@@ -50,7 +50,7 @@ enum UpdateCheckError: LocalizedError {
 }
 
 enum UpdateChecker {
-    static let latestURL = URL(string: "https://api.github.com/repos/gbdubs/alexandria/releases/latest")!
+    static let latestURL = URL(string: "https://api.github.com/repos/gbdubs/pharos/releases/latest")!
 
     private struct Release: Decodable {
         let tagName: String
@@ -85,7 +85,7 @@ enum UpdateChecker {
         guard let asset = release.assets.first(where: { $0.name == name }),
               asset.browserDownloadURL.scheme == "https",
               asset.browserDownloadURL.host == "github.com",
-              asset.browserDownloadURL.path == "/gbdubs/alexandria/releases/download/\(release.tagName)/\(name)" else {
+              asset.browserDownloadURL.path == "/gbdubs/pharos/releases/download/\(release.tagName)/\(name)" else {
             throw UpdateCheckError.missingDiskImage(release.tagName)
         }
         return .available(AvailableUpdate(version: String(release.tagName.dropFirst()),

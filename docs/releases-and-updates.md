@@ -61,7 +61,7 @@ To create a new portable library from the disk image, drag `Pharos.app` into
 the intended library folder and initialize that folder with its embedded CLI:
 
 ```sh
-"/Volumes/YOUR-DRIVE/Pharos/Pharos.app/Contents/MacOS/alexandria" init-library "/Volumes/YOUR-DRIVE/Pharos"
+"/Volumes/YOUR-DRIVE/Pharos/Pharos.app/Contents/MacOS/pharos" init-library "/Volumes/YOUR-DRIVE/Pharos"
 open "/Volumes/YOUR-DRIVE/Pharos/Pharos.app"
 ```
 
@@ -75,7 +75,7 @@ from a per-user install.
 
 The Pharos menu has **Check for Updates…** and an optional **Check for Updates
 on Launch** setting. Checks contact GitHub's latest published release endpoint
-for `gbdubs/alexandria`, compare numeric version components against the running
+for `gbdubs/pharos`, compare numeric version components against the running
 bundle, and require the matching versioned DMG asset. The app shows release
 notes and a **Download Disk Image** button, which opens that asset in the
 default browser. The browser downloads the image; Finder and the user handle
