@@ -54,7 +54,7 @@ on run argv
         set arrangement of viewOptions to not arranged
         set icon size of viewOptions to 112
         set background picture of viewOptions to (POSIX file backgroundPath) as alias
-        set position of item "Pharos.app" of imageWindow to {160, 295}
+        set position of item "Pharos.app" of imageWindow to {150, 165}
         close imageWindow
     end tell
 end run
