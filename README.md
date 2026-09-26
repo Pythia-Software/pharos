@@ -43,10 +43,13 @@ blog post: **[grady.dev/projects/pharos](https://grady.dev/projects/pharos)**.
 
 - macOS 14 or later
 
-Once a release is published, download the prebuilt universal app from
-[GitHub Releases](https://github.com/gbdubs/pharos/releases). See
-[releases and updates](docs/releases-and-updates.md) to install it as a portable
-library without building from source.
+Once a release is published, download the disk image from
+[GitHub Releases](https://github.com/Pythia-Software/pharos/releases). For a portable
+library, create a `Pharos` folder on your SSD and drag `Pharos.app` into it.
+For a Mac-only install, drag the app into Applications; its data will live in
+`~/Library/Application Support/Pharos`, outside Applications. Open the app and
+choose the matching first-run setup option. See [releases and
+updates](docs/releases-and-updates.md) for both paths and later updates.
 
 To build from source, you also need:
 
@@ -54,14 +57,14 @@ To build from source, you also need:
 - Xcode Command Line Tools (`xcode-select --install`) for the Swift wrapper
 - Node.js and npm (optional; without them the checked-in frontend bundle is used)
 
-### 1. Build a library
+### 1. Build a library from source
 
 Pharos works best as a *library*: one folder that holds the app, its
 configuration, and everything it indexes. Put it on an external drive to carry
 your history between Macs, or anywhere you like on a single Mac.
 
 ```sh
-git clone https://github.com/gbdubs/pharos.git pharos
+git clone https://github.com/Pythia-Software/pharos.git pharos
 cd pharos
 macos/install-library.sh /Volumes/<your-drive>/Pharos
 open /Volumes/<your-drive>/Pharos/Pharos.app
@@ -70,10 +73,11 @@ open /Volumes/<your-drive>/Pharos/Pharos.app
 Rerunning `install-library.sh` later upgrades the app and leaves your
 configuration and catalog alone.
 
-> Prefer a plain per-user install? `./launch.sh` builds and opens Pharos with
-> its configuration in `~/Library/Application Support/Pharos/archive.toml`.
-> In that mode you add sources to `archive.toml` by hand; `pharos probe` lists
-> what it finds. See [Configuration](docs/configuration.md).
+> Prefer a plain per-user install from source? `./launch.sh` builds and opens
+> Pharos with its configuration and data in
+> `~/Library/Application Support/Pharos`. In that mode you add sources to
+> `archive.toml` by hand; `pharos probe` lists what it finds. See
+> [Configuration](docs/configuration.md).
 
 ### 2. Choose your sources
 
@@ -200,7 +204,7 @@ template for integrating your own tools.
 
 ## Contact
 
-Found a bug, or have an idea for an addition? **[Open an issue](https://github.com/gbdubs/pharos/issues)**.
+Found a bug, or have an idea for an addition? **[Open an issue](https://github.com/Pythia-Software/pharos/issues)**.
 I'm happy to discuss new sources, new analyses, or anything you've built on a
 fork. You can also find me at [grady.dev](https://grady.dev).
 

@@ -50,27 +50,32 @@ NSRect(x: 0, y: height - 170, width: width, height: 170).fill()
 brass.setFill()
 NSRect(x: 48, y: height - 184, width: width - 96, height: 3).fill()
 
-text("PHAROS  /  UPDATE GUIDE", x: 50, y: 506, width: 600, size: 14, weight: .semibold, foreground: brass)
+text("PHAROS  /  INSTALL & UPDATE", x: 50, y: 506, width: 600, size: 14, weight: .semibold, foreground: brass)
 text("Install Pharos \(version)", x: 48, y: 433, width: 800, size: 39, weight: .bold)
-text("Keep your library. Replace only Pharos.app.", x: 50, y: 397, width: 800, size: 18, foreground: pale)
+text("Drag the app to one of these destinations.", x: 50, y: 397, width: 800, size: 18, foreground: pale)
 
-let iconArea = NSBezierPath(roundedRect: NSRect(x: 50, y: 96, width: 224, height: 252), xRadius: 18, yRadius: 18)
+let iconArea = NSBezierPath(roundedRect: NSRect(x: 50, y: 105, width: 224, height: 243), xRadius: 18, yRadius: 18)
 color(31, 60, 47).setFill()
 iconArea.fill()
-text("DRAG THIS APP", x: 75, y: 313, width: 175, size: 13, weight: .semibold, foreground: brass)
-text("to the place you\ninstalled Pharos", x: 75, y: 118, width: 175, size: 17, weight: .medium)
+text("PHAROS.APP", x: 75, y: 313, width: 175, size: 13, weight: .semibold, foreground: brass)
+text("DRAG FROM HERE", x: 75, y: 120, width: 175, size: 16, weight: .semibold)
 
-let steps: [(String, String, String, CGFloat)] = [
-    ("01", "Quit Pharos", "Close the app before replacing it.", 306),
-    ("02", "Drag Pharos.app to its original location", "Your SSD library folder or Applications.", 226),
-    ("03", "Choose Replace", "Confirm Finder's replacement prompt.", 146),
-    ("04", "Open it and allow access", "If blocked: Privacy & Security → Open Anyway. Allow library access.", 66),
-]
-for (number, title, detail, y) in steps {
-    text(number, x: 310, y: y, width: 50, size: 20, weight: .bold, foreground: brass)
-    text(title, x: 360, y: y + 2, width: 480, size: 19, weight: .semibold)
-    text(detail, x: 360, y: y - 27, width: 480, size: 15, foreground: pale)
-}
+text("01", x: 310, y: 310, width: 45, size: 20, weight: .bold, foreground: brass)
+text("SSD / PORTABLE LIBRARY", x: 358, y: 311, width: 490, size: 19, weight: .semibold)
+text("Make a Pharos folder on your SSD. Drag the app there, open it, then choose Create Library Beside App. Your data stays in that folder.",
+     x: 358, y: 235, width: 490, size: 15, foreground: pale)
+
+text("02", x: 310, y: 190, width: 45, size: 20, weight: .bold, foreground: brass)
+text("APPLICATIONS / THIS MAC", x: 358, y: 191, width: 490, size: 19, weight: .semibold)
+text("Drag the app to Applications. Open it, then choose Set Up on This Mac. Data goes in ~/Library/Application Support/Pharos, not Applications.",
+     x: 358, y: 115, width: 490, size: 15, foreground: pale)
+
+brass.setFill()
+NSRect(x: 50, y: 88, width: 800, height: 1).fill()
+text("UPDATING? Quit Pharos. Drag this app over the original. Choose Replace. Reopen and allow access.",
+     x: 50, y: 52, width: 800, size: 15, weight: .medium)
+text("If macOS blocks opening, use Privacy & Security → Open Anyway.",
+     x: 50, y: 21, width: 800, size: 14, foreground: pale)
 NSGraphicsContext.restoreGraphicsState()
 
 guard let data = bitmap.representation(using: .png, properties: [:]) else { fatalError("Could not encode update guide") }

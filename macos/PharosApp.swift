@@ -105,6 +105,9 @@ final class ArchiveService: ObservableObject {
     @Published var disconnected: Disconnection?
     /// The Eject button's release and eject are under way.
     @Published var ejecting = false
+    @Published var setupNeeded = false
+    @Published var settingUp = false
+    @Published var setupError: String?
 
     private var process: Process?
     private var serviceLog: ServiceLog?
@@ -133,12 +136,91 @@ final class ArchiveService: ObservableObject {
         case .user:
             let config = FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/Application Support/Pharos/archive.toml")
+            guard FileManager.default.fileExists(atPath: config.path) else {
+                setupNeeded = true
+                return
+            }
             guard let contents = try? String(contentsOf: config, encoding: .utf8) else {
-                let beside = Bundle.main.bundleURL.deletingLastPathComponent()
-                error = "Found neither library.toml beside this app nor \(config.path). Create a portable library with `pharos init-library \"\(beside.path)\"`, or this Mac's configuration with `pharos init \"\(config.path)\"`."
+                error = "Could not read \(config.path)."
                 return
             }
             open(config, contents: contents)
+        }
+    }
+
+    var installationFolder: URL { Bundle.main.bundleURL.deletingLastPathComponent() }
+
+    var canSetUpHere: Bool {
+        let readOnly = (try? installationFolder.resourceValues(forKeys: [.volumeIsReadOnlyKey]))?.volumeIsReadOnly == true
+        return !readOnly && !cache.contains(Bundle.main.bundleURL)
+    }
+
+    var canCreatePortableLibrary: Bool {
+        let path = installationFolder.standardizedFileURL.path
+        let applications = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path
+        let appFolder = ["/Applications", "/System/Applications", applications].contains {
+            path == $0 || path.hasPrefix($0 + "/")
+        }
+        return canSetUpHere && !appFolder && FileManager.default.isWritableFile(atPath: installationFolder.path)
+    }
+
+    func setUpOnThisMac() {
+        guard canSetUpHere else { return }
+        let config = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Pharos/archive.toml")
+        runSetup(["init", config.path]) { [weak self] in
+            guard let self else { return }
+            guard let contents = try? String(contentsOf: config, encoding: .utf8) else {
+                self.setupError = "Could not read \(config.path) after setup."
+                return
+            }
+            self.setupNeeded = false
+            self.open(config, contents: contents)
+        }
+    }
+
+    func setUpPortableLibrary() {
+        guard canCreatePortableLibrary else { return }
+        let directory = installationFolder
+        runSetup(["init-library", directory.path]) { [weak self] in
+            guard let self else { return }
+            self.setupNeeded = false
+            self.isTrampoline = true
+            self.status = "Opening Pharos from \(directory.lastPathComponent)…"
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in self?.trampoline(directory) }
+        }
+    }
+
+    private func runSetup(_ arguments: [String], onSuccess: @escaping () -> Void) {
+        guard setupNeeded, !settingUp else { return }
+        let cli = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/pharos")
+        guard FileManager.default.isExecutableFile(atPath: cli.path) else {
+            setupError = "The Pharos command is missing from this app. Download a complete copy and try again."
+            return
+        }
+        settingUp = true
+        setupError = nil
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let task = Process()
+            task.executableURL = cli
+            task.arguments = arguments
+            let errors = Pipe()
+            task.standardError = errors
+            let result: String?
+            do {
+                try task.run()
+                task.waitUntilExit()
+                result = task.terminationStatus == 0 ? nil : String(data: errors.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+                    ?? "Setup exited with status \(task.terminationStatus)."
+            } catch {
+                result = error.localizedDescription
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.settingUp = false
+                if let result { self.setupError = result.trimmingCharacters(in: .whitespacesAndNewlines) }
+                else { onSuccess() }
+            }
         }
     }
 
@@ -891,6 +973,56 @@ struct LibraryDisconnectedView: View {
     }
 }
 
+struct FirstRunView: View {
+    @ObservedObject var service: ArchiveService
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            Text("Set up Pharos").font(.largeTitle.weight(.bold))
+            Text("Choose where your library data should live. Put Pharos.app in its final location before continuing.")
+                .font(.title3)
+            if !service.canSetUpHere {
+                Text("Copy Pharos.app out of the disk image first. Put it in a dedicated folder on your SSD, or in Applications, then open that copy.")
+                    .foregroundStyle(Harbor.brass)
+            }
+            HStack(alignment: .top, spacing: 18) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Label("SSD or portable drive", systemImage: "externaldrive")
+                        .font(.title3.weight(.semibold))
+                    Text("Create a folder such as SSD/Pharos and put Pharos.app inside it. The catalog, captures, and preserved files will live beside the app.")
+                    Text("Current folder: \(service.installationFolder.path)")
+                        .font(.callout.monospaced())
+                        .textSelection(.enabled)
+                        .opacity(0.8)
+                    Spacer(minLength: 0)
+                    Button("Create Library Beside App") { service.setUpPortableLibrary() }
+                        .disabled(!service.canCreatePortableLibrary || service.settingUp)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 12) {
+                    Label("Applications", systemImage: "apps.iphone")
+                        .font(.title3.weight(.semibold))
+                    Text("Put only Pharos.app in Applications. The catalog, captures, and preserved files will live in your Mac's Application Support folder.")
+                    Text("~/Library/Application Support/Pharos")
+                        .font(.callout.monospaced())
+                        .textSelection(.enabled)
+                        .opacity(0.8)
+                    Spacer(minLength: 0)
+                    Button("Set Up on This Mac") { service.setUpOnThisMac() }
+                        .disabled(!service.canSetUpHere || service.settingUp)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(minHeight: 235)
+            if service.settingUp { ProgressView("Creating your library…") }
+            if let setupError = service.setupError {
+                Text(setupError).foregroundStyle(.red).textSelection(.enabled)
+            }
+        }
+        .harborBackdrop()
+    }
+}
+
 @main struct PharosApp: App {
     @StateObject private var service = ArchiveService()
     @StateObject private var updates = UpdateNotice()
@@ -903,6 +1035,7 @@ struct LibraryDisconnectedView: View {
                                             reopen: service.reopen, eject: { service.ejectLibrary() })
                 }
                 else if let url = service.url { ArchiveWebView(url: url, service: service).ignoresSafeArea() }
+                else if service.setupNeeded { FirstRunView(service: service) }
                 else if let error = service.error { ArchiveErrorView(message: error) }
                 else {
                     VStack(spacing: 16) {
@@ -921,7 +1054,9 @@ struct LibraryDisconnectedView: View {
                 UpdateNoticeSheet(notice: updates)
             }
             .task {
-                if !service.isTrampoline { updates.checkOnLaunchIfEnabled(checkForUpdatesOnLaunch) }
+                if !service.isTrampoline && !service.setupNeeded {
+                    updates.checkOnLaunchIfEnabled(checkForUpdatesOnLaunch)
+                }
             }
         }
         .windowStyle(.hiddenTitleBar)

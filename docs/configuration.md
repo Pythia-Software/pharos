@@ -53,6 +53,13 @@ account = "local"
 
 Source paths are explicit opt-ins. A missing or unreadable source is recorded as failed/stale; the service never claims freshness after a failed read. The internal catalog contains searchable cache, protection state, cursors, queues, and receipts. The authoritative retained evidence and its primary package manifest live under `archive_root`.
 
+For a new app installed in Applications, **Set Up on This Mac** creates
+`archive.toml` in `~/Library/Application Support/Pharos`. Its default
+`archive_root` is `~/Library/Application Support/Pharos/preserved`, so the
+catalog, captures, staging files, and preserved data stay outside Applications.
+The example above shows how to move preserved data to a separate drive; set
+`volume_id` when you do so.
+
 ## Portable library
 
 A portable library keeps Pharos and everything it has indexed in one directory,
@@ -72,6 +79,11 @@ Create or upgrade one with:
 ```sh
 macos/install-library.sh /Volumes/euclid/Pharos
 ```
+
+For a downloaded release, make the folder, drag `Pharos.app` from the disk
+image into it, open it, and choose **Create Library Beside App**. The first-run
+screen offers this only when the app is in a writable folder outside
+Applications.
 
 The script builds `Pharos.app` into the directory and runs
 `pharos init-library DIR` there unless `library.toml` already exists. A

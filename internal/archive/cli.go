@@ -37,7 +37,7 @@ func Run(arguments []string) error {
 		if err := InitConfig(path); err != nil {
 			return err
 		}
-		fmt.Printf("Wrote %s. Edit archive_root, pin its volume_id, and opt in source paths.\n", path)
+		fmt.Printf("Wrote %s. Data defaults to Application Support; change archive_root if preferred and opt in source paths.\n", path)
 		return nil
 	}
 	if command == "init-library" {

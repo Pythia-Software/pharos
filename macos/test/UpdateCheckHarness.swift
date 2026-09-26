@@ -19,7 +19,7 @@ final class StubReleaseResponse: URLProtocol {
 func release(_ tag: String, asset: String? = nil, downloadURL: String? = nil,
              draft: Bool = false, prerelease: Bool = false) -> Data {
     let name = asset ?? "Pharos-\(tag)-macos-universal.dmg"
-    let url = downloadURL ?? "https://github.com/gbdubs/pharos/releases/download/\(tag)/\(name)"
+    let url = downloadURL ?? "https://github.com/Pythia-Software/pharos/releases/download/\(tag)/\(name)"
     let object: [String: Any] = [
         "tag_name": tag,
         "body": "Release notes",

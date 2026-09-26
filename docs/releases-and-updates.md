@@ -49,16 +49,25 @@ asset of a published version. The disk image's Finder layout is prepared on the 
 Mac, so release from a logged-in desktop session; Terminal may ask for
 permission to control Finder.
 
-The disk image opens in Finder with an illustrated guide. To update, quit
-Pharos, drag `Pharos.app` from the image to the folder where the original app
-was installed (beside `library.toml` on a portable drive, or in Applications),
-choose **Replace**, then open the new app and approve macOS access prompts.
-Only replace the app; leave the library's other files in place. If macOS blocks
-an ad hoc signed build, use **System Settings → Privacy & Security → Open
-Anyway** after trying to open it.
+The disk image opens in Finder with an illustrated guide. For a **new portable
+library**, create a dedicated folder such as `/Volumes/YOUR-DRIVE/Pharos`, drag
+`Pharos.app` into it, and open that copy. Choose **Create Library Beside App**.
+The app creates `library.toml`, catalog, captures, staging, and preserved data
+in that folder. Keep the folder together when moving it between Macs.
 
-To create a new portable library from the disk image, drag `Pharos.app` into
-the intended library folder and initialize that folder with its embedded CLI:
+For a **new install in Applications**, drag only `Pharos.app` into
+`/Applications` and open it. Choose **Set Up on This Mac**. The app creates
+`archive.toml`, the catalog, captures, staging, and preserved data under
+`~/Library/Application Support/Pharos`; those files stay out of Applications.
+Source paths are disabled until you opt in.
+
+To update either installation, quit Pharos, drag `Pharos.app` from the image to
+the folder where the original app was installed, choose **Replace**, then open
+the new app and approve macOS access prompts. Only replace the app; leave the
+library's other files in place. If macOS blocks an ad hoc signed build, use
+**System Settings → Privacy & Security → Open Anyway** after trying to open it.
+
+The bundled CLI can also initialize a portable library after copying the app:
 
 ```sh
 "/Volumes/YOUR-DRIVE/Pharos/Pharos.app/Contents/MacOS/pharos" init-library "/Volumes/YOUR-DRIVE/Pharos"
@@ -75,7 +84,7 @@ from a per-user install.
 
 The Pharos menu has **Check for Updates…** and an optional **Check for Updates
 on Launch** setting. Checks contact GitHub's latest published release endpoint
-for `gbdubs/pharos`, compare numeric version components against the running
+for `Pythia-Software/pharos`, compare numeric version components against the running
 bundle, and require the matching versioned DMG asset. The app shows release
 notes and a **Download Disk Image** button, which opens that asset in the
 default browser. The browser downloads the image; Finder and the user handle
