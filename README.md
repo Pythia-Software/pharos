@@ -10,7 +10,8 @@
 
 <p align="center">
   <a href="https://grady.dev/projects/pharos">Blog post</a> ·
-  <a href="#getting-started">Getting started</a> ·
+  <a href="#quick-install">Quick install</a> ·
+  <a href="#getting-started-from-source-code">Build from source</a> ·
   <a href="#make-it-yours">Make it yours</a> ·
   <a href="docs/technical-overview.md">Technical overview</a> ·
   <a href="#contact">Contact</a>
@@ -37,27 +38,32 @@ blog post: **[grady.dev/projects/pharos](https://grady.dev/projects/pharos)**.
 
 ![The Library tab: a search for "hardcoding" across every agent conversation, shown as a filterable table of work with repository, model, tokens, cost, and PRs](docs/images/library.png)
 
-## Getting started
+## Quick Install
 
-### Requirements
+On macOS 14 or later, you can install Pharos without building it:
 
-- macOS 14 or later
+1. Open **[GitHub Releases](https://github.com/Pythia-Software/pharos/releases)**,
+   select the **latest release**, and download its Pharos **`.dmg`** under Assets.
+2. Open the disk image and drag `Pharos.app` to a new `Pharos` folder on your
+   SSD for a portable library, or to Applications for an install on this Mac.
+3. Open the copied app. Choose **Create Library Beside App** for the SSD, or
+   **Set Up on This Mac** for Applications, then approve the macOS access prompts.
 
-Once a release is published, download the disk image from
-[GitHub Releases](https://github.com/Pythia-Software/pharos/releases). For a portable
-library, create a `Pharos` folder on your SSD and drag `Pharos.app` into it.
-For a Mac-only install, drag the app into Applications; its data will live in
-`~/Library/Application Support/Pharos`, outside Applications. Open the app and
-choose the matching first-run setup option. See [releases and
-updates](docs/releases-and-updates.md) for both paths and later updates.
+The disk image includes illustrated instructions for both paths and for later
+updates. With an Applications install, Pharos keeps its data in
+`~/Library/Application Support/Pharos`, outside Applications. See [releases and
+updates](docs/releases-and-updates.md) for more detail. If no release is listed
+yet, use the source instructions below.
 
-To build from source, you also need:
+## Getting Started from Source Code
+
+To build Pharos, you need macOS 14 or later and:
 
 - [Go](https://go.dev/dl/). `go.mod` pins Go 1.26, and an older `go` downloads it automatically.
 - Xcode Command Line Tools (`xcode-select --install`) for the Swift wrapper
 - Node.js and npm (optional; without them the checked-in frontend bundle is used)
 
-### 1. Build a library from source
+### 1. Build a library
 
 Pharos works best as a *library*: one folder that holds the app, its
 configuration, and everything it indexes. Put it on an external drive to carry
