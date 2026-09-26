@@ -40,13 +40,33 @@ func text(_ value: String, x: CGFloat, y: CGFloat, width: CGFloat, size: CGFloat
                              withAttributes: attributes)
 }
 
-func polygon(_ points: [CGPoint], fill: NSColor) {
+func speechBubble(in rect: NSRect, tailStart: CGFloat, tailTip: CGPoint,
+                  tailEnd: CGFloat) -> NSBezierPath {
+    let radius: CGFloat = 19
+    let curve = radius * 0.55228475
     let path = NSBezierPath()
-    path.move(to: points[0])
-    for point in points.dropFirst() { path.line(to: point) }
+    path.move(to: CGPoint(x: rect.minX + radius, y: rect.minY))
+    path.line(to: CGPoint(x: tailStart, y: rect.minY))
+    path.line(to: tailTip)
+    path.line(to: CGPoint(x: tailEnd, y: rect.minY))
+    path.line(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
+    path.curve(to: CGPoint(x: rect.maxX, y: rect.minY + radius),
+               controlPoint1: CGPoint(x: rect.maxX - radius + curve, y: rect.minY),
+               controlPoint2: CGPoint(x: rect.maxX, y: rect.minY + radius - curve))
+    path.line(to: CGPoint(x: rect.maxX, y: rect.maxY - radius))
+    path.curve(to: CGPoint(x: rect.maxX - radius, y: rect.maxY),
+               controlPoint1: CGPoint(x: rect.maxX, y: rect.maxY - radius + curve),
+               controlPoint2: CGPoint(x: rect.maxX - radius + curve, y: rect.maxY))
+    path.line(to: CGPoint(x: rect.minX + radius, y: rect.maxY))
+    path.curve(to: CGPoint(x: rect.minX, y: rect.maxY - radius),
+               controlPoint1: CGPoint(x: rect.minX + radius - curve, y: rect.maxY),
+               controlPoint2: CGPoint(x: rect.minX, y: rect.maxY - radius + curve))
+    path.line(to: CGPoint(x: rect.minX, y: rect.minY + radius))
+    path.curve(to: CGPoint(x: rect.minX + radius, y: rect.minY),
+               controlPoint1: CGPoint(x: rect.minX, y: rect.minY + radius - curve),
+               controlPoint2: CGPoint(x: rect.minX + radius - curve, y: rect.minY))
     path.close()
-    fill.setFill()
-    path.fill()
+    return path
 }
 
 func line(from start: CGPoint, to end: CGPoint, color: NSColor, width: CGFloat = 1) {
@@ -75,24 +95,20 @@ context.cgContext.drawRadialGradient(glow, startCenter: CGPoint(x: 150, y: 151),
                                      endCenter: CGPoint(x: 150, y: 151), endRadius: 170,
                                      options: [])
 
-// Two speech bubbles use the same cream and brass tones as the app icon.
-polygon([CGPoint(x: 79, y: 169), CGPoint(x: 59, y: 137), CGPoint(x: 106, y: 162)],
-        fill: color(231, 240, 219, alpha: 0.23))
-let firstBubble = NSBezierPath(roundedRect: NSRect(x: 58, y: 163, width: 150, height: 83),
-                               xRadius: 19, yRadius: 19)
+// Each bubble and its tail form one path, with a continuous outline and fill.
+let firstBubble = speechBubble(in: NSRect(x: 58, y: 174, width: 150, height: 83),
+                               tailStart: 77, tailTip: CGPoint(x: 51, y: 140), tailEnd: 91)
 color(231, 240, 219, alpha: 0.23).setFill()
 firstBubble.fill()
 firstBubble.lineWidth = 1.5
 color(231, 240, 219, alpha: 0.37).setStroke()
 firstBubble.stroke()
 color(231, 240, 219, alpha: 0.56).setFill()
-NSBezierPath(roundedRect: NSRect(x: 79, y: 212, width: 96, height: 5), xRadius: 2.5, yRadius: 2.5).fill()
-NSBezierPath(roundedRect: NSRect(x: 79, y: 192, width: 69, height: 5), xRadius: 2.5, yRadius: 2.5).fill()
+NSBezierPath(roundedRect: NSRect(x: 79, y: 223, width: 96, height: 5), xRadius: 2.5, yRadius: 2.5).fill()
+NSBezierPath(roundedRect: NSRect(x: 79, y: 203, width: 69, height: 5), xRadius: 2.5, yRadius: 2.5).fill()
 
-polygon([CGPoint(x: 207, y: 93), CGPoint(x: 237, y: 65), CGPoint(x: 227, y: 105)],
-        fill: color(243, 214, 150, alpha: 0.32))
-let replyBubble = NSBezierPath(roundedRect: NSRect(x: 93, y: 88, width: 149, height: 85),
-                               xRadius: 19, yRadius: 19)
+let replyBubble = speechBubble(in: NSRect(x: 93, y: 88, width: 149, height: 85),
+                               tailStart: 207, tailTip: CGPoint(x: 237, y: 65), tailEnd: 223)
 color(243, 214, 150, alpha: 0.32).setFill()
 replyBubble.fill()
 replyBubble.lineWidth = 1.5
