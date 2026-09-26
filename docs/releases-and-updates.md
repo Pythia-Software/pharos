@@ -3,8 +3,8 @@
 ## Publish a release from a Mac
 
 Pharos releases are built locally. GitHub Actions is not involved. A release
-contains a universal macOS app (arm64 and x86_64) in
-`Pharos-vX.Y.Z-macos-universal.zip`, plus a matching `.sha256` file. The tag,
+contains a universal macOS app (arm64 and x86_64) in a Finder disk image,
+`Pharos-vX.Y.Z-macos-universal.dmg`, plus a matching `.sha256` file. The tag,
 GitHub release, and both bundle version fields use the same `X.Y.Z` version.
 Sign in to `gh` with permission to publish releases. Run the script only after
 the release commit has been merged into `master`, from a clean checkout at
@@ -42,76 +42,50 @@ macos/release.sh 0.3.0 --developer-id
 The script fetches `origin/master`, refuses a dirty or different checkout and
 an existing tag, builds and verifies the app, then creates an annotated tag
 and publishes a GitHub release. The Developer ID path also notarizes and
-staples the app. It keeps the final archive and checksum under
-`dist/releases/vX.Y.Z/`. If publication fails after the tag is pushed, inspect
-the tag and draft release before retrying; never replace the asset of a
-published version.
+staples both the app and the final disk image. It keeps the disk image and
+checksum under `dist/releases/vX.Y.Z/`. If publication fails after the tag is
+pushed, inspect the tag and draft release before retrying; never replace the
+asset of a published version. The disk image's Finder layout is prepared on the release
+Mac, so release from a logged-in desktop session; Terminal may ask for
+permission to control Finder.
 
-To create a portable library from the downloaded archive, extract it, put
-`Pharos.app` in the library folder, and initialize that folder with the
-embedded CLI:
+The disk image opens in Finder with an illustrated guide. To update, quit
+Pharos, drag `Pharos.app` from the image to the folder where the original app
+was installed (beside `library.toml` on a portable drive, or in Applications),
+choose **Replace**, then open the new app and approve macOS access prompts.
+Only replace the app; leave the library's other files in place. If macOS blocks
+an ad hoc signed build, use **System Settings → Privacy & Security → Open
+Anyway** after trying to open it.
+
+To create a new portable library from the disk image, drag `Pharos.app` into
+the intended library folder and initialize that folder with its embedded CLI:
 
 ```sh
 "/Volumes/YOUR-DRIVE/Pharos/Pharos.app/Contents/MacOS/alexandria" init-library "/Volumes/YOUR-DRIVE/Pharos"
 open "/Volumes/YOUR-DRIVE/Pharos/Pharos.app"
 ```
 
-For an existing library, quit Pharos and any MCP process running directly from
-its old bundle before replacing `Pharos.app`; leave `library.toml` and the
-catalog in place. The source checkout's `macos/install-library.sh` remains
-useful for development builds and for adoption from a per-user install.
+If an MCP process is running directly from the old bundle, quit its client
+before replacing the app. MCP processes using a local runtime copy continue
+using that build until their clients restart them. The source checkout's
+`macos/install-library.sh` remains useful for development builds and adoption
+from a per-user install.
 
-## In-app update design
+## In-app update checks
+
+The Pharos menu has **Check for Updates…** and an optional **Check for Updates
+on Launch** setting. Checks contact GitHub's latest published release endpoint
+for `gbdubs/alexandria`, compare numeric version components against the running
+bundle, and require the matching versioned DMG asset. The app shows release
+notes and a **Download Disk Image** button, which opens that asset in the
+default browser. The browser downloads the image; Finder and the user handle
+installation. Checks on launch show a notice only when a newer release exists.
+Nothing is downloaded in the background without a user action.
 
 The durable app in a portable library is the `Pharos.app` beside
-`library.toml`. Opening it launches a **separate local runtime copy** so that
-the library's drive can be ejected. An updater running in that local copy must
-replace the durable app on the drive, then use the existing trampoline to
-launch the new local copy. Updating only the running copy would disappear at
-the next launch. This makes Sparkle's default replacement of its host bundle
-unsuitable without a custom installer, despite Sparkle being a good fit for an
-ordinary Mac app.
-
-The recommended first implementation is a small native Swift updater in the
-wrapper, with these steps:
-
-1. On a user-initiated **Check for Updates** action, read GitHub's latest
-   published release for `gbdubs/alexandria`. Offer periodic checks only after
-   the user opts in, since this contacts GitHub. Compare numeric version
-   components from the `vX.Y.Z` tag with `CFBundleVersion`; ignore drafts,
-   prereleases, and versions at or below the running one.
-2. Before enabling automatic installation, introduce a separate Ed25519
-   release-signing key, embed its public key in the app, and update the local
-   release script to sign each archive. Keep the private key off GitHub. A
-   `.sha256` file on the same release detects damage but cannot authenticate
-   an artifact if the GitHub release is replaced. An ad hoc code signature
-   cannot authenticate a new build because its designated requirement is its
-   exact code hash. An existing app without the pinned public key would need
-   one manual update to an updater-enabled version.
-3. Download only the exact `Pharos-vX.Y.Z-macos-universal.zip` asset into a
-   private staging directory. Verify its Ed25519 signature **before**
-   extraction, then extract with path traversal protection. Validate the
-   extracted bundle's internal code signature, expected bundle ID, both
-   architecture slices, and bundle versions. For Developer ID releases, also
-   validate the signing identity and notarization. Reject older builds.
-4. Find the durable source bundle: the app beside `library.toml` in library
-   mode, or the installed app in per-user mode. Never modify a source checkout
-   or the runtime cache directly. If the drive is missing, read-only, or the
-   source app is currently executing, keep the staged update and explain why
-   installation is deferred. Stage a verified copy on the same volume as the
-   durable app, replace it while retaining the prior bundle for recovery, and
-   restart through the existing trampoline. Leave `library.toml`, catalog,
-   captures, and user configuration alone.
-5. Show version, release notes, download progress, install errors, and a
-   **Restart to Update** choice in the native UI. The Go service should exit
-   cleanly before relaunch. Existing MCP processes may keep the old binary
-   until their clients restart them. Test interrupted downloads and installs,
-   missing drives, unwritable folders, signature failures, and a restart with
-   a catalog migration before enabling unattended installation.
-
-The release archive and version scheme above provide the stable inputs for
-this updater. The updater itself is not enabled yet. Ed25519 archive signing
-and verification are required before enabling automatic installation, whether
-or not the app has a Developer ID. With ad hoc builds, macOS may still require
-the user to approve a downloaded update; test that behavior on a clean Mac
-before promising unattended updates.
+`library.toml`. Opening it launches a separate local runtime copy so that the
+library's drive can be ejected. Replace the durable copy on the drive when
+updating; replacing the running local copy would not last. An ad hoc signature
+changes with each build, so macOS may ask for access to the library drive
+again. Developer ID signing and notarization improve that experience, but are
+optional in the current release script.

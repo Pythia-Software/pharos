@@ -119,11 +119,13 @@ final class ArchiveService: ObservableObject {
     private var endpoint: (url: URL, token: String)?
     private var service: Process?
     private var release = ReleaseState.none
+    private(set) var isTrampoline = false
 
     init() {
         switch LaunchPlan.resolve(arguments: CommandLine.arguments, environment: ProcessInfo.processInfo.environment,
                                   bundle: Bundle.main.bundleURL, cache: cache) {
         case .trampoline(let directory):
+            isTrampoline = true
             status = "Opening Pharos from \(LibraryVolume(containing: directory)?.name ?? directory.path)…"
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in self?.trampoline(directory) }
         case .library(let directory):
@@ -891,6 +893,8 @@ struct LibraryDisconnectedView: View {
 
 @main struct AIWorkArchiveApp: App {
     @StateObject private var service = ArchiveService()
+    @StateObject private var updates = UpdateNotice()
+    @AppStorage("checkForUpdatesOnLaunch") private var checkForUpdatesOnLaunch = false
     var body: some Scene {
         WindowGroup("Pharos") {
             Group {
@@ -913,8 +917,21 @@ struct LibraryDisconnectedView: View {
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                 service.stop()
             }
+            .sheet(isPresented: Binding(get: { updates.status != nil }, set: { if !$0 { updates.status = nil } })) {
+                UpdateNoticeSheet(notice: updates)
+            }
+            .task {
+                if !service.isTrampoline { updates.checkOnLaunchIfEnabled(checkForUpdatesOnLaunch) }
+            }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1180, height: 780)
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { updates.check() }
+                    .disabled(updates.isChecking)
+                Toggle("Check for Updates on Launch", isOn: $checkForUpdatesOnLaunch)
+            }
+        }
     }
 }
