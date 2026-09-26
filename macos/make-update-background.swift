@@ -62,37 +62,45 @@ NSGraphicsContext.saveGraphicsState()
 NSGraphicsContext.current = context
 context.cgContext.scaleBy(x: CGFloat(scale), y: CGFloat(scale))
 
-// The forest-green gradient and lighthouse echo the app icon without reducing text contrast.
+// Keep the illustration quiet so the installation steps stay in focus.
 NSGradient(colorsAndLocations:
     (color(60, 111, 80), 0), (color(28, 72, 55), 0.45), (dark, 1)
 )!.draw(in: NSRect(x: 0, y: 0, width: width, height: height), angle: 90)
 
-let glowColors = [color(246, 209, 130, alpha: 0.22).cgColor,
+let glowColors = [color(246, 209, 130, alpha: 0.13).cgColor,
                   color(246, 209, 130, alpha: 0).cgColor] as CFArray
 let glow = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: glowColors,
                       locations: [0, 1])!
-context.cgContext.drawRadialGradient(glow, startCenter: CGPoint(x: 150, y: 214), startRadius: 3,
-                                     endCenter: CGPoint(x: 150, y: 214), endRadius: 230,
+context.cgContext.drawRadialGradient(glow, startCenter: CGPoint(x: 150, y: 151), startRadius: 0,
+                                     endCenter: CGPoint(x: 150, y: 151), endRadius: 170,
                                      options: [])
-polygon([CGPoint(x: 146, y: 208), CGPoint(x: 154, y: 220),
-         CGPoint(x: 300, y: 262), CGPoint(x: 300, y: 224)],
-        fill: color(246, 209, 130, alpha: 0.065))
 
-// A simplified version of the icon's lantern, tapered tower, and gold trim.
-polygon([CGPoint(x: 107, y: 54), CGPoint(x: 193, y: 54),
-         CGPoint(x: 176, y: 165), CGPoint(x: 124, y: 165)],
-        fill: color(231, 240, 219, alpha: 0.16))
-polygon([CGPoint(x: 121, y: 165), CGPoint(x: 179, y: 165),
-         CGPoint(x: 171, y: 203), CGPoint(x: 129, y: 203)],
-        fill: color(231, 240, 219, alpha: 0.20))
+// Two speech bubbles use the same cream and brass tones as the app icon.
+polygon([CGPoint(x: 79, y: 169), CGPoint(x: 59, y: 137), CGPoint(x: 106, y: 162)],
+        fill: color(231, 240, 219, alpha: 0.23))
+let firstBubble = NSBezierPath(roundedRect: NSRect(x: 58, y: 163, width: 150, height: 83),
+                               xRadius: 19, yRadius: 19)
+color(231, 240, 219, alpha: 0.23).setFill()
+firstBubble.fill()
+firstBubble.lineWidth = 1.5
+color(231, 240, 219, alpha: 0.37).setStroke()
+firstBubble.stroke()
+color(231, 240, 219, alpha: 0.56).setFill()
+NSBezierPath(roundedRect: NSRect(x: 79, y: 212, width: 96, height: 5), xRadius: 2.5, yRadius: 2.5).fill()
+NSBezierPath(roundedRect: NSRect(x: 79, y: 192, width: 69, height: 5), xRadius: 2.5, yRadius: 2.5).fill()
+
+polygon([CGPoint(x: 207, y: 93), CGPoint(x: 237, y: 65), CGPoint(x: 227, y: 105)],
+        fill: color(243, 214, 150, alpha: 0.32))
+let replyBubble = NSBezierPath(roundedRect: NSRect(x: 93, y: 88, width: 149, height: 85),
+                               xRadius: 19, yRadius: 19)
 color(243, 214, 150, alpha: 0.32).setFill()
-NSRect(x: 117, y: 163, width: 66, height: 5).fill()
-NSRect(x: 127, y: 201, width: 46, height: 5).fill()
-NSRect(x: 137, y: 210, width: 26, height: 23).fill()
-polygon([CGPoint(x: 132, y: 234), CGPoint(x: 168, y: 234), CGPoint(x: 150, y: 249)],
-        fill: color(243, 214, 150, alpha: 0.45))
-color(243, 214, 150, alpha: 0.23).setFill()
-NSRect(x: 102, y: 51, width: 96, height: 4).fill()
+replyBubble.fill()
+replyBubble.lineWidth = 1.5
+color(243, 214, 150, alpha: 0.55).setStroke()
+replyBubble.stroke()
+color(248, 245, 229, alpha: 0.72).setFill()
+NSBezierPath(roundedRect: NSRect(x: 114, y: 138, width: 104, height: 5), xRadius: 2.5, yRadius: 2.5).fill()
+NSBezierPath(roundedRect: NSRect(x: 114, y: 118, width: 75, height: 5), xRadius: 2.5, yRadius: 2.5).fill()
 
 line(from: CGPoint(x: 281, y: 46), to: CGPoint(x: 281, y: 513),
      color: color(240, 246, 222, alpha: 0.19))
