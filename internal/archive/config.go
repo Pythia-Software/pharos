@@ -414,8 +414,9 @@ func regexpAssignment(block, key string) string {
 
 const exampleConfig = `# Pharos — all locations are opt-in; no home-directory scan is performed.
 data_dir = "~/Library/Application Support/Pharos"
-archive_root = "/Volumes/euclid/Pharos"
-# Set this from ` + "`pharos volume-id /Volumes/euclid`" + ` to reject a wrong volume.
+# Preserved data lives outside Pharos.app; change this to a drive if preferred.
+archive_root = "~/Library/Application Support/Pharos/preserved"
+# For an external archive_root, set this from ` + "`pharos volume-id /Volumes/YOUR-DRIVE`" + `.
 volume_id = ""
 host = "127.0.0.1"
 port = 8765

@@ -73,6 +73,35 @@ kind = "codex"
 	}
 }
 
+func TestNewPerUserInstallKeepsDataInApplicationSupport(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.toml")
+	if err := InitConfig(path); err != nil {
+		t.Fatal(err)
+	}
+	config, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(home, "Library", "Application Support", "Pharos")
+	for name, location := range map[string]string{
+		"catalog":   config.CatalogPath,
+		"captures":  config.CaptureRoot,
+		"staging":   config.StagingRoot,
+		"preserved": config.ArchiveRoot,
+	} {
+		if !strings.HasPrefix(location, root+string(filepath.Separator)) {
+			t.Errorf("%s should live under %s, got %s", name, root, location)
+		}
+	}
+	if config.Library {
+		t.Error("a per-user install should not use portable library mode")
+	}
+}
+
 func TestLibraryConfigIsDiscoveredBesideAppBundle(t *testing.T) {
 	root := t.TempDir()
 	executable := filepath.Join(root, "Pharos.app", "Contents", "MacOS", "pharos")

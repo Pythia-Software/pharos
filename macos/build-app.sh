@@ -81,6 +81,7 @@ for goarch in $GOARCHES; do
     swiftc -parse-as-library -target "$arch-apple-macos$MACOS_MIN" -framework SwiftUI -framework WebKit \
         -framework DiskArbitration -framework Security \
         "$ROOT/macos/PharosApp.swift" "$ROOT/macos/LibraryVolume.swift" "$ROOT/macos/RuntimeCache.swift" \
+        "$ROOT/macos/UpdateChecker.swift" "$ROOT/macos/UpdateNotice.swift" \
         -o "$WORK/PharosApp-$arch"
 done
 for name in pharos PharosApp; do

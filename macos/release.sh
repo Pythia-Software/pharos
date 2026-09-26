@@ -7,7 +7,7 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
-REPO=gbdubs/pharos
+REPO=Pythia-Software/pharos
 VERSION=${1:-}
 if [ "$#" -lt 1 ] || [ "$#" -gt 2 ] || ! printf '%s\n' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
     echo "Usage: $0 major.minor.patch [--developer-id]" >&2
@@ -26,7 +26,7 @@ if [ "$MODE" = developer-id ] && { [ -z "$IDENTITY" ] || [ -z "$PROFILE" ]; }; t
     echo "Omit --developer-id to publish an ad hoc signed release instead." >&2
     exit 2
 fi
-for command in git gh go swiftc lipo npm xcrun codesign ditto shasum spctl awk; do
+for command in git gh go swift swiftc lipo npm xcrun codesign ditto hdiutil osascript shasum spctl awk; do
     command -v "$command" >/dev/null 2>&1 || { echo "$command is required." >&2; exit 2; }
 done
 case "$(git remote get-url origin)" in
@@ -103,29 +103,36 @@ if [ -n "$(git status --porcelain)" ]; then
     exit 1
 fi
 
-ARCHIVE_NAME="Pharos-$TAG-macos-universal.zip"
-ARCHIVE="$OUT/$ARCHIVE_NAME"
+IMAGE_NAME="Pharos-$TAG-macos-universal.dmg"
+IMAGE="$OUT/$IMAGE_NAME"
 if [ "$MODE" = developer-id ]; then
-    ditto -c -k "$OUT/stage" "$ARCHIVE"
-    xcrun notarytool submit "$ARCHIVE" --keychain-profile "$PROFILE" --wait
+    # Notarize the app in a temporary ZIP first, so its ticket can be stapled
+    # before it is copied into the final disk image.
+    NOTARY_ARCHIVE="$OUT/notarize.zip"
+    ditto -c -k "$OUT/stage" "$NOTARY_ARCHIVE"
+    xcrun notarytool submit "$NOTARY_ARCHIVE" --keychain-profile "$PROFILE" --wait
     xcrun stapler staple "$APP"
     xcrun stapler validate "$APP"
     spctl -a -vvv -t exec "$APP"
-    # Stapling changes the bundle, so package the final bytes.
-    rm "$ARCHIVE"
+    rm "$NOTARY_ARCHIVE"
 fi
 codesign --verify --strict --deep --verbose=2 "$APP"
-ditto -c -k "$OUT/stage" "$ARCHIVE"
-(cd "$OUT" && shasum -a 256 "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256")
+"$ROOT/macos/make-release-dmg.sh" "$APP" "$IMAGE" "$VERSION"
+if [ "$MODE" = developer-id ]; then
+    xcrun notarytool submit "$IMAGE" --keychain-profile "$PROFILE" --wait
+    xcrun stapler staple "$IMAGE"
+    xcrun stapler validate "$IMAGE"
+fi
+(cd "$OUT" && shasum -a 256 "$IMAGE_NAME" > "$IMAGE_NAME.sha256")
 
 git tag -a "$TAG" -m "Pharos $VERSION"
 git push origin "refs/tags/$TAG"
 if [ "$MODE" = adhoc ]; then
-    gh release create "$TAG" "$ARCHIVE" "$ARCHIVE.sha256" -R "$REPO" \
+    gh release create "$TAG" "$IMAGE" "$IMAGE.sha256" -R "$REPO" \
         --verify-tag --draft --title "Pharos $VERSION" --generate-notes \
         --notes 'This app is ad hoc signed and is not notarized. On first launch, macOS may block it. After attempting to open it, use System Settings → Privacy & Security → Open Anyway if you trust this download.'
 else
-    gh release create "$TAG" "$ARCHIVE" "$ARCHIVE.sha256" -R "$REPO" \
+    gh release create "$TAG" "$IMAGE" "$IMAGE.sha256" -R "$REPO" \
         --verify-tag --draft --title "Pharos $VERSION" --generate-notes
 fi
 gh release edit "$TAG" -R "$REPO" --draft=false

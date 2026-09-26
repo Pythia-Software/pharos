@@ -10,7 +10,8 @@
 
 <p align="center">
   <a href="https://grady.dev/projects/pharos">Blog post</a> ·
-  <a href="#getting-started">Getting started</a> ·
+  <a href="#quick-install">Quick install</a> ·
+  <a href="#getting-started-from-source-code">Build from source</a> ·
   <a href="#make-it-yours">Make it yours</a> ·
   <a href="docs/technical-overview.md">Technical overview</a> ·
   <a href="#contact">Contact</a>
@@ -37,18 +38,26 @@ blog post: **[grady.dev/projects/pharos](https://grady.dev/projects/pharos)**.
 
 ![The Library tab: a search for "hardcoding" across every agent conversation, shown as a filterable table of work with repository, model, tokens, cost, and PRs](docs/images/library.png)
 
-## Getting started
+## Quick Install
 
-### Requirements
+On macOS 14 or later, you can install Pharos without building it:
 
-- macOS 14 or later
+1. Open **[GitHub Releases](https://github.com/Pythia-Software/pharos/releases)**,
+   select the **latest release**, and download its Pharos **`.dmg`** under Assets.
+2. Open the disk image and drag `Pharos.app` to a new `Pharos` folder on your
+   SSD for a portable library, or to Applications for an install on this Mac.
+3. Open the copied app. Choose **Create Library Beside App** for the SSD, or
+   **Set Up on This Mac** for Applications, then approve the macOS access prompts.
 
-Once a release is published, download the prebuilt universal app from
-[GitHub Releases](https://github.com/gbdubs/pharos/releases). See
-[releases and updates](docs/releases-and-updates.md) to install it as a portable
-library without building from source.
+The disk image includes illustrated instructions for both paths and for later
+updates. With an Applications install, Pharos keeps its data in
+`~/Library/Application Support/Pharos`, outside Applications. See [releases and
+updates](docs/releases-and-updates.md) for more detail. If no release is listed
+yet, use the source instructions below.
 
-To build from source, you also need:
+## Getting Started from Source Code
+
+To build Pharos, you need macOS 14 or later and:
 
 - [Go](https://go.dev/dl/). `go.mod` pins Go 1.26, and an older `go` downloads it automatically.
 - Xcode Command Line Tools (`xcode-select --install`) for the Swift wrapper
@@ -61,7 +70,7 @@ configuration, and everything it indexes. Put it on an external drive to carry
 your history between Macs, or anywhere you like on a single Mac.
 
 ```sh
-git clone https://github.com/gbdubs/pharos.git pharos
+git clone https://github.com/Pythia-Software/pharos.git pharos
 cd pharos
 macos/install-library.sh /Volumes/<your-drive>/Pharos
 open /Volumes/<your-drive>/Pharos/Pharos.app
@@ -70,10 +79,11 @@ open /Volumes/<your-drive>/Pharos/Pharos.app
 Rerunning `install-library.sh` later upgrades the app and leaves your
 configuration and catalog alone.
 
-> Prefer a plain per-user install? `./launch.sh` builds and opens Pharos with
-> its configuration in `~/Library/Application Support/Pharos/archive.toml`.
-> In that mode you add sources to `archive.toml` by hand; `pharos probe` lists
-> what it finds. See [Configuration](docs/configuration.md).
+> Prefer a plain per-user install from source? `./launch.sh` builds and opens
+> Pharos with its configuration and data in
+> `~/Library/Application Support/Pharos`. In that mode you add sources to
+> `archive.toml` by hand; `pharos probe` lists what it finds. See
+> [Configuration](docs/configuration.md).
 
 ### 2. Choose your sources
 
@@ -200,7 +210,7 @@ template for integrating your own tools.
 
 ## Contact
 
-Found a bug, or have an idea for an addition? **[Open an issue](https://github.com/gbdubs/pharos/issues)**.
+Found a bug, or have an idea for an addition? **[Open an issue](https://github.com/Pythia-Software/pharos/issues)**.
 I'm happy to discuss new sources, new analyses, or anything you've built on a
 fork. You can also find me at [grady.dev](https://grady.dev).
 
