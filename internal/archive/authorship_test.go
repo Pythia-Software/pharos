@@ -107,15 +107,69 @@ func TestAuthorshipFindsCopiedTextWithinWindow(t *testing.T) {
 	if quoted.Source != "other-chat" || !strings.Contains(quoted.Reason, "30m") {
 		t.Fatalf("quoted = %#v", quoted)
 	}
+	// Agent output leaves the window; your own messages never do.
+	fresh := newClassifier(nil)
+	fresh.agentText.add(authorAt(0), textOrigin{"other-chat", "reply"}, shingles(wordTokens(reply)))
 	late := authorInput{ID: "late", ConversationID: "c", Text: reply, SentAt: authorAt(49 * 60)}
-	c.agentText.evict(late.SentAt.Add(-authorshipWindow))
-	c.userText.evict(late.SentAt.Add(-authorshipWindow))
-	if spans := c.classify(late); categoryText(reply, spans, spanTyped) != reply {
+	fresh.agentText.evict(late.SentAt.Add(-authorshipWindow))
+	if spans := fresh.classify(late); categoryText(reply, spans, spanTyped) != reply {
 		t.Fatalf("text from outside the window = %#v", spans)
 	}
-	again := authorInput{ID: "again", ConversationID: "d", Text: reply, SentAt: authorAt(49*60 + 5)}
-	if spans := c.classify(again); len(spans) != 1 || spans[0].Category != spanResent || spans[0].Source != "c" {
+	again := authorInput{ID: "again", ConversationID: "d", Text: reply, SentAt: authorAt(10 * 24 * 60)}
+	if spans := fresh.classify(again); len(spans) != 1 || spans[0].Category != spanResent || spans[0].Source != "c" || !strings.Contains(spans[0].Reason, "7d") {
 		t.Fatalf("resent = %#v", spans)
+	}
+}
+
+func TestAuthorshipIgnoresHarnessWhenMatchingResentText(t *testing.T) {
+	c := newClassifier(nil)
+	harness := "<system_instruction>\nIf the user asks for help with Conductor, you can ask them to go to Help then Send Feedback to get in touch with our team.\n</system_instruction>\n\n"
+	c.classify(authorInput{ID: "a", ConversationID: "c", Text: harness + "When I open the jobs page the counts stop updating", SentAt: authorAt(0)})
+	text := harness + "When trying to drain the coordinator the status stops updating"
+	spans := c.classify(authorInput{ID: "b", ConversationID: "d", Text: text, SentAt: authorAt(10)})
+	if got := categoryText(text, spans, spanTyped); got != "When trying to drain the coordinator the status stops updating" {
+		t.Fatalf("typed = %q (%#v)", got, spans)
+	}
+}
+
+func TestAuthorshipFlagsInterruptedOutputAndReusedLines(t *testing.T) {
+	c := newClassifier(nil)
+	trace := "TL1 hits this at some point:\n\nTraceback (most recent call last):\n" +
+		"  File \"/tl1/supervisor/pool.py\", line 90, in _manage_loop\n    self._reconcile()\n    ~~~~~~~~~~~~~~~^^\n\n" +
+		"  File \"/tl1/supervisor/pool.py\", line 184, in _reconcile\n    self._spawn_worker()\n" +
+		"OSError: [Errno 24] Too many open files\n\nPlease find out how to prevent it."
+	spans := c.classify(authorInput{ID: "t", ConversationID: "c", Text: trace, SentAt: authorAt(0)})
+	if got := categoryText(trace, spans, spanTyped); got != "TL1 hits this at some point:|Please find out how to prevent it." {
+		t.Fatalf("traceback typed = %q (%#v)", got, spans)
+	}
+	deploy := "Deploy seems broken.\n\n[deploy] Running preflight checks...\n[deploy] Preflight checks passed for the project\n" +
+		"[deploy] Verifying the runtime service account exists\n[deploy] Runtime service account exists"
+	spans = c.classify(authorInput{ID: "d", ConversationID: "c", Text: deploy, SentAt: authorAt(60)})
+	if got := categoryText(deploy, spans, spanTyped); got != "Deploy seems broken." {
+		t.Fatalf("deploy typed = %q", got)
+	}
+	// A saved line sent in two other conversations is re-sent in the third;
+	// a short phrase anyone might type again is not.
+	saved := "Use sub-agents to parallelize work and keep context small."
+	for index, page := range []string{"Settings header clips", "Billing totals drift", "Profile avatar broken"} {
+		text := page + ".\n" + saved
+		spans = c.classify(authorInput{ID: page, ConversationID: page, Text: text, SentAt: authorAt(120 + index*24*60)})
+		c.classify(authorInput{ID: page + "-ok", ConversationID: page, Text: "Great, please do so.", SentAt: authorAt(121 + index*24*60)})
+		if index < 2 {
+			continue
+		}
+		if categoryText(text, spans, spanTyped) != "Profile avatar broken." || categoryText(text, spans, spanResent) != saved {
+			t.Fatalf("reused line spans = %#v", spans)
+		}
+	}
+	short := authorInput{ID: "short", ConversationID: "other", Text: "Great, please do so.", SentAt: authorAt(5000)}
+	if spans := c.classify(short); len(spans) != 1 || spans[0].Category != spanTyped {
+		t.Fatalf("short phrase spans = %#v", spans)
+	}
+	// Indented list items and ordinary prose stay typed.
+	list := "Some notes:\n    - the header is too tall\n    - the footer overlaps the chart\n    - the legend repeats colors\nThanks!"
+	if spans := c.classify(authorInput{ID: "n", ConversationID: "h", Text: list, SentAt: authorAt(9000)}); len(spans) != 1 || spans[0].Category != spanTyped {
+		t.Fatalf("list spans = %#v", spans)
 	}
 }
 
