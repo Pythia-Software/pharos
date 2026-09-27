@@ -29,11 +29,13 @@ Rules run in this order, and the first rule to claim a character keeps it.
 | **Template** | The whole message, when its normalized text (attachment references collapsed, case and whitespace ignored, at least 10 characters) was sent in 5 or more sessions on 3 or more days. This catches Conductor's buttons (Create a PR, Review, Rebase, Resolve conflicts) without a hard-coded list. Sending one prompt to many sessions on a single day is not a template: the first copy counts as typed and the rest as re-sent. A leading slash command such as `/compact` is also a template; its arguments stay typed. |
 | **Attachment** | Conductor attachment markers (`@⟦name⟧(path)`), `.context/attachments/…` paths, and image placeholders. |
 | **Quoted** | Runs of 12 or more words that match agent output from the 48 hours before the message, in any conversation. Lines starting with `>` also count. |
-| **Re-sent** | Runs of 12 or more words that match your own messages from the previous 48 hours. |
-| **Pasted** | Heuristics: fenced code blocks; three or more consecutive log, stack-trace, diff, JSON, or file:line lines; markdown tables; regions formatted like agent replies (two or more headings, or three or more bolded bullets); generated page-feedback reports; and messages whose remaining text arrived faster than 20 characters a second since your previous message in the same conversation (checked only when at least 600 characters remain). |
+| **Re-sent** | Runs of 12 or more words that match any of your earlier messages, however old, so a saved prompt counts as typed the first time only. A line of 8 or more words already sent in 2 other conversations is re-sent too. |
+| **Pasted** | Heuristics: fenced code blocks; blocks of program output or code (at least three machine lines, at most two prose lines between any two of them, and no more prose lines than machine lines); markdown tables; regions formatted like agent replies (two or more headings, or three or more bolded bullets); generated page-feedback reports; and messages whose remaining text arrived faster than 20 characters a second since your previous message in the same conversation (checked only when at least 600 characters remain). |
 | **Typed** | Everything else. |
 
-Word runs are compared as overlapping 8-word shingles over lowercase letters and digits, so punctuation and formatting changes still match. Pasted is the one category inferred from how text looks rather than where it came from. Usage therefore reports typed words as a range, from typed to typed plus pasted. Its chart shows words by day, week, or month over the last 30 days to all time, either typed only or every category stacked.
+Machine lines are log, stack-trace, diff, JSON, and file:line lines; lines tagged like `[deploy] …`; shell prompts (`user@host dir %`, `PS C:\>`); error headers; `key=value` output; rules, underlines, and box drawing; source-code statements; text indented as a block (with spaces or non-breaking spaces) rather than as a list item; and any line of four or more words that appears twice in the message or was sent in 2 other conversations before. People rarely retype a line word for word, so a repeated line is program output or reused text; numbers and IDs are ignored when comparing lines, so the same log line from another run matches.
+
+Word runs are compared as overlapping 8-word shingles over lowercase letters and digits, so punctuation and formatting changes still match. Harness blocks are left out of the comparison. Pasted is the one category inferred from how text looks rather than where it came from. Usage therefore reports typed words as a range, from typed to typed plus pasted. Its chart shows words by day, week, or month over the last 30 days to all time, either typed only or every category stacked.
 
 ## The conversation table
 
@@ -41,7 +43,8 @@ Your writing lists one row per Library work that has classified user messages, w
 
 ## Known limits
 
-- Text pasted from outside the archive (a web chat, a document, a terminal) is found only when it looks like code, logs, tables, or agent formatting.
+- Text pasted from outside the archive (a web chat, a document, a terminal) is found only when it looks like code, logs, tables, or agent formatting. Prose written by an agent elsewhere, such as a review or a campaign prompt pasted as a session's first message, still counts as typed; the typing-speed check needs an earlier message in the same conversation.
+- Agent output is compared only within the 48-hour window.
 - Text you pasted and then edited counts as quoted only where runs of 12 or more words still match. Your edits count as typed.
 - Dictation cannot be told apart from typing; both count as yours.
 - Senders are recorded as sources are re-ingested. Until a session is re-indexed, headless runs from before this change count as typed unless another rule claims them.

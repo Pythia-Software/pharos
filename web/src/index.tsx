@@ -972,7 +972,7 @@ function TokenSummary({ where }: { where: WhereTerm[] }) {
 const writingGroups = [
   { key: "typed", label: "Typed", description: "Written or dictated by you", categories: ["typed"], color: "var(--sea)" },
   { key: "pasted", label: "Likely pasted", description: "Code, logs, tables, agent-style formatting, or sent faster than typing", categories: ["pasted"], color: "var(--heat-1)" },
-  { key: "copied", label: "Copied or re-sent", description: "Matches agent output or your own messages from the previous 48 hours", categories: ["quoted", "resent"], color: "var(--gold)" },
+  { key: "copied", label: "Copied or re-sent", description: "Matches agent output from the previous 48 hours, or anything you sent before", categories: ["quoted", "resent"], color: "var(--gold)" },
   { key: "prompts", label: "Templates and attachments", description: "Repeated one-click prompts, slash commands, attachment references", categories: ["template", "attachment"], color: "var(--heat-2)" },
   { key: "machine", label: "Harness and automation", description: "Harness instructions and prompts sent by scripts or other agents", categories: ["harness", "automated"], color: "var(--muted)" },
 ];

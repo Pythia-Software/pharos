@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -23,10 +24,12 @@ import (
 // docs/human-authorship.md.
 
 // authorshipVersion names the classification rules; a new version rebuilds.
-const authorshipVersion = "authorship-v2"
+const authorshipVersion = "authorship-v3"
 
 const (
-	// authorshipWindow bounds how far back copied text is looked for.
+	// authorshipWindow bounds how far back agent output is looked for. Your
+	// own earlier messages are compared however old they are, since saved
+	// prompts are often re-sent weeks apart.
 	authorshipWindow = 48 * time.Hour
 	// shingleWords is the length of the word runs compared between texts.
 	shingleWords = 8
@@ -35,6 +38,12 @@ const (
 	// Prompts with the same text in this many sessions on this many days are
 	// templates (buttons, saved prompts) rather than text typed each time.
 	templateSessions, templateDays, templateMinChars = 5, 3, 10
+	// A line of at least lineMinWords words already sent in lineConversations
+	// other conversations is output or boilerplate, not something retyped.
+	lineMinWords, lineConversations = 4, 2
+	// machineBlockGap is how many prose lines may interrupt pasted output
+	// (a traceback's source lines, a log's messages) without ending it.
+	machineBlockGap = 2
 	// typingCharsPerSecond is faster than anyone types or dictates.
 	typingCharsPerSecond = 20
 	// typingCheckMinChars keeps the speed check off short replies.
@@ -102,9 +111,21 @@ var (
 	attachmentPattern = regexp.MustCompile(`@⟦[^⟧\n]*⟧\([^)\n]*\)|(?:/[^\s]*)?\.context/attachments/(?:[A-Za-z0-9_-]+/)?[^\n]*?\.(?:md|txt|png|jpe?g|gif|webp|pdf|json|csv|log|html|zip)\b|\(image attachment\)`)
 	slashPattern      = regexp.MustCompile(`^/[A-Za-z][\w:-]*`)
 	fencePattern      = regexp.MustCompile("(?s)```.*?(?:```|$)")
-	timestampPattern  = regexp.MustCompile(`^\[?\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}|^\[?\d{2}:\d{2}:\d{2}`)
+	timestampPattern  = regexp.MustCompile(`^\[?\d{4}[-/]\d{2}[-/]\d{2}[T ]\d{2}:\d{2}|^\[?\d{1,2}:\d{2}:\d{2}`)
 	fileLinePattern   = regexp.MustCompile(`\S+\.[A-Za-z]{1,5}:\d+`)
 	levelPattern      = regexp.MustCompile(`^\[?(?:DEBUG|INFO|WARN|WARNING|ERROR|FATAL|TRACE|debug|info|warn|error)\b[\]:]?`)
+	// Program output: "[deploy] …" tags, shell prompts, error headers,
+	// key=value pairs, and rule or underline lines.
+	tagPrefixPattern   = regexp.MustCompile(`^\[[\w .:/-]{1,24}\]\s`)
+	shellPromptPattern = regexp.MustCompile(`^(?:\S+@\S+ \S+ ?[%$#]|PS [A-Za-z]:\\[^>]*>|>>> )`)
+	errorHeadPattern   = regexp.MustCompile(`^(?:[\w.]*(?:Error|Exception):|error(?:\[\w+\])?:|fatal:|npm (?:ERR|WARN)!|Caused by:|\+ (?:CategoryInfo|FullyQualifiedErrorId)|At line:\d)`)
+	keyValuePattern    = regexp.MustCompile(`\b[\w.-]+=\S+`)
+	ruleLinePattern    = regexp.MustCompile(`^[\s^~─━═│├└┌┐┘╰╭>×✓✗✔✘•=*#-]{4,}$`)
+	// Source code: declarations, imports, and lines ending the way statements do.
+	codeStartPattern = regexp.MustCompile(`^(?://|#!|#include\b|(?:const|let|var) [\w{}\[\], ]+ =|(?:def|func|fn|pub fn|function|class) \w*.*[({:]\s*$|from [\w.]+ import |import .*['"]\s*;?$)`)
+	codeEndPattern   = regexp.MustCompile(`(?:[;{}(\[,]|=>|\)\s*\{)\s*$`)
+	// indentedPattern is text indented as a block, not a nested list item.
+	indentedPattern = regexp.MustCompile(`^(?: {4,}|\t)(?:[^-*•\d\s]|\d+[^.)\d])`)
 )
 
 // harnessTags wrap text a harness prepends to what a person typed, inside the
@@ -425,12 +446,21 @@ func automatedReason(input authorInput) string {
 	return ""
 }
 
-// classifier holds the corpus state classification needs: templates, and
-// the agent output and user text of the window before the current message.
+// lineUse records the first message a line was sent in and the distinct
+// conversations it was sent in, up to one more than lineConversations.
+type lineUse struct {
+	origin        textOrigin
+	conversations []string
+}
+
+// classifier holds the corpus state classification needs: templates, the
+// agent output of the window before the current message, and every earlier
+// message's text and lines.
 type classifier struct {
 	templates    map[string]*templateUse
 	agentText    *shingleIndex
 	userText     *shingleIndex
+	lines        map[uint64]*lineUse
 	lastUserSent map[string]time.Time
 }
 
@@ -452,7 +482,7 @@ func newClassifier(inputs []authorInput) *classifier {
 		use.sessions[input.ConversationID] = true
 		use.days[input.SentAt.Local().Format("2006-01-02")] = true
 	}
-	return &classifier{templates: templates, agentText: newShingleIndex(), userText: newShingleIndex(), lastUserSent: map[string]time.Time{}}
+	return &classifier{templates: templates, agentText: newShingleIndex(), userText: newShingleIndex(), lines: map[uint64]*lineUse{}, lastUserSent: map[string]time.Time{}}
 }
 
 // classify labels one message. Agent output sent before it must already be
@@ -494,16 +524,29 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 			l.claim(line[0], line[1], spanQuoted, "Quoted with >", textOrigin{})
 		}
 	}
+	// Harness text is left out of word runs, or its closing words and the
+	// first words typed after it would match every earlier session's.
 	tokens := wordTokens(text)
+	for len(tokens) > 0 && tokens[0].start < bodyStart {
+		tokens = tokens[1:]
+	}
 	hashes := shingles(tokens)
-	cutoff := input.SentAt.Add(-authorshipWindow)
-	for _, run := range copiedRuns(tokens, hashes, c.agentText, cutoff) {
+	for _, run := range copiedRuns(tokens, hashes, c.agentText, input.SentAt.Add(-authorshipWindow)) {
 		l.claim(run.start, run.end, spanQuoted, "Matches agent output from "+ago(input.SentAt, run.at)+" earlier", run.origin)
 	}
-	for _, run := range copiedRuns(tokens, hashes, c.userText, cutoff) {
+	for _, run := range copiedRuns(tokens, hashes, c.userText, time.Time{}) {
 		l.claim(run.start, run.end, spanResent, "Already sent "+ago(input.SentAt, run.at)+" earlier", run.origin)
 	}
-	claimStructuredBlocks(l, text, lines)
+	// A reused line counts as re-sent on its own only when it is too long to
+	// be a phrase typed again by chance; shorter ones only mark pasted output.
+	keys, repeated := c.repeatedLines(input.ConversationID, text, lines, bodyStart)
+	for index, line := range lines {
+		value := text[line[0]:line[1]]
+		if use := c.lines[keys[index]]; repeated[index] && use != nil && len(wordTokens(value)) >= shingleWords && !machineLine(value) {
+			l.claim(line[0], line[1], spanResent, "Line already sent in other conversations", use.origin)
+		}
+	}
+	claimStructuredBlocks(l, text, lines, repeated)
 	if remaining := l.unclaimed(); hasPrevious && remaining >= typingCheckMinChars {
 		seconds := input.SentAt.Sub(previous).Seconds()
 		if seconds <= 0 || float64(remaining)/seconds > typingCharsPerSecond {
@@ -511,7 +554,78 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 		}
 	}
 	c.userText.add(input.SentAt, textOrigin{input.ConversationID, input.ID}, hashes)
+	c.rememberLines(textOrigin{input.ConversationID, input.ID}, keys)
 	return l.spans()
+}
+
+// lineKey identifies a line by its words, with numbers, IDs, and hashes
+// collapsed so the same log line from another run still matches. Lines shorter
+// than lineMinWords get no key.
+func lineKey(line string) (uint64, bool) {
+	tokens := wordTokens(line)
+	if len(tokens) < lineMinWords {
+		return 0, false
+	}
+	hash := fnv.New64a()
+	for _, token := range tokens {
+		word := token.word
+		if strings.ContainsAny(word, "0123456789") {
+			word = "0"
+		}
+		hash.Write([]byte(word))
+		hash.Write([]byte{0})
+	}
+	return hash.Sum64(), true
+}
+
+// repeatedLines keys each line after the harness and reports which ones
+// appear twice in this message or were sent in lineConversations other
+// conversations before it. People rarely retype a line word for word, so
+// such lines are program output or reused text.
+func (c *classifier) repeatedLines(conversation, text string, lines [][2]int, bodyStart int) ([]uint64, []bool) {
+	keys, repeated := make([]uint64, len(lines)), make([]bool, len(lines))
+	within := map[uint64]int{}
+	for index, line := range lines {
+		if line[1] <= bodyStart {
+			continue
+		}
+		if key, ok := lineKey(text[max(line[0], bodyStart):line[1]]); ok {
+			keys[index] = key
+			within[key]++
+		}
+	}
+	for index, key := range keys {
+		if key == 0 {
+			continue
+		}
+		others := 0
+		if use := c.lines[key]; use != nil {
+			for _, seen := range use.conversations {
+				if seen != conversation {
+					others++
+				}
+			}
+		}
+		repeated[index] = within[key] > 1 || others >= lineConversations
+	}
+	return keys, repeated
+}
+
+// rememberLines records the conversation each keyed line was sent in.
+func (c *classifier) rememberLines(origin textOrigin, keys []uint64) {
+	for _, key := range keys {
+		if key == 0 {
+			continue
+		}
+		use := c.lines[key]
+		if use == nil {
+			use = &lineUse{origin: origin}
+			c.lines[key] = use
+		}
+		if len(use.conversations) <= lineConversations && !slices.Contains(use.conversations, origin.conversation) {
+			use.conversations = append(use.conversations, origin.conversation)
+		}
+	}
 }
 
 // textLines returns the byte range of every line, without its newline.
@@ -527,13 +641,15 @@ func textLines(text string) [][2]int {
 	return lines
 }
 
-// machineLine reports whether a line looks like program output or data
-// rather than prose: log lines, stack frames, diffs, JSON, and file:line lists.
+// machineLine reports whether a line looks like program output, code, or
+// data rather than prose: log lines, stack frames, diffs, JSON, shell
+// sessions, error reports, source code, and file:line lists.
 func machineLine(line string) bool {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
 		return false
 	}
+	first, _ := utf8.DecodeRuneInString(trimmed)
 	switch {
 	case timestampPattern.MatchString(trimmed), levelPattern.MatchString(trimmed):
 		return true
@@ -549,6 +665,13 @@ func machineLine(line string) bool {
 		return true
 	case fileLinePattern.MatchString(trimmed) && len(strings.Fields(trimmed)) <= 6:
 		return true
+	case tagPrefixPattern.MatchString(trimmed), shellPromptPattern.MatchString(trimmed), errorHeadPattern.MatchString(trimmed),
+		ruleLinePattern.MatchString(trimmed), codeStartPattern.MatchString(trimmed), len(keyValuePattern.FindAllStringIndex(trimmed, 3)) >= 2:
+		return true
+	case strings.ContainsAny(trimmed, "│├└╰╭━═"), strings.ContainsRune("▸·✖✔✘✓✗●○◆▶►→⚠❌✅×", first):
+		return true
+	case codeEndPattern.MatchString(trimmed) && codePunctuation(trimmed) >= 2:
+		return true
 	}
 	letters := 0
 	for _, r := range trimmed {
@@ -557,6 +680,17 @@ func machineLine(line string) bool {
 		}
 	}
 	return utf8.RuneCountInString(trimmed) >= 20 && float64(letters)/float64(utf8.RuneCountInString(trimmed)) < 0.6
+}
+
+// codePunctuation counts the brackets, semicolons, and equals signs in text.
+func codePunctuation(text string) int {
+	count := 0
+	for _, r := range text {
+		if strings.ContainsRune("(){}[];=", r) {
+			count++
+		}
+	}
+	return count
 }
 
 func tableLine(line string) bool {
@@ -575,9 +709,43 @@ func boldBulletLine(line string) bool {
 	return strings.HasPrefix(trimmed, " **")
 }
 
-// claimStructuredBlocks marks runs of machine output and tables, and the
-// region of a message formatted the way agents format replies.
-func claimStructuredBlocks(l *labeler, text string, lines [][2]int) {
+// indentedLine reports whether a line is indented as a block (a pasted
+// terminal message or code) rather than as a nested list item. Pastes often
+// indent with non-breaking spaces.
+func indentedLine(line string) bool {
+	return indentedPattern.MatchString(strings.ReplaceAll(line, "\u00a0", " "))
+}
+
+// claimMachineBlocks marks pasted output: at least three machine lines, with
+// at most machineBlockGap prose lines between any two of them and no more
+// prose than machine lines overall. Tracebacks and logs mix source lines and
+// messages into their frames, so strictly consecutive runs miss them.
+func claimMachineBlocks(l *labeler, text string, lines [][2]int, machine []bool) {
+	for index := 0; index < len(lines); {
+		if !machine[index] {
+			index++
+			continue
+		}
+		last, machines, prose, gap := index, 0, 0, 0
+		for next := index; next < len(lines) && gap <= machineBlockGap; next++ {
+			switch {
+			case machine[next]:
+				machines, prose, gap, last = machines+1, prose+gap, 0, next
+			case strings.TrimSpace(text[lines[next][0]:lines[next][1]]) != "":
+				gap++
+			}
+		}
+		if machines >= 3 && machines >= prose {
+			l.claim(lines[index][0], lines[last][1], spanPasted, "Log, trace, code, or data", textOrigin{})
+		}
+		index = last + 1
+	}
+}
+
+// claimStructuredBlocks marks pasted output and tables, and the region of a
+// message formatted the way agents format replies. Repeated lines count as
+// machine lines.
+func claimStructuredBlocks(l *labeler, text string, lines [][2]int, repeated []bool) {
 	claimRuns := func(match func(string) bool, minimum int, reason string) {
 		for index := 0; index < len(lines); {
 			end := index
@@ -590,7 +758,12 @@ func claimStructuredBlocks(l *labeler, text string, lines [][2]int) {
 			index = max(end, index+1)
 		}
 	}
-	claimRuns(machineLine, 3, "Log, trace, or data")
+	machine := make([]bool, len(lines))
+	for index, line := range lines {
+		value := text[line[0]:line[1]]
+		machine[index] = repeated[index] || machineLine(value) || indentedLine(value)
+	}
+	claimMachineBlocks(l, text, lines, machine)
 	claimRuns(tableLine, 2, "Table")
 	first, last, headings, bullets := -1, -1, 0, 0
 	for index, line := range lines {
@@ -628,8 +801,10 @@ func roundDuration(value time.Duration) string {
 		return fmt.Sprintf("%ds", max(int(value.Seconds()), 0))
 	case value < time.Hour:
 		return fmt.Sprintf("%dm", int(value.Minutes()))
-	default:
+	case value < 48*time.Hour:
 		return fmt.Sprintf("%.1fh", value.Hours())
+	default:
+		return fmt.Sprintf("%dd", int(value.Hours()/24))
 	}
 }
 
@@ -804,7 +979,6 @@ func (c *Catalog) classifyInputs(ctx context.Context, inputs []authorInput) ([]a
 		}
 		cutoff := input.SentAt.Add(-authorshipWindow)
 		classifier.agentText.evict(cutoff)
-		classifier.userText.evict(cutoff)
 		results = append(results, authorResult{Input: input, Spans: classifier.classify(input)})
 	}
 	return results, nil
