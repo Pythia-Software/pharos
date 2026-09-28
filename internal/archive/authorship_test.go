@@ -195,6 +195,29 @@ func TestAuthorshipFlagsPastedStructure(t *testing.T) {
 	}
 }
 
+func TestAuthorshipFlagsIdentifiers(t *testing.T) {
+	c := newClassifier(nil)
+	path := "Please debug job_other_06F7MZRNW2VMSJ6VAVF9CDFHH4 and look at the worker logs"
+	spans := c.classify(authorInput{ID: "p", ConversationID: "c", Text: path, SentAt: authorAt(0)})
+	if got := categoryText(path, spans, spanPasted); got != "job_other_06F7MZRNW2VMSJ6VAVF9CDFHH4" {
+		t.Fatalf("pasted = %q (%#v)", got, spans)
+	}
+	if got := categoryText(path, spans, spanTyped); got != "Please debug|and look at the worker logs" {
+		t.Fatalf("typed = %q", got)
+	}
+	selector := "This button is misaligned\n- Selector: `#pharosDrivePanel > dl.pharos-drive-space > dt:nth-of-type(2)`"
+	spans = c.classify(authorInput{ID: "s", ConversationID: "c", Text: selector, SentAt: authorAt(60)})
+	if got := categoryText(selector, spans, spanTyped); got != "This button is misaligned" {
+		t.Fatalf("selector typed = %q (%#v)", got, spans)
+	}
+	// Short labels, quantities, abbreviations, and compounds are typed.
+	prose := "Great, please fix M1, M2, and PR-3 next (i.e. the 2m timeouts) in the frontend/backend split"
+	spans = c.classify(authorInput{ID: "t", ConversationID: "c", Text: prose, SentAt: authorAt(120)})
+	if len(spans) != 1 || spans[0].Category != spanTyped {
+		t.Fatalf("prose spans = %#v", spans)
+	}
+}
+
 func TestAuthorshipTypingSpeedOnlyFlagsImpossibleRates(t *testing.T) {
 	c := newClassifier(nil)
 	c.classify(authorInput{ID: "first", ConversationID: "c", Text: "Start the migration", SentAt: authorAt(0)})
