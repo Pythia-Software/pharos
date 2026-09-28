@@ -79,7 +79,7 @@ func TestUsageRowsSplitSessionsByRequestTime(t *testing.T) {
 func TestUsageSeedAndRefineExistingCatalogs(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	ingestUsageFixture(t, catalog)
-	if _, err := catalog.DB.Exec("DELETE FROM agent_session_usage"); err != nil {
+	if _, err := catalog.DB.Exec("DELETE FROM agent_session_usage; DELETE FROM usage_attribution_state"); err != nil {
 		t.Fatal(err)
 	}
 	if err := catalog.Initialize(); err != nil {

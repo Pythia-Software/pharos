@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func Run(arguments []string) error {
@@ -272,6 +273,8 @@ func Run(arguments []string) error {
 			return fmt.Errorf("repair usage attribution after %d workspaces: %w", repaired, err)
 		}
 		return printJSON(map[string]any{"workspaces_repaired": repaired})
+	case "upgrade":
+		return runUpgradeCLI(catalog, args)
 	case "pricing":
 		return runPricingCLI(catalog, args)
 	case "search":
@@ -297,7 +300,7 @@ func Run(arguments []string) error {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: pharos [--config PATH] {init,init-library,add-this-mac,serve,capture,index,backup,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,build-tools,pricing,search,tl1,health,doctor,dev-ui,mcp,probe,volume-id}")
+	return fmt.Errorf("usage: pharos [--config PATH] {init,init-library,add-this-mac,serve,capture,index,backup,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,upgrade,build-tools,pricing,search,tl1,health,doctor,dev-ui,mcp,probe,volume-id}")
 }
 func urlQueryEscape(value string) string {
 	replacer := strings.NewReplacer("%", "%25", " ", "%20", "+", "%2B", "?", "%3F", "&", "%26", "=", "%3D")
@@ -406,4 +409,52 @@ func runPricingCLI(catalog *Catalog, args []string) error {
 		return fmt.Errorf("pricing file has %d problems", len(problems))
 	}
 	return nil
+}
+
+// runUpgradeCLI runs the library upgrade, or with --status or --preview only
+// reports what it would do. --github also asks GitHub which repositories
+// were renamed or moved.
+func runUpgradeCLI(catalog *Catalog, args []string) error {
+	github, mode := false, "run"
+	for _, arg := range args {
+		switch arg {
+		case "--github":
+			github = true
+		case "--status", "--preview":
+			mode = arg
+		default:
+			return fmt.Errorf("usage: pharos upgrade [--status|--preview] [--github]")
+		}
+	}
+	ctx := context.Background()
+	switch mode {
+	case "--status":
+		value, err := catalog.UpgradeStatus(ctx)
+		if err != nil {
+			return err
+		}
+		return printJSON(value)
+	case "--preview":
+		groups, err := catalog.RepositoryMergePreview(ctx, github)
+		if err != nil {
+			return err
+		}
+		return printJSON(map[string]any{"repository_merges": groups})
+	}
+	started, last := time.Now(), time.Now()
+	err := catalog.RunUpgrade(ctx, github, func(step string, done, total int) {
+		if total == 0 || done == total || time.Since(last) > 10*time.Second {
+			last = time.Now()
+			fmt.Fprintf(os.Stderr, "%s %s: %d/%d\n", time.Since(started).Round(time.Second), step, done, total)
+		}
+	})
+	if err != nil {
+		return err
+	}
+	value, err := catalog.UpgradeStatus(ctx)
+	if err != nil {
+		return err
+	}
+	value["elapsed_seconds"] = time.Since(started).Seconds()
+	return printJSON(value)
 }

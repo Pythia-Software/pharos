@@ -321,8 +321,24 @@ func TestToolErrorSignatureAndTestFailure(t *testing.T) {
 			t.Errorf("%q: %q, want %q", test.input, got, test.want)
 		}
 	}
-	if got := toolErrorSignature("UnicodeDecodeError: 'utf-8' codec can't decode byte 0x8b"); !strings.Contains(got, "utf-<n>") || !strings.Contains(got, "0x<id>") {
+	// A one-byte value names the cause (0x8b is gzip data read as text);
+	// longer hex values are addresses and are hidden.
+	if got := toolErrorSignature("UnicodeDecodeError: 'utf-8' codec can't decode byte 0x8b"); !strings.Contains(got, "utf-<n>") || !strings.Contains(got, "0x8b") {
 		t.Fatalf("codec signature: %q", got)
+	}
+	if got := toolErrorSignature("panic: nil map at 0x14000123abc"); !strings.Contains(got, "0x<id>") {
+		t.Fatalf("address signature: %q", got)
+	}
+	for _, test := range []struct{ input, want string }{
+		{"{\n  \"ok\": false,\n  \"reason\": \"missing field\"\n}", `"ok": false,`},
+		{"/Users/x/repo/file.go\nsomething went wrong", "something went wrong"},
+		{"node:internal/modules/cjs/loader:1228\n  throw err;\n  ^\nError: Cannot find module './x'", "Error: Cannot find module"},
+		{"usage:\n  tl1m [-h] {handoff,finding}", "usage: tl1m [-h]"},
+		{"Validation failed:\n  shape.version must be 2", "Validation failed: shape.version must be"},
+	} {
+		if got := toolErrorSignature(test.input); !strings.Contains(got, test.want) {
+			t.Errorf("%q: %q, want %q", test.input, got, test.want)
+		}
 	}
 	code := int64(1)
 	call := toolCall{Status: "error", ExitCode: &code, CommandCategory: "test"}
@@ -351,7 +367,7 @@ func TestToolErrorSignatureAndTestFailure(t *testing.T) {
 }
 
 func TestRepoRelativePath(t *testing.T) {
-	roots := []repoRoot{{"/Users/a/src/pharos", "pharos"}, {"/Users/a/src/other", "other"}}
+	roots := []repoRoot{{"/Users/a/src/pharos", "pharos", ""}, {"/Users/a/src/other", "other", ""}}
 	cases := []struct{ path, cwd, rel, repo, scope string }{
 		{"/Users/a/src/pharos/a.go", "", "a.go", "pharos", "repo"},
 		{"a.go", "/Users/a/src/other", "a.go", "other", "repo"},
@@ -374,6 +390,39 @@ func TestRepoRelativePath(t *testing.T) {
 		rel, repo, scope := repoRelativePath(test.path, test.cwd, roots)
 		if rel != test.rel || repo != test.repo || scope != test.scope {
 			t.Errorf("%s: %q %q %q", test.path, rel, repo, scope)
+		}
+	}
+}
+
+// A worktree's repository comes from known checkouts, not its directory
+// name, so renamed repositories keep one identity.
+func TestResolveRepoPathUsesKnownCheckouts(t *testing.T) {
+	roots := []repoRoot{
+		{"/Users/a/conductor/workspaces/alexandria/stuttgart", "pharos", "repo-pharos"},
+		{"/Users/a/src/pharos", "pharos", "repo-pharos"},
+		{"/Users/a/conductor/workspaces/shared/one", "first", "repo-first"},
+		{"/Users/a/conductor/workspaces/shared/two", "second", "repo-second"},
+	}
+	for _, test := range []struct{ path, repo, id string }{
+		{"/Users/a/conductor/workspaces/alexandria/stuttgart/a.go", "pharos", "repo-pharos"},
+		{"/Users/a/conductor/workspaces/alexandria/abu-dhabi/a.go", "pharos", "repo-pharos"},
+		{"/Users/a/src/pharos/.conductor/lisbon/a.go", "pharos", "repo-pharos"},
+		{"/Users/a/conductor/workspaces/shared/three/a.go", "shared", ""},
+		{"/Users/a/conductor/workspaces/unknown/x/a.go", "unknown", ""},
+	} {
+		rel, repo, scope := resolveRepoPath(test.path, "", roots)
+		if rel != "a.go" || scope != "repo" || repo.Repository != test.repo || repo.ID != test.id {
+			t.Errorf("%s: %q %+v %q", test.path, rel, repo, scope)
+		}
+	}
+}
+
+// A worktree root itself, near the end of the path, once sliced past it.
+func TestResolveRepoPathAtWorktreeRoot(t *testing.T) {
+	for _, path := range []string{"/w/.conductor/x", "/w/.claude/worktrees/x", "/w/.task-worktrees/x"} {
+		rel, repo, scope := resolveRepoPath(path, "", []repoRoot{{"/elsewhere", "other", "id"}})
+		if rel != "." || scope != "repo" || repo.Repository != "w" {
+			t.Errorf("%s: %q %+v %q", path, rel, repo, scope)
 		}
 	}
 }

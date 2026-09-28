@@ -655,6 +655,12 @@ func ingestCopy(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host,
 		return 0, 0, err
 	}
 	if authority.workspace {
+		// This record wrote the workspace's sessions and token metrics with the
+		// current attribution, so RepairUsageAttribution can skip it.
+		if _, err := tx.Exec(`INSERT INTO usage_attribution_state(workspace_id,version) VALUES(?,?)
+			ON CONFLICT(workspace_id) DO UPDATE SET version=excluded.version`, workspaceID, usageAttributionVersion); err != nil {
+			return 0, 0, err
+		}
 		metrics := record.Metrics
 		if tokens := reconciledTokenMetrics(record); len(tokens) > 0 {
 			if _, err := tx.Exec("DELETE FROM metrics WHERE workspace_id=? AND unit='tokens'", workspaceID); err != nil {
@@ -865,23 +871,49 @@ func upsertRepository(tx *sql.Tx, value map[string]any, options ...repositoryOpt
 	if err != nil {
 		return "", err
 	}
-	owners := repositoryDirectoryOwners(items, aliases)
-	for _, existing := range items {
-		if existing.ID == item.ID && item.ID != "" || repositorySameIdentity(existing, item, items, aliases, owners, separate) {
-			item.ID = existing.ID
-			item.Aliases = repositoryUnion(item.Aliases, existing.Aliases)
-			item.Locations = repositoryUnion(item.Locations, existing.Locations)
-			item.Remote = existing.Remote
-			item.Normalized = existing.Normalized
-			if item.Root == "" {
-				item.Root = existing.Root
-			}
-			if item.Forge == "" {
-				item.Forge = existing.Forge
-			}
-			item.Name = existing.Name
+	match := -1
+	for i, existing := range items {
+		if existing.ID == item.ID && item.ID != "" || repositorySameIdentity(existing, item, aliases, separate) {
+			match = i
 			break
 		}
+	}
+	// A remoteless capture joins the group its checkout or Conductor directory
+	// points to, using the same group-aware rule as the merge planner.
+	if match < 0 && repositoryAttachable(item, repositoryKeys(item, aliases), separate) {
+		g := newRepositoryGrouping(items, aliases, separate, nil)
+		if target, _ := g.attach(item, -1); target >= 0 {
+			match = target
+			group := g.root(target)
+			for i := range items {
+				if g.root(i) == group && repositoryPreferred(items[i], items[match], g.keyed(i), g.keyed(match)) {
+					match = i
+				}
+			}
+		}
+	}
+	if match < 0 {
+		for i, existing := range items {
+			if repositoryRemotelessSibling(existing, item, items) {
+				match = i
+				break
+			}
+		}
+	}
+	if match >= 0 {
+		existing := items[match]
+		item.ID = existing.ID
+		item.Aliases = repositoryUnion(item.Aliases, existing.Aliases)
+		item.Locations = repositoryUnion(item.Locations, existing.Locations)
+		item.Remote = existing.Remote
+		item.Normalized = existing.Normalized
+		if item.Root == "" {
+			item.Root = existing.Root
+		}
+		if item.Forge == "" {
+			item.Forge = existing.Forge
+		}
+		item.Name = existing.Name
 	}
 	if item.ID == "" {
 		identity := item.Normalized

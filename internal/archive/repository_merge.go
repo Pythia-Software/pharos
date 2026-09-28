@@ -114,9 +114,19 @@ func mergeRepositoryGroup(db *sql.DB, group repositoryMergeGroup) error {
 		if _, err := tx.Exec(`DELETE FROM protections WHERE scope_type='repository' AND scope_id=?`, loser.ID); err != nil {
 			return err
 		}
+		// The tool ledger names the repository each file belongs to.
+		if _, err := tx.Exec(`UPDATE tool_calls SET path_repository_id=?,path_repository=? WHERE path_repository_id=?`, group.Survivor.ID, group.Name, loser.ID); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(`DELETE FROM repositories WHERE id=?`, loser.ID); err != nil {
 			return err
 		}
+	}
+	if _, err := tx.Exec(`UPDATE tool_calls SET path_repository=? WHERE path_repository_id=? AND path_repository IS NOT ?`, group.Name, group.Survivor.ID, group.Name); err != nil {
+		return err
+	}
+	if err := recordRepositoryRenames(tx, group); err != nil {
+		return err
 	}
 	// A pre-existing PR on the survivor may also have an older ID. Ingest
 	// derives IDs from the current repository ID, so normalize every PR here.

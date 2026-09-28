@@ -2,7 +2,9 @@ package archive
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -74,12 +76,186 @@ func TestPharosRenamePlan(t *testing.T) {
 	rows := []repositoryIdentity{
 		{ID: "old", Name: "alexandria", Remote: "https://github.com/gbdubs/alexandria.git", Normalized: "github.com/gbdubs/alexandria", Forge: "1377317940", ForgeCanonical: "github.com/pythia-software/pharos", Workspaces: 227, Locations: []string{"/Users/test/conductor/workspaces/alexandria/one"}},
 		{ID: "missing", Name: "alexandria", Workspaces: 57, Locations: []string{"/Users/test/conductor/workspaces/alexandria/two"}},
-		{ID: "middle", Name: "pharos", Remote: "https://github.com/gbdubs/pharos.git", Normalized: "github.com/gbdubs/pharos", Forge: "1377317940", ForgeCanonical: "github.com/pythia-software/pharos", Workspaces: 1},
+		// Two remote rows claim Conductor directory alexandria, but both land
+		// in the same group, so the remoteless row still attaches.
+		{ID: "middle", Name: "pharos", Remote: "https://github.com/gbdubs/pharos.git", Normalized: "github.com/gbdubs/pharos", Forge: "1377317940", ForgeCanonical: "github.com/pythia-software/pharos", Workspaces: 1, Locations: []string{"/Users/test/conductor/workspaces/alexandria/stuttgart"}},
 		{ID: "current", Name: "pharos", Remote: "https://github.com/Pythia-Software/pharos.git", Normalized: "github.com/pythia-software/pharos", Forge: "1377317940", ForgeCanonical: "github.com/pythia-software/pharos", Workspaces: 4},
 	}
 	groups := planRepositoryMerges(rows, nil)
 	if len(groups) != 1 || len(groups[0].Losers) != 3 || groups[0].Survivor.ID != "current" || groups[0].Name != "pharos" {
 		t.Fatalf("plan: %#v", groups)
+	}
+	// Without the forge redirect the two owners form separate groups, and the
+	// shared directory is ambiguous again.
+	for i := range rows {
+		rows[i].Forge, rows[i].ForgeCanonical = "", ""
+	}
+	for _, group := range planRepositoryMerges(rows, nil) {
+		for _, item := range append([]repositoryIdentity{group.Survivor}, group.Losers...) {
+			if item.ID == "missing" {
+				t.Fatalf("attached across groups: %#v", group)
+			}
+		}
+	}
+}
+
+func repositoryGroupIDs(group repositoryMergeGroup) map[string]bool {
+	ids := map[string]bool{group.Survivor.ID: true}
+	for _, loser := range group.Losers {
+		ids[loser.ID] = true
+	}
+	return ids
+}
+
+func TestRepositoryRemotelessCheckoutAttach(t *testing.T) {
+	remote := func(id, slug string, workspaces int, locations ...string) repositoryIdentity {
+		return repositoryIdentity{ID: id, Remote: "git@" + strings.Replace(slug, "/", ":", 1) + ".git", Normalized: slug, Name: filepath.Base(slug), Workspaces: workspaces, Locations: locations}
+	}
+	local := func(id, name string, workspaces int, locations ...string) repositoryIdentity {
+		return repositoryIdentity{ID: id, Name: name, Workspaces: workspaces, Locations: locations}
+	}
+
+	// A remoteless row at the clone path joins the clone's group.
+	rows := []repositoryIdentity{
+		remote("pythia", "github.com/pythia-software/excel-corpus", 327, "/Users/t/gbdubs/excel-corpus", "/Users/t/gbdubs/excel-corpus/.task-worktrees/e60-attempt-1"),
+		remote("gbdubs", "github.com/pythia-software/excel-corpus", 292, "/Users/t/gbdubs/excel-corpus"),
+		local("tl1", "excel-corpus", 10323, "/Users/t/gbdubs/excel-corpus"),
+	}
+	groups := planRepositoryMerges(rows, nil)
+	if len(groups) != 1 || !repositoryGroupIDs(groups[0])["tl1"] || groups[0].Survivor.ID != "pythia" || groups[0].Name != "excel-corpus" {
+		t.Fatalf("clone path: %#v", groups)
+	}
+
+	// Worktrees in known in-clone layouts map to the clone, in either direction.
+	for _, worktree := range []string{"/Users/t/gbdubs/grady.dev/.conductor/puebla-v5", "/Users/t/gbdubs/grady.dev/.task-worktrees/a1", "/Users/t/gbdubs/grady.dev/.claude/worktrees/agent-1"} {
+		rows = []repositoryIdentity{remote("site", "github.com/gbdubs/grady.dev", 38, "/Users/t/gbdubs/grady.dev"), local("wt", "grady.dev", 4, worktree)}
+		if groups := planRepositoryMerges(rows, nil); len(groups) != 1 || !repositoryGroupIDs(groups[0])["wt"] || groups[0].Signals[len(groups[0].Signals)-1] != "local checkout" {
+			t.Fatalf("%s: %#v", worktree, groups)
+		}
+		rows = []repositoryIdentity{remote("site", "github.com/gbdubs/grady.dev", 38, worktree), local("clone", "grady.dev", 4, "/Users/t/gbdubs/grady.dev")}
+		if groups := planRepositoryMerges(rows, nil); len(groups) != 1 {
+			t.Fatalf("clone of %s: %#v", worktree, groups)
+		}
+	}
+	// A deeper path is not truncated to an ancestor clone.
+	rows = []repositoryIdentity{remote("site", "github.com/gbdubs/grady.dev", 38, "/Users/t/gbdubs/grady.dev"), local("nested", "grady.dev", 4, "/Users/t/gbdubs/grady.dev/.conductor/puebla-v5/.context/scratch")}
+	if groups := planRepositoryMerges(rows, nil); len(groups) != 0 {
+		t.Fatalf("nested path attached: %#v", groups)
+	}
+
+	// A path shared by two different groups (a fork and its parent) is ambiguous.
+	rows = []repositoryIdentity{
+		remote("mine", "github.com/one/widget", 5, "/Users/t/widget"),
+		remote("theirs", "github.com/two/widget", 5, "/Users/t/widget"),
+		local("orphan", "widget", 9, "/Users/t/widget"),
+	}
+	rows[0].Root, rows[1].Root = "same", "same"
+	if groups := planRepositoryMerges(rows, nil); len(groups) != 0 {
+		t.Fatalf("ambiguous path merged: %#v", groups)
+	}
+
+	// explo-candidate-v2 is a TL1 project name for the explo clone. The
+	// remoteless rows join explo, and the group keeps explo's name even though
+	// the remoteless rows have more workspaces than the remote rows.
+	rows = []repositoryIdentity{
+		remote("ssh", "github.com/pythia-software/explo", 464, "/Users/t/gbdubs/explo", "/Users/t/gbdubs/explo/.conductor/kampala-v6"),
+		remote("https", "github.com/pythia-software/explo", 300, "/Users/t/gbdubs/explo/.conductor/moscow-v1"),
+		local("candidate", "explo-candidate-v2", 2631, "/Users/t/gbdubs/explo"),
+		local("bare", "explo", 2447, "/Users/t/gbdubs/explo", "/Users/t/gbdubs/explo/.conductor/los-angeles-v2"),
+	}
+	groups = planRepositoryMerges(rows, nil)
+	if len(groups) != 1 || len(groups[0].Losers) != 3 || groups[0].Survivor.ID != "ssh" || groups[0].Name != "explo" {
+		t.Fatalf("explo: %#v", groups)
+	}
+
+	// A TL1 scratch origin.git nested in a Conductor workspace neither merges
+	// nor makes the workspace directory ambiguous.
+	origin := repositoryIdentity{ID: "origin", Name: "origin", Remote: "/Users/t/conductor/workspaces/tl1/edinburgh-v2/.context/run1/origin.git", Workspaces: 10, Locations: []string{"/Users/t/conductor/workspaces/tl1/edinburgh-v2/.context/run1/repo/.candidate-worktrees/4c11"}}
+	rows = []repositoryIdentity{
+		remote("tl1", "github.com/gbdubs/tl1", 261, "/Users/t/gbdubs/tl1", "/Users/t/conductor/workspaces/tl1/yellowknife-v1"),
+		origin,
+		local("missing", "tl1", 19, "/Users/t/conductor/workspaces/tl1/west-monroe-v8"),
+	}
+	groups = planRepositoryMerges(rows, nil)
+	if len(groups) != 1 || !repositoryGroupIDs(groups[0])["missing"] || repositoryGroupIDs(groups[0])["origin"] {
+		t.Fatalf("tl1: %#v", groups)
+	}
+}
+
+func TestRepositoryRemotelessAttachChecksCheckout(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+	clone := t.TempDir()
+	for _, args := range [][]string{{"init", "-q"}, {"remote", "add", "origin", "git@github.com:other/widget.git"}} {
+		if output, err := exec.Command("git", append([]string{"-C", clone}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, output)
+		}
+	}
+	rows := []repositoryIdentity{
+		{ID: "acme", Remote: "https://github.com/acme/widget.git", Normalized: "github.com/acme/widget", Name: "widget", Locations: []string{clone}},
+		{ID: "local", Name: "widget", Locations: []string{clone}},
+	}
+	if groups := planRepositoryMerges(rows, nil); len(groups) != 0 {
+		t.Fatalf("checkout origin disagrees but merged: %#v", groups)
+	}
+	if groups := planRepositoryMerges(rows, map[string]string{"github.com/other/widget": "github.com/acme/widget"}); len(groups) != 1 {
+		t.Fatalf("aliased checkout origin did not attach: %#v", groups)
+	}
+}
+
+func TestRepositoryUpsertRemotelessJoinsGroup(t *testing.T) {
+	catalog, err := OpenCatalog(filepath.Join(t.TempDir(), "catalog.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer catalog.Close()
+	for _, query := range []string{
+		`INSERT INTO repositories(id,canonical_remote,normalized_remote,display_name,forge_id,local_locations_json,created_at,updated_at) VALUES
+			('alexandria','https://github.com/gbdubs/alexandria.git','github.com/gbdubs/alexandria','alexandria','42','["/Users/t/conductor/workspaces/alexandria/one"]','t','t'),
+			('pharos','https://github.com/gbdubs/pharos.git','github.com/gbdubs/pharos','pharos','42','["/Users/t/conductor/workspaces/alexandria/stuttgart"]','t','t'),
+			('explo','git@github.com:acme/explo.git','github.com/acme/explo','explo',NULL,'["/Users/t/gbdubs/explo"]','t','t'),
+			('mine','https://github.com/one/widget.git','github.com/one/widget','widget',NULL,'["/Users/t/widget"]','t','t'),
+			('theirs','https://github.com/two/widget.git','github.com/two/widget','widget',NULL,'["/Users/t/widget"]','t','t')`,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at,repository_id) VALUES('w','codex','local','w','work','t','alexandria')`,
+	} {
+		if _, err := catalog.DB.Exec(query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tx, err := catalog.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	id, err := upsertRepository(tx, map[string]any{"display_name": "alexandria", "local_locations": []string{"/Users/t/conductor/workspaces/alexandria/abu-dhabi-v11"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "alexandria" {
+		t.Fatalf("conductor directory in one group: %s", id)
+	}
+	id, err = upsertRepository(tx, map[string]any{"display_name": "explo-candidate-v2", "local_locations": []string{"/Users/t/gbdubs/explo/.conductor/kyoto"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var name string
+	if err := tx.QueryRow(`SELECT display_name FROM repositories WHERE id=?`, id).Scan(&name); err != nil || id != "explo" || name != "explo" {
+		t.Fatalf("clone worktree: id=%s name=%s err=%v", id, name, err)
+	}
+	id, err = upsertRepository(tx, map[string]any{"display_name": "widget", "local_locations": []string{"/Users/t/widget"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id == "mine" || id == "theirs" {
+		t.Fatalf("ambiguous clone joined %s", id)
+	}
+	id, err = upsertRepository(tx, map[string]any{"display_name": "origin", "canonical_remote": "/Users/t/gbdubs/explo/.conductor/kyoto/.context/run/origin.git", "local_locations": []string{"/Users/t/gbdubs/explo"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id == "explo" {
+		t.Fatal("local origin.git joined explo")
 	}
 }
 

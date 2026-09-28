@@ -11,9 +11,11 @@ import (
 	"time"
 )
 
-var repositoryRoots sync.Map
+var repositoryGitAnswers sync.Map
 
-func repositoryRootCommit(location string) string {
+// repositoryGit runs a read-only Git query in a checkout on this Mac. Answers
+// are cached per location, query, and .git modification time.
+func repositoryGit(location string, args ...string) string {
 	if location == "" {
 		return ""
 	}
@@ -24,25 +26,40 @@ func repositoryRootCommit(location string) string {
 	if err != nil {
 		marker, _ = os.Stat(location)
 	}
-	key := location
+	key := location + "\x00" + strings.Join(args, "\x00")
 	if marker != nil {
 		key += ":" + strconv.FormatInt(marker.ModTime().UnixNano(), 10)
 	}
-	if value, ok := repositoryRoots.Load(key); ok {
+	if value, ok := repositoryGitAnswers.Load(key); ok {
 		return value.(string)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, "git", "-C", location, "rev-list", "--reverse", "--max-parents=0", "HEAD").Output()
+	output, err := exec.CommandContext(ctx, "git", append([]string{"-C", location}, args...)...).Output()
 	if err != nil {
+		// A Git answer (such as "no origin") is cached; a timeout is not.
+		if _, ok := err.(*exec.ExitError); ok && ctx.Err() == nil {
+			repositoryGitAnswers.Store(key, "")
+		}
 		return ""
 	}
-	roots := strings.Fields(string(output))
+	answer := strings.TrimSpace(string(output))
+	repositoryGitAnswers.Store(key, answer)
+	return answer
+}
+
+func repositoryRootCommit(location string) string {
+	roots := strings.Fields(repositoryGit(location, "rev-list", "--reverse", "--max-parents=0", "HEAD"))
 	if len(roots) == 0 {
 		return ""
 	}
-	repositoryRoots.Store(key, roots[0])
 	return roots[0]
+}
+
+// repositoryOriginSlug is the normalized origin of a checkout on this Mac, or
+// empty when the location is absent, is not a checkout, or has no forge origin.
+func repositoryOriginSlug(location string) string {
+	return normalizeRepositoryRemote(repositoryGit(location, "remote", "get-url", "origin"))
 }
 
 // repositoryFromLocation avoids confusing a worktree or branch directory with a repository.

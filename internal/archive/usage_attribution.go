@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const usageAttributionVersion = "1"
+const usageAttributionVersion = "2"
 
 func claudeChildren(conversations []ConversationRecord, root ConversationRecord) []ConversationRecord {
 	if root.Provider != "claude" || root.AgentDepth != 0 {
@@ -26,7 +26,11 @@ func claudeGroupRemainder(conversations []ConversationRecord, root ConversationR
 	if root.Provider != "claude" || root.AgentDepth != 0 {
 		return nil
 	}
-	claims := map[string]tokenCounts{}
+	// Claude Code names a model's claim by its context variant
+	// ("claude-opus-5-5[1m]") while requests carry the base ID, so claims and
+	// requests are matched by model family. Each cost-state replaces the
+	// previous one for the models it names.
+	latest := map[string]tokenCounts{}
 	for _, message := range root.Messages {
 		raw, value := tokenObject(message)
 		if firstString(value["type"], raw["type"]) != "cost-state" {
@@ -34,12 +38,22 @@ func claudeGroupRemainder(conversations []ConversationRecord, root ConversationR
 		}
 		for model, usage := range mapValueDefault(value["modelUsage"]) {
 			if counts := normalizeTokenCounts(mapValue(usage)); counts != nil {
-				claims[model] = counts
+				latest[model] = counts
 			}
 		}
 	}
-	if len(claims) == 0 {
+	if len(latest) == 0 {
 		return nil
+	}
+	claims, names := map[string]tokenCounts{}, map[string]string{}
+	for model, counts := range latest {
+		family := modelFamily(model)
+		if claims[family] == nil {
+			claims[family], names[family] = tokenCounts{}, model
+		} else if model < names[family] {
+			names[family] = model
+		}
+		addTokenCounts(claims[family], counts)
 	}
 	requests := map[string]tokenCounts{}
 	hasRequests := false
@@ -50,19 +64,20 @@ func claudeGroupRemainder(conversations []ConversationRecord, root ConversationR
 				continue
 			}
 			hasRequests = true
-			if requests[request.Model] == nil {
-				requests[request.Model] = tokenCounts{}
+			family := modelFamily(request.Model)
+			if requests[family] == nil {
+				requests[family] = tokenCounts{}
 			}
-			addTokenCounts(requests[request.Model], request.Counts)
+			addTokenCounts(requests[family], request.Counts)
 		}
 	}
 	if !hasRequests {
 		return nil
 	}
 	remainders := map[string]tokenCounts{}
-	for model, claim := range claims {
-		if remainder := tokenRemainder(claim, requests[model]); remainder["total_tokens"] > 0 {
-			remainders[model] = remainder
+	for family, claim := range claims {
+		if remainder := tokenRemainder(claim, requests[family]); remainder["total_tokens"] > 0 {
+			remainders[names[family]] = remainder
 		}
 	}
 	return remainders

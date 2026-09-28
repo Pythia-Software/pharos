@@ -96,3 +96,42 @@ it runs from there; replace that copy when updating. An ad hoc signature
 changes with each build, so macOS may ask for access to the library drive
 again. Developer ID signing and notarization improve that experience, but are
 optional in the current release script.
+
+## Upgrading an existing library
+
+A new version can derive more from the transcripts a library already holds.
+When it opens a catalog indexed by an older version, Pharos offers a one-time
+**Upgrade this library** panel, once per launch, and keeps an **Upgrade
+library** button in the header until the upgrade is done. A library that is
+new to this version has nothing to upgrade and never sees the panel.
+
+The upgrade runs these steps in order, as one background job:
+
+1. **Merge repository identities.** Rows for one repository reached through
+   different remote URLs, renames, or checkouts without a remote become one.
+   **Preview repository merges** lists them first. Ticking **Ask GitHub which
+   repositories were renamed or moved** uses the `gh` command-line tool, when
+   it is installed and signed in; nothing else contacts the network.
+2. **Correct token attribution** for Claude sessions whose sub-agents were
+   counted twice.
+3. **Record harness versions**: which Claude Code or Codex version ran each
+   conversation.
+4. **Rebuild the tool ledger** with error signatures, test failures, and
+   repository-relative paths. This is the longest step.
+5. **Rebuild the Tools rollup**, so the first visit to Tools doesn't wait.
+
+Repositories merge first because the tool ledger records the repository each
+file belongs to. Every step reads the catalog's retained messages; the
+harness step also reads source files and captures where they still exist.
+Transcripts are never changed.
+
+The job commits in small units. Closing the panel doesn't stop it, and the
+drive badge shows its progress. Ejecting stops it after the unit in
+progress, and starting the upgrade again resumes where it stopped. Saved
+table views that filter on a repository name the merge retired are pointed at
+the surviving name.
+
+From the command line, `pharos upgrade --status` reports what is pending,
+`pharos upgrade --preview [--github]` lists the repository merges, and
+`pharos upgrade [--github]` runs every step, printing progress and the time
+each step took.

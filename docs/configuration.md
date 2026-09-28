@@ -1081,6 +1081,28 @@ slashes. It retains every observed URL and local checkout path. When a checkout
 is available, its root commit helps identify a rename within the same forge
 owner. A root commit alone is never enough to merge repositories.
 
+A repository row with no remote (for example a TL1 project or a Conductor
+workspace captured without an origin) joins a group of rows that have remotes
+when its location points to exactly one such group:
+
+- its location is a clone path of a row in that group, or a worktree in one of
+  the in-clone layouts `<clone>/.conductor/<name>`,
+  `<clone>/.task-worktrees/<name>`, or `<clone>/.claude/worktrees/<name>`; or
+- its location is a Conductor workspace, `conductor/workspaces/<dir>/<name>`,
+  and `<dir>` is claimed only by that group's workspaces.
+
+Ambiguity is judged per group, after forge, remote, alias, and root-commit
+grouping: two rows that claim the same path but belong to the same repository
+(such as an old and a renamed remote) do not block the match, while rows in
+two different groups (such as a fork and its parent) do. Paths nested more
+deeply, such as a scratch repository under a workspace's `.context`, never
+match, and a row whose remote is a local path (a TL1 `origin.git`) is never
+attached. When the location is a checkout on this Mac, its current `origin`
+and root commit must agree with the group. The group keeps the name and ID of
+a row with a remote, even when a remoteless row has more workspaces. Ingest
+applies the same rule, so a new remoteless workspace lands in that group's
+repository.
+
 For a rename whose old checkout is gone and whose forge redirect cannot be
 resolved, add explicit aliases to `library.toml` or `archive.toml`:
 
