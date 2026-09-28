@@ -547,9 +547,23 @@ struct ArchiveWebView: NSViewRepresentable {
       document.head.append(style);
       document.documentElement.classList.add('pharos-window');
       const interactive = 'a,button,input,textarea,select,label,summary,[role=button],[contenteditable],[tabindex]';
+      const inside = (rect, x, y) => x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+      // A modal's backdrop covers the header, so presses there land on the
+      // backdrop (or, for a <dialog>, on the dialog outside its box). Treat
+      // those like presses on the header so the window stays draggable.
+      const backdropOverHeader = event => {
+        const header = document.querySelector('header');
+        if (!header) return false;
+        const bar = header.getBoundingClientRect(), x = event.clientX, y = event.clientY;
+        if (!inside(bar, x, y)) return false;
+        const box = event.target.getBoundingClientRect();
+        if (event.target instanceof HTMLDialogElement) return !inside(box, x, y);
+        return box.left <= bar.left && box.right >= bar.right && box.top <= bar.top && box.bottom >= bar.bottom;
+      };
       document.addEventListener('mousedown', event => {
         if (event.button !== 0 || !(event.target instanceof Element)) return;
-        if (!event.target.closest('header') || event.target.closest(interactive)) return;
+        const onHeader = event.target.closest('header') && !event.target.closest(interactive);
+        if (!onHeader && !backdropOverHeader(event)) return;
         event.preventDefault();
         window.webkit.messageHandlers.\(windowMessageName).postMessage(event.detail === 2 ? 'doubleClick' : 'drag');
       });
