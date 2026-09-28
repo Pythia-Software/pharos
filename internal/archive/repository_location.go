@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,11 +17,19 @@ func repositoryRootCommit(location string) string {
 	if location == "" {
 		return ""
 	}
-	if value, ok := repositoryRoots.Load(location); ok {
-		return value.(string)
-	}
 	if info, err := os.Stat(location); err != nil || !info.IsDir() {
 		return ""
+	}
+	marker, err := os.Stat(filepath.Join(location, ".git"))
+	if err != nil {
+		marker, _ = os.Stat(location)
+	}
+	key := location
+	if marker != nil {
+		key += ":" + strconv.FormatInt(marker.ModTime().UnixNano(), 10)
+	}
+	if value, ok := repositoryRoots.Load(key); ok {
+		return value.(string)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -32,7 +41,7 @@ func repositoryRootCommit(location string) string {
 	if len(roots) == 0 {
 		return ""
 	}
-	repositoryRoots.Store(location, roots[0])
+	repositoryRoots.Store(key, roots[0])
 	return roots[0]
 }
 
