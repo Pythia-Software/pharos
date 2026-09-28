@@ -68,9 +68,10 @@ func claudeGroupRemainder(conversations []ConversationRecord, root ConversationR
 	return remainders
 }
 
-func applyClaudeGroupUsage(tx *sql.Tx, workspaceID string, conversations []ConversationRecord, ids []string) error {
+func applyClaudeGroupUsage(tx *sql.Tx, workspaceID string, conversations []ConversationRecord, ids []string, authority []conversationAuthority) error {
 	for index, root := range conversations {
-		if root.Provider != "claude" || root.AgentDepth != 0 || index >= len(ids) || ids[index] == "" {
+		if root.Provider != "claude" || root.AgentDepth != 0 || index >= len(ids) || ids[index] == "" ||
+			(authority != nil && (index >= len(authority) || !authority[index].writer)) {
 			continue
 		}
 		remainders := claudeGroupRemainder(conversations, root)
@@ -151,6 +152,10 @@ func linkClaudeDelegations(tx *sql.Tx, rootID string, root ConversationRecord, c
 // RepairUsageAttribution replays stored messages one workspace at a time.
 // The version row commits with the corrected sessions and metrics.
 func (c *Catalog) RepairUsageAttribution(ctx context.Context, progress func(int, int)) (int, error) {
+	return c.repairUsageAttribution(ctx, progress, walSizeLimit)
+}
+
+func (c *Catalog) repairUsageAttribution(ctx context.Context, progress func(int, int), walLimit int64) (int, error) {
 	rows, err := queryMapsContext(ctx, c.DB, `SELECT w.id FROM workspaces w WHERE EXISTS
 		(SELECT 1 FROM conversations c WHERE c.workspace_id=w.id AND c.provider='claude')
 		AND NOT EXISTS (SELECT 1 FROM usage_attribution_state s WHERE s.workspace_id=w.id AND s.version=?)`, usageAttributionVersion)
@@ -191,7 +196,7 @@ func (c *Catalog) RepairUsageAttribution(ctx context.Context, progress func(int,
 			}
 		}
 		if err == nil {
-			err = applyClaudeGroupUsage(tx, workspaceID, conversations, ids)
+			err = applyClaudeGroupUsage(tx, workspaceID, conversations, ids, nil)
 		}
 		if err == nil {
 			if metrics := reconciledTokenMetrics(WorkspaceRecord{Conversations: conversations}); len(metrics) > 0 {
@@ -212,6 +217,7 @@ func (c *Catalog) RepairUsageAttribution(ctx context.Context, progress func(int,
 		if err = tx.Commit(); err != nil {
 			return index, err
 		}
+		c.boundWAL(walLimit)
 		if progress != nil {
 			progress(index+1, len(rows))
 		}

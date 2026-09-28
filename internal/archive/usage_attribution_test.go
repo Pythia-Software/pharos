@@ -2,9 +2,119 @@ package archive
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 )
+
+func TestClaudeNonWriterCopyPreservesRootUsage(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	makeRecord := func(origin string, complete bool) WorkspaceRecord {
+		messages := []MessageRecord{{NativeID: "r1", Kind: "metadata", Model: "opus", Text: `{"type":"assistant","message":{"id":"r1","usage":{"input_tokens":90,"output_tokens":10}}}`}}
+		claim := `{"type":"cost-state","modelUsage":{"opus":{"input_tokens":100,"output_tokens":10}}}`
+		if complete {
+			messages = append(messages, MessageRecord{NativeID: "r2", Kind: "metadata", Model: "opus", Text: `{"type":"assistant","message":{"id":"r2","usage":{"input_tokens":180,"output_tokens":20}}}`})
+			claim = `{"type":"cost-state","modelUsage":{"opus":{"input_tokens":280,"output_tokens":30}}}`
+		}
+		messages = append(messages, MessageRecord{NativeID: "claim", Kind: "metadata", Text: claim})
+		return WorkspaceRecord{SourceID: "shared-claude", SourceKind: "claude", Account: "local", Conversations: []ConversationRecord{{
+			NativeID: "shared-claude", Provider: "claude", Model: "opus", Account: "local", Origin: origin,
+			StartedAt: "2026-09-20T10:00:00Z", Messages: messages,
+		}}}
+	}
+	ingestAs(t, catalog, "host-a", newCopyFixture(t, makeRecord("/a/session.jsonl", true)))
+	var before, beforeLedger int64
+	if err := catalog.DB.QueryRow("SELECT total_tokens FROM agent_sessions WHERE native_id='main'").Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.DB.QueryRow("SELECT COALESCE(SUM(total_tokens),0) FROM agent_session_usage").Scan(&beforeLedger); err != nil {
+		t.Fatal(err)
+	}
+	if before != 310 || beforeLedger != 310 {
+		t.Fatalf("initial usage = %d/%d, want 310", before, beforeLedger)
+	}
+	if result := ingestAs(t, catalog, "host-b", newCopyFixture(t, makeRecord("/b/session.jsonl", false))); result.Workspaces != 1 {
+		t.Fatalf("non-writer copy was not processed: %+v", result)
+	}
+	var after, afterLedger int64
+	if err := catalog.DB.QueryRow("SELECT total_tokens FROM agent_sessions WHERE native_id='main'").Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.DB.QueryRow("SELECT COALESCE(SUM(total_tokens),0) FROM agent_session_usage").Scan(&afterLedger); err != nil {
+		t.Fatal(err)
+	}
+	if after != before || afterLedger != beforeLedger {
+		t.Fatalf("non-writer copy changed usage from %d/%d to %d/%d", before, beforeLedger, after, afterLedger)
+	}
+}
+
+func TestRepairUsageAttributionBoundsWAL(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	record := WorkspaceRecord{SourceID: "repair-wal", SourceKind: "claude", Account: "local", Conversations: []ConversationRecord{{
+		NativeID: "repair-wal", Provider: "claude", Model: "opus", Account: "local",
+		Messages: []MessageRecord{{NativeID: "request", Kind: "metadata", Text: `{"type":"assistant","message":{"id":"request","usage":{"input_tokens":10,"output_tokens":1}}}`}},
+	}}}
+	tx, err := catalog.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = ingestWorkspace(tx, record, false); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(catalog.Path + "-wal")
+	if err != nil || before.Size() == 0 {
+		t.Fatalf("initial WAL: %v, %v", before, err)
+	}
+	repaired, err := catalog.repairUsageAttribution(context.Background(), nil, 1)
+	if err != nil || repaired != 1 {
+		t.Fatalf("repair = %d, %v", repaired, err)
+	}
+	after, err := os.Stat(catalog.Path + "-wal")
+	if err != nil || after.Size() >= before.Size() {
+		t.Fatalf("WAL did not shrink after repair: before=%d after=%v err=%v", before.Size(), after, err)
+	}
+}
+
+func TestSubagentCountRequiresLinkedChildConversation(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	statements := []string{
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES
+			('codex-parent','codex','local','cp','Codex parent','2026-09-28'),('codex-child','codex','local','cc','Codex child','2026-09-28'),
+			('claude-old','claude','local','co','Claude without delegation result','2026-09-28'),('claude-linked','claude','local','cl','Claude linked','2026-09-28')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,agent_depth) VALUES
+			('cp-root','codex-parent','codex','local','cp-root',0),('cc-child','codex-child','codex','local','cc-child',1),
+			('co-root','claude-old','claude','local','co-root',0),('co-child','claude-old','claude','local','co-root:subagent:agent-one',1),
+			('cl-root','claude-linked','claude','local','cl-root',0),('cl-child','claude-linked','claude','local','cl-root:subagent:agent-one',1)`,
+		`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider,depth,usage_status,child_conversation_id) VALUES
+			('cp-main','codex-parent','cp-root','main','root','codex',0,'unavailable',NULL),
+			('cp-task','codex-parent','cp-root','task','subagent','codex',1,'unavailable',NULL),
+			('cc-main','codex-child','cc-child','main','subagent','codex',1,'reported-reconciled',NULL),
+			('co-main','claude-old','co-root','main','root','claude',0,'unavailable',NULL),
+			('co-task','claude-old','co-root','task','subagent','claude',1,'unavailable',NULL),
+			('co-child-main','claude-old','co-child','main','subagent','claude',1,'reported-reconciled',NULL),
+			('cl-main','claude-linked','cl-root','main','root','claude',0,'unavailable',NULL),
+			('cl-task','claude-linked','cl-root','task','subagent','claude',1,'in-child-conversation','cl-child'),
+			('cl-child-main','claude-linked','cl-child','main','subagent','claude',1,'reported-reconciled',NULL)`,
+	}
+	for _, statement := range statements {
+		if _, err := catalog.DB.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows := libraryRowsByID(t, catalog)
+	for workspaceID, want := range map[string]int64{"codex-parent": 1, "codex-child": 0, "claude-old": 1, "claude-linked": 1} {
+		if got := integer(rows[workspaceID]["subagent_count"]); got != want {
+			t.Errorf("%s subagent_count=%d, want %d", workspaceID, got, want)
+		}
+		if got := integer(rows[workspaceID]["subagent_depth"]); got != want {
+			t.Errorf("%s subagent_depth=%d, want %d", workspaceID, got, want)
+		}
+	}
+}
 
 func TestClaudeGroupUsageAndDelegation(t *testing.T) {
 	for _, claim := range []struct {

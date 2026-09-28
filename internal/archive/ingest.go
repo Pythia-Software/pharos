@@ -634,7 +634,7 @@ func ingestCopy(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host,
 			return 0, 0, err
 		}
 	}
-	if err := applyClaudeGroupUsage(tx, workspaceID, record.Conversations, conversationIDs); err != nil {
+	if err := applyClaudeGroupUsage(tx, workspaceID, record.Conversations, conversationIDs, authority.conversations); err != nil {
 		return 0, 0, err
 	}
 	if authority.workspace {
