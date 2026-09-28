@@ -31,12 +31,15 @@ func printRepositoryMergePlan(output io.Writer, groups []repositoryMergeGroup) {
 	}
 }
 
-func mergeRepositoryGroup(db *sql.DB, group repositoryMergeGroup) error {
-	tx, err := db.BeginTx(context.Background(), nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
+// mergeRepositoryGroup folds one group in a single write transaction. It
+// reads before it writes, so the transaction must hold the write lock from its
+// start (see beginWrite): upgrading a read transaction fails at once with
+// SQLITE_BUSY while any other connection is writing.
+func (c *Catalog) mergeRepositoryGroup(ctx context.Context, group repositoryMergeGroup) error {
+	return c.writeTransaction(ctx, "repository-merge "+group.Name, func(tx *sql.Tx) error { return mergeRepositoryGroupTx(tx, group) })
+}
+
+func mergeRepositoryGroupTx(tx *sql.Tx, group repositoryMergeGroup) error {
 	all := append([]repositoryIdentity{group.Survivor}, group.Losers...)
 	aliases, locations := []string{}, []string{}
 	for _, item := range all {
@@ -189,10 +192,8 @@ func mergeRepositoryGroup(db *sql.DB, group repositoryMergeGroup) error {
 			return err
 		}
 	}
-	if _, err := tx.Exec(`INSERT INTO meta(key,value) VALUES('repository_merge_version','1') ON CONFLICT(key) DO UPDATE SET value=excluded.value`); err != nil {
-		return err
-	}
-	return tx.Commit()
+	_, err = tx.Exec(`INSERT INTO meta(key,value) VALUES('repository_merge_version','1') ON CONFLICT(key) DO UPDATE SET value=excluded.value`)
+	return err
 }
 
 func movePullRequest(tx *sql.Tx, oldID, repositoryID, newID string) error {
@@ -217,18 +218,15 @@ func movePullRequest(tx *sql.Tx, oldID, repositoryID, newID string) error {
 	return err
 }
 
-func saveRepositoryEvidence(db *sql.DB, items []repositoryIdentity) error {
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	for _, item := range items {
-		if _, err := tx.Exec(`UPDATE repositories SET normalized_remote=COALESCE(normalized_remote,?),root_commit=COALESCE(root_commit,?),forge_id=COALESCE(forge_id,?) WHERE id=?`, nilIfEmpty(item.Normalized), nilIfEmpty(item.Root), nilIfEmpty(item.Forge), item.ID); err != nil {
-			return err
+func (c *Catalog) saveRepositoryEvidence(ctx context.Context, items []repositoryIdentity) error {
+	return c.writeTransaction(ctx, "repository-evidence", func(tx *sql.Tx) error {
+		for _, item := range items {
+			if _, err := tx.Exec(`UPDATE repositories SET normalized_remote=COALESCE(normalized_remote,?),root_commit=COALESCE(root_commit,?),forge_id=COALESCE(forge_id,?) WHERE id=?`, nilIfEmpty(item.Normalized), nilIfEmpty(item.Root), nilIfEmpty(item.Forge), item.ID); err != nil {
+				return err
+			}
 		}
-	}
-	return tx.Commit()
+		return nil
+	})
 }
 
 // RefreshRepositoryForgeIDs is opt-in background enrichment. It never merges
@@ -242,5 +240,5 @@ func (c *Catalog) RefreshRepositoryForgeIDs(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	return saveRepositoryEvidence(c.DB, items)
+	return c.saveRepositoryEvidence(ctx, items)
 }

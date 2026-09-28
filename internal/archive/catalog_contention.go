@@ -66,6 +66,30 @@ type catalogWriteTracker struct {
 	next   uint64
 	active map[uint64]catalogWriter
 	recent []string
+	gate   chan struct{}
+}
+
+// acquireWriteGate queues this process's tracked writers for the catalog
+// writer in arrival order. SQLite's busy handler polls with growing sleeps
+// rather than queueing, so a loop that commits and begins again at once (the
+// Library refresh after an update marks every workspace dirty) takes the lock
+// back before a waiting writer's next poll, and that writer fails with
+// SQLITE_BUSY after busy_timeout. A Go channel hands its slot to the longest
+// waiter. Writers in other processes still meet only busy_timeout.
+func (c *Catalog) acquireWriteGate(ctx context.Context) (func(), error) {
+	tracker := &c.writers
+	tracker.mu.Lock()
+	if tracker.gate == nil {
+		tracker.gate = make(chan struct{}, 1)
+	}
+	gate := tracker.gate
+	tracker.mu.Unlock()
+	select {
+	case gate <- struct{}{}:
+		return func() { <-gate }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (c *Catalog) trackWriter(label string) func() {
@@ -102,15 +126,38 @@ func (c *Catalog) trackWriter(label string) func() {
 // or on another Mac sharing the catalog.
 func (c *Catalog) beginTrackedWrite(ctx context.Context, label string) (*sql.Tx, func(), error) {
 	started := time.Now()
+	release, err := c.acquireWriteGate(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
 	tx, err := c.beginWrite(ctx)
 	waited := time.Since(started)
 	if waited >= time.Second || err != nil {
 		fmt.Fprintf(os.Stderr, "Catalog writer acquisition: operation=%s pid=%d waited=%s %s error=%v\n", label, os.Getpid(), waited.Round(time.Millisecond), c.writerSummary(), err)
 	}
 	if err != nil {
+		release()
 		return nil, nil, err
 	}
-	return tx, c.trackWriter(label), nil
+	untrack := c.trackWriter(label)
+	return tx, func() { untrack(); release() }, nil
+}
+
+// writeTransaction runs one atomic unit of work in a tracked write
+// transaction, retrying the whole unit when the catalog stays busy. run must
+// not keep results from a failed attempt.
+func (c *Catalog) writeTransaction(ctx context.Context, label string, run func(tx *sql.Tx) error) error {
+	return c.retryCatalogWrite(ctx, label, nil, func() error {
+		tx, finish, err := c.beginTrackedWrite(ctx, label)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback(); finish() }()
+		if err := run(tx); err != nil {
+			return err
+		}
+		return tx.Commit()
+	})
 }
 
 func (c *Catalog) writerSummary() string {

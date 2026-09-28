@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func upgradePending(t *testing.T, catalog *Catalog) map[string]int64 {
@@ -18,7 +19,10 @@ func upgradePending(t *testing.T, catalog *Catalog) map[string]int64 {
 	return pending
 }
 
-func TestLibraryUpgrade(t *testing.T) {
+// legacyUpgradeCatalog returns a catalog that looks indexed by an older
+// Pharos: every upgrade step has work to do.
+func legacyUpgradeCatalog(t *testing.T) *Catalog {
+	t.Helper()
 	catalog, _ := testCatalog(t)
 	ingestUsageFixture(t, catalog)
 	record := WorkspaceRecord{SourceID: "upgrade-claude", SourceKind: "claude", Account: "local", Conversations: []ConversationRecord{{
@@ -58,6 +62,11 @@ func TestLibraryUpgrade(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	return catalog
+}
+
+func TestLibraryUpgrade(t *testing.T) {
+	catalog := legacyUpgradeCatalog(t)
 	pending := upgradePending(t, catalog)
 	if pending["repositories"] == 0 || pending["usage"] != 1 || pending["harness"] == 0 || pending["tools"] != 2 {
 		t.Fatalf("legacy library pending: %v", pending)
@@ -125,5 +134,49 @@ func TestLibraryUpgrade(t *testing.T) {
 	// Running it again finds nothing to do.
 	if err := catalog.RunUpgrade(context.Background(), false, nil); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The service refreshes the Library view back to back while it has dirty
+// workspaces, which after an upgrade of Pharos is every workspace. The upgrade
+// must get the write lock between those refreshes instead of failing with
+// SQLITE_BUSY.
+func TestLibraryUpgradeWhileLibraryRefreshes(t *testing.T) {
+	catalog := legacyUpgradeCatalog(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	started, stopped := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(stopped)
+		for first := true; ctx.Err() == nil; {
+			// Keep every workspace dirty, as a projection rebuild does, and
+			// hold the lock a while, as a refresh on a large catalog does.
+			tx, finish, err := catalog.beginTrackedWrite(ctx, "test-dirty")
+			if err != nil {
+				continue
+			}
+			if _, err := tx.Exec("INSERT OR IGNORE INTO workspace_library_dirty(workspace_id) SELECT id FROM workspaces"); err == nil {
+				time.Sleep(5 * time.Millisecond)
+				_ = tx.Commit()
+			}
+			_ = tx.Rollback()
+			finish()
+			if n, err := catalog.RefreshLibrary(ctx, 1); err == nil && n > 0 && first {
+				first = false
+				close(started)
+			}
+		}
+	}()
+	<-started
+	var step string
+	err := catalog.RunUpgrade(context.Background(), false, func(current string, _, _ int) { step = current })
+	cancel()
+	<-stopped
+	if err != nil {
+		t.Fatalf("upgrade alongside Library refreshes, in %s: %v", step, err)
+	}
+	for id, pending := range upgradePending(t, catalog) {
+		if pending != 0 {
+			t.Fatalf("after upgrade: %s has %d pending", id, pending)
+		}
 	}
 }

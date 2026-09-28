@@ -201,35 +201,28 @@ func (c *Catalog) repairUsageAttribution(ctx context.Context, progress func(int,
 			}
 			conversations = append(conversations, ConversationRecord{NativeID: nativeID, ParentNativeID: parentNativeID, Provider: firstString(item["provider"]), Model: firstString(item["model"]), AgentDepth: int(integer(item["agent_depth"])), StartedAt: firstString(item["started_at"]), Messages: messages})
 		}
-		tx, err := c.DB.BeginTx(ctx, nil)
-		if err != nil {
-			return index, err
-		}
-		for j, conversation := range conversations {
-			if err = replaceAgentSessions(tx, workspaceID, ids[j], conversation); err != nil {
-				break
-			}
-		}
-		if err == nil {
-			err = applyClaudeGroupUsage(tx, workspaceID, conversations, ids, nil)
-		}
-		if err == nil {
-			if metrics := reconciledTokenMetrics(WorkspaceRecord{Conversations: conversations}); len(metrics) > 0 {
-				_, err = tx.Exec("DELETE FROM metrics WHERE workspace_id=? AND unit='tokens'", workspaceID)
-				if err == nil {
-					err = replaceMetrics(tx, workspaceID, metrics)
+		err = c.writeTransaction(ctx, "usage-repair workspace="+workspaceID, func(tx *sql.Tx) error {
+			for j, conversation := range conversations {
+				if err := replaceAgentSessions(tx, workspaceID, ids[j], conversation); err != nil {
+					return err
 				}
 			}
-		}
-		if err == nil {
-			_, err = tx.Exec(`INSERT INTO usage_attribution_state(workspace_id,version) VALUES(?,?)
+			if err := applyClaudeGroupUsage(tx, workspaceID, conversations, ids, nil); err != nil {
+				return err
+			}
+			if metrics := reconciledTokenMetrics(WorkspaceRecord{Conversations: conversations}); len(metrics) > 0 {
+				if _, err := tx.Exec("DELETE FROM metrics WHERE workspace_id=? AND unit='tokens'", workspaceID); err != nil {
+					return err
+				}
+				if err := replaceMetrics(tx, workspaceID, metrics); err != nil {
+					return err
+				}
+			}
+			_, err := tx.Exec(`INSERT INTO usage_attribution_state(workspace_id,version) VALUES(?,?)
 				ON CONFLICT(workspace_id) DO UPDATE SET version=excluded.version`, workspaceID, usageAttributionVersion)
-		}
+			return err
+		})
 		if err != nil {
-			tx.Rollback()
-			return index, err
-		}
-		if err = tx.Commit(); err != nil {
 			return index, err
 		}
 		c.boundWAL(walLimit)

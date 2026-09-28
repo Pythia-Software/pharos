@@ -250,7 +250,7 @@ func (c *Catalog) RunUpgrade(ctx context.Context, github bool, progress func(ste
 			if err := c.inheritHarnessAliases(); err != nil {
 				return err
 			}
-			return setMeta(c.DB, "harness_version_upgrade", "1")
+			return c.writeTransaction(ctx, "harness-upgrade", func(tx *sql.Tx) error { return setMeta(tx, "harness_version_upgrade", "1") })
 		}); err != nil {
 			return finish(err)
 		}
@@ -278,19 +278,19 @@ func (c *Catalog) applyRepositoryMerges(ctx context.Context, github bool, report
 	if err != nil {
 		return err
 	}
-	if err := saveRepositoryEvidence(c.DB, items); err != nil {
+	if err := c.saveRepositoryEvidence(ctx, items); err != nil {
 		return err
 	}
 	for index, group := range groups {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := mergeRepositoryGroup(c.DB, group); err != nil {
+		if err := c.mergeRepositoryGroup(ctx, group); err != nil {
 			return err
 		}
 		report("repositories", index+1, len(groups))
 	}
-	return setMeta(c.DB, "repository_merge_version", "1")
+	return c.writeTransaction(ctx, "repository-merge", func(tx *sql.Tx) error { return setMeta(tx, "repository_merge_version", "1") })
 }
 
 // recordRepositoryRenames remembers the display names a merge retires, so

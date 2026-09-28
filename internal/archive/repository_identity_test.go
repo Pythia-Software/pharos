@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -407,7 +408,7 @@ func TestRepositoryMergeKeepsPRLinks(t *testing.T) {
 	if len(groups) != 1 {
 		t.Fatalf("groups: %#v", groups)
 	}
-	if err := mergeRepositoryGroup(catalog.DB, groups[0]); err != nil {
+	if err := catalog.mergeRepositoryGroup(context.Background(), groups[0]); err != nil {
 		t.Fatal(err)
 	}
 	var repo, title string

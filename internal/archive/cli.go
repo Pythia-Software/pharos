@@ -136,13 +136,13 @@ func Run(arguments []string) error {
 		}
 		prepareRepositoryIdentities(items)
 		resolveGitHubRepositories(context.Background(), items)
-		if err := saveRepositoryEvidence(catalog.DB, items); err != nil {
+		if err := catalog.saveRepositoryEvidence(context.Background(), items); err != nil {
 			return err
 		}
 		groups := planRepositoryMerges(items, config.RepositoryAliases, config.RepositorySeparate...)
 		printRepositoryMergePlan(os.Stdout, groups)
 		for _, group := range groups {
-			if err := mergeRepositoryGroup(catalog.DB, group); err != nil {
+			if err := catalog.mergeRepositoryGroup(context.Background(), group); err != nil {
 				return err
 			}
 		}
