@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,11 +17,13 @@ import (
 )
 
 type Catalog struct {
-	Path    string
-	DB      *sql.DB
-	library libraryCache
-	find    libraryFindCache
-	derived derivedCache
+	Path          string
+	DB            *sql.DB
+	captureRootMu sync.RWMutex
+	captureRoot   string
+	library       libraryCache
+	find          libraryFindCache
+	derived       derivedCache
 	// quietVersion and warmVersion are the catalog versions warmCaches last
 	// saw and warmed; only the Library maintenance loop uses them.
 	quietVersion, warmVersion int64
@@ -52,12 +55,24 @@ func OpenCatalog(path string) (*Catalog, error) {
 	// snapshot is being parsed without creating unbounded lock contention.
 	db.SetMaxOpenConns(4)
 	db.SetMaxIdleConns(4)
-	catalog := &Catalog{Path: path, DB: db}
+	catalog := &Catalog{Path: path, DB: db, captureRoot: filepath.Join(filepath.Dir(path), "captures")}
 	if err := catalog.initializeLocked(true); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return catalog, nil
+}
+
+func (c *Catalog) setCaptureRoot(root string) {
+	c.captureRootMu.Lock()
+	c.captureRoot = root
+	c.captureRootMu.Unlock()
+}
+
+func (c *Catalog) captureRootPath() string {
+	c.captureRootMu.RLock()
+	defer c.captureRootMu.RUnlock()
+	return c.captureRoot
 }
 
 func filepathDir(path string) string {

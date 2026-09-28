@@ -91,6 +91,12 @@ func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress P
 		result.Error = message
 		return result
 	}
+	if antigravity, ok := adapter.(*antigravityAdapter); ok {
+		if err := antigravity.prepareInstalledVersions(c); err != nil {
+			result.Error = err.Error()
+			return result
+		}
+	}
 	report("checking")
 	seen := ""
 	if view != nil {
@@ -324,6 +330,17 @@ func (c *Catalog) beginWrite(ctx context.Context) (*sql.Tx, error) {
 }
 
 func workspaceRecordDigest(record WorkspaceRecord) (string, error) {
+	// The installed app can change without changing a transcript. Its version
+	// is assigned only when a record is written, never used to force that write.
+	record.Conversations = append([]ConversationRecord(nil), record.Conversations...)
+	for index := range record.Conversations {
+		conversation := &record.Conversations[index]
+		if conversation.HarnessVersionSource == "installed-app" {
+			conversation.HarnessVersionFirst = ""
+			conversation.HarnessVersionLast = ""
+			conversation.HarnessVersionSource = ""
+		}
+	}
 	encoded, err := json.Marshal(record)
 	if err != nil {
 		return "", err

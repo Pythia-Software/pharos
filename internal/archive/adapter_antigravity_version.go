@@ -2,11 +2,35 @@ package archive
 
 import (
 	"bufio"
+	"database/sql"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 )
+
+type installedVersionObservation struct {
+	Version string `json:"version"`
+	Since   string `json:"since"`
+}
+
+func installedVersionForActivity(observation installedVersionObservation, started, ended string) (string, string) {
+	since, ok := parseTime(observation.Since)
+	if !ok || observation.Version == "" {
+		return "", ""
+	}
+	first, last := "", ""
+	if end, ok := parseTime(ended); ok && !end.Before(since) {
+		last = observation.Version
+	}
+	if start, ok := parseTime(started); ok && !start.Before(since) {
+		first = observation.Version
+		if last == "" {
+			last = observation.Version
+		}
+	}
+	return first, last
+}
 
 func antigravityHarness(app string) string {
 	if app == "antigravity-cli" {
@@ -15,20 +39,49 @@ func antigravityHarness(app string) string {
 	return "antigravity"
 }
 
-// An installed version describes only live transcripts from this Mac.
-func (a *antigravityAdapter) installedHarnessVersion(app string) string {
-	if a.view != nil {
-		return ""
+// Observe the installed version before reading source records. The observation
+// time is the earliest point at which Pharos can safely attribute that version.
+func (a *antigravityAdapter) prepareInstalledVersions(c *Catalog) error {
+	a.installedVersions = map[string]installedVersionObservation{}
+	if a.view != nil && a.view.offHost() {
+		return nil
 	}
-	if version, ok := a.installedVersions[app]; ok {
-		return version
+	readVersion := a.installedVersion
+	if readVersion == nil {
+		readVersion = installedAntigravityVersion
 	}
-	if a.installedVersions == nil {
-		a.installedVersions = map[string]string{}
+	for _, app := range []string{"antigravity", "antigravity-cli", "antigravity-ide"} {
+		version := readVersion(app)
+		if version == "" {
+			continue
+		}
+		key := "installed_harness_version:" + app
+		var saved string
+		err := c.DB.QueryRow("SELECT value FROM meta WHERE key=?", key).Scan(&saved)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		var observation installedVersionObservation
+		if saved != "" {
+			_ = decodeJSONText(saved, &observation)
+		}
+		if observation.Version != version || observation.Since == "" {
+			observation = installedVersionObservation{Version: version, Since: formatTime(c.clock())}
+			if _, err := c.DB.Exec(`INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, jsonText(observation)); err != nil {
+				return err
+			}
+		}
+		a.installedVersions[app] = observation
 	}
-	version := installedAntigravityVersion(app)
-	a.installedVersions[app] = version
-	return version
+	return nil
+}
+
+// Captures from this Mac can use the local observation; other hosts cannot.
+func (a *antigravityAdapter) installedHarnessVersion(app string) installedVersionObservation {
+	if a.view != nil && a.view.offHost() {
+		return installedVersionObservation{}
+	}
+	return a.installedVersions[app]
 }
 
 func installedAntigravityVersion(app string) string {
