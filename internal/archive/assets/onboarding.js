@@ -41,7 +41,12 @@
 .pharos-step strong{font-size:14px}
 .pharos-step .pharos-meter{grid-column:2;height:6px;overflow:hidden;border-radius:6px;background:var(--line,#ccc)}
 .pharos-step .pharos-meter>span{display:block;height:100%;min-width:6px;background:var(--accent,#315845);transition:width .25s}
-.pharos-onboard-body .pharos-lead{font-size:16px;margin:18px 0 6px}`;
+.pharos-onboard-body .pharos-lead{font-size:16px;margin:18px 0 6px}
+.pharos-working{display:grid;gap:10px;margin:18px 0}.pharos-working>p{margin:0}
+.pharos-working .pharos-meter{height:6px;overflow:hidden;border-radius:6px;background:var(--line,#ccc)}
+.pharos-working .pharos-meter>span{display:block;width:35%;height:100%;background:var(--accent,#315845);animation:pharos-onboard-slide 1.6s ease-in-out infinite}
+@keyframes pharos-onboard-slide{from{margin-left:-35%}to{margin-left:100%}}
+@media(prefers-reduced-motion:reduce){.pharos-working .pharos-meter>span{animation:none;width:100%;opacity:.5}}`;
 
   const node = (tag, cls, text) => {
     const n = document.createElement(tag);
@@ -62,6 +67,15 @@
     let amount = Number(value) || 0, power = 0;
     while (amount >= 1000 && power < units.length - 1) { amount /= 1000; power++; }
     return `${amount.toFixed(amount < 10 && power ? 1 : 0)} ${units[power]}`;
+  };
+  // An indeterminate bar with a line of text, shown while a request is out.
+  const working = (text, detail) => {
+    const box = node('div', 'pharos-working'), bar = node('div', 'pharos-meter');
+    box.setAttribute('role', 'status');
+    bar.append(node('span'));
+    box.append(node('p', '', text), bar);
+    if (detail) box.append(node('p', 'pharos-muted', detail));
+    return box;
   };
   const day = value => new Date(value).toLocaleDateString(undefined, {year: 'numeric', month: 'short', day: 'numeric'});
   const hostLabel = status => status.host?.label || 'this Mac';
@@ -135,7 +149,7 @@
       'Pharos looked only in the usual places where Claude Code, Codex, Antigravity, Conductor, and TL1 keep conversations; it does not search the rest of your home folder, and nothing is indexed until you add it. ' +
       `Your choice is saved in ${status.host_file_display} inside the library and applies only to this Mac.`);
     const body = node('div', 'pharos-onboard-body'), actions = node('div', 'pharos-onboard-actions');
-    body.append(node('p', 'pharos-muted', 'Looking for conversations on this Mac…'));
+    body.append(working('Looking for conversations on this Mac…'));
     const later = node('button', '', onboarding || offering ? 'Not now' : 'Close');
     later.type = 'button';
     later.onclick = () => {
@@ -183,16 +197,24 @@
           decline.push(name);
         }
       }
+      // Saving checks every folder again, which can take a while; show that
+      // it is under way instead of leaving the list as it was.
+      const shown = [...body.childNodes];
       add.disabled = later.disabled = true;
+      add.textContent = accept.length ? 'Adding…' : 'Saving…';
       error.textContent = '';
+      body.replaceChildren(working(accept.length ? `Adding ${plural(accept.length, 'source')} for this Mac…` : 'Saving your choice for this Mac…',
+        'Pharos checks each folder again before saving it to the library, which can take a moment.'));
       try {
         const result = await call('/api/probe/accept', {method: 'POST', body: JSON.stringify({accept, decline, names})});
         renderResult(result, body, actions, report);
         window.loadSources?.();
         refreshNote();
       } catch (failure) {
+        body.replaceChildren(...shown);
         error.textContent = failure.message;
-        add.disabled = later.disabled = false;
+        later.disabled = false;
+        update();
       }
     };
     actions.replaceChildren(error, later, add);
@@ -257,6 +279,7 @@
     const lead = node('p', 'pharos-lead', `Copying the conversation files of ${sources.join(', ')} into the library…`);
     const note = node('p', 'pharos-muted', 'This copies raw files and takes seconds to minutes. Nothing is parsed yet. You can close this; the capture carries on and the header shows its progress.');
     const rows = node('div');
+    rows.append(working('Starting the capture…'));
     body.replaceChildren(lead, rows, note);
     actions.replaceChildren(button('Run in background', false, close));
     let run;
@@ -313,6 +336,7 @@
     const shown = () => document.body.contains(body);
     setTitle(body, `Indexing ${label}`);
     const rows = node('div');
+    rows.append(working('Starting the index…'));
     body.replaceChildren(node('p', 'pharos-lead', `Indexing what was captured from ${label}…`), rows,
       node('p', 'pharos-muted', 'Indexing parses the captured conversations into the library, so it can take a while the first time. It runs in the background: close this whenever you like. Ejecting the drive stops it safely, and the next index picks up where it stopped.'));
     actions.replaceChildren(button('Run in background', false, close));
