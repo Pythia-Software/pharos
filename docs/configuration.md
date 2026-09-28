@@ -1108,3 +1108,8 @@ the groups before running `pharos repositories --merge --apply`. The apply
 command keeps each group's survivor ID, moves workspace and pull-request
 references, and marks affected Library rows and the Tools rollup for refresh.
 The operation is idempotent. It does not run during ordinary ingest.
+
+Set `resolve_repository_forge = true` at the top level of the config to also
+refresh GitHub numeric IDs in the background while the service is running.
+This uses authenticated `gh` and makes no network requests during ingest. It
+does not merge rows; use the dry-run and apply commands for that.

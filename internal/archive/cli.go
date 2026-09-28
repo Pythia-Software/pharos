@@ -120,7 +120,7 @@ func Run(arguments []string) error {
 				return err
 			}
 			prepareRepositoryIdentities(items)
-			resolveGitHubRepositories(items)
+			resolveGitHubRepositories(context.Background(), items)
 			printRepositoryMergePlan(os.Stdout, planRepositoryMerges(items, config.RepositoryAliases, config.RepositorySeparate...))
 			return nil
 		}
@@ -134,7 +134,7 @@ func Run(arguments []string) error {
 			return err
 		}
 		prepareRepositoryIdentities(items)
-		resolveGitHubRepositories(items)
+		resolveGitHubRepositories(context.Background(), items)
 		if err := saveRepositoryEvidence(catalog.DB, items); err != nil {
 			return err
 		}

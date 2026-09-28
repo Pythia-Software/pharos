@@ -165,3 +165,17 @@ func saveRepositoryEvidence(db *sql.DB, items []repositoryIdentity) error {
 	}
 	return tx.Commit()
 }
+
+// RefreshRepositoryForgeIDs is opt-in background enrichment. It never merges
+// rows; the explicit repository command remains the review gate for that.
+func (c *Catalog) RefreshRepositoryForgeIDs(ctx context.Context) error {
+	items, err := loadRepositoryIdentities(c.DB)
+	if err != nil {
+		return err
+	}
+	resolveGitHubRepositories(ctx, items)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return saveRepositoryEvidence(c.DB, items)
+}

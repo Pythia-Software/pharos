@@ -371,13 +371,13 @@ func planRepositoryMerges(items []repositoryIdentity, aliases map[string]string,
 
 // resolveGitHubRepositories runs only from the explicit repository command.
 // Its cache and pause keep redirect lookups bounded even for large catalogs.
-func resolveGitHubRepositories(items []repositoryIdentity) {
+func resolveGitHubRepositories(ctx context.Context, items []repositoryIdentity) {
 	if _, err := exec.LookPath("gh"); err != nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	authContext, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	if exec.CommandContext(ctx, "gh", "auth", "status").Run() != nil {
+	if exec.CommandContext(authContext, "gh", "auth", "status").Run() != nil {
 		return
 	}
 	type answer struct {
@@ -386,20 +386,27 @@ func resolveGitHubRepositories(items []repositoryIdentity) {
 	}
 	cache := map[string]answer{}
 	for i := range items {
+		if ctx.Err() != nil {
+			return
+		}
 		slug := items[i].Normalized
 		if !strings.HasPrefix(slug, "github.com/") {
 			continue
 		}
 		if _, ok := cache[slug]; !ok {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			output, err := exec.CommandContext(ctx, "gh", "api", "repos/"+strings.TrimPrefix(slug, "github.com/")).Output()
-			cancel()
+			request, stop := context.WithTimeout(ctx, 5*time.Second)
+			output, err := exec.CommandContext(request, "gh", "api", "repos/"+strings.TrimPrefix(slug, "github.com/")).Output()
+			stop()
 			var data answer
 			if err == nil {
 				_ = json.Unmarshal(output, &data)
 			}
 			cache[slug] = data
-			time.Sleep(200 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(200 * time.Millisecond):
+			}
 		}
 		if data := cache[slug]; data.ID != 0 {
 			items[i].Forge = fmt.Sprint(data.ID)

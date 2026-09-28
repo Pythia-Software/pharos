@@ -57,6 +57,9 @@ func NewServer(config Config, catalog *Catalog) *Server {
 		catalog.background = server.spawn
 		catalog.RepositoryAliases = config.RepositoryAliases
 		catalog.RepositorySeparate = config.RepositorySeparate
+		if config.ResolveRepositoryForge {
+			server.spawn(func(ctx context.Context) { _ = catalog.RefreshRepositoryForgeIDs(ctx) })
+		}
 	}
 	return server
 }
