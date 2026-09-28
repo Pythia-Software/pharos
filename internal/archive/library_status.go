@@ -238,6 +238,20 @@ func (s *Server) libraryActivities() []libraryActivity {
 		activities = append(activities, libraryActivity{Kind: "git", Label: "Looking up merges in Git", Detail: "Main-branch merges of indexed work, " + reason,
 			StartedAt: since, Writes: true, OnEject: "Stops; it runs again after the next index."})
 	}
+	if upgrade := s.Catalog.upgrade(); upgrade != nil {
+		upgrade.mu.Lock()
+		running, step, done, total, since := upgrade.running, upgrade.step, upgrade.done, upgrade.total, upgrade.startedAt
+		upgrade.mu.Unlock()
+		if running && step != "tools" {
+			detail := "Step: " + step
+			if total > 0 {
+				detail = fmt.Sprintf("Step: %s, %d of %d", step, done, total)
+			}
+			activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Upgrading the library", Detail: detail,
+				Progress: fraction(float64(done), float64(total)), StartedAt: since, Writes: true,
+				OnEject: "Stops after the unit in progress; starting the upgrade again resumes it."})
+		}
+	}
 	if tools := s.Catalog.toolLedgerProgress(); tools.running {
 		activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Building the Tools ledger",
 			Detail: fmt.Sprintf("%d of %d conversations", tools.done, tools.total), Progress: fraction(float64(tools.done), float64(tools.total)),

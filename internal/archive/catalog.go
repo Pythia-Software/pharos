@@ -208,6 +208,7 @@ func (c *Catalog) Initialize() error {
 		{"tool_calls", "test_failure", "ALTER TABLE tool_calls ADD COLUMN test_failure INTEGER NOT NULL DEFAULT 0"},
 		{"tool_calls", "repo_path", "ALTER TABLE tool_calls ADD COLUMN repo_path TEXT"},
 		{"tool_calls", "path_repository", "ALTER TABLE tool_calls ADD COLUMN path_repository TEXT"},
+		{"tool_calls", "path_repository_id", "ALTER TABLE tool_calls ADD COLUMN path_repository_id TEXT"},
 		{"tool_calls", "path_scope", "ALTER TABLE tool_calls ADD COLUMN path_scope TEXT"},
 	} {
 		has, err := c.hasColumn(migration.table, migration.column)
@@ -239,6 +240,9 @@ func (c *Catalog) Initialize() error {
 		return err
 	}
 	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS tool_calls_signature_idx ON tool_calls(error_signature,started_at) WHERE error_signature IS NOT NULL`); err != nil {
+		return err
+	}
+	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS tool_calls_path_repository_idx ON tool_calls(path_repository_id) WHERE path_repository_id IS NOT NULL`); err != nil {
 		return err
 	}
 	if err := c.migrateHosts(); err != nil {
@@ -329,6 +333,14 @@ func (c *Catalog) Initialize() error {
 	}
 	if err := c.syncPricing(); err != nil {
 		return err
+	}
+	// A catalog with nothing indexed yet resolves repositories and records
+	// harness versions as it ingests, so it never needs those upgrade steps.
+	for _, key := range []string{"repository_merge_version", "harness_version_upgrade"} {
+		if _, err := c.DB.Exec(`INSERT INTO meta(key,value) SELECT ?,'1'
+			WHERE NOT EXISTS (SELECT 1 FROM workspaces) AND NOT EXISTS (SELECT 1 FROM meta WHERE key=?)`, key, key); err != nil {
+			return err
+		}
 	}
 	// Last, so a query open skips Initialize only after all of it succeeded.
 	return c.recordInitializedBuild()

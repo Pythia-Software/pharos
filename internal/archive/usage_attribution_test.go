@@ -65,6 +65,10 @@ func TestRepairUsageAttributionBoundsWAL(t *testing.T) {
 	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
+	// Catalogs indexed before attribution was versioned have no state rows.
+	if _, err := catalog.DB.Exec("DELETE FROM usage_attribution_state"); err != nil {
+		t.Fatal(err)
+	}
 	before, err := os.Stat(catalog.Path + "-wal")
 	if err != nil || before.Size() == 0 {
 		t.Fatalf("initial WAL: %v, %v", before, err)
@@ -123,6 +127,8 @@ func TestClaudeGroupUsageAndDelegation(t *testing.T) {
 	}{
 		{"side call", `{"type":"cost-state","modelUsage":{"opus":{"input_tokens":540,"output_tokens":60},"haiku":{"input_tokens":9,"output_tokens":1}}}`, 610},
 		{"claim below children", `{"type":"cost-state","modelUsage":{"opus":{"input_tokens":200,"output_tokens":50}}}`, 600},
+		// Claude Code names claims by context variant; requests use the base ID.
+		{"context variant claim", `{"type":"cost-state","modelUsage":{"claude-opus[1m]":{"input_tokens":540,"output_tokens":60}}}`, 600},
 	} {
 		t.Run(claim.name, func(t *testing.T) {
 			catalog, _ := testCatalog(t)
@@ -183,6 +189,10 @@ func TestClaudeGroupUsageAndDelegation(t *testing.T) {
 				}
 			}
 			if _, err := catalog.DB.Exec("UPDATE agent_sessions SET total_tokens=999999 WHERE native_id='main' AND depth=0"); err != nil {
+				t.Fatal(err)
+			}
+			// Imitate a catalog indexed before attribution was versioned.
+			if _, err := catalog.DB.Exec("DELETE FROM usage_attribution_state"); err != nil {
 				t.Fatal(err)
 			}
 			repaired, err := catalog.RepairUsageAttribution(context.Background(), nil)

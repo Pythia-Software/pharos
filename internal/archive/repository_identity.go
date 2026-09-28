@@ -201,6 +201,38 @@ func conductorRepositoryDir(path string) string {
 	return ""
 }
 
+// conductorWorkspaceDir is the repository directory of a location that is
+// itself a Conductor workspace (conductor/workspaces/<dir>/<workspace>), not a
+// path nested inside one, such as a scratch repository under .context.
+func conductorWorkspaceDir(path string) string {
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(path)), "/")
+	if n := len(parts); n >= 4 && parts[n-4] == "conductor" && parts[n-3] == "workspaces" && parts[n-2] != "" && parts[n-1] != "" {
+		return parts[n-2]
+	}
+	return ""
+}
+
+// repositoryCheckout maps a worktree in a known in-clone layout
+// (<clone>/.conductor/<name>, <clone>/.task-worktrees/<name>,
+// <clone>/.claude/worktrees/<name>) to its clone. Any other location is
+// returned as is; nested paths are never truncated to an ancestor.
+func repositoryCheckout(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	path = filepath.Clean(path)
+	parent := filepath.Dir(path)
+	switch filepath.Base(parent) {
+	case ".conductor", ".task-worktrees":
+		return filepath.Dir(parent)
+	case "worktrees":
+		if filepath.Base(filepath.Dir(parent)) == ".claude" {
+			return filepath.Dir(filepath.Dir(parent))
+		}
+	}
+	return path
+}
+
 func repositoryKeys(item repositoryIdentity, aliases map[string]string) []string {
 	keys := []string{}
 	for _, raw := range repositoryUnion(item.Aliases, []string{item.Remote, item.Normalized}) {
@@ -216,25 +248,38 @@ func repositoryKeys(item repositoryIdentity, aliases map[string]string) []string
 	return repositoryUnion(keys)
 }
 
-func repositoryMatch(a, b repositoryIdentity, aliases map[string]string, directoryOwners map[string]map[string]bool, separate []string) string {
+func repositorySeparate(item repositoryIdentity, separate []string) bool {
 	for _, id := range separate {
-		if id == a.ID || id == b.ID {
-			return ""
+		if id == item.ID {
+			return true
 		}
+	}
+	return false
+}
+
+// repositoryMatch compares two rows on forge, remote, alias, and root-commit
+// evidence. Locations are handled per group by repositoryGrouping.attach.
+func repositoryMatch(a, b repositoryIdentity, aliases map[string]string, separate []string) string {
+	return repositoryMatchKeys(a, b, repositoryKeys(a, aliases), repositoryKeys(b, aliases), separate)
+}
+
+func repositoryMatchKeys(a, b repositoryIdentity, aKeys, bKeys []string, separate []string) string {
+	if repositorySeparate(a, separate) || repositorySeparate(b, separate) {
+		return ""
 	}
 	if a.Forge != "" && a.Forge == b.Forge {
 		return "forge_id"
 	}
-	for _, left := range repositoryKeys(a, aliases) {
-		for _, right := range repositoryKeys(b, aliases) {
+	for _, left := range aKeys {
+		for _, right := range bKeys {
 			if left == right {
 				return "remote/alias"
 			}
 		}
 	}
 	if a.Root != "" && a.Root == b.Root {
-		for _, left := range repositoryKeys(a, aliases) {
-			for _, right := range repositoryKeys(b, aliases) {
+		for _, left := range aKeys {
+			for _, right := range bKeys {
 				lp, rp := strings.Split(left, "/"), strings.Split(right, "/")
 				if len(lp) == 3 && len(rp) == 3 && lp[0] == rp[0] && lp[1] == rp[1] {
 					return "root+host/owner"
@@ -242,43 +287,165 @@ func repositoryMatch(a, b repositoryIdentity, aliases map[string]string, directo
 			}
 		}
 	}
-	// A missing-remote Conductor capture can use the directory only when it
-	// points to exactly one repository with a remote. Names alone never match.
-	if len(repositoryKeys(a, aliases)) == 0 || len(repositoryKeys(b, aliases)) == 0 {
-		for _, path := range a.Locations {
-			if dir := conductorRepositoryDir(path); dir != "" && len(directoryOwners[dir]) == 1 {
-				for _, other := range b.Locations {
-					if conductorRepositoryDir(other) == dir {
-						return "conductor location"
-					}
-				}
-			}
-		}
-	}
 	return ""
 }
 
-func repositoryDirectoryOwners(items []repositoryIdentity, aliases map[string]string) map[string]map[string]bool {
-	owners := map[string]map[string]bool{}
-	for _, item := range items {
-		if len(repositoryKeys(item, aliases)) == 0 {
-			continue
-		}
-		for _, path := range item.Locations {
-			if dir := conductorRepositoryDir(path); dir != "" {
-				if owners[dir] == nil {
-					owners[dir] = map[string]bool{}
+// repositoryGrouping unions rows on forge/remote/alias/root evidence, then
+// indexes the local paths of rows that carry a remote so a remoteless row can
+// join the one group its location points to.
+type repositoryGrouping struct {
+	items    []repositoryIdentity
+	keys     [][]string
+	parent   []int
+	aliases  map[string]string
+	separate []string
+	// Keyed row indices by clone path and by Conductor repository directory
+	// (only locations that are Conductor workspaces themselves).
+	byCheckout, byDirectory map[string][]int
+}
+
+func newRepositoryGrouping(items []repositoryIdentity, aliases map[string]string, separate []string, signal func(i, j int, signal string)) *repositoryGrouping {
+	g := &repositoryGrouping{items: items, keys: make([][]string, len(items)), parent: make([]int, len(items)), aliases: aliases, separate: separate, byCheckout: map[string][]int{}, byDirectory: map[string][]int{}}
+	for i, item := range items {
+		g.parent[i] = i
+		g.keys[i] = repositoryKeys(item, aliases)
+	}
+	for i := range items {
+		for j := i + 1; j < len(items); j++ {
+			if matched := repositoryMatchKeys(items[i], items[j], g.keys[i], g.keys[j], separate); matched != "" {
+				g.union(i, j)
+				if signal != nil {
+					signal(i, j, matched)
 				}
-				owners[dir][item.ID] = true
 			}
 		}
 	}
-	return owners
+	for i, item := range items {
+		if !g.keyed(i) {
+			continue
+		}
+		for _, path := range item.Locations {
+			if checkout := repositoryCheckout(path); checkout != "" {
+				g.byCheckout[checkout] = append(g.byCheckout[checkout], i)
+			}
+			// A repository nested inside a workspace (for example a TL1
+			// scratch origin.git under .context) does not claim its directory.
+			if dir := conductorWorkspaceDir(path); dir != "" {
+				g.byDirectory[dir] = append(g.byDirectory[dir], i)
+			}
+		}
+	}
+	return g
+}
+
+func (g *repositoryGrouping) root(i int) int {
+	if g.parent[i] != i {
+		g.parent[i] = g.root(g.parent[i])
+	}
+	return g.parent[i]
+}
+
+func (g *repositoryGrouping) union(i, j int) {
+	if a, b := g.root(i), g.root(j); a != b {
+		g.parent[b] = a
+	}
+}
+
+func (g *repositoryGrouping) keyed(i int) bool {
+	return len(g.keys[i]) > 0 || g.items[i].Forge != ""
+}
+
+// repositoryAttachable is a row with no remote at all. A row whose remote is a
+// local path (a TL1 scratch origin.git) has no forge key but is never attached.
+func repositoryAttachable(item repositoryIdentity, keys []string, separate []string) bool {
+	return strings.TrimSpace(item.Remote) == "" && item.Normalized == "" && item.Forge == "" && len(keys) == 0 && !repositorySeparate(item, separate)
+}
+
+// attach returns a keyed row whose group the remoteless item joins, or -1. The
+// item's clone path, or the Conductor directory of a location that is itself a
+// Conductor workspace, must point to exactly one group. Rows in different
+// groups sharing the path make it ambiguous. When a location is a checkout on
+// this Mac, its origin and root commit must agree with the group.
+func (g *repositoryGrouping) attach(item repositoryIdentity, self int) (int, []string) {
+	targets := map[int]int{}
+	var signals []string
+	add := func(indices []int, signal string) {
+		for _, j := range indices {
+			if j == self {
+				continue
+			}
+			if _, ok := targets[g.root(j)]; !ok {
+				targets[g.root(j)] = j
+			}
+			if !containsString(signals, signal) {
+				signals = append(signals, signal)
+			}
+		}
+	}
+	for _, path := range item.Locations {
+		add(g.byCheckout[repositoryCheckout(path)], "local checkout")
+		if dir := conductorWorkspaceDir(path); dir != "" {
+			add(g.byDirectory[dir], "conductor location")
+		}
+	}
+	if len(targets) != 1 {
+		return -1, nil
+	}
+	target := -1
+	for _, j := range targets {
+		target = j
+	}
+	if repositorySeparate(g.items[target], g.separate) {
+		return -1, nil
+	}
+	group := g.root(target)
+	keys, roots := map[string]bool{}, map[string]bool{}
+	for i := range g.items {
+		if g.root(i) != group {
+			continue
+		}
+		for _, key := range g.keys[i] {
+			keys[key] = true
+		}
+		if canonical := g.items[i].ForgeCanonical; canonical != "" {
+			keys[canonicalRepositorySlug(canonical, g.aliases)] = true
+		}
+		if g.items[i].Root != "" {
+			roots[g.items[i].Root] = true
+		}
+	}
+	if item.Root != "" && len(roots) > 0 && !roots[item.Root] {
+		return -1, nil
+	}
+	for _, path := range item.Locations {
+		if origin := repositoryOriginSlug(path); origin != "" && !keys[canonicalRepositorySlug(origin, g.aliases)] {
+			return -1, nil
+		}
+	}
+	return target, signals
+}
+
+// repositoryPreferred orders rows for a group's survivor: rows with a remote
+// first, then the most workspaces, then ID.
+func repositoryPreferred(a, b repositoryIdentity, aKeyed, bKeyed bool) bool {
+	if aKeyed != bKeyed {
+		return aKeyed
+	}
+	return a.Workspaces > b.Workspaces || a.Workspaces == b.Workspaces && a.ID < b.ID
+}
+
+func containsString(values []string, value string) bool {
+	for _, item := range values {
+		if item == value {
+			return true
+		}
+	}
+	return false
 }
 
 // Ingest may update a row marked separate when the incoming record describes
 // that same remote. Separation only prevents linking it to a different row.
-func repositorySameIdentity(existing, incoming repositoryIdentity, items []repositoryIdentity, aliases map[string]string, owners map[string]map[string]bool, separate []string) bool {
+func repositorySameIdentity(existing, incoming repositoryIdentity, aliases map[string]string, separate []string) bool {
 	if incoming.Normalized != "" {
 		for _, raw := range repositoryUnion(existing.Aliases, []string{existing.Remote, existing.Normalized}) {
 			if normalizeRepositoryRemote(raw) == incoming.Normalized {
@@ -286,6 +453,12 @@ func repositorySameIdentity(existing, incoming repositoryIdentity, items []repos
 			}
 		}
 	}
+	return repositoryMatch(existing, incoming, aliases, separate) != ""
+}
+
+// repositoryRemotelessSibling links a remoteless capture to a remoteless row of
+// the same name when its Conductor directory belongs to that row alone.
+func repositoryRemotelessSibling(existing, incoming repositoryIdentity, items []repositoryIdentity) bool {
 	if existing.Remote == "" && incoming.Remote == "" && strings.EqualFold(existing.Name, incoming.Name) &&
 		(existing.Root == "" || incoming.Root == "" || existing.Root == incoming.Root) {
 		for _, path := range incoming.Locations {
@@ -312,7 +485,7 @@ func repositorySameIdentity(existing, incoming repositoryIdentity, items []repos
 			}
 		}
 	}
-	return repositoryMatch(existing, incoming, aliases, owners, separate) != ""
+	return false
 }
 
 type repositoryMergeGroup struct {
@@ -323,42 +496,44 @@ type repositoryMergeGroup struct {
 }
 
 func planRepositoryMerges(items []repositoryIdentity, aliases map[string]string, separate ...string) []repositoryMergeGroup {
-	owners := repositoryDirectoryOwners(items, aliases)
-	parent := make([]int, len(items))
-	for i := range parent {
-		parent[i] = i
-	}
-	var root func(int) int
-	root = func(i int) int {
-		if parent[i] != i {
-			parent[i] = root(parent[i])
-		}
-		return parent[i]
-	}
 	signals := map[int][]string{}
-	for i := range items {
-		for j := i + 1; j < len(items); j++ {
-			if signal := repositoryMatch(items[i], items[j], aliases, owners, separate); signal != "" {
-				a, b := root(i), root(j)
-				if a != b {
-					parent[b] = a
-				}
-				signals[i] = append(signals[i], signal)
-			}
-		}
-	}
-	clusters := map[int][]repositoryIdentity{}
+	g := newRepositoryGrouping(items, aliases, separate, func(i, _ int, signal string) {
+		signals[i] = append(signals[i], signal)
+	})
+	// Remoteless rows join the groups formed by remote evidence. Attachments
+	// are decided against those groups only, never chained through one another.
+	attachments := map[int]int{}
 	for i, item := range items {
-		clusters[root(i)] = append(clusters[root(i)], item)
-	}
-	var result []repositoryMergeGroup
-	for index, cluster := range clusters {
-		if len(cluster) < 2 {
+		if !repositoryAttachable(item, g.keys[i], separate) {
 			continue
 		}
-		sort.Slice(cluster, func(i, j int) bool {
-			return cluster[i].Workspaces > cluster[j].Workspaces || cluster[i].Workspaces == cluster[j].Workspaces && cluster[i].ID < cluster[j].ID
+		if target, matched := g.attach(item, i); target >= 0 {
+			attachments[i] = target
+			signals[i] = append(signals[i], matched...)
+		}
+	}
+	for i, target := range attachments {
+		g.union(target, i)
+	}
+	clusters := map[int][]int{}
+	for i := range items {
+		clusters[g.root(i)] = append(clusters[g.root(i)], i)
+	}
+	var result []repositoryMergeGroup
+	for _, members := range clusters {
+		if len(members) < 2 {
+			continue
+		}
+		// Rows with a remote come first, so a larger remoteless row never
+		// becomes the survivor or names the group.
+		sort.Slice(members, func(i, j int) bool {
+			a, b := members[i], members[j]
+			return repositoryPreferred(items[a], items[b], g.keyed(a), g.keyed(b))
 		})
+		cluster := make([]repositoryIdentity, len(members))
+		for i, index := range members {
+			cluster[i] = items[index]
+		}
 		// A forge redirect identifies the latest slug, even when the older row has more workspaces.
 		canonical := ""
 		for _, item := range cluster {
@@ -384,15 +559,11 @@ func planRepositoryMerges(items []repositoryIdentity, aliases map[string]string,
 		if strings.Contains(slug, "/") {
 			name = filepath.Base(slug)
 		}
-		seen := map[string]bool{}
 		var matched []string
-		for i := range items {
-			if root(i) == index {
-				for _, signal := range signals[i] {
-					if !seen[signal] {
-						seen[signal] = true
-						matched = append(matched, signal)
-					}
+		for _, index := range members {
+			for _, signal := range signals[index] {
+				if !containsString(matched, signal) {
+					matched = append(matched, signal)
 				}
 			}
 		}

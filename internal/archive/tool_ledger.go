@@ -11,7 +11,7 @@ import (
 
 // toolLedgerVersion names the derivation below. Conversations whose ledger
 // was built by another version are rebuilt by BackfillToolLedger.
-const toolLedgerVersion = "tools-v3"
+const toolLedgerVersion = "tools-v4"
 
 // modelRequest is one model API request reconstructed from usage evidence.
 // ContextGrowth is how much the prompt grew since the previous request in the
@@ -42,30 +42,30 @@ type toolCommand struct {
 // growth, or "estimated" from its size); CarriedTokens is ResultTokens times
 // the number of later requests that re-read it before compaction.
 type toolCall struct {
-	Key, CallID, Stream, Kind, CallNativeID, ResultNativeID string
-	Sequence                                                int
-	ToolName, Category, MCPServer, Model                    string
-	Command, Program, Subcommand, CommandCategory, FilePath string
-	CommandCount                                            int
-	HasPipe, HasRedirect, HasHeredoc, Backgrounded          bool
-	StartedAt, EndedAt, DurationSource                      string
-	DurationMS                                              *int64
-	Status, ErrorType, ErrorSignature                       string
-	TestFailure                                             bool
-	RepoPath, PathRepository, PathScope, CWD                string
-	ExitCode                                                *int64
-	Interrupted, Truncated                                  bool
-	InputBytes, ResultBytes, ResultTokens                   int64
-	ResultTokensSource                                      string
-	RequestKey, NextRequestKey                              string
-	ParallelCount                                           int
-	OutputTokens                                            float64
-	CarriedRequests, CarriedTokens                          int64
-	LinesAdded, LinesRemoved                                *int64
-	Commands                                                []toolCommand
-	URL, Host, Hosts, SearchQuery                           string
-	URLCount                                                int
-	URLs                                                    []toolURL
+	Key, CallID, Stream, Kind, CallNativeID, ResultNativeID    string
+	Sequence                                                   int
+	ToolName, Category, MCPServer, Model                       string
+	Command, Program, Subcommand, CommandCategory, FilePath    string
+	CommandCount                                               int
+	HasPipe, HasRedirect, HasHeredoc, Backgrounded             bool
+	StartedAt, EndedAt, DurationSource                         string
+	DurationMS                                                 *int64
+	Status, ErrorType, ErrorSignature                          string
+	TestFailure                                                bool
+	RepoPath, PathRepository, PathRepositoryID, PathScope, CWD string
+	ExitCode                                                   *int64
+	Interrupted, Truncated                                     bool
+	InputBytes, ResultBytes, ResultTokens                      int64
+	ResultTokensSource                                         string
+	RequestKey, NextRequestKey                                 string
+	ParallelCount                                              int
+	OutputTokens                                               float64
+	CarriedRequests, CarriedTokens                             int64
+	LinesAdded, LinesRemoved                                   *int64
+	Commands                                                   []toolCommand
+	URL, Host, Hosts, SearchQuery                              string
+	URLCount                                                   int
+	URLs                                                       []toolURL
 
 	resultIndex    int
 	estimateTokens int64

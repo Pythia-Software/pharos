@@ -15,7 +15,9 @@ var (
 	toolTestMarker     = regexp.MustCompile(`(?m)(?:--- FAIL:|^FAIL\t|test result: FAILED|^FAILED |={2,} FAILURES ={2,}|\b[1-9]\d* failed\b|Tests:.*[1-9]\d* failed|\*\* TEST FAILED \*\*)`)
 	toolTestSubcommand = regexp.MustCompile(`(?i)(^|[\s:/_-])tests?($|[\s:/_-])`)
 	toolCodecNumber    = regexp.MustCompile(`(?i)utf-\d+`)
-	toolHexByte        = regexp.MustCompile(`0x[0-9a-fA-F]+`)
+	toolHexByte        = regexp.MustCompile(`0x[0-9a-fA-F]{4,}`)
+	toolNoiseLine      = regexp.MustCompile(`^(?:[\W_]*|[~/.]\S*|at \S.*|node:internal/\S*|\^+|~+)$`)
+	toolLabelLine      = regexp.MustCompile(`^\S+(?: \S+){0,2}:$`)
 	toolLineNumber     = regexp.MustCompile(`(?i)(\(eval\)|zsh|bash|sh):\d+:|:[0-9]+(?::[0-9]+)?:`)
 )
 
@@ -45,49 +47,63 @@ func toolErrorSignature(content string) string {
 		content = content[:16384] + "\n" + content[len(content)-16384:]
 	}
 	lines := strings.Split(content, "\n")
+	// Lines that name no cause: bare punctuation such as a JSON "{", a lone
+	// path, JavaScript stack frames and carets, and Node's rethrow lines.
 	choose := func(line string) bool {
 		line = strings.TrimSpace(line)
-		return line != "" && !strings.Contains(line, "const err = new Error(message)") && !strings.Contains(line, "triggerUncaughtException(") && !toolWrapperLine.MatchString(line)
+		return line != "" && !toolNoiseLine.MatchString(line) && !strings.Contains(line, "const err = new Error(message)") &&
+			!strings.Contains(line, "triggerUncaughtException(") && !toolWrapperLine.MatchString(line)
 	}
-	selected := ""
-	for _, line := range lines {
+	selected := -1
+	for index, line := range lines {
 		if toolExceptionLine.MatchString(strings.TrimSpace(line)) && choose(line) {
-			selected = line
+			selected = index
 		}
 	}
-	if selected == "" {
+	if selected < 0 {
 		for _, pattern := range []*regexp.Regexp{regexp.MustCompile(`^(?:panic:|--- FAIL: \S+|FAIL\t)`), toolFileLine, toolFailureLine} {
-			for _, line := range lines {
+			for index, line := range lines {
 				if pattern.MatchString(strings.TrimSpace(line)) && choose(line) {
-					selected = line
+					selected = index
 					break
 				}
 			}
-			if selected != "" {
+			if selected >= 0 {
 				break
 			}
 		}
 	}
-	if selected == "" {
-		for _, line := range lines {
+	if selected < 0 {
+		for index, line := range lines {
 			if choose(line) {
-				selected = line
+				selected = index
 				break
 			}
 		}
 	}
-	if selected == "" {
+	if selected < 0 {
 		return ""
 	}
-	selected = toolLineNumber.ReplaceAllStringFunc(selected, func(s string) string {
+	// A short label such as "usage:" or "Validation failed:" names its cause on
+	// the next line.
+	chosen := strings.TrimSpace(lines[selected])
+	if toolLabelLine.MatchString(chosen) {
+		for _, line := range lines[selected+1:] {
+			if choose(line) {
+				chosen += " " + strings.TrimSpace(line)
+				break
+			}
+		}
+	}
+	chosen = toolLineNumber.ReplaceAllStringFunc(chosen, func(s string) string {
 		if strings.HasSuffix(s, ":") {
 			return strings.Split(s, ":")[0] + ":<n>:"
 		}
 		return s
 	})
-	selected = toolCodecNumber.ReplaceAllString(selected, "utf-<n>")
-	selected = toolHexByte.ReplaceAllString(selected, "0x<id>")
-	return tl1Signature(strings.TrimSpace(selected))
+	chosen = toolCodecNumber.ReplaceAllString(chosen, "utf-<n>")
+	chosen = toolHexByte.ReplaceAllString(chosen, "0x<id>")
+	return tl1Signature(strings.TrimSpace(chosen))
 }
 
 func toolTestFailure(call *toolCall, content string) bool {

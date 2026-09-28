@@ -257,6 +257,7 @@ APP_HTML = r'''<!doctype html>
   </style>
   <script>(function(){let theme='dark';try{theme=localStorage.getItem('pharos-theme')||'dark'}catch{}if(theme==='light'||theme==='dark')document.documentElement.dataset.theme=theme})()</script>
   <script src="/assets/onboarding.js" defer></script>
+  <script src="/assets/upgrade.js" defer></script>
   <script src="/assets/library.js" defer></script>
   <script src="/assets/carbon.js" defer></script>
   <link rel="stylesheet" href="/assets/query-tables.css">

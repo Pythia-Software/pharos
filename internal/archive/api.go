@@ -178,6 +178,7 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/query-tables.js":  {"query-tables.js", "text/javascript; charset=utf-8"},
 	"/assets/query-tables.css": {"query-tables.css", "text/css; charset=utf-8"},
 	"/assets/onboarding.js":    {"onboarding.js", "text/javascript; charset=utf-8"},
+	"/assets/upgrade.js":       {"upgrade.js", "text/javascript; charset=utf-8"},
 	"/assets/library.js":       {"library.js", "text/javascript; charset=utf-8"},
 	"/assets/carbon.js":        {"carbon.js", "text/javascript; charset=utf-8"},
 }
@@ -291,6 +292,14 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/tools/status":
 		value, err := s.Catalog.ToolLedgerStatus(r.Context())
 		writeResult(w, value, err)
+	case path == "/api/upgrade":
+		value, err := s.Catalog.UpgradeStatus(r.Context())
+		writeResult(w, value, err)
+	case path == "/api/upgrade/preview":
+		// With github=1 this asks GitHub about renamed repositories, so the UI
+		// only requests it when the user opts in.
+		groups, err := s.Catalog.RepositoryMergePreview(r.Context(), r.URL.Query().Get("github") == "1")
+		writeResult(w, map[string]any{"repository_merges": groups}, err)
 	case strings.HasPrefix(path, "/api/tool-calls/"):
 		id, _ := url.PathUnescape(strings.TrimPrefix(path, "/api/tool-calls/"))
 		value, err := s.Catalog.toolCallDetail(r.Context(), id)
@@ -368,6 +377,21 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 	}
 	path := r.URL.Path
 	switch {
+	case path == "/api/upgrade":
+		// The upgrade reads and rewrites much of the catalog, so it runs in the
+		// background; /api/upgrade and the library status report progress. A
+		// release stops it after the unit in progress; starting it again resumes.
+		github, _ := body["github"].(bool)
+		started := s.spawn(func(ctx context.Context) {
+			if err := s.Catalog.RunUpgrade(ctx, github, nil); err != nil && ctx.Err() == nil {
+				fmt.Fprintf(os.Stderr, "Library upgrade: %v\n", err)
+			}
+		})
+		if !started {
+			writeJSON(w, map[string]any{"error": "Pharos is stopping"}, http.StatusServiceUnavailable)
+			return
+		}
+		writeJSON(w, map[string]any{"started": true}, http.StatusAccepted)
 	case path == "/api/tools/backfill":
 		// Building the ledger re-reads every retained conversation, so it runs
 		// in the background; progress is reported by /api/tools/status. A
