@@ -64,6 +64,8 @@ var libraryColumns = []libraryColumn{
 	{"pr_details", "(SELECT json_group_array(json_object('number',prx.number,'title',prx.title,'url',prx.url,'host',prx.host)) FROM work_pr_links lx JOIN pull_requests prx ON prx.id=lx.pr_id WHERE lx.workspace_id=w.id)"},
 	{"providers", "(SELECT GROUP_CONCAT(DISTINCT cx.provider) FROM conversations cx WHERE cx.workspace_id=w.id)"},
 	{"models", "(SELECT GROUP_CONCAT(DISTINCT cx.model) FROM conversations cx WHERE cx.workspace_id=w.id AND cx.model IS NOT NULL)"},
+	{"harnesses", "(SELECT GROUP_CONCAT(DISTINCT cx.harness) FROM conversations cx WHERE cx.workspace_id=w.id AND cx.harness IS NOT NULL)"},
+	{"harness_versions", "(SELECT GROUP_CONCAT(DISTINCT cx.harness_version_last) FROM conversations cx WHERE cx.workspace_id=w.id AND cx.harness_version_last IS NOT NULL)"},
 	{"changed_files", "(SELECT GROUP_CONCAT(DISTINCT cfx.path) FROM change_sets csx JOIN change_files cfx ON cfx.change_set_id=csx.id WHERE csx.workspace_id=w.id)"},
 	{"error_types", "(SELECT GROUP_CONCAT(DISTINCT mlx.error_type) FROM metric_ledger mlx WHERE mlx.workspace_id=w.id AND mlx.error_type IS NOT NULL)"},
 	{"summary_initiation", "(SELECT sx.initiation FROM summaries sx WHERE sx.workspace_id=w.id)"},

@@ -81,6 +81,8 @@ Run diagnostics with `dist/Pharos.app/Contents/MacOS/pharos --config "$HOME/Libr
 | `chatgpt-export` | User-provided `conversations.json` | None |
 | `canonical` | Documented interchange JSON | None |
 
+Each conversation records its agent harness and first and last observed harness versions. Claude Code takes `entrypoint` and `version` from JSONL events; Codex takes `originator` and `cli_version` from every `session_meta`, including resumed sessions. Conductor keeps its own harness identity and inherits a linked native conversation’s version with source `alias`. Live Antigravity sources use the installed app’s `Info.plist` or CLI log as an `installed-app` version; captured files from another Mac keep the version empty. Version sources distinguish transcript evidence, native aliases, and the installed app; unavailable versions stay empty. Existing catalogs fill these fields during the next identity reconciliation, using retained Claude messages and Codex source or captured files.
+
 Deduplication uses account-scoped native IDs. Conductor aliases are retained as evidence-backed identity links after all adapters run; repeated identical prompts are never merged by content hash. The Conductor extractor inspects each row and selects the materially populated `content`, `full_message`, or `text` field, recording that decision in its evidence locator.
 
 No claim is made that ChatGPT desktop’s local cache is complete. ChatGPT is indexed from a user-provided supported export, and its health row makes that acquisition boundary visible.

@@ -84,7 +84,7 @@ func planCapture(source SourceConfig) (capturePlan, error) {
 	case "tl1":
 		return plan, plan.tl1(source)
 	case "antigravity":
-		adapter := antigravityAdapter{baseAdapter{config: source}}
+		adapter := antigravityAdapter{baseAdapter: baseAdapter{config: source}}
 		files, err := adapter.captureFiles()
 		if err != nil {
 			return plan, fmt.Errorf("Antigravity conversations are unavailable: %w", err)

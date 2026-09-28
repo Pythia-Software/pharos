@@ -905,6 +905,16 @@ func upsertWorkItem(tx *sql.Tx, workspaceID string, value map[string]any) (strin
 	return id, err
 }
 
+func versionSource(value ConversationRecord) any {
+	if value.HarnessVersionLast != "" {
+		if value.HarnessVersionSource != "" {
+			return value.HarnessVersionSource
+		}
+		return "transcript"
+	}
+	return nil
+}
+
 func upsertConversation(tx *sql.Tx, workspaceID, workItemID string, value ConversationRecord, host string) (string, error) {
 	workItem := nilIfEmpty(workItemID)
 	id := stableID("conversation", value.Provider, value.Account, value.NativeID)
@@ -915,7 +925,7 @@ func upsertConversation(tx *sql.Tx, workspaceID, workItemID string, value Conver
 			parent = found
 		}
 	}
-	_, err := tx.Exec(`INSERT INTO conversations(id,workspace_id,work_item_id,provider,model,account,native_id,parent_id,agent_depth,agent_path,agent_nickname,origin,origin_host_id,coverage,started_at,ended_at,aliases_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(provider,account,native_id) DO UPDATE SET workspace_id=excluded.workspace_id,work_item_id=COALESCE(excluded.work_item_id,conversations.work_item_id),parent_id=COALESCE(excluded.parent_id,conversations.parent_id),agent_depth=excluded.agent_depth,agent_path=COALESCE(excluded.agent_path,conversations.agent_path),agent_nickname=COALESCE(excluded.agent_nickname,conversations.agent_nickname),origin=COALESCE(excluded.origin,conversations.origin),origin_host_id=excluded.origin_host_id,model=COALESCE(excluded.model,conversations.model),coverage=excluded.coverage,started_at=COALESCE(excluded.started_at,conversations.started_at),ended_at=MAX(excluded.ended_at,conversations.ended_at),aliases_json=excluded.aliases_json`, id, workspaceID, workItem, value.Provider, nilIfEmpty(value.Model), value.Account, value.NativeID, parent, value.AgentDepth, nilIfEmpty(value.AgentPath), nilIfEmpty(value.AgentNickname), nilIfEmpty(value.Origin), host, defaultString(value.Coverage, "complete"), nilIfEmpty(value.StartedAt), nilIfEmpty(value.EndedAt), jsonText(value.Aliases))
+	_, err := tx.Exec(`INSERT INTO conversations(id,workspace_id,work_item_id,provider,model,account,native_id,parent_id,agent_depth,agent_path,agent_nickname,origin,origin_host_id,coverage,started_at,ended_at,aliases_json,harness,harness_version_first,harness_version_last,harness_version_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(provider,account,native_id) DO UPDATE SET workspace_id=excluded.workspace_id,work_item_id=COALESCE(excluded.work_item_id,conversations.work_item_id),parent_id=COALESCE(excluded.parent_id,conversations.parent_id),agent_depth=excluded.agent_depth,agent_path=COALESCE(excluded.agent_path,conversations.agent_path),agent_nickname=COALESCE(excluded.agent_nickname,conversations.agent_nickname),origin=COALESCE(excluded.origin,conversations.origin),origin_host_id=excluded.origin_host_id,model=COALESCE(excluded.model,conversations.model),coverage=excluded.coverage,started_at=COALESCE(excluded.started_at,conversations.started_at),ended_at=MAX(excluded.ended_at,conversations.ended_at),aliases_json=excluded.aliases_json,harness=COALESCE(excluded.harness,conversations.harness),harness_version_first=COALESCE(conversations.harness_version_first,excluded.harness_version_first),harness_version_last=COALESCE(excluded.harness_version_last,conversations.harness_version_last),harness_version_source=CASE WHEN excluded.harness_version_last IS NOT NULL THEN excluded.harness_version_source ELSE conversations.harness_version_source END`, id, workspaceID, workItem, value.Provider, nilIfEmpty(value.Model), value.Account, value.NativeID, parent, value.AgentDepth, nilIfEmpty(value.AgentPath), nilIfEmpty(value.AgentNickname), nilIfEmpty(value.Origin), host, defaultString(value.Coverage, "complete"), nilIfEmpty(value.StartedAt), nilIfEmpty(value.EndedAt), jsonText(value.Aliases), nilIfEmpty(value.Harness), nilIfEmpty(value.HarnessVersionFirst), nilIfEmpty(value.HarnessVersionLast), versionSource(value))
 	if err != nil {
 		return "", err
 	}
@@ -1377,6 +1387,12 @@ func (c *Catalog) ReconcileIdentities() (int, error) {
 		if err := tx.Commit(); err != nil {
 			return 0, err
 		}
+	}
+	if err := c.backfillHarnessVersions(); err != nil {
+		return 0, err
+	}
+	if err := c.inheritHarnessAliases(); err != nil {
+		return 0, err
 	}
 	links, err := queryMaps(c.DB, `SELECT wa.id left_id,wa.source_kind left_kind,wa.activity_at left_activity,
 		wb.id right_id,wb.source_kind right_kind,wb.activity_at right_activity
