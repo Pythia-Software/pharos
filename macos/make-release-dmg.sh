@@ -30,31 +30,42 @@ cleanup() {
 trap cleanup EXIT
 mkdir -p "$STAGE/.background"
 ditto "$APP" "$STAGE/Pharos.app"
+ln -s /Applications "$STAGE/Applications"
 swift "$ROOT/macos/make-update-background.swift" "$STAGE/.background/Update Guide.png" "$VERSION"
+chflags hidden "$STAGE/.background"
 hdiutil create -quiet -srcfolder "$STAGE" -volname "$VOLUME" -format UDRW "$RW"
 MOUNT=$(hdiutil attach -readwrite -noautoopen "$RW" | awk -F '\t' '/\/Volumes\// { print $NF; exit }')
 [ -n "$MOUNT" ] || { echo "Could not find the disk image's mount point." >&2; exit 1; }
 mounted=1
+if [ "$MOUNT" != "/Volumes/$VOLUME" ]; then
+    echo "A volume named $VOLUME is already mounted. Eject it before building this disk image." >&2
+    exit 1
+fi
 
 # Finder writes the view options and icon position into the image's .DS_Store.
 # The background stays hidden as a normal file inside the mounted image.
-osascript - "$VOLUME" "$MOUNT/.background/Update Guide.png" <<'APPLESCRIPT'
+osascript - "$MOUNT" "$MOUNT/.background/Update Guide.png" <<'APPLESCRIPT'
 on run argv
-    set volumeName to item 1 of argv
+    set mountPath to item 1 of argv
     set backgroundPath to item 2 of argv
     tell application "Finder"
-        set volumeDisk to disk volumeName
+        set volumeDisk to disk of (POSIX file mountPath as alias)
         open volumeDisk
         set imageWindow to container window of volumeDisk
         set current view of imageWindow to icon view
-        set bounds of imageWindow to {120, 120, 1020, 680}
+        -- Leave room for Finder's sidebar and title area around the 760 x 440 background.
+        set bounds of imageWindow to {120, 120, 1020, 650}
         set toolbar visible of imageWindow to false
         set statusbar visible of imageWindow to false
         set viewOptions to icon view options of imageWindow
         set arrangement of viewOptions to not arranged
-        set icon size of viewOptions to 112
+        set icon size of viewOptions to 72
+        set text size of viewOptions to 12
         set background picture of viewOptions to (POSIX file backgroundPath) as alias
-        set position of item "Pharos.app" of imageWindow to {150, 165}
+        -- Hidden system files can still show when Finder's Show All Files is enabled.
+        set position of every item of imageWindow to {1100, 100}
+        set position of item "Pharos.app" of imageWindow to {87, 180}
+        set position of item "Applications" of imageWindow to {210, 180}
         close imageWindow
     end tell
 end run

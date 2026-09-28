@@ -8,7 +8,8 @@ guard CommandLine.arguments.count == 3 else {
 
 let output = URL(fileURLWithPath: CommandLine.arguments[1])
 let version = CommandLine.arguments[2]
-let width = 900, height = 560, scale = 2
+// Finder uses points for its window and icon positions. Draw at 2x for Retina.
+let width = 760, height = 440, scale = 2
 guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width * scale,
                                   pixelsHigh: height * scale, bitsPerSample: 8,
                                   samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
@@ -28,52 +29,23 @@ let gold = color(245, 205, 126)
 func text(_ value: String, x: CGFloat, y: CGFloat, width: CGFloat, size: CGFloat,
           weight: NSFont.Weight = .regular, foreground: NSColor = cream) {
     let paragraph = NSMutableParagraphStyle()
-    paragraph.lineSpacing = 3
+    paragraph.lineSpacing = 2
     let attributes: [NSAttributedString.Key: Any] = [
         .font: NSFont.systemFont(ofSize: size, weight: weight),
         .foregroundColor: foreground,
         .paragraphStyle: paragraph,
     ]
-    let measured = (value as NSString).boundingRect(with: NSSize(width: width, height: 140),
+    let measured = (value as NSString).boundingRect(with: NSSize(width: width, height: 100),
                                                      options: [.usesLineFragmentOrigin], attributes: attributes)
     (value as NSString).draw(in: NSRect(x: x, y: y, width: width, height: ceil(measured.height) + 2),
                              withAttributes: attributes)
 }
 
-func speechBubble(in rect: NSRect, tailStart: CGFloat, tailTip: CGPoint,
-                  tailEnd: CGFloat) -> NSBezierPath {
-    let radius: CGFloat = 19
-    let curve = radius * 0.55228475
-    let path = NSBezierPath()
-    path.move(to: CGPoint(x: rect.minX + radius, y: rect.minY))
-    path.line(to: CGPoint(x: tailStart, y: rect.minY))
-    path.line(to: tailTip)
-    path.line(to: CGPoint(x: tailEnd, y: rect.minY))
-    path.line(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
-    path.curve(to: CGPoint(x: rect.maxX, y: rect.minY + radius),
-               controlPoint1: CGPoint(x: rect.maxX - radius + curve, y: rect.minY),
-               controlPoint2: CGPoint(x: rect.maxX, y: rect.minY + radius - curve))
-    path.line(to: CGPoint(x: rect.maxX, y: rect.maxY - radius))
-    path.curve(to: CGPoint(x: rect.maxX - radius, y: rect.maxY),
-               controlPoint1: CGPoint(x: rect.maxX, y: rect.maxY - radius + curve),
-               controlPoint2: CGPoint(x: rect.maxX - radius + curve, y: rect.maxY))
-    path.line(to: CGPoint(x: rect.minX + radius, y: rect.maxY))
-    path.curve(to: CGPoint(x: rect.minX, y: rect.maxY - radius),
-               controlPoint1: CGPoint(x: rect.minX + radius - curve, y: rect.maxY),
-               controlPoint2: CGPoint(x: rect.minX, y: rect.maxY - radius + curve))
-    path.line(to: CGPoint(x: rect.minX, y: rect.minY + radius))
-    path.curve(to: CGPoint(x: rect.minX + radius, y: rect.minY),
-               controlPoint1: CGPoint(x: rect.minX, y: rect.minY + radius - curve),
-               controlPoint2: CGPoint(x: rect.minX + radius - curve, y: rect.minY))
-    path.close()
-    return path
-}
-
-func line(from start: CGPoint, to end: CGPoint, color: NSColor, width: CGFloat = 1) {
+func line(from start: CGPoint, to end: CGPoint, color: NSColor) {
     let path = NSBezierPath()
     path.move(to: start)
     path.line(to: end)
-    path.lineWidth = width
+    path.lineWidth = 1
     color.setStroke()
     path.stroke()
 }
@@ -82,71 +54,38 @@ NSGraphicsContext.saveGraphicsState()
 NSGraphicsContext.current = context
 context.cgContext.scaleBy(x: CGFloat(scale), y: CGFloat(scale))
 
-// Keep the illustration quiet so the installation steps stay in focus.
 NSGradient(colorsAndLocations:
-    (color(60, 111, 80), 0), (color(28, 72, 55), 0.45), (dark, 1)
+    (color(48, 94, 69), 0), (color(26, 69, 53), 0.5), (dark, 1)
 )!.draw(in: NSRect(x: 0, y: 0, width: width, height: height), angle: 90)
 
-let glowColors = [color(246, 209, 130, alpha: 0.13).cgColor,
-                  color(246, 209, 130, alpha: 0).cgColor] as CFArray
-let glow = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: glowColors,
-                      locations: [0, 1])!
-context.cgContext.drawRadialGradient(glow, startCenter: CGPoint(x: 150, y: 151), startRadius: 0,
-                                     endCenter: CGPoint(x: 150, y: 151), endRadius: 170,
-                                     options: [])
-
-// Each bubble and its tail form one path, with a continuous outline and fill.
-let firstBubble = speechBubble(in: NSRect(x: 58, y: 174, width: 150, height: 83),
-                               tailStart: 77, tailTip: CGPoint(x: 51, y: 140), tailEnd: 91)
-color(231, 240, 219, alpha: 0.23).setFill()
-firstBubble.fill()
-firstBubble.lineWidth = 1.5
-color(231, 240, 219, alpha: 0.37).setStroke()
-firstBubble.stroke()
-color(231, 240, 219, alpha: 0.56).setFill()
-NSBezierPath(roundedRect: NSRect(x: 79, y: 223, width: 96, height: 5), xRadius: 2.5, yRadius: 2.5).fill()
-NSBezierPath(roundedRect: NSRect(x: 79, y: 203, width: 69, height: 5), xRadius: 2.5, yRadius: 2.5).fill()
-
-let replyBubble = speechBubble(in: NSRect(x: 93, y: 88, width: 149, height: 85),
-                               tailStart: 207, tailTip: CGPoint(x: 237, y: 65), tailEnd: 223)
-color(243, 214, 150, alpha: 0.32).setFill()
-replyBubble.fill()
-replyBubble.lineWidth = 1.5
-color(243, 214, 150, alpha: 0.55).setStroke()
-replyBubble.stroke()
-color(248, 245, 229, alpha: 0.72).setFill()
-NSBezierPath(roundedRect: NSRect(x: 114, y: 138, width: 104, height: 5), xRadius: 2.5, yRadius: 2.5).fill()
-NSBezierPath(roundedRect: NSRect(x: 114, y: 118, width: 75, height: 5), xRadius: 2.5, yRadius: 2.5).fill()
-
-line(from: CGPoint(x: 281, y: 46), to: CGPoint(x: 281, y: 513),
-     color: color(240, 246, 222, alpha: 0.19))
-
-text("PHAROS  \(version)", x: 58, y: 495, width: 190, size: 13,
+text("PHAROS  \(version)", x: 34, y: 393, width: 230, size: 15,
      weight: .semibold, foreground: soft)
-text("DRAG THIS APP", x: 83, y: 284, width: 150, size: 13,
-     weight: .semibold, foreground: cream)
+text("Drag to install", x: 43, y: 305, width: 200, size: 19, weight: .bold)
+// The actual Finder icons sit above this simple directional cue.
+text("→", x: 131, y: 221, width: 35, size: 23, foreground: gold)
+text("For a portable library, drag Pharos.app to a folder on your SSD instead.",
+     x: 39, y: 96, width: 212, size: 13, foreground: soft)
+line(from: CGPoint(x: 276, y: 34), to: CGPoint(x: 276, y: 406),
+     color: color(240, 246, 222, alpha: 0.25))
 
-let left: CGFloat = 320
-let contentWidth: CGFloat = 536
-text("First time install", x: left, y: 470, width: contentWidth, size: 31, weight: .bold)
-
-text("SSD · portable library", x: left, y: 423, width: contentWidth, size: 17,
+let left: CGFloat = 307
+let contentWidth: CGFloat = 418
+text("First time install", x: left, y: 380, width: contentWidth, size: 23, weight: .bold)
+text("Portable · SSD", x: left, y: 331, width: contentWidth, size: 15,
      weight: .semibold, foreground: gold)
-text("Make a Pharos folder on your SSD. Drag the app there, open it, and choose “Create Library Beside App.” App and data stay together.",
-     x: left, y: 357, width: contentWidth, size: 16, foreground: soft)
-
-text("Applications · this Mac", x: left, y: 310, width: contentWidth, size: 17,
+text("Make a Pharos folder on your SSD. Drag the app there, open it, and choose “Create Library Beside App.”",
+     x: left, y: 275, width: contentWidth, size: 13, foreground: soft)
+text("This Mac · Applications", x: left, y: 237, width: contentWidth, size: 15,
      weight: .semibold, foreground: gold)
-text("Drag the app into Applications. Open it and choose “Set Up on This Mac.” Data goes in ~/Library/Application Support/Pharos.",
-     x: left, y: 244, width: contentWidth, size: 16, foreground: soft)
-
-line(from: CGPoint(x: left, y: 225), to: CGPoint(x: 856, y: 225),
-     color: color(240, 246, 222, alpha: 0.29))
-text("Updating?", x: left, y: 175, width: contentWidth, size: 31, weight: .bold)
-text("Quit Pharos. Drag this app over your installed copy (SSD or Applications), choose Replace, then reopen and approve the access prompts.",
-     x: left, y: 111, width: contentWidth, size: 16, foreground: soft)
-text("macOS blocked it? Privacy & Security → Open Anyway.",
-     x: left, y: 58, width: contentWidth, size: 14, foreground: cream)
+text("Drag the app onto Applications. Open it and choose “Set Up on This Mac.”",
+     x: left, y: 195, width: contentWidth, size: 13, foreground: soft)
+line(from: CGPoint(x: left, y: 163), to: CGPoint(x: 725, y: 163),
+     color: color(240, 246, 222, alpha: 0.25))
+text("Updating?", x: left, y: 127, width: contentWidth, size: 19, weight: .bold)
+text("Quit Pharos. Drag this app over your installed copy and choose Replace. Then reopen it and approve access prompts.",
+     x: left, y: 71, width: contentWidth, size: 13, foreground: soft)
+text("Blocked by macOS? Privacy & Security → Open Anyway.",
+     x: left, y: 32, width: contentWidth, size: 12, foreground: cream)
 
 NSGraphicsContext.restoreGraphicsState()
 
