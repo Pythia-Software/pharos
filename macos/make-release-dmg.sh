@@ -11,68 +11,27 @@ if [ "$#" -ne 3 ] || [ ! -d "$APP" ] || [ -e "$OUTPUT" ]; then
     echo "Usage: $0 APP OUTPUT.dmg X.Y.Z (OUTPUT must not exist)" >&2
     exit 2
 fi
-for command in hdiutil ditto osascript swift; do
+for command in hdiutil tiffutil swift uvx; do
     command -v "$command" >/dev/null 2>&1 || { echo "$command is required." >&2; exit 2; }
 done
 
-WORK=$(mktemp -d)
-RW="$WORK/layout.dmg"
-STAGE="$WORK/stage"
 VOLUME="Pharos v$VERSION"
-mounted=0
-MOUNT=
-cleanup() {
-    if [ "$mounted" -eq 1 ]; then
-        hdiutil detach "$MOUNT" -quiet || hdiutil detach -force "$MOUNT" -quiet || true
-    fi
-    rm -rf "$WORK"
-}
-trap cleanup EXIT
-mkdir -p "$STAGE/.background"
-ditto "$APP" "$STAGE/Pharos.app"
-ln -s /Applications "$STAGE/Applications"
-swift "$ROOT/macos/make-update-background.swift" "$STAGE/.background/Update Guide.png" "$VERSION"
-chflags hidden "$STAGE/.background"
-hdiutil create -quiet -srcfolder "$STAGE" -volname "$VOLUME" -format UDRW "$RW"
-MOUNT=$(hdiutil attach -readwrite -noautoopen "$RW" | awk -F '\t' '/\/Volumes\// { print $NF; exit }')
-[ -n "$MOUNT" ] || { echo "Could not find the disk image's mount point." >&2; exit 1; }
-mounted=1
-if [ "$MOUNT" != "/Volumes/$VOLUME" ]; then
+# dmgbuild records the background by its mounted path; a second volume with the
+# same name would be mounted as "$VOLUME 1".
+if [ -e "/Volumes/$VOLUME" ]; then
     echo "A volume named $VOLUME is already mounted. Eject it before building this disk image." >&2
     exit 1
 fi
 
-# Finder writes the view options and icon position into the image's .DS_Store.
-# The background stays hidden as a normal file inside the mounted image.
-osascript - "$MOUNT" "$MOUNT/.background/Update Guide.png" <<'APPLESCRIPT'
-on run argv
-    set mountPath to item 1 of argv
-    set backgroundPath to item 2 of argv
-    tell application "Finder"
-        set volumeDisk to disk of (POSIX file mountPath as alias)
-        open volumeDisk
-        set imageWindow to container window of volumeDisk
-        set current view of imageWindow to icon view
-        -- Leave room for Finder's sidebar and title area around the 760 x 440 background.
-        set bounds of imageWindow to {120, 120, 1020, 650}
-        set toolbar visible of imageWindow to false
-        set statusbar visible of imageWindow to false
-        set viewOptions to icon view options of imageWindow
-        set arrangement of viewOptions to not arranged
-        set icon size of viewOptions to 72
-        set text size of viewOptions to 12
-        set background picture of viewOptions to (POSIX file backgroundPath) as alias
-        -- Hidden system files can still show when Finder's Show All Files is enabled.
-        set position of every item of imageWindow to {1100, 100}
-        set position of item "Pharos.app" of imageWindow to {87, 180}
-        set position of item "Applications" of imageWindow to {210, 180}
-        close imageWindow
-    end tell
-end run
-APPLESCRIPT
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+swift "$ROOT/macos/make-update-background.swift" "$WORK/background" "$VERSION"
+tiffutil -cathidpicheck "$WORK/background.png" "$WORK/background@2x.png" \
+    -out "$WORK/background.tiff"
 
-sync
-hdiutil detach "$MOUNT" -quiet
-mounted=0
-hdiutil convert -quiet "$RW" -format UDZO -imagekey zlib-level=9 -o "$OUTPUT"
+# dmgbuild writes the .DS_Store directly instead of scripting Finder, so the
+# layout does not pick up the release Mac's Finder preferences, such as tabs.
+# Pinned: 1.6.7 writes a background alias that macOS 14 and later resolve.
+uvx --quiet --from dmgbuild==1.6.7 dmgbuild -s "$ROOT/macos/dmg-settings.py" \
+    -D app="$APP" -D background="$WORK/background.tiff" "$VOLUME" "$OUTPUT"
 hdiutil verify -quiet "$OUTPUT"

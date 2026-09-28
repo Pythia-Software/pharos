@@ -45,9 +45,10 @@ and publishes a GitHub release. The Developer ID path also notarizes and
 staples both the app and the final disk image. It keeps the disk image and
 checksum under `dist/releases/vX.Y.Z/`. If publication fails after the tag is
 pushed, inspect the tag and draft release before retrying; never replace the
-asset of a published version. The disk image's Finder layout is prepared on the release
-Mac, so release from a logged-in desktop session; Terminal may ask for
-permission to control Finder.
+asset of a published version. The disk image's Finder layout is written by
+[dmgbuild](https://dmgbuild.readthedocs.io/), which the script runs with `uvx`,
+so install [uv](https://docs.astral.sh/uv/) on the release Mac. Finder is not
+scripted, and its settings on the release Mac do not affect the layout.
 
 The disk image opens in Finder with an illustrated guide. For a **new portable
 library**, create a dedicated folder such as `/Volumes/YOUR-DRIVE/Pharos`, drag

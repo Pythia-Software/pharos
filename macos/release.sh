@@ -26,7 +26,7 @@ if [ "$MODE" = developer-id ] && { [ -z "$IDENTITY" ] || [ -z "$PROFILE" ]; }; t
     echo "Omit --developer-id to publish an ad hoc signed release instead." >&2
     exit 2
 fi
-for command in git gh go swift swiftc lipo npm xcrun codesign ditto hdiutil osascript shasum spctl awk; do
+for command in git gh go swift swiftc lipo npm xcrun codesign ditto hdiutil tiffutil uvx shasum spctl awk; do
     command -v "$command" >/dev/null 2>&1 || { echo "$command is required." >&2; exit 2; }
 done
 case "$(git remote get-url origin)" in
