@@ -65,6 +65,23 @@ func (c *Catalog) PricingHealth(ctx context.Context) (map[string]any, error) {
 	})
 }
 
+// UsageAttributionHealth compares root sessions with the retained request
+// ledger. Sources with only aggregate counters are reported separately.
+func (c *Catalog) UsageAttributionHealth(ctx context.Context) ([]map[string]any, error) {
+	return queryMapsContext(ctx, c.DB, `WITH roots AS (
+		SELECT c.id,w.source_kind,c.provider,
+			(SELECT COALESCE(SUM(total_tokens),0) FROM agent_sessions s WHERE s.conversation_id=c.id AND s.depth=0) session_tokens,
+			(SELECT COALESCE(SUM(total_tokens),0) FROM model_requests m WHERE m.conversation_id=c.id) request_tokens
+		FROM conversations c JOIN workspaces w ON w.id=c.workspace_id
+		WHERE c.agent_depth=0 AND c.started_at>=date('now','-30 day')
+	)
+	SELECT source_kind,provider,COUNT(*) sessions,
+		SUM(CASE WHEN request_tokens>0 AND session_tokens>request_tokens*1.05+100000 THEN 1 ELSE 0 END) mismatched,
+		SUM(CASE WHEN request_tokens=0 AND session_tokens>0 THEN 1 ELSE 0 END) session_totals_only,
+		CASE WHEN SUM(CASE WHEN request_tokens>0 THEN 1 ELSE 0 END)=0 THEN 'session totals only' ELSE 'request comparable' END status
+	FROM roots GROUP BY source_kind,provider ORDER BY source_kind,provider`)
+}
+
 func (c *Catalog) indexBytes() int64 {
 	if info, err := os.Stat(c.Path); err == nil {
 		return info.Size()
@@ -84,6 +101,7 @@ func (c *Catalog) Health() map[string]any {
 		health["workspaces"], health["messages"] = counts["workspaces"], counts["messages"]
 	}
 	health["pricing"], _ = c.PricingHealth(ctx)
+	health["usage_attribution"], _ = c.UsageAttributionHealth(ctx)
 	return health
 }
 

@@ -59,8 +59,8 @@ var toolCallDataset = sqlDataset{
 		"command": "t.command", "program": "t.program", "subcommand": "t.subcommand", "command_category": "t.command_category",
 		"command_name":  "NULLIF(TRIM(COALESCE(t.program,'')||' '||COALESCE(t.subcommand,'')),'')",
 		"command_count": "t.command_count", "has_pipe": "t.has_pipe", "has_redirect": "t.has_redirect", "has_heredoc": "t.has_heredoc",
-		"backgrounded": "t.backgrounded", "file_path": "t.file_path",
-		"status": "t.status", "error_type": "t.error_type", "exit_code": "t.exit_code", "interrupted": "t.interrupted", "truncated": "t.truncated",
+		"backgrounded": "t.backgrounded", "file_path": "t.file_path", "repo_path": "t.repo_path", "path_repository": "t.path_repository", "path_scope": "t.path_scope",
+		"status": "t.status", "error_type": "t.error_type", "error_signature": "t.error_signature", "test_failure": "t.test_failure", "exit_code": "t.exit_code", "interrupted": "t.interrupted", "truncated": "t.truncated",
 		"call_count": "1", "error_count": "(t.status='error')",
 		"duration_ms": "t.duration_ms", "duration_source": "t.duration_source",
 		"input_bytes": "t.input_bytes", "result_bytes": "t.result_bytes", "result_tokens": "t.result_tokens",
@@ -107,7 +107,7 @@ func (c *Catalog) priceToolCalls(rows []map[string]any) error {
 		row["output_cost_usd"] = costValue(outputCost.cost)
 		row["tool_cost_usd"] = costValue(addCost(addCost(nil, contextCost.cost), outputCost.cost))
 		row["price_status"] = worsePriceStatus(contextCost.status, outputCost.status)
-		for _, flag := range []string{"has_pipe", "has_redirect", "has_heredoc", "backgrounded", "interrupted", "truncated"} {
+		for _, flag := range []string{"has_pipe", "has_redirect", "has_heredoc", "backgrounded", "interrupted", "truncated", "test_failure"} {
 			row[flag] = integer(row[flag]) != 0
 		}
 	}

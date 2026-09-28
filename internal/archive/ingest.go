@@ -634,6 +634,9 @@ func ingestCopy(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host,
 			return 0, 0, err
 		}
 	}
+	if err := applyClaudeGroupUsage(tx, workspaceID, record.Conversations, conversationIDs, authority.conversations); err != nil {
+		return 0, 0, err
+	}
 	if authority.workspace {
 		metrics := record.Metrics
 		if tokens := reconciledTokenMetrics(record); len(tokens) > 0 {
@@ -1072,10 +1075,14 @@ func replaceMetrics(tx *sql.Tx, workspaceID string, values []map[string]any) err
 }
 
 func replaceAgentSessions(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord) error {
+	return replaceAgentSessionsWithCostState(tx, workspaceID, conversationID, conversation, false)
+}
+
+func replaceAgentSessionsWithCostState(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord, suppressCostState bool) error {
 	if _, err := tx.Exec("DELETE FROM agent_sessions WHERE conversation_id=?", conversationID); err != nil {
 		return err
 	}
-	summaries := agentSessionSummaries(conversation.Messages)
+	summaries := agentSessionSummariesWithCostState(conversation.Messages, suppressCostState)
 	ids := map[string]string{}
 	for _, summary := range summaries {
 		ids[summary.nativeID] = stableID("agent-session", conversationID, summary.nativeID)

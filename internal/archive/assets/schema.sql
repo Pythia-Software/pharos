@@ -209,6 +209,7 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   native_id TEXT NOT NULL,
   parent_id TEXT REFERENCES agent_sessions(id) ON DELETE CASCADE,
   delegation_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+  child_conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
   kind TEXT NOT NULL,
   provider TEXT NOT NULL,
   model TEXT,
@@ -255,6 +256,10 @@ CREATE TABLE IF NOT EXISTS agent_session_usage (
   PRIMARY KEY(agent_session_id, usage_hour, model, attribution)
 );
 CREATE INDEX IF NOT EXISTS agent_session_usage_hour_idx ON agent_session_usage(usage_hour);
+CREATE TABLE IF NOT EXISTS usage_attribution_state (
+  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  version TEXT NOT NULL
+);
 
 -- API price history. Rows are imported from the checked-in pricing file
 -- (pricing/cost_changes.json); only 'confirmed' rows are used for cost.
