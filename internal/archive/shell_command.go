@@ -10,6 +10,7 @@ import (
 type shellSegment struct {
 	Text, Operator                string
 	Program, Subcommand, Category string
+	Assigned                      bool
 }
 
 // shellCommand summarizes a command line for tool analytics. It is a lexical
@@ -40,8 +41,23 @@ func parseShellCommand(line string) shellCommand {
 		text := strings.TrimSpace(current.String())
 		current.Reset()
 		if text != "" {
+			if strings.HasPrefix(text, "(") && strings.HasSuffix(text, ")") && matchSubstitution(text, 0) == len(text) {
+				inner := parseShellCommand(text[1 : len(text)-1])
+				for index, part := range inner.Segments {
+					if index == 0 {
+						part.Operator = operator
+					}
+					result.Segments = append(result.Segments, part)
+				}
+				result.HasPipe = result.HasPipe || inner.HasPipe
+				result.HasRedirect = result.HasRedirect || inner.HasRedirect
+				result.HasHeredoc = result.HasHeredoc || inner.HasHeredoc
+				operator = next
+				return
+			}
 			segment := shellSegment{Text: text, Operator: operator}
 			segment.Program, segment.Subcommand = shellProgram(text)
+			segment.Assigned = assignmentOnly(text)
 			segment.Category = shellCategory(segment.Program, segment.Subcommand, text)
 			result.Segments = append(result.Segments, segment)
 		}
@@ -155,7 +171,7 @@ func parseShellCommand(line string) shellCommand {
 	}
 	flush("")
 	for index, segment := range result.Segments {
-		if segment.Program != "" && !shellSetupPrograms[segment.Program] {
+		if segment.Program != "" && !segment.Assigned && !shellSetupPrograms[segment.Program] {
 			result.Primary = index
 			break
 		}
@@ -204,6 +220,14 @@ func shellWords(text string) []string {
 	var quote byte
 	for index := 0; index < len(text); index++ {
 		char := text[index]
+		if quote != '\'' && (char == '`' || strings.HasPrefix(text[index:], "$(") || strings.HasPrefix(text[index:], "${")) {
+			if end := matchSubstitution(text, index); end > index {
+				word.WriteString(text[index:end])
+				inWord = true
+				index = end - 1
+				continue
+			}
+		}
 		if quote != 0 {
 			if char == quote {
 				quote = 0
@@ -248,6 +272,103 @@ func shellWords(text string) []string {
 	return words
 }
 
+func matchSubstitution(text string, start int) int {
+	if start >= len(text) {
+		return 0
+	}
+	if text[start] == '`' {
+		for i := start + 1; i < len(text); i++ {
+			if text[i] == '\\' {
+				i++
+				continue
+			}
+			if text[i] == '`' {
+				return i + 1
+			}
+		}
+		return 0
+	}
+	open := byte('(')
+	i := start
+	if strings.HasPrefix(text[start:], "${") {
+		open = '{'
+		i++
+	} else if strings.HasPrefix(text[start:], "$(") {
+		i++
+	} else if text[start] != '(' {
+		return 0
+	}
+	stack := []byte{open}
+	var quote byte
+	for i++; i < len(text); i++ {
+		ch := text[i]
+		if ch == '\\' {
+			i++
+			continue
+		}
+		if quote == '\'' {
+			if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		if quote == '"' && ch == '"' {
+			quote = 0
+			continue
+		}
+		if ch == '\'' && quote == 0 {
+			quote = ch
+			continue
+		}
+		if ch == '"' && quote == 0 {
+			quote = ch
+			continue
+		}
+		if ch == '`' {
+			if end := matchSubstitution(text, i); end > i {
+				i = end - 1
+				continue
+			}
+		}
+		if strings.HasPrefix(text[i:], "$(") || strings.HasPrefix(text[i:], "${") {
+			if end := matchSubstitution(text, i); end > i {
+				i = end - 1
+				continue
+			}
+		}
+		if quote == '"' {
+			continue
+		}
+		if ch == '(' || ch == '{' {
+			stack = append(stack, ch)
+		}
+		if ch == ')' || ch == '}' {
+			if len(stack) == 0 || (ch == ')' && stack[len(stack)-1] != '(') || (ch == '}' && stack[len(stack)-1] != '{') {
+				return 0
+			}
+			stack = stack[:len(stack)-1]
+			if len(stack) == 0 {
+				return i + 1
+			}
+		}
+	}
+	return 0
+}
+
+func assignmentOnly(text string) bool {
+	words := shellWords(text)
+	if len(words) == 0 {
+		return false
+	}
+	for _, word := range words {
+		eq := strings.IndexByte(word, '=')
+		if eq <= 0 || !isShellName(word[:eq]) {
+			return false
+		}
+	}
+	return true
+}
+
 func isAllDigits(value string) bool {
 	if value == "" {
 		return false
@@ -290,7 +411,7 @@ var shellOptionArguments = map[string]map[string]bool{
 }
 
 // shellSetupPrograms prepare the shell rather than do the work.
-var shellSetupPrograms = map[string]bool{"for": true, "while": true, "until": true, "if": true, "case": true, "select": true, "[": true, "[[": true, "test": true, "cd": true, "pwd": true, "pushd": true, "popd": true, "export": true, "set": true, "unset": true, "source": true, ".": true, "true": true, ":": true, "echo": true, "printf": true, "sleep": true, "trap": true, "shopt": true, "local": true, "declare": true, "alias": true}
+var shellSetupPrograms = map[string]bool{"mktemp": true, "mkdir": true, "for": true, "while": true, "until": true, "if": true, "case": true, "select": true, "[": true, "[[": true, "test": true, "cd": true, "pwd": true, "pushd": true, "popd": true, "export": true, "set": true, "unset": true, "source": true, ".": true, "true": true, ":": true, "echo": true, "printf": true, "sleep": true, "trap": true, "shopt": true, "local": true, "declare": true, "alias": true}
 
 // shellKeywords introduce the command that follows them in a compound
 // command ("then cat x", "do go test"); they are not programs.
@@ -324,11 +445,23 @@ func shellProgram(text string) (string, string) {
 		index += consumes
 	}
 	if index >= len(words) {
-		// Only variable assignments.
+		for i := len(words) - 1; i >= 0; i-- {
+			if eq := strings.IndexByte(words[i], '='); eq >= 0 {
+				value := words[i][eq+1:]
+				if strings.HasPrefix(value, "$((") {
+					continue
+				}
+				if strings.HasPrefix(value, "$(") && matchSubstitution(value, 0) == len(value) {
+					return shellProgram(value[2 : len(value)-1])
+				}
+				if strings.HasPrefix(value, "`") && matchSubstitution(value, 0) == len(value) {
+					return shellProgram(value[1 : len(value)-1])
+				}
+			}
+		}
 		return "", ""
 	}
 	program := strings.ToLower(path.Base(words[index]))
-	program = strings.TrimSuffix(program, ")")
 	if program == "" {
 		return "", ""
 	}
@@ -402,7 +535,7 @@ var shellProgramCategories = map[string]string{
 	"make": "build", "tsc": "build", "esbuild": "build", "swiftc": "build", "xcodebuild": "build", "gradle": "build", "mvn": "build", "cmake": "build", "ninja": "build", "vite": "build", "webpack": "build", "rollup": "build",
 	"pytest": "test", "jest": "test", "vitest": "test", "playwright": "test", "mocha": "test",
 	"brew": "package", "pip": "package", "pip3": "package", "uv": "package", "poetry": "package", "conda": "package", "apt": "package", "apt-get": "package", "rustup": "package",
-	"mv": "file-write", "cp": "file-write", "rm": "file-write", "mkdir": "file-write", "touch": "file-write", "chmod": "file-write", "ln": "file-write",
+	"mktemp": "shell", "mv": "file-write", "cp": "file-write", "rm": "file-write", "mkdir": "file-write", "touch": "file-write", "chmod": "file-write", "ln": "file-write",
 	"tee": "file-write", "patch": "file-write", "rsync": "file-write", "unzip": "file-write", "zip": "file-write", "tar": "file-write", "rmdir": "file-write", "install": "file-write",
 	"curl": "network", "wget": "network", "ssh": "network", "scp": "network", "nc": "network", "ping": "network", "http": "network", "dig": "network", "nslookup": "network",
 	"ps": "process", "kill": "process", "pkill": "process", "pgrep": "process", "lsof": "process", "top": "process", "open": "process", "osascript": "process",

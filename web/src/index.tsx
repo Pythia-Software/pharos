@@ -1317,6 +1317,8 @@ const toolCallPresets: ToolPreset[] = [
   { label: "Largest results", title: "Single calls by tokens their result added to the context", orderBy: [{ field: "result_tokens", dir: "desc" }] },
   { label: "Most carried", title: "Results re-read the most before compaction", orderBy: [{ field: "carried_tokens", dir: "desc" }] },
   { label: "Failures", title: "Failed calls, newest first, with a breakdown by error type", where: [{ field: "status", op: "=", value: "error" }], orderBy: [{ field: "started_at", dir: "desc" }], aggregations: [count(["error_type"], "Failures by type")] },
+  { label: "Failures by signature", title: "Recurring failures grouped by normalized signature", where: [{ field: "error_signature", op: "is_not_null", value: "" }], aggregations: [count(["error_signature"], "Failures by signature")] },
+  { label: "Test failures", title: "Test commands whose results contain failures", where: [{ field: "test_failure", op: "=", value: "true" }], orderBy: [{ field: "started_at", dir: "desc" }] },
   { label: "Exit codes", title: "Non-zero exit codes by command", where: [{ field: "exit_code", op: "!=", value: "0" }, { field: "exit_code", op: "is_not_null", value: "" }], aggregations: [count(["command_name", "exit_code"], "Exit codes by command")] },
   { label: "Rejected", title: "Calls a person declined", where: [{ field: "error_type", op: "=", value: "user_rejected" }], orderBy: [{ field: "started_at", dir: "desc" }], aggregations: [count(["tool_name"], "Rejections by tool")] },
   { label: "Sites", title: "Calls that reached a URL (web fetches, browser navigation, curl and other network commands), by site and tool", where: [{ field: "host", op: "is_not_null", value: "" }], orderBy: [{ field: "started_at", dir: "desc" }], aggregations: [count(["host"], "Calls by site"), count(["host", "tool_name"], "Calls by site and tool")] },
@@ -1377,6 +1379,7 @@ function ToolCallDialog({ id, onClose }: { id: string; onClose: () => void }) {
         <div><dt>Exit code</dt><dd>{call.exit_code ?? "—"}</dd></div>
         <div><dt>Calls in request</dt><dd>{number(call.parallel_count)}</dd></div>
       </dl>
+      {call.error_signature ? <p className="muted">Error signature: {String(call.error_signature)}</p> : null}
       {call.title ? <p className="muted">{String(call.title)}{call.repository_name ? ` · ${call.repository_name}` : ""} · {String(call.provider)} {call.model ? `· ${call.model}` : ""}</p> : null}
       {Array.isArray(call.commands) && call.commands.length ? <><h3>Commands</h3><div className="mcp-tool-table-wrap"><table className="tool-commands"><thead><tr><th>#</th><th>Program</th><th>Category</th><th>Exit</th><th>Duration</th><th>Command</th></tr></thead><tbody>
         {call.commands.map((command: Row) => <tr key={command.position}><td>{command.operator && command.operator !== "script" ? command.operator : Number(command.position) + 1}</td><td>{[command.program, command.subcommand].filter(Boolean).join(" ")}</td><td>{command.category ?? ""}</td><td>{command.exit_code ?? ""}</td><td>{command.duration_ms === null || command.duration_ms === undefined ? "" : formatDurationMS(command.duration_ms)}</td><td className="tool-command-text">{String(command.command)}</td></tr>)}
@@ -1418,7 +1421,7 @@ function ToolLedgerBanner() {
   const percent = status.backfill.total ? Math.round(status.backfill.done / status.backfill.total * 100) : 0;
   return <div className="tool-ledger-banner" role="status">
     {running ? <span>Building the tool ledger from retained transcripts: {status.backfill.done.toLocaleString()} of {status.backfill.total.toLocaleString()} conversations ({percent}%). Tables refresh as it goes.</span>
-      : <span>{status.pending_conversations.toLocaleString()} of {status.conversations.toLocaleString()} conversations have no tool ledger yet. Building it re-reads their retained messages; no source files are needed.{status.backfill.error ? ` Last attempt failed: ${status.backfill.error}` : ""}</span>}
+      : <span>{status.pending_conversations.toLocaleString()} of {status.conversations.toLocaleString()} conversations need a tool ledger rebuild. Building it re-reads their retained messages; no source files are needed.{status.backfill.error ? ` Last attempt failed: ${status.backfill.error}` : ""}</span>}
     {running ? null : <button type="button" onClick={() => void build()}>Build tool ledger</button>}
   </div>;
 }

@@ -11,7 +11,7 @@ import (
 
 // toolLedgerVersion names the derivation below. Conversations whose ledger
 // was built by another version are rebuilt by BackfillToolLedger.
-const toolLedgerVersion = "tools-v2"
+const toolLedgerVersion = "tools-v3"
 
 // modelRequest is one model API request reconstructed from usage evidence.
 // ContextGrowth is how much the prompt grew since the previous request in the
@@ -50,7 +50,9 @@ type toolCall struct {
 	HasPipe, HasRedirect, HasHeredoc, Backgrounded          bool
 	StartedAt, EndedAt, DurationSource                      string
 	DurationMS                                              *int64
-	Status, ErrorType                                       string
+	Status, ErrorType, ErrorSignature                       string
+	TestFailure                                             bool
+	RepoPath, PathRepository, PathScope, CWD                string
 	ExitCode                                                *int64
 	Interrupted, Truncated                                  bool
 	InputBytes, ResultBytes, ResultTokens                   int64
@@ -71,19 +73,20 @@ type toolCall struct {
 }
 
 var (
-	exitCodePattern     = regexp.MustCompile(`(?m)^(?:Exit code:? |Process exited with code |exit status )(-?\d+)`)
-	wallTimePattern     = regexp.MustCompile(`Wall time:? ([0-9.]+) seconds`)
-	jsCommandPattern    = regexp.MustCompile(`\bcmd"?\s*:\s*"((?:[^"\\]|\\.)*)"`)
-	jsTemplatePattern   = regexp.MustCompile("\\bcmd\"?\\s*:\\s*`([^`]*)`")
-	jsToolPattern       = regexp.MustCompile(`\btools\.([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
-	jsCommandsPattern   = regexp.MustCompile(`\bcmds\s*=\s*\[((?:[^\]"]|"(?:[^"\\]|\\.)*")*)\]`)
-	jsStringPattern     = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
-	patchFilePattern    = regexp.MustCompile(`(?m)^\*\*\* (?:Update|Add|Delete) File: (.+)$`)
-	blockSuffixPattern  = regexp.MustCompile(`(:block:\d+|:usage)$`)
-	benignExitPrograms  = map[string]bool{"grep": true, "rg": true, "ag": true, "egrep": true, "fgrep": true, "diff": true, "cmp": true, "test": true, "[": true, "[[": true}
-	shellToolNames      = map[string]bool{"bash": true, "shell": true, "exec_command": true, "exec": true, "local_shell": true, "run": true, "container.exec": true, "run_command": true, "execute_command": true}
-	toolCategoryByName  = map[string]string{}
-	toolCategoryEntries = map[string][]string{
+	exitCodePattern       = regexp.MustCompile(`(?m)^(?:Exit code:? |Process exited with code |exit status )(-?\d+)`)
+	wallTimePattern       = regexp.MustCompile(`Wall time:? ([0-9.]+) seconds`)
+	jsCommandPattern      = regexp.MustCompile(`\bcmd"?\s*:\s*"((?:[^"\\]|\\.)*)"`)
+	jsTemplatePattern     = regexp.MustCompile("\\bcmd\"?\\s*:\\s*`([^`]*)`")
+	jsToolPattern         = regexp.MustCompile(`\btools\.([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+	jsCommandsPattern     = regexp.MustCompile(`\bcmds\s*=\s*\[((?:[^\]"]|"(?:[^"\\]|\\.)*")*)\]`)
+	jsStringPattern       = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
+	patchFilePattern      = regexp.MustCompile(`(?m)^\*\*\* (?:Update|Add|Delete) File: (.+)$`)
+	harnessBlockedPattern = regexp.MustCompile(`(?s)<tool_use_error>\s*blocked:`)
+	blockSuffixPattern    = regexp.MustCompile(`(:block:\d+|:usage)$`)
+	benignExitPrograms    = map[string]bool{"grep": true, "rg": true, "ag": true, "egrep": true, "fgrep": true, "diff": true, "cmp": true, "test": true, "[": true, "[[": true}
+	shellToolNames        = map[string]bool{"bash": true, "shell": true, "exec_command": true, "exec": true, "local_shell": true, "run": true, "container.exec": true, "run_command": true, "execute_command": true}
+	toolCategoryByName    = map[string]string{}
+	toolCategoryEntries   = map[string][]string{
 		"command": {"bash", "shell", "exec_command", "exec", "local_shell", "run", "write_stdin", "bashoutput", "killshell", "killbash", "run_command", "execute_command", "container.exec"},
 		"read":    {"read", "view_image", "notebookread", "ls", "view", "read_file", "open_file", "list_dir", "list_directory", "view_file", "view_file_outline", "view_code_item"},
 		"search":  {"grep", "glob", "search", "find", "codebase_search", "file_search", "grep_search", "find_by_name"},
@@ -182,7 +185,16 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 	}
 	calls := []toolCall{}
 	seen := map[string]bool{}
+	lastCWD := ""
 	for index, message := range messages {
+		if message.RawText != "" {
+			var raw map[string]any
+			if json.Unmarshal([]byte(message.RawText), &raw) == nil {
+				if cwd := firstString(raw["cwd"]); cwd != "" {
+					lastCWD = cwd
+				}
+			}
+		}
 		if message.Kind != "tool_call" && message.Kind != "delegation" {
 			continue
 		}
@@ -206,6 +218,10 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 		}
 		call.Category, call.MCPServer = toolCategory(call.ToolName, message.Kind)
 		call.FilePath = toolFilePath(call.ToolName, input)
+		call.CWD = firstString(mapValueDefault(input)["workdir"], mapValueDefault(input)["cwd"])
+		if call.CWD == "" {
+			call.CWD = lastCWD
+		}
 		if resultIndex, ok := results[key]; ok {
 			call.resultIndex = resultIndex
 		}
@@ -231,6 +247,10 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 		}
 		applyToolCommands(&call, input, details)
 		classifyToolOutcome(&call, content, isError, details)
+		call.TestFailure = toolTestFailure(&call, content)
+		if call.Status == "error" || call.TestFailure {
+			call.ErrorSignature = toolErrorSignature(content)
+		}
 		applyToolDuration(&call, content, details)
 		applyLineCounts(&call, input, details)
 		applyToolURLs(&call, input, content)
@@ -655,7 +675,7 @@ func applyToolCommands(call *toolCall, input any, details map[string]any) {
 		call.HasRedirect = call.HasRedirect || parsed.HasRedirect
 		call.HasHeredoc = call.HasHeredoc || parsed.HasHeredoc
 		call.Backgrounded = call.Backgrounded || parsed.IsBackgrounded
-		if primary := parsed.primary(); !primarySet && primary.Program != "" && (!shellSetupPrograms[primary.Program] || position == len(lines)-1) {
+		if primary := parsed.primary(); !primarySet && primary.Program != "" && (!primary.Assigned || position == len(lines)-1) && (!shellSetupPrograms[primary.Program] || position == len(lines)-1) {
 			call.Program, call.Subcommand, call.CommandCategory = primary.Program, primary.Subcommand, primary.Category
 			primarySet = true
 		}
@@ -808,6 +828,18 @@ func classifyToolOutcome(call *toolCall, content string, isError bool, details m
 		return
 	}
 	head := strings.ToLower(clipText(content, 2000))
+	// These two messages identify harness failures only when they are the
+	// result's own envelope. A command may print the same words in its log.
+	trimmed := strings.TrimSpace(head)
+	envelope := strings.TrimSpace(strings.TrimPrefix(trimmed, "<tool_use_error>"))
+	if strings.HasPrefix(envelope, "tool permission request failed: error: stream closed") {
+		call.ErrorType = "harness_error"
+		return
+	}
+	if harnessBlockedPattern.MatchString(trimmed) {
+		call.ErrorType = "hook_blocked"
+		return
+	}
 	for _, signature := range harnessErrorSignatures {
 		if strings.Contains(head, signature.needle) {
 			call.ErrorType = signature.kind

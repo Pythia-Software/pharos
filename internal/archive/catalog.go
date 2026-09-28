@@ -176,6 +176,11 @@ func (c *Catalog) Initialize() error {
 		{"tool_calls", "hosts", "ALTER TABLE tool_calls ADD COLUMN hosts TEXT"},
 		{"tool_calls", "url_count", "ALTER TABLE tool_calls ADD COLUMN url_count INTEGER NOT NULL DEFAULT 0"},
 		{"tool_calls", "search_query", "ALTER TABLE tool_calls ADD COLUMN search_query TEXT"},
+		{"tool_calls", "error_signature", "ALTER TABLE tool_calls ADD COLUMN error_signature TEXT"},
+		{"tool_calls", "test_failure", "ALTER TABLE tool_calls ADD COLUMN test_failure INTEGER NOT NULL DEFAULT 0"},
+		{"tool_calls", "repo_path", "ALTER TABLE tool_calls ADD COLUMN repo_path TEXT"},
+		{"tool_calls", "path_repository", "ALTER TABLE tool_calls ADD COLUMN path_repository TEXT"},
+		{"tool_calls", "path_scope", "ALTER TABLE tool_calls ADD COLUMN path_scope TEXT"},
 	} {
 		has, err := c.hasColumn(migration.table, migration.column)
 		if err != nil {
@@ -193,6 +198,9 @@ func (c *Catalog) Initialize() error {
 	// Created here, once the migrations above have added those columns.
 	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS workspaces_library_idx ON workspaces(id,title,source_kind,activity_at,
 		branch,owner,flavor,version,lifecycle,preservation_completeness,main_merge_title,location,repository_id)`); err != nil {
+		return err
+	}
+	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS tool_calls_signature_idx ON tool_calls(error_signature,started_at) WHERE error_signature IS NOT NULL`); err != nil {
 		return err
 	}
 	if err := c.migrateHosts(); err != nil {
