@@ -1149,7 +1149,7 @@ function UsagePage() {
   </div>;
 }
 
-type MCPStatus = { enabled: boolean; transport: string; command: string; args: string[]; note: string };
+type MCPStatus = { enabled: boolean; transport: string; command: string; args: string[]; install_location?: string; note: string };
 type MCPCall = { id: number; called_at: string; tool_name: string; arguments_json: string; status: string; error_text: string | null; duration_ms: number; response_bytes: number; estimated_output_tokens: number; result_count: number | null; truncated: boolean };
 type MCPHistory = { stats: { total_calls: number; failed_calls: number; average_output_tokens: number; largest_output_tokens: number; truncated_calls: number } };
 
@@ -1213,7 +1213,7 @@ function MCPPage() {
     <div className="view-heading"><div><h1>MCP</h1><p className="muted">Let local agents search past conversations in small steps. Review calls to spot oversized responses and failed queries.</p></div><button type="button" className="mcp-refresh" onClick={() => { void refresh(); tableApis.get("mcp_calls")?.refresh(); }}>Refresh</button></div>
     {error ? <div className="query-table-error" role="alert">{error}</div> : null}
     <section className="mcp-card mcp-status-card" aria-label="MCP availability">
-      <div><span className={`mcp-status ${status?.enabled ? "enabled" : "disabled"}`}>{status ? status.enabled ? "Available" : "Off" : "Loading"}</span><h2>Agent access</h2><p className="muted">{status?.note ?? "Loading connection settings…"}</p></div>
+      <div><span className={`mcp-status ${status?.enabled ? "enabled" : "disabled"}`}>{status ? status.enabled ? "Available" : "Off" : "Loading"}</span><h2>Agent access</h2><p className="muted">{status?.note ?? "Loading connection settings…"}</p>{status?.install_location ? <p className="muted">Pharos installation: <code>{status.install_location}</code></p> : null}</div>
       <button type="button" className={`toggle ${status?.enabled ? "on" : ""}`} role="switch" aria-checked={Boolean(status?.enabled)} aria-label="Enable MCP" disabled={!status || busy} onClick={() => void toggle()} />
     </section>
     <section className="mcp-history" aria-label="MCP call history">
