@@ -24,7 +24,7 @@ import (
 // docs/human-authorship.md.
 
 // authorshipVersion names the classification rules; a new version rebuilds.
-const authorshipVersion = "authorship-v3"
+const authorshipVersion = "authorship-v4"
 
 const (
 	// authorshipWindow bounds how far back agent output is looked for. Your
@@ -50,6 +50,16 @@ const (
 	typingCheckMinChars = 600
 	// authorshipRebuildSpacing keeps frequent syncs from rebuilding constantly.
 	authorshipRebuildSpacing = 5 * time.Minute
+	// A line of at least identifierLineMin words, identifierLineShare of them
+	// identifiers, is output or code; so is a longer line of at least
+	// identifierProseMin words with identifierProseShare identifiers.
+	identifierLineMin, identifierLineShare   = 4, 0.5
+	identifierProseMin, identifierProseShare = 8, 0.35
+	// identifierRunChars is the shortest run of consecutive identifiers
+	// (paths, URLs, IDs, hashes) treated as pasted within a typed sentence.
+	identifierRunChars = 20
+	// identifierLongChars is the length past which any token is an ID.
+	identifierLongChars = 40
 )
 
 // Span categories. Typed is what remains after every other rule. Pasted is
@@ -126,6 +136,11 @@ var (
 	codeEndPattern   = regexp.MustCompile(`(?:[;{}(\[,]|=>|\)\s*\{)\s*$`)
 	// indentedPattern is text indented as a block, not a nested list item.
 	indentedPattern = regexp.MustCompile(`^(?: {4,}|\t)(?:[^-*•\d\s]|\d+[^.)\d])`)
+	// Tokens people type that look like identifiers: short labels (M1, PR-2,
+	// p03), quantities (27s, 10k), and abbreviations (e.g, i.e).
+	shortLabelPattern      = regexp.MustCompile(`^(?:[A-Za-z]{1,3}-?\d{1,3}|\d+[A-Za-z]{1,3}|(?:[A-Za-z]\.)+[A-Za-z]?)$`)
+	identifierShapePattern = regexp.MustCompile(`[_\\=@#$%^&|~<>{}\[\]\d]|[a-z][A-Z]|\.\w|://`)
+	identifierTrimChars    = ".,;:!?()[]{}\"'`*<>“”‘’"
 )
 
 // harnessTags wrap text a harness prepends to what a person typed, inside the
@@ -553,6 +568,9 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 			l.claim(0, len(text), spanPasted, fmt.Sprintf("Sent %s after the previous message, faster than typing", roundDuration(input.SentAt.Sub(previous))), textOrigin{})
 		}
 	}
+	// After the speed check, so pasted identifiers still count as text that
+	// arrived too fast to type.
+	claimIdentifiers(l, text, lines, bodyStart)
 	c.userText.add(input.SentAt, textOrigin{input.ConversationID, input.ID}, hashes)
 	c.rememberLines(textOrigin{input.ConversationID, input.ID}, keys)
 	return l.spans()
@@ -789,6 +807,102 @@ func claimStructuredBlocks(l *labeler, text string, lines [][2]int, repeated []b
 		}
 		l.claim(lines[first][0], lines[end][1], spanPasted, "Formatted like agent output", textOrigin{})
 	}
+}
+
+// tokenKind is how a whitespace-separated token reads: as a word, as an
+// identifier (a path, URL, ID, hash, or code), or as neither (numbers,
+// punctuation, short labels), which counts toward no share.
+type tokenKind int8
+
+const (
+	tokenNeutral tokenKind = iota
+	tokenWord
+	tokenIdentifier
+)
+
+// classifyToken judges a token by its shape. People type words, including
+// hyphenated and slashed compounds; digits mixed into letters, underscores,
+// camelCase, inner dots, and symbols mark text copied from a program.
+func classifyToken(token string) (tokenKind, int) {
+	trimmed := strings.Trim(token, identifierTrimChars)
+	length := utf8.RuneCountInString(trimmed)
+	if strings.IndexFunc(trimmed, unicode.IsLetter) < 0 || shortLabelPattern.MatchString(trimmed) {
+		return tokenNeutral, length
+	}
+	if length >= identifierLongChars || identifierShapePattern.MatchString(trimmed) {
+		return tokenIdentifier, length
+	}
+	return tokenWord, length
+}
+
+// claimIdentifiers marks text made of identifiers rather than words: lines
+// that are mostly identifiers (log lines, selectors, code), and within other
+// lines, runs of consecutive identifiers long enough to have been pasted (a
+// path or ID in a typed sentence). The words around a run stay typed.
+func claimIdentifiers(l *labeler, text string, lines [][2]int, bodyStart int) {
+	type field struct {
+		start, end, length int
+		kind               tokenKind
+	}
+	for _, line := range lines {
+		if line[1] <= bodyStart {
+			continue
+		}
+		start := max(line[0], bodyStart)
+		fields, words, identifiers := []field{}, 0, 0
+		for _, span := range fieldSpans(text[start:line[1]]) {
+			kind, length := classifyToken(text[start+span[0] : start+span[1]])
+			fields = append(fields, field{start + span[0], start + span[1], length, kind})
+			switch kind {
+			case tokenWord:
+				words++
+			case tokenIdentifier:
+				identifiers++
+			}
+		}
+		counted := words + identifiers
+		share := float64(identifiers) / float64(max(counted, 1))
+		if counted >= identifierLineMin && share >= identifierLineShare || counted >= identifierProseMin && share >= identifierProseShare {
+			l.claim(start, line[1], spanPasted, "Mostly identifiers, paths, or code", textOrigin{})
+			continue
+		}
+		for index := 0; index < len(fields); {
+			if fields[index].kind != tokenIdentifier {
+				index++
+				continue
+			}
+			end, last, chars := index, index, 0
+			for ; end < len(fields) && fields[end].kind != tokenWord; end++ {
+				if fields[end].kind == tokenIdentifier {
+					last, chars = end, chars+fields[end].length
+				}
+			}
+			if chars >= identifierRunChars {
+				l.claim(fields[index].start, fields[last].end, spanPasted, "Path, URL, or ID", textOrigin{})
+			}
+			index = end
+		}
+	}
+}
+
+// fieldSpans returns the byte range of every whitespace-separated field.
+func fieldSpans(text string) [][2]int {
+	spans := [][2]int{}
+	start := -1
+	for offset, r := range text {
+		if unicode.IsSpace(r) {
+			if start >= 0 {
+				spans = append(spans, [2]int{start, offset})
+				start = -1
+			}
+		} else if start < 0 {
+			start = offset
+		}
+	}
+	if start >= 0 {
+		spans = append(spans, [2]int{start, len(text)})
+	}
+	return spans
 }
 
 func ago(now time.Time, stamp int64) string {
