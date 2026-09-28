@@ -29,8 +29,10 @@ func (c *Catalog) backfillHarnessVersions() error {
 			return err
 		}
 		if len(rows) == 0 {
-			_, err = c.DB.Exec(`INSERT INTO meta(key,value) VALUES('harness_version_backfill','0') ON CONFLICT(key) DO UPDATE SET value='0'`)
-			return err
+			return c.writeTransaction(context.Background(), "harness-backfill", func(tx *sql.Tx) error {
+				_, err := tx.Exec(`INSERT INTO meta(key,value) VALUES('harness_version_backfill','0') ON CONFLICT(key) DO UPDATE SET value='0'`)
+				return err
+			})
 		}
 		// Source files and retained message JSON are read before taking a write lock.
 		prepared := make([]harnessBackfillRow, 0, len(rows))
@@ -72,27 +74,21 @@ func (c *Catalog) backfillHarnessVersions() error {
 			}
 			prepared = append(prepared, value)
 		}
-		tx, err := c.beginWrite(context.Background())
-		if err != nil {
-			return err
-		}
-		for _, value := range prepared {
-			_, err = tx.Exec(`UPDATE conversations SET harness=CASE WHEN harness IS NULL OR harness IN ('claude-code','codex') THEN COALESCE(?,harness) ELSE harness END,harness_version_first=COALESCE(harness_version_first,?),
+		last := prepared[len(prepared)-1].rowid
+		if err := c.writeTransaction(context.Background(), "harness-backfill", func(tx *sql.Tx) error {
+			for _, value := range prepared {
+				if _, err := tx.Exec(`UPDATE conversations SET harness=CASE WHEN harness IS NULL OR harness IN ('claude-code','codex') THEN COALESCE(?,harness) ELSE harness END,harness_version_first=COALESCE(harness_version_first,?),
     harness_version_last=COALESCE(harness_version_last,?),harness_version_source=CASE WHEN harness_version_last IS NULL AND ?<>'' THEN 'transcript' ELSE harness_version_source END WHERE id=? AND (harness IS NULL OR (harness_version_first IS NULL AND ?<>'') OR (harness_version_last IS NULL AND ?<>''))`,
-				nilIfEmpty(value.harness), nilIfEmpty(value.first), nilIfEmpty(value.last), value.last, value.id, value.first, value.last)
-			if err != nil {
-				tx.Rollback()
-				return err
+					nilIfEmpty(value.harness), nilIfEmpty(value.first), nilIfEmpty(value.last), value.last, value.id, value.first, value.last); err != nil {
+					return err
+				}
 			}
-			cursor = value.rowid
-		}
-		if _, err = tx.Exec(`INSERT INTO meta(key,value) VALUES('harness_version_backfill',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, cursor); err != nil {
-			tx.Rollback()
+			_, err := tx.Exec(`INSERT INTO meta(key,value) VALUES('harness_version_backfill',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, last)
+			return err
+		}); err != nil {
 			return err
 		}
-		if err = tx.Commit(); err != nil {
-			return err
-		}
+		cursor = last
 	}
 }
 
@@ -183,7 +179,11 @@ func codexHarnessFromFile(path string) (string, string, string) {
 }
 
 func (c *Catalog) inheritHarnessAliases() error {
-	_, err := c.DB.Exec(`UPDATE conversations AS wrapper SET
+	return c.writeTransaction(context.Background(), "harness-aliases", inheritHarnessAliasesTx)
+}
+
+func inheritHarnessAliasesTx(tx *sql.Tx) error {
+	_, err := tx.Exec(`UPDATE conversations AS wrapper SET
   harness_version_first=COALESCE(wrapper.harness_version_first,peer.harness_version_first),
   harness_version_last=peer.harness_version_last,harness_version_source='alias'
   FROM (SELECT l.left_id wrapper_id,native.harness_version_first,native.harness_version_last

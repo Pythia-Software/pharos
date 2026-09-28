@@ -239,16 +239,10 @@ func (c *Catalog) BackfillToolLedger(ctx context.Context, progress func(done, to
 		if err != nil {
 			return finish(index, err)
 		}
-		tx, err := c.DB.BeginTx(ctx, nil)
-		if err != nil {
-			return finish(index, err)
-		}
 		conversation := ConversationRecord{Provider: firstString(row["provider"]), Model: firstString(row["model"]), Messages: messages}
-		if err := replaceToolLedgerWithRoots(tx, firstString(row["workspace_id"]), firstString(row["id"]), conversation, locations); err != nil {
-			tx.Rollback()
-			return finish(index, err)
-		}
-		if err := tx.Commit(); err != nil {
+		if err := c.writeTransaction(ctx, "tool-ledger conversation="+firstString(row["id"]), func(tx *sql.Tx) error {
+			return replaceToolLedgerWithRoots(tx, firstString(row["workspace_id"]), firstString(row["id"]), conversation, locations)
+		}); err != nil {
 			return finish(index, err)
 		}
 		state.mu.Lock()
@@ -421,14 +415,19 @@ func (c *Catalog) rebuildToolRollup(ctx context.Context, generation, day string)
 	if _, err := conn.ExecContext(ctx, "CREATE TEMP TABLE tool_cube_build AS "+toolCubeSelect("temp.tool_mirror_build")); err != nil {
 		return err
 	}
+	// This transaction replaces the rollup tables and can hold the catalog
+	// writer for longer than an ingest task. Acquire before marking it active.
+	acquiring := time.Now()
+	release, err := c.acquireWriteGate(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	// This transaction replaces the rollup tables and can hold the catalog
-	// writer for longer than an ingest task. Acquire before marking it active.
-	acquiring := time.Now()
 	if _, err := tx.ExecContext(ctx, "DELETE FROM meta WHERE 0"); err != nil {
 		return err
 	}
