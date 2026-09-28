@@ -55,8 +55,9 @@ library**, create a dedicated folder such as `/Volumes/YOUR-DRIVE/Pharos`, drag
 The app creates `library.toml`, catalog, captures, staging, and preserved data
 in that folder. Keep the folder together when moving it between Macs.
 
-For a **new install in Applications**, drag only `Pharos.app` into
-`/Applications` and open it. Choose **Set Up on This Mac**. The app creates
+For a **new install in Applications**, drag `Pharos.app` onto the Applications
+shortcut in the disk image and open the installed copy. Choose **Set Up on This
+Mac**. The app creates
 `archive.toml`, the catalog, captures, staging, and preserved data under
 `~/Library/Application Support/Pharos`; those files stay out of Applications.
 Source paths are disabled until you opt in.
