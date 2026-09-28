@@ -247,7 +247,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 				return err
 			}
 			if !copied {
-				conversations, messages, err = ingestCopy(tx, *record, adapter.Capability() == "tl1-release", host, config.Name, captureViewOf(adapter) != nil)
+				conversations, messages, err = ingestCopy(tx, *record, adapter.Capability() == "tl1-release", host, config.Name, captureViewOf(adapter) != nil, repositoryOptions{c.RepositoryAliases, c.RepositorySeparate})
 				if errors.Is(err, errOlderCopy) {
 					// Nothing is recorded, so the newer read's digest and parts stand.
 					older = true
@@ -391,7 +391,7 @@ func (c *Catalog) IngestExisting(adapter Adapter, progress ProgressFunc) IngestR
 		if beginErr != nil {
 			return beginErr
 		}
-		conversations, messages, ingestErr := ingestCopy(tx, record, adapter.Capability() == "tl1-release", host.ID, config.Name, captureViewOf(adapter) != nil)
+		conversations, messages, ingestErr := ingestCopy(tx, record, adapter.Capability() == "tl1-release", host.ID, config.Name, captureViewOf(adapter) != nil, repositoryOptions{c.RepositoryAliases, c.RepositorySeparate})
 		if errors.Is(ingestErr, errOlderCopy) {
 			tx.Rollback()
 			delete(selected, record.SourceID)
@@ -463,7 +463,7 @@ func ingestWorkspace(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool) 
 // ingestCopy applies one host's copy of a workspace from a source. See
 // copies.go for when a copy may replace or prune what is stored, and
 // guardCapture for a copy read from a capture.
-func ingestCopy(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host, source string, fromCapture bool) (int, int, error) {
+func ingestCopy(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host, source string, fromCapture bool, repositoryOptions ...repositoryOptions) (int, int, error) {
 	record = canonicalRecordTimes(record)
 	workspaceID, err := storedWorkspaceID(tx, record)
 	if err != nil {
@@ -491,7 +491,7 @@ func ingestCopy(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host,
 	}
 	repoID := ""
 	if record.Repository != nil && !authority.older {
-		repoID, err = upsertRepository(tx, record.Repository)
+		repoID, err = upsertRepository(tx, record.Repository, repositoryOptions...)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -834,25 +834,55 @@ func canonicalRowTimes(rows []map[string]any, keys ...string) []map[string]any {
 	return output
 }
 
-func upsertRepository(tx *sql.Tx, value map[string]any) (string, error) {
-	canonical := firstString(value["canonical_remote"])
-	id := firstString(value["id"])
-	if id == "" {
-		identity := canonical
-		if identity == "" {
-			identity = firstString(value["display_name"])
+func upsertRepository(tx *sql.Tx, value map[string]any, options ...repositoryOptions) (string, error) {
+	item := repositoryFromValue(value)
+	var aliases map[string]string
+	var separate []string
+	if len(options) > 0 {
+		aliases, separate = options[0].aliases, options[0].separate
+	}
+	items, err := loadRepositoryIdentities(tx)
+	if err != nil {
+		return "", err
+	}
+	owners := repositoryDirectoryOwners(items, aliases)
+	for _, existing := range items {
+		if existing.ID == item.ID && item.ID != "" || repositoryMatch(existing, item, aliases, owners, separate) != "" {
+			item.ID = existing.ID
+			item.Aliases = repositoryUnion(item.Aliases, existing.Aliases)
+			item.Locations = repositoryUnion(item.Locations, existing.Locations)
+			if item.Remote == "" {
+				item.Remote = existing.Remote
+			}
+			if item.Normalized == "" {
+				item.Normalized = existing.Normalized
+			}
+			if item.Root == "" {
+				item.Root = existing.Root
+			}
+			if item.Forge == "" {
+				item.Forge = existing.Forge
+			}
+			if item.Name == "" || firstString(value["canonical_remote"]) == "" {
+				item.Name = existing.Name
+			}
+			break
 		}
-		id = stableID("repo", identity, value["owner"])
 	}
-	timestamp := now()
-	display := defaultString(value["display_name"], canonical)
-	if display == "" {
-		display = "Unknown repository"
+	if item.ID == "" {
+		identity := item.Normalized
+		if identity == "" {
+			identity = item.Name + "/" + strings.Join(item.Locations, "|")
+		}
+		item.ID = stableID("repo", identity, item.Owner)
 	}
-	_, err := tx.Exec(`INSERT INTO repositories(id,canonical_remote,display_name,owner,aliases_json,local_locations_json,created_at,updated_at)
-	VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET canonical_remote=COALESCE(excluded.canonical_remote,repositories.canonical_remote),display_name=excluded.display_name,
-	owner=COALESCE(excluded.owner,repositories.owner),aliases_json=excluded.aliases_json,local_locations_json=excluded.local_locations_json,updated_at=excluded.updated_at`, id, nilIfEmpty(canonical), display, nilIfEmpty(firstString(value["owner"])), jsonText(valueOr(value["aliases"], []any{})), jsonText(valueOr(value["local_locations"], []any{})), timestamp, timestamp)
-	return id, err
+	if item.Name == "" {
+		item.Name = "Unknown repository"
+	}
+	_, err = tx.Exec(`INSERT INTO repositories(id,canonical_remote,normalized_remote,display_name,owner,root_commit,forge_id,aliases_json,local_locations_json,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET canonical_remote=COALESCE(excluded.canonical_remote,repositories.canonical_remote),normalized_remote=COALESCE(excluded.normalized_remote,repositories.normalized_remote),display_name=excluded.display_name,
+		owner=COALESCE(excluded.owner,repositories.owner),root_commit=COALESCE(excluded.root_commit,repositories.root_commit),forge_id=COALESCE(excluded.forge_id,repositories.forge_id),aliases_json=excluded.aliases_json,local_locations_json=excluded.local_locations_json,updated_at=excluded.updated_at`, item.ID, nilIfEmpty(item.Remote), nilIfEmpty(item.Normalized), item.Name, nilIfEmpty(item.Owner), nilIfEmpty(item.Root), nilIfEmpty(item.Forge), jsonText(item.Aliases), jsonText(item.Locations), now(), now())
+	return item.ID, err
 }
 
 func valueOr(value, fallback any) any {

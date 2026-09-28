@@ -1073,3 +1073,38 @@ mandatory, `enable_reclamation = true` authorizes the scheduler, and
 `release_hook_proven = true` asserts that the owner hook passed the contract
 tests. Both flags and a configured hook are required, and release authority
 comes only from owner-produced `tl1-export` records.
+
+# Repository identities
+
+Pharos normalizes Git remotes across SSH, HTTPS, case, `.git`, and trailing
+slashes. It retains every observed URL and local checkout path. When a checkout
+is available, its root commit helps identify a rename within the same forge
+owner. A root commit alone is never enough to merge repositories.
+
+For a rename whose old checkout is gone and whose forge redirect cannot be
+resolved, add explicit aliases to `library.toml` or `archive.toml`:
+
+```toml
+[repositories.aliases]
+"github.com/gbdubs/alexandria" = "github.com/pythia-software/pharos"
+"github.com/gbdubs/pharos" = "github.com/pythia-software/pharos"
+```
+
+An old display name can also be used as a key when it uniquely identifies the
+repository. Slug keys are safer for common names.
+
+To keep an exceptional row separate, list its repository ID:
+
+```toml
+[repositories.separate]
+"repo_example" = true
+```
+
+`pharos repositories --merge --dry-run` opens the catalog read-only and prints
+the proposed groups and matching signals. It may use authenticated `gh` to
+resolve GitHub redirects, with a short pause between requests. Without `gh`,
+it uses stored forge IDs, remotes, local checkouts, and config aliases. Review
+the groups before running `pharos repositories --merge --apply`. The apply
+command keeps each group's survivor ID, moves workspace and pull-request
+references, and marks affected Library rows and the Tools rollup for refresh.
+The operation is idempotent. It does not run during ordinary ingest.

@@ -2,9 +2,11 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -102,6 +104,49 @@ func Run(arguments []string) error {
 	if command == "backup" {
 		return runBackupCLI(config, args)
 	}
+	if command == "repositories" {
+		if len(args) != 2 || args[0] != "--merge" || args[1] != "--dry-run" && args[1] != "--apply" {
+			return fmt.Errorf("usage: pharos repositories --merge --dry-run|--apply")
+		}
+		if args[1] == "--dry-run" {
+			path := (&url.URL{Scheme: "file", Path: config.CatalogPath}).String() + "?mode=ro"
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			items, err := loadRepositoryIdentities(db)
+			if err != nil {
+				return err
+			}
+			prepareRepositoryIdentities(items)
+			resolveGitHubRepositories(items)
+			printRepositoryMergePlan(os.Stdout, planRepositoryMerges(items, config.RepositoryAliases, config.RepositorySeparate...))
+			return nil
+		}
+		catalog, err := OpenCatalog(config.CatalogPath)
+		if err != nil {
+			return err
+		}
+		defer catalog.Close()
+		items, err := loadRepositoryIdentities(catalog.DB)
+		if err != nil {
+			return err
+		}
+		prepareRepositoryIdentities(items)
+		resolveGitHubRepositories(items)
+		if err := saveRepositoryEvidence(catalog.DB, items); err != nil {
+			return err
+		}
+		groups := planRepositoryMerges(items, config.RepositoryAliases, config.RepositorySeparate...)
+		printRepositoryMergePlan(os.Stdout, groups)
+		for _, group := range groups {
+			if err := mergeRepositoryGroup(catalog.DB, group); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	if command == "add-this-mac" {
 		return runAddThisMacCLI(config, args, os.Stdin, os.Stdout)
 	}
@@ -113,6 +158,8 @@ func Run(arguments []string) error {
 		return err
 	}
 	defer catalog.Close()
+	catalog.RepositoryAliases = config.RepositoryAliases
+	catalog.RepositorySeparate = config.RepositorySeparate
 	switch command {
 	case "serve":
 		openBrowser := false
@@ -239,7 +286,7 @@ func Run(arguments []string) error {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: pharos [--config PATH] {init,init-library,add-this-mac,serve,capture,index,backup,ingest,repair-existing,refine-usage,build-tools,pricing,search,tl1,health,doctor,dev-ui,mcp,probe,volume-id}")
+	return fmt.Errorf("usage: pharos [--config PATH] {init,init-library,add-this-mac,serve,capture,index,backup,ingest,repositories,repair-existing,refine-usage,build-tools,pricing,search,tl1,health,doctor,dev-ui,mcp,probe,volume-id}")
 }
 func urlQueryEscape(value string) string {
 	replacer := strings.NewReplacer("%", "%25", " ", "%20", "+", "%2B", "?", "%3F", "&", "%26", "=", "%3D")

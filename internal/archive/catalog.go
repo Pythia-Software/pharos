@@ -16,11 +16,13 @@ import (
 )
 
 type Catalog struct {
-	Path    string
-	DB      *sql.DB
-	library libraryCache
-	find    libraryFindCache
-	derived derivedCache
+	Path               string
+	DB                 *sql.DB
+	RepositoryAliases  map[string]string
+	RepositorySeparate []string
+	library            libraryCache
+	find               libraryFindCache
+	derived            derivedCache
 	// quietVersion and warmVersion are the catalog versions warmCaches last
 	// saw and warmed; only the Library maintenance loop uses them.
 	quietVersion, warmVersion int64
@@ -101,7 +103,8 @@ func (c *Catalog) Close() error {
 // stale rows as current; it records a TL1 source as synced without its
 // analysis tables; and it writes timestamps that no longer sort as times.
 // 8: source index versions make parser-only updates visible to capture status.
-const catalogSchemaVersion = 8
+// 9: repository identity columns and merge-aware ingestion.
+const catalogSchemaVersion = 9
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.
@@ -176,6 +179,9 @@ func (c *Catalog) Initialize() error {
 		{"tool_calls", "hosts", "ALTER TABLE tool_calls ADD COLUMN hosts TEXT"},
 		{"tool_calls", "url_count", "ALTER TABLE tool_calls ADD COLUMN url_count INTEGER NOT NULL DEFAULT 0"},
 		{"tool_calls", "search_query", "ALTER TABLE tool_calls ADD COLUMN search_query TEXT"},
+		{"repositories", "normalized_remote", "ALTER TABLE repositories ADD COLUMN normalized_remote TEXT"},
+		{"repositories", "root_commit", "ALTER TABLE repositories ADD COLUMN root_commit TEXT"},
+		{"repositories", "forge_id", "ALTER TABLE repositories ADD COLUMN forge_id TEXT"},
 	} {
 		has, err := c.hasColumn(migration.table, migration.column)
 		if err != nil {
@@ -185,6 +191,15 @@ func (c *Catalog) Initialize() error {
 			if _, err := c.DB.Exec(migration.statement); err != nil {
 				return err
 			}
+		}
+	}
+	for _, index := range []string{
+		"CREATE INDEX IF NOT EXISTS repositories_normalized_remote_idx ON repositories(normalized_remote)",
+		"CREATE INDEX IF NOT EXISTS repositories_root_commit_idx ON repositories(root_commit)",
+		"CREATE INDEX IF NOT EXISTS repositories_forge_id_idx ON repositories(forge_id)",
+	} {
+		if _, err := c.DB.Exec(index); err != nil {
+			return err
 		}
 	}
 	// Holds every column the Library's rows read (libraryWorkspaceFields), so

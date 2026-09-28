@@ -6,8 +6,35 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
+
+var repositoryRoots sync.Map
+
+func repositoryRootCommit(location string) string {
+	if location == "" {
+		return ""
+	}
+	if value, ok := repositoryRoots.Load(location); ok {
+		return value.(string)
+	}
+	if info, err := os.Stat(location); err != nil || !info.IsDir() {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "git", "-C", location, "rev-list", "--reverse", "--max-parents=0", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	roots := strings.Fields(string(output))
+	if len(roots) == 0 {
+		return ""
+	}
+	repositoryRoots.Store(location, roots[0])
+	return roots[0]
+}
 
 // repositoryFromLocation avoids confusing a worktree or branch directory with a repository.
 func repositoryFromLocation(location, remote string) map[string]any {
@@ -66,5 +93,13 @@ func repositoryAt(location, remote string, lookup bool) map[string]any {
 		return nil
 	}
 	locations := uniqueStrings([]string{root, location})
-	return map[string]any{"display_name": name, "canonical_remote": nilIfEmpty(remote), "local_locations": locations}
+	aliases := []string{}
+	if remote != "" {
+		aliases = append(aliases, remote)
+	}
+	commit := ""
+	if lookup {
+		commit = repositoryRootCommit(location)
+	}
+	return map[string]any{"display_name": name, "canonical_remote": nilIfEmpty(remote), "normalized_remote": normalizeRepositoryRemote(remote), "root_commit": commit, "aliases": aliases, "local_locations": locations}
 }

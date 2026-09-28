@@ -55,6 +55,8 @@ func NewServer(config Config, catalog *Catalog) *Server {
 	server.life.init()
 	if catalog != nil {
 		catalog.background = server.spawn
+		catalog.RepositoryAliases = config.RepositoryAliases
+		catalog.RepositorySeparate = config.RepositorySeparate
 	}
 	return server
 }
