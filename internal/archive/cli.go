@@ -113,6 +113,7 @@ func Run(arguments []string) error {
 		return err
 	}
 	defer catalog.Close()
+	catalog.setCaptureRoot(config.CaptureRoot)
 	switch command {
 	case "serve":
 		openBrowser := false

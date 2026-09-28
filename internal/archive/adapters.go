@@ -30,6 +30,10 @@ type ConversationRecord struct {
 	AgentDepth                                                                               int    `json:"AgentDepth,omitempty"`
 	AgentPath                                                                                string `json:"AgentPath,omitempty"`
 	AgentNickname                                                                            string `json:"AgentNickname,omitempty"`
+	Harness                                                                                  string `json:"Harness,omitempty"`
+	HarnessVersionFirst                                                                      string `json:"HarnessVersionFirst,omitempty"`
+	HarnessVersionLast                                                                       string `json:"HarnessVersionLast,omitempty"`
+	HarnessVersionSource                                                                     string `json:"HarnessVersionSource,omitempty"`
 	Aliases                                                                                  []string
 	Messages                                                                                 []MessageRecord
 	// Observed is the version of the source this copy was read from (see
@@ -153,7 +157,7 @@ func MakeAdapter(config SourceConfig) (Adapter, error) {
 	case "tl1":
 		return &tl1Adapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}}, nil
 	case "antigravity":
-		return &antigravityAdapter{baseAdapter{config: config, capability: "retrieval-only"}}, nil
+		return &antigravityAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}}, nil
 	default:
 		return nil, fmt.Errorf("unsupported source kind: %s", config.Kind)
 	}
@@ -366,7 +370,7 @@ func (a *canonicalAdapter) workspace(row map[string]any, file string, index int)
 		if nativeID == "" {
 			nativeID = fmt.Sprintf("%s-%d", strings.TrimSuffix(filepath.Base(file), filepath.Ext(file)), cindex)
 		}
-		conversations = append(conversations, ConversationRecord{NativeID: nativeID, Provider: defaultString(conversation["provider"], a.config.Kind), Account: a.config.Account, Model: firstString(conversation["model"]), ParentNativeID: firstString(conversation["parent_id"]), Origin: firstString(conversation["origin"]), Coverage: defaultString(conversation["coverage"], "complete"), Messages: messages, StartedAt: iso(conversation["started_at"]), EndedAt: iso(conversation["ended_at"]), Aliases: stringSlice(conversation["aliases"])})
+		conversations = append(conversations, ConversationRecord{NativeID: nativeID, Provider: defaultString(conversation["provider"], a.config.Kind), Account: a.config.Account, Model: firstString(conversation["model"]), ParentNativeID: firstString(conversation["parent_id"]), Origin: firstString(conversation["origin"]), Coverage: defaultString(conversation["coverage"], "complete"), Messages: messages, StartedAt: iso(conversation["started_at"]), EndedAt: iso(conversation["ended_at"]), Aliases: stringSlice(conversation["aliases"]), Harness: defaultString(conversation["harness"], "canonical"), HarnessVersionFirst: firstString(conversation["harness_version_first"]), HarnessVersionLast: firstString(conversation["harness_version_last"])})
 	}
 	sid := firstString(row["id"], row["source_id"])
 	if sid == "" {
@@ -599,6 +603,7 @@ func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRec
 	origin := a.original(path)
 	meta := map[string]any{}
 	model := ""
+	harness, versionFirst, versionLast := "codex", "", ""
 	messages := []MessageRecord{}
 	usage := map[string]float64{}
 	delegated := map[string]bool{}
@@ -641,6 +646,15 @@ func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRec
 			continue
 		}
 		if etype == "session_meta" {
+			if originator := firstString(payload["originator"]); originator != "" {
+				harness = "codex/" + originator
+			}
+			if version := firstString(payload["cli_version"]); version != "" {
+				if versionFirst == "" {
+					versionFirst = version
+				}
+				versionLast = version
+			}
 			if len(meta) == 0 {
 				meta = payload
 			}
@@ -783,7 +797,7 @@ func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRec
 		started = iso(events[0]["timestamp"])
 		ended = iso(events[len(events)-1]["timestamp"])
 	}
-	record := WorkspaceRecord{SourceID: nativeID, SourceKind: "codex", Title: defaultString(meta["title"], "Codex "+short(nativeID)), Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: ended, Location: cwd, Repository: repository, Metadata: map[string]any{"originator": meta["originator"], "branch": git["branch"], "head_ref": git["commit_hash"]}, Conversations: []ConversationRecord{{NativeID: nativeID, Provider: "codex", Account: a.config.Account, Model: model, ParentNativeID: parentNativeID, AgentDepth: agentDepth, AgentPath: firstString(meta["agent_path"], spawn["agent_path"]), AgentNickname: firstString(meta["agent_nickname"], spawn["agent_nickname"]), Origin: origin, Coverage: "complete", Messages: messages, StartedAt: started, EndedAt: ended}}, Metrics: metrics}
+	record := WorkspaceRecord{SourceID: nativeID, SourceKind: "codex", Title: defaultString(meta["title"], "Codex "+short(nativeID)), Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: ended, Location: cwd, Repository: repository, Metadata: map[string]any{"originator": meta["originator"], "branch": git["branch"], "head_ref": git["commit_hash"]}, Conversations: []ConversationRecord{{NativeID: nativeID, Provider: "codex", Account: a.config.Account, Model: model, ParentNativeID: parentNativeID, AgentDepth: agentDepth, AgentPath: firstString(meta["agent_path"], spawn["agent_path"]), AgentNickname: firstString(meta["agent_nickname"], spawn["agent_nickname"]), Origin: origin, Coverage: "complete", Messages: messages, StartedAt: started, EndedAt: ended, Harness: harness, HarnessVersionFirst: versionFirst, HarnessVersionLast: versionLast}}, Metrics: metrics}
 	record.Metrics = reconciledTokenMetrics(record)
 	return record, true, nil
 }
@@ -797,11 +811,21 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 		rootID = strings.TrimSuffix(filepath.Base(root), filepath.Ext(root))
 	}
 	cwd, started, ended, model, branch, title := "", "", "", "", "", ""
+	harness, versionFirst, versionLast := "claude-code", "", ""
 	tokens := map[string]float64{"input_tokens": 0, "output_tokens": 0, "cache_tokens": 0}
 	delegated := map[string]bool{}
 	toolNames := map[string]string{}
 	resultCalls := map[string]string{}
 	for _, event := range events {
+		if entrypoint := firstString(event["entrypoint"]); entrypoint != "" {
+			harness = "claude-code/" + entrypoint
+		}
+		if version := firstString(event["version"]); version != "" {
+			if versionFirst == "" {
+				versionFirst = version
+			}
+			versionLast = version
+		}
 		if rootID == "" {
 			nativeID = defaultString(firstNonNil(event["sessionId"], event["session_id"]), nativeID)
 		}
@@ -942,7 +966,7 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 	if rootID != "" {
 		depth = 1
 	}
-	record := WorkspaceRecord{SourceID: sourceID, SourceKind: "claude", Title: defaultString(title, "Claude "+short(sourceID)), Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: ended, Location: cwd, Repository: repository, Metadata: map[string]any{"branch": branch}, Conversations: []ConversationRecord{{NativeID: nativeID, Provider: "claude", Account: a.config.Account, Model: model, ParentNativeID: rootID, AgentDepth: depth, Origin: origin, Coverage: "complete", Messages: messages, StartedAt: started, EndedAt: ended}}, Metrics: metrics}
+	record := WorkspaceRecord{SourceID: sourceID, SourceKind: "claude", Title: defaultString(title, "Claude "+short(sourceID)), Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: ended, Location: cwd, Repository: repository, Metadata: map[string]any{"branch": branch}, Conversations: []ConversationRecord{{NativeID: nativeID, Provider: "claude", Account: a.config.Account, Model: model, ParentNativeID: rootID, AgentDepth: depth, Origin: origin, Coverage: "complete", Messages: messages, StartedAt: started, EndedAt: ended, Harness: harness, HarnessVersionFirst: versionFirst, HarnessVersionLast: versionLast}}, Metrics: metrics}
 	record.Metrics = reconciledTokenMetrics(record)
 	return record, true, nil
 }

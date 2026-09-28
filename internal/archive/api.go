@@ -55,6 +55,7 @@ func NewServer(config Config, catalog *Catalog) *Server {
 	server.life.init()
 	if catalog != nil {
 		catalog.background = server.spawn
+		catalog.setCaptureRoot(config.CaptureRoot)
 	}
 	return server
 }
