@@ -11,7 +11,7 @@ import (
 
 // toolLedgerVersion names the derivation below. Conversations whose ledger
 // was built by another version are rebuilt by BackfillToolLedger.
-const toolLedgerVersion = "tools-v2"
+const toolLedgerVersion = "tools-v3"
 
 // modelRequest is one model API request reconstructed from usage evidence.
 // ContextGrowth is how much the prompt grew since the previous request in the
@@ -50,7 +50,9 @@ type toolCall struct {
 	HasPipe, HasRedirect, HasHeredoc, Backgrounded          bool
 	StartedAt, EndedAt, DurationSource                      string
 	DurationMS                                              *int64
-	Status, ErrorType                                       string
+	Status, ErrorType, ErrorSignature                       string
+	TestFailure                                             bool
+	RepoPath, PathRepository, PathScope, CWD                string
 	ExitCode                                                *int64
 	Interrupted, Truncated                                  bool
 	InputBytes, ResultBytes, ResultTokens                   int64
@@ -182,7 +184,16 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 	}
 	calls := []toolCall{}
 	seen := map[string]bool{}
+	lastCWD := ""
 	for index, message := range messages {
+		if message.RawText != "" {
+			var raw map[string]any
+			if json.Unmarshal([]byte(message.RawText), &raw) == nil {
+				if cwd := firstString(raw["cwd"]); cwd != "" {
+					lastCWD = cwd
+				}
+			}
+		}
 		if message.Kind != "tool_call" && message.Kind != "delegation" {
 			continue
 		}
@@ -206,6 +217,10 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 		}
 		call.Category, call.MCPServer = toolCategory(call.ToolName, message.Kind)
 		call.FilePath = toolFilePath(call.ToolName, input)
+		call.CWD = firstString(mapValueDefault(input)["workdir"], mapValueDefault(input)["cwd"])
+		if call.CWD == "" {
+			call.CWD = lastCWD
+		}
 		if resultIndex, ok := results[key]; ok {
 			call.resultIndex = resultIndex
 		}
@@ -231,6 +246,10 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 		}
 		applyToolCommands(&call, input, details)
 		classifyToolOutcome(&call, content, isError, details)
+		call.TestFailure = toolTestFailure(&call, content)
+		if call.Status == "error" || call.TestFailure {
+			call.ErrorSignature = toolErrorSignature(content)
+		}
 		applyToolDuration(&call, content, details)
 		applyLineCounts(&call, input, details)
 		applyToolURLs(&call, input, content)
@@ -655,7 +674,7 @@ func applyToolCommands(call *toolCall, input any, details map[string]any) {
 		call.HasRedirect = call.HasRedirect || parsed.HasRedirect
 		call.HasHeredoc = call.HasHeredoc || parsed.HasHeredoc
 		call.Backgrounded = call.Backgrounded || parsed.IsBackgrounded
-		if primary := parsed.primary(); !primarySet && primary.Program != "" && (!shellSetupPrograms[primary.Program] || position == len(lines)-1) {
+		if primary := parsed.primary(); !primarySet && primary.Program != "" && (!primary.Assigned || position == len(lines)-1) && (!shellSetupPrograms[primary.Program] || position == len(lines)-1) {
 			call.Program, call.Subcommand, call.CommandCategory = primary.Program, primary.Subcommand, primary.Category
 			primarySet = true
 		}
@@ -729,6 +748,9 @@ var harnessErrorSignatures = []struct{ kind, needle string }{
 	{"user_rejected", "was rejected by the user"},
 	{"user_rejected", "user denied"},
 	{"user_rejected", "permission to use"},
+	{"harness_error", "tool permission request failed: error: stream closed"},
+	{"harness_error", "error: stream closed"},
+	{"hook_blocked", "blocked:"},
 	{"hook_blocked", "pretooluse"},
 	{"hook_blocked", "blocked by hook"},
 	{"hook_blocked", "hook error"},

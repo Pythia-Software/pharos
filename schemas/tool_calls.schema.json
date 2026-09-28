@@ -747,6 +747,42 @@
       }
     },
     {
+      "name": "repo_path",
+      "label": "Repository path",
+      "type": "text",
+      "group": "Tool",
+      "render": "truncate",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "repo_path",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "path_repository",
+      "label": "Path repository",
+      "type": "text",
+      "group": "Tool",
+      "select": {
+        "default": false
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "path_repository",
+          "synthetic": true
+        }
+      }
+    },
+    {
       "name": "host",
       "label": "Site",
       "type": "text",
@@ -895,6 +931,10 @@
               "label": "Blocked by hook"
             },
             {
+              "value": "harness_error",
+              "label": "Harness error"
+            },
+            {
               "value": "interrupted",
               "label": "Interrupted"
             },
@@ -940,6 +980,42 @@
       "bindings": {
         "postgres": {
           "expr": "error_type",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "error_signature",
+      "label": "Error signature",
+      "type": "text",
+      "group": "Outcome",
+      "render": "truncate",
+      "select": {
+        "default": false
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "error_signature",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "test_failure",
+      "label": "Test failure",
+      "type": "bool",
+      "group": "Outcome",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "test_failure",
           "synthetic": true
         }
       }

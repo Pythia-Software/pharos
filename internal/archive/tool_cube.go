@@ -24,7 +24,7 @@ var toolCubeGroups = func() []struct{ column, expr string } {
 		{"session_kind", "COALESCE(a.kind,'root')"}, {"agent_depth", "COALESCE(a.depth,0)"},
 	}
 	for _, column := range []string{"provider", "model", "kind", "tool_name", "tool_category", "mcp_server", "program", "subcommand",
-		"command_category", "status", "error_type", "exit_code", "interrupted", "truncated", "has_pipe", "has_redirect", "has_heredoc",
+		"command_category", "status", "error_type", "test_failure", "path_repository", "exit_code", "interrupted", "truncated", "has_pipe", "has_redirect", "has_heredoc",
 		"backgrounded", "host", "duration_source", "result_tokens_source"} {
 		groups = append(groups, struct{ column, expr string }{column, "t." + column})
 	}
@@ -37,7 +37,7 @@ var toolCubeGroups = func() []struct{ column, expr string } {
 
 // toolCubePresence lists the text fields the cube keeps only as present
 // (non-empty) or absent.
-var toolCubePresence = []string{"command", "file_path", "url", "search_query", "hosts"}
+var toolCubePresence = []string{"command", "file_path", "repo_path", "error_signature", "url", "search_query", "hosts"}
 
 // toolCubeMeasures are the number and time fields whose per-group ranges the
 // cube keeps, with sums for the numbers.

@@ -12,7 +12,7 @@ import (
 
 // toolRollupVersion names the tool_usage_daily and tool_call_cube layouts
 // and their derivation.
-const toolRollupVersion = "rollup-v2"
+const toolRollupVersion = "rollup-v3"
 
 // toolLedgerState tracks the in-process ledger backfill and rollup rebuilds.
 type toolLedgerState struct {
@@ -48,6 +48,10 @@ func bumpToolLedgerGeneration(tx execer) error {
 
 // replaceToolLedger rebuilds one conversation's model requests and tool calls.
 func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord) error {
+	return replaceToolLedgerWithRoots(tx, workspaceID, conversationID, conversation, nil)
+}
+
+func replaceToolLedgerWithRoots(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord, locations []repoRoot) error {
 	if _, err := tx.Exec("DELETE FROM tool_calls WHERE conversation_id=?", conversationID); err != nil {
 		return err
 	}
@@ -55,6 +59,27 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 		return err
 	}
 	requests, calls := buildToolLedger(conversation.Messages, strings.TrimSpace(conversation.Model))
+	if locations == nil {
+		var err error
+		locations, err = toolRepositoryLocations(tx)
+		if err != nil {
+			return err
+		}
+	}
+	roots, err := toolRepoRoots(tx, workspaceID, locations)
+	if err != nil {
+		return err
+	}
+	for index := range calls {
+		if calls[index].FilePath == "" {
+			continue
+		}
+		cwd := calls[index].CWD
+		if cwd == "" && len(roots) > 0 {
+			cwd = roots[0].Location
+		}
+		calls[index].RepoPath, calls[index].PathRepository, calls[index].PathScope = repoRelativePath(calls[index].FilePath, cwd, roots)
+	}
 	sessionID := func(stream string) any {
 		if stream == "" {
 			stream = "main"
@@ -99,8 +124,8 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 			sequence,provider,model,kind,tool_name,tool_category,mcp_server,command,program,subcommand,command_category,command_count,
 			has_pipe,has_redirect,has_heredoc,backgrounded,file_path,started_at,ended_at,duration_ms,duration_source,status,error_type,exit_code,
 			interrupted,truncated,input_bytes,result_bytes,result_tokens,result_tokens_source,request_id,next_request_id,parallel_count,
-			output_tokens,carried_requests,carried_tokens,lines_added,lines_removed,url,host,hosts,url_count,search_query)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+			output_tokens,carried_requests,carried_tokens,lines_added,lines_removed,url,host,hosts,url_count,search_query,error_signature,test_failure,repo_path,path_repository,path_scope)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 		if err != nil {
 			return err
 		}
@@ -127,7 +152,7 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 				boolInt(call.Interrupted), boolInt(call.Truncated), call.InputBytes, call.ResultBytes, call.ResultTokens,
 				nilIfEmpty(call.ResultTokensSource), requestID(call.RequestKey), requestID(call.NextRequestKey), call.ParallelCount,
 				call.OutputTokens, call.CarriedRequests, call.CarriedTokens, nullableInt(call.LinesAdded), nullableInt(call.LinesRemoved),
-				nilIfEmpty(call.URL), nilIfEmpty(call.Host), nilIfEmpty(call.Hosts), call.URLCount, nilIfEmpty(call.SearchQuery)); err != nil {
+				nilIfEmpty(call.URL), nilIfEmpty(call.Host), nilIfEmpty(call.Hosts), call.URLCount, nilIfEmpty(call.SearchQuery), nilIfEmpty(call.ErrorSignature), boolInt(call.TestFailure), nilIfEmpty(call.RepoPath), nilIfEmpty(call.PathRepository), nilIfEmpty(call.PathScope)); err != nil {
 				return err
 			}
 			for _, command := range call.Commands {
@@ -188,6 +213,10 @@ func (c *Catalog) BackfillToolLedger(ctx context.Context, progress func(done, to
 	if err != nil {
 		return 0, err
 	}
+	locations, err := toolRepositoryLocations(c.DB)
+	if err != nil {
+		return 0, err
+	}
 	state.mu.Lock()
 	state.running, state.done, state.total, state.lastError = true, 0, len(pending), ""
 	state.mu.Unlock()
@@ -213,7 +242,7 @@ func (c *Catalog) BackfillToolLedger(ctx context.Context, progress func(done, to
 			return finish(index, err)
 		}
 		conversation := ConversationRecord{Provider: firstString(row["provider"]), Model: firstString(row["model"]), Messages: messages}
-		if err := replaceToolLedger(tx, firstString(row["workspace_id"]), firstString(row["id"]), conversation); err != nil {
+		if err := replaceToolLedgerWithRoots(tx, firstString(row["workspace_id"]), firstString(row["id"]), conversation, locations); err != nil {
 			tx.Rollback()
 			return finish(index, err)
 		}

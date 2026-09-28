@@ -2,8 +2,10 @@ package archive
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -117,6 +119,9 @@ func TestClaudeToolLedger(t *testing.T) {
 	}
 	if gotest["subcommand"] != "test" || gotest["command_category"] != "test" || gotest["status"] != "error" || gotest["error_type"] != "nonzero_exit" || integer(gotest["exit_code"]) != 1 {
 		t.Fatalf("go test call: %#v", gotest)
+	}
+	if integer(gotest["test_failure"]) != 1 || !strings.Contains(firstString(gotest["error_signature"]), "FAIL:") {
+		t.Fatalf("go test failure fields: %#v", gotest)
 	}
 	if integer(gotest["result_tokens"]) != 110 || integer(gotest["duration_ms"]) != 12000 {
 		t.Fatalf("go test tokens/duration: %#v", gotest)
@@ -274,5 +279,140 @@ func TestToolLedgerBackfillFromStoredMessages(t *testing.T) {
 	status, err := catalog.ToolLedgerStatus(context.Background())
 	if err != nil || integer(status["pending_conversations"]) != 0 || integer(status["tool_calls"]) != 3 {
 		t.Fatalf("status: %#v %v", status, err)
+	}
+}
+
+func TestShellSubstitutions(t *testing.T) {
+	cases := []struct {
+		line, program, sub string
+		segments           int
+	}{
+		{`task_tmpdir=$(mktemp -d /tmp/x.XXXX) && mkdir -p "$task_tmpdir/a" && go test ./...`, "go", "test", 3},
+		{`resource_dir=$(mktemp -d) object_dir=$(mktemp -d)`, "mktemp", "", 1},
+		{`resource_dir=$(mktemp -d) object_dir=$(mktemp -d) cargo test`, "cargo", "test", 1},
+		{`SHA=$(git rev-parse HEAD) && go build`, "go", "build", 2},
+		{`TOK=$(curl -sS -X POST "$ISS/t" | jq -r .access_token)`, "curl", "", 1},
+		{"X=`date +%s`", "date", "", 1},
+		{`n=$((n+1))`, "", "", 1},
+		{`for k in a b; do c=$(grep -c "^$k$" f); done`, "grep", "", 3},
+		{`X="$(jq -r '.a' f)"`, "jq", "", 1},
+		{`export P=$(gcloud secrets versions access latest)`, "export", "", 1},
+		{`echo "GOROOT=$(go env GOROOT)"`, "echo", "", 1},
+		{`(cd sub && go test ./...)`, "go", "test", 2},
+		{`DSN=$(sops --decrypt f 2>/dev/null | python3 -c 'print(1)')`, "sops", "", 1},
+	}
+	for _, test := range cases {
+		parsed := parseShellCommand(test.line)
+		got := parsed.primary()
+		if len(parsed.Segments) != test.segments || got.Program != test.program || got.Subcommand != test.sub || strings.HasPrefix(got.Program, "-") {
+			t.Errorf("%q: primary %q %q, %d segments: %#v", test.line, got.Program, got.Subcommand, len(parsed.Segments), parsed.Segments)
+		}
+	}
+}
+
+func TestToolErrorSignatureAndTestFailure(t *testing.T) {
+	for _, test := range []struct{ input, want string }{
+		{"Chunk ID: x\nWall time: 0.1 seconds\nProcess exited with code 1\nOriginal token count: 9\nOutput:\nTraceback (most recent call last):\nUnicodeDecodeError: 'utf-8' codec can't decode byte 0x8b", "UnicodeDecodeError:"},
+		{"Script failed\nWall time: 0.2 seconds\nOutput:\nconst err = new Error(message);\nError: Stream closed", "Error: Stream closed"},
+		{"<tool_use_error>Blocked: sleep 10 followed by command</tool_use_error>", "Blocked:"},
+	} {
+		got := toolErrorSignature(test.input)
+		if !strings.Contains(got, test.want) {
+			t.Errorf("%q: %q, want %q", test.input, got, test.want)
+		}
+	}
+	code := int64(1)
+	call := toolCall{Status: "error", ExitCode: &code, CommandCategory: "test"}
+	if !toolTestFailure(&call, "failed") {
+		t.Fatal("nonzero test run")
+	}
+	call.Status = "ok"
+	call.ExitCode = nil
+	if !toolTestFailure(&call, "--- FAIL: TestA") {
+		t.Fatal("masked test failure")
+	}
+	if toolTestFailure(&call, "PASS") {
+		t.Fatal("passing test")
+	}
+}
+
+func TestRepoRelativePath(t *testing.T) {
+	roots := []repoRoot{{"/Users/a/src/pharos", "pharos"}, {"/Users/a/src/other", "other"}}
+	cases := []struct{ path, cwd, rel, repo, scope string }{
+		{"/Users/a/src/pharos/a.go", "", "a.go", "pharos", "repo"},
+		{"a.go", "/Users/a/src/other", "a.go", "other", "repo"},
+		{"/Users/a/src/pharos/.conductor/x/a.go", "", "a.go", "pharos", "repo"},
+		{"/Users/a/src/pharos/.conductor/x/.claude/worktrees/agent-y/a.go", "", "a.go", "x", "repo"},
+		{"/Users/a/src/pharos/.task-worktrees/x/a.go", "", "a.go", "pharos", "repo"},
+		{"/Users/a/src/pharos/.codex/worktrees/x/y/a.go", "", "a.go", "pharos", "repo"},
+		{"/Users/a/conductor/workspaces/pharos/karachi/a.go", "", "a.go", "pharos", "repo"},
+		{"/tmp/x/a.go", "", "", "", "temp"},
+		{"/Users/a/src/pharos", "", ".", "pharos", "repo"},
+		{"/Users/a/.claude/projects/x.jsonl", "", "", "", "external"},
+		{"/opt/share/file", "", "", "", "external"},
+	}
+	home, _ := os.UserHomeDir()
+	if _, _, scope := repoRelativePath(filepath.Join(home, ".claude", "projects", "x"), "", roots); scope != "agent_home" {
+		t.Fatalf("agent home scope: %q", scope)
+	}
+	for _, test := range cases {
+		rel, repo, scope := repoRelativePath(test.path, test.cwd, roots)
+		if rel != test.rel || repo != test.repo || scope != test.scope {
+			t.Errorf("%s: %q %q %q", test.path, rel, repo, scope)
+		}
+	}
+}
+
+func TestHarnessFailuresOverrideCommandExit(t *testing.T) {
+	for _, test := range []struct{ content, kind string }{
+		{"Tool permission request failed: Error: Stream closed", "harness_error"},
+		{"<tool_use_error>Blocked: sleep 10 followed by another command</tool_use_error>", "hook_blocked"},
+	} {
+		call := toolCall{Category: "command", Program: "bash", resultIndex: 1}
+		classifyToolOutcome(&call, test.content, true, nil)
+		if call.Status != "error" || call.ErrorType != test.kind {
+			t.Errorf("%q: %s/%s", test.content, call.Status, call.ErrorType)
+		}
+	}
+}
+
+func TestLedgerSubstitutionPrograms(t *testing.T) {
+	lines := []string{
+		`task_tmpdir=$(mktemp -d /tmp/x.XXXX) && go test ./...`,
+		`TOK=$(curl -sS -X POST "$ISS/t" | jq -r .access_token)`,
+		`DSN=$(sops --decrypt f 2>/dev/null | python3 -c 'print(1)')`,
+	}
+	messages := []MessageRecord{}
+	for i, line := range lines {
+		id := strconv.Itoa(i)
+		input, _ := json.Marshal(map[string]any{"tool": "exec_command", "input": map[string]any{"cmd": line}})
+		output, _ := json.Marshal(map[string]any{"content": "ok", "is_error": false})
+		messages = append(messages, MessageRecord{Kind: "tool_call", NativeID: "call" + id, CallID: id, Text: string(input)}, MessageRecord{Kind: "tool_result", NativeID: "result" + id, CallID: id, Text: string(output)})
+	}
+	_, calls := buildToolLedger(messages, "")
+	if len(calls) != len(lines) {
+		t.Fatalf("%d calls", len(calls))
+	}
+	if calls[0].Program != "go" || calls[1].Program != "curl" || calls[2].Program != "sops" {
+		t.Fatalf("primary programs: %q %q %q", calls[0].Program, calls[1].Program, calls[2].Program)
+	}
+	for _, call := range calls {
+		for _, cmd := range call.Commands {
+			if strings.HasPrefix(cmd.Program, "-") {
+				t.Errorf("bad program %q in %q", cmd.Program, cmd.Command)
+			}
+		}
+	}
+}
+
+func TestUnwrapToolOutput(t *testing.T) {
+	input := "Chunk ID: x\nWall time: 1 seconds\nProcess exited with code 1\nOriginal token count: 5\nOutput:\n<tool_use_error>Error: failed</tool_use_error>\nScript failed\nOutput:\nlast line"
+	got := unwrapToolOutput(input)
+	if got != "Error: failed\nlast line" {
+		t.Fatalf("unwrapped %q", got)
+	}
+	jsonResult := `{"content":[{"type":"input_text","text":"Script completed\nOutput:\nError: broken"}]}`
+	if got = unwrapToolOutput(jsonResult); got != "Error: broken" {
+		t.Fatalf("JSON unwrapped %q", got)
 	}
 }
