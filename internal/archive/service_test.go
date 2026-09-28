@@ -221,9 +221,7 @@ func TestAuthCookieIsPerPort(t *testing.T) {
 	check(NewServer(config, catalog), "pharos_token_8765", http.StatusOK)
 }
 
-func TestServeRecordsTheLibraryOnlyOnceItHasItsPort(t *testing.T) {
-	support := t.TempDir()
-	t.Setenv("PHAROS_SUPPORT_DIR", support)
+func TestServeEndsAReleaseOnlyOnceItHasItsPort(t *testing.T) {
 	config, err := InitLibrary(t.TempDir(), func(string) string { return "" })
 	if err != nil {
 		t.Fatal(err)
@@ -240,9 +238,6 @@ func TestServeRecordsTheLibraryOnlyOnceItHasItsPort(t *testing.T) {
 	}
 	if err := Run([]string{"--config", config.Path, "serve"}); err == nil || !strings.Contains(err.Error(), "address already in use") {
 		t.Fatalf("serve on a taken port: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(support, "library.json")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("a service that never got its port recorded the library: %v", err)
 	}
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatalf("a service that never got its port ended the release: %v", err)
@@ -319,12 +314,6 @@ func TestServeStopsCleanlyOnSIGTERM(t *testing.T) {
 	}
 	if _, err := os.Stat(config.CatalogPath + "-wal"); err != nil {
 		t.Fatalf("expected an open WAL while serving: %v", err)
-	}
-	if _, err := os.Stat(mcpLauncherPath(support)); err != nil {
-		t.Fatalf("serve did not install the MCP launcher in the support directory: %v", err)
-	}
-	if pointer, err := readLibraryPointer(filepath.Join(support, "library.json")); err != nil || pointer.LibraryDir != filepath.Dir(config.Path) {
-		t.Fatalf("serve did not record the library for the MCP launcher: %+v %v", pointer, err)
 	}
 	if entries, _ := os.ReadDir(home); len(entries) != 0 {
 		t.Fatalf("serve wrote into HOME: %v", entries)

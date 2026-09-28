@@ -179,11 +179,9 @@ func mcpCallCount(t *testing.T, path string) int {
 }
 
 func TestMCPServerOutlivesAnUnavailableLibrary(t *testing.T) {
-	root := t.TempDir()
-	pointer := filepath.Join(root, "support", "library.json")
-	drive := filepath.Join(root, "drive")
+	drive := filepath.Join(t.TempDir(), "drive")
 	library := filepath.Join(drive, "Pharos")
-	server := newMCPServer("", pointer)
+	server := newMCPServer(filepath.Join(library, "library.toml"))
 	server.identity = testIdentity
 	call := startMCP(t, server)
 	search := map[string]any{"name": "search_work", "arguments": map[string]any{"query": "parser"}}
@@ -194,17 +192,7 @@ func TestMCPServerOutlivesAnUnavailableLibrary(t *testing.T) {
 	if tools := call("tools/list", nil)["result"].(map[string]any)["tools"].([]any); len(tools) != len(mcpTools) {
 		t.Fatalf("tools/list without a library listed %d tools", len(tools))
 	}
-	if text, isError := toolText(t, call("tools/call", search)); !isError || !strings.Contains(text, "Pharos library is not connected: no library has been opened on this Mac") {
-		t.Fatalf("call without library.json: %v %s", isError, text)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(pointer), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(pointer, []byte(`{"library_dir":`+strconv.Quote(library)+`,"volume_uuid":"TEST-VOLUME","updated_at":"2026-09-24T00:00:00Z"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if text, isError := toolText(t, call("tools/call", search)); !isError || !strings.Contains(text, "Pharos library is not connected: "+filepath.Join(library, "library.toml")+" is missing (volume TEST-VOLUME)") {
+	if text, isError := toolText(t, call("tools/call", search)); !isError || !strings.Contains(text, "Pharos library is not connected: "+filepath.Join(library, "library.toml")+" is missing") {
 		t.Fatalf("call with the drive absent: %v %s", isError, text)
 	}
 
@@ -253,7 +241,7 @@ func TestMCPServerOutlivesAnUnavailableLibrary(t *testing.T) {
 
 func TestMCPLibraryGuardsStillApply(t *testing.T) {
 	config := testLibrary(t, filepath.Join(t.TempDir(), "Pharos"))
-	server := newMCPServer(config.Path, "")
+	server := newMCPServer(config.Path)
 	checks := 0
 	server.identity = func(string) string { checks++; return testVolume }
 	call := startMCP(t, server)
@@ -290,7 +278,7 @@ func TestMCPListsToolsWithoutWaitingForTheHost(t *testing.T) {
 	previous := currentHost
 	currentHost = func() Host { time.Sleep(5 * time.Second); return previous() } // ioreg hanging
 	t.Cleanup(func() { currentHost = previous })
-	for _, server := range []*mcpServer{newMCPServer(config.Path, ""), newMCPServer("", writePointer(t, config))} {
+	for _, server := range []*mcpServer{newMCPServer(config.Path)} {
 		server.identity = testIdentity
 		started := time.Now()
 		if _, err := server.config(); err != nil {
@@ -307,16 +295,6 @@ func TestMCPListsToolsWithoutWaitingForTheHost(t *testing.T) {
 	}
 }
 
-// writePointer writes a library.json naming config's library.
-func writePointer(t *testing.T, config Config) string {
-	t.Helper()
-	pointer := filepath.Join(t.TempDir(), "library.json")
-	if err := os.WriteFile(pointer, []byte(`{"library_dir":`+strconv.Quote(filepath.Dir(config.Path))+`}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return pointer
-}
-
 func TestMCPLeavesOlderCatalogsToTheApp(t *testing.T) {
 	config := testLibrary(t, filepath.Join(t.TempDir(), "Pharos"))
 	db, err := sql.Open("sqlite", catalogDSN(config.CatalogPath))
@@ -328,7 +306,7 @@ func TestMCPLeavesOlderCatalogsToTheApp(t *testing.T) {
 	if _, err := db.Exec("UPDATE meta SET value=? WHERE key='schema_version'", older); err != nil {
 		t.Fatal(err)
 	}
-	server := newMCPServer(config.Path, "")
+	server := newMCPServer(config.Path)
 	server.identity = testIdentity
 	call := startMCP(t, server)
 	text, isError := toolText(t, call("tools/call", map[string]any{"name": "search_work", "arguments": map[string]any{"query": "parser"}}))
@@ -377,7 +355,7 @@ func faultingAnswer(t *testing.T) func(*Catalog, map[string]any) map[string]any 
 
 func TestMCPAnswersAFaultedCallAndRestarts(t *testing.T) {
 	config := testLibrary(t, filepath.Join(t.TempDir(), "Pharos"))
-	server := newMCPServer(config.Path, "")
+	server := newMCPServer(config.Path)
 	server.identity = testIdentity
 	server.answer = faultingAnswer(t)
 	restarts := 0
@@ -399,7 +377,7 @@ func TestMCPHelper(t *testing.T) {
 	if config == "" {
 		t.Skip("helper process")
 	}
-	server := newMCPServer(config, "")
+	server := newMCPServer(config)
 	server.identity = testIdentity
 	server.answer = faultingAnswer(t)
 	if err := server.run(os.Stdin, os.Stdout); err != nil {
@@ -414,7 +392,7 @@ func TestMCPRestartKeepsTheConnection(t *testing.T) {
 		t.Skip("starts an MCP process")
 	}
 	config := testLibrary(t, filepath.Join(t.TempDir(), "Pharos"))
-	// Started, as by the launcher, through a link that a newer build repoints.
+	// Started through a symlink (on PATH, say) that a newer build repoints.
 	current := filepath.Join(t.TempDir(), "current")
 	if err := os.Symlink(os.Args[0], current); err != nil {
 		t.Fatal(err)
@@ -506,7 +484,7 @@ func TestMCPDoesNotReopenAReleasedLibrary(t *testing.T) {
 		t.Fatalf("release left no marker: %v", err)
 	}
 	// The service has exited; the drive is about to unmount.
-	server := newMCPServer(config.Path, "")
+	server := newMCPServer(config.Path)
 	server.identity = testIdentity
 	call := startMCP(t, server)
 	search := map[string]any{"name": "search_work", "arguments": map[string]any{"query": "parser"}}
@@ -561,7 +539,7 @@ func normalizedToolResult(t *testing.T, response map[string]any) any {
 
 func TestMCPForwardingMatchesDirect(t *testing.T) {
 	config := testLibrary(t, filepath.Join(t.TempDir(), "Pharos"))
-	server := newMCPServer(config.Path, "")
+	server := newMCPServer(config.Path)
 	server.identity = testIdentity
 	call := startMCP(t, server)
 	requests := []map[string]any{
@@ -625,7 +603,7 @@ func TestMCPForwardingMatchesDirect(t *testing.T) {
 
 func TestMCPForwardingDeclinesOtherServices(t *testing.T) {
 	config := testLibrary(t, filepath.Join(t.TempDir(), "Pharos"))
-	server := newMCPServer(config.Path, "")
+	server := newMCPServer(config.Path)
 	server.identity = testIdentity
 	call := startMCP(t, server)
 	search := map[string]any{"name": "search_work", "arguments": map[string]any{"query": "parser"}}
@@ -892,7 +870,7 @@ func TestMCPHoldsNoCatalogHandleBetweenCalls(t *testing.T) {
 		t.Fatal("an open catalog is not visible to the check")
 	}
 	open.Close()
-	server := newMCPServer(config.Path, "")
+	server := newMCPServer(config.Path)
 	server.identity = testIdentity
 	call := startMCP(t, server)
 	for _, request := range []map[string]any{
@@ -913,129 +891,41 @@ func TestMCPHoldsNoCatalogHandleBetweenCalls(t *testing.T) {
 	}
 }
 
-func TestMCPStatusPresentsLauncherForLibraries(t *testing.T) {
-	support := t.TempDir()
-	t.Setenv("PHAROS_SUPPORT_DIR", support)
+func TestMCPStatusRunsTheLibrarysOwnApp(t *testing.T) {
 	catalog, config := testCatalog(t)
-	config.Library = true
+	library := filepath.Join(t.TempDir(), "drive with space", "Pharos")
+	config.Path, config.Library = filepath.Join(library, "library.toml"), true
+	if err := os.MkdirAll(library, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config.Path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A service started some other way (a dev build) names the library.
 	status, err := catalog.MCPStatus(config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	launcher := filepath.Join(support, "bin", "pharos-mcp")
-	if status["command"] != launcher || len(status["args"].([]string)) != 0 || status["launcher_installed"] != false ||
-		!strings.Contains(status["note"].(string), "install-mcp") {
-		t.Fatalf("library MCP settings: %#v", status)
-	}
-	if _, err := InstallMCPLauncher(pharosSupportDir()); err != nil {
-		t.Fatal(err)
-	}
-	if status, _ = catalog.MCPStatus(config); status["launcher_installed"] != true || strings.Contains(status["note"].(string), "install-mcp") {
-		t.Fatalf("installed launcher: %#v", status)
-	}
-}
-
-func TestRecordLibraryWritesTheAppsLibraryJSON(t *testing.T) {
-	support := filepath.Join(t.TempDir(), "Pharos")
-	config := Config{Path: "/Volumes/euclid 1/Pharos/library.toml", Library: true}
-	volume := func(dir string) (string, string) {
-		if dir != "/Volumes/euclid 1/Pharos" {
-			t.Fatalf("volume looked up for %s", dir)
-		}
-		return "642c2c39-5926-4831-abe1-34642f37b103", "euclid"
-	}
-	read := func() map[string]string {
-		t.Helper()
-		var record map[string]string
-		data, err := os.ReadFile(filepath.Join(support, "library.json"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := json.Unmarshal(data, &record); err != nil {
-			t.Fatal(err)
-		}
-		return record
-	}
-	if err := recordLibrary(support, config, volume); err != nil {
-		t.Fatal(err)
-	}
-	record := read()
-	// The app decodes updated_at as ISO 8601 without fractional seconds.
-	if at, err := time.Parse(time.RFC3339, record["updated_at"]); err != nil || at.Nanosecond() != 0 || !strings.HasSuffix(record["updated_at"], "Z") {
-		t.Fatalf("updated_at %q: %v", record["updated_at"], err)
-	}
-	delete(record, "updated_at")
-	if want := map[string]string{"library_dir": "/Volumes/euclid 1/Pharos", "volume_uuid": "642C2C39-5926-4831-ABE1-34642F37B103", "volume_name": "euclid"}; !reflect.DeepEqual(record, want) {
-		t.Fatalf("library.json %v, want %v", record, want)
-	}
-	if pointer, err := readLibraryPointer(filepath.Join(support, "library.json")); err != nil || pointer.LibraryDir != "/Volumes/euclid 1/Pharos" {
-		t.Fatalf("the MCP reads %+v, %v", pointer, err)
-	}
-	// library.toml's pin names the volume, as in the app.
-	config.VolumeID = "uuid:abcd-1234"
-	if err := recordLibrary(support, config, volume); err != nil || read()["volume_uuid"] != "ABCD-1234" {
-		t.Fatalf("pinned volume_uuid %q, %v", read()["volume_uuid"], err)
-	}
-	if entries, _ := os.ReadDir(support); len(entries) != 1 {
-		t.Fatalf("support directory holds %v", entries)
-	}
-}
-
-func TestMCPLauncherRunsFromLocalDisk(t *testing.T) {
-	if _, err := os.Stat("/usr/bin/plutil"); err != nil {
-		t.Skip("needs macOS plutil")
-	}
-	root := t.TempDir()
-	support := filepath.Join(root, "Application Support", "Pharos's")
-	path, err := InstallMCPLauncher(support)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o755 {
-		t.Fatalf("launcher mode: %v %v", info, err)
-	}
-	if again, err := InstallMCPLauncher(support); err != nil || again != path {
-		t.Fatalf("reinstall: %q %v", again, err)
-	}
-	launch := func() (string, string, error) {
-		command := exec.Command(path)
-		command.Env = []string{"PATH=/usr/bin:/bin"}
-		var stdout, stderr bytes.Buffer
-		command.Stdout, command.Stderr = &stdout, &stderr
-		err := command.Run()
-		return stdout.String(), stderr.String(), err
-	}
-	fakeApp := func(app, name string) {
-		t.Helper()
-		binary := filepath.Join(app, "Contents", "MacOS", "pharos")
-		if err := os.MkdirAll(filepath.Dir(binary), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(binary, []byte("#!/bin/sh\necho \""+name+" $* ($PHAROS_SUPPORT_DIR)\"\n"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	pointer := filepath.Join(support, "library.json")
-
-	if _, stderr, err := launch(); err == nil || !strings.Contains(stderr, "cannot start") {
-		t.Fatalf("launcher with nothing installed: %v %s", err, stderr)
+	if status["command"] != runningExecutable() || !reflect.DeepEqual(status["args"], []string{"--config", config.Path, "mcp"}) || status["install_location"] != library {
+		t.Fatalf("library without its app: %#v", status)
 	}
 
-	library := filepath.Join(root, "drive with space", "Pharos")
-	fakeApp(filepath.Join(library, "Pharos.app"), "library")
-	if err := os.WriteFile(pointer, []byte(`{"library_dir":`+strconv.Quote(library)+`,"volume_uuid":"X"}`), 0o600); err != nil {
+	// The app beside library.toml finds the library itself, on the drive.
+	bundled := filepath.Join(library, "Pharos.app", "Contents", "MacOS", "pharos")
+	if err := os.MkdirAll(filepath.Dir(bundled), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	stdout, stderr, err := launch()
-	if err != nil || stdout != "library mcp --library-json "+pointer+" ("+support+")\n" || !strings.Contains(stderr, "warning") {
-		t.Fatalf("launcher falling back to the library's app: %v %q %q", err, stdout, stderr)
-	}
-
-	fakeApp(filepath.Join(support, "runtime", "build-1", "Pharos.app"), "runtime")
-	if err := os.Symlink(filepath.Join("build-1", "Pharos.app"), filepath.Join(support, "runtime", "current")); err != nil {
+	if err := os.WriteFile(bundled, nil, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if stdout, stderr, err := launch(); err != nil || stdout != "runtime mcp --library-json "+pointer+" ("+support+")\n" || stderr != "" {
-		t.Fatalf("launcher with a local runtime: %v %q %q", err, stdout, stderr)
+	if status, err = catalog.MCPStatus(config); err != nil || status["command"] != bundled || !reflect.DeepEqual(status["args"], []string{"mcp"}) {
+		t.Fatalf("library with its app: %#v %v", status, err)
+	}
+	if !strings.Contains(status["note"].(string), "Ejecting from Pharos stops them") {
+		t.Fatalf("library note: %q", status["note"])
+	}
+	if line, err := mcpCommandLine(config); err != nil || line != "'"+bundled+"' mcp" {
+		t.Fatalf("command line %q %v", line, err)
 	}
 }

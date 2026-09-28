@@ -382,8 +382,9 @@ describe('library, drive and captures UI', { skip }, () => {
       holder.kill();
       await page.waitForFunction(() => document.querySelector('#pharosDrive')?.dataset.state === 'idle', null, { timeout: 15_000 });
       await page.evaluate(() => { window.__ejectAnswer = 'release'; });
+      assert.match(await panel.textContent(), new RegExp(`Ejecting quits Pharos and stops agents' Pharos MCP servers on this Mac; reconnect them once ${volume} is back\\.`));
       await panel.getByRole('button', { name: `Eject ${volume}` }).click();
-      await panel.getByRole('button', { name: `Ejecting ${volume}…` }).waitFor();
+      await panel.getByRole('button', { name: `Quitting to eject ${volume}…` }).waitFor();
       messages.push(...await page.evaluate(() => window.__ejectMessages));
       assert.deepEqual(messages, [{ action: 'eject' }, { action: 'eject' }]);
       assert.deepEqual(errors, []);

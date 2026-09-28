@@ -934,7 +934,7 @@ func printAdoptResult(w io.Writer, result AdoptResult) {
   1. %s
   2. Quit the old Pharos, which serves %s on port %d. Both apps share a bundle ID, so macOS may bring the running one forward instead of opening the library's.
   3. Open %s. It serves the library on port %d and resumes indexing this Mac's sources from where the copy left off.
-  4. Point MCP clients at %s instead of "--config %s mcp". Opening the app writes it, as does `+"`pharos install-mcp`"+`.
+  4. Point MCP clients at %s instead of "--config %s mcp".
   5. Keep the old install as a fallback until satisfied; it no longer receives anything new. To remove it later, delete %s and its -wal/-shm files.
-`, build, legacy.Path, legacy.Port, app, config.Port, mcpLauncherPath(pharosSupportDir()), legacy.Path, legacy.CatalogPath)
+`, build, legacy.Path, legacy.Port, app, config.Port, shellQuote(filepath.Join(app, "Contents", "MacOS", "pharos"))+" mcp", legacy.Path, legacy.CatalogPath)
 }

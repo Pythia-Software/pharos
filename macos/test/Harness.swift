@@ -1,6 +1,6 @@
-// Exercises the app's runtime cache and library-volume monitor without the
+// Exercises the app's library-volume monitor, release, and Eject without the
 // GUI. Built and driven by macos/test/swift-harness.sh; compiled together with
-// macos/LibraryVolume.swift and macos/RuntimeCache.swift.
+// macos/LibraryVolume.swift and macos/Launch.swift.
 import AppKit
 import Foundation
 
@@ -31,170 +31,6 @@ func wait(_ seconds: Double, until condition: () -> Bool) -> Bool {
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
     }
     return condition()
-}
-
-func inode(_ url: URL) -> Int? {
-    (try? FileManager.default.attributesOfItem(atPath: url.path))?[.systemFileNumber] as? Int
-}
-
-/// runtime SUPPORT REAL_APP REAL_APP_V2 REAL_CDHASH STUB_APP STUB_APP_V2 LIBRARY_DIR VOLUME_UUID
-func runtimeTests(_ args: [String]) {
-    let cache = RuntimeCache(root: URL(fileURLWithPath: args[0], isDirectory: true))
-    let real = URL(fileURLWithPath: args[1]), realV2 = URL(fileURLWithPath: args[2])
-    let stub = URL(fileURLWithPath: args[4]), stubV2 = URL(fileURLWithPath: args[5])
-    let library = URL(fileURLWithPath: args[6], isDirectory: true)
-    let fileManager = FileManager.default
-
-    // Build id and signature.
-    let signature = try! CodeSignature.of(real)
-    check(signature.cdhash == args[3], "build id is the bundle's cdhash (\(signature.cdhash))")
-    let signatureV2 = try! CodeSignature.of(realV2)
-    check(signatureV2.cdhash != signature.cdhash, "a changed nested pharos changes the build id (\(signatureV2.cdhash))")
-    let me = try! CodeSignature.runningCode()
-    check(me.cdhash == (try! CodeSignature.of(URL(fileURLWithPath: CommandLine.arguments[0]))).cdhash,
-          "running code's cdhash matches its file (\(me.cdhash))")
-
-    // Copy, verify, reuse.
-    let copy = try! cache.install(real, signature: signature)
-    check(copy.path == cache.runtime.appendingPathComponent("\(signature.cdhash)/Pharos.app").path, "copied to runtime/<cdhash>/Pharos.app")
-    check((try? signature.verify(copy)) != nil, "copy passes strict signature validation against the original's requirement")
-    check((try? fileManager.destinationOfSymbolicLink(atPath: cache.current.path)) == "\(signature.cdhash)/Pharos.app", "current -> \(signature.cdhash)/Pharos.app")
-    check(cache.current.appendingPathComponent("Contents/MacOS/pharos").resolvingSymlinksInPath().path
-          == copy.appendingPathComponent("Contents/MacOS/pharos").resolvingSymlinksInPath().path, "current/Contents/MacOS/pharos resolves into the copy")
-    let executable = copy.appendingPathComponent("Contents/MacOS/pharos")
-    let before = inode(executable)
-    _ = try! cache.install(real, signature: signature)
-    check(inode(executable) == before, "a valid copy is reused, not copied again")
-    check((try? signatureV2.verify(copy)) == nil, "a copy of another build fails verification")
-
-    // Tampering is caught and repaired.
-    let icon = copy.appendingPathComponent("Contents/Resources/AppIcon.icns")
-    let handle = try! FileHandle(forWritingTo: icon)
-    handle.seekToEndOfFile()
-    handle.write(Data([0]))
-    try! handle.close()
-    check((try? signature.verify(copy)) == nil, "a modified copy fails verification")
-    _ = try! cache.install(real, signature: signature)
-    check((try? signature.verify(copy)) != nil && inode(executable) != before, "install replaces a modified copy")
-    do {
-        let foreign = try CodeSignature.of(stub)
-        _ = try cache.install(real, signature: foreign)
-        check(false, "install refuses a bundle that is not the expected build")
-    } catch {
-        check(true, "install refuses a bundle that is not the expected build: \(error.localizedDescription)")
-    }
-    check(!(((try? fileManager.contentsOfDirectory(atPath: cache.runtime.path)) ?? []).contains { $0.contains(".partial-") }), "no partial copies left behind")
-
-    // A new build becomes current; the old copy is pruned unless running.
-    let copyV2 = try! cache.install(realV2, signature: signatureV2)
-    check((try? fileManager.destinationOfSymbolicLink(atPath: cache.current.path)) == "\(signatureV2.cdhash)/Pharos.app", "current follows the newest build")
-    let stubSignature = try! CodeSignature.of(stub), stubSignatureV2 = try! CodeSignature.of(stubV2)
-    let stubCopy = try! cache.install(stub, signature: stubSignature)
-    _ = try! cache.install(stubV2, signature: stubSignatureV2)
-    let sleeper = Process()
-    sleeper.executableURL = stubCopy.appendingPathComponent("Contents/MacOS/pharos")
-    sleeper.arguments = ["--sleep", "30"]
-    try! sleeper.run()
-    let removed = cache.prune().map(\.lastPathComponent)
-    check(removed.contains(signature.cdhash) && removed.contains(signatureV2.cdhash), "prune removes copies that are neither current nor running: \(removed)")
-    check(fileManager.fileExists(atPath: stubCopy.path), "prune keeps a copy with a running executable")
-    check(fileManager.fileExists(atPath: cache.current.resolvingSymlinksInPath().path), "prune keeps the current copy")
-    sleeper.terminate()
-    sleeper.waitUntilExit()
-    check(cache.prune().map(\.lastPathComponent) == [stubSignature.cdhash], "prune removes that copy once it stops")
-    let stale = cache.runtime.appendingPathComponent(".dead.partial-test")
-    try! fileManager.createDirectory(at: stale, withIntermediateDirectories: true)
-    check(cache.prune().isEmpty, "a fresh partial copy (another launch copying now) is kept")
-    check(cache.prune(now: Date().addingTimeInterval(7200)).map(\.lastPathComponent) == [".dead.partial-test"], "an old partial copy is pruned")
-    _ = copyV2
-
-    // library.json.
-    try! cache.record(library: library)
-    let json = (try? JSONSerialization.jsonObject(with: Data(contentsOf: cache.record))) as? [String: Any] ?? [:]
-    check(json["library_dir"] as? String == library.standardizedFileURL.path, "library.json library_dir = \(json["library_dir"] ?? "nil")")
-    check(json["volume_uuid"] as? String == args[7].uppercased(), "library.json volume_uuid = \(json["volume_uuid"] ?? "nil") (bare)")
-    check((json["updated_at"] as? String).map { ISO8601DateFormatter().date(from: $0) != nil } == true, "library.json updated_at is RFC 3339: \(json["updated_at"] ?? "nil")")
-    check(Set(json.keys) == ["library_dir", "volume_uuid", "volume_name", "updated_at"], "library.json keys: \(json.keys.sorted())")
-    check(cache.readRecord()?.volume?.directory(at: LibraryVolume(containing: library)!.mount).path == library.standardizedFileURL.path,
-          "the recorded volume finds the library again")
-    let moved = LibraryRecord(libraryDir: "/Volumes/euclid 1/Pharos", volumeUuid: "642C2C39-5926-4831-ABE1-34642F37B103", volumeName: "euclid", updatedAt: Date()).volume
-    check(moved?.directory(at: URL(fileURLWithPath: "/Volumes/euclid")).path == "/Volumes/euclid/Pharos" && moved?.name == "euclid",
-          "a library recorded under another mount point is found at the volume's next one")
-
-    // Launch decisions.
-    let beside = library.appendingPathComponent("Pharos.app")
-    check(LaunchPlan.resolve(arguments: ["app"], environment: [:], bundle: beside, cache: cache) == .trampoline(library: library),
-          "an app beside library.toml trampolines")
-    check(LaunchPlan.resolve(arguments: ["app"], environment: ["PHAROS_RUN_IN_PLACE": "1"], bundle: beside, cache: cache) == .library(library),
-          "PHAROS_RUN_IN_PLACE=1 serves in place")
-    check(LaunchPlan.resolve(arguments: ["app", "--library", library.path], environment: [:], bundle: cache.current.resolvingSymlinksInPath(), cache: cache)
-          == .library(library), "the runtime copy serves the library it is given")
-    check(LaunchPlan.resolve(arguments: ["app"], environment: [:], bundle: cache.current.resolvingSymlinksInPath(), cache: cache)
-          == .library(URL(fileURLWithPath: library.standardizedFileURL.path, isDirectory: true)), "the runtime copy alone serves the recorded library")
-    check(LaunchPlan.resolve(arguments: ["app"], environment: [:], bundle: URL(fileURLWithPath: "/tmp/dist/Pharos.app"), cache: cache) == .user,
-          "a dev build without library.toml serves this Mac's configuration")
-
-    // LaunchServices opens the runtime copy with the library (a background-only stub, not Pharos).
-    let stubLibrary = URL(fileURLWithPath: args[0]).appendingPathComponent("stub-library", isDirectory: true)
-    try! fileManager.createDirectory(at: stubLibrary, withIntermediateDirectories: true)
-    let launched = stubLibrary.appendingPathComponent("stub-launched.txt")
-    let stubInstalled = try! cache.install(stub, signature: stubSignature)
-    var launchError: Error?
-    var completed = false
-    Trampoline.launch(stubInstalled, library: stubLibrary, cache: cache) { error in
-        launchError = error
-        completed = true
-    }
-    check(wait(20) { completed } && launchError == nil, "NSWorkspace opened the runtime copy (\(launchError?.localizedDescription ?? "no error"))")
-    check(wait(10) { fileManager.fileExists(atPath: launched.path) }, "the launched copy ran")
-    let lines = ((try? String(contentsOf: launched, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
-    check(lines.first.map { $0.hasPrefix(canonicalPath(stubInstalled) + "/") } == true, "it ran from the runtime copy: \(lines.first ?? "")")
-    check(Array(lines.dropFirst()) == ["--library", stubLibrary.path], "it received --library DIR: \(lines.dropFirst())")
-    let environment = ((try? String(contentsOf: stubLibrary.appendingPathComponent("stub-env.txt"), encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
-    check(environment.first == "PHAROS_SUPPORT_DIR=\(cache.root.path)" && environment.last.map { $0.count > "HOME=".count } == true,
-          "it runs on the same support directory, in an otherwise normal environment: \(environment)")
-
-    // Opening a new build while a copy of another build runs: install has
-    // already repointed current and library.json, so the old one must quit.
-    let stubV2Installed = try! cache.install(stubV2, signature: stubSignatureV2)
-    func open(_ app: URL, _ arguments: [String]) -> NSRunningApplication? {
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.arguments = arguments
-        configuration.createsNewApplicationInstance = true
-        configuration.activates = false
-        var opened: NSRunningApplication?
-        var done = false
-        NSWorkspace.shared.openApplication(at: app, configuration: configuration) { app, _ in opened = app; done = true }
-        _ = wait(20) { done }
-        return opened
-    }
-    func gone(_ app: NSRunningApplication?) -> Bool { app.map { $0.isTerminated || kill($0.processIdentifier, 0) != 0 } ?? true }
-    /// Trampoline.launch's completion: nil while pending, .some(nil) on success.
-    func trampoline(to library: String, quitTimeout: TimeInterval = 15) -> (URL, Error??) {
-        let directory = URL(fileURLWithPath: args[0]).appendingPathComponent(library, isDirectory: true)
-        try! fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        var result: Error?? = nil
-        Trampoline.launch(stubV2Installed, library: directory, cache: cache, quitTimeout: quitTimeout) { result = .some($0) }
-        _ = wait(quitTimeout + 20) { result != nil }
-        return (directory.appendingPathComponent("stub-launched.txt"), result)
-    }
-    let older = open(stubInstalled, ["--stay"])
-    check(!gone(older), "a copy of an older build is running (pid \(older?.processIdentifier ?? 0))")
-    let (upgraded, upgrade) = trampoline(to: "upgrade")
-    check(upgrade.map { $0 == nil } == true, "the new build opened: \(String(describing: upgrade))")
-    check(wait(5) { gone(older) }, "the older copy was asked to quit, and did")
-    check(wait(10) { fileManager.fileExists(atPath: upgraded.path) }
-          && ((try? String(contentsOf: upgraded, encoding: .utf8)) ?? "").hasPrefix(canonicalPath(stubV2Installed) + "/"), "the new build's copy ran")
-    let stubborn = open(stubInstalled, ["--stubborn"])
-    let (refused, refusal) = trampoline(to: "refused", quitTimeout: 2)
-    check(refusal.map { $0 is Trampoline.OlderCopyRunning } == true, "an older copy that will not quit is reported: \(String(describing: refusal))")
-    check(!gone(stubborn) && !fileManager.fileExists(atPath: refused.path), "and the new build is not opened beside it")
-    stubborn?.forceTerminate()
-    let running = open(stubV2Installed, ["--stay"])
-    let (reused, reuse) = trampoline(to: "same")
-    check(reuse.map { $0 == nil } == true && !gone(running) && !fileManager.fileExists(atPath: reused.path),
-          "a running copy of the same build is brought forward, not opened again")
-    running?.forceTerminate()
 }
 
 /// service STOPPING_SERVICE_URL
@@ -305,7 +141,8 @@ func volumeTests(_ args: [String]) {
 
     func startMonitor() -> LibraryVolumeMonitor {
         let monitor = LibraryVolumeMonitor(volumeUUID: uuid)!
-        // As the app does it: release, then approve or dissent.
+        // Release, then approve or dissent: the monitor and release pieces
+        // the app's Eject uses. (The app itself refuses Finder's ejects.)
         monitor.approveUnmount = {
             events.add("approval")
             let result = ServiceClient.release(service, token: releaseToken)
@@ -324,10 +161,6 @@ func volumeTests(_ args: [String]) {
     var monitor = startMonitor()
     check(wait(3) { events.count("mount \(mount)") == 1 }, "monitor reports the mounted volume at start")
     var process = serve()
-    // PHAROS_SUPPORT_DIR: the service records its library for the MCP launcher as the app does.
-    let record = RuntimeCache.standard.readRecord()
-    check(record?.libraryDir == URL(fileURLWithPath: config).deletingLastPathComponent().path && record?.volumeUuid == uuid.uppercased()
-          && record?.volumeName == volume?.name, "serve wrote a library.json the app reads back: \(String(describing: record))")
 
     // A release that fails makes the eject fail with Pharos's message.
     releaseToken = "wrong-token"
@@ -382,68 +215,48 @@ func volumeTests(_ args: [String]) {
     monitor.stop()
 }
 
-/// eject UUID MOUNT PHAROS CONFIG PORT TOKEN
-/// The Eject button's path: release as the app does, then `diskutil eject`.
+/// eject MOUNT APP CONFIG PORT TOKEN
+/// The Eject button's path, with APP the library's Pharos.app on the image:
+/// release, stop what runs from the app, then eject once the app has exited.
 func ejectTests(_ args: [String]) {
-    let uuid = args[0], mount = URL(fileURLWithPath: args[1]), pharos = args[2], config = args[3]
-    let service = URL(string: "http://127.0.0.1:\(args[4])/")!, token = args[5]
+    let mount = URL(fileURLWithPath: args[0]), app = URL(fileURLWithPath: args[1]), config = args[2]
+    let service = URL(string: "http://127.0.0.1:\(args[3])/")!, token = args[4]
     let name = mount.lastPathComponent
-    let events = Events()
+    let pharos = app.appendingPathComponent("Contents/MacOS/pharos").path
 
-    // The reasons diskutil gives, in words.
-    let busy = VolumeEject.describe("Unmount of disk7 failed: at least one volume could not be unmounted\nUnmount was dissented by PID 12473 (/bin/sleep)\nDissenter parent PPID 12380 (/bin/zsh)", volume: "euclid")
-    check(busy == "sleep (process 12473) is using euclid, so it could not be ejected. Quit it or close its files on the drive, then eject again.", "a busy drive names the process: \(busy)")
-    let spotlight = VolumeEject.describe("Volume euclid on disk7s1 failed to unmount: dissented by PID 99 (/System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Support/mds_stores)", volume: "euclid")
-    check(spotlight.hasPrefix("Spotlight is using euclid"), "Spotlight is named as Spotlight: \(spotlight)")
-    check(VolumeEject.describe("Unable to find disk for /Volumes/euclid\n", volume: "euclid") == "euclid could not be ejected: Unable to find disk for /Volumes/euclid", "any other failure passes diskutil's first line on")
+    // Which processes run from the app.
+    let listed: [(pid: pid_t, path: String)] = [(1, "/usr/bin/true"), (2, canonicalPath(app) + "/Contents/MacOS/pharos"),
+                                                (getpid(), canonicalPath(app) + "/Contents/MacOS/PharosApp"), (3, canonicalPath(app) + " 2/Contents/MacOS/pharos")]
+    check(DriveProcesses.running(from: app, in: listed) == [2], "only other processes inside the app count: \(DriveProcesses.running(from: app, in: listed))")
 
-    // The order of the steps.
-    var steps: [String] = []
-    let kept = LibraryEject.run(release: { steps.append("release"); return .dissent(ReleaseState.finishingMessage) },
-                                released: { steps.append("released") }, eject: { steps.append("eject"); return .ejected })
-    check(kept == .kept(ReleaseState.finishingMessage) && steps == ["release"], "a refused release keeps the library and never ejects: \(steps)")
-    steps = []
-    let notEjected = LibraryEject.run(release: { steps.append("release"); return .approve },
-                                      released: { steps.append("released") }, eject: { steps.append("eject"); return .failed("busy") })
-    check(notEjected == .notEjected("busy") && steps == ["release", "released", "eject"], "the drive is ejected only after the release: \(steps)")
-
-    // For real, on the test image, with the volume monitor approving as the app does.
-    var releaseToken = token
-    let release: () -> LibraryVolumeMonitor.Verdict = { ReleaseState.after(ServiceClient.release(service, token: releaseToken)).1 }
-    let monitor = LibraryVolumeMonitor(volumeUUID: uuid)!
-    monitor.approveUnmount = { events.add("approval"); return release() }
-    monitor.onUnmount = { events.add("unmount") }
-    monitor.onMount = { events.add("mount \($0.path)") }
-    monitor.start()
-    check(wait(3) { events.count("mount ") >= 1 }, "monitor sees the re-attached image")
+    // The service, and an agent's MCP server, both running from the image.
     let process = serveLibrary(pharos, config: config, service: service, token: token)
+    let agent = Process()
+    agent.executableURL = URL(fileURLWithPath: pharos)
+    agent.arguments = ["mcp"]
+    let input = Pipe()
+    agent.standardInput = input
+    agent.standardOutput = FileHandle.nullDevice
+    agent.standardError = FileHandle.nullDevice
+    try! agent.run()
+    check(wait(3) { DriveProcesses.running(from: app).contains(agent.processIdentifier) }, "the MCP server runs from the app on the image")
 
-    releaseToken = "wrong-token"
-    let refused = LibraryEject.run(release: release, eject: { VolumeEject.eject(mount, name: name) })
-    if case .kept(let reason) = refused { check(reason.contains("HTTP 401"), "a refused release keeps the library: \(reason.prefix(70))") } else { check(false, "refused release: \(refused)") }
-    check(process.isRunning && FileManager.default.fileExists(atPath: mount.path), "the service and the volume are untouched")
+    check(ServiceClient.release(service, token: token) == .released && wait(5) { !process.isRunning }, "the service released the library and exited \(process.terminationStatus)")
+    let busy = run("/usr/sbin/diskutil", "eject", mount.path)
+    check(busy.status != 0 && FileManager.default.fileExists(atPath: mount.path), "an MCP server running from the drive keeps it from ejecting: \(busy.output.split(separator: "\n").last ?? "")")
 
-    releaseToken = token
-    let held = mount.appendingPathComponent("held-open.txt")
-    FileManager.default.createFile(atPath: held.path, contents: Data("busy".utf8))
-    let handle = try! FileHandle(forWritingTo: held)
-    var releasedFirst = false
-    let blocked = LibraryEject.run(release: release, released: { releasedFirst = !process.isRunning || wait(3) { !process.isRunning } },
-                                   eject: { VolumeEject.eject(mount, name: name) })
-    if case .notEjected(let reason) = blocked {
-        check(reason.contains("harness (process \(getpid())) is using \(name)"), "a file held open keeps the drive, and says who: \(reason)")
-    } else {
-        check(false, "eject with a file held open: \(blocked)")
-    }
-    check(releasedFirst && process.terminationStatus == 0, "the library was released (service exited \(process.terminationStatus)) before the eject was tried")
-    check(FileManager.default.fileExists(atPath: mount.path), "the volume stayed mounted")
-    try? handle.close()
+    let stopped = DriveProcesses.stop(runningFrom: app)
+    check(stopped == [agent.processIdentifier] && wait(3) { !agent.isRunning }, "Eject stops it: \(stopped)")
 
-    let ejected = LibraryEject.run(release: release, eject: { VolumeEject.eject(mount, name: name) })
-    check(ejected == .ejected, "with nothing holding it, the drive ejects: \(ejected)")
-    check(wait(5) { events.count("unmount") >= 1 } && !FileManager.default.fileExists(atPath: mount.path), "monitor reports the drive gone and the mount point is gone")
-    check(events.count("approval") >= 2, "each eject asked Pharos's monitor first (\(events.count("approval")) approvals)")
-    monitor.stop()
+    // Standing in for the app, which quits once the eject is arranged.
+    let quitting = Process()
+    quitting.executableURL = URL(fileURLWithPath: "/bin/sleep")
+    quitting.arguments = ["2"]
+    try! quitting.run()
+    try! VolumeEject.afterExit(of: quitting.processIdentifier, mount: mount, name: name)
+    Thread.sleep(forTimeInterval: 1)
+    check(quitting.isRunning && FileManager.default.fileExists(atPath: mount.path), "the drive waits for the app to exit")
+    check(wait(30) { !FileManager.default.fileExists(atPath: mount.path) }, "then it ejects")
 }
 
 @main struct Harness {
@@ -454,12 +267,11 @@ func ejectTests(_ args: [String]) {
         }
         let args = Array(CommandLine.arguments.dropFirst())
         switch args.first {
-        case "runtime": runtimeTests(Array(args.dropFirst()))
         case "volume": volumeTests(Array(args.dropFirst()))
         case "service": serviceTests(Array(args.dropFirst()))
         case "eject": ejectTests(Array(args.dropFirst()))
         default:
-            print("usage: harness runtime … | service … | volume … | eject …")
+            print("usage: harness service … | volume … | eject …")
             exit(2)
         }
         print(failures == 0 ? "PASS" : "\(failures) FAILED")

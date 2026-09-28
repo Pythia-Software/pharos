@@ -382,6 +382,7 @@
       row.append(note);
       if (other) row.append(node('p', 'pharos-note pharos-warn', 'Pharos cannot stop a capture by another process; the drive stays busy until it finishes.'));
       row.append(button(`Stop and eject ${drive.name}`, 'primary', () => eject(drive)), button('Cancel', '', () => { ejectState = null; renderPanel(); }));
+      row.append(quitNote(drive));
       return row;
     }
     const eject_ = button(ejectState?.phase === 'ejecting' ? ejectState.message : `Eject ${drive.name}`, 'primary', () => {
@@ -391,8 +392,12 @@
     eject_.disabled = ejectState?.phase === 'ejecting';
     row.append(eject_);
     if (ejectState?.phase === 'error') row.append(node('p', 'pharos-note pharos-error', ejectState.message));
+    if (ejectState?.phase !== 'ejecting') row.append(quitNote(drive));
     return row;
   }
+
+  // Pharos runs from the drive, as do the MCP servers agents start from it.
+  const quitNote = drive => node('p', 'pharos-note', `Ejecting quits Pharos and stops agents' Pharos MCP servers on this Mac; reconnect them once ${drive.name} is back.`);
 
   async function eject(drive) {
     const handler = nativeLibrary();
@@ -401,8 +406,8 @@
     renderPanel();
     try {
       await handler.postMessage({action: 'eject'});
-      // The app now shows the library as released and reports the eject.
-      ejectState = {phase: 'ejecting', message: `Ejecting ${drive.name}…`};
+      // The app now quits, and the drive ejects once it has.
+      ejectState = {phase: 'ejecting', message: `Quitting to eject ${drive.name}…`};
     } catch (error) {
       ejectState = {phase: 'error', message: error?.message || String(error)};
     }

@@ -96,7 +96,7 @@ func TestMCPLatencyReport(t *testing.T) {
 		}
 		return request["name"].(string)
 	}
-	server := newMCPServer(config.Path, "")
+	server := newMCPServer(config.Path)
 	call := func(request map[string]any) {
 		response := server.handle(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": request})
 		if text, isError := toolTextOf(response); isError {
