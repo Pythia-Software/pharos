@@ -5,11 +5,13 @@
 // sources onto the library (POST /api/capture), which is quick, so the drive
 // can be ejected, and offers to index them now (POST /api/index); indexing can
 // also run later, on any Mac. Settings → Sources keeps the source discovery
-// action with Capture and Index.
+// action with Capture and Index. A Mac already set up is offered, once, the
+// folders of sources a newer Pharos reads that its file has not decided on
+// (new_sources in /api/probe/status).
 (() => {
   'use strict';
   const DISMISSED = 'pharos-onboarding-dismissed:';
-  const KINDS = {claude: 'Claude Code', codex: 'Codex', conductor: 'Conductor', tl1: 'TL1', chatgpt: 'ChatGPT'};
+  const KINDS = {claude: 'Claude Code', codex: 'Codex', conductor: 'Conductor', tl1: 'TL1', chatgpt: 'ChatGPT', antigravity: 'Antigravity'};
   const CSS = `
 .pharos-onboard-backdrop{position:fixed;inset:0;z-index:9000;display:grid;place-items:center;padding:24px;background:color-mix(in srgb,#000 42%,transparent)}
 .pharos-onboard{width:min(780px,100%);max-height:calc(100vh - 48px);display:flex;flex-direction:column;background:var(--panel,#fff);color:var(--ink,#222);border:1px solid var(--line,#ccc);border-radius:16px;box-shadow:0 24px 70px #0006;overflow:hidden}
@@ -117,7 +119,8 @@
 
   function close() { document.getElementById('pharosOnboarding')?.remove(); }
 
-  function openPanel(status, onboarding) {
+  // offering is set when the panel was opened to offer new_sources.
+  function openPanel(status, onboarding, offering = false) {
     close();
     const label = hostLabel(status);
     const backdrop = node('div', 'pharos-onboard-backdrop'), dialog = node('section', 'pharos-onboard');
@@ -125,18 +128,18 @@
     dialog.setAttribute('role', 'dialog');
     dialog.setAttribute('aria-modal', 'true');
     dialog.setAttribute('aria-labelledby', 'pharosOnboardTitle');
-    const heading = onboarding ? (status.known_host ? `Set up sources for ${label}` : `New Mac detected: ${label}`) : `Conversation sources on ${label}`;
+    const heading = onboarding ? (status.known_host ? `Set up sources for ${label}` : `New Mac detected: ${label}`) : offering ? `New sources on ${label}` : `Conversation sources on ${label}`;
     const title = node('h2', '', heading);
     title.id = 'pharosOnboardTitle';
-    const intro = node('p', 'pharos-onboard-intro', (onboarding ? `This library has not been set up on ${label} yet. ` : '') +
-      'Pharos looked only in the usual places where Claude Code, Codex, Conductor, and TL1 keep conversations; it does not search the rest of your home folder, and nothing is indexed until you add it. ' +
+    const intro = node('p', 'pharos-onboard-intro', (onboarding ? `This library has not been set up on ${label} yet. ` : offering ? 'This version of Pharos can read conversations from more places, and some are on this Mac. ' : '') +
+      'Pharos looked only in the usual places where Claude Code, Codex, Antigravity, Conductor, and TL1 keep conversations; it does not search the rest of your home folder, and nothing is indexed until you add it. ' +
       `Your choice is saved in ${status.host_file_display} inside the library and applies only to this Mac.`);
     const body = node('div', 'pharos-onboard-body'), actions = node('div', 'pharos-onboard-actions');
     body.append(node('p', 'pharos-muted', 'Looking for conversations on this Mac…'));
-    const later = node('button', '', onboarding ? 'Not now' : 'Close');
+    const later = node('button', '', onboarding || offering ? 'Not now' : 'Close');
     later.type = 'button';
     later.onclick = () => {
-      if (onboarding) sessionStorage.setItem(DISMISSED + status.host?.id, '1');
+      if (onboarding || offering) sessionStorage.setItem(DISMISSED + status.host?.id, '1');
       close();
     };
     actions.append(later);
@@ -145,11 +148,11 @@
     backdrop.addEventListener('keydown', event => { if (event.key === 'Escape') later.click(); });
     document.body.append(backdrop);
     later.focus();
-    call('/api/probe').then(report => renderReport(report, onboarding, body, actions, later))
+    call('/api/probe').then(report => renderReport(report, onboarding, body, actions, later, offering))
       .catch(error => body.replaceChildren(node('p', 'pharos-error', `Could not look for sources: ${error.message}`)));
   }
 
-  function renderReport(report, onboarding, body, actions, later) {
+  function renderReport(report, onboarding, body, actions, later, offering) {
     const choices = [], list = node('div');
     report.candidates.forEach((candidate, index) => list.append(candidateRow(candidate, index, choices)));
     const found = report.candidates.some(candidate => candidate.acceptable && candidate.status === 'found');
@@ -161,8 +164,8 @@
     const selected = () => choices.filter(choice => choice.box.checked && !choice.box.disabled);
     const update = () => {
       const count = selected().length;
-      add.textContent = count ? `Add ${plural(count, 'source')}` : onboarding ? 'Continue without adding' : 'Add sources';
-      add.disabled = !count && !onboarding;
+      add.textContent = count ? `Add ${plural(count, 'source')}` : onboarding || offering ? 'Continue without adding' : 'Add sources';
+      add.disabled = !count && !onboarding && !offering;
     };
     choices.forEach(choice => choice.box.addEventListener('change', update));
     update();
@@ -175,7 +178,7 @@
           accept.push(name);
           const custom = choice.input?.value.trim();
           if (custom && custom !== name) names[name] = custom;
-        } else if (onboarding && !choice.candidate.configured && choice.candidate.status === 'found') {
+        } else if ((onboarding || offering) && !choice.candidate.configured && choice.candidate.status === 'found') {
           // Remembered as paused sources, so this Mac is not asked again.
           decline.push(name);
         }
@@ -358,6 +361,8 @@
   sheet.textContent = CSS;
   document.head.append(sheet);
   refreshNote().then(status => {
-    if (status?.needs_onboarding && !sessionStorage.getItem(DISMISSED + status.host?.id)) openPanel(status, true);
+    if (!status || sessionStorage.getItem(DISMISSED + status.host?.id)) return;
+    if (status.needs_onboarding) openPanel(status, true);
+    else if (status.library && status.new_sources > 0) openPanel(status, false, true);
   });
 })();

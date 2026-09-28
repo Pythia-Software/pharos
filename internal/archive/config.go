@@ -445,6 +445,18 @@ name = "claude"
 kind = "claude"
 path = "~/.claude/projects"
 enabled = false
+
+[[sources]]
+name = "antigravity"
+kind = "antigravity"
+path = "~/.gemini/antigravity"
+enabled = false
+
+[[sources]]
+name = "antigravity-cli"
+kind = "antigravity"
+path = "~/.gemini/antigravity-cli"
+enabled = false
 `
 
 func InitConfig(path string) error {

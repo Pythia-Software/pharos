@@ -193,6 +193,10 @@
               "label": "ChatGPT"
             },
             {
+              "value": "antigravity",
+              "label": "Antigravity"
+            },
+            {
               "value": "canonical",
               "label": "Canonical"
             }
@@ -230,6 +234,10 @@
             {
               "value": "chatgpt",
               "label": "ChatGPT"
+            },
+            {
+              "value": "antigravity",
+              "label": "Antigravity"
             },
             {
               "value": "canonical",

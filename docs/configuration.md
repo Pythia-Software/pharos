@@ -327,6 +327,7 @@ storage, other apps' containers, Mail, Messages, and other volumes.
 | --- | --- |
 | Claude Code | `$CLAUDE_CONFIG_DIR/projects`, `~/.claude/projects`, `~/.config/claude/projects`, and any `~/.claude*/projects` (for example `~/.claude-work`) that holds transcripts |
 | Codex | `$CODEX_HOME` and `~/.codex`, when they have `sessions/` or `archived_sessions/` |
+| Antigravity | `~/.gemini/antigravity` (the app), `~/.gemini/antigravity-cli` (`agy`), `~/.gemini/antigravity-ide`, and any other `~/.gemini/antigravity*` folder with a `brain/` of conversations; each is its own source of kind `antigravity` |
 | Conductor | `~/Library/Application Support/com.conductor.app`, when a database at its top level has session and message tables (only table names are read) |
 | TL1 | `~/.tl1/registry.json`, or for TL1 releases before it `~/.tl1/workspaces.json`; installations in a temporary directory or with missing files are skipped, as the TL1 adapter does |
 | ChatGPT | nothing on disk: export your data from ChatGPT and add a source for the folder holding `conversations.json` |
@@ -349,7 +350,10 @@ Conductor, installations for TL1), their size and date range, and:
 - Whether it is already configured, and as which source.
 
 Checked locations become enabled sources and unchecked ones paused sources, so
-the Mac is not asked again; enable those later in Settings → Sources. The choice
+the Mac is not asked again; enable those later in Settings → Sources. When a
+newer Pharos learns to read a new kind of source (Antigravity, so far), a Mac
+already set up is offered, once, the folders of that kind no source covers yet:
+the app opens **New sources on <name>**, and `add-this-mac` lists them too. The choice
 is written, atomically, to `hosts/<host-id>.toml` in the library:
 
 ```toml
@@ -614,6 +618,7 @@ captures/<host-id>/
 | --- | --- |
 | `claude` | every `*.jsonl` under the path, including `<session>/subagents/**` |
 | `codex` | `*.jsonl` under `sessions/` and `archived_sessions/`, and `rollout*` files |
+| `antigravity` | each conversation's `brain/<id>/.system_generated/logs/transcript_full.jsonl` (or `transcript.jsonl` when that is all there is), `annotations/*.pbtxt` titles, and snapshots of `conversation_summaries.db` and of each conversation's `conversations/<id>.db` (its model requests and token usage) |
 | `conductor` | a snapshot of each SQLite database that has session and message tables (not, for example, `cache.db`) |
 | `tl1` | the registry, then for each installation the adapter reads a snapshot of its database (`files/installations/<id>/`), its `transcripts/**/*.jsonl`, and procedural attempts' script logs (`<attempt>-script.log`, `-script.stderr.log`, `-script.stdout.log`) |
 | `canonical`, `tl1-export`, `chatgpt-export` | the export file, or the directory's `*.json` (`conversations.json` for ChatGPT) |

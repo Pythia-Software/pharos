@@ -61,6 +61,10 @@ type ProbeStatus struct {
 	NeedsOnboarding bool   `json:"needs_onboarding"`
 	HostSources     int    `json:"host_sources"`
 	SharedSources   int    `json:"shared_sources"`
+	// NewSources counts conversation folders of kinds this Mac's sources
+	// file predates: Antigravity's, when no source covers them yet. Declined
+	// ones are written as paused sources, so they are not counted again.
+	NewSources int `json:"new_sources"`
 }
 
 type ProbeReport struct {
@@ -166,7 +170,7 @@ var probeTempDirs = func() []string {
 	return dirs
 }
 
-func probeStatus(config Config, catalog *Catalog) ProbeStatus {
+func probeStatus(home string, config Config, catalog *Catalog) ProbeStatus {
 	host := currentHost()
 	status := ProbeStatus{Library: config.Library, Host: host, HostFile: hostConfigPath(config)}
 	if status.HostFile != "" {
@@ -180,6 +184,14 @@ func probeStatus(config Config, catalog *Catalog) ProbeStatus {
 			status.HostSources++
 		} else {
 			status.SharedSources++
+		}
+	}
+	if status.HostFileExists {
+		for _, dir := range antigravityDirs(home) {
+			resolved, err := resolveUnprotected(home, dir)
+			if err == nil && configuredSource(config, home, "antigravity", resolved) == nil {
+				status.NewSources++
+			}
 		}
 	}
 	if catalog != nil {
@@ -197,7 +209,7 @@ func ProbeSources(config Config, catalog *Catalog) ProbeReport {
 
 func probeSources(home string, config Config, catalog *Catalog) ProbeReport {
 	started := time.Now()
-	report := ProbeReport{ProbeStatus: probeStatus(config, catalog), Home: home, Environment: []ProbeVariable{},
+	report := ProbeReport{ProbeStatus: probeStatus(home, config, catalog), Home: home, Environment: []ProbeVariable{},
 		Candidates: []ProbeCandidate{}, Checked: []ProbeLocation{}, TimingsMS: map[string]int64{}}
 	run := &probeRun{home: home, config: config, report: &report, seen: map[string]*ProbeCandidate{}, deadline: started.Add(probeWalkBudget)}
 	type shellResult struct {
@@ -230,6 +242,15 @@ func probeSources(home string, config Config, catalog *Catalog) ProbeReport {
 		}
 	})
 	timed("codex", func() { run.codex(filepath.Join(home, ".codex"), "default location") })
+	timed("antigravity", func() {
+		for _, dir := range antigravityDirs(home) {
+			foundBy := "~/.gemini/antigravity* directory"
+			if antigravityProducts[filepath.Base(dir)] != "" {
+				foundBy = "default location"
+			}
+			run.antigravity(dir, foundBy)
+		}
+	})
 	timed("conductor", func() {
 		run.conductor(filepath.Join(home, "Library", "Application Support", "com.conductor.app"), "default location")
 	})
@@ -411,6 +432,45 @@ func (r *probeRun) codex(dir, foundBy string) {
 		if firstErr != nil && total.files > 0 {
 			candidate.Status, candidate.Readable, candidate.Detail = "found", true, "Partly readable: "+firstErr.Error()
 		}
+	}
+	r.keep(candidate)
+}
+
+// antigravityDirs lists Google Antigravity's app data directories: those in
+// ~/.gemini named antigravity (the app), antigravity-cli (agy), or
+// antigravity-ide, or any other antigravity* folder holding conversations.
+func antigravityDirs(home string) []string {
+	root := filepath.Join(home, ".gemini")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	dirs := []string{}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "antigravity") && (entry.IsDir() || entry.Type()&fs.ModeSymlink != 0) && antigravityDataDir(filepath.Join(root, entry.Name())) {
+			dirs = append(dirs, filepath.Join(root, entry.Name()))
+		}
+	}
+	return dirs
+}
+
+func (r *probeRun) antigravity(dir, foundBy string) {
+	candidate, resolved := r.locate("antigravity", dir, foundBy)
+	if candidate == nil {
+		return
+	}
+	candidate.Unit, candidate.baseName = "conversation", filepath.Base(dir)
+	if candidate.Status == "found" {
+		// A conversation is a brain/<id> folder with a transcript.
+		stats, err := walkTranscripts(filepath.Join(resolved, "brain"), r.deadline, func(relative string) (string, bool) {
+			parts := strings.Split(relative, "/")
+			if len(parts) == 4 && parts[1] == ".system_generated" && parts[2] == "logs" && parts[3] == "transcript_full.jsonl" {
+				return parts[0], true
+			}
+			return "", false
+		})
+		stats.apply(candidate, err)
+		candidate.Detail = antigravityProducts[filepath.Base(dir)]
 	}
 	r.keep(candidate)
 }
@@ -670,25 +730,15 @@ func (r *probeRun) name() {
 	}
 	hostFile := r.report.HostFile
 	for _, candidate := range r.candidates {
-		for _, source := range r.config.Sources {
-			if !strings.EqualFold(source.Kind, candidate.Kind) || source.Path == "" {
-				continue
+		if source := configuredSource(r.config, r.home, candidate.Kind, candidate.resolved); source != nil {
+			scope := "config"
+			if hostFile != "" && source.File == hostFile {
+				scope = "host"
+			} else if r.config.Library {
+				scope = "library"
 			}
-			path := filepath.Clean(source.Path)
-			if resolved, err := resolveUnprotected(r.home, path); err == nil || errors.Is(err, errProtected) {
-				path = resolved
-			}
-			if pathWithin(path, candidate.resolved) || pathWithin(candidate.resolved, path) {
-				scope := "config"
-				if hostFile != "" && source.File == hostFile {
-					scope = "host"
-				} else if r.config.Library {
-					scope = "library"
-				}
-				candidate.Configured = &ProbeConfigured{Name: source.Name, Enabled: source.Enabled, Scope: scope, File: source.File}
-				candidate.Name = source.Name
-				break
-			}
+			candidate.Configured = &ProbeConfigured{Name: source.Name, Enabled: source.Enabled, Scope: scope, File: source.File}
+			candidate.Name = source.Name
 		}
 	}
 	for _, candidate := range r.candidates {
@@ -703,6 +753,24 @@ func (r *probeRun) name() {
 		taken[name] = true
 		candidate.Name = name
 	}
+}
+
+// configuredSource is the configured source of kind that covers resolved, a
+// location on this Mac, or holds it, if any.
+func configuredSource(config Config, home, kind, resolved string) *SourceConfig {
+	for index, source := range config.Sources {
+		if !strings.EqualFold(source.Kind, kind) || source.Path == "" {
+			continue
+		}
+		path := filepath.Clean(source.Path)
+		if found, err := resolveUnprotected(home, path); err == nil || errors.Is(err, errProtected) {
+			path = found
+		}
+		if pathWithin(path, resolved) || pathWithin(resolved, path) {
+			return &config.Sources[index]
+		}
+	}
+	return nil
 }
 
 // suggestedSourceName derives "claude-work" from ~/.claude-work and "claude"

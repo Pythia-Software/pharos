@@ -25,8 +25,8 @@
 
 ---
 
-Pharos gathers your conversations with Claude Code, Codex, Conductor, and ChatGPT
-exports into one searchable library on your Mac, or on an external drive that
+Pharos gathers your conversations with Claude Code, Codex, Google Antigravity
+(the app and the `agy` CLI), Conductor, and ChatGPT exports into one searchable library on your Mac, or on an external drive that
 moves between Macs. You can search past work by what you were trying to do, see
 what each piece of work cost in tokens and dollars, find which tools and
 commands your agents spend their context on, and give your agents read-only
@@ -88,7 +88,7 @@ configuration and catalog alone.
 ### 2. Choose your sources
 
 The first time you open the library on a Mac, Pharos checks the handful of
-places where Claude Code, Codex, and Conductor keep their conversations. It
+places where Claude Code, Codex, Antigravity, and Conductor keep their conversations. It
 never scans the rest of your home folder. It shows what it found: how many
 sessions, how far back they go, and a warning when a tool is set to delete old
 transcripts. Nothing is indexed until you pick.

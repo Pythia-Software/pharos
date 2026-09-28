@@ -940,7 +940,7 @@ func (c *Catalog) suppressMirrors(rows []map[string]any) []map[string]any {
 		}
 		groups[root] = append(groups[root], byID[id])
 	}
-	priority := map[string]int{"tl1": 0, "tl1-export": 0, "codex": 1, "claude": 1, "chatgpt": 1, "conductor": 9}
+	priority := map[string]int{"tl1": 0, "tl1-export": 0, "codex": 1, "claude": 1, "chatgpt": 1, "antigravity": 1, "conductor": 9}
 	output := []map[string]any{}
 	for _, root := range roots {
 		group := groups[root]
