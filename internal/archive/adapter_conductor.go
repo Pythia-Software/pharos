@@ -519,7 +519,7 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 		messages = append(messages, MessageRecord{NativeID: sid + ":context-snapshot", Role: "system", Kind: "metadata", Text: jsonText(map[string]any{"type": "context_snapshot", "context_token_count": session["context_token_count"], "context_used_percent": session["context_used_percent"]}), Model: currentModel, CreatedAt: updated, EvidenceLocator: "sqlite:" + path + ":sessions:" + sid, Selected: true})
 	}
 	aliases = uniqueStrings(append(aliases, sid))
-	return WorkspaceRecord{SourceID: sid, SourceKind: "conductor", Title: title, Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: updated, Location: location, Repository: repository, Metadata: metadata, PRs: prs, Metrics: metrics, Changes: changes, Conversations: []ConversationRecord{{NativeID: "conductor:" + sid, Provider: provider, Account: a.config.Account, Aliases: aliases, Origin: "sqlite:" + path, Coverage: conductorExtractor, Messages: messages, Model: model, StartedAt: started, EndedAt: updated}}}, nil
+	return WorkspaceRecord{SourceID: sid, SourceKind: "conductor", Title: title, Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: updated, Location: location, Repository: repository, Metadata: metadata, PRs: prs, Metrics: metrics, Changes: changes, Conversations: []ConversationRecord{{NativeID: "conductor:" + sid, Provider: provider, Account: a.config.Account, Aliases: aliases, Origin: "sqlite:" + path, Harness: "conductor", Coverage: conductorExtractor, Messages: messages, Model: model, StartedAt: started, EndedAt: updated}}}, nil
 }
 
 // conductorSender names who sent a Conductor message row. Conductor records

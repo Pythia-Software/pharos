@@ -203,6 +203,7 @@ func capturedHost(dir, id string) Host {
 // only the capture, never the original paths, and stops between records once
 // ctx is cancelled; the next run resumes.
 func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progress ProgressFunc) IngestResult {
+	c.setCaptureRoot(filepath.Dir(filepath.Dir(target.Dir)))
 	result := IngestResult{Source: target.Source, Host: target.Host.ID}
 	fail := func(err error) IngestResult {
 		result.Error = err.Error()

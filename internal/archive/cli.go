@@ -160,6 +160,7 @@ func Run(arguments []string) error {
 	defer catalog.Close()
 	catalog.RepositoryAliases = config.RepositoryAliases
 	catalog.RepositorySeparate = config.RepositorySeparate
+	catalog.setCaptureRoot(config.CaptureRoot)
 	switch command {
 	case "serve":
 		openBrowser := false

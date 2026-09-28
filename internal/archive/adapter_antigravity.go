@@ -25,7 +25,11 @@ import (
 // each model request's model and token usage, which are read from it (see
 // adapter_antigravity_usage.go).
 
-type antigravityAdapter struct{ baseAdapter }
+type antigravityAdapter struct {
+	baseAdapter
+	installedVersions map[string]installedVersionObservation
+	installedVersion  func(string) string
+}
 
 // antigravityProducts names the apps by their data directories.
 var antigravityProducts = map[string]string{"antigravity": "Antigravity", "antigravity-cli": "Antigravity CLI", "antigravity-ide": "Antigravity IDE"}
@@ -568,10 +572,13 @@ func (a *antigravityAdapter) record(id, path string, summary antigravitySummary,
 	if len(summary.Workspaces) > 1 {
 		metadata["workspaces"] = summary.Workspaces
 	}
+	installed := a.installedHarnessVersion(app)
+	versionFirst, versionLast := "", ""
+	versionFirst, versionLast = installedVersionForActivity(installed, started, ended)
 	return WorkspaceRecord{SourceID: id, SourceKind: "antigravity", Title: defaultString(summary.Title, product+" "+short(id)), Account: a.config.Account, Purpose: purpose, Outcome: outcome,
 		ActivityAt: ended, Location: location, Repository: a.repository(location, ""), Metadata: metadata,
 		Conversations: []ConversationRecord{{NativeID: id, Provider: "antigravity", Account: a.config.Account, Model: defaultString(served, selected), ParentNativeID: summary.Parent, AgentDepth: depth,
-			AgentNickname: summary.Agent, Origin: origin, Coverage: "complete", Messages: messages, StartedAt: started, EndedAt: ended}}}
+			AgentNickname: summary.Agent, Origin: origin, Harness: antigravityHarness(app), HarnessVersionFirst: versionFirst, HarnessVersionLast: versionLast, HarnessVersionSource: "installed-app", Coverage: "complete", Messages: messages, StartedAt: started, EndedAt: ended}}}
 }
 
 // antigravityMedia lists the media types of a step's attachments; the bytes

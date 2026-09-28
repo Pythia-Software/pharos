@@ -44,6 +44,7 @@ func runAddThisMacCLI(config Config, args []string, in io.Reader, out io.Writer)
 		return err
 	}
 	defer catalog.Close()
+	catalog.setCaptureRoot(config.CaptureRoot)
 
 	report := ProbeSources(config, catalog)
 	fmt.Fprintln(out, "Found on this Mac:")

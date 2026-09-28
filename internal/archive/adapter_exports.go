@@ -81,7 +81,7 @@ func (a *chatGPTAdapter) Discover(emit func(WorkspaceRecord) error) error {
 		if nativeID == "" {
 			return fmt.Errorf("ChatGPT export %s conversation %d has no ID", file, index)
 		}
-		record := WorkspaceRecord{Observed: version, SourceID: nativeID, SourceKind: "chatgpt", Title: defaultString(row["title"], "ChatGPT "+short(nativeID)), Account: a.config.Account, ActivityAt: iso(row["update_time"]), Metadata: map[string]any{}, Conversations: []ConversationRecord{{NativeID: nativeID, Provider: "chatgpt", Account: a.config.Account, Origin: "user-export", Coverage: "complete", Messages: messages, StartedAt: iso(row["create_time"]), EndedAt: iso(row["update_time"]), Observed: version}}}
+		record := WorkspaceRecord{Observed: version, SourceID: nativeID, SourceKind: "chatgpt", Title: defaultString(row["title"], "ChatGPT "+short(nativeID)), Account: a.config.Account, ActivityAt: iso(row["update_time"]), Metadata: map[string]any{}, Conversations: []ConversationRecord{{NativeID: nativeID, Provider: "chatgpt", Account: a.config.Account, Origin: "user-export", Harness: "chatgpt-export", Coverage: "complete", Messages: messages, StartedAt: iso(row["create_time"]), EndedAt: iso(row["update_time"]), Observed: version}}}
 		if err := emit(record); err != nil {
 			return err
 		}

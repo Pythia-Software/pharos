@@ -48,6 +48,8 @@
     { "name": "pr_numbers", "label": "GitHub PRs", "type": "text", "group": "Links", "aliases": ["PR"], "render": "pull_requests", "bindings": { "postgres": { "expr": "pr_numbers", "synthetic": true } } },
     { "name": "main_merge_title", "label": "origin/main", "type": "text", "group": "Links", "render": "main_integration", "bindings": { "postgres": { "expr": "w.main_merge_title" } } },
     { "name": "providers", "label": "Providers", "type": "text", "group": "Context", "select": { "default": false }, "bindings": { "postgres": { "expr": "providers", "synthetic": true } } },
+    { "name": "harnesses", "label": "Harnesses", "type": "text", "group": "Context", "select": { "default": false }, "bindings": { "postgres": { "expr": "harnesses", "synthetic": true } } },
+    { "name": "harness_versions", "label": "Harness versions", "type": "text", "group": "Context", "select": { "default": false }, "bindings": { "postgres": { "expr": "harness_versions", "synthetic": true } } },
     { "name": "models", "label": "Models", "type": "text", "group": "Context", "bindings": { "postgres": { "expr": "models", "synthetic": true } } },
     { "name": "changed_files", "label": "Changed file path", "type": "text", "group": "Changes", "select": { "enabled": false }, "aliases": ["file", "path"], "bindings": { "postgres": { "expr": "changed_files", "synthetic": true } } },
     { "name": "error_types", "label": "Error type", "type": "text", "group": "Metrics", "select": { "enabled": false }, "bindings": { "postgres": { "expr": "error_types", "synthetic": true } } },

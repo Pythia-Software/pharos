@@ -60,6 +60,7 @@ func NewServer(config Config, catalog *Catalog) *Server {
 		if config.ResolveRepositoryForge {
 			server.spawn(func(ctx context.Context) { _ = catalog.RefreshRepositoryForgeIDs(ctx) })
 		}
+		catalog.setCaptureRoot(config.CaptureRoot)
 	}
 	return server
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +21,8 @@ type Catalog struct {
 	DB                 *sql.DB
 	RepositoryAliases  map[string]string
 	RepositorySeparate []string
+	captureRootMu      sync.RWMutex
+	captureRoot        string
 	library            libraryCache
 	find               libraryFindCache
 	derived            derivedCache
@@ -54,12 +57,24 @@ func OpenCatalog(path string) (*Catalog, error) {
 	// snapshot is being parsed without creating unbounded lock contention.
 	db.SetMaxOpenConns(4)
 	db.SetMaxIdleConns(4)
-	catalog := &Catalog{Path: path, DB: db}
+	catalog := &Catalog{Path: path, DB: db, captureRoot: filepath.Join(filepath.Dir(path), "captures")}
 	if err := catalog.initializeLocked(true); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return catalog, nil
+}
+
+func (c *Catalog) setCaptureRoot(root string) {
+	c.captureRootMu.Lock()
+	c.captureRoot = root
+	c.captureRootMu.Unlock()
+}
+
+func (c *Catalog) captureRootPath() string {
+	c.captureRootMu.RLock()
+	defer c.captureRootMu.RUnlock()
+	return c.captureRoot
 }
 
 func filepathDir(path string) string {
@@ -167,6 +182,10 @@ func (c *Catalog) Initialize() error {
 		{"conversations", "agent_depth", "ALTER TABLE conversations ADD COLUMN agent_depth INTEGER NOT NULL DEFAULT 0"},
 		{"conversations", "agent_path", "ALTER TABLE conversations ADD COLUMN agent_path TEXT"},
 		{"conversations", "agent_nickname", "ALTER TABLE conversations ADD COLUMN agent_nickname TEXT"},
+		{"conversations", "harness", "ALTER TABLE conversations ADD COLUMN harness TEXT"},
+		{"conversations", "harness_version_first", "ALTER TABLE conversations ADD COLUMN harness_version_first TEXT"},
+		{"conversations", "harness_version_last", "ALTER TABLE conversations ADD COLUMN harness_version_last TEXT"},
+		{"conversations", "harness_version_source", "ALTER TABLE conversations ADD COLUMN harness_version_source TEXT"},
 		{"workspaces", "reclamation_authority", "ALTER TABLE workspaces ADD COLUMN reclamation_authority INTEGER NOT NULL DEFAULT 0"},
 		{"workspaces", "main_merge_commit", "ALTER TABLE workspaces ADD COLUMN main_merge_commit TEXT"},
 		{"workspaces", "main_merge_title", "ALTER TABLE workspaces ADD COLUMN main_merge_title TEXT"},

@@ -856,7 +856,7 @@ func parseCodexExec(path, origin string) (ConversationRecord, bool, error) {
 		return ConversationRecord{}, false, nil
 	}
 	nativeID := defaultString(threadID, strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)))
-	return ConversationRecord{NativeID: nativeID, Provider: "codex", Origin: origin, Coverage: "complete", Messages: messages, Observed: info.ModTime().UnixNano()}, true, nil
+	return ConversationRecord{NativeID: nativeID, Provider: "codex", Origin: origin, Harness: "tl1", Coverage: "complete", Messages: messages, Observed: info.ModTime().UnixNano()}, true, nil
 }
 
 func tl1FlavorRow(installationID string, row map[string]any) map[string]any {
