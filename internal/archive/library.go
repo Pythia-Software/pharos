@@ -208,11 +208,11 @@ func (c *Catalog) ensureLibrary() error {
 // RefreshLibrary recomputes up to batch dirty workspaces in one short write
 // transaction and reports how many it cleared.
 func (c *Catalog) RefreshLibrary(ctx context.Context, batch int) (int, error) {
-	tx, err := c.DB.BeginTx(ctx, nil)
+	tx, finish, err := c.beginTrackedWrite(ctx, "library-refresh")
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback(); finish() }()
 	// Write first so the transaction takes the write lock (honoring
 	// busy_timeout) instead of failing to upgrade a stale read snapshot.
 	rows, err := queryMapsContext(ctx, tx, `DELETE FROM workspace_library_dirty WHERE workspace_id IN

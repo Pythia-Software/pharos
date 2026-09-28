@@ -29,6 +29,7 @@ type Catalog struct {
 	// authorship tracks the human-authorship rebuild.
 	authorship authorshipState
 	wal        walBound
+	writers    catalogWriteTracker
 	now        func() time.Time
 	// background runs the catalog's own background work (the authorship
 	// rebuild). The service sets it to its spawn, so a release cancels the
