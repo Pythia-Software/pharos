@@ -13,6 +13,8 @@ var (
 	toolFileLine      = regexp.MustCompile(`^\S+\.(?:go|rs|ts|py|js):\d+(?::\d+)?: `)
 	toolFailureLine   = regexp.MustCompile(`^(?:panic:|--- FAIL: \S+|FAIL\t|(?:error|Error|ERROR|fatal)[:\[]|E  |FAILED |usage:)|command not found|No such file or directory`)
 	toolTestMarker    = regexp.MustCompile(`(?m)(?:--- FAIL:|^FAIL\t|test result: FAILED|^FAILED |={2,} FAILURES ={2,}|\b[1-9]\d* failed\b|Tests:.*[1-9]\d* failed|\*\* TEST FAILED \*\*)`)
+	toolCodecNumber   = regexp.MustCompile(`(?i)utf-\d+`)
+	toolHexByte       = regexp.MustCompile(`0x[0-9a-fA-F]+`)
 	toolLineNumber    = regexp.MustCompile(`(?i)(\(eval\)|zsh|bash|sh):\d+:|:[0-9]+(?::[0-9]+)?:`)
 )
 
@@ -82,6 +84,8 @@ func toolErrorSignature(content string) string {
 		}
 		return s
 	})
+	selected = toolCodecNumber.ReplaceAllString(selected, "utf-<n>")
+	selected = toolHexByte.ReplaceAllString(selected, "0x<id>")
 	return tl1Signature(strings.TrimSpace(selected))
 }
 

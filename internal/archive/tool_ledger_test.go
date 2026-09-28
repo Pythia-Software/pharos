@@ -321,6 +321,9 @@ func TestToolErrorSignatureAndTestFailure(t *testing.T) {
 			t.Errorf("%q: %q, want %q", test.input, got, test.want)
 		}
 	}
+	if got := toolErrorSignature("UnicodeDecodeError: 'utf-8' codec can't decode byte 0x8b"); !strings.Contains(got, "utf-<n>") || !strings.Contains(got, "0x<id>") {
+		t.Fatalf("codec signature: %q", got)
+	}
 	code := int64(1)
 	call := toolCall{Status: "error", ExitCode: &code, CommandCategory: "test"}
 	if !toolTestFailure(&call, "failed") {
