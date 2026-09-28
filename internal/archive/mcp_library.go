@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime/debug"
 	"strconv"
@@ -20,46 +19,38 @@ import (
 )
 
 // An agent client keeps its MCP server process for the whole session, often
-// days, while the library's drive may be ejected, unplugged, and carried to
-// another Mac. So the server never holds the catalog between requests (an open
-// file keeps Finder from ejecting the drive) and never fails for good. Each
+// days. So the server never holds the catalog between requests, which would
+// keep a release (see mcpRPC) from closing it, and never fails for good. Each
 // tools/list and tools/call reloads the configuration, then goes to the running
 // Pharos service for it, whose open catalog and warm Library cache answer and
 // record the call, or, when no service answers, opens the catalog for that one
 // request. While the library is unavailable, initialize and tools/list still
-// answer and tool calls fail with a "not connected" error; the next call after
-// the drive returns succeeds.
+// answer and tool calls fail with a "not connected" error.
 type mcpServer struct {
-	configPath  string // --config; "" resolves as LoadConfig does
-	libraryJSON string // --library-json, used when configPath is ""
-	identity    func(string) string
-	client      *http.Client
-	verified    string // library directory last checked against volume_id
+	configPath string // --config; "" resolves as LoadConfig does
+	identity   func(string) string
+	client     *http.Client
+	verified   string // library directory last checked against volume_id
 	// answer is handleMCP and restart restartMCP; tests replace them.
 	answer  func(*Catalog, map[string]any) map[string]any
 	restart func(pending []byte) error
 	faulted bool // a direct call hit a memory fault (see direct)
 }
 
-func newMCPServer(configPath, libraryJSON string) *mcpServer {
+func newMCPServer(configPath string) *mcpServer {
 	// No proxy: the request carries the API token.
 	transport := &http.Transport{DialContext: (&net.Dialer{Timeout: time.Second}).DialContext, IdleConnTimeout: 30 * time.Second}
-	// Resolved now: the launcher starts runtime/current/..., which a newer
-	// build may repoint, and a restart must not switch builds mid-session.
-	executable, err := os.Executable()
-	if resolved, resolveErr := filepath.EvalSymlinks(executable); err == nil && resolveErr == nil {
-		executable = resolved
-	}
-	return &mcpServer{configPath: configPath, libraryJSON: libraryJSON, identity: volumeIdentity,
+	executable := runningExecutable()
+	return &mcpServer{configPath: configPath, identity: volumeIdentity,
 		client: &http.Client{Transport: transport, Timeout: 2 * time.Minute}, answer: handleMCP,
 		restart: func(pending []byte) error { return restartMCP(executable, pending) }}
 }
 
-// RunMCP serves MCP over stdio for the library that configPath or, without
-// one, the library.json at libraryJSON names.
-func RunMCP(configPath, libraryJSON string, input io.Reader, output io.Writer) error {
+// RunMCP serves MCP over stdio for the library or install that configPath
+// names or, without one, that LoadConfig finds.
+func RunMCP(configPath string, input io.Reader, output io.Writer) error {
 	quickHostDetection = true
-	return newMCPServer(configPath, libraryJSON).run(input, output)
+	return newMCPServer(configPath).run(input, output)
 }
 
 // mcpPendingEnv hands input read ahead but not yet answered to the process
@@ -126,20 +117,11 @@ func (m *mcpServer) dispatch(request map[string]any) (map[string]any, error) {
 }
 
 func (m *mcpServer) config() (Config, error) {
-	path, volume := m.configPath, ""
-	if path == "" && m.libraryJSON != "" {
-		pointer, err := readLibraryPointer(m.libraryJSON)
-		if err != nil {
-			m.verified = ""
-			return Config{}, err
-		}
-		path, volume = filepath.Join(pointer.LibraryDir, libraryConfigName), pointer.VolumeUUID
-	}
-	config, err := loadConfig(path, false)
+	config, err := loadConfig(m.configPath, false)
 	if err != nil {
 		m.verified = ""
 		if _, statErr := os.Stat(config.Path); errors.Is(statErr, os.ErrNotExist) {
-			return config, libraryNotConnected(config.Path, volume)
+			return config, libraryNotConnected(config.Path)
 		}
 	}
 	return config, err
@@ -147,16 +129,13 @@ func (m *mcpServer) config() (Config, error) {
 
 // libraryNotConnected explains a missing library file. A drive that is not
 // mounted leaves no /Volumes/NAME behind.
-func libraryNotConnected(path, volumeUUID string) error {
+func libraryNotConnected(path string) error {
 	reason := path + " is missing"
 	if rest, ok := strings.CutPrefix(path, "/Volumes/"); ok {
 		mount := "/Volumes/" + strings.SplitN(rest, "/", 2)[0]
 		if _, err := os.Stat(mount); errors.Is(err, os.ErrNotExist) {
 			reason = mount + " is not mounted"
 		}
-	}
-	if volumeUUID = strings.TrimPrefix(volumeUUID, "uuid:"); volumeUUID != "" {
-		reason += " (volume " + volumeUUID + ")"
 	}
 	return fmt.Errorf("Pharos library is not connected: %s", reason)
 }
@@ -242,7 +221,7 @@ func (m *mcpServer) direct(config Config, request map[string]any) (response map[
 	if errors.Is(err, os.ErrNotExist) {
 		if config.Library {
 			m.verified = ""
-			return nil, libraryNotConnected(config.CatalogPath, "")
+			return nil, libraryNotConnected(config.CatalogPath)
 		}
 		// Only a library refuses to start a missing catalog (see checkLibrary).
 		if err = config.EnsureDirs(); err == nil {
@@ -341,8 +320,7 @@ func sameFile(left, right string) bool {
 }
 
 // pharosSupportDir holds per-Mac state that must not live on the library
-// drive: the local copy of the app (runtime/), library.json, and the MCP
-// launcher. PHAROS_SUPPORT_DIR overrides it.
+// drive, such as host.json. PHAROS_SUPPORT_DIR overrides it.
 func pharosSupportDir() string {
 	if dir := os.Getenv("PHAROS_SUPPORT_DIR"); dir != "" {
 		if absolute, err := filepath.Abs(expandPath(dir)); err == nil {
@@ -354,135 +332,10 @@ func pharosSupportDir() string {
 	return filepath.Join(home, "Library", "Application Support", "Pharos")
 }
 
-// libraryPointer is <support>/library.json, which the Pharos app writes when
-// it runs from a library, and the service when it serves one (recordLibrary):
-//
-//	{"library_dir": "/Volumes/euclid/Pharos", "volume_uuid": "642C2C39-…", "updated_at": "…"}
-//
-// library_dir, the absolute directory holding library.toml, is required.
-// volume_uuid (bare or "uuid:"-prefixed) only names the drive in messages;
-// library.toml's volume_id is what the guard checks. Other fields are ignored.
-type libraryPointer struct {
-	LibraryDir string `json:"library_dir"`
-	VolumeUUID string `json:"volume_uuid"`
-}
-
-func readLibraryPointer(path string) (libraryPointer, error) {
-	var pointer libraryPointer
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return pointer, fmt.Errorf("Pharos library is not connected: no library has been opened on this Mac yet (%s is missing); open Pharos from its library drive", path)
-	} else if err != nil {
-		return pointer, err
+// shellQuote quotes value for a POSIX shell, unless it needs no quoting.
+func shellQuote(value string) string {
+	if value != "" && strings.Trim(value, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-./:=@%+,") == "" {
+		return value
 	}
-	if err := json.Unmarshal(data, &pointer); err != nil {
-		return pointer, fmt.Errorf("read %s: %w", path, err)
-	}
-	if !filepath.IsAbs(pointer.LibraryDir) {
-		return pointer, fmt.Errorf("%s: library_dir must be an absolute path, not %q", path, pointer.LibraryDir)
-	}
-	return pointer, nil
-}
-
-// recordLibrary writes <support>/library.json for a library being served,
-// with the fields the app's runtime copy writes, so the MCP launcher also
-// finds a library the app runs in place or the CLI serves. volume names the
-// external volume holding a directory ("" for the startup disk).
-func recordLibrary(support string, config Config, volume func(dir string) (uuid, name string)) error {
-	dir := filepath.Dir(config.Path)
-	uuid, name := volume(dir)
-	if pin, ok := strings.CutPrefix(config.VolumeID, "uuid:"); ok {
-		uuid = pin
-	}
-	data, err := json.MarshalIndent(map[string]string{"library_dir": dir, "volume_uuid": strings.ToUpper(uuid),
-		"volume_name": name, "updated_at": time.Now().UTC().Format(time.RFC3339)}, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(support, 0o755); err != nil {
-		return err
-	}
-	path := filepath.Join(support, "library.json")
-	temporary := fmt.Sprintf("%s.%d.tmp", path, os.Getpid())
-	if err := os.WriteFile(temporary, append(data, '\n'), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(temporary, path)
-}
-
-// libraryVolume is the UUID and name of the volume mounted under /Volumes
-// holding dir, as the app's LibraryVolume sees it.
-func libraryVolume(dir string) (uuid, name string) {
-	rest, ok := strings.CutPrefix(dir, "/Volumes/")
-	if !ok {
-		return "", ""
-	}
-	output, err := exec.Command("diskutil", "info", "-plist", "/Volumes/"+strings.SplitN(rest, "/", 2)[0]).Output()
-	if err != nil {
-		return "", ""
-	}
-	parsed, err := parsePlist(output)
-	info, _ := parsed.(map[string]any)
-	if err != nil || info == nil {
-		return "", ""
-	}
-	return plistString(info, "VolumeUUID"), plistString(info, "VolumeName")
-}
-
-func mcpLauncherPath(support string) string { return filepath.Join(support, "bin", "pharos-mcp") }
-
-// mcpLauncherScript runs the MCP server from this Mac's disk: a process
-// executing a binary on the library drive would keep the drive from ejecting
-// and die when it is unplugged.
-func mcpLauncherScript(support string) string {
-	return `#!/bin/sh
-# Pharos MCP server for agent clients, written by ` + "`pharos install-mcp`" + `.
-# Run it with no arguments. It runs Pharos from this Mac's disk, not from the
-# library drive, so the drive can be ejected while agents stay connected. The
-# Pharos app keeps these current:
-#   runtime/current  a local copy of the library's Pharos.app
-#   library.json     {"library_dir": "...", "volume_uuid": "..."}
-support=` + shellQuote(support) + `
-export PHAROS_SUPPORT_DIR="$support"
-pointer="$support/library.json"
-runtime="$support/runtime/current/Contents/MacOS/pharos"
-if [ -x "$runtime" ]; then
-	exec "$runtime" mcp --library-json "$pointer"
-fi
-library=$(/usr/bin/plutil -extract library_dir raw -o - "$pointer" 2>/dev/null)
-if [ -n "$library" ]; then
-	for binary in "$library"/*.app/Contents/MacOS/pharos; do
-		if [ -x "$binary" ]; then
-			echo "pharos-mcp: warning: there is no local Pharos runtime at $runtime, so this runs $binary from the library drive; unplugging the drive will stop this MCP server. Open Pharos on this Mac to install the runtime." >&2
-			exec "$binary" mcp --library-json "$pointer"
-		fi
-	done
-fi
-echo "pharos-mcp: cannot start: there is no local Pharos runtime at $runtime and no library drive is connected (see $pointer). Open Pharos from its library drive on this Mac." >&2
-exit 1
-`
-}
-
-func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'" }
-
-// InstallMCPLauncher writes the launcher agent clients run, unless it is
-// already current, and returns its path.
-func InstallMCPLauncher(support string) (string, error) {
-	path, script := mcpLauncherPath(support), mcpLauncherScript(support)
-	if current, err := os.ReadFile(path); err == nil && string(current) == script {
-		if info, err := os.Stat(path); err == nil && info.Mode().Perm()&0o111 != 0 {
-			return path, nil
-		}
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return "", err
-	}
-	temporary := path + ".tmp"
-	if err := os.WriteFile(temporary, []byte(script), 0o755); err != nil {
-		return "", err
-	}
-	if err := os.Chmod(temporary, 0o755); err != nil {
-		return "", err
-	}
-	return path, os.Rename(temporary, path)
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }

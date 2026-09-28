@@ -74,9 +74,9 @@ The bundled CLI can also initialize a portable library after copying the app:
 open "/Volumes/YOUR-DRIVE/Pharos/Pharos.app"
 ```
 
-If an MCP process is running directly from the old bundle, quit its client
-before replacing the app. MCP processes using a local runtime copy continue
-using that build until their clients restart them. The source checkout's
+A library's app runs from the drive, and so do the MCP servers agent clients
+start from it. Quit Pharos and those clients before replacing the app, then
+reconnect Pharos in each client. The source checkout's
 `macos/install-library.sh` remains useful for development builds and adoption
 from a per-user install.
 
@@ -91,10 +91,8 @@ default browser. The browser downloads the image; Finder and the user handle
 installation. Checks on launch show a notice only when a newer release exists.
 Nothing is downloaded in the background without a user action.
 
-The durable app in a portable library is the `Pharos.app` beside
-`library.toml`. Opening it launches a separate local runtime copy so that the
-library's drive can be ejected. Replace the durable copy on the drive when
-updating; replacing the running local copy would not last. An ad hoc signature
+The app in a portable library is the `Pharos.app` beside `library.toml`, and
+it runs from there; replace that copy when updating. An ad hoc signature
 changes with each build, so macOS may ask for access to the library drive
 again. Developer ID signing and notarization improve that experience, but are
 optional in the current release script.

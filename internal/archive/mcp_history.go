@@ -192,28 +192,58 @@ func (c *Catalog) MCPStatus(config Config) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	command, args, err := mcpCommand(config)
+	if err != nil {
+		return nil, err
+	}
+	location := filepath.Dir(command)
+	note := "Agent clients launch this local command when they connect. Disabling MCP rejects tool calls, including from already-connected clients."
 	if config.Library {
-		// A command on the library drive would pin it and die with it.
-		launcher := mcpLauncherPath(pharosSupportDir())
-		_, missing := os.Stat(launcher)
-		note := "Agent clients start this launcher on this Mac. It runs Pharos from this Mac's disk and opens the library only while answering, so its drive can be ejected while agents stay connected; tool calls report the library as not connected until the drive is back. Disabling MCP rejects tool calls, including from already-connected clients."
-		if missing != nil {
-			note += " The launcher is not installed yet; run `pharos install-mcp`."
-		}
-		return map[string]any{"enabled": enabled, "transport": "stdio", "command": launcher, "args": []string{},
-			"install_location": filepath.Dir(config.Path),
-			"launcher_installed": missing == nil, "note": note}, nil
+		location = filepath.Dir(config.Path)
+		note = "Agent clients start Pharos from the library's folder when they connect, so the drive must be connected for them to work. Ejecting from Pharos stops them; once the drive is back, reconnect Pharos in the agent (in Claude Code, /mcp). Disabling MCP rejects tool calls, including from already-connected clients."
+	}
+	return map[string]any{"enabled": enabled, "transport": "stdio", "command": command, "args": args,
+		"install_location": location, "note": note}, nil
+}
+
+// mcpCommandLine is mcpCommand for a shell.
+func mcpCommandLine(config Config) (string, error) {
+	command, args, err := mcpCommand(config)
+	if err != nil {
+		return "", err
+	}
+	words := []string{shellQuote(command)}
+	for _, arg := range args {
+		words = append(words, shellQuote(arg))
+	}
+	return strings.Join(words, " "), nil
+}
+
+// mcpCommand is the stdio command agent clients run for config's MCP server.
+// For a library it is the pharos in the Pharos.app beside library.toml, which
+// finds that library by itself and keeps its path when the app is updated.
+func mcpCommand(config Config) (string, []string, error) {
+	configPath, err := filepath.Abs(config.Path)
+	if err != nil {
+		return "", nil, err
 	}
 	executable := config.Executable
-	if executable == "" {
-		executable, err = os.Executable()
-		if err != nil {
-			return nil, fmt.Errorf("locate Pharos executable: %w", err)
+	if config.Library {
+		bundled := filepath.Join(filepath.Dir(configPath), "Pharos.app", "Contents", "MacOS", "pharos")
+		if _, err := os.Stat(bundled); err == nil {
+			executable = bundled
 		}
 	}
-	executable, _ = filepath.Abs(executable)
-	configPath, _ := filepath.Abs(config.Path)
-	return map[string]any{"enabled": enabled, "transport": "stdio", "command": executable,
-		"args": []string{"--config", configPath, "mcp"}, "install_location": filepath.Dir(executable),
-		"note": strings.TrimSpace("Agent clients launch this local command when they connect. Disabling MCP rejects tool calls, including from already-connected clients.")}, nil
+	if executable == "" {
+		if executable = runningExecutable(); executable == "" {
+			return "", nil, fmt.Errorf("locate the Pharos executable")
+		}
+	}
+	if executable, err = filepath.Abs(executable); err != nil {
+		return "", nil, err
+	}
+	if libraryConfigBeside(executable) == configPath {
+		return executable, []string{"mcp"}, nil
+	}
+	return executable, []string{"--config", configPath, "mcp"}, nil
 }

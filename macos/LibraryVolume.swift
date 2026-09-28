@@ -216,74 +216,35 @@ enum ReleaseState: Equatable {
 }
 
 /// Ejects the drive holding a library, as `diskutil eject` does: every volume
-/// on the drive is unmounted, each asking its watchers (Pharos among them)
-/// for approval, and the drive is ejected.
+/// on the drive is unmounted, and the drive is ejected. Pharos runs from that
+/// drive, so it can only be ejected once Pharos has quit.
 enum VolumeEject {
-    enum Result: Equatable {
-        case ejected
-        case failed(String)
-    }
-
-    static func eject(_ mount: URL, name: String, timeout: TimeInterval = 60) -> Result {
+    /// Ejects the drive at `mount` once process `pid` has exited (or after
+    /// `wait` seconds), from a shell that runs from the startup disk; if the
+    /// eject fails, an alert says why.
+    static func afterExit(of pid: pid_t, mount: URL, name: String, wait: Int = 60) throws {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
-        process.arguments = ["eject", mount.path]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        let finished = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in finished.signal() }
-        do { try process.run() } catch { return .failed("\(name) could not be ejected: \(error.localizedDescription)") }
-        // Read while it runs: its output is short, but a full pipe would block it.
-        let output = pipe.fileHandleForReading.readDataToEndOfFile()
-        if finished.wait(timeout: .now() + timeout) == .timedOut {
-            process.terminate()
-            return .failed("\(name) did not eject within \(Int(timeout)) seconds. Try again, or eject it in Finder.")
-        }
-        if process.terminationStatus == 0 { return .ejected }
-        return .failed(describe(String(decoding: output, as: UTF8.self), volume: name))
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", script, "pharos-eject", String(pid), mount.path, name, String(wait * 10)]
+        // A working directory on the drive would keep it busy too.
+        process.currentDirectoryURL = URL(fileURLWithPath: "/")
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
     }
 
-    /// diskutil names the process that kept a volume busy ("Unmount was
-    /// dissented by PID 431 (/usr/libexec/thing)"); say it in words.
-    static func describe(_ output: String, volume: String) -> String {
-        let text = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let match = text.range(of: #"dissented by PID (\d+) \(([^)]*)\)"#, options: .regularExpression) {
-            let found = String(text[match])
-            let pid = found.split(separator: " ")[3]
-            let path = found.drop(while: { $0 != "(" }).dropFirst().dropLast()
-            let process = (path as NSString).lastPathComponent
-            if ["mds", "mds_stores", "mdworker", "mdworker_shared", "mdsync"].contains(process) {
-                return "Spotlight is using \(volume), so it could not be ejected. Try again in a moment; turning off Spotlight for the drive avoids this (see Settings → Health)."
-            }
-            let who = process.isEmpty ? "Process \(pid)" : "\(process) (process \(pid))"
-            return "\(who) is using \(volume), so it could not be ejected. Quit it or close its files on the drive, then eject again."
-        }
-        let first = text.split(separator: "\n").first.map(String.init) ?? "diskutil reported no reason"
-        return "\(volume) could not be ejected: \(first)"
-    }
-}
-
-/// The page's Eject button: the library is released first, exactly as for an
-/// eject from Finder, and the drive is ejected only once Pharos has let go.
-enum LibraryEject {
-    enum Outcome: Equatable {
-        case ejected
-        /// Pharos kept the library: the release was refused, or ran out of
-        /// time while the service finishes a write.
-        case kept(String)
-        /// Pharos let go of the library, but the drive was not ejected.
-        case notEjected(String)
-    }
-
-    static func run(release: () -> LibraryVolumeMonitor.Verdict, released: () -> Void = {}, eject: () -> VolumeEject.Result) -> Outcome {
-        if case .dissent(let reason) = release() { return .kept(reason) }
-        released()
-        switch eject() {
-        case .ejected: return .ejected
-        case .failed(let reason): return .notEjected(reason)
-        }
-    }
+    static let script = """
+    tries=0
+    while kill -0 "$1" 2>/dev/null && [ "$tries" -lt "$4" ]; do sleep 0.1; tries=$((tries + 1)); done
+    if ! output=$(/usr/sbin/diskutil eject "$2" 2>&1); then
+        /usr/bin/osascript - "$3 was not ejected" "$output" >/dev/null 2>&1 <<'EOF'
+    on run argv
+        display alert (item 1 of argv) message (item 2 of argv) as warning
+    end run
+    EOF
+    fi
+    """
 }
 
 /// Drains a service's stderr as it is written, keeping the last `limit`

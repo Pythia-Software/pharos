@@ -14,8 +14,8 @@ import (
 )
 
 // TestMain keeps every test, and every process a test starts, out of this
-// Mac's real support directory: serving a library writes its MCP launcher,
-// library.json and host.json there. Helper processes share their parent's.
+// Mac's real support directory: detecting the host writes host.json there.
+// Helper processes share their parent's.
 func TestMain(m *testing.M) {
 	support := os.Getenv("PHAROS_TEST_SUPPORT_DIR")
 	owned := support == ""

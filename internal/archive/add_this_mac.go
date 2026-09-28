@@ -17,7 +17,7 @@ import (
 
 // add-this-mac is the one step for a Mac plugged into a library: find its
 // conversation sources, add them to this Mac's host file, capture them onto
-// the library's drive, index them, and install the MCP launcher. Rerunning it
+// the library's drive, index them, and print the MCP command. Rerunning it
 // picks up new sources and captures and indexes only what changed.
 func runAddThisMacCLI(config Config, args []string, in io.Reader, out io.Writer) error {
 	flags := flag.NewFlagSet("add-this-mac", flag.ContinueOnError)
@@ -143,10 +143,8 @@ func runAddThisMacCLI(config Config, args []string, in io.Reader, out io.Writer)
 		}
 	}
 
-	if launcher, err := InstallMCPLauncher(pharosSupportDir()); err != nil {
-		fmt.Fprintf(out, "\nCould not install the MCP launcher: %v\n", err)
-	} else {
-		fmt.Fprintf(out, "\nAgent clients on this Mac can use Pharos as a stdio MCP server: %s\n", launcher)
+	if command, err := mcpCommandLine(config); err == nil {
+		fmt.Fprintf(out, "\nAgent clients on this Mac can use Pharos as a stdio MCP server: %s\n", command)
 	}
 	if failed > 0 {
 		return fmt.Errorf("%s did not index; run this again to retry", plural(failed, "source"))

@@ -63,20 +63,15 @@ processes_under() {
         esac
     done
 }
-# Replacing a running executable can kill it mid-write to the catalog. That
-# only concerns Pharos running from the drive itself (run in place, or an MCP
-# server started while this Mac had no local copy); copies in this Mac's
-# runtime cache run from the local disk and are not touched.
+# Replacing a running executable can kill it mid-write to the catalog.
 running=$(processes_under "$APP/Contents/MacOS")
 if [ -n "$running" ]; then
-    echo "Pharos processes are running from $APP itself" >&2
-    echo "(the app run in place, its service, or MCP servers started by agent clients)." >&2
+    echo "Pharos processes are running from $APP" >&2
+    echo "(the app, its service, or MCP servers started by agent clients)." >&2
     echo "Quit them before reinstalling:" >&2
     echo "$running" >&2
     exit 1
 fi
-RUNTIME="${PHAROS_SUPPORT_DIR:-$HOME/Library/Application Support/Pharos}/runtime"
-local_copies=$(processes_under "$RUNTIME")
 
 had_dir=0
 [ -d "$DIR" ] && had_dir=1
@@ -105,17 +100,6 @@ if [ -f "$DIR/library.toml" ]; then
     echo "Kept the existing library configuration $DIR/library.toml."
 else
     "$CLI" init-library "$DIR"
-fi
-
-if [ -n "$local_copies" ]; then
-    cat <<EOF
-
-Note: Pharos is running from this Mac's local copy of the previous build in
-  $RUNTIME
-which this install leaves alone. Opening the new Pharos.app asks that copy to
-quit and then opens the new build. MCP servers already running keep the
-previous build until their agent clients restart them.
-EOF
 fi
 
 cat <<EOF

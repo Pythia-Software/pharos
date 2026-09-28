@@ -89,13 +89,11 @@ final class ArchiveService: ObservableObject {
             case finishing
             /// The catalog is closed; the drive is still there.
             case released
-            /// The drive went away after Pharos had closed the catalog.
-            case ejected
             case unplugged
         }
         let volume: String
         let state: State
-        /// Why the drive was not ejected, after the Eject button released it.
+        /// Why the drive could not be ejected, after the Eject button released it.
         var note: String? = nil
     }
 
@@ -111,7 +109,6 @@ final class ArchiveService: ObservableObject {
 
     private var process: Process?
     private var serviceLog: ServiceLog?
-    private let cache = RuntimeCache.standard
     /// The directory holding library.toml, when serving a portable library.
     private var library: URL?
     private var volume: LibraryVolume?
@@ -122,15 +119,9 @@ final class ArchiveService: ObservableObject {
     private var endpoint: (url: URL, token: String)?
     private var service: Process?
     private var release = ReleaseState.none
-    private(set) var isTrampoline = false
 
     init() {
-        switch LaunchPlan.resolve(arguments: CommandLine.arguments, environment: ProcessInfo.processInfo.environment,
-                                  bundle: Bundle.main.bundleURL, cache: cache) {
-        case .trampoline(let directory):
-            isTrampoline = true
-            status = "Opening Pharos from \(LibraryVolume(containing: directory)?.name ?? directory.path)…"
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in self?.trampoline(directory) }
+        switch LaunchPlan.resolve(bundle: Bundle.main.bundleURL) {
         case .library(let directory):
             openLibrary(directory)
         case .user:
@@ -152,7 +143,7 @@ final class ArchiveService: ObservableObject {
 
     var canSetUpHere: Bool {
         let readOnly = (try? installationFolder.resourceValues(forKeys: [.volumeIsReadOnlyKey]))?.volumeIsReadOnly == true
-        return !readOnly && !cache.contains(Bundle.main.bundleURL)
+        return !readOnly
     }
 
     var canCreatePortableLibrary: Bool {
@@ -185,9 +176,7 @@ final class ArchiveService: ObservableObject {
         runSetup(["init-library", directory.path]) { [weak self] in
             guard let self else { return }
             self.setupNeeded = false
-            self.isTrampoline = true
-            self.status = "Opening Pharos from \(directory.lastPathComponent)…"
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in self?.trampoline(directory) }
+            self.openLibrary(directory)
         }
     }
 
@@ -224,36 +213,9 @@ final class ArchiveService: ObservableObject {
         }
     }
 
-    // Off the main thread: copying the app from the drive takes a moment.
-    private func trampoline(_ directory: URL) {
-        do {
-            let copy = try Trampoline.prepare(library: directory, cache: cache)
-            DispatchQueue.main.async {
-                Trampoline.launch(copy, library: directory, cache: self.cache) { [weak self] error in
-                    DispatchQueue.main.async {
-                        // Running in place would only reach the older copy's service.
-                        if let error = error as? Trampoline.OlderCopyRunning { self?.error = error.localizedDescription }
-                        else if let error { self?.runInPlace(directory, because: error) } else { NSApp.terminate(nil) }
-                    }
-                }
-            }
-        } catch {
-            DispatchQueue.main.async { [weak self] in self?.runInPlace(directory, because: error) }
-        }
-    }
-
-    // Serving from the drive still works; the drive just can't be ejected
-    // while this copy of the app runs from it.
-    private func runInPlace(_ directory: URL, because error: Error) {
-        NSLog("Pharos is running from its library's drive, which keeps the drive from being ejected: %@", error.localizedDescription)
-        openLibrary(directory)
-    }
-
     private func openLibrary(_ directory: URL) {
         library = directory
-        // A runtime copy opened while the drive is away knows it from library.json.
-        let recorded = cache.readRecord().flatMap { $0.libraryDir == directory.standardizedFileURL.path ? $0.volume : nil }
-        volume = LibraryVolume(containing: directory) ?? volume ?? recorded
+        volume = LibraryVolume(containing: directory) ?? volume
         watchVolume()
         let config = directory.appendingPathComponent("library.toml")
         guard let contents = try? String(contentsOf: config, encoding: .utf8) else {
@@ -264,15 +226,15 @@ final class ArchiveService: ObservableObject {
             }
             return
         }
-        // Keep library.json current, e.g. after the drive came back under
-        // another mount point.
-        if cache.contains(Bundle.main.bundleURL) { try? cache.record(library: directory) }
         open(config, contents: contents)
     }
 
     private func watchVolume() {
         guard monitor == nil, let volume, let monitor = LibraryVolumeMonitor(volumeUUID: volume.uuid) else { return }
-        monitor.approveUnmount = { [weak self] in self?.releaseForEject() ?? .approve }
+        // Pharos runs from the drive, so it cannot be unmounted until Pharos
+        // quits. Say so, rather than leave Finder to blame "a program".
+        let name = volume.name
+        monitor.approveUnmount = { .dissent("Pharos is running from \(name). Use Eject in Pharos, or quit Pharos, to eject it.") }
         monitor.onUnmount = { [weak self] in DispatchQueue.main.async { self?.libraryWentAway() } }
         monitor.onMount = { [weak self] mount in DispatchQueue.main.async { self?.libraryCameBack(at: mount) } }
         self.monitor = monitor
@@ -297,8 +259,8 @@ final class ArchiveService: ObservableObject {
         connectOrStart(serviceURL, token: token, config: config, contents: contents)
     }
 
-    /// Runs on the volume monitor's queue when the library's drive is about
-    /// to be unmounted: closing the catalog first lets the eject go ahead.
+    /// Asks the service to close the catalog before an eject. Blocks; call it
+    /// off the main thread.
     private func releaseForEject() -> LibraryVolumeMonitor.Verdict {
         let (endpoint, service) = lock.withLock { () -> ((url: URL, token: String)?, Process?) in
             release = .asking
@@ -325,10 +287,11 @@ final class ArchiveService: ObservableObject {
     private var releaseState: ReleaseState { lock.withLock { release } }
 
     /// The page's Eject button (see ArchiveWebView), and the one in the
-    /// released window: releases the library exactly as an eject from Finder
-    /// would, then ejects its drive. `reply` gets nil once the library is
-    /// released (the window then says so and reports the eject), or the reason
-    /// Pharos kept it.
+    /// released window. Pharos runs from the library's drive, and so do the
+    /// MCP servers agent clients start from it, so none of them may be left
+    /// running: Pharos releases the library, stops those servers, and quits,
+    /// and the drive is ejected once it has. `reply` gets nil once the library
+    /// is released, or the reason Pharos kept it.
     func ejectLibrary(reply: @escaping (String?) -> Void = { _ in }) {
         guard let volume else {
             reply("This library is not on a drive that Pharos can eject.")
@@ -340,37 +303,29 @@ final class ArchiveService: ObservableObject {
         }
         ejecting = true
         let mount = library.flatMap { LibraryVolume(containing: $0)?.mount } ?? volume.mount
+        let app = Bundle.main.bundleURL
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return reply("Pharos is closing.") }
-            let outcome = LibraryEject.run(release: self.releaseForEject,
-                                           released: { DispatchQueue.main.async { reply(nil) } },
-                                           eject: { VolumeEject.eject(mount, name: volume.name) })
-            DispatchQueue.main.async {
-                self.ejecting = false
-                switch outcome {
-                case .ejected:
-                    break // The volume monitor reports the unmount.
-                case .kept(let reason):
+            if case .dissent(let reason) = self.releaseForEject() {
+                DispatchQueue.main.async {
+                    self.ejecting = false
                     reply(reason)
-                case .notEjected(let reason):
-                    self.ejectFailed(reason)
+                }
+                return
+            }
+            DispatchQueue.main.async { reply(nil) }
+            DriveProcesses.stop(runningFrom: app)
+            do {
+                try VolumeEject.afterExit(of: getpid(), mount: mount, name: volume.name)
+                DispatchQueue.main.async { NSApp.terminate(nil) }
+            } catch {
+                DispatchQueue.main.async {
+                    self.ejecting = false
+                    self.url = nil
+                    self.disconnected = Disconnection(volume: volume.name, state: .released,
+                                                      note: "\(volume.name) could not be ejected: \(error.localizedDescription)")
                 }
             }
-        }
-    }
-
-    /// The library was released, but its drive did not eject.
-    private func ejectFailed(_ reason: String) {
-        guard let volume else { return }
-        url = nil
-        switch disconnected?.state {
-        case .unplugged?:
-            return
-        case .ejected?:
-            // Its volume unmounted; another on the same drive did not.
-            disconnected = Disconnection(volume: volume.name, state: .ejected, note: reason)
-        default:
-            disconnected = Disconnection(volume: volume.name, state: .released, note: reason)
         }
     }
 
@@ -382,15 +337,11 @@ final class ArchiveService: ObservableObject {
     }
 
     private func libraryWentAway() {
-        guard let volume, disconnected?.state != .unplugged, disconnected?.state != .ejected else { return }
+        guard let volume, disconnected?.state != .unplugged else { return }
         url = nil
         error = nil
-        // Released first (an eject from Finder or the Eject button): nothing was left open.
-        let released = lock.withLock { () -> Bool in
-            defer { release = .none }
-            return release == .released
-        }
-        disconnected = Disconnection(volume: volume.name, state: released ? .ejected : .unplugged)
+        lock.withLock { release = .none }
+        disconnected = Disconnection(volume: volume.name, state: .unplugged)
         // After a yank the service stops by itself within a second or two.
         stopService(killAfter: 5)
     }
@@ -934,12 +885,6 @@ struct LibraryDisconnectedView: View {
                     .font(.title2.weight(.semibold))
                 Text("Pharos closed its library so \(disconnection.volume) can be ejected safely.")
                     .opacity(0.8)
-            case .ejected:
-                Text("\(disconnection.volume) ejected")
-                    .font(.title2.weight(.semibold))
-                Text("Pharos closed its library before \(disconnection.volume) was unmounted. You can unplug it now; reconnect it to continue.")
-                    .multilineTextAlignment(.center)
-                    .opacity(0.8)
             case .unplugged:
                 Text("Library disconnected")
                     .font(.title2.weight(.semibold))
@@ -1054,7 +999,7 @@ struct FirstRunView: View {
                 UpdateNoticeSheet(notice: updates)
             }
             .task {
-                if !service.isTrampoline && !service.setupNeeded {
+                if !service.setupNeeded {
                     updates.checkOnLaunchIfEnabled(checkForUpdatesOnLaunch)
                 }
             }

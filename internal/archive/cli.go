@@ -70,24 +70,14 @@ func Run(arguments []string) error {
 		}
 		return SetRootString(expandPath(args[0]), "executable", expandPath(args[1]))
 	}
-	if command == "install-mcp" {
-		path, err := InstallMCPLauncher(pharosSupportDir())
-		if err != nil {
-			return err
-		}
-		fmt.Printf("Wrote %s. Agent clients run it as a stdio MCP server with no arguments.\n", path)
-		return nil
-	}
 	if command == "mcp" {
 		// An agent keeps this process for its whole session, so it starts, and
 		// keeps answering, while the library is unavailable. It loads the
 		// configuration and runs the library guards for each request instead.
-		flags := flag.NewFlagSet("mcp", flag.ContinueOnError)
-		libraryJSON := flags.String("library-json", "", "")
-		if err := flags.Parse(args); err != nil {
-			return err
+		if len(args) != 0 {
+			return fmt.Errorf("usage: pharos [--config PATH] mcp")
 		}
-		return RunMCP(configPath, *libraryJSON, os.Stdin, os.Stdout)
+		return RunMCP(configPath, os.Stdin, os.Stdout)
 	}
 	config, err := LoadConfig(configPath)
 	if err != nil {
@@ -139,23 +129,10 @@ func Run(arguments []string) error {
 			target := fmt.Sprintf("http://%s:%d/?token=%s", display, config.Port, urlQueryEscape(config.APIToken))
 			go func() { _ = exec.Command("open", target).Run() }()
 		}
-		support := pharosSupportDir()
-		if config.Library {
-			if _, err := InstallMCPLauncher(support); err != nil {
-				fmt.Fprintf(os.Stderr, "MCP launcher: %v\n", err)
-			}
-		}
 		server := NewServer(config, catalog)
-		// Only a service that got its port serves the library: then the MCP
-		// launcher may point at it, and a release (see releasedMarkerName) ends.
-		server.life.listening = func() {
-			if config.Library {
-				if err := recordLibrary(support, config, libraryVolume); err != nil {
-					fmt.Fprintf(os.Stderr, "library.json: %v\n", err)
-				}
-			}
-			_ = os.Remove(releasedMarker(config.CatalogPath))
-		}
+		// Only a service that got its port serves the library: then a release
+		// (see releasedMarkerName) ends.
+		server.life.listening = func() { _ = os.Remove(releasedMarker(config.CatalogPath)) }
 		return server.Serve()
 	case "ingest":
 		results := []IngestResult{}
@@ -262,7 +239,7 @@ func Run(arguments []string) error {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: pharos [--config PATH] {init,init-library,add-this-mac,serve,capture,index,backup,ingest,repair-existing,refine-usage,build-tools,pricing,search,tl1,health,doctor,dev-ui,mcp,install-mcp,probe,volume-id}")
+	return fmt.Errorf("usage: pharos [--config PATH] {init,init-library,add-this-mac,serve,capture,index,backup,ingest,repair-existing,refine-usage,build-tools,pricing,search,tl1,health,doctor,dev-ui,mcp,probe,volume-id}")
 }
 func urlQueryEscape(value string) string {
 	replacer := strings.NewReplacer("%", "%25", " ", "%20", "+", "%2B", "?", "%3F", "&", "%26", "=", "%3D")
