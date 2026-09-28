@@ -395,6 +395,17 @@ func (c *Catalog) rebuildToolRollup(ctx context.Context, generation, day string)
 		return err
 	}
 	defer tx.Rollback()
+	// This transaction replaces the rollup tables and can hold the catalog
+	// writer for longer than an ingest task. Acquire before marking it active.
+	acquiring := time.Now()
+	if _, err := tx.ExecContext(ctx, "DELETE FROM meta WHERE 0"); err != nil {
+		return err
+	}
+	if waited := time.Since(acquiring); waited >= time.Second {
+		fmt.Fprintf(os.Stderr, "Catalog writer acquisition: operation=tool-rollup pid=%d waited=%s %s\n", os.Getpid(), waited.Round(time.Millisecond), c.writerSummary())
+	}
+	finish := c.trackWriter("tool-rollup")
+	defer func() { _ = tx.Rollback(); finish() }()
 	for _, statement := range []string{"DELETE FROM tool_mirror_workspaces",
 		"INSERT INTO tool_mirror_workspaces(workspace_id) SELECT workspace_id FROM temp.tool_mirror_build",
 		"DROP TABLE IF EXISTS main.tool_call_cube", "CREATE TABLE main.tool_call_cube AS SELECT * FROM temp.tool_cube_build"} {

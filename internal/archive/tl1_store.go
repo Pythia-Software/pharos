@@ -228,28 +228,29 @@ type tl1SnapshotProvider interface {
 // passed over when the stored one was read from a newer version of the
 // database (see guardCapture): TL1 is indexed whole, so replacing it would
 // roll the analysis back. A live sync is authoritative, as for its records.
-func (c *Catalog) storeTL1Snapshots(snapshots []tl1Snapshot, host string, fromCapture bool) error {
+func (c *Catalog) storeTL1Snapshots(ctx context.Context, snapshots []tl1Snapshot, host string, fromCapture bool) error {
 	for _, snapshot := range snapshots {
-		tx, err := c.beginWrite(context.Background())
-		if err != nil {
-			return err
-		}
-		if fromCapture {
-			stored, known, err := storedTL1Version(tx, snapshot.Installation.ID)
+		label := "tl1-snapshot installation=" + snapshot.Installation.ID
+		if err := c.retryCatalogWrite(ctx, label, nil, func() error {
+			tx, finish, err := c.beginTrackedWrite(ctx, label)
 			if err != nil {
-				tx.Rollback()
 				return err
 			}
-			if known && snapshot.Version < stored {
-				tx.Rollback()
-				continue
+			defer func() { _ = tx.Rollback(); finish() }()
+			if fromCapture {
+				stored, known, err := storedTL1Version(tx, snapshot.Installation.ID)
+				if err != nil {
+					return err
+				}
+				if known && snapshot.Version < stored {
+					return nil
+				}
 			}
-		}
-		if err := storeTL1Snapshot(tx, snapshot, host); err != nil {
-			tx.Rollback()
-			return err
-		}
-		if err := tx.Commit(); err != nil {
+			if err := storeTL1Snapshot(tx, snapshot, host); err != nil {
+				return err
+			}
+			return tx.Commit()
+		}); err != nil {
 			return err
 		}
 	}

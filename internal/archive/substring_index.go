@@ -77,11 +77,11 @@ func (c *Catalog) substringIndexProgress(ctx context.Context) (substringProgress
 // indexSubstringBatch indexes the next batch of conversations and reports
 // whether any remain.
 func (c *Catalog) indexSubstringBatch(ctx context.Context) (bool, error) {
-	tx, err := c.beginWrite(ctx)
+	tx, finish, err := c.beginTrackedWrite(ctx, "substring-index")
 	if err != nil {
 		return false, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback(); finish() }()
 	var done string
 	if err := tx.QueryRowContext(ctx, "SELECT value FROM meta WHERE key='message_trigram_version'").Scan(&done); err == nil {
 		return false, nil

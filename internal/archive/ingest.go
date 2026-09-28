@@ -70,14 +70,14 @@ func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress P
 			progress(phase, result.Workspaces, result.Conversations, result.Messages, result.SkippedCurrent)
 		}
 	}
-	state := func(coverage, cursor, fingerprint, message string, pending int, success bool) {
+	state := func(coverage, cursor, fingerprint, message string, pending int, success bool) error {
 		// An index records its host's source state only once it completes: a
 		// capture failing to index, perhaps on another Mac, says nothing about
 		// the source.
 		if view != nil && coverage != "complete" {
-			return
+			return nil
 		}
-		c.recordSourceState(host.ID, config.Name, config.Kind, adapter.Capability(), coverage, cursor, fingerprint, message, pending, success)
+		return c.recordSourceState(host.ID, config.Name, config.Kind, adapter.Capability(), coverage, cursor, fingerprint, message, pending, success)
 	}
 	if config.Path == "" {
 		message := "FileNotFoundError: configured source path is unavailable: " + config.Path
@@ -148,7 +148,7 @@ func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress P
 		return result
 	}
 	if provider, ok := adapter.(tl1SnapshotProvider); ok {
-		if err := c.storeTL1Snapshots(provider.tl1Snapshots(), host.ID, view != nil); err != nil {
+		if err := c.storeTL1Snapshots(ctx, provider.tl1Snapshots(), host.ID, view != nil); err != nil {
 			message := fmt.Sprintf("TL1 analysis snapshot: %v", err)
 			state("failed", "", fingerprint, message, 0, false)
 			result.Error = message
@@ -156,7 +156,11 @@ func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress P
 			return result
 		}
 	}
-	state("complete", fingerprint, fingerprint, "", 0, true)
+	if err := state("complete", fingerprint, fingerprint, "", 0, true); err != nil {
+		result.Error = fmt.Sprintf("record source completion: %v", err)
+		report("failed")
+		return result
+	}
 	if _, err := c.DB.Exec("UPDATE source_states SET index_version=? WHERE host_id=? AND source_name=?", nilIfEmpty(indexVersion), host.ID, config.Name); err != nil {
 		result.Error = err.Error()
 		report("failed")
@@ -222,43 +226,54 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 			report("indexing")
 			return tracker.hold(c, parts)
 		}
-		tx, err := c.beginWrite(context.Background())
-		if err != nil {
-			return err
-		}
-		copied, err := sightCopiedRecord(tx, *record, digest, host, config.Name)
-		if err != nil {
-			tx.Rollback()
-			return err
-		}
-		conversations, messages := 0, 0
-		if !copied {
-			conversations, messages, err = ingestCopy(tx, *record, adapter.Capability() == "tl1-release", host, config.Name, captureViewOf(adapter) != nil)
-			if errors.Is(err, errOlderCopy) {
-				// Nothing is recorded, so the newer read's digest and parts stand.
-				tx.Rollback()
-				result.Older++
-				report("indexing")
-				return nil
-			} else if err != nil {
-				tx.Rollback()
-				return err
-			}
-		}
-		if _, err := tx.Exec(`INSERT INTO source_record_states(host_id,source_name,source_kind,source_account,source_id,digest,updated_at)
-			VALUES(?,?,?,?,?,?,?) ON CONFLICT(host_id,source_name,source_kind,source_account,source_id) DO UPDATE SET
-			digest=excluded.digest,updated_at=excluded.updated_at`, host, config.Name, record.SourceKind, record.Account, record.SourceID, digest, now()); err != nil {
-			tx.Rollback()
-			return err
-		}
+		copied, older, conversations, messages := false, false, 0, 0
+		operation := fmt.Sprintf("ingest source=%s task=%s", config.Name, record.SourceID)
+		var heldParts []sourcePart
 		if tracker != nil {
-			if err := tracker.record(tx, parts); err != nil {
-				tx.Rollback()
+			heldParts = append(heldParts, tracker.pending...)
+		}
+		if err := c.retryCatalogWrite(ctx, operation, func() { report("waiting for catalog") }, func() error {
+			if tracker != nil {
+				tracker.pending = append(tracker.pending[:0], heldParts...)
+			}
+			tx, finish, err := c.beginTrackedWrite(ctx, operation)
+			if err != nil {
 				return err
 			}
-		}
-		if err := tx.Commit(); err != nil {
+			defer func() { _ = tx.Rollback(); finish() }()
+			copied, older, conversations, messages = false, false, 0, 0
+			copied, err = sightCopiedRecord(tx, *record, digest, host, config.Name)
+			if err != nil {
+				return err
+			}
+			if !copied {
+				conversations, messages, err = ingestCopy(tx, *record, adapter.Capability() == "tl1-release", host, config.Name, captureViewOf(adapter) != nil)
+				if errors.Is(err, errOlderCopy) {
+					// Nothing is recorded, so the newer read's digest and parts stand.
+					older = true
+					return nil
+				} else if err != nil {
+					return err
+				}
+			}
+			if _, err := tx.Exec(`INSERT INTO source_record_states(host_id,source_name,source_kind,source_account,source_id,digest,updated_at)
+				VALUES(?,?,?,?,?,?,?) ON CONFLICT(host_id,source_name,source_kind,source_account,source_id) DO UPDATE SET
+				digest=excluded.digest,updated_at=excluded.updated_at`, host, config.Name, record.SourceKind, record.Account, record.SourceID, digest, now()); err != nil {
+				return err
+			}
+			if tracker != nil {
+				if err := tracker.record(tx, parts); err != nil {
+					return err
+				}
+			}
+			return tx.Commit()
+		}); err != nil {
 			return err
+		}
+		if older {
+			result.Older++
+			report("indexing")
+			return nil
 		}
 		c.boundWAL(walSizeLimit)
 		if copied {
@@ -420,7 +435,7 @@ func (c *Catalog) RecordSourceState(name, kind, capability, coverage, cursor, fi
 	c.recordSourceState(currentHost().ID, name, kind, capability, coverage, cursor, fingerprint, errorText, pending, success)
 }
 
-func (c *Catalog) recordSourceState(host, name, kind, capability, coverage, cursor, fingerprint, errorText string, pending int, success bool) {
+func (c *Catalog) recordSourceState(host, name, kind, capability, coverage, cursor, fingerprint, errorText string, pending int, success bool) error {
 	timestamp := now()
 	var successAt any
 	if success {
@@ -430,11 +445,15 @@ func (c *Catalog) recordSourceState(host, name, kind, capability, coverage, curs
 	if errorText != "" {
 		errorValue = errorText
 	}
-	_, _ = c.DB.Exec(`INSERT INTO source_states(host_id,source_name,kind,capability,cursor,fingerprint,coverage,last_attempt_at,last_success_at,error,pending_count,updated_at)
+	_, err := c.DB.Exec(`INSERT INTO source_states(host_id,source_name,kind,capability,cursor,fingerprint,coverage,last_attempt_at,last_success_at,error,pending_count,updated_at)
 	VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(host_id,source_name) DO UPDATE SET kind=excluded.kind,capability=excluded.capability,
 	cursor=COALESCE(excluded.cursor,source_states.cursor),fingerprint=COALESCE(excluded.fingerprint,source_states.fingerprint),coverage=excluded.coverage,
 	last_attempt_at=excluded.last_attempt_at,last_success_at=COALESCE(excluded.last_success_at,source_states.last_success_at),error=excluded.error,
-	pending_count=excluded.pending_count,updated_at=excluded.updated_at`, host, name, kind, capability, nilIfEmpty(cursor), nilIfEmpty(fingerprint), coverage, timestamp, successAt, errorValue, pending, timestamp)
+		pending_count=excluded.pending_count,updated_at=excluded.updated_at`, host, name, kind, capability, nilIfEmpty(cursor), nilIfEmpty(fingerprint), coverage, timestamp, successAt, errorValue, pending, timestamp)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Catalog source state: source=%s host=%s coverage=%s %s error=%v\n", name, host, coverage, c.writerSummary(), err)
+	}
+	return err
 }
 
 func ingestWorkspace(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool) (int, int, error) {
