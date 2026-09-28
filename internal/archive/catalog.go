@@ -19,6 +19,7 @@ type Catalog struct {
 	Path    string
 	DB      *sql.DB
 	library libraryCache
+	find    libraryFindCache
 	derived derivedCache
 	// quietVersion and warmVersion are the catalog versions warmCaches last
 	// saw and warmed; only the Library maintenance loop uses them.

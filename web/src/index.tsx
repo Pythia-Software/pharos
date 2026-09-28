@@ -125,30 +125,32 @@ async function responseJSON<T>(response: Response): Promise<T> {
   return body as T;
 }
 
-function makeTransport(dataset: Dataset): Transport<Row> {
-  const endpoint = (suffix = "") => {
-    return `/api/query/${dataset}${suffix}`;
+// extra carries the Library's keyword search to every request, so rows,
+// metrics, and filter pickers all follow it. onFind hears how it went.
+function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary | null) => void): Transport<Row> {
+  const endpoint = (suffix = "", params?: URLSearchParams) => {
+    const query = new URLSearchParams(extra);
+    params?.forEach((value, name) => query.set(name, value));
+    return `/api/query/${dataset}${suffix}${query.size ? `?${query}` : ""}`;
   };
   return {
     async fetchRows(query: ServerQuery, signal?: AbortSignal) {
-      return responseJSON(await fetch(endpoint(), {
+      const result = await responseJSON<{ rows: Row[]; total: number; find?: FindSummary }>(await fetch(endpoint(), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(query),
         signal,
       }));
+      onFind?.(result.find ?? null);
+      return result;
     },
     async fetchDistinctValues(query, signal) {
-      const url = new URL(endpoint("/distinct"), window.location.origin);
-      url.searchParams.set("field", query.field);
-      url.searchParams.set("q", query.search);
-      if (query.limit) url.searchParams.set("limit", String(query.limit));
-      return responseJSON(await fetch(url.pathname + url.search, { signal }));
+      const params = new URLSearchParams({ field: query.field, q: query.search });
+      if (query.limit) params.set("limit", String(query.limit));
+      return responseJSON(await fetch(endpoint("/distinct", params), { signal }));
     },
     async fetchFieldStats(fields, signal) {
-      const url = new URL(endpoint("/field-stats"), window.location.origin);
-      url.searchParams.set("fields", fields.join(","));
-      return responseJSON(await fetch(url.pathname + url.search, { signal }));
+      return responseJSON(await fetch(endpoint("/field-stats", new URLSearchParams({ fields: fields.join(",") })), { signal }));
     },
     async fetchAggregations(query, signal) {
       return responseJSON(await fetch(endpoint("/aggregations"), {
@@ -285,13 +287,24 @@ const metricRenderers: RenderRegistry<Row> = {
 
 // header renders between the filters and the metric panels, so a chart there
 // can follow the table's filters.
-function QuerySurface({ dataset, libraryView = "table", trailing, header }: { dataset: Dataset; libraryView?: LibraryView; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode }) {
+// find, for the Library, is a keyword search that narrows the rows before the
+// filters apply; onFind hears how it went.
+function QuerySurface({ dataset, libraryView = "table", find = "", onFind, trailing, header }: { dataset: Dataset; libraryView?: LibraryView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode }) {
   const schema = schemas[dataset];
-  const transport = useMemo(() => makeTransport(dataset), [dataset]);
+  const onFindRef = useRef(onFind);
+  onFindRef.current = onFind;
+  const transport = useMemo(() => makeTransport(dataset, find, value => onFindRef.current?.(value)), [dataset, find]);
   const storage = useMemo(() => localStorageAdapter(), []);
   const api = useQueryTable<Row>({ schema, transport, storage, debounceMs: 100 });
   const apiRef = useRef(api);
   apiRef.current = api;
+  // A new search starts from its first page.
+  const searched = useRef(find);
+  useEffect(() => {
+    if (searched.current === find) return;
+    searched.current = find;
+    apiRef.current.setQuery(previous => previous.offset ? { ...previous, offset: 0 } : previous);
+  }, [find]);
   // query-table 0.3.0's nullability effect depends on the controller object,
   // while useQueryTable returns a fresh facade as data arrives. A stable proxy
   // prevents an effect/request loop and still resolves every property live.
@@ -337,7 +350,7 @@ function QuerySurface({ dataset, libraryView = "table", trailing, header }: { da
     <QueryBuilder api={stableApi} fields={schema.fields} total={api.total} running={api.loading} />
     <MetricsPanel aggregations={api.aggregations} fields={metricFields(schema.fields)} renderers={metricRenderers} />
     {api.error ? <div className="query-table-error">{api.error.message}</div> : null}
-    {dataset === "library" && libraryView === "conversation" ? <ConversationResults api={api} /> : <DataTable
+    {dataset === "library" && libraryView === "conversation" ? <ConversationResults api={api} searching={Boolean(find)} /> : <DataTable
       maxHeight={100000}
       fields={api.visibleFields}
       rows={api.rows}
@@ -348,8 +361,8 @@ function QuerySurface({ dataset, libraryView = "table", trailing, header }: { da
       columnDrag={api.columnDrag}
       total={api.total}
       loading={api.loading}
-      emptyMessage={api.error ? failedMessage : emptyMessages[dataset]}
-      {...(trailing ? { trailing: (row: Row) => trailing(row, api), trailingLabel: dataset === "mcp_calls" || dataset === "tool_calls" ? "View" : dataset === "tools" ? "Drill in" : "Actions" } : {})}
+      emptyMessage={api.error ? failedMessage : find ? "No work matches this search and these filters." : emptyMessages[dataset]}
+      {...(trailing ? { trailing: (row: Row) => trailing(row, api), trailingLabel: dataset === "mcp_calls" || dataset === "tool_calls" ? "View" : dataset === "tools" ? "Drill in" : dataset === "library" ? "Match" : "Actions" } : {})}
     />}
   </FilterValueProvider>;
 }
@@ -429,6 +442,7 @@ function ConversationResultCard({ row }: { row: Row }) {
         <button type="button" onClick={() => setBrowse((value) => !value)} disabled={!turnCount} aria-expanded={browse}>{browse ? "Close turn browser" : "Browse turns"}</button>
       </div>
     </div>
+    {row.find_hit ? <FindMatch hit={row.find_hit} count={Number(row.find_match_count) || 1} /> : null}
     {firstInput || latestResponse ? <div className="conversation-result-preview">
       {firstInput ? <ResultMessage label="First ask" message={firstInput} kind="human" /> : null}
       {latestResponse ? <ResultMessage label="Latest response" message={latestResponse} kind="assistant" /> : null}
@@ -437,8 +451,8 @@ function ConversationResultCard({ row }: { row: Row }) {
   </article>;
 }
 
-function ConversationResults({ api }: { api: QueryTableApi<Row> }) {
-  if (!api.loading && !api.rows.length) return <div className="conversation-results-empty no-results">{api.error ? failedMessage : "No work matches this query."}</div>;
+function ConversationResults({ api, searching }: { api: QueryTableApi<Row>; searching: boolean }) {
+  if (!api.loading && !api.rows.length) return <div className="conversation-results-empty no-results">{api.error ? failedMessage : searching ? "No work matches this search and these filters." : "No work matches this query."}</div>;
   return <div className={`conversation-results ${api.loading ? "loading" : ""}`} aria-busy={api.loading}>
     {api.loading && !api.rows.length ? <div className="conversation-results-empty">Loading conversations…</div> : null}
     {api.rows.map((row) => <ConversationResultCard key={String(api.rowId(row) ?? row.id)} row={row} />)}
@@ -447,7 +461,8 @@ function ConversationResults({ api }: { api: QueryTableApi<Row> }) {
 
 type FindKind = "text" | "file" | "url";
 type FindHit = { workspace_id: string; conversation_id?: string; title: string; provider?: string; started_at?: string; message_id?: string; role?: string; message_kind?: string; snippet?: string; path?: string; old_path?: string; url?: string; url_source?: string; tool_name?: string; tool_call_id?: string; attribution?: string; count: number };
-type FindResult = { items: FindHit[]; total: number; limit: number; offset: number; limited?: boolean };
+// What the Library's keyword search found before the table's filters applied.
+type FindSummary = { workspaces: number; limited: boolean };
 
 function openFindHit(hit: FindHit) {
   const params = new URLSearchParams();
@@ -457,34 +472,43 @@ function openFindHit(hit: FindHit) {
   (window as unknown as { routeFromLocation?: () => void }).routeFromLocation?.();
 }
 
-function LibraryFindResults({ query, kind, fuzzy, caseSensitive, separators }: { query: string; kind: FindKind; fuzzy: boolean; caseSensitive: boolean; separators: boolean }) {
-  const [offset, setOffset] = useState(0);
-  const [result, setResult] = useState<FindResult | null>(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  useEffect(() => { setOffset(0); }, [query, kind, fuzzy, caseSensitive, separators]);
-  useEffect(() => {
-    const controller = new AbortController();
-    const params = new URLSearchParams({ q: query, kind, fuzzy: fuzzy ? "1" : "0", case: caseSensitive ? "1" : "0", separators: separators ? "1" : "0", offset: String(offset), limit: "50" });
-    setLoading(true); setError("");
-    void fetch(`/api/library/find?${params}`, { signal: controller.signal }).then(response => responseJSON<FindResult>(response)).then(value => {
-      if (!controller.signal.aborted) setResult(value);
-    }).catch(reason => { if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Search failed"); }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
-    return () => controller.abort();
-  }, [query, kind, fuzzy, caseSensitive, separators, offset]);
-  if (error) return <p className="query-table-error">{error}</p>;
-  if (loading && !result) return <p className="muted">Searching conversations…</p>;
-  return <section className="library-find-results" aria-busy={loading}>
-    <p className="muted">{result?.limited ? "At least " : ""}{result?.total.toLocaleString() ?? 0} {kind === "text" ? "conversations" : kind === "file" ? "file changes" : "URL records"} found{loading ? " · updating…" : ""}{result?.limited ? " · Search reached its 5,000-record limit; narrow the query for complete results." : ""}</p>
-    {!loading && !result?.items.length ? <p>No matches found.</p> : null}
-    {result?.items.map((hit, index) => <article className="library-find-hit" key={`${hit.conversation_id}:${hit.message_id}:${hit.path}:${hit.url}:${index}`}>
-      <div className="library-find-head"><button type="button" onClick={() => openFindHit(hit)}>{hit.title}</button><span>{[hit.provider, hit.started_at ? new Date(hit.started_at).toLocaleDateString() : ""].filter(Boolean).join(" · ")}</span></div>
-      {kind === "text" ? <><p className="library-find-snippet">{hit.snippet}</p><button type="button" className="library-find-open" onClick={() => openFindHit(hit)}>Open {hit.role === "user" ? "user message" : hit.message_kind === "message" ? "agent response" : "agent thought"} · {hit.count} matching message{hit.count === 1 ? "" : "s"}</button></> : null}
-      {kind === "file" ? <><p className="library-find-snippet">{hit.old_path ? `${hit.old_path} → ` : ""}{hit.path}{hit.count > 1 ? ` · ${hit.count} changes` : ""}</p><button type="button" className="library-find-open" onClick={() => openFindHit(hit)}>Open {hit.attribution === "workspace" ? "work · conversation unknown" : "conversation"}</button></> : null}
-      {kind === "url" ? <><p className="library-find-snippet"><a href={hit.url} target="_blank" rel="noopener noreferrer">{hit.url}</a></p><p className="muted">{hit.tool_name} · {({ input: "Tool argument", command: "Shell command", result: "Opened page", search_result: "Search result link (may not have been opened)" } as Record<string,string>)[hit.url_source ?? ""] ?? hit.url_source}</p><button type="button" className="library-find-open" onClick={() => openFindHit(hit)}>Open tool call in conversation</button></> : null}
-    </article>)}
-    {result && result.total > result.limit ? <nav className="library-find-pages"><button type="button" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - result.limit))}>Previous</button><span>{offset + 1}–{Math.min(offset + result.limit, result.total)} of {result.total}</span><button type="button" disabled={offset + result.limit >= result.total} onClick={() => setOffset(offset + result.limit)}>Next</button></nav> : null}
-  </section>;
+function findHitLabel(hit: FindHit): string {
+  if (hit.url) return `Open tool call${hit.tool_name ? ` · ${hit.tool_name}` : ""}`;
+  if (hit.path) return hit.attribution === "workspace" ? "Open work · conversation unknown" : "Open conversation";
+  return `Open ${hit.role === "user" ? "user message" : hit.message_kind === "message" ? "agent response" : "agent thought"}`;
+}
+
+function findHitText(hit: FindHit): string {
+  if (hit.url) return hit.url;
+  if (hit.path) return `${hit.old_path ? `${hit.old_path} → ` : ""}${hit.path}`;
+  return hit.snippet ?? "";
+}
+
+// A result's keyword match: its most relevant hit and how many there were.
+function FindMatch({ hit, count }: { hit: FindHit; count: number }) {
+  const noun = hit.url ? "matching URL" : hit.path ? "matching file change" : "matching message";
+  return <div className="library-find-match">
+    <div className="result-message-label">Keyword match · {count.toLocaleString()} {noun}{count === 1 ? "" : "s"}</div>
+    <p className="library-find-snippet">{hit.url ? <a href={hit.url} target="_blank" rel="noopener noreferrer">{hit.url}</a> : findHitText(hit)}</p>
+    <button type="button" className="library-find-open" onClick={() => openFindHit(hit)}>{findHitLabel(hit)}</button>
+  </div>;
+}
+
+function FindMatchCell({ row }: { row: Row }) {
+  const hit = row.find_hit as FindHit | undefined;
+  if (!hit) return null;
+  const count = Number(row.find_match_count) || 1;
+  return <button type="button" className="library-find-cell" title={`${findHitText(hit)}\n\n${count.toLocaleString()} match${count === 1 ? "" : "es"} · ${findHitLabel(hit)}`} onClick={event => { event.stopPropagation(); openFindHit(hit); }}>Open match{count > 1 ? ` (${count.toLocaleString()})` : ""}</button>;
+}
+
+function findParameters(query: string, kind: FindKind, fuzzy: boolean, caseSensitive: boolean, separators: boolean): string {
+  if (!query) return "";
+  const params = new URLSearchParams({ find: query });
+  if (kind !== "text") params.set("find_kind", kind);
+  if (kind === "text" && !fuzzy) params.set("find_fuzzy", "0");
+  if (kind === "text" && caseSensitive) params.set("find_case", "1");
+  if (kind === "text" && separators) params.set("find_separators", "1");
+  return params.toString();
 }
 
 function LibraryPage() {
@@ -500,11 +524,16 @@ function LibraryPage() {
   useEffect(() => { const restore = () => { const params = read(); const q = params.get("search") ?? ""; setDraft(q); setSearch(q); setKind((params.get("kind") as FindKind) || "text"); setFuzzy(params.get("fuzzy") !== "0"); setCaseSensitive(params.get("case") === "1"); setSeparators(params.get("separators") === "1"); setView(params.get("view") === "conversation" ? "conversation" : "table"); }; window.addEventListener("pharos:route", restore); return () => window.removeEventListener("pharos:route", restore); }, []);
   function submit(event: FormEvent) { event.preventDefault(); const next = draft.trim(); setSearch(next); updateURI("search", next); }
   function chooseView(next: LibraryView) { setView(next); updateURI("view", next === "conversation" ? next : ""); }
-  return <div className="pharos-query-page">
-    <div className="view-heading library-heading"><div><h1>Find past work</h1></div>{!search ? <div className="library-view-toggle" role="group" aria-label="Library result view"><button type="button" className={view === "table" ? "active" : ""} aria-pressed={view === "table"} onClick={() => chooseView("table")}>Table</button><button type="button" className={view === "conversation" ? "active" : ""} aria-pressed={view === "conversation"} onClick={() => chooseView("conversation")}>Conversations</button></div> : null}</div>
-    <form className="semantic-search" onSubmit={submit}><select aria-label="Search type" value={kind} onChange={event => { const next = event.target.value as FindKind; setKind(next); updateURI("kind", next === "text" ? "" : next); }}><option value="text">Conversation text</option><option value="file">Modified file</option><option value="url">Tool URL</option></select><input type="search" value={draft} onChange={event => setDraft(event.target.value)} placeholder={kind === "text" ? "Words or an exact phrase in quotes…" : kind === "file" ? "File path or name…" : "URL or host…"} aria-label="Search library" /><button type="submit">Search</button></form>
+  function clear() { setDraft(""); setSearch(""); updateURI("search", ""); }
+  const find = findParameters(search, kind, fuzzy, caseSensitive, separators);
+  const [found, setFound] = useState<FindSummary | null>(null);
+  useEffect(() => { setFound(null); }, [find]);
+  return <div className={`pharos-query-page${find ? " library-searching" : ""}`}>
+    <div className="view-heading library-heading"><div><h1>Find past work</h1></div><div className="library-view-toggle" role="group" aria-label="Library result view"><button type="button" className={view === "table" ? "active" : ""} aria-pressed={view === "table"} onClick={() => chooseView("table")}>Table</button><button type="button" className={view === "conversation" ? "active" : ""} aria-pressed={view === "conversation"} onClick={() => chooseView("conversation")}>Conversations</button></div></div>
+    <form className="semantic-search" onSubmit={submit}><select aria-label="Search type" value={kind} onChange={event => { const next = event.target.value as FindKind; setKind(next); updateURI("kind", next === "text" ? "" : next); }}><option value="text">Conversation text</option><option value="file">Modified file</option><option value="url">Tool URL</option></select><input type="search" value={draft} onChange={event => setDraft(event.target.value)} placeholder={kind === "text" ? "Words or an exact phrase in quotes…" : kind === "file" ? "File path or name…" : "URL or host…"} aria-label="Search library" /><button type="submit">Search</button>{search ? <button type="button" className="semantic-search-clear" onClick={clear}>Clear</button> : null}</form>
     {kind === "text" ? <div className="search-options" role="group" aria-label="Text search options"><label><input type="checkbox" checked={fuzzy} onChange={event => { setFuzzy(event.target.checked); updateURI("fuzzy", event.target.checked ? "" : "0"); }} /> Fuzzy words</label><label><input type="checkbox" checked={caseSensitive} onChange={event => { setCaseSensitive(event.target.checked); updateURI("case", event.target.checked ? "1" : ""); }} /> Case sensitive</label><label title="For quoted phrases, require punctuation and spaces exactly as typed"><input type="checkbox" checked={separators} onChange={event => { setSeparators(event.target.checked); updateURI("separators", event.target.checked ? "1" : ""); }} /> Match separators</label></div> : null}
-    {search ? <LibraryFindResults query={search} kind={kind} fuzzy={fuzzy} caseSensitive={caseSensitive} separators={separators} /> : <QuerySurface dataset="library" libraryView={view} />}
+    {search && found ? <p className="library-find-status muted">{found.limited ? "At least " : ""}{found.workspaces.toLocaleString()} result{found.workspaces === 1 ? "" : "s"} match “{search}”; the filters below narrow them further.{found.limited ? " Search reached its 5,000-record limit; narrow the query for complete results." : ""}</p> : null}
+    <QuerySurface dataset="library" libraryView={view} find={find} onFind={setFound} {...(find ? { trailing: (row: Row) => <FindMatchCell row={row} /> } : {})} />
   </div>;
 }
 
