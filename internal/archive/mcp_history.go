@@ -201,6 +201,7 @@ func (c *Catalog) MCPStatus(config Config) (map[string]any, error) {
 			note += " The launcher is not installed yet; run `pharos install-mcp`."
 		}
 		return map[string]any{"enabled": enabled, "transport": "stdio", "command": launcher, "args": []string{},
+			"install_location": filepath.Dir(config.Path),
 			"launcher_installed": missing == nil, "note": note}, nil
 	}
 	executable := config.Executable
@@ -213,6 +214,6 @@ func (c *Catalog) MCPStatus(config Config) (map[string]any, error) {
 	executable, _ = filepath.Abs(executable)
 	configPath, _ := filepath.Abs(config.Path)
 	return map[string]any{"enabled": enabled, "transport": "stdio", "command": executable,
-		"args": []string{"--config", configPath, "mcp"},
+		"args": []string{"--config", configPath, "mcp"}, "install_location": filepath.Dir(executable),
 		"note": strings.TrimSpace("Agent clients launch this local command when they connect. Disabling MCP rejects tool calls, including from already-connected clients.")}, nil
 }
