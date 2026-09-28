@@ -73,19 +73,20 @@ type toolCall struct {
 }
 
 var (
-	exitCodePattern     = regexp.MustCompile(`(?m)^(?:Exit code:? |Process exited with code |exit status )(-?\d+)`)
-	wallTimePattern     = regexp.MustCompile(`Wall time:? ([0-9.]+) seconds`)
-	jsCommandPattern    = regexp.MustCompile(`\bcmd"?\s*:\s*"((?:[^"\\]|\\.)*)"`)
-	jsTemplatePattern   = regexp.MustCompile("\\bcmd\"?\\s*:\\s*`([^`]*)`")
-	jsToolPattern       = regexp.MustCompile(`\btools\.([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
-	jsCommandsPattern   = regexp.MustCompile(`\bcmds\s*=\s*\[((?:[^\]"]|"(?:[^"\\]|\\.)*")*)\]`)
-	jsStringPattern     = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
-	patchFilePattern    = regexp.MustCompile(`(?m)^\*\*\* (?:Update|Add|Delete) File: (.+)$`)
-	blockSuffixPattern  = regexp.MustCompile(`(:block:\d+|:usage)$`)
-	benignExitPrograms  = map[string]bool{"grep": true, "rg": true, "ag": true, "egrep": true, "fgrep": true, "diff": true, "cmp": true, "test": true, "[": true, "[[": true}
-	shellToolNames      = map[string]bool{"bash": true, "shell": true, "exec_command": true, "exec": true, "local_shell": true, "run": true, "container.exec": true, "run_command": true, "execute_command": true}
-	toolCategoryByName  = map[string]string{}
-	toolCategoryEntries = map[string][]string{
+	exitCodePattern       = regexp.MustCompile(`(?m)^(?:Exit code:? |Process exited with code |exit status )(-?\d+)`)
+	wallTimePattern       = regexp.MustCompile(`Wall time:? ([0-9.]+) seconds`)
+	jsCommandPattern      = regexp.MustCompile(`\bcmd"?\s*:\s*"((?:[^"\\]|\\.)*)"`)
+	jsTemplatePattern     = regexp.MustCompile("\\bcmd\"?\\s*:\\s*`([^`]*)`")
+	jsToolPattern         = regexp.MustCompile(`\btools\.([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+	jsCommandsPattern     = regexp.MustCompile(`\bcmds\s*=\s*\[((?:[^\]"]|"(?:[^"\\]|\\.)*")*)\]`)
+	jsStringPattern       = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
+	patchFilePattern      = regexp.MustCompile(`(?m)^\*\*\* (?:Update|Add|Delete) File: (.+)$`)
+	harnessBlockedPattern = regexp.MustCompile(`(?s)<tool_use_error>\s*blocked:`)
+	blockSuffixPattern    = regexp.MustCompile(`(:block:\d+|:usage)$`)
+	benignExitPrograms    = map[string]bool{"grep": true, "rg": true, "ag": true, "egrep": true, "fgrep": true, "diff": true, "cmp": true, "test": true, "[": true, "[[": true}
+	shellToolNames        = map[string]bool{"bash": true, "shell": true, "exec_command": true, "exec": true, "local_shell": true, "run": true, "container.exec": true, "run_command": true, "execute_command": true}
+	toolCategoryByName    = map[string]string{}
+	toolCategoryEntries   = map[string][]string{
 		"command": {"bash", "shell", "exec_command", "exec", "local_shell", "run", "write_stdin", "bashoutput", "killshell", "killbash", "run_command", "execute_command", "container.exec"},
 		"read":    {"read", "view_image", "notebookread", "ls", "view", "read_file", "open_file", "list_dir", "list_directory", "view_file", "view_file_outline", "view_code_item"},
 		"search":  {"grep", "glob", "search", "find", "codebase_search", "file_search", "grep_search", "find_by_name"},
@@ -748,9 +749,6 @@ var harnessErrorSignatures = []struct{ kind, needle string }{
 	{"user_rejected", "was rejected by the user"},
 	{"user_rejected", "user denied"},
 	{"user_rejected", "permission to use"},
-	{"harness_error", "tool permission request failed: error: stream closed"},
-	{"harness_error", "error: stream closed"},
-	{"hook_blocked", "blocked:"},
 	{"hook_blocked", "pretooluse"},
 	{"hook_blocked", "blocked by hook"},
 	{"hook_blocked", "hook error"},
@@ -830,6 +828,18 @@ func classifyToolOutcome(call *toolCall, content string, isError bool, details m
 		return
 	}
 	head := strings.ToLower(clipText(content, 2000))
+	// These two messages identify harness failures only when they are the
+	// result's own envelope. A command may print the same words in its log.
+	trimmed := strings.TrimSpace(head)
+	envelope := strings.TrimSpace(strings.TrimPrefix(trimmed, "<tool_use_error>"))
+	if strings.HasPrefix(envelope, "tool permission request failed: error: stream closed") {
+		call.ErrorType = "harness_error"
+		return
+	}
+	if harnessBlockedPattern.MatchString(trimmed) {
+		call.ErrorType = "hook_blocked"
+		return
+	}
 	for _, signature := range harnessErrorSignatures {
 		if strings.Contains(head, signature.needle) {
 			call.ErrorType = signature.kind

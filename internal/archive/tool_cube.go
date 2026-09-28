@@ -24,7 +24,7 @@ var toolCubeGroups = func() []struct{ column, expr string } {
 		{"session_kind", "COALESCE(a.kind,'root')"}, {"agent_depth", "COALESCE(a.depth,0)"},
 	}
 	for _, column := range []string{"provider", "model", "kind", "tool_name", "tool_category", "mcp_server", "program", "subcommand",
-		"command_category", "status", "error_type", "test_failure", "path_repository", "exit_code", "interrupted", "truncated", "has_pipe", "has_redirect", "has_heredoc",
+		"command_category", "status", "error_type", "test_failure", "path_repository", "path_scope", "exit_code", "interrupted", "truncated", "has_pipe", "has_redirect", "has_heredoc",
 		"backgrounded", "host", "duration_source", "result_tokens_source"} {
 		groups = append(groups, struct{ column, expr string }{column, "t." + column})
 	}

@@ -7,15 +7,16 @@ import (
 )
 
 var (
-	toolErrorTag      = regexp.MustCompile(`</?(?:tool_use_error|error)>`)
-	toolWrapperLine   = regexp.MustCompile(`^(?:Chunk ID:|Wall time:?|Process exited with code |Original token count:|Output:|Script (?:completed|failed|running with cell ID)|Exit code:? [0-9]+$|<persisted-output>)`)
-	toolExceptionLine = regexp.MustCompile(`^\w[\w.]*(?:Error|Exception):`)
-	toolFileLine      = regexp.MustCompile(`^\S+\.(?:go|rs|ts|py|js):\d+(?::\d+)?: `)
-	toolFailureLine   = regexp.MustCompile(`^(?:panic:|--- FAIL: \S+|FAIL\t|(?:error|Error|ERROR|fatal)[:\[]|E  |FAILED |usage:)|command not found|No such file or directory`)
-	toolTestMarker    = regexp.MustCompile(`(?m)(?:--- FAIL:|^FAIL\t|test result: FAILED|^FAILED |={2,} FAILURES ={2,}|\b[1-9]\d* failed\b|Tests:.*[1-9]\d* failed|\*\* TEST FAILED \*\*)`)
-	toolCodecNumber   = regexp.MustCompile(`(?i)utf-\d+`)
-	toolHexByte       = regexp.MustCompile(`0x[0-9a-fA-F]+`)
-	toolLineNumber    = regexp.MustCompile(`(?i)(\(eval\)|zsh|bash|sh):\d+:|:[0-9]+(?::[0-9]+)?:`)
+	toolErrorTag       = regexp.MustCompile(`</?(?:tool_use_error|error)>`)
+	toolWrapperLine    = regexp.MustCompile(`^(?:Chunk ID:|Wall time:?|Process exited with code |Original token count:|Output:|Script (?:completed|failed|running with cell ID)|Exit code:? [0-9]+$|<persisted-output>)`)
+	toolExceptionLine  = regexp.MustCompile(`^\w[\w.]*(?:Error|Exception):`)
+	toolFileLine       = regexp.MustCompile(`^\S+\.(?:go|rs|ts|py|js):\d+(?::\d+)?: `)
+	toolFailureLine    = regexp.MustCompile(`^(?:panic:|--- FAIL: \S+|FAIL\t|(?:error|Error|ERROR|fatal)[:\[]|E  |FAILED |usage:)|command not found|No such file or directory`)
+	toolTestMarker     = regexp.MustCompile(`(?m)(?:--- FAIL:|^FAIL\t|test result: FAILED|^FAILED |={2,} FAILURES ={2,}|\b[1-9]\d* failed\b|Tests:.*[1-9]\d* failed|\*\* TEST FAILED \*\*)`)
+	toolTestSubcommand = regexp.MustCompile(`(?i)(^|[\s:/_-])tests?($|[\s:/_-])`)
+	toolCodecNumber    = regexp.MustCompile(`(?i)utf-\d+`)
+	toolHexByte        = regexp.MustCompile(`0x[0-9a-fA-F]+`)
+	toolLineNumber     = regexp.MustCompile(`(?i)(\(eval\)|zsh|bash|sh):\d+:|:[0-9]+(?::[0-9]+)?:`)
 )
 
 func unwrapToolOutput(content string) string {
@@ -92,7 +93,7 @@ func toolErrorSignature(content string) string {
 func toolTestFailure(call *toolCall, content string) bool {
 	test := call.CommandCategory == "test"
 	for _, command := range call.Commands {
-		if command.Category == "test" || strings.Contains(strings.ToLower(command.Subcommand), "test") {
+		if command.Category == "test" || toolTestSubcommand.MatchString(command.Subcommand) {
 			test = true
 			break
 		}

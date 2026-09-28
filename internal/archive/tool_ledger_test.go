@@ -337,6 +337,17 @@ func TestToolErrorSignatureAndTestFailure(t *testing.T) {
 	if toolTestFailure(&call, "PASS") {
 		t.Fatal("passing test")
 	}
+	for _, subcommand := range []string{"attestation", "latest"} {
+		call.CommandCategory = ""
+		call.Commands = []toolCommand{{Subcommand: subcommand}}
+		if toolTestFailure(&call, "--- FAIL: TestA") {
+			t.Fatalf("non-test subcommand %q", subcommand)
+		}
+	}
+	call.Commands = []toolCommand{{Subcommand: "run test:e2e"}}
+	if !toolTestFailure(&call, "--- FAIL: TestA") {
+		t.Fatal("test script subcommand")
+	}
 }
 
 func TestRepoRelativePath(t *testing.T) {
@@ -345,7 +356,8 @@ func TestRepoRelativePath(t *testing.T) {
 		{"/Users/a/src/pharos/a.go", "", "a.go", "pharos", "repo"},
 		{"a.go", "/Users/a/src/other", "a.go", "other", "repo"},
 		{"/Users/a/src/pharos/.conductor/x/a.go", "", "a.go", "pharos", "repo"},
-		{"/Users/a/src/pharos/.conductor/x/.claude/worktrees/agent-y/a.go", "", "a.go", "x", "repo"},
+		{"/Users/a/src/pharos/.conductor/x/.claude/worktrees/agent-y/a.go", "", "a.go", "pharos", "repo"},
+		{"/Users/a/conductor/workspaces/pharos/karachi/.claude/worktrees/agent-1/x.go", "", "x.go", "pharos", "repo"},
 		{"/Users/a/src/pharos/.task-worktrees/x/a.go", "", "a.go", "pharos", "repo"},
 		{"/Users/a/src/pharos/.codex/worktrees/x/y/a.go", "", "a.go", "pharos", "repo"},
 		{"/Users/a/conductor/workspaces/pharos/karachi/a.go", "", "a.go", "pharos", "repo"},
@@ -369,7 +381,13 @@ func TestRepoRelativePath(t *testing.T) {
 func TestHarnessFailuresOverrideCommandExit(t *testing.T) {
 	for _, test := range []struct{ content, kind string }{
 		{"Tool permission request failed: Error: Stream closed", "harness_error"},
+		{"<tool_use_error>Tool permission request failed: Error: Stream closed</tool_use_error>", "harness_error"},
 		{"<tool_use_error>Blocked: sleep 10 followed by another command</tool_use_error>", "hook_blocked"},
+		{"Exit code 1\nBlocked: 2 tests failed", "nonzero_exit"},
+		{"Blocked: 2", "nonzero_exit"},
+		{"Exit code 1\nCORS request blocked: origin denied", "nonzero_exit"},
+		{"Error: Stream closed", "nonzero_exit"},
+		{"Exit code 1\ngrpc transport: Error: Stream closed", "nonzero_exit"},
 	} {
 		call := toolCall{Category: "command", Program: "bash", resultIndex: 1}
 		classifyToolOutcome(&call, test.content, true, nil)

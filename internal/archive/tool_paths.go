@@ -50,10 +50,12 @@ func repoRelativePath(path, cwd string, roots []repoRoot) (rel, repo, scope stri
 		}
 		if skip > 0 && i+skip <= len(parts) && i > best {
 			best = i
-			if parts[i] == "conductor" {
-				repo = parts[i+2]
-			} else if i > 0 {
-				repo = parts[i-1]
+			if repo == "" {
+				if parts[i] == "conductor" {
+					repo = parts[i+2]
+				} else if i > 0 {
+					repo = parts[i-1]
+				}
 			}
 			rel = strings.Join(parts[i+skip:], "/")
 		}

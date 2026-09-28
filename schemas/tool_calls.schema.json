@@ -783,6 +783,44 @@
       }
     },
     {
+      "name": "path_scope",
+      "label": "Path scope",
+      "type": "enum",
+      "group": "Tool",
+      "select": {
+        "default": false
+      },
+      "filter": {
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "repo",
+              "label": "Repository"
+            },
+            {
+              "value": "temp",
+              "label": "Temporary"
+            },
+            {
+              "value": "agent_home",
+              "label": "Agent home"
+            },
+            {
+              "value": "external",
+              "label": "External"
+            }
+          ]
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "path_scope",
+          "synthetic": true
+        }
+      }
+    },
+    {
       "name": "host",
       "label": "Site",
       "type": "text",
