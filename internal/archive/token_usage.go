@@ -182,6 +182,10 @@ func streamDepth(stream string, parents map[string]string) int {
 }
 
 func conversationTokenReports(messages []MessageRecord) []tokenReport {
+	return conversationTokenReportsWithCostState(messages, false)
+}
+
+func conversationTokenReportsWithCostState(messages []MessageRecord, suppressCostState bool) []tokenReport {
 	reports := make([]tokenReport, len(messages))
 	streamAliases := tokenStreamAliases(messages)
 	seen := map[string]int{}
@@ -320,6 +324,48 @@ func conversationTokenReports(messages []MessageRecord) []tokenReport {
 		}
 		reports[i] = r
 	}
+	// Conductor stores one usage-bearing assistant envelope per content block.
+	// With no message ID, adjacent blocks of one response share the same prompt
+	// size. Keep the largest output until a user turn or tool result intervenes.
+	lastAnonymous := map[string]int{}
+	streams := make([]string, len(reports))
+	for i := range reports {
+		streams[i] = reports[i].stream
+		r := reports[i]
+		if r.scope != "request" || r.counts == nil {
+			continue
+		}
+		raw, value := tokenObject(messages[i])
+		msg := mapValueDefault(value["message"])
+		response := mapValueDefault(value["response"])
+		if msg["usage"] == nil || firstString(msg["id"], response["id"], value["response_id"], value["usage_message_id"]) != "" || !hasUsageEvidence(raw) {
+			delete(lastAnonymous, r.stream)
+			continue
+		}
+		if previous, ok := lastAnonymous[r.stream]; ok && reports[previous].counts["input_tokens"] == r.counts["input_tokens"] &&
+			!turnBetween(messages, streams, r.stream, previous, i) {
+			if reports[previous].counts["output_tokens"] > r.counts["output_tokens"] {
+				reports[i].counts = reports[previous].counts
+			}
+			reports[previous].counts = nil
+		}
+		lastAnonymous[r.stream] = i
+	}
+	hasRequests := false
+	for _, r := range reports {
+		if r.scope == "request" && r.counts != nil && r.counts["total_tokens"] > 0 {
+			hasRequests = true
+			break
+		}
+	}
+	if hasRequests || suppressCostState {
+		for i, m := range messages {
+			raw, value := tokenObject(m)
+			if firstString(value["type"], raw["type"]) == "cost-state" {
+				reports[i].counts = nil
+			}
+		}
+	}
 	requests := map[string]tokenCounts{}
 	for i, r := range reports {
 		if r.scope != "request" || r.counts == nil {
@@ -387,8 +433,12 @@ func conversationTokenReports(messages []MessageRecord) []tokenReport {
 }
 
 func conversationTokenCounts(messages []MessageRecord) tokenCounts {
+	return conversationTokenCountsWithCostState(messages, false)
+}
+
+func conversationTokenCountsWithCostState(messages []MessageRecord, suppressCostState bool) tokenCounts {
 	totals := tokenCounts{}
-	for _, report := range conversationTokenReports(messages) {
+	for _, report := range conversationTokenReportsWithCostState(messages, suppressCostState) {
 		addTokenCounts(totals, report.counts)
 	}
 	return totals
@@ -431,6 +481,10 @@ func (s *agentSessionSummary) addUsage(message MessageRecord, counts tokenCounts
 }
 
 func agentSessionSummaries(messages []MessageRecord) []agentSessionSummary {
+	return agentSessionSummariesWithCostState(messages, false)
+}
+
+func agentSessionSummariesWithCostState(messages []MessageRecord, suppressCostState bool) []agentSessionSummary {
 	root := &agentSessionSummary{nativeID: "main", delegationMessageIndex: -1, counts: tokenCounts{}, usage: map[usageBucket]tokenCounts{}}
 	sessions := map[string]*agentSessionSummary{"main": root}
 	aliases := tokenStreamAliases(messages)
@@ -472,7 +526,7 @@ func agentSessionSummaries(messages []MessageRecord) []agentSessionSummary {
 			}
 		}
 	}
-	for index, report := range conversationTokenReports(messages) {
+	for index, report := range conversationTokenReportsWithCostState(messages, suppressCostState) {
 		if report.counts == nil {
 			continue
 		}
@@ -556,7 +610,11 @@ func agentSessionSummaries(messages []MessageRecord) []agentSessionSummary {
 func reconciledTokenMetrics(record WorkspaceRecord) []map[string]any {
 	totals := tokenCounts{}
 	for _, c := range record.Conversations {
-		addTokenCounts(totals, conversationTokenCounts(c.Messages))
+		remainders := claudeGroupRemainder(record.Conversations, c)
+		addTokenCounts(totals, conversationTokenCountsWithCostState(c.Messages, remainders != nil))
+		for _, remainder := range remainders {
+			addTokenCounts(totals, remainder)
+		}
 	}
 	if _, ok := totals["total_tokens"]; ok {
 		if unclassified := math.Max(0, totals["total_tokens"]-totals["input_tokens"]-totals["output_tokens"]); unclassified > 0 {

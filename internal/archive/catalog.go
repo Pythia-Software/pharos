@@ -101,7 +101,9 @@ func (c *Catalog) Close() error {
 // stale rows as current; it records a TL1 source as synced without its
 // analysis tables; and it writes timestamps that no longer sort as times.
 // 8: source index versions make parser-only updates visible to capture status.
-const catalogSchemaVersion = 8
+// 9: child-conversation links and usage-attribution repair state. Older builds
+// would reingest Claude roots without preserving their group remainder.
+const catalogSchemaVersion = 9
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.
@@ -170,6 +172,7 @@ func (c *Catalog) Initialize() error {
 		{"agent_sessions", "unclassified_tokens", "ALTER TABLE agent_sessions ADD COLUMN unclassified_tokens INTEGER NOT NULL DEFAULT 0"},
 		{"agent_sessions", "cache_creation_5m_input_tokens", "ALTER TABLE agent_sessions ADD COLUMN cache_creation_5m_input_tokens INTEGER NOT NULL DEFAULT 0"},
 		{"agent_sessions", "cache_creation_1h_input_tokens", "ALTER TABLE agent_sessions ADD COLUMN cache_creation_1h_input_tokens INTEGER NOT NULL DEFAULT 0"},
+		{"agent_sessions", "child_conversation_id", "ALTER TABLE agent_sessions ADD COLUMN child_conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL"},
 		{"tool_usage_daily", "command_name", "ALTER TABLE tool_usage_daily ADD COLUMN command_name TEXT"},
 		{"tool_calls", "url", "ALTER TABLE tool_calls ADD COLUMN url TEXT"},
 		{"tool_calls", "host", "ALTER TABLE tool_calls ADD COLUMN host TEXT"},
@@ -186,6 +189,9 @@ func (c *Catalog) Initialize() error {
 				return err
 			}
 		}
+	}
+	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS agent_sessions_child_conversation_idx ON agent_sessions(child_conversation_id)`); err != nil {
+		return err
 	}
 	// Holds every column the Library's rows read (libraryWorkspaceFields), so
 	// building them reads this, not the workspace rows, whose purpose and
@@ -470,7 +476,8 @@ func (c *Catalog) seedSessionUsage() error {
 func (c *Catalog) RefineUsageTimeline(progress func(done, total int)) (int, error) {
 	conversations, err := queryMaps(c.DB, `SELECT c.id,c.workspace_id,c.provider,c.model,c.started_at,c.agent_depth FROM conversations c
 		WHERE c.id IN (SELECT a.conversation_id FROM agent_session_usage u JOIN agent_sessions a ON a.id=u.agent_session_id
-			WHERE u.attribution='session-start')`)
+			WHERE u.attribution='session-start')
+		AND NOT EXISTS (SELECT 1 FROM usage_attribution_state s WHERE s.workspace_id=c.workspace_id AND s.version=?)`, usageAttributionVersion)
 	if err != nil {
 		return 0, err
 	}
@@ -859,7 +866,7 @@ func (c *Catalog) workDetail(id string, includeMessages bool) (map[string]any, e
 	result["conversations"] = conversations
 	queries := []struct{ key, sql string }{
 		{"agent_sessions", `SELECT a.*,(SELECT COUNT(*) FROM agent_session_messages am WHERE am.agent_session_id=a.id) message_count
-			FROM agent_sessions a WHERE a.workspace_id=? ORDER BY a.depth,a.started_at,a.id`},
+			FROM agent_sessions a WHERE a.workspace_id=? AND a.usage_status<>'in-child-conversation' ORDER BY a.depth,a.started_at,a.id`},
 		{"changes", `SELECT cs.id,cs.classification,cs.base_id,cs.head_id,cs.complete,cf.path,cf.old_path,cf.status,cf.tracked,cf.bytes,cf.evidence_locator FROM change_sets cs LEFT JOIN change_files cf ON cf.change_set_id=cs.id WHERE cs.workspace_id=? ORDER BY cf.path`},
 		{"metrics", "SELECT * FROM metrics WHERE workspace_id=? ORDER BY name"},
 		{"metric_ledger", "SELECT * FROM metric_ledger WHERE workspace_id=? ORDER BY sequence LIMIT 10000"},
@@ -875,6 +882,23 @@ func (c *Catalog) workDetail(id string, includeMessages bool) (map[string]any, e
 			return nil, e
 		}
 		result[query.key] = values
+	}
+	if includeMessages {
+		usageByConversation := map[string]tokenCounts{}
+		for _, session := range result["agent_sessions"].([]map[string]any) {
+			conversationID := firstString(session["conversation_id"])
+			if usageByConversation[conversationID] == nil {
+				usageByConversation[conversationID] = tokenCounts{}
+			}
+			for _, key := range []string{"input_tokens", "uncached_input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "cache_creation_5m_input_tokens", "cache_creation_1h_input_tokens", "output_tokens", "reasoning_output_tokens", "unclassified_tokens", "total_tokens"} {
+				usageByConversation[conversationID][key] += float64(integer(session[key]))
+			}
+		}
+		for _, conversation := range conversations {
+			if usage := usageByConversation[firstString(conversation["id"])]; usage != nil {
+				conversation["token_usage"] = usage
+			}
+		}
 	}
 	summary, _ := queryMaps(c.DB, "SELECT * FROM summaries WHERE workspace_id=?", id)
 	if len(summary) > 0 {

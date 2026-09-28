@@ -51,13 +51,14 @@ var libraryColumns = []libraryColumn{
 	// adapter attributed to a turn (compaction_trigger) are counted.
 	{"compaction_count", `(SELECT COUNT(*) FROM conversations kc JOIN messages km ON km.conversation_id=kc.id WHERE kc.workspace_id=w.id AND km.kind='metadata'
 		AND (km.text LIKE '%"subtype":"compact_boundary"%' OR km.text LIKE '%"compaction_trigger":"%'))`},
-	// A conversation's "main" session is its root, or for a child transcript
-	// the sub-agent itself, which its parent's delegation session already
-	// counts (in this workspace or the parent's). Depth is measured from the
-	// workspace's shallowest session, so a sub-agent's own workspace starts at 0.
-	{"subagent_count", "(SELECT COUNT(*) FROM agent_sessions ax WHERE ax.workspace_id=w.id AND ax.native_id<>'main')"},
+	// A child conversation's main session represents its sub-agent. Count it
+	// instead of the zero-usage delegation that points to that conversation.
+	{"subagent_count", `(SELECT COUNT(*) FROM agent_sessions ax JOIN conversations cx ON cx.id=ax.conversation_id
+		WHERE ax.workspace_id=w.id AND ((ax.native_id<>'main' AND ax.usage_status<>'in-child-conversation')
+		OR (ax.native_id='main' AND cx.agent_depth>0)))`},
 	{"subagent_depth", `COALESCE(
-		(SELECT MAX(ax.depth) FROM agent_sessions ax WHERE ax.workspace_id=w.id AND ax.native_id<>'main')
+		(SELECT MAX(ax.depth) FROM agent_sessions ax JOIN conversations cx ON cx.id=ax.conversation_id WHERE ax.workspace_id=w.id
+			AND ((ax.native_id<>'main' AND ax.usage_status<>'in-child-conversation') OR (ax.native_id='main' AND cx.agent_depth>0)))
 		-(SELECT MIN(ax.depth) FROM agent_sessions ax WHERE ax.workspace_id=w.id),0)`},
 	{"pr_count", "(SELECT COUNT(DISTINCT lx.pr_id) FROM work_pr_links lx WHERE lx.workspace_id=w.id)"},
 	{"pr_numbers", "(SELECT GROUP_CONCAT(prx.number) FROM work_pr_links lx JOIN pull_requests prx ON prx.id=lx.pr_id WHERE lx.workspace_id=w.id)"},

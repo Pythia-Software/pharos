@@ -214,6 +214,16 @@ func Run(arguments []string) error {
 			return fmt.Errorf("refine usage after %d conversations: %w", refined, err)
 		}
 		return printJSON(map[string]any{"conversations_refined": refined})
+	case "repair-usage-attribution":
+		repaired, err := catalog.RepairUsageAttribution(context.Background(), func(done, total int) {
+			if done%100 == 0 || done == total {
+				fmt.Fprintf(os.Stderr, "repaired usage for %d/%d workspaces\n", done, total)
+			}
+		})
+		if err != nil {
+			return fmt.Errorf("repair usage attribution after %d workspaces: %w", repaired, err)
+		}
+		return printJSON(map[string]any{"workspaces_repaired": repaired})
 	case "pricing":
 		return runPricingCLI(catalog, args)
 	case "search":
@@ -239,7 +249,7 @@ func Run(arguments []string) error {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: pharos [--config PATH] {init,init-library,add-this-mac,serve,capture,index,backup,ingest,repair-existing,refine-usage,build-tools,pricing,search,tl1,health,doctor,dev-ui,mcp,probe,volume-id}")
+	return fmt.Errorf("usage: pharos [--config PATH] {init,init-library,add-this-mac,serve,capture,index,backup,ingest,repair-existing,refine-usage,repair-usage-attribution,build-tools,pricing,search,tl1,health,doctor,dev-ui,mcp,probe,volume-id}")
 }
 func urlQueryEscape(value string) string {
 	replacer := strings.NewReplacer("%", "%25", " ", "%20", "+", "%2B", "?", "%3F", "&", "%26", "=", "%3D")
