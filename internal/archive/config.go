@@ -27,30 +27,33 @@ type SourceConfig struct {
 }
 
 type Config struct {
-	Path              string
-	Library           bool
-	Executable        string
-	CatalogPath       string
-	ArchiveRoot       string
-	StagingRoot       string
-	VolumeID          string
-	APIToken          string
-	Host              string
-	Port              int
-	PackageCapBytes   int64
-	UpcomingDays      int
-	EligibleDays      int
-	SnoozeDays        int
-	StagingCapBytes   int64
-	EnableReclamation bool
-	ReleaseHookProven bool
-	TL1URL            string
-	TL1Token          string
-	GitHubToken       string
-	CPUIDLECeiling    float64
-	IOMBPSCeiling     float64
-	YieldPollSeconds  float64
-	Sources           []SourceConfig
+	Path                   string
+	Library                bool
+	Executable             string
+	CatalogPath            string
+	ArchiveRoot            string
+	StagingRoot            string
+	VolumeID               string
+	APIToken               string
+	Host                   string
+	Port                   int
+	PackageCapBytes        int64
+	UpcomingDays           int
+	EligibleDays           int
+	SnoozeDays             int
+	StagingCapBytes        int64
+	EnableReclamation      bool
+	ReleaseHookProven      bool
+	TL1URL                 string
+	TL1Token               string
+	GitHubToken            string
+	CPUIDLECeiling         float64
+	IOMBPSCeiling          float64
+	YieldPollSeconds       float64
+	Sources                []SourceConfig
+	RepositoryAliases      map[string]string
+	RepositorySeparate     []string
+	ResolveRepositoryForge bool
 
 	// CaptureRoot holds raw captures of each host's sources; see capture.go.
 	CaptureRoot        string
@@ -103,6 +106,7 @@ func loadConfig(path string, hostSources bool) (Config, error) {
 	defer file.Close()
 	root := map[string]any{}
 	var source map[string]any
+	section := ""
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := stripTOMLComment(strings.TrimSpace(scanner.Text()))
@@ -114,9 +118,15 @@ func loadConfig(path string, hostSources bool) (Config, error) {
 				config.Sources = append(config.Sources, sourceFromMap(source, base))
 			}
 			source = map[string]any{}
+			section = "sources"
 			continue
 		}
 		if strings.HasPrefix(line, "[") {
+			if source != nil {
+				config.Sources = append(config.Sources, sourceFromMap(source, base))
+				source = nil
+			}
+			section = strings.Trim(line, "[]")
 			continue
 		}
 		key, raw, ok := strings.Cut(line, "=")
@@ -125,7 +135,16 @@ func loadConfig(path string, hostSources bool) (Config, error) {
 		}
 		key = strings.TrimSpace(key)
 		value := parseTOMLScalar(strings.TrimSpace(raw))
-		if source != nil {
+		if section == "repositories.aliases" {
+			if config.RepositoryAliases == nil {
+				config.RepositoryAliases = map[string]string{}
+			}
+			config.RepositoryAliases[repositorySlug(strings.Trim(key, `"'`))] = repositorySlug(fmt.Sprint(value))
+		} else if section == "repositories.separate" {
+			if value == true {
+				config.RepositorySeparate = append(config.RepositorySeparate, strings.Trim(key, `"'`))
+			}
+		} else if source != nil {
 			source[key] = value
 		} else {
 			root[key] = value
@@ -166,6 +185,7 @@ func loadConfig(path string, hostSources bool) (Config, error) {
 	config.TL1URL = stringValue(root, "tl1_url", "")
 	config.TL1Token = stringValue(root, "tl1_token", os.Getenv("PHAROS_TL1_TOKEN"))
 	config.GitHubToken = stringValue(root, "github_token", os.Getenv("GITHUB_TOKEN"))
+	config.ResolveRepositoryForge = boolValue(root, "resolve_repository_forge", false)
 	config.CPUIDLECeiling = floatValue(root, "cpu_idle_ceiling", config.CPUIDLECeiling)
 	config.IOMBPSCeiling = floatValue(root, "io_mbps_ceiling", config.IOMBPSCeiling)
 	config.YieldPollSeconds = floatValue(root, "yield_poll_seconds", config.YieldPollSeconds)

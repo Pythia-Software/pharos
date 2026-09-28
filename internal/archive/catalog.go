@@ -17,13 +17,15 @@ import (
 )
 
 type Catalog struct {
-	Path          string
-	DB            *sql.DB
-	captureRootMu sync.RWMutex
-	captureRoot   string
-	library       libraryCache
-	find          libraryFindCache
-	derived       derivedCache
+	Path               string
+	DB                 *sql.DB
+	RepositoryAliases  map[string]string
+	RepositorySeparate []string
+	captureRootMu      sync.RWMutex
+	captureRoot        string
+	library            libraryCache
+	find               libraryFindCache
+	derived            derivedCache
 	// quietVersion and warmVersion are the catalog versions warmCaches last
 	// saw and warmed; only the Library maintenance loop uses them.
 	quietVersion, warmVersion int64
@@ -118,7 +120,8 @@ func (c *Catalog) Close() error {
 // 8: source index versions make parser-only updates visible to capture status.
 // 9: child-conversation links and usage-attribution repair state. Older builds
 // would reingest Claude roots without preserving their group remainder.
-const catalogSchemaVersion = 9
+// 10: repository identity columns and merge-aware ingestion.
+const catalogSchemaVersion = 10
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.
@@ -198,6 +201,9 @@ func (c *Catalog) Initialize() error {
 		{"tool_calls", "hosts", "ALTER TABLE tool_calls ADD COLUMN hosts TEXT"},
 		{"tool_calls", "url_count", "ALTER TABLE tool_calls ADD COLUMN url_count INTEGER NOT NULL DEFAULT 0"},
 		{"tool_calls", "search_query", "ALTER TABLE tool_calls ADD COLUMN search_query TEXT"},
+		{"repositories", "normalized_remote", "ALTER TABLE repositories ADD COLUMN normalized_remote TEXT"},
+		{"repositories", "root_commit", "ALTER TABLE repositories ADD COLUMN root_commit TEXT"},
+		{"repositories", "forge_id", "ALTER TABLE repositories ADD COLUMN forge_id TEXT"},
 		{"tool_calls", "error_signature", "ALTER TABLE tool_calls ADD COLUMN error_signature TEXT"},
 		{"tool_calls", "test_failure", "ALTER TABLE tool_calls ADD COLUMN test_failure INTEGER NOT NULL DEFAULT 0"},
 		{"tool_calls", "repo_path", "ALTER TABLE tool_calls ADD COLUMN repo_path TEXT"},
@@ -214,8 +220,15 @@ func (c *Catalog) Initialize() error {
 			}
 		}
 	}
-	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS agent_sessions_child_conversation_idx ON agent_sessions(child_conversation_id)`); err != nil {
-		return err
+	for _, index := range []string{
+		"CREATE INDEX IF NOT EXISTS agent_sessions_child_conversation_idx ON agent_sessions(child_conversation_id)",
+		"CREATE INDEX IF NOT EXISTS repositories_normalized_remote_idx ON repositories(normalized_remote)",
+		"CREATE INDEX IF NOT EXISTS repositories_root_commit_idx ON repositories(root_commit)",
+		"CREATE INDEX IF NOT EXISTS repositories_forge_id_idx ON repositories(forge_id)",
+	} {
+		if _, err := c.DB.Exec(index); err != nil {
+			return err
+		}
 	}
 	// Holds every column the Library's rows read (libraryWorkspaceFields), so
 	// building them reads this, not the workspace rows, whose purpose and

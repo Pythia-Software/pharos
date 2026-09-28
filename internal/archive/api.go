@@ -55,6 +55,11 @@ func NewServer(config Config, catalog *Catalog) *Server {
 	server.life.init()
 	if catalog != nil {
 		catalog.background = server.spawn
+		catalog.RepositoryAliases = config.RepositoryAliases
+		catalog.RepositorySeparate = config.RepositorySeparate
+		if config.ResolveRepositoryForge {
+			server.spawn(func(ctx context.Context) { _ = catalog.RefreshRepositoryForgeIDs(ctx) })
+		}
 		catalog.setCaptureRoot(config.CaptureRoot)
 	}
 	return server
