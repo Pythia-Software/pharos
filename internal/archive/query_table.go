@@ -34,7 +34,8 @@ func librarySearch(ctx context.Context, values url.Values) SearchOptions {
 func (s *Server) queryTableRows(ctx context.Context, dataset string, values url.Values, fields libraryFields) ([]map[string]any, error) {
 	switch dataset {
 	case "library":
-		return s.Catalog.searchRows(librarySearch(ctx, values), fields)
+		rows, _, err := s.libraryRows(ctx, values, fields, nil)
+		return rows, err
 	case "activity":
 		payload := s.activity()
 		runs, _ := payload["runs"].([]map[string]any)
@@ -230,11 +231,10 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 		}
 		var rows []map[string]any
 		var evidence map[string]*searchEvidence
+		var find *libraryFindSet
 		var err error
 		if dataset == "library" {
-			search := librarySearch(r.Context(), r.URL.Query())
-			search.evidence = &evidence
-			rows, err = s.Catalog.searchRows(search, libraryFieldsFor(needed...))
+			rows, find, err = s.libraryRows(r.Context(), r.URL.Query(), libraryFieldsFor(needed...), &evidence)
 		} else {
 			rows, err = s.queryTableRows(r.Context(), dataset, r.URL.Query(), libraryFieldsFor(needed...))
 		}
@@ -258,6 +258,14 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 					writeError(w, err, http.StatusInternalServerError)
 					return
 				}
+			}
+			if find != nil {
+				find.attach(result.Rows)
+				writeJSON(w, struct {
+					querytable.Result
+					Find libraryFindSummary `json:"find"`
+				}{result, libraryFindSummary{Workspaces: len(find.matches), Limited: find.limited}}, http.StatusOK)
+				return
 			}
 		}
 		writeJSON(w, result, http.StatusOK)

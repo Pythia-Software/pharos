@@ -44,15 +44,30 @@ var libraryWords = regexp.MustCompile(`[\pL\pN]+`)
 func quoteFTS(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
 
 func (c *Catalog) LibraryFind(ctx context.Context, o LibraryFindOptions) (map[string]any, error) {
-	o.Query = strings.TrimSpace(o.Query)
-	if o.Query == "" {
-		return map[string]any{"items": []libraryHit{}, "total": 0}, nil
-	}
-	if len(o.Query) > 500 {
-		return nil, fmt.Errorf("search query is too long (maximum 500 characters)")
+	hits, limited, err := c.libraryFindHits(ctx, o)
+	if err != nil {
+		return nil, err
 	}
 	limit := clamp(o.Limit, 1, 100)
 	offset := max(o.Offset, 0)
+	total := len(hits)
+	if offset > total {
+		offset = total
+	}
+	end := min(offset+limit, total)
+	return map[string]any{"items": hits[offset:end], "total": total, "limit": limit, "offset": offset, "limited": limited}, nil
+}
+
+// libraryFindHits returns every hit, most relevant first, and whether the
+// search stopped at its 5,000-record limit.
+func (c *Catalog) libraryFindHits(ctx context.Context, o LibraryFindOptions) ([]libraryHit, bool, error) {
+	o.Query = strings.TrimSpace(o.Query)
+	if o.Query == "" {
+		return []libraryHit{}, false, nil
+	}
+	if len(o.Query) > 500 {
+		return nil, false, fmt.Errorf("search query is too long (maximum 500 characters)")
+	}
 	limited := false
 	o.limited = &limited
 	var hits []libraryHit
@@ -65,17 +80,9 @@ func (c *Catalog) LibraryFind(ctx context.Context, o LibraryFindOptions) (map[st
 	case "url":
 		hits, err = c.findURLs(ctx, o)
 	default:
-		return nil, fmt.Errorf("unknown search kind %q", o.Kind)
+		return nil, false, fmt.Errorf("unknown search kind %q", o.Kind)
 	}
-	if err != nil {
-		return nil, err
-	}
-	total := len(hits)
-	if offset > total {
-		offset = total
-	}
-	end := min(offset+limit, total)
-	return map[string]any{"items": hits[offset:end], "total": total, "limit": limit, "offset": offset, "limited": limited}, nil
+	return hits, limited, err
 }
 
 // A small edit distance supplements FTS word lookup. This works on vocabulary

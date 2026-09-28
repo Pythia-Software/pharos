@@ -127,8 +127,11 @@ results name a conversation when the archived evidence supports that link;
 otherwise they identify the workspace. URL results exclude links merely
 returned by web search.
 
-With an empty search, the Library table remains a query builder: pick columns,
-filter (including OR and NOT), sort on several keys, add metrics, and save views.
+The Library table is a query builder: pick columns, filter (including OR and
+NOT), sort on several keys, add metrics, and save views. A search narrows it to
+the matching work, so filters and metrics combine with the search, and each
+result links to its best match. Show results as a table or as conversation
+summaries, with or without a search.
 
 Open a row to see its changed files, linked PRs, and conversations. Each
 conversation reads turn by turn: your prompt, the outcome, and every command,

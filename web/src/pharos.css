@@ -99,14 +99,12 @@
 .semantic-search input { flex: 1; min-width: 120px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--ink); padding: 6px 12px; }
 .semantic-search select { min-width: 145px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--ink); padding: 6px 8px; }
 .semantic-search button { background: var(--accent); color: var(--panel); }
-.library-find-results { width: min(900px, 100%); }
-.library-find-hit { padding: 14px 0; border-top: 1px solid var(--line); }
-.library-find-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 7px 14px; }
-.library-find-head button { color: var(--accent); font-weight: 650; text-align: left; padding: 0; }
-.library-find-head span { color: var(--muted); font-size: var(--fs-sm); }
-.library-find-snippet { margin: 8px 0; overflow-wrap: anywhere; white-space: pre-wrap; }
-.library-find-open { color: var(--accent); padding: 0; font-size: var(--fs-sm); }
-.library-find-pages { display: flex; align-items: center; gap: 12px; margin: 16px 0; }
+.semantic-search button.semantic-search-clear { background: var(--panel); color: var(--ink); border: 1px solid var(--line); }
+.library-find-status { margin: -6px 0 14px; font-size: var(--fs-sm); }
+.library-find-match { margin-top: 15px; padding: 10px 12px; border-left: 3px solid var(--accent); border-radius: 4px; background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.library-find-snippet { margin: 6px 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.library-searching .qt-table col:last-child { width: 124px !important; }
+.library-find-open,.library-find-cell { color: var(--accent); padding: 0; border: 0; background: transparent; font-size: var(--fs-sm); text-align: left; white-space: nowrap; }
 .search-options { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: -6px 0 14px; color: var(--muted); font-size: var(--fs-sm); }
 .search-options label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 .search-options input { margin: 0; accent-color: var(--accent); }
