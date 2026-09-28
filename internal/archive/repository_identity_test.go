@@ -17,7 +17,8 @@ func TestNormalizeRepositoryRemote(t *testing.T) {
 func TestRepositoryConfigAliases(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "archive.toml")
 	data := `[repositories.aliases]
-"github.com/acme/old" = "github.com/acme/new"
+"https://GitHub.com/Acme/Old.git" = "git@github.com:Acme/New.git"
+"Alexandria" = "https://github.com/Acme/New.git"
 [repositories.separate]
 "repo_keep" = true
 `
@@ -28,7 +29,7 @@ func TestRepositoryConfigAliases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.RepositoryAliases["github.com/acme/old"] != "github.com/acme/new" || len(config.RepositorySeparate) != 1 || config.RepositorySeparate[0] != "repo_keep" {
+	if config.RepositoryAliases["github.com/acme/old"] != "github.com/acme/new" || config.RepositoryAliases["alexandria"] != "github.com/acme/new" || len(config.RepositorySeparate) != 1 || config.RepositorySeparate[0] != "repo_keep" {
 		t.Fatalf("config: %#v", config)
 	}
 }
@@ -142,6 +143,69 @@ func TestRepositoryUpsertConfigAlias(t *testing.T) {
 	}
 }
 
+func TestRepositoryUpsertLocalWorktreesAndSeparateRow(t *testing.T) {
+	catalog, err := OpenCatalog(filepath.Join(t.TempDir(), "catalog.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer catalog.Close()
+	legacyID := stableID("repo", "local", nil)
+	if _, err := catalog.DB.Exec(`INSERT INTO repositories(id,display_name,local_locations_json,created_at,updated_at) VALUES(?,?,?,?,?)`, legacyID, "local", jsonText([]string{"/old/conductor/workspaces/local/one"}), now(), now()); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := catalog.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/old/conductor/workspaces/local/two", "/old/conductor/workspaces/local/three"} {
+		id, err := upsertRepository(tx, map[string]any{"display_name": "local", "local_locations": []string{path}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if id != legacyID {
+			t.Fatalf("%s created %s, wanted %s", path, id, legacyID)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	items, err := loadRepositoryIdentities(catalog.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || len(items[0].Locations) != 3 {
+		t.Fatalf("local repositories: %#v", items)
+	}
+
+	oldRemote := "https://github.com/acme/one.git"
+	separateID := stableID("repo", oldRemote, nil)
+	if _, err := catalog.DB.Exec(`INSERT INTO repositories(id,canonical_remote,display_name,created_at,updated_at) VALUES(?,?,?,?,?)`, separateID, oldRemote, "one", now(), now()); err != nil {
+		t.Fatal(err)
+	}
+	options := repositoryOptions{aliases: map[string]string{"github.com/acme/one": "github.com/acme/two"}, separate: []string{separateID}}
+	tx, err = catalog.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := upsertRepository(tx, map[string]any{"canonical_remote": "git@github.com:ACME/ONE.git", "display_name": "one"}, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != separateID {
+		t.Fatalf("separate row split: %s != %s", id, separateID)
+	}
+	other, err := upsertRepository(tx, map[string]any{"canonical_remote": "https://github.com/acme/two.git", "display_name": "two"}, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other == separateID {
+		t.Fatal("separate row merged with alias target")
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRepositoryMergeKeepsPRLinks(t *testing.T) {
 	catalog, err := OpenCatalog(filepath.Join(t.TempDir(), "catalog.sqlite3"))
 	if err != nil {
@@ -151,8 +215,8 @@ func TestRepositoryMergeKeepsPRLinks(t *testing.T) {
 	for _, query := range []string{
 		`INSERT INTO repositories(id,canonical_remote,display_name,created_at,updated_at) VALUES('a','https://github.com/acme/old.git','old','t','t'),('b','https://github.com/acme/new.git','new','t','t')`,
 		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at,repository_id) VALUES('w','codex','local','w','work','t','a')`,
-		`INSERT INTO pull_requests(id,host,repository_id,number,title,commit_refs_json) VALUES('p1','github.com','a',1,'rich','["abc"]'),('p2','github.com','b',1,NULL,'[]')`,
-		`INSERT INTO work_pr_links(workspace_id,pr_id,relationship,confidence,evidence_json) VALUES('w','p1','mentions',1,'{}')`,
+		`INSERT INTO pull_requests(id,host,repository_id,number,title,commit_refs_json) VALUES('p1','github.com','a',1,'rich','["abc"]'),('p2','github.com','b',1,NULL,'[]'),('p3','github.com','a',2,'second','[]')`,
+		`INSERT INTO work_pr_links(workspace_id,pr_id,relationship,confidence,evidence_json) VALUES('w','p1','mentions',1,'{}'),('w','p3','mentions',1,'{}')`,
 		`INSERT INTO protections(scope_type,scope_id,mode,reason,created_at) VALUES('repository','a','protect','keep','t')`,
 	} {
 		if _, err := catalog.DB.Exec(query); err != nil {
@@ -170,18 +234,48 @@ func TestRepositoryMergeKeepsPRLinks(t *testing.T) {
 	if err := mergeRepositoryGroup(catalog.DB, groups[0]); err != nil {
 		t.Fatal(err)
 	}
-	var repo, title, link string
+	var repo, title string
 	if err := catalog.DB.QueryRow(`SELECT repository_id FROM workspaces WHERE id='w'`).Scan(&repo); err != nil {
 		t.Fatal(err)
 	}
-	if err := catalog.DB.QueryRow(`SELECT title FROM pull_requests WHERE repository_id=?`, repo).Scan(&title); err != nil {
+	if err := catalog.DB.QueryRow(`SELECT title FROM pull_requests WHERE repository_id=? AND number=1`, repo).Scan(&title); err != nil {
 		t.Fatal(err)
 	}
-	if err := catalog.DB.QueryRow(`SELECT pr_id FROM work_pr_links WHERE workspace_id='w'`).Scan(&link); err != nil {
+	if repo != groups[0].Survivor.ID || title != "rich" {
+		t.Fatalf("repo=%s title=%s", repo, title)
+	}
+	for _, number := range []int{1, 2} {
+		var id string
+		if err := catalog.DB.QueryRow(`SELECT id FROM pull_requests WHERE repository_id=? AND number=?`, repo, number).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		if want := stableID("pr", "github.com", repo, number); id != want {
+			t.Fatalf("PR %d id=%s, want %s", number, id, want)
+		}
+	}
+	var links int
+	if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM work_pr_links WHERE workspace_id='w'`).Scan(&links); err != nil || links != 2 {
+		t.Fatalf("links=%d: %v", links, err)
+	}
+	tx, err := catalog.DB.Begin()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if repo != groups[0].Survivor.ID || title != "rich" || link == "" {
-		t.Fatalf("repo=%s title=%s link=%s", repo, title, link)
+	if err := upsertPRs(tx, "w", repo, []map[string]any{{"host": "github.com", "number": 1, "title": "rich"}, {"host": "github.com", "number": 2, "title": "second"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upsertRepository(tx, map[string]any{"canonical_remote": "https://github.com/acme/old.git", "display_name": "old"}, repositoryOptions{aliases: map[string]string{"github.com/acme/old": "github.com/acme/new"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var remote, name string
+	if err := catalog.DB.QueryRow(`SELECT canonical_remote,display_name FROM repositories WHERE id=?`, repo).Scan(&remote, &name); err != nil {
+		t.Fatal(err)
+	}
+	if remote != "https://github.com/acme/new.git" || name != "new" {
+		t.Fatalf("merge identity overwritten: remote=%s name=%s", remote, name)
 	}
 	var protected int
 	if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM protections WHERE scope_type='repository' AND scope_id=?`, repo).Scan(&protected); err != nil || protected != 1 {

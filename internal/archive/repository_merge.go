@@ -74,7 +74,8 @@ func mergeRepositoryGroup(db *sql.DB, group repositoryMergeGroup) error {
 				return err
 			}
 			if winner == "" {
-				if _, err := tx.Exec(`UPDATE pull_requests SET repository_id=? WHERE id=?`, group.Survivor.ID, entry.id); err != nil {
+				id := stableID("pr", entry.host, group.Survivor.ID, entry.number)
+				if err := movePullRequest(tx, entry.id, group.Survivor.ID, id); err != nil {
 					return err
 				}
 				continue
@@ -117,6 +118,38 @@ func mergeRepositoryGroup(db *sql.DB, group repositoryMergeGroup) error {
 			return err
 		}
 	}
+	// A pre-existing PR on the survivor may also have an older ID. Ingest
+	// derives IDs from the current repository ID, so normalize every PR here.
+	rows, err := tx.Query(`SELECT id,host,number FROM pull_requests WHERE repository_id=?`, group.Survivor.ID)
+	if err != nil {
+		return err
+	}
+	type pullRequestID struct {
+		id, host string
+		number   int
+	}
+	var stored []pullRequestID
+	for rows.Next() {
+		var entry pullRequestID
+		if err := rows.Scan(&entry.id, &entry.host, &entry.number); err != nil {
+			rows.Close()
+			return err
+		}
+		stored = append(stored, entry)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, entry := range stored {
+		id := stableID("pr", entry.host, group.Survivor.ID, entry.number)
+		if entry.id != id {
+			if err := movePullRequest(tx, entry.id, group.Survivor.ID, id); err != nil {
+				return err
+			}
+		}
+	}
 	root, forge := group.Survivor.Root, group.Survivor.Forge
 	for _, item := range all {
 		if root == "" {
@@ -150,6 +183,28 @@ func mergeRepositoryGroup(db *sql.DB, group repositoryMergeGroup) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+func movePullRequest(tx *sql.Tx, oldID, repositoryID, newID string) error {
+	if oldID == newID {
+		_, err := tx.Exec(`UPDATE pull_requests SET repository_id=? WHERE id=?`, repositoryID, oldID)
+		return err
+	}
+	// Temporarily free the host/repository/number key before inserting the
+	// canonical ID. Links stay on the old row until the new row exists.
+	if _, err := tx.Exec(`UPDATE pull_requests SET repository_id=NULL WHERE id=?`, oldID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO pull_requests(id,host,repository_id,number,url,title,state,base_ref,head_ref,commit_refs_json,observed_at)
+		SELECT ?,host,?,number,url,title,state,base_ref,head_ref,commit_refs_json,observed_at FROM pull_requests WHERE id=?`, newID, repositoryID, oldID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO work_pr_links(workspace_id,pr_id,relationship,confidence,evidence_json)
+		SELECT workspace_id,?,relationship,confidence,evidence_json FROM work_pr_links WHERE pr_id=?`, newID, oldID); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`DELETE FROM pull_requests WHERE id=?`, oldID)
+	return err
 }
 
 func saveRepositoryEvidence(db *sql.DB, items []repositoryIdentity) error {

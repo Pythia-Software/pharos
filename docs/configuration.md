@@ -1091,7 +1091,8 @@ resolved, add explicit aliases to `library.toml` or `archive.toml`:
 ```
 
 An old display name can also be used as a key when it uniquely identifies the
-repository. Slug keys are safer for common names.
+repository. SSH and HTTPS URL keys are normalized with slug keys, including
+case and `.git` suffixes. Slug keys are safer for common names.
 
 To keep an exceptional row separate, list its repository ID:
 

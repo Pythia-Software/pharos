@@ -276,6 +276,45 @@ func repositoryDirectoryOwners(items []repositoryIdentity, aliases map[string]st
 	return owners
 }
 
+// Ingest may update a row marked separate when the incoming record describes
+// that same remote. Separation only prevents linking it to a different row.
+func repositorySameIdentity(existing, incoming repositoryIdentity, items []repositoryIdentity, aliases map[string]string, owners map[string]map[string]bool, separate []string) bool {
+	if incoming.Normalized != "" {
+		for _, raw := range repositoryUnion(existing.Aliases, []string{existing.Remote, existing.Normalized}) {
+			if normalizeRepositoryRemote(raw) == incoming.Normalized {
+				return true
+			}
+		}
+	}
+	if existing.Remote == "" && incoming.Remote == "" && strings.EqualFold(existing.Name, incoming.Name) &&
+		(existing.Root == "" || incoming.Root == "" || existing.Root == incoming.Root) {
+		for _, path := range incoming.Locations {
+			dir := conductorRepositoryDir(path)
+			if dir == "" {
+				continue
+			}
+			for _, old := range existing.Locations {
+				if conductorRepositoryDir(old) != dir {
+					continue
+				}
+				matches := 0
+				for _, candidate := range items {
+					for _, location := range candidate.Locations {
+						if conductorRepositoryDir(location) == dir {
+							matches++
+							break
+						}
+					}
+				}
+				if matches == 1 {
+					return true
+				}
+			}
+		}
+	}
+	return repositoryMatch(existing, incoming, aliases, owners, separate) != ""
+}
+
 type repositoryMergeGroup struct {
 	Survivor repositoryIdentity
 	Losers   []repositoryIdentity

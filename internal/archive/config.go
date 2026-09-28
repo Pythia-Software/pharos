@@ -139,7 +139,7 @@ func loadConfig(path string, hostSources bool) (Config, error) {
 			if config.RepositoryAliases == nil {
 				config.RepositoryAliases = map[string]string{}
 			}
-			config.RepositoryAliases[strings.Trim(key, `"'`)] = fmt.Sprint(value)
+			config.RepositoryAliases[repositorySlug(strings.Trim(key, `"'`))] = repositorySlug(fmt.Sprint(value))
 		} else if section == "repositories.separate" {
 			if value == true {
 				config.RepositorySeparate = append(config.RepositorySeparate, strings.Trim(key, `"'`))

@@ -847,25 +847,19 @@ func upsertRepository(tx *sql.Tx, value map[string]any, options ...repositoryOpt
 	}
 	owners := repositoryDirectoryOwners(items, aliases)
 	for _, existing := range items {
-		if existing.ID == item.ID && item.ID != "" || repositoryMatch(existing, item, aliases, owners, separate) != "" {
+		if existing.ID == item.ID && item.ID != "" || repositorySameIdentity(existing, item, items, aliases, owners, separate) {
 			item.ID = existing.ID
 			item.Aliases = repositoryUnion(item.Aliases, existing.Aliases)
 			item.Locations = repositoryUnion(item.Locations, existing.Locations)
-			if item.Remote == "" {
-				item.Remote = existing.Remote
-			}
-			if item.Normalized == "" {
-				item.Normalized = existing.Normalized
-			}
+			item.Remote = existing.Remote
+			item.Normalized = existing.Normalized
 			if item.Root == "" {
 				item.Root = existing.Root
 			}
 			if item.Forge == "" {
 				item.Forge = existing.Forge
 			}
-			if item.Name == "" || firstString(value["canonical_remote"]) == "" {
-				item.Name = existing.Name
-			}
+			item.Name = existing.Name
 			break
 		}
 	}
