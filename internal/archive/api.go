@@ -187,7 +187,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/probe":
 		writeJSON(w, ProbeSources(s.Config(), s.Catalog), http.StatusOK)
 	case path == "/api/probe/status":
-		writeJSON(w, probeStatus(s.Config(), s.Catalog), http.StatusOK)
+		home, _ := os.UserHomeDir()
+		writeJSON(w, probeStatus(home, s.Config(), s.Catalog), http.StatusOK)
 	case strings.HasPrefix(path, "/api/query/"):
 		dataset, operation, ok := queryTableRoute(path)
 		if !ok {

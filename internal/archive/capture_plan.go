@@ -83,6 +83,24 @@ func planCapture(source SourceConfig) (capturePlan, error) {
 		}
 	case "tl1":
 		return plan, plan.tl1(source)
+	case "antigravity":
+		adapter := antigravityAdapter{baseAdapter{config: source}}
+		files, err := adapter.captureFiles()
+		if err != nil {
+			return plan, fmt.Errorf("Antigravity conversations are unavailable: %w", err)
+		}
+		for _, file := range files {
+			rel, _ := filepath.Rel(source.Path, file)
+			plan.files = append(plan.files, captureItem{file, filepath.ToSlash(rel)})
+		}
+		databases, err := adapter.databases()
+		if err != nil {
+			return plan, fmt.Errorf("Antigravity conversations are unavailable: %w", err)
+		}
+		for _, database := range databases {
+			rel, _ := filepath.Rel(source.Path, database)
+			plan.databases = append(plan.databases, captureItem{database, filepath.ToSlash(rel)})
+		}
 	default:
 		return plan, fmt.Errorf("unsupported source kind: %s", source.Kind)
 	}

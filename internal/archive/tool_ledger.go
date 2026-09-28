@@ -85,13 +85,13 @@ var (
 	toolCategoryByName  = map[string]string{}
 	toolCategoryEntries = map[string][]string{
 		"command": {"bash", "shell", "exec_command", "exec", "local_shell", "run", "write_stdin", "bashoutput", "killshell", "killbash", "run_command", "execute_command", "container.exec"},
-		"read":    {"read", "view_image", "notebookread", "ls", "view", "read_file", "open_file", "list_dir", "list_directory"},
-		"search":  {"grep", "glob", "search", "find", "codebase_search", "file_search", "grep_search"},
-		"edit":    {"edit", "write", "multiedit", "notebookedit", "apply_patch", "applypatch", "str_replace_editor", "create_file", "edit_file"},
-		"web":     {"webfetch", "websearch", "web_search", "web__run", "fetch", "browser", "web.run", "js", "js_reset"},
-		"agent":   {"task", "agent", "spawn_agent", "delegate", "workflow", "explore", "send_message", "wait", "wait_agent", "list_agents", "followup_task", "interrupt_agent", "close_agent", "sendmessage", "taskoutput"},
-		"plan":    {"todowrite", "todoread", "taskcreate", "taskupdate", "tasklist", "taskget", "taskstop", "update_plan", "enterplanmode", "exitplanmode", "enterworktree", "exitworktree"},
-		"user":    {"askuserquestion", "request_user_input", "request_user_input_async"},
+		"read":    {"read", "view_image", "notebookread", "ls", "view", "read_file", "open_file", "list_dir", "list_directory", "view_file", "view_file_outline", "view_code_item"},
+		"search":  {"grep", "glob", "search", "find", "codebase_search", "file_search", "grep_search", "find_by_name"},
+		"edit":    {"edit", "write", "multiedit", "notebookedit", "apply_patch", "applypatch", "str_replace_editor", "create_file", "edit_file", "write_to_file", "replace_file_content", "multi_replace_file_content"},
+		"web":     {"webfetch", "websearch", "web_search", "web__run", "fetch", "browser", "web.run", "js", "js_reset", "search_web", "read_url_content"},
+		"agent":   {"task", "agent", "spawn_agent", "delegate", "workflow", "explore", "send_message", "wait", "wait_agent", "list_agents", "followup_task", "interrupt_agent", "close_agent", "sendmessage", "taskoutput", "invoke_subagent", "define_subagent", "manage_subagents"},
+		"plan":    {"todowrite", "todoread", "taskcreate", "taskupdate", "tasklist", "taskget", "taskstop", "update_plan", "enterplanmode", "exitplanmode", "enterworktree", "exitworktree", "manage_task"},
+		"user":    {"askuserquestion", "request_user_input", "request_user_input_async", "ask_question"},
 		"meta":    {"toolsearch", "skill", "get_skill", "request_plugin_install", "slashcommand"},
 	}
 )
@@ -557,7 +557,7 @@ func toolResultText(content any) (string, int) {
 
 func toolFilePath(name string, input any) string {
 	if fields := mapValue(input); fields != nil {
-		if path := firstString(fields["file_path"], fields["notebook_path"], fields["path"], fields["filePath"]); path != "" {
+		if path := firstString(fields["file_path"], fields["notebook_path"], fields["path"], fields["filePath"], fields["AbsolutePath"], fields["TargetFile"]); path != "" {
 			return clipText(path, 500)
 		}
 	}
@@ -580,7 +580,7 @@ func shellCommandText(input any) string {
 	if fields == nil {
 		return ""
 	}
-	switch command := firstNonNil(fields["command"], fields["cmd"]).(type) {
+	switch command := firstNonNil(fields["command"], fields["cmd"], fields["CommandLine"]).(type) {
 	case string:
 		return command
 	case []any:

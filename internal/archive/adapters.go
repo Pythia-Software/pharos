@@ -1,8 +1,6 @@
 package archive
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -154,6 +152,8 @@ func MakeAdapter(config SourceConfig) (Adapter, error) {
 		return &conductorAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}}, nil
 	case "tl1":
 		return &tl1Adapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only"}}, nil
+	case "antigravity":
+		return &antigravityAdapter{baseAdapter{config: config, capability: "retrieval-only"}}, nil
 	default:
 		return nil, fmt.Errorf("unsupported source kind: %s", config.Kind)
 	}
@@ -580,28 +580,9 @@ func (a *jsonlAdapter) parseFile(path string) (WorkspaceRecord, sourcePart, bool
 	if parseHook != nil {
 		parseHook(path)
 	}
-	events := []map[string]any{}
-	reader := bufio.NewReaderSize(io.LimitReader(file, part.size), 64*1024)
-	line := 0
-	for {
-		encoded, readErr := reader.ReadBytes('\n')
-		if len(encoded) == 0 && readErr == io.EOF {
-			break
-		}
-		if readErr != nil && readErr != io.EOF {
-			return WorkspaceRecord{}, part, false, fmt.Errorf("read %s line %d: %w", path, line+1, readErr)
-		}
-		line++
-		decoder := json.NewDecoder(bytes.NewReader(encoded))
-		decoder.UseNumber()
-		var event map[string]any
-		if decoder.Decode(&event) == nil {
-			event["_line"] = int64(line)
-			events = append(events, event)
-		}
-		if readErr == io.EOF {
-			break
-		}
+	events, err := readJSONLines(file, part.size)
+	if err != nil {
+		return WorkspaceRecord{}, part, false, fmt.Errorf("read %s %w", path, err)
 	}
 	var record WorkspaceRecord
 	var ok bool

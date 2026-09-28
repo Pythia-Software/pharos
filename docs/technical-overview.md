@@ -1,6 +1,6 @@
 # Pharos technical overview
 
-Pharos is a local-first macOS library for finding past work across TL1, Conductor, Codex, Claude, and supported desktop exports. A second capability, preserving and reclaiming **TL1-owned** workspaces through a custody-aware owner hook, is mothballed; see [`docs/reclamation/README.md`](reclamation/README.md) for what remains and how to resume it.
+Pharos is a local-first macOS library for finding past work across TL1, Conductor, Codex, Claude, Google Antigravity, and supported desktop exports. A second capability, preserving and reclaiming **TL1-owned** workspaces through a custody-aware owner hook, is mothballed; see [`docs/reclamation/README.md`](reclamation/README.md) for what remains and how to resume it.
 
 The primary implementation is Go 1.26 with SQLite FTS, a local concept index, an authenticated loopback API, a read-only MCP server, and a responsive desktop UI. The Go service and UI are embedded in the macOS `.app`; the destructive TL1 workflow is deliberately held back.
 
@@ -38,7 +38,7 @@ Macs instead, run `macos/install-library.sh /Volumes/euclid/Pharos`. The app
 then uses the `library.toml` beside it, whose paths are relative to its own directory;
 see [Portable library](configuration.md#portable-library). On each Mac the
 drive is plugged into, double-click **Add This Mac.command** beside the app: it
-finds that Mac's Claude Code, Codex, Conductor, and TL1 history, captures it
+finds that Mac's Claude Code, Codex, Antigravity, Conductor, and TL1 history, captures it
 onto the drive, and indexes it ([Adding a Mac](configuration.md#adding-a-mac)).
 To bring an existing per-user install along without re-indexing, add `--adopt`
 with its `archive.toml`; see [Moving an existing install onto a drive](configuration.md#moving-an-existing-install-onto-a-drive).
@@ -77,6 +77,7 @@ Run diagnostics with `dist/Pharos.app/Contents/MacOS/pharos --config "$HOME/Libr
 | `conductor` | Consistent read-only SQLite snapshot transaction and schema inspection | None |
 | `codex` | Native rollout/session JSONL | None |
 | `claude` | Native project session JSONL | None |
+| `antigravity` | Per-conversation step transcripts (`transcript_full.jsonl`) with titles, workspaces, and subagent parents from `conversation_summaries.db`, and each model request's served model and token usage from the protobuf `gen_metadata` rows of `conversations/<id>.db`. Antigravity leaves its cost and credit fields unset, so cost comes from Pharos's price table | None |
 | `chatgpt-export` | User-provided `conversations.json` | None |
 | `canonical` | Documented interchange JSON | None |
 
