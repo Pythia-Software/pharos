@@ -209,7 +209,7 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 			writeError(w, fmt.Errorf("series json: %w", err), http.StatusBadRequest)
 			return
 		}
-		value, err := s.Catalog.writingSeries(r.Context(), request.Where, schema)
+		value, err := s.Catalog.writingSeries(r.Context(), request, schema)
 		if err != nil {
 			writeError(w, err, http.StatusBadRequest)
 			return

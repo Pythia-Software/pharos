@@ -74,7 +74,7 @@ func TestWritingRowsFoldSubagentWorkAndFollowFilters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	series, err := catalog.writingSeries(context.Background(), []querytable.WhereTerm{{Field: "title", Op: "=", Value: "Parser"}}, schema)
+	series, err := catalog.writingSeries(context.Background(), writingSeriesRequest{Where: []querytable.WhereTerm{{Field: "title", Op: "=", Value: "Parser"}}}, schema)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,11 +83,26 @@ func TestWritingRowsFoldSubagentWorkAndFollowFilters(t *testing.T) {
 	if series["works"] != 1 || len(daily) != 2 || integer(totals["typed_words"]) != 13 || integer(totals["automated_words"]) != 0 || integer(daily[1]["typed_words"]) != 7 {
 		t.Fatalf("series = %#v", series)
 	}
-	all, err := catalog.writingSeries(context.Background(), nil, schema)
+	all, err := catalog.writingSeries(context.Background(), writingSeriesRequest{}, schema)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if integer(all["totals"].(map[string]any)["messages"]) != 4 {
 		t.Fatalf("all = %#v", all["totals"])
+	}
+	// A time filter keeps only the days in its window, and a split sums words
+	// per day and row value.
+	window, err := catalog.writingSeries(context.Background(), writingSeriesRequest{From: "2026-09-02", To: "2026-09-08", Split: "source_kind"}, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	split := window["split"].([]map[string]any)
+	if window["works"] != 2 || len(window["daily"].([]map[string]any)) != 2 || len(split) != 2 ||
+		split[0]["day"] != "2026-09-02" || split[0]["value"] != "codex" || integer(split[0]["typed_words"]) != 4 ||
+		split[1]["value"] != "claude" || integer(split[1]["typed_words"]) != 7 {
+		t.Fatalf("window = %#v", window)
+	}
+	if _, err := catalog.writingSeries(context.Background(), writingSeriesRequest{Split: "title"}, schema); err == nil {
+		t.Fatal("split by title was accepted")
 	}
 }
