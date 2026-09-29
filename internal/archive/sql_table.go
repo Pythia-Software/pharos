@@ -379,6 +379,20 @@ func (d sqlDataset) selectList() string {
 	return strings.Join(parts, ",")
 }
 
+// scopedRows returns, in ID order, every row of the dataset that also meets
+// condition: an SQL condition over the dataset's aliases, and its arguments.
+func (d sqlDataset) scopedRows(ctx context.Context, q queryer, condition string, args []any, idField string) ([]map[string]any, error) {
+	where := condition
+	if d.base != "" {
+		where = d.base + " AND (" + condition + ")"
+	}
+	statement := "SELECT " + d.selectList() + " " + d.from + " WHERE " + where
+	if id, ok := d.columns[idField]; ok {
+		statement += " ORDER BY " + id
+	}
+	return queryMapsContext(ctx, q, statement, args...)
+}
+
 func (d sqlDataset) Rows(ctx context.Context, q queryer, query querytable.Query, schema querytable.Schema) (querytable.Result, error) {
 	if err := schema.ValidateQuery(query); err != nil {
 		return querytable.Result{}, err

@@ -575,7 +575,7 @@ struct ArchiveWebView: NSViewRepresentable {
     """
     static let windowMessageName = "pharosWindow"
 
-    final class Coordinator: NSObject, WKScriptMessageHandlerWithReply, WKScriptMessageHandler, WKUIDelegate, WKNavigationDelegate {
+    final class Coordinator: NSObject, WKScriptMessageHandlerWithReply, WKScriptMessageHandler, WKUIDelegate, WKNavigationDelegate, WKDownloadDelegate {
         let origin: URL
         weak var webView: ArchiveWKWebView?
         weak var service: ArchiveService?
@@ -695,13 +695,81 @@ struct ArchiveWebView: NSViewRepresentable {
             decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
         ) {
             guard let url = navigationAction.request.url, !isArchivePage(url) else {
-                decisionHandler(.allow)
+                // A link with a `download` attribute, such as a conversation's Share.
+                decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow)
                 return
             }
             if navigationAction.targetFrame?.isMainFrame ?? true {
                 NSWorkspace.shared.open(url)
             }
             decisionHandler(.cancel)
+        }
+
+        // The archive marks files it wants saved, not shown, as attachments.
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationResponse: WKNavigationResponse,
+            decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
+        ) {
+            let disposition = (navigationResponse.response as? HTTPURLResponse)?
+                .value(forHTTPHeaderField: "Content-Disposition")
+            decisionHandler(disposition?.lowercased().hasPrefix("attachment") == true ? .download : .allow)
+        }
+
+        func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+            download.delegate = self
+        }
+
+        func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+            download.delegate = self
+        }
+
+        // Downloads ask where to save, then show the file in Finder.
+        private var downloadDestinations: [ObjectIdentifier: URL] = [:]
+
+        func download(
+            _ download: WKDownload,
+            decideDestinationUsing response: URLResponse,
+            suggestedFilename: String,
+            completionHandler: @escaping (URL?) -> Void
+        ) {
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = suggestedFilename
+            panel.canCreateDirectories = true
+            panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            let key = ObjectIdentifier(download)
+            let finish: (NSApplication.ModalResponse) -> Void = { [weak self] result in
+                guard result == .OK, let destination = panel.url else {
+                    completionHandler(nil)
+                    return
+                }
+                // The panel has confirmed any replacement, but WKDownload fails
+                // rather than write over a file.
+                try? FileManager.default.removeItem(at: destination)
+                self?.downloadDestinations[key] = destination
+                completionHandler(destination)
+            }
+            if let window = webView?.window {
+                panel.beginSheetModal(for: window, completionHandler: finish)
+            } else {
+                finish(panel.runModal())
+            }
+        }
+
+        func downloadDidFinish(_ download: WKDownload) {
+            if let destination = downloadDestinations.removeValue(forKey: ObjectIdentifier(download)) {
+                NSWorkspace.shared.activateFileViewerSelecting([destination])
+            }
+        }
+
+        func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+            downloadDestinations.removeValue(forKey: ObjectIdentifier(download))
+            // Declining the save panel cancels the download; that is not a failure.
+            if (error as NSError).code == NSURLErrorCancelled { return }
+            let alert = NSAlert()
+            alert.messageText = "Could not save the file"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
         }
     }
 

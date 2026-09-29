@@ -224,6 +224,10 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		} else {
 			writeJSON(w, value, http.StatusOK)
 		}
+	case path == "/api/share":
+		s.getShared(w, r, r.URL.Query()["id"])
+	case strings.HasPrefix(path, "/api/share/work/"):
+		s.getShared(w, r, []string{strings.TrimPrefix(path, "/api/share/work/")})
 	case strings.HasPrefix(path, "/api/work/"):
 		id := strings.TrimPrefix(path, "/api/work/")
 		value, err := s.Catalog.WorkDetail(id)

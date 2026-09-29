@@ -450,55 +450,18 @@ func (c *Catalog) rebuildToolRollup(ctx context.Context, generation, day string)
 	if _, err := tx.Exec("DELETE FROM tool_usage_daily"); err != nil {
 		return err
 	}
-	statement, err := tx.Prepare(`INSERT INTO tool_usage_daily(id,day,week,month,repository_name,source_kind,provider,model,model_family,session_kind,
-		tool_name,tool_category,mcp_server,program,subcommand,command_name,command_category,call_count,error_count,error_rate,no_result_count,rejected_count,
-		interrupted_count,timeout_count,nonzero_exit_count,hook_blocked_count,truncated_count,timed_count,total_duration_ms,avg_duration_ms,
-		max_duration_ms,input_bytes,result_bytes,result_tokens,measured_count,avg_result_tokens,carried_tokens,output_tokens,lines_added,
-		lines_removed,work_count,context_cost_usd,output_cost_usd,tool_cost_usd,price_status)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+	statement, err := tx.Prepare("INSERT INTO tool_usage_daily(" + strings.Join(toolUsageColumns, ",") + ") VALUES(" + placeholders(len(toolUsageColumns)) + ")")
 	if err != nil {
 		return err
 	}
 	defer statement.Close()
 	for _, row := range rows {
-		dayValue := firstString(row["day"])
-		var week, month any
-		if parsed, err := time.Parse("2006-01-02", dayValue); err == nil {
-			week = parsed.AddDate(0, 0, -((int(parsed.Weekday()) + 6) % 7)).Format("2006-01-02")
-			month = parsed.Format("2006-01")
+		record := toolUsageRecord(book, row)
+		values := make([]any, len(toolUsageColumns))
+		for index, column := range toolUsageColumns {
+			values[index] = record[column]
 		}
-		model := strings.TrimSpace(firstString(row["model"]))
-		calls := integer(row["call_count"])
-		var errorRate, avgDuration, avgResult any
-		if calls > 0 {
-			errorRate = float64(integer(row["error_count"])) / float64(calls) * 100
-			avgResult = float64(integer(row["result_tokens"])) / float64(calls)
-		}
-		if timed := integer(row["timed_count"]); timed > 0 {
-			avgDuration = float64(integer(row["total_duration_ms"])) / float64(timed)
-		}
-		// A result is first sent as new input (a cache write for Claude) and
-		// then re-read from cache by every later request until compaction.
-		context := map[string]int64{"cache_read_input_tokens": integer(row["carried_tokens"])}
-		if firstString(row["provider"]) == "claude" {
-			context["cache_creation_input_tokens"] = integer(row["result_tokens"])
-		} else {
-			context["uncached_input_tokens"] = integer(row["result_tokens"])
-		}
-		outputTokens, _ := number(row["output_tokens"])
-		contextCost := book.cost(defaultString(nilIfEmpty(model), "Unknown model"), dayValue, context)
-		outputCost := book.cost(defaultString(nilIfEmpty(model), "Unknown model"), dayValue, map[string]int64{"output_tokens": int64(outputTokens + 0.5)})
-		total := addCost(addCost(nil, contextCost.cost), outputCost.cost)
-		status := worsePriceStatus(contextCost.status, outputCost.status)
-		id := stableID("tool-usage", dayValue, row["repository_name"], row["source_kind"], row["provider"], model, row["session_kind"], row["tool_name"],
-			row["tool_category"], row["mcp_server"], row["program"], row["subcommand"], row["command_category"])
-		if _, err := statement.Exec(id, nilIfEmpty(dayValue), week, month, row["repository_name"], row["source_kind"], row["provider"], nilIfEmpty(model),
-			nilIfEmpty(modelFamily(model)), row["session_kind"], row["tool_name"], row["tool_category"], row["mcp_server"], row["program"], row["subcommand"],
-			nilIfEmpty(strings.TrimSpace(firstString(row["program"])+" "+firstString(row["subcommand"]))), row["command_category"], calls, row["error_count"], errorRate, row["no_result_count"], row["rejected_count"], row["interrupted_count"],
-			row["timeout_count"], row["nonzero_exit_count"], row["hook_blocked_count"], row["truncated_count"], row["timed_count"], row["total_duration_ms"],
-			avgDuration, row["max_duration_ms"], row["input_bytes"], row["result_bytes"], row["result_tokens"], row["measured_count"], avgResult,
-			row["carried_tokens"], outputTokens, row["lines_added"], row["lines_removed"], row["work_count"], costValue(contextCost.cost),
-			costValue(outputCost.cost), costValue(total), status); err != nil {
+		if _, err := statement.Exec(values...); err != nil {
 			return err
 		}
 	}
@@ -508,6 +471,64 @@ func (c *Catalog) rebuildToolRollup(ctx context.Context, generation, day string)
 		}
 	}
 	return tx.Commit()
+}
+
+// toolUsageColumns are tool_usage_daily's columns.
+var toolUsageColumns = []string{"id", "day", "week", "month", "repository_name", "source_kind", "provider", "model", "model_family", "session_kind",
+	"tool_name", "tool_category", "mcp_server", "program", "subcommand", "command_name", "command_category", "call_count", "error_count", "error_rate",
+	"no_result_count", "rejected_count", "interrupted_count", "timeout_count", "nonzero_exit_count", "hook_blocked_count", "truncated_count",
+	"timed_count", "total_duration_ms", "avg_duration_ms", "max_duration_ms", "input_bytes", "result_bytes", "result_tokens", "measured_count",
+	"avg_result_tokens", "carried_tokens", "output_tokens", "lines_added", "lines_removed", "work_count", "context_cost_usd", "output_cost_usd",
+	"tool_cost_usd", "price_status"}
+
+// toolUsageRecord turns one row of toolRollupFromCube into a tool_usage_daily
+// row: its bucket fields, rates, and costs.
+func toolUsageRecord(book priceBook, row map[string]any) map[string]any {
+	dayValue := firstString(row["day"])
+	var week, month any
+	if parsed, err := time.Parse("2006-01-02", dayValue); err == nil {
+		week = parsed.AddDate(0, 0, -((int(parsed.Weekday()) + 6) % 7)).Format("2006-01-02")
+		month = parsed.Format("2006-01")
+	}
+	model := strings.TrimSpace(firstString(row["model"]))
+	calls := integer(row["call_count"])
+	var errorRate, avgDuration, avgResult any
+	if calls > 0 {
+		errorRate = float64(integer(row["error_count"])) / float64(calls) * 100
+		avgResult = float64(integer(row["result_tokens"])) / float64(calls)
+	}
+	if timed := integer(row["timed_count"]); timed > 0 {
+		avgDuration = float64(integer(row["total_duration_ms"])) / float64(timed)
+	}
+	// A result is first sent as new input (a cache write for Claude) and
+	// then re-read from cache by every later request until compaction.
+	context := map[string]int64{"cache_read_input_tokens": integer(row["carried_tokens"])}
+	if firstString(row["provider"]) == "claude" {
+		context["cache_creation_input_tokens"] = integer(row["result_tokens"])
+	} else {
+		context["uncached_input_tokens"] = integer(row["result_tokens"])
+	}
+	outputTokens, _ := number(row["output_tokens"])
+	contextCost := book.cost(defaultString(nilIfEmpty(model), "Unknown model"), dayValue, context)
+	outputCost := book.cost(defaultString(nilIfEmpty(model), "Unknown model"), dayValue, map[string]int64{"output_tokens": int64(outputTokens + 0.5)})
+	total := addCost(addCost(nil, contextCost.cost), outputCost.cost)
+	return map[string]any{
+		"id": stableID("tool-usage", dayValue, row["repository_name"], row["source_kind"], row["provider"], model, row["session_kind"], row["tool_name"],
+			row["tool_category"], row["mcp_server"], row["program"], row["subcommand"], row["command_category"]),
+		"day": nilIfEmpty(dayValue), "week": week, "month": month, "repository_name": row["repository_name"], "source_kind": row["source_kind"],
+		"provider": row["provider"], "model": nilIfEmpty(model), "model_family": nilIfEmpty(modelFamily(model)), "session_kind": row["session_kind"],
+		"tool_name": row["tool_name"], "tool_category": row["tool_category"], "mcp_server": row["mcp_server"], "program": row["program"],
+		"subcommand": row["subcommand"], "command_name": nilIfEmpty(strings.TrimSpace(firstString(row["program"]) + " " + firstString(row["subcommand"]))),
+		"command_category": row["command_category"], "call_count": calls, "error_count": row["error_count"], "error_rate": errorRate,
+		"no_result_count": row["no_result_count"], "rejected_count": row["rejected_count"], "interrupted_count": row["interrupted_count"],
+		"timeout_count": row["timeout_count"], "nonzero_exit_count": row["nonzero_exit_count"], "hook_blocked_count": row["hook_blocked_count"],
+		"truncated_count": row["truncated_count"], "timed_count": row["timed_count"], "total_duration_ms": row["total_duration_ms"],
+		"avg_duration_ms": avgDuration, "max_duration_ms": row["max_duration_ms"], "input_bytes": row["input_bytes"], "result_bytes": row["result_bytes"],
+		"result_tokens": row["result_tokens"], "measured_count": row["measured_count"], "avg_result_tokens": avgResult, "carried_tokens": row["carried_tokens"],
+		"output_tokens": outputTokens, "lines_added": row["lines_added"], "lines_removed": row["lines_removed"], "work_count": row["work_count"],
+		"context_cost_usd": costValue(contextCost.cost), "output_cost_usd": costValue(outputCost.cost), "tool_cost_usd": costValue(total),
+		"price_status": worsePriceStatus(contextCost.status, outputCost.status),
+	}
 }
 
 func costValue(value any) any {

@@ -1,8 +1,8 @@
 import React, { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { decodeQuery, encodeQuery, loadSchema, localStorageAdapter, toAggregationQuery, type AggregationClause, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereTerm } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, applyAggregations, decodeQuery, encodeQuery, loadSchema, localStorageAdapter, memoryStorageAdapter, toAggregationQuery, toServerQuery, type AggregationClause, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereTerm } from "@pythia-software/query-table-core";
 import { useQueryTable, type QueryTableApi } from "@pythia-software/query-table-react";
-import { DataTable, FilterValueProvider, MetricsPanel, QueryBuilder, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
+import { DataTable, FilterValueProvider, MetricsPanel, QueryBuilder, SelectionToolbar, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
 import "@pythia-software/query-table-ui/theme.css";
 import "./pharos.css";
 import libraryDocument from "../../schemas/library.schema.json";
@@ -79,6 +79,12 @@ function usdCost(value: unknown, row: Row): React.ReactNode {
   return <span>{text}</span>;
 }
 
+// A shared export (see share.go) carries its own rows in place of the service:
+// every table runs over them in the browser, and the pages that need the
+// service (search, MCP, TL1, Human Words, Carbon) are left out.
+type SharedExport = { works: Row[]; datasets: Record<string, Row[]>; tool_calls: Record<string, Row> };
+const shared: SharedExport | null = (window as unknown as { pharosShare?: SharedExport | null }).pharosShare ?? null;
+
 const queryParameter = (dataset: Dataset) => `q_${dataset}`;
 
 function updateURI(name: string, value: string) {
@@ -95,6 +101,7 @@ declare global {
   interface Window {
     pharosOpenDetail?: (id: string) => void;
     pharosCopyText?: (text: string) => Promise<void>;
+    pharosShareDownload?: (ids: string[]) => Promise<void>;
     pharosMessageCard?: (message: TranscriptMessage) => HTMLElement;
     pharosTurnSummaries?: (conversation: Row) => TurnSummary[];
     pharosCarbon?: { refresh: () => Promise<void> };
@@ -289,13 +296,14 @@ const metricRenderers: RenderRegistry<Row> = {
 // can follow the table's filters.
 // find, for the Library, is a keyword search that narrows the rows before the
 // filters apply; onFind hears how it went.
-function QuerySurface({ dataset, libraryView = "table", find = "", onFind, trailing, header }: { dataset: Dataset; libraryView?: LibraryView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode }) {
+function QuerySurface({ dataset, libraryView = "table", find = "", onFind, trailing, header, selectable = false }: { dataset: Dataset; selectable?: boolean; libraryView?: LibraryView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode }) {
   const schema = schemas[dataset];
   const onFindRef = useRef(onFind);
   onFindRef.current = onFind;
-  const transport = useMemo(() => makeTransport(dataset, find, value => onFindRef.current?.(value)), [dataset, find]);
-  const storage = useMemo(() => localStorageAdapter(), []);
-  const api = useQueryTable<Row>({ schema, transport, storage, debounceMs: 100 });
+  const transport = useMemo(() => shared ? undefined : makeTransport(dataset, find, value => onFindRef.current?.(value)), [dataset, find]);
+  // A shared file has no origin of its own to keep saved queries apart from other files'.
+  const storage = useMemo(() => shared ? memoryStorageAdapter() : localStorageAdapter(), []);
+  const api = useQueryTable<Row>({ schema, transport, clientRows: shared?.datasets[dataset], storage, debounceMs: 100 });
   const apiRef = useRef(api);
   apiRef.current = api;
   // A new search starts from its first page.
@@ -350,8 +358,10 @@ function QuerySurface({ dataset, libraryView = "table", find = "", onFind, trail
     <QueryBuilder api={stableApi} fields={schema.fields} total={api.total} running={api.loading} />
     <MetricsPanel aggregations={api.aggregations} fields={metricFields(schema.fields)} renderers={metricRenderers} />
     {api.error ? <div className="query-table-error">{api.error.message}</div> : null}
+    {selectable ? <SelectionToolbar selection={api.selection} actions={ids => <ShareSelection ids={ids} api={api} transport={transport} />} /> : null}
     {dataset === "library" && libraryView === "conversation" ? <ConversationResults api={api} searching={Boolean(find)} /> : <DataTable
       maxHeight={100000}
+      {...(selectable ? { selection: api.selection } : {})}
       fields={api.visibleFields}
       rows={api.rows}
       query={api.query}
@@ -365,6 +375,40 @@ function QuerySurface({ dataset, libraryView = "table", find = "", onFind, trail
       {...(trailing ? { trailing: (row: Row) => trailing(row, api), trailingLabel: dataset === "mcp_calls" || dataset === "tool_calls" ? "View" : dataset === "tools" ? "Drill in" : dataset === "library" ? "Match" : "Actions" } : {})}
     />}
   </FilterValueProvider>;
+}
+
+// An export holds at most this many works (see shareWorkLimit in share.go).
+const shareWorkLimit = 200;
+
+// Share, for the works checked in the Library: one standalone HTML file with
+// their conversations and tables. It can also check every work the current
+// filters match, when they fit in one export.
+function ShareSelection({ ids, api, transport }: { ids: unknown[]; api: QueryTableApi<Row>; transport?: Transport<Row> }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const tooMany = ids.length > shareWorkLimit;
+  const total = api.total ?? 0;
+  const canSelectAll = Boolean(transport) && total > ids.length && total <= shareWorkLimit;
+  async function selectAll() {
+    if (!transport) return;
+    setBusy(true);
+    try {
+      const result = await transport.fetchRows({ ...toServerQuery(api.query, schemas.library), limit: shareWorkLimit, offset: 0 });
+      api.selection.replace(result.rows.map(row => api.rowId(row)).filter((id): id is NonNullable<typeof id> => id !== null));
+    } finally { setBusy(false); }
+  }
+  return <>
+    {canSelectAll ? <button type="button" className="qt-btn" disabled={busy} onClick={() => void selectAll()}>Select all {total.toLocaleString()} results</button> : null}
+    <button type="button" className="qt-btn share-selection" disabled={tooMany}
+      title={tooMany ? `One export holds at most ${shareWorkLimit} works. Narrow the selection.` : "Download the selected conversations, with tables of their tool use and token usage, as one standalone HTML file to send or publish. It includes full transcripts, tool output, and file paths."}
+      onClick={() => { setError(""); void window.pharosShareDownload?.(ids.map(String)).catch((failure: unknown) => setError(failure instanceof Error ? failure.message : "The export failed")); }}><Icon name="arrow-down" /> Share {ids.length.toLocaleString()} conversation{ids.length === 1 ? "" : "s"}</button>
+    {error ? <span className="share-error" role="alert">Could not share: {error}</span> : null}
+  </>;
+}
+
+function loadWork(id: string, signal?: AbortSignal): Promise<Row> {
+  const work = shared?.works.find(item => item.id === id);
+  return work ? Promise.resolve(work) : fetch(`/api/work/${encodeURIComponent(id)}`, { signal }).then(responseJSON<Row>);
 }
 
 function conversationTurns(work: Row): ConversationTurn[] {
@@ -383,7 +427,7 @@ function ResultConversationBrowser({ workspaceID }: { workspaceID: string }) {
     const controller = new AbortController();
     void (async () => {
       try {
-        const work = await responseJSON<Row>(await fetch(`/api/work/${encodeURIComponent(workspaceID)}`, { signal: controller.signal }));
+        const work = await loadWork(workspaceID, controller.signal);
         if (!controller.signal.aborted) setState({ loading: false, error: "", turns: conversationTurns(work) });
       } catch (error) {
         if (!controller.signal.aborted) setState({ loading: false, error: error instanceof Error ? error.message : "Conversation unavailable", turns: [] });
@@ -525,15 +569,15 @@ function LibraryPage() {
   function submit(event: FormEvent) { event.preventDefault(); const next = draft.trim(); setSearch(next); updateURI("search", next); }
   function chooseView(next: LibraryView) { setView(next); updateURI("view", next === "conversation" ? next : ""); }
   function clear() { setDraft(""); setSearch(""); updateURI("search", ""); }
-  const find = findParameters(search, kind, fuzzy, caseSensitive, separators);
+  const find = shared ? "" : findParameters(search, kind, fuzzy, caseSensitive, separators);
   const [found, setFound] = useState<FindSummary | null>(null);
   useEffect(() => { setFound(null); }, [find]);
   return <div className={`pharos-query-page${find ? " library-searching" : ""}`}>
-    <div className="view-heading library-heading"><div><h1>Find past work</h1></div><div className="library-view-toggle" role="group" aria-label="Library result view"><button type="button" className={view === "table" ? "active" : ""} aria-pressed={view === "table"} onClick={() => chooseView("table")}>Table</button><button type="button" className={view === "conversation" ? "active" : ""} aria-pressed={view === "conversation"} onClick={() => chooseView("conversation")}>Conversations</button></div></div>
-    <form className="semantic-search" onSubmit={submit}><select aria-label="Search type" value={kind} onChange={event => { const next = event.target.value as FindKind; setKind(next); updateURI("kind", next === "text" ? "" : next); }}><option value="text">Conversation text</option><option value="file">Modified file</option><option value="url">Tool URL</option></select><input type="search" value={draft} onChange={event => setDraft(event.target.value)} placeholder={kind === "text" ? "Words or an exact phrase in quotes…" : kind === "file" ? "File path or name…" : "URL or host…"} aria-label="Search library" /><button type="submit">Search</button>{search ? <button type="button" className="semantic-search-clear" onClick={clear}>Clear</button> : null}</form>
-    {kind === "text" ? <div className="search-options" role="group" aria-label="Text search options"><label><input type="checkbox" checked={fuzzy} onChange={event => { setFuzzy(event.target.checked); updateURI("fuzzy", event.target.checked ? "" : "0"); }} /> Fuzzy words</label><label><input type="checkbox" checked={caseSensitive} onChange={event => { setCaseSensitive(event.target.checked); updateURI("case", event.target.checked ? "1" : ""); }} /> Case sensitive</label><label title="For quoted phrases, require punctuation and spaces exactly as typed"><input type="checkbox" checked={separators} onChange={event => { setSeparators(event.target.checked); updateURI("separators", event.target.checked ? "1" : ""); }} /> Match separators</label></div> : null}
+    <div className="view-heading library-heading"><div><h1>{shared ? "Conversations" : "Find past work"}</h1></div><div className="library-view-toggle" role="group" aria-label="Library result view"><button type="button" className={view === "table" ? "active" : ""} aria-pressed={view === "table"} onClick={() => chooseView("table")}>Table</button><button type="button" className={view === "conversation" ? "active" : ""} aria-pressed={view === "conversation"} onClick={() => chooseView("conversation")}>Conversations</button></div></div>
+    {shared ? null : <form className="semantic-search" onSubmit={submit}><select aria-label="Search type" value={kind} onChange={event => { const next = event.target.value as FindKind; setKind(next); updateURI("kind", next === "text" ? "" : next); }}><option value="text">Conversation text</option><option value="file">Modified file</option><option value="url">Tool URL</option></select><input type="search" value={draft} onChange={event => setDraft(event.target.value)} placeholder={kind === "text" ? "Words or an exact phrase in quotes…" : kind === "file" ? "File path or name…" : "URL or host…"} aria-label="Search library" /><button type="submit">Search</button>{search ? <button type="button" className="semantic-search-clear" onClick={clear}>Clear</button> : null}</form>}
+    {shared ? null : kind === "text" ? <div className="search-options" role="group" aria-label="Text search options"><label><input type="checkbox" checked={fuzzy} onChange={event => { setFuzzy(event.target.checked); updateURI("fuzzy", event.target.checked ? "" : "0"); }} /> Fuzzy words</label><label><input type="checkbox" checked={caseSensitive} onChange={event => { setCaseSensitive(event.target.checked); updateURI("case", event.target.checked ? "1" : ""); }} /> Case sensitive</label><label title="For quoted phrases, require punctuation and spaces exactly as typed"><input type="checkbox" checked={separators} onChange={event => { setSeparators(event.target.checked); updateURI("separators", event.target.checked ? "1" : ""); }} /> Match separators</label></div> : null}
     {search && found ? <p className="library-find-status muted">{found.limited ? "At least " : ""}{found.workspaces.toLocaleString()} result{found.workspaces === 1 ? "" : "s"} match “{search}”; the filters below narrow them further.{found.limited ? " Search reached its 5,000-record limit; narrow the query for complete results." : ""}</p> : null}
-    <QuerySurface dataset="library" libraryView={view} find={find} onFind={setFound} {...(find ? { trailing: (row: Row) => <FindMatchCell row={row} /> } : {})} />
+    <QuerySurface dataset="library" libraryView={view} find={find} onFind={setFound} selectable={!shared && view === "table"} {...(find ? { trailing: (row: Row) => <FindMatchCell row={row} /> } : {})} />
   </div>;
 }
 
@@ -629,6 +673,7 @@ function RefreshPricesButton() {
   const [copied, setCopied] = useState<"" | "copied" | "failed">("");
   useEffect(() => {
     const controller = new AbortController();
+    if (shared) return;
     const load = () => void fetch("/api/pricing", { signal: controller.signal }).then(responseJSON<PricingStatus>).then(setStatus).catch(() => {});
     load();
     window.addEventListener("pharos:usage-refresh", load);
@@ -844,6 +889,18 @@ function useAggregations(dataset: Dataset, where: WhereTerm[], aggregations: Agg
     return () => window.removeEventListener("pharos:usage-refresh", bump);
   }, []);
   useEffect(() => {
+    if (shared) {
+      const request = JSON.parse(key) as { where: WhereTerm[]; aggregations: AggregationClause[] };
+      const result = applyAggregations(shared.datasets[dataset], { ...EMPTY_QUERY, where: request.where, aggregations: request.aggregations }, schemas[dataset]);
+      // The service returns time buckets newest first; so does a shared file.
+      const timePosition = (aggregation: AggregationClause) => aggregation.groupBy.findIndex(field => field === "day" || field === "week" || field === "month");
+      request.aggregations.forEach((aggregation, index) => {
+        const position = timePosition(aggregation);
+        if (dataset === "usage" && position >= 0) result.metrics[index]?.buckets.sort((left, right) => String(right.keys[position] ?? "").localeCompare(String(left.keys[position] ?? "")));
+      });
+      setState({ key, metrics: result.metrics as AggregationMetric[], error: "", loading: false });
+      return;
+    }
     const controller = new AbortController();
     setState(previous => ({ ...previous, loading: true }));
     fetch(`/api/query/${dataset}/aggregations`, { method: "POST", headers: { "Content-Type": "application/json" }, body: key, signal: controller.signal })
@@ -1128,6 +1185,8 @@ const usageViewKey = "pharos-usage-view";
 
 // ?usage= picks the view; otherwise the last choice is kept.
 function initialUsageView(): UsageView {
+  // Human Words and Carbon Impact read the live library.
+  if (shared) return "tokens";
   const requested = new URLSearchParams(location.search).get("usage");
   if (requested === "tokens" || requested === "writing" || requested === "carbon") { store(usageViewKey, requested); return requested; }
   try {
@@ -1166,12 +1225,12 @@ function UsagePage() {
           ? <>Text you typed or dictated into agent chats, per conversation. Harness instructions, one-click prompts, attachments, pastes, and copied agent output are counted separately; filter the table and the chart and breakdown follow. {statusText ? <span className="meta">{statusText}</span> : null}</>
           : "Estimated inference electricity and CO₂e for the tokens in this library, using published research and explicit assumptions."}</p></div>
       <div className="usage-heading-actions">
-        <div className="library-view-toggle" role="group" aria-label="Usage view">
+        {shared ? null : <div className="library-view-toggle" role="group" aria-label="Usage view">
           <button type="button" className={view === "writing" ? "active" : ""} aria-pressed={view === "writing"} onClick={() => choose("writing")}>Human Words</button>
           <button type="button" className={view === "tokens" ? "active" : ""} aria-pressed={view === "tokens"} onClick={() => choose("tokens")}>Machine Tokens</button>
           <button type="button" className={view === "carbon" ? "active" : ""} aria-pressed={view === "carbon"} onClick={() => choose("carbon")}>Carbon Impact</button>
-        </div>
-        {view === "tokens" ? <RefreshPricesButton /> : null}
+        </div>}
+        {view === "tokens" && !shared ? <RefreshPricesButton /> : null}
       </div>
     </div>
     {view === "tokens" ? <TokenUsage /> : view === "writing" ? <WritingUsage onStatus={setStatus} /> : <CarbonImpact />}
@@ -1361,6 +1420,12 @@ function ToolCallDialog({ id, onClose }: { id: string; onClose: () => void }) {
   const [call, setCall] = useState<Row | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
+    if (shared) {
+      const row = shared.datasets.tool_calls.find(item => item.id === id);
+      if (row) setCall({ ...row, ...shared.tool_calls[id] });
+      else setError("Call unavailable");
+      return;
+    }
     const controller = new AbortController();
     fetch(`/api/tool-calls/${encodeURIComponent(id)}`, { signal: controller.signal }).then(responseJSON<Row>).then(setCall)
       .catch(failure => { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "Call unavailable"); });
@@ -1402,6 +1467,7 @@ function ToolLedgerBanner() {
     catch (failure) { setError(failure instanceof Error ? failure.message : "Status unavailable"); }
   };
   useEffect(() => {
+    if (shared) return;
     void load.current();
     const timer = window.setInterval(() => { if (document.querySelector("#tools.active")) void load.current(); }, 3000);
     return () => window.clearInterval(timer);
@@ -1416,6 +1482,7 @@ function ToolLedgerBanner() {
     try { await fetch("/api/tools/backfill", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); await load.current(); }
     catch (failure) { setError(failure instanceof Error ? failure.message : "Could not start"); }
   }
+  if (shared) return null;
   if (error) return <div className="query-table-error">{error}</div>;
   if (!status || (!running && status.pending_conversations === 0 && !status.backfill.error)) return null;
   const percent = status.backfill.total ? Math.round(status.backfill.done / status.backfill.total * 100) : 0;
@@ -1488,6 +1555,7 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["tl1Page", <TL1Page attempts={<QuerySurface dataset="tl1_attempts" />} filterAttempts={(where) => tableApis.get("tl1_attempts")?.setQuery(previous => ({ ...previous, where: where as WhereTerm[], offset: 0 }))} copy={copyText} />],
 ];
 for (const [id, component] of mounts) {
+  if (shared && !["queryTableLibrary", "queryTableUsage", "toolsPage"].includes(id)) continue;
   const element = document.getElementById(id);
   if (element) createRoot(element).render(component);
 }
