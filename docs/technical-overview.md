@@ -166,6 +166,45 @@ latest 5,000 calls with an allowlisted, shortened argument summary and response
 metrics, never response bodies. The page provides per-tool totals and filters
 for tool and status. Output token counts are estimates from bytes.
 
+## Sharing conversations
+
+`GET /api/share?id=<work>&id=<work>…` (up to 200; `/api/share/work/<id>` for
+one) returns the works as an attachment: the app's own page with its assets
+inlined (including the query-table bundle) and the data embedded as JSON in
+`#pharosShareData`. When that element exists, `ui.py` sets `SHARE` and answers
+the reader's `/api/work/…` requests (overview, one conversation at a time, and search across a work's conversations) from it, routes between pages with `?page=` and `?work=`
+(a file cannot change its path), and hides the library chrome
+(`assets/share.css`). The Library selection UI is `ShareSelection` in
+`web/src/index.tsx`.
+
+- **Same code:** the conversation reader and the tables are the app's, so
+  changes to them reach shared files without extra work. In a shared file
+  `QuerySurface` passes each table its rows as `clientRows`, so filtering,
+  sorting, metrics, and charts run in the browser (`applyQuery` and
+  `applyAggregations` from query-table-core) rather than on the service.
+- **Tables:** Library, Tools (summary and calls), and Usage (Machine Tokens),
+  each holding only the selected works' rows. Tools summary rows come from the
+  same SQL and record builder as the rollup (`toolUsageRecord`), run over a
+  temporary cube that excludes every other work. Human Words, Carbon Impact,
+  MCP, TL1, search, and settings need the live library and are left out.
+- **Privacy:** the payload is whitelisted (`sharedWork`, `sharedFieldNames` in
+  `share.go`), so a new catalog column stays out of shared files until it is
+  listed. Message evidence locators and the sources of copied spans (which name
+  other conversations) are removed, as are the Library's `location` and
+  `owner`. Transcript text, raw events, tool output, and file paths are kept.
+  Each tool call's dialog keeps the first 3,000 characters of its input and
+  result; the transcript holds the rest.
+- **Inert:** a `Content-Security-Policy` meta tag (`default-src 'none'`) means
+  the file makes no network requests.
+- **Failures:** the page first requests the same URL with `check=1`, which
+  builds the export and returns JSON, so a failure shows as a message instead
+  of being saved as the file (`shareDownload` in `ui.py`).
+- **macOS wrapper:** `Content-Disposition: attachment` responses become a save
+  panel that replaces an existing file when confirmed (`WKDownloadDelegate` in
+  `PharosApp.swift`). `tools/dev-ui.sh`
+  proxies API calls to the installed service, so Share needs a build that has
+  the endpoints.
+
 ## Preservation, TL1 release, and scheduling (mothballed)
 
 Reclamation is mothballed. The Upcoming tab, protect/snooze controls, and the

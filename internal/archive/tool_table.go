@@ -114,6 +114,33 @@ func (c *Catalog) priceToolCalls(rows []map[string]any) error {
 	return nil
 }
 
+// toolCallText adds a call's input and result content, clipped to limit
+// characters each, to call, in place of the stored message envelopes.
+func toolCallText(call map[string]any, callText, resultText string, limit int) {
+	var input, envelope map[string]any
+	if callText != "" {
+		if json.Unmarshal([]byte(callText), &input) != nil {
+			call["input_text"] = clipText(callText, limit)
+		} else if script, ok := input["input"].(string); ok {
+			call["input_text"] = clipText(script, limit)
+		} else if pretty, err := json.MarshalIndent(input["input"], "", "  "); err == nil {
+			call["input_text"] = clipText(string(pretty), limit)
+		}
+	}
+	if resultText != "" {
+		content := resultText
+		if json.Unmarshal([]byte(resultText), &envelope) == nil {
+			content, _ = toolResultText(envelope["content"])
+			if details := mapValue(envelope["details"]); len(details) > 0 {
+				if pretty, err := json.MarshalIndent(details, "", "  "); err == nil {
+					call["result_details"] = clipText(string(pretty), min(limit, 5000))
+				}
+			}
+		}
+		call["result_text"], call["result_text_bytes"] = clipText(content, limit), len(content)
+	}
+}
+
 // toolCallDetail returns one call with its input, a bounded excerpt of its
 // result, its shell commands, and the requests around it.
 func (c *Catalog) toolCallDetail(ctx context.Context, id string) (map[string]any, error) {
@@ -142,28 +169,7 @@ func (c *Catalog) toolCallDetail(ctx context.Context, id string) (map[string]any
 		return text
 	}
 	// Show the tool input and result content rather than the stored envelopes.
-	var input, envelope map[string]any
-	if text := messageText(link["call_message_id"]); text != "" {
-		if json.Unmarshal([]byte(text), &input) != nil {
-			call["input_text"] = clipText(text, 20000)
-		} else if script, ok := input["input"].(string); ok {
-			call["input_text"] = clipText(script, 20000)
-		} else if pretty, err := json.MarshalIndent(input["input"], "", "  "); err == nil {
-			call["input_text"] = clipText(string(pretty), 20000)
-		}
-	}
-	if text := messageText(link["result_message_id"]); text != "" {
-		content := text
-		if json.Unmarshal([]byte(text), &envelope) == nil {
-			content, _ = toolResultText(envelope["content"])
-			if details := mapValue(envelope["details"]); len(details) > 0 {
-				if pretty, err := json.MarshalIndent(details, "", "  "); err == nil {
-					call["result_details"] = clipText(string(pretty), 5000)
-				}
-			}
-		}
-		call["result_text"], call["result_text_bytes"] = clipText(content, 20000), len(content)
-	}
+	toolCallText(call, messageText(link["call_message_id"]), messageText(link["result_message_id"]), 20000)
 	commands, err := queryMapsContext(ctx, c.DB, `SELECT position,operator,command,program,subcommand,category,exit_code,duration_ms
 		FROM tool_commands WHERE tool_call_id=? ORDER BY position`, id)
 	if err != nil {

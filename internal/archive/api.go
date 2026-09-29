@@ -222,6 +222,10 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		} else {
 			writeJSON(w, value, http.StatusOK)
 		}
+	case path == "/api/share":
+		s.getShared(w, r, r.URL.Query()["id"])
+	case strings.HasPrefix(path, "/api/share/work/"):
+		s.getShared(w, r, []string{strings.TrimPrefix(path, "/api/share/work/")})
 	case strings.HasPrefix(path, "/api/work/"):
 		// /api/work/{id}, /api/work/{id}/conversations/{conversation}, and
 		// /api/work/{id}/find: the reader loads a workspace in pieces.
