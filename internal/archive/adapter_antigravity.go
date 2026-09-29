@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // Google Antigravity (the app, the agy CLI, and the IDE) keeps each of its
@@ -23,7 +24,8 @@ import (
 // titles, workspaces, and subagents' parents; annotations/<id>.pbtxt repeats
 // the title. conversations/<id>.db holds the steps again as protobuf, and
 // each model request's model and token usage, which are read from it (see
-// adapter_antigravity_usage.go).
+// adapter_antigravity_usage.go). The CLI writes a log per run to
+// log/cli-<time>.log, which names each conversation run with -p (print mode).
 
 type antigravityAdapter struct {
 	baseAdapter
@@ -41,6 +43,7 @@ const antigravityExtractor = "antigravity-v1"
 const (
 	antigravitySummaries = "conversation_summaries.db"
 	antigravityLogs      = ".system_generated/logs"
+	antigravityRunLogs   = "log"
 )
 
 func (a *antigravityAdapter) partExtractor() string { return antigravityExtractor }
@@ -89,8 +92,59 @@ func (a *antigravityAdapter) captureFiles() ([]string, error) {
 	}
 	annotations, _ := filepath.Glob(filepath.Join(a.config.Path, "annotations", "*.pbtxt"))
 	files = append(files, annotations...)
+	files = append(files, a.runLogs()...)
 	sort.Strings(files)
 	return files, nil
+}
+
+// runLogs lists the CLI's per-run logs. The CLI keeps only its latest runs'
+// (about 1,300), so a capture keeps the evidence of print mode for the rest.
+func (a *antigravityAdapter) runLogs() []string {
+	logs, _ := filepath.Glob(filepath.Join(a.config.Path, antigravityRunLogs, "cli-*.log"))
+	return logs
+}
+
+// antigravityPrintMode matches the line a print-mode run logs once it has a
+// conversation. Print mode also adds a "NON-INTERACTIVE mode" section to the
+// system prompt, which no transcript keeps.
+var antigravityPrintMode = regexp.MustCompile(`Print mode: conversation=([0-9A-Za-z-]+)`)
+
+// antigravityLogCache holds the print-mode conversations of each run log read,
+// by path, size and modification time; a run's log never changes once it ends.
+var antigravityLogCache sync.Map
+
+type antigravityLogEntry struct {
+	size, modified int64
+	ids            []string
+}
+
+// printModeConversations returns the conversations run with -p, from the run
+// logs the CLI (or a capture of it) still has.
+func (a *antigravityAdapter) printModeConversations() map[string]bool {
+	printed := map[string]bool{}
+	for _, path := range a.runLogs() {
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		entry, cached := antigravityLogCache.Load(path)
+		if !cached || entry.(antigravityLogEntry).size != info.Size() || entry.(antigravityLogEntry).modified != info.ModTime().UnixNano() {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			found := antigravityLogEntry{size: info.Size(), modified: info.ModTime().UnixNano()}
+			for _, match := range antigravityPrintMode.FindAllSubmatch(data, -1) {
+				found.ids = append(found.ids, string(match[1]))
+			}
+			antigravityLogCache.Store(path, found)
+			entry = found
+		}
+		for _, id := range entry.(antigravityLogEntry).ids {
+			printed[id] = true
+		}
+	}
+	return printed
 }
 
 // databases lists the SQLite databases the adapter reads: the summaries, and
@@ -146,11 +200,13 @@ func (a *antigravityAdapter) Discover(emit func(WorkspaceRecord) error) error {
 	})
 }
 
-// antigravitySummary is a conversation's row in conversation_summaries.db.
+// antigravitySummary is a conversation's row in conversation_summaries.db,
+// and whether a run log shows it was run with -p.
 type antigravitySummary struct {
 	Title, Parent, Agent, Project, App, Status string
 	Workspaces                                 []string
 	Depth                                      int
+	Print                                      bool `json:",omitempty"`
 }
 
 // signal digests what a record takes from the summary, so a retitled
@@ -225,6 +281,13 @@ func (a *antigravityAdapter) discoverParts(unchanged func([]sourcePart) bool, em
 		return err
 	}
 	summaries := a.summaries(transcripts)
+	for id := range a.printModeConversations() {
+		if _, ok := transcripts[id]; ok {
+			summary := summaries[id]
+			summary.Print = true
+			summaries[id] = summary
+		}
+	}
 	root := func(id string) string {
 		seen := map[string]bool{}
 		for summaries[id].Parent != "" && !seen[id] {
@@ -459,6 +522,8 @@ func (a *antigravityAdapter) record(id, path string, summary antigravitySummary,
 			item.Role, item.Kind, item.Text = "user", "message", strings.TrimSpace(request)
 			if subagent {
 				item.Role = agentRole
+			} else if summary.Print {
+				item.Sender = "automation:agy-print"
 			}
 			media := antigravityMedia(event["media"])
 			if item.Text == "" && len(media) > 0 {

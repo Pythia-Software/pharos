@@ -606,6 +606,23 @@
           "synthetic": true
         }
       }
+    },
+    {
+      "name": "launched_works",
+      "label": "Launched headless runs",
+      "type": "number",
+      "group": "Context",
+      "render": "number",
+      "select": {
+        "align": "right",
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "launched_works",
+          "synthetic": true
+        }
+      }
     }
   ]
 }
