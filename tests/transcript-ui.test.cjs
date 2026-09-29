@@ -453,6 +453,65 @@ test('workspace failure navigation reveals failed action without claiming sessio
   assert.match(await transcript(page).innerText(),/Permission denied/);
 });
 
+test('transcript filter narrows to prompts and final replies, adds thinking, or shows chosen kinds', async t => {
+  const page = await fixture(t, [human('Audit the rules.'),
+    event('think', 'reasoning', 'Weighing which rule file to open first', 1),
+    event('interim', 'message', 'Reading the rules now.', 2),
+    event('run', 'tool_call', { name: 'Bash', input: { command: 'grep -r quorum rules/' } }, 3, { call_id: 'run' }),
+    event('run-result', 'tool_result', { content: 'rules/a.md: quorum is three' }, 4, { call_id: 'run' }),
+    event('final', 'message', 'Quorum is three.', 5)]);
+  const shown = () => transcript(page).locator('.turn-body > [data-show]:visible').evaluateAll(entries => entries.map(entry => entry.dataset.show));
+  const level = name => page.locator('.transcript-levels').getByRole('button', { name, exact: true });
+  const summary = page.locator('.transcript-filter-summary'), categories = page.locator('.transcript-categories');
+  assert.deepEqual(await shown(), ['prompts', 'thinking', 'replies', 'commands', 'response']);
+  assert.equal(await level('All').getAttribute('aria-pressed'), 'true');
+  assert.equal(await categories.isVisible(), false);
+  await level('Primary only').click();
+  assert.deepEqual(await shown(), ['prompts', 'response']);
+  assert.equal(await summary.innerText(), '2 of 5 events shown');
+  // Find skips hidden events and searches again when the filter changes.
+  await page.evaluate(() => document.querySelector('.conversation-panel').openConversationSearch('grep -r', 'tools'));
+  assert.equal(await page.locator('.conversation-find-count').innerText(), '0 matches');
+  await level('Chain of thought').click();
+  assert.deepEqual(await shown(), ['prompts', 'thinking', 'replies', 'response']);
+  await level('Custom').click();
+  assert.equal(await categories.isVisible(), true);
+  assert.equal(await categories.locator('label', { hasText: 'Thinking' }).locator('input').isChecked(), true);
+  await categories.locator('label', { hasText: 'Thinking' }).locator('input').uncheck();
+  await categories.locator('label', { hasText: 'Commands' }).locator('input').check();
+  assert.deepEqual(await shown(), ['prompts', 'replies', 'commands', 'response']);
+  assert.match(await page.locator('.conversation-find-count').innerText(), /^[1-9]\d* match/);
+  assert.deepEqual(JSON.parse(await page.evaluate(() => localStorage.getItem('pharos-transcript-filter'))), { level: 'custom', custom: ['prompts', 'response', 'replies', 'commands'] });
+  // Presets leave the custom choice intact for the next visit to Custom.
+  await level('All').click();
+  await level('Custom').click();
+  assert.deepEqual(await shown(), ['prompts', 'replies', 'commands', 'response']);
+});
+
+test('events inside a hidden sub-agent count as hidden', async t => {
+  const page = await fixture(t, [human(),
+    event('delegate', 'delegation', { name: 'Task', input: { description: 'Audit configuration' } }, 1, { call_id: 'agent-1' }),
+    event('child', 'message', 'Configuration looks fine.', 2, { parent_native_id: 'agent-1' }),
+    event('delegate-result', 'delegation_result', { content: 'Audit complete' }, 3, { call_id: 'agent-1' }),
+    event('final', 'message', 'Done.', 4)]);
+  await page.locator('.transcript-levels').getByRole('button', { name: 'Chain of thought', exact: true }).click();
+  assert.equal(await page.locator('.transcript-filter-summary').innerText(), '2 of 4 events shown');
+  assert.equal(await page.locator('.subagent-run').isVisible(), false);
+});
+
+test('failure navigation shows a failed action the transcript filter hides', async t => {
+  const page = await workFixture(t,{conversations:[{provider:'claude',messages:[human(),
+    event('call','tool_call',{name:'Bash',input:{command:'git status'}},2,{call_id:'bad'}),
+    event('result','tool_result',{is_error:true,content:'Permission denied'},3,{call_id:'bad'}),
+    event('final','message','Could not read the repository.',4)]}]});
+  await page.locator('.transcript-levels').getByRole('button', { name: 'Primary only', exact: true }).click();
+  assert.equal(await page.locator('.tool-event.error').isVisible(), false);
+  await page.getByText('Next failed action',{exact:true}).click();
+  assert.equal(await page.locator('.tool-event.error').isVisible(), true);
+  await page.locator('.transcript-levels').getByRole('button', { name: 'Chain of thought', exact: true }).click();
+  assert.equal(await page.locator('.tool-event.error').isVisible(), false);
+});
+
 test('wrapped Claude Read leads with its action and file, never the raw envelope', async t => {
   const page = await fixture(t, [human(), read()]);
   const text = await transcript(page).innerText();
