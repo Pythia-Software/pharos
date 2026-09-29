@@ -240,8 +240,14 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		case len(parts) == 2 && parts[1] == "find":
 			q := r.URL.Query()
 			options := transcriptFindOptions{Term: q.Get("q"), Output: q.Get("output") == "1", Regex: q.Get("regex") == "1", CaseSensitive: q.Get("case") == "1"}
-			if show := q.Get("show"); show != "" {
-				options.Show = strings.Split(show, ",")
+			// No show counts every kind as shown; an empty one, none.
+			if q.Has("show") {
+				options.Show = []string{}
+				for _, key := range strings.Split(q.Get("show"), ",") {
+					if key != "" {
+						options.Show = append(options.Show, key)
+					}
+				}
 			}
 			var counts []conversationFindCount
 			counts, err = s.Catalog.WorkConversationMatches(r.Context(), parts[0], options)

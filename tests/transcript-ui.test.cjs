@@ -327,7 +327,7 @@ async function serveWork(page, work) {
     // The service mirrors the reader's classifier (transcript-find fixtures), so the page's own counts stand in for it.
     const params = Object.fromEntries(url.searchParams);
     const counts = await page.evaluate(({ conversations, params }) => {
-      const shown = new Set(params.show ? params.show.split(',') : TRANSCRIPT_CATEGORIES.map(([key]) => key));
+      const shown = new Set('show' in params ? params.show.split(',').filter(Boolean) : TRANSCRIPT_CATEGORIES.map(([key]) => key));
       let pattern; try { pattern = transcriptFindPattern(params.q, params.regex === '1', params.case === '1') } catch { return null }
       return conversations.map(conversation => ({ id: conversation.id, ...transcriptFind(conversationMessages({ messages: conversation.messages || [] }), { pattern, shown, output: params.output === '1' }) })).filter(count => count.shown || count.hidden);
     }, { conversations, params });
@@ -462,6 +462,12 @@ test('workspace find counts other conversations by the kinds the Show filter sho
   await page.locator('.conversation-find-hidden').getByRole('button',{name:'Show'}).click();
   assert.equal(await page.locator('.conversation-find-match').count(),2);
   assert.equal(await page.locator('.transcript-levels button[aria-pressed=true]').innerText(),'Custom');
+  // With every kind unchecked, other conversations match only in hidden kinds.
+  const checked=page.locator('.transcript-categories input:checked');
+  while (await checked.count()) await checked.first().uncheck();
+  await others.getByText('Other conversations match only in hidden kinds:').waitFor();
+  assert.deepEqual(await others.locator('button.hidden-only').allInnerTexts(),['#3']);
+  assert.equal(await page.locator('.conversation-find-row button[title="Next match (Enter)"]').isDisabled(),true);
 });
 
 test('reader classification and find counts match the shared fixtures the service checks', async t => {

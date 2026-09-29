@@ -417,7 +417,7 @@ function shareApi(path){
   if(match[2]){const conversation=work.conversations.find(c=>encodeURIComponent(c.id)===match[2]);if(!conversation)throw new Error('Conversation not found');return conversation}
   if(match[3]){
     // The export carries every message, so it counts matches as the service does.
-    const params=new URLSearchParams(query),term=params.get('q')||'',shown=new Set(params.get('show')?params.get('show').split(','):TRANSCRIPT_CATEGORIES.map(([key])=>key));
+    const params=new URLSearchParams(query),term=params.get('q')||'',shown=new Set(params.has('show')?params.get('show').split(',').filter(Boolean):TRANSCRIPT_CATEGORIES.map(([key])=>key));
     let pattern;try{pattern=transcriptFindPattern(term,params.get('regex')==='1',params.get('case')==='1')}catch{throw new Error('Invalid pattern')}
     return{conversations:term?work.conversations.map(c=>({id:c.id,...transcriptFind(conversationMessages(c),{pattern,shown,output:params.get('output')==='1'})})).filter(c=>c.shown||c.hidden):[]}
   }
@@ -1178,7 +1178,7 @@ function setupConversationSearch(panel){
   const searchOthers=()=>{
     clearTimeout(workspaceTimer);const find=panel.workspaceFind;if(!find||find.total<2){others.hidden=true;return}
     const current=settings();workspaceTimer=setTimeout(async()=>{
-      const found=await find.search(current);if(disposed||input.value!==current.term)return;
+      const found=await find.search(current);if(disposed||JSON.stringify(settings())!==JSON.stringify(current))return;
       const elsewhere=found.filter(item=>item.index!==find.active);others.replaceChildren();others.hidden=false;
       const shownCount=elsewhere.filter(item=>item.shown).length;
       others.append(node('span','conversation-find-others-label',shownCount?`Also in ${shownCount} of ${find.total-1} other conversation${find.total===2?'':'s'}:`:elsewhere.length?'Other conversations match only in hidden kinds:':'No other conversation matches'));
@@ -1328,8 +1328,9 @@ let activeIndex=0,mounting=0;
 const loadConversation=async index=>{const c=conversations[index];if(!c.messages){const full=await api(`${workPath}/conversations/${encodeURIComponent(c.id)}`);Object.assign(c,full)}for(const other of conversations)if(other!==c&&other.id)delete other.messages;return c};
 // Finding text across conversations runs on the service; the page holds one.
 // Each result counts a conversation's matching events that the Show filter
-// shows and hides; without show, every kind counts as shown.
-const searchConversations=async({term,output=true,regex=false,caseSensitive=false,show=null})=>{if(!term)return[];const params=new URLSearchParams({q:term});if(output)params.set('output','1');if(regex)params.set('regex','1');if(caseSensitive)params.set('case','1');if(show)params.set('show',show.join(','));try{return((await api(`${workPath}/find?${params}`)).conversations||[]).map(item=>({...item,index:conversations.findIndex(c=>c.id===item.id)})).filter(item=>item.index>=0)}catch{return[]}};
+// shows and hides; without show every kind counts as shown, and an empty
+// show (Custom with nothing checked) shows none.
+const searchConversations=async({term,output=true,regex=false,caseSensitive=false,show=null})=>{if(!term)return[];const params=new URLSearchParams({q:term});if(output)params.set('output','1');if(regex)params.set('regex','1');if(caseSensitive)params.set('case','1');if(Array.isArray(show))params.set('show',show.join(','));try{return((await api(`${workPath}/find?${params}`)).conversations||[]).map(item=>({...item,index:conversations.findIndex(c=>c.id===item.id)})).filter(item=>item.index>=0)}catch{return[]}};
 const findConversations=async term=>(await searchConversations({term})).map(item=>item.index);
 const conversationLabel=i=>{const other=conversations[i];return[`${i+1}. ${other.provider||'Agent'}`,other.started_at?timeLabel(other.started_at):null,shortText(displayText({role:'user',text:other.first_prompt||''})||other.native_id||'Conversation',80)].filter(Boolean).join(' · ')};
 const matchingLibraryConversation=async query=>{const term=query.trim(),words=term.split(/\s+/).filter(Boolean);if(!term)return-1;const hits=await findConversations(term);if(hits.length||words.length<2)return hits[0]??-1;const each=await Promise.all(words.map(word=>findConversations(word)));return each[0].find(i=>each.every(list=>list.includes(i)))??-1};

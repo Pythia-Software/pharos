@@ -138,6 +138,9 @@ func TestWorkReaderRoutes(t *testing.T) {
 	if code, body := get("/api/work/work/find?q=config.toml&show=prompts,response"); code != 200 || jsonText(body["conversations"]) != `[{"hidden":1,"hidden_kinds":["reads"],"id":"agent","shown":0}]` {
 		t.Fatalf("find: %d %v", code, body)
 	}
+	if code, body := get("/api/work/work/find?q=saffron&show="); code != 200 || jsonText(body["conversations"]) != `[{"hidden":1,"hidden_kinds":["prompts"],"id":"agent","shown":0}]` {
+		t.Fatalf("an empty show shows no kind: %d %v", code, body)
+	}
 	if code, _ := get("/api/work/work/find?q=(&regex=1"); code != 400 {
 		t.Fatalf("invalid find: %d", code)
 	}

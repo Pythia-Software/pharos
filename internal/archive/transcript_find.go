@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -628,6 +629,15 @@ func transcriptFindPattern(term string, useRegex, caseSensitive bool) (*regexp.R
 	return regexp.Compile(pattern)
 }
 
+// readerWords are words the reader writes into events itself, so stored text
+// lacks them; a literal scan keeps the rows that can produce them. (The
+// placeholder the reader shows for a message with no prose, such as "Recorded
+// event", is not kept: it describes an absence rather than content.)
+var readerWords = []struct{ text, source string }{
+	{"TodoWrite", "todo_list"},             // a Codex todo list reads as a TodoWrite call
+	{"Reasoning not retained", "thinking"}, // a thinking block without its text
+}
+
 // storedLiterally reports whether term appears unchanged inside any JSON
 // string that contains it, so a text scan of stored messages cannot miss it.
 func storedLiterally(term string) bool {
@@ -692,48 +702,55 @@ func (c *Catalog) workspaceTranscripts(ctx context.Context, workspaceID string) 
 }
 
 // readWorkspaceTranscripts classifies every conversation in the workspace in
-// one pass, in the reader's message order. Result bodies are not read: results
-// neither start turns nor name tools, so the structure does not need them.
+// one pass, in the reader's message order. A result paired with its call takes
+// the call's kind, so result bodies are left unread; the few results with no
+// call are read afterwards, since the reader classifies those by their own
+// fields (a failing one is an event, a Bash one a command).
 func (c *Catalog) readWorkspaceTranscripts(ctx context.Context, workspaceID string) (*workspaceTranscripts, error) {
 	workspace := &workspaceTranscripts{id: workspaceID, conversations: map[string]*conversationTranscript{}}
 	rows, err := c.DB.QueryContext(ctx, `SELECT c.id,COALESCE(m.id,''),COALESCE(m.native_id,''),COALESCE(m.role,''),COALESCE(m.kind,''),COALESCE(m.parent_native_id,''),COALESCE(m.call_id,''),
-		CASE WHEN m.kind IN ('tool_result','delegation_result') THEN '' ELSE COALESCE(m.text,'') END
+		CASE WHEN m.kind IN ('tool_result','delegation_result') THEN NULL ELSE COALESCE(m.text,'') END
 		FROM conversations c LEFT JOIN messages m ON m.conversation_id=c.id WHERE c.workspace_id=?
 		ORDER BY c.started_at,c.id,m.source_order IS NULL,m.source_order,m.created_at,m.id`, workspaceID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	current, ids, records := "", []string{}, []MessageRecord{}
+	type unread struct {
+		id      string
+		ids     []string
+		records []MessageRecord
+		rows    []int // results left unread and unpaired
+	}
+	pending := []unread{}
+	current, ids, records, skipped := "", []string{}, []MessageRecord{}, map[int]bool{}
 	finish := func() {
 		if current == "" {
 			return
 		}
-		structure := newTranscriptStructure(normalizeTranscript(records))
-		conversation := &conversationTranscript{spans: map[string][2]int{}, paths: structure.paths, consumed: make([]bool, len(structure.events))}
-		for index, event := range structure.events {
-			span := conversation.spans[ids[event.row]]
-			if span[1] == 0 {
-				span[0] = index
-			}
-			span[1]++
-			conversation.spans[ids[event.row]] = span
-			_, conversation.consumed[index] = structure.consumed[index]
-		}
+		conversation, unpaired := buildConversationTranscript(ids, records, skipped)
 		workspace.order = append(workspace.order, current)
 		workspace.conversations[current] = conversation
+		if len(unpaired) > 0 {
+			pending = append(pending, unread{current, append([]string(nil), ids...), append([]MessageRecord(nil), records...), unpaired})
+		}
 	}
 	for rows.Next() {
 		var conversationID, id string
+		var text sql.NullString
 		var record MessageRecord
-		if err := rows.Scan(&conversationID, &id, &record.NativeID, &record.Role, &record.Kind, &record.ParentNativeID, &record.CallID, &record.Text); err != nil {
+		if err := rows.Scan(&conversationID, &id, &record.NativeID, &record.Role, &record.Kind, &record.ParentNativeID, &record.CallID, &text); err != nil {
 			return nil, err
 		}
 		if conversationID != current {
 			finish()
-			current, ids, records = conversationID, ids[:0], records[:0]
+			current, ids, records, skipped = conversationID, ids[:0], records[:0], map[int]bool{}
 		}
 		if id != "" {
+			record.Text = text.String
+			if !text.Valid {
+				skipped[len(records)] = true
+			}
 			ids, records = append(ids, id), append(records, record)
 		}
 	}
@@ -741,12 +758,43 @@ func (c *Catalog) readWorkspaceTranscripts(ctx context.Context, workspaceID stri
 		return nil, err
 	}
 	finish()
+	rows.Close()
+	for _, conversation := range pending {
+		for _, row := range conversation.rows {
+			if err := c.DB.QueryRowContext(ctx, "SELECT COALESCE(text,'') FROM messages WHERE id=?", conversation.ids[row]).Scan(&conversation.records[row].Text); err != nil {
+				return nil, err
+			}
+		}
+		workspace.conversations[conversation.id], _ = buildConversationTranscript(conversation.ids, conversation.records, nil)
+	}
 	return workspace, nil
+}
+
+// buildConversationTranscript records each event's path and pairing by the
+// message it comes from, and reports the skipped rows whose events no call
+// consumed.
+func buildConversationTranscript(ids []string, records []MessageRecord, skipped map[int]bool) (*conversationTranscript, []int) {
+	structure := newTranscriptStructure(normalizeTranscript(records))
+	conversation := &conversationTranscript{spans: map[string][2]int{}, paths: structure.paths, consumed: make([]bool, len(structure.events))}
+	unpaired := []int{}
+	for index, event := range structure.events {
+		span := conversation.spans[ids[event.row]]
+		if span[1] == 0 {
+			span[0] = index
+		}
+		span[1]++
+		conversation.spans[ids[event.row]] = span
+		_, conversation.consumed[index] = structure.consumed[index]
+		if skipped[event.row] && !conversation.consumed[index] && (len(unpaired) == 0 || unpaired[len(unpaired)-1] != event.row) {
+			unpaired = append(unpaired, event.row)
+		}
+	}
+	return conversation, unpaired
 }
 
 // WorkConversationMatches counts, for each conversation in the workspace with
 // a match, the matching events in the kinds shown and in those hidden, in the
-// workspace's conversation order. An empty Show counts every kind as shown.
+// workspace's conversation order. A nil Show counts every kind as shown.
 func (c *Catalog) WorkConversationMatches(ctx context.Context, workspaceID string, o transcriptFindOptions) ([]conversationFindCount, error) {
 	matches := []conversationFindCount{}
 	if o.Term == "" {
@@ -760,7 +808,7 @@ func (c *Catalog) WorkConversationMatches(ctx context.Context, workspaceID strin
 	for _, key := range o.Show {
 		shown[key] = true
 	}
-	if len(o.Show) == 0 {
+	if o.Show == nil {
 		for _, key := range transcriptKinds {
 			shown[key] = true
 		}
@@ -774,9 +822,17 @@ func (c *Catalog) WorkConversationMatches(ctx context.Context, workspaceID strin
 	narrow, args := "", []any{workspaceID}
 	if !o.Regex && storedLiterally(o.Term) {
 		if o.CaseSensitive {
-			narrow, args = " AND instr(m.text,?)>0", append(args, o.Term)
+			narrow, args = "instr(m.text,?)>0", append(args, o.Term)
 		} else if isASCII(o.Term) {
-			narrow, args = ` AND m.text LIKE ? ESCAPE '\'`, append(args, "%"+strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(o.Term)+"%")
+			narrow, args = `m.text LIKE ? ESCAPE '\'`, append(args, "%"+strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(o.Term)+"%")
+		}
+		if narrow != "" {
+			for _, word := range readerWords {
+				if o.CaseSensitive && strings.Contains(word.text, o.Term) || !o.CaseSensitive && strings.Contains(strings.ToLower(word.text), strings.ToLower(o.Term)) {
+					narrow, args = narrow+" OR instr(m.text,?)>0", append(args, word.source)
+				}
+			}
+			narrow = " AND (" + narrow + ")"
 		}
 	}
 	rows, err := c.DB.QueryContext(ctx, `SELECT m.conversation_id,m.id,COALESCE(m.native_id,''),COALESCE(m.role,''),COALESCE(m.kind,''),COALESCE(m.parent_native_id,''),COALESCE(m.call_id,''),COALESCE(m.text,'')

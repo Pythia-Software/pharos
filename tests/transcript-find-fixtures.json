@@ -91,7 +91,8 @@
     {"term": "saffron", "show": ["prompts", "response"], "want": {"shown": 3, "hidden": 7, "hidden_kinds": ["edits", "commands", "tools", "agents", "events"]}},
     {"term": "saffron", "show": ["prompts", "response", "replies", "thinking"], "output": true, "want": {"shown": 3, "hidden": 8, "hidden_kinds": ["edits", "commands", "tools", "agents", "events"]}},
     {"term": "saffron", "output": true, "want": {"shown": 11, "hidden": 0, "hidden_kinds": []}},
-    {"term": "cumin", "show": ["edits"], "want": {"shown": 1, "hidden": 2, "hidden_kinds": ["prompts", "response"]}}
+    {"term": "cumin", "show": ["edits"], "want": {"shown": 1, "hidden": 2, "hidden_kinds": ["prompts", "response"]}},
+    {"term": "TodoWrite", "want": {"shown": 1, "hidden": 0, "hidden_kinds": []}}
    ]},
   {"name": "A sub-agent conversation opens with its parent agent's request",
    "messages": [
@@ -111,5 +112,30 @@
    "queries": [
     {"term": "paprika", "show": ["prompts", "response"], "want": {"shown": 3, "hidden": 1, "hidden_kinds": ["reads"]}},
     {"term": "paprika", "show": ["prompts", "response"], "output": true, "want": {"shown": 3, "hidden": 2, "hidden_kinds": ["reads"]}}
+   ]},
+  {"name": "Results with no call in the conversation, and words the reader writes itself",
+   "messages": [
+    {"native_id": "o1", "role": "user", "kind": "message", "text": "Why did zanzibar fail?"},
+    {"native_id": "o2", "role": "tool", "kind": "tool_result", "call_id": "gone1", "text": {"tool": "Bash", "content": "zanzibar failed", "is_error": true}},
+    {"native_id": "o3", "role": "tool", "kind": "tool_result", "call_id": "gone2", "text": {"tool": "Bash", "content": "zanzibar passed"}},
+    {"native_id": "o4", "role": "assistant", "kind": "message", "text": {"message": {"role": "assistant", "content": [{"type": "thinking", "signature": "sig"}, {"type": "text", "text": "The zanzibar build failed once."}]}}},
+    {"native_id": "o5", "role": "assistant", "kind": "tool_call", "call_id": "t1", "text": {"tool": "Bash", "input": {"command": "make"}}},
+    {"native_id": "o6", "role": "tool", "kind": "tool_result", "call_id": "t1", "text": {"content": "zanzibar built", "is_error": true}}
+   ],
+   "events": [
+    {"kind": "message", "path": ["prompts"]},
+    {"kind": "tool_result", "path": ["events"]},
+    {"kind": "tool_result", "path": ["commands"]},
+    {"kind": "reasoning", "path": ["thinking"]},
+    {"kind": "message", "path": ["response"]},
+    {"kind": "tool_call", "path": ["commands"]},
+    {"kind": "tool_result", "path": ["commands"]}
+   ],
+   "queries": [
+    {"term": "zanzibar", "show": ["prompts", "events"], "want": {"shown": 2, "hidden": 2, "hidden_kinds": ["response", "commands"]}},
+    {"term": "zanzibar", "show": ["prompts", "events"], "output": true, "want": {"shown": 2, "hidden": 3, "hidden_kinds": ["response", "commands"]}},
+    {"term": "zanzibar", "show": [], "want": {"shown": 0, "hidden": 4, "hidden_kinds": ["prompts", "response", "commands", "events"]}},
+    {"term": "not retained", "want": {"shown": 1, "hidden": 0, "hidden_kinds": []}},
+    {"term": "Reasoning not retained", "case": true, "want": {"shown": 1, "hidden": 0, "hidden_kinds": []}}
    ]}
 ]
