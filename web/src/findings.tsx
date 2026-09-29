@@ -14,7 +14,7 @@ type Rank = "usd" | "tokens" | "minutes" | "failures";
 type Handoff = "pr" | "diff";
 type Impact = { usd: number; tokens: number; minutes: number; failures: number; window_days?: number };
 type Card = {
-  id: string; state: string; title: string; explanation: string; impact: Impact; impact_note?: string; rate?: string;
+  id: string; state: string; title: string; detector: string; detector_label?: string; explanation: string; impact: Impact; impact_note?: string; rate?: string;
   change: string; change_label: string; attempt?: number; target: string; target_label: string; scope_label: string;
   repository_id?: string | null; first_seen_at?: string; last_seen?: string; active?: boolean; new?: boolean;
   cart?: { target: string; target_label: string; ticked: boolean }; dismissed?: Row; snoozed?: Row; watching?: Row;
@@ -28,10 +28,10 @@ type Repository = { id: string; name: string; work: number; pr_share: number; ha
 type Win = { id: string; title: string; where: string; change: string; before: string; now: string; saved: Row; days_left: number; regressed_at: string | null; decided_at?: string; copied_at?: string };
 type Status = { built_at: string | null; took_ms: unknown; measured_at: string | null; conversations_28d: unknown; weekly_conversations: unknown; running: boolean; phase: string | null; error: string | null };
 type Overview = {
-  status: Status; settings: { threshold: number; rank: Rank; handoff: "auto" | Handoff; repository_handoff: Record<string, Handoff>; seen_at: string };
+  status: Status; settings: { threshold: number; rank: Rank; handoff: "auto" | Handoff; repository_handoff: Record<string, Handoff>; seen_at: string; disabled_detectors?: string[] };
   threshold: number; recommended: number; checkpoints: Checkpoint[];
   summary: { saved: Row; open: number; watching: number; won: number; dismissed: number; snoozed: number; regressed: number; at_stake_usd: number; new: number; next_result_days: number | null };
-  findings: Card[]; cart: CartGroup[]; targets: Target[]; repositories: Repository[]; near: Array<{ id: string; title: string; affected: number }>; wins: Win[];
+  findings: Card[]; cart: CartGroup[]; targets: Target[]; repositories: Repository[]; near: Array<{ id: string; title: string; affected: number }>; wins: Win[]; detectors?: Array<{ name: string; label: string; enabled: boolean }>;
 };
 type Detail = Card & {
   chart?: { title: string; kind: "rate" | "mean" | "share"; weeks: Week[]; anchor: string; copies: string[]; baseline: number; baseline_phrase: string };
@@ -60,51 +60,37 @@ async function request<T>(url: string, body?: unknown): Promise<T> {
 }
 const findingURL = (id: string) => `/api/findings/${encodeURIComponent(id)}`;
 
-// One overview is shared by the page and the header (tab badge, cart button).
+// One overview is shared by the page and the header's tab badge.
 let latest: Overview | null = null;
 const subscribers = new Set<(overview: Overview) => void>();
 function publish(overview: Overview) {
   latest = overview;
   subscribers.forEach(listener => listener(overview));
-  updateChrome(overview.summary?.new ?? 0, cartCount(overview.cart));
+  updateChrome(overview.summary?.open ?? 0);
 }
 async function loadOverview(): Promise<Overview> {
   const overview = await request<Overview>("/api/findings");
   publish(overview);
   return overview;
 }
-const cartCount = (cart: CartGroup[] = []) => cart.reduce((sum, group) => sum + group.items.length, 0);
 
 // ---------------------------------------------------------------- header
 
-let pageOpen = false;
-function updateChrome(fresh: number, inCart: number) {
+/** The tab's badge always counts the open findings, on the page or off it. */
+function updateChrome(open: number) {
   const badge = document.getElementById("findingsBadge");
   const tab = document.getElementById("findingsTab");
-  const shownNew = pageOpen ? 0 : fresh;
-  if (badge) { badge.hidden = shownNew <= 0; badge.textContent = shownNew > 99 ? "99+" : String(shownNew); }
-  tab?.setAttribute("aria-label", shownNew > 0 ? `Optimize, ${shownNew} new since your last visit` : "Optimize");
-  const button = document.getElementById("findingsCartButton");
-  const countNode = document.getElementById("findingsCartCount");
-  if (button) {
-    button.hidden = inCart <= 0;
-    button.title = `Prompts to copy: ${inCart} ${inCart === 1 ? "finding is" : "findings are"} waiting to be handed to an agent`;
-    button.setAttribute("aria-label", `Prompts to copy, ${inCart} ${inCart === 1 ? "finding" : "findings"}`);
-  }
-  if (countNode) countNode.textContent = String(inCart);
+  if (badge) { badge.hidden = open <= 0; badge.textContent = open > 99 ? "99+" : String(open); }
+  tab?.setAttribute("aria-label", open > 0 ? `Optimize, ${open} open ${open === 1 ? "finding" : "findings"}` : "Optimize");
 }
 
-/** Keeps the tab badge and the header's cart button current: once at load, every few minutes while the app is visible, and after actions. */
+/** Keeps the tab badge current: once at load, every few minutes while the app is visible, and after actions. */
 export function startFindingsChrome() {
-  // A filtered overview carries the same summary and cart with fewer cards.
-  const poll = () => { if (!document.hidden) request<{ summary?: { new?: number }; cart_count?: number }>("/api/findings?state=summary").then(body => updateChrome(body.summary?.new ?? 0, body.cart_count ?? 0)).catch(() => { /* The badge waits for the next poll. */ }); };
+  // A filtered overview carries the same summary with fewer cards.
+  const poll = () => { if (!document.hidden) request<{ summary?: { open?: number } }>("/api/findings?state=summary").then(body => updateChrome(body.summary?.open ?? 0)).catch(() => { /* The badge waits for the next poll. */ }); };
   poll();
   window.setInterval(poll, 4 * 60_000);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && !pageOpen) poll(); });
-  document.getElementById("findingsCartButton")?.addEventListener("click", () => {
-    navigate("/findings");
-    window.setTimeout(() => window.dispatchEvent(new Event("pharos:findings-cart")), 60);
-  });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
 }
 
 // ---------------------------------------------------------------- routing
@@ -326,10 +312,14 @@ function SnoozeDismiss({ card, act }: { card: Card; act: Act }) {
       { key: "30d", label: "30 days", onSelect: () => void act(card.id, { action: "snooze", until: "30d" }, "Snoozed for 30 days.") },
       { key: "worse", label: "Until it gets worse", hint: "comes back if it happens twice as often", onSelect: () => void act(card.id, { action: "snooze", until: "until_worse" }, "Snoozed until it gets worse.") },
     ]} />
-    <Menu label={<>Dismiss <Icon name="chevron-down" className="findings-caret" /></>} ariaLabel="Dismiss" heading="Why dismiss it?" items={[
+    <Menu label={<>Dismiss <Icon name="chevron-down" className="findings-caret" /></>} ariaLabel="Dismiss" heading="Dismiss" items={[
       { key: "not_real", label: "Not real", hint: "Pharos misread what happened", onSelect: () => void act(card.id, { action: "dismiss", reason: "not_real" }, "Dismissed as not real.") },
       { key: "not_worth_it", label: "Not worth it", onSelect: () => void act(card.id, { action: "dismiss", reason: "not_worth_it" }, "Dismissed as not worth it.") },
       { key: "wont_fix", label: "Won't fix", onSelect: () => void act(card.id, { action: "dismiss", reason: "wont_fix" }, "Dismissed: won't fix.") },
+      ...(card.detector_label ? [
+        { key: "all", label: "Dismiss all from this detector", hint: card.detector_label, onSelect: () => void act(card.id, { action: "dismiss_detector" }, `Dismissed every open “${card.detector_label}” finding.`) },
+        { key: "off", label: "Turn this detector off", hint: card.detector_label, danger: true, onSelect: () => void act(card.id, { action: "disable_detector" }, `“${card.detector_label}” findings are turned off. Turn them back on in Findings settings.`) },
+      ] : []),
     ]} />
   </>;
 }
@@ -372,15 +362,18 @@ function StateNote({ card }: { card: Card }) {
 
 function ImpactLine({ card, rank }: { card: Card; rank: Rank }) {
   const impact = card.impact ?? { usd: 0, tokens: 0, minutes: 0, failures: 0 };
-  const note = card.impact_note && !(rank === "tokens" && /token/i.test(card.impact_note)) ? card.impact_note : "";
-  // Units a pattern has no measure of (no agent time, no failures) are left out.
-  const others = (["usd", "tokens", "minutes", "failures"] as Rank[]).filter(unit => unit !== rank && num(impact[unit]) > 0);
   const brief: Record<Rank, (value: unknown) => string> = { usd: money, tokens: value => `${compact(value)} tokens`, minutes: value => `${minutes(value)}`, failures: value => counted(Math.round(num(value)), "failure") };
+  // Units a pattern has no measure of (no agent time, no failures) are left out, and so is a note that repeats one of the units.
+  const others = (["usd", "tokens", "minutes", "failures"] as Rank[]).filter(unit => unit !== rank && num(impact[unit]) > 0).map(unit => brief[unit](impact[unit]));
+  const note = card.impact_note && !(rank === "tokens" && /token/i.test(card.impact_note)) && !others.includes(plain(card.impact_note)) ? card.impact_note : "";
   return <div className="findings-impact">
-    <span className="findings-impact-lead"><strong>{unitValue[rank](impact[rank])}</strong> a month{note ? <> · <Text text={note} /></> : null}</span>
-    <span className="findings-impact-rest" title="Every finding's impact in all four units, per month">{others.map(unit => brief[unit](impact[unit])).join(" · ")}</span>
+    <span className="findings-impact-lead"><strong>{unitValue[rank](impact[rank])}</strong> a month</span>
+    {note ? <span className="findings-impact-note"><Text text={note} /></span> : null}
+    {others.length ? <span className="findings-impact-rest" title="Every finding's impact in all four units, per month">{others.map(text => <span key={text}>{text}</span>)}</span> : null}
   </div>;
 }
+
+const solutionLabel = (card: Card) => card.state === "watching" || card.state === "won" ? "Solution applied" : "Solution";
 
 function FindingCard({ card, rank, targets, act, isNew }: { card: Card; rank: Rank; targets: Target[]; act: Act; isNew: boolean }) {
   const chip = stateChip(card);
@@ -388,13 +381,18 @@ function FindingCard({ card, rank, targets, act, isNew }: { card: Card; rank: Ra
   return <article className={`findings-card ${card.cart ? "in-cart" : ""} ${card.state}`} aria-labelledby={`finding-${card.id}`}>
     <div className="findings-card-meta">
       {isNew ? <span className="findings-chip new">New</span> : null}
+      {card.detector_label ? <span className="findings-detector" title="The detector that found this">{card.detector_label}</span> : null}
       <span className="findings-where">{card.scope_label}</span>
       {chip.tone !== "open" ? <span className={`findings-chip ${chip.tone}`}>{chip.text}</span> : null}
     </div>
-    <h3 id={`finding-${card.id}`}><a href={detailURL(card.id)} onClick={event => { if (event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigate(detailURL(card.id)); }}><Text text={card.title} /></a></h3>
-    <p className="findings-explanation"><Text text={card.explanation} /></p>
-    <ImpactLine card={card} rank={rank} />
-    <p className="findings-change"><span className="findings-change-label">{card.state === "watching" || card.state === "won" ? "Change made" : "Change"}</span> <Text text={card.change} /></p>
+    <div className="findings-card-body">
+      <div className="findings-card-text">
+        <h3 id={`finding-${card.id}`}><a href={detailURL(card.id)} onClick={event => { if (event.metaKey || event.ctrlKey || event.shiftKey) return; event.preventDefault(); navigate(detailURL(card.id)); }}><Text text={card.title} /></a></h3>
+        <p className="findings-explanation"><span className="findings-change-label">Problem</span> <Text text={card.explanation} /></p>
+        <p className="findings-change"><span className="findings-change-label">{solutionLabel(card)}</span> <Text text={card.change} /></p>
+      </div>
+      <ImpactLine card={card} rank={rank} />
+    </div>
     <StateNote card={card} />
     <div className="findings-actions">
       {open ? <AddToPrompt card={card} targets={targets} act={act} /> : null}
@@ -408,7 +406,7 @@ function FindingCard({ card, rank, targets, act, isNew }: { card: Card; rank: Ra
 
 // ---------------------------------------------------------------- cart
 
-function CartPanel({ cart, targets, act, onReview, highlight }: { cart: CartGroup[]; targets: Target[]; act: Act; onReview: (group: CartGroup) => void; highlight: boolean }) {
+function CartPanel({ cart, targets, act, onReview }: { cart: CartGroup[]; targets: Target[]; act: Act; onReview: (group: CartGroup) => void }) {
   // Tick boxes answer at once; the saved cart replaces these when it reloads.
   const [ticks, setTicks] = useState<Record<string, boolean>>({});
   const [dragging, setDragging] = useState<{ id: string; target: string } | null>(null);
@@ -428,7 +426,7 @@ function CartPanel({ cart, targets, act, onReview, highlight }: { cart: CartGrou
     void act(group.items[0].finding_id ?? group.items[0].id, { action: "cart_reorder", target, ids }, "Prompt order saved.");
     setDragging(null);
   };
-  return <aside className={`findings-cart ${highlight ? "highlight" : ""}`} id="findingsCart" aria-labelledby="findingsCartTitle" tabIndex={-1}>
+  return <aside className="findings-cart" id="findingsCart" aria-labelledby="findingsCartTitle">
     <h2 id="findingsCartTitle">Prompts to copy</h2>
     {!cart.length ? <p className="findings-cart-empty">Add findings to a prompt for the repository or Mac where the change goes. Each prompt collects its findings, and copying it hands them to an agent at once.</p> : null}
     {cart.map(group => { const count = group.items.filter(ticked).length; return <section key={group.target} className={`findings-cart-group ${dragging && dragging.target !== group.target ? "drop-target" : ""}`} aria-label={`Prompt for ${group.label}`} onDragOver={event => { if (dragging) event.preventDefault(); }} onDrop={event => { event.preventDefault(); drop(group.target); }}>
@@ -773,13 +771,14 @@ function FindingDetail({ id, tab, overview, act, rank, onReview, newIds }: { id:
     <nav className="findings-breadcrumb" aria-label="Breadcrumb"><button type="button" className="findings-crumb" onClick={() => navigate("/findings")}>Findings</button><span aria-hidden="true">›</span><button type="button" className="findings-crumb" onClick={back}>{stateName}</button></nav>
     <h1><Text text={detail.title} /></h1>
     <div className="findings-detail-chips">
+      {detail.detector_label ? <span className="findings-chip detector" title="The detector that found this">{detail.detector_label}</span> : null}
       <span className="findings-chip">{detail.scope_label}</span>
       <span className={`findings-chip ${chip.tone}`}>{chip.tone === "watching" ? <span className="findings-pulse" aria-hidden="true" /> : null}{chip.text}</span>
       {newIds.has(detail.id) ? <span className="findings-chip new">New</span> : null}
     </div>
-    <p className="findings-detail-explanation"><Text text={detail.explanation} /></p>
+    <p className="findings-detail-explanation"><span className="findings-change-label">Problem</span> <Text text={detail.explanation} /></p>
     <ImpactLine card={detail} rank={rank} />
-    <p className="findings-change"><span className="findings-change-label">{detail.state === "watching" || detail.state === "won" ? "Change made" : "Change"}</span> <Text text={detail.change} /></p>
+    <p className="findings-change"><span className="findings-change-label">{solutionLabel(detail)}</span> <Text text={detail.change} /></p>
     {detail.state !== "watching" ? <StateNote card={detail} /> : null}
     <div className="findings-actions">
       {detail.state === "open" ? <><AddToPrompt card={detail} targets={overview?.targets ?? []} act={act} />{group ? <button type="button" className="findings-button" onClick={() => onReview(group)} disabled={!group.ticked}>Review that prompt</button> : null}<SnoozeDismiss card={detail} act={act} /></> : null}
@@ -900,6 +899,14 @@ function FindingsSettings({ overview, reload }: { overview: Overview | null; rel
       </> : <p className="findings-muted">The preview appears after findings are first computed.</p>}
     </section>
 
+    {overview.detectors?.length ? <section className="findings-panel findings-setting" aria-labelledby="findingsDetectorsTitle">
+      <h2 id="findingsDetectorsTitle">Kinds of findings</h2>
+      <p>Each detector looks for one kind of pattern. Turn one off to stop seeing its findings; anything you're already measuring keeps going.</p>
+      <div className="findings-radios">
+        {overview.detectors.map(detector => <label key={detector.name} className="findings-check"><input type="checkbox" checked={detector.enabled} onChange={event => void save({ detector_enabled: { [detector.name]: event.target.checked } })} /> {detector.label}</label>)}
+      </div>
+    </section> : null}
+
     <section className="findings-panel findings-setting" aria-labelledby="findingsRankTitle">
       <h2 id="findingsRankTitle">Rank findings by</h2>
       <p>Every finding shows all four; this decides the order and which number leads. Dollars are what the same tokens would cost at API prices, which on a subscription shows where your quota goes.</p>
@@ -963,7 +970,7 @@ function Building({ status }: { status: Status }) {
   </div>;
 }
 
-function FindingsList({ overview, route, act, rank, setRank, onReview, newIds, highlightCart }: { overview: Overview; route: Route; act: Act; rank: Rank; setRank: (rank: Rank) => void; onReview: (group: CartGroup) => void; newIds: Set<string>; highlightCart: boolean }) {
+function FindingsList({ overview, route, act, rank, setRank, onReview, newIds }: { overview: Overview; route: Route; act: Act; rank: Rank; setRank: (rank: Rank) => void; onReview: (group: CartGroup) => void; newIds: Set<string> }) {
   const summary = overview.summary;
   const status = overview.status ?? ({} as Status);
   const findings = overview.findings ?? [];
@@ -1027,7 +1034,7 @@ function FindingsList({ overview, route, act, rank, setRank, onReview, newIds, h
             : <div className="findings-empty"><strong>{route.repo ? "Nothing here for this filter." : route.list === "watching" ? "Nothing is being measured." : "Nothing dismissed or snoozed."}</strong>
               <p>{route.repo ? "Choose Everywhere to see every finding in this list." : route.list === "watching" ? "Copy a prompt from Prompts to copy; its findings are measured here until each has a result." : "Findings you dismiss or snooze wait here, and you can restore any of them."}</p></div> : null}
         </div>
-        {showCart ? <CartPanel cart={overview.cart ?? []} targets={overview.targets ?? []} act={act} onReview={onReview} highlight={highlightCart} /> : null}
+        {showCart ? <CartPanel cart={overview.cart ?? []} targets={overview.targets ?? []} act={act} onReview={onReview} /> : null}
       </div>}
     </>}
   </div>;
@@ -1042,7 +1049,6 @@ export function FindingsPage({ copy }: { copy: Copy }) {
   const [newIds, setNewIds] = useState<Set<string>>(new Set());
   const [review, setReview] = useState<string>("");
   const [toast, setToast] = useState("");
-  const [highlightCart, setHighlightCart] = useState(false);
   const [rankOverride, setRankOverride] = useState<Rank | null>(null);
   const toastTimer = useRef<number>();
   const listScroll = useRef(0);
@@ -1054,7 +1060,6 @@ export function FindingsPage({ copy }: { copy: Copy }) {
     let wasOpen = false;
     const onRoute = () => {
       const here = location.pathname === "/findings";
-      pageOpen = here;
       if (!here) { wasOpen = false; return; }
       const next = readRoute();
       setRoute(previous => {
@@ -1070,7 +1075,6 @@ export function FindingsPage({ copy }: { copy: Copy }) {
           if (!body) return;
           setNewIds(new Set(body.findings.filter(card => card.new).map(card => card.id)));
           if (body.summary?.new) request("/api/findings/seen", {}).catch(() => { /* The badge clears on the next visit. */ });
-          updateChrome(0, cartCount(body.cart));
         });
       }
     };
@@ -1089,24 +1093,6 @@ export function FindingsPage({ copy }: { copy: Copy }) {
     const poll = window.setInterval(() => { if (location.pathname === "/findings") void reload(); }, 3000);
     return () => window.clearInterval(poll);
   }, [overview?.status?.running, route.view, reload]);
-
-  useEffect(() => {
-    const show = () => {
-      setHighlightCart(true);
-      // The list may still be loading; wait for the cart to appear.
-      let tries = 0;
-      const reveal = () => {
-        const cart = document.getElementById("findingsCart");
-        if (!cart) { if (++tries < 40) window.setTimeout(reveal, 100); return; }
-        cart.scrollIntoView({ behavior: "smooth", block: "nearest" });
-        cart.focus({ preventScroll: true });
-        window.setTimeout(() => setHighlightCart(false), 1800);
-      };
-      window.setTimeout(reveal, 60);
-    };
-    window.addEventListener("pharos:findings-cart", show);
-    return () => window.removeEventListener("pharos:findings-cart", show);
-  }, []);
 
   const say = useCallback((message: string) => {
     setToast(message);
@@ -1134,7 +1120,7 @@ export function FindingsPage({ copy }: { copy: Copy }) {
   if (route.view === "settings") body = <FindingsSettings overview={overview} reload={reload} />;
   else if (route.finding) body = <FindingDetail id={route.finding} tab={route.tab} overview={overview} act={act} rank={rank} onReview={next => setReview(next.target)} newIds={newIds} />;
   else if (!overview) body = <div className="findings-page">{error ? <p className="findings-error" role="alert">{error}</p> : <p className="findings-muted">Loading findings…</p>}</div>;
-  else body = <FindingsList overview={overview} route={route} act={act} rank={rank} setRank={setRank} onReview={next => setReview(next.target)} newIds={newIds} highlightCart={highlightCart} />;
+  else body = <FindingsList overview={overview} route={route} act={act} rank={rank} setRank={setRank} onReview={next => setReview(next.target)} newIds={newIds} />;
 
   return <>
     {body}

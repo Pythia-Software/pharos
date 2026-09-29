@@ -318,6 +318,22 @@ var findingDetectors = []findingDetector{
 	{"tl1", detectTL1},
 }
 
+// findingDetectorLabels name the detectors for the people reading the cards.
+var findingDetectorLabels = map[string]string{
+	"failure": "Recurring failures", "drift": "Instruction drift", "cli": "CLI friction", "docs": "Documentation hosts",
+	"orientation": "Orientation tax", "exploration": "Delegable exploration", "heavy-output": "Context-heavy commands",
+	"outlier": "Cost outliers", "tl1": "TL1 flavors",
+}
+
+func knownFindingDetector(name string) bool {
+	for _, detector := range findingDetectors {
+		if detector.name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // findingsState tracks the pass in this process.
 type findingsState struct {
 	mu        sync.Mutex

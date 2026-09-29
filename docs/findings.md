@@ -16,8 +16,14 @@ describes what shipped.
 
 - **Findings tab.** Open findings are ranked by the unit you choose in settings:
   dollars (API-equivalent, the default), tokens, agent time, or failures. Every
-  card shows all four. The tab's badge counts findings that appeared since your
-  last visit.
+  card shows all four, stacked down its right-hand side, and names the detector
+  that found it. The tab's badge always counts the open findings; cards that
+  appeared since your last visit carry a "New" chip. Each card describes the
+  Problem and the Solution.
+- **Dismiss and turn off.** Dismiss a finding for one of three reasons, dismiss
+  every open finding from its detector at once, or turn the detector off. Turned
+  off detectors are listed in Findings settings, where they come back on;
+  findings you are already measuring keep going.
 - **Add to prompt.** Each finding suggests where its fix goes: a repository, your
   global instruction files for one provider on one Mac, or an automation such as
   a TL1 flavor. You can pick another target and move items between prompts later.
