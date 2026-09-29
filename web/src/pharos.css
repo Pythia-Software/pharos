@@ -133,11 +133,33 @@
 .usage-chart-controls .usage-preset-label { min-width: 0; margin-right: 2px; }
 .chart-toggle button[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel)); font-weight: 600; }
 .chart-toggle button:disabled { opacity: .45; cursor: not-allowed; }
-.usage-chart-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0 0 8px; color: var(--muted); font-size: var(--fs-sm); }
+.usage-chart-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; margin: 0 0 8px -6px; color: var(--muted); font-size: var(--fs-sm); }
+.usage-legend-item { display: inline-flex; align-items: center; height: auto; min-height: 0; margin: 0; padding: 1px 6px; border: 1px solid transparent; border-radius: 4px; background: none; color: inherit; font: inherit; line-height: 18px; }
+button.usage-legend-item { cursor: pointer; }
+button.usage-legend-item:hover { border-color: var(--line); color: var(--ink); }
+.usage-legend-item[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel)); color: var(--ink); font-weight: 600; }
+.usage-legend-item.dimmed { opacity: .5; }
+.usage-legend-item.dimmed:hover { opacity: 1; }
+.usage-legend-x { margin-left: 6px; color: var(--muted); font-weight: 400; }
+.usage-chart-hint { margin-left: auto; padding-left: 12px; font-size: var(--fs-2xs); }
+.usage-chart-bars.pickable { touch-action: none; user-select: none; -webkit-user-select: none; }
+.usage-chart-bars.pickable > span { cursor: crosshair; }
+.usage-chart-bars > span.picked > i { filter: brightness(1.15); }
+.usage-chart-pick { position: absolute; top: 0; bottom: 0; z-index: 2; pointer-events: none; border: 1px solid var(--accent); border-radius: 3px; background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.usage-chart-pick span { position: absolute; bottom: calc(100% + 3px); left: 50%; transform: translateX(-50%); padding: 1px 6px; border-radius: 4px; background: var(--ink); color: var(--panel); font-size: var(--fs-2xs); white-space: nowrap; }
 .usage-swatch { display: inline-block; width: 10px; height: 10px; margin-right: 7px; border-radius: 3px; vertical-align: -1px; }
 .usage-chart-plot { position: relative; height: 150px; margin-left: 46px; border-bottom: 1px solid var(--line); }
 .usage-chart-grid { position: absolute; left: 0; right: 0; height: 0; border-top: 1px dashed color-mix(in srgb, var(--line) 80%, transparent); pointer-events: none; }
 .usage-chart-grid span { position: absolute; right: calc(100% + 6px); transform: translateY(-50%); color: var(--muted); font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usage-chart-plot.broken { height: 190px; }
+.usage-chart-log { position: absolute; inset: 0 0 50% 0; background: color-mix(in srgb, var(--ink) 4%, transparent); pointer-events: none; }
+.usage-chart-log span { position: absolute; z-index: 2; top: 3px; left: 4px; padding: 0 4px; border-radius: 3px; background: var(--panel); color: var(--muted); font-size: var(--fs-2xs); letter-spacing: .03em; }
+/* The scale change: a gap cut through the columns, with broken-axis slashes at each end. */
+.usage-chart-break { position: absolute; z-index: 1; left: 0; right: 0; bottom: 50%; height: 3px; transform: translateY(50%); background: var(--panel); pointer-events: none; }
+.usage-chart-break::before, .usage-chart-break::after { content: ""; position: absolute; top: -4px; width: 5px; height: 11px; border-left: 1.5px solid var(--muted); border-right: 1.5px solid var(--muted); transform: skewX(-30deg); }
+.usage-chart-break::before { left: -5px; }
+.usage-chart-break::after { right: -5px; }
+.usage-chart-break span { position: absolute; top: 50%; right: calc(100% + 10px); transform: translateY(-50%); color: var(--ink); font-size: var(--fs-2xs); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .usage-chart-bars { position: relative; display: flex; align-items: flex-end; gap: 2px; height: 100%; transition: opacity .15s; }
 .usage-chart-bars.dense { gap: 1px; }
 .usage-chart-bars.denser { gap: 0; }

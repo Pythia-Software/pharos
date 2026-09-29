@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"slices"
 	"sort"
@@ -220,27 +221,56 @@ func rootWorkspace(id string, parents map[string]string) string {
 	return id
 }
 
+// writingSplits are the row fields the writing chart can split its words by.
+var writingSplits = map[string]bool{"repository_name": true, "source_kind": true, "providers": true}
+
 // writingSeries sums, per day, the classified text of the writing rows that
-// match where, and totals it, so the page's chart and breakdown follow the
-// table's filters.
-func (c *Catalog) writingSeries(ctx context.Context, where []querytable.WhereTerm, schema querytable.Schema) (map[string]any, error) {
+// match the request's filters, and totals it, so the page's chart and
+// breakdown follow the table's filters. Days outside From..To (local days,
+// inclusive, either optional) are left out, so a time filter narrows the
+// words and not only the works. With Split, it also sums typed and all words
+// per day and value of that row field.
+func (c *Catalog) writingSeries(ctx context.Context, request writingSeriesRequest, schema querytable.Schema) (map[string]any, error) {
+	if request.Split != "" && !writingSplits[request.Split] {
+		return nil, fmt.Errorf("writing series cannot split by %q", request.Split)
+	}
 	rows, daily, err := c.writingData(ctx)
 	if err != nil {
 		return nil, err
 	}
-	matched, err := querytable.Filter(rows, where, schema)
+	matched, err := querytable.Filter(rows, request.Where, schema)
 	if err != nil {
 		return nil, err
 	}
 	byDay := map[string]*writingDay{}
 	total := newWritingDay("")
+	type splitKey struct{ day, value string }
+	split := map[splitKey][2]int64{}
+	works := 0
 	for _, row := range matched {
+		counted := false
 		for day, entry := range daily[firstString(row["id"])] {
+			if request.From != "" && day < request.From || request.To != "" && day > request.To {
+				continue
+			}
+			counted = true
 			if byDay[day] == nil {
 				byDay[day] = newWritingDay(day)
 			}
 			byDay[day].add(entry)
 			total.add(entry)
+			if request.Split != "" {
+				key := splitKey{day, firstString(row[request.Split])}
+				words := int64(0)
+				for _, category := range authorshipCategories {
+					words += entry.counts[category+"_words"]
+				}
+				sums := split[key]
+				split[key] = [2]int64{sums[0] + entry.counts[spanTyped+"_words"], sums[1] + words}
+			}
+		}
+		if counted {
+			works++
 		}
 	}
 	series := make([]map[string]any, 0, len(byDay))
@@ -252,10 +282,25 @@ func (c *Catalog) writingSeries(ctx context.Context, where []querytable.WhereTer
 	if len(series) > 0 {
 		first, last = firstString(series[0]["day"]), firstString(series[len(series)-1]["day"])
 	}
-	return map[string]any{
-		"works": len(matched), "daily": series,
+	result := map[string]any{
+		"works": works, "daily": series,
 		"totals": writingCounts(total, map[string]any{"first_day": nilIfEmpty(first), "last_day": nilIfEmpty(last)}),
-	}, nil
+	}
+	if request.Split != "" {
+		values := make([]map[string]any, 0, len(split))
+		for key, sums := range split {
+			values = append(values, map[string]any{"day": key.day, "value": nilIfEmpty(key.value), "typed_words": sums[0], "words": sums[1]})
+		}
+		sort.Slice(values, func(i, j int) bool {
+			left, right := values[i], values[j]
+			if left["day"] != right["day"] {
+				return firstString(left["day"]) < firstString(right["day"])
+			}
+			return firstString(left["value"]) < firstString(right["value"])
+		})
+		result["split"] = values
+	}
+	return result, nil
 }
 
 func writingCounts(entry *writingDay, into map[string]any) map[string]any {
@@ -269,4 +314,7 @@ func writingCounts(entry *writingDay, into map[string]any) map[string]any {
 // writingSeriesRequest is the body of POST /api/query/writing/series.
 type writingSeriesRequest struct {
 	Where []querytable.WhereTerm `json:"where"`
+	Split string                 `json:"split,omitempty"`
+	From  string                 `json:"from,omitempty"`
+	To    string                 `json:"to,omitempty"`
 }
