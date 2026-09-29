@@ -171,3 +171,66 @@ func TestFindingObservationsMerge(t *testing.T) {
 		t.Fatalf("merged: %+v", root)
 	}
 }
+
+func TestFindingDismissAllAndDisableADetector(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 9, 28, 15, 0, 0, 0, time.Local)
+	fixture := newFindingFixture(t, now)
+	for back := 27; back >= 0; back-- {
+		fixture.conversation(dayTime(now.Format("2006-01-02")).AddDate(0, 0, -back), back%4 == 0)
+	}
+	catalog := fixture.catalog
+	if err := catalog.RefreshFindings(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	overview, err := catalog.FindingsOverview(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cards := mapSlice(overview["findings"])
+	if len(cards) == 0 {
+		t.Fatal("the fixture should produce findings")
+	}
+	id := firstString(cards[0]["id"])
+	detector := firstString(cards[0]["detector"])
+	if detector == "" || firstString(cards[0]["detector_label"]) == "" {
+		t.Fatalf("a card names its detector: %v", cards[0])
+	}
+	open := func() int {
+		overview, err := catalog.FindingsOverview(ctx, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return int(integer(mapValueDefault(overview["summary"])["open"]))
+	}
+	before := open()
+	if err := catalog.FindingAction(ctx, id, map[string]any{"action": "disable_detector"}); err != nil {
+		t.Fatal(err)
+	}
+	afterOff := open()
+	if afterOff >= before {
+		t.Fatalf("turning a detector off should hide its findings: %d before, %d after", before, afterOff)
+	}
+	if err := catalog.SetFindingSettings(ctx, map[string]any{"detector_enabled": map[string]any{detector: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if open() != before {
+		t.Fatal("turning the detector back on brings its findings back")
+	}
+	if err := catalog.FindingAction(ctx, id, map[string]any{"action": "dismiss_detector"}); err != nil {
+		t.Fatal(err)
+	}
+	remaining := open()
+	overview, _ = catalog.FindingsOverview(ctx, "open")
+	for _, card := range mapSlice(overview["findings"]) {
+		if firstString(card["detector"]) == detector {
+			t.Fatalf("every open finding from %s should be dismissed, but %v is open (%d open)", detector, card["id"], remaining)
+		}
+	}
+	if remaining >= before {
+		t.Fatalf("dismissing a detector should leave fewer open findings: %d before, %d after", before, remaining)
+	}
+	if err := catalog.SetFindingSettings(ctx, map[string]any{"detector_enabled": map[string]any{"nonsense": false}}); err == nil {
+		t.Fatal("an unknown detector is an error")
+	}
+}

@@ -17,11 +17,11 @@ import (
 //
 //	GET  /api/findings                     cards, cart, wins, savings, settings, threshold preview
 //	GET  /api/findings/{id}                one finding: weekly chart, evidence, attempts, prompt
-//	POST /api/findings/{id}/action         dismiss, snooze, restore, cart_*, not_applied
+//	POST /api/findings/{id}/action         dismiss, dismiss_detector, disable_detector, snooze, restore, cart_*, not_applied
 //	POST /api/findings/cart/prompt         preview a target's prompt (starts nothing)
 //	POST /api/findings/cart/copy           the copy: starts measuring the ticked findings
-//	POST /api/findings/settings            threshold, rank, handoff, per-repository handoff
-//	POST /api/findings/seen                the Findings view was opened (tab badge)
+//	POST /api/findings/settings            threshold, rank, handoff, per-repository handoff, detector_enabled
+//	POST /api/findings/seen                the Findings view was opened ("New" chips)
 //	POST /api/findings/refresh             run the full pass now
 //
 // Reading never changes a finding's state; only the copy starts measuring.
@@ -159,7 +159,7 @@ func (view *findingView) state(row *findingRow) string {
 			return findingOpen
 		}
 	}
-	if row.Hidden || !row.Active || !row.Stats.passes(view.thresh) {
+	if row.Hidden || !row.Active || view.detectorOff(row.Detector) || !row.Stats.passes(view.thresh) {
 		return findingHidden
 	}
 	return findingOpen
@@ -183,7 +183,7 @@ func findingCheckpointPreview(view *findingView, weekly float64) ([]map[string]a
 		waits := []float64{}
 		clear := 0
 		for _, row := range view.rows {
-			if row.Hidden || !row.Active || !row.Stats.passes(threshold) {
+			if row.Hidden || !row.Active || view.detectorOff(row.Detector) || !row.Stats.passes(threshold) {
 				continue
 			}
 			if state := view.states[row.ID]; state != nil && (state.Dismissed || state.latest() != nil) {
@@ -335,10 +335,14 @@ func (c *Catalog) FindingsOverview(ctx context.Context, filter string) (map[stri
 	status["running"], status["phase"], status["error"] = c.findings.running, nilIfEmpty(c.findings.phase), nilIfEmpty(c.findings.lastError)
 	c.findings.mu.Unlock()
 	status["current"] = built == c.findingsGeneration()
+	detectors := []map[string]any{}
+	for _, detector := range findingDetectors {
+		detectors = append(detectors, map[string]any{"name": detector.name, "label": findingDetectorLabels[detector.name], "enabled": !view.cart.settings.detectorOff(detector.name)})
+	}
 	return map[string]any{
 		"status": status, "settings": view.cart.settings, "threshold": view.thresh, "recommended": view.rec, "checkpoints": view.checks,
 		"summary": summary, "cart_count": cartCount, "findings": cards, "cart": view.carts(), "targets": view.targets(), "repositories": view.repositories(), "near": view.nearMisses(),
-		"wins": view.wins(),
+		"wins": view.wins(), "detectors": detectors,
 	}, nil
 }
 
@@ -351,7 +355,7 @@ func floatOr(value any) float64 {
 func (view *findingView) card(row *findingRow, state string) map[string]any {
 	user := view.states[row.ID]
 	step, attempt := findingStepFor(row, user)
-	card := map[string]any{"id": row.ID, "state": state, "title": row.Card.Title, "explanation": row.Card.Explanation, "impact": row.Impact,
+	card := map[string]any{"id": row.ID, "state": state, "title": row.Card.Title, "detector": row.Detector, "detector_label": findingDetectorLabels[row.Detector], "explanation": row.Card.Explanation, "impact": row.Impact,
 		"impact_note": row.Card.ImpactNote, "rate": row.Card.Rate, "change": step.Change, "change_label": step.Label, "attempt": attempt,
 		"target": row.Target, "target_label": view.cart.label(row.Target), "scope_label": view.scopeLabel(row), "repository_id": nilIfEmpty(row.RepositoryID),
 		"first_seen_at": row.FirstSeenAt, "last_seen": nilIfEmpty(row.Stats.LastSeen), "active": row.Active}
@@ -504,7 +508,7 @@ func (view *findingView) repositories() []map[string]any {
 func (view *findingView) nearMisses() []map[string]any {
 	rows := []*findingRow{}
 	for _, row := range view.rows {
-		if row.Active && !row.Hidden && !row.Stats.passes(view.thresh) && row.Stats.Recent > 0 {
+		if row.Active && !row.Hidden && !view.detectorOff(row.Detector) && !row.Stats.passes(view.thresh) && row.Stats.Recent > 0 {
 			rows = append(rows, row)
 		}
 	}
@@ -706,4 +710,10 @@ func storeFindingsVolume(tx *sql.Tx, env *findingEnv) error {
 		}
 	}
 	return nil
+}
+
+// detectorOff reports whether the user turned a finding's detector off. The
+// view the pass previews thresholds with has no settings yet.
+func (view *findingView) detectorOff(detector string) bool {
+	return view.cart != nil && view.cart.settings.detectorOff(detector)
 }
