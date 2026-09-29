@@ -47,7 +47,7 @@ test('annotation controls stay above a native modal and return to the page when 
   } finally { await browser.close(); }
 });
 
-test('Library table uses page scroll and conversation cards expose stacked Markdown and work facts', async () => {
+test('Library table scrolls with the page below the header, and conversation cards expose stacked Markdown and work facts', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
   const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
@@ -85,6 +85,7 @@ test('Library table uses page scroll and conversation cards expose stacked Markd
     const layout = await page.evaluate(() => {
       const wrap = document.querySelector('#queryTableLibrary .qt-table-wrap');
       const qb = document.querySelector('#queryTableLibrary .qt-qb');
+      const main = document.querySelector('main');
       return {
         wrapOverflow: getComputedStyle(wrap).overflow,
         wrapRadius: getComputedStyle(wrap).borderRadius,
@@ -93,14 +94,33 @@ test('Library table uses page scroll and conversation cards expose stacked Markd
         documentWidth: document.documentElement.scrollWidth,
         documentHeight: document.documentElement.scrollHeight,
         viewportWidth: innerWidth, viewportHeight: innerHeight,
+        mainTop: main.getBoundingClientRect().top,
+        headerBottom: document.querySelector('body>header').getBoundingClientRect().bottom,
+        mainScrollWidth: main.scrollWidth, mainWidth: main.clientWidth,
+        mainScrollHeight: main.scrollHeight, mainHeight: main.clientHeight,
       };
     });
     assert.equal(layout.wrapOverflow, 'visible');
     assert.equal(layout.wrapRadius, '0px');
     assert.equal(layout.tableRadius, '0px');
     assert.equal(layout.gap, 0);
-    assert.ok(layout.documentWidth > layout.viewportWidth, JSON.stringify(layout));
-    assert.ok(layout.documentHeight > layout.viewportHeight, JSON.stringify(layout));
+    // The wide, tall table scrolls main, whose scrollbars start below the
+    // header; the header and nav never scroll.
+    assert.equal(layout.documentWidth, layout.viewportWidth, JSON.stringify(layout));
+    assert.equal(layout.documentHeight, layout.viewportHeight, JSON.stringify(layout));
+    assert.equal(layout.mainTop, layout.headerBottom, JSON.stringify(layout));
+    assert.ok(layout.mainScrollWidth > layout.mainWidth, JSON.stringify(layout));
+    assert.ok(layout.mainScrollHeight > layout.mainHeight, JSON.stringify(layout));
+    const scrolled = await page.evaluate(() => {
+      const main = document.querySelector('main'), header = document.querySelector('body>header');
+      const before = header.getBoundingClientRect();
+      main.scrollTo(200, document.querySelector('#queryTableLibrary .qt-table').getBoundingClientRect().top - main.getBoundingClientRect().top + 200);
+      const after = header.getBoundingClientRect(), head = document.querySelector('#queryTableLibrary .qt-table thead').getBoundingClientRect();
+      return { headerMoved: after.left !== before.left || after.top !== before.top, theadTop: head.top, mainTop: main.getBoundingClientRect().top };
+    });
+    assert.equal(scrolled.headerMoved, false, JSON.stringify(scrolled));
+    assert.equal(scrolled.theadTop, scrolled.mainTop, JSON.stringify(scrolled));
+    await page.evaluate(() => document.querySelector('main').scrollTo(0, 0));
     fs.mkdirSync(path.join(root, '.context'), { recursive: true });
     await page.screenshot({ path: path.join(root, '.context/library-table.png') });
 
@@ -135,7 +155,7 @@ test('Library table uses page scroll and conversation cards expose stacked Markd
     assert.equal(await exchange.locator('.result-message.human .xml-chip > summary').innerText(), 'environment_context');
     assert.match(await exchange.locator('.result-message.human .message-prose').innerText(), /Fix the bug/);
     assert.equal(await exchange.locator('.result-message.assistant strong').innerText(), 'it');
-    await page.evaluate(() => window.scrollTo(0, document.querySelector('.conversation-result-card').getBoundingClientRect().top + scrollY - 85));
+    await page.evaluate(() => document.querySelector('main').scrollBy(0, document.querySelector('.conversation-result-card').getBoundingClientRect().top - 85));
     await page.screenshot({ path: path.join(root, '.context/library-conversations.png') });
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }

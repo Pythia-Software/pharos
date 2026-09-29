@@ -197,7 +197,7 @@ describe('library, drive and captures UI', { skip }, () => {
     // The chip shows only the drive's name and a brass dot; what runs is in its tooltip.
     await page.waitForFunction(() => document.querySelector('#pharosDrive')?.dataset.state === 'busy' && /Indexing/.test(document.querySelector('#pharosDrive').title), null, { timeout: 15_000 });
     assert.equal(await page.locator('#pharosDrive').textContent(), volume);
-    await page.evaluate(() => scrollTo(0, 0));
+    await page.evaluate(() => document.querySelector('main').scrollTo(0, 0));
     await page.locator('#pharosDrive').click();
     const panel = page.getByRole('dialog', { name: 'Library drive' });
     await panel.getByText('Indexing captures', { exact: true }).waitFor();
@@ -215,7 +215,7 @@ describe('library, drive and captures UI', { skip }, () => {
     assert.ok(remote.path);
     assert.ok(remote.last_attempt_at);
     await shoot(page.locator('#sourceGrid'), 'hosts-indexed');
-    await page.evaluate(() => scrollTo(0, 0));
+    await page.evaluate(() => document.querySelector('main').scrollTo(0, 0));
     await shoot(page.locator('#sourceGrid .source-card').first(), 'source-card-capture');
     // The per-source switches live in card headers.
     const card = page.locator('#sourceGrid .source-card', { has: page.locator('h2', { hasText: /^codex$/ }) });
