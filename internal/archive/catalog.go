@@ -25,6 +25,7 @@ type Catalog struct {
 	captureRoot        string
 	library            libraryCache
 	find               libraryFindCache
+	transcripts        transcriptFindCache
 	derived            derivedCache
 	// quietVersion and warmVersion are the catalog versions warmCaches last
 	// saw and warmed; only the Library maintenance loop uses them.

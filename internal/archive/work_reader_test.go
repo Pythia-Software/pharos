@@ -116,33 +116,6 @@ func TestWorkConversationShortensOutputsButKeepsWhatTheReaderInterprets(t *testi
 	}
 }
 
-func TestWorkConversationMatchesHonorDepthCaseAndRegex(t *testing.T) {
-	catalog, _ := testCatalog(t)
-	seedReaderWorkspace(t, catalog)
-	for _, test := range []struct {
-		term, depth   string
-		regex, sensed bool
-		want          string
-	}{
-		{"SAFFRON", "messages", false, false, `["agent"]`},
-		{"SAFFRON", "messages", false, true, `[]`},
-		{"config.toml", "messages", false, false, `[]`},
-		{"config.toml", "tools", false, false, `["agent"]`},
-		{"build output", "tools", false, false, `[]`},
-		{"build output", "responses", false, false, `["main"]`},
-		{`pull/\d+`, "messages", true, false, `["main"]`},
-		{"50%", "responses", false, false, `[]`},
-	} {
-		got, err := catalog.WorkConversationMatches("work", test.term, test.depth, test.regex, test.sensed)
-		if err != nil || jsonText(got) != test.want {
-			t.Fatalf("%+v: got %s %v", test, jsonText(got), err)
-		}
-	}
-	if _, err := catalog.WorkConversationMatches("work", "(", "messages", true, false); err == nil {
-		t.Fatal("an invalid expression is an error")
-	}
-}
-
 func TestWorkReaderRoutes(t *testing.T) {
 	catalog, config := testCatalog(t)
 	seedReaderWorkspace(t, catalog)
@@ -162,8 +135,11 @@ func TestWorkReaderRoutes(t *testing.T) {
 	if code, body := get("/api/work/work/conversations/agent"); code != 200 || len(body["messages"].([]any)) != 2 {
 		t.Fatalf("conversation: %d %v", code, body)
 	}
-	if code, body := get("/api/work/work/find?q=saffron&depth=messages"); code != 200 || jsonText(body["conversations"]) != `["agent"]` {
+	if code, body := get("/api/work/work/find?q=config.toml&show=prompts,response"); code != 200 || jsonText(body["conversations"]) != `[{"hidden":1,"hidden_kinds":["reads"],"id":"agent","shown":0}]` {
 		t.Fatalf("find: %d %v", code, body)
+	}
+	if code, body := get("/api/work/work/find?q=saffron&show="); code != 200 || jsonText(body["conversations"]) != `[{"hidden":1,"hidden_kinds":["prompts"],"id":"agent","shown":0}]` {
+		t.Fatalf("an empty show shows no kind: %d %v", code, body)
 	}
 	if code, _ := get("/api/work/work/find?q=(&regex=1"); code != 400 {
 		t.Fatalf("invalid find: %d", code)

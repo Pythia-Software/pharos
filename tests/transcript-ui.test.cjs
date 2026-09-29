@@ -319,14 +319,19 @@ async function serveWork(page, work) {
     first_prompt: messages.find(message => ['user', 'agent'].includes(message.role) && message.kind === 'message')?.text })) };
   const originals = new Map(conversations.flatMap(conversation => (conversation.messages || []).map(message => [message.id, message.original]).filter(([id, original]) => id && original)));
   const json = (route, value, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) });
-  await page.route(/\/api\/(work\/work|messages\/)/, route => {
+  await page.route(/\/api\/(work\/work|messages\/)/, async route => {
     const url = new URL(route.request().url()), parts = url.pathname.split('/').slice(3);
     if (parts[0] === 'messages') return originals.has(parts[1]) ? json(route, { id: parts[1], ...originals.get(parts[1]) }) : json(route, { error: 'not found' }, 404);
     if (parts.length === 1) return json(route, overview);
     if (parts[1] === 'conversations') return json(route, conversations.find(conversation => conversation.id === parts[2]) || { error: 'not found' }, conversations.some(conversation => conversation.id === parts[2]) ? 200 : 404);
-    const q = url.searchParams.get('q'), kinds = { messages: ['message'], thinking: ['message', 'reasoning', 'thinking'], tools: ['message', 'reasoning', 'thinking', 'tool_call', 'delegation'] }[url.searchParams.get('depth')];
-    const pattern = new RegExp(url.searchParams.get('regex') === '1' ? q : q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), url.searchParams.get('case') === '1' ? 'u' : 'iu');
-    return json(route, { conversations: conversations.filter(conversation => (conversation.messages || []).some(message => (!kinds || kinds.includes(message.kind)) && pattern.test(message.text))).map(conversation => conversation.id) });
+    // The service mirrors the reader's classifier (transcript-find fixtures), so the page's own counts stand in for it.
+    const params = Object.fromEntries(url.searchParams);
+    const counts = await page.evaluate(({ conversations, params }) => {
+      const shown = new Set('show' in params ? params.show.split(',').filter(Boolean) : TRANSCRIPT_CATEGORIES.map(([key]) => key));
+      let pattern; try { pattern = transcriptFindPattern(params.q, params.regex === '1', params.case === '1') } catch { return null }
+      return conversations.map(conversation => ({ id: conversation.id, ...transcriptFind(conversationMessages({ messages: conversation.messages || [] }), { pattern, shown, output: params.output === '1' }) })).filter(count => count.shown || count.hidden);
+    }, { conversations, params });
+    return counts ? json(route, { conversations: counts }) : json(route, { error: 'invalid pattern' }, 400);
   });
 }
 
@@ -423,12 +428,57 @@ test('Ctrl+F searches across conversations and switches to the next matching car
   ]});
   await page.keyboard.press('Control+f');
   await page.getByRole('searchbox',{name:'Find in conversation'}).fill('saffron');
-  await page.locator('.conversation-find-workspace',{hasText:'1 of 2 conversations match'}).waitFor();
+  await page.locator('.conversation-find-others',{hasText:'Also in 1 of 1 other conversation:'}).waitFor();
+  assert.equal(await page.locator('.conversation-find-others button').innerText(),'#2 · 1');
   await page.locator('.conversation-find-row button[title="Next match (Enter)"]').click();
   await page.locator('.conversation-find-match').waitFor();
   assert.equal(await page.locator('.conversation-selector').inputValue(),'1');
   assert.equal(new URL(page.url()).searchParams.get('conversation'),'conversation-two');
   assert.equal(await page.locator('.conversation-find-match').count(),1);
+});
+
+test('workspace find counts other conversations by the kinds the Show filter shows', async t => {
+  const page = await workFixture(t,{conversations:[
+    {provider:'claude',native_id:'one',messages:[human('First prompt'),event('first-reply','message','Nothing here',1)]},
+    {provider:'claude',native_id:'two',messages:[human('Second prompt'),event('call','tool_call',{name:'Bash',input:{command:'grep saffron'}},1,{call_id:'c'}),event('second-reply','message','Done',2)]},
+    {provider:'claude',native_id:'three',messages:[human('Third prompt'),event('third-reply','message','The saffron answer',1)]}]});
+  await page.locator('.transcript-levels').getByRole('button',{name:'Primary only',exact:true}).click();
+  await page.keyboard.press('Control+f');
+  await page.getByRole('searchbox',{name:'Find in conversation'}).fill('saffron');
+  const others=page.locator('.conversation-find-others');
+  await others.locator('button').nth(1).waitFor();
+  assert.match(await others.innerText(),/Also in 1 of 2 other conversations:/);
+  assert.deepEqual(await others.locator('button').allInnerTexts(),['#2','#3 · 1']);
+  assert.match(await others.locator('button.hidden-only').getAttribute('title'),/1 more in hidden commands/);
+  // Next skips a conversation whose only matches are hidden.
+  await page.locator('.conversation-find-row button[title="Next match (Enter)"]').click();
+  await page.locator('.conversation-find-match').waitFor();
+  assert.equal(await page.locator('.conversation-selector').inputValue(),'2');
+  // Choosing one opens it with the hidden matches counted, ready to show.
+  await others.locator('button',{hasText:'#2'}).click();
+  await page.locator('.conversation-find-hidden',{hasText:'1 more matching event in hidden commands'}).waitFor();
+  assert.equal(await page.locator('.conversation-selector').inputValue(),'1');
+  assert.equal(await page.locator('.conversation-find-match').count(),0);
+  await page.locator('.conversation-find-hidden').getByRole('button',{name:'Show'}).click();
+  assert.equal(await page.locator('.conversation-find-match').count(),2);
+  assert.equal(await page.locator('.transcript-levels button[aria-pressed=true]').innerText(),'Custom');
+  // With every kind unchecked, other conversations match only in hidden kinds.
+  const checked=page.locator('.transcript-categories input:checked');
+  while (await checked.count()) await checked.first().uncheck();
+  await others.getByText('Other conversations match only in hidden kinds:').waitFor();
+  assert.deepEqual(await others.locator('button.hidden-only').allInnerTexts(),['#3']);
+  assert.equal(await page.locator('.conversation-find-row button[title="Next match (Enter)"]').isDisabled(),true);
+});
+
+test('reader classification and find counts match the shared fixtures the service checks', async t => {
+  const page = await fixture(t, []);
+  const cases = JSON.parse(fs.readFileSync(path.join(root, 'tests/transcript-find-fixtures.json'), 'utf8'));
+  const results = await page.evaluate(cases => cases.map(item => {
+    const messages = conversationMessages({ messages: item.messages.map(message => ({ ...message, text: typeof message.text === 'string' ? message.text : JSON.stringify(message.text) })) }), structure = transcriptStructure(messages);
+    return { events: messages.map(message => ({ kind: message.kind, path: structure.pathOf(message) })),
+      queries: item.queries.map(query => transcriptFind(messages, { pattern: transcriptFindPattern(query.term, !!query.regex, !!query.case), shown: new Set(query.show || TRANSCRIPT_CATEGORIES.map(([key]) => key)), output: !!query.output })) };
+  }), cases);
+  cases.forEach((item, index) => { assert.deepEqual(results[index].events, item.events, item.name); assert.deepEqual(results[index].queries, item.queries.map(query => query.want), item.name) });
 });
 
 test('workspace without transcript retains archive context and unavailable file evidence', async t => {
@@ -451,6 +501,66 @@ test('workspace failure navigation reveals failed action without claiming sessio
   assert.equal(await page.locator('.turn').evaluate(el=>el.open),true);
   assert.equal(await page.locator('.tool-event.error').evaluate(el=>el.open),true);
   assert.match(await transcript(page).innerText(),/Permission denied/);
+});
+
+test('transcript filter narrows to prompts and final replies, adds thinking, or shows chosen kinds', async t => {
+  const page = await fixture(t, [human('Audit the rules.'),
+    event('think', 'reasoning', 'Weighing which rule file to open first', 1),
+    event('interim', 'message', 'Reading the rules now.', 2),
+    event('run', 'tool_call', { name: 'Bash', input: { command: 'grep -r quorum rules/' } }, 3, { call_id: 'run' }),
+    event('run-result', 'tool_result', { content: 'rules/a.md: quorum is three' }, 4, { call_id: 'run' }),
+    event('final', 'message', 'Quorum is three.', 5)]);
+  const shown = () => transcript(page).locator('.turn-body > [data-show]:visible').evaluateAll(entries => entries.map(entry => entry.dataset.show));
+  const level = name => page.locator('.transcript-levels').getByRole('button', { name, exact: true });
+  const summary = page.locator('.transcript-filter-summary'), categories = page.locator('.transcript-categories');
+  assert.deepEqual(await shown(), ['prompts', 'thinking', 'replies', 'commands', 'response']);
+  assert.equal(await level('All').getAttribute('aria-pressed'), 'true');
+  assert.equal(await categories.isVisible(), false);
+  await level('Primary only').click();
+  assert.deepEqual(await shown(), ['prompts', 'response']);
+  assert.equal(await summary.innerText(), '2 of 5 events shown');
+  // Find skips hidden events and searches again when the filter changes.
+  await page.evaluate(() => document.querySelector('.conversation-panel').openConversationSearch('grep -r'));
+  assert.equal(await page.locator('.conversation-find-count').innerText(), '0 matches');
+  assert.match(await page.locator('.conversation-find-hidden').innerText(), /1 more matching event in hidden commands/);
+  await level('Chain of thought').click();
+  assert.deepEqual(await shown(), ['prompts', 'thinking', 'replies', 'response']);
+  await level('Custom').click();
+  assert.equal(await categories.isVisible(), true);
+  assert.equal(await categories.locator('label', { hasText: 'Thinking' }).locator('input').isChecked(), true);
+  await categories.locator('label', { hasText: 'Thinking' }).locator('input').uncheck();
+  await categories.locator('label', { hasText: 'Commands' }).locator('input').check();
+  assert.deepEqual(await shown(), ['prompts', 'replies', 'commands', 'response']);
+  assert.match(await page.locator('.conversation-find-count').innerText(), /^[1-9]\d* match/);
+  assert.deepEqual(JSON.parse(await page.evaluate(() => localStorage.getItem('pharos-transcript-filter'))), { level: 'custom', custom: ['prompts', 'response', 'replies', 'commands'] });
+  // Presets leave the custom choice intact for the next visit to Custom.
+  await level('All').click();
+  await level('Custom').click();
+  assert.deepEqual(await shown(), ['prompts', 'replies', 'commands', 'response']);
+});
+
+test('events inside a hidden sub-agent count as hidden', async t => {
+  const page = await fixture(t, [human(),
+    event('delegate', 'delegation', { name: 'Task', input: { description: 'Audit configuration' } }, 1, { call_id: 'agent-1' }),
+    event('child', 'message', 'Configuration looks fine.', 2, { parent_native_id: 'agent-1' }),
+    event('delegate-result', 'delegation_result', { content: 'Audit complete' }, 3, { call_id: 'agent-1' }),
+    event('final', 'message', 'Done.', 4)]);
+  await page.locator('.transcript-levels').getByRole('button', { name: 'Chain of thought', exact: true }).click();
+  assert.equal(await page.locator('.transcript-filter-summary').innerText(), '2 of 4 events shown');
+  assert.equal(await page.locator('.subagent-run').isVisible(), false);
+});
+
+test('failure navigation shows a failed action the transcript filter hides', async t => {
+  const page = await workFixture(t,{conversations:[{provider:'claude',messages:[human(),
+    event('call','tool_call',{name:'Bash',input:{command:'git status'}},2,{call_id:'bad'}),
+    event('result','tool_result',{is_error:true,content:'Permission denied'},3,{call_id:'bad'}),
+    event('final','message','Could not read the repository.',4)]}]});
+  await page.locator('.transcript-levels').getByRole('button', { name: 'Primary only', exact: true }).click();
+  assert.equal(await page.locator('.tool-event.error').isVisible(), false);
+  await page.getByText('Next failed action',{exact:true}).click();
+  assert.equal(await page.locator('.tool-event.error').isVisible(), true);
+  await page.locator('.transcript-levels').getByRole('button', { name: 'Chain of thought', exact: true }).click();
+  assert.equal(await page.locator('.tool-event.error').isVisible(), false);
 });
 
 test('wrapped Claude Read leads with its action and file, never the raw envelope', async t => {
@@ -846,7 +956,7 @@ test('search reveals matching output directly and does not open raw JSON', async
   assert.doesNotMatch(await transcript(page).innerText(), /unique_output_needle/);
   await page.evaluate(()=>document.querySelector('#detail').classList.add('active'));
   await page.keyboard.press('Control+f');
-  await page.getByRole('combobox',{name:'Search depth'}).selectOption('responses');
+  await page.getByLabel('Tool output').check();
   await page.getByRole('searchbox',{name:'Find in conversation'}).fill('unique_output_needle');
   assert.match(await transcript(page).innerText(), /unique_output_needle is configured/);
   assert.equal(await page.locator('.raw-event[open]').count(), 0);
@@ -1030,7 +1140,7 @@ test('repository worktree and recorded cwd paths collapse while external paths s
   assert.equal(await page.locator('.tool-event').last().evaluate(row=>row.open),false);
 });
 
-test('conversation find highlights messages and expands scope through thinking, calls, and responses', async t => {
+test('conversation find highlights what the Show filter shows and expands through thinking, calls, and output', async t => {
   const page=await fixture(t,[
     human('Alpha alpha'),
     event('reply','message','alpha',1),
@@ -1041,31 +1151,36 @@ test('conversation find highlights messages and expands scope through thinking, 
   await page.evaluate(()=>document.querySelector('#detail').classList.add('active'));
   await page.keyboard.press('Control+f');
   const search=page.getByRole('searchbox',{name:'Find in conversation'});
+  const level=name=>page.locator('.transcript-levels').getByRole('button',{name,exact:true});
+  await level('Primary only').click();
   await search.fill('al');
   assert.equal(await page.locator('.conversation-find-match').count(),0);
   assert.equal(await page.locator('.conversation-find-count').innerText(),'Type 3+');
-  await page.getByRole('combobox',{name:'Search depth'}).selectOption('thinking');
+  await page.getByLabel('Tool output').check();
   assert.equal(await page.locator('.conversation-find-match').count(),0);
-  await page.getByRole('combobox',{name:'Search depth'}).selectOption('messages');
-  await page.keyboard.press('Enter');
+  await page.getByLabel('Tool output').uncheck();
+  await search.press('Enter');
   assert.equal(await page.locator('.conversation-find-match').count(),3);
   await search.fill('a');
   assert.equal(await page.locator('.conversation-find-match').count(),0);
   await search.fill('alpha');
   assert.equal(await page.locator('.conversation-find-match').count(),3);
   assert.equal(await page.locator('.conversation-find-count').innerText(),'3 matches');
-  await page.getByRole('combobox',{name:'Search depth'}).selectOption('thinking');
+  assert.equal(await page.locator('.conversation-find-hidden').innerText().then(text=>text.replace(/\s+/g,' ')),'2 more matching events in hidden thinking and commands Show');
+  await level('Chain of thought').click();
   assert.ok(await page.locator('.conversation-find-match').count()>=4);
-  await page.getByRole('combobox',{name:'Search depth'}).selectOption('tools');
+  assert.match(await page.locator('.conversation-find-hidden').innerText(),/1 more matching event in hidden commands/);
+  await level('All').click();
   const calls=await page.locator('.conversation-find-match').count();
   assert.ok(calls>=5);
-  await page.getByRole('combobox',{name:'Search depth'}).selectOption('responses');
+  assert.equal(await page.locator('.conversation-find-hidden').isVisible(),false);
+  await page.getByLabel('Tool output').check();
   assert.ok(await page.locator('.conversation-find-match').count()>calls);
-  await page.locator('.conversation-find-options label').last().locator('input').check();
+  await page.getByLabel('Case sensitive').check();
   await search.fill('Alpha');
   assert.equal(await page.locator('.conversation-find-match').count(),1);
-  await page.locator('.conversation-find-options label').last().locator('input').uncheck();
-  await page.locator('.conversation-find-options label').first().locator('input').check();
+  await page.getByLabel('Case sensitive').uncheck();
+  await page.getByLabel('Regex').check();
   await search.fill('alpha|Alpha');
   assert.ok(await page.locator('.conversation-find-match').count()>1);
   await page.keyboard.press('Enter');
