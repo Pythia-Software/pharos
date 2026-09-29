@@ -3,13 +3,14 @@
 // attribution, harness versions, and the tool ledger (GET /api/upgrade lists
 // what is pending). This offers the upgrade once per launch, keeps an
 // "Upgrade library" button in the header until it is done, previews the
-// repository merges (GET /api/upgrade/preview, which asks GitHub about renamed
-// repositories only when the user ticks the box), and runs every step as one
+// repository merges (GET /api/upgrade/preview, which always asks GitHub about
+// renamed repositories, through the gh tool, when it is available), and runs every step as one
 // background job (POST /api/upgrade). The job survives closing this panel and
 // resumes after an eject; the drive badge shows its progress too.
 (() => {
   'use strict';
   const OFFERED = 'pharos-upgrade-offered';
+  const INTRO = 'This version of Pharos counts tokens more accurately and records more about each tool call and conversation. Your existing catalog needs a one-time pass to catch up. Nothing leaves this Mac except a question to GitHub about repository names, and your transcripts are not changed.';
   const CSS = `
 .pharos-upgrade-backdrop{position:fixed;inset:0;z-index:9000;display:grid;place-items:center;padding:24px;background:color-mix(in srgb,#000 42%,transparent)}
 .pharos-upgrade{width:min(720px,100%);max-height:calc(100vh - 48px);display:flex;flex-direction:column;background:var(--panel,#fff);color:var(--ink,#222);border:1px solid var(--line,#ccc);border-radius:16px;box-shadow:0 24px 70px #0006;overflow:hidden}
@@ -24,7 +25,8 @@
 .pharos-upgrade-meter{grid-column:1/-1;height:6px;overflow:hidden;border-radius:6px;background:var(--line,#ccc)}
 .pharos-upgrade-meter>span{display:block;height:100%;min-width:6px;background:var(--accent,#315845);transition:width .25s}
 .pharos-upgrade-merges{margin:12px 0 0;font-size:13px}
-.pharos-upgrade-merges label{display:flex;gap:8px;align-items:center;margin:8px 0;color:var(--muted,#666)}
+.pharos-upgrade-merges p{margin:8px 0;color:var(--muted,#666)}
+.pharos-upgrade-merges p.error{color:var(--bad,#9c3d36)}
 .pharos-upgrade-merges ul{margin:8px 0;padding-left:18px;max-height:200px;overflow:auto}
 .pharos-upgrade-merges li{margin:3px 0}
 .pharos-upgrade-merges code{font:12px ui-monospace,SFMono-Regular,monospace;color:var(--muted,#666)}
@@ -98,20 +100,24 @@
     return row;
   }
 
+  // What GitHub can tell about renamed repositories depends on the gh tool.
+  function githubNote(github) {
+    if (github === 'missing') return 'Renamed or moved repositories may stay separate: GitHub\u2019s gh command-line tool is not installed. Install it and run gh auth login in Terminal; Pharos checks again every few minutes and merges them then.';
+    if (github === 'signed_out') return 'Renamed or moved repositories may stay separate: the gh command-line tool is not signed in to GitHub. Run gh auth login in Terminal; Pharos checks again every few minutes and merges them then.';
+    return 'Pharos checks with GitHub, through the gh command-line tool, which repositories were renamed or moved. Nothing else contacts the network.';
+  }
+
   function mergeSection(repositories) {
     const section = node('div', 'pharos-upgrade-merges');
-    const github = node('input');
-    github.type = 'checkbox';
-    github.id = 'pharosUpgradeGitHub';
-    const label = node('label');
-    label.append(github, node('span', '', 'Ask GitHub which repositories were renamed or moved (uses the gh command-line tool, if it is installed and signed in)'));
+    const note = node('p', 'note', githubNote(status.github));
     const button = node('button', '', 'Preview repository merges');
     const list = node('div');
     button.addEventListener('click', async () => {
       button.disabled = true;
       list.replaceChildren(node('p', 'note', 'Checking repositories…'));
       try {
-        const result = await call(`/api/upgrade/preview${github.checked ? '?github=1' : ''}`);
+        const result = await call('/api/upgrade/preview');
+        note.textContent = githubNote(result.github);
         const merges = result.repository_merges || [];
         if (!merges.length) { list.replaceChildren(node('p', '', 'No repositories need merging.')); return; }
         const items = node('ul');
@@ -127,8 +133,8 @@
         button.disabled = false;
       }
     });
-    if (repositories.pending > 0) section.append(label, button, list);
-    return {section, github};
+    if (repositories.pending > 0) section.append(note, button, list);
+    return section;
   }
 
   function render() {
@@ -137,13 +143,18 @@
     const body = node('div', 'pharos-upgrade-body');
     for (const step of status.steps) body.append(stepRow(step));
     const repositories = status.steps.find(step => step.id === 'repositories') || {pending: 0};
-    const merges = status.running ? null : mergeSection(repositories);
-    if (merges) body.append(merges.section);
+    if (!status.running) body.append(mergeSection(repositories));
+    // A library that only needs the repository step (it upgraded before) takes about a minute.
+    const onlyRepositories = status.needed && status.steps.every(step => step.id === 'repositories' || step.pending === 0);
+    const intro = panel.querySelector('.pharos-upgrade-intro');
+    if (intro) intro.textContent = onlyRepositories
+      ? 'Some repositories are still split across several entries: worktrees without a remote, and repositories that moved between owners or were renamed. This pass merges them so each repository\u2019s work is counted together. Nothing leaves this Mac except a question to GitHub about repository names, and your transcripts are not changed.'
+      : INTRO;
     const actions = node('div', 'pharos-upgrade-actions');
     if (status.error) actions.append(node('span', 'error', `The last attempt stopped: ${status.error}`));
     else actions.append(node('span', 'note', status.running
       ? 'You can close this; the upgrade keeps running, and the drive badge shows its progress. Ejecting stops it safely, and starting it again resumes.'
-      : status.needed ? 'It re-reads the catalog and can take an hour or more on a large library. You can keep using Pharos meanwhile.'
+      : status.needed ? (onlyRepositories ? 'This takes about a minute. You can keep using Pharos meanwhile.' : 'It re-reads the catalog and can take an hour or more on a large library. You can keep using Pharos meanwhile.')
         : 'The library is up to date.'));
     const later = node('button', '', status.running || !status.needed ? 'Close' : 'Later');
     later.type = 'button';
@@ -155,7 +166,7 @@
       start.addEventListener('click', async () => {
         start.disabled = true;
         try {
-          await call('/api/upgrade', {method: 'POST', body: JSON.stringify({github: Boolean(merges?.github.checked)})});
+          await call('/api/upgrade', {method: 'POST', body: '{}'});
           await refresh();
         } catch (error) {
           start.disabled = false;
@@ -179,7 +190,7 @@
       panel.setAttribute('role', 'dialog');
       panel.setAttribute('aria-label', 'Upgrade this library');
       panel.append(node('h2', '', 'Upgrade this library'),
-        node('p', 'pharos-upgrade-intro', 'This version of Pharos counts tokens more accurately and records more about each tool call and conversation. Your existing catalog needs a one-time pass to catch up. Nothing leaves this Mac, and your transcripts are not changed.'));
+        node('p', 'pharos-upgrade-intro', INTRO));
       backdrop.append(panel);
       backdrop.addEventListener('click', event => { if (event.target === backdrop) close(); });
       document.body.append(backdrop);

@@ -48,8 +48,6 @@ const (
 	typingCharsPerSecond = 20
 	// typingCheckMinChars keeps the speed check off short replies.
 	typingCheckMinChars = 600
-	// authorshipRebuildSpacing keeps frequent syncs from rebuilding constantly.
-	authorshipRebuildSpacing = 5 * time.Minute
 	// A line of at least identifierLineMin words, identifierLineShare of them
 	// identifiers, is output or code; so is a longer line of at least
 	// identifierProseMin words with identifierProseShare identifiers.
@@ -106,7 +104,6 @@ type authorshipState struct {
 	mu        sync.Mutex
 	running   bool
 	lastError string
-	builtAt   time.Time
 }
 
 var harnessLabels = map[string]string{
@@ -937,42 +934,72 @@ func countSpans(text string, spans []authorSpan) authorshipCounts {
 	return counts
 }
 
-// ensureAuthorship starts a background rebuild when messages changed since
-// the last one. The tool ledger generation advances whenever a conversation
-// is re-ingested or identity links change, which is when authorship can too.
-func (c *Catalog) ensureAuthorship() (stale bool) {
+// authorshipGenerations returns the generation message_authorship should be
+// built for and the one it was built for. The tool ledger generation advances
+// whenever a conversation is re-ingested or identity links change, which is
+// when authorship can too.
+func (c *Catalog) authorshipGenerations() (want, built string, err error) {
 	ctx := context.Background()
-	generation, err := c.metaValue(ctx, "tool_ledger_generation")
-	if err != nil {
+	if want, err = c.metaValue(ctx, "tool_ledger_generation"); err != nil {
+		return "", "", err
+	}
+	built, err = c.metaValue(ctx, "authorship_generation")
+	return want + "/" + authorshipVersion, built, err
+}
+
+// refreshAuthorship starts a background rebuild when messages changed since
+// the last one. An index or sync calls it, whether or not it wrote anything:
+// that is someone asking for Pharos to be up to date.
+func (c *Catalog) refreshAuthorship() {
+	if want, built, err := c.authorshipGenerations(); err == nil && want != built {
+		c.startAuthorship(want)
+	}
+}
+
+// ensureAuthorship is refreshAuthorship for a page. It builds a ledger that
+// is missing or classified by older rules, unless that build just failed,
+// and otherwise shows the last index's until the next. It reports whether
+// messages changed since the ledger was built.
+func (c *Catalog) ensureAuthorship() (stale bool) {
+	want, built, err := c.authorshipGenerations()
+	if err != nil || want == built {
 		return false
 	}
-	generation += "/" + authorshipVersion
-	built, _ := c.metaValue(ctx, "authorship_generation")
-	if generation == built {
-		return false
+	c.authorship.mu.Lock()
+	failed := c.authorship.lastError != ""
+	c.authorship.mu.Unlock()
+	if !strings.HasSuffix(built, "/"+authorshipVersion) && !failed {
+		c.startAuthorship(want)
 	}
+	return true
+}
+
+// startAuthorship rebuilds for generation in the background, unless a
+// rebuild is running already. A rebuild that succeeds checks again for
+// messages an index wrote while it ran.
+func (c *Catalog) startAuthorship(generation string) {
 	state := &c.authorship
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.running || built != "" && time.Since(state.builtAt) < authorshipRebuildSpacing {
-		return true
+	if state.running {
+		return
 	}
 	state.running = true
 	rebuild := func(ctx context.Context) {
 		err := c.RebuildAuthorship(ctx, generation)
 		state.mu.Lock()
-		state.running, state.builtAt, state.lastError = false, time.Now(), ""
+		state.running, state.lastError = false, ""
 		if err != nil {
 			state.lastError = err.Error()
 		}
 		state.mu.Unlock()
+		if err == nil && ctx.Err() == nil {
+			c.refreshAuthorship()
+		}
 	}
-	if c.background == nil {
-		go rebuild(ctx)
-	} else if !c.background(rebuild) {
+	if !c.runBackground(rebuild) {
 		state.running = false // the service is stopping
 	}
-	return true
 }
 
 // authorshipRunning reports whether a rebuild is writing message_authorship.

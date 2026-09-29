@@ -32,6 +32,15 @@ func Apply(rows []map[string]any, query Query, schema Schema) (Result, error) {
 	return Result{Rows: filtered[start:end], Total: total}, nil
 }
 
+// Filter returns every row matching where, unpaged, for callers that
+// aggregate over the whole match instead of showing a page of it.
+func Filter(rows []map[string]any, where []WhereTerm, schema Schema) ([]map[string]any, error) {
+	if err := schema.ValidateQuery(Query{Where: where, Limit: 1}); err != nil {
+		return nil, err
+	}
+	return filterRows(rows, where, schema)
+}
+
 // sortRows orders rows stably. Each row's sort values are extracted and
 // parsed once up front; comparisons then only read the parsed keys.
 func sortRows(rows []map[string]any, orderBy []OrderBy, schema Schema) []map[string]any {

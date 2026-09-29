@@ -57,9 +57,7 @@ func NewServer(config Config, catalog *Catalog) *Server {
 		catalog.background = server.spawn
 		catalog.RepositoryAliases = config.RepositoryAliases
 		catalog.RepositorySeparate = config.RepositorySeparate
-		if config.ResolveRepositoryForge {
-			server.spawn(func(ctx context.Context) { _ = catalog.RefreshRepositoryForgeIDs(ctx) })
-		}
+		server.spawn(catalog.keepRepositoryForgeIDs)
 		catalog.setCaptureRoot(config.CaptureRoot)
 	}
 	return server
@@ -300,10 +298,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		value, err := s.Catalog.UpgradeStatus(r.Context())
 		writeResult(w, value, err)
 	case path == "/api/upgrade/preview":
-		// With github=1 this asks GitHub about renamed repositories, so the UI
-		// only requests it when the user opts in.
-		groups, err := s.Catalog.RepositoryMergePreview(r.Context(), r.URL.Query().Get("github") == "1")
-		writeResult(w, map[string]any{"repository_merges": groups}, err)
+		groups, err := s.Catalog.RepositoryMergePreview(r.Context())
+		writeResult(w, map[string]any{"repository_merges": groups, "github": nilIfEmpty(s.Catalog.githubStatus(r.Context()))}, err)
 	case strings.HasPrefix(path, "/api/tool-calls/"):
 		id, _ := url.PathUnescape(strings.TrimPrefix(path, "/api/tool-calls/"))
 		value, err := s.Catalog.toolCallDetail(r.Context(), id)
@@ -385,9 +381,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		// The upgrade reads and rewrites much of the catalog, so it runs in the
 		// background; /api/upgrade and the library status report progress. A
 		// release stops it after the unit in progress; starting it again resumes.
-		github, _ := body["github"].(bool)
 		started := s.spawn(func(ctx context.Context) {
-			if err := s.Catalog.RunUpgrade(ctx, github, nil); err != nil && ctx.Err() == nil {
+			if err := s.Catalog.RunUpgrade(ctx, nil); err != nil && ctx.Err() == nil {
 				fmt.Fprintf(os.Stderr, "Library upgrade: %v\n", err)
 			}
 		})
@@ -708,6 +703,9 @@ func (s *Server) syncSources(w http.ResponseWriter, sources []SourceConfig) {
 		flusher.Flush()
 	}
 	_ = s.Catalog.Checkpoint()
+	if ctx.Err() == nil {
+		s.Catalog.refreshAuthorship()
+	}
 	// Git ancestry enrichment can involve thousands of local Git calls. Run it
 	// once after the entire source sync, without holding up ingestion progress.
 	// It also rebuilds the Tools rollup (see refreshGitInBackground).

@@ -367,7 +367,7 @@ func sharedPage(app string, payload []byte, title string) ([]byte, error) {
 		{"<head>", head},
 		{"<title>Pharos</title>", "<title>" + html.EscapeString(sharedTitle(title)) + "</title>"},
 		{"</head>", "<style>" + string(style) + "</style>\n</head>"},
-		{"</main>", "</main>\n" + footer},
+		{"</main>", footer + "\n</main>"},
 	} {
 		if !strings.Contains(page, edit.old) {
 			return nil, fmt.Errorf("the app page no longer contains %q, so it cannot be shared", edit.old)

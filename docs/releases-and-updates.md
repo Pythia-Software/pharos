@@ -110,10 +110,16 @@ new to this version has nothing to upgrade and never sees the panel.
 The upgrade runs these steps in order, as one background job:
 
 1. **Merge repository identities.** Rows for one repository reached through
-   different remote URLs, renames, or checkouts without a remote become one.
-   **Preview repository merges** lists them first. Ticking **Ask GitHub which
-   repositories were renamed or moved** uses the `gh` command-line tool, when
-   it is installed and signed in; nothing else contacts the network.
+   different remote URLs, renames, worktrees, or checkouts without a remote
+   become one. Pharos always checks with GitHub, through the `gh`
+   command-line tool, which repositories were renamed or moved; nothing else
+   contacts the network. **Preview repository merges** lists the merges first.
+   Without `gh`, or when it isn't signed in (`gh auth login`), the step still
+   runs, the panel says renamed repositories may stay separate, and the
+   service merges them a few minutes after `gh` works. A new version of
+   Pharos that recognizes more split repositories raises the repository
+   merge's version, and a library that ran the older one is offered just this
+   step again (about a minute, with no other step pending).
 2. **Correct token attribution** for Claude sessions whose sub-agents were
    counted twice.
 3. **Record harness versions**: which Claude Code or Codex version ran each
@@ -134,6 +140,6 @@ table views that filter on a repository name the merge retired are pointed at
 the surviving name.
 
 From the command line, `pharos upgrade --status` reports what is pending,
-`pharos upgrade --preview [--github]` lists the repository merges, and
-`pharos upgrade [--github]` runs every step, printing progress and the time
-each step took.
+`pharos upgrade --preview` lists the repository merges, and `pharos upgrade`
+runs every step, printing progress and the time each step took. (`--github`
+is still accepted and ignored; the lookup is no longer optional.)

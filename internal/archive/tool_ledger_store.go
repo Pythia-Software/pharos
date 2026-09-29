@@ -339,9 +339,7 @@ func (c *Catalog) currentToolRollup(ctx context.Context) error {
 		state.mu.Unlock()
 	}
 	state.refreshing = true
-	if c.background == nil {
-		go refresh(context.Background())
-	} else if !c.background(refresh) {
+	if !c.runBackground(refresh) {
 		state.refreshing = false // the service is stopping
 	}
 	return nil

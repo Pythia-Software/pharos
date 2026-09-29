@@ -873,9 +873,12 @@ func upsertRepository(tx *sql.Tx, value map[string]any, options ...repositoryOpt
 	}
 	match := -1
 	for i, existing := range items {
-		if existing.ID == item.ID && item.ID != "" || repositorySameIdentity(existing, item, aliases, separate) {
+		if existing.ID == item.ID && item.ID != "" {
 			match = i
 			break
+		}
+		if repositorySameIdentity(existing, item, aliases, separate) && (match < 0 || repositoryClosest(existing, items[match], item)) {
+			match = i
 		}
 	}
 	// A remoteless capture joins the group its checkout or Conductor directory
@@ -892,9 +895,20 @@ func upsertRepository(tx *sql.Tx, value map[string]any, options ...repositoryOpt
 			}
 		}
 	}
+	// Otherwise it joins the remoteless row of its name that has its checkout.
 	if match < 0 {
 		for i, existing := range items {
-			if repositoryRemotelessSibling(existing, item, items) {
+			if repositoryRemotelessSibling(existing, item) && (match < 0 || repositoryPreferred(existing, items[match], false, false)) {
+				match = i
+			}
+		}
+	}
+	if match < 0 && item.ID == "" {
+		// The ID names the repository, not each worktree it is seen in, so an
+		// unmatched row is never created twice.
+		item.ID = stableID("repo", repositoryIdentityKey(item), item.Owner)
+		for i, existing := range items {
+			if existing.ID == item.ID {
 				match = i
 				break
 			}
@@ -914,13 +928,6 @@ func upsertRepository(tx *sql.Tx, value map[string]any, options ...repositoryOpt
 			item.Forge = existing.Forge
 		}
 		item.Name = existing.Name
-	}
-	if item.ID == "" {
-		identity := item.Normalized
-		if identity == "" {
-			identity = item.Name + "/" + strings.Join(item.Locations, "|")
-		}
-		item.ID = stableID("repo", identity, item.Owner)
 	}
 	if item.Name == "" {
 		item.Name = "Unknown repository"
