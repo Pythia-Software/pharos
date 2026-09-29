@@ -768,6 +768,13 @@ func (c *Catalog) refreshFindingsInBackground(force bool) {
 	})
 }
 
+// findingsRunning reports a findings pass in progress and what it is doing.
+func (c *Catalog) findingsRunning() (bool, string) {
+	c.findings.mu.Lock()
+	defer c.findings.mu.Unlock()
+	return c.findings.running, c.findings.phase
+}
+
 func (c *Catalog) setFindingsPhase(phase string) {
 	c.findings.mu.Lock()
 	c.findings.phase = phase
@@ -790,6 +797,14 @@ func (c *Catalog) runFindingsPass(ctx context.Context, full bool) error {
 	if err != nil {
 		return err
 	}
+	retired, err := queryMapsContext(ctx, conn, "SELECT old_id,new_id FROM repository_retirements")
+	if err != nil {
+		return err
+	}
+	survivors := map[string]string{}
+	for _, row := range retired {
+		survivors["repo:"+firstString(row["old_id"])] = "repo:" + firstString(row["new_id"])
+	}
 	specs := []findingSpec{}
 	measured := map[string]bool{}
 	for id, row := range existing {
@@ -800,8 +815,13 @@ func (c *Catalog) runFindingsPass(ctx context.Context, full bool) error {
 		if full && state == nil {
 			continue
 		}
-		specs = append(specs, row.Spec)
-		measured[id] = true
+		// A finding of a merged repository is measured in the survivor.
+		spec := row.Spec
+		if survivor := survivors[spec.Scope]; survivor != "" {
+			spec.Scope = survivor
+		}
+		specs = append(specs, spec)
+		measured[spec.id()] = true
 	}
 	if !full && len(specs) == 0 {
 		return nil
@@ -846,10 +866,6 @@ func (c *Catalog) runFindingsPass(ctx context.Context, full bool) error {
 	}
 	kept = dedupeFindingCandidates(kept)
 	c.setFindingsPhase("saving")
-	retired, err := queryMapsContext(ctx, conn, "SELECT old_id,new_id FROM repository_retirements")
-	if err != nil {
-		return err
-	}
 	if err := c.storeFindings(ctx, env, kept, existing, states, retired, full); err != nil {
 		return err
 	}
@@ -879,11 +895,23 @@ func findingNeedsMeasuring(state *findingUserState, now time.Time) bool {
 }
 
 // dedupeFindingCandidates keeps one candidate per ID, preferring the one
-// with more affected conversations.
+// with more affected conversations, and drops candidates another one
+// replaces (a repository finding folded into a global one).
 func dedupeFindingCandidates(candidates []*findingCandidate) []*findingCandidate {
 	byID := map[string]*findingCandidate{}
 	order := []string{}
+	replaced := map[string]bool{}
 	for _, candidate := range candidates {
+		for _, alias := range candidate.Aliases {
+			if alias != candidate.Spec.id() {
+				replaced[alias] = true
+			}
+		}
+	}
+	for _, candidate := range candidates {
+		if replaced[candidate.Spec.id()] {
+			continue
+		}
 		id := candidate.Spec.id()
 		if previous := byID[id]; previous == nil {
 			order = append(order, id)

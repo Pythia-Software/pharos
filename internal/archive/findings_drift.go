@@ -178,10 +178,26 @@ func detectDrift(env *findingEnv) ([]*findingCandidate, error) {
 	}
 	inventories := newInstructionInventories()
 	output := []*findingCandidate{}
+	// The loaded-instructions record, where the harness writes one, says
+	// what each provider actually loaded (G7, instructions.go).
+	coverage := map[string]map[string]instructionUse{}
+	for _, item := range candidates {
+		if coverage[item.RepositoryID] != nil {
+			continue
+		}
+		coverage[item.RepositoryID] = map[string]instructionUse{}
+		uses, err := env.catalog.instructionCoverage(env.ctx, env.db, item.RepositoryID, formatTime(dayTime(env.gateFrom)))
+		if err != nil {
+			return nil, err
+		}
+		for _, use := range uses {
+			coverage[item.RepositoryID][use.Provider] = use
+		}
+	}
 	for key, item := range candidates {
 		provider := item.Spec.Params["provider"]
 		files := inventories.current(env, item.RepositoryID)
-		describeDrift(env, item, provider, counts[key], files)
+		describeDrift(env, item, provider, counts[key], files, coverage[item.RepositoryID][provider])
 		output = append(output, item)
 	}
 	sort.Slice(output, func(i, j int) bool { return output[i].Spec.id() < output[j].Spec.id() })
@@ -190,7 +206,7 @@ func detectDrift(env *findingEnv) ([]*findingCandidate, error) {
 
 // describeDrift writes a drift finding: what the provider looked for, and
 // which harness's files the repository has.
-func describeDrift(env *findingEnv, candidate *findingCandidate, provider string, counts map[string]int, files map[string]int64) {
+func describeDrift(env *findingEnv, candidate *findingCandidate, provider string, counts map[string]int, files map[string]int64, loaded instructionUse) {
 	repository := env.repositories[candidate.RepositoryID]
 	searched, readOther, skills := 0, 0, 0
 	searchedFor, readFile := "", ""
@@ -221,7 +237,8 @@ func describeDrift(env *findingEnv, candidate *findingCandidate, provider string
 	}
 	candidate.Lever = "repo-tooling"
 	candidate.Facts = map[string]any{"provider": provider, "native_file": native, "files_on_default_branch": sortedFindingKeys(files),
-		"searches": searched, "hand_reads": readOther, "skill_reads": skills, "searched_for": nilIfEmpty(searchedFor), "read_by_hand": nilIfEmpty(readFile)}
+		"searches": searched, "hand_reads": readOther, "skill_reads": skills, "searched_for": nilIfEmpty(searchedFor), "read_by_hand": nilIfEmpty(readFile),
+		"loaded_instructions": map[string]any{"conversations": loaded.Conversations, "recorded": loaded.Recorded, "loaded_project_file": loaded.ProjectLoaded, "files": loaded.Files}}
 	steps := []findingStep{
 		{Lever: "repo-tooling", Label: "One shared instructions file", Change: fmt.Sprintf("Make one instructions file that every harness here reads (%s), with a symlink, an import line, or the harness's fallback-filename setting, whichever the harness versions in use support. Do the same for skills, and keep the shared file short.", strings.Join(present, " and "))},
 		{Lever: "harness-settings", Label: "A fallback setting", Change: fmt.Sprintf("Point %s at the existing file in its own settings (for Codex, `project_doc_fallback_filenames` in `.codex/config.toml`), and check the result in a fresh session.", providerLabel(provider))},
@@ -251,6 +268,11 @@ func describeDrift(env *findingEnv, candidate *findingCandidate, provider string
 			why = fmt.Sprintf("%s has no agent instructions file. ", repository)
 		}
 		explanation := fmt.Sprintf("%s%s looked for them in %s this month, %s.", why, providerLabel(provider), fractionPhrase(stats.Rate, "conversations"), joinWords(actions))
+		// Where the harness records what it loaded, say plainly that it
+		// loaded nothing here.
+		if loaded.Recorded >= 10 && loaded.ProjectLoaded == 0 {
+			explanation += fmt.Sprintf(" None of its %s here loaded a project instructions file.", countNoun(int(loaded.Recorded), "conversation"))
+		}
 		return findingCard{Title: title, Explanation: explanation, ImpactNote: countNoun(searched+readOther+skills, "lookup"), Steps: steps,
 			ChartTitle: providerLabel(provider) + " conversations that looked for instructions", Rate: fractionPhrase(stats.Rate, "")}
 	}

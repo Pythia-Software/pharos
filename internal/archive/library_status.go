@@ -262,6 +262,11 @@ func (s *Server) libraryActivities() []libraryActivity {
 			Detail: fmt.Sprintf("%d of %d conversations", tools.done, tools.total), Progress: fraction(float64(tools.done), float64(tools.total)),
 			Writes: true, OnEject: "Stops between conversations; building the ledger again resumes it."})
 	}
+	if running, phase := s.Catalog.findingsRunning(); running {
+		activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Updating findings",
+			Detail: "Looking for recurring patterns and measuring the ones you're watching (" + phase + ")", Writes: true,
+			OnEject: "Stops; it runs again after the next index."})
+	}
 	if s.Catalog.authorshipRunning() {
 		activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Classifying your writing",
 			Detail: "Rebuilding human authorship for Usage", Writes: true,

@@ -43,7 +43,7 @@ onto the drive, and indexes it ([Adding a Mac](configuration.md#adding-a-mac)).
 To bring an existing per-user install along without re-indexing, add `--adopt`
 with its `archive.toml`; see [Moving an existing install onto a drive](configuration.md#moving-an-existing-install-onto-a-drive).
 
-The UI has separate Library, Usage, Tools, MCP, and Settings areas. Library, Usage, Tools, and MCP call history
+The UI has separate Library, Usage, Tools, Findings, MCP, and Settings areas. Library, Usage, Tools, and MCP call history
 use the shared query-table pattern: schema-driven columns, field discovery,
 filtering (including OR/NOT), multi-sort, paging, persistent saved views,
 optional aggregate metrics, column reorder, and resize.
@@ -51,9 +51,10 @@ optional aggregate metrics, column reorder, and resize.
 - **Library** searches conversation text, changed files, and tool URLs. Text search reads retained user messages, agent responses, and thinking from `messages_fts`, groups hits by conversation, and links to the matching message. Unquoted words use AND; fuzzy expansion reads nearby vocabulary terms, while quoted phrases match in order. Case and separator matching are optional. The UI's text search does not use workspace vectors. File search uses `change_files`; a file change has workspace scope and is attributed to a conversation only when its work item, time span, or sole-conversation workspace supports that link. URL search reads `tool_urls` and excludes unopened web-search result links. The search narrows the Library query table, whose filters then apply to the matching work; the table also offers repository, source, PR, sub-agent, compaction, cost, and other structured filters. Work detail shows evidence-linked summaries, attempted/checkpointed/integrated changes, conversations, metrics, PR associations, and receipts.
 
 Past Work also shows when an archived commit appears on the local `origin/main` history. It links the first mainline commit containing that work, whether it arrived through a merge commit or directly. This uses local Git objects only; squash merges and work without a retained commit ID cannot be attributed by ancestry. Refresh the local `origin/main` ref and index a source to update these associations.
-- **TL1** appears once a TL1 source is indexed. It compares each flavor across agent configurations (advance, escalation, and agent error rates, cost per useful result, time, tokens, cache reuse), clusters errors by normalized signature and who can fix them, traces human attention and review findings to their causes, segments work by TL1's large enqueues (defaulting to the latest, so analysis follows the most recent flavor revisions), and ranks concerns and savings opportunities, each with a copyable investigation prompt. Flavor and candidate drill-downs and a per-run query table sit underneath. See [`docs/tl1-analysis.md`](tl1-analysis.md).
+- **TL1** appears once a TL1 source is indexed. It compares each flavor across agent configurations (advance, escalation, and agent error rates, cost per useful result, time, tokens, cache reuse), clusters errors by normalized signature and who can fix them, traces human attention and review findings to their causes, and segments work by TL1's large enqueues (defaulting to the latest, so analysis follows the most recent flavor revisions). Its recommendations (error clusters, reruns, cost outliers) are findings scoped to each flavor, measured like any other. Flavor and candidate drill-downs and a per-run query table sit underneath. See [`docs/tl1-analysis.md`](tl1-analysis.md).
 - **Usage** has two views, switched at the top of the page, and remembers the last one. **Tokens** is the token-usage query table: one row per agent session, local day, and model, with uncached input, cache reads, cache writes, output, and reasoning kept separate. Provider, model, repository, source, agent kind, and day/week/month are all filter and group-by fields, so metrics such as "cache reads per week by model" are a saved view. A stacked chart above the table shows tokens or cost per day, week, or month over the last 30 days to all time, split by token type, provider, model, repository, or agent kind, and follows the table's filters. Preset buttons set up common breakdowns. Linked mirrors of the same work are counted once. **Your writing** is described below.
 - **Tools** analyzes tool use from retained transcripts. A daily summary table groups calls by tool, shell program and subcommand (`git status`, `go test`, `sed`), model, repository, and agent kind, with error counts by kind, durations, the tokens each result added to the context, the tokens re-read by later requests until compaction, and their API-equivalent cost. A per-call table filters and sorts every call; a summary row drills into its calls, and each call opens with its parsed commands, input, and result. Each call also records the sites it reached: URLs from web fetches, browser navigation, Codex web searches, and network commands such as `curl`, plus any web search query and the links it returned. Presets cover error rates, failure kinds, top commands, shell calls a dedicated tool could make, slow tools, test and build time, context cost, sites reached, and web searches. Definitions are in [`docs/tool-analytics.md`](tool-analytics.md).
+- **Findings** turns recurring, fixable patterns (failures, instruction drift between harnesses, CLI friction, context-heavy commands, orientation and exploration cost, cost outliers, and TL1 flavor problems) into plain-language cards with a proposed change. Findings go into per-target prompts ("carts") saved in the library; copying one is the intervention that starts a before-and-after measurement with a fixed analysis plan, guard metrics, and weekly net savings. The full pass runs after the first index of each day; other indexes only measure watched findings. See [`docs/findings.md`](findings.md).
 - **MCP** controls local agent access, provides a copyable stdio connection definition and setup prompt, and offers a query-table of recent tool calls with filters, saved views, metrics, response-size estimates, duration, result counts, truncation, and errors.
 - **Sources on this Mac** lists every configured source, path availability, coverage, last index attempt and successful index, and errors. Each card has an enable switch in its header. One action area offers **Find sources on this Mac**, **Capture this Mac**, and **Index captured files**. The header button beside the library disk runs **Capture and Index** in sequence.
 - **Library drive** (in the header) names the drive holding the library and what is holding or writing the library (capture, index, backup, Git lookups, Library view refreshes), with progress. Its panel says how to disconnect the drive: always **Eject**, which in the app releases the library first and then ejects the drive, or says why not; in a plain browser it says how to eject in Finder. See [Library status and Eject](configuration.md#library-status-and-eject).
@@ -126,6 +127,13 @@ GET  /api/upgrade
 GET  /api/upgrade/preview
 POST /api/upgrade
 POST /api/query/{library|activity|usage|…}
+GET  /api/findings
+GET  /api/findings/{id}
+POST /api/findings/{id}/action
+POST /api/findings/cart/prompt
+POST /api/findings/cart/copy
+POST /api/findings/settings
+POST /api/findings/refresh
 GET  /api/query/{library|activity|usage|…}/distinct?field=&q=&limit=
 GET  /api/query/{library|activity|usage|…}/field-stats?fields=a,b
 POST /api/query/{library|activity|usage|…}/aggregations
@@ -155,6 +163,11 @@ message. The discovery tools accept `max_output_tokens` as an approximate
 response budget (defaulting to 700–1,200 depending on the tool). Search cards
 include coverage and index freshness; conversation documents are generated
 locally and existing catalogs are backfilled on opening.
+
+`list_findings` and `get_finding` read findings: compact cards, then one
+finding's extracted facts kept apart from its evidence handles, which are
+labeled as untrusted transcript content. Neither changes a finding's state; only
+copying a prompt in Pharos starts a measurement.
 
 The existing `search_work`, `get_work_detail`, `get_conversation_excerpt`,
 `get_change_set`, `trace`, `query_metrics`, and `get_receipt` tools remain
