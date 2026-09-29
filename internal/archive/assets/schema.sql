@@ -189,6 +189,15 @@ CREATE TABLE IF NOT EXISTS message_authorship (
 );
 CREATE INDEX IF NOT EXISTS message_authorship_conversation_idx ON message_authorship(conversation_id);
 CREATE INDEX IF NOT EXISTS message_authorship_day_idx ON message_authorship(day);
+-- Derived with message_authorship: a headless agent run (claude -p, agy -p,
+-- codex exec) and the conversation whose shell command launched it.
+CREATE TABLE IF NOT EXISTS conversation_launches (
+  child_id TEXT PRIMARY KEY,
+  parent_id TEXT NOT NULL,
+  tool_call_id TEXT NOT NULL,
+  program TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS conversation_launches_parent_idx ON conversation_launches(parent_id);
 -- Prose messages by role and time, for the human-authorship rebuild.
 CREATE INDEX IF NOT EXISTS messages_prose_idx ON messages(role, created_at) WHERE kind='message';
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(message_id UNINDEXED, text, tokenize='unicode61');

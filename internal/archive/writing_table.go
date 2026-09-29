@@ -14,7 +14,8 @@ import (
 // The Usage page's writing view lists one row per Library work with the
 // classified user text of its conversations (see authorship.go). A work that
 // only holds sub-agent conversations spawned from another work (Codex stores
-// each spawned thread as its own session) is folded into that parent, so its
+// each spawned thread as its own session), or only headless runs a command in
+// another work launched (see launches.go), is folded into that parent, so its
 // automated prompts and its tokens count toward the conversation that caused
 // them.
 
@@ -68,7 +69,7 @@ func (c *Catalog) writingData(ctx context.Context) ([]map[string]any, map[string
 }
 
 func (c *Catalog) computeWritingData(ctx context.Context) (writingTable, error) {
-	parents, err := c.subagentParents(ctx)
+	parents, launched, err := c.foldedParents(ctx)
 	if err != nil {
 		return writingTable{}, err
 	}
@@ -123,7 +124,7 @@ func (c *Catalog) computeWritingData(ctx context.Context) (writingTable, error) 
 	if err != nil {
 		return writingTable{}, err
 	}
-	// Folded sub-agent works that sent no user-role text still spent tokens.
+	// Folded works that sent no user-role text still spent tokens.
 	for child := range parents {
 		if root := rootWorkspace(child, parents); daily[root] != nil && !slices.Contains(members[root], child) {
 			members[root] = append(members[root], child)
@@ -141,25 +142,29 @@ func (c *Catalog) computeWritingData(ctx context.Context) (writingTable, error) 
 			total.add(day)
 		}
 		spent := &workspaceUsageTotal{}
+		runs := 0
 		for _, member := range members[id] {
 			if value := usage[member]; value != nil {
 				spent.add(value)
 			}
+			if launched[member] {
+				runs++
+			}
 		}
-		rows = append(rows, writingRow(work, total, spent, len(members[id])-1))
+		rows = append(rows, writingRow(work, total, spent, len(members[id])-1-runs, runs))
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return firstString(rows[i]["id"]) < firstString(rows[j]["id"]) })
 	return writingTable{rows, daily}, nil
 }
 
-func writingRow(work map[string]any, total *writingDay, spent *workspaceUsageTotal, folded int) map[string]any {
+func writingRow(work map[string]any, total *writingDay, spent *workspaceUsageTotal, subagents, launched int) map[string]any {
 	row := map[string]any{
 		"id": work["id"], "workspace_id": work["id"], "title": work["title"], "repository_name": work["repository_name"],
 		"source_kind": work["source_kind"], "providers": work["providers"],
 		"first_message_at": nilIfEmpty(total.firstSent), "last_message_at": nilIfEmpty(total.lastSent),
 		"user_turns": total.messages, "typed_turns": total.typedMessages, "longest_typed_words": total.longestTyped,
 		"total_tokens": spent.tokens, "cost_usd": spent.cost, "cost_today_usd": spent.today, "price_status": nilIfEmpty(spent.status),
-		"subagent_works": int64(folded),
+		"subagent_works": int64(subagents), "launched_works": int64(launched),
 	}
 	words := int64(0)
 	for _, category := range authorshipCategories {
@@ -191,22 +196,39 @@ func writingRow(work map[string]any, total *writingDay, spent *workspaceUsageTot
 
 func roundTenth(value float64) float64 { return math.Round(value*10) / 10 }
 
-// subagentParents maps each work holding only sub-agent conversations whose
-// parents live in another work to that work.
-func (c *Catalog) subagentParents(ctx context.Context) (map[string]string, error) {
+// foldedParents maps each work folded into another to that work: a work
+// holding only sub-agent conversations whose parents live in another work, or
+// only headless runs launched by commands in another work. launched holds the
+// latter.
+func (c *Catalog) foldedParents(ctx context.Context) (parents map[string]string, launched map[string]bool, err error) {
 	rows, err := queryMapsContext(ctx, c.DB, `SELECT c.workspace_id child,MIN(p.workspace_id) parent
 		FROM conversations c JOIN conversations p ON p.id=c.parent_id
 		WHERE p.workspace_id<>c.workspace_id
 		GROUP BY c.workspace_id
 		HAVING COUNT(*)=(SELECT COUNT(*) FROM conversations x WHERE x.workspace_id=c.workspace_id)`)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	parents := map[string]string{}
+	parents, launched = map[string]string{}, map[string]bool{}
 	for _, row := range rows {
 		parents[firstString(row["child"])] = firstString(row["parent"])
 	}
-	return parents, nil
+	// A run's own sub-agents live in its work, so only its root agents count.
+	runs, err := queryMapsContext(ctx, c.DB, `SELECT c.workspace_id child,MIN(p.workspace_id) parent
+		FROM conversation_launches l JOIN conversations c ON c.id=l.child_id JOIN conversations p ON p.id=l.parent_id
+		WHERE p.workspace_id<>c.workspace_id
+		GROUP BY c.workspace_id
+		HAVING COUNT(*)=(SELECT COUNT(*) FROM conversations x WHERE x.workspace_id=c.workspace_id AND x.parent_id IS NULL)`)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, row := range runs {
+		child := firstString(row["child"])
+		if _, ok := parents[child]; !ok {
+			parents[child], launched[child] = firstString(row["parent"]), true
+		}
+	}
+	return parents, launched, nil
 }
 
 // rootWorkspace follows parent links to the work a sub-agent chain started in.

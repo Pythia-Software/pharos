@@ -363,3 +363,61 @@ func TestAntigravityCapturePlanListsWhatTheAdapterReads(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The CLI logs each run, and a run with -p names its conversation there; the
+// transcripts do not record it. A capture keeps the logs the CLI rotates away.
+func TestAntigravityPrintModeRunsAreHeadless(t *testing.T) {
+	useHost(t, "host-a")
+	catalog, config := testCatalog(t)
+	config.CaptureRoot = filepath.Join(t.TempDir(), "captures")
+	dir := antigravityFixture(t)
+	source := SourceConfig{Name: "antigravity-cli", Kind: "antigravity", Path: dir, Account: "local", Enabled: true}
+	config.Sources = []SourceConfig{source}
+	sender := func(catalog *Catalog, native string) string {
+		t.Helper()
+		rows, err := queryMaps(catalog.DB, `SELECT COALESCE(m.sender,'') sender FROM messages m JOIN conversations c ON c.id=m.conversation_id
+			WHERE c.native_id=? AND m.kind='message' AND m.role IN ('user','agent')`, native)
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("%s prompts = %v %v", native, rows, err)
+		}
+		return firstString(rows[0]["sender"])
+	}
+	ingestSource(t, catalog, source)
+	if got := sender(catalog, antigravityRoot); got != "" {
+		t.Fatalf("sender before any log = %q", got)
+	}
+	logs := []string{filepath.Join(dir, "log", "cli-20260928_080300.log"), filepath.Join(dir, "log", "cli-20260928_090000.log")}
+	probePut(t, logs[0], "I0928 08:03:00.100000 1 printmode.go:181] Print mode: starting (promptLength=13)\n"+
+		"I0928 08:03:01.200000 1 session.go:180] Print mode: conversation="+antigravityRoot+", sending message\n")
+	probePut(t, logs[1], "I0928 09:00:00.100000 1 server.go:1584] Starting language server process\n")
+	parses := countParses(t)
+	if result := ingestSource(t, catalog, source); result.Workspaces != 1 || parses.Load() != 2 {
+		t.Fatalf("after the log: %+v, %d parses", result, parses.Load())
+	}
+	if root, child, other := sender(catalog, antigravityRoot), sender(catalog, antigravityChild), sender(catalog, antigravityOther); root != "automation:agy-print" || child != "" || other != "" {
+		t.Fatalf("senders = %q %q %q", root, child, other)
+	}
+	plan, err := planCapture(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	captured := map[string]bool{}
+	for _, item := range plan.files {
+		captured[item.rel] = true
+	}
+	if !captured["log/cli-20260928_080300.log"] || !captured["log/cli-20260928_090000.log"] {
+		t.Fatalf("capture plan = %v", plan.files)
+	}
+	runCapture(t, config)
+	for _, log := range logs {
+		if err := os.Remove(log); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runCapture(t, config)
+	other, _ := testCatalog(t)
+	indexCaptures(t, other, config.CaptureRoot, "host-a")
+	if got := sender(other, antigravityRoot); got != "automation:agy-print" {
+		t.Fatalf("sender from a capture the CLI rotated its log out of = %q", got)
+	}
+}

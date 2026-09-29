@@ -24,7 +24,7 @@ import (
 // docs/human-authorship.md.
 
 // authorshipVersion names the classification rules; a new version rebuilds.
-const authorshipVersion = "authorship-v4"
+const authorshipVersion = "authorship-v5"
 
 const (
 	// authorshipWindow bounds how far back agent output is looked for. Your
@@ -198,10 +198,14 @@ func splitHarnessText(text string) ([]harnessBlock, string) {
 }
 
 // authorInput is one user message and what is known about who sent it.
+// Unclaimed is set when the Mac's Conductor is read and records no session
+// for the message's conversation, and Launch when a command in another
+// conversation started it.
 type authorInput struct {
-	ID, ConversationID, WorkspaceID, Text, Sender, SourceKind string
-	SubAgent                                                  bool
-	SentAt                                                    time.Time
+	ID, ConversationID, WorkspaceID, Text, Sender, SourceKind, Harness string
+	SubAgent, Unclaimed                                                bool
+	Launch                                                             *conversationLaunch
+	SentAt                                                             time.Time
 }
 
 // authorResult is the classification of one message.
@@ -441,10 +445,14 @@ func (use templateUse) template() bool {
 // returns "" when a person sent it.
 func automatedReason(input authorInput) string {
 	switch {
+	case input.Launch != nil:
+		return "Launched with " + headlessLabels[input.Launch.program] + " by a command"
 	case input.Sender == "automation:claude-sdk-cli":
 		return "Sent by a headless claude -p run"
 	case input.Sender == "automation:codex-exec":
 		return "Sent by a codex exec run"
+	case input.Sender == "automation:agy-print":
+		return "Sent by a headless agy -p run"
 	case strings.HasPrefix(input.Sender, "automation:"):
 		return "Sent by automation " + strings.TrimPrefix(input.Sender, "automation:")
 	case strings.HasPrefix(input.Sender, "agent:"):
@@ -454,6 +462,11 @@ func automatedReason(input authorInput) string {
 	case input.SubAgent:
 		// Forked sub-agents also carry the parent's history, already counted there.
 		return "Sub-agent conversation"
+	case input.Unclaimed && headlessRun("claude", input.Harness) != "":
+		// Conductor runs Claude through the SDK too, but records each
+		// session it starts; a claude -p started under another Claude
+		// session inherits its sdk-ts entrypoint.
+		return "Sent by a headless claude -p or SDK run Conductor did not start"
 	}
 	return ""
 }
@@ -505,7 +518,11 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 	previous, hasPrevious := c.lastUserSent[input.ConversationID]
 	c.lastUserSent[input.ConversationID] = input.SentAt
 	if reason := automatedReason(input); reason != "" {
-		l.claim(0, len(text), spanAutomated, reason, textOrigin{})
+		origin := textOrigin{}
+		if input.Launch != nil {
+			origin = textOrigin{input.Launch.parent, input.Launch.message}
+		}
+		l.claim(0, len(text), spanAutomated, reason, origin)
 		return l.spans()
 	}
 	bodyStart := 0
@@ -1009,22 +1026,12 @@ func (c *Catalog) authorshipRunning() bool {
 	return c.authorship.running
 }
 
-// RebuildAuthorship classifies every user message of the work each mirror
-// group is represented by, in send order, and replaces message_authorship.
+// RebuildAuthorship links headless runs to the commands that launched them,
+// classifies every user message of the work each mirror group is represented
+// by, in send order, and replaces message_authorship and
+// conversation_launches.
 func (c *Catalog) RebuildAuthorship(ctx context.Context, generation string) error {
-	workspaces, err := queryMapsContext(ctx, c.DB, `SELECT w.id,w.source_kind,w.activity_at FROM workspaces w`)
-	if err != nil {
-		return err
-	}
-	suppressed := map[string]bool{}
-	for _, row := range c.suppressMirrors(workspaces) {
-		if mirrors, ok := row["mirrored_workspace_ids"].([]string); ok {
-			for _, id := range mirrors {
-				suppressed[id] = true
-			}
-		}
-	}
-	inputs, err := c.authorInputs(ctx, suppressed)
+	inputs, launches, err := c.authorshipInputs(ctx)
 	if err != nil {
 		return err
 	}
@@ -1032,11 +1039,83 @@ func (c *Catalog) RebuildAuthorship(ctx context.Context, generation string) erro
 	if err != nil {
 		return err
 	}
-	return c.storeAuthorship(ctx, results, generation)
+	return c.storeAuthorship(ctx, results, launches, generation)
 }
 
-func (c *Catalog) authorInputs(ctx context.Context, suppressed map[string]bool) ([]authorInput, error) {
-	rows, err := c.DB.QueryContext(ctx, `SELECT m.id,m.conversation_id,c.workspace_id,m.text,m.created_at,COALESCE(m.sender,''),w.source_kind,c.parent_id IS NOT NULL
+// authorshipInputs links headless runs to the commands that launched them,
+// and reads the user messages to classify.
+func (c *Catalog) authorshipInputs(ctx context.Context) ([]authorInput, []conversationLaunch, error) {
+	workspaces, err := queryMapsContext(ctx, c.DB, `SELECT w.id,w.source_kind,w.activity_at FROM workspaces w`)
+	if err != nil {
+		return nil, nil, err
+	}
+	representative := map[string]string{}
+	for _, row := range c.suppressMirrors(workspaces) {
+		if mirrors, ok := row["mirrored_workspace_ids"].([]string); ok {
+			for _, id := range mirrors {
+				representative[id] = firstString(row["id"])
+			}
+		}
+	}
+	claimed, err := c.appClaims(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	launches, err := c.deriveLaunches(ctx, claimed, representative)
+	if err != nil {
+		return nil, nil, err
+	}
+	inputs, err := c.authorInputs(ctx, representative, claimed, launches)
+	return inputs, launches, err
+}
+
+// appClaims returns the conversations an app records starting: those a
+// Conductor session links to.
+func (c *Catalog) appClaims(ctx context.Context) (map[string]bool, error) {
+	rows, err := c.DB.QueryContext(ctx, `SELECT left_id FROM conversation_identity_links UNION SELECT right_id FROM conversation_identity_links`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	claimed := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		claimed[id] = true
+	}
+	return claimed, rows.Err()
+}
+
+// authorInputs reads the user messages to classify, skipping mirrored works
+// (the keys of representative).
+func (c *Catalog) authorInputs(ctx context.Context, representative map[string]string, claimed map[string]bool, launches []conversationLaunch) ([]authorInput, error) {
+	// Only a Mac whose Conductor is read can show a session was not its own.
+	conductorHosts := map[string]bool{}
+	hosts, err := c.DB.QueryContext(ctx, `SELECT DISTINCT c.origin_host_id FROM conversations c JOIN workspaces w ON w.id=c.workspace_id
+		WHERE w.source_kind='conductor' AND c.origin_host_id IS NOT NULL`)
+	if err != nil {
+		return nil, err
+	}
+	for hosts.Next() {
+		var host string
+		if err := hosts.Scan(&host); err != nil {
+			hosts.Close()
+			return nil, err
+		}
+		conductorHosts[host] = true
+	}
+	hosts.Close()
+	if err := hosts.Err(); err != nil {
+		return nil, err
+	}
+	launched := map[string]*conversationLaunch{}
+	for index := range launches {
+		launched[launches[index].child] = &launches[index]
+	}
+	rows, err := c.DB.QueryContext(ctx, `SELECT m.id,m.conversation_id,c.workspace_id,m.text,m.created_at,COALESCE(m.sender,''),w.source_kind,c.parent_id IS NOT NULL,
+			COALESCE(c.harness,''),COALESCE(c.origin_host_id,'')
 		FROM messages m
 		JOIN conversations c ON c.id=m.conversation_id JOIN workspaces w ON w.id=c.workspace_id
 		WHERE m.kind='message' AND m.role='user' AND m.created_at IS NOT NULL`)
@@ -1047,15 +1126,17 @@ func (c *Catalog) authorInputs(ctx context.Context, suppressed map[string]bool) 
 	inputs := []authorInput{}
 	for rows.Next() {
 		var input authorInput
-		var sentAt string
-		if err := rows.Scan(&input.ID, &input.ConversationID, &input.WorkspaceID, &input.Text, &sentAt, &input.Sender, &input.SourceKind, &input.SubAgent); err != nil {
+		var sentAt, host string
+		if err := rows.Scan(&input.ID, &input.ConversationID, &input.WorkspaceID, &input.Text, &sentAt, &input.Sender, &input.SourceKind, &input.SubAgent, &input.Harness, &host); err != nil {
 			return nil, err
 		}
 		parsed, ok := parseTime(sentAt)
-		if !ok || suppressed[input.WorkspaceID] || strings.TrimSpace(input.Text) == "" {
+		if !ok || representative[input.WorkspaceID] != "" || strings.TrimSpace(input.Text) == "" {
 			continue
 		}
 		input.SentAt = parsed
+		input.Unclaimed = conductorHosts[host] && !claimed[input.ConversationID]
+		input.Launch = launched[input.ConversationID]
 		inputs = append(inputs, input)
 	}
 	if err := rows.Err(); err != nil {
@@ -1125,12 +1206,21 @@ func (c *Catalog) classifyInputs(ctx context.Context, inputs []authorInput) ([]a
 	return results, nil
 }
 
-func (c *Catalog) storeAuthorship(ctx context.Context, results []authorResult, generation string) error {
+func (c *Catalog) storeAuthorship(ctx context.Context, results []authorResult, launches []conversationLaunch, generation string) error {
 	tx, err := c.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "DELETE FROM conversation_launches"); err != nil {
+		return err
+	}
+	for _, launch := range launches {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO conversation_launches(child_id,parent_id,tool_call_id,program) VALUES(?,?,?,?)",
+			launch.child, launch.parent, launch.toolCall, launch.program); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM message_authorship"); err != nil {
 		return err
 	}

@@ -25,19 +25,7 @@ func TestAuthorshipEvalLiveCatalog(t *testing.T) {
 	defer db.Close()
 	c := &Catalog{DB: db}
 	ctx := context.Background()
-	workspaces, err := queryMapsContext(ctx, db, `SELECT w.id,w.source_kind,w.activity_at FROM workspaces w`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	suppressed := map[string]bool{}
-	for _, row := range c.suppressMirrors(workspaces) {
-		if mirrors, ok := row["mirrored_workspace_ids"].([]string); ok {
-			for _, id := range mirrors {
-				suppressed[id] = true
-			}
-		}
-	}
-	inputs, err := c.authorInputs(ctx, suppressed)
+	inputs, _, err := c.authorshipInputs(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
