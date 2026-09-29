@@ -18,7 +18,7 @@ final class StubReleaseResponse: URLProtocol {
 
 func release(_ tag: String, asset: String? = nil, downloadURL: String? = nil,
              draft: Bool = false, prerelease: Bool = false) -> Data {
-    let name = asset ?? "Pharos-\(tag)-macos-universal.dmg"
+    let name = asset ?? "\(tag)-Pharos-macos-universal.dmg"
     let url = downloadURL ?? "https://github.com/Pythia-Software/pharos/releases/download/\(tag)/\(name)"
     let object: [String: Any] = [
         "tag_name": tag,
@@ -49,8 +49,8 @@ func expect(_ condition: Bool, _ message: String) {
                "older version is current")
 
         for bad in [
-            release("v0.3.0", asset: "Pharos-v0.3.0-macos-universal.zip"),
-            release("v0.3.0", downloadURL: "https://example.com/Pharos-v0.3.0-macos-universal.dmg"),
+            release("v0.3.0", asset: "v0.3.0-Pharos-macos-universal.zip"),
+            release("v0.3.0", downloadURL: "https://example.com/v0.3.0-Pharos-macos-universal.dmg"),
             release("v0.3.0", draft: true),
             release("v0.3.0", prerelease: true),
             release("latest"),

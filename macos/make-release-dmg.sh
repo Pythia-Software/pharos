@@ -15,7 +15,7 @@ for command in hdiutil tiffutil swift uvx; do
     command -v "$command" >/dev/null 2>&1 || { echo "$command is required." >&2; exit 2; }
 done
 
-VOLUME="Pharos v$VERSION"
+VOLUME="v$VERSION Pharos"
 # dmgbuild records the background by its mounted path; a second volume with the
 # same name would be mounted as "$VOLUME 1".
 if [ -e "/Volumes/$VOLUME" ]; then
