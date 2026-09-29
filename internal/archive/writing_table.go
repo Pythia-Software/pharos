@@ -228,13 +228,13 @@ func (c *Catalog) writingSeries(ctx context.Context, where []querytable.WhereTer
 	if err != nil {
 		return nil, err
 	}
-	matched, err := querytable.Apply(rows, querytable.Query{Where: where, Limit: len(rows) + 1}, schema)
+	matched, err := querytable.Filter(rows, where, schema)
 	if err != nil {
 		return nil, err
 	}
 	byDay := map[string]*writingDay{}
 	total := newWritingDay("")
-	for _, row := range matched.Rows {
+	for _, row := range matched {
 		for day, entry := range daily[firstString(row["id"])] {
 			if byDay[day] == nil {
 				byDay[day] = newWritingDay(day)
@@ -253,7 +253,7 @@ func (c *Catalog) writingSeries(ctx context.Context, where []querytable.WhereTer
 		first, last = firstString(series[0]["day"]), firstString(series[len(series)-1]["day"])
 	}
 	return map[string]any{
-		"works": matched.Total, "daily": series,
+		"works": len(matched), "daily": series,
 		"totals": writingCounts(total, map[string]any{"first_day": nilIfEmpty(first), "last_day": nilIfEmpty(last)}),
 	}, nil
 }
