@@ -29,7 +29,7 @@ var harnessFiles = map[string][]string{
 
 var (
 	instructionName = regexp.MustCompile(`(?:^|[/\s'"*=])((?:AGENTS|CLAUDE|GEMINI)(?:\.override)?\.md)\b`)
-	skillFile       = regexp.MustCompile(`(?:^|[\s'"=]|\./)\.(claude|codex|agents|gemini|agent)/skills/[^\s'"]*SKILL\.md`)
+	skillFile       = regexp.MustCompile(`(?:^|[\s'"=/])\.(claude|codex|agents|gemini|agent)/skills/[^\s'"]*SKILL\.md`)
 	// homeHarness matches a harness's own folder in a home directory: global
 	// files and harness internals, not the repository's.
 	homeHarness   = regexp.MustCompile(`(?:~|\$HOME|/Users/[^/\s]+|/home/[^/\s]+)/\.(?:claude|codex|agents|gemini)\b`)

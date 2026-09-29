@@ -94,6 +94,31 @@ type findingObs struct {
 	At            string
 }
 
+// merge folds another row of the same unit into this one, such as a
+// sub-agent's calls into its top-level conversation's. The later row's
+// outcome is the unit's outcome.
+func (obs *findingObs) merge(other *findingObs) {
+	obs.Hit = obs.Hit || other.Hit
+	obs.Value += other.Value
+	obs.Total += other.Total
+	obs.Occurrences += other.Occurrences
+	obs.Tokens += other.Tokens
+	obs.CostUSD += other.CostUSD
+	obs.DurationMS += other.DurationMS
+	obs.Calls += other.Calls
+	obs.Errors += other.Errors
+	obs.HelpCalls += other.HelpCalls
+	obs.UsageErrors += other.UsageErrors
+	if other.At > obs.At || obs.Success == nil {
+		if other.Success != nil {
+			obs.Success = other.Success
+		}
+	}
+	if other.At > obs.At {
+		obs.At = other.At
+	}
+}
+
 // findingHandle is a piece of evidence MCP can read.
 type findingHandle struct {
 	At             string `json:"at"`
@@ -214,6 +239,12 @@ type findingEnv struct {
 	hosts        map[string]string
 	discover     bool
 	specs        map[string][]findingSpec
+	// measuring holds the IDs of findings being measured or accruing
+	// savings: they keep their own scope rather than fold into a wider one.
+	measuring map[string]bool
+	// stored is the findings table before this pass, for what a
+	// measuring-only pass doesn't recompute.
+	stored map[string]*findingRow
 	// cachedPreEdits is D3 and D4's shared read (see preEdits), and
 	// cachedCalls D1 and D7's (see callGroups).
 	cachedPreEdits map[string]*preEdit
@@ -806,7 +837,7 @@ func (c *Catalog) runFindingsPass(ctx context.Context, full bool) error {
 		survivors["repo:"+firstString(row["old_id"])] = "repo:" + firstString(row["new_id"])
 	}
 	specs := []findingSpec{}
-	measured := map[string]bool{}
+	measured, measuring := map[string]bool{}, map[string]bool{}
 	for id, row := range existing {
 		state := states[id]
 		if !full && !findingNeedsMeasuring(state, c.clock()) {
@@ -822,6 +853,9 @@ func (c *Catalog) runFindingsPass(ctx context.Context, full bool) error {
 		}
 		specs = append(specs, spec)
 		measured[spec.id()] = true
+		if findingNeedsMeasuring(state, c.clock()) {
+			measuring[spec.id()] = true
+		}
 	}
 	if !full && len(specs) == 0 {
 		return nil
@@ -831,6 +865,7 @@ func (c *Catalog) runFindingsPass(ctx context.Context, full bool) error {
 	if err != nil {
 		return err
 	}
+	env.measuring, env.stored = measuring, existing
 	candidates := []*findingCandidate{}
 	for _, detector := range findingDetectors {
 		if !full && len(env.specs[detector.name]) == 0 {
@@ -870,7 +905,39 @@ func (c *Catalog) runFindingsPass(ctx context.Context, full bool) error {
 		return err
 	}
 	c.setFindingsPhase("measuring results")
-	return c.decideInterventions(ctx, env, kept)
+	if err := c.decideInterventions(ctx, env, kept); err != nil {
+		return err
+	}
+	return c.wakeSnoozedFindings(ctx)
+}
+
+// wakeSnoozedFindings ends the snooze of every snoozed-until-worse finding
+// whose weekly rate has doubled, with a restore row, so it stays open when
+// the rate eases again.
+func (c *Catalog) wakeSnoozedFindings(ctx context.Context) error {
+	view, err := c.loadFindingView(ctx)
+	if err != nil {
+		return err
+	}
+	woke := []string{}
+	for id, state := range view.states {
+		if row := view.rows[id]; row != nil && state.SnoozeWorse && view.snoozeWoke(row, state) {
+			woke = append(woke, id)
+		}
+	}
+	if len(woke) == 0 {
+		return nil
+	}
+	sort.Strings(woke)
+	stamp, host := formatTime(c.clock()), c.currentHostID()
+	return c.writeTransaction(ctx, "finding-wake", func(tx *sql.Tx) error {
+		for _, id := range woke {
+			if _, err := tx.Exec("INSERT INTO finding_actions(finding_id,action,reason,host_id,created_at) VALUES(?,?,?,?,?)", id, "restore", "worse", nilIfEmpty(host), stamp); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // findingNeedsMeasuring reports whether an index should update a finding
@@ -1012,12 +1079,28 @@ func (c *Catalog) storeFindings(ctx context.Context, env *findingEnv, candidates
 	for _, row := range retired {
 		retiredIDs[firstString(row["new_id"])] = retiredIDs[firstString(row["new_id"])] + "\x1f" + firstString(row["old_id"])
 	}
+	// When two candidates claim the same earlier ID, the one with more
+	// affected conversations takes it (then the smaller ID), every pass.
+	claims := map[string]*findingCandidate{}
+	for _, candidate := range candidates {
+		for _, alias := range candidate.Aliases {
+			if best := claims[alias]; best == nil || candidate.stats.Affected > best.stats.Affected ||
+				candidate.stats.Affected == best.stats.Affected && candidate.Spec.id() < best.Spec.id() {
+				claims[alias] = candidate
+			}
+		}
+	}
 	return c.writeTransaction(ctx, "findings", func(tx *sql.Tx) error {
 		produced := map[string]bool{}
 		for _, candidate := range candidates {
 			id := candidate.Spec.id()
 			produced[id] = true
-			aliases := append([]string{}, candidate.Aliases...)
+			aliases := []string{}
+			for _, alias := range candidate.Aliases {
+				if claims[alias] == candidate {
+					aliases = append(aliases, alias)
+				}
+			}
 			// Scopes of repositories a merge retired point here now.
 			if candidate.RepositoryID != "" {
 				for _, old := range strings.Split(retiredIDs[candidate.RepositoryID], "\x1f") {
@@ -1077,13 +1160,17 @@ func (c *Catalog) storeFindings(ctx context.Context, env *findingEnv, candidates
 				firstSeen, gatePassed, stamp); err != nil {
 				return err
 			}
-			if _, err := tx.Exec("DELETE FROM finding_aliases WHERE finding_id=?", id); err != nil {
-				return err
-			}
+			// Aliases accumulate: an earlier ID keeps pointing here after
+			// the pattern that produced it stops, so the dismissals,
+			// measurements, and wins recorded under it stay with this
+			// finding.
 			for _, alias := range append(aliases, id) {
 				if _, err := tx.Exec("INSERT INTO finding_aliases(alias,finding_id) VALUES(?,?) ON CONFLICT(alias) DO UPDATE SET finding_id=excluded.finding_id", alias, id); err != nil {
 					return err
 				}
+			}
+			if err := rehomeFindingCart(tx, id); err != nil {
+				return err
 			}
 			if err := writeFindingDaily(tx, id, env.from.Format("2006-01-02"), candidate.daily()); err != nil {
 				return err

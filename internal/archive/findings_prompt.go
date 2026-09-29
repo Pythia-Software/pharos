@@ -89,11 +89,11 @@ func handoffFor(target string, settings findingSettings, habits map[string]repos
 	if kind != "repo" {
 		return "diff", "Changes outside a repository always show the diff first."
 	}
-	if override := settings.RepositoryHandoff[rest]; override != "" {
-		return override, "Set for this repository in Findings settings."
-	}
 	if settings.Handoff == "pr" || settings.Handoff == "diff" {
 		return settings.Handoff, "Set for every repository in Findings settings."
+	}
+	if override := settings.RepositoryHandoff[rest]; override != "" {
+		return override, "Set for this repository in Findings settings."
 	}
 	habit := habits[rest]
 	if habit.Work == 0 {
@@ -298,11 +298,13 @@ func (c *Catalog) CopyCart(ctx context.Context, target string, ids []string, han
 	copied := c.clock()
 	copyID := stableID("finding-copy", target, formatTime(copied))
 	host := c.currentHostID()
-	files := map[string]int64{}
+	var files map[string]int64
 	kind, rest, _ := strings.Cut(target, ":")
 	switch kind {
 	case "repo":
-		files, _ = sharedInstructionInventories.at(cart.locations[rest], time.Time{})
+		if inventory, ok := sharedInstructionInventories.at(cart.locations[rest], time.Time{}); ok {
+			files = inventory
+		}
 	case "global":
 		_, provider, _ := strings.Cut(rest, ":")
 		files = globalInstructionSizes(provider)
@@ -313,6 +315,9 @@ func (c *Catalog) CopyCart(ctx context.Context, target string, ids []string, han
 	}
 	err = c.writeTransaction(ctx, "finding-copy", func(tx *sql.Tx) error {
 		for _, item := range items {
+			if err := rehomeFindingCart(tx, item.Row.ID); err != nil {
+				return err
+			}
 			if _, err := tx.Exec("DELETE FROM finding_cart WHERE finding_id=?", item.Row.ID); err != nil {
 				return err
 			}
@@ -331,7 +336,7 @@ func (c *Catalog) CopyCart(ctx context.Context, target string, ids []string, han
 				return err
 			}
 			plan := planFinding(item.Row, daily, copied)
-			plan.Files, plan.Others, plan.Change = files, without(allIDs, item.Row.ID), item.Step.Change
+			plan.Files, plan.FilesKnown, plan.Others, plan.Change = files, files != nil, without(allIDs, item.Row.ID), item.Step.Change
 			if kind == "repo" {
 				plan.Location = repositoryClone(cart.locations[rest])
 			}

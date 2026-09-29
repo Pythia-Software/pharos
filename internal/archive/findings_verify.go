@@ -50,8 +50,11 @@ type findingPlan struct {
 	FailuresPerEvent float64 `json:"failures_per_event"`
 	// Files are the instruction files the target had at the copy, with
 	// their sizes, for the context a change adds.
-	Files    map[string]int64 `json:"files,omitempty"`
-	Location string           `json:"location,omitempty"`
+	// FilesKnown says they were read, so an empty set means the target had
+	// none and a file the change creates counts as growth from nothing.
+	Files      map[string]int64 `json:"files,omitempty"`
+	FilesKnown bool             `json:"files_known,omitempty"`
+	Location   string           `json:"location,omitempty"`
 	// Others are the findings copied in the same prompt.
 	Others []string `json:"others,omitempty"`
 	// Change is the proposed change the prompt carried.
@@ -71,6 +74,21 @@ type findingSavings struct {
 	Weeks       int     `json:"weeks"`
 	Through     string  `json:"through,omitempty"`
 	Done        bool    `json:"done,omitempty"`
+	// ByWeek keeps each week's figures once measured: a pass reads only
+	// the last 91 days, so older weeks keep what they were measured at.
+	ByWeek []findingWeekSavings `json:"by_week,omitempty"`
+}
+
+// findingWeekSavings is one week's savings, before the added context is
+// subtracted.
+type findingWeekSavings struct {
+	From        string  `json:"from"`
+	USD         float64 `json:"usd"`
+	Tokens      float64 `json:"tokens"`
+	Minutes     float64 `json:"minutes"`
+	Failures    float64 `json:"failures"`
+	AddedTokens float64 `json:"added_tokens"`
+	AddedUSD    float64 `json:"added_usd"`
 }
 
 // hypergeometric returns P(X <= x) and P(X >= x) for x successes in n draws
@@ -367,7 +385,7 @@ func (c *Catalog) decideInterventions(ctx context.Context, env *findingEnv, cand
 			item.DecidedAt = formatTime(env.now)
 			changed = true
 		}
-		if item.Status == interventionWatching || item.Status == interventionImproved && item.RegressedAt == "" {
+		if item.Status == interventionWatching || item.Status == interventionImproved && item.RegressedAt == "" && !item.Savings.Done {
 			item.Savings = env.savings(candidate, item)
 			changed = true
 		}
@@ -472,7 +490,7 @@ func (env *findingEnv) result(candidate *findingCandidate, item *findingInterven
 		elsewhereAfter := env.window(metric, candidate.Elsewhere, plan.AfterFrom, plan.AfterTo)
 		if elsewhereBefore.Units > 0 {
 			result["elsewhere"] = map[string]any{"before": elsewhereBefore.Rate, "after": elsewhereAfter.Rate,
-				"sentence": "Elsewhere, the same thing went from " + fractionPhrase(elsewhereBefore.Rate, "") + " to " + fractionPhrase(elsewhereAfter.Rate, "") + "."}
+				"sentence": "Elsewhere, the same thing went from " + ratePhrase(metric.Kind, elsewhereBefore.Rate) + " to " + ratePhrase(metric.Kind, elsewhereAfter.Rate) + "."}
 		}
 	}
 	return result
@@ -549,9 +567,14 @@ func (env *findingEnv) savings(candidate *findingCandidate, item *findingInterve
 		metric = candidate.Metric
 	}
 	baseline := plan.BeforeRate
-	if plan.BeforeExposure == 0 || metric.Kind == "mean" {
+	if plan.BeforeExposure == 0 {
 		baseline = env.window(metric, candidate.Obs, plan.BeforeFrom, plan.AfterFrom).Rate
 	}
+	measured := map[string]findingWeekSavings{}
+	for _, week := range item.Savings.ByWeek {
+		measured[week.From] = week
+	}
+	loaded := env.from.Local().Format("2006-01-02")
 	savings := findingSavings{}
 	start := dayTime(defaultString(plan.AfterFrom, plan.CopyDay))
 	end := start.AddDate(0, 0, findingSavingsDays)
@@ -564,23 +587,30 @@ func (env *findingEnv) savings(candidate *findingCandidate, item *findingInterve
 		if to.After(end) {
 			to = end
 		}
-		if to.Format("2006-01-02") > env.today || regressed != "" && week.Format("2006-01-02") >= regressed {
+		from, until := week.Format("2006-01-02"), to.Format("2006-01-02")
+		if until > env.today || regressed != "" && from >= regressed {
 			break
 		}
-		stats := env.window(metric, candidate.Obs, week.Format("2006-01-02"), to.Format("2006-01-02"))
-		saved := math.Max(0, findingFadeFactor*baseline-stats.Rate) * stats.Exposure
-		savings.USD += saved * plan.USDPerEvent
-		savings.Tokens += saved * plan.TokensPerEvent
-		savings.Minutes += saved * plan.MinutesPerEvent
-		savings.Failures += saved * plan.FailuresPerEvent
-		tokens, usd := env.addedContext(candidate, item, week.Format("2006-01-02"), to.Format("2006-01-02"))
-		savings.AddedTokens += tokens
-		savings.AddedUSD += usd
+		figures, ok := measured[from]
+		if !ok || from > loaded {
+			// Weeks the pass still holds are measured again; older ones
+			// keep their stored figures.
+			stats := env.window(metric, candidate.Obs, from, until)
+			saved := math.Max(0, findingFadeFactor*baseline-stats.Rate) * stats.Exposure
+			figures = findingWeekSavings{From: from, USD: saved * plan.USDPerEvent, Tokens: saved * plan.TokensPerEvent,
+				Minutes: saved * plan.MinutesPerEvent, Failures: saved * plan.FailuresPerEvent}
+			figures.AddedTokens, figures.AddedUSD = env.addedContext(candidate, item, from, until)
+		}
+		savings.ByWeek = append(savings.ByWeek, figures)
+		savings.USD += figures.USD - figures.AddedUSD
+		savings.Tokens += figures.Tokens - figures.AddedTokens
+		savings.Minutes += figures.Minutes
+		savings.Failures += figures.Failures
+		savings.AddedTokens += figures.AddedTokens
+		savings.AddedUSD += figures.AddedUSD
 		savings.Weeks++
 		savings.Through = to.AddDate(0, 0, -1).Format("2006-01-02")
 	}
-	savings.USD -= savings.AddedUSD
-	savings.Tokens -= savings.AddedTokens
 	savings.Done = env.today >= end.Format("2006-01-02")
 	return savings
 }
@@ -661,7 +691,7 @@ func topKey64(counts map[string]int64) string {
 // instructionGrowth compares the target's instruction files now with the
 // sizes recorded at the copy.
 func (env *findingEnv) instructionGrowth(item *findingIntervention) map[string]int64 {
-	if len(item.Plan.Files) == 0 {
+	if len(item.Plan.Files) == 0 && !item.Plan.FilesKnown {
 		return nil
 	}
 	current := currentInstructionFiles(env, item.Target, item.HostID)

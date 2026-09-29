@@ -34,7 +34,7 @@ func (exposure failureExposure) key() string { return exposure.Kind + ":" + expo
 var (
 	// failureNotice matches signatures that are harness notices or ordinary
 	// output rather than failures.
-	failureNotice = regexp.MustCompile(`(?i)^(?:warning: truncated output|total <n>$|traceback \(most recent call last\):?$|command timed out|<persisted-output>)`)
+	failureNotice = regexp.MustCompile(`(?i)^(?:warning: truncated output|total (?:<n>|\d+)$|traceback \(most recent call last\):?$|command timed out|<persisted-output>)`)
 	// failureNoLever matches failures only the harness can fix, such as its
 	// own tool-input parsing. They are kept for trend but never shown.
 	failureNoLever = regexp.MustCompile(`(?i)input that could not be parsed as json|^inputvalidationerror: \w+ was called with input|stream closed|browser is not available|no browser is available`)
@@ -223,9 +223,13 @@ func detectFailures(env *findingEnv) ([]*findingCandidate, error) {
 		}
 		if item.global {
 			// The repository findings this one replaces.
+			// A repository finding being measured stays in its own scope,
+			// so its result isn't diluted across every repository.
 			for _, call := range item.calls {
 				if scope := env.scopeOf(env.convs[call.Root]); scope != "" {
-					candidate.Aliases = append(candidate.Aliases, findingSpec{Detector: "failure", Scope: scope, Pattern: signature}.id())
+					if alias := (findingSpec{Detector: "failure", Scope: scope, Pattern: signature}).id(); !env.measuring[alias] {
+						candidate.Aliases = append(candidate.Aliases, alias)
+					}
 				}
 			}
 			candidate.Aliases = uniqueStrings(candidate.Aliases)
@@ -237,6 +241,23 @@ func detectFailures(env *findingEnv) ([]*findingCandidate, error) {
 	calls := groups2calls(candidates, bySignature)
 	if err := addRecoveries(env, candidates, calls); err != nil {
 		return nil, err
+	}
+	if !env.discover {
+		// Recoveries are read on full passes; a measuring pass keeps them.
+		for _, candidate := range candidates {
+			row := env.stored[candidate.Spec.id()]
+			if row == nil {
+				continue
+			}
+			for _, key := range []string{"recoveries", "recovery", "recovery_change", "recovery_example", "iteration"} {
+				if value, ok := row.Facts[key]; ok {
+					candidate.Facts[key] = value
+				}
+			}
+			if row.Facts["iteration"] == true {
+				candidate.Hidden = true
+			}
+		}
 	}
 	for _, candidate := range candidates {
 		if failureIteration(candidate.Spec.Pattern, calls[candidate], candidate.Facts["recovery"] != nil) {
@@ -276,7 +297,7 @@ func failureIteration(signature string, calls []failureCall, recovered bool) boo
 		switch {
 		case call.ErrorType == "edit_no_match" || call.ErrorType == "file_not_found" || call.ErrorType == "file_too_large":
 			own++
-		case strings.Contains(signature, "No such file or directory") && (exploring[call.Program] || exploring[signatureName(signature)]):
+		case strings.Contains(strings.ToLower(signature), "no such file or directory") && (exploring[call.Program] || exploring[signatureName(signature)]):
 			own++
 		case !recovered && genericException.MatchString(signature) && inlineScript.MatchString(call.Command):
 			own++
@@ -307,7 +328,7 @@ func failureFamily(signature string) string {
 
 // signatureProgram is the program an error line names ("ls: …"), which in
 // a compound command is often not the command's first program.
-var signatureProgram = regexp.MustCompile(`^(?:\(eval\):<n>: )?([\w][\w.+-]*): `)
+var signatureProgram = regexp.MustCompile(`^(?:\(eval\):(?:<n>|\d+): |\(eval\):)?([\w][\w.+-]*):(?:<n>:|\d+:)? `)
 
 // groups2calls maps each candidate to its errored calls again, for the
 // recovery pass.
@@ -518,7 +539,10 @@ func describeFailure(env *findingEnv, candidate *findingCandidate, calls []failu
 		}
 		where := "In " + name
 		if global {
-			where = fmt.Sprintf("Across %d repositories", max(len(repositories), 3))
+			where = "Across " + countNoun(len(repositories), "repository")
+			if len(repositories) < 2 {
+				where = "In one repository"
+			}
 			title += env.hostSuffix(scope)
 		}
 		exposureWords := map[string]string{"program": "conversations that ran `" + exposure.Key + "`", "tool": "conversations that used " + exposure.Key,

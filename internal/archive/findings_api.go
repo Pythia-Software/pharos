@@ -378,7 +378,7 @@ func (view *findingView) card(row *findingRow, state string) map[string]any {
 		copied, _ := parseTime(latest.CopiedAt)
 		day := int(view.now.Sub(copied).Hours()/24) + 1
 		card["watching"] = map[string]any{"copied_at": latest.CopiedAt, "day": day, "of_days": latest.Plan.AfterDays, "result_on": latest.Plan.AfterTo,
-			"before": fractionPhrase(latest.Plan.BeforeRate, ""), "change": latest.Change, "saved_usd": latest.Savings.USD, "target_label": view.cart.label(latest.Target)}
+			"before": ratePhrase(defaultString(latest.Plan.Metric.Kind, row.Metric.Kind), latest.Plan.BeforeRate), "change": latest.Change, "saved_usd": latest.Savings.USD, "target_label": view.cart.label(latest.Target)}
 	case latest.RegressedAt != "":
 		card["regressed"] = map[string]any{"at": latest.RegressedAt, "change": latest.Change, "saved_usd": latest.Savings.USD}
 	case latest.Status == interventionUnchanged:
@@ -530,7 +530,7 @@ func (view *findingView) wins() []map[string]any {
 			copied, _ := parseTime(item.CopiedAt)
 			left := findingSavingsDays - int(view.now.Sub(copied).Hours()/24)
 			output = append(output, map[string]any{"id": id, "title": row.Card.Title, "where": view.scopeLabel(row), "change": item.Change,
-				"before": fractionPhrase(before, ""), "now": nowPhrase(after), "saved": item.Savings, "days_left": max(left, 0),
+				"before": ratePhrase(row.Metric.Kind, before), "now": nowPhrase(row.Metric.Kind, after), "saved": item.Savings, "days_left": max(left, 0),
 				"regressed_at": nilIfEmpty(item.RegressedAt), "decided_at": item.DecidedAt, "copied_at": item.CopiedAt, "kind": row.Metric.Kind})
 		}
 	}
@@ -546,9 +546,17 @@ func resultRates(result map[string]any) (before, after float64) {
 	return before, after
 }
 
-func nowPhrase(rate float64) string {
+func nowPhrase(kind string, rate float64) string {
 	if rate <= 0 {
 		return "none"
+	}
+	return ratePhrase(kind, rate)
+}
+
+// ratePhrase words a finding's rate: tokens for a mean, else a fraction.
+func ratePhrase(kind string, rate float64) string {
+	if kind == "mean" {
+		return tokensPhrase(rate)
 	}
 	return fractionPhrase(rate, "")
 }
@@ -591,7 +599,7 @@ func (c *Catalog) FindingDetail(ctx context.Context, id string) (map[string]any,
 	if latest := user.latestOrNil(); latest != nil && latest.Plan.BeforeExposure > 0 {
 		// The baseline the result is judged against, fixed at the copy.
 		chart["baseline"] = latest.Plan.BeforeRate
-		chart["baseline_phrase"] = map[bool]string{true: tokensPhrase(latest.Plan.BeforeRate), false: fractionPhrase(latest.Plan.BeforeRate, "")}[row.Metric.Kind == "mean"]
+		chart["baseline_phrase"] = ratePhrase(row.Metric.Kind, latest.Plan.BeforeRate)
 	}
 	card["chart"] = chart
 	card["evidence_count"] = row.Facts["evidence_count"]
@@ -664,7 +672,7 @@ func findingChart(row *findingRow, daily map[string][3]float64, anchor string, n
 		baseline = events / exposure
 	}
 	return map[string]any{"title": row.Card.ChartTitle, "kind": row.Metric.Kind, "weeks": weeks, "anchor": anchor, "copies": copies, "baseline": baseline,
-		"baseline_phrase": map[bool]string{true: tokensPhrase(baseline), false: fractionPhrase(baseline, "")}[row.Metric.Kind == "mean"]}
+		"baseline_phrase": ratePhrase(row.Metric.Kind, baseline)}
 }
 
 // storeFindingsVolume records the library's recent volume, for the

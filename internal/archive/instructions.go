@@ -199,8 +199,12 @@ func skillListingEntries(content string) map[string]string {
 		if strings.HasPrefix(line, "- ") {
 			flush()
 			head := strings.TrimPrefix(line, "- ")
-			if at := strings.Index(head, ":"); at > 0 {
+			// Names have no spaces but may have colons (plugin skills such
+			// as conductor:conductor), so the name ends at ": ".
+			if at := strings.Index(head, ": "); at > 0 {
 				name = strings.TrimSpace(head[:at])
+			} else if strings.HasSuffix(strings.TrimSpace(head), ":") {
+				name = strings.TrimSuffix(strings.TrimSpace(head), ":")
 			}
 		}
 		if name != "" {

@@ -260,7 +260,7 @@ func detectExploration(env *findingEnv) ([]*findingCandidate, error) {
 			obs.CostUSD = env.toolCallCost(conv.Provider, phase.Model, conv.Day, 0, obs.Tokens, 0)
 			obs.At = conv.Started.UTC().Format(timeLayout)
 			candidate.addEvidence(findingHandle{At: obs.At, ConversationID: id, WorkspaceID: conv.WorkspaceID, Where: env.evidenceWhere(conv) + " · " + providerLabel(conv.Provider),
-				Did: countNoun(int(phase.Calls), "read, search, or command") + " before the first edit", Happened: compactNumber(float64(phase.Carried)) + " tokens carried afterwards"})
+				Did: thousands(int(phase.Calls)) + " reads, searches, and commands before the first edit", Happened: compactNumber(float64(phase.Carried)) + " tokens carried afterwards"})
 		}
 		candidate.Obs[id] = obs
 	}
@@ -302,7 +302,7 @@ func detectExploration(env *findingEnv) ([]*findingCandidate, error) {
 // reads files its own way.
 var (
 	sedRange      = regexp.MustCompile(`sed\s+-n\s+['"]?(\d+),(\d+|\$)p`)
-	generatedFile = regexp.MustCompile(`(?i)(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml|go\.sum|Cargo\.lock|poetry\.lock|\.min\.(?:js|css)|(?:^|/)(?:dist|build|vendor|node_modules)/|\.pb\.go|_gen\.|generated|\.snap\b)`)
+	generatedFile = regexp.MustCompile(`(?i)(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml|go\.sum|Cargo\.lock|poetry\.lock|\.min\.(?:js|css)|(?:^|[\s'"=/])(?:dist|build|vendor|node_modules)/|\.pb\.go|_gen\.|generated|\.snap\b)`)
 )
 
 // heavyShape names a call's shape, or "" when it is bounded.
@@ -359,7 +359,7 @@ func heavyShape(program, subcommand, command string) string {
 		if match := sedRange.FindStringSubmatch(command); match != nil {
 			from, _ := strconv.Atoi(match[1])
 			to, err := strconv.Atoi(match[2])
-			if match[2] == "$" || err == nil && to-from > 300 {
+			if match[2] == "$" || err == nil && to-from+1 > 300 {
 				return "long-range"
 			}
 		}

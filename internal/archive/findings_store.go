@@ -330,6 +330,13 @@ func findingAliasMap(ctx context.Context, q queryer) (map[string]string, error) 
 	return aliases, nil
 }
 
+// rehomeFindingCart moves cart rows saved under a finding's earlier IDs to
+// its current one, so cart actions and copies find them.
+func rehomeFindingCart(tx *sql.Tx, id string) error {
+	_, err := tx.Exec(`UPDATE OR REPLACE finding_cart SET finding_id=? WHERE finding_id<>? AND finding_id IN (SELECT alias FROM finding_aliases WHERE finding_id=?)`, id, id, id)
+	return err
+}
+
 func resolveFindingID(aliases map[string]string, id string) string {
 	if current, ok := aliases[id]; ok {
 		return current
@@ -440,6 +447,9 @@ func (c *Catalog) FindingAction(ctx context.Context, id string, body map[string]
 			return fmt.Errorf("reason must be not_real, not_worth_it, or wont_fix")
 		}
 		return c.writeTransaction(ctx, "finding-dismiss", func(tx *sql.Tx) error {
+			if err := rehomeFindingCart(tx, id); err != nil {
+				return err
+			}
 			if _, err := tx.Exec("DELETE FROM finding_cart WHERE finding_id=?", id); err != nil {
 				return err
 			}
@@ -469,6 +479,9 @@ func (c *Catalog) FindingAction(ctx context.Context, id string, body map[string]
 			reason = "until_worse"
 		}
 		return c.writeTransaction(ctx, "finding-snooze", func(tx *sql.Tx) error {
+			if err := rehomeFindingCart(tx, id); err != nil {
+				return err
+			}
 			if _, err := tx.Exec("DELETE FROM finding_cart WHERE finding_id=?", id); err != nil {
 				return err
 			}
@@ -500,12 +513,18 @@ func (c *Catalog) FindingAction(ctx context.Context, id string, body map[string]
 			return fmt.Errorf("unknown prompt target %q", target)
 		}
 		return c.writeTransaction(ctx, "finding-cart", func(tx *sql.Tx) error {
+			if err := rehomeFindingCart(tx, id); err != nil {
+				return err
+			}
 			_, err := tx.Exec(`INSERT INTO finding_cart(finding_id,target,ticked,added_at) VALUES(?,?,1,?)
 				ON CONFLICT(finding_id) DO UPDATE SET target=excluded.target`, id, target, stamp)
 			return err
 		})
 	case "cart_remove":
 		return c.writeTransaction(ctx, "finding-cart", func(tx *sql.Tx) error {
+			if err := rehomeFindingCart(tx, id); err != nil {
+				return err
+			}
 			_, err := tx.Exec("DELETE FROM finding_cart WHERE finding_id=?", id)
 			return err
 		})
@@ -515,6 +534,9 @@ func (c *Catalog) FindingAction(ctx context.Context, id string, body map[string]
 			ticked = 1
 		}
 		return c.writeTransaction(ctx, "finding-cart", func(tx *sql.Tx) error {
+			if err := rehomeFindingCart(tx, id); err != nil {
+				return err
+			}
 			_, err := tx.Exec("UPDATE finding_cart SET ticked=? WHERE finding_id=?", ticked, id)
 			return err
 		})

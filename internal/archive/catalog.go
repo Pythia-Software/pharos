@@ -133,7 +133,11 @@ func (c *Catalog) Close() error {
 // 9: child-conversation links and usage-attribution repair state. Older builds
 // would reingest Claude roots without preserving their group remainder.
 // 10: repository identity columns and merge-aware ingestion.
-const catalogSchemaVersion = 10
+// 11: findings (findings, finding_* user tables, repository_retirements) and
+// the loaded-instructions record. A version-10 build merges repositories
+// without recording the retirement, so dismissals, prompts, and
+// measurements of the merged repository's findings would be orphaned.
+const catalogSchemaVersion = 11
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.

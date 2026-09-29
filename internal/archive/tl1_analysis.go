@@ -152,7 +152,7 @@ func (c *Catalog) TL1Overview(selection tl1Selection, window tl1Window) (map[str
 		"window": tl1WindowRow(data), "enqueues": tl1EnqueueRows(data, tl1EnqueueListLimit),
 		"totals": tl1Totals(data, candidates, human), "coverage": tl1Coverage(data), "matrix": matrix, "flavors": flavors,
 		"graph": tl1Graph(data), "errors": errors, "candidates": candidates, "human": human, "contract_repairs": contracts,
-		"reviews": reviews, "configuration_health": data.Health, "findings": c.tl1Findings(),
+		"reviews": reviews, "configuration_health": data.Health, "findings": c.tl1Findings(data),
 	}
 	return result, nil
 }
@@ -758,9 +758,13 @@ func tl1Dollars(value float64) string {
 	return fmt.Sprintf("$%.2f", value)
 }
 
-// tl1Findings lists the findings scoped to TL1 flavors, which carry TL1's
-// recommendations now.
-func (c *Catalog) tl1Findings() []map[string]any {
+// tl1Findings lists the findings scoped to the selected project's TL1
+// flavors, which carry TL1's recommendations now.
+func (c *Catalog) tl1Findings(data *tl1Data) []map[string]any {
+	flavors := map[string]bool{}
+	for _, task := range data.Tasks {
+		flavors[task.Flavor] = true
+	}
 	overview, err := c.FindingsOverview(context.Background(), "")
 	if err != nil {
 		return []map[string]any{}
@@ -768,7 +772,7 @@ func (c *Catalog) tl1Findings() []map[string]any {
 	output := []map[string]any{}
 	cards, _ := overview["findings"].([]map[string]any)
 	for _, card := range cards {
-		if strings.HasPrefix(firstString(card["target"]), "automation:tl1:") {
+		if flavor, ok := strings.CutPrefix(firstString(card["target"]), "automation:tl1:"); ok && flavors[flavor] {
 			output = append(output, map[string]any{"id": card["id"], "title": card["title"], "state": card["state"], "flavor": strings.TrimPrefix(firstString(card["target"]), "automation:tl1:")})
 		}
 	}

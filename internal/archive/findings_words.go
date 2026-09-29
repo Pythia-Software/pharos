@@ -41,8 +41,9 @@ func thousands(value int) string {
 }
 
 // simpleFraction rounds a rate to a fraction a person would say: "1 of
-// every n" when that is within about a tenth of the rate, otherwise the
-// nearest a/b with b at most 10.
+// every n" when that is within about a tenth of the rate, "1 of every n"
+// with n rounded for rates under a tenth, otherwise the nearest a/b with b
+// at most 10.
 func simpleFraction(rate float64) (int, int) {
 	best, bestB := math.Inf(1), 2
 	for _, b := range []int{2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 40, 50, 100} {
@@ -52,6 +53,9 @@ func simpleFraction(rate float64) (int, int) {
 	}
 	if best <= 0.12 {
 		return 1, bestB
+	}
+	if rate > 0 && rate < 0.1 {
+		return 1, int(math.Round(1 / rate))
 	}
 	bestA, bestB, best := 1, 2, math.Inf(1)
 	for b := 2; b <= 10; b++ {

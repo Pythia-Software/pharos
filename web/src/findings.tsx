@@ -460,6 +460,8 @@ function ReviewDialog({ group, copy, onClose, onCopied }: { group: CartGroup; co
   useEffect(() => {
     let cancelled = false;
     setError("");
+    // Copy stays disabled until the preview matches the choices.
+    setPrompt(null);
     request<Row>("/api/findings/cart/prompt", { target: group.target, ids, ...(repository ? { handoff } : {}) })
       .then(body => { if (!cancelled) setPrompt(body); })
       .catch(failure => { if (!cancelled) setError(failure.message); });
@@ -660,7 +662,10 @@ const attemptStatus: Record<string, string> = { watching: "measuring", improved:
 
 function DetailOverview({ detail, onNotApplied }: { detail: Detail; onNotApplied: () => void }) {
   const attempts = detail.attempts ?? [];
-  const current = attempts[attempts.length - 1];
+  // A withdrawn attempt ("I didn't apply this") never happened as far as
+  // the facts go.
+  const current = [...attempts].reverse().find(attempt => attempt.status !== "withdrawn" && attempt.status !== "not_applied");
+  const rateText = (rate: number) => detail.metric?.kind === "mean" ? `${compact(rate)} tokens` : share(rate);
   const chart = detail.chart;
   const unit = String(detail.metric?.unit || "conversations");
   const since = sinceSoFar(detail);
@@ -679,8 +684,8 @@ function DetailOverview({ detail, onNotApplied }: { detail: Detail; onNotApplied
   const next = detail.steps?.[nextIndex + (detail.state === "watching" || detail.state === "won" ? 0 : 1)];
   const facts: Array<[string, React.ReactNode] | null | false> = detail.state === "watching" || detail.state === "won" || current ? [
     current ? ["Copied", <>{fullDay(current.copied_at)}, in the prompt for {current.target_label ?? detail.target_label}</>] : null,
-    ["Before", <>{detail.watching?.before ?? (current?.result?.before?.rate !== undefined ? share(current.result.before.rate) : current?.plan?.before_rate !== undefined ? share(current.plan.before_rate) : chart?.baseline_phrase)} {chart?.kind === "rate" ? unit : ""}</>],
-    detail.state === "watching" ? ["Since", since ? `${since} so far` : "nothing yet"] : current?.result?.after?.rate !== undefined ? ["After", share(current.result.after.rate)] : null,
+    ["Before", <>{detail.watching?.before ?? (current?.result?.before?.rate !== undefined ? rateText(current.result.before.rate) : current?.plan?.before_rate !== undefined ? rateText(current.plan.before_rate) : chart?.baseline_phrase)} {chart?.kind === "rate" ? unit : ""}</>],
+    detail.state === "watching" ? ["Since", since ? `${since} so far` : "nothing yet"] : current?.result?.after?.rate !== undefined ? ["After", rateText(current.result.after.rate)] : null,
     current?.savings ? ["Saved so far", savedText(current.savings)] : detail.watching?.saved_usd !== undefined ? ["Saved so far", money(detail.watching.saved_usd)] : null,
     detail.state === "watching" && detail.watching?.result_on ? ["Result", `around ${fullDay(detail.watching.result_on)}`] : current?.result && detail.result?.decided_at ? ["Result", fullDay(detail.result.decided_at)] : null,
     ...guards.map((guard): [string, React.ReactNode] => [`Also checked`, <>{guard.name}: {compact(guard.before)} → {compact(guard.after)}{guard.ok === false ? " (got worse)" : ""}</>]),
@@ -713,7 +718,7 @@ function DetailOverview({ detail, onNotApplied }: { detail: Detail; onNotApplied
       </section>
       <section className="findings-panel" aria-labelledby="findingsAttemptsTitle">
         <h2 id="findingsAttemptsTitle">Attempts</h2>
-        {attempts.length ? <ol className="findings-attempts">{attempts.map(attempt => <li key={attempt.attempt} className={attempt.status}>
+        {attempts.length ? <ol className="findings-attempts">{attempts.map(attempt => <li key={`${attempt.attempt}-${attempt.copied_at}`} className={attempt.status}>
           <span className="findings-attempt-mark" aria-hidden="true" />
           <div><strong><Text text={attempt.change} /></strong>
             <span className="findings-muted">{fullDay(attempt.copied_at)} · {attemptStatus[attempt.status] ?? attempt.status}{attempt.regressed_at ? ` · came back ${day(attempt.regressed_at)}` : ""}</span>
@@ -814,7 +819,7 @@ function WinsView({ overview }: { overview: Overview }) {
       <thead><tr><th>What was fixed</th><th>Where</th><th>Change</th><th className="num">How often, before → now</th><th className="num">Saved</th><th>Status</th></tr></thead>
       <tbody>{wins.map(win => {
         const status = win.regressed_at ? { text: "Came back · reopened", tone: "warn" } : num(win.days_left) > 0 ? { text: `Counting savings for ${counted(num(win.days_left), "more day")}`, tone: "good" } : { text: "Done", tone: "good" };
-        return <tr key={win.id}>
+        return <tr key={`${win.id}-${win.copied_at}`}>
           <td><a href={detailURL(win.id)} onClick={event => { if (event.metaKey || event.ctrlKey) return; event.preventDefault(); navigate(detailURL(win.id)); }}><Text text={win.title} /></a></td>
           <td>{win.where}</td><td>{win.change}</td>
           <td className="num">{win.before} → {win.now}</td>

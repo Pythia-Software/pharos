@@ -126,7 +126,11 @@ func detectCLIFriction(env *findingEnv) ([]*findingCandidate, error) {
 				obs.CostUSD = env.toolCallCost(item.conv.Provider, firstString(row["model"]), item.conv.Day, integer(row["result_tokens"]), integer(row["carried"]), output)
 				obs.DurationMS = integer(row["duration_ms"])
 			}
-			candidate.Obs[item.conv.ID] = obs
+			if previous := candidate.Obs[item.conv.ID]; previous != nil {
+				previous.merge(obs)
+			} else {
+				candidate.Obs[item.conv.ID] = obs
+			}
 		}
 	}
 	output := []*findingCandidate{}
@@ -358,7 +362,11 @@ func detectDocsHosts(env *findingEnv) ([]*findingCandidate, error) {
 				Occurrences: int(integer(item.row["fetches"])), Tokens: integer(item.row["result_tokens"]) + integer(item.row["carried"]),
 				CostUSD:    env.toolCallCost(item.conv.Provider, firstString(item.row["model"]), item.conv.Day, integer(item.row["result_tokens"]), integer(item.row["carried"]), output),
 				DurationMS: integer(item.row["duration_ms"]), At: firstString(item.row["last_at"])}
-			hits[key][item.conv.ID] = obs
+			if previous := hits[key][item.conv.ID]; previous != nil {
+				previous.merge(obs)
+			} else {
+				hits[key][item.conv.ID] = obs
+			}
 			if candidates[key] == nil {
 				candidates[key] = &findingCandidate{Spec: findingSpec{Detector: "docs", Scope: scope, Pattern: "host:" + host, Params: map[string]string{"host": host}},
 					RepositoryID: strings.TrimPrefix(scope, "repo:"), Facts: map[string]any{"host": host}, Metric: findingMetric{Kind: "rate", Unit: "conversations"}}
