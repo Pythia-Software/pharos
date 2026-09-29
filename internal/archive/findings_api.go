@@ -306,6 +306,11 @@ func (c *Catalog) FindingsOverview(ctx context.Context, filter string) (map[stri
 			cartCount++
 		}
 	}
+	for _, clone := range view.cart.clones {
+		if view.rows[clone.FindingID] != nil {
+			cartCount++
+		}
+	}
 	summary := map[string]any{"saved": saved, "open": counts[findingOpen], "watching": counts[findingWatching], "won": counts[findingWon],
 		"dismissed": counts[findingDismissed], "snoozed": counts[findingSnoozed], "regressed": regressed, "at_stake_usd": atStake, "new": newCount,
 		"next_result_days": view.nextResult()}
@@ -421,6 +426,17 @@ func (view *findingView) carts() []map[string]any {
 		item := map[string]any{"id": id, "title": row.Card.Title, "ticked": state.Cart.Ticked, "change_label": step.Label, "added_at": state.Cart.AddedAt,
 			"suggested_target": row.Target, "undo": findingNeedsUndo(state) != nil}
 		targets[state.Cart.Target] = append(targets[state.Cart.Target], item)
+	}
+	for _, clone := range view.cart.clones {
+		row := view.rows[clone.FindingID]
+		if row == nil {
+			continue
+		}
+		state := view.states[clone.FindingID]
+		step, _ := findingStepFor(row, state)
+		item := map[string]any{"id": clone.ID, "finding_id": clone.FindingID, "title": row.Card.Title, "ticked": clone.Ticked, "change_label": step.Label, "added_at": clone.AddedAt,
+			"suggested_target": row.Target, "undo": findingNeedsUndo(state) != nil, "clone": true}
+		targets[clone.Target] = append(targets[clone.Target], item)
 	}
 	output := []map[string]any{}
 	for _, target := range sortedFindingKeys(targets) {

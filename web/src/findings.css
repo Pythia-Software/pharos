@@ -132,6 +132,11 @@ button.findings-tile[aria-pressed="true"] { border-color: var(--accent); box-sha
 .findings-cart ul { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
 .findings-cart li { display: flex; align-items: flex-start; gap: 4px; margin: 0 -6px; padding: 4px 2px 4px 6px; border-radius: 5px; }
 .findings-cart li:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.findings-cart li[draggable="true"] { cursor: grab; }
+.findings-cart li.dragging { opacity: .45; }
+.findings-cart-grip { flex: none; color: var(--muted); font-size: 18px; line-height: 20px; user-select: none; }
+.findings-cart-group.drop-target, .findings-cart-drop-zone { outline: 1px dashed var(--accent); outline-offset: 3px; }
+.findings-cart-drop-zone { padding: 10px; border-radius: 5px; color: var(--muted); font-size: var(--fs-sm); }
 .findings-cart li label { display: flex; flex: 1; gap: 8px; min-width: 0; font-size: var(--fs-md); line-height: 1.35; cursor: pointer; }
 .findings-cart li input { flex: none; margin: 2px 0 0; accent-color: var(--accent); width: 15px; height: 15px; }
 .findings-cart li label > span { display: flex; flex-direction: column; min-width: 0; }
@@ -180,6 +185,7 @@ button.findings-tile[aria-pressed="true"] { border-color: var(--accent); box-sha
 .findings-breadcrumb { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; color: var(--muted); font-size: var(--fs-md); }
 .findings-crumb { height: auto; padding: 0; border: 0; background: none; color: var(--accent); font-size: inherit; }
 .findings-crumb:hover { text-decoration: underline; text-underline-offset: 2px; }
+.findings-back { margin-bottom: 12px; }
 .findings-detail h1 { margin: 0 0 8px; font-size: var(--fs-3xl); line-height: 1.15; max-width: 900px; }
 .findings-detail h1 code { font-size: .82em; }
 .findings-detail-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
