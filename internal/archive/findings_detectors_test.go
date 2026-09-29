@@ -11,7 +11,7 @@ import (
 // detectorCall is one tool call for a detector fixture.
 type detectorCall struct {
 	category, tool, program, subcommand, command, path, status, signature string
-	resultTokens, carried                                                   int64
+	resultTokens, carried                                                 int64
 }
 
 // addConversation writes one top-level conversation with its calls.
