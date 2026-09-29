@@ -348,3 +348,28 @@ func TestFindingAliasesFollowRepositoryMerges(t *testing.T) {
 		t.Fatal("aliases should resolve to the current finding")
 	}
 }
+
+func TestFindingPromptTargets(t *testing.T) {
+	row := &findingRow{ID: "failure:global:h:claude:abc", Card: findingCard{Title: "Agents call `python`, which isn't installed", Explanation: "It happens.",
+		Steps: []findingStep{{Lever: "global-instructions", Change: "Tell agents to use `python3`.", Label: "A line in CLAUDE.md"}}}}
+	global := renderFindingPrompt("global:h:claude", "All repositories · Claude", "", "pr", []cartItem{{Row: row, Step: row.Card.Steps[0], Attempt: 1}})
+	for _, want := range []string{"Claude's global instructions on this Mac (~/.claude/CLAUDE.md)", "Pharos finding failure:global:h:claude:abc", "Show me the diff before changing anything."} {
+		if !strings.Contains(global, want) {
+			t.Fatalf("global prompt lacks %q:\n%s", want, global)
+		}
+	}
+	repo := renderFindingPrompt("repo:r", "alpha", "/src/alpha", "pr", []cartItem{{Row: row, Step: row.Card.Steps[0], Attempt: 1}})
+	if !strings.Contains(repo, "You are working in the alpha repository (/src/alpha).") || !strings.HasSuffix(repo, "Open a pull request.") {
+		t.Fatalf("repository prompt:\n%s", repo)
+	}
+	if strings.Count(repo, "smallest") != 1 {
+		t.Fatalf("the prompt asks for the smallest change once:\n%s", repo)
+	}
+	settings := findingSettings{Handoff: "auto", RepositoryHandoff: map[string]string{"r2": "pr"}}
+	habits := map[string]repositoryHabit{"r": {Work: 10, WithPR: 9, Share: 0.9}, "r3": {Work: 10, WithPR: 1, Share: 0.1}}
+	for target, want := range map[string]string{"repo:r": "pr", "repo:r2": "pr", "repo:r3": "diff", "repo:none": "diff", "global:h:codex": "diff", "automation:tl1:x": "diff"} {
+		if got, _ := handoffFor(target, settings, habits); got != want {
+			t.Errorf("handoffFor(%s) = %s, want %s", target, got, want)
+		}
+	}
+}
