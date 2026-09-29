@@ -239,13 +239,17 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 			value, err = nilIfNoMap(s.Catalog.WorkConversation(parts[0], parts[2]))
 		case len(parts) == 2 && parts[1] == "find":
 			q := r.URL.Query()
-			var ids []string
-			ids, err = s.Catalog.WorkConversationMatches(parts[0], q.Get("q"), q.Get("depth"), q.Get("regex") == "1", q.Get("case") == "1")
+			options := transcriptFindOptions{Term: q.Get("q"), Output: q.Get("output") == "1", Regex: q.Get("regex") == "1", CaseSensitive: q.Get("case") == "1"}
+			if show := q.Get("show"); show != "" {
+				options.Show = strings.Split(show, ",")
+			}
+			var counts []conversationFindCount
+			counts, err = s.Catalog.WorkConversationMatches(r.Context(), parts[0], options)
 			if err != nil {
 				writeError(w, err, http.StatusBadRequest)
 				return
 			}
-			value = map[string]any{"conversations": ids}
+			value = map[string]any{"conversations": counts}
 		}
 		if err != nil {
 			writeError(w, err, http.StatusInternalServerError)

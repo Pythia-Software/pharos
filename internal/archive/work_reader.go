@@ -338,66 +338,6 @@ func marshalReaderJSON(value any) []byte {
 	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))
 }
 
-// WorkConversationMatches lists, in the workspace's conversation order, the
-// conversations with a message matching term at the reader's search depth.
-func (c *Catalog) WorkConversationMatches(workspaceID, term, depth string, useRegex, caseSensitive bool) ([]string, error) {
-	if term == "" {
-		return []string{}, nil
-	}
-	kinds := map[string]string{
-		"messages": "'message'",
-		"thinking": "'message','thinking','reasoning'",
-		"tools":    "'message','thinking','reasoning','tool_call','delegation'",
-	}[depth]
-	filter := ""
-	if kinds != "" {
-		filter = " AND m.kind IN (" + kinds + ")"
-	}
-	pattern := term
-	if !useRegex {
-		pattern = regexp.QuoteMeta(term)
-	}
-	if !caseSensitive {
-		pattern = "(?i)" + pattern
-	}
-	expression, err := regexp.Compile(pattern)
-	if err != nil {
-		return nil, err
-	}
-	// A literal term narrows the scan in SQL before the exact match in Go.
-	narrow, args := "", []any{workspaceID}
-	if !useRegex {
-		// LIKE folds only ASCII case, so other terms rely on the Go match.
-		if caseSensitive {
-			narrow = " AND instr(m.text,?)>0"
-			args = append(args, term)
-		} else if isASCII(term) {
-			narrow = " AND m.text LIKE ? ESCAPE '\\'"
-			args = append(args, "%"+strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(term)+"%")
-		}
-	}
-	rows, err := c.DB.Query(`SELECT c.id,m.text FROM conversations c JOIN messages m ON m.conversation_id=c.id
-		WHERE c.workspace_id=?`+filter+narrow+` ORDER BY c.started_at,c.id`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	matches := []string{}
-	for rows.Next() {
-		var id, text string
-		if err := rows.Scan(&id, &text); err != nil {
-			return nil, err
-		}
-		if len(matches) > 0 && matches[len(matches)-1] == id {
-			continue
-		}
-		if expression.MatchString(text) {
-			matches = append(matches, id)
-		}
-	}
-	return matches, rows.Err()
-}
-
 func isASCII(value string) bool {
 	for index := 0; index < len(value); index++ {
 		if value[index] >= utf8.RuneSelf {
