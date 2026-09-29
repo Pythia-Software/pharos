@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./tl1.css";
-import { Icon, type IconName } from "./icons";
+import { Icon } from "./icons";
 
 // The TL1 tab: a project's performance by flavor and agent configuration,
-// combined across the Macs that run it, ranked concerns and opportunities with investigation prompts,
-// and drill-downs into flavors, candidates, and individual runs.
+// combined across the Macs that run it, and drill-downs into flavors, candidates, and individual runs.
+// Recommendations for flavors live in Findings, where they're measured after the user acts.
 
 type Row = Record<string, any>;
 type Counted = { key: string; count: number };
@@ -12,7 +12,6 @@ type Overview = {
   project?: string; installations: Row[]; since?: string | null; window?: Row; enqueues?: Row[];
   totals?: Row; coverage?: Row; matrix?: Row[]; flavors?: Row[]; graph?: { nodes: Row[]; edges: Row[] };
   errors?: Row[]; candidates?: Row; human?: Row; contract_repairs?: Row[]; reviews?: Row;
-  detectors?: Row[]; opportunities?: Row[]; review_prompt?: string;
 };
 type Where = Array<{ field: string; op: string; value: unknown }>;
 type Props = { attempts: React.ReactNode; filterAttempts: (where: Where) => void; copy: (text: string) => Promise<void> };
@@ -101,8 +100,6 @@ const openWork = (id: unknown) => { if (id) window.pharosOpenDetail?.(String(id)
 const typing = (target: EventTarget | null) => target instanceof HTMLElement && (target.isContentEditable || ["SELECT", "TEXTAREA"].includes(target.tagName)
   || (target instanceof HTMLInputElement && !["checkbox", "radio", "button"].includes(target.type)));
 
-const severityLabel: Record<string, string> = { high: "High", medium: "Medium", low: "Low", info: "Info" };
-const severityIcon: Record<string, IconName> = { high: "severity-high", medium: "severity-medium", low: "severity-low", info: "info" };
 const dispositionLabel: Record<string, string> = { advanced: "Advanced", escalated: "Escalated to human", error: "Error", retried: "Retried", open: "Open" };
 
 function CopyButton({ text, label, copy, primary }: { text: string; label: string; copy: Props["copy"]; primary?: boolean }) {
@@ -190,38 +187,6 @@ function ConfigurationTable({ rows, onFlavor, showFlavor }: { rows: Row[]; onFla
       </tr>;
     })}</tbody>
   </table></div>;
-}
-
-function Finding({ item, copy, onFlavor, onRuns }: { item: Row; copy: Props["copy"]; onFlavor: (name: string) => void; onRuns: (filter: Row) => void }) {
-  const impact = item.impact ?? {};
-  const evidence = item.evidence ?? {};
-  const facts: string[] = [];
-  if (impact.tasks) facts.push(`${count(impact.tasks)} tasks`);
-  if (impact.candidates) facts.push(`${count(impact.candidates)} candidates`);
-  if (impact.human_followups) facts.push(`${count(impact.human_followups)} human follow-ups`);
-  if (impact.cost_usd >= 0.01) facts.push(`${usd(impact.cost_usd)} spent`);
-  if (item.estimated_savings_usd >= 0.01) facts.push(`≈${usd(item.estimated_savings_usd)} savings`);
-  if (item.human_tasks_avoided) facts.push(`${count(item.human_tasks_avoided)} human tasks avoided`);
-  const severity = String(item.severity ?? "opportunity");
-  return <article className={`tl1-finding ${severity}`}>
-    <div className="tl1-finding-head">
-      {item.severity ? <span className={`tl1-severity ${severity}`}><Icon name={severityIcon[severity] ?? "severity-low"} />{severityLabel[severity] ?? severity}</span> : <span className="tl1-severity opportunity">Opportunity</span>}
-      <h3>{item.title}</h3>
-    </div>
-    <p>{item.summary}</p>
-    {facts.length ? <div className="tl1-facts">{facts.map(fact => <span key={fact} className="tl1-chip">{fact}</span>)}</div> : null}
-    <div className="tl1-actions">
-      {item.prompt ? <CopyButton text={item.prompt} label="Copy investigation prompt" copy={copy} primary /> : null}
-      {item.filter ? <button type="button" className="tl1-button" onClick={() => onRuns(item.filter)}>Show runs</button> : null}
-      {item.flavor ? <button type="button" className="tl1-button" onClick={() => onFlavor(String(item.flavor))}>Open {item.flavor}</button> : null}
-    </div>
-    {evidence.example || evidence.samples?.length || evidence.attempts?.length ? <details className="tl1-evidence"><summary>Evidence</summary>
-      {evidence.example ? <pre>{evidence.example}</pre> : null}
-      {evidence.log_tail ? <><h4>Script log tail</h4><pre>{evidence.log_tail}</pre></> : null}
-      {evidence.samples?.length ? <ul>{evidence.samples.map((sample: Row) => <li key={sample.task_id}><button type="button" className="tl1-link" onClick={() => openWork(sample.workspace_id)}>{sample.title || sample.task_id}</button> <span className="muted">{sample.flavor} · {when(sample.created_at)}</span></li>)}</ul> : null}
-      {evidence.attempts?.length ? <ul>{evidence.attempts.map((attempt: Row) => <li key={attempt.attempt_id}><button type="button" className="tl1-link" onClick={() => openWork(attempt.workspace_id)}>{attempt.title}</button> <span className="muted">{attempt.flavor} on {attempt.configuration}: {usd(attempt.cost_usd)} vs median {usd(attempt.median_cost_usd)} ({Number(attempt.ratio).toFixed(1)}×)</span></li>)}</ul> : null}
-    </details> : null}
-  </article>;
 }
 
 function FlavorDialog({ query, name, onClose, copy, onRuns }: { query: string; name: string; onClose: () => void; copy: Props["copy"]; onRuns: (filter: Row) => void }) {
@@ -363,7 +328,6 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
   const [loading, setLoading] = useState(false);
   const [flavor, setFlavor] = useState("");
   const [candidate, setCandidate] = useState("");
-  const [showAll, setShowAll] = useState(false);
   const runsRef = useRef<HTMLDivElement>(null);
 
   const loadInstallations = useCallback(async () => {
@@ -447,8 +411,6 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
 
   const totals = overview?.totals ?? {};
   const coverage = overview?.coverage ?? {};
-  const detectors = overview?.detectors ?? [];
-  const visibleDetectors = showAll ? detectors : detectors.slice(0, 8);
   const flavors: Row[] = (overview?.flavors ?? []).filter(row => row.cost_usd > 0).slice(0, 14).map(row => ({ ...row, __value: row.cost_usd }));
   const edges: Row[] = (overview?.graph?.edges ?? []).slice(0, 20).map(row => ({ ...row, __value: row.count }));
   const human = overview?.human ?? {};
@@ -458,8 +420,7 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
 
   return <div className="tl1-page">
     <div className="view-heading">
-      <div><h1>TL1</h1><p className="muted">How each flavor performs on each agent configuration: cost, time, tokens, errors, and human attention. Concerns and opportunities come with prompts you can hand to an agent. Cost is the API list-price equivalent from transcripts.</p></div>
-      <CopyButton text={overview?.review_prompt ?? ""} label="Copy optimization review prompt" copy={copy} primary />
+      <div><h1>TL1</h1><p className="muted">How each flavor performs on each agent configuration: cost, time, tokens, errors, and human attention. Cost is the API list-price equivalent from transcripts.</p></div>
     </div>
     <div className="tl1-controls" role="group" aria-label="TL1 filters">
       <label>Project <select value={selected} onChange={event => {
@@ -502,14 +463,7 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
         <Tile label="Input read from cache" value={pct(totals.cache_read_share)} detail={`${compact(totals.tokens?.total_tokens)} tokens`} />
       </div>
 
-      <Section id="concerns" title="Concerns" description="Ranked by severity, then by the number of tasks affected. Each prompt includes the evidence and the flavor's definition.">
-        {detectors.length ? <div className="tl1-findings">{visibleDetectors.map(item => <Finding key={item.id} item={item} copy={copy} onFlavor={setFlavor} onRuns={showRuns} />)}</div> : <p className="muted">No concerns in this window.</p>}
-        {detectors.length > 8 ? <button type="button" className="tl1-button" onClick={() => setShowAll(value => !value)}>{showAll ? "Show fewer" : `Show all ${detectors.length}`}</button> : null}
-      </Section>
-
-      {overview.opportunities?.length ? <Section id="opportunities" title="Opportunities" description="Estimated from this window's runs. Configuration switches require at least 10 runs on each side and no worse error or escalation rate.">
-        <div className="tl1-findings">{overview.opportunities.slice(0, 6).map(item => <Finding key={item.id} item={item} copy={copy} onFlavor={setFlavor} onRuns={showRuns} />)}</div>
-      </Section> : null}
+      <p className="tl1-findings-link"><Icon name="info" /><span>Recommendations for TL1 flavors now live in <a href="/findings" onClick={event => { if (event.metaKey || event.ctrlKey || event.shiftKey || !window.pharosNavigate) return; event.preventDefault(); window.pharosNavigate("/findings"); }}>Findings</a>, where they're measured after you act on them.</span></p>
 
       <Section id="matrix" title="Flavor × agent configuration" description="Advanced: moved the workflow on without error or a human. Agent errors exclude infrastructure failures. Cost per useful result is total spend divided by advanced runs; rows with fewer than 10 runs are not compared.">
         {overview.matrix?.length ? <ConfigurationTable rows={overview.matrix} onFlavor={setFlavor} showFlavor /> : <p className="muted">No LLM runs in this window.</p>}

@@ -430,6 +430,33 @@ CREATE TABLE IF NOT EXISTS tool_ledger_state (
   updated_at TEXT NOT NULL
 );
 
+-- Instruction files and skills each conversation loaded, as its harness
+-- recorded them (see instructions.go for the kinds). bytes and hash (sha256)
+-- are of the last content loaded, NULL when the transcript names the file
+-- without its content; repo_path is relative to the repository checkout.
+CREATE TABLE IF NOT EXISTS conversation_instructions (
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  harness TEXT NOT NULL,
+  path TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  bytes INTEGER,
+  hash TEXT,
+  repo_path TEXT,
+  first_seen_at TEXT,
+  last_seen_at TEXT,
+  PRIMARY KEY(conversation_id, path, kind)
+);
+CREATE INDEX IF NOT EXISTS conversation_instructions_path_idx ON conversation_instructions(repo_path);
+
+-- Which conversations' records were read, by which parser: status is
+-- 'transcript', or 'unavailable' when a backfill found no transcript left.
+CREATE TABLE IF NOT EXISTS conversation_instructions_state (
+  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+  version TEXT NOT NULL,
+  status TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 -- Daily tool rollup served by the Tools table, rebuilt from tool_calls when
 -- the ledger changes. Mirrored workspaces (see suppressMirrors) are excluded
 -- here and listed in tool_mirror_workspaces for per-call queries. It is summed

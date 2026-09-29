@@ -202,8 +202,13 @@ func (c *Catalog) MCPStatus(config Config) (map[string]any, error) {
 		location = filepath.Dir(config.Path)
 		note = "Agent clients start Pharos from the library's folder when they connect, so the drive must be connected for them to work. Ejecting from Pharos stops them; once the drive is back, reconnect Pharos in the agent (in Claude Code, /mcp). Disabling MCP rejects tool calls, including from already-connected clients."
 	}
+	skill, _ := assets.ReadFile("assets/skills/pharos-optimize/SKILL.md")
 	return map[string]any{"enabled": enabled, "transport": "stdio", "command": command, "args": args,
-		"install_location": location, "note": note}, nil
+		"install_location": location, "note": note,
+		// A short skill that works through the findings tools; agents look for
+		// it at these paths.
+		"skill": map[string]any{"name": "pharos-optimize", "text": string(skill),
+			"paths": map[string]string{"claude": "~/.claude/skills/pharos-optimize/SKILL.md", "codex": "~/.codex/skills/pharos-optimize/SKILL.md"}}}, nil
 }
 
 // mcpCommandLine is mcpCommand for a shell.

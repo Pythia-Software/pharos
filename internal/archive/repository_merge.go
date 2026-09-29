@@ -141,6 +141,14 @@ func mergeRepositoryGroupTx(tx *sql.Tx, group repositoryMergeGroup) error {
 		if _, err := tx.Exec(`DELETE FROM repositories WHERE id=?`, loser.ID); err != nil {
 			return err
 		}
+		// Findings scoped to the retired row follow the survivor (see storeFindings).
+		if _, err := tx.Exec(`UPDATE repository_retirements SET new_id=? WHERE new_id=?`, group.Survivor.ID, loser.ID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO repository_retirements(old_id,new_id,retired_at) VALUES(?,?,?)
+			ON CONFLICT(old_id) DO UPDATE SET new_id=excluded.new_id,retired_at=excluded.retired_at`, loser.ID, group.Survivor.ID, now()); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(`UPDATE tool_calls SET path_repository=? WHERE path_repository_id=? AND path_repository IS NOT ?`, group.Name, group.Survivor.ID, group.Name); err != nil {
 		return err

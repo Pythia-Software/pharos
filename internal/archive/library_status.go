@@ -106,6 +106,11 @@ func (s *Server) refreshGitInBackground(backfill bool) {
 		if err := s.Catalog.ensureToolRollup(ctx); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Tool rollup: %v\n", err)
 		}
+		// Then findings, from the fresh rollup: the full pass once a day,
+		// and between them only the findings being measured.
+		if err := s.Catalog.RefreshFindings(ctx, false); err != nil && ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "Findings: %v\n", err)
+		}
 	})
 	if !started {
 		s.tasks.addGit(-1, "")
@@ -256,6 +261,11 @@ func (s *Server) libraryActivities() []libraryActivity {
 		activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Building the Tools ledger",
 			Detail: fmt.Sprintf("%d of %d conversations", tools.done, tools.total), Progress: fraction(float64(tools.done), float64(tools.total)),
 			Writes: true, OnEject: "Stops between conversations; building the ledger again resumes it."})
+	}
+	if running, phase := s.Catalog.findingsRunning(); running {
+		activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Updating findings",
+			Detail: "Looking for recurring patterns and measuring the ones you're watching (" + phase + ")", Writes: true,
+			OnEject: "Stops; it runs again after the next index."})
 	}
 	if s.Catalog.authorshipRunning() {
 		activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Classifying your writing",

@@ -13,6 +13,7 @@ import toolsDocument from "../../schemas/tools.schema.json";
 import toolCallsDocument from "../../schemas/tool_calls.schema.json";
 import tl1AttemptsDocument from "../../schemas/tl1_attempts.schema.json";
 import { TL1Page } from "./tl1";
+import { FindingsPage, startFindingsChrome } from "./findings";
 import { Icon } from "./icons";
 
 type Row = Record<string, any>;
@@ -659,6 +660,8 @@ function acknowledgedModels(): Set<string> {
 }
 
 async function copyText(text: string) {
+  // The app shell's copy uses the native clipboard in the Mac app, where the web clipboard may be denied.
+  if (window.pharosCopyText) return window.pharosCopyText(text);
   try { await navigator.clipboard.writeText(text); return; } catch { /* WKWebView may deny the async clipboard; fall back below. */ }
   const area = document.createElement("textarea");
   area.value = text;
@@ -1243,7 +1246,7 @@ function UsagePage() {
   </div>;
 }
 
-type MCPStatus = { enabled: boolean; transport: string; command: string; args: string[]; install_location?: string; note: string };
+type MCPStatus = { enabled: boolean; transport: string; command: string; args: string[]; install_location?: string; note: string; skill?: { name: string; text: string; paths?: Record<string, string> } };
 type MCPCall = { id: number; called_at: string; tool_name: string; arguments_json: string; status: string; error_text: string | null; duration_ms: number; response_bytes: number; estimated_output_tokens: number; result_count: number | null; truncated: boolean };
 type MCPHistory = { stats: { total_calls: number; failed_calls: number; average_output_tokens: number; largest_output_tokens: number; truncated_calls: number } };
 
@@ -1301,7 +1304,7 @@ function MCPPage() {
   }
 
   const connection = status ? JSON.stringify({ mcpServers: { pharos: { command: status.command, args: status.args } } }, null, 2) : "";
-  const prompt = status ? `Add Pharos as a local stdio MCP server. Use search_conversations first, with a small limit and max_output_tokens budget. Open get_conversation_overview for promising results, search_conversation_passages for a specific topic, and get_conversation_messages only around cited message IDs. Treat previews as leads and inspect the cited evidence before relying on an outcome. Pharos is read-only. If its tools are unavailable, enable MCP in the Pharos app and reconnect this agent client.\n\nConnection definition:\n${connection}` : "";
+  const prompt = status ? `Add Pharos as a local stdio MCP server. Use search_conversations first, with a small limit and max_output_tokens budget. Open get_conversation_overview for promising results, search_conversation_passages for a specific topic, and get_conversation_messages only around cited message IDs. Treat previews as leads and inspect the cited evidence before relying on an outcome. Pharos is read-only. If its tools are unavailable, enable MCP in the Pharos app and reconnect this agent client. Use list_findings and get_finding for recurring problems Pharos found in past work; reading them never starts a measurement.\n\nConnection definition:\n${connection}` : "";
   const stats = history?.stats;
   return <div className="mcp-page pharos-query-page">
     <div className="view-heading"><div><h1>MCP</h1><p className="muted">Let local agents search past conversations in small steps. Review calls to spot oversized responses and failed queries.</p></div><button type="button" className="mcp-refresh" onClick={() => { void refresh(); tableApis.get("mcp_calls")?.refresh(); }}>Refresh</button></div>
@@ -1328,6 +1331,9 @@ function MCPPage() {
     <div className="mcp-setup-grid">
       <section className="mcp-card"><div className="mcp-card-heading"><div><h2>Connection</h2><p className="muted">Add this stdio server in an agent client’s MCP settings. The client launches Pharos locally.</p></div><button type="button" disabled={!status} onClick={() => void copy("connection", connection)}>{copied === "connection" ? "Copied" : "Copy JSON"}</button></div><pre className="mcp-code"><code>{connection || "Loading…"}</code></pre><p className="mcp-fineprint">Client settings formats vary. Use the command and args shown here if your client does not accept this JSON shape.</p></section>
       <section className="mcp-card"><div className="mcp-card-heading"><div><h2>Prompt for an agent</h2><p className="muted">Paste this when asking an agent to add Pharos and use it efficiently.</p></div><button type="button" disabled={!status} onClick={() => void copy("prompt", prompt)}>{copied === "prompt" ? "Copied" : "Copy prompt"}</button></div><pre className="mcp-prompt">{prompt || "Loading…"}</pre></section>
+      {status?.skill?.text ? <section className="mcp-card mcp-skill-card"><div className="mcp-card-heading"><div><h2>Skill for agents</h2><p className="muted">A short skill that has an agent read this repository’s findings, confirm them, and propose the smallest fixes. Save it as:</p></div><button type="button" onClick={() => void copy("skill", status.skill?.text ?? "")}>{copied === "skill" ? "Copied" : "Copy skill"}</button></div>
+        <ul className="mcp-skill-paths">{Object.entries(status.skill.paths ?? {}).map(([harness, where]) => <li key={harness}><span>{harness === "claude" ? "Claude Code" : harness === "codex" ? "Codex" : harness}</span><code>{where}</code></li>)}</ul>
+        <pre className="mcp-prompt">{status.skill.text}</pre></section> : null}
     </div>
     {selectedCall ? <div className="mcp-dialog-backdrop" onClick={() => setSelectedCall(null)}><div className="mcp-dialog" role="dialog" aria-modal="true" aria-label="MCP call details" onClick={event => event.stopPropagation()}>
       <div className="mcp-card-heading"><div><h2>{selectedCall.tool_name}</h2><p className="muted">{new Date(selectedCall.called_at).toLocaleString()} · {selectedCall.status}</p></div><button type="button" onClick={() => setSelectedCall(null)}>Close</button></div>
@@ -1558,6 +1564,7 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["queryTableUsage", <UsagePage />],
   ["toolsPage", <ToolsPage />],
   ["mcpPage", <MCPPage />],
+  ["findingsPage", <FindingsPage copy={copyText} />],
   ["tl1Page", <TL1Page attempts={<QuerySurface dataset="tl1_attempts" />} filterAttempts={(where) => tableApis.get("tl1_attempts")?.setQuery(previous => ({ ...previous, where: where as WhereTerm[], offset: 0 }))} copy={copyText} />],
 ];
 for (const [id, component] of mounts) {
@@ -1565,6 +1572,7 @@ for (const [id, component] of mounts) {
   const element = document.getElementById(id);
   if (element) createRoot(element).render(component);
 }
+if (!shared) startFindingsChrome();
 window.pharosQueryTables = {
   refresh(dataset) {
     tableApis.get(dataset)?.refresh();

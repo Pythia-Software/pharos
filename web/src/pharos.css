@@ -234,6 +234,11 @@
 .mcp-status { display: inline-block; margin-bottom: 9px; padding: 3px 9px; border-radius: 999px; background: color-mix(in srgb, var(--muted) 15%, var(--panel)); color: var(--muted); font-size: var(--fs-xs); font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
 .mcp-status.enabled { background: color-mix(in srgb, var(--sea) 13%, var(--panel)); color: var(--sea); }
 .mcp-setup-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; margin-top: 28px; }
+.mcp-skill-card { grid-column: 1 / -1; }
+.mcp-skill-paths { display: grid; gap: 4px; margin: -4px 0 12px; padding: 0; list-style: none; font-size: var(--fs-sm); }
+.mcp-skill-paths li { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.mcp-skill-paths span { flex: 0 0 88px; color: var(--muted); }
+.mcp-skill-paths code { overflow-wrap: anywhere; }
 .mcp-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
 .mcp-card-heading>div { min-width: 0; }
 .mcp-card-heading button { flex: 0 0 auto; }

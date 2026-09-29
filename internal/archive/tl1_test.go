@@ -368,10 +368,10 @@ func TestTL1CombinesAProjectAcrossMacs(t *testing.T) {
 	if clusters := overview["errors"].([]map[string]any); len(clusters) != 1 || clusters[0]["count"] != 4 {
 		t.Fatalf("both Macs' review failures should cluster together: %v", clusters)
 	}
-	prompt := firstString(overview["review_prompt"])
+	prompt := firstString(mustTL1Flavor(t, catalog, "review")["prompt"])
 	for _, want := range []string{"Runs on 3 Macs", "Mac host_a", "Mac host_b"} {
 		if !strings.Contains(prompt, want) {
-			t.Errorf("review prompt is missing %q:\n%s", want, prompt)
+			t.Errorf("flavor prompt is missing %q:\n%s", want, prompt)
 		}
 	}
 	candidate, err := catalog.TL1Candidate(tl1Selection{}, "b-cand-1")
@@ -465,11 +465,8 @@ func TestTL1OverviewFindsConcernsWithPrompts(t *testing.T) {
 	if authors := reviews["by_implementation"].([]map[string]any); len(authors) != 1 || authors[0]["configuration"] != "codex-terra-high" || authors[0]["major_or_blocker"] != 1 {
 		t.Fatalf("review finding attribution: %v", reviews["by_implementation"])
 	}
-	prompt := firstString(overview["review_prompt"])
-	for _, want := range []string{"fixture", "tl1.json", "Top concerns"} {
-		if !strings.Contains(prompt, want) {
-			t.Errorf("review prompt is missing %q:\n%s", want, prompt)
-		}
+	if _, ok := overview["review_prompt"]; ok {
+		t.Error("TL1's recommendations are findings; the overview makes none")
 	}
 	candidate, err := catalog.TL1Candidate(tl1Selection{Installation: "install-1"}, "cand-1")
 	if err != nil {
@@ -514,8 +511,8 @@ func TestTL1APIAndMCP(t *testing.T) {
 	if installations := get("/api/tl1")["installations"].([]any); len(installations) != 1 {
 		t.Fatalf("installations: %v", installations)
 	}
-	if detectors := get("/api/tl1/overview?days=0")["detectors"].([]any); len(detectors) == 0 {
-		t.Fatal("overview returned no detectors")
+	if _, ok := get("/api/tl1/overview?days=0")["findings"].([]any); !ok {
+		t.Fatal("overview should list the findings scoped to TL1 flavors")
 	}
 	get("/tl1")
 	latest := get("/api/tl1/overview?since=latest")
@@ -541,30 +538,20 @@ func TestTL1APIAndMCP(t *testing.T) {
 	}
 	listed := handleMCP(catalog, map[string]any{"id": 1, "method": "tools/list"})
 	names := jsonText(listed)
-	for _, tool := range []string{"tl1_overview", "tl1_detector", "tl1_flavor", "tl1_errors", "tl1_candidate"} {
+	for _, tool := range []string{"tl1_overview", "tl1_flavor", "tl1_errors", "tl1_candidate", "list_findings", "get_finding"} {
 		if !strings.Contains(names, `"`+tool+`"`) {
 			t.Errorf("MCP tools/list is missing %s", tool)
 		}
+	}
+	if strings.Contains(names, `"tl1_detector"`) {
+		t.Error("tl1_detector is retired: TL1 concerns are findings")
 	}
 	value, err := callMCP(catalog, "tl1_overview", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	compact := value.(map[string]any)
-	if len(compact["detectors"].([]map[string]any)) == 0 {
-		t.Fatal("five identical failures should produce detectors")
-	}
-	for _, detector := range compact["detectors"].([]map[string]any) {
-		if detector["prompt"] != nil || detector["evidence"] != nil {
-			t.Fatal("compact overview should omit prompts and evidence")
-		}
-		detail, err := callMCP(catalog, "tl1_detector", map[string]any{"id": detector["id"]})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if detail.(map[string]any)["id"] != detector["id"] {
-			t.Fatalf("tl1_detector returned %v", detail)
-		}
+	if _, ok := value.(map[string]any)["findings"]; !ok {
+		t.Fatalf("compact overview should list findings: %v", value)
 	}
 }
 
@@ -616,4 +603,13 @@ func TestTL1EnqueueSpikesMatchTL1(t *testing.T) {
 	if _, _, err := tl1ResolveWindow(tl1Window{Since: "yesterday-ish"}, spikes, time.Now()); err == nil {
 		t.Fatal("an unparseable bound should be rejected")
 	}
+}
+
+func mustTL1Flavor(t *testing.T, catalog *Catalog, name string) map[string]any {
+	t.Helper()
+	flavor, err := catalog.TL1Flavor(tl1Selection{}, name, tl1Window{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return flavor
 }

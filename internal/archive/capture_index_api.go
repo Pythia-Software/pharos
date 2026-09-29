@@ -180,6 +180,9 @@ func (s *Server) indexTargets(ctx context.Context, runID string, targets []captu
 		}
 		_ = s.Catalog.Checkpoint()
 		s.refreshGitInBackground(false)
+	} else if ctx.Err() == nil {
+		// Nothing new, but the first index of a day still rebuilds findings.
+		s.Catalog.refreshFindingsInBackground(false)
 	}
 	// Before the run reports complete, so Usage sees the rebuild running. It
 	// also picks up a rebuild an eject stopped, even if this index wrote nothing.

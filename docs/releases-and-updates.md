@@ -124,14 +124,18 @@ The upgrade runs these steps in order, as one background job:
    counted twice.
 3. **Record harness versions**: which Claude Code or Codex version ran each
    conversation.
-4. **Rebuild the tool ledger** with error signatures, test failures, and
+4. **Record loaded instructions**: which instruction files (`CLAUDE.md`,
+   `AGENTS.md`, memory) and skills each Claude Code or Codex conversation
+   loaded. A conversation whose transcript is gone from this Mac and the
+   library's captures is marked unavailable rather than read again.
+5. **Rebuild the tool ledger** with error signatures, test failures, and
    repository-relative paths. This is the longest step.
-5. **Rebuild the Tools rollup**, so the first visit to Tools doesn't wait.
+6. **Rebuild the Tools rollup**, so the first visit to Tools doesn't wait.
 
-Repositories merge first because the tool ledger records the repository each
-file belongs to. Every step reads the catalog's retained messages; the
-harness step also reads source files and captures where they still exist.
-Transcripts are never changed.
+Repositories merge first because the tool ledger and the loaded-instructions
+record store repository-relative paths. Every step reads the catalog's
+retained messages; the harness and instructions steps also read source files
+and captures where they still exist. Transcripts are never changed.
 
 The job commits in small units. Closing the panel doesn't stop it, and the
 drive badge shows its progress. Ejecting stops it after the unit in

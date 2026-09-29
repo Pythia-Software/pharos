@@ -236,5 +236,8 @@ func callMCP(catalog *Catalog, name string, args map[string]any) (any, error) {
 	if value, ok, err := callTL1MCP(catalog, name, args); ok {
 		return value, err
 	}
+	if value, ok, err := callFindingsMCP(catalog, name, args); ok {
+		return value, err
+	}
 	return nil, fmt.Errorf("unknown tool: %s", name)
 }

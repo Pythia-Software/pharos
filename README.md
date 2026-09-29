@@ -174,13 +174,21 @@ are slow, and which results bloat the context window for the rest of the session
 
 ![The Tools tab: every tool call with its command, status, duration, and context cost, plus a calls-by-tool chart](docs/images/tools.png)
 
-### 6. Connect your agents (optional)
+### 6. Fix what keeps going wrong
+
+**Findings** turns the largest recurring, fixable patterns into prompts for an
+agent: failures agents keep hitting, instructions one harness can't find, tools
+they keep looking up, commands that flood the context. Collect findings into a
+prompt for a repository, copy it, and Pharos measures whether the problem went
+away, with a running tally of what the fixes saved. See [Findings](docs/findings.md).
+
+### 7. Connect your agents (optional)
 
 The **MCP** tab gives you a copyable stdio configuration for your agent client.
-Your agents can then search and read past conversations. The tools are
-read-only, and one switch turns them off for every client.
+Your agents can then search and read past conversations and findings. The
+tools are read-only, and one switch turns them off for every client.
 
-### 7. Unplug safely
+### 8. Unplug safely
 
 The drive badge in the header shows what Pharos is doing with the library right
 now. Use its **Eject** button instead of pulling the drive: Pharos stops its own

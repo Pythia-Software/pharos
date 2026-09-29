@@ -1,7 +1,9 @@
 # Findings: evidence-backed optimization prompts
 
-Design date: 2026-09-28. Status: accepted. The prerequisites shipped in
-Pharos 0.4.0; the findings feature itself is next.
+Design date: 2026-09-28. Status: implemented (see [`findings.md`](findings.md)
+for what shipped and "Implementation notes" at the end for where it differs).
+The prerequisites shipped in Pharos 0.4.0 and 0.4.1; the loaded-instructions
+record (G7) shipped with findings.
 
 Pharos already shows where tokens, time, and errors go. This design turns the
 largest, most fixable patterns into **findings**. Each finding is a specific,
@@ -975,3 +977,39 @@ Resolved since the first draft: global findings are per Mac and per provider;
 TL1 findings live in Findings; the after window extends until it matches the
 before window's work, up to 60 days, fixed at the copy; repository findings
 are per library.
+
+## Implementation notes (2026-09-28)
+
+Rollout steps 2 to 5 shipped together. Where the implementation settled
+something this document left open, or differs from it:
+
+- **Windows are local days.** The before window is the 28 days ending on the
+  copy day, since a change takes effect after the agent makes it; the after
+  window starts the next day and lasts 7 to 60 days.
+- **Metrics per detector.** Count metrics use Fisher's exact test on units.
+  Token metrics (orientation, exploration, command shapes) compare medians with
+  a one-sided Mann-Whitney test and use the same "at most half" bar. Cost
+  outliers are named causes with fixed thresholds (more than 1,000 requests or
+  10 compactions; a request over 500k tokens), so the bar never moves; the
+  share of tokens is the metric and Fisher's test on outlier conversations the
+  significance check.
+- **Guard tolerance** is 10% (the open question's starting point).
+- **D1 filters.** Besides harness notices, D1 hides the agent's own iteration:
+  stale edits, exploring missing paths, and exceptions from scripts it wrote
+  inline, unless a consistent recovery or a known pattern says otherwise. Known
+  patterns (python missing, zsh comparisons and globs, gzip read as text,
+  unpushed `gh pr create`, `sleep` and worktree guards, CA bundles, sandbox
+  writes, test imports) are one finding per scope however their error line
+  varies, with wording written for them.
+- **D9** counts file-name searches and hand reads of another harness's files in
+  the repository; content searches and files in home folders don't count. The
+  coverage matrix comes from the default branch of the local clone, and the
+  loaded-instructions record adds whether the provider loaded any project file.
+- **D7** also covers documentation hosts fetched repeatedly in one repository.
+- **Recommended threshold:** the smallest checkpoint of at least 5 where three
+  in four results would be clear within 30 days; otherwise 10 for libraries
+  with 300 or more conversations a week, 5 below.
+- **Worse** results are closed by copying their undo prompt, after which the
+  finding reopens with its next change.
+- **TL1's** `tl1_detector` MCP tool and review prompt are retired; the flavor
+  drill-down keeps its tuning prompt.
