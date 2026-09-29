@@ -287,11 +287,12 @@ async function fixture(t, messages, viewport = { width: 1280, height: 900 }, con
     return route.fulfill({ body: '', contentType: 'application/javascript' });
   });
   await page.goto('http://transcript.test/');
-  await page.addStyleTag({ content: 'body > :not(#transcript-test-root):not(.conversation-map):not(.conversation-find):not(.conversation-find-rail):not(.conversation-map-window) { display:none !important } #transcript-test-root { max-width:1100px;margin:20px auto; }' });
+  await page.addStyleTag({ content: 'main > :not(#transcript-test-root), body > :not(main):not(.conversation-map):not(.conversation-find):not(.conversation-find-rail):not(.conversation-map-window) { display:none !important } #transcript-test-root { max-width:1100px;margin:20px auto; }' });
   await page.evaluate(({messages,conversation}) => {
-    const root = document.createElement('main'); root.id = 'transcript-test-root';
+    // Render inside the app's main, which is the page's scroller.
+    const root = document.createElement('div'); root.id = 'transcript-test-root';
     root.append(renderConversation({ provider: 'claude', native_id: 'fixture', repo_root: '/workspace', ...conversation, messages }, conversation.workspace_roots||[]));
-    document.body.append(root);
+    document.querySelector('main').append(root);
   }, {messages,conversation});
   if (process.env.TRANSCRIPT_SCREENSHOTS) {
     const output = path.join(root, '.context/browser-tests/screenshots');
@@ -698,7 +699,7 @@ test('nested delegations read like turns and appear as layers in the token rail'
 test('narrow screens retain readable action targets without horizontal overflow', async t => {
   const page = await fixture(t, [human(), read('read', '/Users/someone/projects/a-long-project-name/deeply/nested/folder/docs/RULES.md')], { width: 390, height: 844 });
   assert.match(await transcript(page).innerText(), /RULES\.md/);
-  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1 && document.querySelector('main').scrollWidth <= document.querySelector('main').clientWidth + 1), true);
   assert.equal(await page.locator('.file-target').evaluate(target => {
     const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
     let text;
@@ -718,14 +719,14 @@ test('conversation map tracks the viewport and jumps to a human turn', async t =
     event(`reply-${index}`, 'message', `Completed review step ${index + 1}.`, index * 20 + 5),
   ]).flat();
   const page = await fixture(t, messages);
-  await page.evaluate(() => { document.querySelector('#detail').classList.add('active'); window.scrollTo(0, 500); });
+  await page.evaluate(() => { document.querySelector('#detail').classList.add('active'); document.querySelector('main').scrollTo(0, 500); });
   await page.waitForFunction(() => document.querySelector('.conversation-map')?.classList.contains('visible'));
   assert.equal(await page.locator('.conversation-map-label').innerText(),'Turns');
   const mapBox = await page.locator('.conversation-map').boundingBox();
   assert.ok(mapBox.y <= 75 && mapBox.height >= 770, `Conversation map should span the viewport above its label: ${JSON.stringify(mapBox)}`);
   assert.equal(await page.locator('.conversation-map-turn.human').count(), 40);
   const before = await page.locator('.conversation-map-viewport').getAttribute('style');
-  await page.evaluate(() => window.scrollTo(0, 2000));
+  await page.evaluate(() => document.querySelector('main').scrollTo(0, 2000));
   await page.waitForFunction(previous => document.querySelector('.conversation-map-viewport').getAttribute('style') !== previous, before);
   await page.locator('.conversation-map-turn').nth(15).click({ force: true });
   await page.waitForFunction(() => Math.abs(document.querySelectorAll('.turn')[15].getBoundingClientRect().top) < 3);
@@ -1090,7 +1091,7 @@ test('turn, token, and search rails share conversation positions and one viewpor
   }
   const page=await fixture(t,messages);
   await page.evaluate(()=>document.querySelector('#detail').classList.add('active'));
-  await page.evaluate(()=>scrollTo(0,500));
+  await page.evaluate(()=>document.querySelector('main').scrollTo(0,500));
   await page.waitForFunction(()=>document.querySelector('.conversation-map')?.classList.contains('visible'));
   await page.keyboard.press('Control+f');
   await page.getByRole('searchbox',{name:'Find in conversation'}).fill('needle');
@@ -1117,7 +1118,7 @@ test('turn, token, and search rails share conversation positions and one viewpor
   assert.ok(positions.window.x<=positions.searchRail.x+1);
   assert.ok(positions.window.x+positions.window.width>=positions.turnRail.x+positions.turnRail.width-1);
   const before=await page.locator('.conversation-map-viewport').getAttribute('style');
-  await page.evaluate(()=>scrollTo(0,1200));
+  await page.evaluate(()=>document.querySelector('main').scrollTo(0,1200));
   await page.waitForFunction(previous=>document.querySelector('.conversation-map-viewport').getAttribute('style')!==previous,before);
   await page.addStyleTag({content:'body > header {display:block!important}'});
   await page.evaluate(()=>setNavOpen(true));
@@ -1129,7 +1130,7 @@ test('turn, token, and search rails share conversation positions and one viewpor
   assert.equal(railTops.turn,railTops.context);
   assert.equal(railTops.turn,railTops.find);
   assert.equal(railTops.turn,railTops.window);
-  await page.evaluate(()=>scrollTo(0,document.body.scrollHeight));
+  await page.evaluate(()=>document.querySelector('main').scrollTo(0,document.querySelector('main').scrollHeight));
   await page.waitForTimeout(100);
   const windowExtent=await page.locator('.conversation-map-viewport').evaluate(el=>parseFloat(el.style.top)+parseFloat(el.style.height));
   assert.ok(windowExtent<=100.001,`Viewport window extends below the rail: ${windowExtent}%`);

@@ -172,16 +172,20 @@ func (s *Server) indexTargets(ctx context.Context, runID string, targets []captu
 			run.Messages, run.SkippedCurrent = base.Messages+result.Messages, base.SkippedCurrent+result.SkippedCurrent
 		})
 	}
-	if !wroteRecords(results) {
-		return
-	}
-	if ctx.Err() == nil {
-		if _, err := s.Catalog.ReconcileIdentities(); err != nil {
-			failure = err.Error()
+	if wroteRecords(results) {
+		if ctx.Err() == nil {
+			if _, err := s.Catalog.ReconcileIdentities(); err != nil {
+				failure = err.Error()
+			}
 		}
+		_ = s.Catalog.Checkpoint()
+		s.refreshGitInBackground(false)
 	}
-	_ = s.Catalog.Checkpoint()
-	s.refreshGitInBackground(false)
+	// Before the run reports complete, so Usage sees the rebuild running. It
+	// also picks up a rebuild an eject stopped, even if this index wrote nothing.
+	if ctx.Err() == nil {
+		s.Catalog.refreshAuthorship()
+	}
 }
 
 func wroteRecords(results []IngestResult) bool {

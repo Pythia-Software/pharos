@@ -42,6 +42,16 @@ type Catalog struct {
 	background func(work func(context.Context)) bool
 }
 
+// runBackground starts work with background, or in a goroutine when it is
+// nil, and reports false if the service is stopping.
+func (c *Catalog) runBackground(work func(context.Context)) bool {
+	if c.background == nil {
+		go work(context.Background())
+		return true
+	}
+	return c.background(work)
+}
+
 func OpenCatalog(path string) (*Catalog, error) {
 	if err := os.MkdirAll(filepathDir(path), 0o755); err != nil {
 		return nil, err
@@ -336,9 +346,9 @@ func (c *Catalog) Initialize() error {
 	}
 	// A catalog with nothing indexed yet resolves repositories and records
 	// harness versions as it ingests, so it never needs those upgrade steps.
-	for _, key := range []string{"repository_merge_version", "harness_version_upgrade"} {
-		if _, err := c.DB.Exec(`INSERT INTO meta(key,value) SELECT ?,'1'
-			WHERE NOT EXISTS (SELECT 1 FROM workspaces) AND NOT EXISTS (SELECT 1 FROM meta WHERE key=?)`, key, key); err != nil {
+	for key, version := range map[string]string{"repository_merge_version": repositoryMergeVersion, "harness_version_upgrade": "1"} {
+		if _, err := c.DB.Exec(`INSERT INTO meta(key,value) SELECT ?,?
+			WHERE NOT EXISTS (SELECT 1 FROM workspaces) AND NOT EXISTS (SELECT 1 FROM meta WHERE key=?)`, key, version, key); err != nil {
 			return err
 		}
 	}

@@ -121,7 +121,7 @@ POST /api/sources/{name}/sync
 POST /api/sources/{name}/enabled
 POST /api/sources/sync
 GET  /api/upgrade
-GET  /api/upgrade/preview?github=
+GET  /api/upgrade/preview
 POST /api/upgrade
 POST /api/query/{library|activity|usage|…}
 GET  /api/query/{library|activity|usage|…}/distinct?field=&q=&limit=

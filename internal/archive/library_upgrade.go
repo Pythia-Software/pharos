@@ -11,8 +11,8 @@ import (
 
 // A library upgrade brings the derived data of a catalog indexed by an older
 // Pharos up to date: repository identities, token attribution, harness
-// versions, and the tool ledger. Each step reads only the catalog (and, when
-// asked, GitHub for renamed repositories), commits in small units, and
+// versions, and the tool ledger. Each step reads only the catalog (and, for
+// repository identities, GitHub through the gh tool), commits in small units, and
 // resumes where it stopped, so the whole upgrade is one job that can be
 // interrupted by an eject and started again.
 //
@@ -38,6 +38,9 @@ type upgradeState struct {
 	startedAt   string
 	lastError   string
 	seconds     map[string]float64
+	// github is the last answer of githubAvailability, and when it was asked.
+	github   string
+	githubAt time.Time
 }
 
 type upgradeMergeGroup struct {
@@ -58,6 +61,13 @@ func (c *Catalog) upgrade() *upgradeState {
 	return value.(*upgradeState)
 }
 
+func (c *Catalog) upgradeRunning() bool {
+	state := c.upgrade()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.running
+}
+
 // UpgradeSteps reports what an upgrade would do. A library indexed entirely by
 // this version has nothing pending.
 func (c *Catalog) UpgradeSteps(ctx context.Context) ([]upgradeStep, error) {
@@ -70,11 +80,12 @@ func (c *Catalog) UpgradeSteps(ctx context.Context) ([]upgradeStep, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Until the merge has run once, every repository is checked: rows with
-	// different names and remotes can still be one repository (a rename found
-	// by root commit, an alias, or GitHub), which only the merge plan can tell.
+	// Until the merge of this version has run, every repository is checked:
+	// rows with different names and remotes can still be one repository (a
+	// rename found by root commit, an alias, or GitHub), which only the merge
+	// plan can tell. An older merge left duplicates that ingest kept creating.
 	var repositories int64
-	if merged == "" {
+	if merged != repositoryMergeVersion {
 		if repositories, err = count(`SELECT COUNT(*) FROM repositories`); err != nil {
 			return nil, err
 		}
@@ -106,7 +117,7 @@ func (c *Catalog) UpgradeSteps(ctx context.Context) ([]upgradeStep, error) {
 	defer state.mu.Unlock()
 	steps := []upgradeStep{
 		{ID: "repositories", Label: "Merge repository identities", Unit: "repository",
-			Detail: "Checks every repository and folds rows for one repository reached by different remote URLs, renames, or checkouts without a remote, so its work is counted together.", Pending: repositories},
+			Detail: "Merges the rows Pharos holds for one repository: different remote URLs, worktrees, and checkouts without a remote. It asks GitHub, through the gh command-line tool, which repositories were renamed or moved, so their work is counted together.", Pending: repositories},
 		{ID: "usage", Label: "Correct token attribution", Unit: "workspace",
 			Detail: "Recounts Claude sessions whose sub-agents were counted twice. Uses retained messages only.", Pending: usage},
 		{ID: "harness", Label: "Record harness versions", Unit: "conversation",
@@ -134,34 +145,65 @@ func (c *Catalog) UpgradeStatus(ctx context.Context) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Whether GitHub can be asked about renamed repositories matters only
+	// while the repository step is pending or has just run.
+	github := ""
+	for _, step := range steps {
+		if step.ID == "repositories" && (step.Pending > 0 || step.Seconds > 0) {
+			github = c.githubStatus(ctx)
+		}
+	}
 	state := c.upgrade()
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	return map[string]any{"needed": pending > 0, "steps": steps, "running": state.running, "step": nilIfEmpty(state.step),
 		"done": state.done, "total": state.total, "started_at": nilIfEmpty(state.startedAt), "error": nilIfEmpty(state.lastError),
-		"repository_renames": renames}, nil
+		"repository_renames": renames, "github": nilIfEmpty(github)}, nil
 }
 
-func (c *Catalog) repositoryMergeGroups(ctx context.Context, github bool) ([]repositoryIdentity, []repositoryMergeGroup, error) {
+// githubStatus is githubReady, githubMissing or githubSignedOut. The answer is
+// kept for a minute, so a polling panel doesn't run gh each time.
+func (c *Catalog) githubStatus(ctx context.Context) string {
+	state := c.upgrade()
+	state.mu.Lock()
+	status, fresh := state.github, time.Since(state.githubAt) < time.Minute
+	state.mu.Unlock()
+	if status != "" && fresh {
+		return status
+	}
+	status, _ = githubAvailability(ctx)
+	c.rememberGitHubStatus(status)
+	return status
+}
+
+func (c *Catalog) rememberGitHubStatus(status string) {
+	state := c.upgrade()
+	state.mu.Lock()
+	state.github, state.githubAt = status, time.Now()
+	state.mu.Unlock()
+}
+
+// repositoryMergeGroups plans the merges. Every github.com repository is
+// resolved through the gh tool first; without it the plan still runs on remotes,
+// root commits, and checkouts, and renamed repositories may stay separate.
+func (c *Catalog) repositoryMergeGroups(ctx context.Context) ([]repositoryIdentity, []repositoryMergeGroup, error) {
 	items, err := loadRepositoryIdentities(c.DB)
 	if err != nil {
 		return nil, nil, err
 	}
 	prepareRepositoryIdentities(items)
-	if github {
-		resolveGitHubRepositories(ctx, items)
-	}
+	c.rememberGitHubStatus(resolveGitHubRepositories(ctx, items, nil))
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
 	return items, planRepositoryMerges(items, c.RepositoryAliases, c.RepositorySeparate...), nil
 }
 
-// RepositoryMergePreview lists the merges an upgrade would make. With github,
-// it asks GitHub (through the gh CLI, when it is installed and signed in) which
+// RepositoryMergePreview lists the merges an upgrade would make. It asks
+// GitHub (through the gh CLI, when it is installed and signed in) which
 // repositories were renamed or moved.
-func (c *Catalog) RepositoryMergePreview(ctx context.Context, github bool) ([]upgradeMergeGroup, error) {
-	_, groups, err := c.repositoryMergeGroups(ctx, github)
+func (c *Catalog) RepositoryMergePreview(ctx context.Context) ([]upgradeMergeGroup, error) {
+	_, groups, err := c.repositoryMergeGroups(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +226,7 @@ func (c *Catalog) RepositoryMergePreview(ctx context.Context, github bool) ([]up
 // RunUpgrade runs every pending step in order. It returns when ctx is
 // cancelled, after the unit of work in progress commits; running it again
 // resumes.
-func (c *Catalog) RunUpgrade(ctx context.Context, github bool, progress func(step string, done, total int)) error {
+func (c *Catalog) RunUpgrade(ctx context.Context, progress func(step string, done, total int)) error {
 	state := c.upgrade()
 	state.mu.Lock()
 	if state.running {
@@ -228,7 +270,7 @@ func (c *Catalog) RunUpgrade(ctx context.Context, github bool, progress func(ste
 		pending[step.ID] = step.Pending
 	}
 	if pending["repositories"] > 0 {
-		if err := timed("repositories", func() error { return c.applyRepositoryMerges(ctx, github, report) }); err != nil {
+		if err := timed("repositories", func() error { return c.applyRepositoryMerges(ctx, report) }); err != nil {
 			return finish(err)
 		}
 	}
@@ -273,8 +315,8 @@ func (c *Catalog) RunUpgrade(ctx context.Context, github bool, progress func(ste
 	return finish(err)
 }
 
-func (c *Catalog) applyRepositoryMerges(ctx context.Context, github bool, report func(string, int, int)) error {
-	items, groups, err := c.repositoryMergeGroups(ctx, github)
+func (c *Catalog) applyRepositoryMerges(ctx context.Context, report func(string, int, int)) error {
+	items, groups, err := c.repositoryMergeGroups(ctx)
 	if err != nil {
 		return err
 	}
@@ -290,7 +332,7 @@ func (c *Catalog) applyRepositoryMerges(ctx context.Context, github bool, report
 		}
 		report("repositories", index+1, len(groups))
 	}
-	return c.writeTransaction(ctx, "repository-merge", func(tx *sql.Tx) error { return setMeta(tx, "repository_merge_version", "1") })
+	return c.writeTransaction(ctx, "repository-merge", func(tx *sql.Tx) error { return setMeta(tx, "repository_merge_version", repositoryMergeVersion) })
 }
 
 // recordRepositoryRenames remembers the display names a merge retires, so
