@@ -5,8 +5,17 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"os"
 	"strings"
+	"sync"
+	"time"
 )
+
+// repositoryMergeVersion is the version of the repository merge. A library
+// whose stored repository_merge_version differs is offered the merge again:
+// version 1 left the duplicate rows that ingest kept creating for repositories
+// without a remote or whose remote had moved.
+const repositoryMergeVersion = "2"
 
 func prepareRepositoryIdentities(items []repositoryIdentity) {
 	for i := range items {
@@ -45,6 +54,14 @@ func mergeRepositoryGroupTx(tx *sql.Tx, group repositoryMergeGroup) error {
 	for _, item := range all {
 		aliases = repositoryUnion(aliases, item.Aliases, []string{item.Remote})
 		locations = repositoryUnion(locations, item.Locations)
+		// Ingest may have added to the row since the plan was made.
+		var storedAliases, storedLocations sql.NullString
+		err := tx.QueryRow(`SELECT aliases_json,local_locations_json FROM repositories WHERE id=?`, item.ID).Scan(&storedAliases, &storedLocations)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		aliases = repositoryUnion(aliases, repositoryStrings(storedAliases.String))
+		locations = repositoryUnion(locations, repositoryStrings(storedLocations.String))
 	}
 	for _, loser := range group.Losers {
 		// Repoint PR links before removing a duplicate host/repository/number.
@@ -187,12 +204,7 @@ func mergeRepositoryGroupTx(tx *sql.Tx, group repositoryMergeGroup) error {
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO workspace_library_dirty(workspace_id) SELECT id FROM workspaces WHERE repository_id=?`, group.Survivor.ID); err != nil {
 		return err
 	}
-	for _, key := range []string{"tool_rollup_generation"} {
-		if _, err := tx.Exec(`DELETE FROM meta WHERE key=?`, key); err != nil {
-			return err
-		}
-	}
-	_, err = tx.Exec(`INSERT INTO meta(key,value) VALUES('repository_merge_version','1') ON CONFLICT(key) DO UPDATE SET value=excluded.value`)
+	_, err = tx.Exec(`DELETE FROM meta WHERE key='tool_rollup_generation'`)
 	return err
 }
 
@@ -229,16 +241,100 @@ func (c *Catalog) saveRepositoryEvidence(ctx context.Context, items []repository
 	})
 }
 
-// RefreshRepositoryForgeIDs is opt-in background enrichment. It never merges
-// rows; the explicit repository command remains the review gate for that.
+// forgeRefreshEvery is how often the service looks for repositories GitHub has
+// not been asked about yet, forgeRetry how long it waits before asking again
+// about one GitHub could not resolve (a private repository, a deleted one).
+const (
+	forgeRefreshEvery = 10 * time.Minute
+	forgeRetry        = 6 * time.Hour
+)
+
+// forgeAttempts remembers, per catalog and repository, when GitHub was last
+// asked and had no answer. Ingest never asks; this job does.
+var forgeAttempts sync.Map
+
+// keepRepositoryForgeIDs runs for the life of the service, resolving the
+// repositories that indexing has added since the last pass.
+func (c *Catalog) keepRepositoryForgeIDs(ctx context.Context) {
+	timer := time.NewTimer(30 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		if err := c.RefreshRepositoryForgeIDs(ctx); err != nil && ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "Repository forge refresh: %v\n", err)
+		}
+		timer.Reset(forgeRefreshEvery)
+	}
+}
+
+// RefreshRepositoryForgeIDs asks GitHub, through the gh tool, about every
+// github.com repository that has no forge ID yet, then merges the rows that
+// turn out to be one repository (a move between owners, a rename). It leaves the
+// rows alone when gh is missing or signed out, and while the library upgrade
+// has not merged yet or is running, since the upgrade does that merge itself.
 func (c *Catalog) RefreshRepositoryForgeIDs(ctx context.Context) error {
 	items, err := loadRepositoryIdentities(c.DB)
 	if err != nil {
 		return err
 	}
-	resolveGitHubRepositories(ctx, items)
+	prepareRepositoryIdentities(items)
+	pending := map[string]bool{}
+	for _, item := range items {
+		if _, tried := forgeAttempts.Load(c.Path + "\x00" + item.Normalized); item.Forge == "" && strings.HasPrefix(item.Normalized, "github.com/") && !tried {
+			pending[item.ID] = true
+		}
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	if resolveGitHubRepositories(ctx, items, func(item repositoryIdentity) bool { return pending[item.ID] }) != githubReady || ctx.Err() != nil {
+		return ctx.Err()
+	}
+	resolved := map[string]bool{}
+	forges := map[string]bool{}
+	for _, item := range items {
+		if !pending[item.ID] {
+			continue
+		}
+		if item.Forge == "" {
+			forgeAttempts.Store(c.Path+"\x00"+item.Normalized, true)
+			time.AfterFunc(forgeRetry, func() { forgeAttempts.Delete(c.Path + "\x00" + item.Normalized) })
+			continue
+		}
+		resolved[item.ID], forges[item.Forge] = true, true
+	}
+	if len(resolved) == 0 {
+		return nil
+	}
+	// A row that already had its forge ID has no current name yet; the group's
+	// name comes from GitHub's answer for it, so ask for those rows too.
+	resolveGitHubRepositories(ctx, items, func(item repositoryIdentity) bool { return item.ForgeCanonical == "" && forges[item.Forge] })
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	return c.saveRepositoryEvidence(ctx, items)
+	if err := c.saveRepositoryEvidence(ctx, items); err != nil {
+		return err
+	}
+	if merged, err := c.metaValue(ctx, "repository_merge_version"); err != nil || merged != repositoryMergeVersion || c.upgradeRunning() {
+		return err
+	}
+	for _, group := range planRepositoryMerges(items, c.RepositoryAliases, c.RepositorySeparate...) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		affected := resolved[group.Survivor.ID]
+		for _, loser := range group.Losers {
+			affected = affected || resolved[loser.ID]
+		}
+		if affected {
+			if err := c.mergeRepositoryGroup(ctx, group); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

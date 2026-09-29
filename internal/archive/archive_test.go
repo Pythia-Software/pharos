@@ -28,6 +28,8 @@ func TestMain(m *testing.M) {
 		os.Setenv("PHAROS_TEST_SUPPORT_DIR", support)
 	}
 	os.Setenv("PHAROS_SUPPORT_DIR", support)
+	// No test may reach GitHub. Tests of the lookup point githubCLI at a stub.
+	githubCLI, githubPause = "pharos-test-no-gh", time.Millisecond
 	code := m.Run()
 	if owned {
 		os.RemoveAll(support)

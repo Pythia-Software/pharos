@@ -121,7 +121,7 @@ func Run(arguments []string) error {
 				return err
 			}
 			prepareRepositoryIdentities(items)
-			resolveGitHubRepositories(context.Background(), items)
+			resolveGitHubRepositories(context.Background(), items, nil)
 			printRepositoryMergePlan(os.Stdout, planRepositoryMerges(items, config.RepositoryAliases, config.RepositorySeparate...))
 			return nil
 		}
@@ -135,7 +135,7 @@ func Run(arguments []string) error {
 			return err
 		}
 		prepareRepositoryIdentities(items)
-		resolveGitHubRepositories(context.Background(), items)
+		resolveGitHubRepositories(context.Background(), items, nil)
 		if err := catalog.saveRepositoryEvidence(context.Background(), items); err != nil {
 			return err
 		}
@@ -146,7 +146,7 @@ func Run(arguments []string) error {
 				return err
 			}
 		}
-		return nil
+		return catalog.writeTransaction(context.Background(), "repository-merge", func(tx *sql.Tx) error { return setMeta(tx, "repository_merge_version", repositoryMergeVersion) })
 	}
 	if command == "add-this-mac" {
 		return runAddThisMacCLI(config, args, os.Stdin, os.Stdout)
@@ -412,18 +412,18 @@ func runPricingCLI(catalog *Catalog, args []string) error {
 }
 
 // runUpgradeCLI runs the library upgrade, or with --status or --preview only
-// reports what it would do. --github also asks GitHub which repositories
-// were renamed or moved.
+// reports what it would do. The upgrade always asks GitHub, through the gh
+// tool, which repositories were renamed or moved; --github is accepted and
+// ignored so scripts written for 0.4.1 keep working.
 func runUpgradeCLI(catalog *Catalog, args []string) error {
-	github, mode := false, "run"
+	mode := "run"
 	for _, arg := range args {
 		switch arg {
 		case "--github":
-			github = true
 		case "--status", "--preview":
 			mode = arg
 		default:
-			return fmt.Errorf("usage: pharos upgrade [--status|--preview] [--github]")
+			return fmt.Errorf("usage: pharos upgrade [--status|--preview]")
 		}
 	}
 	ctx := context.Background()
@@ -435,14 +435,14 @@ func runUpgradeCLI(catalog *Catalog, args []string) error {
 		}
 		return printJSON(value)
 	case "--preview":
-		groups, err := catalog.RepositoryMergePreview(ctx, github)
+		groups, err := catalog.RepositoryMergePreview(ctx)
 		if err != nil {
 			return err
 		}
 		return printJSON(map[string]any{"repository_merges": groups})
 	}
 	started, last := time.Now(), time.Now()
-	err := catalog.RunUpgrade(ctx, github, func(step string, done, total int) {
+	err := catalog.RunUpgrade(ctx, func(step string, done, total int) {
 		if total == 0 || done == total || time.Since(last) > 10*time.Second {
 			last = time.Now()
 			fmt.Fprintf(os.Stderr, "%s %s: %d/%d\n", time.Since(started).Round(time.Second), step, done, total)
