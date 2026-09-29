@@ -74,6 +74,13 @@ CREATE TABLE IF NOT EXISTS finding_cart (
   ticked INTEGER NOT NULL DEFAULT 1,
   added_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS finding_cart_clones (
+  id TEXT PRIMARY KEY,
+  finding_id TEXT NOT NULL,
+  target TEXT NOT NULL,
+  ticked INTEGER NOT NULL DEFAULT 1,
+  added_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS finding_interventions (
   id TEXT PRIMARY KEY,
   finding_id TEXT NOT NULL,
@@ -263,6 +270,7 @@ type findingUserState struct {
 }
 
 type findingCartEntry struct {
+	ID        string `json:"id"`
 	FindingID string `json:"finding_id"`
 	Target    string `json:"target"`
 	Ticked    bool   `json:"ticked"`
@@ -334,6 +342,10 @@ func findingAliasMap(ctx context.Context, q queryer) (map[string]string, error) 
 // its current one, so cart actions and copies find them.
 func rehomeFindingCart(tx *sql.Tx, id string) error {
 	_, err := tx.Exec(`UPDATE OR REPLACE finding_cart SET finding_id=? WHERE finding_id<>? AND finding_id IN (SELECT alias FROM finding_aliases WHERE finding_id=?)`, id, id, id)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(`UPDATE finding_cart_clones SET finding_id=? WHERE finding_id<>? AND finding_id IN (SELECT alias FROM finding_aliases WHERE finding_id=?)`, id, id, id)
 	return err
 }
 
@@ -383,6 +395,7 @@ func (c *Catalog) findingUserStates(ctx context.Context, q queryer) (map[string]
 	}
 	for _, row := range cart {
 		entry := &findingCartEntry{FindingID: resolveFindingID(aliases, firstString(row["finding_id"])), Target: firstString(row["target"]), Ticked: integer(row["ticked"]) != 0, AddedAt: firstString(row["added_at"])}
+		entry.ID = entry.FindingID
 		state(entry.FindingID).Cart = entry
 	}
 	interventions, err := loadInterventions(ctx, q, "")
@@ -426,6 +439,17 @@ func loadInterventions(ctx context.Context, q queryer, where string, args ...any
 // this"), which withdraws the latest measurement.
 func (c *Catalog) FindingAction(ctx context.Context, id string, body map[string]any) error {
 	action := firstString(body["action"])
+	// Clone IDs address a cart entry while preserving the source finding.
+	if strings.HasPrefix(id, "clone:") {
+		var source string
+		if err := c.DB.QueryRowContext(ctx, "SELECT finding_id FROM finding_cart_clones WHERE id=?", id).Scan(&source); err != nil {
+			return err
+		}
+		if action == "cart_move" || action == "cart_remove" || action == "cart_tick" || action == "cart_clone" {
+			return c.findingCloneAction(ctx, id, source, body)
+		}
+		return fmt.Errorf("unsupported clone action %q", action)
+	}
 	aliases, err := findingAliasMap(ctx, c.DB)
 	if err != nil {
 		return err
@@ -441,6 +465,10 @@ func (c *Catalog) FindingAction(ctx context.Context, id string, body map[string]
 	host := c.currentHostID()
 	stamp := formatTime(c.clock())
 	switch action {
+	case "cart_clone":
+		return c.createFindingCartClone(ctx, id, stamp)
+	case "cart_reorder":
+		return c.reorderFindingCart(ctx, firstString(body["target"]), body["ids"])
 	case "dismiss":
 		reason := firstString(body["reason"])
 		if reason != "" && reason != "not_real" && reason != "not_worth_it" && reason != "wont_fix" {
@@ -451,6 +479,9 @@ func (c *Catalog) FindingAction(ctx context.Context, id string, body map[string]
 				return err
 			}
 			if _, err := tx.Exec("DELETE FROM finding_cart WHERE finding_id=?", id); err != nil {
+				return err
+			}
+			if _, err := tx.Exec("DELETE FROM finding_cart_clones WHERE finding_id=?", id); err != nil {
 				return err
 			}
 			_, err := tx.Exec("INSERT INTO finding_actions(finding_id,action,reason,host_id,created_at) VALUES(?,?,?,?,?)", id, "dismiss", nilIfEmpty(reason), nilIfEmpty(host), stamp)
@@ -483,6 +514,9 @@ func (c *Catalog) FindingAction(ctx context.Context, id string, body map[string]
 				return err
 			}
 			if _, err := tx.Exec("DELETE FROM finding_cart WHERE finding_id=?", id); err != nil {
+				return err
+			}
+			if _, err := tx.Exec("DELETE FROM finding_cart_clones WHERE finding_id=?", id); err != nil {
 				return err
 			}
 			_, err := tx.Exec("INSERT INTO finding_actions(finding_id,action,reason,until_at,rate,host_id,created_at) VALUES(?,?,?,?,?,?,?)", id, "snooze", reason, until, rate, nilIfEmpty(host), stamp)
@@ -549,6 +583,88 @@ func (c *Catalog) FindingAction(ctx context.Context, id string, body map[string]
 		})
 	}
 	return fmt.Errorf("unknown finding action %q", action)
+}
+
+func (c *Catalog) createFindingCartClone(ctx context.Context, id, stamp string) error {
+	return c.writeTransaction(ctx, "finding-cart", func(tx *sql.Tx) error {
+		var source, target string
+		err := tx.QueryRow("SELECT finding_id,target FROM finding_cart WHERE finding_id=? UNION ALL SELECT finding_id,target FROM finding_cart_clones WHERE id=? LIMIT 1", id, id).Scan(&source, &target)
+		if err != nil {
+			return err
+		}
+		cloneID := "clone:" + stableID("finding-cart-clone", id, fmt.Sprint(time.Now().UnixNano()))
+		_, err = tx.Exec("INSERT INTO finding_cart_clones(id,finding_id,target,ticked,added_at) VALUES(?,?,?,0,?)", cloneID, source, target, stamp)
+		return err
+	})
+}
+
+func (c *Catalog) findingCloneAction(ctx context.Context, id, source string, body map[string]any) error {
+	action := firstString(body["action"])
+	if action == "cart_clone" {
+		return c.createFindingCartClone(ctx, id, formatTime(c.clock()))
+	}
+	return c.writeTransaction(ctx, "finding-cart", func(tx *sql.Tx) error {
+		switch action {
+		case "cart_move":
+			target := firstString(body["target"])
+			if !validFindingTarget(target) {
+				return fmt.Errorf("unknown prompt target %q", target)
+			}
+			_, err := tx.Exec("UPDATE finding_cart_clones SET target=? WHERE id=? AND finding_id=?", target, id, source)
+			return err
+		case "cart_remove":
+			_, err := tx.Exec("DELETE FROM finding_cart_clones WHERE id=?", id)
+			return err
+		case "cart_tick":
+			ticked := 0
+			if body["ticked"] == true {
+				ticked = 1
+			}
+			_, err := tx.Exec("UPDATE finding_cart_clones SET ticked=? WHERE id=?", ticked, id)
+			return err
+		}
+		return fmt.Errorf("unknown clone action %q", action)
+	})
+}
+
+func (c *Catalog) reorderFindingCart(ctx context.Context, target string, value any) error {
+	ids, ok := value.([]any)
+	if !ok {
+		return fmt.Errorf("ids must be an array")
+	}
+	return c.writeTransaction(ctx, "finding-cart", func(tx *sql.Tx) error {
+		var count int
+		if err := tx.QueryRow("SELECT (SELECT COUNT(*) FROM finding_cart WHERE target=?) + (SELECT COUNT(*) FROM finding_cart_clones WHERE target=?)", target, target).Scan(&count); err != nil {
+			return err
+		}
+		if len(ids) != count {
+			return fmt.Errorf("cart changed; reload before reordering")
+		}
+		seen := map[string]bool{}
+		for i, raw := range ids {
+			id := firstString(raw)
+			if seen[id] {
+				return fmt.Errorf("duplicate cart item")
+			}
+			seen[id] = true
+			stamp := fmt.Sprintf("0000-order:%s:%09d", target, i)
+			var result sql.Result
+			var err error
+			if strings.HasPrefix(id, "clone:") {
+				result, err = tx.Exec("UPDATE finding_cart_clones SET added_at=? WHERE id=? AND target=?", stamp, id, target)
+			} else {
+				result, err = tx.Exec("UPDATE finding_cart SET added_at=? WHERE finding_id=? AND target=?", stamp, id, target)
+			}
+			if err != nil {
+				return err
+			}
+			n, _ := result.RowsAffected()
+			if n != 1 {
+				return fmt.Errorf("cart changed; reload before reordering")
+			}
+		}
+		return nil
+	})
 }
 
 // validFindingTarget accepts the prompt targets a cart can hold: a

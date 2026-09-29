@@ -20,7 +20,7 @@ type Card = {
   cart?: { target: string; target_label: string; ticked: boolean }; dismissed?: Row; snoozed?: Row; watching?: Row;
   regressed?: Row; reopened?: Row; inconclusive?: Row; undo?: Row; result?: Row;
 };
-type CartItem = { id: string; title: string; ticked: boolean; change_label: string; suggested_target: string; undo?: boolean };
+type CartItem = { id: string; finding_id?: string; title: string; ticked: boolean; change_label: string; suggested_target: string; undo?: boolean; clone?: boolean };
 type CartGroup = { target: string; label: string; handoff: Handoff; handoff_reason: string; ticked: number; items: CartItem[] };
 type Target = { target: string; label: string };
 type Checkpoint = { threshold: number; shown: number; typical_wait_days: number; clear_share: number };
@@ -83,7 +83,7 @@ function updateChrome(fresh: number, inCart: number) {
   const tab = document.getElementById("findingsTab");
   const shownNew = pageOpen ? 0 : fresh;
   if (badge) { badge.hidden = shownNew <= 0; badge.textContent = shownNew > 99 ? "99+" : String(shownNew); }
-  tab?.setAttribute("aria-label", shownNew > 0 ? `Findings, ${shownNew} new since your last visit` : "Findings");
+  tab?.setAttribute("aria-label", shownNew > 0 ? `Optimize, ${shownNew} new since your last visit` : "Optimize");
   const button = document.getElementById("findingsCartButton");
   const countNode = document.getElementById("findingsCartCount");
   if (button) {
@@ -109,7 +109,9 @@ export function startFindingsChrome() {
 
 // ---------------------------------------------------------------- routing
 
+let findingsReturnURL = "/findings";
 function navigate(url: string) {
+  if (url.includes("finding=") && location.pathname === "/findings" && !new URLSearchParams(location.search).has("finding")) findingsReturnURL = location.pathname + location.search;
   if (window.pharosNavigate) window.pharosNavigate(url);
   else { history.pushState(null, "", url); window.dispatchEvent(new Event("pharos:route")); }
 }
@@ -309,23 +311,12 @@ function Tile({ label, value, detail, onClick, pressed }: { label: string; value
 
 // ---------------------------------------------------------------- cart actions on a card
 
-function AddToPrompt({ card, targets, act, compact: small }: { card: Card; targets: Target[]; act: Act; compact?: boolean }) {
+function AddToPrompt({ card, act }: { card: Card; targets: Target[]; act: Act; compact?: boolean }) {
   if (card.cart) return <span className="findings-in-cart">
     <span className="findings-in-cart-label"><Icon name="check" />In prompt for {card.cart.target_label}</span>
     <button type="button" className="findings-button quiet" onClick={() => void act(card.id, { action: "cart_remove" }, `Removed from the prompt for ${card.cart?.target_label}.`)}>Remove from prompt</button>
   </span>;
-  const suggested = targets.find(item => item.target === card.target) ?? { target: card.target, label: card.target_label };
-  const others = targets.filter(item => item.target !== suggested.target);
-  const items: MenuItem[] = [suggested, ...others].map((item, index) => ({
-    key: item.target, label: item.label, hint: index === 0 ? "suggested" : undefined,
-    onSelect: () => void act(card.id, { action: "cart_add", target: item.target }, `Added to the prompt for ${item.label}.`),
-  }));
-  return <span className="findings-split">
-    <button type="button" className="findings-button primary" onClick={() => void act(card.id, { action: "cart_add" }, `Added to the prompt for ${card.target_label}.`)}>
-      {small ? "Add to prompt" : <>Add to prompt for <span className="findings-split-target">{card.target_label}</span></>}
-    </button>
-    <Menu className="findings-split-more" label={<Icon name="chevron-down" />} ariaLabel="Choose where this change goes" heading="Add to prompt for" items={items} filter={items.length > 10} />
-  </span>;
+  return <button type="button" className="findings-button primary" onClick={() => void act(card.id, { action: "cart_add" }, `Added to the prompt for ${card.target_label}.`)}>Add to Prompt Cart</button>;
 }
 
 function SnoozeDismiss({ card, act }: { card: Card; act: Act }) {
@@ -420,32 +411,43 @@ function FindingCard({ card, rank, targets, act, isNew }: { card: Card; rank: Ra
 function CartPanel({ cart, targets, act, onReview, highlight }: { cart: CartGroup[]; targets: Target[]; act: Act; onReview: (group: CartGroup) => void; highlight: boolean }) {
   // Tick boxes answer at once; the saved cart replaces these when it reloads.
   const [ticks, setTicks] = useState<Record<string, boolean>>({});
+  const [dragging, setDragging] = useState<{ id: string; target: string } | null>(null);
   useEffect(() => setTicks({}), [cart]);
   const ticked = (item: CartItem) => ticks[item.id] ?? item.ticked;
   const tick = (item: CartItem, value: boolean) => {
     setTicks(current => ({ ...current, [item.id]: value }));
     void act(item.id, { action: "cart_tick", ticked: value }).then(ok => { if (!ok) setTicks(current => { const next = { ...current }; delete next[item.id]; return next; }); });
   };
+  const drop = (target: string, before?: string) => {
+    if (!dragging) return;
+    if (dragging.target !== target) { void act(dragging.id, { action: "cart_move", target }, "Moved to another prompt."); setDragging(null); return; }
+    const group = cart.find(entry => entry.target === target);
+    if (!group || dragging.id === before) { setDragging(null); return; }
+    const ids = group.items.map(item => item.id).filter(id => id !== dragging.id);
+    ids.splice(before ? ids.indexOf(before) : ids.length, 0, dragging.id);
+    void act(group.items[0].finding_id ?? group.items[0].id, { action: "cart_reorder", target, ids }, "Prompt order saved.");
+    setDragging(null);
+  };
   return <aside className={`findings-cart ${highlight ? "highlight" : ""}`} id="findingsCart" aria-labelledby="findingsCartTitle" tabIndex={-1}>
     <h2 id="findingsCartTitle">Prompts to copy</h2>
     {!cart.length ? <p className="findings-cart-empty">Add findings to a prompt for the repository or Mac where the change goes. Each prompt collects its findings, and copying it hands them to an agent at once.</p> : null}
-    {cart.map(group => { const count = group.items.filter(ticked).length; return <section key={group.target} className="findings-cart-group" aria-label={`Prompt for ${group.label}`}>
+    {cart.map(group => { const count = group.items.filter(ticked).length; return <section key={group.target} className={`findings-cart-group ${dragging && dragging.target !== group.target ? "drop-target" : ""}`} aria-label={`Prompt for ${group.label}`} onDragOver={event => { if (dragging) event.preventDefault(); }} onDrop={event => { event.preventDefault(); drop(group.target); }}>
       <div className="findings-cart-head"><h3>{group.label}</h3><span>{count} of {group.items.length} ticked</span></div>
-      <ul>{group.items.map(item => <li key={item.id} className={ticked(item) ? "" : "unticked"}>
+      <ul>{group.items.map(item => <li key={item.id} draggable onDragStart={event => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", item.id); setDragging({ id: item.id, target: group.target }); }} onDragEnd={() => setDragging(null)} onDragOver={event => { if (dragging) event.preventDefault(); }} onDrop={event => { event.stopPropagation(); event.preventDefault(); drop(group.target, item.id); }} className={`${ticked(item) ? "" : "unticked"} ${dragging?.id === item.id ? "dragging" : ""}`}>
+        <span className="findings-cart-grip" aria-hidden="true">⠿</span>
         <label>
           <input type="checkbox" checked={ticked(item)} onChange={event => tick(item, event.target.checked)} />
-          <span><span className="findings-cart-title"><Text text={item.title} /></span><small>{item.undo ? "Undo the last change" : item.change_label}</small></span>
+          <span><span className="findings-cart-title"><Text text={item.title} />{item.clone ? " (copy)" : ""}</span><small>{item.undo ? "Undo the last change" : item.change_label}</small></span>
         </label>
-        <Menu className="findings-cart-move" align="end" label={<span aria-hidden="true">⋯</span>} ariaLabel={`Move or remove “${plain(item.title)}”`} heading="Move to the prompt for" filter={targets.length > 10}
+        <Menu className="findings-cart-move" align="end" label={<span aria-hidden="true">⋯</span>} ariaLabel={`Clone or delete “${plain(item.title)}”`}
           items={[
-            ...targets.filter(target => target.target !== group.target).map(target => ({ key: target.target, label: target.label, hint: target.target === item.suggested_target ? "suggested" : undefined, onSelect: () => void act(item.id, { action: "cart_move", target: target.target }, `Moved to the prompt for ${target.label}.`) }))
-              .sort((a, b) => Number(Boolean(b.hint)) - Number(Boolean(a.hint))),
-            { key: "__remove", label: "Remove from prompt", danger: true, onSelect: () => void act(item.id, { action: "cart_remove" }, "Removed from the prompt.") },
+            { key: "__clone", label: "Clone", onSelect: () => void act(item.id, { action: "cart_clone" }, "Cloned. Drag the copy to another prompt.") },
+            { key: "__remove", label: "Delete", danger: true, onSelect: () => void act(item.id, { action: "cart_remove" }, "Deleted from the prompt cart.") },
           ]} />
       </li>)}</ul>
       <button type="button" className="findings-button primary" disabled={!count || count !== group.ticked} onClick={() => onReview(group)}>Review prompt ({count} ticked)</button>
     </section>; })}
-    <p className="findings-cart-note">Saved in the library, so it's here on any Mac. Only ticked items are copied; the rest wait here.</p>
+    {dragging ? targets.filter(target => !cart.some(group => group.target === target.target)).map(target => <div key={target.target} className="findings-cart-drop-zone" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); drop(target.target); }}>Drop in {target.label}</div>) : null}
   </aside>;
 }
 
@@ -757,7 +759,7 @@ function FindingDetail({ id, tab, overview, act, rank, onReview, newIds }: { id:
   useEffect(() => { setDetail(null); void load(); }, [load]);
   // Actions reload the overview; the detail follows it.
   useEffect(() => { if (overview && detail) void load(); }, [overview]);
-  const back = () => navigate(`/findings${detail ? (listForState(detail.state) === "open" ? "" : `?list=${listForState(detail.state)}`) : ""}`);
+  const back = () => navigate(findingsReturnURL);
   if (error) return <div className="findings-page"><button type="button" className="findings-crumb" onClick={() => navigate("/findings")}>Findings</button><p className="findings-error" role="alert">{error}</p></div>;
   if (!detail) return <div className="findings-page"><p className="findings-muted">Loading the finding…</p></div>;
   const chip = stateChip(detail);
@@ -767,6 +769,7 @@ function FindingDetail({ id, tab, overview, act, rank, onReview, newIds }: { id:
   const tabs: Array<[Route["tab"], string]> = [["overview", "Overview"], ["evidence", `Evidence · ${evidence.length}`], ["prompt", "Prompt"]];
   const onTab = (next: Route["tab"]) => replaceParams({ tab: next === "overview" ? "" : next });
   return <div className="findings-page findings-detail">
+    <button type="button" className="findings-button findings-back" onClick={back}><Icon name="arrow-left" />Back to Optimize</button>
     <nav className="findings-breadcrumb" aria-label="Breadcrumb"><button type="button" className="findings-crumb" onClick={() => navigate("/findings")}>Findings</button><span aria-hidden="true">›</span><button type="button" className="findings-crumb" onClick={back}>{stateName}</button></nav>
     <h1><Text text={detail.title} /></h1>
     <div className="findings-detail-chips">
@@ -980,6 +983,8 @@ function FindingsList({ overview, route, act, rank, setRank, onReview, newIds, h
   const shown = findings.filter(inList).sort((a, b) => num(b.impact?.[rank]) - num(a.impact?.[rank]));
   const counts: Record<List, number> = { open: summary.open ?? 0, watching: summary.watching ?? 0, wins: overview.wins?.length ?? summary.won ?? 0, dismissed: (summary.dismissed ?? 0) + (summary.snoozed ?? 0) };
   const saved = summary.saved ?? {};
+  const expected = (state: string) => findings.filter(card => card.state === state).reduce((sum, card) => sum + num(card.impact?.[rank]), 0);
+  const savings = (value: unknown) => `${unitValue[rank](value)} ${rank === "failures" ? "avoided" : "saved"}`;
   const built = Boolean(status.built_at);
   const tabs: Array<[List, string]> = [["open", "Open"], ["watching", "Watching"], ["wins", "Wins"], ["dismissed", "Dismissed"]];
   const showCart = route.list !== "wins";
@@ -994,10 +999,10 @@ function FindingsList({ overview, route, act, rank, setRank, onReview, newIds, h
     {status.error ? <p className="findings-error" role="alert">The last refresh failed: {status.error}</p> : null}
     {!built ? <Building status={status} /> : !findings.length && !overview.wins?.length && !overview.cart?.length ? <EmptyOpen overview={overview} /> : <>
       {route.list === "wins" ? <WinsHero overview={overview} /> : <div className="findings-tiles">
-        <Tile label="Saved so far (estimate)" value={money(saved.usd)} detail={`${compact(saved.tokens)} tokens · ${minutes(saved.minutes)} · ${Math.round(num(saved.failures)).toLocaleString()} failures avoided`} onClick={() => setList("wins")} />
-        <Tile label="Open" value={counts.open.toLocaleString()} detail={counts.open ? `about ${aboutMoney(summary.at_stake_usd)} a month at stake` : "nothing to fix right now"} onClick={() => setList("open")} pressed={route.list === "open"} />
-        <Tile label="Watching" value={counts.watching.toLocaleString()} detail={counts.watching ? summary.next_result_days === null || summary.next_result_days === undefined ? "measuring" : summary.next_result_days <= 0 ? "first result due today" : `first result in ${counted(summary.next_result_days, "day")}` : "copy a prompt to start"} onClick={() => setList("watching")} pressed={route.list === "watching"} />
-        <Tile label="Wins" value={(summary.won ?? 0).toLocaleString()} detail={summary.regressed ? `${summary.regressed} came back` : summary.won ? "none came back" : "none yet"} onClick={() => setList("wins")} />
+        <Tile label="Saved so far (estimate)" value={unitValue[rank](saved[rank])} detail={`${savings(saved[rank])} so far`} onClick={() => setList("wins")} />
+        <Tile label="Open" value={counts.open.toLocaleString()} detail={counts.open ? `Expected: ${savings(expected("open"))} a month` : "nothing to fix right now"} onClick={() => setList("open")} pressed={route.list === "open"} />
+        <Tile label="Watching" value={counts.watching.toLocaleString()} detail={counts.watching ? `Expected: ${savings(expected("watching"))} a month` : "copy a prompt to start"} onClick={() => setList("watching")} pressed={route.list === "watching"} />
+        <Tile label="Wins" value={(summary.won ?? 0).toLocaleString()} detail={summary.won ? `${savings(saved[rank])} so far` : "none yet"} onClick={() => setList("wins")} />
       </div>}
       <div className="findings-toolbar">
         <div className="findings-tabs" role="tablist" aria-label="Findings by state">

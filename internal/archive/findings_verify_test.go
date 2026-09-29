@@ -178,6 +178,76 @@ func TestFindingCartMoveAndTick(t *testing.T) {
 	}
 }
 
+func TestFindingCartCloneAndReorder(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 9, 28, 15, 0, 0, 0, time.Local)
+	fixture := newFindingFixture(t, now)
+	for back := 27; back >= 0; back-- {
+		fixture.conversation(dayTime(now.Format("2006-01-02")).AddDate(0, 0, -back), back%2 == 0)
+	}
+	catalog := fixture.catalog
+	if err := catalog.RefreshFindings(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := loadFindingRows(ctx, catalog.DB, "WHERE detector='failure'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	for key := range rows {
+		id = key
+		break
+	}
+	if err := catalog.FindingAction(ctx, id, map[string]any{"action": "cart_add"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.FindingAction(ctx, id, map[string]any{"action": "cart_clone"}); err != nil {
+		t.Fatal(err)
+	}
+	view, err := catalog.FindingsOverview(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	group := view["cart"].([]map[string]any)[0]
+	items := group["items"].([]map[string]any)
+	if len(items) != 2 {
+		t.Fatalf("cart items: %v", items)
+	}
+	cloneID := firstString(items[1]["id"])
+	if !strings.HasPrefix(cloneID, "clone:") || items[1]["ticked"] != false {
+		t.Fatalf("clone: %v", items[1])
+	}
+	if err := catalog.FindingAction(ctx, id, map[string]any{"action": "cart_reorder", "target": group["target"], "ids": []any{cloneID, id}}); err != nil {
+		t.Fatal(err)
+	}
+	view, _ = catalog.FindingsOverview(ctx, "")
+	items = view["cart"].([]map[string]any)[0]["items"].([]map[string]any)
+	if items[0]["id"] != cloneID {
+		t.Fatalf("reordered items: %v", items)
+	}
+	if err := catalog.FindingAction(ctx, cloneID, map[string]any{"action": "cart_move", "target": "global:host-a:claude"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.FindingAction(ctx, cloneID, map[string]any{"action": "cart_tick", "ticked": true}); err != nil {
+		t.Fatal(err)
+	}
+	view, _ = catalog.FindingsOverview(ctx, "")
+	if len(view["cart"].([]map[string]any)) != 2 {
+		t.Fatalf("cart groups: %v", view["cart"])
+	}
+	preview, err := catalog.CartPrompt(ctx, "global:host-a:claude", []string{cloneID}, "diff")
+	if err != nil || preview["count"] != 1 {
+		t.Fatalf("clone prompt: %v %v", preview, err)
+	}
+	if _, err := catalog.CopyCart(ctx, "global:host-a:claude", []string{cloneID}, "diff"); err != nil {
+		t.Fatal(err)
+	}
+	view, _ = catalog.FindingsOverview(ctx, "")
+	if len(view["cart"].([]map[string]any)) != 1 {
+		t.Fatalf("original cart item after copying clone: %v", view["cart"])
+	}
+}
+
 func TestFindingCheckpointsRecommend(t *testing.T) {
 	row := func(affected, exposure int) *findingRow {
 		return &findingRow{ID: stableID("row", affected, exposure), Active: true, Metric: findingMetric{Kind: "rate", Unit: "conversations"},

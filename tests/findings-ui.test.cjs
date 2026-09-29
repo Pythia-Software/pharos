@@ -82,6 +82,7 @@ async function open(state) {
       state.requests.push({ method, path: url.pathname + url.search, body: method === 'POST' ? route.request().postDataJSON() : null });
       if (url.pathname === '/api/findings') return respond(state.overview);
       if (url.pathname === '/api/findings/seen') { state.overview = { ...state.overview, summary: { ...state.overview.summary, new: 0 } }; return respond({ ok: true }); }
+      if (url.pathname === '/api/findings/settings') { state.overview = { ...state.overview, settings: { ...state.overview.settings, ...route.request().postDataJSON() } }; return respond(state.overview.settings); }
       if (url.pathname === '/api/findings/cart/prompt') return respond({ target: repo, label: 'explo', handoff: route.request().postDataJSON().handoff ?? 'pr', prompt: `PROMPT for ${route.request().postDataJSON().ids.join(',')}`, count: 1 });
       if (url.pathname === '/api/findings/cart/copy') { state.copied = route.request().postDataJSON(); return respond({ copied: true }); }
       if (url.pathname.endsWith('/action')) return respond({ ok: true });
@@ -103,7 +104,8 @@ test('Findings is routed at /findings, badges new findings until visited, and th
     const tab = page.locator('#findingsTab');
     await page.locator('#findingsBadge:not([hidden])').waitFor();
     assert.equal(await page.locator('#findingsBadge').innerText(), '2');
-    assert.equal(await tab.getAttribute('aria-label'), 'Findings, 2 new since your last visit');
+    assert.equal(await tab.innerText(), 'Optimize2');
+    assert.equal(await tab.getAttribute('aria-label'), 'Optimize, 2 new since your last visit');
     assert.equal(await page.locator('#findingsCartCount').innerText(), '1');
     assert.equal(await page.locator('#findingsCartButton').isVisible(), true);
     // Tabs sit in order, with Findings between Tools and MCP.
@@ -111,6 +113,14 @@ test('Findings is routed at /findings, badges new findings until visited, and th
 
     await tab.click();
     await page.getByRole('heading', { name: 'Findings', level: 1 }).waitFor();
+    assert.match(await page.locator('.findings-tile', { hasText: 'Open' }).locator('small').innerText(), /Expected: \$44 saved a month/);
+    await page.getByRole('button', { name: 'Tokens', exact: true }).click();
+    assert.match(await page.locator('.findings-tile', { hasText: 'Open' }).locator('small').innerText(), /tokens saved a month/);
+    assert.equal(await page.locator('.findings-cart-note').count(), 0);
+    assert.equal(await page.getByRole('button', { name: 'Add to Prompt Cart' }).count(), 1);
+    assert.equal(await page.locator('.findings-split-more').count(), 0);
+    await page.setViewportSize({ width: 1920, height: 1055 });
+    await page.screenshot({ path: path.join(root, '.context', 'findings-updated.png'), fullPage: true });
     assert.equal(new URL(page.url()).pathname, '/findings');
     assert.equal(await page.locator('#findings').evaluate(view => view.classList.contains('active')), true);
     await page.locator('#findingsBadge[hidden]').waitFor({ state: 'attached' });
@@ -118,7 +128,7 @@ test('Findings is routed at /findings, badges new findings until visited, and th
     // New since the last visit stays marked on the card during this visit.
     assert.equal(await page.locator('.findings-card', { hasText: "explo's instructions" }).locator('.findings-chip.new').count(), 1);
     // The ranked unit leads each card, then the note that makes the point.
-    assert.match(await page.locator('.findings-card').first().locator('.findings-impact-lead').innerText(), /^\$41 a month · 330 searches$/);
+    assert.match(await page.locator('.findings-card').first().locator('.findings-impact-lead').innerText(), /^150M tokens a month · 330 searches$/);
     assert.match(await page.locator('.findings-card').first().locator('.findings-explanation').innerHTML(), /<code>CLAUDE\.md<\/code>/);
 
     await page.locator('button[data-view=library]').click();
@@ -132,6 +142,10 @@ test('Findings is routed at /findings, badges new findings until visited, and th
     assert.equal(new URL(page.url()).searchParams.get('list'), 'watching');
     await page.locator('.findings-card', { hasText: "tl1's instructions" }).locator('h3 a').click();
     await page.locator('.findings-detail h1', { hasText: "tl1's instructions" }).waitFor();
+    assert.equal(await page.getByRole('button', { name: 'Back to Optimize' }).isVisible(), true);
+    await page.getByRole('button', { name: 'Back to Optimize' }).click();
+    assert.equal(new URL(page.url()).searchParams.get('list'), 'watching');
+    await page.locator('.findings-card', { hasText: "tl1's instructions" }).locator('h3 a').click();
     assert.equal(new URL(page.url()).searchParams.get('finding'), detail.id);
     assert.match(await page.locator('.findings-chart > svg').getAttribute('aria-label'), /Prompt copied Sep 1[56]/);
     assert.equal(await page.locator('.findings-chart > svg .findings-chart-point.hollow').count(), 1);
@@ -182,6 +196,28 @@ test('Copying a cart prompt writes the clipboard first and then starts measuring
     await page.waitForFunction(() => document.querySelector('.findings-toast.shown'));
     const action = state.requests.find(request => request.path.endsWith('/action'));
     assert.deepEqual(action.body, { action: 'dismiss', reason: 'not_worth_it' });
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
+test('Prompt cart uses drag ordering and clone/delete menu actions', async () => {
+  const first = { ...openCard, cart: { target: repo, target_label: 'explo', ticked: true } };
+  const data = overview({ findings: [first, cartCard] });
+  data.cart[0].items.unshift({ id: first.id, title: first.title, ticked: true, change_label: first.change_label, suggested_target: repo, undo: false });
+  data.cart[0].ticked = 2;
+  const state = { overview: data, requests: [] };
+  const { browser, page, errors } = await open(state);
+  try {
+    await page.goto('http://findings-ui.test/findings');
+    const items = page.locator('#findingsCart li');
+    await items.nth(1).dragTo(items.nth(0));
+    await page.waitForFunction(() => window.location.pathname === '/findings');
+    assert.ok(state.requests.some(request => request.body?.action === 'cart_reorder' && request.body.ids[0] === cartCard.id));
+    await items.first().locator('.findings-cart-move button').first().click();
+    const menu = page.locator('.findings-cart-move [role=menu]');
+    assert.deepEqual(await menu.locator('[role=menuitem]').allInnerTexts(), ['Clone', 'Delete']);
+    await menu.getByRole('menuitem', { name: 'Clone' }).click();
+    assert.ok(state.requests.some(request => request.body?.action === 'cart_clone'));
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

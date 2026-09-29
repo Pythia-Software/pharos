@@ -188,6 +188,7 @@ func previousLabel(state *findingUserState) string {
 type cartContext struct {
 	rows      map[string]*findingRow
 	states    map[string]*findingUserState
+	clones    []*findingCartEntry
 	settings  findingSettings
 	habits    map[string]repositoryHabit
 	repos     map[string]string
@@ -213,6 +214,17 @@ func (c *Catalog) loadCartContext(ctx context.Context) (*cartContext, error) {
 		return nil, err
 	}
 	cart := &cartContext{rows: rows, states: states, settings: settings, habits: habits, repos: map[string]string{}, locations: map[string][]string{}, hosts: map[string]string{}}
+	aliases, err := findingAliasMap(ctx, c.DB)
+	if err != nil {
+		return nil, err
+	}
+	cloneRows, err := queryMapsContext(ctx, c.DB, "SELECT id,finding_id,target,ticked,added_at FROM finding_cart_clones ORDER BY added_at")
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range cloneRows {
+		cart.clones = append(cart.clones, &findingCartEntry{ID: firstString(row["id"]), FindingID: resolveFindingID(aliases, firstString(row["finding_id"])), Target: firstString(row["target"]), Ticked: integer(row["ticked"]) != 0, AddedAt: firstString(row["added_at"])})
+	}
 	repositories, err := queryMapsContext(ctx, c.DB, "SELECT id,display_name,local_locations_json FROM repositories")
 	if err != nil {
 		return nil, err
@@ -252,6 +264,22 @@ func (cart *cartContext) items(target string, ids []string) []cartItem {
 		}
 		step, attempt := findingStepFor(row, state)
 		items = append(items, cartItem{Row: row, State: state, Step: step, Attempt: attempt, Undo: findingNeedsUndo(state)})
+	}
+	for _, clone := range cart.clones {
+		if clone.Target != target || len(ids) > 0 && !wanted[clone.ID] {
+			continue
+		}
+		row, state := cart.rows[clone.FindingID], cart.states[clone.FindingID]
+		if row == nil {
+			continue
+		}
+		if state == nil {
+			state = &findingUserState{}
+		}
+		step, attempt := findingStepFor(row, state)
+		copyState := *state
+		copyState.Cart = clone
+		items = append(items, cartItem{Row: row, State: &copyState, Step: step, Attempt: attempt, Undo: findingNeedsUndo(state)})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].State.Cart.AddedAt < items[j].State.Cart.AddedAt })
 	return items
@@ -318,7 +346,10 @@ func (c *Catalog) CopyCart(ctx context.Context, target string, ids []string, han
 			if err := rehomeFindingCart(tx, item.Row.ID); err != nil {
 				return err
 			}
-			if _, err := tx.Exec("DELETE FROM finding_cart WHERE finding_id=?", item.Row.ID); err != nil {
+			if _, err := tx.Exec("DELETE FROM finding_cart WHERE finding_id=? AND target=?", item.Row.ID, target); err != nil {
+				return err
+			}
+			if _, err := tx.Exec("DELETE FROM finding_cart_clones WHERE id=?", item.State.Cart.ID); err != nil {
 				return err
 			}
 			if item.Undo != nil {
