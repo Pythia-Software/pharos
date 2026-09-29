@@ -265,6 +265,8 @@ test('nested subagent checkpoints count once and remain nested sessions', async 
   ];
   const page = await fixture(t,messages);
   assert.equal(await page.locator('.turn > summary .token-badge').getAttribute('data-tokens'),'300');
+  assert.equal(await page.locator('.subagent-run').count(),1,'A sub-agent builds its events when opened');
+  await page.locator('.subagent-run > summary').click();
   assert.equal(await page.locator('.subagent-run').count(),2);
 });
 const read = (id = 'read', file = '/workspace/docs/RULES.md', seconds = 10) => event(id, 'message', {
@@ -309,6 +311,25 @@ async function fixture(t, messages, viewport = { width: 1280, height: 900 }, con
 }
 const transcript = page => page.locator('#transcript-test-root');
 
+// Serves a workspace the way the service does: an overview without messages,
+// then each conversation, cross-conversation find, and original messages.
+async function serveWork(page, work) {
+  const conversations = work.conversations.map((conversation, index) => ({ id: `conversation-${index}`, ...conversation }));
+  const overview = { ...work, conversations: conversations.map(({ messages = [], ...conversation }) => ({ ...conversation, message_count: messages.length,
+    first_prompt: messages.find(message => ['user', 'agent'].includes(message.role) && message.kind === 'message')?.text })) };
+  const originals = new Map(conversations.flatMap(conversation => (conversation.messages || []).map(message => [message.id, message.original]).filter(([id, original]) => id && original)));
+  const json = (route, value, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) });
+  await page.route(/\/api\/(work\/work|messages\/)/, route => {
+    const url = new URL(route.request().url()), parts = url.pathname.split('/').slice(3);
+    if (parts[0] === 'messages') return originals.has(parts[1]) ? json(route, { id: parts[1], ...originals.get(parts[1]) }) : json(route, { error: 'not found' }, 404);
+    if (parts.length === 1) return json(route, overview);
+    if (parts[1] === 'conversations') return json(route, conversations.find(conversation => conversation.id === parts[2]) || { error: 'not found' }, conversations.some(conversation => conversation.id === parts[2]) ? 200 : 404);
+    const q = url.searchParams.get('q'), kinds = { messages: ['message'], thinking: ['message', 'reasoning', 'thinking'], tools: ['message', 'reasoning', 'thinking', 'tool_call', 'delegation'] }[url.searchParams.get('depth')];
+    const pattern = new RegExp(url.searchParams.get('regex') === '1' ? q : q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), url.searchParams.get('case') === '1' ? 'u' : 'iu');
+    return json(route, { conversations: conversations.filter(conversation => (conversation.messages || []).some(message => (!kinds || kinds.includes(message.kind)) && pattern.test(message.text))).map(conversation => conversation.id) });
+  });
+}
+
 async function workFixture(t, overrides = {}) {
   const page = await fixture(t, []);
   const work = { id:'work', title:'Inspect renderer', repository_name:'pharos', branch:'feature', location:'/workspace',
@@ -319,7 +340,7 @@ async function workFixture(t, overrides = {}) {
     metrics:[{name:'input_tokens',value:100,unit:'tokens',status:'observed'}],identity_links:[],
     receipt:{outcome:'preserved',package_bytes:1024,package_hash:'receipt-hash'},
     conversations:[{provider:'claude',native_id:'one',coverage:'complete',messages:[human(),read()]}], ...overrides };
-  await page.route('http://transcript.test/api/work/work', route => route.fulfill({contentType:'application/json',body:JSON.stringify(work)}));
+  await serveWork(page, work);
   await page.evaluate(async () => {
     await detail('work');
     document.querySelector('#transcript-test-root').replaceChildren(document.querySelector('#detailBody'));
@@ -351,8 +372,8 @@ test('workspace leads with transcript and keeps supporting information collapsed
   assert.equal(await page.locator('#library').getAttribute('class'),'view active');
 });
 
-test('workspace discovers GitHub pull-request links retained in conversation text', async t => {
-  const page = await workFixture(t,{prs:[],canonical_remote:'git@github.com:acme/pharos.git',main_merge_commit:'abcdef1234567890',main_merge_title:'Merge feature into main',main_merge_method:'merge',main_merge_url:'https://github.com/acme/pharos/commit/abcdef1234567890',conversations:[{
+test('workspace links GitHub pull requests the service found in conversation text', async t => {
+  const page = await workFixture(t,{prs:[],discovered_prs:[{host:'github.com',number:73,url:'https://github.com/acme/pharos/pull/73'}],canonical_remote:'git@github.com:acme/pharos.git',main_merge_commit:'abcdef1234567890',main_merge_title:'Merge feature into main',main_merge_method:'merge',main_merge_url:'https://github.com/acme/pharos/commit/abcdef1234567890',conversations:[{
     provider:'codex',native_id:'one',coverage:'complete',messages:[human('Ship the fix'),event('reply','message','Opened https://github.com/acme/pharos/pull/73 for review.',4)]
   }]});
   assert.equal(await page.getByRole('link',{name:'PR #73',exact:true}).getAttribute('href'),'https://github.com/acme/pharos/pull/73');
@@ -368,10 +389,10 @@ test('workspace switches conversations, links files across conversations, and wa
   assert.match(await page.locator('.coverage-warning').innerText(),/claude · partial/);
   await page.locator('.file-index > summary').click();
   await page.locator('.file-index-link').click();
-  assert.equal(await page.locator('.conversation-selector').inputValue(),'1');
+  await page.waitForFunction(()=>document.querySelector('.conversation-selector')?.value==='1');
   assert.match(await page.locator('.conversation-panel').innerText(),/Second prompt/);
   await page.locator('.conversation-selector').selectOption('0');
-  assert.match(await page.locator('.conversation-panel').innerText(),/First prompt/);
+  await page.locator('.conversation-panel',{hasText:'First prompt'}).waitFor();
   assert.equal(await page.locator('.conversation-toolbar input').inputValue(),'');
 });
 
@@ -388,7 +409,7 @@ test('workspace conversation picker lives in the card, follows Library search, a
   assert.equal(new URL(page.url()).searchParams.get('conversation'),'conversation-two');
   await picker.selectOption('0');
   assert.equal(new URL(page.url()).searchParams.get('conversation'),'conversation-one');
-  assert.match(await page.locator('.conversation-panel').innerText(),/First prompt/);
+  await page.locator('.conversation-panel',{hasText:'First prompt'}).waitFor();
   await page.goBack();
   await page.locator('.conversation-selector').waitFor();
   assert.equal(await page.locator('.conversation-selector').inputValue(),'1');
@@ -402,8 +423,9 @@ test('Ctrl+F searches across conversations and switches to the next matching car
   ]});
   await page.keyboard.press('Control+f');
   await page.getByRole('searchbox',{name:'Find in conversation'}).fill('saffron');
-  assert.match(await page.locator('.conversation-find-workspace').innerText(),/1 of 2 conversations match/);
+  await page.locator('.conversation-find-workspace',{hasText:'1 of 2 conversations match'}).waitFor();
   await page.locator('.conversation-find-row button[title="Next match (Enter)"]').click();
+  await page.locator('.conversation-find-match').waitFor();
   assert.equal(await page.locator('.conversation-selector').inputValue(),'1');
   assert.equal(new URL(page.url()).searchParams.get('conversation'),'conversation-two');
   assert.equal(await page.locator('.conversation-find-match').count(),1);
@@ -661,16 +683,17 @@ test('nested delegations read like turns and appear as layers in the token rail'
     event('outer-result','delegation_result',{content:'Audit complete'},7,{call_id:'outer-call'}),
   ]);
   const runs=page.locator('.subagent-run');
-  assert.equal(await runs.count(),2);
+  assert.equal(await runs.count(),1);
   assert.match(await runs.first().locator(':scope > summary').innerText(),/Reviewer.*Audit the interface.*Audit complete/s);
-  assert.match(await runs.last().locator(':scope > summary').textContent(),/Analyst.*Check the token rail.*Rail checked/s);
   const markers=page.locator('.token-map .event-marker');
   assert.equal(await markers.count(),2);
   assert.match(await markers.nth(0).getAttribute('aria-label'),/Subagent outer-call · 12,000 input tokens/);
   assert.match(await markers.nth(1).getAttribute('aria-label'),/Subagent inner-call · 5,000 input tokens/);
   assert.notEqual(await markers.nth(0).evaluate(el=>el.style.getPropertyValue('--token-color')),await markers.nth(1).evaluate(el=>el.style.getPropertyValue('--token-color')));
   await markers.nth(1).click();
+  assert.equal(await runs.count(),2,'The rail reveals the nested run');
   assert.equal(await runs.last().evaluate(el=>el.open),true);
+  assert.match(await runs.last().locator(':scope > summary').textContent(),/Analyst.*Check the token rail.*Rail checked/s);
 });
 
 test('narrow screens retain readable action targets without horizontal overflow', async t => {
@@ -730,7 +753,7 @@ test('orphaned child events and unknown envelopes remain accessible', async t =>
   assert.match(await transcript(page).innerText(), /orphan\.txt/);
   assert.match(await transcript(page).innerText(), /future_provider_event|Future Provider Event/i);
   assert.doesNotMatch(await transcript(page).innerText(), /forensic-value/);
-  const unknown = page.locator('.tool-event').filter({ hasText: 'forensic-value' });
+  const unknown = page.locator('.tool-event').filter({ hasText: /future_provider_event|Future Provider Event/i });
   await unknown.locator(':scope > summary').click();
   await unknown.locator('.raw-event > summary').click();
   assert.match(await unknown.innerText(), /forensic-value/);
@@ -1138,5 +1161,12 @@ test('a single oversized turn also starts as a summary', async t => {
   assert.equal(await page.locator('.turn').count(),1);
   assert.equal(await page.locator('.turn-body .timeline-entry').count(),0);
   await page.locator('.turn > summary').click();
-  await page.waitForFunction(()=>document.querySelectorAll('.turn-body .timeline-entry').length===351);
+  // The first page renders at once; the rest follow as the reader scrolls.
+  assert.equal(await page.locator('.turn-body .timeline-entry').count(),151);
+  assert.match(await page.locator('.sequence-more').innerText(),/Show 150 more · 200 events not shown/);
+  await page.locator('.sequence-more').scrollIntoViewIfNeeded();
+  await page.waitForFunction(()=>document.querySelectorAll('.turn-body .timeline-entry').length===301);
+  await page.locator('.sequence-more').click();
+  assert.equal(await page.locator('.turn-body .timeline-entry').count(),351);
+  assert.equal(await page.locator('.sequence-more').count(),0);
 });

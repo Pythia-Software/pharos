@@ -70,10 +70,11 @@ test('Library table scrolls with the page below the header, and conversation car
       if (url.pathname === '/assets/query-tables.css') return route.fulfill({ contentType: 'text/css', body: fs.readFileSync(path.join(root, 'internal/archive/assets/query-tables.css')) });
       if (url.pathname.endsWith('/distinct')) return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ values: [], hasMore: false }) });
       if (url.pathname.startsWith('/api/query/') && route.request().method() === 'POST') return route.fulfill({ contentType: 'application/json', body: JSON.stringify(url.pathname.endsWith('/aggregations') ? { metrics: [] } : { rows, total: rows.length }) });
-      if (url.pathname === '/api/work/work-0') return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ conversations: [{ provider: 'codex', messages: [
+      if (url.pathname === '/api/work/work-0') return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ conversations: [{ id: 'conversation-0', provider: 'codex' }, { id: 'agent-0', provider: 'codex', parent_id: 'conversation-0' }] }) });
+      if (url.pathname === '/api/work/work-0/conversations/conversation-0') return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ id: 'conversation-0', provider: 'codex', messages: [
         { native_id: 'u1', role: 'user', kind: 'message', text: '<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>\nFix the bug' },
         { native_id: 'a1', role: 'assistant', kind: 'message', text: 'Fixed **it**.' },
-      ] }] }) });
+      ] }) });
       // Other pages' panels handle an unavailable API; a wrong-shaped stub would crash them.
       if (url.pathname.startsWith('/api/')) return route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not stubbed' }) });
       return route.fulfill({ status: 404 });

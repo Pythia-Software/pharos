@@ -102,6 +102,7 @@ declare global {
     pharosOpenDetail?: (id: string) => void;
     pharosCopyText?: (text: string) => Promise<void>;
     pharosShareDownload?: (ids: string[]) => Promise<void>;
+    pharosApi?: (path: string) => Promise<Row>;
     pharosMessageCard?: (message: TranscriptMessage) => HTMLElement;
     pharosTurnSummaries?: (conversation: Row) => TurnSummary[];
     pharosCarbon?: { refresh: () => Promise<void> };
@@ -406,9 +407,9 @@ function ShareSelection({ ids, api, transport }: { ids: unknown[]; api: QueryTab
   </>;
 }
 
-function loadWork(id: string, signal?: AbortSignal): Promise<Row> {
-  const work = shared?.works.find(item => item.id === id);
-  return work ? Promise.resolve(work) : fetch(`/api/work/${encodeURIComponent(id)}`, { signal }).then(responseJSON<Row>);
+// The reader's requests, answered from the file itself in a shared export.
+function readerJSON(path: string, signal?: AbortSignal): Promise<Row> {
+  return shared ? window.pharosApi!(path) : fetch(path, { signal }).then(responseJSON<Row>);
 }
 
 function conversationTurns(work: Row): ConversationTurn[] {
@@ -427,8 +428,13 @@ function ResultConversationBrowser({ workspaceID }: { workspaceID: string }) {
     const controller = new AbortController();
     void (async () => {
       try {
-        const work = await loadWork(workspaceID, controller.signal);
-        if (!controller.signal.aborted) setState({ loading: false, error: "", turns: conversationTurns(work) });
+        const base = `/api/work/${encodeURIComponent(workspaceID)}`;
+        const work = await readerJSON(base, controller.signal);
+        // The overview omits messages. Sub-agents' assignments are not user
+        // turns, so only top-level conversations are fetched.
+        const conversations = await Promise.all((work.conversations ?? []).filter((conversation: Row) => !conversation.parent_id)
+          .map((conversation: Row) => readerJSON(`${base}/conversations/${encodeURIComponent(String(conversation.id))}`, controller.signal)));
+        if (!controller.signal.aborted) setState({ loading: false, error: "", turns: conversationTurns({ conversations }) });
       } catch (error) {
         if (!controller.signal.aborted) setState({ loading: false, error: error instanceof Error ? error.message : "Conversation unavailable", turns: [] });
       }

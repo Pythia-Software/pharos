@@ -54,12 +54,20 @@ func (c *Catalog) SharedHTML(ctx context.Context, ids []string) ([]byte, string,
 	works := make([]map[string]any, 0, len(ids))
 	kept := make([]string, 0, len(ids))
 	for _, id := range ids {
-		work, err := c.WorkDetail(id)
+		work, err := c.WorkOverview(id)
 		if err != nil {
 			return nil, "", err
 		}
 		if work == nil {
 			return nil, "", errUnknownWork
+		}
+		// The reader loads a conversation at a time; a file holds them all, whole.
+		for _, conversation := range work["conversations"].([]map[string]any) {
+			full, err := c.workConversation(id, firstString(conversation["id"]), false)
+			if err != nil {
+				return nil, "", err
+			}
+			conversation["messages"], conversation["token_usage"] = full["messages"], full["token_usage"]
 		}
 		if shared := sharedWork(work); len(shared["conversations"].([]map[string]any)) > 0 {
 			works = append(works, shared)
@@ -95,11 +103,14 @@ func sharedWork(work map[string]any) map[string]any {
 	shared["prs"] = pickAll(work["prs"], "number", "url", "title", "relationship")
 	shared["metrics"] = pickAll(work["metrics"], "name", "value", "unit", "status")
 	shared["changes"] = pickAll(work["changes"], "path", "classification", "status", "complete")
+	shared["discovered_prs"] = pickAll(work["discovered_prs"], "host", "number", "url")
+	shared["files"] = pickAll(work["files"], "path", "conversation_id")
 	conversations, _ := work["conversations"].([]map[string]any)
 	kept := make([]map[string]any, 0, len(conversations))
 	for _, conversation := range conversations {
 		item := pick(conversation, "id", "provider", "model", "native_id", "coverage", "started_at", "ended_at",
-			"harness", "harness_version_first", "harness_version_last", "harness_version_source", "token_usage")
+			"harness", "harness_version_first", "harness_version_last", "harness_version_source", "token_usage",
+			"parent_id", "message_count", "first_prompt")
 		messages, _ := conversation["messages"].([]map[string]any)
 		item["messages"] = sharedMessages(messages)
 		kept = append(kept, item)

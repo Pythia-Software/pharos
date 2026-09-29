@@ -92,6 +92,8 @@ No claim is made that ChatGPT desktop’s local cache is complete. ChatGPT is in
 
 The Library UI sends its text, file, and URL searches to the Library query table as `find=` (with `find_kind`, `find_fuzzy`, `find_case`, and `find_separators`), which keeps the work `/api/library/find` hits and adds each row's best match and match count; `/api/library/find` still returns the hits themselves. Its text path uses FTS vocabulary and message verification without vector ranking. Legacy `/api/search`, query-table `search=`, and MCP conversation discovery still retain the previous concept/feature embedding behavior. No archive content leaves the machine. Extractive summaries cite retained source locators.
 
+The workspace page loads a workspace in pieces, since one long session with many sub-agents can retain hundreds of megabytes. `/api/work/{id}` returns the workspace without messages, plus what the page used to derive from all of them: each conversation's message count and first prompt, pull request links found in any message, and the files its tool calls touched. `/api/work/{id}/conversations/{id}` returns one conversation for the reader. Its long tool outputs and event bodies are shortened past 2 KB, with JSON keeping its structure so error flags, exit codes, and token usage survive, and are marked `text_clipped`/`raw_clipped`. `/api/messages/{id}` returns a message's original when the reader opens it. Finding text across a workspace's conversations runs on the service (`/find`). In the reader, a turn renders 150 events at a time and adds more as it scrolls; event details are built when opened.
+
 The HTTP service binds only to loopback and requires either a bearer token or its HttpOnly UI cookie. Core endpoints are:
 
 ```text
@@ -99,6 +101,9 @@ GET  /api/search?q=&repository=&source=&file=&pr=&substring=&limit=&offset=
 GET  /api/library/find?kind=text|file|url&q=&fuzzy=&case=&separators=&limit=&offset=
 GET  /api/search/status
 GET  /api/work/{workspace_id}
+GET  /api/work/{workspace_id}/conversations/{conversation_id}
+GET  /api/work/{workspace_id}/find?q=&depth=messages|thinking|tools|responses&regex=&case=
+GET  /api/messages/{message_id}
 GET  /api/conversation/{conversation_id}?limit=&offset=
 GET  /api/change/{change_set_id}
 GET  /api/trace?file=&pr=
@@ -167,7 +172,7 @@ for tool and status. Output token counts are estimates from bytes.
 one) returns the works as an attachment: the app's own page with its assets
 inlined (including the query-table bundle) and the data embedded as JSON in
 `#pharosShareData`. When that element exists, `ui.py` sets `SHARE` and answers
-`api('/api/work/…')` from it, routes between pages with `?page=` and `?work=`
+the reader's `/api/work/…` requests (overview, one conversation at a time, and search across a work's conversations) from it, routes between pages with `?page=` and `?work=`
 (a file cannot change its path), and hides the library chrome
 (`assets/share.css`). The Library selection UI is `ShareSelection` in
 `web/src/index.tsx`.
