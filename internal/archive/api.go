@@ -699,6 +699,9 @@ func (s *Server) syncSources(w http.ResponseWriter, sources []SourceConfig) {
 		flusher.Flush()
 	}
 	_ = s.Catalog.Checkpoint()
+	if ctx.Err() == nil {
+		s.Catalog.refreshAuthorship()
+	}
 	// Git ancestry enrichment can involve thousands of local Git calls. Run it
 	// once after the entire source sync, without holding up ingestion progress.
 	// It also rebuilds the Tools rollup (see refreshGitInBackground).

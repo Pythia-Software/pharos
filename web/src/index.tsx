@@ -1025,7 +1025,7 @@ function useAuthorshipStatus(onBuilt: () => void): AuthorshipStatus | null {
         setStatus(next);
         if (built.current !== undefined && next.built_at !== built.current) onBuilt();
         built.current = next.built_at;
-        if (next.running || next.stale) timer = window.setTimeout(load, 5000);
+        if (next.running) timer = window.setTimeout(load, 5000);
       } catch { /* the status line stays as it was */ }
     };
     void load();

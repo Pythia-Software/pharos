@@ -414,3 +414,61 @@ func TestAuthorshipUpgradeAddsWordColumns(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// An index or sync rebuilds authorship when messages changed; a page builds
+// it only when it is missing or classified by older rules.
+func TestAuthorshipRebuildsAfterIndex(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	started := []func(context.Context){}
+	catalog.background = func(work func(context.Context)) bool {
+		started = append(started, work)
+		return true
+	}
+	check := func(step string, want int, running bool) {
+		t.Helper()
+		if len(started) != want || catalog.authorshipRunning() != running {
+			t.Fatalf("%s: %d rebuilds started, running=%v; want %d, running=%v", step, len(started), catalog.authorshipRunning(), want, running)
+		}
+	}
+	if !catalog.ensureAuthorship() || !catalog.ensureAuthorship() {
+		t.Fatal("a missing ledger should be stale")
+	}
+	check("a page with no ledger", 1, true)
+	// An index writes while the rebuild runs, and asks for a rebuild.
+	if err := bumpToolLedgerGeneration(catalog.DB); err != nil {
+		t.Fatal(err)
+	}
+	catalog.refreshAuthorship()
+	check("an index during the rebuild", 1, true)
+	started[0](context.Background())
+	check("after the rebuild", 2, true)
+	started[1](context.Background())
+	check("after the second rebuild", 2, false)
+	if catalog.ensureAuthorship() {
+		t.Fatal("the ledger should be current")
+	}
+	if err := bumpToolLedgerGeneration(catalog.DB); err != nil {
+		t.Fatal(err)
+	}
+	if !catalog.ensureAuthorship() {
+		t.Fatal("the ledger should lag the index")
+	}
+	check("a page after an index elsewhere", 2, false)
+	catalog.refreshAuthorship()
+	check("the next index", 3, true)
+	stopped, stop := context.WithCancel(context.Background())
+	stop()
+	started[2](stopped)
+	check("a stopped rebuild", 3, false)
+
+	// Older rules rebuild on a page, unless that rebuild just failed.
+	if _, err := catalog.DB.Exec("UPDATE meta SET value='1/authorship-v0' WHERE key='authorship_generation'"); err != nil {
+		t.Fatal(err)
+	}
+	catalog.authorship.lastError = "disk full"
+	catalog.ensureAuthorship()
+	check("a page after a failed rebuild", 3, false)
+	catalog.authorship.lastError = ""
+	catalog.ensureAuthorship()
+	check("a page with older rules", 4, true)
+}
