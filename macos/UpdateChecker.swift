@@ -81,7 +81,7 @@ enum UpdateChecker {
               !release.draft, !release.prerelease else { throw UpdateCheckError.invalidRelease }
         guard version > installed else { return .current }
 
-        let name = "Pharos-\(release.tagName)-macos-universal.dmg"
+        let name = "\(release.tagName)-Pharos-macos-universal.dmg"
         guard let asset = release.assets.first(where: { $0.name == name }),
               asset.browserDownloadURL.scheme == "https",
               asset.browserDownloadURL.host == "github.com",
