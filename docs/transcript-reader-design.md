@@ -67,6 +67,8 @@ Pharos is an archive reader, not a live execution console. It should optimize fo
 - Each activity row retains the complete archived payload behind another disclosure.
 - Structured payloads remain lazily navigable as a JSON tree.
 - Large textual output is bounded and scrollable instead of expanding the page indefinitely.
+- Long outputs and source records arrive shortened (past 2 KB, keeping JSON structure) and load in full when their event opens. Find in the page sees the shortened text until then; the count of other matching conversations searches the originals on the service.
+- A workspace loads one conversation at a time, and a turn renders 150 events at a time, adding more as the reader scrolls or as search, failure navigation, or a message link needs them.
 - Exact source coverage, native identity, and origin remain available in Source details.
 
 ### Refined event grammar
