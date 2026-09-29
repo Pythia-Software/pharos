@@ -383,8 +383,13 @@ function ResultConversationBrowser({ workspaceID }: { workspaceID: string }) {
     const controller = new AbortController();
     void (async () => {
       try {
-        const work = await responseJSON<Row>(await fetch(`/api/work/${encodeURIComponent(workspaceID)}`, { signal: controller.signal }));
-        if (!controller.signal.aborted) setState({ loading: false, error: "", turns: conversationTurns(work) });
+        const base = `/api/work/${encodeURIComponent(workspaceID)}`;
+        const work = await responseJSON<Row>(await fetch(base, { signal: controller.signal }));
+        // The overview omits messages. Sub-agents' assignments are not user
+        // turns, so only top-level conversations are fetched.
+        const conversations = await Promise.all((work.conversations ?? []).filter((conversation: Row) => !conversation.parent_id)
+          .map(async (conversation: Row) => responseJSON<Row>(await fetch(`${base}/conversations/${encodeURIComponent(String(conversation.id))}`, { signal: controller.signal }))));
+        if (!controller.signal.aborted) setState({ loading: false, error: "", turns: conversationTurns({ conversations }) });
       } catch (error) {
         if (!controller.signal.aborted) setState({ loading: false, error: error instanceof Error ? error.message : "Conversation unavailable", turns: [] });
       }

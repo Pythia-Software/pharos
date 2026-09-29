@@ -225,8 +225,35 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, value, http.StatusOK)
 		}
 	case strings.HasPrefix(path, "/api/work/"):
-		id := strings.TrimPrefix(path, "/api/work/")
-		value, err := s.Catalog.WorkDetail(id)
+		// /api/work/{id}, /api/work/{id}/conversations/{conversation}, and
+		// /api/work/{id}/find: the reader loads a workspace in pieces.
+		parts := strings.Split(strings.TrimPrefix(path, "/api/work/"), "/")
+		var value any
+		var err error
+		switch {
+		case len(parts) == 1:
+			value, err = nilIfNoMap(s.Catalog.WorkOverview(parts[0]))
+		case len(parts) == 3 && parts[1] == "conversations":
+			value, err = nilIfNoMap(s.Catalog.WorkConversation(parts[0], parts[2]))
+		case len(parts) == 2 && parts[1] == "find":
+			q := r.URL.Query()
+			var ids []string
+			ids, err = s.Catalog.WorkConversationMatches(parts[0], q.Get("q"), q.Get("depth"), q.Get("regex") == "1", q.Get("case") == "1")
+			if err != nil {
+				writeError(w, err, http.StatusBadRequest)
+				return
+			}
+			value = map[string]any{"conversations": ids}
+		}
+		if err != nil {
+			writeError(w, err, http.StatusInternalServerError)
+		} else if value == nil {
+			writeJSON(w, map[string]any{"error": "not found"}, http.StatusNotFound)
+		} else {
+			writeJSON(w, value, http.StatusOK)
+		}
+	case strings.HasPrefix(path, "/api/messages/"):
+		value, err := nilIfNoMap(s.Catalog.MessageOriginal(strings.TrimPrefix(path, "/api/messages/")))
 		if err != nil {
 			writeError(w, err, http.StatusInternalServerError)
 		} else if value == nil {
@@ -809,6 +836,14 @@ func merge(left, right map[string]any) map[string]any {
 		left[key] = value
 	}
 	return left
+}
+
+// nilIfNoMap turns a missing record into an untyped nil for a not-found check.
+func nilIfNoMap(value map[string]any, err error) (any, error) {
+	if value == nil {
+		return nil, err
+	}
+	return value, err
 }
 
 func writeResult(w http.ResponseWriter, value any, err error) {
