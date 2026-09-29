@@ -49,6 +49,7 @@
 /* Chips and notes */
 .findings-chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border: 1px solid var(--line); border-radius: 20px; color: var(--muted); font-size: var(--fs-xs); line-height: 1.6; white-space: nowrap; }
 .findings-chip svg.app-icon { width: 12px; height: 12px; }
+.findings-chip.detector { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); color: var(--accent); font-weight: 600; }
 .findings-chip.new { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--ink); font-weight: 600; }
 .findings-chip.watching { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); color: var(--ink); }
 .findings-chip.good { border-color: color-mix(in srgb, var(--sea) 55%, var(--line)); color: var(--sea); }
@@ -109,10 +110,20 @@ button.findings-tile[aria-pressed="true"] { border-color: var(--accent); box-sha
 .findings-explanation, .findings-change { margin: 0; font-size: var(--fs-md); line-height: 1.5; max-width: 76ch; }
 .findings-change-label { color: var(--accent); font-weight: 650; }
 .findings-change-label::after { content: ":"; }
-.findings-impact { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 16px; font-size: var(--fs-md); }
+.findings-card-body { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px 24px; min-width: 0; }
+.findings-card-text { display: flex; flex-direction: column; gap: 9px; flex: 1 1 auto; min-width: 0; }
+.findings-detector { flex: none; color: var(--accent); font-weight: 650; letter-spacing: .02em; }
+.findings-impact { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; font-size: var(--fs-md); }
 .findings-impact-lead { color: var(--ink); }
 .findings-impact-lead strong { font: 650 var(--fs-xl) var(--serif); letter-spacing: -.01em; margin-right: 2px; }
-.findings-impact-rest { color: var(--muted); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.findings-impact-note::before { content: "· "; }
+.findings-impact-rest { display: inline-flex; flex-wrap: wrap; color: var(--muted); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.findings-impact-rest span + span::before { content: " · "; white-space: pre; }
+/* On a card the impact stacks down the right-hand side. */
+.findings-card-body > .findings-impact { flex: none; flex-direction: column; flex-wrap: nowrap; align-items: flex-end; gap: 2px; max-width: 34%; text-align: right; }
+.findings-card-body > .findings-impact .findings-impact-note::before, .findings-card-body > .findings-impact .findings-impact-rest span + span::before { content: none; }
+.findings-card-body > .findings-impact .findings-impact-note { color: var(--muted); font-size: var(--fs-sm); }
+.findings-card-body > .findings-impact .findings-impact-rest { flex-direction: column; align-items: flex-end; }
 .findings-card .findings-actions { margin-top: 3px; }
 .findings-in-cart { display: inline-flex; align-items: center; gap: 4px; }
 .findings-in-cart-label { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 10px; border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line)); border-radius: 5px; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--ink); font-size: var(--fs-md); font-weight: 600; white-space: nowrap; }
@@ -121,7 +132,6 @@ button.findings-tile[aria-pressed="true"] { border-color: var(--accent); box-sha
 /* Cart */
 .findings-cart { position: sticky; top: 16px; display: flex; flex-direction: column; gap: 14px; max-height: calc(100vh - 140px); overflow: auto; padding: 15px 16px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); transition: box-shadow .3s, border-color .3s; }
 .findings-cart:focus { outline: none; }
-.findings-cart.highlight { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
 .findings-cart h2 { margin: 0; font-size: var(--fs-xl); }
 .findings-cart-empty { margin: 0; color: var(--muted); font-size: var(--fs-md); line-height: 1.5; }
 .findings-cart-group { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
@@ -300,19 +310,11 @@ button.findings-tile[aria-pressed="true"] { border-color: var(--accent); box-sha
 #openFindingsSettings { flex: none; height: 32px; padding: 0 13px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--ink); white-space: nowrap; }
 #openFindingsSettings:hover { border-color: var(--accent); color: var(--accent); }
 
-/* Header: tab badge and the cart button, beside the library drive. */
+/* Header: the tab badge counting open findings. */
 .tabs .findings-badge { display: inline-block; min-width: 18px; margin-left: 6px; padding: 0 5px; border-radius: 9px; background: var(--mast-brass, var(--accent)); color: var(--mast-active-ink, var(--panel)); font: 700 var(--fs-2xs)/16px var(--sans); text-align: center; vertical-align: 1px; }
 .tabs .findings-badge[hidden] { display: none; }
 .tabs button.active .findings-badge { background: var(--mast-active-ink, var(--panel)); color: var(--mast-brass, var(--accent)); }
-.findings-cart-button { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 32px; margin-left: 8px; padding: 0 9px 0 8px; border: 1px solid var(--mast-brass, var(--accent)); border-radius: 4px; background: color-mix(in srgb, var(--mast-brass, var(--accent)) 18%, transparent); color: var(--mast-ink, var(--ink)); font-size: var(--fs-md); font-weight: 650; white-space: nowrap; }
-.findings-cart-button:hover { background: color-mix(in srgb, var(--mast-brass, var(--accent)) 30%, transparent); }
-.findings-cart-button[hidden] { display: none; }
-.findings-cart-button svg.app-icon { width: 16px; height: 16px; stroke: currentColor; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; }
-/* The header has no room for the words beside the search field; they stay in the button's name and tooltip. */
-.findings-cart-words { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.findings-cart-button span { font-variant-numeric: tabular-nums; }
 
-@media (max-width: 960px) { .findings-cart-button { order: 2; margin-left: auto; } }
 @media (max-width: 1080px) {
   .findings-layout.with-cart, .findings-detail-grid { grid-template-columns: minmax(0, 1fr); }
   .findings-cart { position: static; max-height: none; }
@@ -320,6 +322,9 @@ button.findings-tile[aria-pressed="true"] { border-color: var(--accent); box-sha
   .findings-hero { grid-column: 1 / -1; }
 }
 @media (max-width: 760px) {
+  .findings-card-body { flex-direction: column; }
+  .findings-card-body > .findings-impact { align-items: flex-start; max-width: none; text-align: left; }
+  .findings-card-body > .findings-impact .findings-impact-rest { align-items: flex-start; }
   .findings-tiles, .findings-tiles.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .findings-rank { margin-left: 0; }
   .findings-evidence button, .findings-evidence li > div { grid-template-columns: 50px minmax(0, 1fr); }

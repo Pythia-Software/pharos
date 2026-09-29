@@ -1,7 +1,7 @@
 // Drives the Findings tab (web/src/findings.tsx in the query-tables bundle and
 // the shell in internal/archive/assets/ui.py) against mocked /api/findings
-// responses: routing to /findings and back, the tab badge and the header's
-// cart button, a finding's detail with its chart, the prompt cart's copy
+// responses: routing to /findings and back, the tab badge counting open
+// findings, a finding's detail with its chart, the prompt cart's copy
 // flow, and the empty state.
 //
 //   node --test tests/findings-ui.test.cjs
@@ -22,6 +22,7 @@ const openCard = {
   explanation: 'explo keeps its agent instructions in `CLAUDE.md`, which only Claude reads.',
   impact: { usd: 41.2, tokens: 150e6, minutes: 12, failures: 330, window_days: 28 }, impact_note: '330 searches', rate: '1 in 3',
   change: 'Make one instructions file that both Claude and Codex read.', change_label: 'One shared instructions file', attempt: 1,
+  detector: 'drift', detector_label: 'Instruction drift',
   target: repo, target_label: 'explo', scope_label: 'explo', repository_id: 'repo_explo', first_seen_at: '2026-09-20T10:00:00Z', last_seen: '2026-09-27T10:00:00Z', active: true, new: true,
 };
 const cartCard = {
@@ -48,6 +49,7 @@ function overview({ findings = [openCard, cartCard, watchingCard], fresh = 2 } =
     repositories: [{ id: 'repo_explo', name: 'explo', work: 700, pr_share: 0.86, handoff: 'pr', override: null }],
     near: [{ id: 'n1', title: '`python`: command not found', affected: 3 }, { id: 'n2', title: 'A missing AGENTS.md in one repository', affected: 4 }],
     wins: [],
+    detectors: [{ name: 'drift', label: 'Instruction drift', enabled: true }, { name: 'failure', label: 'Recurring failures', enabled: false }],
   };
 }
 const weeks = Array.from({ length: 14 }, (_, index) => {
@@ -96,7 +98,7 @@ async function open(state) {
   return { browser, page, errors };
 }
 
-test('Findings is routed at /findings, badges new findings until visited, and the cart button opens it', async () => {
+test('Findings is routed at /findings, and its tab badge always counts the open findings', async () => {
   const state = { overview: overview(), requests: [] };
   const { browser, page, errors } = await open(state);
   try {
@@ -105,9 +107,9 @@ test('Findings is routed at /findings, badges new findings until visited, and th
     await page.locator('#findingsBadge:not([hidden])').waitFor();
     assert.equal(await page.locator('#findingsBadge').innerText(), '2');
     assert.equal(await tab.innerText(), 'Optimize2');
-    assert.equal(await tab.getAttribute('aria-label'), 'Optimize, 2 new since your last visit');
-    assert.equal(await page.locator('#findingsCartCount').innerText(), '1');
-    assert.equal(await page.locator('#findingsCartButton').isVisible(), true);
+    assert.equal(await tab.getAttribute('aria-label'), 'Optimize, 2 open findings');
+    // The prompt cart lives on the page, not in the header.
+    assert.equal(await page.locator('#findingsCartButton').count(), 0);
     // Tabs sit in order, with Findings between Tools and MCP.
     assert.deepEqual(await page.locator('nav.tabs button').evaluateAll(buttons => buttons.filter(b => !b.hidden).map(b => b.dataset.view)), ['library', 'usage', 'tools', 'findings', 'mcp']);
 
@@ -123,19 +125,31 @@ test('Findings is routed at /findings, badges new findings until visited, and th
     await page.screenshot({ path: path.join(root, '.context', 'findings-updated.png'), fullPage: true });
     assert.equal(new URL(page.url()).pathname, '/findings');
     assert.equal(await page.locator('#findings').evaluate(view => view.classList.contains('active')), true);
-    await page.locator('#findingsBadge[hidden]').waitFor({ state: 'attached' });
+    // The badge keeps counting open findings while the page is open.
+    assert.equal(await page.locator('#findingsBadge').innerText(), '2');
+    assert.equal(await page.locator('#findingsBadge').evaluate(badge => badge.hidden), false);
     assert.ok(state.requests.some(request => request.method === 'POST' && request.path === '/api/findings/seen'));
     // New since the last visit stays marked on the card during this visit.
     assert.equal(await page.locator('.findings-card', { hasText: "explo's instructions" }).locator('.findings-chip.new').count(), 1);
-    // The ranked unit leads each card, then the note that makes the point.
-    assert.match(await page.locator('.findings-card').first().locator('.findings-impact-lead').innerText(), /^150M tokens a month · 330 searches$/);
-    assert.match(await page.locator('.findings-card').first().locator('.findings-explanation').innerHTML(), /<code>CLAUDE\.md<\/code>/);
+    // The ranked unit leads each card, stacked on its right-hand side with the note and the other units under it.
+    const first = page.locator('.findings-card').first();
+    assert.equal(await first.locator('.findings-impact-lead').innerText(), '150M tokens a month');
+    assert.equal(await first.locator('.findings-impact-note').innerText(), '330 searches');
+    const impact = await first.locator('.findings-impact').boundingBox();
+    const text = await first.locator('.findings-card-text').boundingBox();
+    assert.ok(impact.x >= text.x + text.width - 1, 'the impact sits to the right of the text');
+    assert.ok(await first.locator('.findings-impact-lead').evaluate(lead => lead.nextElementSibling.getBoundingClientRect().top >= lead.getBoundingClientRect().bottom - 1), 'the impact is stacked');
+    // The card names its detector, and labels its two paragraphs.
+    assert.equal(await first.locator('.findings-detector').innerText(), 'Instruction drift');
+    assert.equal(await first.locator('.findings-explanation .findings-change-label').innerText(), 'Problem');
+    assert.equal(await first.locator('.findings-change .findings-change-label').innerText(), 'Solution');
+    assert.match(await first.locator('.findings-explanation').innerHTML(), /<code>CLAUDE\.md<\/code>/);
 
     await page.locator('button[data-view=library]').click();
-    await page.locator('#findingsCartButton').click();
+    assert.equal(await page.locator('#findingsBadge').innerText(), '2');
+    await tab.click();
     await page.locator('#findingsCart').waitFor();
     assert.equal(new URL(page.url()).pathname, '/findings');
-    await page.waitForFunction(() => document.activeElement?.id === 'findingsCart');
 
     // A finding's page has its own address; back and forward move between it and the list.
     await page.getByRole('tab', { name: /Watching/ }).click();
@@ -196,6 +210,18 @@ test('Copying a cart prompt writes the clipboard first and then starts measuring
     await page.waitForFunction(() => document.querySelector('.findings-toast.shown'));
     const action = state.requests.find(request => request.path.endsWith('/action'));
     assert.deepEqual(action.body, { action: 'dismiss', reason: 'not_worth_it' });
+
+    // A whole detector can be dismissed at once, or turned off.
+    await card.getByRole('button', { name: 'Dismiss' }).click();
+    await page.getByRole('menuitem', { name: /Dismiss all from this detector/ }).waitFor();
+    if (process.env.PHAROS_UI_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.PHAROS_UI_SCREENSHOTS, 'findings-dismiss-menu.png') });
+    await page.getByRole('menuitem', { name: /Dismiss all from this detector/ }).click();
+    await page.waitForFunction(() => document.querySelector('.findings-toast.shown'));
+    assert.deepEqual(state.requests.filter(request => request.path.endsWith('/action')).at(-1).body, { action: 'dismiss_detector' });
+    await card.getByRole('button', { name: 'Dismiss' }).click();
+    await page.getByRole('menuitem', { name: /Turn this detector off/ }).click();
+    await page.waitForFunction(() => /turned off/.test(document.querySelector('.findings-toast')?.textContent ?? ''));
+    assert.deepEqual(state.requests.filter(request => request.path.endsWith('/action')).at(-1).body, { action: 'disable_detector' });
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });
@@ -233,11 +259,14 @@ test('With nothing to show, Findings says what it looked at and which patterns a
     assert.match(text, /shows up in 5 conversations \(the recommended threshold for a library this size\)/);
     assert.match(text, /Two patterns are close: python: command not found \(3 conversations\) and A missing AGENTS\.md in one repository \(4 conversations\)/);
     assert.equal(await page.locator('#findingsBadge').evaluate(badge => badge.hidden), true);
-    assert.equal(await page.locator('#findingsCartButton').evaluate(button => button.hidden), true);
     if (process.env.PHAROS_UI_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.PHAROS_UI_SCREENSHOTS, 'findings-empty-state.png') });
     await page.getByRole('link', { name: 'Change the threshold' }).click();
     await page.getByRole('heading', { name: 'Findings settings' }).waitFor();
     assert.equal(new URL(page.url()).searchParams.get('view'), 'settings');
+    // A turned-off detector is listed in settings, where it comes back on.
+    await page.getByRole('checkbox', { name: 'Recurring failures' }).click();
+    assert.deepEqual(state.requests.filter(request => request.path === '/api/findings/settings').at(-1).body, { detector_enabled: { failure: true } });
+    if (process.env.PHAROS_UI_SCREENSHOTS) await page.locator('#findingsDetectorsTitle').scrollIntoViewIfNeeded(), await page.screenshot({ path: path.join(process.env.PHAROS_UI_SCREENSHOTS, 'findings-settings-detectors.png') });
     assert.equal(await page.getByRole('slider').inputValue(), '1');
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -158,14 +159,21 @@ type findingSettings struct {
 	Handoff string `json:"handoff"`
 	// RepositoryHandoff overrides Handoff per repository ID.
 	RepositoryHandoff map[string]string `json:"repository_handoff"`
-	// SeenAt is when the Findings view was last opened, for the tab badge.
+	// SeenAt is when the Findings view was last opened, for the "New" chips.
 	SeenAt string `json:"seen_at"`
+	// DisabledDetectors are the detectors whose findings are not shown.
+	DisabledDetectors []string `json:"disabled_detectors"`
+}
+
+// detectorOff reports whether the user turned a detector off.
+func (settings findingSettings) detectorOff(detector string) bool {
+	return slices.Contains(settings.DisabledDetectors, detector)
 }
 
 var findingRanks = map[string]bool{"usd": true, "tokens": true, "minutes": true, "failures": true}
 
 func (c *Catalog) findingSettings(ctx context.Context) (findingSettings, error) {
-	settings := findingSettings{Rank: "usd", Handoff: "auto", RepositoryHandoff: map[string]string{}}
+	settings := findingSettings{Rank: "usd", Handoff: "auto", RepositoryHandoff: map[string]string{}, DisabledDetectors: []string{}}
 	rows, err := c.DB.QueryContext(ctx, "SELECT key,value FROM finding_settings")
 	if err != nil {
 		return settings, err
@@ -187,13 +195,17 @@ func (c *Catalog) findingSettings(ctx context.Context) (findingSettings, error) 
 			settings.SeenAt = value
 		case strings.HasPrefix(key, "handoff:") && (value == "pr" || value == "diff"):
 			settings.RepositoryHandoff[strings.TrimPrefix(key, "handoff:")] = value
+		case strings.HasPrefix(key, "detector_off:") && value == "1":
+			settings.DisabledDetectors = append(settings.DisabledDetectors, strings.TrimPrefix(key, "detector_off:"))
 		}
 	}
+	sort.Strings(settings.DisabledDetectors)
 	return settings, rows.Err()
 }
 
 // SetFindingSettings stores the changed options. A threshold of 0 follows
-// the recommendation; a repository handoff of "auto" removes its override.
+// the recommendation; a repository handoff of "auto" removes its override;
+// detector_enabled turns detectors off (false) or back on (true).
 func (c *Catalog) SetFindingSettings(ctx context.Context, body map[string]any) error {
 	updates := map[string]string{}
 	deletes := []string{}
@@ -226,6 +238,16 @@ func (c *Catalog) SetFindingSettings(ctx context.Context, body map[string]any) e
 			deletes = append(deletes, "handoff:"+repository)
 		default:
 			return fmt.Errorf("a repository's handoff must be auto, pr, or diff")
+		}
+	}
+	for detector, value := range mapValueDefault(body["detector_enabled"]) {
+		if !knownFindingDetector(detector) {
+			return fmt.Errorf("no detector named %q", detector)
+		}
+		if enabled, _ := value.(bool); enabled {
+			deletes = append(deletes, "detector_off:"+detector)
+		} else {
+			updates["detector_off:"+detector] = "1"
 		}
 	}
 	if len(updates) == 0 && len(deletes) == 0 {
@@ -433,8 +455,26 @@ func loadInterventions(ctx context.Context, q queryer, where string, args ...any
 	return items, nil
 }
 
+// dismissFindingTx hides a finding until it is restored and takes it out of
+// the prompt cart.
+func dismissFindingTx(tx *sql.Tx, id, reason, host, stamp string) error {
+	if err := rehomeFindingCart(tx, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM finding_cart WHERE finding_id=?", id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM finding_cart_clones WHERE finding_id=?", id); err != nil {
+		return err
+	}
+	_, err := tx.Exec("INSERT INTO finding_actions(finding_id,action,reason,host_id,created_at) VALUES(?,?,?,?,?)", id, "dismiss", nilIfEmpty(reason), nilIfEmpty(host), stamp)
+	return err
+}
+
 // FindingAction applies a user action to a finding: dismiss (reason not
-// real, not worth it, or won't fix), snooze (7d, 30d, or until_worse),
+// real, not worth it, or won't fix), dismiss_detector (dismiss every open
+// finding from the same detector), disable_detector (stop showing that
+// detector's findings), snooze (7d, 30d, or until_worse),
 // restore, cart add/remove/move/tick, and not_applied ("I didn't apply
 // this"), which withdraws the latest measurement.
 func (c *Catalog) FindingAction(ctx context.Context, id string, body map[string]any) error {
@@ -475,17 +515,34 @@ func (c *Catalog) FindingAction(ctx context.Context, id string, body map[string]
 			return fmt.Errorf("reason must be not_real, not_worth_it, or wont_fix")
 		}
 		return c.writeTransaction(ctx, "finding-dismiss", func(tx *sql.Tx) error {
-			if err := rehomeFindingCart(tx, id); err != nil {
-				return err
-			}
-			if _, err := tx.Exec("DELETE FROM finding_cart WHERE finding_id=?", id); err != nil {
-				return err
-			}
-			if _, err := tx.Exec("DELETE FROM finding_cart_clones WHERE finding_id=?", id); err != nil {
-				return err
-			}
-			_, err := tx.Exec("INSERT INTO finding_actions(finding_id,action,reason,host_id,created_at) VALUES(?,?,?,?,?)", id, "dismiss", nilIfEmpty(reason), nilIfEmpty(host), stamp)
+			return dismissFindingTx(tx, id, reason, host, stamp)
+		})
+	case "dismiss_detector", "disable_detector":
+		var detector string
+		if err := c.DB.QueryRowContext(ctx, "SELECT detector FROM findings WHERE id=?", id).Scan(&detector); err != nil {
 			return err
+		}
+		if action == "disable_detector" {
+			return c.SetFindingSettings(ctx, map[string]any{"detector_enabled": map[string]any{detector: false}})
+		}
+		// Every finding the detector shows as open goes, this one included.
+		view, err := c.loadFindingView(ctx)
+		if err != nil {
+			return err
+		}
+		ids := []string{id}
+		for _, row := range view.rows {
+			if row.ID != id && row.Detector == detector && view.state(row) == findingOpen {
+				ids = append(ids, row.ID)
+			}
+		}
+		return c.writeTransaction(ctx, "finding-dismiss-detector", func(tx *sql.Tx) error {
+			for _, each := range ids {
+				if err := dismissFindingTx(tx, each, "", host, stamp); err != nil {
+					return err
+				}
+			}
+			return nil
 		})
 	case "snooze":
 		mode := firstString(body["until"])
