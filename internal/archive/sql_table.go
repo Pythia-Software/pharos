@@ -31,7 +31,8 @@ type sqlDataset struct {
 	buckets map[string]string
 	// lookups are fields with an index that finds their few rows directly,
 	// such as IDs; filters on other fields are marked likely() (see where).
-	lookups map[string]bool
+	lookups           map[string]bool
+	toolSearchIndexed bool // the command trigram index is complete
 	// cube, when set, answers what it can in place of the rows (see sqlCube).
 	cube *sqlCube
 }
@@ -86,6 +87,22 @@ func (cube *sqlCube) filters(terms []querytable.WhereTerm) bool {
 			}
 			if _, ok := cube.present[clause.Field]; !ok || clause.Op != "is_null" && clause.Op != "is_not_null" {
 				return false
+			}
+		}
+	}
+	return true
+}
+
+func (d sqlDataset) cubeFilters(terms []querytable.WhereTerm) bool {
+	if d.cube == nil || !d.cube.filters(terms) {
+		return false
+	}
+	if d.toolSearchIndexed {
+		for _, term := range terms {
+			for _, clause := range term.Predicates() {
+				if !clause.Negated && toolSearchTerm(clause.Field, clause.Op, clause.Value) != "" {
+					return false
+				}
 			}
 		}
 	}
@@ -340,6 +357,13 @@ func (d sqlDataset) where(terms []querytable.WhereTerm, schema querytable.Schema
 			if err != nil {
 				return "", nil, err
 			}
+			if d.toolSearchIndexed && !clause.Negated {
+				if term := toolSearchTerm(clause.Field, clause.Op, clause.Value); term != "" {
+					sqlText = "(" + toolSearchPredicate(term) + " AND " + sqlText + ")"
+					clauseArgs = append([]any{term}, clauseArgs...)
+					lookup = true
+				}
+			}
 			if column, ok := d.buckets[clause.Field]; ok && clause.Op == "=" && !clause.Negated {
 				if from, to, ok := bucketRange(clause.Field, clause.Value); ok {
 					sqlText = "(" + sqlText + " AND " + column + ">=? AND " + column + "<?)"
@@ -402,7 +426,7 @@ func (d sqlDataset) Rows(ctx context.Context, q queryer, query querytable.Query,
 		return querytable.Result{}, err
 	}
 	count, countArgs := "SELECT COUNT(*) n "+d.from+where, args
-	if d.cube != nil && d.cube.filters(query.Where) {
+	if d.cubeFilters(query.Where) {
 		cubeWhere, cubeArgs, err := d.cube.table().where(query.Where, schema)
 		if err != nil {
 			return querytable.Result{}, err
@@ -511,7 +535,7 @@ func (d sqlDataset) Aggregate(ctx context.Context, q queryer, request querytable
 	if err != nil {
 		return querytable.AggregationResult{}, err
 	}
-	routed := d.cube != nil && d.cube.filters(request.Where)
+	routed := d.cubeFilters(request.Where)
 	var cubeWhere string
 	var cubeArgs []any
 	if routed {

@@ -330,6 +330,10 @@ func (c *Catalog) Initialize() error {
 		WHERE NOT EXISTS(SELECT 1 FROM conversations)`); err != nil {
 		return err
 	}
+	if _, err := c.DB.Exec(`INSERT OR IGNORE INTO meta(key,value) SELECT 'tool_command_fts_version','1'
+		WHERE NOT EXISTS(SELECT 1 FROM tool_calls)`); err != nil {
+		return err
+	}
 	if err := c.backfillAgentSessions(); err != nil {
 		return err
 	}

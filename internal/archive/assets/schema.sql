@@ -394,6 +394,24 @@ CREATE INDEX IF NOT EXISTS tool_calls_carried_idx ON tool_calls(carried_tokens);
 -- so walking the calls by time to find a page of them reads nearly all.
 CREATE INDEX IF NOT EXISTS tool_calls_error_idx ON tool_calls(error_type, started_at) WHERE error_type IS NOT NULL;
 
+-- Narrow substring and regex filters on shell commands before reading calls.
+-- Existing catalogs fill this index in the background.
+CREATE VIRTUAL TABLE IF NOT EXISTS tool_command_fts USING fts5(command, program, subcommand, command_name, content='', contentless_delete=1, tokenize='trigram');
+CREATE TRIGGER IF NOT EXISTS tool_command_fts_insert AFTER INSERT ON tool_calls
+WHEN COALESCE(new.command,'')<>'' OR COALESCE(new.program,'')<>'' OR COALESCE(new.subcommand,'')<>'' BEGIN
+  INSERT INTO tool_command_fts(rowid,command,program,subcommand,command_name)
+    VALUES(new.rowid,new.command,new.program,new.subcommand,TRIM(COALESCE(new.program,'')||' '||COALESCE(new.subcommand,'')));
+END;
+CREATE TRIGGER IF NOT EXISTS tool_command_fts_delete AFTER DELETE ON tool_calls BEGIN
+  DELETE FROM tool_command_fts WHERE rowid=old.rowid;
+END;
+CREATE TRIGGER IF NOT EXISTS tool_command_fts_update AFTER UPDATE OF command,program,subcommand ON tool_calls BEGIN
+  DELETE FROM tool_command_fts WHERE rowid=old.rowid;
+  INSERT INTO tool_command_fts(rowid,command,program,subcommand,command_name)
+    SELECT new.rowid,new.command,new.program,new.subcommand,TRIM(COALESCE(new.program,'')||' '||COALESCE(new.subcommand,''))
+    WHERE COALESCE(new.command,'')<>'' OR COALESCE(new.program,'')<>'' OR COALESCE(new.subcommand,'')<>'';
+END;
+
 -- The simple commands of a shell tool call, in order. Operator is the shell
 -- control operator joining a command to the previous one ("script" when a
 -- Codex exec script started it as a separate process).
