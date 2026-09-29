@@ -1077,9 +1077,19 @@ comes only from owner-produced `tl1-export` records.
 # Repository identities
 
 Pharos normalizes Git remotes across SSH, HTTPS, case, `.git`, and trailing
-slashes. It retains every observed URL and local checkout path. When a checkout
-is available, its root commit helps identify a rename within the same forge
-owner. A root commit alone is never enough to merge repositories.
+slashes. It retains every observed URL and local checkout path. A root commit
+alone is never enough to merge repositories. Rows are one repository when they
+share any of:
+
+- a GitHub numeric ID (see below), which follows a repository through renames
+  and moves between owners;
+- a remote or config alias;
+- a root commit and a host and owner (a rename within one owner); or
+- a root commit and a clone on this Mac (signal `shared checkout`): the same
+  checkout that has had both remotes over time means the remote moved, for
+  example `gbdubs/excel-corpus` to `Pythia-Software/excel-corpus`. A fork
+  lives in a checkout of its own and never matches this way, and a remote that
+  is a local path (a TL1 `origin.git`) never counts.
 
 A repository row with no remote (for example a TL1 project or a Conductor
 workspace captured without an origin) joins a group of rows that have remotes
@@ -1087,21 +1097,47 @@ when its location points to exactly one such group:
 
 - its location is a clone path of a row in that group, or a worktree in one of
   the in-clone layouts `<clone>/.conductor/<name>`,
-  `<clone>/.task-worktrees/<name>`, or `<clone>/.claude/worktrees/<name>`; or
+  `<clone>/.task-worktrees/<name>`, `<clone>/.candidate-worktrees/<name>`, or
+  `<clone>/.claude/worktrees/<name>`; or
 - its location is a Conductor workspace, `conductor/workspaces/<dir>/<name>`,
   and `<dir>` is claimed only by that group's workspaces.
 
-Ambiguity is judged per group, after forge, remote, alias, and root-commit
-grouping: two rows that claim the same path but belong to the same repository
-(such as an old and a renamed remote) do not block the match, while rows in
-two different groups (such as a fork and its parent) do. Paths nested more
-deeply, such as a scratch repository under a workspace's `.context`, never
-match, and a row whose remote is a local path (a TL1 `origin.git`) is never
-attached. When the location is a checkout on this Mac, its current `origin`
-and root commit must agree with the group. The group keeps the name and ID of
-a row with a remote, even when a remoteless row has more workspaces. Ingest
-applies the same rule, so a new remoteless workspace lands in that group's
-repository.
+Ambiguity is judged per group, after forge, remote, alias, root-commit, and
+shared-checkout grouping: two rows that claim the same path but belong to the
+same repository (such as an old and a renamed remote) do not block the match,
+while rows in two different groups (such as a fork and its parent) do. When
+several groups claim the path and it is a checkout on this Mac, its current
+`origin` picks the group whose remotes include it; only if that cannot decide
+does the row stay separate. Paths nested more deeply, such as a scratch
+repository under a workspace's `.context`, match only a row named after the
+Conductor directory (the name Pharos gives a row when Git says nothing else),
+and a row whose remote is a local path (a TL1 `origin.git`) is never attached. When the location is a
+checkout on this Mac, its current `origin` and root commit must agree with the
+group. The group keeps the name and ID of a row with a remote, even when a
+remoteless row has more workspaces.
+
+Remoteless rows that no group claims still merge with each other: rows of the
+same name, with no conflicting root commit, that share a clone (a worktree
+counts as its clone) or a Conductor repository directory are one repository,
+and join the group their siblings attached to. Ingest applies the same rules,
+so a new workspace never creates a row for a repository that already has one.
+A new remoteless row gets an ID from its name and its Conductor directory or
+clone, not from each worktree it was seen in.
+
+Pharos always asks GitHub, through the `gh` command-line tool, for the numeric
+ID and current name of each github.com repository, which is how a rename such
+as `gbdubs/alexandria` to `Pythia-Software/pharos` is recognized. The lookup
+runs in the library upgrade's repository step and in the merge dry run. The
+service also runs it in the background, a few minutes after starting and then
+every ten minutes, for repositories it has not resolved yet (new rows from
+indexing), and merges the rows that turn out to be one repository. Ingest
+itself makes no network requests. Requests are paused between calls, cached,
+and stop when the service stops; a repository GitHub cannot resolve (private,
+deleted) is not asked about again for six hours. `gh` is found on `PATH` and in
+`/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin`, `/usr/bin`, and
+`~/.local/bin`. When it is missing or not signed in (`gh auth login`), everything
+works without GitHub; renamed repositories may stay separate until it is. The
+old `resolve_repository_forge` key is ignored.
 
 For a rename whose old checkout is gone and whose forge redirect cannot be
 resolved, add explicit aliases to `library.toml` or `archive.toml`:
@@ -1124,15 +1160,13 @@ To keep an exceptional row separate, list its repository ID:
 ```
 
 `pharos repositories --merge --dry-run` opens the catalog read-only and prints
-the proposed groups and matching signals. It may use authenticated `gh` to
-resolve GitHub redirects, with a short pause between requests. Without `gh`,
-it uses stored forge IDs, remotes, local checkouts, and config aliases. Review
-the groups before running `pharos repositories --merge --apply`. The apply
-command keeps each group's survivor ID, moves workspace and pull-request
+the proposed groups and matching signals. It uses authenticated `gh` to resolve
+GitHub redirects, with a short pause between requests. Without `gh`, it uses
+stored forge IDs, remotes, local checkouts, and config aliases. Review the
+groups before running `pharos repositories --merge --apply`. The apply command
+keeps each group's survivor ID, moves workspace, pull-request, and tool-call
 references, and marks affected Library rows and the Tools rollup for refresh.
-The operation is idempotent. It does not run during ordinary ingest.
-
-Set `resolve_repository_forge = true` at the top level of the config to also
-refresh GitHub numeric IDs in the background while the service is running.
-This uses authenticated `gh` and makes no network requests during ingest. It
-does not merge rows; use the dry-run and apply commands for that.
+The operation is idempotent. It does not run during ordinary ingest; the
+[library upgrade](releases-and-updates.md#upgrading-an-existing-library) runs
+it, and offers it again when a version of Pharos changes how repositories are
+recognized.
