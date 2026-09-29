@@ -308,6 +308,14 @@ func (s *Server) postSQLQueryTable(w http.ResponseWriter, r *http.Request, datas
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
+	if dataset == "tool_calls" {
+		ready, err := s.Catalog.toolSearchReady(r.Context())
+		if err != nil {
+			writeError(w, err, http.StatusInternalServerError)
+			return
+		}
+		table.toolSearchIndexed = ready
+	}
 	switch operation {
 	case "rows":
 		var query querytable.Query

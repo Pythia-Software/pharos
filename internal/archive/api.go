@@ -83,6 +83,7 @@ func (s *Server) Serve() error {
 	server := &http.Server{Handler: s, ReadHeaderTimeout: 5 * time.Second, BaseContext: func(net.Listener) context.Context { return s.life.ctx }}
 	s.spawn(s.Catalog.maintainLibrary)
 	s.spawn(s.Catalog.maintainSubstringIndex)
+	s.spawn(s.Catalog.maintainToolSearch)
 	s.spawn(func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
 	s.refreshGitInBackground(true)
 	return s.serveUntilStopped(server, listener)
