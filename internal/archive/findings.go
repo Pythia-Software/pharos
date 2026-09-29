@@ -994,7 +994,18 @@ func (c *Catalog) storeFindings(ctx context.Context, env *findingEnv, candidates
 	}
 	threshold := settings.Threshold
 	if threshold == 0 {
-		threshold = 10
+		// Follow the recommendation, as the view will.
+		rows := map[string]*findingRow{}
+		for _, candidate := range candidates {
+			rows[candidate.Spec.id()] = &findingRow{ID: candidate.Spec.id(), Active: true, Hidden: candidate.Hidden, Metric: candidate.Metric, Stats: candidate.stats}
+		}
+		weekly := 0
+		for _, conv := range env.convs {
+			if env.inGate(conv.Day) {
+				weekly++
+			}
+		}
+		_, threshold = findingCheckpointPreview(&findingView{rows: rows, states: map[string]*findingUserState{}}, float64(weekly)/4)
 	}
 	stamp := formatTime(env.now)
 	retiredIDs := map[string]string{}

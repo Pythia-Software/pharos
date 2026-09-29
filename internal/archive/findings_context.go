@@ -417,44 +417,63 @@ func detectHeavyOutput(env *findingEnv) ([]*findingCandidate, error) {
 	}
 	wanted := env.wants("heavy-output")
 	candidates := map[string]*findingCandidate{}
+	add := func(scope, shape, provider string, item call) {
+		pattern := "shape:" + shape + ":provider:" + provider
+		id := scope + "\x1f" + pattern
+		candidate := candidates[id]
+		if candidate == nil {
+			candidate = &findingCandidate{Spec: findingSpec{Detector: "heavy-output", Scope: scope, Pattern: pattern, Params: map[string]string{"shape": shape, "provider": provider}},
+				Obs: map[string]*findingObs{}, Facts: map[string]any{"shape": shape, "provider": provider}, Metric: findingMetric{Kind: "mean", Unit: "calls", Value: "tokens"}}
+			if strings.HasPrefix(scope, "repo:") {
+				candidate.RepositoryID = strings.TrimPrefix(scope, "repo:")
+			}
+			candidates[id] = candidate
+		}
+		result, carried := integer(item.row["result_tokens"]), integer(item.row["carried_tokens"])
+		output, _ := number(item.row["output_tokens"])
+		obs := &findingObs{Unit: firstString(item.row["id"]), Conversation: item.conv.ID, Workspace: item.conv.WorkspaceID, Day: item.conv.Day, Provider: provider,
+			Value: float64(result), Hit: result >= heavyResultTokens, At: firstString(item.row["started_at"])}
+		if obs.Hit {
+			obs.Occurrences = 1
+			obs.Tokens = result + carried
+			obs.CostUSD = env.toolCallCost(provider, firstString(item.row["model"]), item.conv.Day, result, carried, output)
+			candidate.addEvidence(findingHandle{At: obs.At, ConversationID: item.conv.ID, WorkspaceID: item.conv.WorkspaceID, ToolCallID: obs.Unit,
+				MessageID: firstString(item.row["message_id"]), Where: env.evidenceWhere(item.conv) + " · " + providerLabel(provider),
+				Did: "ran `" + clipText(firstLine(firstString(item.row["command"])), 80) + "`", Happened: compactNumber(float64(result)) + " tokens back, re-read " + compactNumber(float64(carried)) + " more"})
+		}
+		candidate.Obs[obs.Unit] = obs
+	}
 	for key, calls := range byShape {
 		shape, provider, _ := strings.Cut(key, ":")
+		pattern := "shape:" + shape + ":provider:" + provider
+		// A shape in three or more repositories is a global habit of that
+		// provider on that Mac.
 		global := len(repositories[key]) >= 3
 		for _, item := range calls {
-			scope := env.scopeOf(item.conv)
-			if global {
-				scope = globalScope(item.conv)
-			}
-			if scope == "" {
-				continue
-			}
-			pattern := "shape:" + shape + ":provider:" + provider
-			id := scope + "\x1f" + pattern
-			if _, ok := wanted[id]; !ok && !env.discover {
-				continue
-			}
-			candidate := candidates[id]
-			if candidate == nil {
-				candidate = &findingCandidate{Spec: findingSpec{Detector: "heavy-output", Scope: scope, Pattern: pattern, Params: map[string]string{"shape": shape, "provider": provider}},
-					Obs: map[string]*findingObs{}, Facts: map[string]any{"shape": shape, "provider": provider}, Metric: findingMetric{Kind: "mean", Unit: "calls", Value: "tokens"}}
-				if strings.HasPrefix(scope, "repo:") {
-					candidate.RepositoryID = strings.TrimPrefix(scope, "repo:")
+			if env.discover {
+				scope := env.scopeOf(item.conv)
+				if global {
+					scope = globalScope(item.conv)
 				}
-				candidates[id] = candidate
+				if scope != "" {
+					add(scope, shape, provider, item)
+				}
 			}
-			result, carried := integer(item.row["result_tokens"]), integer(item.row["carried_tokens"])
-			output, _ := number(item.row["output_tokens"])
-			obs := &findingObs{Unit: firstString(item.row["id"]), Conversation: item.conv.ID, Workspace: item.conv.WorkspaceID, Day: item.conv.Day, Provider: provider,
-				Value: float64(result), Hit: result >= heavyResultTokens, At: firstString(item.row["started_at"])}
-			if obs.Hit {
-				obs.Occurrences = 1
-				obs.Tokens = result + carried
-				obs.CostUSD = env.toolCallCost(provider, firstString(item.row["model"]), item.conv.Day, result, carried, output)
-				candidate.addEvidence(findingHandle{At: obs.At, ConversationID: item.conv.ID, WorkspaceID: item.conv.WorkspaceID, ToolCallID: obs.Unit,
-					MessageID: firstString(item.row["message_id"]), Where: env.evidenceWhere(item.conv) + " · " + providerLabel(provider),
-					Did: "ran `" + clipText(firstLine(firstString(item.row["command"])), 80) + "`", Happened: compactNumber(float64(result)) + " tokens back, re-read " + compactNumber(float64(carried)) + " more"})
+			// Measured findings keep their scope, whatever this pass decided.
+			for _, spec := range wanted {
+				if spec.Pattern == pattern && env.inScope(spec.Scope, item.conv) && (env.discover == false || candidates[spec.Scope+"\x1f"+pattern] == nil || candidates[spec.Scope+"\x1f"+pattern].Obs[firstString(item.row["id"])] == nil) {
+					add(spec.Scope, shape, provider, item)
+				}
 			}
-			candidate.Obs[obs.Unit] = obs
+		}
+	}
+	for id, spec := range wanted {
+		if candidates[id] == nil {
+			candidates[id] = &findingCandidate{Spec: spec, Obs: map[string]*findingObs{}, Facts: map[string]any{"shape": spec.Params["shape"], "provider": spec.Params["provider"]},
+				Metric: findingMetric{Kind: "mean", Unit: "calls", Value: "tokens"}, RepositoryID: strings.TrimPrefix(spec.Scope, "repo:")}
+			if !strings.HasPrefix(spec.Scope, "repo:") {
+				candidates[id].RepositoryID = ""
+			}
 		}
 	}
 	output := []*findingCandidate{}

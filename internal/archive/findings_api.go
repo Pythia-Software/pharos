@@ -216,10 +216,7 @@ func findingCheckpointPreview(view *findingView, weekly float64) ([]map[string]a
 
 // findingExpectedWait is how long a result would take if copied today.
 func findingExpectedWait(row *findingRow) float64 {
-	units := float64(row.Stats.Exposure)
-	if row.Metric.Unit != "conversations" {
-		units = row.Stats.Denom
-	}
+	units := findingUnits(row)
 	if row.Stats.DailyExposure <= 0 || units <= 0 {
 		return findingAfterMaxDays
 	}

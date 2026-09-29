@@ -275,6 +275,16 @@ func compareWindows(metric findingMetric, before, after windowStats) (ratio, pLo
 	return ratio, pLower, pUpper
 }
 
+// findingUnits is the relevant work in a finding's last 28 days, in the
+// units its daily exposure counts: calls for command shapes, otherwise
+// conversations, engagements, or runs.
+func findingUnits(row *findingRow) float64 {
+	if row.Metric.Unit == "calls" {
+		return row.Stats.Denom
+	}
+	return float64(row.Stats.Exposure)
+}
+
 // planFinding fixes the analysis plan for a copy.
 func planFinding(row *findingRow, daily map[string][3]float64, copied time.Time) findingPlan {
 	copyDay := copied.Local().Format("2006-01-02")
@@ -291,18 +301,7 @@ func planFinding(row *findingRow, daily map[string][3]float64, copied time.Time)
 	}
 	// The after window should hold as much relevant work as the before
 	// window, at the recent rate of relevant work.
-	units := float64(row.Stats.Exposure)
-	if row.Metric.Unit != "conversations" {
-		units = row.Stats.Denom
-		if row.Metric.Kind == "share" {
-			units = 0
-			for day, values := range daily {
-				if day >= plan.BeforeFrom && day <= copyDay && values[1] > 0 {
-					units++
-				}
-			}
-		}
-	}
+	units := findingUnits(row)
 	days := findingAfterMaxDays
 	if row.Stats.DailyExposure > 0 && units > 0 {
 		days = int(math.Ceil(units / row.Stats.DailyExposure))

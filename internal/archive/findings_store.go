@@ -298,6 +298,14 @@ func (state *findingUserState) latest() *findingIntervention {
 	return nil
 }
 
+// latestOrNil is latest for a state that may be nil.
+func (state *findingUserState) latestOrNil() *findingIntervention {
+	if state == nil {
+		return nil
+	}
+	return state.latest()
+}
+
 // attempts counts the interventions that reached a result or are measuring.
 func (state *findingUserState) attempts() int {
 	count := 0
@@ -473,6 +481,15 @@ func (c *Catalog) FindingAction(ctx context.Context, id string, body map[string]
 			return err
 		})
 	case "cart_add", "cart_move":
+		if action == "cart_add" {
+			states, err := c.findingUserStates(ctx, c.DB)
+			if err != nil {
+				return err
+			}
+			if latest := states[id].latestOrNil(); latest != nil && latest.Status == interventionWatching {
+				return fmt.Errorf("this finding is being measured; its result comes first")
+			}
+		}
 		target := firstString(body["target"])
 		if target == "" {
 			if err := c.DB.QueryRowContext(ctx, "SELECT target FROM findings WHERE id=?", id).Scan(&target); err != nil {

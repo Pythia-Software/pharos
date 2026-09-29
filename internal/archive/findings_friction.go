@@ -289,6 +289,9 @@ func describeCLI(env *findingEnv, candidate *findingCandidate) {
 	}
 }
 
+// documentationServer matches MCP servers that serve reference docs.
+var documentationServer = regexp.MustCompile(`(?i)docs?\b|context7|deepwiki|documentation|reference|manual`)
+
 // Documentation hosts: agents in one repository fetching the same
 // reference site again and again, which a vendored copy would answer.
 var generalHosts = regexp.MustCompile(`(?i)^(?:localhost|127\.|0\.0\.0\.0|\[::1\]|github\.com$|gist\.github|www\.google\.|google\.com$|bing\.com|duckduckgo|api\.|.*\.local$)`)
@@ -299,6 +302,19 @@ func detectDocsHosts(env *findingEnv) ([]*findingCandidate, error) {
 		FROM tool_urls u JOIN tool_calls t ON t.id=u.tool_call_id WHERE t.started_at>=? AND u.source IN ('input','result') AND COALESCE(u.host,'')<>'' GROUP BY 1,2`, env.fromUTC)
 	if err != nil {
 		return nil, err
+	}
+	// Documentation MCP servers count like documentation sites: the same
+	// lookups again and again are a reference worth keeping in the repository.
+	servers, err := queryMapsContext(env.ctx, env.db, `SELECT t.conversation_id,'mcp:'||t.mcp_server host,COUNT(*) fetches,MAX(t.started_at) last_at,SUM(t.result_tokens) result_tokens,
+		SUM(t.carried_tokens) carried,SUM(t.output_tokens) output,COALESCE(t.model,'') model,SUM(COALESCE(t.duration_ms,0)) duration_ms,MIN(t.tool_name) url,MIN(t.id) call_id,
+		MIN(COALESCE(t.call_message_id,'')) message_id FROM tool_calls t WHERE t.started_at>=? AND COALESCE(t.mcp_server,'')<>'' GROUP BY 1,2`, env.fromUTC)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range servers {
+		if documentationServer.MatchString(strings.TrimPrefix(firstString(row["host"]), "mcp:")) {
+			rows = append(rows, row)
+		}
 	}
 	wanted := env.wants("docs")
 	type fetch struct {
@@ -370,6 +386,9 @@ func detectDocsHosts(env *findingEnv) ([]*findingCandidate, error) {
 			candidate.Obs[id] = obs
 		}
 		host := candidate.Spec.Params["host"]
+		if server, ok := strings.CutPrefix(host, "mcp:"); ok {
+			host = "the " + server + " MCP server"
+		}
 		steps := []findingStep{
 			{Lever: "repo-tooling", Label: "A local copy of the reference", Change: fmt.Sprintf("Save the parts of %s that agents keep reading into the repository (for example `docs/reference/`), and point the instructions at them.", host)},
 			{Lever: "repo-tooling", Label: "A skill", Change: fmt.Sprintf("Add a skill that summarizes what agents look up on %s, with links for the rest.", host)},
