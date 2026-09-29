@@ -33,9 +33,11 @@ type Catalog struct {
 	gitMainMu                 sync.Mutex
 	// authorship tracks the human-authorship rebuild.
 	authorship authorshipState
-	wal        walBound
-	writers    catalogWriteTracker
-	now        func() time.Time
+	// findings tracks the findings pass (see findings.go).
+	findings findingsState
+	wal      walBound
+	writers  catalogWriteTracker
+	now      func() time.Time
 	// background runs the catalog's own background work (the authorship
 	// rebuild). The service sets it to its spawn, so a release cancels the
 	// work and waits for it before closing the catalog; nil runs a goroutine.
@@ -166,6 +168,9 @@ func (c *Catalog) Initialize() error {
 	}
 	if err := c.ensureTL1Schema(); err != nil {
 		return fmt.Errorf("initialize TL1 tables: %w", err)
+	}
+	if err := c.ensureFindingsSchema(); err != nil {
+		return fmt.Errorf("initialize findings tables: %w", err)
 	}
 	// Keep large bulk imports from spending most of their time merging FTS
 	// segments inside individual message inserts. These settings persist in FTS5.

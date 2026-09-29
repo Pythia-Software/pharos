@@ -106,6 +106,11 @@ func (s *Server) refreshGitInBackground(backfill bool) {
 		if err := s.Catalog.ensureToolRollup(ctx); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Tool rollup: %v\n", err)
 		}
+		// Then findings, from the fresh rollup: the full pass once a day,
+		// and between them only the findings being measured.
+		if err := s.Catalog.RefreshFindings(ctx, false); err != nil && ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "Findings: %v\n", err)
+		}
 	})
 	if !started {
 		s.tasks.addGit(-1, "")

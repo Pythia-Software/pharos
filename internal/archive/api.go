@@ -165,7 +165,7 @@ func (s *Server) authorized(r *http.Request) bool {
 // of which serves the single-page UI.
 func isUIPage(path string) bool {
 	switch path {
-	case "/", "/library", "/settings", "/sources", "/activity", "/usage", "/tools", "/tl1", "/health", "/mcp":
+	case "/", "/library", "/settings", "/sources", "/activity", "/usage", "/tools", "/tl1", "/health", "/mcp", "/findings":
 		return true
 	}
 	return strings.HasPrefix(path, "/work/")
@@ -285,6 +285,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		}
 	case path == "/api/tl1" || strings.HasPrefix(path, "/api/tl1/"):
 		s.getTL1(w, r)
+	case path == "/api/findings" || strings.HasPrefix(path, "/api/findings/"):
+		s.getFindings(w, r)
 	case path == "/api/ready":
 		// The macOS wrapper polls this until the service listens; it must stay
 		// cheap, since each timed-out probe would otherwise leave work running.
@@ -435,6 +437,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, map[string]any{"started": true}, http.StatusAccepted)
+	case strings.HasPrefix(path, "/api/findings/"):
+		s.postFindings(w, r, body)
 	case path == "/api/capture":
 		s.startCapture(w, body)
 	case path == "/api/index":

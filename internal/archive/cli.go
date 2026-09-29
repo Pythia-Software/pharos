@@ -105,6 +105,11 @@ func Run(arguments []string) error {
 	if command == "backup" {
 		return runBackupCLI(config, args)
 	}
+	// A preview reads the catalog without writing, so it can run beside a
+	// service that is indexing.
+	if command == "findings" && slices.Contains(args, "--preview") {
+		return runFindingsPreview(config.CatalogPath, args)
+	}
 	if command == "repositories" {
 		if len(args) != 2 || args[0] != "--merge" || args[1] != "--dry-run" && args[1] != "--apply" {
 			return fmt.Errorf("usage: pharos repositories --merge --dry-run|--apply")
@@ -281,6 +286,8 @@ func Run(arguments []string) error {
 		return runSearchCLI(catalog, args)
 	case "tl1":
 		return runTL1CLI(catalog, args)
+	case "findings":
+		return runFindingsCLI(catalog, args)
 	case "health":
 		value := catalog.Health()
 		value["storage"] = storage(config)

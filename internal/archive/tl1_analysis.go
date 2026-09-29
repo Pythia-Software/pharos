@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -116,8 +117,8 @@ func newTL1Cell(flavor, configuration string) *tl1Cell {
 }
 
 // TL1Overview is the TL1 tab: totals, the flavor × configuration matrix, the
-// observed workflow graph, error clusters, detectors with investigation
-// prompts, and ranked opportunities.
+// observed workflow graph, and error clusters. Its concerns are findings
+// scoped to TL1 flavors; findings lists them.
 func (c *Catalog) TL1Overview(selection tl1Selection, window tl1Window) (map[string]any, error) {
 	all, err := c.tl1Installations()
 	if err != nil {
@@ -141,8 +142,7 @@ func (c *Catalog) TL1Overview(selection tl1Selection, window tl1Window) (map[str
 	human := tl1HumanSummary(data)
 	contracts := tl1ContractRepairs(data)
 	reviews := tl1ReviewSummary(data)
-	detectors := tl1Detectors(data, cells, clusters, candidates, human, contracts, flavors)
-	opportunities := tl1Opportunities(data, cells, clusters)
+	_ = cells
 	errors := make([]map[string]any, 0, len(clusters))
 	for _, cluster := range clusters {
 		errors = append(errors, cluster.row())
@@ -152,9 +152,8 @@ func (c *Catalog) TL1Overview(selection tl1Selection, window tl1Window) (map[str
 		"window": tl1WindowRow(data), "enqueues": tl1EnqueueRows(data, tl1EnqueueListLimit),
 		"totals": tl1Totals(data, candidates, human), "coverage": tl1Coverage(data), "matrix": matrix, "flavors": flavors,
 		"graph": tl1Graph(data), "errors": errors, "candidates": candidates, "human": human, "contract_repairs": contracts,
-		"reviews": reviews, "detectors": detectors, "opportunities": opportunities, "configuration_health": data.Health,
+		"reviews": reviews, "configuration_health": data.Health, "findings": c.tl1Findings(),
 	}
-	result["review_prompt"] = tl1ReviewPrompt(data, result)
 	return result, nil
 }
 
@@ -757,4 +756,21 @@ func tl1Dollars(value float64) string {
 		return fmt.Sprintf("$%.0f", value)
 	}
 	return fmt.Sprintf("$%.2f", value)
+}
+
+// tl1Findings lists the findings scoped to TL1 flavors, which carry TL1's
+// recommendations now.
+func (c *Catalog) tl1Findings() []map[string]any {
+	overview, err := c.FindingsOverview(context.Background(), "")
+	if err != nil {
+		return []map[string]any{}
+	}
+	output := []map[string]any{}
+	cards, _ := overview["findings"].([]map[string]any)
+	for _, card := range cards {
+		if strings.HasPrefix(firstString(card["target"]), "automation:tl1:") {
+			output = append(output, map[string]any{"id": card["id"], "title": card["title"], "state": card["state"], "flavor": strings.TrimPrefix(firstString(card["target"]), "automation:tl1:")})
+		}
+	}
+	return output
 }
