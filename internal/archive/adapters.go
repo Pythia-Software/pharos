@@ -36,6 +36,9 @@ type ConversationRecord struct {
 	HarnessVersionSource                                                                     string `json:"HarnessVersionSource,omitempty"`
 	Aliases                                                                                  []string
 	Messages                                                                                 []MessageRecord
+	// Instructions are the instruction files and skills the transcript
+	// recorded as loaded (see instructions.go).
+	Instructions []InstructionRecord `json:"Instructions,omitempty"`
 	// Observed is the version of the source this copy was read from (see
 	// sourceVersion); not part of the record's digest.
 	Observed int64 `json:"-"`
@@ -797,7 +800,7 @@ func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRec
 		started = iso(events[0]["timestamp"])
 		ended = iso(events[len(events)-1]["timestamp"])
 	}
-	record := WorkspaceRecord{SourceID: nativeID, SourceKind: "codex", Title: defaultString(meta["title"], "Codex "+short(nativeID)), Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: ended, Location: cwd, Repository: repository, Metadata: map[string]any{"originator": meta["originator"], "branch": git["branch"], "head_ref": git["commit_hash"]}, Conversations: []ConversationRecord{{NativeID: nativeID, Provider: "codex", Account: a.config.Account, Model: model, ParentNativeID: parentNativeID, AgentDepth: agentDepth, AgentPath: firstString(meta["agent_path"], spawn["agent_path"]), AgentNickname: firstString(meta["agent_nickname"], spawn["agent_nickname"]), Origin: origin, Coverage: "complete", Messages: messages, StartedAt: started, EndedAt: ended, Harness: harness, HarnessVersionFirst: versionFirst, HarnessVersionLast: versionLast}}, Metrics: metrics}
+	record := WorkspaceRecord{SourceID: nativeID, SourceKind: "codex", Title: defaultString(meta["title"], "Codex "+short(nativeID)), Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: ended, Location: cwd, Repository: repository, Metadata: map[string]any{"originator": meta["originator"], "branch": git["branch"], "head_ref": git["commit_hash"]}, Conversations: []ConversationRecord{{NativeID: nativeID, Provider: "codex", Account: a.config.Account, Model: model, ParentNativeID: parentNativeID, AgentDepth: agentDepth, AgentPath: firstString(meta["agent_path"], spawn["agent_path"]), AgentNickname: firstString(meta["agent_nickname"], spawn["agent_nickname"]), Origin: origin, Coverage: "complete", Messages: messages, StartedAt: started, EndedAt: ended, Harness: harness, HarnessVersionFirst: versionFirst, HarnessVersionLast: versionLast, Instructions: codexInstructions(events)}}, Metrics: metrics}
 	record.Metrics = reconciledTokenMetrics(record)
 	return record, true, nil
 }
@@ -966,7 +969,7 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 	if rootID != "" {
 		depth = 1
 	}
-	record := WorkspaceRecord{SourceID: sourceID, SourceKind: "claude", Title: defaultString(title, "Claude "+short(sourceID)), Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: ended, Location: cwd, Repository: repository, Metadata: map[string]any{"branch": branch}, Conversations: []ConversationRecord{{NativeID: nativeID, Provider: "claude", Account: a.config.Account, Model: model, ParentNativeID: rootID, AgentDepth: depth, Origin: origin, Coverage: "complete", Messages: messages, StartedAt: started, EndedAt: ended, Harness: harness, HarnessVersionFirst: versionFirst, HarnessVersionLast: versionLast}}, Metrics: metrics}
+	record := WorkspaceRecord{SourceID: sourceID, SourceKind: "claude", Title: defaultString(title, "Claude "+short(sourceID)), Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: ended, Location: cwd, Repository: repository, Metadata: map[string]any{"branch": branch}, Conversations: []ConversationRecord{{NativeID: nativeID, Provider: "claude", Account: a.config.Account, Model: model, ParentNativeID: rootID, AgentDepth: depth, Origin: origin, Coverage: "complete", Messages: messages, StartedAt: started, EndedAt: ended, Harness: harness, HarnessVersionFirst: versionFirst, HarnessVersionLast: versionLast, Instructions: claudeInstructions(events)}}, Metrics: metrics}
 	record.Metrics = reconciledTokenMetrics(record)
 	return record, true, nil
 }

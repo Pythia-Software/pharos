@@ -11,14 +11,16 @@ import (
 
 // A library upgrade brings the derived data of a catalog indexed by an older
 // Pharos up to date: repository identities, token attribution, harness
-// versions, and the tool ledger. Each step reads only the catalog (and, for
-// repository identities, GitHub through the gh tool), commits in small units, and
-// resumes where it stopped, so the whole upgrade is one job that can be
-// interrupted by an eject and started again.
+// versions, loaded instructions, and the tool ledger. Each step reads only the
+// catalog (and, for repository identities, GitHub through the gh tool; for
+// harness versions and loaded instructions, source transcripts and captures),
+// commits in small units, and resumes where it stopped, so the whole upgrade
+// is one job that can be interrupted by an eject and started again.
 //
-// The order matters. Repositories merge first because the tool ledger stores
-// the repository each file belongs to, and token attribution and the ledger
-// read only stored messages, so they can run on any Mac.
+// The order matters. Repositories merge first because the tool ledger and
+// the loaded-instructions record store the repository-relative path of each
+// file, and token attribution and the ledger read only stored messages, so
+// they can run on any Mac.
 
 type upgradeStep struct {
 	ID      string `json:"id"`
@@ -107,6 +109,10 @@ func (c *Catalog) UpgradeSteps(ctx context.Context) ([]upgradeStep, error) {
 			return nil, err
 		}
 	}
+	instructions, err := c.pendingInstructions(ctx)
+	if err != nil {
+		return nil, err
+	}
 	tools, err := count(`SELECT COUNT(*) FROM conversations c LEFT JOIN tool_ledger_state s ON s.conversation_id=c.id
 		WHERE s.conversation_id IS NULL OR s.version<>?`, toolLedgerVersion)
 	if err != nil {
@@ -122,6 +128,8 @@ func (c *Catalog) UpgradeSteps(ctx context.Context) ([]upgradeStep, error) {
 			Detail: "Recounts Claude sessions whose sub-agents were counted twice. Uses retained messages only.", Pending: usage},
 		{ID: "harness", Label: "Record harness versions", Unit: "conversation",
 			Detail: "Notes which Claude Code or Codex version ran each conversation, from retained messages or source files where they still exist.", Pending: harness},
+		{ID: "instructions", Label: "Record loaded instructions", Unit: "conversation",
+			Detail: "Notes which instruction files (CLAUDE.md, AGENTS.md, memory) and skills each Claude Code or Codex conversation loaded, from source files or captures where they still exist.", Pending: instructions},
 		{ID: "tools", Label: "Rebuild the tool ledger", Unit: "conversation",
 			Detail: "Re-reads retained messages to store error signatures, test failures, and repository-relative paths. The longest step.", Pending: tools},
 	}
@@ -293,6 +301,14 @@ func (c *Catalog) RunUpgrade(ctx context.Context, progress func(step string, don
 				return err
 			}
 			return c.writeTransaction(ctx, "harness-upgrade", func(tx *sql.Tx) error { return setMeta(tx, "harness_version_upgrade", "1") })
+		}); err != nil {
+			return finish(err)
+		}
+	}
+	if pending["instructions"] > 0 {
+		if err := timed("instructions", func() error {
+			_, err := c.BackfillInstructions(ctx, func(done, total int) { report("instructions", done, total) })
+			return err
 		}); err != nil {
 			return finish(err)
 		}

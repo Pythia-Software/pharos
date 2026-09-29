@@ -587,6 +587,9 @@ func ingestCopy(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host,
 			if err := linkAliases(tx, claim.id, conversation.Aliases); err != nil {
 				return 0, 0, err
 			}
+			if err := upsertConversationInstructions(tx, workspaceID, claim.id, conversation.Instructions, nil); err != nil {
+				return 0, 0, err
+			}
 			continue
 		}
 		written++
@@ -648,6 +651,9 @@ func ingestCopy(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host,
 			return 0, 0, err
 		}
 		if err := replaceToolLedger(tx, workspaceID, conversationID, conversation); err != nil {
+			return 0, 0, err
+		}
+		if err := replaceConversationInstructions(tx, workspaceID, conversationID, conversation.Instructions, nil, "transcript"); err != nil {
 			return 0, 0, err
 		}
 	}
