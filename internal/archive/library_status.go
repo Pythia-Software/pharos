@@ -260,7 +260,7 @@ func (s *Server) libraryActivities() []libraryActivity {
 	if s.Catalog.authorshipRunning() {
 		activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Classifying your writing",
 			Detail: "Rebuilding human authorship for Usage", Writes: true,
-			OnEject: "Stops; it runs again the next time Usage is opened."})
+			OnEject: "Stops; it runs again after the next index."})
 	}
 	if progress, err := s.Catalog.substringIndexProgress(context.Background()); err == nil && !progress.Ready && progress.Total > 0 {
 		activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Building substring search",

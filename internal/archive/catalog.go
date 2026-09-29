@@ -42,6 +42,16 @@ type Catalog struct {
 	background func(work func(context.Context)) bool
 }
 
+// runBackground starts work with background, or in a goroutine when it is
+// nil, and reports false if the service is stopping.
+func (c *Catalog) runBackground(work func(context.Context)) bool {
+	if c.background == nil {
+		go work(context.Background())
+		return true
+	}
+	return c.background(work)
+}
+
 func OpenCatalog(path string) (*Catalog, error) {
 	if err := os.MkdirAll(filepathDir(path), 0o755); err != nil {
 		return nil, err
