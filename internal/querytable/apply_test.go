@@ -194,3 +194,20 @@ func TestFieldStats(t *testing.T) {
 		t.Fatal("oversized request accepted")
 	}
 }
+
+func TestFilterIsNotCappedByMaxLimit(t *testing.T) {
+	rows := make([]map[string]any, MaxLimit+5)
+	for i := range rows {
+		rows[i] = map[string]any{"id": "x", "status": "open"}
+	}
+	got, err := Filter(rows, []WhereTerm{{Field: "status", Op: "=", Value: "open"}}, testSchema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(rows) {
+		t.Fatalf("got %d rows, want %d", len(got), len(rows))
+	}
+	if _, err := Filter(rows, []WhereTerm{{Field: "nope", Op: "=", Value: "x"}}, testSchema()); err == nil {
+		t.Fatal("expected unknown field error")
+	}
+}
