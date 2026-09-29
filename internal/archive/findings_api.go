@@ -265,7 +265,9 @@ func (c *Catalog) FindingsOverview(ctx context.Context, filter string) (map[stri
 		card := view.card(row, state)
 		if state == findingOpen {
 			atStake += floatOr(row.Impact["usd"])
-			if row.GatePassedAt == "" || row.GatePassedAt > view.cart.settings.SeenAt {
+			// New since the last visit: when it first passed the gate, or was
+			// first seen when a lower threshold made it visible.
+			if firstString(row.GatePassedAt, row.FirstSeenAt) > view.cart.settings.SeenAt {
 				newCount++
 				card["new"] = true
 			}
@@ -279,6 +281,7 @@ func (c *Catalog) FindingsOverview(ctx context.Context, filter string) (map[stri
 					saved.Failures += item.Savings.Failures
 					saved.AddedUSD += item.Savings.AddedUSD
 					saved.AddedTokens += item.Savings.AddedTokens
+					saved.Weeks = max(saved.Weeks, item.Savings.Weeks)
 					if item.RegressedAt != "" {
 						regressed++
 					}
@@ -297,10 +300,31 @@ func (c *Catalog) FindingsOverview(ctx context.Context, filter string) (map[stri
 		}
 		return firstString(cards[i]["title"]) < firstString(cards[j]["title"])
 	})
+	cartCount := 0
+	for _, state := range view.states {
+		if state.Cart != nil && view.rows[state.Cart.FindingID] != nil {
+			cartCount++
+		}
+	}
+	summary := map[string]any{"saved": saved, "open": counts[findingOpen], "watching": counts[findingWatching], "won": counts[findingWon],
+		"dismissed": counts[findingDismissed], "snoozed": counts[findingSnoozed], "regressed": regressed, "at_stake_usd": atStake, "new": newCount,
+		"next_result_days": view.nextResult()}
+	// The header's badge and cart button poll this; it skips the cards.
+	if filter == "summary" {
+		return map[string]any{"summary": summary, "cart_count": cartCount}, nil
+	}
 	status := map[string]any{}
-	for _, key := range []string{"findings_built_at", "findings_took_ms", "findings_measured_at", "findings_conversations_28d", "findings_weekly_conversations", "findings_generation"} {
+	for _, key := range []string{"findings_built_at", "findings_measured_at", "findings_generation"} {
 		value, _ := c.metaValue(ctx, key)
 		status[strings.TrimPrefix(key, "findings_")] = nilIfEmpty(value)
+	}
+	for _, key := range []string{"findings_took_ms", "findings_conversations_28d", "findings_weekly_conversations"} {
+		value, _ := c.metaValue(ctx, key)
+		if value == "" {
+			status[strings.TrimPrefix(key, "findings_")] = nil
+		} else {
+			status[strings.TrimPrefix(key, "findings_")] = parseFloat(value)
+		}
 	}
 	c.findings.mu.Lock()
 	status["running"], status["phase"], status["error"] = c.findings.running, nilIfEmpty(c.findings.phase), nilIfEmpty(c.findings.lastError)
@@ -308,10 +332,7 @@ func (c *Catalog) FindingsOverview(ctx context.Context, filter string) (map[stri
 	status["current"] = built == c.findingsGeneration()
 	return map[string]any{
 		"status": status, "settings": view.cart.settings, "threshold": view.thresh, "recommended": view.rec, "checkpoints": view.checks,
-		"summary": map[string]any{"saved": saved, "open": counts[findingOpen], "watching": counts[findingWatching], "won": counts[findingWon],
-			"dismissed": counts[findingDismissed], "snoozed": counts[findingSnoozed], "regressed": regressed, "at_stake_usd": atStake, "new": newCount,
-			"next_result_days": view.nextResult()},
-		"findings": cards, "cart": view.carts(), "targets": view.targets(), "repositories": view.repositories(), "near": view.nearMisses(),
+		"summary": summary, "cart_count": cartCount, "findings": cards, "cart": view.carts(), "targets": view.targets(), "repositories": view.repositories(), "near": view.nearMisses(),
 		"wins": view.wins(),
 	}, nil
 }
@@ -566,7 +587,14 @@ func (c *Catalog) FindingDetail(ctx context.Context, id string) (map[string]any,
 	if len(copies) > 0 {
 		anchor = copies[len(copies)-1]
 	}
-	card["chart"] = findingChart(row, daily, anchor, view.now, copies)
+	chart := findingChart(row, daily, anchor, view.now, copies)
+	if latest := user.latestOrNil(); latest != nil && latest.Plan.BeforeExposure > 0 {
+		// The baseline the result is judged against, fixed at the copy.
+		chart["baseline"] = latest.Plan.BeforeRate
+		chart["baseline_phrase"] = map[bool]string{true: tokensPhrase(latest.Plan.BeforeRate), false: fractionPhrase(latest.Plan.BeforeRate, "")}[row.Metric.Kind == "mean"]
+	}
+	card["chart"] = chart
+	card["evidence_count"] = row.Facts["evidence_count"]
 	card["evidence"] = row.Evidence
 	card["facts"] = row.Facts
 	attempts := []map[string]any{}

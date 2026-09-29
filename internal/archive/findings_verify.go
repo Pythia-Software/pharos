@@ -465,7 +465,7 @@ func (env *findingEnv) result(candidate *findingCandidate, item *findingInterven
 		}
 	}
 	if len(others) > 0 {
-		result["others"] = others
+		result["others"], result["alongside"] = others, others
 	}
 	if candidate.Elsewhere != nil {
 		elsewhereBefore := env.window(metric, candidate.Elsewhere, plan.BeforeFrom, plan.AfterFrom)

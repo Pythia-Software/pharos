@@ -77,7 +77,7 @@ func runFindingsPreview(catalogPath string, args []string) error {
 		} else if candidate.stats.passes(threshold) {
 			pass = "yes"
 		}
-		impact := findingImpact(candidate.stats)
+		impact := findingImpact(candidate.stats, candidate.Metric)
 		fmt.Fprintf(writer, "%s\t%d\t%d\t%d\t%d\t%d\t%.3g\t%.2f\t%s\t%s\n", pass, candidate.stats.Affected, candidate.stats.Recent, candidate.stats.Live,
 			candidate.stats.Days, candidate.stats.Workspaces, candidate.stats.Rate, impact["usd"], clipText(env.scopeName(candidate.Spec.Scope), 28), clipText(candidate.card.Title, 90))
 		if verbose && (candidate.stats.passes(threshold) || candidate.Hidden) {

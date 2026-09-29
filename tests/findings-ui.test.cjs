@@ -42,6 +42,7 @@ function overview({ findings = [openCard, cartCard, watchingCard], fresh = 2 } =
     checkpoints: [3, 5, 10, 15, 20].map(threshold => ({ threshold, shown: 60 - threshold * 2, typical_wait_days: 28, clear_share: 0.8 })),
     summary: { saved: { usd: 38.4, tokens: 5.2e6, minutes: 74, failures: 12, added_usd: 1.1, added_tokens: 9e5 }, open: findings.filter(card => card.state === 'open').length, watching: findings.filter(card => card.state === 'watching').length, won: 0, dismissed: 0, snoozed: 0, regressed: 0, at_stake_usd: 44.2, new: fresh, next_result_days: 16 },
     findings,
+    cart_count: findings.filter(card => card.cart).length,
     cart: findings.some(card => card.cart) ? [{ target: repo, label: 'explo', handoff: 'pr', handoff_reason: "explo's work ends in a pull request 86% of the time, so Pharos suggests a PR.", ticked: 1, items: [{ id: cartCard.id, title: cartCard.title, ticked: true, change_label: 'A line in the instructions', suggested_target: repo, undo: false }] }] : [],
     targets: [{ target: repo, label: 'explo' }, { target: 'repo:repo_tl1', label: 'tl1' }, { target: 'global:host:codex', label: 'All repositories · Codex on this Mac' }],
     repositories: [{ id: 'repo_explo', name: 'explo', work: 700, pr_share: 0.86, handoff: 'pr', override: null }],

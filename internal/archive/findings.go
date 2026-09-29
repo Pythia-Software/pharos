@@ -1061,7 +1061,9 @@ func (c *Catalog) storeFindings(ctx context.Context, env *findingEnv, candidates
 			}
 			baseline := map[string]any{"events": candidate.stats.Events, "exposure": candidate.stats.Denom, "rate": candidate.stats.Rate,
 				"affected": candidate.stats.Affected, "conversations": candidate.stats.Exposure}
-			impact := findingImpact(candidate.stats)
+			impact := findingImpact(candidate.stats, candidate.Metric)
+			candidate.Facts = defaultFacts(candidate.Facts)
+			candidate.Facts["evidence_count"] = len(candidate.Evidence)
 			if _, err := tx.Exec(`INSERT INTO findings(id,detector,scope,lever,repository_id,pattern,spec_json,card_json,metric_json,baseline_json,impact_json,gate_json,
 				affected,providers_json,facts_json,evidence_json,target,active,first_seen_at,gate_passed_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?)
 				ON CONFLICT(id) DO UPDATE SET detector=excluded.detector,scope=excluded.scope,lever=excluded.lever,repository_id=excluded.repository_id,
@@ -1138,11 +1140,15 @@ func writeFindingDaily(tx *sql.Tx, id, from string, days map[string][3]float64) 
 	return nil
 }
 
-// findingImpact is a finding's cost scaled from 28 days to a month.
-func findingImpact(stats findingStats) map[string]any {
-	scale := 30.0 / findingGateDays
-	return map[string]any{"usd": stats.CostUSD * scale, "tokens": float64(stats.Tokens) * scale, "minutes": stats.Minutes * scale,
-		"failures": float64(stats.Occurrences) * scale, "window_days": findingGateDays}
+// findingImpact is what a finding cost in the last 28 days, shown as "a
+// month".
+func findingImpact(stats findingStats, metric findingMetric) map[string]any {
+	// Over the last 28 days, the same window as the counts in the wording.
+	failures := 0.0
+	if metric.Failures {
+		failures = float64(stats.Occurrences)
+	}
+	return map[string]any{"usd": stats.CostUSD, "tokens": float64(stats.Tokens), "minutes": stats.Minutes, "failures": failures, "window_days": findingGateDays}
 }
 
 func defaultFacts(facts map[string]any) map[string]any {

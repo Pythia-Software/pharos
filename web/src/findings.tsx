@@ -97,7 +97,7 @@ function updateChrome(fresh: number, inCart: number) {
 /** Keeps the tab badge and the header's cart button current: once at load, every few minutes while the app is visible, and after actions. */
 export function startFindingsChrome() {
   // A filtered overview carries the same summary and cart with fewer cards.
-  const poll = () => { if (!document.hidden) request<Overview>("/api/findings?state=won").then(body => updateChrome(body.summary?.new ?? 0, cartCount(body.cart))).catch(() => { /* The badge waits for the next poll. */ }); };
+  const poll = () => { if (!document.hidden) request<{ summary?: { new?: number }; cart_count?: number }>("/api/findings?state=summary").then(body => updateChrome(body.summary?.new ?? 0, body.cart_count ?? 0)).catch(() => { /* The badge waits for the next poll. */ }); };
   poll();
   window.setInterval(poll, 4 * 60_000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden && !pageOpen) poll(); });
@@ -382,7 +382,8 @@ function StateNote({ card }: { card: Card }) {
 function ImpactLine({ card, rank }: { card: Card; rank: Rank }) {
   const impact = card.impact ?? { usd: 0, tokens: 0, minutes: 0, failures: 0 };
   const note = card.impact_note && !(rank === "tokens" && /token/i.test(card.impact_note)) ? card.impact_note : "";
-  const others = (["usd", "tokens", "minutes", "failures"] as Rank[]).filter(unit => unit !== rank);
+  // Units a pattern has no measure of (no agent time, no failures) are left out.
+  const others = (["usd", "tokens", "minutes", "failures"] as Rank[]).filter(unit => unit !== rank && num(impact[unit]) > 0);
   const brief: Record<Rank, (value: unknown) => string> = { usd: money, tokens: value => `${compact(value)} tokens`, minutes: value => `${minutes(value)}`, failures: value => counted(Math.round(num(value)), "failure") };
   return <div className="findings-impact">
     <span className="findings-impact-lead"><strong>{unitValue[rank](impact[rank])}</strong> a month{note ? <> · <Text text={note} /></> : null}</span>
@@ -687,7 +688,7 @@ function DetailOverview({ detail, onNotApplied }: { detail: Detail; onNotApplied
     alongside.length ? ["Copied alongside", alongside.map((item: Row | string) => typeof item === "string" ? item : item.title).join("; ")] : null,
   ] : [
     ["How often", <>{detail.rate ?? chart?.baseline_phrase}</>],
-    ["Impact", <>{money(detail.impact?.usd)} · {compact(detail.impact?.tokens)} tokens · {minutes(detail.impact?.minutes)} · {counted(Math.round(num(detail.impact?.failures)), "failure")} a month</>],
+    ["Impact", <>{[money(detail.impact?.usd), `${compact(detail.impact?.tokens)} tokens`, num(detail.impact?.minutes) > 0 ? minutes(detail.impact?.minutes) : "", num(detail.impact?.failures) > 0 ? counted(Math.round(num(detail.impact?.failures)), "failure") : ""].filter(Boolean).join(" · ")} a month</>],
     detail.first_seen_at ? ["Found", fullDay(detail.first_seen_at)] : null,
     detail.last_seen ? ["Last seen", fullDay(detail.last_seen)] : null,
     ["Change", detail.change_label],
