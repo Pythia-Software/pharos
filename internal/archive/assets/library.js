@@ -8,11 +8,8 @@
 (() => {
   'use strict';
   const CSS = `
-.pharos-drive{display:flex;align-items:center;gap:7px;min-width:0;max-width:190px;height:32px;box-sizing:border-box;padding:0 10px;border:1px solid #f3ebdc30;border-radius:4px;background:#ffffff0f;color:var(--mast-ink,#f3ebdc);font-size:var(--fs-md,13px);line-height:1;white-space:nowrap}
-.pharos-drive:hover,.pharos-drive[aria-expanded="true"]{border-color:var(--mast-brass,#d4a857);color:#f1d690}
-.header-sync.running .app-icon{animation:pharos-header-turn 1.4s linear infinite}
-@keyframes pharos-header-turn{to{transform:rotate(360deg)}}
-@media(prefers-reduced-motion:reduce){.header-sync.running .app-icon{animation:none}}
+.pharos-library-controls{min-width:0;font-size:var(--fs-md,13px)}
+.combo-button>.pharos-drive{gap:7px;min-width:0;max-width:190px;font-weight:400;line-height:1}
 .pharos-drive-name{flex:0 1 auto;min-width:2.5em;font-weight:650;overflow:hidden;text-overflow:ellipsis}
 .pharos-drive-alert{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;color:#f1d690;font-size:var(--fs-xs,12px)}
 .pharos-dot{flex:none;display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--sea,#315845)}
@@ -33,6 +30,7 @@
 .pharos-activity{padding:8px 0;border-bottom:1px solid var(--line,#ccc)}
 .pharos-activity:last-child{border-bottom:0}
 .pharos-activity-head{display:flex;align-items:center;gap:8px;font-weight:650}
+.pharos-activity-head .pharos-button{margin-left:auto;font-weight:400}
 .pharos-activity .pharos-sub{margin-top:2px}
 .pharos-last-index{padding-top:8px;border-top:1px solid var(--line,#ccc)}
 .pharos-last-index h3{margin-top:4px}
@@ -63,6 +61,7 @@
 .source-card.remote .source-card-head h2{color:color-mix(in srgb,var(--ink,#222) 78%,var(--muted,#666))}
 .pharos-chip{border:1px solid var(--line,#ccc);border-radius:20px;padding:1px 8px;font-size:12px;color:var(--muted,#666)}
 .pharos-chip.warn{color:var(--warn,#98601d);border-color:color-mix(in srgb,var(--warn,#98601d) 50%,var(--line,#ccc))}
+.pharos-run-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .pharos-run{margin:0 0 12px;padding:10px 14px;border:1px dashed var(--line,#ccc);border-radius:11px}
 .pharos-card-capture{margin-top:9px;font-size:12px}
 .pharos-checks{display:grid;gap:0;background:var(--panel,#fff);border:1px solid var(--line,#ccc);border-radius:14px;padding:4px 18px}
@@ -157,7 +156,35 @@
   let recentIndex = null, indexStatusRequest = null;
   const listeners = new Set();
   const driveName = () => status?.drive?.name || 'the drive';
-  const indexFailed = run => run && (run.state !== 'complete' || (run.results || []).some(result => result.error));
+  // A run the user stopped is not a failure: what it wrote is kept and the next
+  // run resumes it. Only the "interrupted:" error of the source it cut short is
+  // the stop itself; any other error in the run is still a failure.
+  const indexStopped = run => run?.stop_requested === true;
+  const isStopError = (run, error) => indexStopped(run) && String(error).startsWith('interrupted:');
+  const indexErrors = run => {
+    const errors = (run?.results || []).filter(result => result.error && !isStopError(run, result.error)).map(result => `${result.source}: ${result.error}`);
+    if (run?.error && !isStopError(run, run.error) && !errors.some(error => error.includes(String(run.error)))) errors.unshift(String(run.error));
+    return errors;
+  };
+  const indexFailed = run => run && ((run.state !== 'complete' && !indexStopped(run)) || indexErrors(run).length > 0);
+
+  // Stops the running index (or source sync) between records; it says when it has.
+  async function stopIndex() {
+    try {
+      const {stopped} = await post('/api/index/cancel');
+      if (!stopped) toast('No index is running.');
+    } catch (error) {
+      toast(error.message);
+    }
+    await refreshStatus();
+    if (document.getElementById('sourceGrid')) loadHosts().catch(() => {});
+  }
+  const stopButton = stopping => {
+    const stop = button(stopping ? 'Stopping…' : 'Stop', '', stopIndex);
+    stop.disabled = stopping;
+    stop.title = 'Stops after the record being indexed. Everything already indexed is kept, and the next index picks up where this one stopped.';
+    return stop;
+  };
 
   function refreshIndexStatus() {
     if (!indexStatusRequest) {
@@ -184,19 +211,32 @@
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshStatus(); });
 
-  let chip = null, headerSync = null, headerCaptureIndexRunning = false, panel = null, panelMode = 'drive', ejectState = null;
+  let controls = null, chip = null, headerSync = null, headerCaptureIndexRunning = false, panel = null, panelMode = 'drive', ejectState = null;
   let driveSpace = null, driveSpaceRequest = null, driveSpaceError = false;
-  function ensureChip() {
-    if (chip?.isConnected) return chip;
+  // The drive chip and Capture and Index share one combo button (ui.py's
+  // .combo-button) at the start of the header icons.
+  function ensureControls() {
+    if (controls?.isConnected) return controls;
     const icons = document.querySelector('body>header .header-icons');
     if (!icons) return null;
+    controls = node('div', 'combo-button pharos-library-controls');
+    controls.setAttribute('role', 'group');
+    controls.setAttribute('aria-label', 'Library');
+    icons.prepend(controls);
+    return controls;
+  }
+
+  function ensureChip() {
+    if (chip?.isConnected) return chip;
+    const group = ensureControls();
+    if (!group) return null;
     chip = node('button', 'pharos-drive');
     chip.id = 'pharosDrive';
     chip.type = 'button';
     chip.setAttribute('aria-haspopup', 'dialog');
     chip.setAttribute('aria-expanded', 'false');
     chip.onclick = () => (panel && panelMode === 'drive' ? closePanel() : openPanel('drive'));
-    icons.prepend(chip);
+    group.prepend(chip);
     return chip;
   }
 
@@ -204,7 +244,7 @@
     const drive = ensureChip();
     if (!drive) return null;
     if (headerSync?.isConnected) return headerSync;
-    headerSync = node('button', 'header-icon header-sync');
+    headerSync = node('button', 'combo-icon header-sync');
     headerSync.id = 'headerSync';
     headerSync.type = 'button';
     headerSync.title = 'Capture and Index';
@@ -227,7 +267,7 @@
     if (!action) return;
     const active = status?.activities?.some(activity => ['capture', 'capture-other', 'sync', 'index'].includes(activity.kind));
     action.disabled = headerCaptureIndexRunning || Boolean(hostsBusy) || Boolean(active);
-    action.classList.toggle('running', headerCaptureIndexRunning);
+    action.setAttribute('aria-busy', String(headerCaptureIndexRunning));
   }
 
   function activitySummary(activity) {
@@ -340,6 +380,7 @@
     activities.forEach(activity => {
       const item = node('div', 'pharos-activity'), head = node('div', 'pharos-activity-head');
       head.append(node('span', 'pharos-dot busy'), node('span', '', activity.label));
+      if (activity.stoppable) head.append(stopButton(activity.stopping));
       item.append(head);
       if (activity.detail) item.append(node('div', 'pharos-sub', activity.detail));
       if (activity.kind !== 'maintenance' && activity.kind !== 'capture-other') item.append(progressBar(activity.progress));
@@ -350,11 +391,10 @@
       const last = node('div', 'pharos-last-index');
       last.append(node('h3', '', 'Last index this session'));
       const failed = indexFailed(recentIndex);
-      const label = recentIndex.state === 'interrupted' ? 'Interrupted' : failed ? 'Failed' : 'Complete';
+      const label = indexStopped(recentIndex) ? 'Stopped' : recentIndex.state === 'interrupted' ? 'Interrupted' : failed ? 'Failed' : 'Complete';
       last.append(node('div', failed ? 'pharos-error' : '', `${label} · ${ago(recentIndex.completed_at)} · ${recentIndex.completed_sources} of ${recentIndex.total_sources} sources`));
-      last.append(node('div', 'pharos-sub', `${plural(recentIndex.workspaces, 'workspace')} updated · ${plural(recentIndex.conversations, 'conversation')}`));
-      const errors = (recentIndex.results || []).filter(result => result.error).map(result => `${result.source}: ${result.error}`);
-      if (recentIndex.error && !errors.some(error => error.includes(String(recentIndex.error)))) errors.unshift(String(recentIndex.error));
+      last.append(node('div', 'pharos-sub', `${plural(recentIndex.workspaces, 'workspace')} updated · ${plural(recentIndex.conversations, 'conversation')}${indexStopped(recentIndex) ? '; the next index resumes' : ''}`));
+      const errors = indexErrors(recentIndex);
       if (errors.length) last.append(node('div', 'pharos-error', errors.join(' · ')));
       panel.append(last);
     }
@@ -523,6 +563,16 @@
 
   // Runs report progress by source; a lone source shows as work in progress.
   const runProgress = run => (run.total_sources > 1 ? run.completed_sources / run.total_sources : null);
+  // An index counts the conversations it has to parse before it starts, and is
+  // measured against them (a source it cannot count is one step); sources are
+  // only its fallback.
+  const indexProgress = run => (run.phase === 'counting' ? null : run.progress ?? runProgress(run));
+  const indexDetail = run => {
+    const current = run.current_source || 'starting';
+    if (run.phase === 'counting') return `${current} · counting the conversations to index`;
+    if (run.total_conversations > 0) return `${current} · ${Number(run.done_conversations).toLocaleString()} of ${plural(run.total_conversations, 'conversation')} · ${run.completed_sources} of ${run.total_sources} sources`;
+    return `${current} · ${run.completed_sources} of ${run.total_sources} sources · ${plural(run.conversations, 'conversation')} written`;
+  };
 
   function indexRunSummary(run) {
     const results = run?.results || [];
@@ -552,18 +602,24 @@
       return box;
     }
     if (indexRun?.state === 'running') {
-      box.append(node('strong', '', 'Indexing captures'),
-        node('div', 'pharos-sub', `${indexRun.current_source || 'starting'} · ${indexRun.completed_sources} of ${indexRun.total_sources} sources · ${plural(indexRun.conversations, 'conversation')} written`),
-        progressBar(runProgress(indexRun)));
+      const head = node('div', 'pharos-run-head');
+      head.append(node('strong', '', indexRun.stop_requested ? 'Stopping the index…' : 'Indexing captures'), stopButton(indexRun.stop_requested));
+      box.append(head,
+        node('div', 'pharos-sub', indexDetail(indexRun)),
+        progressBar(indexProgress(indexRun)));
       return box;
     }
     const recent = [captureRun, indexRun].filter(Boolean).sort((a, b) => String(b.completed_at || '').localeCompare(String(a.completed_at || '')))[0];
     if (!recent || !recent.completed_at || Date.now() - new Date(recent.completed_at).getTime() > 3600_000) return null;
-    const failed = recent.state !== 'complete';
+    const failed = recent.kind === 'capture' ? recent.state !== 'complete' : indexFailed(recent);
     if (recent.kind === 'capture') {
       box.append(node('span', failed ? 'pharos-error' : '', failed ? `The last capture ${recent.state === 'failed' ? 'finished with errors' : 'stopped'}: ${(recent.errors || []).map(error => error.error).slice(0, 2).join('; ') || 'see the sources below'}.` : `Captured ${size(recent.bytes_copied)} ${ago(recent.completed_at)}.`));
     } else {
-      box.append(node('span', failed ? 'pharos-error' : '', failed ? `The last index ${recent.state === 'interrupted' ? 'was interrupted; the next one resumes it' : `failed: ${recent.error || 'see the sources below'}`}.` : `${indexRunSummary(recent)} ${ago(recent.completed_at)}.`));
+      if (indexStopped(recent)) {
+        box.append(node('span', '', `You stopped the last index ${ago(recent.completed_at)}; what it wrote is kept, and the next index resumes it.`));
+        const errors = indexErrors(recent);
+        if (errors.length) box.append(node('div', 'pharos-error', `It also hit errors: ${errors.join(' · ')}`));
+      } else box.append(node('span', failed ? 'pharos-error' : '', failed ? `The last index ${recent.state === 'interrupted' ? 'was interrupted; the next one resumes it' : `failed: ${recent.error || 'see the sources below'}`}.` : `${indexRunSummary(recent)} ${ago(recent.completed_at)}.`));
     }
     return box;
   }
@@ -599,7 +655,9 @@
         hostsData.index = {...hostsData.index, run: update, active: update.state === 'running'};
         renderHosts();
       });
-      toast(run?.state === 'complete' ? indexRunSummary(run) : `Indexing ${label} ${run?.state === 'interrupted' ? 'was interrupted' : 'finished with errors'}`);
+      toast(run?.state === 'complete' ? indexRunSummary(run)
+        : indexStopped(run) ? `Indexing ${label} stopped; what it wrote is kept, and the next index resumes it${indexErrors(run).length ? `. It also hit errors: ${indexErrors(run)[0]}` : ''}`
+        : `Indexing ${label} ${run?.state === 'interrupted' ? 'was interrupted' : 'finished with errors'}`);
       window.loadSources?.();
     } catch (error) {
       hostsError = error.status === 409 ? 'Source indexing is already running; try again when it finishes.' : error.message;

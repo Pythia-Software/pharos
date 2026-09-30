@@ -161,6 +161,22 @@ func TestLibraryStatusListsEverythingHoldingTheLibrary(t *testing.T) {
 	if activity := status["activities"].([]any)[1].(map[string]any); activity["progress"] != nil {
 		t.Fatalf("a one-source sync has no progress to report: %#v", activity)
 	}
+	// An index that counted its work reports conversations, not sources.
+	server.updateRun(index.ID, func(run *SyncRun) {
+		quarter := 0.25
+		run.TotalConversations, run.DoneConversations, run.Progress = 40, 10, &quarter
+	})
+	status = expect("index", "sync")
+	activity = status["activities"].([]any)[0].(map[string]any)
+	if activity["detail"] != "host-b/codex · 10 of 40 conversations · 1 of 2 sources" || activity["progress"] != 0.25 {
+		t.Fatalf("index activity with a count: %#v", activity)
+	}
+	server.updateRun(index.ID, func(run *SyncRun) { run.Phase = "counting" })
+	status = expect("index", "sync")
+	activity = status["activities"].([]any)[0].(map[string]any)
+	if activity["detail"] != "host-b/codex · counting the conversations to index" || activity["progress"] != nil {
+		t.Fatalf("index activity while counting: %#v", activity)
+	}
 	for _, run := range []*SyncRun{sync, index} {
 		server.updateRun(run.ID, func(run *SyncRun) { run.State = "complete" })
 	}

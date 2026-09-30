@@ -38,6 +38,10 @@ type libraryActivity struct {
 	Writes bool `json:"writes"`
 	// OnEject says what a release before an eject does to it.
 	OnEject string `json:"on_eject"`
+	// Stoppable is true for an index or sync that POST /api/index/cancel can
+	// stop, and Stopping once it has been asked to.
+	Stoppable bool `json:"stoppable,omitempty"`
+	Stopping  bool `json:"stopping,omitempty"`
 }
 
 // libraryDrive identifies the volume holding the library.
@@ -185,7 +189,7 @@ func (s *Server) libraryActivities() []libraryActivity {
 			continue
 		}
 		activity := libraryActivity{Kind: "sync", Label: "Indexing sources", StartedAt: run.StartedAt, Writes: true,
-			OnEject: "Stops between workspaces; the next index resumes it."}
+			OnEject: "Stops between workspaces; the next index resumes it.", Stoppable: true, Stopping: run.StopRequested}
 		// Sources are the only unit of progress a run reports; one source
 		// would sit at 0% until it is done.
 		if run.TotalSources > 1 {
@@ -194,14 +198,29 @@ func (s *Server) libraryActivities() []libraryActivity {
 		if run.Kind == indexRunKind {
 			activity.Kind, activity.Label = "index", "Indexing captures"
 			activity.OnEject = "Stops between records; the next index resumes it."
+			// An index counts the conversations it has to parse first, and
+			// measures itself against them rather than the sources.
+			if run.Phase == "counting" {
+				activity.Progress = nil
+			} else if run.Progress != nil {
+				activity.Progress = run.Progress
+			}
 		}
 		parts := []string{}
 		if current := firstString(run.CurrentSource); current != "" {
 			parts = append(parts, current)
 		}
-		parts = append(parts, fmt.Sprintf("%d of %d sources", run.CompletedSources, run.TotalSources))
-		if run.Conversations > 0 {
-			parts = append(parts, plural(run.Conversations, "conversation")+" written")
+		switch {
+		case run.Kind == indexRunKind && run.Phase == "counting":
+			parts = append(parts, "counting the conversations to index")
+		case run.Kind == indexRunKind && run.TotalConversations > 0:
+			parts = append(parts, fmt.Sprintf("%d of %s", run.DoneConversations, plural(run.TotalConversations, "conversation")),
+				fmt.Sprintf("%d of %d sources", run.CompletedSources, run.TotalSources))
+		default:
+			parts = append(parts, fmt.Sprintf("%d of %d sources", run.CompletedSources, run.TotalSources))
+			if run.Conversations > 0 {
+				parts = append(parts, plural(run.Conversations, "conversation")+" written")
+			}
 		}
 		activity.Detail = strings.Join(parts, " · ")
 		activities = append(activities, activity)

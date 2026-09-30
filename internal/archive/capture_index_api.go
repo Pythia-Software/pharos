@@ -10,10 +10,61 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"time"
 )
 
 const indexRunKind = "capture-index"
+
+// ingestStopper is how a stop request reaches the index or source sync
+// holding ingestMu.
+type ingestStopper struct {
+	mu     sync.Mutex
+	runID  string
+	cancel context.CancelFunc
+}
+
+// beginIngest registers the run that has just taken ingestMu and returns its
+// context, cancelled by stopIngest or when the service stops. The returned
+// func ends the registration; call it before releasing ingestMu.
+func (s *Server) beginIngest(runID string) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(s.life.ctx)
+	s.ingestStop.mu.Lock()
+	s.ingestStop.runID, s.ingestStop.cancel = runID, cancel
+	s.ingestStop.mu.Unlock()
+	return ctx, func() {
+		s.ingestStop.mu.Lock()
+		s.ingestStop.runID, s.ingestStop.cancel = "", nil
+		s.ingestStop.mu.Unlock()
+		cancel()
+	}
+}
+
+// closeIngestStop ends what a stop can do once every source has been handled:
+// the finishing steps cannot be cut short, and a stop that arrives during them
+// must not turn a run that indexed everything into an interrupted one.
+func (s *Server) closeIngestStop() {
+	s.ingestStop.mu.Lock()
+	defer s.ingestStop.mu.Unlock()
+	if s.ingestStop.cancel != nil {
+		s.ingestStop.runID, s.ingestStop.cancel = "", func() {}
+	}
+}
+
+// stopIngest asks the running index or sync to stop, reporting whether one
+// was running. It stops between records like a release does, so every record
+// already written stays and the next run resumes from there, but unlike a
+// release the service carries on and finishes up what was written.
+func (s *Server) stopIngest() bool {
+	s.ingestStop.mu.Lock()
+	defer s.ingestStop.mu.Unlock()
+	if s.ingestStop.cancel == nil {
+		return false
+	}
+	s.updateRun(s.ingestStop.runID, func(run *SyncRun) { run.StopRequested = run.State == "running" })
+	s.ingestStop.cancel()
+	return true
+}
 
 // runIndexCLI: pharos index [--host ID | --all-hosts] [SOURCE ...]
 func runIndexCLI(config Config, catalog *Catalog, args []string) error {
@@ -103,12 +154,15 @@ func (s *Server) startIndex(w http.ResponseWriter, body map[string]any) {
 		labels = append(labels, target.label())
 	}
 	run := s.startRunNamed(indexRunKind, labels)
-	started := s.spawn(func(ctx context.Context) {
+	ctx, end := s.beginIngest(run.ID)
+	started := s.spawn(func(context.Context) {
 		defer s.ingestMu.Unlock()
+		defer end()
 		s.indexTargets(ctx, run.ID, targets)
 	})
 	if !started {
 		// A stop began after this request was admitted.
+		end()
 		s.ingestMu.Unlock()
 		stopping := errors.New("Pharos is stopping, so the index did not start")
 		s.updateRun(run.ID, func(run *SyncRun) {
@@ -123,12 +177,17 @@ func (s *Server) startIndex(w http.ResponseWriter, body map[string]any) {
 func (s *Server) indexTargets(ctx context.Context, runID string, targets []captureTarget) {
 	results := []IngestResult{}
 	var failure any
+	// interrupted is decided when the sources are done, not after the finishing
+	// steps, so a stop that comes later changes nothing.
+	interrupted := false
 	defer func() {
 		if value := recover(); value != nil {
 			s.exitIfFault(value)
 			failure = fmt.Sprintf("index stopped: %v", value)
 		}
-		ok := failure == nil && ctx.Err() == nil
+		// A release during the finishing steps skips some of them.
+		interrupted = interrupted || s.life.ctx.Err() != nil
+		ok := failure == nil && !interrupted
 		for _, result := range results {
 			if result.Error != nil {
 				ok = false
@@ -137,7 +196,7 @@ func (s *Server) indexTargets(ctx context.Context, runID string, targets []captu
 		}
 		s.updateRun(runID, func(run *SyncRun) {
 			run.State, run.Phase = "complete", "complete"
-			if ctx.Err() != nil {
+			if interrupted {
 				run.State, run.Phase = "interrupted", "interrupted"
 			} else if !ok {
 				run.State, run.Phase = "failed", "failed"
@@ -145,6 +204,8 @@ func (s *Server) indexTargets(ctx context.Context, runID string, targets []captu
 			run.CurrentSource, run.CompletedAt, run.Error = nil, now(), failure
 		})
 	}()
+	// Counted first, so the run can report how many conversations remain.
+	plan := s.countIndexWork(ctx, runID, targets)
 	for index, target := range targets {
 		if ctx.Err() != nil {
 			break
@@ -157,38 +218,111 @@ func (s *Server) indexTargets(ctx context.Context, runID string, targets []captu
 			base.Messages += result.Messages
 			base.SkippedCurrent += result.SkippedCurrent
 		}
-		result := s.Catalog.IndexCapture(ctx, target, func(phase string, w, c, m, skipped int) {
+		result := s.Catalog.IndexCapture(ctx, target, func(phase string, w, c, m, skipped, processed int) {
 			s.updateRun(runID, func(run *SyncRun) {
 				run.CurrentSource, run.Phase, run.CompletedSources = label, phase, index
+				plan.report(run, index, processed)
 				run.Workspaces, run.Conversations = base.Workspaces+w, base.Conversations+c
 				run.Messages, run.SkippedCurrent = base.Messages+m, base.SkippedCurrent+skipped
 			})
 		})
 		results = append(results, result)
+		plan.finish(index)
 		s.updateRun(runID, func(run *SyncRun) {
 			run.Results = slices.Clone(results)
 			run.CompletedSources = index + 1
+			plan.report(run, index+1, 0)
 			run.Workspaces, run.Conversations = base.Workspaces+result.Workspaces, base.Conversations+result.Conversations
 			run.Messages, run.SkippedCurrent = base.Messages+result.Messages, base.SkippedCurrent+result.SkippedCurrent
 		})
 	}
+	interrupted = ctx.Err() != nil
+	s.closeIngestStop()
+	// A stop from the user leaves the service up, so what the index did write
+	// is still linked, checkpointed and looked up in Git; only a release
+	// (before an eject) skips the linking and the authorship rebuild.
+	serviceUp := s.life.ctx.Err() == nil
 	if wroteRecords(results) {
-		if ctx.Err() == nil {
+		if serviceUp {
 			if _, err := s.Catalog.ReconcileIdentities(); err != nil {
 				failure = err.Error()
 			}
 		}
 		_ = s.Catalog.Checkpoint()
 		s.refreshGitInBackground(false)
-	} else if ctx.Err() == nil {
+	} else if !interrupted {
 		// Nothing new, but the first index of a day still rebuilds findings.
 		s.Catalog.refreshFindingsInBackground(false)
 	}
 	// Before the run reports complete, so Usage sees the rebuild running. It
 	// also picks up a rebuild an eject stopped, even if this index wrote nothing.
-	if ctx.Err() == nil {
+	if serviceUp {
 		s.Catalog.refreshAuthorship()
 	}
+}
+
+// indexPlan is what a counting pass found for an index run: per target, the
+// conversations it has to parse, or -1 for a source that cannot be counted (a
+// kind that parses whole, or a capture that would not open). The bar measures
+// conversations, and a source it cannot count as one step of its own, so one
+// such source does not take the conversation count from the rest.
+type indexPlan struct {
+	needed []int
+	// conversationsBefore and unitsBefore are what the targets already
+	// finished account for, in conversations and in bar steps.
+	conversationsBefore, unitsBefore int
+	totalUnits                       int
+}
+
+func planUnits(needed int) int {
+	if needed < 0 {
+		return 1
+	}
+	return needed
+}
+
+// report sets the run's counts as the target at index has handled processed
+// of its conversations; targets before index are done.
+func (p *indexPlan) report(run *SyncRun, index, processed int) {
+	conversations, units := p.conversationsBefore, p.unitsBefore
+	if index < len(p.needed) && p.needed[index] > 0 {
+		conversations += min(processed, p.needed[index])
+		units += min(processed, p.needed[index])
+	}
+	run.DoneConversations = conversations
+	run.Progress = fraction(float64(units), float64(p.totalUnits))
+}
+
+// finish takes the target at index as done, whatever it turned out to handle.
+func (p *indexPlan) finish(index int) {
+	p.unitsBefore += planUnits(p.needed[index])
+	p.conversationsBefore += max(p.needed[index], 0)
+}
+
+// countIndexWork counts each target's conversations and records their sum on
+// the run; the run's progress is nil until it has, or if there is nothing to
+// measure it against.
+func (s *Server) countIndexWork(ctx context.Context, runID string, targets []captureTarget) *indexPlan {
+	s.updateRun(runID, func(run *SyncRun) { run.Phase = "counting" })
+	plan := &indexPlan{needed: make([]int, len(targets))}
+	conversations := 0
+	for index, target := range targets {
+		count, ok := 0, false
+		if ctx.Err() == nil {
+			count, ok = s.Catalog.captureIndexWork(ctx, target)
+		}
+		if !ok {
+			count = -1
+		}
+		plan.needed[index] = count
+		conversations += max(count, 0)
+		plan.totalUnits += planUnits(count)
+	}
+	s.updateRun(runID, func(run *SyncRun) {
+		run.Phase, run.TotalConversations = "starting", conversations
+		plan.report(run, 0, 0)
+	})
+	return plan
 }
 
 func wroteRecords(results []IngestResult) bool {

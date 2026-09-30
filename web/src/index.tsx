@@ -607,7 +607,7 @@ function LibraryPage() {
 type ChartPeriod = "day" | "week" | "month";
 type ChartRange = "30d" | "90d" | "6m" | "1y";
 type TokenSplit = "type" | "provider" | "model_family" | "repository_name" | "session_kind";
-type TokenChartView = { metric: "tokens" | "cost"; split: TokenSplit; period: ChartPeriod };
+type TokenChartView = { metric: "tokens" | "cost" | "percent"; split: TokenSplit; period: ChartPeriod };
 // A preset either fills the metric panels or sets the chart above them.
 type UsagePreset = { label: string; title: string; aggregations?: AggregationClause[]; chart?: Partial<TokenChartView>; orderBy?: OrderByClause[] };
 const sum = (field: string, groupBy: string[], label: string): AggregationClause => ({ id: `${field}:${groupBy.join(",")}`, op: "sum", field, groupBy, label });
@@ -749,7 +749,7 @@ const chartPeriods: Record<ChartPeriod, { unit: string }> = { day: { unit: "day"
 const chartRanges: Array<[ChartRange, string]> = [["30d", "30 days"], ["90d", "90 days"], ["6m", "6 months"], ["1y", "1 year"]];
 const periodOptions: Array<[ChartPeriod, string]> = [["day", "Day"], ["week", "Week"], ["month", "Month"]];
 // value, on a series the key can filter to, is what it filters to.
-type ChartSeries = { key: string; label: string; color: string; value?: string };
+type ChartSeries = { key: string; label: string; color: string; value?: string; hiddenCount?: number };
 // parts lists what a folded series (Other) holds in this bucket.
 type ChartBucket = { key: string; date: Date; values: Record<string, number>; parts?: Record<string, Array<[string, number]>>; detail?: string };
 const pad2 = (value: number) => String(value).padStart(2, "0");
@@ -941,24 +941,23 @@ function filterChange(api: QueryTableApi<Row>): FilterChange {
 // foldSeries adds (bucket, value, amount) rows to their buckets as series.
 // Fixed values keep one color each whatever the filters; otherwise the five
 // largest in view get their own series, as does any selected value, and the
-// rest fold into Other.
-function foldSeries(rows: Array<[string, string, number]>, byKey: Map<string, ChartBucket>, label: (name: string) => string, fixed: string[] | undefined, selected: string[]): ChartSeries[] {
+// rest fold into Other. Expanding Other raises the limit five at a time.
+function foldSeries(rows: Array<[string, string, number]>, byKey: Map<string, ChartBucket>, label: (name: string) => string, fixed: string[] | undefined, selected: string[], limit = 5): ChartSeries[] {
   const inView = rows.filter(([key]) => byKey.has(key)), totals = new Map<string, number>();
   for (const [, name, value] of inView) totals.set(name, (totals.get(name) ?? 0) + value);
   const shown = fixed ? [...fixed.filter(name => totals.get(name)), ...[...totals.keys()].filter(name => !fixed.includes(name) && totals.get(name))]
     : [...totals.entries()].filter(([, value]) => value > 0).sort((left, right) => right[1] - left[1]).map(([name]) => name);
-  const top = shown.slice(0, 5);
+  const top = shown.slice(0, limit);
   // A selected value keeps its key, so it can be cleared, even with nothing in view.
   for (const name of selected) if (!top.includes(name)) top.push(name);
   const rest = shown.filter(name => !top.includes(name));
   const color = (name: string, index: number) => splitColors[(fixed ? fixed.indexOf(name) : index)] ?? splitColors[index % splitColors.length];
   const series: ChartSeries[] = top.map((name, index) => ({ key: `s:${name}`, label: label(name), color: color(name, index), value: name }));
-  // A lone folded value keeps its name; Other lists what it holds on hover.
-  if (rest.length) series.push({ key: "other", label: rest.length === 1 ? label(rest[0]) : `Other (${rest.length})`, color: "var(--muted)", ...(rest.length === 1 ? { value: rest[0] } : {}) });
+  if (rest.length) series.push({ key: "other", label: `Other (${rest.length})`, color: "var(--muted)", hiddenCount: rest.length });
   for (const [bucketKey, name, value] of inView) {
     const target = byKey.get(bucketKey)!, key = top.includes(name) ? `s:${name}` : "other";
     target.values[key] = (target.values[key] ?? 0) + value;
-    if (key !== "other" || value <= 0 || rest.length < 2) continue;
+    if (key !== "other" || value <= 0) continue;
     const parts = ((target.parts ??= {}).other ??= []), part = parts.find(([item]) => item === label(name));
     if (part) part[1] += value;
     else parts.push([label(name), value]);
@@ -1055,10 +1054,10 @@ function Segmented<T extends string>({ label, value, options, onChange }: { labe
 // With onSelect, clicking a key selects its series: only selected series are
 // drawn and the rest stay in the key, dimmed. With onRange, dragging across
 // columns (or clicking or pressing Enter on one) picks a time range.
-function StackedColumns({ title, controls, series, buckets, period, format, tickFormat = format, noun, loading, error, legend = false, selected = [], onSelect, onRange }: {
+function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, format, tickFormat = format, noun, loading, error, legend = false, selected = [], percent = false, onSelect, onExpand, onRange }: {
   title: string; controls: React.ReactNode; series: ChartSeries[]; buckets: ChartBucket[]; period: ChartPeriod;
   format: (value: number) => string; tickFormat?: (value: number) => string; noun: string; loading: boolean; error: string; legend?: boolean;
-  selected?: string[]; onSelect?: (key: string | null, additive: boolean) => void; onRange?: (first: ChartBucket, last: ChartBucket) => void;
+  selected?: string[]; percent?: boolean; onSelect?: (key: string | null, additive: boolean) => void; onExpand?: () => void; onRange?: (first: ChartBucket, last: ChartBucket) => void;
 }) {
   const root = useRef<HTMLDivElement>(null), tipRef = useRef<HTMLDivElement>(null), bars = useRef<HTMLDivElement>(null);
   const [tip, setTip] = useState<{ bucket: ChartBucket; x: number; width: number; top: number } | null>(null);
@@ -1067,8 +1066,15 @@ function StackedColumns({ title, controls, series, buckets, period, format, tick
   const dragRef = useRef(drag);
   const moveDrag = (next: typeof drag) => { dragRef.current = next; setDrag(next); };
   const drawn = selected.length ? series.filter(item => selected.includes(item.key)) : series;
+  const buckets = percent ? sourceBuckets.map(bucket => {
+    const total = drawn.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0);
+    const values = Object.fromEntries(drawn.map(item => [item.key, total ? 100 * (bucket.values[item.key] ?? 0) / total : 0]));
+    const parts = Object.fromEntries(Object.entries(bucket.parts ?? {}).map(([key, entries]) => [key, entries.map(([name, value]) => [name, total ? 100 * value / total : 0] as [string, number])]));
+    return { ...bucket, values, parts };
+  }) : sourceBuckets;
   const total = (bucket: ChartBucket) => drawn.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0);
-  const { y, ticks, split } = columnScale(buckets.map(total)), unit = chartPeriods[period].unit, stacked = drawn.length > 1;
+  const { y, ticks, split } = percent ? { y: (value: number) => value, ticks: [25, 50, 75, 100], split: undefined } : columnScale(buckets.map(total));
+  const unit = chartPeriods[period].unit, stacked = drawn.length > 1;
   const label = (date: Date) => period === "month" ? date.toLocaleDateString(undefined, { month: "short", year: "numeric" }) : date.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(period === "day" && buckets.length > 120 ? { year: "2-digit" } : {}) });
   const heading = (bucket: ChartBucket) => `${period === "week" ? "Week of " : ""}${label(bucket.date)}`;
   const suffix = noun ? ` ${noun}` : "";
@@ -1128,7 +1134,8 @@ function StackedColumns({ title, controls, series, buckets, period, format, tick
       {series.length > 1 || legend ? series.map(item => {
         const on = selected.includes(item.key), dimmed = selected.length > 0 && !on;
         const content = <><span className="usage-swatch" style={{ background: item.color }} />{item.label}{on && selected.length === 1 ? <span className="usage-legend-x" aria-hidden="true">×</span> : null}</>;
-        return selectable(item) ? <button key={item.key} type="button" className={`usage-legend-item${dimmed ? " dimmed" : ""}`} aria-pressed={on}
+        return item.hiddenCount && onExpand ? <button key={item.key} type="button" className="usage-legend-item" title={`Show next ${Math.min(5, item.hiddenCount)} values`} onClick={onExpand}>{content}</button>
+          : selectable(item) ? <button key={item.key} type="button" className={`usage-legend-item${dimmed ? " dimmed" : ""}`} aria-pressed={on}
           title={on && selected.length === 1 ? "Clear this filter" : `Show only ${item.label}; ⌘-click to ${on ? "remove it" : "add it"}`}
           onClick={event => onSelect!(item.key, event.metaKey || event.ctrlKey || event.shiftKey)}>{content}</button>
           : <span key={item.key} className={`usage-legend-item${dimmed ? " dimmed" : ""}`}>{content}</span>;
@@ -1149,7 +1156,7 @@ function StackedColumns({ title, controls, series, buckets, period, format, tick
             const value = bucket.values[item.key] ?? 0, bottom = y(below);
             below += value;
             const height = y(below) - bottom;
-            return value > 0 && (!stacked || height >= 0.5) ? [{ item, height }] : [];
+            return value > 0 && (!stacked || percent || height >= 0.5) ? [{ item, height }] : [];
           });
           const className = [tip?.bucket.key === bucket.key && !drag ? "active" : "", picked && index >= picked[0] && index <= picked[1] ? "picked" : ""].filter(Boolean).join(" ");
           return <span key={bucket.key} role="listitem" tabIndex={0} aria-label={describe(bucket)} className={className} onMouseEnter={event => show(event, bucket)} onFocus={event => show(event, bucket)} onMouseLeave={() => setTip(null)} onBlur={() => setTip(null)}
@@ -1266,6 +1273,8 @@ function TokenChart({ where, onFilter, view, onChange }: { where: WhereTerm[]; o
   const split: TokenSplit = view.metric === "cost" && view.split === "type" ? "provider" : view.split;
   const measure = view.metric === "cost" ? "cost_usd" : "total_tokens";
   const [types, setTypes] = useState<string[]>([]);
+  const [seriesLimit, setSeriesLimit] = useState(5);
+  useEffect(() => setSeriesLimit(5), [split]);
   const sliced = split !== "type";
   const chosen = sliced ? sliceValues(where, split).map(value => value ?? "") : types;
   const chartWhere = sliced ? where.filter(term => !isSliceTerm(term, split)) : where;
@@ -1287,8 +1296,8 @@ function TokenChart({ where, onFilter, view, onChange }: { where: WhereTerm[]; o
       return { series: tokenTypes.filter(type => type.key !== "unclassified_tokens" || buckets.some(bucket => bucket.values[type.key])).map(type => ({ ...type, value: type.key })), buckets };
     }
     const rows = (result.metrics[0]?.buckets ?? []).map(bucket => [String(bucket.keys[0]), String(bucket.keys[1] ?? ""), Number(bucket.value) || 0] as [string, string, number]);
-    return { series: foldSeries(rows, byKey, name => splitLabel(split, name), fixedSplitOrder[split], chosen), buckets };
-  }, [result.metrics, split, view.period, bounds.from?.getTime(), bounds.to?.getTime(), chosen.join("\u0000")]);
+    return { series: foldSeries(rows, byKey, name => splitLabel(split, name), fixedSplitOrder[split], chosen, seriesLimit), buckets };
+  }, [result.metrics, split, view.period, bounds.from?.getTime(), bounds.to?.getTime(), chosen.join("\u0000"), seriesLimit]);
   const selected = series.filter(item => item.value !== undefined && chosen.includes(item.value)).map(item => item.key);
   function select(key: string | null, additive: boolean) {
     const value = key === null ? undefined : series.find(item => item.key === key)?.value;
@@ -1296,16 +1305,18 @@ function TokenChart({ where, onFilter, view, onChange }: { where: WhereTerm[]; o
     else onFilter(current => withSlice(current, split, value === undefined ? [] : nextSlice(sliceValues(current, split), value || null, additive)));
   }
   const unit = chartPeriods[view.period].unit, splitName = tokenSplits.find(([value]) => value === split)?.[1].toLowerCase() ?? split;
-  const title = `${view.metric === "cost" ? "API cost" : "Tokens"} per ${unit} by ${splitName}`;
+  const title = `${view.metric === "cost" ? "API cost" : view.metric === "percent" ? "Token share" : "Tokens"} per ${unit} by ${splitName}`;
   const controls = <>
-    <Segmented label="Show" value={view.metric} options={[["tokens", "Tokens"], ["cost", "Cost"]]} onChange={metric => onChange({ metric })} />
+    <Segmented label="Show" value={view.metric} options={[["tokens", "Tokens"], ["cost", "Cost"], ["percent", "%"]]} onChange={metric => onChange({ metric })} />
     <Segmented label="Split" value={split} options={tokenSplits.map(([value, text]) => [value, text, value === "type" && view.metric === "cost" ? "Cost is priced per request, not per token type" : undefined])} onChange={next => onChange({ split: next })} />
     <Segmented label="By" value={view.period} options={periodOptions} onChange={period => onChange({ period })} />
     <RangeControl bounds={bounds} onChange={from => onFilter(current => withTimeRange(current, usageTime, from))} />
   </>;
   return <StackedColumns title={title} controls={controls} series={series.length ? series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={buckets} period={view.period}
-    format={view.metric === "cost" ? formatUSD : compactNumber} tickFormat={view.metric === "cost" ? costTick : compactNumber} noun={view.metric === "cost" ? "" : "tokens"} loading={result.loading} error={result.error} legend={series.length > 0}
-    selected={selected} onSelect={select} onRange={pickRange(onFilter, usageTime, view.period, period => onChange({ period }))} />;
+    format={view.metric === "cost" ? formatUSD : view.metric === "percent" ? value => `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })}%` : compactNumber}
+    tickFormat={view.metric === "cost" ? costTick : view.metric === "percent" ? value => `${value}%` : compactNumber}
+    noun={view.metric === "tokens" ? "tokens" : ""} loading={result.loading} error={result.error} legend={series.length > 0} percent={view.metric === "percent"}
+    selected={selected} onSelect={select} onExpand={() => setSeriesLimit(limit => limit + 5)} onRange={pickRange(onFilter, usageTime, view.period, period => onChange({ period }))} />;
 }
 
 function PresetRow({ label, presets, onApply, clear }: { label: string; presets: UsagePreset[]; onApply: (preset: UsagePreset | null) => void; clear?: boolean }) {
@@ -1318,7 +1329,7 @@ function PresetRow({ label, presets, onApply, clear }: { label: string; presets:
 
 function TokenUsage() {
   const [chart, setChart] = useState<TokenChartView>(() => readStored(tokenChartKey, defaultTokenChart, view =>
-    ["tokens", "cost"].includes(view.metric) && tokenSplits.some(([value]) => value === view.split) && view.period in chartPeriods));
+    ["tokens", "cost", "percent"].includes(view.metric) && tokenSplits.some(([value]) => value === view.split) && view.period in chartPeriods));
   const update = (next: Partial<TokenChartView>) => setChart(previous => { const merged = { ...previous, ...next }; store(tokenChartKey, merged); return merged; });
   function apply(preset: UsagePreset | null) {
     if (preset?.chart) {
@@ -1443,9 +1454,11 @@ function WritingPanel({ where, onFilter, status, reload }: { where: WhereTerm[];
   const [view, setView] = useState(() => readStored(writingViewKey, { period: "week" as ChartPeriod, scope: "typed" as "typed" | "all", split: "kind" as WritingSplit }, value => value.period in chartPeriods && ["typed", "all"].includes(value.scope) && writingSplits.some(([option]) => option === value.split)));
   const update = (next: Partial<typeof view>) => setView(previous => { const merged = { ...previous, ...next }; store(writingViewKey, merged); return merged; });
   const [kinds, setKinds] = useState<string[]>([]);
+  const [seriesLimit, setSeriesLimit] = useState(5);
   const bounds = timeBounds(where, writingTime);
   const window = { from: bounds.from ? localDay(bounds.from) : undefined, to: bounds.to ? localDay(new Date(bounds.to.getTime() - 1)) : undefined };
   const split = view.split === "kind" ? null : view.split;
+  useEffect(() => setSeriesLimit(5), [split]);
   const chosen = split ? sliceValues(where, split).map(value => value ?? "") : kinds;
   const chartWhere = split ? where.filter(term => !isSliceTerm(term, split)) : where;
   // Without a key filter, one request answers both the totals and the chart.
@@ -1468,8 +1481,8 @@ function WritingPanel({ where, onFilter, status, reload }: { where: WhereTerm[];
     for (const bucket of buckets) bucket.detail = `${(messages.get(bucket.key) ?? 0).toLocaleString()} messages with typed text`;
     if (!split) return { chartSeries: groups.map(group => ({ key: group.key, label: group.label, color: group.color, value: group.key })), buckets };
     const rows = (chartData.series?.split ?? []).map(entry => [bucketOf(entry.day), entry.value ?? "", Number(view.scope === "typed" ? entry.typed_words : entry.words) || 0] as [string, string, number]);
-    return { chartSeries: foldSeries(rows, byKey, name => writingSplitLabel(split, name), undefined, chosen), buckets };
-  }, [series, chartData.series, split, view.scope, view.period, bounds.from?.getTime(), bounds.to?.getTime(), chosen.join("\u0000")]);
+    return { chartSeries: foldSeries(rows, byKey, name => writingSplitLabel(split, name), undefined, chosen, seriesLimit), buckets };
+  }, [series, chartData.series, split, view.scope, view.period, bounds.from?.getTime(), bounds.to?.getTime(), chosen.join("\u0000"), seriesLimit]);
   const selected = chartSeries.filter(item => item.value !== undefined && chosen.includes(item.value)).map(item => item.key);
   function select(key: string | null, additive: boolean) {
     const value = key === null ? undefined : chartSeries.find(item => item.key === key)?.value;
@@ -1504,7 +1517,7 @@ function WritingPanel({ where, onFilter, status, reload }: { where: WhereTerm[];
       </>}
       series={chartSeries} buckets={buckets} period={view.period} legend={Boolean(split) && chartSeries.length > 0}
       format={value => value.toLocaleString()} tickFormat={compactNumber} noun="words" loading={chartData.loading} error={chartData.error}
-      selected={selected} onSelect={select} onRange={pickRange(onFilter, writingTime, view.period, period => update({ period }))} />
+      selected={selected} onSelect={select} onExpand={() => setSeriesLimit(limit => limit + 5)} onRange={pickRange(onFilter, writingTime, view.period, period => update({ period }))} />
     <div className="writing-mix">
       <h3>Where user-turn text came from</h3>
       {!allChars ? <p className="muted">{data.loading ? "Loading…" : "No classified user messages match these filters."}</p> : <>

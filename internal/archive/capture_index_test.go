@@ -519,7 +519,7 @@ func TestIndexResumesAfterInterruption(t *testing.T) {
 	parses := countParses(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	result := catalog.IndexCapture(ctx, targets[0], func(phase string, workspaces, _, _, _ int) {
+	result := catalog.IndexCapture(ctx, targets[0], func(phase string, workspaces, _, _, _, _ int) {
 		if workspaces == 2 {
 			cancel()
 		}
@@ -535,6 +535,104 @@ func TestIndexResumesAfterInterruption(t *testing.T) {
 	_ = catalog.DB.QueryRow("SELECT coverage FROM source_states WHERE host_id='host-a' AND source_name='codex'").Scan(&coverage)
 	if result.Error != nil || result.Workspaces != 3 || result.Unchanged != 2 || parses.Load() != 3 || coverage != "complete" {
 		t.Fatalf("resumed index: %#v, %d parses, coverage %s", result, parses.Load(), coverage)
+	}
+}
+
+func TestIndexWorkCountsWhatRemainsWithoutParsing(t *testing.T) {
+	useHost(t, "host-a")
+	catalog, _ := testCatalog(t)
+	codex := filepath.Join(t.TempDir(), "codex")
+	for index := range 5 {
+		writeSourceFile(t, filepath.Join(codex, "sessions", fmt.Sprintf("rollout-%d.jsonl", index)), codexLines(fmt.Sprintf("session-%d", index), 1))
+	}
+	config := captureTestConfig(t, SourceConfig{Name: "codex", Kind: "codex", Path: codex, Account: "local", Enabled: true})
+	runCapture(t, config)
+	targets, err := captureTargets(config.CaptureRoot, nil, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parses := countParses(t)
+	if needed, ok := catalog.captureIndexWork(context.Background(), targets[0]); !ok || needed != 5 || parses.Load() != 0 {
+		t.Fatalf("before any index: %d needed, ok %v, %d parses", needed, ok, parses.Load())
+	}
+	// Two of five, as after an interrupted index.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	catalog.IndexCapture(ctx, targets[0], func(_ string, workspaces, _, _, _, processed int) {
+		if workspaces == 2 {
+			cancel()
+		}
+	})
+	parses.Store(0)
+	if needed, ok := catalog.captureIndexWork(context.Background(), targets[0]); !ok || needed != 3 || parses.Load() != 0 {
+		t.Fatalf("after an interrupted index: %d needed, ok %v, %d parses", needed, ok, parses.Load())
+	}
+	if result := catalog.IndexCapture(context.Background(), targets[0], nil); result.Error != nil || result.Processed != 3 {
+		t.Fatalf("resumed index: %#v", result)
+	}
+	if needed, ok := catalog.captureIndexWork(context.Background(), targets[0]); !ok || needed != 0 {
+		t.Fatalf("after the index: %d needed, ok %v", needed, ok)
+	}
+	// A cancelled count is not a count.
+	cancelled, stop := context.WithCancel(context.Background())
+	stop()
+	if _, ok := catalog.captureIndexWork(cancelled, targets[0]); ok {
+		t.Fatal("a cancelled count reported success")
+	}
+}
+
+func TestIndexPlanCountsAnUncountableSourceAsOneStep(t *testing.T) {
+	plan := &indexPlan{needed: []int{-1, 3, 0}, totalUnits: 4}
+	var run SyncRun
+	plan.report(&run, 0, 0)
+	if run.DoneConversations != 0 || *run.Progress != 0 {
+		t.Fatalf("start: %#v", run)
+	}
+	plan.finish(0)
+	plan.report(&run, 1, 2)
+	if run.DoneConversations != 2 || *run.Progress != 0.75 {
+		t.Fatalf("two of the three conversations after the uncountable source: %d, %v", run.DoneConversations, *run.Progress)
+	}
+	// A target that handled more than was counted does not overrun its share.
+	plan.report(&run, 1, 9)
+	if run.DoneConversations != 3 || *run.Progress != 1 {
+		t.Fatalf("overrun: %d, %v", run.DoneConversations, *run.Progress)
+	}
+	plan.finish(1)
+	plan.finish(2)
+	if plan.report(&run, 3, 0); run.DoneConversations != 3 || *run.Progress != 1 {
+		t.Fatalf("finished: %d, %v", run.DoneConversations, *run.Progress)
+	}
+	empty := &indexPlan{needed: []int{0}}
+	if empty.report(&run, 0, 0); run.Progress != nil {
+		t.Fatalf("nothing to measure progress by: %v", *run.Progress)
+	}
+}
+
+func TestIndexRunCountsConversationsBesideAnUncountableSource(t *testing.T) {
+	useHost(t, "host-a")
+	catalog, _ := testCatalog(t)
+	dir := t.TempDir()
+	codex := filepath.Join(dir, "codex")
+	for index := range 3 {
+		writeSourceFile(t, filepath.Join(codex, "sessions", fmt.Sprintf("rollout-%d.jsonl", index)), codexLines(fmt.Sprintf("session-%d", index), 1))
+	}
+	export := filepath.Join(dir, "export.json")
+	writeSourceFile(t, export, `{"workspaces":[{"id":"work","title":"T","conversations":[{"id":"thread","messages":[{"id":"one","role":"user","text":"hello"}]}]}]}`)
+	config := captureTestConfig(t,
+		SourceConfig{Name: "export", Kind: "canonical", Path: export, Account: "local", Enabled: true},
+		SourceConfig{Name: "codex", Kind: "codex", Path: codex, Account: "local", Enabled: true})
+	runCapture(t, config)
+	targets, err := captureTargets(config.CaptureRoot, nil, false, nil)
+	if err != nil || len(targets) != 2 {
+		t.Fatalf("targets: %v %v", targets, err)
+	}
+	server := NewServer(config, catalog)
+	run := server.startRunNamed(indexRunKind, []string{targets[0].label(), targets[1].label()})
+	server.indexTargets(context.Background(), run.ID, targets)
+	finished := server.indexRuns()[0]
+	if finished.State != "complete" || finished.TotalConversations != 3 || finished.DoneConversations != 3 || finished.Progress == nil || *finished.Progress != 1 {
+		t.Fatalf("index beside an uncountable source: %#v", finished)
 	}
 }
 
@@ -765,7 +863,7 @@ func TestIndexAPIRunsInBackground(t *testing.T) {
 			host, _ := hosts[0].(map[string]any)
 			sources, _ := host["sources"].([]any)
 			source, _ := sources[0].(map[string]any)
-			if run["workspaces"] != float64(1) || run["kind"] != indexRunKind || host["id"] != "host-a" || host["current"] != true || source["needs_index"] != false || source["last_data_at"] != lastDataAt {
+			if run["workspaces"] != float64(1) || run["total_conversations"] != float64(1) || run["done_conversations"] != float64(1) || run["kind"] != indexRunKind || host["id"] != "host-a" || host["current"] != true || source["needs_index"] != false || source["last_data_at"] != lastDataAt {
 				t.Fatalf("finished index: %#v", body)
 			}
 			break
@@ -828,5 +926,100 @@ func TestIndexPassesOverWholeSourceCapturesOlderThanTheLastSync(t *testing.T) {
 	runCapture(t, config)
 	if indexCaptures(t, catalog, config.CaptureRoot, "host-a"); title() != "Newest" {
 		t.Fatalf("newer capture not indexed: %q", title())
+	}
+}
+
+// A stop asked for while an index runs ends it between records: what it wrote
+// stays, the run reads as interrupted (not failed), the service carries on, and
+// the next index writes only what is left.
+func TestStoppingAnIndexKeepsWhatItWrote(t *testing.T) {
+	useHost(t, "host-a")
+	catalog, config := testCatalog(t)
+	codex := filepath.Join(t.TempDir(), "codex")
+	for index := range 6 {
+		writeSourceFile(t, filepath.Join(codex, "sessions", fmt.Sprintf("rollout-%d.jsonl", index)), codexLines(fmt.Sprintf("session-%d", index), 1))
+	}
+	config.CaptureRoot = filepath.Join(t.TempDir(), "captures")
+	config.Sources = []SourceConfig{{Name: "codex", Kind: "codex", Path: codex, Account: "local", Enabled: true}}
+	runCapture(t, config)
+	server := NewServer(config, catalog)
+	call := func(method, path, body string) map[string]any {
+		t.Helper()
+		request := httptest.NewRequest(method, path, strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer test-token")
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		value := map[string]any{}
+		_ = json.Unmarshal(response.Body.Bytes(), &value)
+		if response.Code >= 300 {
+			t.Fatalf("%s %s: %d %s", method, path, response.Code, response.Body.String())
+		}
+		return value
+	}
+	finished := func() map[string]any {
+		t.Helper()
+		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			run, _ := call(http.MethodGet, "/api/index", "")["run"].(map[string]any)
+			if run["state"] != "running" {
+				return run
+			}
+		}
+		t.Fatal("index did not finish")
+		return nil
+	}
+	if call(http.MethodPost, "/api/index/cancel", "")["stopped"] != false {
+		t.Fatal("a stop with nothing running reported stopping something")
+	}
+	var parses atomic.Int64
+	parseHook = func(string) {
+		if parses.Add(1) == 3 {
+			call(http.MethodPost, "/api/index/cancel", "")
+		}
+	}
+	t.Cleanup(func() { parseHook = nil })
+	call(http.MethodPost, "/api/index", `{}`)
+	run := finished()
+	written := int(run["workspaces"].(float64))
+	if run["state"] != "interrupted" || run["stop_requested"] != true || written == 0 || written >= 6 {
+		t.Fatalf("stopped index: %#v", run)
+	}
+	var stored int
+	_ = catalog.DB.QueryRow("SELECT COUNT(*) FROM workspaces").Scan(&stored)
+	if stored != written {
+		t.Fatalf("stopped index reported %d workspaces but the catalog holds %d", written, stored)
+	}
+	if !server.ingestMu.TryLock() {
+		t.Fatal("a stopped index kept the lock")
+	}
+	server.ingestMu.Unlock()
+	if hosts, _ := call(http.MethodGet, "/api/index", "")["hosts"].([]any); len(hosts) != 1 || hosts[0].(map[string]any)["sources"].([]any)[0].(map[string]any)["needs_index"] != true {
+		t.Fatalf("a stopped index left its source marked indexed: %#v", hosts)
+	}
+	parseHook = nil
+	call(http.MethodPost, "/api/index", `{}`)
+	run = finished()
+	_ = catalog.DB.QueryRow("SELECT COUNT(*) FROM workspaces").Scan(&stored)
+	if run["state"] != "complete" || run["stop_requested"] != nil || stored != 6 || int(run["workspaces"].(float64)) != 6-written {
+		t.Fatalf("resumed index wrote %v workspaces after %d, the catalog holds %d: %#v", run["workspaces"], written, stored, run)
+	}
+}
+
+// Once every source has been handled a stop has nothing left to cut short, so
+// it cannot turn a run that indexed everything into an interrupted one.
+func TestStopAfterTheLastSourceChangesNothing(t *testing.T) {
+	catalog, config := testCatalog(t)
+	server := NewServer(config, catalog)
+	run := server.startRunNamed(indexRunKind, []string{"host-a/codex"})
+	ctx, end := server.beginIngest(run.ID)
+	defer end()
+	if !server.stopIngest() || ctx.Err() == nil || !server.indexRuns()[0].StopRequested {
+		t.Fatal("a stop during the sources did not cancel the run")
+	}
+	ctx, end = server.beginIngest(run.ID)
+	defer end()
+	server.updateRun(run.ID, func(run *SyncRun) { run.StopRequested = false })
+	server.closeIngestStop()
+	if !server.stopIngest() || ctx.Err() != nil || server.indexRuns()[0].StopRequested {
+		t.Fatalf("a stop during the finishing steps cancelled the run: %v %#v", ctx.Err(), server.indexRuns()[0])
 	}
 }
