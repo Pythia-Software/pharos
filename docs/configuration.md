@@ -686,10 +686,26 @@ shaped like sync runs (`kind` `capture-index`, `sources` labelled
 captured host's `id`, `label`, `user`, `current` (this Mac), and `sources[]` with
 `kind`, `captured_at`, `capture_finished`, `indexed_at`, `coverage`, `error` and
 `needs_index`. A release (before an eject) stops an index between records, and
-the next run resumes it. The service also accepts `"only_needed": true` to
-limit a run to sources with new captured data, an incomplete prior index,
-snapshots awaiting an index, or a new indexer version; the Settings action uses
-this. A capture that copied no new data stays marked indexed. Within a selected
+the next run resumes it.
+
+**Stopping an index.** `POST /api/index/cancel` stops the running index, or the
+running source sync (they share one lock), and answers `{"stopped": true}`, or
+`false` when nothing was running. The **Stop** button beside a running index in
+Settings → Sources and in the drive panel calls it. It stops the same way a
+release does, between records: the record being written finishes and commits, so
+everything already indexed stays. Unlike a release, the service carries on, so
+what the run did write is still linked across Macs, checkpointed and looked up
+in Git, and the run ends `interrupted` with `stop_requested` true. The app shows
+that as stopped, not failed, unless the run also hit a real error (another
+source failing, or the linking step), which it still reports. Sources not yet
+reached, and the one stopped, still show `needs_index`; the next index skips
+every record already written (they show as unchanged) and parses only what is
+left. A stop that arrives after the last source has been handled, while the run
+links, checkpoints and rebuilds, changes nothing: the run completes normally. A
+capture cannot be stopped this way. The service also accepts `"only_needed":
+true` to limit a run to sources with new captured data, an incomplete prior
+index, snapshots awaiting an index, or a new indexer version; the Settings
+action uses this. A capture that copied no new data stays marked indexed. Within a selected
 source, unchanged transcript files and Conductor sessions are skipped. An
 indexer version change rechecks their parts. Run results distinguish
 conversations written, parts parsed, unchanged parts skipped, and whole

@@ -10,10 +10,61 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"time"
 )
 
 const indexRunKind = "capture-index"
+
+// ingestStopper is how a stop request reaches the index or source sync
+// holding ingestMu.
+type ingestStopper struct {
+	mu     sync.Mutex
+	runID  string
+	cancel context.CancelFunc
+}
+
+// beginIngest registers the run that has just taken ingestMu and returns its
+// context, cancelled by stopIngest or when the service stops. The returned
+// func ends the registration; call it before releasing ingestMu.
+func (s *Server) beginIngest(runID string) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(s.life.ctx)
+	s.ingestStop.mu.Lock()
+	s.ingestStop.runID, s.ingestStop.cancel = runID, cancel
+	s.ingestStop.mu.Unlock()
+	return ctx, func() {
+		s.ingestStop.mu.Lock()
+		s.ingestStop.runID, s.ingestStop.cancel = "", nil
+		s.ingestStop.mu.Unlock()
+		cancel()
+	}
+}
+
+// closeIngestStop ends what a stop can do once every source has been handled:
+// the finishing steps cannot be cut short, and a stop that arrives during them
+// must not turn a run that indexed everything into an interrupted one.
+func (s *Server) closeIngestStop() {
+	s.ingestStop.mu.Lock()
+	defer s.ingestStop.mu.Unlock()
+	if s.ingestStop.cancel != nil {
+		s.ingestStop.runID, s.ingestStop.cancel = "", func() {}
+	}
+}
+
+// stopIngest asks the running index or sync to stop, reporting whether one
+// was running. It stops between records like a release does, so every record
+// already written stays and the next run resumes from there, but unlike a
+// release the service carries on and finishes up what was written.
+func (s *Server) stopIngest() bool {
+	s.ingestStop.mu.Lock()
+	defer s.ingestStop.mu.Unlock()
+	if s.ingestStop.cancel == nil {
+		return false
+	}
+	s.updateRun(s.ingestStop.runID, func(run *SyncRun) { run.StopRequested = run.State == "running" })
+	s.ingestStop.cancel()
+	return true
+}
 
 // runIndexCLI: pharos index [--host ID | --all-hosts] [SOURCE ...]
 func runIndexCLI(config Config, catalog *Catalog, args []string) error {
@@ -103,12 +154,15 @@ func (s *Server) startIndex(w http.ResponseWriter, body map[string]any) {
 		labels = append(labels, target.label())
 	}
 	run := s.startRunNamed(indexRunKind, labels)
-	started := s.spawn(func(ctx context.Context) {
+	ctx, end := s.beginIngest(run.ID)
+	started := s.spawn(func(context.Context) {
 		defer s.ingestMu.Unlock()
+		defer end()
 		s.indexTargets(ctx, run.ID, targets)
 	})
 	if !started {
 		// A stop began after this request was admitted.
+		end()
 		s.ingestMu.Unlock()
 		stopping := errors.New("Pharos is stopping, so the index did not start")
 		s.updateRun(run.ID, func(run *SyncRun) {
@@ -123,12 +177,17 @@ func (s *Server) startIndex(w http.ResponseWriter, body map[string]any) {
 func (s *Server) indexTargets(ctx context.Context, runID string, targets []captureTarget) {
 	results := []IngestResult{}
 	var failure any
+	// interrupted is decided when the sources are done, not after the finishing
+	// steps, so a stop that comes later changes nothing.
+	interrupted := false
 	defer func() {
 		if value := recover(); value != nil {
 			s.exitIfFault(value)
 			failure = fmt.Sprintf("index stopped: %v", value)
 		}
-		ok := failure == nil && ctx.Err() == nil
+		// A release during the finishing steps skips some of them.
+		interrupted = interrupted || s.life.ctx.Err() != nil
+		ok := failure == nil && !interrupted
 		for _, result := range results {
 			if result.Error != nil {
 				ok = false
@@ -137,7 +196,7 @@ func (s *Server) indexTargets(ctx context.Context, runID string, targets []captu
 		}
 		s.updateRun(runID, func(run *SyncRun) {
 			run.State, run.Phase = "complete", "complete"
-			if ctx.Err() != nil {
+			if interrupted {
 				run.State, run.Phase = "interrupted", "interrupted"
 			} else if !ok {
 				run.State, run.Phase = "failed", "failed"
@@ -172,21 +231,27 @@ func (s *Server) indexTargets(ctx context.Context, runID string, targets []captu
 			run.Messages, run.SkippedCurrent = base.Messages+result.Messages, base.SkippedCurrent+result.SkippedCurrent
 		})
 	}
+	interrupted = ctx.Err() != nil
+	s.closeIngestStop()
+	// A stop from the user leaves the service up, so what the index did write
+	// is still linked, checkpointed and looked up in Git; only a release
+	// (before an eject) skips the linking and the authorship rebuild.
+	serviceUp := s.life.ctx.Err() == nil
 	if wroteRecords(results) {
-		if ctx.Err() == nil {
+		if serviceUp {
 			if _, err := s.Catalog.ReconcileIdentities(); err != nil {
 				failure = err.Error()
 			}
 		}
 		_ = s.Catalog.Checkpoint()
 		s.refreshGitInBackground(false)
-	} else if ctx.Err() == nil {
+	} else if !interrupted {
 		// Nothing new, but the first index of a day still rebuilds findings.
 		s.Catalog.refreshFindingsInBackground(false)
 	}
 	// Before the run reports complete, so Usage sees the rebuild running. It
 	// also picks up a rebuild an eject stopped, even if this index wrote nothing.
-	if ctx.Err() == nil {
+	if serviceUp {
 		s.Catalog.refreshAuthorship()
 	}
 }
