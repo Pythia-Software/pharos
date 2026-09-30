@@ -55,13 +55,14 @@ func callFindingsMCP(catalog *Catalog, name string, args map[string]any) (value 
 				}
 			}
 			items = append(items, map[string]any{"id": card["id"], "state": card["state"], "title": card["title"], "what_happens": card["explanation"],
-				"impact": card["impact_note"], "impact_per_month": card["impact"], "proposed_change": card["change"], "where": card["scope_label"],
+				"impact": card["impact_note"], "impact_per_month": card["impact"], "likely_saving_per_month": card["expected"], "estimate": card["estimate"],
+				"proposed_change": card["change"], "where": card["scope_label"],
 				"prompt_target": card["target_label"]})
 			if len(items) >= limit {
 				break
 			}
 		}
-		return map[string]any{"items": items, "note": "Findings are ranked by the user's chosen unit. Copying a finding's prompt in Pharos starts its before-and-after measurement; reading them here does not."}, true, nil
+		return map[string]any{"items": items, "note": "Findings are ranked by their likely saving in the user's chosen unit: the impact times the share the change could remove, how often changes of its kind work, and how much of the pattern would stay untouched (see estimate). Copying a finding's prompt in Pharos starts its before-and-after measurement; reading them here does not."}, true, nil
 	case "get_finding":
 		detail, err := catalog.FindingDetail(ctx, firstString(args["id"]))
 		if err != nil {
@@ -71,6 +72,7 @@ func callFindingsMCP(catalog *Catalog, name string, args map[string]any) (value 
 			return nil, true, fmt.Errorf("no finding with id %q", args["id"])
 		}
 		facts := map[string]any{"title": detail["title"], "what_happens": detail["explanation"], "impact": detail["impact_note"], "impact_per_month": detail["impact"],
+			"likely_saving_per_month": detail["expected"], "estimate": detail["estimate"],
 			"proposed_change": detail["change"], "later_changes": detail["steps"], "where": detail["scope_label"], "rate": detail["rate"],
 			"extracted": detail["facts"], "baseline_28_days": detail["baseline"], "attempts": compactAttempts(detail["attempts"])}
 		return map[string]any{"id": detail["id"], "state": detail["state"], "extracted_facts": facts,

@@ -2,6 +2,7 @@ package archive
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strings"
@@ -124,6 +125,10 @@ func detectCLIFriction(env *findingEnv) ([]*findingCandidate, error) {
 			if obs.Hit {
 				obs.Tokens = integer(row["tokens"])
 				obs.CostUSD = env.toolCallCost(item.conv.Provider, firstString(row["model"]), item.conv.Day, integer(row["result_tokens"]), integer(row["carried"]), output)
+				// The engagement's help calls and usage errors go; its
+				// real work stays.
+				share := math.Min(float64(help+usage)/float64(max(obs.Calls, 1)), 1)
+				obs.Removable, obs.RemovableTokens = obs.CostUSD*share, int64(float64(obs.Tokens)*share)
 				obs.DurationMS = integer(row["duration_ms"])
 			}
 			if previous := candidate.Obs[item.conv.ID]; previous != nil {
@@ -369,7 +374,8 @@ func detectDocsHosts(env *findingEnv) ([]*findingCandidate, error) {
 			}
 			if candidates[key] == nil {
 				candidates[key] = &findingCandidate{Spec: findingSpec{Detector: "docs", Scope: scope, Pattern: "host:" + host, Params: map[string]string{"host": host}},
-					RepositoryID: strings.TrimPrefix(scope, "repo:"), Facts: map[string]any{"host": host}, Metric: findingMetric{Kind: "rate", Unit: "conversations"}}
+					RepositoryID: strings.TrimPrefix(scope, "repo:"), Facts: map[string]any{"host": host}, Metric: findingMetric{Kind: "rate", Unit: "conversations"},
+					RemovableShare: findingDocsRemovable}
 			}
 			candidates[key].addEvidence(findingHandle{At: obs.At, ConversationID: item.conv.ID, WorkspaceID: item.conv.WorkspaceID, ToolCallID: firstString(item.row["call_id"]),
 				MessageID: firstString(item.row["message_id"]), Where: env.evidenceWhere(item.conv), Did: "fetched " + clipText(firstString(item.row["url"]), 80),
@@ -379,7 +385,7 @@ func detectDocsHosts(env *findingEnv) ([]*findingCandidate, error) {
 	for key, spec := range wanted {
 		if candidates[key] == nil {
 			candidates[key] = &findingCandidate{Spec: spec, RepositoryID: strings.TrimPrefix(spec.Scope, "repo:"), Facts: map[string]any{"host": spec.Params["host"]},
-				Metric: findingMetric{Kind: "rate", Unit: "conversations"}}
+				Metric: findingMetric{Kind: "rate", Unit: "conversations"}, RemovableShare: findingDocsRemovable}
 		}
 	}
 	output := []*findingCandidate{}

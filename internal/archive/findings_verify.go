@@ -48,6 +48,10 @@ type findingPlan struct {
 	TokensPerEvent   float64 `json:"tokens_per_event"`
 	MinutesPerEvent  float64 `json:"minutes_per_event"`
 	FailuresPerEvent float64 `json:"failures_per_event"`
+	// Persists is the share of the pattern that would have stayed with no
+	// fix, from the detector's backtest at the copy. Savings count only the
+	// decline beyond it; plans from before it was measured use one half.
+	Persists float64 `json:"persists,omitempty"`
 	// Files are the instruction files the target had at the copy, with
 	// their sizes, for the context a change adds.
 	// FilesKnown says they were read, so an empty set means the target had
@@ -325,6 +329,7 @@ func planFinding(row *findingRow, daily map[string][3]float64, copied time.Time)
 		days = int(math.Ceil(units / row.Stats.DailyExposure))
 	}
 	plan.AfterDays = min(max(days, 7), findingAfterMaxDays)
+	plan.Persists = floatOr(row.Impact["persists"])
 	plan.AfterTo = dayTime(plan.AfterFrom).AddDate(0, 0, plan.AfterDays).Format("2006-01-02")
 	events := row.Stats.Events
 	if row.Metric.Kind == "rate" {
@@ -557,7 +562,8 @@ func (env *findingEnv) harnessNote(candidate *findingCandidate, plan findingPlan
 }
 
 // savings accrue per full week since the copy, for 90 days: the decline
-// beyond the half an untouched pattern would fade to anyway, times the work
+// beyond what an untouched pattern would keep anyway (the plan's persists),
+// times the work
 // done that week, times the cost of one occurrence, less the context the
 // change added.
 func (env *findingEnv) savings(candidate *findingCandidate, item *findingIntervention) findingSavings {
@@ -567,6 +573,10 @@ func (env *findingEnv) savings(candidate *findingCandidate, item *findingInterve
 		metric = candidate.Metric
 	}
 	baseline := plan.BeforeRate
+	persists := plan.Persists
+	if persists <= 0 {
+		persists = findingFadeFactor
+	}
 	if plan.BeforeExposure == 0 {
 		baseline = env.window(metric, candidate.Obs, plan.BeforeFrom, plan.AfterFrom).Rate
 	}
@@ -596,7 +606,7 @@ func (env *findingEnv) savings(candidate *findingCandidate, item *findingInterve
 			// Weeks the pass still holds are measured again; older ones
 			// keep their stored figures.
 			stats := env.window(metric, candidate.Obs, from, until)
-			saved := math.Max(0, findingFadeFactor*baseline-stats.Rate) * stats.Exposure
+			saved := math.Max(0, persists*baseline-stats.Rate) * stats.Exposure
 			figures = findingWeekSavings{From: from, USD: saved * plan.USDPerEvent, Tokens: saved * plan.TokensPerEvent,
 				Minutes: saved * plan.MinutesPerEvent, Failures: saved * plan.FailuresPerEvent}
 			figures.AddedTokens, figures.AddedUSD = env.addedContext(candidate, item, from, until)

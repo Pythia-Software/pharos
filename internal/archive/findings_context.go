@@ -2,6 +2,7 @@ package archive
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
@@ -20,6 +21,10 @@ type preEdit struct {
 	Output                       float64
 	Model                        string
 	Files                        map[string]*preEditFile
+	// InPhase is the part of Carried re-read before the first edit, by the
+	// exploration's own later calls. A sub-agent doing the exploration would
+	// carry that too.
+	InPhase int64
 }
 
 type preEditFile struct {
@@ -42,6 +47,8 @@ func (env *findingEnv) preEdits() (map[string]*preEdit, error) {
 	output := map[string]*preEdit{}
 	ids := []any{}
 	edits := map[string]int64{}
+	// sequence, result tokens, and carried tokens of each pre-edit call.
+	phaseCalls := map[string][][3]int64{}
 	for _, row := range firsts {
 		id := firstString(row["conversation_id"])
 		if env.convs[id] == nil {
@@ -69,6 +76,7 @@ func (env *findingEnv) preEdits() (map[string]*preEdit, error) {
 			phase.Calls++
 			phase.ResultTokens += integer(row["result_tokens"])
 			phase.Carried += integer(row["carried_tokens"])
+			phaseCalls[id] = append(phaseCalls[id], [3]int64{integer(row["sequence"]), integer(row["result_tokens"]), integer(row["carried_tokens"])})
 			value, _ := number(row["output_tokens"])
 			phase.Output += value
 			phase.Model = defaultString(phase.Model, firstString(row["model"]))
@@ -88,6 +96,15 @@ func (env *findingEnv) preEdits() (map[string]*preEdit, error) {
 		}
 		if env.ctx.Err() != nil {
 			return nil, env.ctx.Err()
+		}
+	}
+	// Each call's result is re-read by the calls after it in the phase,
+	// counting a call as a request (parallel calls make this an
+	// underestimate).
+	for id, calls := range phaseCalls {
+		sort.Slice(calls, func(i, j int) bool { return calls[i][0] < calls[j][0] })
+		for index, call := range calls {
+			output[id].InPhase += min(call[1]*int64(len(calls)-1-index), call[2])
 		}
 	}
 	env.cachedPreEdits = output
@@ -153,7 +170,7 @@ func detectOrientation(env *findingEnv) ([]*findingCandidate, error) {
 		}
 		candidate := &findingCandidate{Spec: findingSpec{Detector: "orientation", Scope: scope, Pattern: "orientation", Params: map[string]string{"files": strings.Join(hot, "\n")}},
 			RepositoryID: repository, Obs: map[string]*findingObs{}, Facts: map[string]any{},
-			Metric: findingMetric{Kind: "mean", Unit: "conversations", Value: "tokens"}}
+			Metric: findingMetric{Kind: "mean", Unit: "conversations", Value: "tokens"}, RemovableShare: findingOrientationRemovable}
 		readers := map[string]int{}
 		tokens := map[string]int64{}
 		for id, phase := range phases {
@@ -256,8 +273,13 @@ func detectExploration(env *findingEnv) ([]*findingCandidate, error) {
 			obs.Occurrences = int(phase.Calls)
 			// An upper bound: a sub-agent's summary of about 3k tokens would
 			// be carried instead, and some results are used after the edit.
-			obs.Tokens = max(phase.Carried-3000*max(conv.Requests-phase.Calls, 0), 0)
+			summary := 3000 * max(conv.Requests-phase.Calls, 0)
+			obs.Tokens = max(phase.Carried-summary, 0)
 			obs.CostUSD = env.toolCallCost(conv.Provider, phase.Model, conv.Day, 0, obs.Tokens, 0)
+			// The sub-agent re-reads its own results while it explores;
+			// only what later requests carry goes.
+			obs.RemovableTokens = max(phase.Carried-phase.InPhase-summary, 0)
+			obs.Removable = env.toolCallCost(conv.Provider, phase.Model, conv.Day, 0, obs.RemovableTokens, 0)
 			obs.At = conv.Started.UTC().Format(timeLayout)
 			candidate.addEvidence(findingHandle{At: obs.At, ConversationID: id, WorkspaceID: conv.WorkspaceID, Where: env.evidenceWhere(conv) + " · " + providerLabel(conv.Provider),
 				Did: thousands(int(phase.Calls)) + " reads, searches, and commands before the first edit", Happened: compactNumber(float64(phase.Carried)) + " tokens carried afterwards"})
@@ -294,6 +316,70 @@ func detectExploration(env *findingEnv) ([]*findingCandidate, error) {
 		output = append(output, candidate)
 	}
 	return output, nil
+}
+
+// outlierRemovable sets the part of each outlier conversation's cost a change
+// could remove, from its requests' context. Splitting a runaway task leaves
+// the work to do, so only the context above the repository's typical request
+// goes; an earlier compaction removes what's above what it keeps.
+func (env *findingEnv) outlierRemovable(candidates map[string]*findingCandidate) error {
+	hits := map[string]bool{}
+	for _, candidate := range candidates {
+		for id, obs := range candidate.Obs {
+			if obs.Hit {
+				hits[id] = true
+			}
+		}
+	}
+	ids := []any{}
+	for id, root := range env.roots {
+		if hits[root] {
+			ids = append(ids, id)
+		}
+	}
+	inputs := map[string][]float64{}
+	for start := 0; start < len(ids); start += 300 {
+		end := min(start+300, len(ids))
+		rows, err := queryMapsContext(env.ctx, env.db, `SELECT conversation_id,input_tokens FROM model_requests WHERE input_tokens>0 AND conversation_id IN (`+placeholders(end-start)+`)`, ids[start:end]...)
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			root := env.roots[firstString(row["conversation_id"])]
+			inputs[root] = append(inputs[root], float64(integer(row["input_tokens"])))
+		}
+	}
+	// The typical request: tokens per request of the scope's conversations
+	// that aren't runaway.
+	sums := map[string][2]float64{}
+	for _, conv := range env.convs {
+		if conv.Requests == 0 || conv.Requests > runawayRequests || conv.Compactions > runawayCompactions {
+			continue
+		}
+		sum := sums[env.scopeOf(conv)]
+		sums[env.scopeOf(conv)] = [2]float64{sum[0] + float64(conv.Tokens), sum[1] + float64(conv.Requests)}
+	}
+	for _, candidate := range candidates {
+		keep := float64(compactedInput)
+		if candidate.Spec.Params["cause"] == "runaway" {
+			sum := sums[candidate.Spec.Scope]
+			if sum[1] == 0 {
+				continue
+			}
+			keep = sum[0] / sum[1]
+		}
+		for id, obs := range candidate.Obs {
+			total, excess := 0.0, 0.0
+			for _, input := range inputs[id] {
+				total += input
+				excess += math.Max(input-keep, 0)
+			}
+			if obs.Hit && total > 0 {
+				obs.Removable, obs.RemovableTokens = obs.CostUSD*excess/total, int64(float64(obs.Tokens)*excess/total)
+			}
+		}
+	}
+	return nil
 }
 
 // D5: command shapes whose results are large and common. Carried context
@@ -379,6 +465,31 @@ var heavyShapeWords = map[string]struct{ title, did, change, command string }{
 	"generated-file":    {"reads generated files in full", "read lock files or generated code in full with `cat`", "search lock files and generated code for the one entry needed instead of reading them in full", "cat"},
 }
 
+// narrowReadLines is how many lines of a file agents end up reading when
+// they read it only in short ranges: 180 at the median in Codex's `sed -n`
+// reads of September 2026, against 486 for files read more than 300 lines
+// at a time.
+const narrowReadLines = 180
+
+// heavyShapeRemovable is the share of a heavy call's cost its narrower form
+// would save, for the shapes nothing measured says more about.
+var heavyShapeRemovable = map[string]float64{"search-everything": 0.5, "full-diff": 0.5, "full-log": 0.7, "generated-file": 0.8, "long-range": 0.5}
+
+// heavyRemovable is the share of one heavy call's cost its narrower form
+// would save. A long range keeps about the lines a narrow reader reads.
+func heavyRemovable(shape, command string) float64 {
+	if shape == "long-range" {
+		if match := sedRange.FindStringSubmatch(command); match != nil {
+			from, _ := strconv.Atoi(match[1])
+			to, err := strconv.Atoi(match[2])
+			if err == nil && to >= from {
+				return math.Max(0, 1-narrowReadLines/float64(to-from+1))
+			}
+		}
+	}
+	return heavyShapeRemovable[shape]
+}
+
 // heavyResultTokens is the result size that makes a call count as heavy.
 const heavyResultTokens = 2000
 
@@ -437,6 +548,8 @@ func detectHeavyOutput(env *findingEnv) ([]*findingCandidate, error) {
 			obs.Occurrences = 1
 			obs.Tokens = result + carried
 			obs.CostUSD = env.toolCallCost(provider, firstString(item.row["model"]), item.conv.Day, result, carried, output)
+			share := heavyRemovable(shape, firstString(item.row["command"]))
+			obs.Removable, obs.RemovableTokens = obs.CostUSD*share, int64(float64(obs.Tokens)*share)
 			candidate.addEvidence(findingHandle{At: obs.At, ConversationID: item.conv.ID, WorkspaceID: item.conv.WorkspaceID, ToolCallID: obs.Unit,
 				MessageID: firstString(item.row["message_id"]), Where: env.evidenceWhere(item.conv) + " · " + providerLabel(provider),
 				Did: "ran `" + clipText(firstLine(firstString(item.row["command"])), 80) + "`", Happened: compactNumber(float64(result)) + " tokens back, re-read " + compactNumber(float64(carried)) + " more"})
@@ -521,6 +634,8 @@ const (
 	runawayRequests    = 1000
 	runawayCompactions = 10
 	oversizedInput     = 500_000
+	// compactedInput is about the context an earlier compaction would keep.
+	compactedInput = 250_000
 )
 
 func detectOutliers(env *findingEnv) ([]*findingCandidate, error) {
@@ -557,6 +672,9 @@ func detectOutliers(env *findingEnv) ([]*findingCandidate, error) {
 			}
 			candidate.Obs[conv.ID] = obs
 		}
+	}
+	if err := env.outlierRemovable(candidates); err != nil {
+		return nil, err
 	}
 	output := []*findingCandidate{}
 	for _, candidate := range candidates {

@@ -13,8 +13,11 @@ type Row = Record<string, any>;
 type Rank = "usd" | "tokens" | "minutes" | "failures";
 type Handoff = "pr" | "diff";
 type Impact = { usd: number; tokens: number; minutes: number; failures: number; window_days?: number };
+/** The shares a card's likely saving is worked out from: impact × removable × takes × persists. */
+type Estimate = { removable: number; takes: number; kind: string; results: number; persists: number; persist_cases: number };
 type Card = {
   id: string; state: string; title: string; detector: string; detector_label?: string; explanation: string; impact: Impact; impact_note?: string; rate?: string;
+  expected?: Impact; estimate?: Estimate;
   change: string; change_label: string; attempt?: number; target: string; target_label: string; scope_label: string;
   repository_id?: string | null; first_seen_at?: string; last_seen?: string; active?: boolean; new?: boolean;
   cart?: { target: string; target_label: string; ticked: boolean }; dismissed?: Row; snoozed?: Row; watching?: Row;
@@ -164,6 +167,19 @@ const unitValue: Record<Rank, (value: unknown) => string> = {
   minutes: value => `${minutes(value)} of agent time`,
   failures: value => counted(Math.round(num(value)), "failure"),
 };
+/** A unit's value rounded for an estimate. */
+const aboutValue: Record<Rank, (value: unknown) => string> = { ...unitValue, usd: aboutMoney };
+/** A share as a rounded percentage for "about" sentences. */
+const about = (share: unknown) => { const p = num(share) * 100; return `${p >= 10 ? Math.round(p / 5) * 5 : Math.round(p)}%`; };
+const expectedOf = (card: Card) => card.expected ?? card.impact;
+
+/** Says where a card's likely saving comes from, one share per clause. */
+function estimateSentence(estimate: Estimate | undefined): string {
+  if (!estimate) return "";
+  const results = estimate.results ? ` (${counted(estimate.results, "result")} of yours so far)` : "";
+  const cases = estimate.persist_cases ? ` (from ${counted(estimate.persist_cases, "pattern")} in this library)` : "";
+  return `The change could remove about ${about(estimate.removable)} of it. Changes like it work about ${about(estimate.takes)} of the time${results}. Left alone, about ${about(Math.min(estimate.persists, 1))} of patterns like it are still there a month later${cases}.`;
+}
 const rankLabels: Record<Rank, string> = { usd: "Dollars", tokens: "Tokens", minutes: "Time", failures: "Failures" };
 
 function parseDay(value: unknown): Date | null {
@@ -360,16 +376,23 @@ function StateNote({ card }: { card: Card }) {
   return null;
 }
 
+// The lead is the likely saving; what the pattern touched is the "at stake" beside it.
+const impactText = (impact: Impact | undefined, dollars: (value: unknown) => string) =>
+  [dollars(impact?.usd), `${compact(impact?.tokens)} tokens`, num(impact?.minutes) > 0 ? minutes(impact?.minutes) : "", num(impact?.failures) > 0 ? counted(Math.round(num(impact?.failures)), "failure") : ""].filter(Boolean).join(" · ");
+
 function ImpactLine({ card, rank }: { card: Card; rank: Rank }) {
   const impact = card.impact ?? { usd: 0, tokens: 0, minutes: 0, failures: 0 };
-  const brief: Record<Rank, (value: unknown) => string> = { usd: money, tokens: value => `${compact(value)} tokens`, minutes: value => `${minutes(value)}`, failures: value => counted(Math.round(num(value)), "failure") };
-  // Units a pattern has no measure of (no agent time, no failures) are left out, and so is a note that repeats one of the units.
-  const others = (["usd", "tokens", "minutes", "failures"] as Rank[]).filter(unit => unit !== rank && num(impact[unit]) > 0).map(unit => brief[unit](impact[unit]));
-  const note = card.impact_note && !(rank === "tokens" && /token/i.test(card.impact_note)) && !others.includes(plain(card.impact_note)) ? card.impact_note : "";
+  const expected = expectedOf(card);
+  const brief: Record<Rank, (value: unknown) => string> = { usd: aboutMoney, tokens: value => `${compact(value)} tokens`, minutes: value => `${minutes(value)}`, failures: value => counted(Math.round(num(value)), "failure") };
+  // Units a pattern has no measure of (no agent time, no failures) are left out. So is a note that repeats one of the units, or
+  // counts the tokens at stake beside the likely ones.
+  const others = (["usd", "tokens", "minutes", "failures"] as Rank[]).filter(unit => unit !== rank && num(expected[unit]) > 0).map(unit => brief[unit](expected[unit]));
+  const note = card.impact_note && !/token/i.test(card.impact_note) && !others.includes(plain(card.impact_note)) ? card.impact_note : "";
   return <div className="findings-impact">
-    <span className="findings-impact-lead"><strong>{unitValue[rank](impact[rank])}</strong> a month</span>
+    <span className="findings-impact-lead"><strong>{aboutValue[rank](expected[rank])}</strong> a month</span>
+    <span className="findings-impact-stake" title={estimateSentence(card.estimate)}>likely, of {unitValue[rank](impact[rank])} at stake</span>
     {note ? <span className="findings-impact-note"><Text text={note} /></span> : null}
-    {others.length ? <span className="findings-impact-rest" title="Every finding's impact in all four units, per month">{others.map(text => <span key={text}>{text}</span>)}</span> : null}
+    {others.length ? <span className="findings-impact-rest" title="The likely saving in the other units, per month">{others.map(text => <span key={text}>{text}</span>)}</span> : null}
   </div>;
 }
 
@@ -693,7 +716,9 @@ function DetailOverview({ detail, onNotApplied }: { detail: Detail; onNotApplied
     alongside.length ? ["Copied alongside", alongside.map((item: Row | string) => typeof item === "string" ? item : item.title).join("; ")] : null,
   ] : [
     ["How often", <>{detail.rate ?? chart?.baseline_phrase}</>],
-    ["Impact", <>{[money(detail.impact?.usd), `${compact(detail.impact?.tokens)} tokens`, num(detail.impact?.minutes) > 0 ? minutes(detail.impact?.minutes) : "", num(detail.impact?.failures) > 0 ? counted(Math.round(num(detail.impact?.failures)), "failure") : ""].filter(Boolean).join(" · ")} a month</>],
+    ["Likely saving", <>{impactText(expectedOf(detail), aboutMoney)} a month</>],
+    ["At stake", <>{impactText(detail.impact, money)} a month</>],
+    detail.estimate ? ["Why likely", estimateSentence(detail.estimate)] : null,
     detail.first_seen_at ? ["Found", fullDay(detail.first_seen_at)] : null,
     detail.last_seen ? ["Last seen", fullDay(detail.last_seen)] : null,
     ["Change", detail.change_label],
@@ -987,10 +1012,10 @@ function FindingsList({ overview, route, act, rank, setRank, onReview, newIds }:
     return [...map.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
   }, [findings]);
   const inList = (card: Card) => listForState(card.state) === route.list && (!route.repo || (card.repository_id || card.target) === route.repo);
-  const shown = findings.filter(inList).sort((a, b) => num(b.impact?.[rank]) - num(a.impact?.[rank]));
+  const shown = findings.filter(inList).sort((a, b) => num(expectedOf(b)?.[rank]) - num(expectedOf(a)?.[rank]));
   const counts: Record<List, number> = { open: summary.open ?? 0, watching: summary.watching ?? 0, wins: overview.wins?.length ?? summary.won ?? 0, dismissed: (summary.dismissed ?? 0) + (summary.snoozed ?? 0) };
   const saved = summary.saved ?? {};
-  const expected = (state: string) => findings.filter(card => card.state === state).reduce((sum, card) => sum + num(card.impact?.[rank]), 0);
+  const expected = (state: string) => findings.filter(card => card.state === state).reduce((sum, card) => sum + num(expectedOf(card)?.[rank]), 0);
   const savings = (value: unknown) => `${unitValue[rank](value)} ${rank === "failures" ? "avoided" : "saved"}`;
   const built = Boolean(status.built_at);
   const tabs: Array<[List, string]> = [["open", "Open"], ["watching", "Watching"], ["wins", "Wins"], ["dismissed", "Dismissed"]];

@@ -8,7 +8,6 @@ import (
 	"os"
 	"slices"
 	"sort"
-	"strings"
 	"text/tabwriter"
 	"time"
 )
@@ -56,6 +55,16 @@ func runFindingsPreview(catalogPath string, args []string) error {
 		fmt.Fprintf(os.Stderr, "%-13s %4d candidates in %s\n", detector.name, len(found), time.Since(began).Round(time.Millisecond))
 		candidates = append(candidates, found...)
 	}
+	if only == "" {
+		began := time.Now()
+		env.persist = env.persistence(candidates, nil)
+		fmt.Fprintf(os.Stderr, "backtest      in %s:", time.Since(began).Round(time.Millisecond))
+		for _, detector := range findingDetectors {
+			persist := env.persist[detector.name]
+			fmt.Fprintf(os.Stderr, " %s %.2f (%d)", detector.name, persist.Share, persist.Cases)
+		}
+		fmt.Fprintln(os.Stderr)
+	}
 	for _, candidate := range candidates {
 		candidate.stats = env.stats(candidate)
 		if candidate.write != nil {
@@ -63,9 +72,23 @@ func runFindingsPreview(catalogPath string, args []string) error {
 		}
 	}
 	candidates = dedupeFindingCandidates(candidates)
-	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].stats.Affected > candidates[j].stats.Affected })
+	// Ranked as the Findings view ranks them, by the first step's expected
+	// saving in dollars.
+	estimates := map[*findingCandidate]findingEstimate{}
+	for _, candidate := range candidates {
+		row := &findingRow{Detector: candidate.Spec.Detector, Lever: candidate.Lever, Providers: candidate.stats.Providers,
+			Impact: findingImpact(candidate, env.persistFor(candidate.Spec.Detector))}
+		step := findingStep{Lever: candidate.Lever}
+		if len(candidate.card.Steps) > 0 {
+			step = candidate.card.Steps[0]
+		}
+		estimates[candidate] = estimateFinding(row, step, nil)
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return estimates[candidates[i]].Expected["usd"] > estimates[candidates[j]].Expected["usd"]
+	})
 	writer := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(writer, "PASS\tAFFECTED\tRECENT\tLIVE\tDAYS\tWS\tRATE\t$/MO\tSCOPE\tTITLE")
+	fmt.Fprintln(writer, "PASS\tAFFECTED\tRECENT\tLIVE\tDAYS\tWS\tRATE\t$/MO\tREMOVE\tTAKES\tPERSISTS\tLIKELY\tSCOPE\tTITLE")
 	verbose := slices.Contains(args, "--verbose")
 	for _, candidate := range candidates {
 		if candidate.stats.Affected < findingCheckpoints[0] {
@@ -77,9 +100,10 @@ func runFindingsPreview(catalogPath string, args []string) error {
 		} else if candidate.stats.passes(threshold) {
 			pass = "yes"
 		}
-		impact := findingImpact(candidate.stats, candidate.Metric)
-		fmt.Fprintf(writer, "%s\t%d\t%d\t%d\t%d\t%d\t%.3g\t%.2f\t%s\t%s\n", pass, candidate.stats.Affected, candidate.stats.Recent, candidate.stats.Live,
-			candidate.stats.Days, candidate.stats.Workspaces, candidate.stats.Rate, impact["usd"], clipText(env.scopeName(candidate.Spec.Scope), 28), clipText(candidate.card.Title, 90))
+		estimate := estimates[candidate]
+		fmt.Fprintf(writer, "%s\t%d\t%d\t%d\t%d\t%d\t%.3g\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%s\t%s\n", pass, candidate.stats.Affected, candidate.stats.Recent, candidate.stats.Live,
+			candidate.stats.Days, candidate.stats.Workspaces, candidate.stats.Rate, candidate.stats.CostUSD, estimate.Removable, estimate.Takes, estimate.Persists,
+			estimate.Expected["usd"], clipText(env.scopeName(candidate.Spec.Scope), 28), clipText(candidate.card.Title, 90))
 		if verbose && (candidate.stats.passes(threshold) || candidate.Hidden) {
 			writer.Flush()
 			fmt.Printf("    %s\n    %s\n    impact: %s · change: %s\n", candidate.Spec.id(), candidate.card.Explanation, candidate.card.ImpactNote, firstStepChange(candidate.card))
@@ -113,7 +137,8 @@ func runFindingsCLI(catalog *Catalog, args []string) error {
 	}
 	findings, _ := value["findings"].([]map[string]any)
 	for _, item := range findings {
-		fmt.Printf("%-9s %s\n          %s\n", item["state"], item["title"], strings.TrimSpace(firstString(item["impact_line"])))
+		fmt.Printf("%-9s %s\n          %s a month likely, of %s at stake\n", item["state"], item["title"],
+			dollars(floatOr(mapValueDefault(item["expected"])["usd"])), dollars(floatOr(mapValueDefault(item["impact"])["usd"])))
 	}
 	return nil
 }

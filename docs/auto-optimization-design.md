@@ -32,6 +32,9 @@ rest of this document disagrees, these win.
 2. **Ranking unit: dollars by default, configurable** among dollars, tokens,
    time, and failures. Dollars are API-equivalent, which on a subscription
    is still the best proxy for where quota goes. Every card shows all four.
+   *(Revised 2026-09-30: cards rank by the likely saving in the unit, the
+   impact times the removable, takes, and persists shares; see
+   `docs/findings.md`, "Ranking".)*
 3. **What the agent is asked to do follows the repository's habit.** If
    recent work in the repository regularly ends in pull requests (from the
    PR links Pharos already records), the prompt asks for a PR. Otherwise it
@@ -71,7 +74,11 @@ rest of this document disagrees, these win.
     only the decline beyond that: a finding saves (half the baseline rate −
     current rate, if positive) × the relevant work done since the fix × the
     average cost of one occurrence, accrued weekly from the day its cart was
-    copied. The factor of one half is fixed for every library. A rule added to an instruction file costs
+    copied. The factor of one half is fixed for every library. *(Revised
+    2026-09-30: the backtest per detector showed failures keeping about 0.45
+    of their rate and habits all of it, so the factor is now each detector's
+    persistence from the library's own backtest, fixed at the copy; see
+    `docs/findings.md`, "Ranking".)* A rule added to an instruction file costs
     something too: it is re-read on every request of every session that loads
     the file. That added context is subtracted from the saving, and results
     and wins show it next to the saving, so a fix that costs more than it
