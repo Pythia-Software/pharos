@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./tl1.css";
 import { Icon } from "./icons";
+import { preferences } from "./preferences";
 
 // The TL1 tab: a project's performance by flavor and agent configuration,
 // combined across the Macs that run it, and drill-downs into flavors, candidates, and individual runs.
@@ -28,10 +29,9 @@ const windowStorage = "tl1-window";
 const dayPresets = [{ label: "24 hours", days: 1 }, { label: "7 days", days: 7 }, { label: "30 days", days: 30 }];
 
 function readWindow(): TimeWindow {
-  try {
-    const value = JSON.parse(localStorage.getItem(windowStorage) || "");
-    if (value && ["latest", "all", "days", "enqueue", "custom"].includes(value.mode)) return value as TimeWindow;
-  } catch { /* Missing or malformed state falls back to the latest enqueue. */ }
+  const value = preferences().get<{ mode?: string } | null>(windowStorage, null);
+  // Missing or malformed state falls back to the latest enqueue.
+  if (value && typeof value === "object" && ["latest", "all", "days", "enqueue", "custom"].includes(value.mode ?? "")) return value as TimeWindow;
   return { mode: "latest" };
 }
 
@@ -313,14 +313,14 @@ function WindowSummary({ resolved, enqueues, onFlavor, onCurrent }: { resolved: 
 export function TL1Page({ attempts, filterAttempts, copy }: Props) {
   // TL1 runs as one installation per Mac, so a project may have several.
   const [projects, setProjects] = useState<Row[]>([]);
-  const [project, setProject] = useState(() => localStorage.getItem("tl1-project") ?? "");
+  const [project, setProject] = useState(() => String(preferences().get("tl1-project", "")));
   // One Mac's installation, or "" for every Mac.
   const [installation, setInstallation] = useState("");
   const [timeWindow, setTimeWindowState] = useState<TimeWindow>(readWindow);
   const [enqueues, setEnqueues] = useState<Row[]>([]);
   const setTimeWindow = useCallback((next: TimeWindow) => {
     setTimeWindowState(next);
-    try { localStorage.setItem(windowStorage, JSON.stringify(next)); } catch { /* Storage may be disabled. */ }
+    preferences().set(windowStorage, next);
   }, []);
   const [scope, setScope] = useState("all");
   const [overview, setOverview] = useState<Overview | null>(null);
@@ -426,7 +426,7 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
       <label>Project <select value={selected} onChange={event => {
         setProject(event.target.value);
         setInstallation("");
-        localStorage.setItem("tl1-project", event.target.value);
+        preferences().set("tl1-project", event.target.value);
         // A chosen enqueue belongs to the previous project.
         setEnqueues([]);
         if (timeWindow.mode === "enqueue") setTimeWindow({ mode: "latest" });

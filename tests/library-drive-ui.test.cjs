@@ -283,6 +283,43 @@ describe('library, drive and captures UI', { skip }, () => {
     await context.close();
   });
 
+  it('keeps preferences in the library, so another Mac opening it sees them', async () => {
+    const stored = async () => (await api('/api/preferences')).values;
+    // A web view that predates library preferences holds its settings itself;
+    // they move into the library once and leave the web view.
+    const legacy = { 'pharos-theme': 'light', 'pharos-show-nav-button': 'true', 'pharos-bookmarks-v1': JSON.stringify([{ id: 'b1', url: '/usage', title: 'Usage' }]), 'pharos-nav-open': 'false' };
+    const seeded = await openPage(`if (!sessionStorage.getItem('seeded')) { for (const [key, value] of Object.entries(${JSON.stringify(legacy)})) localStorage.setItem(key, value); sessionStorage.setItem('seeded', '1'); }`);
+    await seeded.page.goto(`${base}/settings`);
+    await seeded.page.locator('#lighthouseSpinOnClick').waitFor();
+    await waitFor(async () => (await stored())['pharos-bookmarks-v1']);
+    assert.equal((await stored())['pharos-theme'], 'light');
+    assert.equal((await stored())['pharos-show-nav-button'], true);
+    assert.deepEqual(await seeded.page.evaluate(() => Object.keys(localStorage).filter(key => /theme|show-nav|bookmarks/.test(key))), []);
+    // Loading the page never writes a default; a toggle does.
+    assert.equal('pharos-lighthouse-spin-on-click' in await stored(), false);
+    await seeded.page.locator('#lighthouseSpinOnClick').click();
+    await waitFor(async () => (await stored())['pharos-lighthouse-spin-on-click'] === false);
+    await seeded.page.locator('#lighthouseLoadingIndicator').click();
+    await waitFor(async () => (await stored())['pharos-lighthouse-loading-indicator'] === false);
+    assert.deepEqual(seeded.errors, []);
+    await seeded.context.close();
+
+    // Another Mac has an empty web view and the same library.
+    const other = await openPage();
+    await other.page.goto(`${base}/settings`);
+    await other.page.locator('#lighthouseSpinOnClick').waitFor();
+    assert.equal(await other.page.evaluate(() => document.documentElement.dataset.theme), 'light');
+    assert.equal(await other.page.locator('#navigatorToggle').isVisible(), true);
+    assert.equal(await other.page.locator('#lighthouseSpinOnClick').getAttribute('aria-checked'), 'false');
+    assert.equal(await other.page.locator('#lighthouseLoadingIndicator').getAttribute('aria-checked'), 'false');
+    assert.equal(await other.page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', []).length), 1);
+    assert.deepEqual(other.errors, []);
+    await other.context.close();
+
+    await api('/api/preferences', { method: 'POST', body: JSON.stringify({ delete: Object.keys(await stored()) }) });
+    assert.deepEqual(await stored(), {});
+  });
+
   it('backs up from Health, refusing the library drive with a clear reason', async () => {
     const { page, context, errors } = await openPage();
     await page.goto(`${base}/settings`);

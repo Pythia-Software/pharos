@@ -23,7 +23,7 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     const errors = [], series = [], aggregations = [];
-    let pricing = { prompt: 'Update missing model prices', unpriced_models: [], unpriced_tokens: 0, confirmed_changes: 0, proposed_changes: 0 };
+    let pricing = { prompt: 'Update missing model prices', unpriced_models: [], priced_tokens: 10, unpriced_tokens: 0, confirmed_changes: 0, proposed_changes: 0 };
     page.on('pageerror', error => errors.push(error.message));
     await page.route('http://usage-ui.test/**', route => {
       const url = new URL(route.request().url());
@@ -41,7 +41,7 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
         const body = route.request().postDataJSON();
         aggregations.push(body);
         return json({ metrics: body.aggregations.map((aggregation, index) => ({ id: aggregation.id, buckets: aggregation.groupBy?.[1] === 'model_family'
-          ? ['m1', 'm2', 'm3', 'm4', 'm5', 'small-a', 'small-b'].map((model, rank) => ({ keys: [periodKey(aggregation.groupBy[0]), model], value: 700 - 100 * rank, count: 1 }))
+          ? [...['m1', 'm2', 'm3', 'm4', 'm5', 'small-a', 'small-b', 'small-c', 'small-d', 'small-e', 'small-f', 'small-g', 'small-h', 'small-i'].map((model, rank) => ({ keys: [periodKey(aggregation.groupBy[0]), model], value: 1400 - 100 * rank, count: 1 })), ...(aggregation.groupBy[0] === 'day' ? [{ keys: [day(1), 'm1'], value: 900, count: 1 }, { keys: [day(1), 'm2'], value: 100, count: 1 }] : [])]
           : [{ keys: [periodKey(aggregation.groupBy?.[0] ?? 'day'), ...((aggregation.groupBy?.length ?? 0) > 1 ? ['claude'] : [])], value: aggregation.field === 'cost_usd' ? 1_250_000_000_000 : 2_500_000_000 * (index + 1), count: 1 }] })) });
       }
       if (url.pathname.endsWith('/distinct')) return json({ values: [], hasMore: false });
@@ -95,12 +95,12 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     await page.locator('.usage-chart').getByRole('button', { name: 'Day', exact: true }).click();
     await page.locator('.usage-chart').getByRole('button', { name: '30 days' }).click();
     await page.waitForFunction(() => document.querySelectorAll('.usage-chart-bars > span').length === 30);
-    assert.ok(await page.locator('.usage-chart-grid').count() >= 1);
+    await page.locator('.usage-chart-grid').first().waitFor();
     assert.doesNotMatch(await page.locator('.usage-chart-axis').innerText(), /peak/);
 
     // The hover key lists each series with its color, and Other names what it holds.
     await page.locator('.usage-chart').getByRole('button', { name: 'Model', exact: true }).click();
-    await page.locator('.usage-chart-legend', { hasText: 'Other (2)' }).waitFor();
+    await page.locator('.usage-chart-legend', { hasText: 'Other (9)' }).waitFor();
     await page.locator('.usage-chart-bars > span').last().hover();
     const tip = page.locator('.usage-chart-tip');
     await tip.waitFor();
@@ -108,6 +108,19 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     assert.equal(await tip.locator(':scope > ul > li .usage-swatch').count(), 6);
     assert.match(await tip.locator('.usage-chart-tip-parts').innerText(), /small-a[\s\S]*small-b/);
     assert.match(await tip.innerText(), /Total/);
+    await page.locator('.usage-chart-legend').getByRole('button', { name: 'Other (9)' }).click();
+    await page.locator('.usage-chart-legend').getByRole('button', { name: 'Other (4)' }).waitFor();
+    assert.equal(await page.locator('.usage-chart-legend').getByRole('button', { name: 'small-a' }).count(), 1);
+    await page.locator('.usage-chart-legend').getByRole('button', { name: 'Other (4)' }).click();
+    assert.equal(await page.locator('.usage-chart-legend').getByRole('button', { name: /^Other/ }).count(), 0);
+    await page.locator('.usage-chart').getByRole('button', { name: '%', exact: true }).click();
+    await page.locator('#usage .usage-chart h3', { hasText: 'Token share per day by model' }).waitFor();
+    await page.waitForFunction(() => document.querySelector('.usage-chart-bars > span:last-child')?.getAttribute('aria-label')?.includes('100% in all'));
+    assert.match(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), /100% in all/);
+    assert.deepEqual(await page.locator('.usage-chart-grid span').allTextContents(), ['25%', '50%', '75%', '100%']);
+    assert.equal(await page.locator('.usage-chart-bars > span').last().locator('i').evaluateAll(parts => Math.round(parts.reduce((sum, part) => sum + parseFloat(part.style.height), 0))), 100);
+    assert.equal(await page.locator('.usage-chart-bars > span').nth(28).locator('i').first().evaluate(part => Math.round(parseFloat(part.style.height))), 90);
+    await page.locator('.usage-chart').getByRole('button', { name: 'Cost', exact: true }).click();
     await page.locator('.usage-chart').getByRole('button', { name: 'Month', exact: true }).click();
     await page.locator('.usage-chart').getByRole('button', { name: '6 months' }).click();
     await page.locator('.usage-chart').getByRole('button', { name: 'Provider', exact: true }).click();
@@ -125,7 +138,7 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     // All input stacks every category, and the series request carries the table filters.
     await page.getByRole('button', { name: 'All input' }).click();
     await page.locator('.usage-chart h3', { hasText: 'Words of user input per week' }).waitFor();
-    assert.equal(await page.locator('.usage-chart-legend > span').count(), 5);
+    assert.equal(await page.locator('.usage-chart-legend > button').count(), 5);
     const filtered = encodeQuery({ ...EMPTY_QUERY, where: [{ field: 'repository_name', op: '=', value: 'example/repo' }] });
     series.length = 0;
     await page.goto(`http://usage-ui.test/usage?usage=writing&q_writing=${encodeURIComponent(filtered)}`);
@@ -143,7 +156,7 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     assert.equal(new URL(page.url()).searchParams.get('usage'), 'tokens');
     await page.goto('http://usage-ui.test/settings');
     const pricingCard = page.locator('#healthCards > .panel', { hasText: 'Known Pricing' });
-    await pricingCard.getByRole('button', { name: 'Open in Usage' }).click();
+    await pricingCard.click();
     await page.locator('#usage.view.active .usage-chart h3', { hasText: 'API cost per month by provider' }).waitFor();
     assert.equal(new URL(page.url()).searchParams.get('usage'), 'tokens');
     await page.goto('http://usage-ui.test/settings');
