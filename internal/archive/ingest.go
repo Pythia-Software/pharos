@@ -145,7 +145,7 @@ func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress P
 		state("indexing", sourceID, fingerprint, "", -1, false)
 	})
 	if err != nil && ctx.Err() != nil {
-		result.Error = "interrupted: Pharos stopped before this source finished; the next index resumes it"
+		result.Error = "interrupted: the index stopped before this source finished; the next index resumes it"
 		report("interrupted")
 		return result
 	}
