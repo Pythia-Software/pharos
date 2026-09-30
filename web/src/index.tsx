@@ -8,6 +8,7 @@ import "./pharos.css";
 import libraryDocument from "../../schemas/library.schema.json";
 import usageDocument from "../../schemas/usage.schema.json";
 import writingDocument from "../../schemas/writing.schema.json";
+import writingMessagesDocument from "../../schemas/writing_messages.schema.json";
 import mcpCallsDocument from "../../schemas/mcp_calls.schema.json";
 import toolsDocument from "../../schemas/tools.schema.json";
 import toolCallsDocument from "../../schemas/tool_calls.schema.json";
@@ -15,10 +16,12 @@ import tl1AttemptsDocument from "../../schemas/tl1_attempts.schema.json";
 import { TL1Page } from "./tl1";
 import { FindingsPage, startFindingsChrome } from "./findings";
 import { Icon } from "./icons";
+import { AuthoredMessages, CategoryPill, MessageMix, authoredRenderers } from "./authored";
 
 type Row = Record<string, any>;
-type Dataset = "library" | "usage" | "writing" | "mcp_calls" | "tools" | "tool_calls" | "tl1_attempts";
+type Dataset = "library" | "usage" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "tl1_attempts";
 type LibraryView = "table" | "conversation";
+type MessageView = "table" | "text";
 type TranscriptMessage = { role: string; text: unknown; raw_text?: unknown };
 type TurnSummary = { human: TranscriptMessage | null; response: TranscriptMessage | null };
 type ConversationTurn = { provider: string; conversation: number; turn: number; input: TranscriptMessage | null; response: TranscriptMessage | null };
@@ -119,6 +122,7 @@ const schemas: Record<Dataset, FieldSchema<Row>> = {
   library: loadSchema<Row>(libraryDocument),
   usage: loadSchema<Row>(usageDocument),
   writing: loadSchema<Row>(writingDocument),
+  writing_messages: loadSchema<Row>(writingMessagesDocument),
   mcp_calls: loadSchema<Row>(mcpCallsDocument),
   tools: loadSchema<Row>(toolsDocument),
   tool_calls: loadSchema<Row>(toolCallsDocument),
@@ -217,6 +221,7 @@ const renderers: RenderRegistry<Row> = {
     const state = String(value ?? "unknown");
     return <span className={`mcp-call-state ${state}`}>{state.replace("_", " ")}</span>;
   },
+  ...authoredRenderers,
 };
 
 // Filter chips, pickers, and cell quick filters show each value's schema label
@@ -238,6 +243,7 @@ const statusBadges: Record<string, (value: string, label: string) => React.React
   run_state: (value, label) => <span className={`qt-state-pill ${value}`}>{label}</span>,
   mcp_status: (value, label) => <span className={`mcp-call-state ${value}`}>{label}</span>,
   tool_status: (value, label) => <span className={`mcp-call-state ${value}`}>{label}</span>,
+  authorship_category: (value, label) => <CategoryPill category={value} label={label} />,
 };
 
 const filterPresentations = Object.fromEntries(Object.entries(schemas).map(([dataset, schema]) => {
@@ -258,6 +264,7 @@ const emptyMessages: Record<Dataset, string> = {
   library: "No work matches this query.",
   usage: "No token usage matches this query.",
   writing: "No conversations with user messages match this query.",
+  writing_messages: "No classified user messages match this query.",
   mcp_calls: "No MCP calls match this query.",
   tools: "No tool use matches this query.",
   tool_calls: "No tool calls match this query.",
@@ -298,14 +305,20 @@ const metricRenderers: RenderRegistry<Row> = {
 // can follow the table's filters.
 // find, for the Library, is a keyword search that narrows the rows before the
 // filters apply; onFind hears how it went.
-function QuerySurface({ dataset, libraryView = "table", find = "", onFind, trailing, header, selectable = false }: { dataset: Dataset; selectable?: boolean; libraryView?: LibraryView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode }) {
+function QuerySurface({ dataset, libraryView = "table", messageView = "table", find = "", onFind, trailing, header, selectable = false }: { dataset: Dataset; selectable?: boolean; libraryView?: LibraryView; messageView?: MessageView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode }) {
   const schema = schemas[dataset];
   const onFindRef = useRef(onFind);
   onFindRef.current = onFind;
   const transport = useMemo(() => shared ? undefined : makeTransport(dataset, find, value => onFindRef.current?.(value)), [dataset, find]);
   // A shared file has no origin of its own to keep saved queries apart from other files'.
   const storage = useMemo(() => shared ? memoryStorageAdapter() : localStorageAdapter(), []);
-  const api = useQueryTable<Row>({ schema, transport, clientRows: shared?.datasets[dataset], storage, debounceMs: 100 });
+  // A query in the URL (a link, or a drill-down from another table) starts
+  // the table, rather than the last one used, which loads after it otherwise.
+  const [urlQuery] = useState(() => {
+    const token = new URLSearchParams(location.search).get(queryParameter(dataset));
+    return token === null ? undefined : decodeQuery(token);
+  });
+  const api = useQueryTable<Row>({ schema, transport, clientRows: shared?.datasets[dataset], storage, debounceMs: 100, ...(urlQuery ? { initialQuery: urlQuery } : {}) });
   const apiRef = useRef(api);
   apiRef.current = api;
   // A new search starts from its first page.
@@ -361,7 +374,8 @@ function QuerySurface({ dataset, libraryView = "table", find = "", onFind, trail
     <MetricsPanel aggregations={api.aggregations} fields={metricFields(schema.fields)} renderers={metricRenderers} />
     {api.error ? <div className="query-table-error">{api.error.message}</div> : null}
     {selectable ? <SelectionToolbar selection={api.selection} actions={ids => <ShareSelection ids={ids} api={api} transport={transport} />} /> : null}
-    {dataset === "library" && libraryView === "conversation" ? <ConversationResults api={api} searching={Boolean(find)} /> : <DataTable
+    {dataset === "library" && libraryView === "conversation" ? <ConversationResults api={api} searching={Boolean(find)} />
+      : dataset === "writing_messages" && messageView === "text" ? <AuthoredMessages api={api} emptyMessage={api.error ? failedMessage : emptyMessages[dataset]} /> : <DataTable
       maxHeight={100000}
       {...(selectable ? { selection: api.selection } : {})}
       fields={api.visibleFields}
@@ -374,7 +388,7 @@ function QuerySurface({ dataset, libraryView = "table", find = "", onFind, trail
       total={api.total}
       loading={api.loading}
       emptyMessage={api.error ? failedMessage : find ? "No work matches this search and these filters." : emptyMessages[dataset]}
-      {...(trailing ? { trailing: (row: Row) => trailing(row, api), trailingLabel: dataset === "mcp_calls" || dataset === "tool_calls" ? "View" : dataset === "tools" ? "Drill in" : dataset === "library" ? "Match" : "Actions" } : {})}
+      {...(trailing ? { trailing: (row: Row) => trailing(row, api), trailingLabel: dataset === "mcp_calls" || dataset === "tool_calls" ? "View" : dataset === "tools" || dataset === "writing" ? "Drill in" : dataset === "library" ? "Match" : "Actions" } : {})}
     />}
   </FilterValueProvider>;
 }
@@ -649,6 +663,20 @@ const writingMetricPresets: UsagePreset[] = [
   { label: "By repository", title: "Typed and pasted words by repository", aggregations: [sum("typed_words", ["repository_name"], "Typed words by repository"), sum("pasted_words", ["repository_name"], "Likely pasted words by repository")] },
   { label: "By provider", title: "Typed words and tokens by provider", aggregations: [sum("typed_words", ["providers"], "Typed words by provider"), sum("total_tokens", ["providers"], "Tokens by provider")] },
   { label: "By source", title: "Typed words by source app", aggregations: [sum("typed_words", ["source_kind"], "Typed words by source")] },
+];
+
+const byAsc = (field: string): OrderByClause[] => [{ field, dir: "asc" }];
+const messagePresets: UsagePreset[] = [
+  { label: "Newest", title: "Most recent messages first", orderBy: byDesc("sent_at") },
+  { label: "Longest typed", title: "Messages with the most words you typed", orderBy: byDesc("typed_words") },
+  { label: "Most pasted", title: "Messages with the most text that looks pasted", orderBy: byDesc("pasted_words") },
+  { label: "Most copied", title: "Messages with the most agent output or earlier messages copied in", orderBy: byDesc("copied_words") },
+  { label: "Least typed", title: "Messages whose text is least your own", orderBy: [...byAsc("typed_share"), ...byDesc("words")] },
+];
+const messageMetricPresets: UsagePreset[] = [
+  { label: "By category", title: "Messages by the category holding most of their words", aggregations: [{ id: "messages:main_category", op: "count", groupBy: ["main_category"], label: "Messages by main category" }, sum("other_words", ["main_category"], "Words from elsewhere by main category")] },
+  { label: "Per week", title: "Typed and pasted words per week", aggregations: [sum("typed_words", ["week"], "Typed words per week"), sum("pasted_words", ["week"], "Likely pasted words per week")] },
+  { label: "By repository", title: "Typed words and messages by repository", aggregations: [sum("typed_words", ["repository_name"], "Typed words by repository"), sum("message_count", ["repository_name"], "Messages by repository")] },
 ];
 
 type PricingModel = { model: string; provider: string; tokens: number; first_day: string; last_day: string };
@@ -1492,18 +1520,57 @@ function WritingPanel({ where, onFilter, status, reload }: { where: WhereTerm[];
   </section>;
 }
 
+// Human Words lists conversations or single messages (?writing=messages), and
+// messages as a table or as highlighted text (?messages=text), like the
+// Library's Table and Conversations views.
+type WritingRows = "conversations" | "messages";
+const writingRows = (): WritingRows => new URLSearchParams(location.search).get("writing") === "messages" ? "messages" : "conversations";
+const messageView = (): MessageView => new URLSearchParams(location.search).get("messages") === "text" ? "text" : "table";
+
 function WritingUsage({ onStatus }: { onStatus: (status: AuthorshipStatus | null) => void }) {
   const [reload, setReload] = useState(0);
-  const status = useAuthorshipStatus(() => { setReload(value => value + 1); tableApis.get("writing")?.refresh(); });
+  const status = useAuthorshipStatus(() => { setReload(value => value + 1); tableApis.get("writing")?.refresh(); tableApis.get("writing_messages")?.refresh(); });
   useEffect(() => onStatus(status), [status]);
-  function apply(preset: UsagePreset | null) {
-    tableApis.get("writing")?.setQuery(previous => ({ ...previous, ...(preset?.orderBy ? { orderBy: preset.orderBy } : { aggregations: preset?.aggregations ?? [] }), offset: 0 }));
+  const [rows, setRows] = useState<WritingRows>(writingRows);
+  const [view, setView] = useState<MessageView>(messageView);
+  useEffect(() => {
+    const restore = () => { setRows(writingRows()); setView(messageView()); };
+    window.addEventListener("pharos:route", restore);
+    return () => window.removeEventListener("pharos:route", restore);
+  }, []);
+  function chooseRows(next: WritingRows) { setRows(next); updateURI("writing", next === "messages" ? next : ""); }
+  function chooseView(next: MessageView) { setView(next); updateURI("messages", next === "text" ? next : ""); }
+  // A conversation's Messages button lists the messages counted toward it;
+  // the message table starts from the query in the URL.
+  function drill(row: Row) {
+    const where: WhereTerm[] = [{ field: "work_id", op: "=", value: String(row.id) }];
+    updateURI(queryParameter("writing_messages"), encodeQuery({ ...EMPTY_QUERY, limit: schemas.writing_messages.defaultLimit ?? EMPTY_QUERY.limit, where }));
+    chooseRows("messages");
   }
-  return <QuerySurface dataset="writing" header={api => <>
-    <WritingPanel where={toAggregationQuery(api.query, schemas.writing).where} onFilter={filterChange(api)} status={status} reload={reload} />
+  function apply(dataset: Dataset, preset: UsagePreset | null) {
+    tableApis.get(dataset)?.setQuery(previous => ({ ...previous, ...(preset?.orderBy ? { orderBy: preset.orderBy } : { aggregations: preset?.aggregations ?? [] }), offset: 0 }));
+  }
+  const toggle = <div className="writing-rows-bar">
+    <Segmented label="List" value={rows} options={[["conversations", "Conversations"], ["messages", "Messages"]]} onChange={chooseRows} />
+    {rows === "messages" ? <div className="library-view-toggle" role="group" aria-label="Message result view">
+      <button type="button" className={view === "table" ? "active" : ""} aria-pressed={view === "table"} onClick={() => chooseView("table")}>Table</button>
+      <button type="button" className={view === "text" ? "active" : ""} aria-pressed={view === "text"} onClick={() => chooseView("text")}>Highlighted text</button>
+    </div> : null}
+  </div>;
+  if (rows === "messages") return <QuerySurface key="messages" dataset="writing_messages" messageView={view} header={api => <>
+    {toggle}
+    <MessageMix where={toAggregationQuery(api.query, schemas.writing_messages).where} reload={reload} onFilter={filterChange(api)} />
     <div className="usage-preset-rows">
-      <PresetRow label="Sort" presets={writingPresets} onApply={apply} />
-      <PresetRow label="Metrics" presets={writingMetricPresets} onApply={apply} clear />
+      <PresetRow label="Sort" presets={messagePresets} onApply={preset => apply("writing_messages", preset)} />
+      <PresetRow label="Metrics" presets={messageMetricPresets} onApply={preset => apply("writing_messages", preset)} clear />
+    </div>
+  </>} />;
+  return <QuerySurface key="conversations" dataset="writing" trailing={row => <button type="button" className="mcp-detail-button" title="List this conversation's messages, highlighted by where their text came from" onClick={() => drill(row)}>Messages</button>} header={api => <>
+    <WritingPanel where={toAggregationQuery(api.query, schemas.writing).where} onFilter={filterChange(api)} status={status} reload={reload} />
+    {toggle}
+    <div className="usage-preset-rows">
+      <PresetRow label="Sort" presets={writingPresets} onApply={preset => apply("writing", preset)} />
+      <PresetRow label="Metrics" presets={writingMetricPresets} onApply={preset => apply("writing", preset)} clear />
     </div>
   </>} />;
 }
@@ -1543,14 +1610,17 @@ function UsagePage() {
     window.addEventListener("pharos:route", restore);
     return () => window.removeEventListener("pharos:route", restore);
   }, []);
-  function choose(next: UsageView) { setView(next); store(usageViewKey, next); updateURI("usage", next === "writing" ? next : ""); }
+  function choose(next: UsageView) {
+    setView(next); store(usageViewKey, next); updateURI("usage", next === "writing" ? next : "");
+    if (next !== "writing") { updateURI("writing", ""); updateURI("messages", ""); }
+  }
   const statusText = !status ? "" : status.error ? `Last update failed: ${status.error}` : status.running ? "Updating…" : status.built_at ? `Updated ${new Date(status.built_at).toLocaleString()}` : "Waiting to build";
   return <div className="pharos-query-page usage-page">
     <div className="view-heading library-heading usage-heading">
       <div><h1>Usage</h1><p className="muted">{view === "tokens"
         ? "Reconciled tokens per agent session, day, and model. Input includes cached input; filter to any provider, model, or repository and the chart follows. Cost is the API list-price equivalent on the day of use, at standard rates. It ignores long-context premiums and subscriptions, so treat it as a lower bound. ≈ marks costs priced by assumption."
         : view === "writing"
-          ? <>Text you typed or dictated into agent chats, per conversation. Harness instructions, one-click prompts, attachments, pastes, and copied agent output are counted separately; filter the table and the chart and breakdown follow. {statusText ? <span className="meta">{statusText}</span> : null}</>
+          ? <>Text you typed or dictated into agent chats, per conversation or per message. Harness instructions, one-click prompts, attachments, pastes, and copied agent output are counted separately; filter the table and the chart and breakdown follow. {statusText ? <span className="meta">{statusText}</span> : null}</>
           : "Estimated inference electricity and CO₂e for the tokens in this library, using published research and explicit assumptions."}</p></div>
       <div className="usage-heading-actions">
         {shared ? null : <div className="library-view-toggle" role="group" aria-label="Usage view">
@@ -1897,6 +1967,7 @@ window.pharosQueryTables = {
     tableApis.get(dataset)?.refresh();
     if (dataset === "usage") {
       tableApis.get("writing")?.refresh();
+      tableApis.get("writing_messages")?.refresh();
       window.dispatchEvent(new Event("pharos:usage-refresh"));
     }
   },
