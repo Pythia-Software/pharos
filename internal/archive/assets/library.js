@@ -8,11 +8,8 @@
 (() => {
   'use strict';
   const CSS = `
-.pharos-drive{display:flex;align-items:center;gap:7px;min-width:0;max-width:190px;height:32px;box-sizing:border-box;padding:0 10px;border:1px solid #f3ebdc30;border-radius:4px;background:#ffffff0f;color:var(--mast-ink,#f3ebdc);font-size:var(--fs-md,13px);line-height:1;white-space:nowrap}
-.pharos-drive:hover,.pharos-drive[aria-expanded="true"]{border-color:var(--mast-brass,#d4a857);color:#f1d690}
-.header-sync.running .app-icon{animation:pharos-header-turn 1.4s linear infinite}
-@keyframes pharos-header-turn{to{transform:rotate(360deg)}}
-@media(prefers-reduced-motion:reduce){.header-sync.running .app-icon{animation:none}}
+.pharos-library-controls{min-width:0;font-size:var(--fs-md,13px)}
+.combo-button>.pharos-drive{gap:7px;min-width:0;max-width:190px;font-weight:400;line-height:1}
 .pharos-drive-name{flex:0 1 auto;min-width:2.5em;font-weight:650;overflow:hidden;text-overflow:ellipsis}
 .pharos-drive-alert{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;color:#f1d690;font-size:var(--fs-xs,12px)}
 .pharos-dot{flex:none;display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--sea,#315845)}
@@ -181,19 +178,32 @@
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshStatus(); });
 
-  let chip = null, headerSync = null, headerCaptureIndexRunning = false, panel = null, panelMode = 'drive', ejectState = null;
+  let controls = null, chip = null, headerSync = null, headerCaptureIndexRunning = false, panel = null, panelMode = 'drive', ejectState = null;
   let driveSpace = null, driveSpaceRequest = null, driveSpaceError = false;
-  function ensureChip() {
-    if (chip?.isConnected) return chip;
+  // The drive chip and Capture and Index share one combo button (ui.py's
+  // .combo-button) at the start of the header icons.
+  function ensureControls() {
+    if (controls?.isConnected) return controls;
     const icons = document.querySelector('body>header .header-icons');
     if (!icons) return null;
+    controls = node('div', 'combo-button pharos-library-controls');
+    controls.setAttribute('role', 'group');
+    controls.setAttribute('aria-label', 'Library');
+    icons.prepend(controls);
+    return controls;
+  }
+
+  function ensureChip() {
+    if (chip?.isConnected) return chip;
+    const group = ensureControls();
+    if (!group) return null;
     chip = node('button', 'pharos-drive');
     chip.id = 'pharosDrive';
     chip.type = 'button';
     chip.setAttribute('aria-haspopup', 'dialog');
     chip.setAttribute('aria-expanded', 'false');
     chip.onclick = () => (panel && panelMode === 'drive' ? closePanel() : openPanel('drive'));
-    icons.prepend(chip);
+    group.prepend(chip);
     return chip;
   }
 
@@ -201,7 +211,7 @@
     const drive = ensureChip();
     if (!drive) return null;
     if (headerSync?.isConnected) return headerSync;
-    headerSync = node('button', 'header-icon header-sync');
+    headerSync = node('button', 'combo-icon header-sync');
     headerSync.id = 'headerSync';
     headerSync.type = 'button';
     headerSync.title = 'Capture and Index';
@@ -224,7 +234,7 @@
     if (!action) return;
     const active = status?.activities?.some(activity => ['capture', 'capture-other', 'sync', 'index'].includes(activity.kind));
     action.disabled = headerCaptureIndexRunning || Boolean(hostsBusy) || Boolean(active);
-    action.classList.toggle('running', headerCaptureIndexRunning);
+    action.setAttribute('aria-busy', String(headerCaptureIndexRunning));
   }
 
   function activitySummary(activity) {
