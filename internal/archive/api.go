@@ -298,6 +298,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		s.getTL1(w, r)
 	case path == "/api/findings" || strings.HasPrefix(path, "/api/findings/"):
 		s.getFindings(w, r)
+	case path == "/api/preferences" || path == "/assets/preferences.js":
+		s.getPreferences(w, r)
 	case path == "/api/ready":
 		// The macOS wrapper polls this until the service listens; it must stay
 		// cheap, since each timed-out probe would otherwise leave work running.
@@ -450,6 +452,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"started": true}, http.StatusAccepted)
 	case strings.HasPrefix(path, "/api/findings/"):
 		s.postFindings(w, r, body)
+	case path == "/api/preferences":
+		s.postPreferences(w, r, body)
 	case path == "/api/capture":
 		s.startCapture(w, body)
 	case path == "/api/index":

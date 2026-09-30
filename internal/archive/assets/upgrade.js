@@ -198,9 +198,10 @@
     render();
   }
 
-  // Saved and last-used table queries live in this web view's storage, so a
-  // repository merge that retires a display name cannot update them. Point
-  // filters on a retired name at the surviving one, once per set of renames.
+  // Saved table queries live in the library's preferences and last-used ones
+  // in this web view's storage, so a repository merge that retires a display
+  // name cannot update them. Point filters on a retired name at the surviving
+  // one, once per set of renames on each Mac.
   const RENAMED = 'pharos-repository-renames-applied';
   const REPOSITORY_FIELDS = new Set(['repository_name', 'path_repository']);
   function applyRenames(renames) {
@@ -227,6 +228,13 @@
         try { parsed = JSON.parse(raw); } catch { continue; }
         const next = JSON.stringify(walk(parsed));
         if (next !== raw) localStorage.setItem(key, next);
+      }
+      const prefs = window.pharosPrefs;
+      for (const key of prefs.keys('query-table:')) {
+        const value = prefs.get(key);
+        if (!value || typeof value !== 'object') continue;
+        const next = walk(value);
+        if (JSON.stringify(next) !== JSON.stringify(value)) prefs.set(key, next);
       }
       localStorage.setItem(RENAMED, version);
     } catch { /* Storage may be disabled. */ }

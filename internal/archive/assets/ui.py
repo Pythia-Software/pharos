@@ -262,7 +262,33 @@ APP_HTML = r'''<!doctype html>
     @media(max-width:760px){.health{grid-template-columns:repeat(2,minmax(0,1fr))}}
     @media(max-width:500px){.health{grid-template-columns:1fr}}
   </style>
-  <script>(function(){const fallback=document.getElementById('pharosShareData')?'system':'dark';let theme=fallback;try{theme=localStorage.getItem('pharos-theme')||fallback}catch{}if(theme==='light'||theme==='dark')document.documentElement.dataset.theme=theme})()</script>
+  <script src="/assets/preferences.js"></script>
+  <script>window.pharosPrefs=(function(){
+    // Preferences and saved views live in the library (internal/archive/preferences.go), so they follow it between Macs. A page with no library behind it (a shared file) keeps them in the web view's own storage instead.
+    const source=window.pharosPreferenceValues,values=source&&typeof source==='object'?{...source}:null;
+    const LEGACY=new Set(['pharos-theme','pharos-show-nav-button','pharos-show-agent-annotation-button','pharos-bookmarks-v1','pharos-transcript-filter','pharos-carbon-v1','pharos-ui-feedback-clear-on-copy','pharos-pricing-acknowledged-models','pharos-usage-view','pharos-usage-chart','pharos-writing-view','tl1-project','tl1-window']),LEGACY_PREFIXES=['query-table:saved:','query-table:default:'];
+    const isRaw=key=>key==='pharos-theme'||key==='pharos-usage-view'||key==='tl1-project'||key.startsWith('query-table:default:');
+    const parse=raw=>{try{return JSON.parse(raw)}catch{return raw}};
+    const send=body=>{const text=JSON.stringify(body);return fetch('/api/preferences',{method:'POST',headers:{'Content-Type':'application/json'},body:text,keepalive:text.length<60000}).then(response=>{if(!response.ok)throw new Error('HTTP '+response.status)})};
+    let pending={set:{},delete:new Set()},timer=0;
+    function flush(){clearTimeout(timer);timer=0;const body={set:pending.set,delete:[...pending.delete]};if(!Object.keys(body.set).length&&!body.delete.length)return;pending={set:{},delete:new Set()};send(body).catch(error=>console.warn('Could not save preferences',error))}
+    const queue=()=>{if(!timer)timer=setTimeout(flush,250)};
+    if(values){
+      addEventListener('pagehide',flush);
+      // This web view's earlier copies move into the library once. A copy the library already has is left alone, so a second Mac's values are never overwritten.
+      const moved={};
+      try{for(let index=0;index<localStorage.length;index++){const key=localStorage.key(index);if(key&&!(key in values)&&(LEGACY.has(key)||LEGACY_PREFIXES.some(prefix=>key.startsWith(prefix))))moved[key]=isRaw(key)?localStorage.getItem(key):parse(localStorage.getItem(key))}}catch{}
+      if(Object.keys(moved).length){Object.assign(values,moved);send({set:moved}).then(()=>{try{for(const key of Object.keys(moved))localStorage.removeItem(key)}catch{}}).catch(error=>console.warn('Could not move preferences into the library',error))}
+    }
+    return{
+      get(key,fallback){if(values)return key in values?values[key]:fallback;try{const raw=localStorage.getItem(key);return raw===null?fallback:parse(raw)}catch{return fallback}},
+      set(key,value){if(values){values[key]=value;pending.set[key]=value;pending.delete.delete(key);queue()}else{try{localStorage.setItem(key,typeof value==='string'?value:JSON.stringify(value))}catch{}}},
+      remove(key){if(values){delete values[key];delete pending.set[key];pending.delete.add(key);queue()}else{try{localStorage.removeItem(key)}catch{}}},
+      keys(prefix){if(values)return Object.keys(values).filter(key=>key.startsWith(prefix));const found=[];try{for(let index=0;index<localStorage.length;index++){const key=localStorage.key(index);if(key&&key.startsWith(prefix))found.push(key)}}catch{}return found},
+      flush
+    }
+  })()</script>
+  <script>(function(){const fallback=document.getElementById('pharosShareData')?'system':'dark',theme=pharosPrefs.get('pharos-theme',fallback);if(theme==='light'||theme==='dark')document.documentElement.dataset.theme=theme})()</script>
   <script src="/assets/onboarding.js" defer></script>
   <script src="/assets/upgrade.js" defer></script>
   <script src="/assets/library.js" defer></script>
@@ -279,6 +305,8 @@ APP_HTML = r'''<!doctype html>
     <section id="optionalBehaviors" class="settings-section"><h2>Optional Behaviors</h2>
       <div class="optional-behavior"><div><h3 id="showNavButtonTitle">Nav button</h3><p id="showNavButtonDescription" class="muted">Show the Nav button in the menu bar to navigate by URL, save bookmarks, and view page history.</p></div><button id="showNavButton" class="toggle" type="button" role="switch" aria-labelledby="showNavButtonTitle" aria-describedby="showNavButtonDescription" aria-checked="false"></button></div>
       <div class="optional-behavior"><div><h3 id="showAgentAnnotationButtonTitle">Agent Annotation button</h3><p id="showAgentAnnotationButtonDescription" class="muted">Show the Agent Annotation button in the menu bar to mark up parts of the interface and share feedback with an agent for easier customization.</p></div><button id="showAgentAnnotationButton" class="toggle" type="button" role="switch" aria-labelledby="showAgentAnnotationButtonTitle" aria-describedby="showAgentAnnotationButtonDescription" aria-checked="false"></button></div>
+      <div class="optional-behavior"><div><h3 id="lighthouseSpinOnClickTitle">Lighthouse spins on click</h3><p id="lighthouseSpinOnClickDescription" class="muted">Turn the lighthouse beam once around when you click the door of the lighthouse in the menu bar.</p></div><button id="lighthouseSpinOnClick" class="toggle" type="button" role="switch" aria-labelledby="lighthouseSpinOnClickTitle" aria-describedby="lighthouseSpinOnClickDescription" aria-checked="false"></button></div>
+      <div class="optional-behavior"><div><h3 id="lighthouseLoadingIndicatorTitle">Lighthouse loading indicator</h3><p id="lighthouseLoadingIndicatorDescription" class="muted">Turn the lighthouse beam while sources are indexed and while pages load. The drive badge pulses while the library is busy either way.</p></div><button id="lighthouseLoadingIndicator" class="toggle" type="button" role="switch" aria-labelledby="lighthouseLoadingIndicatorTitle" aria-describedby="lighthouseLoadingIndicatorDescription" aria-checked="false"></button></div>
     </section>
   </section>
   <section id="usage" class="view" data-feedback-label="Usage view"><div id="queryTableUsage"></div></section>
@@ -321,6 +349,7 @@ if(SHARE)for(const method of ['pushState','replaceState']){const native=history[
 const pageScroller=$('main');
 function icon(name){const svg=document.createElementNS('http://www.w3.org/2000/svg','svg'),use=document.createElementNS('http://www.w3.org/2000/svg','use');svg.classList.add('app-icon');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('aria-hidden','true');use.setAttribute('href','#ph-icon-'+name);svg.append(use);return svg}
 function iconLabel(name,label){return[icon(name),document.createTextNode(' '+label)]}
+// Unsent annotations, the open toolbar, page history, and the open navigation bar stay in this web view's storage: they describe this Mac's session, not the library.
 const FEEDBACK_KEY='pharos-ui-feedback-v1',FEEDBACK_DRAFT_KEY='pharos-ui-feedback-draft-v1',FEEDBACK_CLEAR_KEY='pharos-ui-feedback-clear-on-copy';
 let feedbackAnnotations=loadFeedback(),feedbackMode=false,feedbackTarget=null,feedbackHoverElement=null,feedbackHoverTrail=[],feedbackHoverIndex=0,feedbackToastTimer;
 // Saves works as one standalone file. The service is asked to build it first, so a failure (nothing to share, an error)
@@ -396,7 +425,7 @@ async function copyFeedbackText(text){
 function clearFeedback(){if(!feedbackAnnotations.length)return;feedbackAnnotations=[];saveFeedback();feedbackToast('Feedback cleared')}
 async function copyFeedback(){if(!feedbackAnnotations.length)return;const button=$('#feedbackCopy'),count=feedbackAnnotations.length,clearAfterCopy=$('#feedbackClearOnCopy').checked;button.disabled=true;try{await copyFeedbackText(feedbackMarkdown());if(clearAfterCopy){feedbackAnnotations=[];saveFeedback()}feedbackToast(`Copied ${count} annotation${count===1?'':'s'}${clearAfterCopy?' and cleared':''}`)}catch{feedbackToast('Could not copy feedback. Check clipboard access and try again.')}finally{button.disabled=!feedbackAnnotations.length}}
 function feedbackToast(message){const toast=$('#feedbackToast');toast.textContent=message;toast.classList.add('visible');clearTimeout(feedbackToastTimer);feedbackToastTimer=setTimeout(()=>toast.classList.remove('visible'),1800)}
-$('#feedbackClearOnCopy').checked=localStorage.getItem(FEEDBACK_CLEAR_KEY)==='true';$('#feedbackClearOnCopy').onchange=event=>localStorage.setItem(FEEDBACK_CLEAR_KEY,String(event.target.checked));$('#feedbackTarget').onclick=()=>setFeedbackMode(!feedbackMode);$('#feedbackToggle').onclick=()=>setFeedbackEnabled(!document.body.classList.contains('feedback-enabled'));{let enabled=false;try{enabled=localStorage.getItem(FEEDBACK_ENABLED_KEY)==='true'}catch{}setFeedbackEnabled(enabled)}$('#feedbackOpen').onclick=()=>$('#feedbackPanel').classList.toggle('open');$('#feedbackClose').onclick=()=>$('#feedbackPanel').classList.remove('open');$('#feedbackCancel').onclick=closeFeedbackComposer;$('#feedbackAdd').onclick=addFeedback;$('#feedbackCopy').onclick=copyFeedback;$('#feedbackClear').onclick=clearFeedback;$('#feedbackNote').oninput=saveFeedbackDraft;$('#feedbackNote').onkeydown=e=>{if((e.metaKey||e.ctrlKey)&&e.key==='Enter')addFeedback()};
+$('#feedbackClearOnCopy').checked=pharosPrefs.get(FEEDBACK_CLEAR_KEY,false)===true;$('#feedbackClearOnCopy').onchange=event=>pharosPrefs.set(FEEDBACK_CLEAR_KEY,event.target.checked);$('#feedbackTarget').onclick=()=>setFeedbackMode(!feedbackMode);$('#feedbackToggle').onclick=()=>setFeedbackEnabled(!document.body.classList.contains('feedback-enabled'));{let enabled=false;try{enabled=localStorage.getItem(FEEDBACK_ENABLED_KEY)==='true'}catch{}setFeedbackEnabled(enabled)}$('#feedbackOpen').onclick=()=>$('#feedbackPanel').classList.toggle('open');$('#feedbackClose').onclick=()=>$('#feedbackPanel').classList.remove('open');$('#feedbackCancel').onclick=closeFeedbackComposer;$('#feedbackAdd').onclick=addFeedback;$('#feedbackCopy').onclick=copyFeedback;$('#feedbackClear').onclick=clearFeedback;$('#feedbackNote').oninput=saveFeedbackDraft;$('#feedbackNote').onkeydown=e=>{if((e.metaKey||e.ctrlKey)&&e.key==='Enter')addFeedback()};
 const feedbackDraft=loadFeedbackDraft();if(feedbackDraft)openFeedbackComposer(feedbackDraft.target,feedbackDraft.note);
 // Feedback controls sit above dialogs. Keep their pointer events from reaching
 // document-level outside-click handlers that would dismiss the dialog.
@@ -427,7 +456,7 @@ window.pharosApi=path=>api(path);
 async function api(path,opts={}){if(SHARE)return shareApi(path);const r=await fetch(path,{...opts,headers:{'Content-Type':'application/json',...(opts.headers||{})}});if(!r.ok)throw new Error((await r.json().catch(()=>({error:r.statusText}))).error);return r.json()}
 const ROUTES=new Set(['library','tl1','usage','tools','findings','mcp','settings']);
 const themeOrder=['system','light','dark'];
-function applyTheme(theme){if(theme==='system')document.documentElement.removeAttribute('data-theme');else document.documentElement.dataset.theme=theme;const button=$('#themeToggle'),next=themeOrder[(themeOrder.indexOf(theme)+1)%themeOrder.length],label=theme[0].toUpperCase()+theme.slice(1),nextLabel=next[0].toUpperCase()+next.slice(1);button.replaceChildren(icon(theme==='dark'?'moon':theme==='light'?'sun':'theme-system'));button.setAttribute('aria-label',`Color theme: ${label}. Activate to switch to ${nextLabel}.`);button.title=`Theme: ${label}. Click to use ${nextLabel}.`;try{localStorage.setItem('pharos-theme',theme)}catch{}}
+function applyTheme(theme,save=true){if(theme==='system')document.documentElement.removeAttribute('data-theme');else document.documentElement.dataset.theme=theme;const button=$('#themeToggle'),next=themeOrder[(themeOrder.indexOf(theme)+1)%themeOrder.length],label=theme[0].toUpperCase()+theme.slice(1),nextLabel=next[0].toUpperCase()+next.slice(1);button.replaceChildren(icon(theme==='dark'?'moon':theme==='light'?'sun':'theme-system'));button.setAttribute('aria-label',`Color theme: ${label}. Activate to switch to ${nextLabel}.`);button.title=`Theme: ${label}. Click to use ${nextLabel}.`;if(save)pharosPrefs.set('pharos-theme',theme)}
 function syncHeaderSearch(){const input=$('#headerSearchInput');if(input&&document.activeElement!==input)input.value=new URLSearchParams(location.search).get('search')||''}
 
 function syncNavigatorGo(){$('#navigatorGo').hidden=$('#navigatorURI').value.trim()===location.href}
@@ -436,7 +465,7 @@ function setRoute(path){if(SHARE){const params=new URLSearchParams(location.sear
 function show(name,fromLocation=false){if(['sources','activity','health'].includes(name))name='settings';if(name!=='detail')document.querySelector('.conversation-find.open [aria-label="Close conversation search"]')?.click();document.querySelectorAll('.view').forEach(x=>x.classList.toggle('active',x.id===name));document.querySelectorAll('button[data-view]').forEach(x=>x.classList.toggle('active',x.dataset.view===(name==='detail'?'library':name)));if(!fromLocation&&ROUTES.has(name))setRoute('/'+name);if(name==='settings'){loadHealth();loadSources()}if(name==='usage')window.pharosQueryTables?.refresh('usage');renderFeedbackPins();window.dispatchEvent(new CustomEvent('pharos:view',{detail:name}))}
 function routeFromLocation(){if(SHARE){const params=new URLSearchParams(location.search),work=SHARE.works.find(w=>w.id===params.get('work'))||(!params.get('page')&&SHARE.works.length===1?SHARE.works[0]:null);if(work)void detail(work.id,true);else{show(SHARE_PAGES.includes(params.get('page'))?params.get('page'):'library',true)}window.dispatchEvent(new Event('pharos:route'));return}const path=location.pathname;let name=path.slice(1);if(path.startsWith('/work/')&&path.length>6){let id;try{id=decodeURIComponent(path.slice(6))}catch{feedbackToast('Invalid work URI');return}void detail(id,true).catch(()=>{show('library',true);feedbackToast('Work unavailable')})}else{if(['sources','activity','health'].includes(name)){name='settings';history.replaceState(null,'','/settings'+location.search)}show(ROUTES.has(name)?name:'library',true);recordVisit()}window.dispatchEvent(new Event('pharos:route'));syncNavigator();syncHeaderSearch()}
 document.querySelectorAll('button[data-view]').forEach(b=>b.onclick=()=>{if(b.dataset.view==='findings'&&location.pathname==='/findings'&&location.search){openHistoryEntry('/findings');return}show(b.dataset.view==='settings'&&$('#settings').classList.contains('active')?'library':b.dataset.view)});$('#back').onclick=()=>show('library');$('.brand').onclick=event=>{if(SHARE)return;if(event.metaKey||event.ctrlKey||event.shiftKey||event.button)return;event.preventDefault();show('library')};
-let currentTheme=SHARE?'system':'dark';try{currentTheme=localStorage.getItem('pharos-theme')||(SHARE?'system':'dark')}catch{}if(!themeOrder.includes(currentTheme))currentTheme='dark';applyTheme(currentTheme);$('#themeToggle').onclick=()=>{currentTheme=themeOrder[(themeOrder.indexOf(currentTheme)+1)%themeOrder.length];applyTheme(currentTheme)};
+let currentTheme=pharosPrefs.get('pharos-theme',SHARE?'system':'dark');if(!themeOrder.includes(currentTheme))currentTheme='dark';applyTheme(currentTheme,false);$('#themeToggle').onclick=()=>{currentTheme=themeOrder[(themeOrder.indexOf(currentTheme)+1)%themeOrder.length];applyTheme(currentTheme)};
 $('#headerSearch').onsubmit=event=>{event.preventDefault();const query=$('#headerSearchInput').value.trim(),params=new URLSearchParams(location.search);if(query)params.set('search',query);else params.delete('search');const url='/library'+(params.size?'?'+params.toString():'');history.pushState(null,'',url);show('library',true);recordVisit();window.dispatchEvent(new Event('pharos:route'));syncHeaderSearch()};
 
 $('#navigator').onsubmit=event=>{event.preventDefault();const input=$('#navigatorURI');let target;try{target=new URL(input.value.trim(),location.href)}catch{$('#navigatorError').textContent='Invalid URI';return}const name=target.pathname.slice(1);if(target.origin!==location.origin||!(target.pathname==='/'||ROUTES.has(name)||target.pathname.startsWith('/work/'))){$('#navigatorError').textContent='Enter a Pharos URI on this service';return}$('#navigatorError').textContent='';history.pushState(null,'',target.pathname+target.search);input.blur();routeFromLocation()};
@@ -459,8 +488,8 @@ addEventListener('pharos:uri-changed',()=>recordVisit(true));
 $('#historyFilter').oninput=renderHistory;$('#historyClear').onclick=()=>{saveHistory([]);renderHistory();feedbackToast('History cleared')};
 addEventListener('storage',event=>{if(event.key===HISTORY_KEY&&$('#historyDrawer').classList.contains('open'))renderHistory();if(event.key===BOOKMARKS_KEY){syncBookmarkState();if($('#bookmarksDrawer').classList.contains('open'))renderBookmarks()}});
 const BOOKMARKS_KEY='pharos-bookmarks-v1',DRAWERS={historyDrawer:'#historyToggle',bookmarksDrawer:'#bookmarksToggle'};
-function loadBookmarks(){try{const value=JSON.parse(localStorage.getItem(BOOKMARKS_KEY)||'[]');return Array.isArray(value)?value.filter(item=>item&&typeof item.id==='string'&&typeof item.url==='string'&&typeof item.title==='string'):[]}catch{return[]}}
-function saveBookmarks(items){try{localStorage.setItem(BOOKMARKS_KEY,JSON.stringify(items))}catch{feedbackToast('Could not save bookmarks')}syncBookmarkState()}
+function loadBookmarks(){const value=pharosPrefs.get(BOOKMARKS_KEY,[]);return Array.isArray(value)?value.filter(item=>item&&typeof item.id==='string'&&typeof item.url==='string'&&typeof item.title==='string'):[]}
+function saveBookmarks(items){pharosPrefs.set(BOOKMARKS_KEY,items);syncBookmarkState()}
 function currentPageURL(){return location.pathname+location.search}
 function syncBookmarkState(){const marked=loadBookmarks().some(item=>item.url===currentPageURL()),add=$('#bookmarkAdd'),toggle=$('#bookmarksToggle');add.replaceChildren(...iconLabel('star',marked?'This page is bookmarked':'Bookmark this page'));add.disabled=marked;toggle.title=marked?'Bookmarks (this page is bookmarked)':'Bookmarks';const star=$('#bookmarkStar'),label=marked?'Edit bookmark':'Bookmark this page';star.classList.toggle('bookmarked',marked);star.setAttribute('aria-label',label);star.title=label}
 function openHistoryEntry(url){history.pushState(null,'',url);routeFromLocation()}
@@ -505,18 +534,16 @@ const OPTIONAL_MENU_BUTTONS=[
   {toggle:'#showNavButton',button:'#navigatorToggle',key:'pharos-show-nav-button',close:()=>setNavOpen(false)},
   {toggle:'#showAgentAnnotationButton',button:'#feedbackToggle',key:'pharos-show-agent-annotation-button',close:()=>setFeedbackEnabled(false)}
 ];
-function setOptionalMenuButton(option,visible){
+function setOptionalMenuButton(option,visible,save=true){
   const toggle=$(option.toggle);
   toggle.classList.toggle('on',visible);
   toggle.setAttribute('aria-checked',String(visible));
   $(option.button).hidden=!visible;
   if(!visible)option.close();
-  try{localStorage.setItem(option.key,String(visible))}catch{}
+  if(save)pharosPrefs.set(option.key,visible);
 }
 for(const option of OPTIONAL_MENU_BUTTONS){
-  let visible=false;
-  try{visible=localStorage.getItem(option.key)==='true'}catch{}
-  setOptionalMenuButton(option,visible);
+  setOptionalMenuButton(option,pharosPrefs.get(option.key,false)===true,false);
   $(option.toggle).onclick=()=>setOptionalMenuButton(option,$(option.toggle).getAttribute('aria-checked')!=='true');
 }
 function node(tag,cls,text){const n=document.createElement(tag);if(cls)n.className=cls;if(text instanceof Node)n.append(text);else if(text!==undefined)n.textContent=text;return n}
@@ -961,8 +988,8 @@ function actionRow(messages,context){
 const TRANSCRIPT_FILTER_KEY='pharos-transcript-filter';
 const TRANSCRIPT_CATEGORIES=[['prompts','Prompts','Messages you, or a parent agent, sent'],['response','Final responses','The last reply of each turn'],['replies','Interim replies','Agent messages before the final reply of a turn'],['thinking','Thinking','Reasoning the agent recorded'],['edits','File edits','Edits and writes'],['commands','Commands','Shell commands'],['reads','Reads & searches','File reads, listings, and searches'],['tools','Other tools','Browser, todo, MCP, and other tool calls'],['agents','Sub-agents','Delegated agent runs'],['events','System events','Injected context, attachments, run events, and errors']];
 const TRANSCRIPT_LEVELS=[['all','All','Every event',TRANSCRIPT_CATEGORIES.map(([key])=>key)],['thought','Chain of thought','Prompts, replies, and thinking; no tool activity',['prompts','response','replies','thinking']],['primary','Primary only','Prompts and each turn’s final response',['prompts','response']],['custom','Custom','Choose each kind of event',null]];
-function loadTranscriptFilter(){let saved={};try{saved=JSON.parse(localStorage.getItem(TRANSCRIPT_FILTER_KEY)||'{}')||{}}catch{}const keys=TRANSCRIPT_CATEGORIES.map(([key])=>key);return{level:TRANSCRIPT_LEVELS.some(([key])=>key===saved.level)?saved.level:'all',custom:Array.isArray(saved.custom)?saved.custom.filter(key=>keys.includes(key)):null}}
-function saveTranscriptFilter(state){try{localStorage.setItem(TRANSCRIPT_FILTER_KEY,JSON.stringify(state))}catch{}}
+function loadTranscriptFilter(){const stored=pharosPrefs.get(TRANSCRIPT_FILTER_KEY,{}),saved=stored&&typeof stored==='object'?stored:{};const keys=TRANSCRIPT_CATEGORIES.map(([key])=>key);return{level:TRANSCRIPT_LEVELS.some(([key])=>key===saved.level)?saved.level:'all',custom:Array.isArray(saved.custom)?saved.custom.filter(key=>keys.includes(key)):null}}
+function saveTranscriptFilter(state){pharosPrefs.set(TRANSCRIPT_FILTER_KEY,state)}
 function transcriptShown(state){return new Set(state.level==='custom'?state.custom||[]:TRANSCRIPT_LEVELS.find(([key])=>key===state.level)[3])}
 function transcriptCategory(message,context){
   if(message.kind==='delegation')return'agents';if(message.kind==='reasoning')return'thinking';
@@ -1401,12 +1428,17 @@ async function loadSources(){
 async function toggleSource(source,button){button.disabled=true;try{await api(`/api/sources/${encodeURIComponent(source.name)}/enabled`,{method:'POST',body:JSON.stringify({enabled:!source.enabled})});feedbackToast(`${source.name} ${source.enabled?'paused':'enabled'}`)}catch(error){feedbackToast(error.message)}finally{await loadSources();void window.pharosLibrary?.refreshSettings?.()}}
 // The lighthouse turns while sources are indexed (4s a turn) or a page loads (1.5s a turn). It changes pace or stops only between turns, when the beam is back at rest, so it never jumps.
 let brandSyncing=false,brandLoads=0;
-function brandPace(){return brandLoads?'loading':brandSyncing?'syncing':''}
+// Both lighthouse behaviors are on unless switched off in Settings → Optional Behaviors.
+const BRAND_OPTIONS=[{toggle:'#lighthouseSpinOnClick',key:'pharos-lighthouse-spin-on-click',on:true},{toggle:'#lighthouseLoadingIndicator',key:'pharos-lighthouse-loading-indicator',on:true}];
+function brandOption(toggle){return BRAND_OPTIONS.find(option=>option.toggle===toggle).on}
+function setBrandOption(option,on,save=true){option.on=on;const toggle=$(option.toggle);toggle.classList.toggle('on',on);toggle.setAttribute('aria-checked',String(on));if(save)pharosPrefs.set(option.key,on);renderBrand()}
+function brandPace(){return brandOption('#lighthouseLoadingIndicator')?brandLoads?'loading':brandSyncing?'syncing':'':''}
 function startBrandTurn(fast){const brand=$('.brand');brand.classList.toggle('loading',fast);brand.classList.add('sweeping')}
 function settleBrandTurn(){const brand=$('.brand'),pace=brandPace(),fast=pace==='loading';if(!pace)brand.classList.remove('sweeping','loading');else if(brand.classList.contains('loading')!==fast){brand.classList.remove('sweeping');void brand.offsetWidth;startBrandTurn(fast)}}
 function renderBrand(){const brand=$('.brand'),pace=brandPace();brand.title=SHARE?'Pharos on GitHub':brandSyncing?'Indexing sources. Open library':'Open library';if(pace&&!brand.classList.contains('sweeping'))startBrandTurn(pace==='loading');else if(matchMedia('(prefers-reduced-motion: reduce)').matches)settleBrandTurn()}
 $('.brand').addEventListener('animationiteration',event=>{if(event.target===event.currentTarget)settleBrandTurn()});
 function setBrandSyncing(on){brandSyncing=on;renderBrand()}
+for(const option of BRAND_OPTIONS){setBrandOption(option,pharosPrefs.get(option.key,option.on)===true,false);$(option.toggle).onclick=()=>setBrandOption(option,$(option.toggle).getAttribute('aria-checked')!=='true')}
 // Page loads mark the document busy at once and turn the lighthouse once they outlast 150ms, so instant loads don't flash it.
 let pageLoads=0;
 async function pageLoad(load){pageLoads++;document.documentElement.classList.add('page-loading');let turning=false;const timer=setTimeout(()=>{turning=true;brandLoads++;renderBrand()},150);try{return await load()}finally{clearTimeout(timer);if(turning){brandLoads--;renderBrand()}if(!--pageLoads)document.documentElement.classList.remove('page-loading')}}
@@ -1417,7 +1449,7 @@ const USAGE_SUMMARY_ROWS=[['Human words','human_words','Words you typed yourself
 let usageSummaryData=null,usageSummaryError='';
 // Three significant figures with a unit: 22.3B, $128k, 5.
 function sigFigs(value,prefix=''){if(value==null||!Number.isFinite(Number(value)))return'—';const units=['','k','M','B','T'];let amount=Number(Number(value).toPrecision(3)),power=0;while(Math.abs(amount)>=1000&&power<units.length-1){amount=Number((amount/1000).toPrecision(3));power++}return prefix+String(amount)+units[power]}
-function carbonSummaryValue(bucket){const factors=usageSummaryData?.carbon_factors;if(!factors)return null;const saved=(()=>{try{return JSON.parse(localStorage.getItem('pharos-carbon-v1'))||{}}catch{return{}}})(),scenario=['low','central','high'].includes(saved.scenario)?saved.scenario:'central',pueScenario=['low','central','high'].includes(saved.pueScenario)?saved.pueScenario:'central',inputScale=saved.inputSensitivity==='third'?5/3:1,grid=factors.grids.find(item=>item.key===saved.grid),gridValue=saved.grid==='custom'?Math.max(0,Number(saved.customGrid)||0):(grid||factors.grids.find(item=>item.key===factors.default_grid))?.g_co2e_per_kwh||0;let wh=0;for(const [tierKey,counts] of Object.entries(bucket.carbon_tokens||{})){const tier=factors.tiers.find(item=>item.key===tierKey);if(!tier)continue;for(const [category,count] of Object.entries(counts)){const ratio=category==='output'?1:(factors.ratios[category]?.[scenario]??1)*inputScale;wh+=Number(count||0)/1e6*(tier.output_wh_per_mtok?.[scenario]||0)*ratio}}const grams=wh*(factors.pue?.[pueScenario]||1)*gridValue/1000;const amount=grams>=1e6?`${sigFigs(grams/1e6)} t`:grams>=1e3?`${sigFigs(grams/1e3)} kg`:`${sigFigs(grams)} g`;return{amount,grams}}
+function carbonSummaryValue(bucket){const factors=usageSummaryData?.carbon_factors;if(!factors)return null;const stored=pharosPrefs.get('pharos-carbon-v1',{}),saved=stored&&typeof stored==='object'?stored:{},scenario=['low','central','high'].includes(saved.scenario)?saved.scenario:'central',pueScenario=['low','central','high'].includes(saved.pueScenario)?saved.pueScenario:'central',inputScale=saved.inputSensitivity==='third'?5/3:1,grid=factors.grids.find(item=>item.key===saved.grid),gridValue=saved.grid==='custom'?Math.max(0,Number(saved.customGrid)||0):(grid||factors.grids.find(item=>item.key===factors.default_grid))?.g_co2e_per_kwh||0;let wh=0;for(const [tierKey,counts] of Object.entries(bucket.carbon_tokens||{})){const tier=factors.tiers.find(item=>item.key===tierKey);if(!tier)continue;for(const [category,count] of Object.entries(counts)){const ratio=category==='output'?1:(factors.ratios[category]?.[scenario]??1)*inputScale;wh+=Number(count||0)/1e6*(tier.output_wh_per_mtok?.[scenario]||0)*ratio}}const grams=wh*(factors.pue?.[pueScenario]||1)*gridValue/1000;const amount=grams>=1e6?`${sigFigs(grams/1e6)} t`:grams>=1e3?`${sigFigs(grams/1e3)} kg`:`${sigFigs(grams)} g`;return{amount,grams}}
 function renderUsageSummary(){const root=$('#usageSummary');if(root.hidden)return;const table=node('table'),head=node('tr'),body=node('tbody'),windows=usageSummaryData?.windows||Object.keys(USAGE_SUMMARY_COLUMNS).map(key=>({key}));head.append(node('th'));windows.forEach(bucket=>{const cell=node('th','',USAGE_SUMMARY_COLUMNS[bucket.key]||bucket.key);cell.scope='col';head.append(cell)});const thead=node('thead');thead.append(head);USAGE_SUMMARY_ROWS.forEach(([label,field,description,prefix='',view])=>{const row=node('tr'),name=node('th'),link=node('a','',label);name.scope='row';name.title=description;link.href=`/usage?usage=${view}`;link.dataset.summaryUsageLink=view;name.append(link);row.append(name);windows.forEach(bucket=>{const carbon=field==='co2e_g'?carbonSummaryValue(bucket):null,value=carbon?carbon.grams:bucket[field],cell=node('td','',usageSummaryData?(carbon?.amount||sigFigs(value,prefix)):'…');if(value!=null)cell.title=carbon?`${Number(value).toLocaleString(undefined,{maximumFractionDigits:3})} g CO₂e`:prefix?`$${Number(value).toLocaleString(undefined,{maximumFractionDigits:2})}`:Number(value).toLocaleString();row.append(cell)});body.append(row)});table.append(thead,body);root.replaceChildren(table,node('p','usage-summary-note',usageSummaryError));placeUsageSummary()}
 function placeUsageSummary(){const root=$('#usageSummary'),toggle=$('#usageSummaryToggle');if(root.hidden)return;const box=toggle.getBoundingClientRect(),header=document.querySelector('body>header').getBoundingClientRect();root.style.top=`${Math.round(header.bottom+8)}px`;root.style.left=`${Math.round(Math.max(12,Math.min(box.right-root.offsetWidth,innerWidth-root.offsetWidth-12)))}px`}
 async function loadUsageSummary(){try{usageSummaryData=await api('/api/usage/summary');usageSummaryError=''}catch(error){usageSummaryError=`Could not load usage: ${error.message}`}renderUsageSummary()}
@@ -1427,7 +1459,7 @@ addEventListener('pharos:carbon-settings',()=>{if(!$('#usageSummary').hidden)ren
 document.addEventListener('mousedown',event=>{if(!$('#usageSummary').hidden&&!event.target.closest('#usageSummary,#usageSummaryToggle'))setUsageSummaryOpen(false)});
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!$('#usageSummary').hidden){setUsageSummaryOpen(false);$('#usageSummaryToggle').focus()}});
 addEventListener('resize',placeUsageSummary);
-$('.brand-mark .door-hit').addEventListener('click',event=>{event.preventDefault();event.stopPropagation();if(!$('.brand').classList.contains('sweeping')){startBrandTurn(false);renderBrand()}});
+$('.brand-mark .door-hit').addEventListener('click',event=>{if(!brandOption('#lighthouseSpinOnClick'))return;event.preventDefault();event.stopPropagation();if(!$('.brand').classList.contains('sweeping')){startBrandTurn(false);renderBrand()}});
 function healthCard(root,name,value,detail){const card=node('div','panel');fillHealthCard(card,name,value,detail);root.append(card);return card}
 function fillHealthCard(card,name,value,detail){card.replaceChildren(node('div','meta',name),node('div','big',value));if(detail)card.append(node('div','meta health-detail',detail))}
 function pricingCard(p){if(!p)return[];const assumed=Number(p.assumed_tokens||0),priced=Number(p.priced_tokens||0)+assumed+Number(p.partial_tokens||0),total=priced+Number(p.unpriced_tokens||0);if(!total)return[];const pct=n=>`${Math.floor(n/total*1000)/10}%`,top=(p.unpriced_models||[]).slice(0,3).map(m=>m.model).join(', ');return[['Known Pricing',pct(priced),`${Number(p.confirmed_changes||0)} confirmed prices · ${Number(p.proposed_changes||0)} awaiting review`+(assumed?` · ${pct(assumed)} by assumption`:'')+(top?` · unpriced: ${top}`:'')]]}

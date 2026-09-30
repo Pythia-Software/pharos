@@ -984,3 +984,11 @@ CREATE TABLE IF NOT EXISTS message_authorship (
 );
 CREATE INDEX IF NOT EXISTS message_authorship_conversation_idx ON message_authorship(conversation_id);
 CREATE INDEX IF NOT EXISTS message_authorship_day_idx ON message_authorship(day);
+
+-- Interface preferences and saved views (theme, optional buttons, bookmarks,
+-- saved queries). They live in the catalog, not the web view's storage, so
+-- they follow the library between Macs. Each value is JSON.
+CREATE TABLE IF NOT EXISTS ui_preferences (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
