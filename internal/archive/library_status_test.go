@@ -187,14 +187,28 @@ func TestLibraryStatusListsEverythingHoldingTheLibrary(t *testing.T) {
 	if _, err := catalog.DB.Exec("INSERT INTO workspace_library_dirty(workspace_id) VALUES('w1'),('w2')"); err != nil {
 		t.Fatal(err)
 	}
+	// A refresh that has only just started, like the one after each record
+	// an index writes, is not listed.
+	clock := time.Now()
+	catalog.now = func() time.Time { return clock }
+	catalog.noteLibraryRefresh(10, nil)
+	expect()
+	clock = clock.Add(libraryCatchUpShown)
 	status = expect("maintenance")
 	if detail := firstString(status["activities"].([]any)[0].(map[string]any)["detail"]); detail != "2 workspaces to refresh" {
 		t.Fatalf("maintenance detail %q", detail)
 	}
-	if _, err := catalog.RefreshLibrary(context.Background(), 10); err != nil {
+	count, err := catalog.RefreshLibrary(context.Background(), 10)
+	catalog.noteLibraryRefresh(count, err)
+	count, err = catalog.RefreshLibrary(context.Background(), 10)
+	catalog.noteLibraryRefresh(count, err)
+	if err != nil {
 		t.Fatal(err)
 	}
 	expect()
+	if catalog.libraryCatchingUp() {
+		t.Fatal("still catching up once nothing is dirty")
+	}
 }
 
 // The Git lookup is counted while it runs and not after, including when a

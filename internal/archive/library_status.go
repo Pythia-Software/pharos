@@ -278,10 +278,14 @@ func (s *Server) libraryActivities() []libraryActivity {
 			Progress: fraction(float64(progress.Done), float64(progress.Total)), Writes: true,
 			OnEject: "Stops between batches; it carries on when Pharos next opens the library."})
 	}
-	if pending, err := s.Catalog.libraryPending(100_000); err == nil && pending > 0 {
-		activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Updating the Library view",
-			Detail: plural(pending, "workspace") + " to refresh", Writes: true,
-			OnEject: "Stops; it carries on when Pharos next opens the library."})
+	// Only a refresh that has run for a while: an index's own writes are
+	// refreshed within seconds of each commit.
+	if s.Catalog.libraryCatchingUp() {
+		if pending, err := s.Catalog.libraryPending(100_000); err == nil && pending > 0 {
+			activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Updating the Library view",
+				Detail: plural(pending, "workspace") + " to refresh", Writes: true,
+				OnEject: "Stops; it carries on when Pharos next opens the library."})
+		}
 	}
 	return activities
 }

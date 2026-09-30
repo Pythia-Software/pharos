@@ -504,8 +504,9 @@ progress is, and the next run redoes it.
   such as `pharos capture`, holds the capture lock; Pharos cannot stop it,
   and it keeps the drive busy), `backup` (reads the library, writes elsewhere),
   `git` (the main-branch merge lookup that follows a sync or an index, or the
-  first scan of a catalog), and `maintenance` (Library view rows still to be
-  recomputed).
+  first scan of a catalog), and `maintenance` (among others, Library view rows
+  still to be recomputed, listed once the refresh has run for 15 seconds:
+  those an index writes are refreshed within seconds of each record).
 - `idle` (nothing running), `writing` (something writes to the drive), and
   `safe_to_unplug`, which equals `idle`, as does `GET /api/capture`'s field of
   that name.
