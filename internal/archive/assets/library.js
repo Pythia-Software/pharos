@@ -516,6 +516,16 @@
 
   // Runs report progress by source; a lone source shows as work in progress.
   const runProgress = run => (run.total_sources > 1 ? run.completed_sources / run.total_sources : null);
+  // An index counts the conversations it has to parse before it starts, and is
+  // measured against them (a source it cannot count is one step); sources are
+  // only its fallback.
+  const indexProgress = run => (run.phase === 'counting' ? null : run.progress ?? runProgress(run));
+  const indexDetail = run => {
+    const current = run.current_source || 'starting';
+    if (run.phase === 'counting') return `${current} · counting the conversations to index`;
+    if (run.total_conversations > 0) return `${current} · ${Number(run.done_conversations).toLocaleString()} of ${plural(run.total_conversations, 'conversation')} · ${run.completed_sources} of ${run.total_sources} sources`;
+    return `${current} · ${run.completed_sources} of ${run.total_sources} sources · ${plural(run.conversations, 'conversation')} written`;
+  };
 
   function indexRunSummary(run) {
     const results = run?.results || [];
@@ -546,8 +556,8 @@
     }
     if (indexRun?.state === 'running') {
       box.append(node('strong', '', 'Indexing captures'),
-        node('div', 'pharos-sub', `${indexRun.current_source || 'starting'} · ${indexRun.completed_sources} of ${indexRun.total_sources} sources · ${plural(indexRun.conversations, 'conversation')} written`),
-        progressBar(runProgress(indexRun)));
+        node('div', 'pharos-sub', indexDetail(indexRun)),
+        progressBar(indexProgress(indexRun)));
       return box;
     }
     const recent = [captureRun, indexRun].filter(Boolean).sort((a, b) => String(b.completed_at || '').localeCompare(String(a.completed_at || '')))[0];
