@@ -10,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -285,11 +286,44 @@ func (c *Catalog) refreshAllLibrary(ctx context.Context) error {
 	}
 }
 
+// libraryCatchUpShown is how long maintainLibrary must have been refreshing
+// without catching up before the drive panel lists it. Each workspace an
+// index writes is dirty only until the next pass, which clears it within about
+// two seconds, and listing that would flash on and off throughout the index.
+const libraryCatchUpShown = 15 * time.Second
+
+// libraryCatchUp is when maintainLibrary last started refreshing after it
+// found nothing dirty; zero while it is caught up.
+type libraryCatchUp struct {
+	mu    sync.Mutex
+	since time.Time
+}
+
+func (c *Catalog) noteLibraryRefresh(count int, err error) {
+	c.catchUp.mu.Lock()
+	defer c.catchUp.mu.Unlock()
+	switch {
+	case err == nil && count == 0:
+		c.catchUp.since = time.Time{}
+	case count > 0 && c.catchUp.since.IsZero():
+		c.catchUp.since = c.clock()
+	}
+}
+
+// libraryCatchingUp reports whether maintainLibrary has been refreshing for
+// long enough to list.
+func (c *Catalog) libraryCatchingUp() bool {
+	c.catchUp.mu.Lock()
+	defer c.catchUp.mu.Unlock()
+	return !c.catchUp.since.IsZero() && c.clock().Sub(c.catchUp.since) >= libraryCatchUpShown
+}
+
 // maintainLibrary keeps the stored projection current, including after
 // ingests run by other processes against the same catalog.
 func (c *Catalog) maintainLibrary(ctx context.Context) {
 	for {
 		count, err := c.RefreshLibrary(ctx, 10)
+		c.noteLibraryRefresh(count, err)
 		wait := time.Duration(0)
 		if err != nil {
 			if ctx.Err() != nil {

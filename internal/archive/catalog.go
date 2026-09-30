@@ -24,6 +24,7 @@ type Catalog struct {
 	captureRootMu      sync.RWMutex
 	captureRoot        string
 	library            libraryCache
+	catchUp            libraryCatchUp
 	find               libraryFindCache
 	transcripts        transcriptFindCache
 	derived            derivedCache
