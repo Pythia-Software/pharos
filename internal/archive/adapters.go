@@ -1002,6 +1002,8 @@ func number(value any) (float64, bool) {
 		return item, true
 	case int64:
 		return float64(item), true
+	case int:
+		return float64(item), true
 	case json.Number:
 		value, err := item.Float64()
 		return value, err == nil

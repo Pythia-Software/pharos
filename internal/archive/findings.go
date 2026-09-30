@@ -16,7 +16,7 @@ import (
 
 // findingsVersion names the detectors' keys, wording, and metrics. A new
 // version rebuilds findings the next time the pass runs, even on the same day.
-const findingsVersion = "findings-v1"
+const findingsVersion = "findings-v2"
 
 // The pass observes the last findingWindowDays days: 28 for the gate and the
 // baseline, twelve weeks for sparklines, and 90 for savings after a copy.
@@ -86,6 +86,11 @@ type findingObs struct {
 	Tokens      int64
 	CostUSD     float64
 	DurationMS  int64
+	// Removable and RemovableTokens are the part of CostUSD and Tokens the
+	// proposed change could take away if agents followed it every time (see
+	// findings_estimate.go).
+	Removable       float64
+	RemovableTokens int64
 	// Calls and Errors feed the failure guard, Success the engagement guard.
 	Calls, Errors int
 	Success       *bool
@@ -104,6 +109,8 @@ func (obs *findingObs) merge(other *findingObs) {
 	obs.Occurrences += other.Occurrences
 	obs.Tokens += other.Tokens
 	obs.CostUSD += other.CostUSD
+	obs.Removable += other.Removable
+	obs.RemovableTokens += other.RemovableTokens
 	obs.DurationMS += other.DurationMS
 	obs.Calls += other.Calls
 	obs.Errors += other.Errors
@@ -172,9 +179,13 @@ type findingCandidate struct {
 	// Hidden candidates are kept for trend but never shown: patterns with no
 	// lever the user controls.
 	Hidden bool
-	write  func(*findingCandidate, findingStats) findingCard
-	card   findingCard
-	stats  findingStats
+	// RemovableShare, when set, is the share of every observation's cost the
+	// change could remove; detectors that work it out per observation set
+	// findingObs.Removable instead.
+	RemovableShare float64
+	write          func(*findingCandidate, findingStats) findingCard
+	card           findingCard
+	stats          findingStats
 }
 
 // findingStats summarizes a candidate's last 28 days.
@@ -194,6 +205,10 @@ type findingStats struct {
 	Tokens      int64   `json:"tokens"`
 	CostUSD     float64 `json:"cost_usd"`
 	Minutes     float64 `json:"minutes"`
+	// Removable and RemovableTokens are the part of CostUSD and Tokens the
+	// change could remove.
+	Removable       float64 `json:"removable_usd"`
+	RemovableTokens int64   `json:"removable_tokens"`
 	// DailyExposure is the recent daily rate of relevant work, which sets
 	// the length of a result's after window.
 	DailyExposure float64          `json:"daily_exposure"`
@@ -245,6 +260,8 @@ type findingEnv struct {
 	// stored is the findings table before this pass, for what a
 	// measuring-only pass doesn't recompute.
 	stored map[string]*findingRow
+	// persist is the full pass's backtest of each detector's persistence.
+	persist map[string]findingPersist
 	// cachedPreEdits is D3 and D4's shared read (see preEdits), and
 	// cachedCalls D1 and D7's (see callGroups).
 	cachedPreEdits map[string]*preEdit
@@ -675,6 +692,13 @@ func (env *findingEnv) stats(candidate *findingCandidate) findingStats {
 		stats.Occurrences += max(obs.Occurrences, 1)
 		stats.Tokens += obs.Tokens
 		stats.CostUSD += obs.CostUSD
+		if candidate.RemovableShare > 0 {
+			stats.Removable += obs.CostUSD * candidate.RemovableShare
+			stats.RemovableTokens += int64(float64(obs.Tokens) * candidate.RemovableShare)
+		} else {
+			stats.Removable += obs.Removable
+			stats.RemovableTokens += obs.RemovableTokens
+		}
 		stats.Minutes += float64(obs.DurationMS) / 60_000
 		if obs.At > stats.LastSeen {
 			stats.LastSeen = obs.At
@@ -896,6 +920,17 @@ func (c *Catalog) runFindingsPass(ctx context.Context, full bool) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+	}
+	if full {
+		// Patterns someone is measuring or has measured aren't untouched.
+		treated := map[string]bool{}
+		for id, state := range states {
+			if len(state.Interventions) > 0 {
+				treated[id] = true
+			}
+		}
+		c.setFindingsPhase("backtesting")
+		env.persist = env.persistence(candidates, treated)
 	}
 	kept := []*findingCandidate{}
 	for _, candidate := range candidates {
@@ -1160,7 +1195,7 @@ func (c *Catalog) storeFindings(ctx context.Context, env *findingEnv, candidates
 			}
 			baseline := map[string]any{"events": candidate.stats.Events, "exposure": candidate.stats.Denom, "rate": candidate.stats.Rate,
 				"affected": candidate.stats.Affected, "conversations": candidate.stats.Exposure}
-			impact := findingImpact(candidate.stats, candidate.Metric)
+			impact := findingImpact(candidate, env.persistFor(candidate.Spec.Detector))
 			candidate.Facts = defaultFacts(candidate.Facts)
 			candidate.Facts["evidence_count"] = len(candidate.Evidence)
 			if _, err := tx.Exec(`INSERT INTO findings(id,detector,scope,lever,repository_id,pattern,spec_json,card_json,metric_json,baseline_json,impact_json,gate_json,
@@ -1244,14 +1279,25 @@ func writeFindingDaily(tx *sql.Tx, id, from string, days map[string][3]float64) 
 }
 
 // findingImpact is what a finding cost in the last 28 days, shown as "a
-// month".
-func findingImpact(stats findingStats, metric findingMetric) map[string]any {
+// month", with the shares its expected saving is worked out from (see
+// findings_estimate.go): the part the change could remove, and how much of
+// patterns like it stays untouched.
+func findingImpact(candidate *findingCandidate, persist findingPersist) map[string]any {
 	// Over the last 28 days, the same window as the counts in the wording.
+	stats := candidate.stats
 	failures := 0.0
-	if metric.Failures {
+	if candidate.Metric.Failures {
 		failures = float64(stats.Occurrences)
 	}
-	return map[string]any{"usd": stats.CostUSD, "tokens": float64(stats.Tokens), "minutes": stats.Minutes, "failures": failures, "window_days": findingGateDays}
+	// The share of the cost, or of the tokens where no price is known.
+	removable := candidate.RemovableShare
+	if stats.CostUSD > 0 {
+		removable = math.Min(stats.Removable/stats.CostUSD, 1)
+	} else if stats.Tokens > 0 {
+		removable = math.Min(float64(stats.RemovableTokens)/float64(stats.Tokens), 1)
+	}
+	return map[string]any{"usd": stats.CostUSD, "tokens": float64(stats.Tokens), "minutes": stats.Minutes, "failures": failures, "window_days": findingGateDays,
+		"removable": removable, "persists": persist.Share, "persist_cases": persist.Cases}
 }
 
 func defaultFacts(facts map[string]any) map[string]any {

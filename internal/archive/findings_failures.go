@@ -176,7 +176,9 @@ func detectFailures(env *findingEnv) ([]*findingCandidate, error) {
 		spec := findingSpec{Detector: "failure", Scope: item.scope, Pattern: signature,
 			Params: map[string]string{"exposure": item.exposure.Kind, "key": item.exposure.Key}}
 		candidate := &findingCandidate{Spec: spec, Obs: map[string]*findingObs{}, Metric: findingMetric{Kind: "rate", Unit: "conversations",
-			GuardErrors: item.exposure.Kind == "program", Failures: true}, Facts: map[string]any{}}
+			GuardErrors: item.exposure.Kind == "program", Failures: true}, Facts: map[string]any{},
+			// Avoiding the failure avoids the failed call's whole cost.
+			RemovableShare: 1}
 		if strings.HasPrefix(item.scope, "repo:") {
 			candidate.RepositoryID = strings.TrimPrefix(item.scope, "repo:")
 		}

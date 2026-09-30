@@ -152,7 +152,15 @@ func detectDrift(env *findingEnv) ([]*findingCandidate, error) {
 			result, carried := integer(found.row["result_tokens"]), integer(found.row["carried_tokens"])
 			output, _ := number(found.row["output_tokens"])
 			obs.Tokens += result + carried
-			obs.CostUSD += env.toolCallCost(conv.Provider, firstString(found.row["model"]), conv.Day, result, carried, output)
+			cost := env.toolCallCost(conv.Provider, firstString(found.row["model"]), conv.Day, result, carried, output)
+			obs.CostUSD += cost
+			// Once the harness finds the file, the searches for it go. The
+			// hand reads don't: the harness loads the same text itself, in
+			// every conversation, so the fix saves no tokens on them.
+			if found.kind == "search" {
+				obs.Removable += cost
+				obs.RemovableTokens += result + carried
+			}
 			at := firstString(found.row["started_at"])
 			if at > obs.At {
 				obs.At = at

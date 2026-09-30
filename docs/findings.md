@@ -14,10 +14,11 @@ describes what shipped.
 
 ## Using findings
 
-- **Findings tab.** Open findings are ranked by the unit you choose in settings:
-  dollars (API-equivalent, the default), tokens, agent time, or failures. Every
-  card shows all four, stacked down its right-hand side, and names the detector
-  that found it. The tab's badge always counts the open findings; cards that
+- **Findings tab.** Open findings are ranked by their likely saving in the unit
+  you choose in settings: dollars (API-equivalent, the default), tokens, agent
+  time, or failures (see [Ranking](#ranking)). Every card leads with the likely
+  saving, shows what the pattern cost ("at stake") beside it, lists the other
+  units down its right-hand side, and names the detector that found it. The tab's badge always counts the open findings; cards that
   appeared since your last visit carry a "New" chip. Each card describes the
   Problem and the Solution.
 - **Dismiss and turn off.** Dismiss a finding for one of three reasons, dismiss
@@ -69,6 +70,54 @@ a ladder of changes for successive attempts.
 A pattern with no fix the user controls (a harness's own tool-input parsing, a
 browser that isn't available) is kept for trend and never shown.
 
+## Ranking
+
+A finding's impact is everything its pattern touched in the last 28 days.
+Ranked by that alone, the biggest tasks always came first: on one library the
+top card was $1,700 from six long conversations, of which splitting them could
+remove about a sixth. Cards are ranked by the likely saving instead:
+
+    likely = impact × removable × takes × persists
+
+- **Removable:** the part of the cost the change could remove if agents followed
+  it every time. Each detector works it out from what it measured:
+
+  | Detector | Removable part |
+  | --- | --- |
+  | Recurring failures | The failed calls, in full |
+  | CLI friction | The engagement's help calls and usage errors, not its real work |
+  | Instruction drift | The searches for the file; hand reads stay, since the harness loads the same text |
+  | Context-heavy commands | For long `sed` ranges, all but the 180 lines a narrow reader reads of a file; for other shapes a fixed share (half for searches and diffs, 0.7 for patch logs, 0.8 for generated files) |
+  | Delegable exploration | What later requests carry after the exploration, less a 3k-token summary; a sub-agent pays the carry within the exploration too |
+  | Cost outliers | For runaway conversations, the context above the repository's typical request; for oversized ones, the context above 250k |
+  | Orientation, documentation hosts, TL1 errors | Assumed: 0.3, 0.5, 0.5. TL1 repeat runs and the cost above a flavor's median count in full |
+
+  Where a model has no price, the share is taken from tokens.
+- **Takes:** how often a change of its kind works, by the lever of the change the
+  card proposes next. A harness setting or hook starts at 0.9; a concrete
+  instruction line (use this command, not that one) or a line in an
+  automation's prompt at 0.7; a script, skill, or file at 0.6; a line asking
+  agents to work differently at 0.3; and asking them to delegate to a sub-agent
+  at 0.3 for Claude and 0.1 for Codex and Antigravity. The instruction and habit
+  numbers come from natural experiments in one repository's instruction history:
+  a line naming the build path cut builds to the wrong path from 33% to 4% of
+  conversations, while "read the rules first" was followed in 46% and "commit
+  early" made no visible difference. The others are assumptions. Each improved,
+  unchanged, or worse result in the library moves its kind's number (the prior
+  counts as ten results).
+- **Persists:** how much of a pattern like it would still be there a month later
+  with nobody fixing it. Each full pass backtests every detector on its own 91
+  days: at weekly gate days from four weeks back, every untouched pattern that
+  passed a gate of 5 is followed for 28 days, and its after rate over its before
+  rate (at most 2, and 0 where the work stopped) is one case. A detector's share
+  is the mean case, with a prior counting as five cases (failures 0.45, CLI 0.85,
+  outliers 0.9, documentation hosts and TL1 0.7, the rest 1), kept between 0.1
+  and 1.
+
+Cards explain the three shares under **Why likely**, and MCP returns them as
+`estimate`. The context a change itself adds and overlap between findings that
+share conversations aren't subtracted yet.
+
 ## The observability gate
 
 A finding is shown only when a change could visibly move it within 30 days:
@@ -118,11 +167,12 @@ in the same repository).
 Savings accrue weekly from the copy for 90 days, and only count toward the total
 once a finding improves:
 
-    saved = max(0, ½ × before rate − this week's rate) × this week's relevant work
+    saved = max(0, persists × before rate − this week's rate) × this week's relevant work
             × the before window's cost of one occurrence
 
-The factor of one half is fixed: untouched patterns tend to fade to about half
-their rate on their own. The context a change adds is subtracted: the growth of
+*Persists* is the detector's share from the backtest (see [Ranking](#ranking)),
+fixed in the plan at the copy: only the decline beyond what an untouched
+pattern would keep counts. Plans copied before it was measured use one half. The context a change adds is subtracted: the growth of
 the target's instruction files since the copy (from the loaded-instructions
 record where the harness writes one, otherwise from the default branch or this
 Mac's global files), times the requests of the sessions that read them, priced as

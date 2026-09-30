@@ -111,6 +111,8 @@ type findingView struct {
 	checks   []map[string]any
 	hosts    int
 	thisHost string
+	// takes counts the library's results by change kind, for estimates.
+	takes map[string]findingTakesRecord
 }
 
 func (c *Catalog) loadFindingView(ctx context.Context) (*findingView, error) {
@@ -119,6 +121,7 @@ func (c *Catalog) loadFindingView(ctx context.Context) (*findingView, error) {
 		return nil, err
 	}
 	view := &findingView{cart: cart, rows: cart.rows, states: cart.states, now: c.clock(), hosts: len(cart.hosts), thisHost: c.currentHostID()}
+	view.takes = findingTakesRecords(view.states, view.rows)
 	weekly, _ := c.metaValue(ctx, "findings_weekly_conversations")
 	view.checks, view.rec = findingCheckpointPreview(view, parseFloat(weekly))
 	view.thresh = cart.settings.Threshold
@@ -253,7 +256,7 @@ func (c *Catalog) FindingsOverview(ctx context.Context, filter string) (map[stri
 	cards := []map[string]any{}
 	counts := map[string]int{}
 	saved := findingSavings{}
-	atStake := 0.0
+	atStake, likely := 0.0, 0.0
 	regressed := 0
 	newCount := 0
 	for _, row := range view.rows {
@@ -265,6 +268,7 @@ func (c *Catalog) FindingsOverview(ctx context.Context, filter string) (map[stri
 		card := view.card(row, state)
 		if state == findingOpen {
 			atStake += floatOr(row.Impact["usd"])
+			likely += floatOr(mapValueDefault(card["expected"])["usd"])
 			// New since the last visit: when it first passed the gate, or was
 			// first seen when a lower threshold made it visible.
 			if firstString(row.GatePassedAt, row.FirstSeenAt) > view.cart.settings.SeenAt {
@@ -292,9 +296,10 @@ func (c *Catalog) FindingsOverview(ctx context.Context, filter string) (map[stri
 			cards = append(cards, card)
 		}
 	}
+	// Ranked by the expected saving, not by what the pattern touched.
 	rank := view.cart.settings.Rank
 	sort.SliceStable(cards, func(i, j int) bool {
-		left, right := floatOr(mapValueDefault(cards[i]["impact"])[rank]), floatOr(mapValueDefault(cards[j]["impact"])[rank])
+		left, right := floatOr(mapValueDefault(cards[i]["expected"])[rank]), floatOr(mapValueDefault(cards[j]["expected"])[rank])
 		if left != right {
 			return left > right
 		}
@@ -312,7 +317,7 @@ func (c *Catalog) FindingsOverview(ctx context.Context, filter string) (map[stri
 		}
 	}
 	summary := map[string]any{"saved": saved, "open": counts[findingOpen], "watching": counts[findingWatching], "won": counts[findingWon],
-		"dismissed": counts[findingDismissed], "snoozed": counts[findingSnoozed], "regressed": regressed, "at_stake_usd": atStake, "new": newCount,
+		"dismissed": counts[findingDismissed], "snoozed": counts[findingSnoozed], "regressed": regressed, "at_stake_usd": atStake, "likely_usd": likely, "new": newCount,
 		"next_result_days": view.nextResult()}
 	// The header's badge and cart button poll this; it skips the cards.
 	if filter == "summary" {
@@ -359,6 +364,12 @@ func (view *findingView) card(row *findingRow, state string) map[string]any {
 		"impact_note": row.Card.ImpactNote, "rate": row.Card.Rate, "change": step.Change, "change_label": step.Label, "attempt": attempt,
 		"target": row.Target, "target_label": view.cart.label(row.Target), "scope_label": view.scopeLabel(row), "repository_id": nilIfEmpty(row.RepositoryID),
 		"first_seen_at": row.FirstSeenAt, "last_seen": nilIfEmpty(row.Stats.LastSeen), "active": row.Active}
+	estimate := estimateFinding(row, step, view.takes)
+	expected := map[string]any{}
+	for unit, value := range estimate.Expected {
+		expected[unit] = value
+	}
+	card["expected"], card["estimate"] = expected, estimate
 	if user == nil {
 		return card
 	}

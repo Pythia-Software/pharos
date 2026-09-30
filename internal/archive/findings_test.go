@@ -213,6 +213,13 @@ func TestFindingLifecycle(t *testing.T) {
 	if !strings.Contains(firstString(card["explanation"]), "about half of the conversations that ran shell commands") {
 		t.Fatalf("explanation: %q", card["explanation"])
 	}
+	// Four weeks is too short to backtest, so the likely saving uses the
+	// failure prior; the failed call's whole cost is removable.
+	estimate := card["estimate"].(findingEstimate)
+	if estimate.Kind != changeInstruction || estimate.Removable != 1 || estimate.Persists != findingPersistPriors["failure"] ||
+		floatOr(card["expected"].(map[string]any)["tokens"]) >= floatOr(card["impact"].(map[string]any)["tokens"]) {
+		t.Fatalf("estimate %+v expected %v impact %v", estimate, card["expected"], card["impact"])
+	}
 	id := firstString(card["id"])
 	if !strings.HasPrefix(id, "failure:repo:repo-1:") {
 		t.Fatalf("id %q", id)
@@ -260,7 +267,7 @@ func TestFindingLifecycle(t *testing.T) {
 	}
 	interventions, _ := loadInterventions(ctx, catalog.DB, "")
 	plan := interventions[0].Plan
-	if plan.AfterDays < 7 || plan.AfterDays > findingAfterMaxDays || plan.BeforeRate < 0.4 || plan.BeforeRate > 0.6 {
+	if plan.AfterDays < 7 || plan.AfterDays > findingAfterMaxDays || plan.BeforeRate < 0.4 || plan.BeforeRate > 0.6 || plan.Persists != findingPersistPriors["failure"] {
 		t.Fatalf("plan: %+v", plan)
 	}
 

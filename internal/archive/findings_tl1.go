@@ -66,7 +66,8 @@ func tl1FindingCandidates(env *findingEnv, data *tl1Data, wanted map[string]find
 		base := func(pattern string, metric findingMetric, params map[string]string) *findingCandidate {
 			liveCount := live
 			return &findingCandidate{Spec: findingSpec{Detector: "tl1", Scope: scope, Pattern: pattern, Params: params}, Obs: map[string]*findingObs{}, Live: &liveCount,
-				Metric: metric, Target: scope, Facts: map[string]any{"project": data.Project, "flavor": flavor, "flavor_definition": definition}}
+				Metric: metric, Target: scope, Facts: map[string]any{"project": data.Project, "flavor": flavor, "flavor_definition": definition},
+				RemovableShare: findingTL1Removable[params["kind"]]}
 		}
 		evidence := func(candidate *findingCandidate, task *tl1Task, did, happened string) {
 			candidate.addEvidence(findingHandle{At: task.CreatedAt, WorkspaceID: task.WorkspaceID, TaskID: task.ID, Where: "TL1 " + flavor, Did: did, Happened: happened})

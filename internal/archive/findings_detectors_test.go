@@ -151,6 +151,10 @@ func TestHeavyOutputAndOutlierDetectors(t *testing.T) {
 	if sed == nil || sed.Stats.Affected != 14 || sed.Metric.Kind != "mean" || !strings.Contains(sed.Card.Title, "reads files hundreds of lines at a time") {
 		t.Fatalf("long sed reads: %+v", sed)
 	}
+	// A 900-line read keeps about the 180 lines a narrow reader reads.
+	if removable := floatOr(sed.Impact["removable"]); removable < 0.79 || removable > 0.81 {
+		t.Fatalf("long sed reads removable %v", removable)
+	}
 	outliers, _ := loadFindingRows(context.Background(), fixture.catalog.DB, "WHERE detector='outlier'")
 	var runaway *findingRow
 	for _, row := range outliers {
