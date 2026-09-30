@@ -69,7 +69,7 @@ func (c *Catalog) writingData(ctx context.Context) ([]map[string]any, map[string
 }
 
 func (c *Catalog) computeWritingData(ctx context.Context) (writingTable, error) {
-	parents, launched, err := c.foldedParents(ctx)
+	parents, launched, err := foldedParents(ctx, c.DB)
 	if err != nil {
 		return writingTable{}, err
 	}
@@ -200,8 +200,8 @@ func roundTenth(value float64) float64 { return math.Round(value*10) / 10 }
 // holding only sub-agent conversations whose parents live in another work, or
 // only headless runs launched by commands in another work. launched holds the
 // latter.
-func (c *Catalog) foldedParents(ctx context.Context) (parents map[string]string, launched map[string]bool, err error) {
-	rows, err := queryMapsContext(ctx, c.DB, `SELECT c.workspace_id child,MIN(p.workspace_id) parent
+func foldedParents(ctx context.Context, q queryer) (parents map[string]string, launched map[string]bool, err error) {
+	rows, err := queryMapsContext(ctx, q, `SELECT c.workspace_id child,MIN(p.workspace_id) parent
 		FROM conversations c JOIN conversations p ON p.id=c.parent_id
 		WHERE p.workspace_id<>c.workspace_id
 		GROUP BY c.workspace_id
@@ -214,7 +214,7 @@ func (c *Catalog) foldedParents(ctx context.Context) (parents map[string]string,
 		parents[firstString(row["child"])] = firstString(row["parent"])
 	}
 	// A run's own sub-agents live in its work, so only its root agents count.
-	runs, err := queryMapsContext(ctx, c.DB, `SELECT c.workspace_id child,MIN(p.workspace_id) parent
+	runs, err := queryMapsContext(ctx, q, `SELECT c.workspace_id child,MIN(p.workspace_id) parent
 		FROM conversation_launches l JOIN conversations c ON c.id=l.child_id JOIN conversations p ON p.id=l.parent_id
 		WHERE p.workspace_id<>c.workspace_id
 		GROUP BY c.workspace_id

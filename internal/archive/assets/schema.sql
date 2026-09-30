@@ -185,10 +185,39 @@ CREATE TABLE IF NOT EXISTS message_authorship (
   resent_words INTEGER NOT NULL DEFAULT 0,
   pasted_chars INTEGER NOT NULL DEFAULT 0,
   pasted_words INTEGER NOT NULL DEFAULT 0,
-  spans_json TEXT NOT NULL
+  spans_json TEXT NOT NULL,
+  -- The Library work the message counts toward in Human Words: its own, or
+  -- the work a sub-agent or headless run's work is folded into.
+  work_id TEXT,
+  words INTEGER NOT NULL DEFAULT 0,
+  -- The category holding the most words, and JSON arrays of the categories
+  -- and rules (message_authorship_spans.rule) holding any words.
+  main_category TEXT,
+  categories TEXT,
+  rules TEXT
 );
 CREATE INDEX IF NOT EXISTS message_authorship_conversation_idx ON message_authorship(conversation_id);
 CREATE INDEX IF NOT EXISTS message_authorship_day_idx ON message_authorship(day);
+CREATE INDEX IF NOT EXISTS message_authorship_sent_idx ON message_authorship(sent_at);
+-- Derived with message_authorship: each labelled span of a user message, in
+-- order. start_byte and end_byte index messages.text. rule names the rule that
+-- claimed the span without its particulars, so spans can be grouped by it;
+-- reason is the full explanation. source_* name the text a copied span matches.
+CREATE TABLE IF NOT EXISTS message_authorship_spans (
+  message_id TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  category TEXT NOT NULL,
+  rule TEXT NOT NULL,
+  reason TEXT,
+  start_byte INTEGER NOT NULL,
+  end_byte INTEGER NOT NULL,
+  chars INTEGER NOT NULL,
+  words INTEGER NOT NULL,
+  source_conversation_id TEXT,
+  source_message_id TEXT,
+  PRIMARY KEY(message_id, position)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS message_authorship_spans_rule_idx ON message_authorship_spans(rule, category);
 -- Derived with message_authorship: a headless agent run (claude -p, agy -p,
 -- codex exec) and the conversation whose shell command launched it.
 CREATE TABLE IF NOT EXISTS conversation_launches (

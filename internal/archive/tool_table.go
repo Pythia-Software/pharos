@@ -77,6 +77,8 @@ func sqlDatasetFor(dataset string) (sqlDataset, bool) {
 		return toolRollupDataset, true
 	case "tool_calls":
 		return toolCallDataset, true
+	case "writing_messages":
+		return writingMessageDataset, true
 	}
 	return sqlDataset{}, false
 }

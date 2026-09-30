@@ -1,0 +1,819 @@
+{
+  "$schema": "https://github.com/Pythia-Software/query-table/schema/query-table.schema.json",
+  "name": "pharos_writing_messages",
+  "version": 1,
+  "idField": "id",
+  "defaultLimit": 50,
+  "defaultSort": [
+    {
+      "field": "sent_at",
+      "dir": "desc",
+      "nulls": "last"
+    }
+  ],
+  "tiebreakSort": [
+    {
+      "field": "id",
+      "dir": "asc"
+    }
+  ],
+  "defaultSelect": [
+    {
+      "field": "sent_at",
+      "width": 110
+    },
+    {
+      "field": "text",
+      "width": 480
+    },
+    {
+      "field": "main_category",
+      "width": 120
+    },
+    {
+      "field": "typed_words",
+      "width": 95
+    },
+    {
+      "field": "other_words",
+      "width": 110
+    },
+    {
+      "field": "title",
+      "width": 220
+    },
+    {
+      "field": "repository_name",
+      "width": 140
+    }
+  ],
+  "fields": [
+    {
+      "name": "id",
+      "label": "Message ID",
+      "type": "text",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "id",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "sent_at",
+      "label": "Sent",
+      "type": "datetime",
+      "group": "Time",
+      "render": "datetime_rel",
+      "bindings": {
+        "postgres": {
+          "expr": "sent_at",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "day",
+      "label": "Day",
+      "type": "text",
+      "group": "Time",
+      "aliases": [
+        "date"
+      ],
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "day",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "week",
+      "label": "Week (Mon)",
+      "type": "text",
+      "group": "Time",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "week",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "month",
+      "label": "Month",
+      "type": "text",
+      "group": "Time",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "month",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "text",
+      "label": "Message",
+      "type": "text",
+      "group": "Message",
+      "render": "authored_text",
+      "aliases": [
+        "content",
+        "prompt"
+      ],
+      "bindings": {
+        "postgres": {
+          "expr": "text",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "main_category",
+      "label": "Mostly",
+      "type": "enum",
+      "group": "Message",
+      "render": "authorship_category",
+      "aliases": [
+        "kind",
+        "category"
+      ],
+      "filter": {
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "typed",
+              "label": "Typed"
+            },
+            {
+              "value": "pasted",
+              "label": "Likely pasted"
+            },
+            {
+              "value": "quoted",
+              "label": "Copied"
+            },
+            {
+              "value": "resent",
+              "label": "Re-sent"
+            },
+            {
+              "value": "template",
+              "label": "Template"
+            },
+            {
+              "value": "attachment",
+              "label": "Attachment"
+            },
+            {
+              "value": "harness",
+              "label": "Harness"
+            },
+            {
+              "value": "automated",
+              "label": "Automated"
+            }
+          ]
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "main_category",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "categories",
+      "label": "Categories",
+      "type": "textarray",
+      "group": "Message",
+      "render": "authorship_categories",
+      "select": {
+        "default": false
+      },
+      "filter": {
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "typed",
+              "label": "Typed"
+            },
+            {
+              "value": "pasted",
+              "label": "Likely pasted"
+            },
+            {
+              "value": "quoted",
+              "label": "Copied"
+            },
+            {
+              "value": "resent",
+              "label": "Re-sent"
+            },
+            {
+              "value": "template",
+              "label": "Template"
+            },
+            {
+              "value": "attachment",
+              "label": "Attachment"
+            },
+            {
+              "value": "harness",
+              "label": "Harness"
+            },
+            {
+              "value": "automated",
+              "label": "Automated"
+            }
+          ]
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "categories",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "rules",
+      "label": "Rules",
+      "type": "textarray",
+      "group": "Message",
+      "render": "authorship_rules",
+      "aliases": [
+        "reason",
+        "why"
+      ],
+      "select": {
+        "default": false
+      },
+      "filter": {
+        "values": {
+          "source": "static",
+          "options": [
+            "No other rule matched",
+            "Code block",
+            "Log, trace, code, or data",
+            "Table",
+            "Formatted like agent output",
+            "Mostly identifiers, paths, or code",
+            "Path, URL, or ID",
+            "Sent faster than typing",
+            "Generated page feedback",
+            "Quoted with >",
+            "Matches recent agent output",
+            "Already sent earlier",
+            "Line already sent in other conversations",
+            "Repeated prompt",
+            "Slash command",
+            "Attachment reference",
+            "Conductor system instruction",
+            "System reminder",
+            "Environment context",
+            "Project instructions",
+            "Plugin recommendations",
+            "Harness context",
+            "Launched by a command",
+            "Sent by a headless claude -p run",
+            "Sent by a codex exec run",
+            "Sent by a headless agy -p run",
+            "Sent by automation",
+            "Sent by another agent session",
+            "Sent by TL1 orchestration",
+            "Sub-agent conversation",
+            "Sent by a headless claude -p or SDK run Conductor did not start"
+          ]
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "rules",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "has_source",
+      "label": "Copied from a conversation",
+      "type": "bool",
+      "group": "Message",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "has_source",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "typed_message",
+      "label": "Has typed text",
+      "type": "bool",
+      "group": "Message",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "typed_message",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "typed_words",
+      "label": "Typed words",
+      "type": "number",
+      "group": "Your writing",
+      "render": "number",
+      "select": {
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "typed_words",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "typed_share",
+      "label": "Typed %",
+      "type": "number",
+      "group": "Your writing",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "aggregate": {
+        "measure": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "typed_share",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "other_words",
+      "label": "Words from elsewhere",
+      "type": "number",
+      "group": "Other input",
+      "render": "number",
+      "select": {
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "other_words",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "pasted_words",
+      "label": "Likely pasted words",
+      "type": "number",
+      "group": "Other input",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "pasted_words",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "copied_words",
+      "label": "Copied or re-sent words",
+      "type": "number",
+      "group": "Other input",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "copied_words",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "prompt_words",
+      "label": "Template and attachment words",
+      "type": "number",
+      "group": "Other input",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "prompt_words",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "machine_words",
+      "label": "Harness and automation words",
+      "type": "number",
+      "group": "Other input",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "machine_words",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "quoted_words",
+      "label": "Copied words",
+      "type": "number",
+      "group": "Other input",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "quoted_words",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "resent_words",
+      "label": "Re-sent words",
+      "type": "number",
+      "group": "Other input",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "resent_words",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "template_words",
+      "label": "Template words",
+      "type": "number",
+      "group": "Other input",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "template_words",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "attachment_words",
+      "label": "Attachment words",
+      "type": "number",
+      "group": "Other input",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "attachment_words",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "harness_words",
+      "label": "Harness words",
+      "type": "number",
+      "group": "Other input",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "harness_words",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "automated_words",
+      "label": "Automated words",
+      "type": "number",
+      "group": "Other input",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "automated_words",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "words",
+      "label": "Words",
+      "type": "number",
+      "group": "Size",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "words",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "chars",
+      "label": "Characters",
+      "type": "number",
+      "group": "Size",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "chars",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "message_count",
+      "label": "Messages",
+      "type": "number",
+      "group": "Size",
+      "render": "number",
+      "select": {
+        "default": false,
+        "align": "right"
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "message_count",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "title",
+      "label": "Work",
+      "type": "text",
+      "group": "Context",
+      "render": "work_title",
+      "bindings": {
+        "postgres": {
+          "expr": "title",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "repository_name",
+      "label": "Repository",
+      "type": "text",
+      "group": "Context",
+      "aliases": [
+        "repo"
+      ],
+      "bindings": {
+        "postgres": {
+          "expr": "repository_name",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "source_kind",
+      "label": "Source",
+      "type": "enum",
+      "group": "Context",
+      "select": {
+        "default": false
+      },
+      "filter": {
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "tl1",
+              "label": "TL1"
+            },
+            {
+              "value": "tl1-export",
+              "label": "TL1 export"
+            },
+            {
+              "value": "conductor",
+              "label": "Conductor"
+            },
+            {
+              "value": "codex",
+              "label": "Codex"
+            },
+            {
+              "value": "claude",
+              "label": "Claude"
+            },
+            {
+              "value": "chatgpt",
+              "label": "ChatGPT"
+            },
+            {
+              "value": "antigravity",
+              "label": "Antigravity"
+            },
+            {
+              "value": "canonical",
+              "label": "Canonical"
+            }
+          ]
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "source_kind",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "provider",
+      "label": "Provider",
+      "type": "enum",
+      "group": "Context",
+      "select": {
+        "default": false
+      },
+      "filter": {
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "claude",
+              "label": "Claude"
+            },
+            {
+              "value": "codex",
+              "label": "Codex"
+            },
+            {
+              "value": "tl1",
+              "label": "TL1"
+            },
+            {
+              "value": "chatgpt",
+              "label": "ChatGPT"
+            },
+            {
+              "value": "antigravity",
+              "label": "Antigravity"
+            },
+            {
+              "value": "canonical",
+              "label": "Canonical"
+            }
+          ]
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "provider",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "subagent",
+      "label": "Sub-agent",
+      "type": "bool",
+      "group": "Context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "subagent",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "sender",
+      "label": "Sender",
+      "type": "text",
+      "group": "Context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "sender",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "conversation_id",
+      "label": "Conversation ID",
+      "type": "text",
+      "group": "Context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "conversation_id",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "workspace_id",
+      "label": "Conversation's work ID",
+      "type": "text",
+      "group": "Context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "workspace_id",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "work_id",
+      "label": "Work ID",
+      "type": "text",
+      "group": "Context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "work_id",
+          "synthetic": true
+        }
+      }
+    }
+  ]
+}
