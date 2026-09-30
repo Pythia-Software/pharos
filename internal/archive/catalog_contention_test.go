@@ -35,7 +35,7 @@ func TestIngestRetriesCatalogWriterContention(t *testing.T) {
 	var held *sql.Tx
 	waiting := false
 	released := make(chan error, 1)
-	result := catalog.IngestContext(context.Background(), adapter, func(phase string, _, _, _, _ int) {
+	result := catalog.IngestContext(context.Background(), adapter, func(phase string, _, _, _, _, _ int) {
 		if phase == "waiting for catalog" {
 			waiting = true
 		}

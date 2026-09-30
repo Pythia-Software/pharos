@@ -682,7 +682,15 @@ with `"sources": ["claude"]`. It starts a run in the background and answers
 another index runs (they share one lock), `503` if the capture root is
 unavailable. `GET /api/index` returns `active`, `run` (the latest) and `runs`,
 shaped like sync runs (`kind` `capture-index`, `sources` labelled
-`<host-id>/<source>`, per-source `results`, running totals), and `hosts`: each
+`<host-id>/<source>`, per-source `results`, running totals). Before it parses
+anything, a run has phase `counting` while it counts, without parsing, the
+conversations (a session with its subagents) that changed since they were last
+indexed; `total_conversations` is that count and `done_conversations` how many
+the run has handled. `progress` (0 to 1, `null` while counting or with nothing
+to measure) is what the progress bar shows: conversations handled, with each
+source that cannot be counted (a whole-file kind such as TL1, ChatGPT or a
+canonical export, or a capture that will not open) as one step of its own, so
+it does not take the count from the others. `hosts` follows: each
 captured host's `id`, `label`, `user`, `current` (this Mac), and `sources[]` with
 `kind`, `captured_at`, `capture_finished`, `indexed_at`, `coverage`, `error` and
 `needs_index`. A release (before an eject) stops an index between records, and

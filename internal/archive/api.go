@@ -19,23 +19,32 @@ import (
 )
 
 type SyncRun struct {
-	ID               string         `json:"id"`
-	Kind             string         `json:"kind"`
-	State            string         `json:"state"`
-	Phase            string         `json:"phase"`
-	Sources          []string       `json:"sources"`
-	CurrentSource    any            `json:"current_source"`
-	CompletedSources int            `json:"completed_sources"`
-	TotalSources     int            `json:"total_sources"`
-	Workspaces       int            `json:"workspaces"`
-	Conversations    int            `json:"conversations"`
-	Messages         int            `json:"messages"`
-	SkippedCurrent   int            `json:"skipped_current"`
-	Results          []IngestResult `json:"results"`
-	Error            any            `json:"error"`
-	StartedAt        string         `json:"started_at"`
-	UpdatedAt        string         `json:"updated_at"`
-	CompletedAt      any            `json:"completed_at"`
+	ID               string   `json:"id"`
+	Kind             string   `json:"kind"`
+	State            string   `json:"state"`
+	Phase            string   `json:"phase"`
+	Sources          []string `json:"sources"`
+	CurrentSource    any      `json:"current_source"`
+	CompletedSources int      `json:"completed_sources"`
+	TotalSources     int      `json:"total_sources"`
+	// TotalConversations is what an index counted to parse, in the part
+	// groups (a session with its subagents) it will parse again, and
+	// DoneConversations how many it has handled; the total is 0 while it is
+	// counted. Progress is the index's fraction done, counting each source it
+	// could not count as one step; nil while counting, or with nothing to
+	// measure it by.
+	TotalConversations int            `json:"total_conversations"`
+	DoneConversations  int            `json:"done_conversations"`
+	Progress           *float64       `json:"progress"`
+	Workspaces         int            `json:"workspaces"`
+	Conversations      int            `json:"conversations"`
+	Messages           int            `json:"messages"`
+	SkippedCurrent     int            `json:"skipped_current"`
+	Results            []IngestResult `json:"results"`
+	Error              any            `json:"error"`
+	StartedAt          string         `json:"started_at"`
+	UpdatedAt          string         `json:"updated_at"`
+	CompletedAt        any            `json:"completed_at"`
 	// StopRequested is set while a running run winds down after a stop
 	// request: it finishes the record in hand and keeps everything written.
 	StopRequested bool `json:"stop_requested,omitempty"`
@@ -693,7 +702,7 @@ func (s *Server) syncSources(w http.ResponseWriter, sources []SourceConfig) {
 			continue
 		}
 		baseW, baseC, baseM := totals(results)
-		result := s.Catalog.IngestContext(ctx, adapter, func(phase string, w, c, m, skipped int) {
+		result := s.Catalog.IngestContext(ctx, adapter, func(phase string, w, c, m, skipped, _ int) {
 			s.updateRun(run.ID, func(run *SyncRun) {
 				run.CurrentSource = source.Name
 				run.Phase = phase

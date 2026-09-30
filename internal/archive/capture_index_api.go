@@ -204,6 +204,8 @@ func (s *Server) indexTargets(ctx context.Context, runID string, targets []captu
 			run.CurrentSource, run.CompletedAt, run.Error = nil, now(), failure
 		})
 	}()
+	// Counted first, so the run can report how many conversations remain.
+	plan := s.countIndexWork(ctx, runID, targets)
 	for index, target := range targets {
 		if ctx.Err() != nil {
 			break
@@ -216,17 +218,20 @@ func (s *Server) indexTargets(ctx context.Context, runID string, targets []captu
 			base.Messages += result.Messages
 			base.SkippedCurrent += result.SkippedCurrent
 		}
-		result := s.Catalog.IndexCapture(ctx, target, func(phase string, w, c, m, skipped int) {
+		result := s.Catalog.IndexCapture(ctx, target, func(phase string, w, c, m, skipped, processed int) {
 			s.updateRun(runID, func(run *SyncRun) {
 				run.CurrentSource, run.Phase, run.CompletedSources = label, phase, index
+				plan.report(run, index, processed)
 				run.Workspaces, run.Conversations = base.Workspaces+w, base.Conversations+c
 				run.Messages, run.SkippedCurrent = base.Messages+m, base.SkippedCurrent+skipped
 			})
 		})
 		results = append(results, result)
+		plan.finish(index)
 		s.updateRun(runID, func(run *SyncRun) {
 			run.Results = slices.Clone(results)
 			run.CompletedSources = index + 1
+			plan.report(run, index+1, 0)
 			run.Workspaces, run.Conversations = base.Workspaces+result.Workspaces, base.Conversations+result.Conversations
 			run.Messages, run.SkippedCurrent = base.Messages+result.Messages, base.SkippedCurrent+result.SkippedCurrent
 		})
@@ -254,6 +259,70 @@ func (s *Server) indexTargets(ctx context.Context, runID string, targets []captu
 	if serviceUp {
 		s.Catalog.refreshAuthorship()
 	}
+}
+
+// indexPlan is what a counting pass found for an index run: per target, the
+// conversations it has to parse, or -1 for a source that cannot be counted (a
+// kind that parses whole, or a capture that would not open). The bar measures
+// conversations, and a source it cannot count as one step of its own, so one
+// such source does not take the conversation count from the rest.
+type indexPlan struct {
+	needed []int
+	// conversationsBefore and unitsBefore are what the targets already
+	// finished account for, in conversations and in bar steps.
+	conversationsBefore, unitsBefore int
+	totalUnits                       int
+}
+
+func planUnits(needed int) int {
+	if needed < 0 {
+		return 1
+	}
+	return needed
+}
+
+// report sets the run's counts as the target at index has handled processed
+// of its conversations; targets before index are done.
+func (p *indexPlan) report(run *SyncRun, index, processed int) {
+	conversations, units := p.conversationsBefore, p.unitsBefore
+	if index < len(p.needed) && p.needed[index] > 0 {
+		conversations += min(processed, p.needed[index])
+		units += min(processed, p.needed[index])
+	}
+	run.DoneConversations = conversations
+	run.Progress = fraction(float64(units), float64(p.totalUnits))
+}
+
+// finish takes the target at index as done, whatever it turned out to handle.
+func (p *indexPlan) finish(index int) {
+	p.unitsBefore += planUnits(p.needed[index])
+	p.conversationsBefore += max(p.needed[index], 0)
+}
+
+// countIndexWork counts each target's conversations and records their sum on
+// the run; the run's progress is nil until it has, or if there is nothing to
+// measure it against.
+func (s *Server) countIndexWork(ctx context.Context, runID string, targets []captureTarget) *indexPlan {
+	s.updateRun(runID, func(run *SyncRun) { run.Phase = "counting" })
+	plan := &indexPlan{needed: make([]int, len(targets))}
+	conversations := 0
+	for index, target := range targets {
+		count, ok := 0, false
+		if ctx.Err() == nil {
+			count, ok = s.Catalog.captureIndexWork(ctx, target)
+		}
+		if !ok {
+			count = -1
+		}
+		plan.needed[index] = count
+		conversations += max(count, 0)
+		plan.totalUnits += planUnits(count)
+	}
+	s.updateRun(runID, func(run *SyncRun) {
+		run.Phase, run.TotalConversations = "starting", conversations
+		plan.report(run, 0, 0)
+	})
+	return plan
 }
 
 func wroteRecords(results []IngestResult) bool {

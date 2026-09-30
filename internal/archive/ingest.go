@@ -29,10 +29,13 @@ type IngestResult struct {
 	// Older counts a capture's records passed over because their host had
 	// already written them from a newer read (see guardCapture).
 	Older int `json:"older,omitempty"`
-	Error any `json:"error"`
+	// Processed counts the part groups an incremental ingest handled, written
+	// or not; an index's progress measures it against captureIndexWork.
+	Processed int `json:"-"`
+	Error     any `json:"error"`
 }
 
-type ProgressFunc func(phase string, workspaces, conversations, messages, skippedCurrent int)
+type ProgressFunc func(phase string, workspaces, conversations, messages, skippedCurrent, processed int)
 
 func (c *Catalog) Ingest(adapter Adapter, progress ProgressFunc) IngestResult {
 	return c.IngestContext(context.Background(), adapter, progress)
@@ -67,7 +70,7 @@ func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress P
 	}
 	report := func(phase string) {
 		if progress != nil {
-			progress(phase, result.Workspaces, result.Conversations, result.Messages, result.SkippedCurrent)
+			progress(phase, result.Workspaces, result.Conversations, result.Messages, result.SkippedCurrent, result.Processed)
 		}
 	}
 	state := func(coverage, cursor, fingerprint, message string, pending int, success bool) error {
@@ -209,8 +212,11 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 			return err
 		}
 		result.Parsed += len(parts)
+		result.Processed++
 		if record == nil {
-			return tracker.hold(c, parts)
+			err := tracker.hold(c, parts)
+			report("indexing")
+			return err
 		}
 		digest, err := workspaceRecordDigest(*record)
 		if err != nil {
@@ -428,7 +434,7 @@ func (c *Catalog) IngestExisting(adapter Adapter, progress ProgressFunc) IngestR
 		delete(selected, record.SourceID)
 		c.recordSourceState(host.ID, config.Name, config.Kind, adapter.Capability(), "repairing-existing", record.SourceID, "", "", len(selected), false)
 		if progress != nil {
-			progress("repairing-existing", result.Workspaces, result.Conversations, result.Messages, result.SkippedCurrent)
+			progress("repairing-existing", result.Workspaces, result.Conversations, result.Messages, result.SkippedCurrent, result.Processed)
 		}
 		return nil
 	})

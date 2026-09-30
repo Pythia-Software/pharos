@@ -199,6 +199,71 @@ func capturedHost(dir, id string) Host {
 	return host
 }
 
+// openCaptureAdapter builds the adapter that reads one captured source, bound
+// to its capture.
+func openCaptureAdapter(target captureTarget) (Adapter, *captureManifest, *captureView, error) {
+	manifest, err := loadCaptureManifest(target.Dir)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if manifest.Version == 0 {
+		return nil, nil, nil, fmt.Errorf("%s holds no capture", target.Dir)
+	}
+	// The directory decides attribution; a manifest naming another host was
+	// moved or copied and must not be indexed as this one.
+	if manifest.Host.ID != target.Host.ID || manifest.Source.Name != target.Source {
+		return nil, nil, nil, fmt.Errorf("capture %s belongs to %s/%s", target.Dir, manifest.Host.ID, manifest.Source.Name)
+	}
+	view := newCaptureView(target.Host, target.Dir, manifest)
+	root, ok := view.captured(manifest.Source.Path)
+	if !ok {
+		return nil, nil, nil, fmt.Errorf("capture manifest %s does not map its source path", target.Dir)
+	}
+	config := SourceConfig{Name: target.Source, Kind: manifest.Source.Kind, Path: root, Account: defaultString(manifest.Source.Account, "local"), Enabled: true}
+	adapter, err := MakeAdapter(config)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	binder, ok := adapter.(interface{ bindCapture(*captureView) })
+	if !ok {
+		return nil, nil, nil, fmt.Errorf("captures of %s sources cannot be indexed", config.Kind)
+	}
+	binder.bindCapture(view)
+	return adapter, manifest, view, nil
+}
+
+// captureIndexWork counts the conversations an index of target would parse:
+// the part groups (a session with its subagents) not passed over as unchanged.
+// It parses nothing, as the ingest itself does not for a part that has not
+// changed. ok is false for a source that cannot be told apart from what was
+// indexed without parsing, or if ctx ends the count.
+func (c *Catalog) captureIndexWork(ctx context.Context, target captureTarget) (needed int, ok bool) {
+	adapter, _, view, err := openCaptureAdapter(target)
+	if err != nil {
+		return 0, false
+	}
+	partial, incremental := adapter.(partialAdapter)
+	if !incremental {
+		return 0, false
+	}
+	tracker, err := c.newPartTracker(view.host.ID, target.Source, partial, view)
+	if err != nil {
+		return 0, false
+	}
+	// Passing over every group keeps the adapter from parsing any; a group it
+	// parses anyway (its parts could not all be read) is counted as needed.
+	err = partial.discoverParts(func(parts []sourcePart) bool {
+		if ctx.Err() == nil && !tracker.unchanged(parts) {
+			needed++
+		}
+		return true
+	}, func(*WorkspaceRecord, []sourcePart) error {
+		needed++
+		return nil
+	})
+	return needed, err == nil && ctx.Err() == nil
+}
+
 // IndexCapture parses one host's captured source into the catalog. It reads
 // only the capture, never the original paths, and stops between records once
 // ctx is cancelled; the next run resumes.
@@ -209,33 +274,10 @@ func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progre
 		result.Error = err.Error()
 		return result
 	}
-	manifest, err := loadCaptureManifest(target.Dir)
+	adapter, manifest, view, err := openCaptureAdapter(target)
 	if err != nil {
 		return fail(err)
 	}
-	if manifest.Version == 0 {
-		return fail(fmt.Errorf("%s holds no capture", target.Dir))
-	}
-	// The directory decides attribution; a manifest naming another host was
-	// moved or copied and must not be indexed as this one.
-	if manifest.Host.ID != target.Host.ID || manifest.Source.Name != target.Source {
-		return fail(fmt.Errorf("capture %s belongs to %s/%s", target.Dir, manifest.Host.ID, manifest.Source.Name))
-	}
-	view := newCaptureView(target.Host, target.Dir, manifest)
-	root, ok := view.captured(manifest.Source.Path)
-	if !ok {
-		return fail(fmt.Errorf("capture manifest %s does not map its source path", target.Dir))
-	}
-	config := SourceConfig{Name: target.Source, Kind: manifest.Source.Kind, Path: root, Account: defaultString(manifest.Source.Account, "local"), Enabled: true}
-	adapter, err := MakeAdapter(config)
-	if err != nil {
-		return fail(err)
-	}
-	binder, ok := adapter.(interface{ bindCapture(*captureView) })
-	if !ok {
-		return fail(fmt.Errorf("captures of %s sources cannot be indexed", config.Kind))
-	}
-	binder.bindCapture(view)
 	// Only one index of a capture at a time, by the service or the CLI.
 	lock, err := os.OpenFile(filepath.Join(target.Dir, indexLockName), os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
