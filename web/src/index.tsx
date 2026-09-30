@@ -1,10 +1,12 @@
 import React, { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { EMPTY_QUERY, applyAggregations, decodeQuery, encodeQuery, isOrGroup, loadSchema, predicatesOf, localStorageAdapter, memoryStorageAdapter, toAggregationQuery, toServerQuery, type AggregationClause, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, applyAggregations, decodeQuery, encodeQuery, isOrGroup, loadSchema, predicatesOf, memoryStorageAdapter, toAggregationQuery, toServerQuery, type AggregationClause, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { useQueryTable, type QueryTableApi } from "@pythia-software/query-table-react";
 import { DataTable, FilterValueProvider, MetricsPanel, QueryBuilder, SelectionToolbar, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
 import "@pythia-software/query-table-ui/theme.css";
 import "./pharos.css";
+import { libraryStorageAdapter } from "./storage";
+import { preferences } from "./preferences";
 import libraryDocument from "../../schemas/library.schema.json";
 import usageDocument from "../../schemas/usage.schema.json";
 import writingDocument from "../../schemas/writing.schema.json";
@@ -311,7 +313,7 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
   onFindRef.current = onFind;
   const transport = useMemo(() => shared ? undefined : makeTransport(dataset, find, value => onFindRef.current?.(value)), [dataset, find]);
   // A shared file has no origin of its own to keep saved queries apart from other files'.
-  const storage = useMemo(() => shared ? memoryStorageAdapter() : localStorageAdapter(), []);
+  const storage = useMemo(() => shared ? memoryStorageAdapter() : libraryStorageAdapter(), []);
   // A query in the URL (a link, or a drill-down from another table) starts
   // the table, rather than the last one used, which loads after it otherwise.
   const [urlQuery] = useState(() => {
@@ -684,7 +686,8 @@ type PricingStatus = { prompt: string; unpriced_models: PricingModel[]; unpriced
 const acknowledgedPricingKey = "pharos-pricing-acknowledged-models";
 
 function acknowledgedModels(): Set<string> {
-  try { return new Set(JSON.parse(localStorage.getItem(acknowledgedPricingKey) ?? "[]")); } catch { return new Set(); }
+  const saved = preferences().get<unknown>(acknowledgedPricingKey, []);
+  return new Set(Array.isArray(saved) ? saved.filter((model): model is string => typeof model === "string") : []);
 }
 
 async function copyText(text: string) {
@@ -723,7 +726,7 @@ function RefreshPricesButton() {
     try {
       await copyText(status.prompt);
       const next = new Set([...acknowledged, ...unpriced.map((model) => model.model)]);
-      localStorage.setItem(acknowledgedPricingKey, JSON.stringify([...next]));
+      preferences().set(acknowledgedPricingKey, [...next]);
       setAcknowledged(next);
       setCopied("copied");
     } catch { setCopied("failed"); }
@@ -1028,14 +1031,14 @@ function compactNumber(value: number): string {
 }
 
 function readStored<T extends object>(key: string, fallback: T, valid: (value: T) => boolean): T {
-  try {
-    const stored = { ...fallback, ...JSON.parse(localStorage.getItem(key) ?? "{}") };
-    return valid(stored) ? stored : fallback;
-  } catch { return fallback; }
+  const saved = preferences().get<unknown>(key, {});
+  if (!saved || typeof saved !== "object") return fallback;
+  const stored = { ...fallback, ...saved } as T;
+  return valid(stored) ? stored : fallback;
 }
 
 function store(key: string, value: unknown) {
-  try { localStorage.setItem(key, typeof value === "string" ? value : JSON.stringify(value)); } catch { /* storage may be unavailable */ }
+  preferences().set(key, value);
 }
 
 function Segmented<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: Array<[T, string, string?]>; onChange: (next: T) => void }) {
@@ -1597,10 +1600,8 @@ function initialUsageView(): UsageView {
   if (shared) return "tokens";
   const requested = new URLSearchParams(location.search).get("usage");
   if (requested === "tokens" || requested === "writing" || requested === "carbon") { store(usageViewKey, requested); return requested; }
-  try {
-    const saved = localStorage.getItem(usageViewKey);
-    return saved === "writing" || saved === "carbon" ? saved : "tokens";
-  } catch { return "tokens"; }
+  const saved = preferences().get<unknown>(usageViewKey, "tokens");
+  return saved === "writing" || saved === "carbon" ? saved : "tokens";
 }
 
 function CarbonImpact() {

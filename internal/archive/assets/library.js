@@ -15,6 +15,9 @@
 .pharos-dot{flex:none;display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--sea,#315845)}
 .pharos-drive .pharos-dot{background:#8cc6a0}
 .pharos-dot.busy{background:var(--mast-brass,#d4a857);box-shadow:0 0 0 3px color-mix(in srgb,var(--mast-brass,#d4a857) 30%,transparent)}
+.pharos-drive .pharos-dot.busy{animation:pharos-drive-pulse 1.6s ease-in-out infinite}
+@keyframes pharos-drive-pulse{50%{opacity:.55;box-shadow:0 0 0 6px color-mix(in srgb,var(--mast-brass,#d4a857) 10%,transparent)}}
+@media(prefers-reduced-motion:reduce){.pharos-drive .pharos-dot.busy{animation:none}}
 .pharos-dot.warn{background:var(--warn,#98601d)}.pharos-dot.bad{background:var(--bad,#9c3d36)}.pharos-dot.idle{background:var(--muted,#756c5f)}
 .pharos-drive-panel{position:fixed;z-index:8000;width:min(430px,calc(100vw - 24px));max-height:calc(100vh - 100px);overflow:auto;padding:16px 18px;background:var(--panel,#fff);color:var(--ink,#222);border:1px solid var(--line,#ccc);border-radius:14px;box-shadow:0 18px 50px #0005;font-size:13px}
 .pharos-drive-panel h2{margin:0;font:700 20px/1.2 var(--serif,serif)}
@@ -273,8 +276,9 @@
   }
 
   // The chip is just the drive's name and a dot: green when nothing is
-  // running, so ejecting stops nothing; brass while work holds the library,
-  // which an eject would stop first. The panel has the details.
+  // running, so ejecting stops nothing; brass and pulsing while work holds
+  // the library, which an eject would stop first. The panel has the details.
+  const DRIVE_PULSE_MS = 1600;
   function renderChip() {
     const target = ensureChip();
     if (!target) return;
@@ -288,8 +292,11 @@
     } else {
       name.textContent = status.drive?.ejectable ? status.drive.name : status.portable ? 'Library' : 'This Mac';
       const activities = status.activities || [];
-      if (activities.length) dot.classList.add('busy');
-      else if (indexFailed(recentIndex)) dot.classList.add('warn');
+      if (activities.length) {
+        dot.classList.add('busy');
+        // The dot is rebuilt on every status refresh; entering mid-cycle keeps the pulse from restarting.
+        dot.style.animationDelay = `-${Date.now() % DRIVE_PULSE_MS}ms`;
+      } else if (indexFailed(recentIndex)) dot.classList.add('warn');
       state = activities.length ? activities.map(activitySummary).join(', ') : indexFailed(recentIndex) ? `Last index ${recentIndex.state === 'interrupted' ? 'interrupted' : 'failed'}` : 'Nothing running';
     }
     target.replaceChildren(dot, name);

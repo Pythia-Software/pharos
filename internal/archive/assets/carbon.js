@@ -102,8 +102,8 @@
     if (text !== undefined && text !== null) n.textContent = text;
     return n;
   };
-  const load = () => { try { return JSON.parse(localStorage.getItem(STORE)) || {}; } catch { return {}; } };
-  const save = () => { try { localStorage.setItem(STORE, JSON.stringify(prefs)); } catch {} };
+  const load = () => { const saved = window.pharosPrefs.get(STORE, {}); return saved && typeof saved === 'object' ? saved : {}; };
+  const save = () => window.pharosPrefs.set(STORE, prefs);
   const prefs = load();
   let data = null, error = '', loading = 0;
 
