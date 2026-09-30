@@ -3,6 +3,8 @@ package archive
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
@@ -57,6 +59,78 @@ func upgradePending(t *testing.T, catalog *Catalog) map[string]int64 {
 		pending[step.ID] = step.Pending
 	}
 	return pending
+}
+
+func TestUpgradeStatusReportsWholeJobProgress(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	state := catalog.upgrade()
+	state.mu.Lock()
+	state.running = true
+	state.step = "tools"
+	state.done, state.total = 5, 10
+	state.planned = []upgradeStep{{ID: "repositories"}, {ID: "tools"}, {ID: "rollup"}}
+	state.mu.Unlock()
+	status, err := catalog.UpgradeStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if progress, ok := status["overall_progress"].(*float64); !ok || *progress != 0.5 {
+		t.Fatalf("whole upgrade progress: %#v", status["overall_progress"])
+	}
+}
+
+func TestIndexCanContinueWithPendingUpgrade(t *testing.T) {
+	stubGitHub(t, false, nil)
+	catalog := legacyUpgradeCatalog(t)
+	server := NewServer(Config{CatalogPath: catalog.Path, CaptureRoot: t.TempDir()}, catalog)
+	response := httptest.NewRecorder()
+	server.startIndex(response, map[string]any{"all_hosts": true, "auto_upgrade": true})
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("start index: %d %s", response.Code, response.Body.String())
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		status, err := catalog.UpgradeStatus(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status["needed"] == false && status["running"] == false {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("index did not finish its upgrade: %#v", status)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestIndexSkipsUpgradeWhenLibraryIsCurrent(t *testing.T) {
+	catalog, config := testCatalog(t)
+	config.CaptureRoot = t.TempDir()
+	server := NewServer(config, catalog)
+	response := httptest.NewRecorder()
+	server.startIndex(response, map[string]any{"all_hosts": true, "auto_upgrade": true})
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("start index: %d %s", response.Code, response.Body.String())
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		runs := server.indexRuns()
+		if len(runs) > 0 && runs[0].State != "running" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("index did not finish")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	status, err := catalog.UpgradeStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status["started_at"] != nil {
+		t.Fatalf("current library ran an upgrade: %#v", status)
+	}
 }
 
 // legacyUpgradeCatalog returns a catalog that looks indexed by an older

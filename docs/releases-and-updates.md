@@ -105,10 +105,12 @@ optional in the current release script.
 ## Upgrading an existing library
 
 A new version can derive more from the transcripts a library already holds.
-When it opens a catalog indexed by an older version, Pharos offers a one-time
-**Upgrade this library** panel, once per launch, and keeps an **Upgrade
-library** button in the header until the upgrade is done. A library that is
-new to this version has nothing to upgrade and never sees the panel.
+When it opens a catalog indexed by an older version, Pharos includes the
+required upgrade in **Update library** in the header. The same action captures
+and indexes sources, then starts any pending upgrade. It also runs the upgrade
+when this Mac has no enabled sources. The drive panel shows one library update
+with its current step and progress; **Update details** opens the upgrade steps
+and repository merge preview. A library already current has no upgrade work.
 
 The upgrade runs these steps in order, as one background job:
 
@@ -142,7 +144,7 @@ and captures where they still exist. Transcripts are never changed.
 
 The job commits in small units. Closing the panel doesn't stop it, and the
 drive badge shows its progress. Ejecting stops it after the unit in
-progress, and starting the upgrade again resumes where it stopped. Saved
+progress, and using **Update library** again resumes where it stopped. Saved
 table views that filter on a repository name the merge retired are pointed at
 the surviving name.
 

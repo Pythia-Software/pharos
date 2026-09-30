@@ -68,7 +68,6 @@ async function open(state) {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => {
-    sessionStorage.setItem('pharos-upgrade-offered', '1');
     window.webkit = { messageHandlers: { pharosClipboard: { postMessage: async text => { window.__copiedText = text; } } } };
   });
   await page.route('http://findings-ui.test/**', route => {
