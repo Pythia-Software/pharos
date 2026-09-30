@@ -40,6 +40,7 @@ type upgradeState struct {
 	startedAt   string
 	lastError   string
 	seconds     map[string]float64
+	planned     []upgradeStep
 	// github is the last answer of githubAvailability, and when it was asked.
 	github   string
 	githubAt time.Time
@@ -164,9 +165,26 @@ func (c *Catalog) UpgradeStatus(ctx context.Context) (map[string]any, error) {
 	state := c.upgrade()
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	var overall *float64
+	if state.running && len(state.planned) > 0 && state.step != "" {
+		completed := 0.0
+		for _, step := range state.planned {
+			if step.ID == state.step {
+				if state.total > 0 {
+					completed += min(max(float64(state.done)/float64(state.total), 0), 1)
+				}
+				break
+			}
+			completed++
+		}
+		overall = fraction(completed, float64(len(state.planned)))
+		if overall != nil {
+			*overall = min(*overall, 0.99)
+		}
+	}
 	return map[string]any{"needed": pending > 0, "steps": steps, "running": state.running, "step": nilIfEmpty(state.step),
 		"done": state.done, "total": state.total, "started_at": nilIfEmpty(state.startedAt), "error": nilIfEmpty(state.lastError),
-		"repository_renames": renames, "github": nilIfEmpty(github)}, nil
+		"overall_progress": overall, "repository_renames": renames, "github": nilIfEmpty(github)}, nil
 }
 
 // githubStatus is githubReady, githubMissing or githubSignedOut. The answer is
@@ -277,6 +295,17 @@ func (c *Catalog) RunUpgrade(ctx context.Context, progress func(step string, don
 	for _, step := range steps {
 		pending[step.ID] = step.Pending
 	}
+	state.mu.Lock()
+	state.planned = nil
+	for _, step := range steps {
+		if step.Pending > 0 {
+			state.planned = append(state.planned, step)
+		}
+	}
+	if len(state.planned) > 0 {
+		state.planned = append(state.planned, upgradeStep{ID: "rollup"})
+	}
+	state.mu.Unlock()
 	if pending["repositories"] > 0 {
 		if err := timed("repositories", func() error { return c.applyRepositoryMerges(ctx, report) }); err != nil {
 			return finish(err)

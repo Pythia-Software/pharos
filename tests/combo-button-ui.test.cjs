@@ -96,7 +96,7 @@ test('Usage summary refreshes on demand, and auto update refetches every 30 seco
   } finally { await browser.close(); }
 });
 
-test('The header joins the drive indicator and Capture and Index into one combo button', async () => {
+test('The header joins the drive indicator and Update library into one combo button', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
   const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
@@ -140,6 +140,163 @@ test('The header joins the drive indicator and Capture and Index into one combo 
       assert.equal(id, await segment.getAttribute('id'));
       assert.equal(color, brass);
     }
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
+test('Update library starts a pending upgrade through the shared action', async () => {
+  const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    const errors = [];
+    let running = false;
+    let starts = 0;
+    let statusReads = 0;
+    page.on('pageerror', error => errors.push(error.message));
+    await page.clock.install();
+    await page.route('http://shared-update.test/**', route => {
+      const url = new URL(route.request().url());
+      const json = body => route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) });
+      if (url.pathname === '/assets/library.js' || url.pathname === '/assets/upgrade.js') {
+        return route.fulfill({ contentType: 'application/javascript', body: fs.readFileSync(path.join(root, 'internal/archive/assets', path.basename(url.pathname))) });
+      }
+      if (!url.pathname.startsWith('/api/') && !url.pathname.startsWith('/assets/')) return route.fulfill({ contentType: 'text/html', body: html });
+      if (url.pathname === '/api/upgrade') {
+        if (route.request().method() === 'POST') { running = true; starts++; return json({ started: true }); }
+        statusReads++;
+        return json({ needed: true, running, step: running ? 'usage' : null, done: 2, total: 10, overall_progress: running ? 0.1 : null,
+          steps: [{ id: 'usage', label: 'Correct token attribution', detail: 'Recounting', unit: 'workspace', pending: 10 }], repository_renames: {} });
+      }
+      if (url.pathname === '/api/library/status') return json({ idle: !running, portable: true, drive: { name: 'Pharos SSD', ejectable: false },
+        activities: running ? [{ kind: 'maintenance', label: 'Upgrading the library', detail: 'Step: usage', progress: 0.2, writes: true }] : [] });
+      if (url.pathname === '/api/activity') return json({ active: 0, runs: [] });
+      if (url.pathname === '/api/sources') return json({ enabled: 0, items: [] });
+      if (url.pathname.startsWith('/api/')) return json({ items: [] });
+      return route.fulfill({ contentType: 'application/javascript', body: '' });
+    });
+    await page.goto('http://shared-update.test/library');
+    await page.locator('#headerSync').waitFor();
+    await page.clock.runFor(31_000);
+    assert.equal(statusReads, 1, 'a pending upgrade does not keep polling every open tab');
+    const upgradeStarted = page.waitForResponse(response => response.url().endsWith('/api/upgrade') && response.request().method() === 'POST');
+    await page.locator('#headerSync').click();
+    await upgradeStarted;
+    await page.waitForFunction(() => document.querySelector('#headerSync')?.disabled);
+    assert.equal(starts, 1);
+    assert.equal(await page.locator('#upgradeToggle').count(), 0);
+    await page.locator('#pharosDrive').click();
+    const panel = page.getByRole('dialog', { name: 'Library drive' });
+    await panel.getByText('Correct token attribution').waitFor();
+    assert.equal(await panel.locator('.pharos-activity').count(), 1);
+    assert.equal(await panel.locator('.pharos-bar').count(), 1);
+    await panel.getByRole('button', { name: 'Update details' }).click();
+    const details = page.getByRole('dialog', { name: 'Library update details' });
+    await details.getByText('Correct token attribution').waitFor();
+    assert.equal(await details.getByRole('button', { name: 'Upgrade now' }).count(), 0);
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
+test('standalone maintenance stays separate from a library update', async () => {
+  const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    const errors = [];
+    let recentRun = null;
+    let activities = [
+      { kind: 'maintenance', label: 'Building substring search', detail: '50 of 100 conversations', progress: 0.5 },
+      { kind: 'maintenance', label: 'Building the Tools ledger', detail: '10 of 20 conversations', progress: 0.5 },
+      { kind: 'maintenance', label: 'Updating the Library view', detail: '5 workspaces to refresh', progress: null },
+      { kind: 'git', label: 'Looking up merges in Git', detail: 'first scan of this catalog', progress: null },
+    ];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.route('http://activity-grouping.test/**', route => {
+      const url = new URL(route.request().url());
+      const json = body => route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) });
+      if (url.pathname === '/assets/library.js' || url.pathname === '/assets/upgrade.js') {
+        return route.fulfill({ contentType: 'application/javascript', body: fs.readFileSync(path.join(root, 'internal/archive/assets', path.basename(url.pathname))) });
+      }
+      if (!url.pathname.startsWith('/api/') && !url.pathname.startsWith('/assets/')) return route.fulfill({ contentType: 'text/html', body: html });
+      if (url.pathname === '/api/library/status') return json({ idle: false, portable: true, drive: { name: 'Pharos SSD', ejectable: false }, activities });
+      if (url.pathname === '/api/activity') return json({ active: 0, runs: recentRun ? [recentRun] : [] });
+      if (url.pathname === '/api/upgrade') return json({ needed: false, running: false, steps: [], repository_renames: {} });
+      if (url.pathname.startsWith('/api/')) return json({ items: [] });
+      return route.fulfill({ contentType: 'application/javascript', body: '' });
+    });
+    await page.goto('http://activity-grouping.test/library');
+    await page.locator('#pharosDrive').click();
+    const panel = page.getByRole('dialog', { name: 'Library drive' });
+    await panel.getByText('Building substring search').waitFor();
+    assert.equal(await panel.locator('.pharos-activity').count(), 4);
+    assert.equal(await panel.getByText('Updating library', { exact: true }).count(), 0);
+    assert.equal(await panel.locator('.pharos-activity', { hasText: 'Building substring search' }).locator('.pharos-bar').count(), 1);
+    assert.match(await page.locator('#pharosDrive').getAttribute('title'), /Building substring search 50%/);
+
+    const started = new Date(Date.now() - 10_000).toISOString();
+    recentRun = { id: 'recent-index', kind: 'capture-index', state: 'complete', started_at: started, completed_at: new Date().toISOString() };
+    activities = [
+      { kind: 'git', label: 'Looking up merges in Git', detail: 'Main-branch merges of indexed work, after the last index', started_at: started, progress: null },
+      { kind: 'maintenance', label: 'Building substring search', detail: '50 of 100 conversations', progress: 0.5 },
+    ];
+    await page.evaluate(() => window.pharosLibrary.refresh());
+    await panel.getByText('Finishing the library update').waitFor();
+    assert.equal(await panel.locator('.pharos-activity').count(), 2);
+    assert.equal(await panel.getByText('Building substring search').count(), 1);
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
+test('the update action stays busy while a completed index hands off to upgrade', async () => {
+  const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    const errors = [];
+    let upgradeRunning = false;
+    let indexStarts = 0;
+    const startedAt = new Date().toISOString();
+    page.on('pageerror', error => errors.push(error.message));
+    await page.route('http://update-handoff.test/**', route => {
+      const url = new URL(route.request().url());
+      const json = body => route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) });
+      if (url.pathname === '/assets/library.js' || url.pathname === '/assets/upgrade.js') {
+        return route.fulfill({ contentType: 'application/javascript', body: fs.readFileSync(path.join(root, 'internal/archive/assets', path.basename(url.pathname))) });
+      }
+      if (!url.pathname.startsWith('/api/') && !url.pathname.startsWith('/assets/')) return route.fulfill({ contentType: 'text/html', body: html });
+      if (url.pathname === '/api/upgrade') return json({ needed: true, running: upgradeRunning, step: upgradeRunning ? 'usage' : null,
+        done: 1, total: 10, overall_progress: upgradeRunning ? 0.05 : null,
+        steps: [{ id: 'usage', label: 'Correct token attribution', detail: 'Recounting', unit: 'workspace', pending: 10 }], repository_renames: {} });
+      if (url.pathname === '/api/library/status') return json({ idle: !upgradeRunning, portable: true, drive: { name: 'Pharos SSD', ejectable: false },
+        activities: upgradeRunning ? [{ kind: 'maintenance', label: 'Upgrading the library', detail: 'Step: usage', progress: 0.1 }] : [] });
+      if (url.pathname === '/api/sources') return json({ enabled: 1, items: [] });
+      if (url.pathname === '/api/capture') return json(route.request().method() === 'POST'
+        ? { run: { id: 'capture', state: 'running' } } : { runs: [{ id: 'capture', state: 'complete' }] });
+      if (url.pathname === '/api/index') {
+        if (route.request().method() === 'POST') {
+          indexStarts++;
+          setTimeout(() => { upgradeRunning = true; }, 900);
+          return json({ run: { id: 'index', state: 'running' } });
+        }
+        return json({ active: false, runs: [], hosts: [] });
+      }
+      if (url.pathname === '/api/activity') return json({ active: 0, runs: indexStarts
+        ? [{ id: 'index', kind: 'capture-index', state: 'complete', started_at: startedAt, completed_at: new Date().toISOString(), results: [] }] : [] });
+      if (url.pathname.startsWith('/api/')) return json({ items: [] });
+      return route.fulfill({ contentType: 'application/javascript', body: '' });
+    });
+    await page.goto('http://update-handoff.test/library');
+    const indexStarted = page.waitForResponse(response => response.url().endsWith('/api/index') && response.request().method() === 'POST');
+    await page.locator('#headerSync').click();
+    await indexStarted;
+    await page.locator('#pharosDrive').click();
+    const panel = page.getByRole('dialog', { name: 'Library drive' });
+    await panel.getByText('Preparing the library upgrade…').waitFor();
+    assert.equal(await page.locator('#headerSync').isDisabled(), true);
+    await panel.getByText('Correct token attribution').waitFor({ timeout: 5000 });
+    assert.equal(indexStarts, 1);
+    assert.equal(await page.locator('#headerSync').isDisabled(), true);
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

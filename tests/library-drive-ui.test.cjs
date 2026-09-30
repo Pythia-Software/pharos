@@ -200,8 +200,8 @@ describe('library, drive and captures UI', { skip }, () => {
     await page.evaluate(() => document.querySelector('main').scrollTo(0, 0));
     await page.locator('#pharosDrive').click();
     const panel = page.getByRole('dialog', { name: 'Library drive' });
-    await panel.getByText('Indexing captures', { exact: true }).waitFor();
-    assert.match(await panel.textContent(), /host-b\/claude · 0 of 1 sources/);
+    await panel.getByText('Indexing conversations', { exact: true }).waitFor();
+    assert.equal(await panel.locator('.pharos-activity').count(), 1);
     assert.match(await panel.textContent(), /Indexing captures(, [^:]+)?: writing to .* now; unplugging it would lose that work/);
     await shoot(page, 'drive-panel-indexing');
     await page.keyboard.press('Escape');
@@ -263,8 +263,8 @@ describe('library, drive and captures UI', { skip }, () => {
     const { page, context, errors } = await openPage();
     const headerAction = page.locator('#headerSync');
     await headerAction.waitFor();
-    assert.equal(await headerAction.getAttribute('title'), 'Capture and Index');
-    assert.equal(await headerAction.getAttribute('aria-label'), 'Capture and Index');
+    assert.equal(await headerAction.getAttribute('title'), 'Update library');
+    assert.equal(await headerAction.getAttribute('aria-label'), 'Update library');
     await page.goto(`${base}/settings`);
     const actions = page.locator('#sourceToolbar');
     await actions.getByRole('button', { name: 'Find sources on this Mac…' }).waitFor();

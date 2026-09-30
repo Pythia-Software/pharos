@@ -105,14 +105,16 @@ func runIndexCLI(config Config, catalog *Catalog, args []string) error {
 
 // startIndex indexes captures in the background: body {"host": ID} or
 // {"all_hosts": true}, default this Mac, and optionally {"sources": [...]}.
+// auto_upgrade continues with pending library upgrade work after indexing.
 // It shares the sync lock, so a sync and an index never run at once.
 func (s *Server) startIndex(w http.ResponseWriter, body map[string]any) {
 	names, ok := sliceValue(body["sources"])
 	all, allOK := valueOr(body["all_hosts"], false).(bool)
 	onlyNeeded, neededOK := valueOr(body["only_needed"], false).(bool)
+	autoUpgrade, upgradeOK := valueOr(body["auto_upgrade"], false).(bool)
 	host, hostOK := valueOr(body["host"], "").(string)
-	if !ok || !allOK || !hostOK || !neededOK || (all && host != "") {
-		writeError(w, errors.New(`body is {"host": ID} or {"all_hosts": true}, with optional "sources": [names] and "only_needed": true`), http.StatusBadRequest)
+	if !ok || !allOK || !hostOK || !neededOK || !upgradeOK || (all && host != "") {
+		writeError(w, errors.New(`body is {"host": ID} or {"all_hosts": true}, with optional "sources": [names], "only_needed": true and "auto_upgrade": true`), http.StatusBadRequest)
 		return
 	}
 	hosts := []string{}
@@ -155,10 +157,24 @@ func (s *Server) startIndex(w http.ResponseWriter, body map[string]any) {
 	}
 	run := s.startRunNamed(indexRunKind, labels)
 	ctx, end := s.beginIngest(run.ID)
-	started := s.spawn(func(context.Context) {
-		defer s.ingestMu.Unlock()
-		defer end()
-		s.indexTargets(ctx, run.ID, targets)
+	started := s.spawn(func(lifecycleCtx context.Context) {
+		needsUpgrade := autoUpgrade
+		if autoUpgrade {
+			if steps, err := s.Catalog.UpgradeSteps(lifecycleCtx); err == nil {
+				needsUpgrade = slices.ContainsFunc(steps, func(step upgradeStep) bool { return step.Pending > 0 })
+			}
+		}
+		func() {
+			defer s.ingestMu.Unlock()
+			defer end()
+			s.indexTargets(ctx, run.ID, targets)
+		}()
+		completed := slices.ContainsFunc(s.indexRuns(), func(indexed SyncRun) bool { return indexed.ID == run.ID && indexed.State == "complete" })
+		if needsUpgrade && completed && lifecycleCtx.Err() == nil {
+			if err := s.Catalog.RunUpgrade(lifecycleCtx, nil); err != nil && lifecycleCtx.Err() == nil {
+				fmt.Fprintf(os.Stderr, "Library upgrade after indexing: %v\n", err)
+			}
+		}
 	})
 	if !started {
 		// A stop began after this request was admitted.

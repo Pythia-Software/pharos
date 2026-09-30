@@ -5,7 +5,7 @@
 // sources onto the library (POST /api/capture), which is quick, so the drive
 // can be ejected, and offers to index them now (POST /api/index); indexing can
 // also run later, on any Mac. Settings → Sources keeps the source discovery
-// action with Capture and Index. A Mac already set up is offered, once, the
+// actions beside Update library. A Mac already set up is offered, once, the
 // folders of sources a newer Pharos reads that its file has not decided on
 // (new_sources in /api/probe/status).
 (() => {

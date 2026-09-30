@@ -150,8 +150,16 @@
 
   // ---- library status (header chip and panel)
   let status = null, statusError = null, statusTimer = null, statusRequest = null;
-  let recentIndex = null, indexStatusRequest = null;
+  let recentIndex = null, indexStatusRequest = null, upgradeStatus = null;
   const listeners = new Set();
+  window.addEventListener('pharos:upgrade-status', event => {
+    const runningChanged = Boolean(upgradeStatus?.running) !== Boolean(event.detail.running);
+    upgradeStatus = event.detail;
+    renderHeaderAction();
+    renderChip();
+    renderPanel();
+    if (runningChanged) refreshStatus();
+  });
   const driveName = () => status?.drive?.name || 'the drive';
   // A run the user stopped is not a failure: what it wrote is kept and the next
   // run resumes it. Only the "interrupted:" error of the source it cut short is
@@ -210,7 +218,7 @@
 
   let controls = null, chip = null, headerSync = null, headerCaptureIndexRunning = false, panel = null, panelMode = 'drive', ejectState = null;
   let driveSpace = null, driveSpaceRequest = null, driveSpaceError = false;
-  // The drive chip and Capture and Index share one combo button (ui.py's
+  // The drive chip and Update library share one combo button (ui.py's
   // .combo-button) at the start of the header icons.
   function ensureControls() {
     if (controls?.isConnected) return controls;
@@ -244,8 +252,8 @@
     headerSync = node('button', 'combo-icon header-sync');
     headerSync.id = 'headerSync';
     headerSync.type = 'button';
-    headerSync.title = 'Capture and Index';
-    headerSync.setAttribute('aria-label', 'Capture and Index');
+    headerSync.title = 'Update library';
+    headerSync.setAttribute('aria-label', 'Update library');
     const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
     icon.setAttribute('class', 'app-icon');
@@ -263,12 +271,44 @@
     const action = ensureHeaderAction();
     if (!action) return;
     const active = status?.activities?.some(activity => ['capture', 'capture-other', 'sync', 'index'].includes(activity.kind));
-    action.disabled = headerCaptureIndexRunning || Boolean(hostsBusy) || Boolean(active);
+    action.disabled = headerCaptureIndexRunning || Boolean(hostsBusy) || Boolean(active) || Boolean(upgradeStatus?.running);
     action.setAttribute('aria-busy', String(headerCaptureIndexRunning));
   }
 
+  let updateProgressFloor = 0;
+  function libraryUpdate(activities) {
+    const recent = recentIndex?.state === 'complete' && Date.now() - new Date(recentIndex.completed_at).getTime() < 300_000;
+    const indexFollowUp = recent && activities.find(activity => activity.kind === 'git'
+      && activity.detail?.includes('after the last index')
+      && new Date(activity.started_at).getTime() >= new Date(recentIndex.started_at).getTime());
+    const updating = activities.filter(activity => ['capture', 'sync', 'index'].includes(activity.kind)
+      || activity.label === 'Upgrading the library'
+      || (upgradeStatus?.running && upgradeStatus.step === 'tools' && activity.label === 'Building the Tools ledger')
+      || (indexFollowUp && (activity === indexFollowUp || activity.label === 'Updating findings')));
+    if (!updating.length) {
+      updateProgressFloor = 0;
+      return null;
+    }
+    const capturing = updating.find(activity => activity.kind === 'capture');
+    const indexing = updating.find(activity => activity.kind === 'sync' || activity.kind === 'index');
+    const upgrade = upgradeStatus?.running;
+    const step = upgradeStatus?.steps?.find(item => item.id === upgradeStatus.step);
+    let progress = null;
+    if (capturing?.progress != null) progress = capturing.progress * 0.15;
+    else if (indexing?.progress != null) progress = 0.15 + indexing.progress * (upgradeStatus?.needed || upgrade ? 0.55 : 0.7);
+    else if (upgrade && upgradeStatus.overall_progress != null) progress = recent
+      ? 0.75 + upgradeStatus.overall_progress * 0.24 : upgradeStatus.overall_progress;
+    else if (!indexing && recent) progress = upgradeStatus?.needed ? 0.7 : 0.85;
+    if (progress != null) {
+      updateProgressFloor = Math.max(updateProgressFloor, progress);
+      progress = updateProgressFloor;
+    }
+    const label = capturing ? 'Capturing sources' : indexing ? 'Indexing conversations' : upgrade ? (step?.label || 'Upgrading the library') : 'Finishing the library update';
+    return {updating, indexing, label, progress};
+  }
+
   function activitySummary(activity) {
-    const verb = {sync: 'Indexing', index: 'Indexing', capture: 'Capturing', 'capture-other': 'Capturing', backup: 'Backing up', git: 'Checking Git', maintenance: 'Updating'}[activity.kind] || activity.label;
+    const verb = {sync: 'Indexing', index: 'Indexing', capture: 'Capturing', 'capture-other': 'Capturing', backup: 'Backing up'}[activity.kind] || activity.label;
     return activity.progress ? `${verb} ${Math.round(activity.progress * 100)}%` : verb;
   }
 
@@ -290,7 +330,11 @@
       const activities = status.activities || [];
       if (activities.length) dot.classList.add('busy');
       else if (indexFailed(recentIndex)) dot.classList.add('warn');
-      state = activities.length ? activities.map(activitySummary).join(', ') : indexFailed(recentIndex) ? `Last index ${recentIndex.state === 'interrupted' ? 'interrupted' : 'failed'}` : 'Nothing running';
+      const update = libraryUpdate(activities);
+      state = activities.length ? [update && `${update.label}${update.progress == null ? '' : ` ${Math.round(update.progress * 100)}%`}`,
+        ...activities.filter(activity => !update?.updating.includes(activity)).map(activitySummary)].filter(Boolean).join(', ')
+        : headerCaptureIndexRunning && upgradeStatus?.needed ? 'Preparing library upgrade'
+          : upgradeStatus?.needed ? 'Library update available' : indexFailed(recentIndex) ? `Last index ${recentIndex.state === 'interrupted' ? 'interrupted' : 'failed'}` : 'Nothing running';
     }
     target.replaceChildren(dot, name);
     if (status && !(status.activities || []).length && indexFailed(recentIndex)) {
@@ -369,18 +413,30 @@
 
     panel.append(node('h3', '', 'Running now'));
     const activities = status.activities || [];
-    if (!activities.length) panel.append(node('p', 'pharos-sub', 'Nothing is running.'));
-    activities.forEach(activity => {
+    const update = libraryUpdate(activities);
+    if (!activities.length) panel.append(node('p', 'pharos-sub', headerCaptureIndexRunning && upgradeStatus?.needed
+      ? 'Preparing the library upgrade…' : upgradeStatus?.needed ? 'A library update is available. Use Update library in the header to run it.' : 'Nothing is running.'));
+    if (update) {
+      const item = node('div', 'pharos-activity'), head = node('div', 'pharos-activity-head');
+      head.append(node('span', '', 'Updating library'));
+      if (update.indexing?.stoppable) head.append(stopButton(update.indexing.stopping));
+      item.append(head, node('div', 'pharos-sub', update.label), progressBar(update.progress));
+      panel.append(item);
+    }
+    activities.filter(activity => !update?.updating.includes(activity)).forEach(activity => {
       const item = node('div', 'pharos-activity'), head = node('div', 'pharos-activity-head');
       head.append(node('span', 'pharos-dot busy'), node('span', '', activity.label));
       if (activity.stoppable) head.append(stopButton(activity.stopping));
       item.append(head);
       if (activity.detail) item.append(node('div', 'pharos-sub', activity.detail));
-      if (activity.kind !== 'maintenance' && activity.kind !== 'capture-other') item.append(progressBar(activity.progress));
+      if (activity.kind !== 'capture-other' && (activity.kind !== 'maintenance' || activity.progress != null)) item.append(progressBar(activity.progress));
       panel.append(item);
     });
+    if (upgradeStatus?.needed || upgradeStatus?.running) {
+      panel.append(button('Update details', '', () => window.pharosUpgrade?.open()));
+    }
 
-    if (recentIndex) {
+    if (recentIndex && !update) {
       const last = node('div', 'pharos-last-index');
       last.append(node('h3', '', 'Last index this session'));
       const failed = indexFailed(recentIndex);
@@ -617,7 +673,7 @@
     return box;
   }
 
-  async function startCapture() {
+  async function startCapture(quiet = false) {
     hostsBusy = 'capture';
     hostsError = null;
     renderHosts();
@@ -627,7 +683,7 @@
         hostsData.capture = {...hostsData.capture, run: update, active: update.state === 'running'};
         renderHosts();
       });
-      toast(run?.state === 'complete' ? `Captured ${size(run.bytes_copied)}` : 'The capture finished with errors');
+      if (!quiet || run?.state !== 'complete') toast(run?.state === 'complete' ? `Captured ${size(run.bytes_copied)}` : 'The capture finished with errors');
       return run;
     } catch (error) {
       hostsError = error.status === 409 ? 'A capture is already running.' : error.message;
@@ -638,7 +694,7 @@
     }
   }
 
-  async function startIndex(body, label) {
+  async function startIndex(body, label, quiet = false) {
     hostsBusy = 'index';
     hostsError = null;
     renderHosts();
@@ -648,10 +704,11 @@
         hostsData.index = {...hostsData.index, run: update, active: update.state === 'running'};
         renderHosts();
       });
-      toast(run?.state === 'complete' ? indexRunSummary(run)
+      if (!quiet || run?.state !== 'complete') toast(run?.state === 'complete' ? indexRunSummary(run)
         : indexStopped(run) ? `Indexing ${label} stopped; what it wrote is kept, and the next index resumes it${indexErrors(run).length ? `. It also hit errors: ${indexErrors(run)[0]}` : ''}`
         : `Indexing ${label} ${run?.state === 'interrupted' ? 'was interrupted' : 'finished with errors'}`);
       window.loadSources?.();
+      return run;
     } catch (error) {
       hostsError = error.status === 409 ? 'Source indexing is already running; try again when it finishes.' : error.message;
       toast(hostsError);
@@ -666,14 +723,27 @@
     headerCaptureIndexRunning = true;
     renderHeaderAction();
     try {
+      await window.pharosUpgrade?.refresh();
+      if (upgradeStatus?.running) return;
       const sources = await call('/api/sources');
-      if (!sources.enabled) {
+      let upgradeScheduled = false;
+      if (sources.enabled) {
+        const capture = await startCapture(true);
+        if (capture?.state === 'complete') {
+          const indexed = await startIndex({all_hosts: true, only_needed: true, auto_upgrade: true}, 'captured files', true);
+          upgradeScheduled = Boolean(indexed);
+        }
+      } else if (!upgradeStatus?.needed) {
         toast('No enabled sources on this Mac. Open Settings → Sources to enable one.');
-        return;
       }
-      const capture = await startCapture();
-      if (capture?.state !== 'complete') return;
-      await startIndex({all_hosts: true, only_needed: true}, 'captured files');
+      if (upgradeScheduled) {
+        for (let attempt = 0; attempt < 8; attempt++) {
+          await window.pharosUpgrade?.refresh();
+          if (upgradeStatus?.running || !upgradeStatus?.needed) break;
+          await sleep(250);
+        }
+      }
+      else await window.pharosUpgrade?.start();
     } catch (error) {
       toast(error.message);
     } finally {

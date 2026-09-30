@@ -421,11 +421,14 @@ copied into `archive.toml` by hand.
 Settings → Sources keeps three actions together: **Find sources on this Mac**
 configures local sources, **Capture this Mac** copies enabled sources into the
 library, and **Index captured files** indexes captures from every Mac. The
-header button beside the library disk runs **Capture and Index** in that order.
+header button beside the library disk runs **Update library**: capture, index,
+and any pending library upgrade in that order.
 The enable switch sits in each source card's header. Below the cards, **Macs and
 captures** shows when each source was captured and indexed, and what still
 needs indexing. The API can still target one host or source with `POST
-/api/index` using `{"host": …}` or `{"sources": […]}`.
+/api/index` using `{"host": …}` or `{"sources": […]}`. Passing
+`"auto_upgrade": true` continues with pending library upgrade work after a
+successful index, even if the browser closes.
 
 ## Running from an external drive
 
