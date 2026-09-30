@@ -131,7 +131,7 @@ func (s *Server) getQueryTable(w http.ResponseWriter, r *http.Request, dataset, 
 		}
 	}
 	if table, ok := sqlDatasetFor(dataset); ok {
-		if err := s.Catalog.currentToolRollup(r.Context()); err != nil {
+		if err := s.Catalog.prepareSQLDataset(r.Context(), dataset); err != nil {
 			writeError(w, err, http.StatusInternalServerError)
 			return
 		}
@@ -173,7 +173,7 @@ func (s *Server) getFieldStats(w http.ResponseWriter, r *http.Request, dataset s
 	}
 	var result map[string]querytable.FieldStat
 	if table, ok := sqlDatasetFor(dataset); ok {
-		if err := s.Catalog.currentToolRollup(r.Context()); err != nil {
+		if err := s.Catalog.prepareSQLDataset(r.Context(), dataset); err != nil {
 			writeError(w, err, http.StatusInternalServerError)
 			return
 		}
@@ -301,10 +301,21 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 	}
 }
 
+// prepareSQLDataset brings the derived table an SQL dataset reads up to date:
+// the tool rollup for tool use, and for user messages, a classification that
+// is missing or by older rules (see ensureAuthorship).
+func (c *Catalog) prepareSQLDataset(ctx context.Context, dataset string) error {
+	if dataset == "writing_messages" {
+		c.ensureAuthorship()
+		return nil
+	}
+	return c.currentToolRollup(ctx)
+}
+
 // postSQLQueryTable answers row and aggregation requests for SQL-backed
 // datasets, which filter, sort, page, and group in SQLite.
 func (s *Server) postSQLQueryTable(w http.ResponseWriter, r *http.Request, dataset, operation string, table sqlDataset, schema querytable.Schema, decoder *json.Decoder) {
-	if err := s.Catalog.currentToolRollup(r.Context()); err != nil {
+	if err := s.Catalog.prepareSQLDataset(r.Context(), dataset); err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -331,11 +342,15 @@ func (s *Server) postSQLQueryTable(w http.ResponseWriter, r *http.Request, datas
 			writeError(w, err, http.StatusBadRequest)
 			return
 		}
-		if dataset == "tool_calls" {
-			if err := s.Catalog.priceToolCalls(result.Rows); err != nil {
-				writeError(w, err, http.StatusInternalServerError)
-				return
-			}
+		switch dataset {
+		case "tool_calls":
+			err = s.Catalog.priceToolCalls(result.Rows)
+		case "writing_messages":
+			err = s.Catalog.attachAuthoredText(r.Context(), result.Rows)
+		}
+		if err != nil {
+			writeError(w, err, http.StatusInternalServerError)
+			return
 		}
 		writeJSON(w, result, http.StatusOK)
 	case "aggregations":

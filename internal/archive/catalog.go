@@ -198,6 +198,11 @@ func (c *Catalog) Initialize() error {
 		{"message_authorship", "attachment_words", "ALTER TABLE message_authorship ADD COLUMN attachment_words INTEGER NOT NULL DEFAULT 0"},
 		{"message_authorship", "quoted_words", "ALTER TABLE message_authorship ADD COLUMN quoted_words INTEGER NOT NULL DEFAULT 0"},
 		{"message_authorship", "resent_words", "ALTER TABLE message_authorship ADD COLUMN resent_words INTEGER NOT NULL DEFAULT 0"},
+		{"message_authorship", "work_id", "ALTER TABLE message_authorship ADD COLUMN work_id TEXT"},
+		{"message_authorship", "words", "ALTER TABLE message_authorship ADD COLUMN words INTEGER NOT NULL DEFAULT 0"},
+		{"message_authorship", "main_category", "ALTER TABLE message_authorship ADD COLUMN main_category TEXT"},
+		{"message_authorship", "categories", "ALTER TABLE message_authorship ADD COLUMN categories TEXT"},
+		{"message_authorship", "rules", "ALTER TABLE message_authorship ADD COLUMN rules TEXT"},
 		{"conversations", "model", "ALTER TABLE conversations ADD COLUMN model TEXT"},
 		{"conversations", "agent_depth", "ALTER TABLE conversations ADD COLUMN agent_depth INTEGER NOT NULL DEFAULT 0"},
 		{"conversations", "agent_path", "ALTER TABLE conversations ADD COLUMN agent_path TEXT"},
@@ -246,6 +251,7 @@ func (c *Catalog) Initialize() error {
 		"CREATE INDEX IF NOT EXISTS repositories_normalized_remote_idx ON repositories(normalized_remote)",
 		"CREATE INDEX IF NOT EXISTS repositories_root_commit_idx ON repositories(root_commit)",
 		"CREATE INDEX IF NOT EXISTS repositories_forge_id_idx ON repositories(forge_id)",
+		"CREATE INDEX IF NOT EXISTS message_authorship_work_idx ON message_authorship(work_id)",
 	} {
 		if _, err := c.DB.Exec(index); err != nil {
 			return err

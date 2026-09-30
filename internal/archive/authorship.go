@@ -24,7 +24,7 @@ import (
 // docs/human-authorship.md.
 
 // authorshipVersion names the classification rules; a new version rebuilds.
-const authorshipVersion = "authorship-v5"
+const authorshipVersion = "authorship-v6"
 
 const (
 	// authorshipWindow bounds how far back agent output is looked for. Your
@@ -97,6 +97,36 @@ type authorSpan struct {
 	// a quoted or resent span matches.
 	Source  string `json:"source,omitempty"`
 	Message string `json:"message,omitempty"`
+}
+
+// Rules name what claimed a span without its particulars (how long ago,
+// how many sessions), so spans and messages can be filtered and grouped by
+// them. Most reasons are already fixed text and are their own rule.
+const ruleTyped = "No other rule matched"
+
+var ruleReasons = []struct{ prefix, suffix, rule string }{
+	{"Launched with ", " by a command", "Launched by a command"},
+	{"Sent by automation ", "", "Sent by automation"},
+	{"Repeated prompt: ", "", "Repeated prompt"},
+	{"Matches agent output from ", " earlier", "Matches recent agent output"},
+	{"Already sent ", " earlier", "Already sent earlier"},
+	{"Sent ", ", faster than typing", "Sent faster than typing"},
+}
+
+// spanRule returns the rule that claimed span.
+func spanRule(span authorSpan) string {
+	if span.Reason == "" {
+		if span.Category == spanTyped {
+			return ruleTyped
+		}
+		return span.Category
+	}
+	for _, pattern := range ruleReasons {
+		if strings.HasPrefix(span.Reason, pattern.prefix) && strings.HasSuffix(span.Reason, pattern.suffix) {
+			return pattern.rule
+		}
+	}
+	return span.Reason
 }
 
 // authorshipState tracks the in-process rebuild.
@@ -951,6 +981,58 @@ func countSpans(text string, spans []authorSpan) authorshipCounts {
 	return counts
 }
 
+// spanSummary is what a message's spans hold: the category with the most
+// words, and JSON arrays of the categories and rules holding any text, most
+// words first.
+type spanSummary struct{ main, categories, rules string }
+
+func summarizeSpans(text string, spans []authorSpan) spanSummary {
+	type weight struct {
+		name         string
+		words, chars int
+	}
+	tally := func(key func(authorSpan) string) []weight {
+		weights := []weight{}
+		index := map[string]int{}
+		for _, span := range spans {
+			value := text[span.Start:span.End]
+			chars := utf8.RuneCountInString(strings.TrimSpace(value))
+			if chars == 0 {
+				continue
+			}
+			name := key(span)
+			if _, ok := index[name]; !ok {
+				index[name] = len(weights)
+				weights = append(weights, weight{name: name})
+			}
+			entry := &weights[index[name]]
+			entry.words += len(strings.Fields(value))
+			entry.chars += chars
+		}
+		sort.SliceStable(weights, func(i, j int) bool {
+			if weights[i].words != weights[j].words {
+				return weights[i].words > weights[j].words
+			}
+			return weights[i].chars > weights[j].chars
+		})
+		return weights
+	}
+	names := func(weights []weight) string {
+		list := make([]string, len(weights))
+		for index, entry := range weights {
+			list[index] = entry.name
+		}
+		encoded, _ := json.Marshal(list)
+		return string(encoded)
+	}
+	categories := tally(func(span authorSpan) string { return span.Category })
+	summary := spanSummary{categories: names(categories), rules: names(tally(spanRule))}
+	if len(categories) > 0 {
+		summary.main = categories[0].name
+	}
+	return summary
+}
+
 // authorshipGenerations returns the generation message_authorship should be
 // built for and the one it was built for. The tool ledger generation advances
 // whenever a conversation is re-ingested or identity links change, which is
@@ -1221,27 +1303,51 @@ func (c *Catalog) storeAuthorship(ctx context.Context, results []authorResult, l
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM message_authorship"); err != nil {
+	for _, table := range []string{"message_authorship", "message_authorship_spans"} {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
+			return err
+		}
+	}
+	// Launches are in place, so works folded into another can be found.
+	parents, _, err := foldedParents(ctx, tx)
+	if err != nil {
 		return err
 	}
 	columns := append([]string{"message_id", "conversation_id", "workspace_id", "sent_at", "day", "total_chars"}, authorshipColumns()...)
-	columns = append(columns, "spans_json")
+	columns = append(columns, "spans_json", "work_id", "words", "main_category", "categories", "rules")
 	statement, err := tx.PrepareContext(ctx, "INSERT INTO message_authorship("+strings.Join(columns, ",")+") VALUES("+placeholders(len(columns))+")")
 	if err != nil {
 		return err
 	}
 	defer statement.Close()
+	spanStatement, err := tx.PrepareContext(ctx, `INSERT INTO message_authorship_spans(message_id,position,category,rule,reason,start_byte,end_byte,chars,words,
+		source_conversation_id,source_message_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
+	if err != nil {
+		return err
+	}
+	defer spanStatement.Close()
 	for _, result := range results {
 		input := result.Input
 		counts := countSpans(input.Text, result.Spans)
 		spans, _ := json.Marshal(result.Spans)
 		values := []any{input.ID, input.ConversationID, input.WorkspaceID, formatTime(input.SentAt), input.SentAt.Local().Format("2006-01-02"),
 			utf8.RuneCountInString(strings.TrimSpace(input.Text))}
+		words := 0
 		for _, category := range authorshipCategories {
 			values = append(values, counts.chars[category], counts.words[category])
+			words += counts.words[category]
 		}
-		if _, err := statement.ExecContext(ctx, append(values, string(spans))...); err != nil {
+		summary := summarizeSpans(input.Text, result.Spans)
+		values = append(values, string(spans), rootWorkspace(input.WorkspaceID, parents), words, nilIfEmpty(summary.main), summary.categories, summary.rules)
+		if _, err := statement.ExecContext(ctx, values...); err != nil {
 			return err
+		}
+		for position, span := range result.Spans {
+			value := input.Text[span.Start:span.End]
+			if _, err := spanStatement.ExecContext(ctx, input.ID, position, span.Category, spanRule(span), nilIfEmpty(span.Reason), span.Start, span.End,
+				utf8.RuneCountInString(strings.TrimSpace(value)), len(strings.Fields(value)), nilIfEmpty(span.Source), nilIfEmpty(span.Message)); err != nil {
+				return err
+			}
 		}
 	}
 	for key, value := range map[string]string{"authorship_generation": generation, "authorship_built_at": now()} {
