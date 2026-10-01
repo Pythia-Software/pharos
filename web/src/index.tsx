@@ -7,6 +7,10 @@ import "@pythia-software/query-table-ui/theme.css";
 import "./pharos.css";
 import { libraryStorageAdapter } from "./storage";
 import { preferences } from "./preferences";
+import { foldSeries, rollingAverageBuckets, validRollingPeriods, type ChartBucket, type ChartSeries } from "./chart-series";
+import { ChartLegendChip } from "./chart-legend-chip";
+import { isSliceTerm, readSlice, updateSlice, withSlice, type LegendAction, type SliceSelection } from "./chart-selection";
+import { UsageChartColorsProvider, useUsageChartPalette, useUsageTableRenderers } from "./usage-chart-colors";
 import libraryDocument from "../../schemas/library.schema.json";
 import usageDocument from "../../schemas/usage.schema.json";
 import writingDocument from "../../schemas/writing.schema.json";
@@ -309,6 +313,7 @@ const metricRenderers: RenderRegistry<Row> = {
 // filters apply; onFind hears how it went.
 function QuerySurface({ dataset, libraryView = "table", messageView = "table", find = "", onFind, trailing, header, selectable = false }: { dataset: Dataset; selectable?: boolean; libraryView?: LibraryView; messageView?: MessageView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode }) {
   const schema = schemas[dataset];
+  const tableRenderers = useUsageTableRenderers(renderers);
   const onFindRef = useRef(onFind);
   onFindRef.current = onFind;
   const transport = useMemo(() => shared ? undefined : makeTransport(dataset, find, value => onFindRef.current?.(value)), [dataset, find]);
@@ -384,7 +389,7 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
       rows={api.rows}
       query={api.query}
       onQueryChange={api.setQuery}
-      renderers={renderers}
+      renderers={tableRenderers}
       rowId={api.rowId}
       columnDrag={api.columnDrag}
       total={api.total}
@@ -607,7 +612,7 @@ function LibraryPage() {
 type ChartPeriod = "day" | "week" | "month";
 type ChartRange = "30d" | "90d" | "6m" | "1y";
 type TokenSplit = "type" | "provider" | "model_family" | "repository_name" | "session_kind";
-type TokenChartView = { metric: "tokens" | "cost" | "percent"; split: TokenSplit; period: ChartPeriod };
+type TokenChartView = { metric: "tokens" | "cost" | "percent"; split: TokenSplit; period: ChartPeriod; rollingPeriods: number };
 // A preset either fills the metric panels or sets the chart above them.
 type UsagePreset = { label: string; title: string; aggregations?: AggregationClause[]; chart?: Partial<TokenChartView>; orderBy?: OrderByClause[] };
 const sum = (field: string, groupBy: string[], label: string): AggregationClause => ({ id: `${field}:${groupBy.join(",")}`, op: "sum", field, groupBy, label });
@@ -748,10 +753,6 @@ function RefreshPricesButton() {
 const chartPeriods: Record<ChartPeriod, { unit: string }> = { day: { unit: "day" }, week: { unit: "week" }, month: { unit: "month" } };
 const chartRanges: Array<[ChartRange, string]> = [["30d", "30 days"], ["90d", "90 days"], ["6m", "6 months"], ["1y", "1 year"]];
 const periodOptions: Array<[ChartPeriod, string]> = [["day", "Day"], ["week", "Week"], ["month", "Month"]];
-// value, on a series the key can filter to, is what it filters to.
-type ChartSeries = { key: string; label: string; color: string; value?: string; hiddenCount?: number };
-// parts lists what a folded series (Other) holds in this bucket.
-type ChartBucket = { key: string; date: Date; values: Record<string, number>; parts?: Record<string, Array<[string, number]>>; detail?: string };
 const pad2 = (value: number) => String(value).padStart(2, "0");
 const localDay = (date: Date) => `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
 
@@ -903,66 +904,10 @@ function RangeControl({ bounds, onChange }: { bounds: TimeBounds; onChange: (fro
   </div>;
 }
 
-// A key filters the table to rows with its value; null stands for rows with
-// none. Several values are one OR group.
-type SliceValue = string | null;
-const sliceClause = (clause: WhereClause, field: string) => clause.field === field && !clause.negated && (clause.op === "=" || clause.op === "is_null");
-function isSliceTerm(term: WhereTerm, field: string): boolean {
-  return isOrGroup(term) ? term.any.length > 0 && term.any.every(clause => sliceClause(clause, field)) : sliceClause(term, field);
-}
-
-function sliceValues(where: WhereTerm[], field: string): SliceValue[] {
-  const term = where.find(item => isSliceTerm(item, field));
-  return term ? predicatesOf(term).map(clause => clause.op === "is_null" ? null : clause.value) : [];
-}
-
-function withSlice(where: WhereTerm[], field: string, values: SliceValue[]): WhereTerm[] {
-  const kept = where.filter(term => !isSliceTerm(term, field));
-  const clauses: WhereClause[] = values.map(value => value === null ? { field, op: "is_null", value: "" } : { field, op: "=", value });
-  if (clauses.length === 1) kept.push(clauses[0]);
-  else if (clauses.length) kept.push({ any: clauses });
-  return kept;
-}
-
-// Clicking a key shows only it, or everything again when it was alone;
-// ⌘-, Ctrl-, or Shift-clicking adds it or takes it away.
-function nextSlice<T>(current: T[], value: T, additive: boolean): T[] {
-  const has = current.includes(value);
-  if (additive) return has ? current.filter(item => item !== value) : [...current, value];
-  return has && current.length === 1 ? [] : [value];
-}
-
 // Charts change their table's filters through this.
 type FilterChange = (change: (where: WhereTerm[]) => WhereTerm[]) => void;
 function filterChange(api: QueryTableApi<Row>): FilterChange {
   return change => api.setQuery(previous => ({ ...previous, where: change(previous.where), offset: 0 }));
-}
-
-// foldSeries adds (bucket, value, amount) rows to their buckets as series.
-// Fixed values keep one color each whatever the filters; otherwise the five
-// largest in view get their own series, as does any selected value, and the
-// rest fold into Other. Expanding Other raises the limit five at a time.
-function foldSeries(rows: Array<[string, string, number]>, byKey: Map<string, ChartBucket>, label: (name: string) => string, fixed: string[] | undefined, selected: string[], limit = 5): ChartSeries[] {
-  const inView = rows.filter(([key]) => byKey.has(key)), totals = new Map<string, number>();
-  for (const [, name, value] of inView) totals.set(name, (totals.get(name) ?? 0) + value);
-  const shown = fixed ? [...fixed.filter(name => totals.get(name)), ...[...totals.keys()].filter(name => !fixed.includes(name) && totals.get(name))]
-    : [...totals.entries()].filter(([, value]) => value > 0).sort((left, right) => right[1] - left[1]).map(([name]) => name);
-  const top = shown.slice(0, limit);
-  // A selected value keeps its key, so it can be cleared, even with nothing in view.
-  for (const name of selected) if (!top.includes(name)) top.push(name);
-  const rest = shown.filter(name => !top.includes(name));
-  const color = (name: string, index: number) => splitColors[(fixed ? fixed.indexOf(name) : index)] ?? splitColors[index % splitColors.length];
-  const series: ChartSeries[] = top.map((name, index) => ({ key: `s:${name}`, label: label(name), color: color(name, index), value: name }));
-  if (rest.length) series.push({ key: "other", label: `Other (${rest.length})`, color: "var(--muted)", hiddenCount: rest.length });
-  for (const [bucketKey, name, value] of inView) {
-    const target = byKey.get(bucketKey)!, key = top.includes(name) ? `s:${name}` : "other";
-    target.values[key] = (target.values[key] ?? 0) + value;
-    if (key !== "other" || value <= 0) continue;
-    const parts = ((target.parts ??= {}).other ??= []), part = parts.find(([item]) => item === label(name));
-    if (part) part[1] += value;
-    else parts.push([label(name), value]);
-  }
-  return series;
 }
 
 // niceTicks places two or three gridlines at round values up to peak.
@@ -1048,16 +993,27 @@ function Segmented<T extends string>({ label, value, options, onChange }: { labe
   </div>;
 }
 
+function RollingControl({ value, period, onChange }: { value: number; period: ChartPeriod; onChange: (next: number) => void }) {
+  const unit = chartPeriods[period].unit;
+  return <label className="usage-presets usage-rolling-control">
+    <span className="usage-preset-label">Rolling</span>
+    <select aria-label="Rolling periods" value={value} title="Trailing average including the current period. Empty periods count as zero; the start of the range uses available periods only." onChange={event => onChange(Number(event.target.value))}>
+      <option value={0}>0 — Off</option>
+      {Array.from({ length: 10 }, (_, index) => index + 1).map(count => <option key={count} value={count}>{count} {unit}{count > 1 ? "s" : ""}</option>)}
+    </select>
+  </label>;
+}
+
 // A single series needs no legend unless the title does not name it (a split
 // that happens to hold one value). Hovering a column shows a key of the series
 // it holds, largest first, with what a folded series contains.
 // With onSelect, clicking a key selects its series: only selected series are
 // drawn and the rest stay in the key, dimmed. With onRange, dragging across
 // columns (or clicking or pressing Enter on one) picks a time range.
-function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, format, tickFormat = format, noun, loading, error, legend = false, selected = [], percent = false, onSelect, onExpand, onRange }: {
+function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, rollingPeriods = 0, format, tickFormat = format, noun, loading, error, legend = false, selected = [], excluded = false, percent = false, onSelect, onExpand, onRange }: {
   title: string; controls: React.ReactNode; series: ChartSeries[]; buckets: ChartBucket[]; period: ChartPeriod;
   format: (value: number) => string; tickFormat?: (value: number) => string; noun: string; loading: boolean; error: string; legend?: boolean;
-  selected?: string[]; percent?: boolean; onSelect?: (key: string | null, additive: boolean) => void; onExpand?: () => void; onRange?: (first: ChartBucket, last: ChartBucket) => void;
+  selected?: string[]; excluded?: boolean; percent?: boolean; rollingPeriods?: number; onSelect?: (key: string | null, action: LegendAction) => void; onExpand?: () => void; onRange?: (first: ChartBucket, last: ChartBucket) => void;
 }) {
   const root = useRef<HTMLDivElement>(null), tipRef = useRef<HTMLDivElement>(null), bars = useRef<HTMLDivElement>(null);
   const [tip, setTip] = useState<{ bucket: ChartBucket; x: number; width: number; top: number } | null>(null);
@@ -1065,18 +1021,22 @@ function StackedColumns({ title, controls, series, buckets: sourceBuckets, perio
   // Pointer events can outrun rendering, so the handlers read the drag from a ref.
   const dragRef = useRef(drag);
   const moveDrag = (next: typeof drag) => { dragRef.current = next; setDrag(next); };
-  const drawn = selected.length ? series.filter(item => selected.includes(item.key)) : series;
-  const buckets = percent ? sourceBuckets.map(bucket => {
+  const drawn = selected.length ? series.filter(item => excluded ? !selected.includes(item.key) : selected.includes(item.key)) : series;
+  const averagedBuckets = useMemo(() => rollingAverageBuckets(sourceBuckets, rollingPeriods), [sourceBuckets, rollingPeriods]);
+  useEffect(() => setTip(null), [rollingPeriods]);
+  const buckets = percent ? averagedBuckets.map(bucket => {
     const total = drawn.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0);
     const values = Object.fromEntries(drawn.map(item => [item.key, total ? 100 * (bucket.values[item.key] ?? 0) / total : 0]));
     const parts = Object.fromEntries(Object.entries(bucket.parts ?? {}).map(([key, entries]) => [key, entries.map(([name, value]) => [name, total ? 100 * value / total : 0] as [string, number])]));
     return { ...bucket, values, parts };
-  }) : sourceBuckets;
+  }) : averagedBuckets;
   const total = (bucket: ChartBucket) => drawn.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0);
   const { y, ticks, split } = percent ? { y: (value: number) => value, ticks: [25, 50, 75, 100], split: undefined } : columnScale(buckets.map(total));
   const unit = chartPeriods[period].unit, stacked = drawn.length > 1;
+  const averageLabel = rollingPeriods > 1 ? `${rollingPeriods}-${unit} rolling average` : "";
+  const chartLabel = averageLabel ? `${title}; ${averageLabel}` : title;
   const label = (date: Date) => period === "month" ? date.toLocaleDateString(undefined, { month: "short", year: "numeric" }) : date.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(period === "day" && buckets.length > 120 ? { year: "2-digit" } : {}) });
-  const heading = (bucket: ChartBucket) => `${period === "week" ? "Week of " : ""}${label(bucket.date)}`;
+  const heading = (bucket: ChartBucket) => `${period === "week" ? "Week of " : ""}${label(bucket.date)}${averageLabel ? ` · ${bucket.windowSize ?? rollingPeriods}-${unit} average` : ""}`;
   const suffix = noun ? ` ${noun}` : "";
   const present = (bucket: ChartBucket) => drawn.filter(item => (bucket.values[item.key] ?? 0) > 0).sort((left, right) => bucket.values[right.key] - bucket.values[left.key]);
   const describe = (bucket: ChartBucket) => `${heading(bucket)}: `
@@ -1129,25 +1089,27 @@ function StackedColumns({ title, controls, series, buckets: sourceBuckets, perio
   const middle = buckets[Math.floor(buckets.length / 2)], last = buckets[buckets.length - 1];
   const selectable = (item: ChartSeries) => Boolean(onSelect) && item.value !== undefined;
   return <div className="usage-chart" ref={root}>
-    <div className="usage-chart-head"><h3>{title}</h3><div className="usage-chart-controls">{controls}</div></div>
+    <div className="usage-chart-head"><h3>{title}{averageLabel ? <span className="usage-chart-average-label"> {averageLabel}</span> : null}</h3><div className="usage-chart-controls">{controls}</div></div>
     {series.length > 1 || legend || onRange ? <div className="usage-chart-legend">
-      {series.length > 1 || legend ? series.map(item => {
-        const on = selected.includes(item.key), dimmed = selected.length > 0 && !on;
-        const content = <><span className="usage-swatch" style={{ background: item.color }} />{item.label}{on && selected.length === 1 ? <span className="usage-legend-x" aria-hidden="true">×</span> : null}</>;
-        return item.hiddenCount && onExpand ? <button key={item.key} type="button" className="usage-legend-item" title={`Show next ${Math.min(5, item.hiddenCount)} values`} onClick={onExpand}>{content}</button>
-          : selectable(item) ? <button key={item.key} type="button" className={`usage-legend-item${dimmed ? " dimmed" : ""}`} aria-pressed={on}
-          title={on && selected.length === 1 ? "Clear this filter" : `Show only ${item.label}; ⌘-click to ${on ? "remove it" : "add it"}`}
-          onClick={event => onSelect!(item.key, event.metaKey || event.ctrlKey || event.shiftKey)}>{content}</button>
-          : <span key={item.key} className={`usage-legend-item${dimmed ? " dimmed" : ""}`}>{content}</span>;
+      {series.length > 1 || legend ? [...new Set(series.map(item => item.group))].map(group => {
+        const items = series.filter(item => item.group === group).map(item => {
+          const on = selected.length > 0 && (excluded ? !selected.includes(item.key) : selected.includes(item.key)), dimmed = selected.length > 0 && !on;
+          const content = <><span className="usage-swatch" style={{ background: item.color }} />{item.label}</>;
+          return item.hiddenCount && onExpand ? <button key={item.key} type="button" className="usage-legend-item" title={`Show next ${Math.min(5, item.hiddenCount)} values`} onClick={onExpand}>{content}</button>
+            : selectable(item) ? <ChartLegendChip key={item.key} item={item} active={on} dimmed={dimmed} selectionActive={selected.length > 0} soleSelection={on && !excluded && selected.length === 1} onAction={action => onSelect!(item.key, action)} />
+            : <span key={item.key} className={`usage-legend-item${dimmed ? " dimmed" : ""}`}>{content}</span>;
+        });
+        return group ? <div key={group} className="usage-legend-group" role="group" aria-label={group}><span className="usage-legend-provider">{group}</span>{items}</div>
+          : <React.Fragment key="ungrouped">{items}</React.Fragment>;
       }) : null}
-      {selected.length > 1 ? <button type="button" className="usage-legend-item usage-legend-clear" onClick={() => onSelect?.(null, false)}>Clear</button> : null}
-      {onRange ? <span className="usage-chart-hint">{series.some(selectable) ? "Click a key to filter · drag" : "Drag"} across columns to filter dates</span> : null}
+      {selected.length > 0 ? <button type="button" className="usage-legend-item usage-legend-clear" onClick={() => onSelect?.(null, "clear")}>Show all</button> : null}
+      {onRange ? <span className="usage-chart-hint">{series.some(selectable) ? "Click a key for filter options · drag" : "Drag"} across columns to filter dates</span> : null}
     </div> : null}
     {error ? <p className="query-table-error">{error}</p> : null}
     <div className={`usage-chart-plot${split ? " broken" : ""}`}>
       {split ? <div className="usage-chart-log" aria-hidden="true"><span>log scale</span></div> : null}
       {ticks.map(tick => <div key={tick} className="usage-chart-grid" style={{ bottom: `${y(tick)}%` }} aria-hidden="true"><span>{tickFormat(tick)}</span></div>)}
-      <div ref={bars} className={`usage-chart-bars ${density} ${loading ? "loading" : ""} ${onRange ? "pickable" : ""}`} role="list" aria-busy={loading} aria-label={split ? `${title}; linear up to ${tickFormat(split)}, logarithmic above` : title} {...picking}>
+      <div ref={bars} className={`usage-chart-bars ${density} ${loading ? "loading" : ""} ${onRange ? "pickable" : ""}`} role="list" aria-busy={loading} aria-label={split ? `${chartLabel}; linear up to ${tickFormat(split)}, logarithmic above` : chartLabel} {...picking}>
         {buckets.map((bucket, index) => {
           // Each segment spans the heights of its stack's running totals, so a
           // stack crossing the break is split at the same value as the axis.
@@ -1236,14 +1198,13 @@ const tokenTypes: ChartSeries[] = [
   { key: "output_tokens", label: "Output", color: "var(--heat-2)" },
   { key: "unclassified_tokens", label: "Unclassified", color: "var(--muted)" },
 ];
-const splitColors = ["var(--heat-2)", "var(--gold)", "var(--heat-0)", "var(--heat-3)", "var(--heat-1)"];
 const tokenSplits: Array<[TokenSplit, string]> = [["type", "Token type"], ["provider", "Provider"], ["model_family", "Model"], ["repository_name", "Repository"], ["session_kind", "Agent"]];
 // Providers and agent kinds keep one color each whatever the filters; models
 // and repositories show the five largest in view and fold the rest into Other.
-const fixedSplitOrder: Partial<Record<TokenSplit, string[]>> = { provider: ["claude", "codex", "tl1", "chatgpt", "canonical"], session_kind: ["root", "subagent"] };
+const fixedSplitOrder: Partial<Record<TokenSplit, string[]>> = { provider: ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"], session_kind: ["root", "subagent"] };
 const sessionKindLabels: Record<string, string> = { root: "Root agent", subagent: "Sub-agent" };
 const tokenChartKey = "pharos-usage-chart";
-const defaultTokenChart: TokenChartView = { metric: "tokens", split: "type", period: "week" };
+const defaultTokenChart: TokenChartView = { metric: "tokens", split: "type", period: "week", rollingPeriods: 0 };
 const costTick = (value: number) => Math.abs(value) >= 1e4 ? `$${compactNumber(value)}` : `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 
 function splitLabel(split: TokenSplit, value: unknown): string {
@@ -1272,11 +1233,12 @@ function pickRange(onFilter: FilterChange, fields: TimeFields, period: ChartPeri
 function TokenChart({ where, onFilter, view, onChange }: { where: WhereTerm[]; onFilter: FilterChange; view: TokenChartView; onChange: (next: Partial<TokenChartView>) => void }) {
   const split: TokenSplit = view.metric === "cost" && view.split === "type" ? "provider" : view.split;
   const measure = view.metric === "cost" ? "cost_usd" : "total_tokens";
-  const [types, setTypes] = useState<string[]>([]);
+  const [types, setTypes] = useState<SliceSelection<string>>({ values: [], excluded: false });
   const [seriesLimit, setSeriesLimit] = useState(5);
   useEffect(() => setSeriesLimit(5), [split]);
   const sliced = split !== "type";
-  const chosen = sliced ? sliceValues(where, split).map(value => value ?? "") : types;
+  const selection = sliced ? readSlice(where, split) : types;
+  const chosen = selection.values.map(value => value ?? "");
   const chartWhere = sliced ? where.filter(term => !isSliceTerm(term, split)) : where;
   const aggregations = useMemo(() => split === "type"
     ? tokenTypes.map(type => sum(type.key, [view.period], type.label))
@@ -1296,13 +1258,14 @@ function TokenChart({ where, onFilter, view, onChange }: { where: WhereTerm[]; o
       return { series: tokenTypes.filter(type => type.key !== "unclassified_tokens" || buckets.some(bucket => bucket.values[type.key])).map(type => ({ ...type, value: type.key })), buckets };
     }
     const rows = (result.metrics[0]?.buckets ?? []).map(bucket => [String(bucket.keys[0]), String(bucket.keys[1] ?? ""), Number(bucket.value) || 0] as [string, string, number]);
-    return { series: foldSeries(rows, byKey, name => splitLabel(split, name), fixedSplitOrder[split], chosen, seriesLimit), buckets };
+    return { series: foldSeries(rows, byKey, name => splitLabel(split, name), fixedSplitOrder[split], chosen, seriesLimit, split), buckets };
   }, [result.metrics, split, view.period, bounds.from?.getTime(), bounds.to?.getTime(), chosen.join("\u0000"), seriesLimit]);
+  useUsageChartPalette(sliced ? split : null, series);
   const selected = series.filter(item => item.value !== undefined && chosen.includes(item.value)).map(item => item.key);
-  function select(key: string | null, additive: boolean) {
+  function select(key: string | null, action: LegendAction) {
     const value = key === null ? undefined : series.find(item => item.key === key)?.value;
-    if (!sliced) setTypes(current => value === undefined ? [] : nextSlice(current, value, additive));
-    else onFilter(current => withSlice(current, split, value === undefined ? [] : nextSlice(sliceValues(current, split), value || null, additive)));
+    if (!sliced) setTypes(current => updateSlice(current, value ?? "", action));
+    else onFilter(current => withSlice(current, split, updateSlice(readSlice(current, split), value || null, action)));
   }
   const unit = chartPeriods[view.period].unit, splitName = tokenSplits.find(([value]) => value === split)?.[1].toLowerCase() ?? split;
   const title = `${view.metric === "cost" ? "API cost" : view.metric === "percent" ? "Token share" : "Tokens"} per ${unit} by ${splitName}`;
@@ -1310,13 +1273,14 @@ function TokenChart({ where, onFilter, view, onChange }: { where: WhereTerm[]; o
     <Segmented label="Show" value={view.metric} options={[["tokens", "Tokens"], ["cost", "Cost"], ["percent", "%"]]} onChange={metric => onChange({ metric })} />
     <Segmented label="Split" value={split} options={tokenSplits.map(([value, text]) => [value, text, value === "type" && view.metric === "cost" ? "Cost is priced per request, not per token type" : undefined])} onChange={next => onChange({ split: next })} />
     <Segmented label="By" value={view.period} options={periodOptions} onChange={period => onChange({ period })} />
+    <RollingControl value={view.rollingPeriods} period={view.period} onChange={rollingPeriods => onChange({ rollingPeriods })} />
     <RangeControl bounds={bounds} onChange={from => onFilter(current => withTimeRange(current, usageTime, from))} />
   </>;
-  return <StackedColumns title={title} controls={controls} series={series.length ? series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={buckets} period={view.period}
+  return <StackedColumns title={title} controls={controls} series={series.length ? series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={buckets} period={view.period} rollingPeriods={view.rollingPeriods}
     format={view.metric === "cost" ? formatUSD : view.metric === "percent" ? value => `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })}%` : compactNumber}
     tickFormat={view.metric === "cost" ? costTick : view.metric === "percent" ? value => `${value}%` : compactNumber}
     noun={view.metric === "tokens" ? "tokens" : ""} loading={result.loading} error={result.error} legend={series.length > 0} percent={view.metric === "percent"}
-    selected={selected} onSelect={select} onExpand={() => setSeriesLimit(limit => limit + 5)} onRange={pickRange(onFilter, usageTime, view.period, period => onChange({ period }))} />;
+    selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => setSeriesLimit(limit => limit + 5)} onRange={pickRange(onFilter, usageTime, view.period, period => onChange({ period }))} />;
 }
 
 function PresetRow({ label, presets, onApply, clear }: { label: string; presets: UsagePreset[]; onApply: (preset: UsagePreset | null) => void; clear?: boolean }) {
@@ -1329,7 +1293,7 @@ function PresetRow({ label, presets, onApply, clear }: { label: string; presets:
 
 function TokenUsage() {
   const [chart, setChart] = useState<TokenChartView>(() => readStored(tokenChartKey, defaultTokenChart, view =>
-    ["tokens", "cost", "percent"].includes(view.metric) && tokenSplits.some(([value]) => value === view.split) && view.period in chartPeriods));
+    ["tokens", "cost", "percent"].includes(view.metric) && tokenSplits.some(([value]) => value === view.split) && view.period in chartPeriods && validRollingPeriods(view.rollingPeriods)));
   const update = (next: Partial<TokenChartView>) => setChart(previous => { const merged = { ...previous, ...next }; store(tokenChartKey, merged); return merged; });
   function apply(preset: UsagePreset | null) {
     if (preset?.chart) {
@@ -1451,15 +1415,16 @@ function useWritingSeries(body: object | null, reload: number) {
 // a row field, the key filters the table as on the tokens chart; the input
 // kinds are not rows, so clicking one only narrows the chart.
 function WritingPanel({ where, onFilter, status, reload }: { where: WhereTerm[]; onFilter: FilterChange; status: AuthorshipStatus | null; reload: number }) {
-  const [view, setView] = useState(() => readStored(writingViewKey, { period: "week" as ChartPeriod, scope: "typed" as "typed" | "all", split: "kind" as WritingSplit }, value => value.period in chartPeriods && ["typed", "all"].includes(value.scope) && writingSplits.some(([option]) => option === value.split)));
+  const [view, setView] = useState(() => readStored(writingViewKey, { period: "week" as ChartPeriod, scope: "typed" as "typed" | "all", split: "kind" as WritingSplit, rollingPeriods: 0 }, value => value.period in chartPeriods && ["typed", "all"].includes(value.scope) && writingSplits.some(([option]) => option === value.split) && validRollingPeriods(value.rollingPeriods)));
   const update = (next: Partial<typeof view>) => setView(previous => { const merged = { ...previous, ...next }; store(writingViewKey, merged); return merged; });
-  const [kinds, setKinds] = useState<string[]>([]);
+  const [kinds, setKinds] = useState<SliceSelection<string>>({ values: [], excluded: false });
   const [seriesLimit, setSeriesLimit] = useState(5);
   const bounds = timeBounds(where, writingTime);
   const window = { from: bounds.from ? localDay(bounds.from) : undefined, to: bounds.to ? localDay(new Date(bounds.to.getTime() - 1)) : undefined };
   const split = view.split === "kind" ? null : view.split;
   useEffect(() => setSeriesLimit(5), [split]);
-  const chosen = split ? sliceValues(where, split).map(value => value ?? "") : kinds;
+  const selection = split ? readSlice(where, split) : kinds;
+  const chosen = selection.values.map(value => value ?? "");
   const chartWhere = split ? where.filter(term => !isSliceTerm(term, split)) : where;
   // Without a key filter, one request answers both the totals and the chart.
   const separate = chartWhere.length !== where.length;
@@ -1481,13 +1446,14 @@ function WritingPanel({ where, onFilter, status, reload }: { where: WhereTerm[];
     for (const bucket of buckets) bucket.detail = `${(messages.get(bucket.key) ?? 0).toLocaleString()} messages with typed text`;
     if (!split) return { chartSeries: groups.map(group => ({ key: group.key, label: group.label, color: group.color, value: group.key })), buckets };
     const rows = (chartData.series?.split ?? []).map(entry => [bucketOf(entry.day), entry.value ?? "", Number(view.scope === "typed" ? entry.typed_words : entry.words) || 0] as [string, string, number]);
-    return { chartSeries: foldSeries(rows, byKey, name => writingSplitLabel(split, name), undefined, chosen, seriesLimit), buckets };
+    return { chartSeries: foldSeries(rows, byKey, name => writingSplitLabel(split, name), undefined, chosen, seriesLimit, `writing:${split}`), buckets };
   }, [series, chartData.series, split, view.scope, view.period, bounds.from?.getTime(), bounds.to?.getTime(), chosen.join("\u0000"), seriesLimit]);
+  useUsageChartPalette(split, chartSeries);
   const selected = chartSeries.filter(item => item.value !== undefined && chosen.includes(item.value)).map(item => item.key);
-  function select(key: string | null, additive: boolean) {
+  function select(key: string | null, action: LegendAction) {
     const value = key === null ? undefined : chartSeries.find(item => item.key === key)?.value;
-    if (!split) setKinds(current => value === undefined ? [] : nextSlice(current, value, additive));
-    else onFilter(current => withSlice(current, split, value === undefined ? [] : nextSlice(sliceValues(current, split), value || null, additive)));
+    if (!split) setKinds(current => updateSlice(current, value ?? "", action));
+    else onFilter(current => withSlice(current, split, updateSlice(readSlice(current, split), value || null, action)));
   }
   const typed = Number(totals.typed_words) || 0, pasted = Number(totals.pasted_words) || 0, typedMessages = Number(totals.typed_messages) || 0;
   const since = localDay(new Date(Date.now() - 29 * 86_400_000));
@@ -1513,11 +1479,12 @@ function WritingPanel({ where, onFilter, status, reload }: { where: WhereTerm[];
         <Segmented label="Show" value={view.scope} options={[["typed", "Typed"], ["all", "All input"]]} onChange={scope => update({ scope })} />
         <Segmented label="Split" value={view.split} options={writingSplits} onChange={next => update({ split: next })} />
         <Segmented label="By" value={view.period} options={periodOptions} onChange={period => update({ period })} />
+        <RollingControl value={view.rollingPeriods} period={view.period} onChange={rollingPeriods => update({ rollingPeriods })} />
         <RangeControl bounds={bounds} onChange={from => onFilter(current => withTimeRange(current, writingTime, from))} />
       </>}
-      series={chartSeries} buckets={buckets} period={view.period} legend={Boolean(split) && chartSeries.length > 0}
+      series={chartSeries} buckets={buckets} period={view.period} rollingPeriods={view.rollingPeriods} legend={Boolean(split) && chartSeries.length > 0}
       format={value => value.toLocaleString()} tickFormat={compactNumber} noun="words" loading={chartData.loading} error={chartData.error}
-      selected={selected} onSelect={select} onExpand={() => setSeriesLimit(limit => limit + 5)} onRange={pickRange(onFilter, writingTime, view.period, period => update({ period }))} />
+      selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => setSeriesLimit(limit => limit + 5)} onRange={pickRange(onFilter, writingTime, view.period, period => update({ period }))} />
     <div className="writing-mix">
       <h3>Where user-turn text came from</h3>
       {!allChars ? <p className="muted">{data.loading ? "Loading…" : "No classified user messages match these filters."}</p> : <>
@@ -1629,7 +1596,7 @@ function UsagePage() {
     if (next !== "writing") { updateURI("writing", ""); updateURI("messages", ""); }
   }
   const statusText = !status ? "" : status.error ? `Last update failed: ${status.error}` : status.running ? "Updating…" : status.built_at ? `Updated ${new Date(status.built_at).toLocaleString()}` : "Waiting to build";
-  return <div className="pharos-query-page usage-page">
+  return <UsageChartColorsProvider><div className="pharos-query-page usage-page">
     <div className="view-heading library-heading usage-heading">
       <div><h1>Usage</h1><p className="muted">{view === "tokens"
         ? "Reconciled tokens per agent session, day, and model. Input includes cached input; filter to any provider, model, or repository and the chart follows. Cost is the API list-price equivalent on the day of use, at standard rates. It ignores long-context premiums and subscriptions, so treat it as a lower bound. ≈ marks costs priced by assumption."
@@ -1646,7 +1613,7 @@ function UsagePage() {
       </div>
     </div>
     {view === "tokens" ? <TokenUsage /> : view === "writing" ? <WritingUsage onStatus={setStatus} /> : <CarbonImpact />}
-  </div>;
+  </div></UsageChartColorsProvider>;
 }
 
 type MCPStatus = { enabled: boolean; transport: string; command: string; args: string[]; install_location?: string; note: string; skill?: { name: string; text: string; paths?: Record<string, string> } };
