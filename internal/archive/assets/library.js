@@ -1,8 +1,6 @@
 // Pharos library, drive and captures. GET /api/library/status says what holds
-// or writes the library and how to disconnect its drive; the header shows it,
-// with Eject. Eject goes through the app (the pharosLibrary message handler),
-// which releases the library before it ejects the drive; in a plain browser
-// the page says how to eject in Finder instead. Settings → Sources shows
+// or writes the library; the header shows it and estimated completion times.
+// Settings → Sources shows
 // captures from other Macs alongside this Mac's sources; Settings →
 // Health gains the drive's checks and backups.
 (() => {
@@ -29,6 +27,9 @@
 .pharos-sub{color:var(--muted,#666);overflow-wrap:anywhere}
 .pharos-activity{padding:8px 0;border-bottom:1px solid var(--line,#ccc)}
 .pharos-activity:last-child{border-bottom:0}
+.pharos-activity-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.pharos-activity-info{flex:1;min-width:0}
+.pharos-activity-timing{flex:none;text-align:right;font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums}
 .pharos-activity-head{display:flex;align-items:center;gap:8px;font-weight:650}
 .pharos-activity-head .pharos-button{margin-left:auto;font-weight:400}
 .pharos-activity .pharos-sub{margin-top:2px}
@@ -40,8 +41,6 @@
 .pharos-bar.indeterminate>span{width:35%;animation:pharos-slide 1.6s ease-in-out infinite}
 @keyframes pharos-slide{from{margin-left:-35%}to{margin-left:100%}}
 @media(prefers-reduced-motion:reduce){.pharos-bar.indeterminate>span{animation:none;width:100%;opacity:.5}}
-.pharos-advice{padding:10px 12px;border-radius:10px;background:color-mix(in srgb,var(--bg,#eee) 70%,transparent)}
-.pharos-advice.unsafe{background:color-mix(in srgb,var(--warn,#98601d) 12%,transparent)}
 .pharos-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:12px}
 .pharos-row .pharos-note{flex:1 1 100%}
 .pharos-button{border:1px solid var(--line,#ccc);background:var(--panel,#fff);color:var(--ink,#222)}
@@ -135,6 +134,23 @@
     bar.append(fill);
     return bar;
   };
+  const completionEstimate = (activities, currentStep = false) => {
+    const timing = node('div', 'pharos-sub pharos-activity-timing');
+    const starts = activities.map(activity => new Date(activity.started_at).getTime()).filter(Number.isFinite);
+    const elapsed = starts.length ? Math.max(0, Math.floor((Date.now() - Math.min(...starts)) / 60_000)) : null;
+    timing.append(node('div', '', elapsed == null ? 'Started unknown' : `Started ${elapsed}m ago`));
+    const estimates = activities.map(activity => new Date(activity.estimated_completion_at).getTime());
+    if (!estimates.length || estimates.some(value => !Number.isFinite(value))) {
+      timing.append(node('div', '', 'Estimated complete unknown'));
+      timing.title = 'Completion estimate unavailable — not enough past data.';
+      return timing;
+    }
+    const completion = Math.max(...estimates), remaining = completion - Date.now();
+    timing.append(node('div', '', remaining <= 0 ? 'Estimated complete overdue' : `Estimated complete in ${Math.ceil(remaining / 60_000)}m`));
+    timing.title = remaining <= 0 ? 'Taking longer than past runs — still running.'
+      : `${currentStep ? 'Current step estimate. ' : ''}Based on the median duration of the last 10 successful runs on this Mac.`;
+    return timing;
+  };
   const copy = async text => {
     try {
       if (typeof window.pharosCopyText === 'function') await window.pharosCopyText(text);
@@ -147,8 +163,6 @@
     line.append(node('code', '', text), button('Copy', '', () => copy(text)));
     return line;
   };
-  const shellWord = value => /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
-  const nativeLibrary = () => window.webkit?.messageHandlers?.pharosLibrary;
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   // ---- library status (header chip and panel)
@@ -219,7 +233,7 @@
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshStatus(); });
 
-  let controls = null, chip = null, headerSync = null, headerCaptureIndexRunning = false, panel = null, panelMode = 'drive', ejectState = null;
+  let controls = null, chip = null, headerSync = null, headerCaptureIndexRunning = false, panel = null, panelMode = 'drive';
   let driveSpace = null, driveSpaceRequest = null, driveSpaceError = false;
   // The drive chip and Update library share one combo button (ui.py's
   // .combo-button) at the start of the header icons.
@@ -385,7 +399,6 @@
   function closePanel() {
     panel?.remove();
     panel = null;
-    ejectState = null;
     chip?.setAttribute('aria-expanded', 'false');
   }
   document.addEventListener('mousedown', event => {
@@ -424,18 +437,22 @@
     if (!activities.length) panel.append(node('p', 'pharos-sub', headerCaptureIndexRunning && upgradeStatus?.needed
       ? 'Preparing the library upgrade…' : upgradeStatus?.needed ? 'A library update is available. Use Update library in the header to run it.' : 'Nothing is running.'));
     if (update) {
-      const item = node('div', 'pharos-activity'), head = node('div', 'pharos-activity-head');
+      const item = node('div', 'pharos-activity'), row = node('div', 'pharos-activity-row'), info = node('div', 'pharos-activity-info'), head = node('div', 'pharos-activity-head');
       head.append(node('span', '', 'Updating library'));
       if (update.indexing?.stoppable) head.append(stopButton(update.indexing.stopping));
-      item.append(head, node('div', 'pharos-sub', update.label), progressBar(update.progress));
+      info.append(head, node('div', 'pharos-sub', update.label));
+      row.append(info, completionEstimate(update.updating, true));
+      item.append(row, progressBar(update.progress));
       panel.append(item);
     }
     activities.filter(activity => !update?.updating.includes(activity)).forEach(activity => {
-      const item = node('div', 'pharos-activity'), head = node('div', 'pharos-activity-head');
+      const item = node('div', 'pharos-activity'), row = node('div', 'pharos-activity-row'), info = node('div', 'pharos-activity-info'), head = node('div', 'pharos-activity-head');
       head.append(node('span', 'pharos-dot busy'), node('span', '', activity.label));
       if (activity.stoppable) head.append(stopButton(activity.stopping));
-      item.append(head);
-      if (activity.detail) item.append(node('div', 'pharos-sub', activity.detail));
+      info.append(head);
+      if (activity.detail) info.append(node('div', 'pharos-sub', activity.detail));
+      row.append(info, completionEstimate([activity]));
+      item.append(row);
       if (activity.kind !== 'capture-other' && (activity.kind !== 'maintenance' || activity.progress != null)) item.append(progressBar(activity.progress));
       panel.append(item);
     });
@@ -455,66 +472,7 @@
       panel.append(last);
     }
 
-    if (panelMode === 'activity') { placePanel(); return; }
-    const unplug = status.unplug || {};
-    if (unplug.action === 'eject') {
-      panel.append(node('h3', '', 'Disconnecting'));
-      panel.append(node('p', 'pharos-advice' + (unplug.without_eject === 'unsafe' ? ' unsafe' : ''), unplug.summary));
-      panel.append(ejectControls(drive, activities));
-    } else if (unplug.summary) {
-      panel.append(node('p', 'pharos-sub', unplug.summary));
-    }
     placePanel();
-  }
-
-  function ejectControls(drive, activities) {
-    const row = node('div', 'pharos-row');
-    row.id = 'pharosEject';
-    if (!nativeLibrary()) {
-      // A plain browser has no way to eject: say how.
-      const note = node('div', 'pharos-note');
-      note.append(node('p', '', `Eject ${drive.name} in Finder: click ⏏ beside it in the sidebar. Or in Terminal:`),
-        codeLine(`diskutil eject ${shellWord(drive.mount_point)}`));
-      row.append(note);
-      return row;
-    }
-    if (ejectState?.phase === 'confirm') {
-      const stopping = activities.filter(activity => activity.kind !== 'capture-other').map(activity => activity.label);
-      const other = activities.some(activity => activity.kind === 'capture-other');
-      const note = node('p', 'pharos-note', stopping.length ? `Ejecting stops ${stopping.join(', ')} at a safe point; ${stopping.length === 1 ? 'it resumes' : 'each resumes'} the next time it runs.` : '');
-      row.append(note);
-      if (other) row.append(node('p', 'pharos-note pharos-warn', 'Pharos cannot stop a capture by another process; the drive stays busy until it finishes.'));
-      row.append(button(`Stop and eject ${drive.name}`, 'primary', () => eject(drive)), button('Cancel', '', () => { ejectState = null; renderPanel(); }));
-      row.append(quitNote(drive));
-      return row;
-    }
-    const eject_ = button(ejectState?.phase === 'ejecting' ? ejectState.message : `Eject ${drive.name}`, 'primary', () => {
-      if (activities.length) { ejectState = {phase: 'confirm'}; renderPanel(); } else eject(drive);
-    });
-    eject_.id = 'pharosEjectButton';
-    eject_.disabled = ejectState?.phase === 'ejecting';
-    row.append(eject_);
-    if (ejectState?.phase === 'error') row.append(node('p', 'pharos-note pharos-error', ejectState.message));
-    if (ejectState?.phase !== 'ejecting') row.append(quitNote(drive));
-    return row;
-  }
-
-  // Pharos runs from the drive, as do the MCP servers agents start from it.
-  const quitNote = drive => node('p', 'pharos-note', `Ejecting quits Pharos and stops agents' Pharos MCP servers on this Mac; reconnect them once ${drive.name} is back.`);
-
-  async function eject(drive) {
-    const handler = nativeLibrary();
-    if (!handler) return;
-    ejectState = {phase: 'ejecting', message: 'Releasing the library…'};
-    renderPanel();
-    try {
-      await handler.postMessage({action: 'eject'});
-      // The app now quits, and the drive ejects once it has.
-      ejectState = {phase: 'ejecting', message: `Quitting to eject ${drive.name}…`};
-    } catch (error) {
-      ejectState = {phase: 'error', message: error?.message || String(error)};
-    }
-    renderPanel();
   }
 
   // ---- runs, shared with onboarding. An index is watched through

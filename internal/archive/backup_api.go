@@ -127,6 +127,9 @@ func (s *Server) startBackup(w http.ResponseWriter, body map[string]any) {
 				run.Errors = append(run.Errors, captureError{Error: fmt.Sprintf("backup stopped: %v", value)})
 			}
 			s.backups.update(run, true)
+			if run.State == "complete" {
+				s.recordActivityDuration("backup", run.StartedAt, firstString(run.CompletedAt))
+			}
 		}()
 		run = job.Run(ctx, func(progress BackupRun) { s.backups.update(progress, false) })
 	})

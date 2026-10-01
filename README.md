@@ -191,12 +191,12 @@ tools are read-only, and one switch turns them off for every client.
 ### 8. Unplug safely
 
 The drive badge in the header shows what Pharos is doing with the library right
-now. Use its **Eject** button instead of pulling the drive: Pharos stops its own
-work at a safe point, closes the library, and then ejects, or tells you why it
-can't.
+now, with estimated completion times based on recent successful runs. Quit
+Pharos before ejecting the drive in Finder instead of pulling it: Pharos stops
+its own work at a safe point and closes the library.
 
 <p align="center">
-  <img src="docs/images/drive-panel.png" alt="The drive panel: indexing sources and updating the Library view, with an explanation and an Eject button" width="480">
+  <img src="docs/images/drive-panel.png" alt="The library drive panel" width="480">
 </p>
 
 For everything else (the CLI, the HTTP API, configuration keys, code signing,

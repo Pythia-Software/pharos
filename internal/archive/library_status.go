@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 )
 
 // GET /api/library/status is the one answer to "what holds or writes the
@@ -31,8 +32,9 @@ type libraryActivity struct {
 	Label  string `json:"label"`
 	Detail string `json:"detail,omitempty"`
 	// Progress is between 0 and 1 when it can be estimated.
-	Progress  *float64 `json:"progress"`
-	StartedAt string   `json:"started_at,omitempty"`
+	Progress              *float64 `json:"progress"`
+	StartedAt             string   `json:"started_at,omitempty"`
+	EstimatedCompletionAt string   `json:"estimated_completion_at,omitempty"`
 	// Writes is true for work that writes to the library's drive; a backup
 	// only reads it.
 	Writes bool `json:"writes"`
@@ -96,12 +98,15 @@ func (s *Server) refreshGitInBackground(backfill bool) {
 	s.tasks.addGit(1, reason)
 	started := s.spawn(func(ctx context.Context) {
 		defer s.tasks.addGit(-1, "")
+		startedAt := now()
+		completed := true
 		refresh, name := s.Catalog.refreshMainIntegrations, "refresh"
 		if backfill {
 			refresh, name = s.Catalog.backfillMainIntegrations, "backfill"
 		}
 		if err := refresh(ctx); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Git integration %s: %v\n", name, err)
+			completed = false
 		}
 		if backfill {
 			return
@@ -109,11 +114,14 @@ func (s *Server) refreshGitInBackground(backfill bool) {
 		// Rebuild the Tools rollup now rather than on the next page view.
 		if err := s.Catalog.ensureToolRollup(ctx); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Tool rollup: %v\n", err)
+			completed = false
 		}
 		// Then findings, from the fresh rollup: the full pass once a day,
 		// and between them only the findings being measured.
 		if err := s.Catalog.RefreshFindings(ctx, false); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Findings: %v\n", err)
+		} else if completed && ctx.Err() == nil {
+			s.recordActivityDuration("git", startedAt, now())
 		}
 	})
 	if !started {
@@ -343,6 +351,17 @@ func (s *Server) libraryStatus() map[string]any {
 	config := s.Config()
 	drive := libraryDriveOf(config)
 	activities := s.libraryActivities()
+	for index := range activities {
+		activity := &activities[index]
+		if activity.Kind == "git" && strings.Contains(activity.Detail, "first scan of this catalog") {
+			continue
+		}
+		if duration := s.activityDuration(activity.Kind); duration > 0 && activity.StartedAt != "" {
+			if started, err := time.Parse(time.RFC3339Nano, activity.StartedAt); err == nil {
+				activity.EstimatedCompletionAt = formatTime(started.Add(duration))
+			}
+		}
+	}
 	writing := slices.ContainsFunc(activities, func(activity libraryActivity) bool { return activity.Writes })
 	return map[string]any{
 		"portable": config.Library, "library_dir": libraryDir(config), "config_path": config.Path,
