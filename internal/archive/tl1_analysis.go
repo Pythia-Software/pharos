@@ -152,9 +152,110 @@ func (c *Catalog) TL1Overview(selection tl1Selection, window tl1Window) (map[str
 		"window": tl1WindowRow(data), "enqueues": tl1EnqueueRows(data, tl1EnqueueListLimit),
 		"totals": tl1Totals(data, candidates, human), "coverage": tl1Coverage(data), "matrix": matrix, "flavors": flavors,
 		"graph": tl1Graph(data), "errors": errors, "candidates": candidates, "human": human, "contract_repairs": contracts,
-		"reviews": reviews, "configuration_health": data.Health, "findings": c.tl1Findings(data),
+		"reviews": reviews, "followups": tl1Followups(data), "configuration_health": data.Health, "findings": c.tl1Findings(data),
 	}
 	return result, nil
+}
+
+// tl1Followups follows recorded parent links. A row counts a task handoff,
+// not an attempt; the final attempt identifies the model used at each step.
+// Findings are tied to the review task that recorded them. Only tasks in the
+// selected window and definition scope are counted at every step.
+func tl1Followups(data *tl1Data) map[string]any {
+	type nextKey struct{ fromFlavor, fromConfig, fromModel, toFlavor, toConfig, toModel, toClass, outcome string }
+	type afterKey struct {
+		nextKey
+		afterFlavor, afterClass, afterOutcome string
+	}
+	type counts struct{ paths, withFindings, findings int }
+	next := map[nextKey]*counts{}
+	after := map[afterKey]*counts{}
+	findings := map[string]int{}
+	for _, finding := range data.Findings {
+		findings[firstString(finding["review_task_id"])]++
+	}
+	humanActions := map[string]string{}
+	for _, touch := range data.Touches {
+		if firstString(touch["kind"]) == "response" {
+			if action := firstString(touch["action"]); action != "" {
+				humanActions[firstString(touch["task_id"])] = action
+			}
+		}
+	}
+	outcome := func(task *tl1Task) string {
+		if task.ExecutionClass == "human" && humanActions[task.ID] != "" {
+			return humanActions[task.ID]
+		}
+		return defaultString(nilIfEmpty(task.Outcome), defaultString(nilIfEmpty(task.ErrorClass), "Pending"))
+	}
+	final := func(task *tl1Task) *tl1Attempt {
+		if task == nil || len(task.Attempts) == 0 {
+			return nil
+		}
+		return task.Attempts[len(task.Attempts)-1]
+	}
+	config := func(task *tl1Task) (string, string) {
+		if attempt := final(task); attempt != nil {
+			return defaultString(nilIfEmpty(attempt.Configuration), "Unrecorded"), defaultString(nilIfEmpty(attempt.Model), "Unrecorded")
+		}
+		return "—", "—"
+	}
+	for _, task := range data.Tasks {
+		if task.Parent == nil || data.TaskByID[task.Parent.ID] == nil {
+			continue
+		}
+		parent := task.Parent
+		fromConfig, fromModel := config(parent)
+		toConfig, toModel := config(task)
+		key := nextKey{parent.Flavor, fromConfig, fromModel, task.Flavor, toConfig, toModel, task.ExecutionClass, outcome(task)}
+		if next[key] == nil {
+			next[key] = &counts{}
+		}
+		next[key].paths++
+		if n := findings[task.ID]; n > 0 {
+			next[key].withFindings++
+			next[key].findings += n
+		}
+		if parent.Parent == nil || data.TaskByID[parent.Parent.ID] == nil {
+			continue
+		}
+		grandparent := parent.Parent
+		originConfig, originModel := config(grandparent)
+		origin := nextKey{grandparent.Flavor, originConfig, originModel, parent.Flavor, fromConfig, fromModel, parent.ExecutionClass, outcome(parent)}
+		path := afterKey{origin, task.Flavor, task.ExecutionClass, outcome(task)}
+		if after[path] == nil {
+			after[path] = &counts{}
+		}
+		after[path].paths++
+		if n := findings[parent.ID]; n > 0 {
+			after[path].withFindings++
+			after[path].findings += n
+		}
+	}
+	nextRows := make([]map[string]any, 0, len(next))
+	for key, value := range next {
+		nextRows = append(nextRows, map[string]any{"from_flavor": key.fromFlavor, "from_configuration": key.fromConfig, "from_model": key.fromModel,
+			"next_flavor": key.toFlavor, "next_configuration": key.toConfig, "next_model": key.toModel, "next_class": key.toClass,
+			"next_outcome": key.outcome, "paths": value.paths, "with_findings": value.withFindings, "findings": value.findings})
+	}
+	afterRows := make([]map[string]any, 0, len(after))
+	for key, value := range after {
+		afterRows = append(afterRows, map[string]any{"from_flavor": key.fromFlavor, "from_configuration": key.fromConfig, "from_model": key.fromModel,
+			"next_flavor": key.toFlavor, "next_configuration": key.toConfig, "next_model": key.toModel, "next_class": key.toClass, "next_outcome": key.outcome,
+			"after_flavor": key.afterFlavor, "after_class": key.afterClass, "after_outcome": key.afterOutcome,
+			"paths": value.paths, "with_findings": value.withFindings, "findings": value.findings})
+	}
+	order := func(rows []map[string]any) {
+		sort.Slice(rows, func(i, j int) bool {
+			if rows[i]["paths"].(int) != rows[j]["paths"].(int) {
+				return rows[i]["paths"].(int) > rows[j]["paths"].(int)
+			}
+			return fmt.Sprint(rows[i]) < fmt.Sprint(rows[j])
+		})
+	}
+	order(nextRows)
+	order(afterRows)
+	return map[string]any{"next": nextRows, "after": afterRows}
 }
 
 func tl1Matrix(data *tl1Data) ([]map[string]any, map[string]*tl1Cell) {

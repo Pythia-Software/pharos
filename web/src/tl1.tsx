@@ -13,6 +13,7 @@ type Overview = {
   project?: string; installations: Row[]; since?: string | null; window?: Row; enqueues?: Row[];
   totals?: Row; coverage?: Row; matrix?: Row[]; flavors?: Row[]; graph?: { nodes: Row[]; edges: Row[] };
   errors?: Row[]; candidates?: Row; human?: Row; contract_repairs?: Row[]; reviews?: Row;
+  followups?: { next: Row[]; after: Row[] };
 };
 type Where = Array<{ field: string; op: string; value: unknown }>;
 type Props = { attempts: React.ReactNode; filterAttempts: (where: Where) => void; copy: (text: string) => Promise<void> };
@@ -101,6 +102,38 @@ const typing = (target: EventTarget | null) => target instanceof HTMLElement && 
   || (target instanceof HTMLInputElement && !["checkbox", "radio", "button"].includes(target.type)));
 
 const dispositionLabel: Record<string, string> = { advanced: "Advanced", escalated: "Escalated to human", error: "Error", retried: "Retried", open: "Open" };
+const tl1Pages = [
+  { path: "/tl1", label: "Overview", title: "Overview", description: "Spend, throughput, and workflow activity." },
+  { path: "/tl1/configurations", label: "Configurations", title: "Configurations", description: "Compare flavors and the agents that run them." },
+  { path: "/tl1/followups", label: "Follow-up outcomes", title: "Follow-up outcomes", description: "See what happened in the next action and the action after it." },
+  { path: "/tl1/quality", label: "Quality & review", title: "Quality & review", description: "Errors, human attention, and review findings." },
+  { path: "/tl1/runs", label: "Runs", title: "Runs", description: "Explore individual attempts and filter their metrics." },
+] as const;
+const tl1Path = () => tl1Pages.some(item => item.path === window.location.pathname) ? window.location.pathname : "/tl1";
+
+function Followups({ data, onFlavor }: { data?: Overview["followups"]; onFlavor: (name: string) => void }) {
+  const next = data?.next ?? [], after = data?.after ?? [];
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const sources = [...new Set(next.map(row => String(row.from_flavor)))].sort();
+  const successors = [...new Set(next.map(row => String(row.next_flavor)))].sort();
+  useEffect(() => { if (from && !sources.includes(from)) setFrom(""); if (to && !successors.includes(to)) setTo(""); }, [data, from, to]);
+  const matches = (row: Row) => (!from || row.from_flavor === from) && (!to || row.next_flavor === to);
+  const shownNext = next.filter(matches), shownAfter = after.filter(matches);
+  const agent = (flavor: string, configuration: string, model: string) => <><button type="button" className="tl1-link" onClick={() => onFlavor(flavor)}>{flavor}</button><small>{configuration === "—" ? "Human / procedural" : `${configuration} · ${model}`}</small></>;
+  return <>
+    <div className="tl1-followup-filters">
+      <label>From flavor <select value={from} onChange={event => setFrom(event.target.value)}><option value="">All flavors</option>{sources.map(name => <option key={name}>{name}</option>)}</select></label>
+      <label>Next flavor <select value={to} onChange={event => setTo(event.target.value)}><option value="">All flavors</option>{successors.map(name => <option key={name}>{name}</option>)}</select></label>
+    </div>
+    <Section id="followup-next" title="Next action" description="Each row counts direct parent → child handoffs. Agent names show the final attempt's configuration and model. Findings are linked to the child task; zero means none were recorded for that task.">
+      {shownNext.length ? <div className="tl1-table-wrap"><table className="tl1-table tl1-followup-table"><thead><tr><th>Starting action · agent</th><th>Next action · agent</th><th>Next result</th><th className="num">Handoffs</th><th className="num">With findings</th><th className="num">Findings</th></tr></thead><tbody>{shownNext.map((row, index) => <tr key={index}><td>{agent(row.from_flavor, row.from_configuration, row.from_model)}</td><td>{agent(row.next_flavor, row.next_configuration, row.next_model)}</td><td>{row.next_outcome}</td><td className="num">{count(row.paths)}</td><td className="num">{count(row.with_findings)} / {count(row.paths)}</td><td className="num">{count(row.findings)}</td></tr>)}</tbody></table></div> : <p className="muted">No matching handoffs in this window.</p>}
+    </Section>
+    <Section id="followup-after" title="One action later" description="Follow each starting action through two parent links. The final column shows the third task's recorded outcome, including human decisions such as remand when TL1 records them.">
+      {shownAfter.length ? <div className="tl1-table-wrap"><table className="tl1-table tl1-followup-table"><thead><tr><th>Starting action · agent</th><th>Next action · agent</th><th>Next result</th><th>Then</th><th>Then result</th><th className="num">Paths</th><th className="num">Next with findings</th></tr></thead><tbody>{shownAfter.map((row, index) => <tr key={index}><td>{agent(row.from_flavor, row.from_configuration, row.from_model)}</td><td>{agent(row.next_flavor, row.next_configuration, row.next_model)}</td><td>{row.next_outcome}</td><td>{agent(row.after_flavor, "—", "—")}</td><td>{row.after_outcome}</td><td className="num">{count(row.paths)}</td><td className="num">{count(row.with_findings)} / {count(row.paths)}</td></tr>)}</tbody></table></div> : <p className="muted">No matching two-step paths in this window.</p>}
+    </Section>
+  </>;
+}
 
 function CopyButton({ text, label, copy, primary }: { text: string; label: string; copy: Props["copy"]; primary?: boolean }) {
   const [state, setState] = useState<"" | "copied" | "failed">("");
@@ -174,13 +207,13 @@ function ConfigurationTable({ rows, onFlavor, showFlavor }: { rows: Row[]; onFla
       previous = row.flavor;
       return <tr key={index} className={`${row.low_sample ? "low-sample" : ""} ${first && showFlavor ? "group-start" : ""}`}>
         {showFlavor ? <td>{first ? <button type="button" className="tl1-link" onClick={() => onFlavor?.(row.flavor)}>{row.flavor}</button> : null}</td> : null}
-        <td>{row.configuration}{row.default ? <span className="tl1-chip" title="The flavor's default agent configuration">default</span> : null}{row.low_sample ? <span className="tl1-chip muted" title="Fewer than 10 runs; not compared">few runs</span> : null}</td>
+        <td>{row.configuration}</td>
         <td className="num">{count(row.attempts)}</td>
         <td><Meter value={row.advance_rate} title={`${row.advanced} of ${row.attempts} runs advanced the workflow`} /></td>
         <td><Meter value={row.escalation_rate} tone="warn" title={`${row.escalated} runs handed off to a human`} /></td>
         <td><Meter value={row.agent_error_rate} tone="bad" title={`${row.agent_errors} errors attributable to the run; ${row.infrastructure_errors} infrastructure errors excluded${row.top_errors?.length ? `. Most common: ${row.top_errors[0].key}` : ""}`} /></td>
         <td className="num">{usd(row.median_cost_usd)}</td>
-        <td className="num">{usd(row.cost_per_advance_usd)}{row.flag === "best_value" ? <span className="tl1-chip good">best value</span> : row.flag === "worst_value" ? <span className="tl1-chip bad">worst value</span> : null}</td>
+        <td className="num">{usd(row.cost_per_advance_usd)}</td>
         <td className="num">{duration(row.median_duration_ms)}</td>
         <td className="num">{compact(row.median_tokens)}</td>
         <td className="num">{pct(row.cache_read_share)}</td>
@@ -328,7 +361,15 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
   const [loading, setLoading] = useState(false);
   const [flavor, setFlavor] = useState("");
   const [candidate, setCandidate] = useState("");
+  const [page, setPage] = useState(tl1Path);
   const runsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const update = () => setPage(tl1Path());
+    window.addEventListener("pharos:route", update);
+    window.addEventListener("pharos:view", update);
+    return () => { window.removeEventListener("pharos:route", update); window.removeEventListener("pharos:view", update); };
+  }, []);
+  useEffect(() => { if (page !== "/tl1/runs" && document.querySelector("#tl1.active")) document.querySelector("main")?.scrollTo(0, 0); }, [page]);
 
   const loadInstallations = useCallback(async () => {
     try {
@@ -404,7 +445,8 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
 
   const showRuns = useCallback((filter: Row) => {
     filterAttempts([...Object.entries(filter).map(([field, value]) => ({ field, op: "=", value })), ...windowWhere(), ...projectWhere()]);
-    runsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.pharosNavigate?.("/tl1/runs");
+    window.requestAnimationFrame(() => runsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }, [filterAttempts, windowWhere, projectWhere]);
 
   if (!projects.length) return <div className="tl1-page"><div className="view-heading"><div><h1>TL1</h1><p className="muted">No TL1 installations are indexed. Enable the tl1 source in Settings and index it.</p></div></div></div>;
@@ -418,9 +460,10 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
   const candidates = overview?.candidates ?? {};
   const reviews = overview?.reviews ?? {};
 
+  const activePage = tl1Pages.find(item => item.path === page) ?? tl1Pages[0];
   return <div className="tl1-page">
     <div className="view-heading">
-      <div><h1>TL1</h1><p className="muted">How each flavor performs on each agent configuration: cost, time, tokens, errors, and human attention. Cost is the API list-price equivalent from transcripts.</p></div>
+      <div><h1>TL1</h1><p className="muted">Analyze flavor performance and the actions that follow each run. Cost is the API list-price equivalent from transcripts.</p></div>
     </div>
     <div className="tl1-controls" role="group" aria-label="TL1 filters">
       <label>Project <select value={selected} onChange={event => {
@@ -449,11 +492,16 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
     </div>
     <WindowControls value={timeWindow} onChange={setTimeWindow} enqueues={enqueues} resolved={overview?.window} />
     {error ? <div className="query-table-error" role="alert">{error}</div> : null}
+    <div className="tl1-layout">
+      <nav className="settings-nav tl1-nav" aria-label="TL1 pages"><span className="settings-nav-label">TL1 analysis</span>{tl1Pages.map(item => <a key={item.path} href={item.path} aria-current={page === item.path ? "page" : undefined} onClick={event => { if (event.metaKey || event.ctrlKey || event.shiftKey || event.button || !window.pharosNavigate) return; event.preventDefault(); window.pharosNavigate(item.path); }}>{item.label}</a>)}</nav>
+      <div className="tl1-content">
+      <div className="tl1-page-heading"><h2>{activePage.title}</h2><p className="muted">{activePage.description}</p></div>
     {overview ? <>
       <WindowSummary resolved={overview.window ?? {}} enqueues={enqueues} onFlavor={setFlavor} onCurrent={scope === "all" ? () => setScope("current") : undefined} />
       <p className="tl1-coverage muted" title={(coverage.by_executor ?? []).map((row: Row) => `${row.executor}: ${row.with_transcript}/${row.attempts} with transcript, ${row.priced_from_tokens} priced`).join("\n")}>
         Transcripts found for {pct(coverage.transcript_share)} of LLM runs; cost known for {pct(coverage.cost_share)}. {indexed(overview.installations)}.
       </p>
+      {page === "/tl1" ? <>
       <div className="tl1-tiles">
         <Tile label="Spend" value={usd(totals.cost_usd)} detail={`${count(totals.llm_attempts)} LLM runs · ${count(totals.procedural_attempts)} procedural`} />
         <Tile label="Per finished candidate" value={usd(totals.cost_per_finished_candidate_usd)} detail={`${count(totals.finished_candidates)} of ${count(totals.candidates)} finished`} />
@@ -464,11 +512,6 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
       </div>
 
       <p className="tl1-findings-link"><Icon name="info" /><span>Recommendations for TL1 flavors now live in <a href="/findings" onClick={event => { if (event.metaKey || event.ctrlKey || event.shiftKey || !window.pharosNavigate) return; event.preventDefault(); window.pharosNavigate("/findings"); }}>Findings</a>, where they're measured after you act on them.</span></p>
-
-      <Section id="matrix" title="Flavor × agent configuration" description="Advanced: moved the workflow on without error or a human. Agent errors exclude infrastructure failures. Cost per useful result is total spend divided by advanced runs; rows with fewer than 10 runs are not compared.">
-        {overview.matrix?.length ? <ConfigurationTable rows={overview.matrix} onFlavor={setFlavor} showFlavor /> : <p className="muted">No LLM runs in this window.</p>}
-      </Section>
-
       <div className="tl1-two">
         <Section id="spend" title="Spend by flavor" description="Select a flavor for its definition, history, and tuning prompt.">
           <BarList rows={flavors} max={Math.max(...flavors.map(row => row.cost_usd), 0)} render={row => ({
@@ -484,6 +527,17 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
           })} />
         </Section>
       </div>
+      </> : null}
+
+      {page === "/tl1/configurations" ? <>
+      <Section id="matrix" title="Flavor × agent configuration" description="Advanced: moved the workflow on without error or a human. Agent errors exclude infrastructure failures. Cost per useful result is total spend divided by advanced runs.">
+        {overview.matrix?.length ? <ConfigurationTable rows={overview.matrix} onFlavor={setFlavor} showFlavor /> : <p className="muted">No LLM runs in this window.</p>}
+      </Section>
+      </> : null}
+
+      {page === "/tl1/followups" ? <Followups data={overview.followups} onFlavor={setFlavor} /> : null}
+
+      {page === "/tl1/quality" ? <>
 
       <Section id="errors" title="Error clusters" description="Failures grouped by normalized signature. Attribution says who can fix it: configuration, output contract, script, infrastructure, provider, or the agent.">
         {overview.errors?.length ? <div className="tl1-table-wrap"><table className="tl1-table">
@@ -521,14 +575,18 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
           </tr>)}</tbody>
         </table></div>
       </Section>
+      </> : null}
     </> : !error ? <p className="muted">Loading TL1 analysis…</p> : null}
 
-    <div ref={runsRef}><Section id="runs" title="Runs" description="Every TL1 attempt with its flavor, configuration, result, cost, and error. Filter, group, and add metrics like any Pharos table." actions={<div className="tl1-actions">
+    <div ref={runsRef} hidden={page !== "/tl1/runs"}><Section id="runs" title="Runs" description="Every TL1 attempt with its flavor, configuration, result, cost, and error. Filter, group, and add metrics like any Pharos table." actions={<div className="tl1-actions">
       <button type="button" className="tl1-button" title="Filter to runs of tasks created in the analysis window" onClick={() => filterAttempts([...windowWhere(), ...projectWhere()])}>Show runs in window</button>
       <button type="button" className="tl1-button" onClick={() => filterAttempts([])}>Clear filters</button>
     </div>}>
       {attempts}
     </Section></div>
+
+      </div>
+    </div>
 
     {flavor ? <FlavorDialog query={query} name={flavor} onClose={() => setFlavor("")} copy={copy} onRuns={showRuns} /> : null}
     {candidate ? <CandidateDialog query={query} id={candidate} onClose={() => setCandidate("")} /> : null}
