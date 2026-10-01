@@ -28,6 +28,7 @@
 .pharos-activity{padding:8px 0;border-bottom:1px solid var(--line,#ccc)}
 .pharos-activity:last-child{border-bottom:0}
 .pharos-activity-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.pharos-activity-row>.pharos-button{flex:none}
 .pharos-activity-info{flex:1;min-width:0}
 .pharos-activity-timing{flex:none;text-align:right;font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums}
 .pharos-activity-head{display:flex;align-items:center;gap:8px;font-weight:650}
@@ -458,10 +459,13 @@
     activities.filter(activity => !update?.updating.includes(activity)).forEach(activity => {
       const item = node('div', 'pharos-activity'), row = node('div', 'pharos-activity-row'), info = node('div', 'pharos-activity-info'), head = node('div', 'pharos-activity-head');
       head.append(node('span', 'pharos-dot busy'), node('span', '', activity.label));
-      if (activity.stoppable) head.append(stopButton(activity.stopping, activity.stop_path));
+      // The Library view refresh's Stop sits past its timing, like Resume once stopped.
+      const stop = activity.stoppable && stopButton(activity.stopping, activity.stop_path);
+      if (stop && activity.stop_path !== LIBRARY_REFRESH_STOP) head.append(stop);
       info.append(head);
       if (activity.detail) info.append(node('div', 'pharos-sub', activity.detail));
       row.append(info, completionEstimate([activity]));
+      if (stop && activity.stop_path === LIBRARY_REFRESH_STOP) row.append(stop);
       item.append(row);
       if (activity.kind !== 'capture-other' && (activity.kind !== 'maintenance' || activity.progress != null)) item.append(progressBar(activity.progress));
       panel.append(item);
