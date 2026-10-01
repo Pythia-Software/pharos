@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "providers": {
+    "anthropic": { "label": "Anthropic", "color": "#d97732", "hue": 28 },
+    "google": { "label": "Google", "color": "#4285f4", "hue": 217 },
+    "openai": { "label": "OpenAI", "color": "#10a37f", "hue": 158 },
+    "other": { "label": "Other providers", "color": "#8775b5", "hue": 270 }
+  },
+  "models": {
+    "opus": { "provider": "anthropic", "class": "Opus", "color": "#b96524" },
+    "opus-4-1": { "provider": "anthropic", "class": "Opus", "color": "#f4a664" },
+    "opus-4-5": { "provider": "anthropic", "class": "Opus", "color": "#ee9148" },
+    "opus-4-6": { "provider": "anthropic", "class": "Opus", "color": "#e67a30" },
+    "opus-4-7": { "provider": "anthropic", "class": "Opus", "color": "#d46a24" },
+    "opus-4-8": { "provider": "anthropic", "class": "Opus", "color": "#bd5b1c" },
+    "opus-5": { "provider": "anthropic", "class": "Opus", "color": "#a34d18" },
+    "opus-5-5": { "provider": "anthropic", "class": "Opus", "color": "#884016" },
+    "sonnet": { "provider": "anthropic", "class": "Sonnet", "color": "#cc8c38" },
+    "sonnet-4": { "provider": "anthropic", "class": "Sonnet", "color": "#efb65c" },
+    "sonnet-4-5": { "provider": "anthropic", "class": "Sonnet", "color": "#e5a342" },
+    "sonnet-4-6": { "provider": "anthropic", "class": "Sonnet", "color": "#cf8e2f" },
+    "sonnet-5": { "provider": "anthropic", "class": "Sonnet", "color": "#b57925" },
+    "sonnet-5-5": { "provider": "anthropic", "class": "Sonnet", "color": "#9b651e" },
+    "haiku": { "provider": "anthropic", "class": "Haiku", "color": "#e09270" },
+    "haiku-4-5": { "provider": "anthropic", "class": "Haiku", "color": "#bf633e" },
+    "fable-5": { "provider": "anthropic", "class": "Fable", "color": "#e2a07a" },
+    "fable-5-1": { "provider": "anthropic", "class": "Fable", "color": "#c67a50" },
+    "gemini-3.8-flash": { "provider": "google", "class": "Flash", "color": "#669cf6" },
+    "gpt-5.3-codex": { "provider": "openai", "class": "Codex", "color": "#087e62" },
+    "gpt-5.3-codex-spark": { "provider": "openai", "class": "Codex", "color": "#35b397" },
+    "gpt-5.5": { "provider": "openai", "class": "GPT", "color": "#72c59c" },
+    "gpt-5.6-luna": { "provider": "openai", "class": "GPT", "color": "#58bf8b" },
+    "gpt-5.6-sol": { "provider": "openai", "class": "GPT", "color": "#35af70" },
+    "gpt-5.6-terra": { "provider": "openai", "class": "GPT", "color": "#439c72" },
+    "gpt-6-astra": { "provider": "openai", "class": "GPT", "color": "#209a5d" },
+    "gpt-6-luna": { "provider": "openai", "class": "GPT", "color": "#15844c" },
+    "gpt-6-sol": { "provider": "openai", "class": "GPT", "color": "#087743" }
+  },
+  "sources": {
+    "claude": { "provider": "anthropic", "color": "#d97732" },
+    "antigravity": { "provider": "google", "color": "#4285f4" },
+    "codex": { "provider": "openai", "color": "#10a37f" },
+    "chatgpt": { "provider": "openai", "color": "#65bfa7" },
+    "tl1": { "provider": "other", "color": "#8775b5" },
+    "canonical": { "provider": "other", "color": "#64558c" }
+  }
+}

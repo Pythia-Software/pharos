@@ -14,9 +14,10 @@ const day = offset => { const d = new Date(); d.setDate(d.getDate() - offset); r
 // The usage dataset's current day, week (Monday), and month keys.
 const periodKey = period => { const d = new Date(); if (period === 'week') d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; return period === 'month' ? key.slice(0, 7) : key; };
 const counts = (typed, pasted, harness) => ({ typed_words: typed, typed_chars: typed * 6, pasted_words: pasted, pasted_chars: pasted * 6, harness_words: harness, harness_chars: harness * 6 });
+const modelNames = ['opus-5-5', 'gpt-6-sol', 'gemini-3.8-flash', 'sonnet-5-5', 'gpt-5.3-codex', 'small-a', 'small-b', 'small-c', 'small-d', 'small-e', 'small-f', 'small-g', 'small-h', 'small-i'];
 
 test('Usage toggles between tokens and writing, remembers the choice, and charts follow table filters', async () => {
-  const { encodeQuery, EMPTY_QUERY } = await import(pathToFileURL(path.join(root, 'web/node_modules/@pythia-software/query-table-core/dist/index.js')).href);
+  const { decodeQuery, encodeQuery, EMPTY_QUERY } = await import(pathToFileURL(path.join(root, 'web/node_modules/@pythia-software/query-table-core/dist/index.js')).href);
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
   const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
@@ -41,7 +42,7 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
         const body = route.request().postDataJSON();
         aggregations.push(body);
         return json({ metrics: body.aggregations.map((aggregation, index) => ({ id: aggregation.id, buckets: aggregation.groupBy?.[1] === 'model_family'
-          ? [...['m1', 'm2', 'm3', 'm4', 'm5', 'small-a', 'small-b', 'small-c', 'small-d', 'small-e', 'small-f', 'small-g', 'small-h', 'small-i'].map((model, rank) => ({ keys: [periodKey(aggregation.groupBy[0]), model], value: 1400 - 100 * rank, count: 1 })), ...(aggregation.groupBy[0] === 'day' ? [{ keys: [day(1), 'm1'], value: 900, count: 1 }, { keys: [day(1), 'm2'], value: 100, count: 1 }] : [])]
+          ? [...modelNames.map((model, rank) => ({ keys: [periodKey(aggregation.groupBy[0]), model], value: 1400 - 100 * rank, count: 1 })), ...(aggregation.groupBy[0] === 'day' ? [{ keys: [day(1), modelNames[0]], value: 900, count: 1 }, { keys: [day(1), modelNames[1]], value: 100, count: 1 }] : [])]
           : [{ keys: [periodKey(aggregation.groupBy?.[0] ?? 'day'), ...((aggregation.groupBy?.length ?? 0) > 1 ? ['claude'] : [])], value: aggregation.field === 'cost_usd' ? 1_250_000_000_000 : 2_500_000_000 * (index + 1), count: 1 }] })) });
       }
       if (url.pathname.endsWith('/distinct')) return json({ values: [], hasMore: false });
@@ -80,6 +81,19 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     assert.match(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), /2\.5B/);
     await page.locator('#usage .qt-row', { hasText: '2.5T' }).waitFor();
     assert.equal(await page.locator('#usage .qt-row [title="2,500,000,000,000"]').innerText(), '2.5T');
+    const tokenChip = name => page.locator('.usage-chart-legend').getByRole('button', { name, exact: true });
+    const tokenRequests = aggregations.length;
+    await tokenChip('Uncached input').click();
+    await page.getByRole('menu', { name: 'Filter Uncached input' }).getByRole('menuitem', { name: /^Show only this value/ }).click();
+    assert.equal(await page.locator('.usage-chart-bars > span').last().locator('i').count(), 1);
+    await tokenChip('Output').click();
+    await page.getByRole('menu', { name: 'Filter Output' }).getByRole('menuitem', { name: /^Add to selection/ }).click();
+    assert.equal(await page.locator('.usage-chart-bars > span').last().locator('i').count(), 2);
+    await tokenChip('Output').click();
+    await page.getByRole('menu', { name: 'Filter Output' }).getByRole('menuitem', { name: /^Show all except this value/ }).click();
+    assert.equal(await page.locator('.usage-chart-bars > span').last().locator('i').count(), 4);
+    await page.locator('.usage-chart-legend').getByRole('button', { name: 'Show all', exact: true }).click();
+    assert.equal(aggregations.length, tokenRequests);
 
     // Cost can't split by token type, so the split falls back to provider.
     await page.locator('.usage-chart').getByRole('button', { name: 'Cost', exact: true }).click();
@@ -101,6 +115,10 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     // The hover key lists each series with its color, and Other names what it holds.
     await page.locator('.usage-chart').getByRole('button', { name: 'Model', exact: true }).click();
     await page.locator('.usage-chart-legend', { hasText: 'Other (9)' }).waitFor();
+    const swatchColors = () => page.locator('.usage-chart-legend .usage-legend-item:not(.usage-legend-clear)').evaluateAll(items => Object.fromEntries(items.map(item => [item.getAttribute('aria-label') ?? item.textContent.trim(), getComputedStyle(item.querySelector('.usage-swatch')).backgroundColor])));
+    const initialColors = await swatchColors();
+    assert.deepEqual(await page.locator('.usage-legend-provider').allTextContents(), ['Anthropic', 'Google', 'OpenAI']);
+    assert.deepEqual(await page.locator('.usage-chart-legend [role="group"][aria-label="Anthropic"] button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label'))), ['opus-5-5', 'sonnet-5-5']);
     await page.locator('.usage-chart-bars > span').last().hover();
     const tip = page.locator('.usage-chart-tip');
     await tip.waitFor();
@@ -108,11 +126,81 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     assert.equal(await tip.locator(':scope > ul > li .usage-swatch').count(), 6);
     assert.match(await tip.locator('.usage-chart-tip-parts').innerText(), /small-a[\s\S]*small-b/);
     assert.match(await tip.innerText(), /Total/);
+    await page.locator('.usage-chart-legend').getByRole('button', { name: 'opus-5-5', exact: true }).click();
+    await page.getByRole('menu', { name: 'Filter opus-5-5' }).getByRole('menuitem', { name: /^Show all except this value/ }).click();
+    assert.equal(await page.locator('.usage-chart-bars > span').last().locator('i').count(), 5);
+    assert.match(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), /Other \(9\)/);
+    assert.doesNotMatch(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), /opus-5-5/);
+    await page.locator('.usage-chart-legend').getByRole('button', { name: 'Show all', exact: true }).click();
     await page.locator('.usage-chart-legend').getByRole('button', { name: 'Other (9)' }).click();
     await page.locator('.usage-chart-legend').getByRole('button', { name: 'Other (4)' }).waitFor();
     assert.equal(await page.locator('.usage-chart-legend').getByRole('button', { name: 'small-a' }).count(), 1);
     await page.locator('.usage-chart-legend').getByRole('button', { name: 'Other (4)' }).click();
     assert.equal(await page.locator('.usage-chart-legend').getByRole('button', { name: /^Other/ }).count(), 0);
+    const expandedColors = await swatchColors();
+    assert.equal(new Set(Object.values(expandedColors)).size, modelNames.length);
+    for (const model of modelNames.slice(0, 5)) assert.equal(expandedColors[model], initialColors[model]);
+    assert.deepEqual(await page.locator('.usage-legend-provider').allTextContents(), ['Anthropic', 'Google', 'OpenAI', 'Other providers']);
+    assert.deepEqual(await page.locator('.usage-chart-bars > span').last().locator('i').evaluateAll(parts => parts.map(part => getComputedStyle(part).backgroundColor)), Object.values(expandedColors));
+    const opus = page.locator('.usage-chart-legend').getByRole('button', { name: /^opus-5-5/ });
+    await opus.click();
+    const menu = page.getByRole('menu', { name: 'Filter opus-5-5' });
+    await menu.waitFor();
+    await page.locator('#usage .usage-chart').screenshot({ path: path.join(root, '.context/usage-chip-popover.png') });
+    assert.equal(await opus.getAttribute('aria-expanded'), 'true');
+    assert.equal(await opus.getAttribute('aria-pressed'), 'false');
+    assert.equal(await page.locator('.usage-chart-bars > span').last().locator('i').count(), modelNames.length);
+    await menu.getByRole('menuitem', { name: /^Show only this value/ }).click();
+    await menu.waitFor({ state: 'detached' });
+    await page.waitForFunction(() => document.querySelector('.usage-chart-legend button[aria-pressed="true"]')?.textContent.includes('opus-5-5'));
+    assert.equal((await swatchColors())['opus-5-5'], initialColors['opus-5-5']);
+    assert.ok(aggregations.at(-1).where.some(clause => clause.field === 'model_family' && clause.value === 'opus-5-5'));
+    assert.equal(await page.locator('.usage-chart-bars > span').last().locator('i').count(), 1);
+    const gpt = page.locator('.usage-chart-legend').getByRole('button', { name: 'gpt-6-sol', exact: true });
+    await gpt.click();
+    await page.getByRole('menu', { name: 'Filter gpt-6-sol' }).getByRole('menuitem', { name: /^Add to selection/ }).click();
+    await page.waitForFunction(() => document.querySelectorAll('.usage-chart-legend button[aria-pressed="true"]').length === 2);
+    assert.equal(await page.locator('.usage-chart-bars > span').last().locator('i').count(), 2);
+    await gpt.click();
+    await page.getByRole('menu', { name: 'Filter gpt-6-sol' }).getByRole('menuitem', { name: /^Remove from selection/ }).click();
+    await page.waitForFunction(() => document.querySelectorAll('.usage-chart-legend button[aria-pressed="true"]').length === 1);
+    await opus.click();
+    await menu.getByRole('menuitem', { name: /^Show all except this value/ }).click();
+    await page.waitForFunction(() => document.querySelectorAll('.usage-chart-legend button[aria-pressed="true"]').length === 13);
+    assert.equal(await opus.getAttribute('aria-pressed'), 'false');
+    assert.equal(await page.locator('.usage-chart-bars > span').last().locator('i').count(), modelNames.length - 1);
+    const exceptQuery = decodeQuery(new URL(page.url()).searchParams.get('q_usage'));
+    assert.ok(exceptQuery.where.some(term => term.any?.some(clause => clause.field === 'model_family' && clause.op === '!=' && clause.value === 'opus-5-5')));
+    assert.ok(exceptQuery.where.some(term => term.field === 'last_usage_at'));
+    assert.ok(aggregations.filter(body => body.aggregations.some(aggregation => aggregation.label === 'chart')).every(body => !JSON.stringify(body.where).includes('opus-5-5')));
+    await opus.click();
+    await menu.getByRole('menuitem', { name: /^Add to selection/ }).click();
+    await page.waitForFunction(() => !document.querySelector('.usage-legend-clear'));
+    assert.equal(await page.locator('.usage-chart-bars > span').last().locator('i').count(), modelNames.length);
+    await opus.focus();
+    await page.keyboard.press('ArrowDown');
+    await menu.waitFor();
+    assert.equal(await menu.getByRole('menuitem', { name: /^Show only this value/ }).evaluate(item => item === document.activeElement), true);
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await menu.getByRole('menuitem', { name: /^Add to selection/ }).evaluate(item => item === document.activeElement), true);
+    await page.keyboard.press('End');
+    assert.equal(await menu.getByRole('menuitem', { name: /^Show all except this value/ }).evaluate(item => item === document.activeElement), true);
+    await page.keyboard.press('Escape');
+    await menu.waitFor({ state: 'detached' });
+    assert.equal(await opus.evaluate(item => item === document.activeElement), true);
+    await page.keyboard.press('ArrowUp');
+    await menu.waitFor();
+    assert.equal(await menu.getByRole('menuitem', { name: /^Show all except this value/ }).evaluate(item => item === document.activeElement), true);
+    await page.keyboard.press('Tab');
+    await menu.waitFor({ state: 'detached' });
+    await opus.click();
+    await page.locator('.usage-chart h3').click();
+    await menu.waitFor({ state: 'detached' });
+    await opus.click();
+    await menu.getByRole('menuitem', { name: /^Show only this value/ }).click();
+    await opus.click();
+    await menu.getByRole('menuitem', { name: 'Show all values', exact: true }).click();
+    await page.waitForFunction(() => !document.querySelector('.usage-legend-clear'));
     await page.locator('.usage-chart').getByRole('button', { name: '%', exact: true }).click();
     await page.locator('#usage .usage-chart h3', { hasText: 'Token share per day by model' }).waitFor();
     await page.waitForFunction(() => document.querySelector('.usage-chart-bars > span:last-child')?.getAttribute('aria-label')?.includes('100% in all'));
@@ -120,10 +208,41 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     assert.deepEqual(await page.locator('.usage-chart-grid span').allTextContents(), ['25%', '50%', '75%', '100%']);
     assert.equal(await page.locator('.usage-chart-bars > span').last().locator('i').evaluateAll(parts => Math.round(parts.reduce((sum, part) => sum + parseFloat(part.style.height), 0))), 100);
     assert.equal(await page.locator('.usage-chart-bars > span').nth(28).locator('i').first().evaluate(part => Math.round(parseFloat(part.style.height))), 90);
+    assert.deepEqual(await swatchColors(), expandedColors);
+    const plotBounds = await page.locator('.usage-chart-plot').boundingBox();
+    const segmentTops = await page.locator('.usage-chart-bars > span').last().locator('i').evaluateAll(parts => parts.map(part => part.getBoundingClientRect().top));
+    assert.ok(segmentTops.every(top => top >= plotBounds.y - 0.1), 'Expanded percentage stacks stay inside the plot instead of overlapping the legend');
+    const rolling = page.getByRole('combobox', { name: 'Rolling periods' });
+    assert.equal(await rolling.inputValue(), '0');
+    assert.equal(await rolling.locator('option').count(), 11);
+    assert.equal(await rolling.locator('option[value="10"]').innerText(), '10 days');
+    const smoothingRequests = aggregations.length;
+    const smoothingQuery = new URL(page.url()).searchParams.get('q_usage');
+    await rolling.selectOption('2');
+    await page.locator('.usage-chart-average-label', { hasText: '2-day rolling average' }).waitFor();
+    assert.match(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), /opus-5-5 20%/);
+    assert.equal(aggregations.length, smoothingRequests);
+    assert.equal(new URL(page.url()).searchParams.get('q_usage'), smoothingQuery);
+    assert.deepEqual(await swatchColors(), expandedColors);
+    await page.locator('.usage-chart-bars > span').last().hover();
+    await page.locator('.usage-chart-tip-head', { hasText: '2-day average' }).waitFor();
+    await page.locator('.usage-chart').getByRole('button', { name: 'Week', exact: true }).click();
+    assert.equal(await rolling.inputValue(), '2');
+    assert.equal(await rolling.locator('option[value="2"]').innerText(), '2 weeks');
+    await page.locator('.usage-chart').getByRole('button', { name: 'Day', exact: true }).click();
+    await page.reload();
+    await page.locator('.usage-chart-average-label', { hasText: '2-day rolling average' }).waitFor();
+    assert.equal(await rolling.inputValue(), '2');
+    await page.waitForFunction(() => document.querySelector('.usage-chart-bars > span:last-child')?.getAttribute('aria-label')?.includes('opus-5-5 20%'));
+    await rolling.selectOption('0');
+    await page.locator('.usage-chart-average-label').waitFor({ state: 'detached' });
+    assert.match(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), /opus-5-5 13\.3%/);
     await page.locator('.usage-chart').getByRole('button', { name: 'Cost', exact: true }).click();
     await page.locator('.usage-chart').getByRole('button', { name: 'Month', exact: true }).click();
     await page.locator('.usage-chart').getByRole('button', { name: '6 months' }).click();
     await page.locator('.usage-chart').getByRole('button', { name: 'Provider', exact: true }).click();
+    assert.equal(await rolling.locator('option[value="10"]').innerText(), '10 months');
+    await rolling.selectOption('2');
 
     // Switching to writing updates the URI, and the choice survives a plain /usage visit.
     await page.getByRole('group', { name: 'Usage view' }).getByRole('button', { name: 'Human Words' }).click();
@@ -134,11 +253,31 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     await page.locator('#usage .qt-row', { hasText: 'Deep work' }).waitFor();
     await page.goto('http://usage-ui.test/usage');
     await page.locator('.usage-chart h3', { hasText: 'Typed words per week' }).waitFor();
+    assert.equal(await rolling.inputValue(), '0');
+    assert.equal(await rolling.locator('option[value="3"]').innerText(), '3 weeks');
+    const writingBucketCount = await page.locator('.usage-chart-bars > span').count();
+    const writingRequests = series.length;
+    const writingCards = await page.locator('.usage-cards').innerText();
+    await rolling.selectOption('3');
+    await page.locator('.usage-chart-average-label', { hasText: '3-week rolling average' }).waitFor();
+    assert.match(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), new RegExp(`Typed ${Math.round(200 / Math.min(3, writingBucketCount))}`));
+    assert.equal(await page.locator('.usage-cards').innerText(), writingCards);
+    assert.equal(series.length, writingRequests);
+    await page.reload();
+    await page.locator('.usage-chart-average-label', { hasText: '3-week rolling average' }).waitFor();
+    assert.equal(await rolling.inputValue(), '3');
+    await rolling.selectOption('0');
 
     // All input stacks every category, and the series request carries the table filters.
     await page.getByRole('button', { name: 'All input' }).click();
     await page.locator('.usage-chart h3', { hasText: 'Words of user input per week' }).waitFor();
-    assert.equal(await page.locator('.usage-chart-legend > button').count(), 5);
+    assert.equal(await page.locator('.usage-chart-legend .usage-legend-chip').count(), 5);
+    const typedChip = page.locator('.usage-chart-legend').getByRole('button', { name: 'Typed', exact: true });
+    await typedChip.click();
+    await page.getByRole('menu', { name: 'Filter Typed' }).getByRole('menuitem', { name: /^Show all except this value/ }).click();
+    await page.waitForFunction(() => [...document.querySelectorAll('.usage-chart-bars > span')].some(bar => bar.getAttribute('aria-label')?.includes('Likely pasted')));
+    assert.ok((await page.locator('.usage-chart-bars > span').evaluateAll(bars => bars.map(bar => bar.getAttribute('aria-label')))).every(label => !label.includes('Typed ')));
+    await page.locator('.usage-chart-legend').getByRole('button', { name: 'Show all', exact: true }).click();
     const filtered = encodeQuery({ ...EMPTY_QUERY, where: [{ field: 'repository_name', op: '=', value: 'example/repo' }] });
     series.length = 0;
     await page.goto(`http://usage-ui.test/usage?usage=writing&q_writing=${encodeURIComponent(filtered)}`);
@@ -154,6 +293,7 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     await tokensCard.click();
     await page.locator('#usage.view.active .usage-chart h3', { hasText: 'API cost per month by provider' }).waitFor();
     assert.equal(new URL(page.url()).searchParams.get('usage'), 'tokens');
+    assert.equal(await rolling.inputValue(), '2');
     await page.goto('http://usage-ui.test/settings');
     const pricingCard = page.locator('#healthCards > .panel', { hasText: 'Known Pricing' });
     await pricingCard.click();

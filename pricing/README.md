@@ -1,5 +1,54 @@
 # API price history
 
+## Dashboard colors
+
+`model_colors.json` is the static dashboard color catalog, bundled with the
+frontend. Model keys use the same normalization as usage/pricing: no `claude-`
+prefix, snapshot date, or `-1m`/`[1m]` context suffix. Add a unique hex color and
+model class here when adding a priced model. Anthropic models use orange,
+Google models use blue (base `#4285f4`), and OpenAI models use green. Classes
+and versions get distinct tints/shades within those families. Within each model
+class, older versions use lighter tints and newer versions use deeper, darker
+shades. Keep that direction when adding new versioned colors.
+
+The `sources` entries map the usage dataset's provider/source values (Claude,
+Codex, ChatGPT, Antigravity, etc.) into provider groups without changing table
+filters. Codex and ChatGPT have different green shades. The model chart groups
+stacks and legends by provider, then model class and version; the five largest
+models are initially shown, with the rest behind **Other**. Expanding reveals
+five more at a time without recoloring existing series. Unlisted models and
+other chart dimensions get stable, collision-checked colors, rather than cycling
+through a short palette. Unknown models with recognizable names stay in their
+provider's hue family. Rebuild the frontend after editing this catalog.
+
+Click a chart legend chip to open its filter menu: **Show only this value**,
+**Add to selection** (or **Remove from selection**), and **Show all except this
+value**. **Show all values** resets that chart's selection without clearing date
+or unrelated table filters. Excluding a value includes every other value,
+including models folded into **Other**, future models, and missing values.
+Menus support arrow-key navigation, Escape, and clicking outside to dismiss.
+
+The **Rolling** control applies a trailing average over 0–10 chart periods:
+**0** turns smoothing off, **1** keeps the original values, and **N** averages
+the current period with the preceding N−1 days, weeks, or months. Empty periods
+inside the displayed range count as zero. At the start of the range, only
+available periods are averaged; data outside the current filters is not used.
+Token share is calculated from the averaged token counts, not by averaging
+each period's percentages. Tooltips and **Other** breakdowns show the same
+averaged values as the bars. Table data, totals, and date selection remain
+unchanged. The setting is remembered separately for Machine Tokens and Human
+Words.
+
+Usage table repository, provider, and model cells show a color badge only when
+that facet is selected in the graph. The badge matches the current legend,
+including the **Other** color for folded values; expanding **Other** updates
+those badges to the newly shown colors. Reported model snapshots and context
+variants use their model family's color. These badges are presentation only:
+the original cell text, raw values, sorting, copying, and quick filters remain
+unchanged.
+
+## Price history
+
 `cost_changes.json` holds the API list prices Pharos uses to turn token
 usage into API-equivalent cost. The app embeds this file and imports it into the
 `cost_changes` and `model_aliases` tables whenever its contents change. The
