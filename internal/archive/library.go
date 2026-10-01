@@ -321,16 +321,22 @@ func (c *Catalog) refreshAllLibrary(ctx context.Context) error {
 const libraryCatchUpShown = 15 * time.Second
 
 // libraryCatchUp is when maintainLibrary last started refreshing after it
-// found nothing dirty; zero while it is caught up.
+// found nothing dirty; zero while it is caught up or stopped.
 type libraryCatchUp struct {
 	mu    sync.Mutex
 	since time.Time
+	// stopped is set while the user has stopped the refresh: maintainLibrary
+	// leaves dirty workspaces dirty (reads compute them live) until it is
+	// resumed or the service restarts. cancel abandons the pass in progress.
+	stopped bool
+	cancel  context.CancelFunc
 }
 
 func (c *Catalog) noteLibraryRefresh(count int, err error) {
 	c.catchUp.mu.Lock()
 	defer c.catchUp.mu.Unlock()
 	switch {
+	case c.catchUp.stopped:
 	case err == nil && count == 0:
 		c.catchUp.since = time.Time{}
 	case count > 0 && c.catchUp.since.IsZero():
@@ -343,14 +349,63 @@ func (c *Catalog) noteLibraryRefresh(count int, err error) {
 func (c *Catalog) libraryCatchingUp() bool {
 	c.catchUp.mu.Lock()
 	defer c.catchUp.mu.Unlock()
-	return !c.catchUp.since.IsZero() && c.clock().Sub(c.catchUp.since) >= libraryCatchUpShown
+	return !c.catchUp.stopped && !c.catchUp.since.IsZero() && c.clock().Sub(c.catchUp.since) >= libraryCatchUpShown
+}
+
+// stopLibraryRefresh stops maintainLibrary, abandoning the batch in progress
+// (its workspaces stay dirty), and reports whether it was running.
+func (c *Catalog) stopLibraryRefresh() bool {
+	c.catchUp.mu.Lock()
+	defer c.catchUp.mu.Unlock()
+	if c.catchUp.stopped {
+		return false
+	}
+	c.catchUp.stopped, c.catchUp.since = true, time.Time{}
+	if c.catchUp.cancel != nil {
+		c.catchUp.cancel()
+	}
+	return true
+}
+
+// resumeLibraryRefresh undoes stopLibraryRefresh and reports whether it was
+// stopped.
+func (c *Catalog) resumeLibraryRefresh() bool {
+	c.catchUp.mu.Lock()
+	defer c.catchUp.mu.Unlock()
+	stopped := c.catchUp.stopped
+	c.catchUp.stopped = false
+	return stopped
+}
+
+func (c *Catalog) libraryRefreshStopped() bool {
+	c.catchUp.mu.Lock()
+	defer c.catchUp.mu.Unlock()
+	return c.catchUp.stopped
+}
+
+// libraryPass starts one maintainLibrary pass that stopLibraryRefresh can
+// cancel, or reports false while the refresh is stopped.
+func (c *Catalog) libraryPass(ctx context.Context) (context.Context, func(), bool) {
+	c.catchUp.mu.Lock()
+	defer c.catchUp.mu.Unlock()
+	if c.catchUp.stopped {
+		return nil, nil, false
+	}
+	pass, cancel := context.WithCancel(ctx)
+	c.catchUp.cancel = cancel
+	return pass, func() {
+		c.catchUp.mu.Lock()
+		c.catchUp.cancel = nil
+		c.catchUp.mu.Unlock()
+		cancel()
+	}, true
 }
 
 // maintainLibrary keeps the stored projection current, including after
 // ingests run by other processes against the same catalog.
 func (c *Catalog) maintainLibrary(ctx context.Context) {
 	for {
-		if c.projectionBatches.Load() > 0 {
+		if c.projectionBatches.Load() > 0 || c.libraryRefreshStopped() {
 			select {
 			case <-ctx.Done():
 				return
@@ -358,25 +413,32 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 				continue
 			}
 		}
-		count, err := c.RefreshLibrary(ctx, 10)
+		pass, done, running := c.libraryPass(ctx)
+		if !running {
+			continue
+		}
+		count, err := c.RefreshLibrary(pass, 10)
 		c.noteLibraryRefresh(count, err)
 		wait := time.Duration(0)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
-			fmt.Fprintf(os.Stderr, "Library refresh: %v\n", err)
-			wait = 5 * time.Second
+			if pass.Err() == nil {
+				fmt.Fprintf(os.Stderr, "Library refresh: %v\n", err)
+				wait = 5 * time.Second
+			}
 		} else if count == 0 {
 			// Idle: fill in previews, then keep the page caches warm.
-			if filled, err := c.refreshPreviews(ctx, 25); err != nil || filled == 0 {
-				if err != nil && ctx.Err() == nil {
+			if filled, err := c.refreshPreviews(pass, 25); err != nil || filled == 0 {
+				if err != nil && pass.Err() == nil {
 					fmt.Fprintf(os.Stderr, "Library previews: %v\n", err)
 				}
 				wait = 2 * time.Second
 				c.warmCaches(ctx)
 			}
 		}
+		done()
 		select {
 		case <-ctx.Done():
 			return

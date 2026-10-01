@@ -28,6 +28,7 @@
 .pharos-activity{padding:8px 0;border-bottom:1px solid var(--line,#ccc)}
 .pharos-activity:last-child{border-bottom:0}
 .pharos-activity-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.pharos-activity-row>.pharos-button{flex:none}
 .pharos-activity-info{flex:1;min-width:0}
 .pharos-activity-timing{flex:none;text-align:right;font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums}
 .pharos-activity-head{display:flex;align-items:center;gap:8px;font-weight:650}
@@ -190,23 +191,32 @@
   };
   const indexFailed = run => run && ((run.state !== 'complete' && !indexStopped(run)) || indexErrors(run).length > 0);
 
-  // Stops the running index (or source sync) between records; it says when it has.
-  async function stopIndex() {
+  // Stops the running index (or source sync) between records, or the Library
+  // view refresh; it says when it has.
+  const LIBRARY_REFRESH_STOP = '/api/library/refresh/stop';
+  async function stopWork(path = '/api/index/cancel') {
     try {
-      const {stopped} = await post('/api/index/cancel');
-      if (!stopped) toast('No index is running.');
+      const {stopped} = await post(path);
+      if (!stopped) toast(path === LIBRARY_REFRESH_STOP ? 'The Library view refresh is not running.' : 'No index is running.');
     } catch (error) {
       toast(error.message);
     }
     await refreshStatus();
     if (document.getElementById('sourceGrid')) loadHosts().catch(() => {});
   }
-  const stopButton = stopping => {
-    const stop = button(stopping ? 'Stopping…' : 'Stop', '', stopIndex);
+  const stopButton = (stopping, path) => {
+    const stop = button(stopping ? 'Stopping…' : 'Stop', '', () => stopWork(path));
     stop.disabled = stopping;
-    stop.title = 'Stops after the record being indexed. Everything already indexed is kept, and the next index picks up where this one stopped.';
+    stop.title = path === LIBRARY_REFRESH_STOP
+      ? 'Stops refreshing the Library view. Workspaces not yet refreshed are worked out as the Library shows them, which can be slower, until you resume it or update the library.'
+      : 'Stops after the record being indexed. Everything already indexed is kept, and the next index picks up where this one stopped.';
     return stop;
   };
+  async function resumeLibraryRefresh() {
+    try { await post('/api/library/refresh/resume'); }
+    catch (error) { toast(error.message); }
+    await refreshStatus();
+  }
 
   function refreshIndexStatus() {
     if (!indexStatusRequest) {
@@ -440,7 +450,7 @@
     if (update) {
       const item = node('div', 'pharos-activity'), row = node('div', 'pharos-activity-row'), info = node('div', 'pharos-activity-info'), head = node('div', 'pharos-activity-head');
       head.append(node('span', '', 'Updating library'));
-      if (update.indexing?.stoppable) head.append(stopButton(update.indexing.stopping));
+      if (update.indexing?.stoppable) head.append(stopButton(update.indexing.stopping, update.indexing.stop_path));
       info.append(head, node('div', 'pharos-sub', update.label));
       row.append(info, completionEstimate(update.updating, true));
       item.append(row, progressBar(update.progress));
@@ -449,14 +459,23 @@
     activities.filter(activity => !update?.updating.includes(activity)).forEach(activity => {
       const item = node('div', 'pharos-activity'), row = node('div', 'pharos-activity-row'), info = node('div', 'pharos-activity-info'), head = node('div', 'pharos-activity-head');
       head.append(node('span', 'pharos-dot busy'), node('span', '', activity.label));
-      if (activity.stoppable) head.append(stopButton(activity.stopping));
+      // The Library view refresh's Stop sits past its timing, like Resume once stopped.
+      const stop = activity.stoppable && stopButton(activity.stopping, activity.stop_path);
+      if (stop && activity.stop_path !== LIBRARY_REFRESH_STOP) head.append(stop);
       info.append(head);
       if (activity.detail) info.append(node('div', 'pharos-sub', activity.detail));
       row.append(info, completionEstimate([activity]));
+      if (stop && activity.stop_path === LIBRARY_REFRESH_STOP) row.append(stop);
       item.append(row);
       if (activity.kind !== 'capture-other' && (activity.kind !== 'maintenance' || activity.progress != null)) item.append(progressBar(activity.progress));
       panel.append(item);
     });
+    if (status.library_refresh?.stopped) {
+      const item = node('div', 'pharos-activity pharos-library-refresh-stopped'), head = node('div', 'pharos-activity-head');
+      head.append(node('span', 'pharos-dot idle'), node('span', '', 'Library view refresh stopped'), button('Resume', '', resumeLibraryRefresh));
+      item.append(head, node('div', 'pharos-sub', `${status.library_refresh.pending ? `${plural(status.library_refresh.pending, 'workspace')} left to refresh; the Library works them out as it shows them, which can be slower. ` : ''}Update library or restarting Pharos also resumes it.`));
+      panel.append(item);
+    }
     if (upgradeStatus?.needed || upgradeStatus?.running) {
       panel.append(button('Update details', '', () => window.pharosUpgrade?.open()));
     }

@@ -385,6 +385,47 @@ describe('library, drive and captures UI', { skip }, () => {
     await context.close();
   });
 
+  it('stops and resumes the Library view refresh from the drive panel', async () => {
+    await idle();
+    const { page, context, errors } = await openPage();
+    // The refresh only lists itself after 15 seconds of catching up, so the
+    // status is staged; the stop and resume go to the service.
+    let stopped = false;
+    const posts = [];
+    page.on('request', request => {
+      if (request.method() !== 'POST' || !request.url().includes('/api/library/refresh/')) return;
+      posts.push(new URL(request.url()).pathname);
+      stopped = request.url().endsWith('/stop');
+    });
+    await page.route('**/api/library/status', async route => {
+      const status = await (await route.fetch()).json();
+      if (stopped) status.library_refresh = { stopped: true, pending: 1234 };
+      else Object.assign(status, { idle: false, writing: true, activities: [{ kind: 'maintenance', label: 'Updating the Library view', detail: '1,234 workspaces to refresh',
+        progress: null, writes: true, on_eject: 'Stops; it carries on when Pharos next opens the library.', stoppable: true, stop_path: '/api/library/refresh/stop' }] });
+      await route.fulfill({ json: status });
+    });
+    try {
+      await page.locator('#pharosDrive').click();
+      const panel = page.getByRole('dialog', { name: 'Library drive' });
+      await panel.getByText('Updating the Library view', { exact: true }).waitFor();
+      await shoot(page, 'drive-panel-library-refresh');
+      await panel.getByRole('button', { name: 'Stop' }).click();
+      await panel.getByText('Library view refresh stopped', { exact: true }).waitFor();
+      assert.match(await panel.textContent(), /1,234 workspaces left to refresh/);
+      assert.match(await panel.textContent(), /Nothing is running\./);
+      await shoot(page, 'drive-panel-library-refresh-stopped');
+      await panel.getByRole('button', { name: 'Resume' }).click();
+      await panel.getByText('Updating the Library view', { exact: true }).waitFor();
+      assert.equal(await panel.getByText('Library view refresh stopped').count(), 0);
+      assert.deepEqual(posts, ['/api/library/refresh/stop', '/api/library/refresh/resume']);
+      assert.deepEqual(errors, []);
+    } finally {
+      await page.unroute('**/api/library/status');
+      await api('/api/library/refresh/resume', { method: 'POST', body: '{}' }).catch(() => {});
+      await context.close();
+    }
+  });
+
   it('shows busy activity without disconnect controls in the native app', async () => {
     await idle();
     // A capture by another process holds this Mac's capture lock.

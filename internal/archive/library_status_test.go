@@ -227,6 +227,63 @@ func TestLibraryStatusListsEverythingHoldingTheLibrary(t *testing.T) {
 	}
 }
 
+// Stopping the Library view refresh cancels the pass in progress and leaves
+// dirty workspaces dirty, without listing it as running, until it is resumed.
+func TestLibraryRefreshCanBeStoppedAndResumed(t *testing.T) {
+	useHost(t, "host-a")
+	catalog, config := testCatalog(t)
+	server := NewServer(config, catalog)
+	if _, err := catalog.DB.Exec("INSERT INTO workspace_library_dirty(workspace_id) VALUES('w1'),('w2')"); err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Now()
+	catalog.now = func() time.Time { return clock }
+	catalog.noteLibraryRefresh(10, nil)
+	clock = clock.Add(libraryCatchUpShown)
+	status := libraryStatusCall(t, server, "/api/library/status")
+	activity := status["activities"].([]any)[0].(map[string]any)
+	if activity["label"] != "Updating the Library view" || activity["stoppable"] != true || activity["stop_path"] != "/api/library/refresh/stop" {
+		t.Fatalf("library refresh activity: %#v", activity)
+	}
+
+	pass, done, running := catalog.libraryPass(context.Background())
+	if !running {
+		t.Fatal("no pass before a stop")
+	}
+	defer done()
+	if code, body := probeCall(t, server, http.MethodPost, "/api/library/refresh/stop", "{}"); code != http.StatusOK || body["stopped"] != true {
+		t.Fatalf("stop: %d %#v", code, body)
+	}
+	if pass.Err() == nil {
+		t.Fatal("the pass in progress was not cancelled")
+	}
+	if _, _, running := catalog.libraryPass(context.Background()); running {
+		t.Fatal("a pass started while stopped")
+	}
+	if _, body := probeCall(t, server, http.MethodPost, "/api/library/refresh/stop", "{}"); body["stopped"] != false {
+		t.Fatalf("second stop: %#v", body)
+	}
+	status = libraryStatusCall(t, server, "/api/library/status")
+	if len(status["activities"].([]any)) != 0 || status["idle"] != true {
+		t.Fatalf("a stopped refresh is listed as running: %#v", status["activities"])
+	}
+	if refresh := status["library_refresh"].(map[string]any); refresh["stopped"] != true || refresh["pending"] != float64(2) {
+		t.Fatalf("stopped refresh: %#v", refresh)
+	}
+
+	if code, body := probeCall(t, server, http.MethodPost, "/api/library/refresh/resume", "{}"); code != http.StatusOK || body["resumed"] != true {
+		t.Fatalf("resume: %d %#v", code, body)
+	}
+	if _, next, running := catalog.libraryPass(context.Background()); !running {
+		t.Fatal("no pass once resumed")
+	} else {
+		next()
+	}
+	if refresh := libraryStatusCall(t, server, "/api/library/status")["library_refresh"].(map[string]any); refresh["stopped"] != false {
+		t.Fatalf("resumed refresh: %#v", refresh)
+	}
+}
+
 // The Git lookup is counted while it runs and not after, including when a
 // stop keeps it from starting.
 func TestGitRefreshIsTrackedWhileItRuns(t *testing.T) {
