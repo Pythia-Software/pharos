@@ -525,7 +525,7 @@ function ReviewDialog({ group, copy, onClose, onCopied }: { group: CartGroup; co
         <label><input type="radio" name="findingsHandoff" checked={handoff === "pr"} onChange={() => setHandoff("pr")} /> Open a pull request</label>
         <label><input type="radio" name="findingsHandoff" checked={handoff === "diff"} onChange={() => setHandoff("diff")} /> Show me the diff</label>
       </div>
-      <p>{group.handoff_reason} <a href="/findings?view=settings" onClick={event => { event.preventDefault(); onClose(); navigate("/findings?view=settings"); }}>Change the default</a></p>
+      <p>{group.handoff_reason} <a href="/settings/optimization" onClick={event => { event.preventDefault(); onClose(); navigate("/settings/optimization"); }}>Change the default</a></p>
     </fieldset> : <p className="findings-handoff-note">{group.handoff_reason}</p>}
     {error ? <p className="findings-error" role="alert">{error}</p> : null}
     {state === "done" ? <p className="findings-success" role="status">Copied. Paste it into the agent; Pharos is now measuring {count === 1 ? "this finding" : `these ${count} findings`}.</p> : null}
@@ -860,7 +860,7 @@ function WinsView({ overview }: { overview: Overview }) {
 
 // ---------------------------------------------------------------- settings
 
-function FindingsSettings({ overview, reload }: { overview: Overview | null; reload: () => Promise<unknown> }) {
+function FindingsSettings({ overview, reload, embedded = false }: { overview: Overview | null; reload: () => Promise<unknown>; embedded?: boolean }) {
   const [error, setError] = useState("");
   const [pending, setPending] = useState<number | null>(null);
   const [showAll, setShowAll] = useState(false);
@@ -901,8 +901,8 @@ function FindingsSettings({ overview, reload }: { overview: Overview | null; rel
   }
   const position = (index: number) => checkpoints.length > 1 ? `${(index / (checkpoints.length - 1)) * 100}%` : "0%";
   return <div className="findings-page findings-settings">
-    <nav className="findings-breadcrumb" aria-label="Breadcrumb"><button type="button" className="findings-crumb" onClick={() => navigate("/findings")}>Findings</button><span aria-hidden="true">›</span><span>Settings</span></nav>
-    <div className="view-heading"><div><h1>Findings settings</h1><p className="muted">How much evidence a pattern needs before it's shown, how findings are ranked, and what prompts ask agents to do. Saved in the library, so they apply on every Mac.</p></div></div>
+    {embedded ? null : <><nav className="findings-breadcrumb" aria-label="Breadcrumb"><button type="button" className="findings-crumb" onClick={() => navigate("/findings")}>Findings</button><span aria-hidden="true">›</span><span>Settings</span></nav>
+    <div className="view-heading"><div><h1>Findings settings</h1><p className="muted">How much evidence a pattern needs before it's shown, how findings are ranked, and what prompts ask agents to do. Saved in the library, so they apply on every Mac.</p></div></div></>}
     {error ? <p className="findings-error" role="alert">{error}</p> : null}
 
     <section className="findings-panel findings-setting" aria-labelledby="findingsThresholdTitle">
@@ -973,12 +973,27 @@ function FindingsSettings({ overview, reload }: { overview: Overview | null; rel
   </div>;
 }
 
+export function OptimizationSettingsPage() {
+  const [active, setActive] = useState(location.pathname === "/settings/optimization");
+  const [overview, setOverview] = useState<Overview | null>(latest);
+  const [error, setError] = useState("");
+  const reload = useCallback(() => loadOverview().then(body => { setError(""); return body; }).catch(failure => { setError((failure as Error).message); return null; }), []);
+  useEffect(() => { subscribers.add(setOverview); return () => { subscribers.delete(setOverview); }; }, []);
+  useEffect(() => {
+    const onRoute = () => { const here = location.pathname === "/settings/optimization"; setActive(here); if (here) void reload(); };
+    onRoute();
+    window.addEventListener("pharos:view", onRoute);
+    return () => { window.removeEventListener("pharos:view", onRoute); };
+  }, [reload]);
+  return active ? <>{error ? <p className="findings-error" role="alert">{error}</p> : null}<FindingsSettings overview={overview} reload={reload} embedded /></> : null;
+}
+
 // ---------------------------------------------------------------- list page
 
 function EmptyOpen({ overview }: { overview: Overview }) {
   const near = overview.near ?? [];
   const threshold = overview.threshold;
-  const settings = <a href="/findings?view=settings" onClick={event => { event.preventDefault(); navigate("/findings?view=settings"); }}>Change the threshold</a>;
+  const settings = <a href="/settings/optimization" onClick={event => { event.preventDefault(); navigate("/settings/optimization"); }}>Change the threshold</a>;
   return <div className="findings-empty">
     <strong>Nothing qualifies yet.</strong>
     <p>Pharos looked at {counted(Math.round(num(overview.status?.conversations_28d)), "conversation")} from the last 28 days. A pattern becomes a finding once it shows up in {threshold} conversations ({threshold === overview.recommended ? "the recommended threshold for a library this size" : `you set this; Pharos recommends ${overview.recommended} for a library this size`}).{" "}
@@ -1026,7 +1041,7 @@ function FindingsList({ overview, route, act, rank, setRank, onReview, newIds }:
         <p className="muted">Recurring patterns in your agents' work that a change to a repository, its instructions, or a harness setting can fix. Each is measured before and after you hand it to an agent.</p>
         {built ? <p className="findings-updated">{status.running ? <>Updating{status.phase ? ` · ${status.phase}` : ""}… </> : null}Updated {whenText(status.built_at)} from {counted(Math.round(num(status.conversations_28d)), "conversation")}.</p> : null}
       </div>
-      <button type="button" className="findings-button" onClick={() => navigate("/findings?view=settings")}><Icon name="settings" />Settings</button>
+      <button type="button" className="findings-button" onClick={() => navigate("/settings/optimization")}><Icon name="settings" />Settings</button>
     </div>
     {status.error ? <p className="findings-error" role="alert">The last refresh failed: {status.error}</p> : null}
     {!built ? <Building status={status} /> : !findings.length && !overview.wins?.length && !overview.cart?.length ? <EmptyOpen overview={overview} /> : <>

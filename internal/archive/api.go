@@ -180,7 +180,7 @@ func (s *Server) authorized(r *http.Request) bool {
 // of which serves the single-page UI.
 func isUIPage(path string) bool {
 	switch path {
-	case "/", "/library", "/settings", "/sources", "/activity", "/usage", "/tools", "/tl1", "/health", "/mcp", "/findings":
+	case "/", "/library", "/settings", "/settings/sources", "/settings/optimization", "/settings/preferences", "/sources", "/activity", "/usage", "/tools", "/tl1", "/health", "/mcp", "/findings":
 		return true
 	}
 	return strings.HasPrefix(path, "/work/")

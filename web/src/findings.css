@@ -308,10 +308,6 @@ button.findings-tile[aria-pressed="true"] { border-color: var(--accent); box-sha
 .findings-slider-ticks span.selected { color: var(--ink); font-weight: 700; }
 .findings-check { margin-bottom: 2px; color: var(--ink); }
 
-/* The Findings section of the Settings page. */
-#openFindingsSettings { flex: none; height: 32px; padding: 0 13px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--ink); white-space: nowrap; }
-#openFindingsSettings:hover { border-color: var(--accent); color: var(--accent); }
-
 /* Header: the tab badge counting open findings. */
 .tabs .findings-badge { display: inline-block; min-width: 18px; margin-left: 6px; padding: 0 5px; border-radius: 9px; background: var(--mast-brass, var(--accent)); color: var(--mast-active-ink, var(--panel)); font: 700 var(--fs-2xs)/16px var(--sans); text-align: center; vertical-align: 1px; }
 .tabs .findings-badge[hidden] { display: none; }

@@ -16,7 +16,7 @@ import toolsDocument from "../../schemas/tools.schema.json";
 import toolCallsDocument from "../../schemas/tool_calls.schema.json";
 import tl1AttemptsDocument from "../../schemas/tl1_attempts.schema.json";
 import { TL1Page } from "./tl1";
-import { FindingsPage, startFindingsChrome } from "./findings";
+import { FindingsPage, OptimizationSettingsPage, startFindingsChrome } from "./findings";
 import { Icon } from "./icons";
 import { AuthoredMessages, CategoryPill, MessageMix, authoredRenderers } from "./authored";
 
@@ -1968,6 +1968,7 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["toolsPage", <ToolsPage />],
   ["mcpPage", <MCPPage />],
   ["findingsPage", <FindingsPage copy={copyText} />],
+  ["optimizationSettingsPage", <OptimizationSettingsPage />],
   ["tl1Page", <TL1Page attempts={<QuerySurface dataset="tl1_attempts" />} filterAttempts={(where) => tableApis.get("tl1_attempts")?.setQuery(previous => ({ ...previous, where: where as WhereTerm[], offset: 0 }))} copy={copyText} />],
 ];
 for (const [id, component] of mounts) {
