@@ -214,6 +214,9 @@ func (s *Server) startCapture(w http.ResponseWriter, body map[string]any) {
 				failure = fmt.Errorf("capture stopped: %v", value)
 			}
 			s.captures.finish(run.ID, summary, failure)
+			if summary.OK && failure == nil {
+				s.recordActivityDuration("capture", run.StartedAt, now())
+			}
 		}()
 		summary = session.Run(ctx, sources, func(result CaptureSourceResult) { s.captures.progress(run.ID, result) })
 	})

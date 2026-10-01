@@ -202,7 +202,7 @@ describe('library, drive and captures UI', { skip }, () => {
     const panel = page.getByRole('dialog', { name: 'Library drive' });
     await panel.getByText('Indexing conversations', { exact: true }).waitFor();
     assert.equal(await panel.locator('.pharos-activity').count(), 1);
-    assert.match(await panel.textContent(), /Indexing captures(, [^:]+)?: writing to .* now; unplugging it would lose that work/);
+    assert.doesNotMatch(await panel.textContent(), /Disconnecting|unplugging|Eject/);
     await shoot(page, 'drive-panel-indexing');
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => /· indexed$/.test(document.querySelector('#sourceGrid .source-card.remote[data-host="host-b"][data-source="claude"] .pharos-card-capture')?.textContent.trim() || ''), null, { timeout: 180_000 });
@@ -362,7 +362,7 @@ describe('library, drive and captures UI', { skip }, () => {
     await context.close();
   });
 
-  it('says how to eject in Finder in a plain browser', async () => {
+  it('shows drive space and activity without a Disconnecting section', async () => {
     await idle();
     const { page, context, errors } = await openPage();
     const chip = page.locator('#pharosDrive');
@@ -373,10 +373,9 @@ describe('library, drive and captures UI', { skip }, () => {
     const panel = page.getByRole('dialog', { name: 'Library drive' });
     await panel.waitFor();
     const text = await panel.textContent();
-    assert.match(text, new RegExp(`Eject ${volume} in Finder`));
     assert.match(text, /Nothing is running\./);
-    assert.match(text, /Unplugging without ejecting now would probably lose nothing/);
-    assert.equal(await panel.locator('code').textContent(), `diskutil eject ${mount}`);
+    assert.doesNotMatch(text, /Disconnecting|unplugging|Eject|diskutil/);
+    assert.equal(await panel.locator('#pharosEject').count(), 0);
     assert.equal(await panel.locator('#pharosEjectButton').count(), 0);
     await shoot(page, 'drive-panel-browser');
     await page.emulateMedia({ colorScheme: 'dark' });
@@ -386,19 +385,16 @@ describe('library, drive and captures UI', { skip }, () => {
     await context.close();
   });
 
-  it('shows what holds the library, and ejects through the app when it can', async () => {
+  it('shows busy activity without disconnect controls in the native app', async () => {
     await idle();
     // A capture by another process holds this Mac's capture lock.
     const lock = path.join(library, 'captures', hostA.id, '.capture.lock');
     const holder = spawn('python3', ['-c', 'import fcntl,sys,time\nf=open(sys.argv[1],"a")\nfcntl.flock(f,fcntl.LOCK_EX)\nprint("locked",flush=True)\ntime.sleep(60)', lock], { stdio: ['ignore', 'pipe', 'ignore'] });
     await new Promise(resolve => holder.stdout.once('data', resolve));
-    const messages = [];
     const { page, context, errors } = await openPage(() => {
       // Stands in for the app's pharosLibrary handler (WKScriptMessageHandlerWithReply).
-      window.__ejectAnswer = 'refuse';
       window.webkit = { messageHandlers: { pharosLibrary: { postMessage: async message => {
         window.__ejectMessages = [...(window.__ejectMessages || []), message];
-        if (window.__ejectAnswer === 'refuse') throw new Error('Pharos is finishing a write; try ejecting again in a moment.');
         return { released: true };
       } } } };
     });
@@ -409,21 +405,13 @@ describe('library, drive and captures UI', { skip }, () => {
       await chip.click();
       const panel = page.getByRole('dialog', { name: 'Library drive' });
       await panel.getByText('Capture by another process', { exact: true }).waitFor();
-      assert.match(await panel.textContent(), new RegExp(`Capture by another process: writing to ${volume} now; unplugging it would lose that work\\. Eject it instead.*Pharos cannot stop it\\.`));
+      assert.match(await panel.textContent(), /Estimated complete unknown/);
+      assert.doesNotMatch(await panel.textContent(), /Disconnecting|unplugging|Eject/);
       await shoot(page, 'drive-panel-busy');
-      await panel.getByRole('button', { name: `Eject ${volume}` }).click();
-      await panel.getByText('Pharos cannot stop a capture by another process').waitFor();
-      await panel.getByRole('button', { name: `Stop and eject ${volume}` }).click();
-      await panel.getByText('Pharos is finishing a write; try ejecting again in a moment.').waitFor();
-      await shoot(page, 'drive-panel-eject-refused');
       holder.kill();
       await page.waitForFunction(() => document.querySelector('#pharosDrive')?.dataset.state === 'idle', null, { timeout: 15_000 });
-      await page.evaluate(() => { window.__ejectAnswer = 'release'; });
-      assert.match(await panel.textContent(), new RegExp(`Ejecting quits Pharos and stops agents' Pharos MCP servers on this Mac; reconnect them once ${volume} is back\\.`));
-      await panel.getByRole('button', { name: `Eject ${volume}` }).click();
-      await panel.getByRole('button', { name: `Quitting to eject ${volume}…` }).waitFor();
-      messages.push(...await page.evaluate(() => window.__ejectMessages));
-      assert.deepEqual(messages, [{ action: 'eject' }, { action: 'eject' }]);
+      assert.match(await panel.textContent(), /Nothing is running\./);
+      assert.deepEqual(await page.evaluate(() => window.__ejectMessages || []), []);
       assert.deepEqual(errors, []);
     } finally {
       holder.kill();

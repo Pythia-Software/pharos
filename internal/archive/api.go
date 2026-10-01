@@ -62,6 +62,7 @@ type Server struct {
 	captures   captureRuns
 	backups    backupRuns
 	tasks      backgroundTasks
+	timingMu   sync.Mutex
 }
 
 func NewServer(config Config, catalog *Catalog) *Server {
@@ -823,8 +824,16 @@ func (s *Server) updateRun(id string, update func(*SyncRun)) {
 	defer s.runsMu.Unlock()
 	for _, run := range s.runs {
 		if run.ID == id {
+			previousState := run.State
 			update(run)
 			run.UpdatedAt = now()
+			if previousState == "running" && run.State == "complete" && !run.StopRequested {
+				kind := "sync"
+				if run.Kind == indexRunKind {
+					kind = "index"
+				}
+				s.recordActivityDuration(kind, run.StartedAt, firstString(run.CompletedAt))
+			}
 			return
 		}
 	}

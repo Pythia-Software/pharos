@@ -144,6 +144,70 @@ test('The header joins the drive indicator and Update library into one combo but
   } finally { await browser.close(); }
 });
 
+test('Running now shows historical completion estimates without disconnect controls', async () => {
+  const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    const started = new Date('2026-10-01T16:00:00Z');
+    await page.clock.install({ time: new Date(started.getTime() + 120_000) });
+    let activities = [{ kind: 'index', label: 'Indexing captures', detail: '120 of 600 conversations', progress: 0.2,
+      started_at: started.toISOString(), estimated_completion_at: new Date(started.getTime() + 420_000).toISOString() }];
+    await page.route('http://drive-estimate.test/**', route => {
+      const url = new URL(route.request().url());
+      const json = body => route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) });
+      if (url.pathname === '/assets/library.js') return route.fulfill({ contentType: 'application/javascript', body: fs.readFileSync(path.join(root, 'internal/archive/assets/library.js')) });
+      if (!url.pathname.startsWith('/api/') && !url.pathname.startsWith('/assets/')) return route.fulfill({ contentType: 'text/html', body: html });
+      if (url.pathname === '/api/library/status') return json({ idle: !activities.length, portable: true, library_dir: '/Volumes/Pharos SSD/Pharos',
+        drive: { name: 'Pharos SSD', location: 'external', ejectable: true }, activities,
+        unplug: { action: 'eject', summary: 'Disconnecting advice must not appear.' } });
+      if (url.pathname === '/api/health/drive') return json({ free_bytes: 400_000_000_000, sizes: { library_bytes: 12_000_000_000 } });
+      if (url.pathname === '/api/activity') return json({ active: 1, runs: [] });
+      if (url.pathname.startsWith('/api/')) return json({ items: [] });
+      return route.fulfill({ contentType: 'application/javascript', body: '' });
+    });
+    await page.goto('http://drive-estimate.test/library');
+    await page.locator('#pharosDrive').click();
+    const panel = page.getByRole('dialog', { name: 'Library drive' });
+    await panel.getByText('Started 2m ago', { exact: true }).waitFor();
+    await panel.getByText('Estimated complete in 5m', { exact: true }).waitFor();
+    const info = await panel.locator('.pharos-activity-info').boundingBox();
+    const timing = await panel.locator('.pharos-activity-timing').boundingBox();
+    assert.ok(timing.x >= info.x + info.width, 'timing sits to the right of the activity');
+    assert.ok(Math.abs(timing.y - info.y) < 4, 'timing aligns with the activity title');
+    assert.doesNotMatch(await panel.textContent(), /Disconnecting|Eject|diskutil/);
+    assert.equal(await panel.locator('#pharosEject').count(), 0);
+    if (process.env.PHAROS_UI_SCREENSHOTS) {
+      fs.mkdirSync(process.env.PHAROS_UI_SCREENSHOTS, { recursive: true });
+      await panel.screenshot({ path: path.join(process.env.PHAROS_UI_SCREENSHOTS, 'drive-popover-estimate.png') });
+    }
+    await page.setViewportSize({ width: 320, height: 900 });
+    assert.equal(await panel.evaluate(element => element.scrollWidth <= element.clientWidth), true, 'timing fits a narrow popover');
+    await page.setViewportSize({ width: 1280, height: 900 });
+    activities = [{ kind: 'backup', label: 'Backing up', started_at: started.toISOString(), estimated_completion_at: new Date(started.getTime() + 420_000).toISOString() }];
+    await page.clock.runFor(61_000);
+    await panel.getByText('Started 3m ago', { exact: true }).waitFor();
+    await panel.getByText('Estimated complete in 4m', { exact: true }).waitFor();
+    activities = [{ kind: 'maintenance', label: 'Updating findings' }];
+    await page.clock.runFor(2100);
+    await panel.getByText('Started unknown', { exact: true }).waitFor();
+    await panel.getByText('Estimated complete unknown', { exact: true }).waitFor();
+    activities = [{ kind: 'index', label: 'Indexing captures', estimated_completion_at: started.toISOString() }];
+    await page.clock.runFor(2100);
+    await panel.getByText('Estimated complete overdue', { exact: true }).waitFor();
+    activities = [{ kind: 'index', label: 'Indexing captures', estimated_completion_at: 'invalid' }];
+    await page.clock.runFor(2100);
+    await panel.getByText('Estimated complete unknown', { exact: true }).waitFor();
+    activities = [];
+    await page.clock.runFor(2100);
+    await panel.getByText('Nothing is running.').waitFor();
+    assert.doesNotMatch(await panel.textContent(), /Estimated complete|Started|Disconnecting|Eject/);
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
 test('Update library starts a pending upgrade through the shared action', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
   const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
