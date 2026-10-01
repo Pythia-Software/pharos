@@ -230,7 +230,7 @@ func rederiveWorkspaceMode(tx *sql.Tx, workspaceID string, merged map[string]boo
 		}
 	}
 	var stored sql.NullFloat64
-	if err := tx.QueryRow("SELECT MAX(value) FROM metrics WHERE workspace_id=? AND unit='tokens' AND name='total_tokens'", workspaceID).Scan(&stored); err != nil {
+	if err := tx.QueryRow("SELECT MAX(value) FROM metrics WHERE workspace_id=? AND unit='tokens' AND +name='total_tokens'", workspaceID).Scan(&stored); err != nil {
 		return err
 	}
 	if tokens := reconciledTokenMetrics(union); len(tokens) > 0 && (force || metricValue(tokens, "total_tokens") >= stored.Float64) {

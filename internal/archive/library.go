@@ -42,15 +42,17 @@ var libraryColumns = []libraryColumn{
 	// conversations, not messages_prose_idx (see libraryPreviewSelect).
 	{"turn_count", "(SELECT COUNT(*) FROM conversations tx JOIN messages tm ON tm.conversation_id=tx.id WHERE tx.workspace_id=w.id AND " + currentGroupConversation("tx") + " AND +tm.role='user' AND tm.kind='message')"},
 	{"changed_file_count", "(SELECT COUNT(*) FROM change_sets csx JOIN change_files cfx ON cfx.change_set_id=csx.id WHERE csx.workspace_id=w.id)"},
+	// A unary + on name keeps metrics found through their workspace, not
+	// metrics_name_value_idx, which holds every workspace's metric of that name.
 	{"token_count", `COALESCE(
-		(SELECT MAX(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND mx.name='total_tokens'),
-		(SELECT SUM(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND mx.name IN ('input_tokens','output_tokens','cache_tokens')))`},
+		(SELECT MAX(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND +mx.name='total_tokens'),
+		(SELECT SUM(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND +mx.name IN ('input_tokens','output_tokens','cache_tokens')))`},
 	{"tool_use_count", `MAX(
 		(SELECT COUNT(*) FROM conversations tc JOIN messages tm ON tm.conversation_id=tc.id WHERE tc.workspace_id=w.id AND ` + currentGroupConversation("tc") + ` AND tm.kind IN ('tool_call','delegation')),
-		COALESCE((SELECT SUM(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND mx.name='tool_calls' AND mx.extractor_version<>'core-v1'),0))`},
+		COALESCE((SELECT SUM(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND +mx.name='tool_calls' AND mx.extractor_version<>'core-v1'),0))`},
 	{"tool_error_count", `MAX(
 		(SELECT COUNT(*) FROM conversations ec JOIN messages em ON em.conversation_id=ec.id WHERE ec.workspace_id=w.id AND ` + currentGroupConversation("ec") + ` AND em.kind IN ('tool_result','delegation_result') AND json_extract(CASE WHEN json_valid(em.text) THEN em.text ELSE '{}' END,'$.is_error')=1),
-		COALESCE((SELECT SUM(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND mx.name='tool_errors' AND mx.extractor_version<>'core-v1'),0))`},
+		COALESCE((SELECT SUM(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND +mx.name='tool_errors' AND mx.extractor_version<>'core-v1'),0))`},
 	// Claude marks a compaction with a compact_boundary event. Codex replays
 	// earlier compactions when a session resumes or forks, so only those the
 	// adapter attributed to a turn (compaction_trigger) are counted.

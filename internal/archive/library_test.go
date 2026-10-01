@@ -515,3 +515,14 @@ func TestLibraryRowsReadTheWorkspaceIndex(t *testing.T) {
 		t.Fatalf("Library rows read the workspace table, so workspaces_library_idx lacks a field they use: %s", text)
 	}
 }
+
+func TestLibraryRefreshReadsMetricsThroughTheirWorkspace(t *testing.T) {
+	catalog, _ := libraryFixture(t)
+	plan, err := queryMaps(catalog.DB, "EXPLAIN QUERY PLAN "+libraryDerivedSelect("w.id=?"), "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := jsonText(plan); strings.Contains(text, "metrics_name_value_idx") {
+		t.Fatalf("a Library refresh walks every workspace's metric of a name for each workspace: %s", text)
+	}
+}
