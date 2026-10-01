@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -43,7 +44,8 @@ type Catalog struct {
 	// background runs the catalog's own background work (the authorship
 	// rebuild). The service sets it to its spawn, so a release cancels the
 	// work and waits for it before closing the catalog; nil runs a goroutine.
-	background func(work func(context.Context)) bool
+	background        func(work func(context.Context)) bool
+	projectionBatches atomic.Int32
 }
 
 // runBackground starts work with background, or in a goroutine when it is
@@ -139,7 +141,7 @@ func (c *Catalog) Close() error {
 // the loaded-instructions record. A version-10 build merges repositories
 // without recording the retirement, so dismissals, prompts, and
 // measurements of the merged repository's findings would be orphaned.
-const catalogSchemaVersion = 11
+const catalogSchemaVersion = 12
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.
@@ -187,6 +189,7 @@ func (c *Catalog) Initialize() error {
 		return err
 	}
 	for _, migration := range []struct{ table, column, statement string }{
+		{"source_item_states", "indexed_by", "ALTER TABLE source_item_states ADD COLUMN indexed_by TEXT NOT NULL DEFAULT 'intentional'"},
 		{"source_states", "index_version", "ALTER TABLE source_states ADD COLUMN index_version TEXT"},
 		{"messages", "raw_text", "ALTER TABLE messages ADD COLUMN raw_text TEXT"},
 		{"messages", "source_order", "ALTER TABLE messages ADD COLUMN source_order INTEGER"},
@@ -287,6 +290,14 @@ func (c *Catalog) Initialize() error {
 	if err := c.ensureLibrary(); err != nil {
 		return err
 	}
+	if _, err := c.DB.Exec(`INSERT OR IGNORE INTO declared_native_aliases(conversation_id,account,native_id)
+		SELECT c.id,c.account,alias.value FROM conversations c JOIN json_each(CASE WHEN json_valid(c.aliases_json) THEN c.aliases_json ELSE '[]' END) alias
+		WHERE alias.type='text' AND alias.value<>'' AND NOT EXISTS(SELECT 1 FROM meta WHERE key='declared_native_aliases_version')`); err != nil {
+		return err
+	}
+	if _, err := c.DB.Exec("INSERT OR IGNORE INTO meta(key,value) VALUES('declared_native_aliases_version','1')"); err != nil {
+		return err
+	}
 	// Never lower the recorded version, even if a newer build raced this open.
 	_, err = c.DB.Exec(`INSERT INTO meta(key,value) VALUES('schema_version',?) ON CONFLICT(key) DO UPDATE
 		SET value=excluded.value WHERE CAST(meta.value AS INTEGER)<CAST(excluded.value AS INTEGER)`, strconv.Itoa(catalogSchemaVersion))
@@ -339,6 +350,18 @@ func (c *Catalog) Initialize() error {
 	}
 	if _, err := c.DB.Exec(`INSERT OR IGNORE INTO meta(key,value) SELECT 'tool_command_fts_version','1'
 		WHERE NOT EXISTS(SELECT 1 FROM tool_calls)`); err != nil {
+		return err
+	}
+	var aliasesVersion string
+	if err := c.DB.QueryRow("SELECT value FROM meta WHERE key='declared_native_aliases_version'").Scan(&aliasesVersion); err == sql.ErrNoRows {
+		if _, err := c.DB.Exec(`INSERT OR IGNORE INTO declared_native_aliases(conversation_id,account,native_id)
+			SELECT c.id,c.account,a.value FROM conversations c,json_each(c.aliases_json) a WHERE a.type='text' AND a.value<>''`); err != nil {
+			return err
+		}
+		if _, err := c.DB.Exec("INSERT INTO meta(key,value) VALUES('declared_native_aliases_version','1')"); err != nil {
+			return err
+		}
+	} else if err != nil {
 		return err
 	}
 	if err := c.backfillAgentSessions(); err != nil {

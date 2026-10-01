@@ -26,6 +26,7 @@ import (
 
 // libraryActivity is one piece of work that holds or writes the library.
 type libraryActivity struct {
+	timingKind string
 	// Kind is sync, index, capture, capture-other (a capture by another
 	// process, such as the CLI), backup, git, or maintenance.
 	Kind   string `json:"kind"`
@@ -196,8 +197,23 @@ func (s *Server) libraryActivities() []libraryActivity {
 		if run.State != "running" {
 			continue
 		}
-		activity := libraryActivity{Kind: "sync", Label: "Indexing sources", StartedAt: run.StartedAt, Writes: true,
+		activity := libraryActivity{Kind: "sync", Label: "Indexing sources", StartedAt: run.StartedAt, Writes: true, timingKind: activityTimingKind(run.Kind),
 			OnEject: "Stops between workspaces; the next index resumes it.", Stoppable: true, Stopping: run.StopRequested}
+		if run.Kind == automaticRunKind {
+			activity.Label = "Automatic sync: checking for changes"
+			if run.Phase == "indexing" {
+				activity.Label = fmt.Sprintf("Automatic sync: syncing %d conversations", run.Conversations)
+			}
+			if run.Phase == "verifying" {
+				activity.Label = "Automatic sync: verifying a conversation"
+			}
+		}
+		if run.Kind == "library-update" {
+			activity.Label = "Updating library: " + run.Phase
+		}
+		if run.Kind == "verification" {
+			activity.Label = "Verifying retained inputs"
+		}
 		// Sources are the only unit of progress a run reports; one source
 		// would sit at 0% until it is done.
 		if run.TotalSources > 1 {
@@ -356,7 +372,7 @@ func (s *Server) libraryStatus() map[string]any {
 		if activity.Kind == "git" && strings.Contains(activity.Detail, "first scan of this catalog") {
 			continue
 		}
-		if duration := s.activityDuration(activity.Kind); duration > 0 && activity.StartedAt != "" {
+		if duration := s.activityDuration(defaultString(activity.timingKind, activity.Kind)); duration > 0 && activity.StartedAt != "" {
 			if started, err := time.Parse(time.RFC3339Nano, activity.StartedAt); err == nil {
 				activity.EstimatedCompletionAt = formatTime(started.Add(duration))
 			}

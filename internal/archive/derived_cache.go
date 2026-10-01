@@ -129,6 +129,9 @@ func (c *Catalog) catalogVersion(ctx context.Context) (int64, error) {
 // warms the Library, the page the app opens on, the usage behind it, and the
 // Tools rollup.
 func (c *Catalog) warmCaches(ctx context.Context) {
+	if c.projectionBatches.Load() > 0 {
+		return
+	}
 	version, err := c.catalogVersion(ctx)
 	if err != nil || version != c.quietVersion {
 		c.quietVersion = version

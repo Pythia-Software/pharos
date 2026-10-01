@@ -195,11 +195,17 @@ func (s *Server) startCapture(w http.ResponseWriter, body map[string]any) {
 		writeError(w, errCaptureBusy, http.StatusConflict)
 		return
 	}
+	if !s.acquireManualIngest() {
+		writeError(w, errors.New("manual sync operation already running"), http.StatusConflict)
+		return
+	}
 	session, err := beginCapture(config)
 	if errors.Is(err, errCaptureBusy) {
+		s.ingestMu.Unlock()
 		writeError(w, err, http.StatusConflict)
 		return
 	} else if err != nil {
+		s.ingestMu.Unlock()
 		writeError(w, err, http.StatusServiceUnavailable)
 		return
 	}
@@ -207,6 +213,7 @@ func (s *Server) startCapture(w http.ResponseWriter, body map[string]any) {
 	// A release (before an eject) cancels the capture between files; every
 	// file and manifest is replaced atomically, so the next run resumes.
 	started := s.spawn(func(ctx context.Context) {
+		defer s.ingestMu.Unlock()
 		defer session.Close()
 		summary, failure := CaptureSummary{OK: true}, error(nil)
 		defer func() {
@@ -221,6 +228,7 @@ func (s *Server) startCapture(w http.ResponseWriter, body map[string]any) {
 		summary = session.Run(ctx, sources, func(result CaptureSourceResult) { s.captures.progress(run.ID, result) })
 	})
 	if !started {
+		s.ingestMu.Unlock()
 		// A stop began after this request was admitted.
 		session.Close()
 		stopping := errors.New("Pharos is stopping, so the capture did not start")

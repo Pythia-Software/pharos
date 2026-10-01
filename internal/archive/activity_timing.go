@@ -10,6 +10,17 @@ func activityTimingKey(kind string) string {
 	return "activity_durations:" + currentHost().ID + ":" + kind
 }
 
+func activityTimingKind(runKind string) string {
+	switch runKind {
+	case "source-sync":
+		return "sync"
+	case indexRunKind:
+		return "index"
+	default:
+		return runKind
+	}
+}
+
 func (s *Server) activityDurations(kind string) []float64 {
 	var value string
 	if s.Catalog == nil || s.Catalog.DB.QueryRow("SELECT value FROM meta WHERE key=?", activityTimingKey(kind)).Scan(&value) != nil {

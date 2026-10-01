@@ -31,36 +31,40 @@ import (
 
 type libraryColumn struct{ name, expr string }
 
+func currentGroupConversation(alias string) string {
+	return "NOT EXISTS(SELECT 1 FROM conversation_group_membership gm WHERE gm.conversation_id=" + alias + ".id AND gm.active=0)"
+}
+
 // libraryColumns are evaluated per workspace with the workspace aliased as w.
 var libraryColumns = []libraryColumn{
-	{"conversation_count", "(SELECT COUNT(*) FROM conversations cx WHERE cx.workspace_id=w.id)"},
+	{"conversation_count", "(SELECT COUNT(*) FROM conversations cx WHERE cx.workspace_id=w.id AND " + currentGroupConversation("cx") + ")"},
 	// A unary + on role keeps a workspace's messages found through its
 	// conversations, not messages_prose_idx (see libraryPreviewSelect).
-	{"turn_count", "(SELECT COUNT(*) FROM conversations tx JOIN messages tm ON tm.conversation_id=tx.id WHERE tx.workspace_id=w.id AND +tm.role='user' AND tm.kind='message')"},
+	{"turn_count", "(SELECT COUNT(*) FROM conversations tx JOIN messages tm ON tm.conversation_id=tx.id WHERE tx.workspace_id=w.id AND " + currentGroupConversation("tx") + " AND +tm.role='user' AND tm.kind='message')"},
 	{"changed_file_count", "(SELECT COUNT(*) FROM change_sets csx JOIN change_files cfx ON cfx.change_set_id=csx.id WHERE csx.workspace_id=w.id)"},
 	{"token_count", `COALESCE(
 		(SELECT MAX(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND mx.name='total_tokens'),
 		(SELECT SUM(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND mx.name IN ('input_tokens','output_tokens','cache_tokens')))`},
 	{"tool_use_count", `MAX(
-		(SELECT COUNT(*) FROM conversations tc JOIN messages tm ON tm.conversation_id=tc.id WHERE tc.workspace_id=w.id AND tm.kind IN ('tool_call','delegation')),
+		(SELECT COUNT(*) FROM conversations tc JOIN messages tm ON tm.conversation_id=tc.id WHERE tc.workspace_id=w.id AND ` + currentGroupConversation("tc") + ` AND tm.kind IN ('tool_call','delegation')),
 		COALESCE((SELECT SUM(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND mx.name='tool_calls' AND mx.extractor_version<>'core-v1'),0))`},
 	{"tool_error_count", `MAX(
-		(SELECT COUNT(*) FROM conversations ec JOIN messages em ON em.conversation_id=ec.id WHERE ec.workspace_id=w.id AND em.kind IN ('tool_result','delegation_result') AND json_extract(CASE WHEN json_valid(em.text) THEN em.text ELSE '{}' END,'$.is_error')=1),
+		(SELECT COUNT(*) FROM conversations ec JOIN messages em ON em.conversation_id=ec.id WHERE ec.workspace_id=w.id AND ` + currentGroupConversation("ec") + ` AND em.kind IN ('tool_result','delegation_result') AND json_extract(CASE WHEN json_valid(em.text) THEN em.text ELSE '{}' END,'$.is_error')=1),
 		COALESCE((SELECT SUM(mx.value) FROM metrics mx WHERE mx.workspace_id=w.id AND mx.name='tool_errors' AND mx.extractor_version<>'core-v1'),0))`},
 	// Claude marks a compaction with a compact_boundary event. Codex replays
 	// earlier compactions when a session resumes or forks, so only those the
 	// adapter attributed to a turn (compaction_trigger) are counted.
-	{"compaction_count", `(SELECT COUNT(*) FROM conversations kc JOIN messages km ON km.conversation_id=kc.id WHERE kc.workspace_id=w.id AND km.kind='metadata'
+	{"compaction_count", `(SELECT COUNT(*) FROM conversations kc JOIN messages km ON km.conversation_id=kc.id WHERE kc.workspace_id=w.id AND ` + currentGroupConversation("kc") + ` AND km.kind='metadata'
 		AND (km.text LIKE '%"subtype":"compact_boundary"%' OR km.text LIKE '%"compaction_trigger":"%'))`},
 	// A child conversation's main session replaces its linked delegation in
 	// this count. Unlinked children may belong to another workspace or still
 	// have a delegation without a result.
 	{"subagent_count", `(SELECT COUNT(*) FROM agent_sessions ax JOIN conversations cx ON cx.id=ax.conversation_id
-		WHERE ax.workspace_id=w.id AND ((ax.native_id<>'main' AND ax.usage_status<>'in-child-conversation')
+		WHERE ax.workspace_id=w.id AND ` + currentGroupConversation("cx") + ` AND ((ax.native_id<>'main' AND ax.usage_status<>'in-child-conversation')
 		OR (ax.native_id='main' AND cx.agent_depth>0 AND EXISTS
 			(SELECT 1 FROM agent_sessions delegation WHERE delegation.child_conversation_id=cx.id))))`},
 	{"subagent_depth", `COALESCE(
-		(SELECT MAX(ax.depth) FROM agent_sessions ax JOIN conversations cx ON cx.id=ax.conversation_id WHERE ax.workspace_id=w.id
+		(SELECT MAX(ax.depth) FROM agent_sessions ax JOIN conversations cx ON cx.id=ax.conversation_id WHERE ax.workspace_id=w.id AND ` + currentGroupConversation("cx") + `
 			AND ((ax.native_id<>'main' AND ax.usage_status<>'in-child-conversation') OR
 				(ax.native_id='main' AND cx.agent_depth>0 AND EXISTS
 					(SELECT 1 FROM agent_sessions delegation WHERE delegation.child_conversation_id=cx.id))))
@@ -92,6 +96,7 @@ var libraryDependencies = []libraryDependency{
 	// Workspace columns are read live; a new workspace only needs a stored row.
 	{table: "workspaces", workspaces: func(row string) string { return "SELECT " + row + ".id AS id" }, insertOnly: true},
 	{table: "conversations", workspaces: workspaceColumn},
+	{table: "conversation_group_membership", workspaces: workspaceColumn},
 	{table: "messages", workspaces: func(row string) string {
 		return "SELECT workspace_id AS id FROM conversations WHERE id=" + row + ".conversation_id"
 	}},
@@ -216,6 +221,19 @@ func (c *Catalog) ensureLibrary() error {
 // RefreshLibrary recomputes up to batch dirty workspaces in one short write
 // transaction and reports how many it cleared.
 func (c *Catalog) RefreshLibrary(ctx context.Context, batch int) (int, error) {
+	return c.refreshLibrary(ctx, batch, nil)
+}
+
+func (c *Catalog) refreshLibraryWorkspaces(ctx context.Context, workspaces []string) error {
+	for offset := 0; offset < len(workspaces); offset += 10 {
+		if _, err := c.refreshLibrary(ctx, 10, workspaces[offset:min(offset+10, len(workspaces))]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Catalog) refreshLibrary(ctx context.Context, batch int, workspaces []string) (int, error) {
 	tx, finish, err := c.beginTrackedWrite(ctx, "library-refresh")
 	if err != nil {
 		return 0, err
@@ -223,8 +241,16 @@ func (c *Catalog) RefreshLibrary(ctx context.Context, batch int) (int, error) {
 	defer func() { _ = tx.Rollback(); finish() }()
 	// Write first so the transaction takes the write lock (honoring
 	// busy_timeout) instead of failing to upgrade a stale read snapshot.
+	where, arguments := "", []any{}
+	if workspaces != nil {
+		where = " WHERE workspace_id IN (" + placeholders(len(workspaces)) + ")"
+		for _, id := range workspaces {
+			arguments = append(arguments, id)
+		}
+	}
+	arguments = append(arguments, batch)
 	rows, err := queryMapsContext(ctx, tx, `DELETE FROM workspace_library_dirty WHERE workspace_id IN
-		(SELECT workspace_id FROM workspace_library_dirty LIMIT ?) RETURNING workspace_id`, batch)
+		(SELECT workspace_id FROM workspace_library_dirty`+where+` LIMIT ?) RETURNING workspace_id`, arguments...)
 	if err != nil || len(rows) == 0 {
 		return 0, err
 	}
@@ -322,6 +348,14 @@ func (c *Catalog) libraryCatchingUp() bool {
 // ingests run by other processes against the same catalog.
 func (c *Catalog) maintainLibrary(ctx context.Context) {
 	for {
+		if c.projectionBatches.Load() > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(100 * time.Millisecond):
+				continue
+			}
+		}
 		count, err := c.RefreshLibrary(ctx, 10)
 		c.noteLibraryRefresh(count, err)
 		wait := time.Duration(0)

@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 )
 
 type MessageRecord struct {
+	accounting                                                                                              *messageAccounting
 	NativeID, Role, Kind, Text, Model, CreatedAt, ParentNativeID, PreviousNativeID, CallID, EvidenceLocator string
 	RawText                                                                                                 string
 	SourceOrder                                                                                             int
@@ -103,6 +105,7 @@ type VersionedAdapter interface {
 }
 
 type baseAdapter struct {
+	ctx        context.Context
 	config     SourceConfig
 	capability string
 	// view, when set, has the adapter read a capture of the source (see
@@ -112,6 +115,20 @@ type baseAdapter struct {
 
 func (a baseAdapter) Config() SourceConfig { return a.config }
 func (a baseAdapter) Capability() string   { return a.capability }
+
+func (a *baseAdapter) setContext(ctx context.Context) { a.ctx = ctx }
+func (a baseAdapter) context() context.Context {
+	if a.ctx != nil {
+		return a.ctx
+	}
+	return context.Background()
+}
+
+func setAdapterContext(adapter Adapter, ctx context.Context) {
+	if contextual, ok := adapter.(interface{ setContext(context.Context) }); ok {
+		contextual.setContext(ctx)
+	}
+}
 
 func (a baseAdapter) capture() *captureView { return a.view }
 
@@ -459,6 +476,9 @@ const jsonlExtractor = "message-model-v9"
 func (a *jsonlAdapter) accept(path string) bool {
 	relative, _ := filepath.Rel(a.config.Path, path)
 	relative = filepath.ToSlash(relative)
+	if relative == "." {
+		relative = filepath.Base(path)
+	}
 	if a.provider == "codex" {
 		return strings.HasPrefix(relative, "sessions/") || strings.HasPrefix(relative, "archived_sessions/") || strings.HasPrefix(filepath.Base(relative), "rollout")
 	}
@@ -475,12 +495,36 @@ func (a *jsonlAdapter) Discover(emit func(WorkspaceRecord) error) error {
 
 func (a *jsonlAdapter) partExtractor() string { return a.provider + ":" + jsonlExtractor }
 
+func (a *jsonlAdapter) transcriptInfo(path string, entry os.DirEntry, walkErr error) (fs.FileInfo, error) {
+	if err := a.context().Err(); err != nil {
+		return nil, err
+	}
+	if walkErr != nil {
+		if errors.Is(walkErr, os.ErrNotExist) && path != a.config.Path {
+			return nil, nil
+		}
+		return nil, walkErr
+	}
+	if entry.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".jsonl") || !a.accept(path) {
+		return nil, nil
+	}
+	info, err := entry.Info()
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	return info, err
+}
+
 // discoverParts parses each transcript, a Claude session together with its
 // subagents' files, unless unchanged passes over the files as they are.
 func (a *jsonlAdapter) discoverParts(unchanged func([]sourcePart) bool, emit func(*WorkspaceRecord, []sourcePart) error) error {
 	groups, infos, roots := map[string][]string{}, map[string]fs.FileInfo{}, []string{}
 	if err := filepath.WalkDir(a.config.Path, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil || entry.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".jsonl") || !a.accept(path) {
+		info, err := a.transcriptInfo(path, entry, walkErr)
+		if err != nil {
+			return err
+		}
+		if info == nil {
 			return nil
 		}
 		root := path
@@ -491,9 +535,7 @@ func (a *jsonlAdapter) discoverParts(unchanged func([]sourcePart) bool, emit fun
 			roots = append(roots, root)
 		}
 		groups[root] = append(groups[root], path)
-		if info, err := entry.Info(); err == nil {
-			infos[path] = info
-		}
+		infos[path] = info
 		return nil
 	}); err != nil {
 		return err
@@ -502,6 +544,9 @@ func (a *jsonlAdapter) discoverParts(unchanged func([]sourcePart) bool, emit fun
 		sort.Strings(roots)
 	}
 	for _, root := range roots {
+		if err := a.context().Err(); err != nil {
+			return err
+		}
 		paths := groups[root]
 		sort.Slice(paths, func(i, j int) bool {
 			if paths[i] == root || paths[j] == root {

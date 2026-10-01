@@ -169,8 +169,14 @@ func mergeConversation(tx *sql.Tx, claim conversationAuthority, value Conversati
 			continue
 		}
 		message.SourceOrder = sourceOrder
-		if _, _, err := upsertMessage(tx, claim.id, message); err != nil {
+		id, changed, err := upsertMessage(tx, claim.id, message)
+		if err != nil {
 			return false, err
+		}
+		if changed {
+			if err := replaceMessageFTS(tx, id); err != nil {
+				return false, err
+			}
 		}
 		added = true
 	}
@@ -180,12 +186,6 @@ func mergeConversation(tx *sql.Tx, claim conversationAuthority, value Conversati
 	if _, err := tx.Exec("UPDATE conversations SET origin_host_id=? WHERE id=?", mergedWriter, claim.id); err != nil {
 		return false, err
 	}
-	if err := deleteConversationFTS(tx, claim.id); err != nil {
-		return false, err
-	}
-	if err := insertConversationFTS(tx, claim.id); err != nil {
-		return false, err
-	}
 	return true, upsertConversationDocument(tx, claim.id)
 }
 
@@ -193,6 +193,10 @@ func mergeConversation(tx *sql.Tx, claim conversationAuthority, value Conversati
 // merge. Reconciling interleaved copies is order-sensitive, so a union that
 // reports fewer tokens than are stored keeps the stored figures.
 func rederiveWorkspace(tx *sql.Tx, workspaceID string, merged map[string]bool) error {
+	return rederiveWorkspaceMode(tx, workspaceID, merged, false)
+}
+
+func rederiveWorkspaceMode(tx *sql.Tx, workspaceID string, merged map[string]bool, force bool) error {
 	rows, err := queryMaps(tx, "SELECT id,provider,model,started_at,ended_at,agent_depth FROM conversations WHERE workspace_id=? ORDER BY started_at,id", workspaceID)
 	if err != nil {
 		return err
@@ -207,14 +211,14 @@ func rederiveWorkspace(tx *sql.Tx, workspaceID string, merged map[string]bool) e
 		conversation := ConversationRecord{Provider: firstString(row["provider"]), Model: firstString(row["model"]), StartedAt: firstString(row["started_at"]),
 			EndedAt: firstString(row["ended_at"]), AgentDepth: int(integer(row["agent_depth"])), Messages: messages}
 		union.Conversations = append(union.Conversations, conversation)
-		if !merged[id] {
+		if !merged[id] || force {
 			continue
 		}
 		var stored float64
 		if err := tx.QueryRow("SELECT COALESCE(SUM(total_tokens),0) FROM agent_sessions WHERE conversation_id=?", id).Scan(&stored); err != nil {
 			return err
 		}
-		if conversationTokenCounts(messages)["total_tokens"] >= stored {
+		if force || conversationTokenCounts(messages)["total_tokens"] >= stored {
 			if err := replaceAgentSessions(tx, workspaceID, id, conversation); err != nil {
 				return err
 			}
@@ -229,7 +233,7 @@ func rederiveWorkspace(tx *sql.Tx, workspaceID string, merged map[string]bool) e
 	if err := tx.QueryRow("SELECT MAX(value) FROM metrics WHERE workspace_id=? AND unit='tokens' AND name='total_tokens'", workspaceID).Scan(&stored); err != nil {
 		return err
 	}
-	if tokens := reconciledTokenMetrics(union); len(tokens) > 0 && metricValue(tokens, "total_tokens") >= stored.Float64 {
+	if tokens := reconciledTokenMetrics(union); len(tokens) > 0 && (force || metricValue(tokens, "total_tokens") >= stored.Float64) {
 		if _, err := tx.Exec("DELETE FROM metrics WHERE workspace_id=? AND unit='tokens'", workspaceID); err != nil {
 			return err
 		}

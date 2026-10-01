@@ -9,10 +9,14 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 )
 
 type IngestResult struct {
-	Source string `json:"source"`
+	WriteSeconds          float64 `json:"write_seconds,omitempty"`
+	DiscoveryParseSeconds float64 `json:"discovery_parse_seconds,omitempty"`
+	WriteRows             int64   `json:"write_rows,omitempty"`
+	Source                string  `json:"source"`
 	// Host is the Mac whose copy of the source was ingested.
 	Host             string `json:"host,omitempty"`
 	Workspaces       int    `json:"workspaces"`
@@ -61,7 +65,9 @@ func captureViewOf(adapter Adapter) *captureView {
 // record commits on its own, so the source is left "indexing" and the next
 // sync resumes it, as after a crash.
 func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress ProgressFunc) IngestResult {
+	setAdapterContext(adapter, ctx)
 	config := adapter.Config()
+	mode := modeOf(ctx)
 	host, view := sourceHost(adapter), captureViewOf(adapter)
 	result := IngestResult{Source: config.Name, Host: host.ID}
 	if host.Fallback {
@@ -74,6 +80,9 @@ func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress P
 		}
 	}
 	state := func(coverage, cursor, fingerprint, message string, pending int, success bool) error {
+		if mode.automatic {
+			return nil
+		}
 		// An index records its host's source state only once it completes: a
 		// capture failing to index, perhaps on another Mac, says nothing about
 		// the source.
@@ -106,7 +115,11 @@ func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress P
 		seen = view.seen()
 	}
 	_ = c.registerHost(host, seen)
-	fingerprint, err := adapter.Fingerprint()
+	fingerprint, err := "", error(nil)
+	_, partialSource := adapter.(partialAdapter)
+	if !mode.automatic || !partialSource {
+		fingerprint, err = adapter.Fingerprint()
+	}
 	if err != nil {
 		message := fmt.Sprintf("%T: %v", err, err)
 		state("failed", "", "", message, 0, false)
@@ -124,12 +137,16 @@ func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress P
 		// must not take it as current (see partTracker).
 		fingerprint = "offhost:" + fingerprint
 	}
-	indexVersion := sourceIndexVersion(adapter)
+	indexVersion, err := c.effectiveIndexVersion(host.ID, config.Name, adapter)
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
 	var priorFingerprint, lastSuccess, priorError, coverage sql.NullString
 	var priorVersion sql.NullString
 	var pending int64
 	err = c.DB.QueryRow("SELECT fingerprint,index_version,last_success_at,error,pending_count,coverage FROM source_states WHERE host_id=? AND source_name=?", host.ID, config.Name).Scan(&priorFingerprint, &priorVersion, &lastSuccess, &priorError, &pending, &coverage)
-	if err == nil && priorFingerprint.String == fingerprint && priorVersion.String == indexVersion && lastSuccess.Valid && !priorError.Valid && pending == 0 && coverage.String == "complete" {
+	if !mode.automatic && !mode.force && err == nil && priorFingerprint.String == fingerprint && priorVersion.String == indexVersion && lastSuccess.Valid && !priorError.Valid && pending == 0 && coverage.String == "complete" {
 		state("complete", fingerprint, fingerprint, "", 0, true)
 		result.SkippedUnchanged = true
 		report("complete")
@@ -170,10 +187,12 @@ func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress P
 		report("failed")
 		return result
 	}
-	if _, err := c.DB.Exec("UPDATE source_states SET index_version=? WHERE host_id=? AND source_name=?", nilIfEmpty(indexVersion), host.ID, config.Name); err != nil {
-		result.Error = err.Error()
-		report("failed")
-		return result
+	if !mode.automatic {
+		if _, err := c.DB.Exec("UPDATE source_states SET index_version=? WHERE host_id=? AND source_name=?", nilIfEmpty(indexVersion), host.ID, config.Name); err != nil {
+			result.Error = err.Error()
+			report("failed")
+			return result
+		}
 	}
 	report("complete")
 	return result
@@ -198,7 +217,14 @@ func sourceIndexVersion(adapter Adapter) string {
 // adapter those of the parts that changed, as host's copy. cursor records
 // progress every 25 workspaces written.
 func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, resume bool, result *IngestResult, report func(string), cursor func(string)) error {
+	started := time.Now()
+	defer func() { result.DiscoveryParseSeconds = time.Since(started).Seconds() - result.WriteSeconds }()
 	config := adapter.Config()
+	mode := modeOf(ctx)
+	indexVersion, err := c.effectiveIndexVersion(host, config.Name, adapter)
+	if err != nil {
+		return err
+	}
 	var tracker *partTracker
 	partial, incremental := adapter.(partialAdapter)
 	if incremental {
@@ -206,12 +232,17 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 		if tracker, err = c.newPartTracker(host, config.Name, partial, captureViewOf(adapter)); err != nil {
 			return err
 		}
+		if mode.automatic {
+			tracker.writer = "automatic"
+		}
 	}
 	process := func(record *WorkspaceRecord, parts []sourcePart) error {
+		started := time.Now()
+		defer func() { result.WriteSeconds += time.Since(started).Seconds() }()
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		result.Parsed += len(parts)
+		result.Parsed += physicalPartCount(parts)
 		result.Processed++
 		if record == nil {
 			err := tracker.hold(c, parts)
@@ -222,23 +253,27 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 		if err != nil {
 			return err
 		}
+		digest = indexVersion + ":" + digest
 		var storedDigest string
 		if err := c.DB.QueryRow(`SELECT digest FROM source_record_states WHERE host_id=? AND source_name=? AND source_kind=?
 			AND source_account=? AND source_id=?`, host, config.Name, record.SourceKind, record.Account, record.SourceID).Scan(&storedDigest); err == nil && storedDigest == digest {
-			result.SkippedCurrent++
-			report("indexing")
-			return tracker.hold(c, parts)
+			if !mode.force {
+				result.SkippedCurrent++
+				report("indexing")
+				return tracker.hold(c, parts)
+			}
 		} else if err != nil && err != sql.ErrNoRows {
 			return err
 		}
 		// Parts supersede this: a record skipped here would have its part
 		// recorded as current and never be parsed again.
-		if resume && !incremental && c.recordUsesCurrentExtractor(adapter, *record, host) {
+		if !mode.force && resume && !incremental && c.recordUsesCurrentExtractor(adapter, *record, host) {
 			result.SkippedCurrent++
 			report("indexing")
 			return tracker.hold(c, parts)
 		}
 		copied, older, conversations, messages := false, false, 0, 0
+		workspaceID := ""
 		operation := fmt.Sprintf("ingest source=%s task=%s", config.Name, record.SourceID)
 		var heldParts []sourcePart
 		if tracker != nil {
@@ -253,13 +288,19 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 				return err
 			}
 			defer func() { _ = tx.Rollback(); finish() }()
-			copied, older, conversations, messages = false, false, 0, 0
-			copied, err = sightCopiedRecord(tx, *record, digest, host, config.Name)
-			if err != nil {
+			var initialWrites int64
+			if err := tx.QueryRow("SELECT total_changes()").Scan(&initialWrites); err != nil {
 				return err
 			}
+			copied, older, conversations, messages = false, false, 0, 0
+			if !mode.force {
+				copied, err = sightCopiedRecord(tx, *record, digest, host, config.Name)
+				if err != nil {
+					return err
+				}
+			}
 			if !copied {
-				conversations, messages, err = ingestCopy(tx, *record, adapter.Capability() == "tl1-release", host, config.Name, captureViewOf(adapter) != nil, repositoryOptions{c.RepositoryAliases, c.RepositorySeparate})
+				conversations, messages, err = ingestCopyMode(tx, *record, adapter.Capability() == "tl1-release", host, config.Name, captureViewOf(adapter) != nil, mode.force, repositoryOptions{c.RepositoryAliases, c.RepositorySeparate})
 				if errors.Is(err, errOlderCopy) {
 					// Nothing is recorded, so the newer read's digest and parts stand.
 					older = true
@@ -278,11 +319,33 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 					return err
 				}
 			}
-			return tx.Commit()
+			if mode.automatic && !copied {
+				if err := markSyncDeferred(tx); err != nil {
+					return err
+				}
+			}
+			if mode.written != nil && !copied {
+				workspaceID, err = storedWorkspaceID(tx, *record)
+				if err != nil {
+					return err
+				}
+			}
+			var finalWrites int64
+			if err := tx.QueryRow("SELECT total_changes()").Scan(&finalWrites); err != nil {
+				return err
+			}
+			if err := tx.Commit(); err != nil {
+				return err
+			}
+			result.WriteRows += finalWrites - initialWrites
+			return nil
 		}); err != nil {
 			return err
 		}
 		if older {
+			if err := tracker.recordTerminal(c, parts); err != nil {
+				return err
+			}
 			result.Older++
 			report("indexing")
 			return nil
@@ -296,6 +359,9 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 		result.Workspaces++
 		result.Conversations += conversations
 		result.Messages += messages
+		if mode.written != nil && workspaceID != "" {
+			mode.written(workspaceID)
+		}
 		if result.Workspaces == 1 || result.Workspaces%25 == 0 {
 			cursor(record.SourceID)
 		}
@@ -305,11 +371,18 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 	if !incremental {
 		return adapter.Discover(func(record WorkspaceRecord) error { return process(&record, nil) })
 	}
-	err := partial.discoverParts(func(parts []sourcePart) bool {
-		if !tracker.unchanged(parts) {
+	err = partial.discoverParts(func(parts []sourcePart) bool {
+		if ctx.Err() != nil {
 			return false
 		}
-		result.Unchanged += len(parts)
+		unchanged := tracker.unchanged(parts)
+		if mode.discovered != nil {
+			mode.discovered(parts, !unchanged)
+		}
+		if !unchanged {
+			return false
+		}
+		result.Unchanged += physicalPartCount(parts)
 		return true
 	}, process)
 	if flushErr := tracker.flush(c); err == nil {
@@ -487,7 +560,12 @@ func ingestWorkspace(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool) 
 // copies.go for when a copy may replace or prune what is stored, and
 // guardCapture for a copy read from a capture.
 func ingestCopy(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host, source string, fromCapture bool, repositoryOptions ...repositoryOptions) (int, int, error) {
+	return ingestCopyMode(tx, record, allowReclamation, host, source, fromCapture, false, repositoryOptions...)
+}
+
+func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host, source string, fromCapture, force bool, repositoryOptions ...repositoryOptions) (int, int, error) {
 	record = canonicalRecordTimes(record)
+	prepareRecordAccounting(&record)
 	workspaceID, err := storedWorkspaceID(tx, record)
 	if err != nil {
 		return 0, 0, err
@@ -604,45 +682,34 @@ func ingestCopy(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host,
 			return 0, 0, err
 		}
 		conversationIDs[index] = conversationID
-		retained := map[string]bool{}
-		textChanged := false
-		for sourceOrder, message := range conversation.Messages {
-			message.SourceOrder = sourceOrder
-			id, changed, err := upsertMessage(tx, conversationID, message)
-			if err != nil {
-				return 0, 0, err
-			}
-			textChanged = textChanged || changed
-			retained[id] = true
-		}
-		var stored int
-		if err := tx.QueryRow("SELECT COUNT(*) FROM messages WHERE conversation_id=?", conversationID).Scan(&stored); err != nil {
+		messageWriter, err := newMessageWriter(tx, conversationID)
+		if err != nil {
 			return 0, 0, err
 		}
-		staleMessages := stored > len(retained)
-		if !staleMessages && textChanged {
-			rows, err := queryMaps(tx, "SELECT id FROM messages WHERE conversation_id=?", conversationID)
+		retained := map[string]bool{}
+		for sourceOrder, message := range conversation.Messages {
+			message.SourceOrder = sourceOrder
+			id, changed, err := messageWriter.write(message)
 			if err != nil {
+				messageWriter.statement.Close()
 				return 0, 0, err
 			}
-			for _, row := range rows {
-				if !retained[firstString(row["id"])] {
-					staleMessages = true
-					break
+			if changed {
+				if err := replaceMessageFTS(tx, id); err != nil {
+					messageWriter.statement.Close()
+					return 0, 0, err
 				}
 			}
+			retained[id] = true
 		}
-		if textChanged || staleMessages {
+		messageWriter.statement.Close()
+		if err := pruneMessages(tx, conversationID, retained); err != nil {
+			return 0, 0, err
+		}
+		if force {
 			if err := deleteConversationFTS(tx, conversationID); err != nil {
 				return 0, 0, err
 			}
-		}
-		if staleMessages {
-			if err := pruneMessages(tx, conversationID, retained); err != nil {
-				return 0, 0, err
-			}
-		}
-		if textChanged || staleMessages {
 			if err := insertConversationFTS(tx, conversationID); err != nil {
 				return 0, 0, err
 			}
@@ -653,6 +720,25 @@ func ingestCopy(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host,
 		if err := linkAliases(tx, conversationID, conversation.Aliases); err != nil {
 			return 0, 0, err
 		}
+		input := hashBytes([]byte(workspaceID + ":" + conversationDerivationVersion + ":" + jsonText(conversation)))
+		var priorInput string
+		inputErr := tx.QueryRow("SELECT fingerprint FROM conversation_derivation_inputs WHERE conversation_id=?", conversationID).Scan(&priorInput)
+		if inputErr != nil && inputErr != sql.ErrNoRows {
+			return 0, 0, inputErr
+		}
+		if !force && input == priorInput {
+			continue
+		}
+		if force {
+			for _, table := range []string{"tool_calls", "model_requests", "tool_ledger_inputs"} {
+				if _, err := tx.Exec("DELETE FROM "+table+" WHERE conversation_id=?", conversationID); err != nil {
+					return 0, 0, err
+				}
+			}
+			if _, err := tx.Exec("DELETE FROM agent_sessions WHERE conversation_id=?", conversationID); err != nil {
+				return 0, 0, err
+			}
+		}
 		if err := replaceAgentSessions(tx, workspaceID, conversationID, conversation); err != nil {
 			return 0, 0, err
 		}
@@ -662,9 +748,33 @@ func ingestCopy(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host,
 		if err := replaceConversationInstructions(tx, workspaceID, conversationID, conversation.Instructions, nil, "transcript"); err != nil {
 			return 0, 0, err
 		}
+		if _, err := tx.Exec(`INSERT INTO conversation_derivation_inputs(conversation_id,fingerprint) VALUES(?,?)
+			ON CONFLICT(conversation_id) DO UPDATE SET fingerprint=excluded.fingerprint`, conversationID, input); err != nil {
+			return 0, 0, err
+		}
 	}
 	if err := applyClaudeGroupUsage(tx, workspaceID, record.Conversations, conversationIDs, authority.conversations); err != nil {
 		return 0, 0, err
+	}
+	if record.SourceKind == "antigravity" && authority.workspace {
+		members := []any{workspaceID}
+		for _, id := range conversationIDs {
+			if id != "" {
+				members = append(members, id)
+			}
+		}
+		if len(members) > 1 {
+			if _, err := tx.Exec("UPDATE conversation_group_membership SET active=0 WHERE workspace_id=? AND active=1 AND conversation_id NOT IN ("+placeholders(len(members)-1)+")", members...); err != nil {
+				return 0, 0, err
+			}
+			for _, id := range members[1:] {
+				if _, err := tx.Exec(`INSERT INTO conversation_group_membership(conversation_id,workspace_id,active) VALUES(?,?,1)
+					ON CONFLICT(conversation_id) DO UPDATE SET workspace_id=excluded.workspace_id,active=1
+					WHERE conversation_group_membership.workspace_id<>excluded.workspace_id OR conversation_group_membership.active<>1`, id, workspaceID); err != nil {
+					return 0, 0, err
+				}
+			}
+		}
 	}
 	if authority.workspace {
 		// This record wrote the workspace's sessions and token metrics with the
@@ -713,7 +823,9 @@ func ingestCopy(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host,
 		}
 	}
 	if record.ActivityAt != "" && !authority.older {
-		_, err = tx.Exec(`INSERT INTO activity_events(workspace_id,source,kind,meaningful,occurred_at,evidence_json) VALUES(?,?,?,?,?,?)`, workspaceID, record.SourceKind, "native", 1, record.ActivityAt, "{}")
+		_, err = tx.Exec(`INSERT INTO activity_events(workspace_id,source,kind,meaningful,occurred_at,evidence_json)
+			SELECT ?,?,'native',1,?,'{}' WHERE NOT EXISTS
+			(SELECT 1 FROM activity_events WHERE workspace_id=? AND source=? AND kind='native' AND occurred_at=?)`, workspaceID, record.SourceKind, record.ActivityAt, workspaceID, record.SourceKind, record.ActivityAt)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -1025,10 +1137,14 @@ func upsertConversation(tx *sql.Tx, workspaceID, workItemID string, value Conver
 		return "", err
 	}
 	err = tx.QueryRow("SELECT id FROM conversations WHERE provider=? AND account=? AND native_id=?", value.Provider, value.Account, value.NativeID).Scan(&id)
+	if err == nil && value.Provider == "antigravity" && value.ParentNativeID == "" {
+		_, err = tx.Exec("UPDATE conversations SET parent_id=NULL WHERE id=? AND parent_id IS NOT NULL", id)
+	}
 	return id, err
 }
 
 func upsertMessage(tx *sql.Tx, conversationID string, value MessageRecord) (string, bool, error) {
+	value.accounting = nil
 	id := stableID("message", conversationID, value.NativeID)
 	selected := 1
 	if !value.Selected {
@@ -1037,13 +1153,23 @@ func upsertMessage(tx *sql.Tx, conversationID string, value MessageRecord) (stri
 	// Preserve accounting evidence independently of the display text hash.
 	contentHash := hashBytes([]byte(value.Text))
 	var existingID, existingHash string
-	lookupErr := tx.QueryRow("SELECT id,content_hash FROM messages WHERE conversation_id=? AND native_id=?", conversationID, value.NativeID).Scan(&existingID, &existingHash)
+	var stored MessageRecord
+	var storedSelected int
+	lookupErr := tx.QueryRow(`SELECT id,content_hash,role,kind,COALESCE(model,''),text,COALESCE(raw_text,''),COALESCE(source_order,0),
+		COALESCE(created_at,''),COALESCE(parent_native_id,''),COALESCE(previous_native_id,''),COALESCE(call_id,''),
+		COALESCE(evidence_locator,''),selected,COALESCE(sender,'') FROM messages WHERE conversation_id=? AND native_id=?`, conversationID, value.NativeID).
+		Scan(&existingID, &existingHash, &stored.Role, &stored.Kind, &stored.Model, &stored.Text, &stored.RawText, &stored.SourceOrder,
+			&stored.CreatedAt, &stored.ParentNativeID, &stored.PreviousNativeID, &stored.CallID, &stored.EvidenceLocator, &storedSelected, &stored.Sender)
 	if lookupErr != nil && lookupErr != sql.ErrNoRows {
 		return "", false, lookupErr
 	}
-	if lookupErr == nil && existingHash == contentHash {
-		_, updateErr := tx.Exec(`UPDATE messages SET role=?,kind=?,model=?,created_at=?,parent_native_id=?,previous_native_id=?,call_id=?,evidence_locator=?,selected=?,raw_text=?,source_order=?,sender=? WHERE id=?`, defaultString(value.Role, "unknown"), defaultString(value.Kind, "message"), nilIfEmpty(value.Model), nilIfEmpty(value.CreatedAt), nilIfEmpty(value.ParentNativeID), nilIfEmpty(value.PreviousNativeID), nilIfEmpty(value.CallID), nilIfEmpty(value.EvidenceLocator), selected, nilIfEmpty(value.RawText), value.SourceOrder, nilIfEmpty(value.Sender), existingID)
-		return existingID, false, updateErr
+	value.Role = defaultString(value.Role, "unknown")
+	value.Kind = defaultString(value.Kind, "message")
+	if lookupErr == nil {
+		stored.NativeID, stored.Selected = value.NativeID, storedSelected != 0
+		if stored == value && existingHash == contentHash {
+			return existingID, false, nil
+		}
 	}
 	if lookupErr == nil {
 		id = existingID
@@ -1059,7 +1185,40 @@ func upsertMessage(tx *sql.Tx, conversationID string, value MessageRecord) (stri
 	if err != nil {
 		return "", false, err
 	}
-	return id, true, nil
+	return id, lookupErr == sql.ErrNoRows || stored.Text != value.Text || stored.Kind != value.Kind, nil
+}
+
+func deleteMessageFTS(tx *sql.Tx, id string) error {
+	for _, table := range []string{"messages_fts", "messages_trigram"} {
+		if _, err := tx.Exec("DELETE FROM "+table+" WHERE rowid IN (SELECT fts_rowid FROM message_fts_rows WHERE message_id=?)", id); err != nil {
+			return err
+		}
+	}
+	_, err := tx.Exec("DELETE FROM message_fts_rows WHERE message_id=?", id)
+	return err
+}
+
+func replaceMessageFTS(tx *sql.Tx, id string) error {
+	if err := deleteMessageFTS(tx, id); err != nil {
+		return err
+	}
+	result, err := tx.Exec("INSERT INTO messages_fts(message_id,text) SELECT id,text FROM messages WHERE id=? AND text<>''", id)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil || count == 0 {
+		return err
+	}
+	rowID, err := result.LastInsertId()
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec("INSERT INTO message_fts_rows(message_id,fts_rowid) VALUES(?,?)", id, rowID); err != nil {
+		return err
+	}
+	_, err = tx.Exec(substringInsert("m.id=?"), id)
+	return err
 }
 
 func deleteConversationFTS(tx *sql.Tx, conversationID string) error {
@@ -1106,6 +1265,11 @@ func pruneMessages(tx *sql.Tx, conversationID string, retained map[string]bool) 
 	}
 	for start := 0; start < len(stale); start += 500 {
 		batch := stale[start:min(start+500, len(stale))]
+		for _, id := range batch {
+			if err := deleteMessageFTS(tx, id.(string)); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.Exec("DELETE FROM messages WHERE id IN ("+placeholders(len(batch))+")", batch...); err != nil {
 			return err
 		}
@@ -1114,15 +1278,19 @@ func pruneMessages(tx *sql.Tx, conversationID string, retained map[string]bool) 
 }
 
 func linkAliases(tx *sql.Tx, conversationID string, aliases []string) error {
-	if len(aliases) == 0 {
-		return nil
-	}
-	var provider, account string
-	if err := tx.QueryRow("SELECT provider,account FROM conversations WHERE id=?", conversationID).Scan(&provider, &account); err != nil {
+	return linkAliasesContext(context.Background(), tx, conversationID, aliases)
+}
+
+func linkAliasesContext(ctx context.Context, tx *sql.Tx, conversationID string, aliases []string) error {
+	var provider, account, nativeID string
+	if err := tx.QueryRowContext(ctx, "SELECT provider,account,native_id FROM conversations WHERE id=?", conversationID).Scan(&provider, &account, &nativeID); err != nil {
 		return err
 	}
 	for _, alias := range aliases {
-		matches, err := queryMaps(tx, "SELECT id,provider FROM conversations WHERE account=? AND native_id=? AND id<>?", account, alias, conversationID)
+		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO declared_native_aliases(conversation_id,account,native_id) VALUES(?,?,?)", conversationID, account, alias); err != nil {
+			return err
+		}
+		matches, err := queryMapsContext(ctx, tx, "SELECT id,provider FROM conversations WHERE account=? AND native_id=? AND id<>?", account, alias, conversationID)
 		if err != nil {
 			return err
 		}
@@ -1131,9 +1299,22 @@ func linkAliases(tx *sql.Tx, conversationID string, aliases []string) error {
 			if left > right {
 				left, right = right, left
 			}
-			if _, err := tx.Exec(`INSERT OR IGNORE INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES(?,?,?,?,?)`, left, right, "native-alias", 1.0, jsonText(map[string]any{"alias": alias, "declared_by": provider})); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES(?,?,?,?,?)`, left, right, "native-alias", 1.0, jsonText(map[string]any{"alias": alias, "declared_by": provider})); err != nil {
 				return err
 			}
+		}
+	}
+	declarations, err := queryMapsContext(ctx, tx, "SELECT a.conversation_id,c.provider FROM declared_native_aliases a JOIN conversations c ON c.id=a.conversation_id WHERE a.account=? AND a.native_id=? AND a.conversation_id<>?", account, nativeID, conversationID)
+	if err != nil {
+		return err
+	}
+	for _, declaration := range declarations {
+		left, right := conversationID, firstString(declaration["conversation_id"])
+		if left > right {
+			left, right = right, left
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES(?,?,'native-alias',1,?)`, left, right, jsonText(map[string]any{"alias": nativeID, "declared_by": declaration["provider"]})); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -1157,10 +1338,17 @@ func replaceAgentSessions(tx *sql.Tx, workspaceID, conversationID string, conver
 }
 
 func replaceAgentSessionsWithCostState(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord, suppressCostState bool) error {
-	if _, err := tx.Exec("DELETE FROM agent_sessions WHERE conversation_id=?", conversationID); err != nil {
+	summaries := agentSessionSummariesWithCostState(conversation.Messages, suppressCostState)
+	existingMappings, err := queryMaps(tx, `SELECT am.agent_session_id,am.message_id,am.source_order FROM agent_session_messages am
+		JOIN agent_sessions a ON a.id=am.agent_session_id WHERE a.conversation_id=?`, conversationID)
+	if err != nil {
 		return err
 	}
-	summaries := agentSessionSummariesWithCostState(conversation.Messages, suppressCostState)
+	priorMappings := map[string]int{}
+	for _, row := range existingMappings {
+		priorMappings[firstString(row["agent_session_id"])+"\x00"+firstString(row["message_id"])] = int(integer(row["source_order"]))
+	}
+	desiredMappings := map[string]int{}
 	ids := map[string]string{}
 	for _, summary := range summaries {
 		ids[summary.nativeID] = stableID("agent-session", conversationID, summary.nativeID)
@@ -1197,7 +1385,14 @@ func replaceAgentSessionsWithCostState(tx *sql.Tx, workspaceID, conversationID s
 			started_at,ended_at,input_tokens,uncached_input_tokens,cache_read_input_tokens,
 			cache_creation_input_tokens,cache_creation_5m_input_tokens,cache_creation_1h_input_tokens,
 			output_tokens,reasoning_output_tokens,unclassified_tokens,total_tokens,usage_status)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+			workspace_id=excluded.workspace_id,native_id=excluded.native_id,parent_id=excluded.parent_id,delegation_message_id=excluded.delegation_message_id,
+			child_conversation_id=NULL,kind=excluded.kind,provider=excluded.provider,model=excluded.model,depth=excluded.depth,
+			started_at=excluded.started_at,ended_at=excluded.ended_at,input_tokens=excluded.input_tokens,
+			uncached_input_tokens=excluded.uncached_input_tokens,cache_read_input_tokens=excluded.cache_read_input_tokens,
+			cache_creation_input_tokens=excluded.cache_creation_input_tokens,cache_creation_5m_input_tokens=excluded.cache_creation_5m_input_tokens,
+			cache_creation_1h_input_tokens=excluded.cache_creation_1h_input_tokens,output_tokens=excluded.output_tokens,
+			reasoning_output_tokens=excluded.reasoning_output_tokens,unclassified_tokens=excluded.unclassified_tokens,total_tokens=excluded.total_tokens,usage_status=excluded.usage_status`,
 			ids[summary.nativeID], workspaceID, conversationID, summary.nativeID, parentID, delegationMessageID,
 			kind, conversation.Provider, nilIfEmpty(conversation.Model), depth, nilIfEmpty(summary.startedAt), nilIfEmpty(summary.endedAt),
 			integer(summary.counts["input_tokens"]), integer(summary.counts["uncached_input_tokens"]),
@@ -1205,6 +1400,9 @@ func replaceAgentSessionsWithCostState(tx *sql.Tx, workspaceID, conversationID s
 			integer(summary.counts["cache_creation_5m_input_tokens"]), integer(summary.counts["cache_creation_1h_input_tokens"]),
 			integer(summary.counts["output_tokens"]), integer(summary.counts["reasoning_output_tokens"]),
 			integer(unclassified), integer(summary.counts["total_tokens"]), status); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("DELETE FROM agent_session_usage WHERE agent_session_id=?", ids[summary.nativeID]); err != nil {
 			return err
 		}
 		for bucket, counts := range summary.usage {
@@ -1246,8 +1444,42 @@ func replaceAgentSessionsWithCostState(tx *sql.Tx, workspaceID, conversationID s
 				continue
 			}
 			messageID := stableID("message", conversationID, conversation.Messages[index].NativeID)
-			if _, err := tx.Exec(`INSERT INTO agent_session_messages(agent_session_id,message_id,source_order) VALUES(?,?,?)
-				ON CONFLICT(agent_session_id,message_id) DO UPDATE SET source_order=MIN(source_order,excluded.source_order)`, ids[summary.nativeID], messageID, index); err != nil {
+			key := ids[summary.nativeID] + "\x00" + messageID
+			if previous, ok := desiredMappings[key]; !ok || index < previous {
+				desiredMappings[key] = index
+			}
+		}
+	}
+	for key, index := range desiredMappings {
+		if previous, ok := priorMappings[key]; ok && previous == index {
+			continue
+		}
+		parts := strings.SplitN(key, "\x00", 2)
+		if _, err := tx.Exec(`INSERT INTO agent_session_messages(agent_session_id,message_id,source_order) VALUES(?,?,?)
+			ON CONFLICT(agent_session_id,message_id) DO UPDATE SET source_order=excluded.source_order`, parts[0], parts[1], index); err != nil {
+			return err
+		}
+	}
+	for key := range priorMappings {
+		if _, ok := desiredMappings[key]; !ok {
+			parts := strings.SplitN(key, "\x00", 2)
+			if _, err := tx.Exec("DELETE FROM agent_session_messages WHERE agent_session_id=? AND message_id=?", parts[0], parts[1]); err != nil {
+				return err
+			}
+		}
+	}
+	priorSessions, err := queryMaps(tx, "SELECT id FROM agent_sessions WHERE conversation_id=?", conversationID)
+	if err != nil {
+		return err
+	}
+	retained := map[string]bool{}
+	for _, id := range ids {
+		retained[id] = true
+	}
+	for _, session := range priorSessions {
+		id := firstString(session["id"])
+		if !retained[id] {
+			if _, err := tx.Exec("DELETE FROM agent_sessions WHERE id=?", id); err != nil {
 				return err
 			}
 		}
@@ -1305,11 +1537,20 @@ func derivedMetrics(record WorkspaceRecord) []map[string]any {
 }
 
 func metricLedger(tx *sql.Tx, workspaceID string, record WorkspaceRecord) error {
+	rows, err := queryMaps(tx, "SELECT sequence,event_kind,COALESCE(error_type,'') error_type,COALESCE(evidence_locator,'') evidence_locator FROM metric_ledger WHERE workspace_id=?", workspaceID)
+	if err != nil {
+		return err
+	}
+	prior := map[string]map[string]any{}
+	for _, row := range rows {
+		prior[fmt.Sprintf("%d:%s", integer(row["sequence"]), firstString(row["event_kind"]))] = row
+	}
+	retained := map[string]bool{}
 	sequence := 0
 	for _, conversation := range record.Conversations {
 		for _, message := range conversation.Messages {
 			if sequence >= 10000 {
-				return nil
+				break
 			}
 			kind := defaultString(message.Kind, "message")
 			eventKind := kind
@@ -1321,10 +1562,22 @@ func metricLedger(tx *sql.Tx, workspaceID string, record WorkspaceRecord) error 
 			if strings.Contains(lower, "error") || strings.Contains(lower, "failed") || strings.Contains(lower, "failure") {
 				errorType = "visible-error"
 			}
-			if _, err := tx.Exec(`INSERT INTO metric_ledger(workspace_id,sequence,event_kind,error_type,evidence_locator) VALUES(?,?,?,?,?) ON CONFLICT(workspace_id,sequence,event_kind) DO UPDATE SET error_type=excluded.error_type,evidence_locator=excluded.evidence_locator`, workspaceID, sequence, eventKind, errorType, nilIfEmpty(message.EvidenceLocator)); err != nil {
-				return err
+			key := fmt.Sprintf("%d:%s", sequence, eventKind)
+			retained[key] = true
+			previous, exists := prior[key]
+			if !exists || firstString(previous["error_type"]) != firstString(errorType) || firstString(previous["evidence_locator"]) != message.EvidenceLocator {
+				if _, err := tx.Exec(`INSERT INTO metric_ledger(workspace_id,sequence,event_kind,error_type,evidence_locator) VALUES(?,?,?,?,?) ON CONFLICT(workspace_id,sequence,event_kind) DO UPDATE SET error_type=excluded.error_type,evidence_locator=excluded.evidence_locator`, workspaceID, sequence, eventKind, errorType, nilIfEmpty(message.EvidenceLocator)); err != nil {
+					return err
+				}
 			}
 			sequence++
+		}
+	}
+	for key, row := range prior {
+		if !retained[key] {
+			if _, err := tx.Exec("DELETE FROM metric_ledger WHERE workspace_id=? AND sequence=? AND event_kind=?", workspaceID, row["sequence"], row["event_kind"]); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -1462,38 +1715,39 @@ func upsertPRs(tx *sql.Tx, workspaceID, repoID string, prs []map[string]any) err
 }
 
 func (c *Catalog) ReconcileIdentities() (int, error) {
+	return c.ReconcileIdentitiesContext(context.Background())
+}
+
+func (c *Catalog) ReconcileIdentitiesContext(ctx context.Context) (int, error) {
 	var before int
-	if err := c.DB.QueryRow("SELECT COUNT(*) FROM conversation_identity_links").Scan(&before); err != nil {
+	if err := c.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM conversation_identity_links").Scan(&before); err != nil {
 		return 0, err
 	}
-	rows, err := queryMaps(c.DB, "SELECT id,aliases_json FROM conversations WHERE aliases_json<>'[]'")
+	rows, err := queryMapsContext(ctx, c.DB, "SELECT id,aliases_json FROM conversations WHERE aliases_json<>'[]'")
 	if err != nil {
 		return 0, err
 	}
 	for _, row := range rows {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		var aliases []string
 		if jsonErr := decodeJSONText(firstString(row["aliases_json"]), &aliases); jsonErr != nil {
 			continue
 		}
-		tx, err := c.beginWrite(context.Background())
-		if err != nil {
-			return 0, err
-		}
-		if err := linkAliases(tx, firstString(row["id"]), aliases); err != nil {
-			tx.Rollback()
-			return 0, err
-		}
-		if err := tx.Commit(); err != nil {
+		if err := c.writeTransaction(ctx, "reconcile aliases", func(tx *sql.Tx) error {
+			return linkAliasesContext(ctx, tx, firstString(row["id"]), aliases)
+		}); err != nil {
 			return 0, err
 		}
 	}
-	if err := c.backfillHarnessVersions(); err != nil {
+	if err := c.backfillHarnessVersionsContext(ctx); err != nil {
 		return 0, err
 	}
-	if err := c.inheritHarnessAliases(); err != nil {
+	if err := c.inheritHarnessAliasesContext(ctx); err != nil {
 		return 0, err
 	}
-	links, err := queryMaps(c.DB, `SELECT wa.id left_id,wa.source_kind left_kind,wa.activity_at left_activity,
+	links, err := queryMapsContext(ctx, c.DB, `SELECT wa.id left_id,wa.source_kind left_kind,wa.activity_at left_activity,
 		wb.id right_id,wb.source_kind right_kind,wb.activity_at right_activity
 		FROM conversation_identity_links l JOIN conversations ca ON ca.id=l.left_id
 		JOIN conversations cb ON cb.id=l.right_id JOIN workspaces wa ON wa.id=ca.workspace_id
@@ -1516,14 +1770,14 @@ func (c *Catalog) ReconcileIdentities() (int, error) {
 			}
 			activity, hasActivity := parseTime(pair[2])
 			if !hasActivity || linked.After(activity) {
-				if _, err := c.DB.Exec("UPDATE workspaces SET activity_at=?,activity_source=? WHERE id=?", formatTime(linked), "linked:"+pair[3]+":native-id", pair[0]); err != nil {
+				if _, err := c.DB.ExecContext(ctx, "UPDATE workspaces SET activity_at=?,activity_source=? WHERE id=?", formatTime(linked), "linked:"+pair[3]+":native-id", pair[0]); err != nil {
 					return 0, err
 				}
 			}
 		}
 	}
 	var after int
-	if err := c.DB.QueryRow("SELECT COUNT(*) FROM conversation_identity_links").Scan(&after); err != nil {
+	if err := c.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM conversation_identity_links").Scan(&after); err != nil {
 		return 0, err
 	}
 	if after != before {
