@@ -2,6 +2,7 @@ package archive
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -57,7 +58,10 @@ func (a *antigravityAdapter) requestsDatabase(id string) string {
 func (a *antigravityAdapter) requests(id string) (map[int64]antigravityRequest, error) {
 	path := a.requestsDatabase(id)
 	if _, err := os.Stat(path); err != nil {
-		return nil, nil
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	db, err := openReadOnlySQLite(path)
 	if err != nil {

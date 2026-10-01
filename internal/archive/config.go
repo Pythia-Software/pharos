@@ -57,6 +57,7 @@ type Config struct {
 	// CaptureRoot holds raw captures of each host's sources; see capture.go.
 	CaptureRoot        string
 	CaptureGenerations int
+	CaptureRecoveryID  string
 }
 
 func defaultConfig(path string) Config {

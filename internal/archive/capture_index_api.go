@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -29,6 +30,7 @@ type ingestStopper struct {
 // func ends the registration; call it before releasing ingestMu.
 func (s *Server) beginIngest(runID string) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(s.life.ctx)
+	s.Catalog.projectionBatches.Add(1)
 	s.ingestStop.mu.Lock()
 	s.ingestStop.runID, s.ingestStop.cancel = runID, cancel
 	s.ingestStop.mu.Unlock()
@@ -37,6 +39,7 @@ func (s *Server) beginIngest(runID string) (context.Context, func()) {
 		s.ingestStop.runID, s.ingestStop.cancel = "", nil
 		s.ingestStop.mu.Unlock()
 		cancel()
+		s.Catalog.projectionBatches.Add(-1)
 	}
 }
 
@@ -147,7 +150,7 @@ func (s *Server) startIndex(w http.ResponseWriter, body map[string]any) {
 		}
 		targets = slices.DeleteFunc(targets, func(target captureTarget) bool { return !needed[target.label()] })
 	}
-	if !s.ingestMu.TryLock() {
+	if !s.acquireManualIngest() {
 		writeError(w, errors.New("source indexing is already running"), http.StatusConflict)
 		return
 	}
@@ -462,7 +465,15 @@ func (c *Catalog) capturedHosts(root string) ([]map[string]any, error) {
 			versionChanged := false
 			adapter, adapterErr := MakeAdapter(SourceConfig{Name: item.Name(), Kind: manifest.Source.Kind, Path: manifest.Source.Path, Account: manifest.Source.Account})
 			if adapterErr == nil {
-				versionChanged = firstString(state["index_version"]) != captureSourceIndexVersion(adapter, host.ID)
+				version := captureSourceIndexVersion(adapter, host.ID)
+				var generation int64
+				if err := c.DB.QueryRow("SELECT generation FROM sync_generations WHERE host_id=? AND source_name=?", host.ID, item.Name()).Scan(&generation); err != nil && err != sql.ErrNoRows {
+					return nil, err
+				}
+				if generation > 0 {
+					version += fmt.Sprintf("@generation:%d", generation)
+				}
+				versionChanged = firstString(state["index_version"]) != version
 			}
 			pendingSnapshots := false
 			if len(manifest.Snapshots) > 0 {

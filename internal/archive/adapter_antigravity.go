@@ -3,13 +3,16 @@ package archive
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -38,7 +41,7 @@ var antigravityProducts = map[string]string{"antigravity": "Antigravity", "antig
 
 // antigravityExtractor versions the parser; bump it when parsing changes so
 // every transcript is parsed again.
-const antigravityExtractor = "antigravity-v1"
+const antigravityExtractor = "antigravity-v2-group-membership"
 
 const (
 	antigravitySummaries = "conversation_summaries.db"
@@ -120,31 +123,104 @@ type antigravityLogEntry struct {
 
 // printModeConversations returns the conversations run with -p, from the run
 // logs the CLI (or a capture of it) still has.
-func (a *antigravityAdapter) printModeConversations() map[string]bool {
+func (a *antigravityAdapter) printModeConversations() (map[string]bool, error) {
 	printed := map[string]bool{}
+	buffer := make([]byte, 64*1024)
 	for _, path := range a.runLogs() {
+		if err := a.context().Err(); err != nil {
+			return nil, err
+		}
 		info, err := os.Stat(path)
 		if err != nil {
-			continue
+			return nil, err
 		}
 		entry, cached := antigravityLogCache.Load(path)
-		if !cached || entry.(antigravityLogEntry).size != info.Size() || entry.(antigravityLogEntry).modified != info.ModTime().UnixNano() {
-			data, err := os.ReadFile(path)
+		if a.view != nil || !cached || entry.(antigravityLogEntry).size != info.Size() || entry.(antigravityLogEntry).modified != info.ModTime().UnixNano() {
+			ids, err := readAntigravityLogConversations(a.context(), path, buffer)
 			if err != nil {
-				continue
+				return nil, err
 			}
-			found := antigravityLogEntry{size: info.Size(), modified: info.ModTime().UnixNano()}
-			for _, match := range antigravityPrintMode.FindAllSubmatch(data, -1) {
-				found.ids = append(found.ids, string(match[1]))
+			found := antigravityLogEntry{size: info.Size(), modified: info.ModTime().UnixNano(), ids: ids}
+			if a.view == nil {
+				antigravityLogCache.Store(path, found)
+				entries := 0
+				antigravityLogCache.Range(func(key, value any) bool {
+					entries++
+					if entries > 4096 {
+						antigravityLogCache.Delete(key)
+					}
+					return true
+				})
 			}
-			antigravityLogCache.Store(path, found)
 			entry = found
 		}
 		for _, id := range entry.(antigravityLogEntry).ids {
 			printed[id] = true
 		}
 	}
-	return printed
+	return printed, nil
+}
+
+func readAntigravityLogConversations(ctx context.Context, path string, buffer []byte) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	const chunkSize = 32 * 1024
+	const overlap = 512
+	final := false
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(buffer, 64*1024)
+	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+		if len(data) > chunkSize {
+			final = false
+			return chunkSize - overlap, data[:chunkSize], nil
+		}
+		if atEOF && len(data) > 0 {
+			final = true
+			return len(data), data, nil
+		}
+		return 0, nil, nil
+	})
+	ids, seen := []string{}, map[string]bool{}
+	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		data := scanner.Bytes()
+		for _, match := range antigravityPrintMode.FindAllSubmatchIndex(data, -1) {
+			if match[1] == len(data) && !final {
+				continue
+			}
+			id := string(data[match[2]:match[3]])
+			if !seen[id] {
+				ids, seen[id] = append(ids, id), true
+			}
+		}
+	}
+	return ids, scanner.Err()
+}
+
+func (a *antigravityAdapter) runLogsFor(ids map[string]bool) ([]string, error) {
+	paths := []string{}
+	buffer := make([]byte, 64*1024)
+	for _, path := range a.runLogs() {
+		printed, err := readAntigravityLogConversations(a.context(), path, buffer)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range printed {
+			if ids[id] {
+				paths = append(paths, path)
+				break
+			}
+		}
+	}
+	return paths, nil
 }
 
 // databases lists the SQLite databases the adapter reads: the summaries, and
@@ -219,13 +295,16 @@ var antigravityTitle = regexp.MustCompile(`(?m)^\s*title:\s*"((?:[^"\\]|\\.)*)"`
 
 // summaries reads the conversation index, and the titles of conversations it
 // does not list from their annotations. Either may be missing.
-func (a *antigravityAdapter) summaries(ids map[string]string) map[string]antigravitySummary {
+func (a *antigravityAdapter) summaries(ids map[string]string) (map[string]antigravitySummary, error) {
 	summaries := map[string]antigravitySummary{}
 	path := filepath.Join(a.config.Path, antigravitySummaries)
 	if _, err := os.Stat(path); err == nil {
 		if db, err := openReadOnlySQLite(path); err == nil {
-			rows, err := queryMaps(db, "SELECT * FROM conversation_summaries")
+			rows, err := queryMapsContext(a.context(), db, "SELECT * FROM conversation_summaries")
 			db.Close()
+			if err != nil {
+				return nil, err
+			}
 			if err == nil {
 				for _, row := range rows {
 					id := firstString(row["conversation_id"])
@@ -243,7 +322,11 @@ func (a *antigravityAdapter) summaries(ids map[string]string) map[string]antigra
 					summaries[id] = summary
 				}
 			}
+		} else {
+			return nil, err
 		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
 	}
 	for id := range ids {
 		if summaries[id].Title != "" {
@@ -251,7 +334,10 @@ func (a *antigravityAdapter) summaries(ids map[string]string) map[string]antigra
 		}
 		data, err := os.ReadFile(filepath.Join(a.config.Path, "annotations", id+".pbtxt"))
 		if err != nil {
-			continue
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, err
 		}
 		if match := antigravityTitle.FindSubmatch(data); match != nil {
 			var title string
@@ -263,7 +349,7 @@ func (a *antigravityAdapter) summaries(ids map[string]string) map[string]antigra
 			summaries[id] = summary
 		}
 	}
-	return summaries
+	return summaries, nil
 }
 
 func fileURIPath(uri string) string {
@@ -280,8 +366,16 @@ func (a *antigravityAdapter) discoverParts(unchanged func([]sourcePart) bool, em
 	if err != nil {
 		return err
 	}
-	summaries := a.summaries(transcripts)
-	for id := range a.printModeConversations() {
+	metadataVersion := a.databaseVersion(filepath.Join(a.config.Path, antigravitySummaries))
+	summaries, err := a.summaries(transcripts)
+	if err != nil {
+		return err
+	}
+	printed, err := a.printModeConversations()
+	if err != nil {
+		return err
+	}
+	for id := range printed {
 		if _, ok := transcripts[id]; ok {
 			summary := summaries[id]
 			summary.Print = true
@@ -308,7 +402,12 @@ func (a *antigravityAdapter) discoverParts(unchanged func([]sourcePart) bool, em
 		roots = append(roots, id)
 	}
 	sort.Strings(roots)
+	var failures []error
+groupsLoop:
 	for _, rootID := range roots {
+		if err := a.context().Err(); err != nil {
+			return err
+		}
 		ids := groups[rootID]
 		sort.Slice(ids, func(i, j int) bool {
 			if ids[i] == rootID || ids[j] == rootID {
@@ -316,34 +415,45 @@ func (a *antigravityAdapter) discoverParts(unchanged func([]sourcePart) bool, em
 			}
 			return ids[i] < ids[j]
 		})
-		parts, complete := []sourcePart{}, true
+		parts := []sourcePart{}
 		for _, id := range ids {
 			if info, err := os.Stat(transcripts[id]); err == nil {
 				parts = append(parts, sourcePart{item: a.original(transcripts[id]), size: info.Size(), version: info.ModTime().UnixNano(), signal: summaries[id].signal()})
 			} else {
-				complete = false
+				if !errors.Is(err, os.ErrNotExist) {
+					failures = append(failures, fmt.Errorf("stat group %s: %w", rootID, err))
+				}
+				continue groupsLoop
 			}
-			if part, ok := a.requestsPart(id); ok {
+			if part, ok, err := a.requestsPart(id); err != nil {
+				failures = append(failures, fmt.Errorf("read group %s dependencies: %w", rootID, err))
+				continue groupsLoop
+			} else if ok {
 				parts = append(parts, part)
 			}
 		}
-		if unchanged != nil && complete && unchanged(parts) {
+		manifest := []string{}
+		for _, part := range parts {
+			manifest = append(manifest, part.item)
+		}
+		parts = append(parts, sourcePart{item: "group:" + a.original(a.config.Path) + ":" + rootID, signal: hashBytes([]byte(jsonText(manifest)))})
+		if unchanged != nil && unchanged(parts) {
 			continue
 		}
 		var combined *WorkspaceRecord
-		read := []sourcePart{}
+		read := slices.Clone(parts)
 		for _, id := range ids {
 			record, part, err := a.parseFile(id, transcripts[id], summaries[id])
 			if err != nil {
-				return fmt.Errorf("parse %s: %w", transcripts[id], err)
+				if !errors.Is(err, os.ErrNotExist) {
+					failures = append(failures, fmt.Errorf("parse %s: %w", transcripts[id], err))
+				}
+				continue groupsLoop
 			}
 			if part.item == "" {
 				continue
 			}
-			read = append(read, part)
-			if part, ok := a.requestsPart(id); ok {
-				read = append(read, part)
-			}
+			observe(&record, max(record.Observed, metadataVersion))
 			if len(record.Conversations) == 0 || len(record.Conversations[0].Messages) == 0 {
 				continue
 			}
@@ -361,11 +471,33 @@ func (a *antigravityAdapter) discoverParts(unchanged func([]sourcePart) bool, em
 		if combined != nil {
 			combined.Metrics = reconciledTokenMetrics(*combined)
 		}
+		for _, part := range parts {
+			if strings.HasPrefix(part.item, "sqlite:") {
+				continue
+			}
+			if strings.HasPrefix(part.item, "group:") {
+				continue
+			}
+			for _, transcript := range transcripts {
+				if a.original(transcript) == part.item {
+					info, err := os.Stat(transcript)
+					if err != nil {
+						if !errors.Is(err, os.ErrNotExist) {
+							failures = append(failures, fmt.Errorf("stat group %s after parse: %w", rootID, err))
+						}
+						continue groupsLoop
+					}
+					if info.Size() != part.size || info.ModTime().UnixNano() != part.version {
+						continue groupsLoop
+					}
+				}
+			}
+		}
 		if err := emit(combined, read); err != nil {
 			return fmt.Errorf("ingest %s: %w", rootID, err)
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 // readJSONLines decodes each line of the first size bytes of r that holds a
@@ -396,24 +528,35 @@ func readJSONLines(r io.Reader, size int64) ([]map[string]any, error) {
 
 // requestsPart is the version of a conversation's requests database, read
 // before it is, so a later write is read again next time.
-func (a *antigravityAdapter) requestsPart(id string) (sourcePart, bool) {
+func (a *antigravityAdapter) requestsPart(id string) (sourcePart, bool, error) {
 	path := a.requestsDatabase(id)
-	info, err := os.Stat(path)
-	if err != nil {
-		return sourcePart{}, false
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return sourcePart{}, false, nil
+		}
+		return sourcePart{}, false, err
 	}
-	return sourcePart{item: "sqlite:" + a.original(path), size: info.Size(), version: a.databaseVersion(path)}, true
+	state, err := sqliteDependencyState(path)
+	if err != nil {
+		return sourcePart{}, false, err
+	}
+	if a.view != nil {
+		if captured, ok := a.view.databaseState(path); ok {
+			state = captured
+		}
+	}
+	return sourcePart{item: "sqlite:" + a.original(path), size: state.Size, version: state.version(), signal: hashBytes([]byte(jsonText(state)))}, true, nil
 }
 
 func (a *antigravityAdapter) parseFile(id, path string, summary antigravitySummary) (WorkspaceRecord, sourcePart, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return WorkspaceRecord{}, sourcePart{}, nil
+		return WorkspaceRecord{}, sourcePart{}, err
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return WorkspaceRecord{}, sourcePart{}, nil
+		return WorkspaceRecord{}, sourcePart{}, err
 	}
 	part := sourcePart{item: a.original(path), size: info.Size(), version: info.ModTime().UnixNano(), signal: summary.signal()}
 	if parseHook != nil {

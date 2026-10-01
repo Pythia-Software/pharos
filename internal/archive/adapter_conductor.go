@@ -73,8 +73,14 @@ func (a *conductorAdapter) discover(selected map[string]bool, unchanged func([]s
 	if !info.IsDir() {
 		candidates = append(candidates, a.config.Path)
 	} else {
-		_ = filepath.WalkDir(a.config.Path, func(path string, entry os.DirEntry, walkErr error) error {
-			if walkErr != nil || entry.IsDir() {
+		if err := filepath.WalkDir(a.config.Path, func(path string, entry os.DirEntry, walkErr error) error {
+			if err := a.context().Err(); err != nil {
+				return err
+			}
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() {
 				return nil
 			}
 			lower := strings.ToLower(entry.Name())
@@ -82,11 +88,16 @@ func (a *conductorAdapter) discover(selected map[string]bool, unchanged func([]s
 				candidates = append(candidates, path)
 			}
 			return nil
-		})
+		}); err != nil {
+			return err
+		}
 	}
 	sort.Strings(candidates)
 	for _, path := range candidates {
 		for attempt := 0; ; attempt++ {
+			if err := a.context().Err(); err != nil {
+				return err
+			}
 			err := a.database(path, selected, unchanged, emit)
 			if err == nil {
 				break
@@ -94,7 +105,11 @@ func (a *conductorAdapter) discover(selected map[string]bool, unchanged func([]s
 			if attempt >= 5 || (!strings.Contains(err.Error(), "database is locked") && !strings.Contains(err.Error(), "database is busy")) {
 				return fmt.Errorf("could not read Conductor database consistently: %s: %w", path, err)
 			}
-			time.Sleep(time.Duration(attempt+1) * 250 * time.Millisecond)
+			select {
+			case <-a.context().Done():
+				return a.context().Err()
+			case <-time.After(time.Duration(attempt+1) * 250 * time.Millisecond):
+			}
 		}
 	}
 	return nil
@@ -116,7 +131,7 @@ func (a *conductorAdapter) database(path string, selected map[string]bool, uncha
 		return err
 	}
 	defer db.Close()
-	tx, err := db.Begin()
+	tx, err := db.BeginTx(a.context(), nil)
 	if err != nil {
 		return err
 	}
@@ -125,7 +140,6 @@ func (a *conductorAdapter) database(path string, selected map[string]bool, uncha
 	if err != nil {
 		return err
 	}
-	// After the first read, which fixes what the transaction sees.
 	version := a.databaseVersion(path)
 	sessionTable := firstPresent(tables, "sessions", "workspaces", "threads")
 	messageTable := firstPresent(tables, "messages", "session_messages")
@@ -155,18 +169,48 @@ func (a *conductorAdapter) database(path string, selected map[string]bool, uncha
 		}
 		statement += " WHERE " + sidColumn + " IN (" + strings.Join(placeholders, ",") + ")"
 	}
-	sessions, err := queryMaps(tx, statement, arguments...)
+	sessions, err := queryMapsContext(a.context(), tx, statement, arguments...)
 	if err != nil {
 		return err
 	}
 	origin := a.original(path)
 	var signals map[string]sourcePart
 	if unchanged != nil {
-		if signals, err = conductorSignals(tx, sessionTable, messageTable, sidColumn, fkColumn, sessions, scols, mcols, tables); err != nil {
+		if signals, err = conductorSignals(tx, sessionTable, messageTable, sidColumn, fkColumn, sessions, scols, mcols, tables, selected); err != nil {
 			return err
 		}
 	}
+	if modeOf(a.context()).automatic && selected == nil && signals != nil {
+		selected := map[string]bool{}
+		for _, session := range sessions {
+			if err := a.context().Err(); err != nil {
+				return err
+			}
+			sid := firstString(session[sidColumn])
+			part := signals[sid]
+			part.item = "sqlite:" + origin + ":sessions:" + sid
+			if !unchanged([]sourcePart{part}) {
+				selected[sid] = true
+			}
+		}
+		if err := tx.Rollback(); err != nil {
+			return err
+		}
+		for _, session := range sessions {
+			sid := firstString(session[sidColumn])
+			if !selected[sid] {
+				continue
+			}
+			if err := a.database(path, map[string]bool{sid: true}, func([]sourcePart) bool { return false }, emit); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for _, session := range sessions {
+		if err := a.context().Err(); err != nil {
+			return err
+		}
 		sid := firstString(session[sidColumn])
 		if selected != nil && !selected[sid] {
 			continue
@@ -201,16 +245,23 @@ func (a *conductorAdapter) database(path string, selected map[string]bool, uncha
 // updates the session row as its status changes. Git lookups made while
 // building a record are not covered either (main-branch merges are refreshed
 // separately after each sync).
-func conductorSignals(tx *sql.Tx, sessionTable, messageTable, sidColumn, fkColumn string, sessions []map[string]any, scols, mcols, tables map[string]bool) (map[string]sourcePart, error) {
+func conductorSignals(tx *sql.Tx, sessionTable, messageTable, sidColumn, fkColumn string, sessions []map[string]any, scols, mcols, tables map[string]bool, selection ...map[string]bool) (map[string]sourcePart, error) {
 	stats := map[string]sourcePart{}
 	aggregates := "COUNT(*) messages,MAX(rowid) last"
 	if mcols["sent_at"] {
 		aggregates += ",MAX(sent_at) sent"
 	}
-	rows, err := queryMaps(tx, "SELECT "+fkColumn+" sid,"+aggregates+" FROM "+messageTable+" GROUP BY "+fkColumn)
+	where, args := "", []any{}
+	if len(selection) > 0 && selection[0] != nil {
+		for id := range selection[0] {
+			args = append(args, id)
+		}
+		where = " WHERE " + fkColumn + " IN (" + placeholders(len(args)) + ")"
+	}
+	rows, err := queryMaps(tx, "SELECT "+fkColumn+" sid,"+aggregates+" FROM "+messageTable+where+" GROUP BY "+fkColumn, args...)
 	if err != nil {
 		// A table without rowids (or anything else unexpected) is parsed whole.
-		return nil, nil
+		return nil, err
 	}
 	latest := map[string][]any{}
 	for _, row := range rows {
@@ -219,7 +270,13 @@ func conductorSignals(tx *sql.Tx, sessionTable, messageTable, sidColumn, fkColum
 		latest[sid] = []any{row["sent"]}
 	}
 	if mcols["cancelled_at"] {
-		rows, err := queryMaps(tx, "SELECT "+fkColumn+" sid,MAX(cancelled_at) cancelled FROM "+messageTable+" WHERE cancelled_at IS NOT NULL GROUP BY "+fkColumn)
+		cancelWhere := where
+		if cancelWhere == "" {
+			cancelWhere = " WHERE "
+		} else {
+			cancelWhere += " AND "
+		}
+		rows, err := queryMaps(tx, "SELECT "+fkColumn+" sid,MAX(cancelled_at) cancelled FROM "+messageTable+cancelWhere+"cancelled_at IS NOT NULL GROUP BY "+fkColumn, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -305,7 +362,7 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 	if mcols["created_at"] && mcols["id"] {
 		order = " ORDER BY created_at,id"
 	}
-	rows, err := queryMaps(tx, "SELECT * FROM "+messageTable+" WHERE "+fkColumn+"=?"+order, session[sidColumn])
+	rows, err := queryMapsContext(a.context(), tx, "SELECT * FROM "+messageTable+" WHERE "+fkColumn+"=?"+order, session[sidColumn])
 	if err != nil {
 		return WorkspaceRecord{}, err
 	}
@@ -372,7 +429,7 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 	}
 	var workspace map[string]any
 	if scols["workspace_id"] && session["workspace_id"] != nil && tables["workspaces"] {
-		found, e := queryMaps(tx, "SELECT * FROM workspaces WHERE id=?", session["workspace_id"])
+		found, e := queryMapsContext(a.context(), tx, "SELECT * FROM workspaces WHERE id=?", session["workspace_id"])
 		if e != nil {
 			return WorkspaceRecord{}, e
 		}
@@ -398,7 +455,7 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 	}
 	var nativeRepository map[string]any
 	if workspace != nil && wcols["repository_id"] && workspace["repository_id"] != nil && tables["repos"] {
-		found, e := queryMaps(tx, "SELECT * FROM repos WHERE id=?", workspace["repository_id"])
+		found, e := queryMapsContext(a.context(), tx, "SELECT * FROM repos WHERE id=?", workspace["repository_id"])
 		if e != nil {
 			return WorkspaceRecord{}, e
 		}

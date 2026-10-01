@@ -46,16 +46,30 @@ type partTracker struct {
 	host, source, extractor string
 	// capture is set when the parts are a capture's copies, which may be
 	// older than what this host already indexed from the live source.
-	capture bool
-	states  map[string]partState
-	pending []sourcePart
+	capture  bool
+	states   map[string]partState
+	pending  []sourcePart
+	writer   string
+	terminal map[string]bool
 }
 
 func (c *Catalog) newPartTracker(host, source string, adapter partialAdapter, view *captureView) (*partTracker, error) {
 	// Parsed without the host's Git checkouts, so the host's own sync must
 	// parse it again to fill in what only its checkouts know.
-	extractor := sourceIndexVersion(adapter)
-	tracker := &partTracker{host: host, source: source, extractor: extractor, capture: view != nil, states: map[string]partState{}}
+	extractor, err := c.effectiveIndexVersion(host, source, adapter)
+	if err != nil {
+		return nil, err
+	}
+	tracker := &partTracker{host: host, source: source, extractor: extractor, capture: view != nil, states: map[string]partState{}, terminal: map[string]bool{}}
+	if view != nil {
+		rows, err := queryMaps(c.DB, "SELECT item,size,version,signal FROM source_terminal_states WHERE host_id=? AND source_name=? AND extractor=?", host, source, extractor)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			tracker.terminal[partsSignature([]sourcePart{{item: firstString(row["item"]), size: integer(row["size"]), version: integer(row["version"]), signal: firstString(row["signal"])}})] = true
+		}
+	}
 	rows, err := c.DB.Query("SELECT item,extractor,size,version,COALESCE(signal,'') FROM source_item_states WHERE host_id=? AND source_name=?", host, source)
 	if err != nil {
 		return nil, err
@@ -78,6 +92,9 @@ func (c *Catalog) newPartTracker(host, source string, adapter partialAdapter, vi
 // since the host and origin match and it would be the writer.
 func (t *partTracker) unchanged(parts []sourcePart) bool {
 	for _, part := range parts {
+		if t.capture && t.terminal[partsSignature([]sourcePart{part})] {
+			continue
+		}
 		state, ok := t.states[part.item]
 		if !ok || state.extractor != t.extractor {
 			return false
@@ -93,13 +110,28 @@ func (t *partTracker) unchanged(parts []sourcePart) bool {
 	return len(parts) > 0
 }
 
+func (t *partTracker) recordTerminal(c *Catalog, parts []sourcePart) error {
+	if t == nil {
+		return nil
+	}
+	return c.writeTransaction(context.Background(), "terminal older capture", func(tx *sql.Tx) error {
+		for _, part := range parts {
+			if _, err := tx.Exec("INSERT OR IGNORE INTO source_terminal_states(host_id,source_name,item,extractor,size,version,signal) VALUES(?,?,?,?,?,?,?)", t.host, t.source, part.item, t.extractor, part.size, part.version, part.signal); err != nil {
+				return err
+			}
+			t.terminal[partsSignature([]sourcePart{part})] = true
+		}
+		return nil
+	})
+}
+
 // record writes parts' states in tx along with anything pending.
 func (t *partTracker) record(tx *sql.Tx, parts []sourcePart) error {
 	timestamp := now()
 	for _, part := range append(t.pending, parts...) {
-		if _, err := tx.Exec(`INSERT INTO source_item_states(host_id,source_name,item,extractor,size,version,signal,indexed_at) VALUES(?,?,?,?,?,?,?,?)
+		if _, err := tx.Exec(`INSERT INTO source_item_states(host_id,source_name,item,extractor,size,version,signal,indexed_at,indexed_by) VALUES(?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(host_id,source_name,item) DO UPDATE SET extractor=excluded.extractor,size=excluded.size,version=excluded.version,
-			signal=excluded.signal,indexed_at=excluded.indexed_at`, t.host, t.source, part.item, t.extractor, part.size, part.version, nilIfEmpty(part.signal), timestamp); err != nil {
+			signal=excluded.signal,indexed_at=excluded.indexed_at,indexed_by=excluded.indexed_by`, t.host, t.source, part.item, t.extractor, part.size, part.version, nilIfEmpty(part.signal), timestamp, defaultString(t.writer, "intentional")); err != nil {
 			return err
 		}
 	}

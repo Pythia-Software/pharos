@@ -149,6 +149,7 @@ func (c *Catalog) usageLedger(workspaceIDs []string) ([]map[string]any, error) {
 	}
 	return queryMaps(c.DB, `SELECT u.agent_session_id,u.usage_hour,u.model usage_model,u.attribution,`+strings.Join(sums, ",")+`,
 			a.kind session_kind,a.depth,a.provider,a.model session_model,a.conversation_id,
+            CASE WHEN `+currentGroupConversation("c")+` THEN 1 ELSE 0 END current_group_member,
             c.harness,c.harness_version_first,c.harness_version_last,c.harness_version_source,
 			w.id workspace_id,w.title,w.source_kind,r.display_name repository_name
 		FROM agent_session_usage u
@@ -246,6 +247,9 @@ func (c *Catalog) workspaceUsage(workspaceIDs []string) (map[string]*workspaceUs
 	}
 	totals := map[string]*workspaceUsageTotal{}
 	for _, entry := range ledger {
+		if integer(entry["current_group_member"]) == 0 {
+			continue
+		}
 		day := ""
 		if hour, ok := parseTime(firstString(entry["usage_hour"])); ok {
 			day = localMidnight(hour, time.Local).Format("2006-01-02")

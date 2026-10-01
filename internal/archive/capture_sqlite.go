@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/url"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	sqlite "modernc.org/sqlite"
@@ -22,7 +24,7 @@ func (c *sourceCapture) captureDatabases(items []captureItem, present map[string
 			return err
 		}
 		rel := path.Join(captureFilesDir, item.rel)
-		state, err := sqliteState(item.path)
+		state, err := sqliteDependencyState(item.path)
 		if err != nil {
 			if !errors.Is(err, fs.ErrNotExist) {
 				c.fail(item.path, err)
@@ -35,7 +37,7 @@ func (c *sourceCapture) captureDatabases(items []captureItem, present map[string
 		previous := c.snapshots[rel]
 		if previous != nil {
 			previous.MissingSince = ""
-			if previous.Source == state && c.intact(previous.Captured, previous.Size, previous.CapturedMTimeNS) {
+			if (c.session.recoveryID == "" || previous.RecoveryID == c.session.recoveryID) && previous.Source == state && c.intact(previous.Captured, previous.Size, previous.CapturedMTimeNS) {
 				c.result.SnapshotsUnchanged++
 				continue
 			}
@@ -72,6 +74,32 @@ func sqliteState(file string) (sqliteSourceState, error) {
 	state := sqliteSourceState{Size: info.Size(), MTimeNS: info.ModTime().UnixNano()}
 	if wal, err := os.Stat(file + "-wal"); err == nil {
 		state.WALSize, state.WALMTimeNS = wal.Size(), wal.ModTime().UnixNano()
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return sqliteSourceState{}, err
+	}
+	return state, nil
+}
+
+func sqliteDependencyState(file string) (sqliteSourceState, error) {
+	state, err := sqliteState(file)
+	if err != nil {
+		return state, err
+	}
+	info, err := os.Stat(file)
+	if err != nil {
+		return state, err
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		state.Identity = fmt.Sprintf("%d:%d", stat.Dev, stat.Ino)
+	}
+	if state.WALSize > 0 {
+		wal, err := os.Stat(file + "-wal")
+		if err != nil {
+			return state, err
+		}
+		if stat, ok := wal.Sys().(*syscall.Stat_t); ok {
+			state.WALIdentity = fmt.Sprintf("%d:%d", stat.Dev, stat.Ino)
+		}
 	}
 	return state, nil
 }
@@ -102,7 +130,7 @@ func (c *sourceCapture) snapshot(item captureItem, rel string, state sqliteSourc
 		os.Remove(temporary)
 		return nil, toDestination(err)
 	}
-	snapshot := &capturedSnapshot{Path: item.path, Captured: rel, Size: info.Size(), CapturedMTimeNS: info.ModTime().UnixNano(), CapturedAt: now(), Method: "sqlite-backup", Source: state}
+	snapshot := &capturedSnapshot{RecoveryID: c.session.recoveryID, Path: item.path, Captured: rel, Size: info.Size(), CapturedMTimeNS: info.ModTime().UnixNano(), CapturedAt: now(), Method: "sqlite-backup", Source: state}
 	if previous != nil {
 		snapshot.Generations = slices.Clone(previous.Generations)
 		if c.session.generations > 0 {
@@ -136,6 +164,9 @@ func (c *sourceCapture) snapshot(item captureItem, rel string, state sqliteSourc
 // sessions deleted at the source survive until indexed; past that the oldest
 // goes with a warning, so an index that never runs cannot fill the drive.
 func (c *sourceCapture) retain(path string, generations []capturedVersion) []capturedVersion {
+	if c.session.recoveryID != "" {
+		return generations
+	}
 	limit := c.session.generations
 	if len(generations) <= limit {
 		return generations

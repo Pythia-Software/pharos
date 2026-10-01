@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	httppprof "net/http/pprof"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -33,18 +34,19 @@ type SyncRun struct {
 	// counted. Progress is the index's fraction done, counting each source it
 	// could not count as one step; nil while counting, or with nothing to
 	// measure it by.
-	TotalConversations int            `json:"total_conversations"`
-	DoneConversations  int            `json:"done_conversations"`
-	Progress           *float64       `json:"progress"`
-	Workspaces         int            `json:"workspaces"`
-	Conversations      int            `json:"conversations"`
-	Messages           int            `json:"messages"`
-	SkippedCurrent     int            `json:"skipped_current"`
-	Results            []IngestResult `json:"results"`
-	Error              any            `json:"error"`
-	StartedAt          string         `json:"started_at"`
-	UpdatedAt          string         `json:"updated_at"`
-	CompletedAt        any            `json:"completed_at"`
+	TotalConversations int                  `json:"total_conversations"`
+	DoneConversations  int                  `json:"done_conversations"`
+	Progress           *float64             `json:"progress"`
+	Workspaces         int                  `json:"workspaces"`
+	Conversations      int                  `json:"conversations"`
+	Messages           int                  `json:"messages"`
+	SkippedCurrent     int                  `json:"skipped_current"`
+	Results            []IngestResult       `json:"results"`
+	Verification       *verificationSummary `json:"verification,omitempty"`
+	Error              any                  `json:"error"`
+	StartedAt          string               `json:"started_at"`
+	UpdatedAt          string               `json:"updated_at"`
+	CompletedAt        any                  `json:"completed_at"`
 	// StopRequested is set while a running run winds down after a stop
 	// request: it finishes the record in hand and keeps everything written.
 	StopRequested bool `json:"stop_requested,omitempty"`
@@ -63,6 +65,7 @@ type Server struct {
 	backups    backupRuns
 	tasks      backgroundTasks
 	timingMu   sync.Mutex
+	auto       automaticSync
 }
 
 func NewServer(config Config, catalog *Catalog) *Server {
@@ -100,6 +103,7 @@ func (s *Server) Serve() error {
 	s.spawn(s.Catalog.maintainSubstringIndex)
 	s.spawn(s.Catalog.maintainToolSearch)
 	s.spawn(func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
+	s.spawn(s.automaticLoop)
 	s.refreshGitInBackground(true)
 	return s.serveUntilStopped(server, listener)
 }
@@ -181,7 +185,7 @@ func (s *Server) authorized(r *http.Request) bool {
 // of which serves the single-page UI.
 func isUIPage(path string) bool {
 	switch path {
-	case "/", "/library", "/settings", "/settings/sources", "/settings/optimization", "/settings/preferences", "/sources", "/activity", "/usage", "/tools", "/tl1", "/tl1/configurations", "/tl1/followups", "/tl1/quality", "/tl1/runs", "/health", "/mcp", "/findings":
+	case "/", "/library", "/settings", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/preferences", "/sources", "/activity", "/usage", "/tools", "/tl1", "/tl1/configurations", "/tl1/followups", "/tl1/quality", "/tl1/runs", "/health", "/mcp", "/findings":
 		return true
 	}
 	return strings.HasPrefix(path, "/work/")
@@ -194,6 +198,7 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/onboarding.js":    {"onboarding.js", "text/javascript; charset=utf-8"},
 	"/assets/upgrade.js":       {"upgrade.js", "text/javascript; charset=utf-8"},
 	"/assets/library.js":       {"library.js", "text/javascript; charset=utf-8"},
+	"/assets/sync.js":          {"sync.js", "text/javascript; charset=utf-8"},
 	"/assets/carbon.js":        {"carbon.js", "text/javascript; charset=utf-8"},
 }
 
@@ -319,6 +324,17 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		// The macOS wrapper polls this until the service listens; it must stay
 		// cheap, since each timed-out probe would otherwise leave work running.
 		writeJSON(w, map[string]any{"ok": true}, 200)
+	case path == "/api/diagnostics/profile":
+		seconds, _ := strconv.Atoi(r.URL.Query().Get("seconds"))
+		if seconds < 1 || seconds > 60 {
+			writeError(w, fmt.Errorf("seconds must be 1 to 60"), 400)
+			return
+		}
+		httppprof.Profile(w, r)
+	case path == "/api/sync/settings" || path == "/api/sync/status" || path == "/api/sync/history" || path == "/api/sync/issues" || path == "/api/sync/recovery":
+		s.getIncrementalSync(w, r)
+	case strings.HasPrefix(path, "/api/sources/") && strings.HasSuffix(path, "/changes"):
+		s.sourceChanges(w, r)
 	case path == "/api/health":
 		health := s.Catalog.Health()
 		health["storage"] = storage(s.Config())
@@ -434,6 +450,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 	}
 	path := r.URL.Path
 	switch {
+	case strings.HasPrefix(path, "/api/sync/") || path == "/api/library/update":
+		s.postIncrementalSync(w, r, body)
 	case path == "/api/upgrade":
 		// The upgrade reads and rewrites much of the catalog, so it runs in the
 		// background; /api/upgrade and the library status report progress. A
@@ -682,7 +700,7 @@ func (s *Server) sourceInventory() (map[string]any, error) {
 }
 
 func (s *Server) syncSources(w http.ResponseWriter, sources []SourceConfig) {
-	if !s.ingestMu.TryLock() {
+	if !s.acquireManualIngest() {
 		writeJSON(w, map[string]any{"error": "source indexing is already running"}, http.StatusConflict)
 		return
 	}
@@ -828,11 +846,7 @@ func (s *Server) updateRun(id string, update func(*SyncRun)) {
 			update(run)
 			run.UpdatedAt = now()
 			if previousState == "running" && run.State == "complete" && !run.StopRequested {
-				kind := "sync"
-				if run.Kind == indexRunKind {
-					kind = "index"
-				}
-				s.recordActivityDuration(kind, run.StartedAt, firstString(run.CompletedAt))
+				s.recordActivityDuration(activityTimingKind(run.Kind), run.StartedAt, firstString(run.CompletedAt))
 			}
 			return
 		}

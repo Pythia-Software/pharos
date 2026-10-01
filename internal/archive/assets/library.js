@@ -288,8 +288,9 @@
     const action = ensureHeaderAction();
     if (!action) return;
     const active = status?.activities?.some(activity => ['capture', 'capture-other', 'sync', 'index'].includes(activity.kind));
-    action.disabled = headerCaptureIndexRunning || Boolean(hostsBusy) || Boolean(active) || Boolean(upgradeStatus?.running);
-    action.setAttribute('aria-busy', String(headerCaptureIndexRunning));
+    const incremental = Boolean(window.pharosSync?.isBusy());
+    action.disabled = headerCaptureIndexRunning || Boolean(hostsBusy) || Boolean(active) || incremental || Boolean(upgradeStatus?.running);
+    action.setAttribute('aria-busy', String(headerCaptureIndexRunning || Boolean(active) || incremental));
   }
 
   let updateProgressFloor = 0;
@@ -693,11 +694,12 @@
       const sources = await call('/api/sources');
       let upgradeScheduled = false;
       if (sources.enabled) {
-        const capture = await startCapture(true);
-        if (capture?.state === 'complete') {
-          const indexed = await startIndex({all_hosts: true, only_needed: true, auto_upgrade: true}, 'captured files', true);
-          upgradeScheduled = Boolean(indexed);
-        }
+        const started = await post('/api/library/update', {});
+        refreshStatus();
+        const indexed = await watch('/api/activity', started.run_id);
+        if (indexed?.state !== 'complete') toast(indexed?.error || 'Update stopped; committed work is retained.');
+        upgradeScheduled = indexed?.state === 'complete';
+        if (upgradeScheduled) await window.pharosUpgrade?.start();
       } else if (!upgradeStatus?.needed) {
         toast('No enabled sources on this Mac. Open Settings → Sources to enable one.');
       }

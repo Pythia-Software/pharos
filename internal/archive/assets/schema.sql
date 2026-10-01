@@ -7,6 +7,15 @@ CREATE TABLE IF NOT EXISTS meta (
   value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS sync_generations (
+  host_id TEXT NOT NULL, source_name TEXT NOT NULL, generation INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(host_id,source_name)
+);
+CREATE TABLE IF NOT EXISTS conversation_derivation_inputs (
+  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+  fingerprint TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS repositories (
   id TEXT PRIMARY KEY,
   canonical_remote TEXT,
@@ -97,6 +106,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   UNIQUE(provider, account, native_id)
 );
 CREATE INDEX IF NOT EXISTS conversations_workspace_idx ON conversations(workspace_id);
+CREATE INDEX IF NOT EXISTS conversations_native_alias_idx ON conversations(account,native_id);
 
 CREATE TABLE IF NOT EXISTS mcp_calls (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -991,4 +1001,60 @@ CREATE INDEX IF NOT EXISTS message_authorship_day_idx ON message_authorship(day)
 CREATE TABLE IF NOT EXISTS ui_preferences (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS native_activity_lookup ON activity_events(workspace_id,source,kind,occurred_at);
+CREATE TABLE IF NOT EXISTS sync_settings (
+  host_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, interval_seconds INTEGER NOT NULL,
+  sources_json TEXT NOT NULL DEFAULT '[]', next_at TEXT
+);
+CREATE TABLE IF NOT EXISTS automatic_source_states (
+  host_id TEXT NOT NULL, source_name TEXT NOT NULL, attempted_at TEXT, succeeded_at TEXT,
+  error TEXT, indexed_at TEXT, preflight TEXT, counts_json TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY(host_id,source_name)
+);
+CREATE TABLE IF NOT EXISTS sync_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, host_id TEXT NOT NULL, run_id TEXT NOT NULL,
+  finished_at TEXT NOT NULL, sample_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS sync_history_host_idx ON sync_history(host_id,id DESC);
+CREATE TABLE IF NOT EXISTS sync_deferred (
+  name TEXT PRIMARY KEY, generation INTEGER NOT NULL DEFAULT 0,
+  completed_generation INTEGER NOT NULL DEFAULT 0, changed_at TEXT NOT NULL, completed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS sync_verifications (
+  host_id TEXT NOT NULL, source_name TEXT NOT NULL, unit TEXT NOT NULL,
+  checked_at TEXT NOT NULL, outcome TEXT NOT NULL, detail TEXT, signature TEXT,
+  PRIMARY KEY(host_id,source_name,unit)
+);
+CREATE TABLE IF NOT EXISTS sync_integrity_issues (
+  id TEXT PRIMARY KEY, host_id TEXT NOT NULL, source_name TEXT NOT NULL, unit TEXT NOT NULL,
+  first_at TEXT NOT NULL, last_at TEXT NOT NULL, state TEXT NOT NULL,
+  detail_json TEXT NOT NULL, occurrences INTEGER NOT NULL DEFAULT 1, resolved_at TEXT
+);
+CREATE TABLE IF NOT EXISTS sync_recovery_jobs (
+  id TEXT PRIMARY KEY, mode TEXT NOT NULL, scope_json TEXT NOT NULL, state TEXT NOT NULL,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, progress_json TEXT NOT NULL DEFAULT '{}',
+  cursor TEXT, error TEXT
+);
+CREATE TABLE IF NOT EXISTS declared_native_aliases (
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  account TEXT NOT NULL, native_id TEXT NOT NULL,
+  PRIMARY KEY(conversation_id,account,native_id)
+);
+CREATE INDEX IF NOT EXISTS declared_native_aliases_lookup ON declared_native_aliases(account,native_id);
+CREATE TABLE IF NOT EXISTS conversation_group_membership (
+  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  active INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS conversation_group_membership_workspace ON conversation_group_membership(workspace_id,active);
+CREATE TABLE IF NOT EXISTS source_terminal_states (
+ host_id TEXT NOT NULL,source_name TEXT NOT NULL,item TEXT NOT NULL,extractor TEXT NOT NULL,
+ size INTEGER NOT NULL,version INTEGER NOT NULL,signal TEXT NOT NULL,
+ PRIMARY KEY(host_id,source_name,item,extractor,version,signal)
+);
+CREATE TABLE IF NOT EXISTS tool_ledger_inputs (
+ conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+ row_kind TEXT NOT NULL,row_id TEXT NOT NULL,fingerprint TEXT NOT NULL,
+ PRIMARY KEY(conversation_id,row_kind,row_id)
 );

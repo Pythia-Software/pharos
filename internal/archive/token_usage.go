@@ -84,6 +84,9 @@ func normalizeTokenCounts(u map[string]any) tokenCounts {
 	return out
 }
 func tokenObject(m MessageRecord) (map[string]any, map[string]any) {
+	if m.accounting != nil && m.accounting.input == defaultString(m.RawText, m.Text) {
+		return m.accounting.raw, m.accounting.value
+	}
 	var raw map[string]any
 	decoder := json.NewDecoder(strings.NewReader(defaultString(m.RawText, m.Text)))
 	decoder.UseNumber()
@@ -104,6 +107,34 @@ func tokenObject(m MessageRecord) (map[string]any, map[string]any) {
 		value = next
 	}
 	return raw, value
+}
+
+type messageAccounting struct {
+	input      string
+	raw, value map[string]any
+}
+
+func prepareRecordAccounting(record *WorkspaceRecord) {
+	cache := map[string]*messageAccounting{}
+	var bytes int64
+	for conversationIndex := range record.Conversations {
+		for messageIndex := range record.Conversations[conversationIndex].Messages {
+			message := &record.Conversations[conversationIndex].Messages[messageIndex]
+			input := defaultString(message.RawText, message.Text)
+			if cached, ok := cache[input]; ok {
+				message.accounting = cached
+				continue
+			}
+			if bytes+int64(len(input))*8 > 64<<20 {
+				message.accounting = nil
+				continue
+			}
+			raw, value := tokenObject(*message)
+			message.accounting = &messageAccounting{input: input, raw: raw, value: value}
+			cache[input] = message.accounting
+			bytes += int64(len(input)) * 8
+		}
+	}
 }
 func addTokenCounts(to, from tokenCounts) {
 	for k, v := range from {

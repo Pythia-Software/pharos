@@ -329,12 +329,19 @@ test('the update action stays busy while a completed index hands off to upgrade'
         return route.fulfill({ contentType: 'application/javascript', body: fs.readFileSync(path.join(root, 'internal/archive/assets', path.basename(url.pathname))) });
       }
       if (!url.pathname.startsWith('/api/') && !url.pathname.startsWith('/assets/')) return route.fulfill({ contentType: 'text/html', body: html });
-      if (url.pathname === '/api/upgrade') return json({ needed: true, running: upgradeRunning, step: upgradeRunning ? 'usage' : null,
+      if (url.pathname === '/api/upgrade') {
+        if (route.request().method() === 'POST') setTimeout(() => { upgradeRunning = true; }, 900);
+        return json({ needed: true, running: upgradeRunning, step: upgradeRunning ? 'usage' : null,
         done: 1, total: 10, overall_progress: upgradeRunning ? 0.05 : null,
         steps: [{ id: 'usage', label: 'Correct token attribution', detail: 'Recounting', unit: 'workspace', pending: 10 }], repository_renames: {} });
+      }
       if (url.pathname === '/api/library/status') return json({ idle: !upgradeRunning, portable: true, drive: { name: 'Pharos SSD', ejectable: false },
         activities: upgradeRunning ? [{ kind: 'maintenance', label: 'Upgrading the library', detail: 'Step: usage', progress: 0.1 }] : [] });
       if (url.pathname === '/api/sources') return json({ enabled: 1, items: [] });
+      if (url.pathname === '/api/library/update') {
+        indexStarts++;
+        return json({ run_id: 'index' });
+      }
       if (url.pathname === '/api/capture') return json(route.request().method() === 'POST'
         ? { run: { id: 'capture', state: 'running' } } : { runs: [{ id: 'capture', state: 'complete' }] });
       if (url.pathname === '/api/index') {
@@ -351,7 +358,7 @@ test('the update action stays busy while a completed index hands off to upgrade'
       return route.fulfill({ contentType: 'application/javascript', body: '' });
     });
     await page.goto('http://update-handoff.test/library');
-    const indexStarted = page.waitForResponse(response => response.url().endsWith('/api/index') && response.request().method() === 'POST');
+    const indexStarted = page.waitForResponse(response => response.url().endsWith('/api/library/update') && response.request().method() === 'POST');
     await page.locator('#headerSync').click();
     await indexStarted;
     await page.locator('#pharosDrive').click();

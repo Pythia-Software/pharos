@@ -85,22 +85,27 @@ func pathUnder(path, root string) (string, bool) {
 // manifest recorded before snapshotting it; 0 (unknown) for a superseded
 // snapshot from before generations recorded theirs.
 func (v *captureView) databaseVersion(path string) int64 {
+	state, _ := v.databaseState(path)
+	return state.version()
+}
+
+func (v *captureView) databaseState(path string) (sqliteSourceState, bool) {
 	rel, err := filepath.Rel(v.dir, path)
 	if err != nil {
-		return 0
+		return sqliteSourceState{}, false
 	}
 	rel = filepath.ToSlash(rel)
 	for _, snapshot := range v.manifest.Snapshots {
 		if snapshot.Captured == rel {
-			return snapshot.Source.version()
+			return snapshot.Source, true
 		}
 		for _, generation := range snapshot.Generations {
 			if generation.Captured == rel && generation.Source != nil {
-				return generation.Source.version()
+				return *generation.Source, true
 			}
 		}
 	}
-	return 0
+	return sqliteSourceState{}, false
 }
 
 func (s sqliteSourceState) version() int64 { return max(s.MTimeNS, s.WALMTimeNS) }
@@ -324,10 +329,11 @@ func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progre
 // cannot index only what is missing, so their generations are merely recorded.
 func (c *Catalog) indexGenerations(ctx context.Context, adapter Adapter, view *captureView, marker *indexMarker, result *IngestResult) error {
 	conductor, ok := adapter.(*conductorAdapter)
+	force := modeOf(ctx).force
 	for _, snapshot := range view.manifest.Snapshots {
 		pending := false
 		for _, generation := range snapshot.Generations {
-			pending = pending || !marker.has(snapshot.Path, generation.CapturedAt)
+			pending = pending || force || !marker.has(snapshot.Path, generation.CapturedAt)
 		}
 		if !pending || !ok {
 			for _, generation := range snapshot.Generations {
@@ -356,7 +362,7 @@ func (c *Catalog) indexGenerations(ctx context.Context, adapter Adapter, view *c
 					handled[id] = true
 				}
 			}
-			if marker.has(snapshot.Path, generation.CapturedAt) || len(missing) == 0 {
+			if (!force && marker.has(snapshot.Path, generation.CapturedAt)) || len(missing) == 0 {
 				marker.add(snapshot.Path, generation.CapturedAt)
 				continue
 			}
@@ -374,6 +380,10 @@ func (c *Catalog) indexGenerations(ctx context.Context, adapter Adapter, view *c
 }
 
 func conductorSessionIDs(file string) (map[string]bool, error) {
+	return conductorSessionIDsContext(context.Background(), file)
+}
+
+func conductorSessionIDsContext(ctx context.Context, file string) (map[string]bool, error) {
 	db, err := openReadOnlySQLite(file)
 	if err != nil {
 		return nil, err
@@ -396,7 +406,7 @@ func conductorSessionIDs(file string) (map[string]bool, error) {
 	if column == "" {
 		return ids, nil
 	}
-	rows, err := queryMaps(db, "SELECT "+column+" id FROM "+table)
+	rows, err := queryMapsContext(ctx, db, "SELECT "+column+" id FROM "+table)
 	for _, row := range rows {
 		ids[firstString(row["id"])] = true
 	}

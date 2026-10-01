@@ -52,11 +52,40 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 }
 
 func replaceToolLedgerWithRoots(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord, locations []repoRoot) error {
-	if _, err := tx.Exec("DELETE FROM tool_calls WHERE conversation_id=?", conversationID); err != nil {
+	var priorVersion string
+	if err := tx.QueryRow("SELECT version FROM tool_ledger_state WHERE conversation_id=?", conversationID).Scan(&priorVersion); err != nil && err != sql.ErrNoRows {
 		return err
 	}
-	if _, err := tx.Exec("DELETE FROM model_requests WHERE conversation_id=?", conversationID); err != nil {
+	if priorVersion != toolLedgerVersion {
+		for _, table := range []string{"tool_calls", "model_requests", "tool_ledger_inputs"} {
+			if _, err := tx.Exec("DELETE FROM "+table+" WHERE conversation_id=?", conversationID); err != nil {
+				return err
+			}
+		}
+	}
+	rows, err := queryMaps(tx, "SELECT row_kind,row_id,fingerprint FROM tool_ledger_inputs WHERE conversation_id=?", conversationID)
+	if err != nil {
 		return err
+	}
+	inputs := map[string]string{}
+	for _, row := range rows {
+		inputs[firstString(row["row_kind"])+":"+firstString(row["row_id"])] = firstString(row["fingerprint"])
+	}
+	retained := map[string]bool{}
+	changed := false
+	needsWrite := func(kind, id string, value any) (bool, error) {
+		key := kind + ":" + id
+		retained[key] = true
+		fingerprint := hashBytes([]byte(toolLedgerVersion + ":" + workspaceID + ":" + conversation.Provider + ":" + jsonText(value)))
+		if inputs[key] == fingerprint {
+			return false, nil
+		}
+		if _, err := tx.Exec(`INSERT INTO tool_ledger_inputs(conversation_id,row_kind,row_id,fingerprint) VALUES(?,?,?,?)
+			ON CONFLICT(conversation_id,row_kind,row_id) DO UPDATE SET fingerprint=excluded.fingerprint`, conversationID, kind, id, fingerprint); err != nil {
+			return false, err
+		}
+		changed = true
+		return true, nil
 	}
 	requests, calls := buildToolLedger(conversation.Messages, strings.TrimSpace(conversation.Model))
 	if locations == nil {
@@ -101,13 +130,21 @@ func replaceToolLedgerWithRoots(tx *sql.Tx, workspaceID, conversationID string, 
 		return stableID("message", conversationID, nativeID)
 	}
 	if len(requests) > 0 {
-		statement, err := tx.Prepare(`INSERT INTO model_requests(id,conversation_id,agent_session_id,native_id,sequence,requested_at,model,
+		statement, err := tx.Prepare(derivedUpsertSQL(`INSERT INTO model_requests(id,conversation_id,agent_session_id,native_id,sequence,requested_at,model,
 			input_tokens,uncached_input_tokens,cache_read_input_tokens,cache_creation_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,
-			context_growth_tokens,compacted_before,tool_call_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+			context_growth_tokens,compacted_before,tool_call_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
 		if err != nil {
 			return err
 		}
 		for _, request := range requests {
+			write, err := needsWrite("request", firstString(requestID(request.Key)), request)
+			if err != nil {
+				statement.Close()
+				return err
+			}
+			if !write {
+				continue
+			}
 			counts := request.Counts
 			uncached := max(counts["input_tokens"]-counts["cache_read_input_tokens"]-counts["cache_creation_input_tokens"], 0)
 			if _, err := statement.Exec(requestID(request.Key), conversationID, sessionID(request.Stream), nilIfEmpty(request.NativeID), request.Sequence,
@@ -122,12 +159,12 @@ func replaceToolLedgerWithRoots(tx *sql.Tx, workspaceID, conversationID string, 
 		statement.Close()
 	}
 	if len(calls) > 0 {
-		callStatement, err := tx.Prepare(`INSERT INTO tool_calls(id,workspace_id,conversation_id,agent_session_id,call_id,call_message_id,result_message_id,
+		callStatement, err := tx.Prepare(derivedUpsertSQL(`INSERT INTO tool_calls(id,workspace_id,conversation_id,agent_session_id,call_id,call_message_id,result_message_id,
 			sequence,provider,model,kind,tool_name,tool_category,mcp_server,command,program,subcommand,command_category,command_count,
 			has_pipe,has_redirect,has_heredoc,backgrounded,file_path,started_at,ended_at,duration_ms,duration_source,status,error_type,exit_code,
 			interrupted,truncated,input_bytes,result_bytes,result_tokens,result_tokens_source,request_id,next_request_id,parallel_count,
 			output_tokens,carried_requests,carried_tokens,lines_added,lines_removed,url,host,hosts,url_count,search_query,error_signature,test_failure,repo_path,path_repository,path_repository_id,path_scope)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
 		if err != nil {
 			return err
 		}
@@ -145,6 +182,18 @@ func replaceToolLedgerWithRoots(tx *sql.Tx, workspaceID, conversationID string, 
 		defer urlStatement.Close()
 		for _, call := range calls {
 			id := stableID("tool-call", conversationID, call.Key)
+			write, err := needsWrite("call", id, call)
+			if err != nil {
+				return err
+			}
+			if !write {
+				continue
+			}
+			for _, table := range []string{"tool_commands", "tool_urls"} {
+				if _, err := tx.Exec("DELETE FROM "+table+" WHERE tool_call_id=?", id); err != nil {
+					return err
+				}
+			}
 			if _, err := callStatement.Exec(id, workspaceID, conversationID, sessionID(call.Stream), nilIfEmpty(call.CallID),
 				messageID(call.CallNativeID), messageID(call.ResultNativeID), call.Sequence, conversation.Provider, nilIfEmpty(call.Model),
 				call.Kind, call.ToolName, call.Category, nilIfEmpty(call.MCPServer), nilIfEmpty(call.Command), nilIfEmpty(call.Program),
@@ -170,12 +219,52 @@ func replaceToolLedgerWithRoots(tx *sql.Tx, workspaceID, conversationID string, 
 			}
 		}
 	}
+	for _, kind := range []string{"call", "request"} {
+		table := "tool_calls"
+		if kind == "request" {
+			table = "model_requests"
+		}
+		rows, err := queryMaps(tx, "SELECT id FROM "+table+" WHERE conversation_id=?", conversationID)
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			id := firstString(row["id"])
+			if retained[kind+":"+id] {
+				continue
+			}
+			if _, err := tx.Exec("DELETE FROM "+table+" WHERE id=?", id); err != nil {
+				return err
+			}
+			if _, err := tx.Exec("DELETE FROM tool_ledger_inputs WHERE conversation_id=? AND row_kind=? AND row_id=?", conversationID, kind, id); err != nil {
+				return err
+			}
+			changed = true
+		}
+	}
 	if _, err := tx.Exec(`INSERT INTO tool_ledger_state(conversation_id,version,tool_calls,updated_at) VALUES(?,?,?,?)
-		ON CONFLICT(conversation_id) DO UPDATE SET version=excluded.version,tool_calls=excluded.tool_calls,updated_at=excluded.updated_at`,
+		ON CONFLICT(conversation_id) DO UPDATE SET version=excluded.version,tool_calls=excluded.tool_calls,updated_at=excluded.updated_at
+		WHERE tool_ledger_state.version<>excluded.version OR tool_ledger_state.tool_calls<>excluded.tool_calls`,
 		conversationID, toolLedgerVersion, len(calls), now()); err != nil {
 		return err
 	}
-	return bumpToolLedgerGeneration(tx)
+	if changed {
+		return bumpToolLedgerGeneration(tx)
+	}
+	return nil
+}
+
+func derivedUpsertSQL(statement string) string {
+	start, end := strings.Index(statement, "("), strings.Index(statement, ")")
+	columns := strings.Split(statement[start+1:end], ",")
+	updates := []string{}
+	for _, column := range columns {
+		column = strings.TrimSpace(column)
+		if column != "id" {
+			updates = append(updates, column+"=excluded."+column)
+		}
+	}
+	return statement + " ON CONFLICT(id) DO UPDATE SET " + strings.Join(updates, ",")
 }
 
 // storedMessages reads a conversation's retained messages in source order.
@@ -324,6 +413,13 @@ func (c *Catalog) currentToolRollup(ctx context.Context) error {
 	if !strings.HasSuffix(built, "/"+toolRollupVersion) {
 		return c.ensureToolRollup(ctx)
 	}
+	var deferred bool
+	if err := c.DB.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sync_deferred WHERE name='tools' AND generation>completed_generation)").Scan(&deferred); err != nil {
+		return err
+	}
+	if deferred {
+		return nil
+	}
 	state := &c.tools
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -413,6 +509,12 @@ func (c *Catalog) rebuildToolRollup(ctx context.Context, generation, day string)
 	if _, err := conn.ExecContext(ctx, "CREATE TEMP TABLE tool_cube_build AS "+toolCubeSelect("temp.tool_mirror_build")); err != nil {
 		return err
 	}
+	return c.retryCatalogWrite(ctx, "tool-rollup-publish", nil, func() error {
+		return c.publishToolRollup(ctx, conn, book, generation, day)
+	})
+}
+
+func (c *Catalog) publishToolRollup(ctx context.Context, conn *sql.Conn, book priceBook, generation, day string) error {
 	// This transaction replaces the rollup tables and can hold the catalog
 	// writer for longer than an ingest task. Acquire before marking it active.
 	acquiring := time.Now()

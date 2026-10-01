@@ -423,6 +423,10 @@ configures local sources, **Capture this Mac** copies enabled sources into the
 library, and **Index captured files** indexes captures from every Mac. The
 header button beside the library disk runs **Update library**: capture, index,
 and any pending library upgrade in that order.
+Settings → Sync also offers opt-in automatic live refresh, measured costs,
+integrity verification, and stoppable/resumable recovery. Live refresh does
+not capture raw evidence. See [Incremental conversation refresh](incremental-sync.md)
+for controls, preservation boundaries, repair modes, and API details.
 The enable switch sits in each source card's header. Below the cards, **Macs and
 captures** shows when each source was captured and indexed, and what still
 needs indexing. The API can still target one host or source with `POST

@@ -87,6 +87,7 @@ type captureSourceInfo struct {
 // source's mtime, so size+mtime identify it on both sides; captured_at changes
 // whenever it is captured again.
 type capturedFile struct {
+	RecoveryID   string            `json:"recovery_id,omitempty"`
 	Path         string            `json:"path"`
 	Captured     string            `json:"captured"`
 	Size         int64             `json:"size"`
@@ -115,6 +116,7 @@ type capturedVersion struct {
 // online backup API. Source records the database and WAL state it was taken
 // from; an unchanged state skips the next snapshot.
 type capturedSnapshot struct {
+	RecoveryID      string            `json:"recovery_id,omitempty"`
 	Path            string            `json:"path"`
 	Captured        string            `json:"captured"`
 	Size            int64             `json:"size"`
@@ -127,10 +129,12 @@ type capturedSnapshot struct {
 }
 
 type sqliteSourceState struct {
-	Size       int64 `json:"size"`
-	MTimeNS    int64 `json:"mtime_ns"`
-	WALSize    int64 `json:"wal_size"`
-	WALMTimeNS int64 `json:"wal_mtime_ns"`
+	Size        int64  `json:"size"`
+	MTimeNS     int64  `json:"mtime_ns"`
+	WALSize     int64  `json:"wal_size"`
+	WALMTimeNS  int64  `json:"wal_mtime_ns"`
+	Identity    string `json:"identity,omitempty"`
+	WALIdentity string `json:"wal_identity,omitempty"`
 }
 
 // capturedInstallation maps a TL1 registry entry's absolute paths to their
@@ -261,6 +265,7 @@ func Capture(ctx context.Context, config Config, sources []SourceConfig, progres
 }
 
 type captureSession struct {
+	recoveryID  string
 	hostDir     string
 	host        Host
 	generations int
@@ -304,7 +309,7 @@ func beginCapture(config Config) (*captureSession, error) {
 		}
 		return nil, err
 	}
-	session := &captureSession{hostDir: hostDir, host: host, generations: max(config.CaptureGenerations, 0), lock: lock, buffers: make(chan []byte, 4)}
+	session := &captureSession{recoveryID: config.CaptureRecoveryID, hostDir: hostDir, host: host, generations: max(config.CaptureGenerations, 0), lock: lock, buffers: make(chan []byte, 4)}
 	for range cap(session.buffers) {
 		session.buffers <- make([]byte, 1<<20)
 	}
@@ -634,7 +639,7 @@ func (c *sourceCapture) captureFiles(items []captureItem, present map[string]boo
 		previous := c.files[rel]
 		if previous != nil {
 			previous.MissingSince = ""
-			if previous.Size == info.Size() && previous.MTimeNS == info.ModTime().UnixNano() && c.intact(previous.Captured, previous.Size, previous.MTimeNS) {
+			if (c.session.recoveryID == "" || previous.RecoveryID == c.session.recoveryID) && previous.Size == info.Size() && previous.MTimeNS == info.ModTime().UnixNano() && c.intact(previous.Captured, previous.Size, previous.MTimeNS) {
 				c.result.FilesUnchanged++
 				continue
 			}
@@ -752,7 +757,7 @@ func (c *sourceCapture) copyOnce(item captureItem, previous *capturedFile) (*cap
 	keep := previous != nil && previous.SHA256 != "" && c.intact(previous.Captured, previous.Size, previous.MTimeNS)
 	rewritten := keep
 	copied := int64(0)
-	if keep && previous.Size <= size {
+	if keep && c.session.recoveryID == "" && previous.Size <= size {
 		n, err := c.copyN(out, digest, source, previous.Size)
 		if err != nil {
 			return abandon(err)
@@ -767,6 +772,9 @@ func (c *sourceCapture) copyOnce(item captureItem, previous *capturedFile) (*cap
 	if copied += n; copied < size {
 		return abandon(errCaptureSourceChanged)
 	}
+	if c.session.recoveryID != "" {
+		rewritten = keep && digest.sum() != previous.SHA256
+	}
 	if err := os.Chtimes(temporary, mtime, mtime); err != nil {
 		return abandon(toDestination(err))
 	}
@@ -778,7 +786,7 @@ func (c *sourceCapture) copyOnce(item captureItem, previous *capturedFile) (*cap
 		return nil, nil, toDestination(err)
 	}
 	entry := &capturedFile{Path: item.path, Captured: rel, Size: size, MTime: mtime.UTC().Format(time.RFC3339Nano), MTimeNS: mtime.UnixNano(),
-		SHA256: digest.sum(), CapturedAt: now()}
+		SHA256: digest.sum(), CapturedAt: now(), RecoveryID: c.session.recoveryID}
 	var version *capturedVersion
 	if previous != nil {
 		entry.Previous = previous.Previous
