@@ -58,7 +58,7 @@
 .pharos-health-actions{display:flex;align-items:center;flex-wrap:wrap;gap:9px}.pharos-health-attention{display:flex;align-items:center;flex-wrap:wrap;gap:6px}.pharos-health-attention-label{color:var(--warn,#98601d)}.pharos-health-attention .pharos-chip{background:var(--panel,#fff)}.pharos-health-details[hidden]{display:none}
 .source-host{display:block;margin:0 0 7px;color:var(--muted,#666);font-size:12px}
 .source-card.remote{background:color-mix(in srgb,var(--panel,#fff) 58%,var(--bg,#eee));border-style:dashed;box-shadow:none}
-.source-card.remote .source-card-head h2{color:color-mix(in srgb,var(--ink,#222) 78%,var(--muted,#666))}
+.source-card.remote .source-card-head h3{color:color-mix(in srgb,var(--ink,#222) 78%,var(--muted,#666))}
 .pharos-chip{border:1px solid var(--line,#ccc);border-radius:20px;padding:1px 8px;font-size:12px;color:var(--muted,#666)}
 .pharos-chip.warn{color:var(--warn,#98601d);border-color:color-mix(in srgb,var(--warn,#98601d) 50%,var(--line,#ccc))}
 .pharos-run-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
@@ -596,7 +596,7 @@
         const card = node('article', 'source-card remote'), head = node('div', 'source-card-head'), title = node('div');
         card.dataset.host = host.id;
         card.dataset.source = source.name;
-        title.append(node('h2', '', source.name), node('span', 'source-host', [host.label || host.id, host.user].filter(Boolean).join(' · ')));
+        title.append(node('h3', '', source.name), node('span', 'source-host', [host.label || host.id, host.user].filter(Boolean).join(' · ')));
         head.append(title);
         const path = node('div', 'source-path', source.path || 'No path recorded'), facts = node('dl', 'source-facts');
         for (const [label, value] of [['Last indexed', source.indexed_at], ['Last index attempt', source.last_attempt_at]]) {
