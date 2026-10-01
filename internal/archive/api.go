@@ -493,6 +493,10 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		s.startIndex(w, body)
 	case path == "/api/index/cancel":
 		writeJSON(w, map[string]any{"stopped": s.stopIngest()}, http.StatusOK)
+	case path == "/api/library/refresh/stop":
+		writeJSON(w, map[string]any{"stopped": s.Catalog.stopLibraryRefresh()}, http.StatusOK)
+	case path == "/api/library/refresh/resume":
+		writeJSON(w, map[string]any{"resumed": s.Catalog.resumeLibraryRefresh()}, http.StatusOK)
 	case path == "/api/backup":
 		s.startBackup(w, body)
 	case path == "/api/backup/cancel":

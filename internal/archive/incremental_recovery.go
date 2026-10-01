@@ -133,6 +133,10 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 		writeError(w, errors.New("manual sync operation already running"), 409)
 		return
 	}
+	// Updating the library resumes a Library view refresh the user stopped.
+	if r.URL.Path == "/api/library/update" {
+		s.Catalog.resumeLibraryRefresh()
+	}
 	run := s.startRunNamed("library-update", names)
 	ctx, end := s.beginIngest(run.ID)
 	job := resume

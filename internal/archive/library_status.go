@@ -41,10 +41,12 @@ type libraryActivity struct {
 	Writes bool `json:"writes"`
 	// OnEject says what a release before an eject does to it.
 	OnEject string `json:"on_eject"`
-	// Stoppable is true for an index or sync that POST /api/index/cancel can
-	// stop, and Stopping once it has been asked to.
-	Stoppable bool `json:"stoppable,omitempty"`
-	Stopping  bool `json:"stopping,omitempty"`
+	// Stoppable is true for work that POST StopPath stops: an index or sync
+	// (/api/index/cancel), or the Library view refresh
+	// (/api/library/refresh/stop). Stopping is true once it has been asked to.
+	Stoppable bool   `json:"stoppable,omitempty"`
+	StopPath  string `json:"stop_path,omitempty"`
+	Stopping  bool   `json:"stopping,omitempty"`
 }
 
 // libraryDrive identifies the volume holding the library.
@@ -198,7 +200,7 @@ func (s *Server) libraryActivities() []libraryActivity {
 			continue
 		}
 		activity := libraryActivity{Kind: "sync", Label: "Indexing sources", StartedAt: run.StartedAt, Writes: true, timingKind: activityTimingKind(run.Kind),
-			OnEject: "Stops between workspaces; the next index resumes it.", Stoppable: true, Stopping: run.StopRequested}
+			OnEject: "Stops between workspaces; the next index resumes it.", Stoppable: true, StopPath: "/api/index/cancel", Stopping: run.StopRequested}
 		if run.Kind == automaticRunKind {
 			activity.Label = "Automatic sync: checking for changes"
 			if run.Phase == "indexing" {
@@ -327,7 +329,7 @@ func (s *Server) libraryActivities() []libraryActivity {
 		if pending, err := s.Catalog.libraryPending(100_000); err == nil && pending > 0 {
 			activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Updating the Library view",
 				Detail: plural(pending, "workspace") + " to refresh", Writes: true,
-				OnEject: "Stops; it carries on when Pharos next opens the library."})
+				OnEject: "Stops; it carries on when Pharos next opens the library.", Stoppable: true, StopPath: "/api/library/refresh/stop"})
 		}
 	}
 	return activities
@@ -379,13 +381,21 @@ func (s *Server) libraryStatus() map[string]any {
 		}
 	}
 	writing := slices.ContainsFunc(activities, func(activity libraryActivity) bool { return activity.Writes })
+	// A stopped Library view refresh is not running, so it is not an
+	// activity; it is listed with what it left so it can be resumed.
+	refresh := map[string]any{"stopped": false}
+	if s.Catalog.libraryRefreshStopped() {
+		pending, _ := s.Catalog.libraryPending(100_000)
+		refresh = map[string]any{"stopped": true, "pending": pending}
+	}
 	return map[string]any{
 		"portable": config.Library, "library_dir": libraryDir(config), "config_path": config.Path,
 		"catalog_path": config.CatalogPath, "capture_root": config.CaptureRoot, "host": currentHost(),
 		"drive": drive, "catalog_open": true, "activities": activities, "idle": len(activities) == 0, "writing": writing,
 		// GET /api/capture has the same field: nothing is running. The
 		// catalog is still open, so eject regardless.
-		"safe_to_unplug": len(activities) == 0,
-		"unplug":         unplugAdvice(drive, activities),
+		"safe_to_unplug":  len(activities) == 0,
+		"unplug":          unplugAdvice(drive, activities),
+		"library_refresh": refresh,
 	}
 }

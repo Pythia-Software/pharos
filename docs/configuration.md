@@ -513,6 +513,10 @@ progress is, and the next run redoes it.
   first scan of a catalog), and `maintenance` (among others, Library view rows
   still to be recomputed, listed once the refresh has run for 15 seconds:
   those an index writes are refreshed within seconds of each record).
+  `stoppable` work carries the `stop_path` to POST to stop it (below), and
+  `stopping` once it has been asked to.
+- `library_refresh`: `stopped`, and while it is, `pending` (workspaces left
+  to refresh). See **Stopping the Library view refresh** below.
 - `idle` (nothing running), `writing` (something writes to the drive), and
   `safe_to_unplug`, which equals `idle`, as does `GET /api/capture`'s field of
   that name.
@@ -530,6 +534,16 @@ catalog across restarts. Without history or a known start time, the panel says
 the estimate is unavailable; an overdue estimate says the work is taking
 longer than past runs. A multi-stage library update estimates the current step,
 not later steps that have not started.
+
+**Stopping the Library view refresh.** `POST /api/library/refresh/stop`
+(the **Stop** beside "Updating the Library view" in the drive panel) stops
+recomputing Library view rows and answers `{"stopped": true}`, or `false` if
+it was already stopped. The batch in progress is abandoned, not committed, so
+its workspaces stay pending with the rest. Nothing is lost: the Library works
+out a pending workspace's row as it shows it, which is slower on a large
+backlog. The refresh stays stopped, and off the list of running work, until
+`POST /api/library/refresh/resume` (the panel's **Resume**), an Update library
+(`POST /api/library/update`), or the next start of Pharos.
 
 The panel has no Disconnecting section or eject controls. Quit Pharos (or stop
 `pharos serve`), then eject the drive in Finder or with `diskutil eject`. Other
