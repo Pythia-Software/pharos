@@ -465,6 +465,24 @@ func TestTL1OverviewFindsConcernsWithPrompts(t *testing.T) {
 	if authors := reviews["by_implementation"].([]map[string]any); len(authors) != 1 || authors[0]["configuration"] != "codex-terra-high" || authors[0]["major_or_blocker"] != 1 {
 		t.Fatalf("review finding attribution: %v", reviews["by_implementation"])
 	}
+	followups := overview["followups"].(map[string]any)
+	var reviewHandoff, humanFollowup map[string]any
+	for _, row := range followups["next"].([]map[string]any) {
+		if row["from_flavor"] == "implement" && row["next_flavor"] == "review" {
+			reviewHandoff = row
+		}
+	}
+	for _, row := range followups["after"].([]map[string]any) {
+		if row["from_flavor"] == "implement" && row["after_flavor"] == "human-escalation" {
+			humanFollowup = row
+		}
+	}
+	if reviewHandoff == nil || reviewHandoff["next_model"] != "gpt-5.6-terra" || reviewHandoff["with_findings"] != 1 || reviewHandoff["findings"] != 1 || reviewHandoff["paths"] != 1 {
+		t.Fatalf("review handoff and findings: %v", reviewHandoff)
+	}
+	if humanFollowup == nil || humanFollowup["next_model"] != "gpt-5.6-terra" || humanFollowup["after_outcome"] != "Pending" || humanFollowup["with_findings"] != 1 {
+		t.Fatalf("human follow-up after review: %v", humanFollowup)
+	}
 	if _, ok := overview["review_prompt"]; ok {
 		t.Error("TL1's recommendations are findings; the overview makes none")
 	}
@@ -492,6 +510,46 @@ func TestTL1OverviewFindsConcernsWithPrompts(t *testing.T) {
 	}
 }
 
+func TestTL1FollowupsSeparateReviewModelsAndHumanDecisions(t *testing.T) {
+	data := &tl1Data{TaskByID: map[string]*tl1Task{}}
+	for _, run := range []struct {
+		id, model, decision string
+		findings            int
+	}{
+		{"a", "review-model-a", "remand", 2},
+		{"b", "review-model-b", "approve", 0},
+	} {
+		implement := &tl1Task{ID: "implement-" + run.id, Flavor: "implement", ExecutionClass: "llm", Outcome: "ready"}
+		review := &tl1Task{ID: "review-" + run.id, Flavor: "agent-review", ExecutionClass: "llm", Outcome: "reviewed", Parent: implement}
+		human := &tl1Task{ID: "human-" + run.id, Flavor: "human-review", ExecutionClass: "human", Parent: review}
+		implement.Attempts = []*tl1Attempt{{Configuration: "implement-config", Model: "implementation-model"}}
+		review.Attempts = []*tl1Attempt{{Configuration: "review-config", Model: run.model}}
+		for _, task := range []*tl1Task{implement, review, human} {
+			data.Tasks = append(data.Tasks, task)
+			data.TaskByID[task.ID] = task
+		}
+		data.Touches = append(data.Touches, map[string]any{"kind": "response", "task_id": human.ID, "action": run.decision})
+		for range run.findings {
+			data.Findings = append(data.Findings, map[string]any{"review_task_id": review.ID})
+		}
+	}
+	followups := tl1Followups(data)
+	after := followups["after"].([]map[string]any)
+	if len(after) != 2 {
+		t.Fatalf("expected distinct model and decision paths: %v", after)
+	}
+	byModel := map[string]map[string]any{}
+	for _, row := range after {
+		byModel[firstString(row["next_model"])] = row
+	}
+	if a := byModel["review-model-a"]; a["after_outcome"] != "remand" || a["with_findings"] != 1 || a["findings"] != 2 {
+		t.Fatalf("review model a: %v", a)
+	}
+	if b := byModel["review-model-b"]; b["after_outcome"] != "approve" || b["with_findings"] != 0 {
+		t.Fatalf("review model b: %v", b)
+	}
+}
+
 func TestTL1APIAndMCP(t *testing.T) {
 	catalog, config := testCatalog(t)
 	ingestTL1Fixture(t, catalog, 4)
@@ -515,6 +573,9 @@ func TestTL1APIAndMCP(t *testing.T) {
 		t.Fatal("overview should list the findings scoped to TL1 flavors")
 	}
 	get("/tl1")
+	for _, page := range []string{"/tl1/configurations", "/tl1/followups", "/tl1/quality", "/tl1/runs"} {
+		get(page)
+	}
 	latest := get("/api/tl1/overview?since=latest")
 	if window := latest["window"].(map[string]any); window["mode"] != "latest_enqueue" || latest["enqueues"] == nil {
 		t.Fatalf("latest enqueue window: %v", window)
