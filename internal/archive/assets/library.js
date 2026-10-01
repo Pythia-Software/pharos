@@ -473,6 +473,8 @@
       panel.append(last);
     }
 
+    // The panel is rebuilt on every status refresh; extensions (sync.js) re-attach their sections synchronously so they never flash away.
+    window.dispatchEvent(new CustomEvent('pharos:drive-panel'));
     placePanel();
   }
 

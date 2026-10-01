@@ -232,6 +232,7 @@
     finally { busy = false; clearTimeout(timer); timer = setTimeout(refresh, 3000); }
   }
   document.addEventListener('click', () => queueMicrotask(renderMenu));
+  window.addEventListener('pharos:drive-panel', renderMenu);
   window.addEventListener('pharos:route', refresh);
   window.pharosSync = {refresh, recovery, isBusy: () => Boolean(activeRun)};
   refresh();
