@@ -8,7 +8,8 @@ function clauseSelection(clause: WhereClause, field: string): SliceSelection<Sli
   if (clause.field !== field) return null;
   if (!clause.negated && (clause.op === "=" || clause.op === "is_null")) return { values: [clause.op === "is_null" ? null : clause.value], excluded: false };
   if ((!clause.negated && clause.op === "is_not_null") || (clause.negated && clause.op === "is_null")) return { values: [null], excluded: true };
-  if ((!clause.negated && clause.op === "!=") || (clause.negated && clause.op === "=")) return { values: [clause.value, null], excluded: true };
+  if (!clause.negated && clause.op === "!=") return { values: [clause.value], excluded: true };
+  if (clause.negated && clause.op === "=") return { values: [clause.value, null], excluded: true };
   return null;
 }
 

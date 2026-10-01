@@ -65,10 +65,30 @@ test('inclusions with an unknown value remain a single OR selection', () => {
   assert.deepEqual(readSlice(where, field), selection);
 });
 
-test('existing negative filters retain their null-excluding semantics', () => {
-  for (const term of [{ field, op: '!=', value: 'opus-5-5' }, { field, op: '=', value: 'opus-5-5', negated: true }]) {
-    assert.deepEqual(readSlice([term], field), { values: ['opus-5-5', null], excluded: true });
+test('plain not-equal filters preserve missing repositories through legend actions', async () => {
+  const { EMPTY_QUERY, applyQuery, loadSchema } = await core;
+  const repositoryField = 'repository_name';
+  const time = { field: 'last_usage_at', op: '>=', value: '2026-09-01' };
+  const where = [time, { field: repositoryField, op: '!=', value: 'foo' }];
+  const selection = readSlice(where, repositoryField);
+  assert.deepEqual(selection, { values: ['foo'], excluded: true });
+  assert.equal(selection.values.includes(null), false);
+  const rows = ['foo', 'bar', 'baz', null, ''].map(repository_name => ({ repository_name, last_usage_at: '2026-10-01' }));
+  rows.push({ last_usage_at: '2026-10-01' });
+  for (const [next, expected] of [[selection, rows.slice(1)], [updateSlice(selection, 'bar', 'toggle'), rows.slice(2)]]) {
+    const rewritten = withSlice(where, repositoryField, next);
+    assert.deepEqual(rewritten[0], time);
+    assert.ok(!rewritten.some(term => term.op === 'is_not_null'));
+    assert.deepEqual(readSlice(rewritten, repositoryField), next);
+    for (const document of [usageSchema, require('../schemas/writing.schema.json')]) {
+      assert.deepEqual(applyQuery(rows, { ...EMPTY_QUERY, where: rewritten }, loadSchema(document)).rows, expected);
+    }
   }
+});
+
+test('negated equality and explicit null filters retain their null-excluding semantics', () => {
+  assert.deepEqual(readSlice([{ field, op: '=', value: 'opus-5-5', negated: true }], field), { values: ['opus-5-5', null], excluded: true });
   assert.deepEqual(readSlice([{ field, op: 'is_not_null', value: '' }], field), { values: [null], excluded: true });
+  assert.deepEqual(readSlice([{ field, op: 'is_null', value: '', negated: true }], field), { values: [null], excluded: true });
   assert.equal(isSliceTerm({ any: [{ field, op: '=', value: 'opus-5-5' }, { field: 'provider', op: '=', value: 'codex' }] }, field), false);
 });
