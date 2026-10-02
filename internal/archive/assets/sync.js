@@ -129,7 +129,8 @@
     .sync-section-head{justify-content:space-between;margin-bottom:16px}
     .sync-section-head p{margin:4px 0 0!important}
     .sync-controls label{display:inline-flex;align-items:center;gap:8px}
-    .sync-controls select,.sync-controls input[type=number]{font:inherit;border:1px solid var(--line);border-radius:5px;padding:5px 8px;background:var(--bg);color:var(--ink)}
+    .sync-controls select,.sync-controls input[type=number]{font:inherit;border:1px solid var(--line);border-radius:5px;padding:5px 8px;background-color:var(--bg);color:var(--ink)}
+    .sync-controls select{padding-right:30px}
     .sync-controls>button{border:1px solid var(--line);padding:6px 12px;background:var(--bg)}
     .sync-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:6px;overflow:hidden;margin-bottom:18px}
     .sync-metric{background:var(--panel);padding:14px 16px;min-width:0}

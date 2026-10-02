@@ -92,6 +92,8 @@ test('Index changes runs the incremental run, shares busy state with a Stop in t
     await dashboard.getByRole('button', { name: 'Verify all retained inputs' }).click();
     assert.deepEqual(requests.find(request => request.path === '/api/sync/verify').body, { all: true });
     const cadence = dashboard.getByLabel('Automatic indexing schedule');
+    // The schedule keeps the shared select chevron: one, at the right, clear of the text.
+    assert.deepEqual(await cadence.evaluate(select => { const style = getComputedStyle(select); return [style.backgroundRepeat, style.paddingRight]; }), ['no-repeat', '30px']);
     await cadence.selectOption('60');
     await page.waitForFunction(() => document.querySelector('#syncDashboard select').value === '60');
     const offSaved = page.waitForResponse(response => response.url().endsWith('/api/sync/settings') && response.request().method() === 'POST' && response.request().postDataJSON().enabled === false);
