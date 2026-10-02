@@ -12,16 +12,17 @@ cadence are retained per host; an empty source selection means all supported,
 enabled sources. **Check now** runs the same discovery, ingestion, projection,
 and verification pipeline without enabling the timer.
 
-The header's sync control shares its busy state with automatic refresh,
-intentional capture/index, verification, and repair. **Stop** cancels work;
+The header's sync control (**Sync now**) runs **Check now** and shares its
+busy state with automatic refresh, intentional capture/index, verification,
+and repair. **Stop**, beside the running work in the drive panel, cancels it;
 already committed groups remain usable. Runs do not overlap or queue missed
 timer ticks. The next interval starts after a run finishes. A manual operation
 cancels and waits for automatic work before taking the coordinator.
 
 Automatic refresh reads live inputs but **does not preserve their raw source
 evidence**. Freshness is the selected interval plus processing time. Pending
-preservation is shown separately from indexing success. **Update library**
-captures this Mac, indexes retained captures across Macs, reconciles deferred
+preservation is shown separately from indexing success. **Update library**,
+in the drive panel, captures this Mac, indexes retained captures across Macs, reconciles deferred
 library-wide work, and continues pending upgrades through the existing UI.
 Its coordinator holds the pause across capture and index; independent capture
 and index endpoints also pause automatic writes.

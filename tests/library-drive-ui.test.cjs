@@ -263,8 +263,8 @@ describe('library, drive and captures UI', { skip }, () => {
     const { page, context, errors } = await openPage();
     const headerAction = page.locator('#headerSync');
     await headerAction.waitFor();
-    assert.equal(await headerAction.getAttribute('title'), 'Update library');
-    assert.equal(await headerAction.getAttribute('aria-label'), 'Update library');
+    assert.equal(await headerAction.getAttribute('title'), 'Sync now');
+    assert.equal(await headerAction.getAttribute('aria-label'), 'Sync now');
     await page.goto(`${base}/settings`);
     const actions = page.locator('#sourceToolbar');
     await actions.getByRole('button', { name: 'Find sources on this Mac…' }).waitFor();

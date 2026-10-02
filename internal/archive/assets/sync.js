@@ -31,7 +31,7 @@
   const seconds = value => `${Number(value || 0).toFixed(3)} s`;
   const memory = value => `${(Number(value || 0) / 1048576).toFixed(1)} MiB`;
   const style = node('style', `#syncDashboard{display:grid;gap:14px}.sync-controls,.sync-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.sync-costs{border-collapse:collapse;width:100%;font-size:var(--fs-sm)}.sync-costs td,.sync-costs th{text-align:left;padding:7px;border-bottom:1px solid var(--line)}.sync-warning{border:1px solid var(--accent);padding:12px;border-radius:6px}.sync-menu{display:grid;gap:8px;margin-top:15px;border-top:1px solid var(--line);padding-top:12px}.sync-dialog{max-width:620px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:24px}.sync-dialog::backdrop{background:#0008}.sync-phase-list{font-size:var(--fs-sm)}.header-sync[aria-busy=true] svg{animation:sync-spin 1.5s linear infinite}@keyframes sync-spin{to{transform:rotate(360deg)}}`);
-  style.textContent += '#headerSyncStop[hidden],#syncDashboard input[hidden]{display:none}';
+  style.textContent += '#syncDashboard input[hidden]{display:none}';
   document.head.append(style);
 
   function showError(message) {
@@ -86,24 +86,17 @@
     const active = (activity.runs || []).find(run => run.state === 'running');
     const wasActive = Boolean(activeRun);
     activeRun = active || null;
-    let stop = document.getElementById('headerSyncStop');
-    if (!stop) {
-      stop = button('Stop', () => call('/api/sync/stop', {}));
-      stop.id = 'headerSyncStop';
-      action.after(stop);
-    }
-    stop.hidden = !active;
+    // A running sync is stopped from the drive panel, not the header.
     if (active) {
       action.disabled = true;
       action.setAttribute('aria-busy', 'true');
       const automatic = active.kind === 'automatic-sync';
       action.title = automatic ? `Automatic sync: ${active.phase === 'verifying' ? 'verifying a conversation' : active.phase === 'checking' ? 'checking for changes' : `syncing ${active.conversations} conversations`}` : `${active.kind}: ${active.phase}`;
       action.setAttribute('aria-label', action.title);
-      stop.disabled = Boolean(active.stop_requested);
     } else {
       action.setAttribute('aria-busy', 'false');
-      action.title = 'Update library';
-      action.setAttribute('aria-label', 'Update library');
+      action.title = 'Sync now';
+      action.setAttribute('aria-label', 'Sync now');
       if (wasActive) window.pharosLibrary?.refresh?.();
     }
   }
@@ -224,7 +217,7 @@
       const open = issues.issues?.filter(issue => issue.state === 'open') || [];
       if (open.length && !warning) {
         warning = button('Sync verification mismatch', () => { history.pushState(null, '', '/settings/sync'); window.dispatchEvent(new PopStateEvent('popstate')); });
-        warning.id = 'syncIntegrityWarning'; warning.className = 'badtext'; document.getElementById('headerSync')?.after(warning);
+        warning.id = 'syncIntegrityWarning'; warning.className = 'badtext'; document.getElementById('headerSync')?.closest('.combo-button')?.after(warning);
       }
       if (!open.length) warning?.remove();
       renderMenu();

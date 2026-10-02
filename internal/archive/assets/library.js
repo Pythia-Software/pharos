@@ -21,6 +21,9 @@
 .pharos-drive-panel h2{margin:0;font:700 20px/1.2 var(--serif,serif)}
 .pharos-drive-panel h3{margin:14px 0 6px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted,#666)}
 .pharos-drive-panel p{margin:8px 0}
+.pharos-running-head{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.pharos-running-head>div{min-width:0}
+.pharos-running-head>.pharos-button{flex:none}
 .pharos-drive-space{display:grid;grid-template-columns:1fr auto;gap:5px 12px;margin:12px 0 2px;padding:10px 0;border-top:1px solid var(--line,#ccc);border-bottom:1px solid var(--line,#ccc)}
 .pharos-drive-space dt{color:var(--muted,#666)}
 .pharos-drive-space dd{margin:0;font-variant-numeric:tabular-nums;font-weight:650}
@@ -245,8 +248,9 @@
 
   let controls = null, chip = null, headerSync = null, headerCaptureIndexRunning = false, panel = null, panelMode = 'drive';
   let driveSpace = null, driveSpaceRequest = null, driveSpaceError = false;
-  // The drive chip and Update library share one combo button (ui.py's
-  // .combo-button) at the start of the header icons.
+  // The drive chip and Sync now share one combo button (ui.py's
+  // .combo-button) at the start of the header icons. Stopping a sync, and the
+  // full Update library, are in the drive panel.
   function ensureControls() {
     if (controls?.isConnected) return controls;
     const icons = document.querySelector('body>header .header-icons');
@@ -279,8 +283,8 @@
     headerSync = node('button', 'combo-icon header-sync');
     headerSync.id = 'headerSync';
     headerSync.type = 'button';
-    headerSync.title = 'Update library';
-    headerSync.setAttribute('aria-label', 'Update library');
+    headerSync.title = 'Sync now';
+    headerSync.setAttribute('aria-label', 'Sync now');
     const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
     icon.setAttribute('class', 'app-icon');
@@ -289,7 +293,7 @@
     use.setAttribute('href', '#ph-icon-refresh');
     icon.append(use);
     headerSync.append(icon);
-    headerSync.onclick = captureAndIndex;
+    headerSync.onclick = syncNow;
     drive.after(headerSync);
     return headerSync;
   }
@@ -442,11 +446,21 @@
       panel.append(space);
     }
 
-    panel.append(node('h3', '', 'Running now'));
+    // Update library sits to the right of Running now (and Nothing is running).
+    const running = node('div', 'pharos-running-head'), runningText = node('div');
+    runningText.append(node('h3', '', 'Running now'));
+    running.append(runningText);
+    panel.append(running);
     const activities = status.activities || [];
     const update = libraryUpdate(activities);
-    if (!activities.length) panel.append(node('p', 'pharos-sub', headerCaptureIndexRunning && upgradeStatus?.needed
-      ? 'Preparing the library upgrade…' : upgradeStatus?.needed ? 'A library update is available. Use Update library in the header to run it.' : 'Nothing is running.'));
+    if (!activities.length) runningText.append(node('p', 'pharos-sub', headerCaptureIndexRunning && upgradeStatus?.needed
+      ? 'Preparing the library upgrade…' : upgradeStatus?.needed ? 'A library update is available. Use Update library to run it.' : 'Nothing is running.'));
+    if (panelMode === 'drive') {
+      const updateLibrary = button('Update library', '', captureAndIndex);
+      updateLibrary.disabled = headerSync?.disabled;
+      updateLibrary.title = "Captures this Mac's sources, indexes captures from every Mac, and runs any pending library upgrade. Sync now in the header only indexes what changed.";
+      running.append(updateLibrary);
+    }
     if (update) {
       const item = node('div', 'pharos-activity'), row = node('div', 'pharos-activity-row'), info = node('div', 'pharos-activity-info'), head = node('div', 'pharos-activity-head');
       head.append(node('span', '', 'Updating library'));
@@ -702,6 +716,24 @@
     } finally {
       hostsBusy = null;
       await loadHosts().catch(() => {});
+    }
+  }
+
+  // Sync now runs the incremental sync (Settings → Sync's Check now): it
+  // indexes only what changed in this Mac's live sources.
+  async function syncNow() {
+    if (headerCaptureIndexRunning || hostsBusy) return;
+    headerCaptureIndexRunning = true;
+    renderHeaderAction();
+    try {
+      await post('/api/sync/check', {});
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      headerCaptureIndexRunning = false;
+      await window.pharosSync?.refresh();
+      renderHeaderAction();
+      await refreshStatus();
     }
   }
 

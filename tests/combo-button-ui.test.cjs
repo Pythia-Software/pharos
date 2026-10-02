@@ -96,7 +96,7 @@ test('Usage summary refreshes on demand, and auto update refetches every 30 seco
   } finally { await browser.close(); }
 });
 
-test('The header joins the drive indicator and Update library into one combo button', async () => {
+test('The header joins the drive indicator and Sync now into one combo button', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
   const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
@@ -244,13 +244,14 @@ test('Update library starts a pending upgrade through the shared action', async 
     await page.clock.runFor(31_000);
     assert.equal(statusReads, 1, 'a pending upgrade does not keep polling every open tab');
     const upgradeStarted = page.waitForResponse(response => response.url().endsWith('/api/upgrade') && response.request().method() === 'POST');
-    await page.locator('#headerSync').click();
+    await page.locator('#pharosDrive').click();
+    const panel = page.getByRole('dialog', { name: 'Library drive' });
+    await panel.getByText('Use Update library to run it').waitFor();
+    await panel.getByRole('button', { name: 'Update library' }).click();
     await upgradeStarted;
     await page.waitForFunction(() => document.querySelector('#headerSync')?.disabled);
     assert.equal(starts, 1);
     assert.equal(await page.locator('#upgradeToggle').count(), 0);
-    await page.locator('#pharosDrive').click();
-    const panel = page.getByRole('dialog', { name: 'Library drive' });
     await panel.getByText('Correct token attribution').waitFor();
     assert.equal(await panel.locator('.pharos-activity').count(), 1);
     assert.equal(await panel.locator('.pharos-bar').count(), 1);
@@ -359,10 +360,10 @@ test('the update action stays busy while a completed index hands off to upgrade'
     });
     await page.goto('http://update-handoff.test/library');
     const indexStarted = page.waitForResponse(response => response.url().endsWith('/api/library/update') && response.request().method() === 'POST');
-    await page.locator('#headerSync').click();
-    await indexStarted;
     await page.locator('#pharosDrive').click();
     const panel = page.getByRole('dialog', { name: 'Library drive' });
+    await panel.getByRole('button', { name: 'Update library' }).click();
+    await indexStarted;
     await panel.getByText('Preparing the library upgrade…').waitFor();
     assert.equal(await page.locator('#headerSync').isDisabled(), true);
     await panel.getByText('Correct token attribution').waitFor({ timeout: 5000 });

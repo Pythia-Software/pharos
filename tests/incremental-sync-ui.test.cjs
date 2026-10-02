@@ -9,7 +9,7 @@ const { chromium } = createRequire(path.join(root, '.context/browser-tests/packa
 const source = fs.readFileSync(path.join(root, 'internal/archive/assets/ui.py'), 'utf8');
 const html = source.slice(source.indexOf("r'''") + 4, source.lastIndexOf("'''"));
 
-test('Sync shares busy/Stop state and exposes cadence, source selection, resume and exhaustive verification', async () => {
+test('Sync now runs the incremental sync, shares busy state with a Stop in the drive panel, and exposes cadence, source selection, resume and exhaustive verification', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
   const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
@@ -30,7 +30,7 @@ test('Sync shares busy/Stop state and exposes cadence, source selection, resume 
       if (route.request().method() === 'POST') {
         const body = JSON.parse(route.request().postData() || '{}');
         requests.push({ path: url.pathname, body });
-        if (url.pathname === '/api/sync/stop') active = false;
+        if (url.pathname === '/api/sync/stop' || url.pathname === '/api/index/cancel') active = false;
         if (url.pathname === '/api/sync/settings') settings = { ...settings, ...body };
         return json({ accepted: true, stopped: true, run_id: 'manual', ...settings });
       }
@@ -68,9 +68,20 @@ test('Sync shares busy/Stop state and exposes cadence, source selection, resume 
     assert.equal(await page.locator('#headerSync').getAttribute('aria-busy'), 'true');
     assert.match(await page.locator('#headerSync').getAttribute('aria-label'), /verifying a conversation/);
     assert.equal(await dashboard.getByRole('button', { name: 'Resume repair' }).isDisabled(), true);
-    await page.locator('#headerSyncStop').click();
+    // Stop is in the drive panel; the header's combo button keeps only the
+    // drive and Sync now, so Sync now keeps its rounded right side.
+    const group = page.locator('body>header .header-icons > .combo-button');
+    assert.deepEqual(await group.locator('> *').evaluateAll(items => items.map(item => item.id)), ['pharosDrive', 'headerSync']);
+    assert.deepEqual(await page.evaluate(() => { const style = getComputedStyle(document.getElementById('headerSync')); return [style.borderTopRightRadius, style.borderBottomRightRadius]; }), ['4px', '4px']);
+    await page.locator('#pharosDrive').click();
+    await page.getByRole('dialog', { name: 'Library drive' }).getByRole('button', { name: 'Stop' }).click();
     await page.waitForFunction(() => !document.getElementById('headerSync').disabled);
-    assert.equal(await page.locator('#headerSyncStop').isHidden(), true);
+    assert.equal(await page.locator('#headerSyncStop').count(), 0);
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#headerSync').getAttribute('aria-label'), 'Sync now');
+    await page.locator('#headerSync').click();
+    await page.waitForFunction(() => !document.getElementById('headerSync').disabled);
+    assert.deepEqual(requests.filter(request => ['/api/sync/check', '/api/library/update'].includes(request.path)).map(request => request.path), ['/api/sync/check']);
     await dashboard.getByRole('button', { name: 'Resume repair' }).click();
     assert.deepEqual(requests.find(request => request.path === '/api/sync/recovery').body, { resume: 'repair' });
     await dashboard.getByRole('button', { name: 'Verify all retained inputs' }).click();

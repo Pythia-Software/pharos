@@ -421,8 +421,10 @@ copied into `archive.toml` by hand.
 Settings → Sources keeps three actions together: **Find sources on this Mac**
 configures local sources, **Capture this Mac** copies enabled sources into the
 library, and **Index captured files** indexes captures from every Mac. The
-header button beside the library disk runs **Update library**: capture, index,
-and any pending library upgrade in that order.
+header button beside the library disk runs **Sync now**, the incremental sync
+(Settings → Sync's **Check now**): it indexes what changed in this Mac's
+sources. **Update library**, in the drive panel the disk opens, runs capture,
+index, and any pending library upgrade in that order.
 Settings → Sync also offers opt-in automatic live refresh, measured costs,
 integrity verification, and stoppable/resumable recovery. Live refresh does
 not capture raw evidence. See [Incremental conversation refresh](incremental-sync.md)

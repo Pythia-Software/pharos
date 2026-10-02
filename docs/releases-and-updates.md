@@ -104,7 +104,7 @@ optional in the current release script.
 
 A new version can derive more from the transcripts a library already holds.
 When it opens a catalog indexed by an older version, Pharos includes the
-required upgrade in **Update library** in the header. The same action captures
+required upgrade in **Update library** in the drive panel. The same action captures
 and indexes sources, then starts any pending upgrade. It also runs the upgrade
 when this Mac has no enabled sources. The drive panel shows one library update
 with its current step and progress; **Update details** opens the upgrade steps
