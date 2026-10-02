@@ -30,7 +30,7 @@
   const when = value => value ? new Date(value).toLocaleString() : 'Not yet';
   const seconds = value => `${Number(value || 0).toFixed(3)} s`;
   const memory = value => `${(Number(value || 0) / 1048576).toFixed(1)} MiB`;
-  const style = node('style', `#syncDashboard{display:grid;gap:14px}.sync-controls,.sync-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.sync-costs{border-collapse:collapse;width:100%;font-size:var(--fs-sm)}.sync-costs td,.sync-costs th{text-align:left;padding:7px;border-bottom:1px solid var(--line)}.sync-warning{border:1px solid var(--accent);padding:12px;border-radius:6px}.sync-menu{display:grid;gap:8px;margin-top:15px;border-top:1px solid var(--line);padding-top:12px}.sync-dialog{max-width:620px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:24px}.sync-dialog::backdrop{background:#0008}.sync-phase-list{font-size:var(--fs-sm)}.header-sync[aria-busy=true] svg{animation:sync-spin 1.5s linear infinite}@keyframes sync-spin{to{transform:rotate(360deg)}}`);
+  const style = node('style', `#syncDashboard{display:grid;gap:14px}.sync-controls,.sync-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.sync-costs{border-collapse:collapse;width:100%;font-size:var(--fs-sm)}.sync-costs td,.sync-costs th{text-align:left;padding:7px;border-bottom:1px solid var(--line)}.sync-warning{border:1px solid var(--accent);padding:12px;border-radius:6px}#syncDashboard button,.sync-dialog button{padding:7px 14px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);font:inherit;font-size:var(--fs-sm);font-weight:600;cursor:pointer}#syncDashboard button:hover:not(:disabled),.sync-dialog button:hover:not(:disabled){border-color:var(--accent)}#syncDashboard button:disabled,.sync-dialog button:disabled{opacity:.55;cursor:default}.sync-dialog{max-width:620px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:24px}.sync-dialog::backdrop{background:#0008}.sync-phase-list{font-size:var(--fs-sm)}.header-sync[aria-busy=true] svg{animation:sync-spin 1.5s linear infinite}@keyframes sync-spin{to{transform:rotate(360deg)}}`);
   style.textContent += '#headerSyncStop[hidden],#syncDashboard input[hidden]{display:none}';
   document.head.append(style);
 
@@ -65,19 +65,6 @@
     dialog.addEventListener('close', () => dialog.remove());
     document.body.append(dialog);
     dialog.showModal();
-  }
-
-  function renderMenu() {
-    const panel = document.querySelector('.pharos-drive-panel');
-    if (!panel || panel.querySelector('.sync-menu')) return;
-    const menu = node('section', '', 'sync-menu');
-    menu.setAttribute('aria-label', 'Sync and repair');
-    menu.append(button('Sync settings & measured cost', () => {
-      history.pushState(null, '', '/settings/sync');
-      window.dispatchEvent(new PopStateEvent('popstate'));
-      document.getElementById('syncSettings')?.scrollIntoView();
-    }), button('Full recapture & re-index…', () => recovery('full')), button('Rebuild indexes from retained messages…', () => recovery('retained')));
-    panel.append(menu);
   }
 
   function renderHeader(activity) {
@@ -227,12 +214,9 @@
         warning.id = 'syncIntegrityWarning'; warning.className = 'badtext'; document.getElementById('headerSync')?.after(warning);
       }
       if (!open.length) warning?.remove();
-      renderMenu();
     } catch (error) { if (!status) showError(error.message); }
     finally { busy = false; clearTimeout(timer); timer = setTimeout(refresh, 3000); }
   }
-  document.addEventListener('click', () => queueMicrotask(renderMenu));
-  window.addEventListener('pharos:drive-panel', renderMenu);
   window.addEventListener('pharos:route', refresh);
   window.pharosSync = {refresh, recovery, isBusy: () => Boolean(activeRun)};
   refresh();
