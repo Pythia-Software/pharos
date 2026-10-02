@@ -96,7 +96,7 @@ test('Usage summary refreshes on demand, and auto update refetches every 30 seco
   } finally { await browser.close(); }
 });
 
-test('The header joins the drive indicator and Update library into one combo button', async () => {
+test('The header joins the drive indicator and Index changes into one combo button', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
   const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
@@ -208,7 +208,7 @@ test('Running now shows historical completion estimates without disconnect contr
   } finally { await browser.close(); }
 });
 
-test('Update library starts a pending upgrade through the shared action', async () => {
+test('Capture & index starts a pending upgrade through the shared action', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
   const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
@@ -244,18 +244,19 @@ test('Update library starts a pending upgrade through the shared action', async 
     await page.clock.runFor(31_000);
     assert.equal(statusReads, 1, 'a pending upgrade does not keep polling every open tab');
     const upgradeStarted = page.waitForResponse(response => response.url().endsWith('/api/upgrade') && response.request().method() === 'POST');
-    await page.locator('#headerSync').click();
+    await page.locator('#pharosDrive').click();
+    const panel = page.getByRole('dialog', { name: 'Library drive' });
+    await panel.getByText('Use Capture & index to run it').waitFor();
+    await panel.getByRole('button', { name: 'Capture & index' }).click();
     await upgradeStarted;
     await page.waitForFunction(() => document.querySelector('#headerSync')?.disabled);
     assert.equal(starts, 1);
     assert.equal(await page.locator('#upgradeToggle').count(), 0);
-    await page.locator('#pharosDrive').click();
-    const panel = page.getByRole('dialog', { name: 'Library drive' });
     await panel.getByText('Correct token attribution').waitFor();
     assert.equal(await panel.locator('.pharos-activity').count(), 1);
     assert.equal(await panel.locator('.pharos-bar').count(), 1);
-    await panel.getByRole('button', { name: 'Update details' }).click();
-    const details = page.getByRole('dialog', { name: 'Library update details' });
+    await panel.getByRole('button', { name: 'Upgrade details' }).click();
+    const details = page.getByRole('dialog', { name: 'Library upgrade details' });
     await details.getByText('Correct token attribution').waitFor();
     assert.equal(await details.getByRole('button', { name: 'Upgrade now' }).count(), 0);
     assert.deepEqual(errors, []);
@@ -272,7 +273,7 @@ test('standalone maintenance stays separate from a library update', async () => 
     let activities = [
       { kind: 'maintenance', label: 'Building substring search', detail: '50 of 100 conversations', progress: 0.5 },
       { kind: 'maintenance', label: 'Building the Tools ledger', detail: '10 of 20 conversations', progress: 0.5 },
-      { kind: 'maintenance', label: 'Updating the Library view', detail: '5 workspaces to refresh', progress: null },
+      { kind: 'maintenance', label: 'Indexing the Library view', detail: '5 workspaces to index', progress: null },
       { kind: 'git', label: 'Looking up merges in Git', detail: 'first scan of this catalog', progress: null },
     ];
     page.on('pageerror', error => errors.push(error.message));
@@ -294,7 +295,7 @@ test('standalone maintenance stays separate from a library update', async () => 
     const panel = page.getByRole('dialog', { name: 'Library drive' });
     await panel.getByText('Building substring search').waitFor();
     assert.equal(await panel.locator('.pharos-activity').count(), 4);
-    assert.equal(await panel.getByText('Updating library', { exact: true }).count(), 0);
+    assert.equal(await panel.locator('.pharos-activity-head').getByText('Capture & index', { exact: true }).count(), 0);
     assert.equal(await panel.locator('.pharos-activity', { hasText: 'Building substring search' }).locator('.pharos-bar').count(), 1);
     assert.match(await page.locator('#pharosDrive').getAttribute('title'), /Building substring search 50%/);
 
@@ -305,7 +306,7 @@ test('standalone maintenance stays separate from a library update', async () => 
       { kind: 'maintenance', label: 'Building substring search', detail: '50 of 100 conversations', progress: 0.5 },
     ];
     await page.evaluate(() => window.pharosLibrary.refresh());
-    await panel.getByText('Finishing the library update').waitFor();
+    await panel.getByText('Finishing capture & index').waitFor();
     assert.equal(await panel.locator('.pharos-activity').count(), 2);
     assert.equal(await panel.getByText('Building substring search').count(), 1);
     assert.deepEqual(errors, []);
@@ -359,10 +360,10 @@ test('the update action stays busy while a completed index hands off to upgrade'
     });
     await page.goto('http://update-handoff.test/library');
     const indexStarted = page.waitForResponse(response => response.url().endsWith('/api/library/update') && response.request().method() === 'POST');
-    await page.locator('#headerSync').click();
-    await indexStarted;
     await page.locator('#pharosDrive').click();
     const panel = page.getByRole('dialog', { name: 'Library drive' });
+    await panel.getByRole('button', { name: 'Capture & index' }).click();
+    await indexStarted;
     await panel.getByText('Preparing the library upgrade…').waitFor();
     assert.equal(await page.locator('#headerSync').isDisabled(), true);
     await panel.getByText('Correct token attribution').waitFor({ timeout: 5000 });

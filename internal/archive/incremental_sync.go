@@ -453,9 +453,9 @@ func (s *Server) getIncrementalSync(w http.ResponseWriter, r *http.Request) {
 	if !settings.Enabled {
 		pause = "Off"
 	} else if s.captureActive() {
-		pause = "Capturing evidence"
+		pause = "Capturing"
 	} else if s.syncActive() {
-		pause = "Sync operation running"
+		pause = "Indexing"
 	}
 	writeJSON(w, map[string]any{"settings": settings, "sources": syncSourceChoices(s.autoSources(settings)), "available_sources": syncSourceChoices(s.autoSources(syncSettings{})), "source_states": states, "history": samples, "statistics": syncStatistics(samples, settings.Interval), "pause_reason": pause, "busy": s.syncActive() || s.captureActive(), "recovery_jobs": jobs, "deferred": deferred, "coverage": coverage, "issues": issues, "measurement_limits": syncMeasurementLimits}, 200)
 }

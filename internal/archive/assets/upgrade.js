@@ -126,8 +126,8 @@
     const actions = node('div', 'pharos-upgrade-actions');
     if (status.error) actions.append(node('span', 'error', `The last attempt stopped: ${status.error}`));
     else actions.append(node('span', 'note', status.running
-      ? 'You can close this; the library update keeps running. Ejecting stops it safely, and Update library resumes it.'
-      : status.needed ? (onlyRepositories ? 'Use Update library in the header. This takes about a minute.' : 'Use Update library in the header. You can keep using Pharos meanwhile.')
+      ? 'You can close this; the library upgrade keeps running. Ejecting stops it safely, and Capture & index resumes it.'
+      : status.needed ? (onlyRepositories ? 'Use Capture & index in the drive panel. This takes about a minute.' : 'Use Capture & index in the drive panel. You can keep using Pharos meanwhile.')
         : 'The library is up to date.'));
     const later = node('button', '', status.running || !status.needed ? 'Close' : 'Later');
     later.type = 'button';
@@ -147,8 +147,8 @@
       backdrop.id = 'pharosUpgrade';
       const panel = node('div', 'pharos-upgrade');
       panel.setAttribute('role', 'dialog');
-      panel.setAttribute('aria-label', 'Library update details');
-      panel.append(node('h2', '', 'Library update details'),
+      panel.setAttribute('aria-label', 'Library upgrade details');
+      panel.append(node('h2', '', 'Library upgrade details'),
         node('p', 'pharos-upgrade-intro', INTRO));
       backdrop.append(panel);
       backdrop.addEventListener('click', event => { if (event.target === backdrop) close(); });

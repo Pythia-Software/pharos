@@ -211,7 +211,7 @@ func TestLibraryStatusListsEverythingHoldingTheLibrary(t *testing.T) {
 	expect()
 	clock = clock.Add(libraryCatchUpShown)
 	status = expect("maintenance")
-	if detail := firstString(status["activities"].([]any)[0].(map[string]any)["detail"]); detail != "2 workspaces to refresh" {
+	if detail := firstString(status["activities"].([]any)[0].(map[string]any)["detail"]); detail != "2 workspaces to index" {
 		t.Fatalf("maintenance detail %q", detail)
 	}
 	count, err := catalog.RefreshLibrary(context.Background(), 10)
@@ -242,7 +242,7 @@ func TestLibraryRefreshCanBeStoppedAndResumed(t *testing.T) {
 	clock = clock.Add(libraryCatchUpShown)
 	status := libraryStatusCall(t, server, "/api/library/status")
 	activity := status["activities"].([]any)[0].(map[string]any)
-	if activity["label"] != "Updating the Library view" || activity["stoppable"] != true || activity["stop_path"] != "/api/library/refresh/stop" {
+	if activity["label"] != "Indexing the Library view" || activity["stoppable"] != true || activity["stop_path"] != "/api/library/refresh/stop" {
 		t.Fatalf("library refresh activity: %#v", activity)
 	}
 

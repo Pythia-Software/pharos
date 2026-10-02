@@ -47,6 +47,9 @@ type libraryActivity struct {
 	Stoppable bool   `json:"stoppable,omitempty"`
 	StopPath  string `json:"stop_path,omitempty"`
 	Stopping  bool   `json:"stopping,omitempty"`
+	// Automatic is true for Index changes (an incremental run), which
+	// indexes what changed in this Mac's sources without capturing them.
+	Automatic bool `json:"automatic,omitempty"`
 }
 
 // libraryDrive identifies the volume holding the library.
@@ -202,16 +205,17 @@ func (s *Server) libraryActivities() []libraryActivity {
 		activity := libraryActivity{Kind: "sync", Label: "Indexing sources", StartedAt: run.StartedAt, Writes: true, timingKind: activityTimingKind(run.Kind),
 			OnEject: "Stops between workspaces; the next index resumes it.", Stoppable: true, StopPath: "/api/index/cancel", Stopping: run.StopRequested}
 		if run.Kind == automaticRunKind {
-			activity.Label = "Automatic sync: checking for changes"
+			activity.Automatic = true
+			activity.Label = "Indexing changes: checking for changes"
 			if run.Phase == "indexing" {
-				activity.Label = fmt.Sprintf("Automatic sync: syncing %d conversations", run.Conversations)
+				activity.Label = fmt.Sprintf("Indexing changes: %s", plural(run.Conversations, "conversation"))
 			}
 			if run.Phase == "verifying" {
-				activity.Label = "Automatic sync: verifying a conversation"
+				activity.Label = "Indexing changes: verifying a conversation"
 			}
 		}
 		if run.Kind == "library-update" {
-			activity.Label = "Updating library: " + run.Phase
+			activity.Label = "Capture & index: " + run.Phase
 		}
 		if run.Kind == "verification" {
 			activity.Label = "Verifying retained inputs"
@@ -327,8 +331,8 @@ func (s *Server) libraryActivities() []libraryActivity {
 	// refreshed within seconds of each commit.
 	if s.Catalog.libraryCatchingUp() {
 		if pending, err := s.Catalog.libraryPending(100_000); err == nil && pending > 0 {
-			activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Updating the Library view",
-				Detail: plural(pending, "workspace") + " to refresh", Writes: true,
+			activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Indexing the Library view",
+				Detail: plural(pending, "workspace") + " to index", Writes: true,
 				OnEject: "Stops; it carries on when Pharos next opens the library.", Stoppable: true, StopPath: "/api/library/refresh/stop"})
 		}
 	}

@@ -289,7 +289,7 @@
     } catch (failure) {
       if (!shown()) return toast(failure.message);
       setTitle(body, `Sources added for ${label}`);
-      body.replaceChildren(node('p', 'pharos-error', failure.status === 409 ? 'A capture is already running on this Mac. Capture these sources from Settings → Sync once it finishes.' : `The capture did not start: ${failure.message}`));
+      body.replaceChildren(node('p', 'pharos-error', failure.status === 409 ? 'A capture is already running on this Mac. Capture these sources from Settings → Capture & index once it finishes.' : `The capture did not start: ${failure.message}`));
       actions.replaceChildren(button('Close', true, close));
       return;
     }
@@ -300,14 +300,14 @@
       ? (incremental ? `Captured ${size(bytes)} of new and changed files from ${label}; the rest was already in the library.` : `Captured ${size(bytes)} from ${label}.`)
       : `The capture from ${label} finished with errors.`;
     if (!shown()) {
-      toast(run?.state === 'complete' ? `${headline} Index it in Settings → Sync.` : headline);
+      toast(run?.state === 'complete' ? `${headline} Index it in Settings → Capture & index.` : headline);
       return;
     }
     setTitle(body, run?.state === 'complete' ? `Captured from ${label}` : `Capture from ${label} incomplete`);
     const next = drive?.ejectable
       ? `You can eject ${drive.name} now; indexing can finish now or later on any Mac.`
       : 'Indexing makes these conversations searchable; it can run now or later.';
-    body.replaceChildren(node('p', 'pharos-lead', headline), captureRows(run), node('p', '', run?.state === 'complete' ? next : `What was captured is kept; capture again from Settings → Sync. ${next}`));
+    body.replaceChildren(node('p', 'pharos-lead', headline), captureRows(run), node('p', '', run?.state === 'complete' ? next : `What was captured is kept; capture again from Settings → Capture & index. ${next}`));
     const index = button('Index now', true, () => indexSources(sources, status, body, actions));
     actions.replaceChildren(button('Later', false, close), index);
     index.focus();
@@ -345,7 +345,7 @@
       run = await runs.index({sources, only_needed: true}, update => { if (update && shown()) rows.replaceChildren(indexRows(update)); });
     } catch (failure) {
       if (!shown()) return toast(failure.message);
-      body.replaceChildren(node('p', 'pharos-error', failure.status === 409 ? 'Source indexing is already running. Index these captures from Settings → Sync once it finishes.' : `Indexing did not start: ${failure.message}`));
+      body.replaceChildren(node('p', 'pharos-error', failure.status === 409 ? 'Source indexing is already running. Index these captures from Settings → Capture & index once it finishes.' : `Indexing did not start: ${failure.message}`));
       actions.replaceChildren(button('Close', true, close));
       return;
     }
