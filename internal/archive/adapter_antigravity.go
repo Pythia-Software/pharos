@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Google Antigravity (the app, the agy CLI, and the IDE) keeps each of its
@@ -28,7 +29,7 @@ import (
 // the title. conversations/<id>.db holds the steps again as protobuf, and
 // each model request's model and token usage, which are read from it (see
 // adapter_antigravity_usage.go). The CLI writes a log per run to
-// log/cli-<time>.log, which names each conversation run with -p (print mode).
+// log/cli-<time>.log, which shows which conversations ran with -p (print mode).
 
 type antigravityAdapter struct {
 	baseAdapter
@@ -107,24 +108,45 @@ func (a *antigravityAdapter) runLogs() []string {
 	return logs
 }
 
-// antigravityPrintMode matches the line a print-mode run logs once it has a
-// conversation. Print mode also adds a "NON-INTERACTIVE mode" section to the
-// system prompt, which no transcript keeps.
-var antigravityPrintMode = regexp.MustCompile(`Print mode: conversation=([0-9A-Za-z-]+)`)
+// antigravityPrintMode marks a run with -p: it logs "Print mode: starting"
+// and, once it has a conversation, "Print mode: conversation=<id>". Print
+// mode also adds a "NON-INTERACTIVE mode" section to the system prompt, which
+// no transcript keeps.
+var antigravityPrintMode = []byte("Print mode:")
 
-// antigravityLogCache holds the print-mode conversations of each run log read,
-// by path, size and modification time; a run's log never changes once it ends.
+// antigravityLogID matches the conversation IDs a run log names.
+var antigravityLogID = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+
+// antigravityRunLogName is the run's start, to the second, in a log's name.
+var antigravityRunLogName = regexp.MustCompile(`^cli-(\d{8}_\d{6})\.log$`)
+
+// antigravityLaunchWindow bounds how long after its run started a
+// conversation's first step comes; print-mode runs take 1 to 10 seconds.
+const antigravityLaunchWindow = 10 * time.Second
+
+// antigravityRunLog is what a run log shows: when the run started, whether it
+// ran with -p, and the conversations it names. Runs started in the same second
+// share a log and overwrite each other's lines, so a print-mode run's
+// "Print mode: conversation=" line may be lost while other lines naming its
+// conversation survive, or nothing naming it may survive at all.
+type antigravityRunLog struct {
+	started time.Time
+	print   bool
+	ids     []string
+}
+
+// antigravityLogCache holds each run log read, by path, size and modification
+// time; a run's log never changes once it ends.
 var antigravityLogCache sync.Map
 
 type antigravityLogEntry struct {
 	size, modified int64
-	ids            []string
+	log            antigravityRunLog
 }
 
-// printModeConversations returns the conversations run with -p, from the run
-// logs the CLI (or a capture of it) still has.
-func (a *antigravityAdapter) printModeConversations() (map[string]bool, error) {
-	printed := map[string]bool{}
+// readRunLogs reads the run logs the CLI (or a capture of it) still has.
+func (a *antigravityAdapter) readRunLogs() ([]antigravityRunLog, error) {
+	logs := []antigravityRunLog{}
 	buffer := make([]byte, 64*1024)
 	for _, path := range a.runLogs() {
 		if err := a.context().Err(); err != nil {
@@ -136,11 +158,11 @@ func (a *antigravityAdapter) printModeConversations() (map[string]bool, error) {
 		}
 		entry, cached := antigravityLogCache.Load(path)
 		if a.view != nil || !cached || entry.(antigravityLogEntry).size != info.Size() || entry.(antigravityLogEntry).modified != info.ModTime().UnixNano() {
-			ids, err := readAntigravityLogConversations(a.context(), path, buffer)
+			log, err := readAntigravityRunLog(a.context(), path, buffer)
 			if err != nil {
 				return nil, err
 			}
-			found := antigravityLogEntry{size: info.Size(), modified: info.ModTime().UnixNano(), ids: ids}
+			found := antigravityLogEntry{size: info.Size(), modified: info.ModTime().UnixNano(), log: log}
 			if a.view == nil {
 				antigravityLogCache.Store(path, found)
 				entries := 0
@@ -154,20 +176,97 @@ func (a *antigravityAdapter) printModeConversations() (map[string]bool, error) {
 			}
 			entry = found
 		}
-		for _, id := range entry.(antigravityLogEntry).ids {
+		logs = append(logs, entry.(antigravityLogEntry).log)
+	}
+	return logs, nil
+}
+
+// printModeConversations returns which of the transcripts' conversations were
+// run with -p: those a print-mode run log names, and those no run log names
+// that started just after a print-mode run did.
+func (a *antigravityAdapter) printModeConversations(transcripts map[string]string) (map[string]bool, error) {
+	logs, err := a.readRunLogs()
+	if err != nil {
+		return nil, err
+	}
+	printed, named, anyPrint := map[string]bool{}, map[string]bool{}, false
+	for _, log := range logs {
+		anyPrint = anyPrint || log.print
+		for _, id := range log.ids {
+			named[id] = true
+			printed[id] = printed[id] || log.print
+		}
+	}
+	for id, path := range transcripts {
+		if named[id] || !anyPrint {
+			continue
+		}
+		if log := launchingRunLog(logs, antigravityStarted(path)); log != nil && log.print {
 			printed[id] = true
 		}
 	}
 	return printed, nil
 }
 
-func readAntigravityLogConversations(ctx context.Context, path string, buffer []byte) ([]string, error) {
+// launchingRunLog returns the log of the run that started last before a
+// conversation did, if it started within antigravityLaunchWindow of it.
+func launchingRunLog(logs []antigravityRunLog, started time.Time) *antigravityRunLog {
+	if started.IsZero() {
+		return nil
+	}
+	var launching *antigravityRunLog
+	for index := range logs {
+		if logs[index].started.IsZero() || logs[index].started.After(started) {
+			continue
+		}
+		if launching == nil || logs[index].started.After(launching.started) {
+			launching = &logs[index]
+		}
+	}
+	if launching == nil || started.Sub(launching.started) > antigravityLaunchWindow {
+		return nil
+	}
+	return launching
+}
+
+// antigravityStarted returns when a transcript's first dated step was
+// created, or the zero time.
+func antigravityStarted(path string) time.Time {
+	file, err := os.Open(path)
+	if err != nil {
+		return time.Time{}
+	}
+	defer file.Close()
+	reader := bufio.NewReader(file)
+	for range 8 {
+		line, err := reader.ReadBytes('\n')
+		var step struct {
+			CreatedAt string `json:"created_at"`
+		}
+		if json.Unmarshal(line, &step) == nil && step.CreatedAt != "" {
+			if created, err := time.Parse(time.RFC3339Nano, step.CreatedAt); err == nil {
+				return created
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	return time.Time{}
+}
+
+func readAntigravityRunLog(ctx context.Context, path string, buffer []byte) (antigravityRunLog, error) {
+	log := antigravityRunLog{}
+	if match := antigravityRunLogName.FindStringSubmatch(filepath.Base(path)); match != nil {
+		// The CLI names logs by the local time the run started.
+		log.started, _ = time.ParseInLocation("20060102_150405", match[1], time.Local)
+	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return log, err
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return log, err
 	}
 	defer file.Close()
 	const chunkSize = 32 * 1024
@@ -186,41 +285,69 @@ func readAntigravityLogConversations(ctx context.Context, path string, buffer []
 		}
 		return 0, nil, nil
 	})
-	ids, seen := []string{}, map[string]bool{}
+	seen := map[string]bool{}
 	for scanner.Scan() {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return log, err
 		}
 		data := scanner.Bytes()
-		for _, match := range antigravityPrintMode.FindAllSubmatchIndex(data, -1) {
+		log.print = log.print || bytes.Contains(data, antigravityPrintMode)
+		for _, match := range antigravityLogID.FindAllIndex(data, -1) {
 			if match[1] == len(data) && !final {
 				continue
 			}
-			id := string(data[match[2]:match[3]])
+			id := string(data[match[0]:match[1]])
 			if !seen[id] {
-				ids, seen[id] = append(ids, id), true
+				log.ids, seen[id] = append(log.ids, id), true
 			}
 		}
 	}
-	return ids, scanner.Err()
+	return log, scanner.Err()
 }
 
+// runLogsFor lists the run logs that decide whether the conversations ids
+// ran with -p: those naming one, and those of the runs that launched the ones
+// no log names.
 func (a *antigravityAdapter) runLogsFor(ids map[string]bool) ([]string, error) {
-	paths := []string{}
+	transcripts, err := a.transcripts()
+	if err != nil {
+		return nil, err
+	}
+	paths := a.runLogs()
+	logs := make([]antigravityRunLog, len(paths))
 	buffer := make([]byte, 64*1024)
-	for _, path := range a.runLogs() {
-		printed, err := readAntigravityLogConversations(a.context(), path, buffer)
-		if err != nil {
+	named := map[string]bool{}
+	for index, path := range paths {
+		if logs[index], err = readAntigravityRunLog(a.context(), path, buffer); err != nil {
 			return nil, err
 		}
-		for _, id := range printed {
+		for _, id := range logs[index].ids {
+			named[id] = true
+		}
+	}
+	wanted := map[*antigravityRunLog]bool{}
+	for index := range logs {
+		for _, id := range logs[index].ids {
 			if ids[id] {
-				paths = append(paths, path)
+				wanted[&logs[index]] = true
 				break
 			}
 		}
 	}
-	return paths, nil
+	for id := range ids {
+		if path, ok := transcripts[id]; ok && !named[id] {
+			if log := launchingRunLog(logs, antigravityStarted(path)); log != nil {
+				wanted[log] = true
+			}
+		}
+	}
+	found := []string{}
+	for index, path := range paths {
+		if wanted[&logs[index]] {
+			found = append(found, path)
+		}
+	}
+	return found, nil
 }
 
 // databases lists the SQLite databases the adapter reads: the summaries, and
@@ -371,7 +498,7 @@ func (a *antigravityAdapter) discoverParts(unchanged func([]sourcePart) bool, em
 	if err != nil {
 		return err
 	}
-	printed, err := a.printModeConversations()
+	printed, err := a.printModeConversations(transcripts)
 	if err != nil {
 		return err
 	}

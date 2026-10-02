@@ -334,13 +334,13 @@ func TestAntigravityLogReaderHandlesChunkBoundariesAndLongLines(t *testing.T) {
 		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		ids, err := readAntigravityLogConversations(t.Context(), path, make([]byte, 64*1024))
-		if err != nil || !slices.Equal(ids, []string{antigravityRoot, antigravityChild}) {
-			t.Fatalf("offset %d: streaming print-mode IDs=%v error=%v", offset, ids, err)
+		log, err := readAntigravityRunLog(t.Context(), path, make([]byte, 64*1024))
+		if err != nil || !log.print || !slices.Equal(log.ids, []string{antigravityRoot, antigravityChild}) {
+			t.Fatalf("offset %d: streaming print-mode IDs=%v error=%v", offset, log.ids, err)
 		}
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		if _, err := readAntigravityLogConversations(ctx, path, make([]byte, 64*1024)); !errors.Is(err, context.Canceled) {
+		if _, err := readAntigravityRunLog(ctx, path, make([]byte, 64*1024)); !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancelled log read did not stop: %v", err)
 		}
 	}
