@@ -60,6 +60,7 @@
 .pharos-section-head p{margin:0;max-width:720px}
 .pharos-health-actions{display:flex;align-items:center;flex-wrap:wrap;gap:9px}.pharos-health-attention{display:flex;align-items:center;flex-wrap:wrap;gap:6px}.pharos-health-attention-label{color:var(--warn,#98601d)}.pharos-health-attention .pharos-chip{background:var(--panel,#fff)}.pharos-health-details[hidden]{display:none}
 .source-host{display:block;margin:0 0 7px;color:var(--muted,#666);font-size:12px}
+.source-toolbar>a{margin-left:auto;font-size:var(--fs-sm)}
 .source-card.remote{background:color-mix(in srgb,var(--panel,#fff) 58%,var(--bg,#eee));border-style:dashed;box-shadow:none}
 .source-card.remote .source-card-head h3{color:color-mix(in srgb,var(--ink,#222) 78%,var(--muted,#666))}
 .pharos-chip{border:1px solid var(--line,#ccc);border-radius:20px;padding:1px 8px;font-size:12px;color:var(--muted,#666)}
@@ -179,6 +180,7 @@
     renderHeaderAction();
     renderChip();
     renderPanel();
+    renderSyncControls();
     if (runningChanged) refreshStatus();
   });
   const driveName = () => status?.drive?.name || 'the drive';
@@ -239,6 +241,7 @@
     await Promise.all([statusRequest, refreshIndexStatus()]);
     renderChip();
     renderPanel();
+    renderSyncControls();
     listeners.forEach(listener => listener(status));
     const busy = status && !status.idle;
     if (!document.hidden) statusTimer = setTimeout(refreshStatus, busy || statusError ? 2000 : 10000);
@@ -300,11 +303,25 @@
 
   function renderHeaderAction() {
     const action = ensureHeaderAction();
-    if (!action) return;
     const active = status?.activities?.some(activity => ['capture', 'capture-other', 'sync', 'index'].includes(activity.kind));
     const incremental = Boolean(window.pharosSync?.isBusy());
-    action.disabled = headerCaptureIndexRunning || Boolean(hostsBusy) || Boolean(active) || incremental || Boolean(upgradeStatus?.running);
-    action.setAttribute('aria-busy', String(headerCaptureIndexRunning || Boolean(active) || incremental));
+    const busy = headerCaptureIndexRunning || Boolean(hostsBusy) || Boolean(active) || incremental || Boolean(upgradeStatus?.running) || Boolean(hostsData?.index.active || hostsData?.index.sync_active || hostsData?.capture.active);
+    if (action) {
+      action.disabled = busy;
+      action.setAttribute('aria-busy', String(busy));
+    }
+    // Update library is on Settings → Sync and in the drive panel.
+    for (const update of document.querySelectorAll('#pharosUpdateLibrary, .pharos-panel-update')) {
+      update.disabled = busy || Boolean(hostsData && !hostsData.sources.enabled && !upgradeStatus?.needed);
+      update.setAttribute('aria-busy', String(busy));
+    }
+    const capture = document.getElementById('pharosCaptureHost');
+    if (capture) {
+      capture.disabled = busy || !hostsData?.sources.enabled;
+      capture.textContent = hostsData?.capture.active ? 'Capturing…' : 'Capture this Mac';
+    }
+    const index = document.getElementById('pharosIndexAll');
+    if (index) index.disabled = busy || !(hostsData?.index.hosts || []).some(host => (host.sources || []).some(source => source.needs_index));
   }
 
   let updateProgressFloor = 0;
@@ -342,6 +359,16 @@
   function activitySummary(activity) {
     const verb = {sync: 'Indexing', index: 'Indexing', capture: 'Capturing', 'capture-other': 'Capturing', backup: 'Backing up'}[activity.kind] || activity.label;
     return activity.progress ? `${verb} ${Math.round(activity.progress * 100)}%` : verb;
+  }
+
+  function libraryUpdateLine(update) {
+    const item = node('div', 'pharos-activity'), row = node('div', 'pharos-activity-row'), info = node('div', 'pharos-activity-info'), head = node('div', 'pharos-activity-head');
+    head.append(node('span', '', 'Updating library'));
+    if (update.indexing?.stoppable) head.append(stopButton(update.indexing.stopping, update.indexing.stop_path));
+    info.append(head, node('div', 'pharos-sub', update.label));
+    row.append(info, completionEstimate(update.updating, true));
+    item.append(row, progressBar(update.progress));
+    return item;
   }
 
   // The chip is just the drive's name and a dot: green when nothing is
@@ -456,19 +483,13 @@
     if (!activities.length) runningText.append(node('p', 'pharos-sub', headerCaptureIndexRunning && upgradeStatus?.needed
       ? 'Preparing the library upgrade…' : upgradeStatus?.needed ? 'A library update is available. Use Update library to run it.' : 'Nothing is running.'));
     if (panelMode === 'drive') {
-      const updateLibrary = button('Update library', '', captureAndIndex);
-      updateLibrary.disabled = headerSync?.disabled;
+      const updateLibrary = button('Update library', 'pharos-panel-update', captureAndIndex);
       updateLibrary.title = "Captures this Mac's sources, indexes captures from every Mac, and runs any pending library upgrade. Sync now in the header only indexes what changed.";
       running.append(updateLibrary);
+      renderHeaderAction();
     }
     if (update) {
-      const item = node('div', 'pharos-activity'), row = node('div', 'pharos-activity-row'), info = node('div', 'pharos-activity-info'), head = node('div', 'pharos-activity-head');
-      head.append(node('span', '', 'Updating library'));
-      if (update.indexing?.stoppable) head.append(stopButton(update.indexing.stopping, update.indexing.stop_path));
-      info.append(head, node('div', 'pharos-sub', update.label));
-      row.append(info, completionEstimate(update.updating, true));
-      item.append(row, progressBar(update.progress));
-      panel.append(item);
+      panel.append(libraryUpdateLine(update));
     }
     activities.filter(activity => !update?.updating.includes(activity)).forEach(activity => {
       const item = node('div', 'pharos-activity'), row = node('div', 'pharos-activity-row'), info = node('div', 'pharos-activity-info'), head = node('div', 'pharos-activity-head');
@@ -506,8 +527,6 @@
       panel.append(last);
     }
 
-    // The panel is rebuilt on every status refresh; extensions (sync.js) re-attach their sections synchronously so they never flash away.
-    window.dispatchEvent(new CustomEvent('pharos:drive-panel'));
     placePanel();
   }
 
@@ -563,26 +582,9 @@
   function renderHosts() {
     const grid = document.getElementById('sourceGrid');
     if (!grid || !hostsData) return;
-    const {sources, index, capture} = hostsData;
+    const {index} = hostsData;
     const captured = index.hosts || [];
-    const busy = headerCaptureIndexRunning || Boolean(hostsBusy) || index.active || index.sync_active || capture.active;
-    const actions = document.getElementById('sourceRunActions');
-    const captureButton = button(capture.active ? 'Capturing…' : 'Capture this Mac', '', () => startCapture());
-    captureButton.id = 'pharosCaptureHost';
-    captureButton.disabled = busy || !sources.enabled;
-    const needing = captured.filter(host => host.sources.some(source => source.needs_index));
-    const indexAll = button('Index captured files', 'primary', () => startIndex({all_hosts: true, only_needed: true}, 'captured files'));
-    indexAll.id = 'pharosIndexAll';
-    indexAll.disabled = busy || !needing.length;
-    indexAll.title = capture.active ? 'Capture is running; index after it finishes' : index.sync_active ? 'Source indexing is running' : needing.length ? `Index captures from ${needing.map(host => host.label).join(', ')}; unchanged files and sessions are skipped` : 'Everything captured is indexed';
-    actions?.replaceChildren(captureButton, indexAll);
-    renderHeaderAction();
-    const activity = document.getElementById('sourceActivity');
-    activity?.replaceChildren();
-    const line = runLine(capture, index);
-    if (line) activity?.append(line);
-    if (hostsError) activity?.append(node('p', 'pharos-error', hostsError));
-    if (index.error && !captured.length) activity?.append(node('p', 'pharos-sub', `No captures yet (${index.error}).`));
+    renderSyncControls();
 
     grid.querySelectorAll('.source-card.remote').forEach(card => card.remove());
     for (const host of captured.filter(host => !host.current)) {
@@ -609,6 +611,41 @@
         grid.append(card);
       }
     }
+  }
+
+  function renderSyncControls() {
+    if (!hostsData) return;
+    const {index, capture} = hostsData;
+    const updateAction = document.getElementById('syncUpdateAction');
+    if (updateAction && !document.getElementById('pharosUpdateLibrary')) {
+      const update = button('Update library', 'primary', captureAndIndex);
+      update.id = 'pharosUpdateLibrary';
+      updateAction.append(update);
+    }
+    const actions = document.getElementById('syncRunActions');
+    if (actions && !document.getElementById('pharosCaptureHost')) {
+      const captureButton = button('Capture this Mac', '', () => startCapture());
+      captureButton.id = 'pharosCaptureHost';
+      const indexAll = button('Index captured files', '', () => startIndex({all_hosts: true, only_needed: true}, 'captured files'));
+      indexAll.id = 'pharosIndexAll';
+      actions.append(captureButton, indexAll);
+    }
+    const needing = (index.hosts || []).filter(host => (host.sources || []).some(source => source.needs_index));
+    const indexAll = document.getElementById('pharosIndexAll');
+    if (indexAll) indexAll.title = capture.active ? 'Capture is running; index after it finishes' : index.sync_active ? 'Source indexing is running' : needing.length ? `Index captures from ${needing.map(host => host.label).join(', ')}; unchanged files and sessions are skipped` : 'Everything captured is indexed';
+    renderHeaderAction();
+    const activity = document.getElementById('syncActivity');
+    activity?.replaceChildren();
+    const update = libraryUpdate(status?.activities || []);
+    let line;
+    if (!hostsBusy && update) line = libraryUpdateLine(update);
+    else if (headerCaptureIndexRunning) {
+      line = node('div', 'pharos-run');
+      line.append(node('strong', '', upgradeStatus?.running ? 'Upgrading the library…' : 'Starting library update…'), progressBar(null));
+    } else line = runLine(capture, index);
+    if (line) activity?.append(line);
+    if (hostsError) activity?.append(node('p', 'pharos-error', hostsError));
+    if (index.error && !index.hosts?.length) activity?.append(node('p', 'pharos-sub', `No captures yet (${index.error}).`));
   }
 
   // Runs report progress by source; a lone source shows as work in progress.
@@ -740,6 +777,7 @@
   async function captureAndIndex() {
     if (headerCaptureIndexRunning || hostsBusy) return;
     headerCaptureIndexRunning = true;
+    renderSyncControls();
     renderHeaderAction();
     try {
       await window.pharosUpgrade?.refresh();
@@ -769,7 +807,7 @@
     } finally {
       headerCaptureIndexRunning = false;
       renderHeaderAction();
-      await refreshStatus();
+      await Promise.all([refreshStatus(), loadHosts().catch(() => {})]);
     }
   }
 
@@ -977,7 +1015,7 @@
     if (settingsVisible()) refreshSettings();
   }
 
-  window.pharosLibrary = {refresh: refreshStatus, status: () => status, runs, refreshSettings, onStatus: listener => listeners.add(listener), toggleActivityPanel: () => (panel && panelMode === 'activity' ? closePanel() : openPanel('activity'))};
+  window.pharosLibrary = {refresh: refreshStatus, status: () => status, runs, refreshSettings, refreshSyncControls: renderSyncControls, onStatus: listener => listeners.add(listener), toggleActivityPanel: () => (panel && panelMode === 'activity' ? closePanel() : openPanel('activity'))};
   const sheet = node('style');
   sheet.textContent = CSS;
   document.head.append(sheet);

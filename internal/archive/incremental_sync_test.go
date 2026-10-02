@@ -107,6 +107,9 @@ func TestAutomaticRefreshKeepsIntentionalStateAndAuditsNoops(t *testing.T) {
 	if sample.Audit.Outcome != "passed" || sample.Workspaces != 0 {
 		t.Fatalf("noop must verify: %+v", sample)
 	}
+	if sample.FinishedAt == "" || !slices.Equal(sample.Sources, []string{"codex"}) || len(sample.SourceResults) != 1 || sample.SourceResults[0].Source != "codex" {
+		t.Fatalf("sync must record completion time and source breakdown: %+v", sample)
+	}
 	for _, result := range server.runs[0].Results {
 		if result.WriteRows != 0 {
 			t.Fatal("unchanged discovery wrote conversation rows")
@@ -125,6 +128,46 @@ func TestAutomaticRefreshKeepsIntentionalStateAndAuditsNoops(t *testing.T) {
 	after, _ = queryMaps(server.Catalog.DB, "SELECT * FROM source_states")
 	if jsonText(before) != jsonText(after) {
 		t.Fatal("append overwrote intentional state")
+	}
+	response := httptest.NewRecorder()
+	server.getIncrementalSync(response, httptest.NewRequest("GET", "/api/sync/history", nil))
+	var history struct {
+		Samples []syncMeasurement `json:"samples"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &history); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != 200 || len(history.Samples) != 2 {
+		t.Fatalf("sync history: %d %s", response.Code, response.Body.String())
+	}
+	latest := history.Samples[0]
+	if len(latest.SourceResults) != 1 || latest.SourceResults[0].Conversations != latest.Conversations || latest.SourceResults[0].Messages != latest.Messages || latest.Conversations == 0 || latest.FinishedAt == "" {
+		t.Fatalf("source counts must match refreshed totals: %+v", latest)
+	}
+}
+
+func TestSyncHistoryRestoresLegacyCompletionTime(t *testing.T) {
+	useHost(t, "host-a")
+	server := automaticTestServer(t, stableCodexSource(t, 3))
+	stamp := "2026-09-30T18:00:00Z"
+	legacy := syncMeasurement{RunID: "legacy", State: "complete", Class: "no_changes"}
+	if _, err := server.Catalog.DB.Exec("INSERT INTO sync_history(host_id,run_id,finished_at,sample_json) VALUES(?,?,?,?)", currentHost().ID, legacy.RunID, stamp, jsonText(legacy)); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/sync/history", "/api/sync/status"} {
+		response := httptest.NewRecorder()
+		server.getIncrementalSync(response, httptest.NewRequest("GET", path, nil))
+		var body struct {
+			Samples []syncMeasurement `json:"samples"`
+			History []syncMeasurement `json:"history"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		samples := append(body.Samples, body.History...)
+		if response.Code != 200 || len(samples) != 1 || samples[0].FinishedAt != stamp || len(samples[0].SourceResults) != 0 {
+			t.Fatalf("legacy history must retain its timestamp without inventing source counts: %s", response.Body.String())
+		}
 	}
 }
 

@@ -582,7 +582,8 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
       <button type="button" className="tl1-button" title="Filter to runs of tasks created in the analysis window" onClick={() => filterAttempts([...windowWhere(), ...projectWhere()])}>Show runs in window</button>
       <button type="button" className="tl1-button" onClick={() => filterAttempts([])}>Clear filters</button>
     </div>}>
-      {attempts}
+      {/* Joins the other query tables' themed styles and icon normalization. */}
+      <div className="pharos-query-page">{attempts}</div>
     </Section></div>
 
       </div>

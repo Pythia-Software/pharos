@@ -50,6 +50,8 @@
 .tl1-tile span { color: var(--muted); font-size: var(--fs-xs); }
 .tl1-tile strong { margin-top: 4px; font: 650 var(--fs-2xl)/1.2 var(--serif); font-variant-numeric: tabular-nums; }
 .tl1-tile small { margin-top: 3px; color: var(--muted); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Other query pages let a wide table spill into the page; beside the TL1 nav it scrolls in its column. */
+.tl1-page .pharos-query-page .qt-table-wrap { overflow-x: auto !important; }
 .tl1-section { padding: 22px 0 6px; border-top: 1px solid var(--line); margin-top: 18px; min-width: 0; }
 .tl1-section-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 12px; }
 .tl1-section-head p { margin: 0; font-size: var(--fs-md); max-width: 760px; }
