@@ -59,7 +59,13 @@ test('TL1 pages show follow-up outcomes and omit redundant configuration chips',
     assert.equal(await page.locator('.tl1-nav a[aria-current="page"]').innerText(), 'Follow-up outcomes');
     await page.getByRole('link', { name: 'Runs', exact: true }).click();
     assert.equal(new URL(page.url()).pathname, '/tl1/runs');
-    await page.locator('#tl1-runs').waitFor();
+    await page.locator('#tl1-runs .qt-qb').waitFor();
+    // The runs table takes the app's dark palette, not the component's white defaults.
+    await page.emulateMedia({ colorScheme: 'dark' });
+    const white = await page.locator('#tl1-runs').evaluate(section => [...section.querySelectorAll('.qt-qb, .qt-qb-bar, .qt-btn, .qt-table')]
+      .filter(item => getComputedStyle(item).backgroundColor === 'rgb(255, 255, 255)').map(item => item.className));
+    assert.deepEqual(white, []);
+    await page.screenshot({ path: path.join(root, '.context/tl1-runs-dark.png'), fullPage: true });
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });
