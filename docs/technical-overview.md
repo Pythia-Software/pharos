@@ -164,6 +164,21 @@ response budget (defaulting to 700–1,200 depending on the tool). Search cards
 include coverage and index freshness; conversation documents are generated
 locally and existing catalogs are backfilled on opening.
 
+`list_repositories` comes before them: the repositories with sessions, most
+recently active first, each with its conversation count, latest message
+(`last_message_at`, the latest conversation end or start), and latest capture
+(`last_indexed_at`). It also returns each source's last successful sync per
+host, with the error of a later failed attempt, and the number of conversations
+outside any repository, which a `repository` filter never matches. `query`
+matches a repository's name, remote, aliases, or checkout paths, and `path`
+returns the repository checked out at or above a directory, so an agent can
+find the name to pass as `search_conversations`' `repository` filter. That
+filter, and those of `search_work` and `list_findings`, must match a
+repository's name or remote: one that matches none is an error rather than an
+empty result. When the value is a checkout path, or a directory name in one of
+at most three repositories' checkout paths (such as a worktree's), the error
+names those repositories.
+
 `list_findings` and `get_finding` read findings: compact cards, then one
 finding's extracted facts kept apart from its evidence handles, which are
 labeled as untrusted transcript content. Neither changes a finding's state; only

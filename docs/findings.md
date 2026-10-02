@@ -220,8 +220,7 @@ POST /api/findings/refresh          run the full pass now
 MCP adds `list_findings(repository?, scope?, state?)` and `get_finding(id)`.
 `get_finding` separates the **extracted facts** Pharos computed from the
 **evidence** handles, which point into transcripts and are labeled as untrusted
-content. Neither tool changes any finding's state. The MCP page offers a short
-`pharos-optimize` skill that works through them.
+content. Neither tool changes any finding's state.
 
 `pharos findings --preview [--detector NAME] [--threshold N] [--verbose]` runs
 every detector against a catalog opened read-only and prints the candidates with
