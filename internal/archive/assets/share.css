@@ -1,7 +1,7 @@
 /* Chrome that only makes sense with a Pharos service behind it. A shared
    export keeps the header (mark, Library, Usage, and Tools tabs, theme toggle)
    and drops the rest. */
-.shared .header-search,.shared .navigator,.shared .tabs [data-view=mcp],.shared .tabs [data-view=tl1],.shared .tabs [data-view=findings],
+.shared .search-dialog,.shared .navigator,.shared .tabs [data-view=mcp],.shared .tabs [data-view=tl1],.shared .tabs [data-view=findings],
 .shared .header-icons>:not(#themeToggle),.shared .drawer,.shared #bookmarkPopover,
 .shared .feedback-toolbar,.shared .feedback-panel,.shared .feedback-highlight,.shared #usageSummary{display:none!important}
 .shared main>.view{padding-bottom:20px}
