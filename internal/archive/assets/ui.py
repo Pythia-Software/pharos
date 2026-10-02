@@ -325,6 +325,8 @@ APP_HTML = r'''<!doctype html>
     </div></section>
     <section id="optimizationSettings" class="settings-section" aria-labelledby="optimizationSettingsHeading" hidden><div class="settings-section-heading"><div><h2 id="optimizationSettingsHeading">Optimization</h2><p class="muted">Set when recurring patterns become findings, how they are ranked, and what agents are asked to do.</p></div></div><div id="optimizationSettingsPage"></div></section>
     <section id="optionalBehaviors" class="settings-section" aria-labelledby="optionalBehaviorsHeading"><div class="settings-section-heading"><div><h2 id="optionalBehaviorsHeading">App preferences</h2><p class="muted">Choose which controls appear and how the lighthouse behaves.</p></div></div>
+      <div class="optional-behavior"><div><h3 id="showUsageSummaryButtonTitle">Usage summary button</h3><p id="showUsageSummaryButtonDescription" class="muted">Show the Usage summary button in the menu bar to see your recent words, tokens, CO₂e, and API cost at a glance.</p></div><button id="showUsageSummaryButton" class="toggle" type="button" role="switch" aria-labelledby="showUsageSummaryButtonTitle" aria-describedby="showUsageSummaryButtonDescription" aria-checked="false"></button></div>
+      <div class="optional-behavior"><div><h3 id="showThemeButtonTitle">Theme button</h3><p id="showThemeButtonDescription" class="muted">Show the Theme button in the menu bar to switch between the system, light, and dark color themes. Hiding it keeps the current theme.</p></div><button id="showThemeButton" class="toggle" type="button" role="switch" aria-labelledby="showThemeButtonTitle" aria-describedby="showThemeButtonDescription" aria-checked="false"></button></div>
       <div class="optional-behavior"><div><h3 id="showNavButtonTitle">Nav button</h3><p id="showNavButtonDescription" class="muted">Show the Nav button in the menu bar to navigate by URL, save bookmarks, and view page history.</p></div><button id="showNavButton" class="toggle" type="button" role="switch" aria-labelledby="showNavButtonTitle" aria-describedby="showNavButtonDescription" aria-checked="false"></button></div>
       <div class="optional-behavior"><div><h3 id="showAgentAnnotationButtonTitle">Agent Annotation button</h3><p id="showAgentAnnotationButtonDescription" class="muted">Show the Agent Annotation button in the menu bar to mark up parts of the interface and share feedback with an agent for easier customization.</p></div><button id="showAgentAnnotationButton" class="toggle" type="button" role="switch" aria-labelledby="showAgentAnnotationButtonTitle" aria-describedby="showAgentAnnotationButtonDescription" aria-checked="false"></button></div>
       <div class="optional-behavior"><div><h3 id="lighthouseSpinOnClickTitle">Lighthouse spins on click</h3><p id="lighthouseSpinOnClickDescription" class="muted">Turn the lighthouse beam once around when you click the door of the lighthouse in the menu bar.</p></div><button id="lighthouseSpinOnClick" class="toggle" type="button" role="switch" aria-labelledby="lighthouseSpinOnClickTitle" aria-describedby="lighthouseSpinOnClickDescription" aria-checked="false"></button></div>
@@ -566,9 +568,12 @@ addEventListener('popstate',()=>{syncNavButtons();syncNavigator()});
 document.addEventListener('keydown',event=>{if(!(event.metaKey||event.ctrlKey)||event.altKey||event.shiftKey||(event.key!=='['&&event.key!==']'))return;const target=event.target;if(target.closest?.('input,textarea,select,[contenteditable="true"]'))return;event.preventDefault();(event.key==='['?$('#navBack'):$('#navForward')).click()});
 {let open=false;try{open=localStorage.getItem(NAV_OPEN_KEY)==='true'}catch{}setNavOpen(open)}
 syncNavButtons();
+// The Usage summary and Theme buttons show unless switched off; the rest stay hidden until switched on.
 const OPTIONAL_MENU_BUTTONS=[
-  {toggle:'#showNavButton',button:'#navigatorToggle',key:'pharos-show-nav-button',close:()=>setNavOpen(false)},
-  {toggle:'#showAgentAnnotationButton',button:'#feedbackToggle',key:'pharos-show-agent-annotation-button',close:()=>setFeedbackEnabled(false)}
+  {toggle:'#showUsageSummaryButton',button:'#usageSummaryToggle',key:'pharos-show-usage-summary-button',on:true,close:()=>{if(!$('#usageSummary').hidden)setUsageSummaryOpen(false)}},
+  {toggle:'#showThemeButton',button:'#themeToggle',key:'pharos-show-theme-button',on:true,close:()=>{}},
+  {toggle:'#showNavButton',button:'#navigatorToggle',key:'pharos-show-nav-button',on:false,close:()=>setNavOpen(false)},
+  {toggle:'#showAgentAnnotationButton',button:'#feedbackToggle',key:'pharos-show-agent-annotation-button',on:false,close:()=>setFeedbackEnabled(false)}
 ];
 function setOptionalMenuButton(option,visible,save=true){
   const toggle=$(option.toggle);
@@ -579,7 +584,7 @@ function setOptionalMenuButton(option,visible,save=true){
   if(save)pharosPrefs.set(option.key,visible);
 }
 for(const option of OPTIONAL_MENU_BUTTONS){
-  setOptionalMenuButton(option,pharosPrefs.get(option.key,false)===true,false);
+  setOptionalMenuButton(option,pharosPrefs.get(option.key,option.on)===true,false);
   $(option.toggle).onclick=()=>setOptionalMenuButton(option,$(option.toggle).getAttribute('aria-checked')!=='true');
 }
 function node(tag,cls,text){const n=document.createElement(tag);if(cls)n.className=cls;if(text instanceof Node)n.append(text);else if(text!==undefined)n.textContent=text;return n}
