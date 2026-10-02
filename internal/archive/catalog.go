@@ -392,6 +392,9 @@ func (c *Catalog) Initialize() error {
 	if err := c.syncPricing(); err != nil {
 		return err
 	}
+	if err := c.reindexStaleMetricLedgers(); err != nil {
+		return err
+	}
 	// A catalog with nothing indexed yet resolves repositories and records
 	// harness versions as it ingests, so it never needs those upgrade steps.
 	for key, version := range map[string]string{"repository_merge_version": repositoryMergeVersion, "harness_version_upgrade": "1"} {

@@ -1603,6 +1603,47 @@ func metricLedger(tx *sql.Tx, workspaceID string, record WorkspaceRecord) error 
 	return nil
 }
 
+// reindexStaleMetricLedgers has the next index write again the workspaces
+// whose metric ledger still holds rows of an older numbering. Until
+// metricLedger removed the keys a record no longer has, renumbering left them
+// behind: a Claude session whose root grew ahead of its sub-agents, or a
+// Conductor session whose trailing metadata row moved as messages arrived.
+// Every other ledger holds one row per sequence. Forgetting what was indexed
+// from these workspaces (their parts, their records' digests, and their
+// sources' fingerprints, so an intentional index does not pass over the
+// source) makes the next index parse and write them, and its metricLedger
+// drops the old rows; nothing else is parsed again.
+func (c *Catalog) reindexStaleMetricLedgers() error {
+	const key, version = "metric_ledger_reindex", "1"
+	if done, err := c.metaValue(context.Background(), key); err != nil || done == version {
+		return err
+	}
+	return c.writeTransaction(context.Background(), "metric-ledger reindex", func(tx *sql.Tx) error {
+		for _, statement := range []string{
+			`CREATE TEMP TABLE stale_workspaces AS SELECT DISTINCT w.id,w.source_kind,w.source_account,w.source_id,c.origin_host_id host_id,c.origin
+				FROM workspaces w JOIN conversations c ON c.workspace_id=w.id
+				WHERE w.id IN (SELECT workspace_id FROM metric_ledger GROUP BY workspace_id HAVING COUNT(*)>COUNT(DISTINCT sequence))`,
+			// A file's part is its path; a Conductor session's part names the
+			// database it is in and its ID.
+			`CREATE TEMP TABLE stale_parts AS SELECT s.host_id,s.source_name,s.item FROM source_item_states s WHERE (s.host_id,s.item) IN (
+				SELECT host_id,origin FROM stale_workspaces
+				UNION SELECT host_id,origin||':sessions:'||source_id FROM stale_workspaces WHERE source_kind='conductor')`,
+			"UPDATE source_states SET fingerprint=NULL WHERE (host_id,source_name) IN (SELECT host_id,source_name FROM stale_parts)",
+			"DELETE FROM source_item_states WHERE (host_id,source_name,item) IN (SELECT host_id,source_name,item FROM stale_parts)",
+			`DELETE FROM source_record_states WHERE (host_id,source_kind,source_account,source_id) IN
+				(SELECT host_id,source_kind,source_account,source_id FROM stale_workspaces)`,
+			"DROP TABLE stale_parts",
+			"DROP TABLE stale_workspaces",
+		} {
+			if _, err := tx.Exec(statement); err != nil {
+				return err
+			}
+		}
+		_, err := tx.Exec("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, version)
+		return err
+	})
+}
+
 func upsertSummary(tx *sql.Tx, workspaceID string, record WorkspaceRecord) error {
 	var firstUser, lastAgent *MessageRecord
 	failures := []MessageRecord{}

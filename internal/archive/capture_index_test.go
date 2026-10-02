@@ -1023,3 +1023,61 @@ func TestStopAfterTheLastSourceChangesNothing(t *testing.T) {
 		t.Fatalf("a stop during the finishing steps cancelled the run: %v %#v", ctx.Err(), server.indexRuns()[0])
 	}
 }
+
+// Ledgers left with rows of an older numbering are parsed again by the next
+// index, and only they are.
+func TestStaleMetricLedgersAreIndexedAgain(t *testing.T) {
+	useHost(t, "host-a")
+	catalog, _ := testCatalog(t)
+	claude := filepath.Join(t.TempDir(), "claude")
+	writeSourceFile(t, filepath.Join(claude, "-p", "s1.jsonl"), claudeLine("s1", "u1", "root", "/p", 1))
+	writeSourceFile(t, filepath.Join(claude, "-p", "s1", "subagents", "agent-a.jsonl"), claudeLine("s1", "a1", "agent", "/p", 2))
+	writeSourceFile(t, filepath.Join(claude, "-p", "s2.jsonl"), claudeLine("s2", "u1", "other", "/p", 3))
+	dir := filepath.Join(t.TempDir(), "conductor")
+	exec := conductorFixture(t, dir)
+	exec(append(addConductorSession("c1", 2), addConductorSession("c2", 2)...)...)
+	sources := []SourceConfig{
+		{Name: "claude", Kind: "claude", Path: claude, Account: "local", Enabled: true},
+		{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true},
+	}
+	var parsed []string
+	parseHook = func(path string) { parsed = append(parsed, filepath.Base(path)) }
+	t.Cleanup(func() { parseHook = nil })
+	index := func() (claudeParsed []string, conductorParsed int) {
+		t.Helper()
+		parsed = nil
+		ingestSource(t, catalog, sources[0])
+		claudeParsed = parsed
+		return claudeParsed, ingestSource(t, catalog, sources[1]).Parsed
+	}
+	index()
+	if files, sessions := index(); len(files) != 0 || sessions != 0 {
+		t.Fatalf("unchanged sources parsed %v and %d sessions", files, sessions)
+	}
+	// What metricLedger kept before it removed old keys.
+	for _, source := range []string{"s1", "c1"} {
+		if _, err := catalog.DB.Exec(`INSERT INTO metric_ledger(workspace_id,sequence,event_kind) SELECT id,0,'stale' FROM workspaces WHERE source_id=?`, source); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := catalog.DB.Exec("DELETE FROM meta WHERE key='metric_ledger_reindex'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.reindexStaleMetricLedgers(); err != nil {
+		t.Fatal(err)
+	}
+	files, sessions := index()
+	if strings.Join(files, ",") != "s1.jsonl,agent-a.jsonl" || sessions != 1 {
+		t.Fatalf("parsed %v and %d sessions, want the stale Claude session and one Conductor session", files, sessions)
+	}
+	if stale := countRows(t, catalog, "SELECT COUNT(*) FROM metric_ledger WHERE event_kind='stale'"); stale != 0 {
+		t.Fatalf("%d stale ledger rows remain", stale)
+	}
+	// It runs once.
+	if err := catalog.reindexStaleMetricLedgers(); err != nil {
+		t.Fatal(err)
+	}
+	if files, sessions := index(); len(files) != 0 || sessions != 0 {
+		t.Fatalf("a second pass parsed %v and %d sessions", files, sessions)
+	}
+}
