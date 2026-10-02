@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -210,6 +211,18 @@ func mergeRepositoryGroupTx(tx *sql.Tx, group repositoryMergeGroup) error {
 		return err
 	}
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO workspace_library_dirty(workspace_id) SELECT id FROM workspaces WHERE repository_id=?`, group.Survivor.ID); err != nil {
+		return err
+	}
+	// Fewer repositories may now have checkouts in a Conductor repository
+	// directory, so the tool calls in those directories may resolve anew.
+	directories := []string{}
+	for _, location := range locations {
+		if directory, _ := conductorCheckout(location); directory != "" {
+			location = directory
+		}
+		directories = append(directories, filepath.Clean(expandHome(location)))
+	}
+	if err := reresolveToolPaths(tx, directories); err != nil {
 		return err
 	}
 	_, err = tx.Exec(`DELETE FROM meta WHERE key='tool_rollup_generation'`)

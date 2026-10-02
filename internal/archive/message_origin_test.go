@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,5 +118,78 @@ func TestCodexSubagentPromptComesFromAgent(t *testing.T) {
 	)
 	if brief := byNativeID(messages)["brief"]; brief.Role != agentRole {
 		t.Fatalf("sub-agent prompt = %#v", brief)
+	}
+}
+
+func TestClaudeSkipsReplayedEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	call := func(uuid, parent, id, at string) string {
+		return `{"sessionId":"s","uuid":"` + uuid + `","parentUuid":"` + parent + `","timestamp":"` + at + `","type":"assistant","message":{"id":"` + id + `","model":"claude-test","content":[{"type":"tool_use","id":"toolu_` + uuid + `","name":"Bash","input":{"command":"ls"}}],"usage":{"input_tokens":10,"output_tokens":5}}}`
+	}
+	result := func(uuid, parent, at, stdout string) string {
+		return `{"sessionId":"s","uuid":"` + uuid + `","parentUuid":"` + parent + `","timestamp":"` + at + `","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_` + parent + `","content":"listing"}]},"toolUseResult":{"stdout":"` + stdout + `","exitCode":0}}`
+	}
+	prompt := `{"sessionId":"s","uuid":"prompt","timestamp":"2026-09-24T17:08:00Z","type":"user","message":{"role":"user","content":"List the files"}}`
+	lines := []string{
+		prompt, call("a1", "prompt", "msg_1", "2026-09-24T17:08:01Z"), result("r1", "a1", "2026-09-24T17:08:02Z", "main.go"),
+		`{"sessionId":"s","uuid":"boundary","timestamp":"2026-09-24T17:09:00Z","type":"system","subtype":"compact_boundary"}`,
+		call("a2", "boundary", "msg_2", "2026-09-24T17:09:01Z"), result("r2", "a2", "2026-09-24T17:09:02Z", "go.mod"),
+		// Claude Code writes the earlier entries again, tool output stripped.
+		prompt, call("a1", "prompt", "msg_1", "2026-09-24T17:08:01Z"), result("r1", "a1", "2026-09-24T17:08:02Z", ""),
+		call("a3", "r1", "msg_3", "2026-09-24T17:10:01Z"),
+	}
+	messages := parseJSONL(t, "claude", path, lines...)
+	seen := map[string]bool{}
+	for _, message := range messages {
+		if seen[message.NativeID] {
+			t.Fatalf("%s parsed twice: %#v", message.NativeID, messages)
+		}
+		seen[message.NativeID] = true
+	}
+	if result := byNativeID(messages)["r1:block:0"]; !strings.HasSuffix(result.EvidenceLocator, ":3:block:0") {
+		t.Fatalf("replay replaced the original tool result: %#v", result)
+	}
+
+	// Rebuilding derived rows from the stored messages must reproduce what
+	// the parse derived; the integrity audit compares the two.
+	catalog, _ := testCatalog(t)
+	record, _, err := (&jsonlAdapter{provider: "claude", baseAdapter: baseAdapter{config: SourceConfig{Account: "local"}}}).parse(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingestRecords(t, catalog, record)
+	snapshot := func() string {
+		rows, err := queryMaps(catalog.DB, `SELECT 'session' kind,message_id id,source_order position,NULL carried FROM agent_session_messages
+			UNION ALL SELECT 'request',native_id,sequence,NULL FROM model_requests
+			UNION ALL SELECT 'call',call_id,sequence,carried_requests FROM tool_calls ORDER BY 1,2`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return jsonText(rows)
+	}
+	parsed := snapshot()
+	conversation, err := queryMaps(catalog.DB, "SELECT id,workspace_id,provider,model,started_at,agent_depth FROM conversations")
+	if err != nil || len(conversation) != 1 {
+		t.Fatalf("conversations = %v, %v", conversation, err)
+	}
+	if err := catalog.rebuildAgentSessions(conversation[0]); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := storedMessages(context.Background(), catalog.DB, conversation[0]["id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := catalog.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceToolLedger(tx, firstString(conversation[0]["workspace_id"]), firstString(conversation[0]["id"]), ConversationRecord{Provider: "claude", Model: firstString(conversation[0]["model"]), Messages: stored}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if rebuilt := snapshot(); rebuilt != parsed {
+		t.Fatalf("rebuilt from stored messages:\n%s\nparsed:\n%s", rebuilt, parsed)
 	}
 }

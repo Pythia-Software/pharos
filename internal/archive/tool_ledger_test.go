@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -402,6 +403,8 @@ func TestResolveRepoPathUsesKnownCheckouts(t *testing.T) {
 		{"/Users/a/src/pharos", "pharos", "repo-pharos"},
 		{"/Users/a/conductor/workspaces/shared/one", "first", "repo-first"},
 		{"/Users/a/conductor/workspaces/shared/two", "second", "repo-second"},
+		// A clone kept inside a checkout is not a checkout of its directory.
+		{"/Users/a/conductor/workspaces/alexandria/stuttgart/.context/fixture/origin", "origin", "repo-fixture"},
 	}
 	for _, test := range []struct{ path, repo, id string }{
 		{"/Users/a/conductor/workspaces/alexandria/stuttgart/a.go", "pharos", "repo-pharos"},
@@ -485,4 +488,80 @@ func TestUnwrapToolOutput(t *testing.T) {
 	if got = unwrapToolOutput(jsonResult); got != "Error: broken" {
 		t.Fatalf("JSON unwrapped %q", got)
 	}
+}
+
+// Stored tool calls follow the checkouts later records make known, as a
+// fresh build of their ledger would.
+func TestToolPathsFollowNewlyKnownCheckouts(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	dir := "/Users/t/conductor/workspaces/widget"
+	record := func(id string, repository map[string]any, paths ...string) WorkspaceRecord {
+		messages := []MessageRecord{}
+		for index, path := range paths {
+			call := fmt.Sprintf("toolu_%s_%d", id, index)
+			messages = append(messages, MessageRecord{NativeID: call, Role: "assistant", Kind: "tool_call", CallID: call, Selected: true, CreatedAt: "2026-09-20T12:00:00Z",
+				Text: jsonText(map[string]any{"tool": "Read", "input": map[string]any{"file_path": path}})})
+		}
+		location := "/Users/t/elsewhere"
+		if repository != nil {
+			location = repository["local_locations"].([]string)[0]
+		}
+		return WorkspaceRecord{SourceID: id, SourceKind: "claude", Account: "local", Title: id, Location: location, Repository: repository,
+			Conversations: []ConversationRecord{{NativeID: id, Provider: "claude", Account: "local", Messages: messages}}}
+	}
+	checkout := func(name, location string) map[string]any {
+		return map[string]any{"display_name": name, "canonical_remote": "git@github.com:acme/" + name + ".git", "local_locations": []string{location}}
+	}
+	ingestRecords(t, catalog, record("reader", nil, dir+"/w2/a.go", dir+"/w4/b.go"))
+	parsed := func() string {
+		rows, err := queryMaps(catalog.DB, "SELECT file_path,repo_path,path_repository,path_repository_id,path_scope FROM tool_calls ORDER BY file_path")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return jsonText(rows)
+	}
+	repository := func(name string) string {
+		var id string
+		if err := catalog.DB.QueryRow("SELECT id FROM repositories WHERE display_name=?", name).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	check := func(step string, want map[string]string) {
+		t.Helper()
+		for path, id := range want {
+			var stored string
+			if err := catalog.DB.QueryRow("SELECT COALESCE(path_repository_id,'') FROM tool_calls WHERE file_path=?", dir+path).Scan(&stored); err != nil {
+				t.Fatal(err)
+			}
+			if stored != id {
+				t.Errorf("%s: %s belongs to %q, want %q", step, path, stored, id)
+			}
+		}
+		// Rebuilding the reader's ledger now must change nothing.
+		before := parsed()
+		var conversationID, workspaceID string
+		if err := catalog.DB.QueryRow("SELECT id,workspace_id FROM conversations WHERE native_id='reader'").Scan(&conversationID, &workspaceID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := catalog.DB.Exec("DELETE FROM tool_ledger_state WHERE conversation_id=?", conversationID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := catalog.BackfillToolLedger(t.Context(), nil); err != nil {
+			t.Fatal(err)
+		}
+		if after := parsed(); after != before {
+			t.Errorf("%s: a fresh build differs:\n%s\nstored:\n%s", step, after, before)
+		}
+	}
+	check("nothing known", map[string]string{"/w2/a.go": "", "/w4/b.go": ""})
+	// A checkout makes the directory widget's.
+	ingestRecords(t, catalog, record("widget-w3", checkout("widget", dir+"/w3")))
+	widget := repository("widget")
+	check("widget known", map[string]string{"/w2/a.go": widget, "/w4/b.go": widget})
+	// Another repository's checkout there leaves only known checkouts known.
+	ingestRecords(t, catalog, record("gadget-w4", checkout("gadget", dir+"/w4")))
+	check("gadget known", map[string]string{"/w2/a.go": "", "/w4/b.go": repository("gadget")})
+	ingestRecords(t, catalog, record("widget-w2", checkout("widget", dir+"/w2")))
+	check("w2 known", map[string]string{"/w2/a.go": widget, "/w4/b.go": repository("gadget")})
 }

@@ -239,6 +239,7 @@ func (c *Catalog) Initialize() error {
 		{"tool_calls", "path_repository", "ALTER TABLE tool_calls ADD COLUMN path_repository TEXT"},
 		{"tool_calls", "path_repository_id", "ALTER TABLE tool_calls ADD COLUMN path_repository_id TEXT"},
 		{"tool_calls", "path_scope", "ALTER TABLE tool_calls ADD COLUMN path_scope TEXT"},
+		{"tool_calls", "path_absolute", "ALTER TABLE tool_calls ADD COLUMN path_absolute TEXT"},
 	} {
 		has, err := c.hasColumn(migration.table, migration.column)
 		if err != nil {
@@ -273,6 +274,9 @@ func (c *Catalog) Initialize() error {
 		return err
 	}
 	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS tool_calls_path_repository_idx ON tool_calls(path_repository_id) WHERE path_repository_id IS NOT NULL`); err != nil {
+		return err
+	}
+	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS tool_calls_path_absolute_idx ON tool_calls(path_absolute) WHERE path_absolute IS NOT NULL`); err != nil {
 		return err
 	}
 	if err := c.migrateHosts(); err != nil {
