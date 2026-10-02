@@ -4,6 +4,7 @@
   let busy = false;
   let timer = null;
   let activeRun = null;
+  let openIssues = [];
   let showAllRuns = false;
   const recentRunLimit = 5;
   const openPanels = new Set();
@@ -470,18 +471,17 @@
         status = await call('/api/sync/status');
         renderDashboard();
       }
+      // Open mismatches turn the drive chip's dot red; the drive panel lists them.
       const issues = await call('/api/sync/issues');
-      let warning = document.getElementById('syncIntegrityWarning');
       const open = issues.issues?.filter(issue => issue.state === 'open') || [];
-      if (open.length && !warning) {
-        warning = button('Index verification mismatch', () => { history.pushState(null, '', '/settings/sync'); window.dispatchEvent(new PopStateEvent('popstate')); });
-        warning.id = 'syncIntegrityWarning'; warning.className = 'badtext'; document.getElementById('headerSync')?.closest('.combo-button')?.after(warning);
+      if (JSON.stringify(open.map(issue => issue.id)) !== JSON.stringify(openIssues.map(issue => issue.id))) {
+        openIssues = open;
+        window.pharosLibrary?.renderAlerts?.();
       }
-      if (!open.length) warning?.remove();
     } catch (error) { if (!status) showError(error.message); }
     finally { busy = false; clearTimeout(timer); timer = setTimeout(refresh, 3000); }
   }
   window.addEventListener('pharos:route', refresh);
-  window.pharosSync = {refresh, recovery, isBusy: () => Boolean(activeRun)};
+  window.pharosSync = {refresh, recovery, isBusy: () => Boolean(activeRun), issues: () => openIssues};
   refresh();
 })();

@@ -345,3 +345,62 @@ test('Sync prioritizes readable history and source counts, with persistent optio
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });
+
+test('Problems turn the drive dot red and are explained in the drive panel, not the header', async () => {
+  const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const errors = [];
+    page.on('pageerror', error => { if (/assets\/(library|sync)\.js/.test(error.stack || '')) errors.push(error.message); });
+    let issues = [{ id: 'issue-1', source_name: 'codex', unit: 'rollout-1.jsonl', state: 'open' }];
+    const failedIndex = { id: 'failed', kind: 'capture-index', state: 'failed', started_at: new Date().toISOString(), completed_at: new Date().toISOString(), completed_sources: 1, total_sources: 2, workspaces: 3, conversations: 4, results: [{ source: 'claude', error: 'disk read failed' }] };
+    await page.route('http://problems.test/**', route => {
+      const url = new URL(route.request().url());
+      const json = body => route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) });
+      if (url.pathname.startsWith('/assets/')) {
+        const file = path.join(root, 'internal/archive/assets', path.basename(url.pathname));
+        return route.fulfill({ contentType: 'application/javascript', body: fs.existsSync(file) ? fs.readFileSync(file) : '' });
+      }
+      if (!url.pathname.startsWith('/api/')) return route.fulfill({ contentType: 'text/html', body: html });
+      if (url.pathname === '/api/sync/issues') return json({ issues });
+      if (url.pathname === '/api/activity') return json({ runs: [failedIndex] });
+      if (url.pathname === '/api/sync/status') return json({ settings: { enabled: false, interval_seconds: 300, sources: [] }, available_sources: [], source_states: [], history: [], statistics: {}, issues });
+      if (url.pathname === '/api/upgrade') return json({ running: false, needed: false, steps: [], repository_renames: {} });
+      if (url.pathname === '/api/library/status') return json({ idle: true, portable: true, drive: { name: 'Pharos SSD', ejectable: true }, activities: [] });
+      if (url.pathname === '/api/index') return json({ active: false, hosts: [], runs: [] });
+      if (url.pathname === '/api/sources') return json({ enabled: 1, items: [] });
+      if (url.pathname === '/api/capture') return json({ runs: [] });
+      return json({ items: [], rows: [], metrics: [], counts: {}, setup: {}, usage: { running: false } });
+    });
+    await page.goto('http://problems.test/library');
+    const dot = page.locator('#pharosDrive .pharos-dot');
+    await page.waitForFunction(() => document.querySelector('#pharosDrive .pharos-dot')?.classList.contains('bad'));
+    assert.notEqual(await dot.evaluate(element => getComputedStyle(element).animationName), 'none');
+    await page.waitForFunction(() => /Needs attention \(index verification mismatch, index failed\)/.test(document.getElementById('pharosDrive').title));
+    // Nothing but the combo button is added to the header for a problem.
+    assert.equal(await page.locator('#syncIntegrityWarning, .pharos-drive-alert').count(), 0);
+    assert.deepEqual(await page.locator('body>header .header-icons > .combo-button').locator('> *').evaluateAll(items => items.map(item => item.id)), ['pharosDrive', 'headerSync']);
+
+    await page.locator('#pharosDrive').click();
+    const attention = page.getByRole('dialog', { name: 'Library drive' }).getByRole('region', { name: 'Needs attention' });
+    await attention.getByText('Index verification found a mismatch').waitFor();
+    assert.equal(await attention.getByText('codex · rollout-1.jsonl').count(), 1);
+    await attention.getByText('The last index failed').waitFor();
+    assert.equal(await attention.getByText('disk read failed').count(), 1);
+    const header = await page.locator('body>header .header-icons').boundingBox();
+    await page.screenshot({ path: path.join(root, '.context/problems-header.png'), clip: { x: header.x - 8, y: header.y - 6, width: header.width + 16, height: header.height + 12 } });
+    await page.getByRole('dialog', { name: 'Library drive' }).screenshot({ path: path.join(root, '.context/problems-panel.png') });
+    await attention.getByRole('button', { name: 'Review…' }).click();
+    await page.waitForURL('**/settings/sync');
+    assert.equal(await page.getByRole('dialog', { name: 'Library drive' }).count(), 0);
+
+    issues = [];
+    await page.evaluate(() => window.pharosSync.refresh());
+    await page.locator('#pharosDrive').click();
+    const panel = page.getByRole('dialog', { name: 'Library drive' });
+    await panel.getByText('The last index failed').waitFor();
+    assert.equal(await panel.getByText('Index verification found a mismatch').count(), 0);
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});

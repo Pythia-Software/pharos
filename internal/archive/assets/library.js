@@ -9,13 +9,18 @@
 .pharos-library-controls{min-width:0;font-size:var(--fs-md,13px)}
 .combo-button>.pharos-drive{gap:7px;min-width:0;max-width:190px;font-weight:400;line-height:1}
 .pharos-drive-name{flex:0 1 auto;min-width:2.5em;font-weight:650;overflow:hidden;text-overflow:ellipsis}
-.pharos-drive-alert{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;color:#f1d690;font-size:var(--fs-xs,12px)}
 .pharos-dot{flex:none;display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--sea,#315845)}
 .pharos-drive .pharos-dot{background:#8cc6a0}
 .pharos-dot.busy{background:var(--mast-brass,#d4a857);box-shadow:0 0 0 3px color-mix(in srgb,var(--mast-brass,#d4a857) 30%,transparent)}
 .pharos-drive .pharos-dot.busy{animation:pharos-drive-pulse 1.6s ease-in-out infinite}
 @keyframes pharos-drive-pulse{50%{opacity:.55;box-shadow:0 0 0 6px color-mix(in srgb,var(--mast-brass,#d4a857) 10%,transparent)}}
 @media(prefers-reduced-motion:reduce){.pharos-drive .pharos-dot.busy{animation:none}}
+.pharos-drive .pharos-dot.bad{background:#e5675c;box-shadow:0 0 0 3px color-mix(in srgb,#e5675c 35%,transparent);animation:pharos-drive-alert 1.6s ease-in-out infinite}
+@keyframes pharos-drive-alert{50%{opacity:.6;box-shadow:0 0 0 6px color-mix(in srgb,#e5675c 12%,transparent)}}
+@media(prefers-reduced-motion:reduce){.pharos-drive .pharos-dot.bad{animation:none}}
+.pharos-attention{margin-top:12px;padding:10px 12px;border:1px solid var(--bad,#9c3d36);border-radius:8px;background:color-mix(in srgb,var(--bad,#9c3d36) 8%,transparent)}
+.pharos-attention h3{margin-top:0;color:var(--bad,#9c3d36)}
+.pharos-attention-item+.pharos-attention-item{margin-top:10px;padding-top:10px;border-top:1px solid var(--line,#ccc)}
 .pharos-dot.warn{background:var(--warn,#98601d)}.pharos-dot.bad{background:var(--bad,#9c3d36)}.pharos-dot.idle{background:var(--muted,#756c5f)}
 .pharos-drive-panel{position:fixed;z-index:8000;width:min(430px,calc(100vw - 24px));max-height:calc(100vh - 100px);overflow:auto;padding:16px 18px;background:var(--panel,#fff);color:var(--ink,#222);border:1px solid var(--line,#ccc);border-radius:14px;box-shadow:0 18px 50px #0005;font-size:13px}
 .pharos-drive-panel h2{margin:0;font:700 20px/1.2 var(--serif,serif)}
@@ -380,6 +385,32 @@
   // running, so ejecting stops nothing; brass and pulsing while work holds
   // the library, which an eject would stop first. The panel has the details.
   const DRIVE_PULSE_MS = 1600;
+  // What needs the user's attention. The chip's dot turns red and pulses;
+  // the drive panel says what is wrong and offers what to do about it.
+  function openCaptureAndIndex() {
+    closePanel();
+    history.pushState(null, '', '/settings/sync');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }
+  function problems() {
+    const found = [];
+    const issues = window.pharosSync?.issues?.() || [];
+    if (issues.length) {
+      const shown = issues.slice(0, 3).map(issue => `${issue.source_name} · ${issue.unit}`);
+      if (issues.length > shown.length) shown.push(`and ${issues.length - shown.length} more`);
+      found.push({title: issues.length === 1 ? 'Index verification found a mismatch' : `Index verification found ${issues.length} mismatches`,
+        detail: shown.join('; '), action: 'Review…', summary: 'index verification mismatch'});
+    }
+    // A failed index stops counting once another capture or index is running.
+    const indexing = status?.activities?.some(activity => ['capture', 'sync', 'index'].includes(activity.kind));
+    if (!indexing && indexFailed(recentIndex)) {
+      const interrupted = recentIndex.state === 'interrupted';
+      found.push({title: interrupted ? 'The last index was interrupted' : 'The last index failed',
+        detail: indexErrors(recentIndex).join(' · '), action: 'Open Capture & index', summary: interrupted ? 'index interrupted' : 'index failed'});
+    }
+    return found;
+  }
+
   function renderChip() {
     const target = ensureChip();
     if (!target) return;
@@ -393,21 +424,22 @@
     } else {
       name.textContent = status.drive?.ejectable ? status.drive.name : status.portable ? 'Library' : 'This Mac';
       const activities = status.activities || [];
-      if (activities.length) {
-        dot.classList.add('busy');
+      const alerts = problems();
+      // A problem outranks running work: an automatic index every minute
+      // would otherwise keep it hidden.
+      if (alerts.length || activities.length) {
+        dot.classList.add(alerts.length ? 'bad' : 'busy');
         // The dot is rebuilt on every status refresh; entering mid-cycle keeps the pulse from restarting.
         dot.style.animationDelay = `-${Date.now() % DRIVE_PULSE_MS}ms`;
-      } else if (indexFailed(recentIndex)) dot.classList.add('warn');
+      }
       const update = libraryUpdate(activities);
       state = activities.length ? [update && `${update.label}${update.progress == null ? '' : ` ${Math.round(update.progress * 100)}%`}`,
         ...activities.filter(activity => !update?.updating.includes(activity)).map(activitySummary)].filter(Boolean).join(', ')
         : headerCaptureIndexRunning && upgradeStatus?.needed ? 'Preparing library upgrade'
-          : upgradeStatus?.needed ? 'Library upgrade available' : indexFailed(recentIndex) ? `Last index ${recentIndex.state === 'interrupted' ? 'interrupted' : 'failed'}` : 'Nothing running';
+          : upgradeStatus?.needed ? 'Library upgrade available' : 'Nothing running';
+      if (alerts.length) state = `Needs attention (${alerts.map(alert => alert.summary).join(', ')}). ${state}`;
     }
     target.replaceChildren(dot, name);
-    if (status && !(status.activities || []).length && indexFailed(recentIndex)) {
-      target.append(node('span', 'pharos-drive-alert', recentIndex.state === 'interrupted' ? 'Index stopped' : 'Index failed'));
-    }
     target.dataset.state = !status ? 'unavailable' : status.idle ? 'idle' : 'busy';
     target.title = `${name.textContent}: ${state}`;
     target.setAttribute('aria-label', `Library drive: ${target.title}`);
@@ -478,6 +510,22 @@
       panel.append(space);
     }
 
+    const alerts = panelMode === 'drive' ? problems() : [];
+    if (alerts.length) {
+      const attention = node('section', 'pharos-attention');
+      attention.setAttribute('aria-label', 'Needs attention');
+      attention.append(node('h3', '', 'Needs attention'));
+      for (const alert of alerts) {
+        const item = node('div', 'pharos-attention-item'), row = node('div', 'pharos-running-head'), text = node('div');
+        text.append(node('strong', '', alert.title));
+        if (alert.detail) text.append(node('div', 'pharos-sub', alert.detail));
+        row.append(text, button(alert.action, '', openCaptureAndIndex));
+        item.append(row);
+        attention.append(item);
+      }
+      panel.append(attention);
+    }
+
     // Capture & index sits to the right of Running now (and Nothing is running).
     const running = node('div', 'pharos-running-head'), runningText = node('div');
     runningText.append(node('h3', '', 'Running now'));
@@ -527,7 +575,8 @@
       const label = indexStopped(recentIndex) ? 'Stopped' : recentIndex.state === 'interrupted' ? 'Interrupted' : failed ? 'Failed' : 'Complete';
       last.append(node('div', failed ? 'pharos-error' : '', `${label} · ${ago(recentIndex.completed_at)} · ${recentIndex.completed_sources} of ${recentIndex.total_sources} sources`));
       last.append(node('div', 'pharos-sub', `${plural(recentIndex.workspaces, 'workspace')} indexed · ${plural(recentIndex.conversations, 'conversation')}${indexStopped(recentIndex) ? '; the next index resumes' : ''}`));
-      const errors = indexErrors(recentIndex);
+      // A failure's errors are under Needs attention.
+      const errors = failed ? [] : indexErrors(recentIndex);
       if (errors.length) last.append(node('div', 'pharos-error', errors.join(' · ')));
       panel.append(last);
     }
@@ -1021,7 +1070,7 @@
     if (settingsVisible()) refreshSettings();
   }
 
-  window.pharosLibrary = {refresh: refreshStatus, status: () => status, runs, refreshSettings, refreshSyncControls: renderSyncControls, onStatus: listener => listeners.add(listener), toggleActivityPanel: () => (panel && panelMode === 'activity' ? closePanel() : openPanel('activity'))};
+  window.pharosLibrary = {refresh: refreshStatus, status: () => status, runs, refreshSettings, refreshSyncControls: renderSyncControls, renderAlerts: () => { renderChip(); renderPanel(); }, onStatus: listener => listeners.add(listener), toggleActivityPanel: () => (panel && panelMode === 'activity' ? closePanel() : openPanel('activity'))};
   const sheet = node('style');
   sheet.textContent = CSS;
   document.head.append(sheet);

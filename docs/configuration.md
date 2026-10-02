@@ -531,9 +531,12 @@ progress is, and the next run redoes it.
   `without_eject` (`probably-fine` when idle, `unsafe` otherwise,
   `not-applicable`), and a `summary` for people.
 
-The header shows the drive's name, running work, and a failed index alert; its
-panel lists every current activity, the latest index result this session and
-errors. Running now shows two right-aligned timing lines beside each activity:
+The header shows the drive's name and a status dot: green when idle, brass
+and pulsing while work runs, and red and pulsing when something needs
+attention (a failed index, or an index verification mismatch). The header
+shows no other alert; its panel lists what needs attention, each with a
+button to deal with it, then every current activity and the latest index
+result this session. Running now shows two right-aligned timing lines beside each activity:
 `Started Xm ago` and `Estimated complete in Xm`. The estimate uses the median
 of up to 10 recent successful runs of that activity on this
 Mac. Capture, index (including Index changes), backup, and post-index Git timings are saved in the

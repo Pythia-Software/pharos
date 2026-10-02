@@ -140,7 +140,10 @@ the bounded snapshot. Frozen evidence parsing bypasses the live log cache;
 live log discovery uses a bounded cache and a cancellable chunked reader that
 handles long lines and conversation IDs crossing chunk boundaries.
 
-A confirmed mismatch creates a deduplicated persistent issue. Diagnostics
+A confirmed mismatch creates a deduplicated persistent issue. While one is
+open, the drive dot in the header is red and pulses, and the drive panel lists
+it under **Needs attention** with **Review…**, which opens Settings → Capture
+& index, where its details and repair actions are. Diagnostics
 record field categories and signatures without transcript text. Repair alone
 does not dismiss an issue: the repaired unit must pass verification. Sampling
 does not certify the entire library, and a shared parser bug can still agree
