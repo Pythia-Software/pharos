@@ -180,6 +180,7 @@ func (s *Server) runAutomatic(parent context.Context, settings syncSettings) boo
 	defer stop()
 	meter := beginSyncMeasurement()
 	results := []IngestResult{}
+	attemptedSources := []string{}
 	var failure any
 	pool := newAuditPool(s.Catalog)
 	changedWorkspaces := map[string]bool{}
@@ -187,6 +188,7 @@ func (s *Server) runAutomatic(parent context.Context, settings syncSettings) boo
 		if ctx.Err() != nil {
 			break
 		}
+		attemptedSources = append(attemptedSources, source.Name)
 		phase := meter.beginPhase(source.Name)
 		s.updateRun(run.ID, func(run *SyncRun) {
 			run.CurrentSource = source.Name
@@ -282,6 +284,7 @@ func (s *Server) runAutomatic(parent context.Context, settings syncSettings) boo
 	}
 	sample := meter.finish()
 	sample.RunID, sample.State, sample.ColdStart, sample.Audit = run.ID, state, cold, audit
+	sample.FinishedAt, sample.Sources, sample.SourceResults = now(), attemptedSources, results
 	sample.Workspaces, sample.Conversations, sample.Messages = totals(results)
 	sample.Class = "no_changes"
 	if sample.Workspaces > 0 {
@@ -294,7 +297,7 @@ func (s *Server) runAutomatic(parent context.Context, settings syncSettings) boo
 	} else if audit.Outcome == "deferred" || audit.Outcome == "read_error" {
 		sample.Class += "_audit_deferred"
 	}
-	if _, err := s.Catalog.DB.Exec(`INSERT INTO sync_history(host_id,run_id,finished_at,sample_json) VALUES(?,?,?,?)`, currentHost().ID, run.ID, now(), jsonText(sample)); err != nil {
+	if _, err := s.Catalog.DB.Exec(`INSERT INTO sync_history(host_id,run_id,finished_at,sample_json) VALUES(?,?,?,?)`, currentHost().ID, run.ID, sample.FinishedAt, jsonText(sample)); err != nil {
 		failure = err.Error()
 		state = "failed"
 	}
@@ -422,6 +425,7 @@ func (s *Server) getIncrementalSync(w http.ResponseWriter, r *http.Request) {
 	for _, row := range history {
 		var sample syncMeasurement
 		if json.Unmarshal([]byte(firstString(row["sample_json"])), &sample) == nil {
+			sample.FinishedAt = firstString(row["finished_at"])
 			samples = append(samples, sample)
 		}
 	}

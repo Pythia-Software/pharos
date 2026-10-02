@@ -12,6 +12,24 @@ cadence are retained per host; an empty source selection means all supported,
 enabled sources. **Check now** runs the same discovery, ingestion, projection,
 and verification pipeline without enabling the timer.
 
+The page opens with the latest run's conversation count, elapsed time, CPU
+time, and observed RAM peak, followed by a table of the five most recent
+automatic refreshes. Expand the history to see up to 200 retained runs.
+Each row identifies its sources and their conversation counts; **Details**
+shows per-source message counts, phase timings, and verification results.
+Counts describe complete refreshed conversations, not just newly added
+messages. Times use compact durations and relative timestamps; hover a
+timestamp for the exact date and time. Performance distributions,
+verification coverage, and repair controls are in expandable sections.
+
+**Sync now** offers **Update library**, the same coordinated action as the
+header: capture enabled local sources, index captures from every Mac, and
+finish pending library updates. **Capture or index separately** exposes
+**Capture this Mac** and **Index captured files** when only one step is needed.
+Their progress, errors, and index **Stop** control appear here. All sync actions
+share the same busy state. Settings → Sources keeps discovery, configuration,
+and source status, with a link here instead of its own capture/index controls.
+
 The header's sync control shares its busy state with automatic refresh,
 intentional capture/index, verification, and repair. **Stop** cancels work;
 already committed groups remain usable. Runs do not overlap or queue missed
@@ -132,6 +150,11 @@ Existing authentication applies to all endpoints. POST bodies are JSON.
 | `GET /api/activity` | Progress, interruption, failures and verification summaries by returned run ID. |
 
 ## Measurement and regression gates
+
+History samples expose `finished_at`, `sources` (attempted sources), and
+`source_results` (the per-source ingest results). Older samples receive their
+completion timestamp from the history record; their source names can be
+recovered from phase timings, but missing per-source counts are not inferred.
 
 Run history separates unchanged, changed, failed/interrupted, and cold-start
 work, and includes audit/projection costs and phase timings. CPU is
