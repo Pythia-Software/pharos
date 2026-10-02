@@ -104,10 +104,11 @@ optional in the current release script.
 
 A new version can derive more from the transcripts a library already holds.
 When it opens a catalog indexed by an older version, Pharos includes the
-required upgrade in **Update library** in the drive panel. The same action captures
-and indexes sources, then starts any pending upgrade. It also runs the upgrade
-when this Mac has no enabled sources. The drive panel shows one library update
-with its current step and progress; **Update details** opens the upgrade steps
+required upgrade in **Capture & index**, in the drive panel and on Settings →
+Capture & index. The same action captures and indexes sources, then starts any
+pending upgrade. It also runs the upgrade when this Mac has no enabled
+sources. The drive panel shows one Capture & index line with its current step
+and progress; **Upgrade details** opens the upgrade steps
 and repository merge preview. A library already current has no upgrade work.
 
 The upgrade runs these steps in order, as one background job:
@@ -142,7 +143,7 @@ and captures where they still exist. Transcripts are never changed.
 
 The job commits in small units. Closing the panel doesn't stop it, and the
 drive badge shows its progress. Ejecting stops it after the unit in
-progress, and using **Update library** again resumes where it stopped. Saved
+progress, and using **Capture & index** again resumes where it stopped. Saved
 table views that filter on a repository name the merge retired are pointed at
 the surviving name.
 

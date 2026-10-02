@@ -1,49 +1,62 @@
-# Incremental conversation refresh
+# Index changes
+
+Pharos keeps a library current with two verbs:
+
+- **Capture** copies this Mac's source files into the library, so they are
+  kept even if the originals are deleted.
+- **Index** reads conversations into the library so they are searchable and
+  analyzed.
+
+**Index changes** is the incremental index: it indexes only what changed in
+this Mac's sources, and does not capture them. **Capture & index** does both:
+it captures this Mac, indexes captures from every Mac, and finishes any
+pending library upgrade.
 
 ## Controls and freshness
 
-Settings → Sync (`/settings/sync`) controls automatic refresh for this Mac's
-enabled Claude, Codex, Conductor, and Antigravity sources. It starts **Off**.
-The dedicated Settings page supports sidebar navigation, direct links, and
-reloads without showing the other Settings sections. Choose one minute,
-five minutes, fifteen minutes, thirty minutes, or a custom interval from one
-minute to one day. The initial suggested interval is five minutes. Sources and
-cadence are retained per host; an empty source selection means all supported,
-enabled sources. **Check now** runs the same discovery, ingestion, projection,
-and verification pipeline without enabling the timer.
+The header button beside the library disk runs **Index changes**. Settings →
+Capture & index (`/settings/sync`) schedules it as **Automatic indexing** for
+this Mac's enabled Claude, Codex, Conductor, and Antigravity sources. It
+starts **Off**. The dedicated Settings page supports sidebar navigation,
+direct links, and reloads without showing the other Settings sections. Choose
+one minute, five minutes, fifteen minutes, thirty minutes, or a custom
+interval from one minute to one day. The initial suggested interval is five
+minutes. Sources and schedule are retained per host; an empty source
+selection means all supported, enabled sources. **Index changes now** (and
+the header button) runs the same discovery, ingestion, projection, and
+verification pipeline without enabling the schedule.
 
 The page opens with the latest run's conversation count, elapsed time, CPU
 time, and observed RAM peak, followed by a table of the five most recent
-automatic refreshes. Expand the history to see up to 200 retained runs.
+Index changes runs. Expand the history to see up to 200 retained runs.
 Each row identifies its sources and their conversation counts; **Details**
 shows per-source message counts, phase timings, and verification results.
-Counts describe complete refreshed conversations, not just newly added
+Counts describe whole indexed conversations, not just newly added
 messages. Times use compact durations and relative timestamps; hover a
 timestamp for the exact date and time. Performance distributions,
 verification coverage, and repair controls are in expandable sections.
 
-**Sync now** offers **Update library**, the same coordinated action as the
-drive panel's: capture enabled local sources, index captures from every Mac,
-and finish pending library updates. **Capture or index separately** exposes
+The page's **Capture & index** section runs the same action as the drive
+panel's **Capture & index** button. **Capture or index separately** exposes
 **Capture this Mac** and **Index captured files** when only one step is needed.
-Their progress, errors, and index **Stop** control appear here. All sync actions
-share the same busy state. Settings → Sources keeps discovery, configuration,
+Their progress, errors, and index **Stop** control appear here. All of these
+share one busy state. Settings → Sources keeps discovery, configuration,
 and source status, with a link here instead of its own capture/index controls.
 
-The header's sync control (**Sync now**) runs **Check now** and shares its
-busy state with automatic refresh, intentional capture/index, verification,
-and repair. **Stop**, beside the running work in the drive panel, cancels it;
-already committed groups remain usable. Runs do not overlap or queue missed
-timer ticks. The next interval starts after a run finishes. A manual operation
-cancels and waits for automatic work before taking the coordinator.
+The header's **Index changes** shares its busy state with automatic indexing,
+Capture & index, verification, and repair. **Stop**, beside the running work
+in the drive panel, cancels it; already committed groups remain usable. Runs
+do not overlap or queue missed timer ticks. The next interval starts after a
+run finishes. A capture or index started by hand cancels and waits for
+automatic work before taking the coordinator.
 
-Automatic refresh reads live inputs but **does not preserve their raw source
-evidence**. Freshness is the selected interval plus processing time. Pending
-preservation is shown separately from indexing success. **Update library**,
-in the drive panel, captures this Mac, indexes retained captures across Macs, reconciles deferred
-library-wide work, and continues pending upgrades through the existing UI.
-Its coordinator holds the pause across capture and index; independent capture
-and index endpoints also pause automatic writes.
+Index changes reads live inputs but **does not capture them**. Freshness is
+the selected interval plus processing time. A source indexed but not yet
+captured is shown as **Needs capture**. **Capture & index** captures this
+Mac, indexes retained captures across Macs, reconciles deferred library-wide
+work, and continues pending upgrades through the existing UI. Its coordinator
+holds the pause across capture and index; independent capture and index
+endpoints also pause automatic writes.
 
 ## Changed-unit ingestion
 
@@ -76,13 +89,13 @@ Reparenting has one current association; old captures cannot restore obsolete
 membership over newer authority. A same-size/same-mtime rewrite may escape
 discovery; independent audits and forced recovery are the backstops.
 Antigravity has no atomic snapshot spanning its files: dependency movement
-defers verification or leaves a group eligible for the next refresh.
+defers verification or leaves a group eligible for the next run.
 
 ## Repair and verification
 
-Sync settings and integrity issues expose:
+Settings → Capture & index and integrity issues expose:
 
-- **Full recapture & re-index…** freshly copies available selected local
+- **Full recapture & reindex…** freshly copies available selected local
   evidence, then forces parser, search, ledger, and supported derivation work
   through selected captures on every retained host. Other Macs are re-indexed
   from captures, not remotely recaptured. Deleted Conductor sessions can be
@@ -91,7 +104,7 @@ Sync settings and integrity issues expose:
   measured throughput; unknown measurements are not guessed.
   Byte-identical file recaptures do not create superseded history entries;
   genuinely changed file versions still preserve the prior evidence.
-- **Rebuild indexes from retained messages…** rebuilds search, conversation
+- **Reindex from stored messages…** reindexes search, conversation
   documents, sessions, token usage, and tool ledgers without original sources.
   It bypasses derivation fingerprints and cannot recover missing messages,
   original files, or source-only metadata. History, preferences, identity
@@ -209,7 +222,7 @@ were not modified. Synthetic results and their small sample size must not be
 generalized to every provider or library. Profiling removed whole-conversation
 search rewrites, repeated unchanged-message SQL, unindexed audit scope scans,
 and large serialized comparison keys; library-wide reconciliation remains
-deliberately heavier than automatic refresh.
+deliberately heavier than automatic indexing.
 
 The final three-iteration, profiled synthetic runs measured:
 
@@ -265,15 +278,15 @@ app is a one-conversation sample, and no real IDE source was available. These
 single-machine, small-sample results are not provider-wide latency promises;
 the fixed canaries ran concurrently with a large Conductor import and final
 correctness/race tests. No production service/catalog or live input file was
-modified, and automatic refresh remained Off.
+modified, and automatic indexing remained Off.
 
 After integrating master's activity-popover estimates, all six Antigravity
 warm checks passed again against a rebuilt binary. CLI checks after its
 process-local log cache warmed took 0.370 / 0.374 seconds, including audits;
 the first CLI check after server restart took 3.569 seconds. These are warm
 catalog checks, not new cold imports. Completion estimates retain separate
-histories for source indexing, captured-input indexing, automatic refresh,
-verification, and coordinated library updates, so a quick refresh cannot
+histories for source indexing, captured-input indexing, automatic indexing,
+verification, and Capture & index, so a quick Index changes run cannot
 become an unrelated operation's historical estimate.
 
 Conductor's roughly 9 GB real database needed a full, uninterrupted first

@@ -397,7 +397,7 @@ copied, then says how much it captured, for example "Captured 4.3 GB from
 MacBook Air. You can eject euclid now; indexing can finish now or later on any
 Mac." **Index now** indexes those captures (see [Indexing
 captures](#indexing-captures)) with per-source progress; **Later** leaves them
-to be indexed from Settings → Sync (see below), on this Mac or any other. Either
+to be indexed from Settings → Capture & index (see below), on this Mac or any other. Either
 step can be left to run in the background: the header shows its progress, and
 a message says when it finishes.
 
@@ -418,20 +418,22 @@ A per-user `archive.toml` has no per-Mac file, so there `probe` only reports:
 `--accept` and `POST /api/probe/accept` refuse, and the `[[sources]]` wanted are
 copied into `archive.toml` by hand.
 
-Settings → Sources keeps **Find sources on this Mac**, source configuration,
-and enable switches, with **Open Sync** linking to the update controls.
-Settings → Sync offers **Update library**, the coordinated capture, index, and
-pending upgrade action that is also in the drive panel the header's library
-disk opens. Expand **Capture or index separately** for **Capture this Mac**,
-which copies enabled local sources into the library, or **Index captured
-files**, which indexes captures from every Mac. Progress and the index **Stop**
-control are on Sync too. The header button beside the library disk runs
-**Sync now**, the incremental sync (Settings → Sync's **Check now**): it
-indexes what changed in this Mac's sources.
-Settings → Sync also offers opt-in automatic live refresh, measured costs,
-integrity verification, and stoppable/resumable recovery. Live refresh does
-not capture raw evidence. See [Incremental conversation refresh](incremental-sync.md)
-for controls, preservation boundaries, repair modes, and API details.
+Pharos has two verbs for keeping the library current: **capture** copies
+this Mac's source files into the library, and **index** makes conversations
+searchable. Settings → Sources keeps **Find sources on this Mac**, source
+configuration, and enable switches, with **Open Capture & index** linking to
+the controls. Settings → Capture & index offers **Capture & index**: capture
+this Mac, index captures from every Mac, then any pending library upgrade.
+The same button is in the drive panel the header's library disk opens.
+Expand **Capture or index separately** for **Capture this Mac**, which copies
+enabled local sources into the library, or **Index captured files**, which
+indexes captures from every Mac. Progress and the index **Stop** control are
+on that page too. The header button beside the library disk runs **Index
+changes**: it indexes what changed in this Mac's sources, without capturing
+them. Settings → Capture & index also offers opt-in automatic indexing,
+measured costs, integrity verification, and stoppable/resumable recovery. See
+[Index changes](incremental-sync.md) for controls, repair modes, and API
+details.
 The enable switch sits in each source card's header. Below the cards, **Macs and
 captures** shows when each source was captured and indexed, and what still
 needs indexing. The API can still target one host or source with `POST
@@ -516,12 +518,12 @@ progress is, and the next run redoes it.
   and it keeps the drive busy), `backup` (reads the library, writes elsewhere),
   `git` (the main-branch merge lookup that follows a sync or an index, or the
   first scan of a catalog), and `maintenance` (among others, Library view rows
-  still to be recomputed, listed once the refresh has run for 15 seconds:
-  those an index writes are refreshed within seconds of each record).
+  still to be indexed, listed once that has run for 15 seconds: those an
+  index writes are indexed within seconds of each record).
   `stoppable` work carries the `stop_path` to POST to stop it (below), and
   `stopping` once it has been asked to.
 - `library_refresh`: `stopped`, and while it is, `pending` (workspaces left
-  to refresh). See **Stopping the Library view refresh** below.
+  to index). See **Stopping Library view indexing** below.
 - `idle` (nothing running), `writing` (something writes to the drive), and
   `safe_to_unplug`, which equals `idle`, as does `GET /api/capture`'s field of
   that name.
@@ -534,20 +536,20 @@ panel lists every current activity, the latest index result this session and
 errors. Running now shows two right-aligned timing lines beside each activity:
 `Started Xm ago` and `Estimated complete in Xm`. The estimate uses the median
 of up to 10 recent successful runs of that activity on this
-Mac. Capture, sync, index, backup, and post-index Git timings are saved in the
+Mac. Capture, index (including Index changes), backup, and post-index Git timings are saved in the
 catalog across restarts. Without history or a known start time, the panel says
 the estimate is unavailable; an overdue estimate says the work is taking
-longer than past runs. A multi-stage library update estimates the current step,
+longer than past runs. A multi-stage Capture & index estimates the current step,
 not later steps that have not started.
 
-**Stopping the Library view refresh.** `POST /api/library/refresh/stop`
-(the **Stop** beside "Updating the Library view" in the drive panel) stops
+**Stopping Library view indexing.** `POST /api/library/refresh/stop`
+(the **Stop** beside "Indexing the Library view" in the drive panel) stops
 recomputing Library view rows and answers `{"stopped": true}`, or `false` if
 it was already stopped. The batch in progress is abandoned, not committed, so
 its workspaces stay pending with the rest. Nothing is lost: the Library works
 out a pending workspace's row as it shows it, which is slower on a large
-backlog. The refresh stays stopped, and off the list of running work, until
-`POST /api/library/refresh/resume` (the panel's **Resume**), an Update library
+backlog. It stays stopped, and off the list of running work, until
+`POST /api/library/refresh/resume` (the panel's **Resume**), a Capture & index
 (`POST /api/library/update`), or the next start of Pharos.
 
 The panel has no Disconnecting section or eject controls. Quit Pharos (or stop
@@ -577,7 +579,7 @@ per-source progress (files and bytes copied, snapshots, errors) and
 `safe_to_unplug`, which is true when nothing at all is running, as reported by
 [`GET /api/library/status`](#library-status-and-eject): no capture (by the
 service, the CLI, or anything else on this Mac holding the capture lock), sync,
-index, backup, Git lookup, or Library view refresh. Even then the service has
+index, backup, Git lookup, or Library view indexing. Even then the service has
 the catalog open, so eject the drive rather than pulling it.
 
 ```toml
@@ -720,9 +722,9 @@ captured host's `id`, `label`, `user`, `current` (this Mac), and `sources[]` wit
 the next run resumes it.
 
 **Stopping an index.** `POST /api/index/cancel` stops the running index, or the
-running source sync (they share one lock), and answers `{"stopped": true}`, or
+running Index changes (they share one lock), and answers `{"stopped": true}`, or
 `false` when nothing was running. The **Stop** button beside a running index in
-Settings → Sync and in the drive panel calls it. It stops the same way a
+Settings → Capture & index and in the drive panel calls it. It stops the same way a
 release does, between records: the record being written finishes and commits, so
 everything already indexed stays. Unlike a release, the service carries on, so
 what the run did write is still linked across Macs, checkpointed and looked up
@@ -745,8 +747,8 @@ that wrote records, make `safe_to_unplug` false. An index records the
 capturing Mac's source state only when it completes: a capture failing to
 index, perhaps
 on another Mac, leaves that Mac's own sync state as it was. In the app,
-onboarding offers **Index now** after its capture, and Settings → Sync
-indexes captured files from every Mac (see [Adding a Mac](#adding-a-mac)).
+onboarding offers **Index now** after its capture, and Settings → Capture &
+index indexes captured files from every Mac (see [Adding a Mac](#adding-a-mac)).
 
 **Attribution.** Everything an index writes belongs to the Mac that captured the
 data (the capture directory's host ID), not the Mac running it: the source's sync

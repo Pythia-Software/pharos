@@ -720,7 +720,7 @@ func (s *Server) startVerification(w http.ResponseWriter, r *http.Request, body 
 		names = stringSlice(values)
 	}
 	if !s.acquireManualIngest() {
-		writeError(w, errors.New("manual sync operation already running"), 409)
+		writeError(w, errors.New("a capture or index is already running"), 409)
 		return
 	}
 	run := s.startRunNamed("verification", nil)

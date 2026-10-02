@@ -116,7 +116,7 @@
   ])];
   const resultLabel = run => run.state === 'failed' ? 'Failed' : run.state === 'interrupted' ? 'Stopped'
     : run.audit?.outcome === 'mismatch' ? 'Needs attention' : run.state && run.state !== 'complete' ? run.state
-    : run.audit?.outcome && run.audit.outcome !== 'passed' ? 'Check deferred' : run.changed_groups > 0 || run.conversations > 0 ? 'Refreshed' : 'No changes';
+    : run.audit?.outcome && run.audit.outcome !== 'passed' ? 'Check deferred' : run.changed_groups > 0 || run.conversations > 0 ? 'Indexed' : 'No changes';
   const style = node('style', `
     #syncDashboard{display:grid;gap:18px;min-width:0}
     #syncDashboard h3{margin:0;font-size:var(--fs-lg)}
@@ -178,7 +178,7 @@
   async function recovery(mode, sources, resume) {
     if (resume) { await call('/api/sync/recovery', {resume}); return; }
     const dialog = node('dialog', '', 'sync-dialog');
-    dialog.append(node('h2', mode === 'full' ? 'Full recapture & re-index' : 'Rebuild indexes from retained messages'));
+    dialog.append(node('h2', mode === 'full' ? 'Full recapture & reindex' : 'Reindex from stored messages'));
     if (mode === 'full') {
       const estimate = node('p', 'Measuring retained scope…', 'muted');
       dialog.append(estimate);
@@ -189,8 +189,8 @@
       }).catch(() => { estimate.textContent = 'No complete throughput measurements yet. Capture, indexing, verification and library analysis can take a long time.'; });
     }
     dialog.append(node('p', mode === 'full'
-      ? 'Freshly copy available source evidence on this Mac, then reparse selected captures from every Mac and rebuild supported indexes. This can take a long time. It is stoppable and resumable. Historical evidence and catalog-only user records are preserved. Other Macs are re-indexed from retained captures, not recaptured remotely.'
-      : 'Rebuild search, conversation documents, sessions, usage and tool ledgers from retained catalog messages. No original source is required. This cannot recreate missing transcripts or source-only metadata. Your findings, preferences, identity links and retained history are preserved.'));
+      ? 'Freshly copy available source evidence on this Mac, then reindex selected captures from every Mac. This can take a long time. It is stoppable and resumable. Historical evidence and catalog-only user records are preserved. Other Macs are re-indexed from retained captures, not recaptured remotely.'
+      : 'Reindex search, conversation documents, sessions, usage and tool ledgers from the messages the library already stores. No original source is required. This cannot recreate missing transcripts or source-only metadata. Your findings, preferences, identity links and retained history are preserved.'));
     if (sources?.length) dialog.append(node('p', `Scope: ${sources.join(', ')}`));
     const actions = node('div', '', 'sync-actions');
     actions.append(button('Cancel', () => dialog.close()), button('Begin repair', async () => {
@@ -214,12 +214,12 @@
       action.disabled = true;
       action.setAttribute('aria-busy', 'true');
       const automatic = active.kind === 'automatic-sync';
-      action.title = automatic ? `Automatic sync: ${active.phase === 'verifying' ? 'verifying a conversation' : active.phase === 'checking' ? 'checking for changes' : `syncing ${active.conversations} conversations`}` : `${active.kind}: ${active.phase}`;
+      action.title = automatic ? `Indexing changes: ${active.phase === 'verifying' ? 'verifying a conversation' : active.phase === 'checking' ? 'checking for changes' : `${active.conversations} conversations`}` : `${active.kind}: ${active.phase}`;
       action.setAttribute('aria-label', action.title);
     } else {
       action.setAttribute('aria-busy', 'false');
-      action.title = 'Sync now';
-      action.setAttribute('aria-label', 'Sync now');
+      action.title = 'Index changes';
+      action.setAttribute('aria-label', 'Index changes');
       if (wasActive) window.pharosLibrary?.refresh?.();
     }
     window.pharosLibrary?.refreshSyncControls?.();
@@ -228,7 +228,7 @@
   function renderRunDetails(element, run) {
     element.replaceChildren();
     if (run.source_results?.length) {
-      element.append(node('h4', 'Refreshed by source'));
+      element.append(node('h4', 'Indexed by source'));
       const sources = table('Source breakdown', ['Source', 'Conversations', 'Messages', 'Changed groups', 'Status'], `sources-${run.run_id || run.finished_at}`);
       for (const result of run.source_results) cells(sources.body, [result.source, number(result.conversations), number(result.messages), number(result.workspaces), result.error ? 'Failed' : result.yielded ? 'Partial' : 'Complete']);
       element.append(sources.wrapper);
@@ -237,7 +237,7 @@
     }
     if (run.phases?.length) {
       const phases = table('Time by phase', ['Phase', 'Elapsed', 'CPU time'], `phases-${run.run_id || run.finished_at}`);
-      for (const phase of run.phases) cells(phases.body, [phase.name === 'audit' ? 'Verification' : phase.name === 'projections' ? 'Library updates' : phase.name, seconds(phase.seconds), seconds(phase.cpu_seconds)]);
+      for (const phase of run.phases) cells(phases.body, [phase.name === 'audit' ? 'Verification' : phase.name === 'projections' ? 'Library view' : phase.name, seconds(phase.seconds), seconds(phase.cpu_seconds)]);
       element.append(phases.wrapper);
     }
     const audit = run.audit;
@@ -250,30 +250,30 @@
     const history = status.history || [];
     const latest = history[0];
     const section = node('section', '', 'sync-panel');
-    section.setAttribute('aria-label', 'Recent syncs');
+    section.setAttribute('aria-label', 'Recent runs');
     const heading = node('div', '', 'sync-section-head');
     const title = node('div', '');
-    title.append(node('h3', 'Recent syncs'));
-    const subtitle = node('p', latest ? 'Automatic refreshes · Last run ' : 'Automatic refresh activity on this Mac', 'muted');
+    title.append(node('h3', 'Recent runs'));
+    const subtitle = node('p', latest ? 'Index changes · Last run ' : 'Index changes on this Mac', 'muted');
     if (latest) subtitle.append(time(latest.finished_at), document.createTextNode(` · ${resultLabel(latest)}`));
     title.append(subtitle);
     heading.append(title);
-    if (status.busy) heading.append(node('span', status.pause_reason || 'Sync in progress', 'sync-result'));
+    if (status.busy) heading.append(node('span', status.pause_reason || 'Indexing in progress', 'sync-result'));
     section.append(heading);
     if (!latest) {
-      section.append(node('p', 'No automatic refreshes yet. Use Check now to refresh your selected sources.', 'sync-empty'));
+      section.append(node('p', 'No runs yet. Use Index changes now to index your selected sources.', 'sync-empty'));
       dashboard.append(section);
       return;
     }
     const summary = node('div', '', 'sync-summary');
-    summary.setAttribute('aria-label', 'Last sync cost');
-    for (const [label, value] of [['Conversations refreshed', number(latest.conversations)], ['Elapsed time', seconds(latest.seconds)], ['CPU time', seconds(latest.cpu_seconds)], ['RAM peak', memory(latest.rss_observed_peak_bytes)]]) {
+    summary.setAttribute('aria-label', 'Last run cost');
+    for (const [label, value] of [['Conversations indexed', number(latest.conversations)], ['Elapsed time', seconds(latest.seconds)], ['CPU time', seconds(latest.cpu_seconds)], ['RAM peak', memory(latest.rss_observed_peak_bytes)]]) {
       const metric = node('div', '', 'sync-metric');
       metric.append(node('span', label), node('strong', value));
       summary.append(metric);
     }
     section.append(summary);
-    const runs = table('Recent sync history', ['When', 'Result', 'Sources', 'Conversations', 'Messages', 'Elapsed', 'CPU time', 'RAM peak']);
+    const runs = table('Recent run history', ['When', 'Result', 'Sources', 'Conversations', 'Messages', 'Elapsed', 'CPU time', 'RAM peak']);
     runs.wrapper.classList.add('sync-history');
     for (const run of showAllRuns ? history : history.slice(0, recentRunLimit)) {
       const key = run.run_id || run.finished_at;
@@ -282,7 +282,7 @@
       const toggle = node('button', openRuns.has(key) ? 'Hide details' : 'Details', 'sync-run-toggle');
       toggle.type = 'button';
       toggle.dataset.syncFocus = `run-${key}`;
-      toggle.setAttribute('aria-label', `Details for sync ${when(run.finished_at)}`);
+      toggle.setAttribute('aria-label', `Details for run ${when(run.finished_at)}`);
       toggle.setAttribute('aria-expanded', String(openRuns.has(key)));
       timestamp.append(toggle);
       const sources = node('div', '', 'sync-source-list');
@@ -290,7 +290,7 @@
         const result = run.source_results?.find(item => item.source === name);
         const text = result ? `${name} · ${number(result.conversations)} conv.` : name;
         const source = node('span', text);
-        if (result) source.title = `${number(result.messages)} messages in refreshed conversations${result.error ? ' · Failed' : result.yielded ? ' · Partial' : ''}`;
+        if (result) source.title = `${number(result.messages)} messages in indexed conversations${result.error ? ' · Failed' : result.yielded ? ' · Partial' : ''}`;
         sources.append(source);
       }
       if (!sources.childElementCount) sources.append(node('span', 'Not recorded', 'muted'));
@@ -321,20 +321,20 @@
       more.onclick = () => { showAllRuns = !showAllRuns; renderDashboard(); };
       section.append(more);
     }
-    section.append(node('p', 'Counts cover refreshed conversations, not just newly added messages. CPU and RAM reflect the whole Pharos process, including other work.', 'muted'));
+    section.append(node('p', 'Counts cover whole indexed conversations, not just newly added messages. CPU and RAM reflect the whole Pharos process, including other work.', 'muted'));
     dashboard.append(section);
   }
 
   function renderDiagnostics(dashboard) {
     const diagnostics = panel('Performance & verification details', 'diagnostics');
     diagnostics.append(node('p', 'Measured cost by workload, across the last 200 runs. Median is the typical run; p95 covers 95% of runs.', 'muted'));
-    const costs = table('Measured refresh cost', ['Workload', 'Runs', 'Elapsed median / p95', 'CPU median / p95', 'Last RAM peak', 'Estimated CPU duty']);
+    const costs = table('Measured indexing cost', ['Workload', 'Runs', 'Elapsed median / p95', 'CPU median / p95', 'Last RAM peak', 'Estimated CPU duty']);
     for (const [classification, stats] of Object.entries(status.statistics || {})) {
       const distribution = values => `${seconds(values?.median)} / ${seconds(values?.p95)}`;
       cells(costs.body, [classification.replaceAll('_', ' '), number(stats.samples), distribution(stats.elapsed_seconds), distribution(stats.cpu_seconds), memory(stats.rss_observed_peak_bytes?.last), `${percent(stats.estimated_cpu_duty_percent_one_core)} of one core`]);
     }
     if (costs.body.childElementCount) diagnostics.append(costs.wrapper);
-    else diagnostics.append(node('p', 'Performance measurements will appear after the first sync.', 'muted'));
+    else diagnostics.append(node('p', 'Performance measurements will appear after the first run.', 'muted'));
     if (status.measurement_limits) diagnostics.append(node('p', status.measurement_limits, 'muted'));
     if (status.coverage?.length) {
       const coverage = table('Verification coverage', ['Source', 'Units', 'Result', 'Last verified']);
@@ -362,11 +362,11 @@
     renderRecentRuns(dashboard);
     if (operations) dashboard.append(operations);
     const preferences = node('section', '', 'sync-panel');
-    preferences.append(node('h3', 'Automatic refresh'));
+    preferences.append(node('h3', 'Automatic indexing'));
     const controls = node('div', '', 'sync-controls');
-    const label = node('label', 'Check for changes ');
+    const label = node('label', 'Index changes ');
     const cadence = document.createElement('select');
-    cadence.setAttribute('aria-label', 'Automatic refresh cadence');
+    cadence.setAttribute('aria-label', 'Automatic indexing schedule');
     for (const [value, text] of [[0, 'Off'], [60, 'Every minute'], [300, 'Every 5 minutes'], [900, 'Every 15 minutes'], [1800, 'Every 30 minutes'], [-1, 'Custom…']]) {
       const option = node('option', text);
       option.value = value;
@@ -388,48 +388,48 @@
     cadence.onchange = () => save().catch(error => showError(error.message));
     custom.onchange = cadence.onchange;
     label.append(cadence);
-    const check = button('Check now', () => call('/api/sync/check', {}));
+    const check = button('Index changes now', () => call('/api/sync/check', {}));
     check.disabled = Boolean(status.busy);
     controls.append(label, custom, check);
-    const schedule = node('p', `${status.pause_reason || 'Ready'} · Next check: `, 'muted');
+    const schedule = node('p', `${status.pause_reason || 'Ready'} · Next run: `, 'muted');
     schedule.append(settings.enabled ? time(settings.next_at) : document.createTextNode('Off'));
     preferences.append(controls, schedule);
     const sources = node('fieldset', '', 'sync-controls');
-    sources.append(node('legend', 'Sources checked on this Mac'));
+    sources.append(node('legend', 'Index changes from these sources on this Mac'));
     const selected = new Set(settings.sources.length ? settings.sources : (status.available_sources || status.sources || []).map(source => source.name));
     for (const source of status.available_sources || status.sources || []) {
       const choice = document.createElement('input');
       choice.type = 'checkbox'; choice.checked = selected.has(source.name);
-      choice.setAttribute('aria-label', `Automatically refresh ${source.name}`);
+      choice.setAttribute('aria-label', `Index changes from ${source.name}`);
       choice.onchange = async () => {
         if (choice.checked) selected.add(source.name); else selected.delete(source.name);
-        if (!selected.size) { choice.checked = true; selected.add(source.name); showError('Choose at least one source, or turn automatic refresh Off.'); return; }
+        if (!selected.size) { choice.checked = true; selected.add(source.name); showError('Choose at least one source, or turn automatic indexing Off.'); return; }
         try { await call('/api/sync/settings', {sources: [...selected]}); }
         catch (error) { showError(error.message); }
       };
       const sourceLabel = node('label', ''); sourceLabel.append(choice, document.createTextNode(` ${source.name}`)); sources.append(sourceLabel);
     }
-    preferences.append(sources, node('p', 'Refresh makes live conversations searchable. Use Update library to also preserve raw source evidence and update library-wide analysis.', 'muted'));
+    preferences.append(sources, node('p', 'Indexing changes makes new conversations searchable without capturing them. Use Capture & index to also keep a copy of the source files and finish library-wide analysis.', 'muted'));
     dashboard.append(preferences);
     const sourceStatus = node('section', '', 'sync-panel');
     sourceStatus.append(node('h3', 'Source status'));
-    const states = table('Source sync status', ['Source', 'Last checked', 'Last success', 'Last captured', 'Status']);
+    const states = table('Source status', ['Source', 'Last checked', 'Last success', 'Last captured', 'Status']);
     for (const source of status.source_states || []) {
       const state = node('div', source.error ? 'Error' : source.pending_preservation ? 'Needs capture' : 'Up to date');
-      if (source.pending_preservation) state.append(node('span', 'Live updates are searchable but not yet preserved.', 'muted sync-source-note'));
+      if (source.pending_preservation) state.append(node('span', 'Indexed, but not captured yet.', 'muted sync-source-note'));
       if (source.error) state.append(node('span', source.error, 'badtext sync-source-note'));
       cells(states.body, [source.source_name, time(source.attempted_at), time(source.succeeded_at), time(source.last_capture_at), state]);
     }
     if (states.body.childElementCount) sourceStatus.append(states.wrapper);
-    else sourceStatus.append(node('p', 'Source status will appear after the first check.', 'muted'));
+    else sourceStatus.append(node('p', 'Source status will appear after the first run.', 'muted'));
     dashboard.append(sourceStatus);
     const latest = status.history?.[0];
-    if (settings.enabled && latest?.seconds > settings.interval_seconds) dashboard.append(node('p', 'Refresh takes longer than the selected interval. The next check starts after this run finishes.', 'badtext'));
+    if (settings.enabled && latest?.seconds > settings.interval_seconds) dashboard.append(node('p', 'Indexing changes takes longer than the selected interval. The next run starts after this one finishes.', 'badtext'));
     renderDiagnostics(dashboard);
     const repairs = panel('Repair & maintenance', 'repairs', status.recovery_jobs?.some(job => ['interrupted', 'failed'].includes(job.state)));
-    repairs.append(node('p', 'For missing data or damaged indexes. These operations can take a long time; routine sync does not need them.', 'muted'));
+    repairs.append(node('p', 'For missing data or damaged indexes. These operations can take a long time; everyday capturing and indexing do not need them.', 'muted'));
     const actions = node('div', '', 'sync-actions');
-    actions.append(button('Full recapture & re-index…', () => recovery('full')), button('Rebuild indexes from retained messages…', () => recovery('retained')), button('Verify all retained inputs', () => call('/api/sync/verify', {all: true})));
+    actions.append(button('Full recapture & reindex…', () => recovery('full')), button('Reindex from stored messages…', () => recovery('retained')), button('Verify all retained inputs', () => call('/api/sync/verify', {all: true})));
     repairs.append(actions);
     for (const job of status.recovery_jobs || []) {
       const line = node('p', `${job.mode} repair: ${job.state} · last progress ${when(job.updated_at)}${job.error ? ` · ${job.error}` : ''}`);
@@ -445,13 +445,13 @@
     dashboard.append(repairs);
     for (const issue of status.issues || []) {
       const warning = node('div', '', 'sync-warning');
-      warning.append(node('strong', 'Automatic sync verification found a mismatch.'), node('p', `${issue.source_name} · ${issue.unit}`), button('View details / copy diagnostics', async () => {
+      warning.append(node('strong', 'Verifying indexed changes found a mismatch.'), node('p', `${issue.source_name} · ${issue.unit}`), button('View details / copy diagnostics', async () => {
         const data = await call('/api/sync/issues');
         const details = data.issues.find(item => item.id === issue.id);
         const dialog = node('dialog', '', 'sync-dialog');
-        dialog.append(node('h2', 'Sync integrity issue'), node('pre', JSON.stringify(details, null, 2)), button('Copy diagnostics', () => navigator.clipboard.writeText(JSON.stringify(details, null, 2))), button('Close', () => dialog.close()));
+        dialog.append(node('h2', 'Index integrity issue'), node('pre', JSON.stringify(details, null, 2)), button('Copy diagnostics', () => navigator.clipboard.writeText(JSON.stringify(details, null, 2))), button('Close', () => dialog.close()));
         dialog.addEventListener('close', () => dialog.remove()); document.body.append(dialog); dialog.showModal();
-      }), button('Full recapture & re-index…', () => recovery('full', [issue.source_name])));
+      }), button('Full recapture & reindex…', () => recovery('full', [issue.source_name])));
       dashboard.prepend(warning);
     }
     for (const element of dashboard.querySelectorAll('.sync-table-wrap')) element.scrollLeft = scrollPositions.get(element.dataset.syncScroll) || 0;
@@ -473,7 +473,7 @@
       let warning = document.getElementById('syncIntegrityWarning');
       const open = issues.issues?.filter(issue => issue.state === 'open') || [];
       if (open.length && !warning) {
-        warning = button('Sync verification mismatch', () => { history.pushState(null, '', '/settings/sync'); window.dispatchEvent(new PopStateEvent('popstate')); });
+        warning = button('Index verification mismatch', () => { history.pushState(null, '', '/settings/sync'); window.dispatchEvent(new PopStateEvent('popstate')); });
         warning.id = 'syncIntegrityWarning'; warning.className = 'badtext'; document.getElementById('headerSync')?.closest('.combo-button')?.after(warning);
       }
       if (!open.length) warning?.remove();

@@ -130,7 +130,7 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 		}
 	}
 	if !s.acquireManualIngest() {
-		writeError(w, errors.New("manual sync operation already running"), 409)
+		writeError(w, errors.New("a capture or index is already running"), 409)
 		return
 	}
 	// Updating the library resumes a Library view refresh the user stopped.

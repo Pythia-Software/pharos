@@ -9,7 +9,7 @@ const { chromium } = createRequire(path.join(root, '.context/browser-tests/packa
 const source = fs.readFileSync(path.join(root, 'internal/archive/assets/ui.py'), 'utf8');
 const html = source.slice(source.indexOf("r'''") + 4, source.lastIndexOf("'''"));
 
-test('Sync now runs the incremental sync, shares busy state with a Stop in the drive panel, and exposes cadence, source selection, resume and exhaustive verification', async () => {
+test('Index changes runs the incremental run, shares busy state with a Stop in the drive panel, and exposes cadence, source selection, resume and exhaustive verification', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
   const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
@@ -36,7 +36,7 @@ test('Sync now runs the incremental sync, shares busy state with a Stop in the d
       }
       if (url.pathname === '/api/activity') return json({ runs: active ? [{ id: 'auto', kind: 'automatic-sync', state: 'running', phase: 'verifying', conversations: 2 }] : [] });
       if (url.pathname === '/api/sync/status') return json({
-        settings, busy: active, pause_reason: active ? 'Sync operation running' : '',
+        settings, busy: active, pause_reason: active ? 'Indexing' : '',
         available_sources: [{ name: 'codex' }, { name: 'claude' }], sources: [{ name: 'codex' }, { name: 'claude' }],
         source_states: [{ source_name: 'codex', pending_preservation: true }], history: [], statistics: {},
         coverage: [{ source_name: 'codex', outcome: 'passed', units: 2 }], deferred: [{ name: 'tools' }],
@@ -51,26 +51,26 @@ test('Sync now runs the incremental sync, shares busy state with a Stop in the d
     });
     await page.goto('http://sync.test/settings/sync');
     const dashboard = page.locator('#syncDashboard');
-    await dashboard.getByText(/Live updates are searchable/).waitFor();
+    await dashboard.getByText(/Indexed, but not captured yet/).waitFor();
     const navigation = page.getByRole('navigation', { name: 'Settings pages' });
-    assert.equal(await navigation.getByRole('link', { name: 'Sync', exact: true }).getAttribute('aria-current'), 'page');
+    assert.equal(await navigation.getByRole('link', { name: 'Capture & index', exact: true }).getAttribute('aria-current'), 'page');
     assert.equal(await page.locator('#health').isHidden(), true);
     assert.equal(await page.locator('#sources').isHidden(), true);
     await navigation.getByRole('link', { name: 'App preferences' }).click();
     await page.waitForURL('**/settings/preferences');
     assert.equal(await dashboard.isHidden(), true);
-    await navigation.getByRole('link', { name: 'Sync', exact: true }).click();
+    await navigation.getByRole('link', { name: 'Capture & index', exact: true }).click();
     await page.waitForURL('**/settings/sync');
-    await dashboard.getByText(/Live updates are searchable/).waitFor();
+    await dashboard.getByText(/Indexed, but not captured yet/).waitFor();
     await page.reload();
-    await dashboard.getByText(/Live updates are searchable/).waitFor();
+    await dashboard.getByText(/Indexed, but not captured yet/).waitFor();
     assert.equal(await page.locator('#headerSync').isDisabled(), true);
     assert.equal(await page.locator('#headerSync').getAttribute('aria-busy'), 'true');
-    assert.equal(await dashboard.getByRole('button', { name: 'Update library', exact: true }).isDisabled(), true);
+    assert.equal(await dashboard.getByRole('button', { name: 'Capture & index', exact: true }).isDisabled(), true);
     assert.match(await page.locator('#headerSync').getAttribute('aria-label'), /verifying a conversation/);
     assert.equal(await dashboard.getByRole('button', { name: 'Resume repair' }).isDisabled(), true);
     // Stop is in the drive panel; the header's combo button keeps only the
-    // drive and Sync now, so Sync now keeps its rounded right side.
+    // drive and Index changes, so Index changes keeps its rounded right side.
     const group = page.locator('body>header .header-icons > .combo-button');
     assert.deepEqual(await group.locator('> *').evaluateAll(items => items.map(item => item.id)), ['pharosDrive', 'headerSync']);
     assert.deepEqual(await page.evaluate(() => { const style = getComputedStyle(document.getElementById('headerSync')); return [style.borderTopRightRadius, style.borderBottomRightRadius]; }), ['4px', '4px']);
@@ -80,10 +80,10 @@ test('Sync now runs the incremental sync, shares busy state with a Stop in the d
     assert.equal(await page.locator('#headerSyncStop').count(), 0);
     const drivePanel = page.getByRole('dialog', { name: 'Library drive' });
     assert.equal(await drivePanel.locator('.sync-menu').count(), 0);
-    assert.equal(await drivePanel.getByRole('button', { name: 'Full recapture & re-index…' }).count(), 0);
-    assert.equal(await drivePanel.getByRole('button', { name: 'Rebuild indexes from retained messages…' }).count(), 0);
+    assert.equal(await drivePanel.getByRole('button', { name: 'Full recapture & reindex…' }).count(), 0);
+    assert.equal(await drivePanel.getByRole('button', { name: 'Reindex from stored messages…' }).count(), 0);
     await page.keyboard.press('Escape');
-    assert.equal(await page.locator('#headerSync').getAttribute('aria-label'), 'Sync now');
+    assert.equal(await page.locator('#headerSync').getAttribute('aria-label'), 'Index changes');
     await page.locator('#headerSync').click();
     await page.waitForFunction(() => !document.getElementById('headerSync').disabled);
     assert.deepEqual(requests.filter(request => ['/api/sync/check', '/api/library/update'].includes(request.path)).map(request => request.path), ['/api/sync/check']);
@@ -91,7 +91,7 @@ test('Sync now runs the incremental sync, shares busy state with a Stop in the d
     assert.deepEqual(requests.find(request => request.path === '/api/sync/recovery').body, { resume: 'repair' });
     await dashboard.getByRole('button', { name: 'Verify all retained inputs' }).click();
     assert.deepEqual(requests.find(request => request.path === '/api/sync/verify').body, { all: true });
-    const cadence = dashboard.getByLabel('Automatic refresh cadence');
+    const cadence = dashboard.getByLabel('Automatic indexing schedule');
     await cadence.selectOption('60');
     await page.waitForFunction(() => document.querySelector('#syncDashboard select').value === '60');
     const offSaved = page.waitForResponse(response => response.url().endsWith('/api/sync/settings') && response.request().method() === 'POST' && response.request().postDataJSON().enabled === false);
@@ -99,15 +99,15 @@ test('Sync now runs the incremental sync, shares busy state with a Stop in the d
     await offSaved;
     assert.ok(requests.some(request => request.path === '/api/sync/settings' && request.body.enabled === false));
     const sourcesSaved = page.waitForResponse(response => response.url().endsWith('/api/sync/settings') && response.request().method() === 'POST' && response.request().postDataJSON().sources);
-    await dashboard.getByLabel('Automatically refresh claude').uncheck();
+    await dashboard.getByLabel('Index changes from claude').uncheck();
     await sourcesSaved;
     assert.ok(requests.some(request => request.path === '/api/sync/settings' && JSON.stringify(request.body.sources) === '["codex"]'));
     for (const name of ['Library health', 'Sources', 'Optimization', 'App preferences']) {
       await navigation.getByRole('link', { name, exact: true }).click();
       assert.equal(await dashboard.isHidden(), true);
     }
-    await navigation.getByRole('link', { name: 'Sync', exact: true }).click();
-    await dashboard.getByText(/Live updates are searchable/).waitFor();
+    await navigation.getByRole('link', { name: 'Capture & index', exact: true }).click();
+    await dashboard.getByText(/Indexed, but not captured yet/).waitFor();
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });
@@ -161,11 +161,11 @@ test('Sources links to Sync, where coordinated updates and separate capture/inde
     await sources.getByRole('button', { name: 'Find sources on this Mac…' }).waitFor();
     assert.equal(await sources.getByRole('button', { name: 'Capture this Mac' }).count(), 0);
     assert.equal(await sources.getByRole('button', { name: 'Index captured files' }).count(), 0);
-    assert.equal(await sources.getByRole('button', { name: 'Update library', exact: true }).count(), 0);
-    await sources.getByRole('link', { name: 'Open Sync →' }).click();
+    assert.equal(await sources.getByRole('button', { name: 'Capture & index', exact: true }).count(), 0);
+    await sources.getByRole('link', { name: 'Open Capture & index →' }).click();
     await page.waitForURL('**/settings/sync');
-    const operations = page.getByRole('region', { name: 'One-off sync', exact: true });
-    const update = operations.getByRole('button', { name: 'Update library', exact: true });
+    const operations = page.getByRole('region', { name: 'Capture and index now', exact: true });
+    const update = operations.getByRole('button', { name: 'Capture & index', exact: true });
     await update.waitFor();
     const capture = operations.locator('#pharosCaptureHost');
     const index = operations.getByRole('button', { name: 'Index captured files' });
@@ -182,7 +182,7 @@ test('Sources links to Sync, where coordinated updates and separate capture/inde
 
     await update.click();
     await page.waitForFunction(() => document.getElementById('pharosUpdateLibrary').getAttribute('aria-busy') === 'true');
-    await operations.getByText('Updating library', { exact: true }).waitFor();
+    await operations.locator('.pharos-activity-head').getByText('Capture & index', { exact: true }).waitFor();
     assert.equal(await operations.getByText('Indexing conversations', { exact: true }).isVisible(), true);
     assert.equal(await capture.isDisabled(), true);
     assert.equal(await index.isDisabled(), true);
@@ -284,11 +284,11 @@ test('Sync prioritizes readable history and source counts, with persistent optio
     });
     await page.goto('http://sync.test/settings/sync');
     const dashboard = page.locator('#syncDashboard');
-    const recent = dashboard.getByRole('region', { name: 'Recent syncs', exact: true });
-    await recent.getByRole('heading', { name: 'Recent syncs' }).waitFor();
-    assert.equal(await dashboard.locator('section').first().getAttribute('aria-label'), 'Recent syncs');
+    const recent = dashboard.getByRole('region', { name: 'Recent runs', exact: true });
+    await recent.getByRole('heading', { name: 'Recent runs' }).waitFor();
+    assert.equal(await dashboard.locator('section').first().getAttribute('aria-label'), 'Recent runs');
     assert.deepEqual(await recent.locator('.sync-metric strong').allTextContents(), ['12', '22s', '9s', '129 MiB']);
-    const rows = recent.getByRole('table', { name: 'Recent sync history' }).locator('tbody > tr:not([hidden])');
+    const rows = recent.getByRole('table', { name: 'Recent run history' }).locator('tbody > tr:not([hidden])');
     assert.equal(await rows.count(), 5);
     const first = rows.first();
     assert.match(await first.innerText(), /2m ago/);
@@ -303,24 +303,24 @@ test('Sync prioritizes readable history and source counts, with persistent optio
     assert.equal(await rows.nth(3).locator('.sync-source-list').innerText(), 'codex');
     assert.match(await rows.nth(4).innerText(), /—/);
     assert.ok(!(await recent.innerText()).includes('12345678'));
-    assert.equal(await dashboard.getByRole('table', { name: 'Measured refresh cost' }).isVisible(), false);
+    assert.equal(await dashboard.getByRole('table', { name: 'Measured indexing cost' }).isVisible(), false);
     assert.equal(await dashboard.getByRole('button', { name: 'Verify all retained inputs' }).isVisible(), false);
     assert.match(await dashboard.innerText(), /In 3m/);
     await page.screenshot({ path: path.join(root, '.context/sync-desktop.png') });
 
-    await first.getByRole('button', { name: 'Details for sync 2m ago' }).click();
+    await first.getByRole('button', { name: 'Details for run 2m ago' }).click();
     await recent.getByRole('table', { name: 'Source breakdown' }).waitFor();
     assert.match(await recent.getByRole('table', { name: 'Source breakdown' }).innerText(), /130/);
     assert.match(await recent.getByRole('table', { name: 'Source breakdown' }).innerText(), /210/);
     await dashboard.locator('summary').filter({ hasText: 'Performance & verification details' }).click();
     await page.evaluate(() => window.pharosSync.refresh());
     assert.equal(await recent.getByRole('table', { name: 'Source breakdown' }).isVisible(), true);
-    assert.equal(await dashboard.getByRole('table', { name: 'Measured refresh cost' }).isVisible(), true);
+    assert.equal(await dashboard.getByRole('table', { name: 'Measured indexing cost' }).isVisible(), true);
     await dashboard.locator('summary').filter({ hasText: 'Performance & verification details' }).click();
-    await recent.getByRole('button', { name: 'Details for sync 2m ago' }).click();
-    await rows.nth(3).getByRole('button', { name: 'Details for sync 8m ago' }).click();
+    await recent.getByRole('button', { name: 'Details for run 2m ago' }).click();
+    await rows.nth(3).getByRole('button', { name: 'Details for run 8m ago' }).click();
     assert.equal(await recent.getByText('Per-source counts were not recorded for this older run.').isVisible(), true);
-    await recent.getByRole('button', { name: 'Details for sync 8m ago' }).click();
+    await recent.getByRole('button', { name: 'Details for run 8m ago' }).click();
     await recent.getByRole('button', { name: 'Show all 12 runs' }).click();
     assert.equal(await rows.count(), 12);
     assert.match(await rows.nth(5).innerText(), /Stopped/);
@@ -330,7 +330,7 @@ test('Sync prioritizes readable history and source counts, with persistent optio
     await page.locator('main').evaluate(element => { element.scrollTop = 0; });
     await page.screenshot({ path: path.join(root, '.context/sync-mobile.png') });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
-    const region = recent.getByRole('region', { name: 'Recent sync history', exact: true });
+    const region = recent.getByRole('region', { name: 'Recent run history', exact: true });
     assert.equal(await region.evaluate(element => element.scrollWidth > element.clientWidth), true);
     await region.focus();
     const scrollPosition = await region.evaluate(element => { element.scrollLeft = 250; return element.scrollLeft; });
@@ -339,7 +339,7 @@ test('Sync prioritizes readable history and source counts, with persistent optio
     assert.equal(await region.evaluate(element => element === document.activeElement), true);
     history = [];
     await page.evaluate(() => { document.activeElement.blur(); return window.pharosSync.refresh(); });
-    await recent.getByText('No automatic refreshes yet. Use Check now to refresh your selected sources.').waitFor();
+    await recent.getByText('No runs yet. Use Index changes now to index your selected sources.').waitFor();
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

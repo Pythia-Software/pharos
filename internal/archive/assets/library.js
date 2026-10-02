@@ -202,7 +202,7 @@
   async function stopWork(path = '/api/index/cancel') {
     try {
       const {stopped} = await post(path);
-      if (!stopped) toast(path === LIBRARY_REFRESH_STOP ? 'The Library view refresh is not running.' : 'No index is running.');
+      if (!stopped) toast(path === LIBRARY_REFRESH_STOP ? 'Library view indexing is not running.' : 'No index is running.');
     } catch (error) {
       toast(error.message);
     }
@@ -213,7 +213,7 @@
     const stop = button(stopping ? 'Stopping…' : 'Stop', '', () => stopWork(path));
     stop.disabled = stopping;
     stop.title = path === LIBRARY_REFRESH_STOP
-      ? 'Stops refreshing the Library view. Workspaces not yet refreshed are worked out as the Library shows them, which can be slower, until you resume it or update the library.'
+      ? 'Stops indexing the Library view. Workspaces not yet indexed are worked out as the Library shows them, which can be slower, until you resume it or Capture & index.'
       : 'Stops after the record being indexed. Everything already indexed is kept, and the next index picks up where this one stopped.';
     return stop;
   };
@@ -251,9 +251,9 @@
 
   let controls = null, chip = null, headerSync = null, headerCaptureIndexRunning = false, panel = null, panelMode = 'drive';
   let driveSpace = null, driveSpaceRequest = null, driveSpaceError = false;
-  // The drive chip and Sync now share one combo button (ui.py's
-  // .combo-button) at the start of the header icons. Stopping a sync, and the
-  // full Update library, are in the drive panel.
+  // The drive chip and Index changes share one combo button (ui.py's
+  // .combo-button) at the start of the header icons. Stop, and the full
+  // Capture & index, are in the drive panel.
   function ensureControls() {
     if (controls?.isConnected) return controls;
     const icons = document.querySelector('body>header .header-icons');
@@ -286,8 +286,8 @@
     headerSync = node('button', 'combo-icon header-sync');
     headerSync.id = 'headerSync';
     headerSync.type = 'button';
-    headerSync.title = 'Sync now';
-    headerSync.setAttribute('aria-label', 'Sync now');
+    headerSync.title = 'Index changes';
+    headerSync.setAttribute('aria-label', 'Index changes');
     const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
     icon.setAttribute('class', 'app-icon');
@@ -310,7 +310,7 @@
       action.disabled = busy;
       action.setAttribute('aria-busy', String(busy));
     }
-    // Update library is on Settings → Sync and in the drive panel.
+    // Capture & index is on Settings → Capture & index and in the drive panel.
     for (const update of document.querySelectorAll('#pharosUpdateLibrary, .pharos-panel-update')) {
       update.disabled = busy || Boolean(hostsData && !hostsData.sources.enabled && !upgradeStatus?.needed);
       update.setAttribute('aria-busy', String(busy));
@@ -352,8 +352,10 @@
       updateProgressFloor = Math.max(updateProgressFloor, progress);
       progress = updateProgressFloor;
     }
-    const label = capturing ? 'Capturing sources' : indexing ? 'Indexing conversations' : upgrade ? (step?.label || 'Upgrading the library') : 'Finishing the library update';
-    return {updating, indexing, label, progress};
+    // Index changes says which step it is on ("Indexing changes: checking for changes").
+    const changesStep = indexing?.automatic && indexing.label?.replace(/^Indexing changes: (.)/, (_, first) => first.toUpperCase());
+    const label = capturing ? 'Capturing sources' : indexing ? changesStep || 'Indexing conversations' : upgrade ? (step?.label || 'Upgrading the library') : 'Finishing capture & index';
+    return {updating, indexing, capturing, label, progress};
   }
 
   function activitySummary(activity) {
@@ -363,7 +365,10 @@
 
   function libraryUpdateLine(update) {
     const item = node('div', 'pharos-activity'), row = node('div', 'pharos-activity-row'), info = node('div', 'pharos-activity-info'), head = node('div', 'pharos-activity-head');
-    head.append(node('span', '', 'Updating library'));
+    // Index changes is incremental; Capture & index the full run; otherwise
+    // the library upgrade is running on its own.
+    const automatic = update.indexing?.automatic && !update.capturing;
+    head.append(node('span', '', automatic ? 'Indexing changes' : update.capturing || update.indexing ? 'Capture & index' : 'Upgrading the library'));
     if (update.indexing?.stoppable) head.append(stopButton(update.indexing.stopping, update.indexing.stop_path));
     info.append(head, node('div', 'pharos-sub', update.label));
     row.append(info, completionEstimate(update.updating, true));
@@ -397,7 +402,7 @@
       state = activities.length ? [update && `${update.label}${update.progress == null ? '' : ` ${Math.round(update.progress * 100)}%`}`,
         ...activities.filter(activity => !update?.updating.includes(activity)).map(activitySummary)].filter(Boolean).join(', ')
         : headerCaptureIndexRunning && upgradeStatus?.needed ? 'Preparing library upgrade'
-          : upgradeStatus?.needed ? 'Library update available' : indexFailed(recentIndex) ? `Last index ${recentIndex.state === 'interrupted' ? 'interrupted' : 'failed'}` : 'Nothing running';
+          : upgradeStatus?.needed ? 'Library upgrade available' : indexFailed(recentIndex) ? `Last index ${recentIndex.state === 'interrupted' ? 'interrupted' : 'failed'}` : 'Nothing running';
     }
     target.replaceChildren(dot, name);
     if (status && !(status.activities || []).length && indexFailed(recentIndex)) {
@@ -473,7 +478,7 @@
       panel.append(space);
     }
 
-    // Update library sits to the right of Running now (and Nothing is running).
+    // Capture & index sits to the right of Running now (and Nothing is running).
     const running = node('div', 'pharos-running-head'), runningText = node('div');
     runningText.append(node('h3', '', 'Running now'));
     running.append(runningText);
@@ -481,10 +486,10 @@
     const activities = status.activities || [];
     const update = libraryUpdate(activities);
     if (!activities.length) runningText.append(node('p', 'pharos-sub', headerCaptureIndexRunning && upgradeStatus?.needed
-      ? 'Preparing the library upgrade…' : upgradeStatus?.needed ? 'A library update is available. Use Update library to run it.' : 'Nothing is running.'));
+      ? 'Preparing the library upgrade…' : upgradeStatus?.needed ? 'A library upgrade is available. Use Capture & index to run it.' : 'Nothing is running.'));
     if (panelMode === 'drive') {
-      const updateLibrary = button('Update library', 'pharos-panel-update', captureAndIndex);
-      updateLibrary.title = "Captures this Mac's sources, indexes captures from every Mac, and runs any pending library upgrade. Sync now in the header only indexes what changed.";
+      const updateLibrary = button('Capture & index', 'pharos-panel-update', captureAndIndex);
+      updateLibrary.title = "Captures this Mac's sources, indexes captures from every Mac, and runs any pending library upgrade. Index changes, in the header, only indexes what changed.";
       running.append(updateLibrary);
       renderHeaderAction();
     }
@@ -494,7 +499,7 @@
     activities.filter(activity => !update?.updating.includes(activity)).forEach(activity => {
       const item = node('div', 'pharos-activity'), row = node('div', 'pharos-activity-row'), info = node('div', 'pharos-activity-info'), head = node('div', 'pharos-activity-head');
       head.append(node('span', 'pharos-dot busy'), node('span', '', activity.label));
-      // The Library view refresh's Stop sits past its timing, like Resume once stopped.
+      // The Library view indexing's Stop sits past its timing, like Resume once stopped.
       const stop = activity.stoppable && stopButton(activity.stopping, activity.stop_path);
       if (stop && activity.stop_path !== LIBRARY_REFRESH_STOP) head.append(stop);
       info.append(head);
@@ -507,12 +512,12 @@
     });
     if (status.library_refresh?.stopped) {
       const item = node('div', 'pharos-activity pharos-library-refresh-stopped'), head = node('div', 'pharos-activity-head');
-      head.append(node('span', 'pharos-dot idle'), node('span', '', 'Library view refresh stopped'), button('Resume', '', resumeLibraryRefresh));
-      item.append(head, node('div', 'pharos-sub', `${status.library_refresh.pending ? `${plural(status.library_refresh.pending, 'workspace')} left to refresh; the Library works them out as it shows them, which can be slower. ` : ''}Update library or restarting Pharos also resumes it.`));
+      head.append(node('span', 'pharos-dot idle'), node('span', '', 'Library view indexing stopped'), button('Resume', '', resumeLibraryRefresh));
+      item.append(head, node('div', 'pharos-sub', `${status.library_refresh.pending ? `${plural(status.library_refresh.pending, 'workspace')} left to index; the Library works them out as it shows them, which can be slower. ` : ''}Capture & index or restarting Pharos also resumes it.`));
       panel.append(item);
     }
     if (upgradeStatus?.needed || upgradeStatus?.running) {
-      panel.append(button('Update details', '', () => window.pharosUpgrade?.open()));
+      panel.append(button('Upgrade details', '', () => window.pharosUpgrade?.open()));
     }
 
     if (recentIndex && !update) {
@@ -521,7 +526,7 @@
       const failed = indexFailed(recentIndex);
       const label = indexStopped(recentIndex) ? 'Stopped' : recentIndex.state === 'interrupted' ? 'Interrupted' : failed ? 'Failed' : 'Complete';
       last.append(node('div', failed ? 'pharos-error' : '', `${label} · ${ago(recentIndex.completed_at)} · ${recentIndex.completed_sources} of ${recentIndex.total_sources} sources`));
-      last.append(node('div', 'pharos-sub', `${plural(recentIndex.workspaces, 'workspace')} updated · ${plural(recentIndex.conversations, 'conversation')}${indexStopped(recentIndex) ? '; the next index resumes' : ''}`));
+      last.append(node('div', 'pharos-sub', `${plural(recentIndex.workspaces, 'workspace')} indexed · ${plural(recentIndex.conversations, 'conversation')}${indexStopped(recentIndex) ? '; the next index resumes' : ''}`));
       const errors = indexErrors(recentIndex);
       if (errors.length) last.append(node('div', 'pharos-error', errors.join(' · ')));
       panel.append(last);
@@ -618,7 +623,7 @@
     const {index, capture} = hostsData;
     const updateAction = document.getElementById('syncUpdateAction');
     if (updateAction && !document.getElementById('pharosUpdateLibrary')) {
-      const update = button('Update library', 'primary', captureAndIndex);
+      const update = button('Capture & index', 'primary', captureAndIndex);
       update.id = 'pharosUpdateLibrary';
       updateAction.append(update);
     }
@@ -641,7 +646,7 @@
     if (!hostsBusy && update) line = libraryUpdateLine(update);
     else if (headerCaptureIndexRunning) {
       line = node('div', 'pharos-run');
-      line.append(node('strong', '', upgradeStatus?.running ? 'Upgrading the library…' : 'Starting library update…'), progressBar(null));
+      line.append(node('strong', '', upgradeStatus?.running ? 'Upgrading the library…' : 'Starting capture & index…'), progressBar(null));
     } else line = runLine(capture, index);
     if (line) activity?.append(line);
     if (hostsError) activity?.append(node('p', 'pharos-error', hostsError));
@@ -756,8 +761,9 @@
     }
   }
 
-  // Sync now runs the incremental sync (Settings → Sync's Check now): it
-  // indexes only what changed in this Mac's live sources.
+  // Index changes is the incremental run (Settings → Capture & index's
+  // Index changes now): it indexes only what changed in this Mac's sources,
+  // without capturing them.
   async function syncNow() {
     if (headerCaptureIndexRunning || hostsBusy) return;
     headerCaptureIndexRunning = true;
@@ -788,7 +794,7 @@
         const started = await post('/api/library/update', {});
         refreshStatus();
         const indexed = await watch('/api/activity', started.run_id);
-        if (indexed?.state !== 'complete') toast(indexed?.error || 'Update stopped; committed work is retained.');
+        if (indexed?.state !== 'complete') toast(indexed?.error || 'Capture & index stopped; committed work is kept.');
         upgradeScheduled = indexed?.state === 'complete';
         if (upgradeScheduled) await window.pharosUpgrade?.start();
       } else if (!upgradeStatus?.needed) {
