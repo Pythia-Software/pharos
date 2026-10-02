@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -386,7 +387,7 @@ func TestAntigravityPrintModeRunsAreHeadless(t *testing.T) {
 	if got := sender(catalog, antigravityRoot); got != "" {
 		t.Fatalf("sender before any log = %q", got)
 	}
-	logs := []string{filepath.Join(dir, "log", "cli-20260928_080300.log"), filepath.Join(dir, "log", "cli-20260928_090000.log")}
+	logs := []string{filepath.Join(dir, "log", "cli-20260928_080412.log"), filepath.Join(dir, "log", "cli-20260928_090000.log")}
 	probePut(t, logs[0], "I0928 08:03:00.100000 1 printmode.go:181] Print mode: starting (promptLength=13)\n"+
 		"I0928 08:03:01.200000 1 session.go:180] Print mode: conversation="+antigravityRoot+", sending message\n")
 	probePut(t, logs[1], "I0928 09:00:00.100000 1 server.go:1584] Starting language server process\n")
@@ -405,7 +406,7 @@ func TestAntigravityPrintModeRunsAreHeadless(t *testing.T) {
 	for _, item := range plan.files {
 		captured[item.rel] = true
 	}
-	if !captured["log/cli-20260928_080300.log"] || !captured["log/cli-20260928_090000.log"] {
+	if !captured["log/cli-20260928_080412.log"] || !captured["log/cli-20260928_090000.log"] {
 		t.Fatalf("capture plan = %v", plan.files)
 	}
 	runCapture(t, config)
@@ -419,5 +420,54 @@ func TestAntigravityPrintModeRunsAreHeadless(t *testing.T) {
 	indexCaptures(t, other, config.CaptureRoot, "host-a")
 	if got := sender(other, antigravityRoot); got != "automation:agy-print" {
 		t.Fatalf("sender from a capture the CLI rotated its log out of = %q", got)
+	}
+}
+
+// Runs started in the same second share a log and overwrite each other's
+// lines, losing a run's "Print mode: conversation=" line or every line naming
+// its conversation. Any line naming it in a print-mode log, or starting just
+// after a print-mode run did when no log names it, shows it ran with -p.
+func TestAntigravityPrintModeSurvivesSharedRunLogs(t *testing.T) {
+	dir := antigravityFixture(t)
+	other := time.Date(2026, 9, 28, 14, 30, 2, 0, time.UTC)
+	antigravityTranscript(t, dir, antigravityOther, "transcript.jsonl", antigravitySteps(
+		map[string]any{"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "hello", "created_at": other.Format(time.RFC3339)},
+	))
+	adapter := &antigravityAdapter{baseAdapter: baseAdapter{config: SourceConfig{Name: "antigravity-cli", Kind: "antigravity", Path: dir}}}
+	printed := func() map[string]bool {
+		t.Helper()
+		transcripts, err := adapter.transcripts()
+		if err != nil {
+			t.Fatal(err)
+		}
+		printed, err := adapter.printModeConversations(transcripts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return printed
+	}
+	logName := func(started time.Time) string {
+		return filepath.Join(dir, "log", "cli-"+started.In(time.Local).Format("20060102_150405")+".log")
+	}
+	shared := logName(other.Add(-2 * time.Second))
+	probePut(t, shared, "I0928 08:30:00.100000 1 printmode.go:202] Print mode: starting (promptLength=13)\n"+
+		"ger shutting down\nI0928 08:30:09.100000 500 server.go:1305] Stream goroutine exited for "+antigravityRoot+", sending completion signal\n")
+	if got := printed(); !got[antigravityRoot] || !got[antigravityOther] {
+		t.Fatalf("print-mode conversations of a shared log = %v", got)
+	}
+	// A conversation an interactive run's log names is not a print-mode run's,
+	// and nor is one that started too long after a print-mode run.
+	probePut(t, logName(other.Add(-time.Second)), "I0928 08:30:01.000000 1 server.go:1584] Streaming conversation "+antigravityOther+"\n")
+	if got := printed(); !got[antigravityRoot] || got[antigravityOther] {
+		t.Fatalf("print-mode conversations with an interactive log = %v", got)
+	}
+	if err := os.Remove(logName(other.Add(-time.Second))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(shared, logName(other.Add(-antigravityLaunchWindow-time.Second))); err != nil {
+		t.Fatal(err)
+	}
+	if got := printed(); !got[antigravityRoot] || got[antigravityOther] {
+		t.Fatalf("print-mode conversations with a log started long before = %v", got)
 	}
 }
