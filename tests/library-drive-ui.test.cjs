@@ -301,7 +301,7 @@ describe('library, drive and captures UI', { skip }, () => {
     // they move into the library once and leave the web view.
     const legacy = { 'pharos-theme': 'light', 'pharos-show-nav-button': 'true', 'pharos-bookmarks-v1': JSON.stringify([{ id: 'b1', url: '/usage', title: 'Usage' }]), 'pharos-nav-open': 'false' };
     const seeded = await openPage(`if (!sessionStorage.getItem('seeded')) { for (const [key, value] of Object.entries(${JSON.stringify(legacy)})) localStorage.setItem(key, value); sessionStorage.setItem('seeded', '1'); }`);
-    await seeded.page.goto(`${base}/settings`);
+    await seeded.page.goto(`${base}/settings/preferences`);
     await seeded.page.locator('#lighthouseSpinOnClick').waitFor();
     await waitFor(async () => (await stored())['pharos-bookmarks-v1']);
     assert.equal((await stored())['pharos-theme'], 'light');
@@ -313,17 +313,29 @@ describe('library, drive and captures UI', { skip }, () => {
     await waitFor(async () => (await stored())['pharos-lighthouse-spin-on-click'] === false);
     await seeded.page.locator('#lighthouseLoadingIndicator').click();
     await waitFor(async () => (await stored())['pharos-lighthouse-loading-indicator'] === false);
+    // The Usage summary and Theme buttons show until switched off.
+    for (const [toggle, button, key] of [['#showUsageSummaryButton', '#usageSummaryToggle', 'pharos-show-usage-summary-button'], ['#showThemeButton', '#themeToggle', 'pharos-show-theme-button']]) {
+      assert.equal(await seeded.page.locator(toggle).getAttribute('aria-checked'), 'true');
+      assert.equal(await seeded.page.locator(button).isVisible(), true);
+      assert.equal(key in await stored(), false);
+      await seeded.page.locator(toggle).click();
+      await waitFor(async () => (await stored())[key] === false);
+      assert.equal(await seeded.page.locator(button).isVisible(), false);
+    }
     assert.deepEqual(seeded.errors, []);
     await seeded.context.close();
 
     // Another Mac has an empty web view and the same library.
     const other = await openPage();
-    await other.page.goto(`${base}/settings`);
+    await other.page.goto(`${base}/settings/preferences`);
     await other.page.locator('#lighthouseSpinOnClick').waitFor();
     assert.equal(await other.page.evaluate(() => document.documentElement.dataset.theme), 'light');
     assert.equal(await other.page.locator('#navigatorToggle').isVisible(), true);
     assert.equal(await other.page.locator('#lighthouseSpinOnClick').getAttribute('aria-checked'), 'false');
     assert.equal(await other.page.locator('#lighthouseLoadingIndicator').getAttribute('aria-checked'), 'false');
+    assert.equal(await other.page.locator('#usageSummaryToggle').isVisible(), false);
+    assert.equal(await other.page.locator('#themeToggle').isVisible(), false);
+    assert.equal(await other.page.locator('#showThemeButton').getAttribute('aria-checked'), 'false');
     assert.equal(await other.page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', []).length), 1);
     assert.deepEqual(other.errors, []);
     await other.context.close();
