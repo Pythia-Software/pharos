@@ -72,6 +72,13 @@ test('Sync shares busy/Stop state and exposes cadence, source selection, resume 
     await page.locator('#headerSyncStop').click();
     await page.waitForFunction(() => !document.getElementById('headerSync').disabled);
     assert.equal(await page.locator('#headerSyncStop').isHidden(), true);
+    await page.locator('#pharosDrive').click();
+    const drivePanel = page.getByRole('dialog', { name: 'Library drive' });
+    await drivePanel.waitFor();
+    assert.equal(await drivePanel.locator('.sync-menu').count(), 0);
+    assert.equal(await drivePanel.getByRole('button', { name: 'Full recapture & re-index…' }).count(), 0);
+    assert.equal(await drivePanel.getByRole('button', { name: 'Rebuild indexes from retained messages…' }).count(), 0);
+    await page.keyboard.press('Escape');
     await dashboard.getByRole('button', { name: 'Resume repair' }).click();
     assert.deepEqual(requests.find(request => request.path === '/api/sync/recovery').body, { resume: 'repair' });
     await dashboard.getByRole('button', { name: 'Verify all retained inputs' }).click();

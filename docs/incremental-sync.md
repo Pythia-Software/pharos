@@ -79,7 +79,7 @@ defers verification or leaves a group eligible for the next refresh.
 
 ## Repair and verification
 
-The disk menu, Sync settings, and integrity issues expose:
+Sync settings and integrity issues expose:
 
 - **Full recapture & re-index…** freshly copies available selected local
   evidence, then forces parser, search, ledger, and supported derivation work
