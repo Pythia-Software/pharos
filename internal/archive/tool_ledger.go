@@ -10,8 +10,10 @@ import (
 )
 
 // toolLedgerVersion names the derivation below. Conversations whose ledger
-// was built by another version are rebuilt by BackfillToolLedger.
-const toolLedgerVersion = "tools-v4"
+// was built by another version are rebuilt by BackfillToolLedger. v5 records
+// each call's absolute path, so its repository can be resolved again when
+// the known checkouts change (see reresolveToolPaths).
+const toolLedgerVersion = "tools-v5"
 
 // modelRequest is one model API request reconstructed from usage evidence.
 // ContextGrowth is how much the prompt grew since the previous request in the
@@ -53,6 +55,7 @@ type toolCall struct {
 	Status, ErrorType, ErrorSignature                          string
 	TestFailure                                                bool
 	RepoPath, PathRepository, PathRepositoryID, PathScope, CWD string
+	PathAbsolute                                               string
 	ExitCode                                                   *int64
 	Interrupted, Truncated                                     bool
 	InputBytes, ResultBytes, ResultTokens                      int64

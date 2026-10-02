@@ -400,7 +400,11 @@ func TestLibraryUpgradeRepairsSplitRepositories(t *testing.T) {
 	exec(`INSERT INTO pull_requests(id,host,repository_id,number,title) VALUES('p1','github.com','big-local',7,'seven'),('p2','github.com','gbdubs',8,'eight')`)
 	exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,coverage) VALUES('c1','w4','codex','local','c1','complete')`)
 	exec(`INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,status,path_repository,path_repository_id) VALUES('t1','w4','c1',1,'codex','call','Edit','edit','ok','excel-corpus','big-local')`)
-	exec(`INSERT INTO tool_ledger_state(conversation_id,version,tool_calls,updated_at) VALUES('c1',?,1,'t')`, toolLedgerVersion)
+	// Two rows for xlsxl-agy have checkouts in its directory, so a third
+	// checkout's path names no single repository until they merge.
+	exec(`INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,status,path_absolute,repo_path,path_repository,path_scope)
+		VALUES('t2','w6','c1',2,'codex','call','Edit','edit','ok','/Users/t/conductor/workspaces/xlsxl-agy/three/a.go','a.go','xlsxl-agy','repo')`)
+	exec(`INSERT INTO tool_ledger_state(conversation_id,version,tool_calls,updated_at) VALUES('c1',?,2,'t')`, toolLedgerVersion)
 	exec(`DELETE FROM meta WHERE key IN ('repository_merge_version')`)
 	exec(`INSERT INTO meta(key,value) VALUES('repository_merge_version','1')`)
 	// The rest of the upgrade is current; only the repository step is pending.
@@ -455,6 +459,9 @@ func TestLibraryUpgradeRepairsSplitRepositories(t *testing.T) {
 	var prs int
 	if err := catalog.DB.QueryRow(`SELECT COUNT(*) FROM pull_requests WHERE repository_id=?`, survivor).Scan(&prs); err != nil || prs != 2 {
 		t.Fatalf("pull requests on the survivor = %d, %v", prs, err)
+	}
+	if got, want := repositoryOf(`SELECT COALESCE(path_repository_id,'') FROM tool_calls WHERE id='t2'`), repositoryOf(`SELECT repository_id FROM workspaces WHERE id='w6'`); got != want {
+		t.Fatalf("tool call in the merged directory = %q, want %s", got, want)
 	}
 	if got := repositoryOf(`SELECT repository_id FROM workspaces WHERE id='w6'`); got != repositoryOf(`SELECT repository_id FROM workspaces WHERE id='w7'`) {
 		t.Fatal("xlsxl-agy workspaces still point at different rows")

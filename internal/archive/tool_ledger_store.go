@@ -48,10 +48,6 @@ func bumpToolLedgerGeneration(tx execer) error {
 
 // replaceToolLedger rebuilds one conversation's model requests and tool calls.
 func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord) error {
-	return replaceToolLedgerWithRoots(tx, workspaceID, conversationID, conversation, nil)
-}
-
-func replaceToolLedgerWithRoots(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord, locations []repoRoot) error {
 	var priorVersion string
 	if err := tx.QueryRow("SELECT version FROM tool_ledger_state WHERE conversation_id=?", conversationID).Scan(&priorVersion); err != nil && err != sql.ErrNoRows {
 		return err
@@ -88,12 +84,9 @@ func replaceToolLedgerWithRoots(tx *sql.Tx, workspaceID, conversationID string, 
 		return true, nil
 	}
 	requests, calls := buildToolLedger(conversation.Messages, strings.TrimSpace(conversation.Model))
-	if locations == nil {
-		var err error
-		locations, err = toolRepositoryLocations(tx)
-		if err != nil {
-			return err
-		}
+	locations, err := toolRepositoryLocations(tx)
+	if err != nil {
+		return err
 	}
 	roots, err := toolRepoRoots(tx, workspaceID, locations)
 	if err != nil {
@@ -108,6 +101,7 @@ func replaceToolLedgerWithRoots(tx *sql.Tx, workspaceID, conversationID string, 
 			cwd = roots[0].Location
 		}
 		var repo repoRoot
+		calls[index].PathAbsolute = absoluteToolPath(calls[index].FilePath, cwd)
 		calls[index].RepoPath, repo, calls[index].PathScope = resolveRepoPath(calls[index].FilePath, cwd, roots)
 		calls[index].PathRepository, calls[index].PathRepositoryID = repo.Repository, repo.ID
 	}
@@ -163,8 +157,8 @@ func replaceToolLedgerWithRoots(tx *sql.Tx, workspaceID, conversationID string, 
 			sequence,provider,model,kind,tool_name,tool_category,mcp_server,command,program,subcommand,command_category,command_count,
 			has_pipe,has_redirect,has_heredoc,backgrounded,file_path,started_at,ended_at,duration_ms,duration_source,status,error_type,exit_code,
 			interrupted,truncated,input_bytes,result_bytes,result_tokens,result_tokens_source,request_id,next_request_id,parallel_count,
-			output_tokens,carried_requests,carried_tokens,lines_added,lines_removed,url,host,hosts,url_count,search_query,error_signature,test_failure,repo_path,path_repository,path_repository_id,path_scope)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
+			output_tokens,carried_requests,carried_tokens,lines_added,lines_removed,url,host,hosts,url_count,search_query,error_signature,test_failure,repo_path,path_repository,path_repository_id,path_scope,path_absolute)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
 		if err != nil {
 			return err
 		}
@@ -203,7 +197,7 @@ func replaceToolLedgerWithRoots(tx *sql.Tx, workspaceID, conversationID string, 
 				boolInt(call.Interrupted), boolInt(call.Truncated), call.InputBytes, call.ResultBytes, call.ResultTokens,
 				nilIfEmpty(call.ResultTokensSource), requestID(call.RequestKey), requestID(call.NextRequestKey), call.ParallelCount,
 				call.OutputTokens, call.CarriedRequests, call.CarriedTokens, nullableInt(call.LinesAdded), nullableInt(call.LinesRemoved),
-				nilIfEmpty(call.URL), nilIfEmpty(call.Host), nilIfEmpty(call.Hosts), call.URLCount, nilIfEmpty(call.SearchQuery), nilIfEmpty(call.ErrorSignature), boolInt(call.TestFailure), nilIfEmpty(call.RepoPath), nilIfEmpty(call.PathRepository), nilIfEmpty(call.PathRepositoryID), nilIfEmpty(call.PathScope)); err != nil {
+				nilIfEmpty(call.URL), nilIfEmpty(call.Host), nilIfEmpty(call.Hosts), call.URLCount, nilIfEmpty(call.SearchQuery), nilIfEmpty(call.ErrorSignature), boolInt(call.TestFailure), nilIfEmpty(call.RepoPath), nilIfEmpty(call.PathRepository), nilIfEmpty(call.PathRepositoryID), nilIfEmpty(call.PathScope), nilIfEmpty(call.PathAbsolute)); err != nil {
 				return err
 			}
 			for _, command := range call.Commands {
@@ -304,10 +298,6 @@ func (c *Catalog) BackfillToolLedger(ctx context.Context, progress func(done, to
 	if err != nil {
 		return 0, err
 	}
-	locations, err := toolRepositoryLocations(c.DB)
-	if err != nil {
-		return 0, err
-	}
 	state.mu.Lock()
 	state.running, state.done, state.total, state.lastError = true, 0, len(pending), ""
 	state.mu.Unlock()
@@ -330,7 +320,10 @@ func (c *Catalog) BackfillToolLedger(ctx context.Context, progress func(done, to
 		}
 		conversation := ConversationRecord{Provider: firstString(row["provider"]), Model: firstString(row["model"]), Messages: messages}
 		if err := c.writeTransaction(ctx, "tool-ledger conversation="+firstString(row["id"]), func(tx *sql.Tx) error {
-			return replaceToolLedgerWithRoots(tx, firstString(row["workspace_id"]), firstString(row["id"]), conversation, locations)
+			// The known checkouts are read in each write transaction: an index
+			// running alongside may add some, and re-resolves only the rows
+			// already written (see reresolveToolPaths).
+			return replaceToolLedger(tx, firstString(row["workspace_id"]), firstString(row["id"]), conversation)
 		}); err != nil {
 			return finish(index, err)
 		}

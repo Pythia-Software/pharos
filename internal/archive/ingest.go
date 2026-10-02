@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -590,9 +591,9 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 			return 0, 0, err
 		}
 	}
-	repoID := ""
+	repoID, stalePaths := "", []string(nil)
 	if record.Repository != nil && !authority.older {
-		repoID, err = upsertRepository(tx, record.Repository, repositoryOptions...)
+		repoID, stalePaths, err = upsertRepositoryChanges(tx, record.Repository, repositoryOptions...)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -607,6 +608,10 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 		err = mergeWorkspace(tx, workspaceID, record, repoID, metadata)
 	}
 	if err != nil {
+		return 0, 0, err
+	}
+	// Tool calls already stored may name a checkout this record made known.
+	if err := reresolveToolPaths(tx, stalePaths); err != nil {
 		return 0, 0, err
 	}
 	workItemID := ""
@@ -985,6 +990,13 @@ func canonicalRowTimes(rows []map[string]any, keys ...string) []map[string]any {
 }
 
 func upsertRepository(tx *sql.Tx, value map[string]any, options ...repositoryOptions) (string, error) {
+	id, _, err := upsertRepositoryChanges(tx, value, options...)
+	return id, err
+}
+
+// upsertRepositoryChanges also names the directories whose tool call paths
+// may now belong to another repository (see staleToolPaths).
+func upsertRepositoryChanges(tx *sql.Tx, value map[string]any, options ...repositoryOptions) (string, []string, error) {
 	item := repositoryFromValue(value)
 	var aliases map[string]string
 	var separate []string
@@ -993,7 +1005,7 @@ func upsertRepository(tx *sql.Tx, value map[string]any, options ...repositoryOpt
 	}
 	items, err := loadRepositoryIdentities(tx)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	match := -1
 	for i, existing := range items {
@@ -1038,8 +1050,10 @@ func upsertRepository(tx *sql.Tx, value map[string]any, options ...repositoryOpt
 			}
 		}
 	}
+	var known []string
 	if match >= 0 {
 		existing := items[match]
+		known = existing.Locations
 		item.ID = existing.ID
 		item.Aliases = repositoryUnion(item.Aliases, existing.Aliases)
 		item.Locations = repositoryUnion(item.Locations, existing.Locations)
@@ -1056,10 +1070,16 @@ func upsertRepository(tx *sql.Tx, value map[string]any, options ...repositoryOpt
 	if item.Name == "" {
 		item.Name = "Unknown repository"
 	}
+	added := []string{}
+	for _, location := range item.Locations {
+		if !slices.Contains(known, location) {
+			added = append(added, location)
+		}
+	}
 	_, err = tx.Exec(`INSERT INTO repositories(id,canonical_remote,normalized_remote,display_name,owner,root_commit,forge_id,aliases_json,local_locations_json,created_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET canonical_remote=COALESCE(excluded.canonical_remote,repositories.canonical_remote),normalized_remote=COALESCE(excluded.normalized_remote,repositories.normalized_remote),display_name=excluded.display_name,
 		owner=COALESCE(excluded.owner,repositories.owner),root_commit=COALESCE(excluded.root_commit,repositories.root_commit),forge_id=COALESCE(excluded.forge_id,repositories.forge_id),aliases_json=excluded.aliases_json,local_locations_json=excluded.local_locations_json,updated_at=excluded.updated_at`, item.ID, nilIfEmpty(item.Remote), nilIfEmpty(item.Normalized), item.Name, nilIfEmpty(item.Owner), nilIfEmpty(item.Root), nilIfEmpty(item.Forge), jsonText(item.Aliases), jsonText(item.Locations), now(), now())
-	return item.ID, err
+	return item.ID, staleToolPaths(added, item.ID, items), err
 }
 
 func valueOr(value, fallback any) any {

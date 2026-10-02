@@ -2,9 +2,11 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -25,24 +27,48 @@ func resolveRepoPath(path, cwd string, roots []repoRoot) (rel string, repo repoR
 	if path == "" {
 		return "", repoRoot{}, ""
 	}
-	home, _ := os.UserHomeDir()
-	expand := func(p string) string {
-		if p == "~" {
-			return home
-		}
-		if strings.HasPrefix(p, "~/") {
-			return filepath.Join(home, p[2:])
-		}
-		return p
+	absolute := absoluteToolPath(path, cwd)
+	if absolute == "" {
+		return "", repoRoot{}, "external"
 	}
-	path, cwd = expand(path), expand(cwd)
+	return resolveAbsolutePath(absolute, roots)
+}
+
+// absoluteToolPath is the path a tool call named, resolved against its working
+// directory; it is empty for a relative path with no working directory.
+func absoluteToolPath(path, cwd string) string {
+	if path == "" {
+		return ""
+	}
+	path, cwd = expandHome(path), expandHome(cwd)
 	if !filepath.IsAbs(path) {
 		if cwd == "" {
-			return "", repoRoot{}, "external"
+			return ""
 		}
 		path = filepath.Join(cwd, path)
 	}
-	path = filepath.Clean(path)
+	return filepath.Clean(path)
+}
+
+func expandHome(path string) string {
+	home, _ := os.UserHomeDir()
+	return expandHomeIn(home, path)
+}
+
+func expandHomeIn(home, path string) string {
+	if path == "~" {
+		return home
+	}
+	if strings.HasPrefix(path, "~/") {
+		return filepath.Join(home, path[2:])
+	}
+	return path
+}
+
+// resolveAbsolutePath resolves a path absoluteToolPath returned.
+func resolveAbsolutePath(path string, roots []repoRoot) (rel string, repo repoRoot, scope string) {
+	home, _ := os.UserHomeDir()
+	expand := func(path string) string { return expandHomeIn(home, path) }
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	best := -1
 	known := func(location string) (repoRoot, bool) {
@@ -54,11 +80,14 @@ func resolveRepoPath(path, cwd string, roots []repoRoot) (rel string, repo repoR
 		return repoRoot{}, false
 	}
 	// knownUnder finds the single repository with checkouts in a Conductor
-	// repository directory; several mean the directory name was reused.
+	// repository directory; several mean the directory name was reused. Only
+	// a checkout counts, not a clone kept inside one (a test fixture under
+	// .context, say).
 	knownUnder := func(prefix string) (repoRoot, bool) {
 		var found repoRoot
 		for _, root := range roots {
-			if root.ID == "" || !strings.HasPrefix(filepath.Clean(expand(root.Location))+"/", prefix) {
+			checkout, ok := strings.CutPrefix(filepath.Clean(expand(root.Location)), prefix)
+			if root.ID == "" || !ok || checkout == "" || strings.Contains(checkout, "/") {
 				continue
 			}
 			if found.ID != "" && found.ID != root.ID {
@@ -170,4 +199,95 @@ func conductorRepository(parts []string, i int, knownUnder func(string) (repoRoo
 		return repoRoot{}, false
 	}
 	return knownUnder("/" + strings.Join(parts[:i+3], "/") + "/")
+}
+
+// conductorCheckout names the Conductor repository directory a location is
+// in (".../conductor/workspaces/<repo>") and whether the location is one of
+// its checkouts, not a directory inside one.
+func conductorCheckout(location string) (directory string, checkout bool) {
+	parts := strings.Split(strings.Trim(filepath.Clean(expandHome(location)), "/"), "/")
+	for i := range parts {
+		if parts[i] == "conductor" && i+3 < len(parts) && parts[i+1] == "workspaces" {
+			return "/" + strings.Join(parts[:i+3], "/"), len(parts) == i+4
+		}
+	}
+	return "", false
+}
+
+// staleToolPaths names the directories whose tool call paths may resolve to
+// another repository once repository id has the added locations. A new
+// checkout is known by its own path; when id had no checkout in that
+// Conductor repository directory before, which single repository has
+// checkouts there may change too, so the whole directory is named.
+func staleToolPaths(added []string, id string, before []repositoryIdentity) []string {
+	stale := []string{}
+	for _, location := range added {
+		location = filepath.Clean(expandHome(location))
+		directory, checkout := conductorCheckout(location)
+		if !checkout || slices.ContainsFunc(before, func(item repositoryIdentity) bool {
+			return item.ID == id && slices.ContainsFunc(item.Locations, func(known string) bool {
+				other, isCheckout := conductorCheckout(known)
+				return isCheckout && other == directory
+			})
+		}) {
+			stale = append(stale, location)
+		} else {
+			stale = append(stale, directory)
+		}
+	}
+	return stale
+}
+
+// reresolveToolPaths resolves the repository of the tool calls under the
+// given directories again, after the known checkouts changed, so the ledger
+// holds what building it now would. Rows built before path_absolute was
+// recorded are left to BackfillToolLedger.
+func reresolveToolPaths(tx *sql.Tx, directories []string) error {
+	slices.Sort(directories)
+	outermost := []string{}
+	for _, directory := range directories {
+		if count := len(outermost); count > 0 && (directory == outermost[count-1] || strings.HasPrefix(directory, outermost[count-1]+"/")) {
+			continue
+		}
+		outermost = append(outermost, directory)
+	}
+	if len(outermost) == 0 {
+		return nil
+	}
+	locations, err := toolRepositoryLocations(tx)
+	if err != nil {
+		return err
+	}
+	roots := map[string][]repoRoot{}
+	changed := false
+	for _, directory := range outermost {
+		// "0" sorts just after "/", so the range holds the directory and
+		// everything in it (and a few siblings, which resolve unchanged).
+		rows, err := queryMaps(tx, `SELECT id,workspace_id,path_absolute,COALESCE(repo_path,'') repo_path,COALESCE(path_repository,'') path_repository,
+			COALESCE(path_repository_id,'') path_repository_id,COALESCE(path_scope,'') path_scope FROM tool_calls WHERE path_absolute>=? AND path_absolute<?`, directory, directory+"0")
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			workspaceID := firstString(row["workspace_id"])
+			if _, ok := roots[workspaceID]; !ok {
+				if roots[workspaceID], err = toolRepoRoots(tx, workspaceID, locations); err != nil {
+					return err
+				}
+			}
+			rel, repo, scope := resolveAbsolutePath(firstString(row["path_absolute"]), roots[workspaceID])
+			if rel == firstString(row["repo_path"]) && repo.Repository == firstString(row["path_repository"]) && repo.ID == firstString(row["path_repository_id"]) && scope == firstString(row["path_scope"]) {
+				continue
+			}
+			if _, err := tx.Exec(`UPDATE tool_calls SET repo_path=?,path_repository=?,path_repository_id=?,path_scope=? WHERE id=?`,
+				nilIfEmpty(rel), nilIfEmpty(repo.Repository), nilIfEmpty(repo.ID), nilIfEmpty(scope), row["id"]); err != nil {
+				return err
+			}
+			changed = true
+		}
+	}
+	if changed {
+		return bumpToolLedgerGeneration(tx)
+	}
+	return nil
 }

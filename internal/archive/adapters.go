@@ -470,8 +470,9 @@ func (a *jsonlAdapter) Fingerprint() (string, error) {
 
 // jsonlExtractor versions the Claude and Codex parsers; bump it when parsing
 // changes so every file is parsed again. v8 retains tool result metadata (exit
-// codes, durations, interruptions); v9 retains Codex hosted web searches.
-const jsonlExtractor = "message-model-v9"
+// codes, durations, interruptions); v9 retains Codex hosted web searches; v10
+// skips Claude entries replayed under a uuid already seen.
+const jsonlExtractor = "message-model-v10"
 
 func (a *jsonlAdapter) accept(path string) bool {
 	relative, _ := filepath.Rel(a.config.Path, path)
@@ -864,7 +865,19 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 	delegated := map[string]bool{}
 	toolNames := map[string]string{}
 	resultCalls := map[string]string{}
+	replayed := map[string]bool{}
 	for _, event := range events {
+		// Claude Code can write a session's earlier entries into its file again
+		// under their original uuids, with tool results stripped. The first copy
+		// is the one that happened; parsing a replay would give a message two
+		// positions, so its stored order and the order derived from this parse
+		// would disagree.
+		if id := firstString(event["uuid"]); id != "" {
+			if replayed[id] {
+				continue
+			}
+			replayed[id] = true
+		}
 		if entrypoint := firstString(event["entrypoint"]); entrypoint != "" {
 			harness = "claude-code/" + entrypoint
 		}
