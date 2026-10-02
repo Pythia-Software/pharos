@@ -10,11 +10,12 @@ import (
 )
 
 var mcpTools = []map[string]any{
-	{"name": "search_conversations", "description": "Find relevant past conversations. Returns compact ranked cards and message handles, never transcripts. Start here; then inspect an overview or passages.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}, "repository": map[string]any{"type": "string"}, "source": map[string]any{"type": "string"}, "provider": map[string]any{"type": "string"}, "file": map[string]any{"type": "string"}, "pr": map[string]any{"type": "integer"}, "from": map[string]any{"type": "string"}, "to": map[string]any{"type": "string"}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 20}, "offset": map[string]any{"type": "integer", "minimum": 0}, "max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
+	{"name": "list_repositories", "description": "List the repositories Pharos has sessions for, most recently active first, with each one's conversation count, latest message, and latest capture, plus when Pharos last synced each source. Use it to find the repository name to pass as the repository filter; path finds the repository checked out at a directory.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string", "description": "Matches a repository's name, remote, aliases, or checkout paths."}, "path": map[string]any{"type": "string", "description": "An absolute directory, such as the current working directory."}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 100}, "max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
+	{"name": "search_conversations", "description": "Find relevant past conversations. Returns compact ranked cards and message handles, never transcripts. Start here, filtered by repository when you know it (list_repositories gives the names); then inspect an overview or passages.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}, "repository": map[string]any{"type": "string", "description": "A repository name or remote as list_repositories gives it, not a worktree or directory name. One Pharos has no record of is an error."}, "source": map[string]any{"type": "string"}, "provider": map[string]any{"type": "string"}, "file": map[string]any{"type": "string"}, "pr": map[string]any{"type": "integer"}, "from": map[string]any{"type": "string"}, "to": map[string]any{"type": "string"}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 20}, "offset": map[string]any{"type": "integer", "minimum": 0}, "max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
 	{"name": "get_conversation_overview", "description": "Get an extractive, cited overview of one conversation before reading messages.", "inputSchema": map[string]any{"type": "object", "required": []string{"conversation_id"}, "properties": map[string]any{"conversation_id": map[string]any{"type": "string"}, "max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
 	{"name": "search_conversation_passages", "description": "Find short matching passages within a chosen conversation; returns message IDs for focused reading.", "inputSchema": map[string]any{"type": "object", "required": []string{"conversation_id", "query"}, "properties": map[string]any{"conversation_id": map[string]any{"type": "string"}, "query": map[string]any{"type": "string"}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 10}, "max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
 	{"name": "get_conversation_messages", "description": "Read a small bounded message window, optionally centered on a message ID. For a long message, request message_id with next_text_offset to continue its text.", "inputSchema": map[string]any{"type": "object", "required": []string{"conversation_id"}, "properties": map[string]any{"conversation_id": map[string]any{"type": "string"}, "around_message_id": map[string]any{"type": "string"}, "message_id": map[string]any{"type": "string"}, "text_offset": map[string]any{"type": "integer", "minimum": 0}, "offset": map[string]any{"type": "integer", "minimum": 0}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 12}, "max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
-	{"name": "search_work", "description": "Search archived AI work with structured repository, source, file, and PR filters.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}, "repository": map[string]any{"type": "string"}, "source": map[string]any{"type": "string"}, "file": map[string]any{"type": "string"}, "pr": map[string]any{"type": "integer"}, "limit": map[string]any{"type": "integer", "maximum": 100}}, "additionalProperties": true}},
+	{"name": "search_work", "description": "Search archived AI work with structured repository, source, file, and PR filters.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}, "repository": map[string]any{"type": "string", "description": "A repository name or remote as list_repositories gives it, not a worktree or directory name. One Pharos has no record of is an error."}, "source": map[string]any{"type": "string"}, "file": map[string]any{"type": "string"}, "pr": map[string]any{"type": "integer"}, "limit": map[string]any{"type": "integer", "maximum": 100}}, "additionalProperties": true}},
 	{"name": "get_work_detail", "description": "Get bounded evidence-linked work metadata, changes, metrics, PRs, and receipt.", "inputSchema": map[string]any{"type": "object", "required": []string{"workspace_id"}, "properties": map[string]any{"workspace_id": map[string]any{"type": "string"}}}},
 	{"name": "get_conversation_excerpt", "description": "Compatibility alias for bounded get_conversation_messages.", "inputSchema": map[string]any{"type": "object", "required": []string{"conversation_id"}, "properties": map[string]any{"conversation_id": map[string]any{"type": "string"}, "limit": map[string]any{"type": "integer", "maximum": 12}, "offset": map[string]any{"type": "integer"}, "max_output_tokens": map[string]any{"type": "integer", "maximum": 4000}}}},
 	{"name": "get_change_set", "description": "Get a change inventory and preserved patch locator.", "inputSchema": map[string]any{"type": "object", "required": []string{"change_set_id"}, "properties": map[string]any{"change_set_id": map[string]any{"type": "string"}}}},
@@ -130,12 +131,24 @@ func handleMCP(catalog *Catalog, request map[string]any) map[string]any {
 	return map[string]any{"jsonrpc": "2.0", "id": request["id"], "error": map[string]any{"code": -32601, "message": "method not found"}}
 }
 
+// repositoryFilterTools are the tools whose repository argument filters by
+// repository name or remote.
+var repositoryFilterTools = map[string]bool{"search_conversations": true, "search_work": true, "list_findings": true}
+
 func callMCP(catalog *Catalog, name string, args map[string]any) (any, error) {
 	limit := int(integer(valueOr(args["limit"], 50)))
 	if limit > 100 {
 		limit = 100
 	}
+	// An unknown repository would otherwise filter everything out silently.
+	if repository := firstString(args["repository"]); repository != "" && repositoryFilterTools[name] {
+		if err := catalog.checkRepositoryFilter(repository); err != nil {
+			return nil, err
+		}
+	}
 	switch name {
+	case "list_repositories":
+		return catalog.listRepositories(args)
 	case "search_conversations":
 		return catalog.searchConversations(args)
 	case "get_conversation_overview":

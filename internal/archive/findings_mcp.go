@@ -16,7 +16,7 @@ import (
 var findingsMCPTools = []map[string]any{
 	{"name": "list_findings", "description": "List Pharos findings: recurring, fixable patterns in past agent work (failures, instructions an agent can't find, tools it keeps looking up, context-heavy commands), each with its impact and the change Pharos proposes. Open findings by default. Reading findings never starts a measurement.",
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
-			"repository": map[string]any{"type": "string", "description": "Repository name; its findings and the global ones that apply to it"},
+			"repository": map[string]any{"type": "string", "description": "Repository name as list_repositories gives it; its findings and the global ones that apply to it. One Pharos has no record of is an error."},
 			"scope":      map[string]any{"type": "string", "description": "A finding scope such as repo:<id>, global:<host>:<provider>, or automation:tl1:<flavor>"},
 			"state":      map[string]any{"type": "string", "enum": []string{"open", "watching", "won", "dismissed", "snoozed", "all"}},
 			"limit":      map[string]any{"type": "integer", "minimum": 1, "maximum": 50}}}},

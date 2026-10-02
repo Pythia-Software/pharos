@@ -1055,7 +1055,10 @@ agent once the drive is back (in Claude Code, `/mcp`). MCP is enabled by default
 the page's switch stores its state in the catalog so it takes effect for both
 new and already running MCP processes. Enabling access does not start a network
 listener or configure an agent client automatically. After enabling it,
-reconnect a client that previously saw an empty tool list.
+reconnect a client that previously saw an empty tool list. The page also offers a
+`search-prior-coding-sessions` skill to save in Claude Code or Codex: it walks
+an agent through the conversation search tools and has it ask the user to turn
+on and reconnect Pharos when the tools are unavailable.
 
 **No open catalog between requests.** An agent client keeps its MCP server
 process for the whole session, so the server never holds the catalog open
