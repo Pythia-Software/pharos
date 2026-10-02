@@ -995,12 +995,19 @@ function Segmented<T extends string>({ label, value, options, onChange }: { labe
 
 function RollingControl({ value, period, onChange }: { value: number; period: ChartPeriod; onChange: (next: number) => void }) {
   const unit = chartPeriods[period].unit;
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
   return <label className="usage-presets usage-rolling-control">
-    <span className="usage-preset-label">Rolling</span>
-    <select aria-label="Rolling periods" value={value} title="Trailing average including the current period. Empty periods count as zero; the start of the range uses available periods only." onChange={event => onChange(Number(event.target.value))}>
-      <option value={0}>0 — Off</option>
-      {Array.from({ length: 10 }, (_, index) => index + 1).map(count => <option key={count} value={count}>{count} {unit}{count > 1 ? "s" : ""}</option>)}
-    </select>
+    <span className="usage-preset-label">Smoothing</span>
+    <input type="number" aria-label="Smoothing periods" min={0} max={10} step={1} value={draft}
+      title="Trailing average including the current period (0 or 1 is off). Empty periods count as zero; the start of the range uses available periods only."
+      onChange={event => {
+        setDraft(event.target.value);
+        const next = event.target.valueAsNumber;
+        if (validRollingPeriods(next)) onChange(next);
+      }}
+      onBlur={() => setDraft(String(value))} />
+    <span className="usage-rolling-unit">{unit}{value === 1 ? "" : "s"}</span>
   </label>;
 }
 
