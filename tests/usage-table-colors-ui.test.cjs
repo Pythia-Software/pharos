@@ -88,7 +88,7 @@ test('Usage table badges follow the active graph and preserve raw sorting and ce
       await checkFacet('model_family', rows[0].model_family, rows[0].model_family);
       await checkFacet('model_family', rows[0].model_family, rows[0].model, 'model');
     }
-    await page.getByRole('combobox', { name: 'Rolling periods' }).selectOption('4');
+    await page.getByRole('spinbutton', { name: 'Smoothing periods' }).fill('4');
     await checkFacet('model_family', rows[0].model_family, rows[0].model_family);
     fs.mkdirSync(path.join(root, '.context'), { recursive: true });
     await page.locator('#usage').getByRole('button', { name: 'Collapse query builder', exact: true }).click();

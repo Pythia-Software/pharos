@@ -212,13 +212,12 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     const plotBounds = await page.locator('.usage-chart-plot').boundingBox();
     const segmentTops = await page.locator('.usage-chart-bars > span').last().locator('i').evaluateAll(parts => parts.map(part => part.getBoundingClientRect().top));
     assert.ok(segmentTops.every(top => top >= plotBounds.y - 0.1), 'Expanded percentage stacks stay inside the plot instead of overlapping the legend');
-    const rolling = page.getByRole('combobox', { name: 'Rolling periods' });
+    const rolling = page.getByRole('spinbutton', { name: 'Smoothing periods' });
     assert.equal(await rolling.inputValue(), '0');
-    assert.equal(await rolling.locator('option').count(), 11);
-    assert.equal(await rolling.locator('option[value="10"]').innerText(), '10 days');
+    assert.equal(await page.locator('.usage-rolling-unit').innerText(), 'days');
     const smoothingRequests = aggregations.length;
     const smoothingQuery = new URL(page.url()).searchParams.get('q_usage');
-    await rolling.selectOption('2');
+    await rolling.fill('2');
     await page.locator('.usage-chart-average-label', { hasText: '2-day rolling average' }).waitFor();
     assert.match(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), /opus-5-5 20%/);
     assert.equal(aggregations.length, smoothingRequests);
@@ -228,21 +227,21 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     await page.locator('.usage-chart-tip-head', { hasText: '2-day average' }).waitFor();
     await page.locator('.usage-chart').getByRole('button', { name: 'Week', exact: true }).click();
     assert.equal(await rolling.inputValue(), '2');
-    assert.equal(await rolling.locator('option[value="2"]').innerText(), '2 weeks');
+    assert.equal(await page.locator('.usage-rolling-unit').innerText(), 'weeks');
     await page.locator('.usage-chart').getByRole('button', { name: 'Day', exact: true }).click();
     await page.reload();
     await page.locator('.usage-chart-average-label', { hasText: '2-day rolling average' }).waitFor();
     assert.equal(await rolling.inputValue(), '2');
     await page.waitForFunction(() => document.querySelector('.usage-chart-bars > span:last-child')?.getAttribute('aria-label')?.includes('opus-5-5 20%'));
-    await rolling.selectOption('0');
+    await rolling.fill('0');
     await page.locator('.usage-chart-average-label').waitFor({ state: 'detached' });
     assert.match(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), /opus-5-5 13\.3%/);
     await page.locator('.usage-chart').getByRole('button', { name: 'Cost', exact: true }).click();
     await page.locator('.usage-chart').getByRole('button', { name: 'Month', exact: true }).click();
     await page.locator('.usage-chart').getByRole('button', { name: '6 months' }).click();
     await page.locator('.usage-chart').getByRole('button', { name: 'Provider', exact: true }).click();
-    assert.equal(await rolling.locator('option[value="10"]').innerText(), '10 months');
-    await rolling.selectOption('2');
+    assert.equal(await page.locator('.usage-rolling-unit').innerText(), 'months');
+    await rolling.fill('2');
 
     // Switching to writing updates the URI, and the choice survives a plain /usage visit.
     await page.getByRole('group', { name: 'Usage view' }).getByRole('button', { name: 'Human Words' }).click();
@@ -254,11 +253,11 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     await page.goto('http://usage-ui.test/usage');
     await page.locator('.usage-chart h3', { hasText: 'Typed words per week' }).waitFor();
     assert.equal(await rolling.inputValue(), '0');
-    assert.equal(await rolling.locator('option[value="3"]').innerText(), '3 weeks');
+    assert.equal(await page.locator('.usage-rolling-unit').innerText(), 'weeks');
     const writingBucketCount = await page.locator('.usage-chart-bars > span').count();
     const writingRequests = series.length;
     const writingCards = await page.locator('.usage-cards').innerText();
-    await rolling.selectOption('3');
+    await rolling.fill('3');
     await page.locator('.usage-chart-average-label', { hasText: '3-week rolling average' }).waitFor();
     assert.match(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), new RegExp(`Typed ${Math.round(200 / Math.min(3, writingBucketCount))}`));
     assert.equal(await page.locator('.usage-cards').innerText(), writingCards);
@@ -266,7 +265,7 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     await page.reload();
     await page.locator('.usage-chart-average-label', { hasText: '3-week rolling average' }).waitFor();
     assert.equal(await rolling.inputValue(), '3');
-    await rolling.selectOption('0');
+    await rolling.fill('0');
 
     // All input stacks every category, and the series request carries the table filters.
     await page.getByRole('button', { name: 'All input' }).click();
