@@ -19,7 +19,7 @@
 @keyframes pharos-drive-alert{50%{opacity:.6;box-shadow:0 0 0 6px color-mix(in srgb,#e5675c 12%,transparent)}}
 @media(prefers-reduced-motion:reduce){.pharos-drive .pharos-dot.bad{animation:none}}
 .pharos-attention{margin-top:12px;padding:10px 12px;border:1px solid var(--bad,#9c3d36);border-radius:8px;background:color-mix(in srgb,var(--bad,#9c3d36) 8%,transparent)}
-.pharos-attention h3{margin-top:0;color:var(--bad,#9c3d36)}
+.pharos-drive-panel .pharos-attention h3{margin-top:0;color:var(--bad,#9c3d36)}
 .pharos-attention-item+.pharos-attention-item{margin-top:10px;padding-top:10px;border-top:1px solid var(--line,#ccc)}
 .pharos-dot.warn{background:var(--warn,#98601d)}.pharos-dot.bad{background:var(--bad,#9c3d36)}.pharos-dot.idle{background:var(--muted,#756c5f)}
 .pharos-drive-panel{position:fixed;z-index:8000;width:min(430px,calc(100vw - 24px));max-height:calc(100vh - 100px);overflow:auto;padding:16px 18px;background:var(--panel,#fff);color:var(--ink,#222);border:1px solid var(--line,#ccc);border-radius:14px;box-shadow:0 18px 50px #0005;font-size:13px}
