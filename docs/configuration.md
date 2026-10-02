@@ -397,7 +397,7 @@ copied, then says how much it captured, for example "Captured 4.3 GB from
 MacBook Air. You can eject euclid now; indexing can finish now or later on any
 Mac." **Index now** indexes those captures (see [Indexing
 captures](#indexing-captures)) with per-source progress; **Later** leaves them
-to be indexed from Settings → Sources (see below), on this Mac or any other. Either
+to be indexed from Settings → Sync (see below), on this Mac or any other. Either
 step can be left to run in the background: the header shows its progress, and
 a message says when it finishes.
 
@@ -418,11 +418,13 @@ A per-user `archive.toml` has no per-Mac file, so there `probe` only reports:
 `--accept` and `POST /api/probe/accept` refuse, and the `[[sources]]` wanted are
 copied into `archive.toml` by hand.
 
-Settings → Sources keeps three actions together: **Find sources on this Mac**
-configures local sources, **Capture this Mac** copies enabled sources into the
-library, and **Index captured files** indexes captures from every Mac. The
-header button beside the library disk runs **Update library**: capture, index,
-and any pending library upgrade in that order.
+Settings → Sources keeps **Find sources on this Mac**, source configuration,
+and enable switches, with **Open Sync** linking to the update controls.
+Settings → Sync offers **Update library**, the same coordinated capture,
+index, and pending upgrade action as the header button. Expand **Capture or
+index separately** for **Capture this Mac**, which copies enabled local
+sources into the library, or **Index captured files**, which indexes captures
+from every Mac. Progress and the index **Stop** control are on Sync too.
 Settings → Sync also offers opt-in automatic live refresh, measured costs,
 integrity verification, and stoppable/resumable recovery. Live refresh does
 not capture raw evidence. See [Incremental conversation refresh](incremental-sync.md)
@@ -717,7 +719,7 @@ the next run resumes it.
 **Stopping an index.** `POST /api/index/cancel` stops the running index, or the
 running source sync (they share one lock), and answers `{"stopped": true}`, or
 `false` when nothing was running. The **Stop** button beside a running index in
-Settings → Sources and in the drive panel calls it. It stops the same way a
+Settings → Sync and in the drive panel calls it. It stops the same way a
 release does, between records: the record being written finishes and commits, so
 everything already indexed stays. Unlike a release, the service carries on, so
 what the run did write is still linked across Macs, checkpointed and looked up
@@ -740,8 +742,8 @@ that wrote records, make `safe_to_unplug` false. An index records the
 capturing Mac's source state only when it completes: a capture failing to
 index, perhaps
 on another Mac, leaves that Mac's own sync state as it was. In the app,
-onboarding offers **Index now** after its capture, and Settings → Sources
-indexes one Mac or all (see [Adding a Mac](#adding-a-mac)).
+onboarding offers **Index now** after its capture, and Settings → Sync
+indexes captured files from every Mac (see [Adding a Mac](#adding-a-mac)).
 
 **Attribution.** Everything an index writes belongs to the Mac that captured the
 data (the capture directory's host ID), not the Mac running it: the source's sync

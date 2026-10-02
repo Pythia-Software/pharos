@@ -179,7 +179,7 @@ describe('library, drive and captures UI', { skip }, () => {
 
   it("shows another Mac's captures as needing an index, and indexes them", async () => {
     const { page, context, errors } = await openPage();
-    await page.goto(`${base}/settings`);
+    await page.goto(`${base}/settings/sources`);
     const air = page.locator('#sourceGrid .source-card.remote[data-host="host-b"][data-source="claude"]');
     await air.waitFor();
     assert.match(await air.textContent(), /MacBook Air.*Last indexed.*Last index attempt.*Coverage.*Account.*Captured.*needs index/s);
@@ -190,10 +190,13 @@ describe('library, drive and captures UI', { skip }, () => {
     assert.match(await page.locator('#sourceGrid .source-card').first().locator('.pharos-card-capture').textContent(), /Captured .* · indexed/);
     await shoot(page.locator('#sourceGrid'), 'hosts-needs-index');
     assert.equal(await air.getByRole('button').count(), 0);
-    await page.locator('#sourceToolbar').getByRole('button', { name: 'Index captured files' }).click();
+    await page.locator('#sourceToolbar').getByRole('link', { name: 'Open Sync →' }).click();
+    await page.waitForURL('**/settings/sync');
+    await page.locator('#syncOperations summary').click();
+    await page.locator('#syncRunActions').getByRole('button', { name: 'Index captured files' }).click();
     // While it runs: the run line, and the drive badge with its panel.
-    await page.locator('#sourceActivity .pharos-run', { hasText: 'Indexing captures' }).waitFor({ timeout: 15_000 });
-    await shoot(page.locator('#sources'), 'hosts-indexing');
+    await page.locator('#syncActivity .pharos-run', { hasText: 'Indexing captures' }).waitFor({ timeout: 15_000 });
+    await shoot(page.locator('#syncOperations'), 'hosts-indexing');
     // The chip shows only the drive's name and a brass dot; what runs is in its tooltip.
     await page.waitForFunction(() => document.querySelector('#pharosDrive')?.dataset.state === 'busy' && /Indexing/.test(document.querySelector('#pharosDrive').title), null, { timeout: 15_000 });
     assert.equal(await page.locator('#pharosDrive').textContent(), volume);
@@ -214,6 +217,8 @@ describe('library, drive and captures UI', { skip }, () => {
     assert.equal(remote.coverage, 'complete');
     assert.ok(remote.path);
     assert.ok(remote.last_attempt_at);
+    await page.locator('#syncOperations').getByRole('link', { name: 'Manage sources →' }).click();
+    await page.waitForURL('**/settings/sources');
     await shoot(page.locator('#sourceGrid'), 'hosts-indexed');
     await page.evaluate(() => document.querySelector('main').scrollTo(0, 0));
     await shoot(page.locator('#sourceGrid .source-card').first(), 'source-card-capture');
@@ -259,18 +264,25 @@ describe('library, drive and captures UI', { skip }, () => {
     await context.close();
   });
 
-  it('shows disk space in the drive panel and keeps source actions together', async () => {
+  it('shows disk space in the drive panel and links Sources to the one-off sync controls', async () => {
     const { page, context, errors } = await openPage();
     const headerAction = page.locator('#headerSync');
     await headerAction.waitFor();
     assert.equal(await headerAction.getAttribute('title'), 'Update library');
     assert.equal(await headerAction.getAttribute('aria-label'), 'Update library');
-    await page.goto(`${base}/settings`);
+    await page.goto(`${base}/settings/sources`);
     const actions = page.locator('#sourceToolbar');
     await actions.getByRole('button', { name: 'Find sources on this Mac…' }).waitFor();
-    assert.equal(await actions.getByRole('button', { name: 'Capture this Mac' }).count(), 1);
-    assert.equal(await actions.getByRole('button', { name: 'Index captured files' }).count(), 1);
+    assert.equal(await actions.getByRole('button', { name: 'Capture this Mac' }).count(), 0);
+    assert.equal(await actions.getByRole('button', { name: 'Index captured files' }).count(), 0);
     assert.equal(await page.locator('#sourceGrid .sync-source, #sourceGrid .remote button, #pharosHosts').count(), 0);
+    await actions.getByRole('link', { name: 'Open Sync →' }).click();
+    await page.waitForURL('**/settings/sync');
+    const sync = page.locator('#syncOperations');
+    await sync.getByRole('button', { name: 'Update library', exact: true }).waitFor();
+    await sync.locator('summary').click();
+    assert.equal(await sync.getByRole('button', { name: 'Capture this Mac' }).count(), 1);
+    assert.equal(await sync.getByRole('button', { name: 'Index captured files' }).count(), 1);
     await page.locator('#pharosDrive').click();
     const drivePanel = page.getByRole('dialog', { name: 'Library drive' });
     await drivePanel.getByText('Archive size').waitFor();
