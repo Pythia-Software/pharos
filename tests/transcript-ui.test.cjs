@@ -137,6 +137,24 @@ test('conversation header aligns stats and actions, and model searches Library',
   assert.equal(await page.evaluate(()=>window.selectedModel),'claude-opus-5-5');
 });
 
+test('conversation and message Name and ID buttons copy in one click', async t => {
+  const page=await fixture(t,[{...human('Rename the export flag.\nKeep the old one as an alias.'),id:'message_human'},{...event('reply','message','Renamed.'),id:'message_reply'}],{width:1177,height:780},{id:'conversation_fixture',title:'Rename export flag'});
+  await page.evaluate(()=>{window.copied=[];window.webkit={messageHandlers:{pharosClipboard:{postMessage:text=>window.copied.push(text)}}}});
+  const head=page.locator('.conversation-title-line');
+  assert.equal(await head.locator('h2').innerText(),'claude conversation');
+  await head.getByRole('button',{name:'Copy conversation name'}).click();
+  await head.getByRole('button',{name:'Copy conversation ID'}).click();
+  const reply=page.locator('.speaker-row.agent');
+  assert.equal(await reply.locator('.copy-values').evaluate(el=>getComputedStyle(el).opacity),'0');
+  await reply.hover();
+  await reply.locator('.copy-values').evaluate(el=>new Promise(done=>{const check=()=>getComputedStyle(el).opacity==='1'?done():requestAnimationFrame(check);check()}));
+  await reply.getByRole('button',{name:'Copy message ID'}).click();
+  await page.locator('.speaker-row.human').hover();
+  await page.locator('.speaker-row.human').getByRole('button',{name:'Copy message name'}).click();
+  assert.deepEqual(await page.evaluate(()=>window.copied),['Rename export flag','conversation_fixture','message_reply','Rename the export flag. Keep the old one as an alias.']);
+  assert.equal(await head.getByRole('button',{name:'Copy conversation ID'}).locator('use').getAttribute('href'),'#ph-icon-check');
+});
+
 test('deferred long turns retain profiles and spend before materialization', async t => {
   const request=event('usage','message',{message:{id:'long-request',usage:{input_tokens:12000,output_tokens:100},content:[{type:'text',text:'Final response'}]}});
   const page=await fixture(t,[human(),...Array.from({length:301},(_,i)=>event('filler-'+i,'message','Filler')),request]);
