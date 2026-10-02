@@ -531,8 +531,11 @@ struct ArchiveWebView: NSViewRepresentable {
     static let libraryHandler = "pharosLibrary"
 
     // WKWebView has no `-webkit-app-region`, so the page reports presses on
-    // the header's empty space and the window drags or zooms natively. The
-    // header is trimmed to `WindowChrome.titlebarHeight` so the traffic
+    // the app header's empty space and the window drags or zooms natively.
+    // Only the app header (`body > header`) acts as the title bar; the page's
+    // own <header>s, such as a workspace's heading and the drawers' and
+    // panels' heads, are content, so pressing them never moves the window.
+    // The header is trimmed to `WindowChrome.titlebarHeight` so the traffic
     // lights sit centered in it, and its left edge clears them except in
     // full screen, where macOS hides them. The page also reports its
     // background whenever the theme changes, so the area revealed by
@@ -552,7 +555,7 @@ struct ArchiveWebView: NSViewRepresentable {
       // backdrop (or, for a <dialog>, on the dialog outside its box). Treat
       // those like presses on the header so the window stays draggable.
       const backdropOverHeader = event => {
-        const header = document.querySelector('header');
+        const header = document.querySelector('body > header');
         if (!header) return false;
         const bar = header.getBoundingClientRect(), x = event.clientX, y = event.clientY;
         if (!inside(bar, x, y)) return false;
@@ -562,7 +565,7 @@ struct ArchiveWebView: NSViewRepresentable {
       };
       document.addEventListener('mousedown', event => {
         if (event.button !== 0 || !(event.target instanceof Element)) return;
-        const onHeader = event.target.closest('header') && !event.target.closest(interactive);
+        const onHeader = event.target.closest('body > header') && !event.target.closest(interactive);
         if (!onHeader && !backdropOverHeader(event)) return;
         event.preventDefault();
         window.webkit.messageHandlers.\(windowMessageName).postMessage(event.detail === 2 ? 'doubleClick' : 'drag');
