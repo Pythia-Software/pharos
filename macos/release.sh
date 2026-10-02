@@ -104,9 +104,6 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 
 IMAGE_NAME="$TAG-Pharos-macos-universal.dmg"
-# Pharos 0.5.0 and earlier check for updates by this older asset name, so each
-# release also carries a copy of the image under it.
-LEGACY_IMAGE_NAME="Pharos-$TAG-macos-universal.dmg"
 IMAGE="$OUT/$IMAGE_NAME"
 if [ "$MODE" = developer-id ]; then
     # Notarize the app in a temporary ZIP first, so its ticket can be stapled
@@ -127,17 +124,15 @@ if [ "$MODE" = developer-id ]; then
     xcrun stapler validate "$IMAGE"
 fi
 (cd "$OUT" && shasum -a 256 "$IMAGE_NAME" > "$IMAGE_NAME.sha256")
-cp -c "$IMAGE" "$OUT/$LEGACY_IMAGE_NAME"
-LEGACY_ASSET="$OUT/$LEGACY_IMAGE_NAME#$LEGACY_IMAGE_NAME (for updates from Pharos 0.5.0 and earlier)"
 
 git tag -a "$TAG" -m "Pharos $VERSION"
 git push origin "refs/tags/$TAG"
 if [ "$MODE" = adhoc ]; then
-    gh release create "$TAG" "$IMAGE" "$IMAGE.sha256" "$LEGACY_ASSET" -R "$REPO" \
+    gh release create "$TAG" "$IMAGE" "$IMAGE.sha256" -R "$REPO" \
         --verify-tag --draft --title "Pharos $VERSION" --generate-notes \
         --notes 'This app is ad hoc signed and is not notarized. On first launch, macOS may block it. After attempting to open it, use System Settings → Privacy & Security → Open Anyway if you trust this download.'
 else
-    gh release create "$TAG" "$IMAGE" "$IMAGE.sha256" "$LEGACY_ASSET" -R "$REPO" \
+    gh release create "$TAG" "$IMAGE" "$IMAGE.sha256" -R "$REPO" \
         --verify-tag --draft --title "Pharos $VERSION" --generate-notes
 fi
 gh release edit "$TAG" -R "$REPO" --draft=false

@@ -5,10 +5,8 @@
 Pharos releases are built locally. GitHub Actions is not involved. A release
 contains a universal macOS app (arm64 and x86_64) in a Finder disk image,
 `vX.Y.Z-Pharos-macos-universal.dmg`, whose volume is named `vX.Y.Z Pharos`,
-plus a matching `.sha256` file. Pharos 0.5.0 and earlier look for updates
-under the older name `Pharos-vX.Y.Z-macos-universal.dmg`, so the release also
-carries an identical copy of the image under that name. The tag,
-GitHub release, and both bundle version fields use the same `X.Y.Z` version.
+plus a matching `.sha256` file. The tag, GitHub release, and both bundle
+version fields use the same `X.Y.Z` version.
 Sign in to `gh` with permission to publish releases. Run the script only after
 the release commit has been merged into `master`, from a clean checkout at
 `origin/master`.
