@@ -450,7 +450,7 @@ describe('library, drive and captures UI', { skip }, () => {
     }
   });
 
-  it('shows busy activity without disconnect controls in the native app', async () => {
+  it('ejects from the drive panel in the native app, asking first over running work', async () => {
     await idle();
     // A capture by another process holds this Mac's capture lock.
     const lock = path.join(library, 'captures', hostA.id, '.capture.lock');
@@ -460,6 +460,7 @@ describe('library, drive and captures UI', { skip }, () => {
       // Stands in for the app's pharosLibrary handler (WKScriptMessageHandlerWithReply).
       window.webkit = { messageHandlers: { pharosLibrary: { postMessage: async message => {
         window.__ejectMessages = [...(window.__ejectMessages || []), message];
+        if (window.__ejectRefusal) throw new Error(window.__ejectRefusal);
         return { released: true };
       } } } };
     });
@@ -471,12 +472,33 @@ describe('library, drive and captures UI', { skip }, () => {
       const panel = page.getByRole('dialog', { name: 'Library drive' });
       await panel.getByText('Capture by another process', { exact: true }).waitFor();
       assert.match(await panel.textContent(), /Estimated complete unknown/);
-      assert.doesNotMatch(await panel.textContent(), /Disconnecting|unplugging|Eject/);
+      const eject = panel.getByRole('button', { name: `Eject ${volume}`, exact: true });
+      assert.equal(await eject.textContent(), '⏏ Eject');
+      assert.match(await eject.getAttribute('title'), /stops agents' Pharos MCP servers/);
+      // The button sits at the right of the panel's title.
+      const [title, button] = await Promise.all([panel.locator('h2').boundingBox(), eject.boundingBox()]);
+      assert.ok(button.x > title.x + title.width && Math.abs((button.y + button.height / 2) - (title.y + title.height / 2)) < 6);
       await shoot(page, 'drive-panel-busy');
+      await eject.click();
+      await panel.getByText('Pharos cannot stop a capture by another process; the drive stays busy until it finishes.').waitFor();
+      assert.equal(await eject.isDisabled(), true);
+      await shoot(page, 'drive-panel-eject-confirm');
+      await panel.getByRole('button', { name: 'Cancel' }).click();
+      assert.equal(await panel.getByRole('button', { name: `Stop and eject ${volume}` }).count(), 0);
+      assert.deepEqual(await page.evaluate(() => window.__ejectMessages || []), []);
       holder.kill();
       await page.waitForFunction(() => document.querySelector('#pharosDrive')?.dataset.state === 'idle', null, { timeout: 15_000 });
       assert.match(await panel.textContent(), /Nothing is running\./);
-      assert.deepEqual(await page.evaluate(() => window.__ejectMessages || []), []);
+      // Idle: no confirmation. A refusal shows under the title.
+      await page.evaluate(() => { window.__ejectRefusal = 'Pharos is finishing a write; try ejecting again in a moment.'; });
+      await eject.click();
+      await panel.getByText('Pharos is finishing a write; try ejecting again in a moment.').waitFor();
+      await page.evaluate(() => { window.__ejectRefusal = null; });
+      await eject.click();
+      await page.waitForFunction(() => document.querySelector('#pharosEjectButton')?.textContent === 'Ejecting…');
+      assert.equal(await eject.isDisabled(), true);
+      assert.deepEqual(await page.evaluate(() => window.__ejectMessages), [{ action: 'eject' }, { action: 'eject' }]);
+      await shoot(page, 'drive-panel-ejecting');
       assert.deepEqual(errors, []);
     } finally {
       holder.kill();

@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -173,12 +174,14 @@ func (s *Server) release(w http.ResponseWriter) {
 	writeJSON(w, map[string]any{"released": true}, http.StatusOK)
 }
 
-// serveUntilStopped serves until a signal, a release, or the loss of the
-// catalog's drive, and returns nil only after a clean stop.
+// serveUntilStopped serves until a signal, a release, the exit of the app
+// that started it, or the loss of the catalog's drive, and returns nil only
+// after a clean stop.
 func (s *Server) serveUntilStopped(server *http.Server, listener net.Listener) error {
 	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, syscall.SIGTERM, os.Interrupt)
 	defer signal.Stop(signals)
+	parent := parentFromEnv()
 	served := make(chan error, 1)
 	go func() { served <- server.Serve(listener) }()
 	dir := filepath.Dir(s.Catalog.Path)
@@ -198,6 +201,9 @@ func (s *Server) serveUntilStopped(server *http.Server, listener net.Listener) e
 			os.Exit(1)
 		}()
 		err = s.stop(stopTimeout)
+	case <-parentGone(s.life.ctx, parent, time.Second):
+		fmt.Fprintln(os.Stderr, "Pharos: the app that started this service exited; stopping.")
+		err = s.stop(stopTimeout)
 	case <-driveGone(s.life.ctx, dir, time.Second):
 		// Nothing can reach a drive that is gone, and closing the catalog would
 		// touch its mapped index (see exitOnFault), so exit without it.
@@ -209,6 +215,53 @@ func (s *Server) serveUntilStopped(server *http.Server, listener net.Listener) e
 	defer cancel()
 	_ = server.Shutdown(shutdown)
 	return err
+}
+
+// parentEnv names the process that started the service and owns it: the
+// app sets it. The app stops its service with SIGTERM when it quits, but a
+// force quit, a crash, or a quit that never reaches that code leaves the
+// service running from the library's drive, keeping it from ejecting.
+const parentEnv = "PHAROS_PARENT_PID"
+
+// parentFromEnv reads and clears parentEnv, so processes the service starts
+// do not take its parent for their own. 0 means no owner.
+func parentFromEnv() int {
+	value := os.Getenv(parentEnv)
+	_ = os.Unsetenv(parentEnv)
+	pid, err := strconv.Atoi(value)
+	if err != nil || pid <= 1 {
+		return 0
+	}
+	return pid
+}
+
+// parentGone is closed once this process is no longer parent's child: parent
+// exited and the process was reparented. It is never closed for parent 0.
+func parentGone(ctx context.Context, parent int, every time.Duration) <-chan struct{} {
+	gone := make(chan struct{})
+	if parent == 0 {
+		return gone
+	}
+	if os.Getppid() != parent {
+		close(gone)
+		return gone
+	}
+	go func() {
+		ticker := time.NewTicker(every)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			if os.Getppid() != parent {
+				close(gone)
+				return
+			}
+		}
+	}()
+	return gone
 }
 
 // driveGone is closed once dir is missing or no longer on the volume it was
