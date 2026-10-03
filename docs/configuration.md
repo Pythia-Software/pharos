@@ -482,7 +482,12 @@ when the same volume mounts again, even at another mount point such as
 
 **Stopping the service.** SIGTERM and SIGINT stop `serve` the same way as a
 release, within 7 seconds (a second signal exits at once); the app sends
-SIGTERM when it quits.
+SIGTERM when it quits, with or without a window open. The app also starts the
+service with `PHAROS_PARENT_PID` set to its own process, and the service stops
+the same way within about a second once that process is gone, so a force quit
+or a crash of Pharos does not leave the service holding the drive. A service
+started without it (by `pharos serve` in a terminal, or a launch agent) keeps
+running on its own.
 
 **Two services on one Mac.** Cookies ignore ports, so each service names its
 login cookie `pharos_token_<port>`; a per-user install on 8765 and a library on
@@ -497,8 +502,10 @@ Both use a throwaway disk image and never launch Pharos.
 ### Library status and Eject
 
 While Pharos runs it has the catalog open, whatever else it is doing, so the
-way to disconnect the library's drive is to quit Pharos first, then eject it
-in Finder. Quitting stops the service and closes the catalog (above).
+way to disconnect the library's drive is **Eject** at the right of the drive
+panel's title (above): it also stops agents' Pharos MCP servers, which quitting
+Pharos does not. Quitting stops the service and closes the catalog (above);
+eject the drive in Finder afterwards once nothing else runs from it.
 Unplugging without ejecting is only "probably fine" when nothing is running:
 every commit is atomic and flushed, so nothing committed is lost, but work in
 progress is, and the next run redoes it.
@@ -555,10 +562,15 @@ backlog. It stays stopped, and off the list of running work, until
 `POST /api/library/refresh/resume` (the panel's **Resume**), a Capture & index
 (`POST /api/library/update`), or the next start of Pharos.
 
-The panel has no Disconnecting section or eject controls. Quit Pharos (or stop
-`pharos serve`), then eject the drive in Finder or with `diskutil eject`. Other
-processes running from the drive, including agents' Pharos MCP servers, must
-also be stopped before the drive can be ejected.
+In the app, the drive panel's title has **⏏ Eject** at its right when the
+library is on a drive that can be ejected. With nothing running it ejects at
+once; otherwise it first lists the work an eject stops (each resumes the next
+time it runs) and asks to **Stop and eject**. It goes through the app's eject
+handler (above), so it stops agents' Pharos MCP servers too; a reason Pharos
+kept the library shows under the title. A plain browser cannot eject and shows
+no button: quit Pharos (or stop `pharos serve`), stop other processes running
+from the drive, including agents' Pharos MCP servers, then eject it in Finder or
+with `diskutil eject`.
 
 ## Capture
 

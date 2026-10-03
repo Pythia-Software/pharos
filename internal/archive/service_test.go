@@ -194,6 +194,38 @@ func TestDriveGoneNoticesMissingDirectory(t *testing.T) {
 	}
 }
 
+func TestParentGoneNoticesAnotherParent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	for _, parent := range []int{0, os.Getppid()} {
+		select {
+		case <-parentGone(ctx, parent, 5*time.Millisecond):
+			t.Fatalf("parent %d reported gone", parent)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	// A parent this process is not a child of has exited, as far as it knows.
+	select {
+	case <-parentGone(ctx, os.Getppid()+1, 5*time.Millisecond):
+	case <-time.After(2 * time.Second):
+		t.Fatal("other parent not noticed")
+	}
+}
+
+func TestParentFromEnvClearsIt(t *testing.T) {
+	t.Setenv(parentEnv, "4242")
+	if pid := parentFromEnv(); pid != 4242 {
+		t.Fatalf("parent %d, want 4242", pid)
+	}
+	if value, ok := os.LookupEnv(parentEnv); ok {
+		t.Fatalf("%s still set to %q", parentEnv, value)
+	}
+	t.Setenv(parentEnv, "1")
+	if pid := parentFromEnv(); pid != 0 {
+		t.Fatalf("launchd as parent: %d, want 0", pid)
+	}
+}
+
 func TestAuthCookieIsPerPort(t *testing.T) {
 	catalog, config := testCatalog(t)
 	config.Port = 8766

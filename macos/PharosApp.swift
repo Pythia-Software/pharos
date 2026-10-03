@@ -119,8 +119,14 @@ final class ArchiveService: ObservableObject {
     private var endpoint: (url: URL, token: String)?
     private var service: Process?
     private var release = ReleaseState.none
+    private var terminationObserver: NSObjectProtocol?
 
     init() {
+        // Here rather than on a view: with its window closed, Pharos keeps
+        // running, and a view's observer would be gone when it quits.
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.stop() }
         switch LaunchPlan.resolve(bundle: Bundle.main.bundleURL) {
         case .library(let directory):
             openLibrary(directory)
@@ -402,6 +408,12 @@ final class ArchiveService: ObservableObject {
             task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
             task.arguments = ["pharos", "--config", config.path, "serve"]
         }
+        // The service stops once Pharos has exited, even when Pharos could
+        // not stop it (a force quit or a crash), so it never keeps the
+        // library's drive busy by itself.
+        var environment = ProcessInfo.processInfo.environment
+        environment["PHAROS_PARENT_PID"] = String(getpid())
+        task.environment = environment
         let log = ServiceLog()
         task.standardError = log.pipe
         serviceLog = log
@@ -501,7 +513,10 @@ final class ArchiveService: ObservableObject {
         stopService()
     }
 
-    deinit { stop() }
+    deinit {
+        if let terminationObserver { NotificationCenter.default.removeObserver(terminationObserver) }
+        stop()
+    }
 }
 
 // Remembers the mouse-down that a header drag or double-click message refers
@@ -1077,9 +1092,6 @@ struct FirstRunView: View {
                 }
             }
             .background(WindowChrome())
-            .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-                service.stop()
-            }
             .sheet(isPresented: Binding(get: { updates.status != nil }, set: { if !$0 { updates.status = nil } })) {
                 UpdateNoticeSheet(notice: updates)
             }

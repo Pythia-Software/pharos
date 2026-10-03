@@ -1,6 +1,8 @@
 // Pharos library, drive and captures. GET /api/library/status says what holds
 // or writes the library; the header shows it and estimated completion times.
-// Settings → Sources shows
+// In the app, the drive panel's Eject goes through the pharosLibrary message
+// handler, which releases the library, stops agents' MCP servers running from
+// the drive, quits, and ejects the drive. Settings → Sources shows
 // captures from other Macs alongside this Mac's sources; Settings →
 // Health gains the drive's checks and backups.
 (() => {
@@ -24,6 +26,9 @@
 .pharos-dot.warn{background:var(--warn,#98601d)}.pharos-dot.bad{background:var(--bad,#9c3d36)}.pharos-dot.idle{background:var(--muted,#756c5f)}
 .pharos-drive-panel{position:fixed;z-index:8000;width:min(430px,calc(100vw - 24px));max-height:calc(100vh - 100px);overflow:auto;padding:16px 18px;background:var(--panel,#fff);color:var(--ink,#222);border:1px solid var(--line,#ccc);border-radius:14px;box-shadow:0 18px 50px #0005;font-size:13px}
 .pharos-drive-panel h2{margin:0;font:700 20px/1.2 var(--serif,serif)}
+.pharos-panel-head{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.pharos-panel-head>h2{min-width:0;overflow-wrap:anywhere}
+.pharos-panel-head>.pharos-button{flex:none}
 .pharos-drive-panel h3{margin:14px 0 6px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted,#666)}
 .pharos-drive-panel p{margin:8px 0}
 .pharos-running-head{display:flex;justify-content:space-between;align-items:center;gap:12px}
@@ -173,6 +178,7 @@
     line.append(node('code', '', text), button('Copy', '', () => copy(text)));
     return line;
   };
+  const nativeLibrary = () => window.webkit?.messageHandlers?.pharosLibrary;
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   // ---- library status (header chip and panel)
@@ -254,7 +260,7 @@
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshStatus(); });
 
-  let controls = null, chip = null, headerSync = null, headerCaptureIndexRunning = false, panel = null, panelMode = 'drive';
+  let controls = null, chip = null, headerSync = null, headerCaptureIndexRunning = false, panel = null, panelMode = 'drive', ejectState = null;
   let driveSpace = null, driveSpaceRequest = null, driveSpaceError = false;
   // The drive chip and Index changes share one combo button (ui.py's
   // .combo-button) at the start of the header icons. Stop, and the full
@@ -478,6 +484,7 @@
   function closePanel() {
     panel?.remove();
     panel = null;
+    if (ejectState?.phase !== 'ejecting') ejectState = null;
     chip?.setAttribute('aria-expanded', 'false');
   }
   document.addEventListener('mousedown', event => {
@@ -500,7 +507,10 @@
     if (panelMode === 'activity') {
       panel.append(node('h2', '', 'Running activity'));
     } else {
-      panel.append(node('h2', '', drive.ejectable ? drive.name : status.portable ? 'Library' : 'This Mac'));
+      const head = node('div', 'pharos-panel-head');
+      head.append(node('h2', '', drive.ejectable ? drive.name : status.portable ? 'Library' : 'This Mac'));
+      if (drive.ejectable && nativeLibrary()) head.append(ejectButton(drive, status.activities || []));
+      panel.append(head);
       const where = [{external: 'External drive', 'disk-image': 'Disk image', internal: "This Mac's internal disk"}[drive.location] || 'Drive', status.library_dir].filter(Boolean).join(' · ');
       panel.append(node('div', 'pharos-sub', where));
       const space = node('dl', 'pharos-drive-space');
@@ -508,6 +518,8 @@
       space.append(node('dt', '', 'Free space'), node('dd', '', driveSpace?.free_bytes == null ? unknown : size(driveSpace.free_bytes)),
         node('dt', '', 'Pharos size'), node('dd', '', driveSpace?.sizes?.library_bytes == null ? unknown : size(driveSpace.sizes.library_bytes)));
       panel.append(space);
+      if (ejectState?.phase === 'confirm') panel.append(ejectConfirm(drive, status.activities || []));
+      if (ejectState?.phase === 'error') panel.append(node('p', 'pharos-error', ejectState.message));
     }
 
     const alerts = panelMode === 'drive' ? problems() : [];
@@ -582,6 +594,46 @@
     }
 
     placePanel();
+  }
+
+  // Pharos runs from the drive, as do the MCP servers agents start from it, so
+  // ejecting quits Pharos and stops those servers too.
+  const ejectNote = drive => `Quits Pharos and stops agents' Pharos MCP servers on this Mac, then ejects ${drive.name}. Reconnect agents (/mcp in Claude Code) once it is back.`;
+
+  function ejectButton(drive, activities) {
+    const ejecting = ejectState?.phase === 'ejecting';
+    const eject_ = button(ejecting ? ejectState.message : '⏏ Eject', '', () => {
+      if (activities.length) { ejectState = {phase: 'confirm'}; renderPanel(); } else eject(drive);
+    });
+    eject_.id = 'pharosEjectButton';
+    eject_.title = ejectNote(drive);
+    eject_.setAttribute('aria-label', `Eject ${drive.name}`);
+    eject_.disabled = ejecting || ejectState?.phase === 'confirm';
+    return eject_;
+  }
+
+  function ejectConfirm(drive, activities) {
+    const row = node('div', 'pharos-row');
+    const stopping = activities.filter(activity => activity.kind !== 'capture-other').map(activity => activity.label);
+    if (stopping.length) row.append(node('p', 'pharos-note', `Ejecting stops ${stopping.join(', ')} at a safe point; ${stopping.length === 1 ? 'it resumes' : 'each resumes'} the next time it runs.`));
+    if (activities.some(activity => activity.kind === 'capture-other')) row.append(node('p', 'pharos-note pharos-warn', 'Pharos cannot stop a capture by another process; the drive stays busy until it finishes.'));
+    row.append(button(`Stop and eject ${drive.name}`, 'primary', () => eject(drive)), button('Cancel', '', () => { ejectState = null; renderPanel(); }));
+    return row;
+  }
+
+  async function eject(drive) {
+    const handler = nativeLibrary();
+    if (!handler) return;
+    ejectState = {phase: 'ejecting', message: 'Releasing…'};
+    renderPanel();
+    try {
+      await handler.postMessage({action: 'eject'});
+      // The app now quits, and the drive ejects once it has.
+      ejectState = {phase: 'ejecting', message: 'Ejecting…'};
+    } catch (error) {
+      ejectState = {phase: 'error', message: error?.message || String(error)};
+    }
+    renderPanel();
   }
 
   // ---- runs, shared with onboarding. An index is watched through
