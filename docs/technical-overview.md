@@ -139,11 +139,18 @@ GET  /api/query/{library|activity|usage|…}/field-stats?fields=a,b
 POST /api/query/{library|activity|usage|…}/aggregations
 ```
 
-The query endpoints implement the `@pythia-software/query-table-*` 0.4.2 wire
+The query endpoints implement the `@pythia-software/query-table-*` 0.5.0 wire
 contract. Their allowlisted field definitions live in [`schemas`](../schemas), and
 the same documents drive the React frontend and Go executor. Pharos uses a
 map-backed Go adapter because the upstream compiler currently emits PostgreSQL;
-the catalog remains SQLite and query values never become SQL text.
+the catalog remains SQLite and query values never become SQL text. Both the
+in-memory and SQLite executors support text length filters (`length_gt`,
+`length_lt`, `length_eq`, counting characters; zero length matches empty text
+but not NULL) and sorts on a regex-extracted value (the first capture group, or
+the whole match; a number field's extraction orders numerically). Text-array
+fields with `filter.editor: "set"` get query-table's ANY/ALL/NONE/EMPTY tag
+editor; its metadata stays in the browser, and the server sees only `includes`
+and `is_null` predicates, where an empty array counts as null.
 
 Legacy Library query-table requests use `search=` for text; quoted multi-word
 phrases require an ordered match in one message. `substring=1` also matches

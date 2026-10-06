@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type Result struct {
@@ -216,6 +217,24 @@ func matchesBase(value any, clause WhereClause, field Field) (bool, error) {
 			matched = !matched
 		}
 		return matched, nil
+	case "length_gt", "length_lt", "length_eq":
+		limit, err := ParseLength(clause.Value)
+		if err != nil {
+			return false, err
+		}
+		// Length counts code points; a NULL or non-text value has none.
+		text, ok := value.(string)
+		if !ok {
+			return false, nil
+		}
+		length := int64(utf8.RuneCountInString(text))
+		switch clause.Op {
+		case "length_gt":
+			return length > limit, nil
+		case "length_lt":
+			return length < limit, nil
+		}
+		return length == limit, nil
 	}
 	coerced, err := coerce(kind, clause.Value)
 	if err != nil {
@@ -243,6 +262,16 @@ func matchesBase(value any, clause WhereClause, field Field) (bool, error) {
 		return strings.HasSuffix(strings.ToLower(fmt.Sprint(value)), strings.ToLower(clause.Value)), nil
 	}
 	return false, fmt.Errorf("unknown op %q", clause.Op)
+}
+
+// ParseLength reads a text length filter's value: a non-negative integer
+// without sign or leading zeros, no larger than JavaScript's safe integers.
+func ParseLength(raw string) (int64, error) {
+	limit, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || limit < 0 || limit > 1<<53-1 || strings.HasPrefix(raw, "+") || len(raw) > 1 && raw[0] == '0' {
+		return 0, fmt.Errorf("invalid string length %q: expected a non-negative integer", raw)
+	}
+	return limit, nil
 }
 
 func coerce(kind FieldKind, raw string) (any, error) {

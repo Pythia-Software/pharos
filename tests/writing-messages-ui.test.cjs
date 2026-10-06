@@ -69,6 +69,15 @@ test('Human Words lists single messages as a table or as text highlighted by whe
     await page.locator('.authored-legend').getByRole('button', { name: /Likely pasted/ }).click();
     await page.waitForFunction(() => document.querySelector('.authored-legend [data-category="pasted"]')?.getAttribute('aria-pressed') === 'true');
     assert.deepEqual(mixes.at(-1).where.at(-1), { field: 'categories', op: 'includes', value: 'pasted' });
+    // Legend categories collect in one set filter, with the key's pills as its tags.
+    await page.locator('.authored-legend').getByRole('button', { name: /Typed/ }).click();
+    await page.waitForFunction(() => document.querySelector('.authored-legend [data-category="typed"]')?.getAttribute('aria-pressed') === 'true');
+    assert.deepEqual(mixes.at(-1).where.slice(-2), [{ field: 'categories', op: 'includes', value: 'pasted' }, { field: 'categories', op: 'includes', value: 'typed' }]);
+    const setChip = page.locator('#usage .qt-chip', { has: page.getByRole('button', { name: 'Edit Categories tag filter' }) });
+    assert.deepEqual(await setChip.locator('.qt-set-tag .authored-pill').allInnerTexts(), ['Likely pasted', 'Typed']);
+    await setChip.getByRole('button', { name: 'Remove tag typed' }).click();
+    await page.waitForFunction(() => document.querySelector('.authored-legend [data-category="typed"]')?.getAttribute('aria-pressed') === 'false');
+    assert.deepEqual(await setChip.locator('.qt-set-tag .authored-pill').allInnerTexts(), ['Likely pasted']);
 
     // Highlighted text shows the whole message, long harness text folded.
     await page.getByRole('group', { name: 'Message result view' }).getByRole('button', { name: 'Highlighted text' }).click();
@@ -83,6 +92,9 @@ test('Human Words lists single messages as a table or as text highlighted by whe
 
     // Hovering a span explains the rule; a click keeps it open for its link.
     const pasted = card.locator('mark[data-category="pasted"]');
+    // Tips close on scroll, so let scrolling the span into view settle first.
+    await pasted.scrollIntoViewIfNeeded();
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     await pasted.hover();
     const tip = page.locator('.authored-tip');
     await tip.waitFor();

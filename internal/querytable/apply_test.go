@@ -211,3 +211,83 @@ func TestFilterIsNotCappedByMaxLimit(t *testing.T) {
 		t.Fatal("expected unknown field error")
 	}
 }
+
+func TestApplyTextLength(t *testing.T) {
+	rows := []map[string]any{{"id": "a", "name": ""}, {"id": "b", "name": "é!"}, {"id": "c", "name": nil}, {"id": "d", "name": "abcd"}}
+	ids := func(clause WhereClause) []string {
+		t.Helper()
+		result, err := Apply(rows, Query{Where: []WhereTerm{{Field: clause.Field, Op: clause.Op, Value: clause.Value, Negated: clause.Negated}}, Limit: 10}, testSchema())
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := []string{}
+		for _, row := range result.Rows {
+			out = append(out, row["id"].(string))
+		}
+		return out
+	}
+	for _, test := range []struct {
+		clause WhereClause
+		want   []string
+	}{
+		// Zero length tells an empty string from NULL.
+		{WhereClause{Field: "name", Op: "length_eq", Value: "0"}, []string{"a"}},
+		{WhereClause{Field: "name", Op: "length_gt", Value: "0"}, []string{"b", "d"}},
+		// Length counts code points, not bytes.
+		{WhereClause{Field: "name", Op: "length_eq", Value: "2"}, []string{"b"}},
+		{WhereClause{Field: "name", Op: "length_lt", Value: "3"}, []string{"a", "b"}},
+		{WhereClause{Field: "name", Op: "length_lt", Value: "3", Negated: true}, []string{"d"}},
+		{WhereClause{Field: "name", Op: "length_gt", Value: ""}, []string{"a", "b", "c", "d"}},
+	} {
+		if got := ids(test.clause); !reflect.DeepEqual(got, test.want) {
+			t.Errorf("%+v = %v, want %v", test.clause, got, test.want)
+		}
+	}
+	for _, value := range []string{"-1", "+1", "01", "1.5", "x", "9007199254740992"} {
+		if _, err := Apply(rows, Query{Where: []WhereTerm{{Field: "name", Op: "length_gt", Value: value}}, Limit: 10}, testSchema()); err == nil {
+			t.Errorf("length %q accepted", value)
+		}
+	}
+	if _, err := Apply(rows, Query{Where: []WhereTerm{{Field: "count", Op: "length_gt", Value: "1"}}, Limit: 10}, testSchema()); err == nil {
+		t.Error("length filter accepted on a number field")
+	}
+}
+
+// setFilterModes are the predicates query-table's set editor emits for the
+// keys a and b (see its docs/set-filters.md).
+var setFilterModes = map[string][]WhereTerm{
+	"any":   {{Any: []WhereClause{{Field: "tags", Op: "includes", Value: "a"}, {Field: "tags", Op: "includes", Value: "b"}}}},
+	"all":   {{Field: "tags", Op: "includes", Value: "a"}, {Field: "tags", Op: "includes", Value: "b"}},
+	"none":  {{Any: []WhereClause{{Field: "tags", Op: "is_null"}, {Field: "tags", Op: "includes", Value: "a", Negated: true}}}, {Any: []WhereClause{{Field: "tags", Op: "is_null"}, {Field: "tags", Op: "includes", Value: "b", Negated: true}}}},
+	"empty": {{Field: "tags", Op: "is_null"}},
+}
+
+func TestApplySetFilterModes(t *testing.T) {
+	rows := []map[string]any{
+		{"id": "empty", "tags": []string{}}, {"id": "a", "tags": []string{"a"}}, {"id": "b", "tags": []any{"b"}},
+		{"id": "ab", "tags": []string{"a", "b"}}, {"id": "c", "tags": []string{"c"}}, {"id": "A", "tags": []string{"A"}}, {"id": "null"},
+	}
+	want := map[string][]string{"any": {"a", "b", "ab", "A"}, "all": {"ab"}, "none": {"empty", "c", "null"}, "empty": {"empty", "null"}}
+	for mode, where := range setFilterModes {
+		result, err := Apply(rows, Query{Where: where, Limit: 10}, testSchema())
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := []string{}
+		for _, row := range result.Rows {
+			got = append(got, row["id"].(string))
+		}
+		if !reflect.DeepEqual(got, want[mode]) {
+			t.Errorf("%s = %v, want %v", mode, got, want[mode])
+		}
+	}
+	// The editor's metadata is presentation only; a client that sends it
+	// still gets the predicates' meaning.
+	query, err := Decode([]byte(`{"where":[{"any":[{"field":"tags","op":"includes","value":"a"}],"setFilter":{"id":"x","mode":"any","values":["a"]}}],"limit":10}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, err := Apply(rows, query, testSchema()); err != nil || result.Total != 3 {
+		t.Fatalf("decoded set filter: result=%#v err=%v", result, err)
+	}
+}
