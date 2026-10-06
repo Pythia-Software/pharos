@@ -142,13 +142,20 @@ func (c *Catalog) referenceSearchConversations(args map[string]any) (map[string]
 		offset = total
 	}
 	end := min(total, offset+limit)
-	freshness := c.Freshness()
+	if err := c.attachConversationProvenance(results[offset:end]); err != nil {
+		return nil, err
+	}
+	compactConversationProvenance(results[offset:end])
+	freshness, err := c.archiveSourceStatus()
+	if err != nil {
+		return nil, err
+	}
 	result := map[string]any{"items": results[offset:end], "next_offset": nil, "total": total,
 		"freshness": map[string]any{"status": freshness["status"], "stale_sources": freshness["stale_sources"]}}
 	if end < total {
 		result["next_offset"] = end
 	}
-	fitConversationItems(result, budget)
+	fitConversationCards(result, budget)
 	if len(result["items"].([]map[string]any)) < end-offset {
 		result["next_offset"] = offset + len(result["items"].([]map[string]any))
 	}

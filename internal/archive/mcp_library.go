@@ -231,6 +231,7 @@ func (m *mcpServer) direct(config Config, request map[string]any) (response map[
 	if err != nil {
 		return nil, err
 	}
+	catalog.setCaptureRoot(config.CaptureRoot)
 	response = m.answer(catalog, request)
 	catalog.closeQuery()
 	return response, nil

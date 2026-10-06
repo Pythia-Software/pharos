@@ -181,13 +181,16 @@ func (c *Catalog) searchConversations(args map[string]any) (map[string]any, erro
 	if err := c.conversationCards(results[offset:end], ftsQuery(query)); err != nil {
 		return nil, err
 	}
-	freshness := c.Freshness()
+	freshness, err := c.archiveSourceStatus()
+	if err != nil {
+		return nil, err
+	}
 	result := map[string]any{"items": results[offset:end], "next_offset": nil, "total": total,
 		"freshness": map[string]any{"status": freshness["status"], "stale_sources": freshness["stale_sources"]}}
 	if end < total {
 		result["next_offset"] = end
 	}
-	fitConversationItems(result, budget)
+	fitConversationCards(result, budget)
 	if len(result["items"].([]map[string]any)) < end-offset {
 		result["next_offset"] = offset + len(result["items"].([]map[string]any))
 	}
@@ -239,6 +242,10 @@ func (c *Catalog) conversationCards(cards []map[string]any, parsed string) error
 			card["snippet"] = clipText(firstString(snippets[0]["snippet"]), 180)
 		}
 	}
+	if err := c.attachConversationProvenance(cards); err != nil {
+		return err
+	}
+	compactConversationProvenance(cards)
 	return nil
 }
 
@@ -321,6 +328,28 @@ func (c *Catalog) conversationOverview(args map[string]any) (map[string]any, err
 		"last_response":     map[string]any{"text": clipText(firstString(row["conversation_outcome"]), min(500, budget)), "message_id": row["outcome_message_id"]},
 		"workspace_outcome": clipText(firstString(row["outcome"]), 200),
 		"note":              "Extractive previews; inspect cited messages before treating an outcome as verified."}
+	if err := c.attachConversationProvenance([]map[string]any{result}); err != nil {
+		return nil, err
+	}
+	if len(jsonText(result)) > budget*3 {
+		lineage := result["lineage"].(map[string]any)
+		for _, field := range []string{"assignment", "origin", "agent_path", "originating_title", "originating_location"} {
+			delete(lineage, field)
+		}
+		delete(result, "reported_outcome")
+		delete(result, "recorded_activity")
+		freshness := result["freshness"].(map[string]any)
+		if len(freshness["sources"].([]map[string]any)) > 0 {
+			freshness["sources"] = []map[string]any{}
+			freshness["sources_truncated"] = true
+			freshness["source_attribution_access"] = map[string]any{"tool": "get_work_detail", "workspace_id": result["workspace_id"], "section": "conversation_sightings"}
+		}
+		result["provenance_truncated"] = true
+	}
+	if len(jsonText(result)) > budget*3 {
+		delete(result, "lineage")
+		delete(result, "freshness")
+	}
 	for len(jsonText(result)) > budget*3 {
 		request := result["request"].(map[string]any)
 		response := result["last_response"].(map[string]any)
@@ -330,6 +359,9 @@ func (c *Catalog) conversationOverview(args map[string]any) (map[string]any, err
 		if len([]rune(firstString(request["text"]))) <= 41 && len([]rune(firstString(response["text"]))) <= 41 {
 			break
 		}
+	}
+	if len(jsonText(result)) > budget*3 {
+		return nil, fmt.Errorf("max_output_tokens is too small for conversation overview metadata; increase the output budget")
 	}
 	return result, nil
 }
@@ -373,11 +405,16 @@ func (c *Catalog) conversationMessages(args map[string]any) (map[string]any, err
 	offset := max(0, int(integer(args["offset"])))
 	messageID := firstString(args["message_id"])
 	textOffset := max(0, int(integer(args["text_offset"])))
+	proseDefault := messageID == "" && firstString(args["around_message_id"]) == ""
+	filters, filterValues, err := messageFilters(args, "", proseDefault)
+	if err != nil {
+		return nil, err
+	}
 	if messageID != "" {
 		length := max(100, mcpBudget(args, 1200)*3-300)
 		rows, err := queryMaps(c.DB, `SELECT id,role,kind,source_order,created_at,
 			substr(text,?,?) text,length(text) text_length,evidence_locator FROM messages
-			WHERE id=? AND conversation_id=?`, textOffset+1, length, messageID, id)
+			WHERE id=? AND conversation_id=? AND `+filters, append([]any{textOffset + 1, length, messageID, id}, filterValues...)...)
 		if err != nil {
 			return nil, err
 		}
@@ -385,7 +422,7 @@ func (c *Catalog) conversationMessages(args map[string]any) (map[string]any, err
 			return nil, fmt.Errorf("message not found in conversation")
 		}
 		row := rows[0]
-		runes := []rune(firstString(row["text"]))
+		runes := []rune(asString(row["text"]))
 		total := int(integer(row["text_length"]))
 		textOffset = min(textOffset, total)
 		end := textOffset + len(runes)
@@ -395,17 +432,22 @@ func (c *Catalog) conversationMessages(args map[string]any) (map[string]any, err
 		if end < total {
 			item["next_text_offset"] = end
 		}
-		for len(jsonText(item)) > mcpBudget(args, 1200)*3 && end > textOffset+20 {
+		for len(jsonText(item)) > mcpBudget(args, 1200)*3 && end > textOffset {
 			end -= max(1, (end-textOffset)/8)
 			item["text"] = string(runes[:end-textOffset])
 			item["next_text_offset"] = end
+		}
+		if len(jsonText(item)) > mcpBudget(args, 1200)*3 || end == textOffset && textOffset < total {
+			return nil, fmt.Errorf("max_output_tokens is too small for message metadata; increase the output budget")
 		}
 		return item, nil
 	}
 	if anchor := firstString(args["around_message_id"]); anchor != "" {
 		rows, err := queryMaps(c.DB, `SELECT position FROM (
-			SELECT id,row_number() OVER (ORDER BY source_order IS NULL,source_order,created_at,id)-1 position
-			FROM messages WHERE conversation_id=?) WHERE id=?`, id, anchor)
+			SELECT id,COALESCE(SUM(CASE WHEN `+filters+` THEN 1 ELSE 0 END) OVER (
+				ORDER BY source_order IS NULL,source_order,created_at,id
+				ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),0) position
+			FROM messages WHERE conversation_id=?) WHERE id=?`, append(filterValues, id, anchor)...)
 		if err != nil {
 			return nil, err
 		}
@@ -418,7 +460,7 @@ func (c *Catalog) conversationMessages(args map[string]any) (map[string]any, err
 	maxText := max(100, (budget*3-300)/limit)
 	rows, err := queryMaps(c.DB, `SELECT id,role,kind,source_order,created_at,substr(text,1,?) text,
 		length(text) text_length,evidence_locator FROM messages
-		WHERE conversation_id=? ORDER BY source_order IS NULL,source_order,created_at,id LIMIT ? OFFSET ?`, maxText, id, limit+1, offset)
+		WHERE conversation_id=? AND `+filters+` ORDER BY source_order IS NULL,source_order,created_at,id LIMIT ? OFFSET ?`, append(append([]any{maxText, id}, filterValues...), limit+1, offset)...)
 	if err != nil {
 		return nil, err
 	}
@@ -428,20 +470,49 @@ func (c *Catalog) conversationMessages(args map[string]any) (map[string]any, err
 	}
 	items := []map[string]any{}
 	for _, row := range rows {
-		original := firstString(row["text"])
+		original := asString(row["text"])
 		item := map[string]any{"message_id": row["id"], "role": row["role"], "kind": row["kind"],
 			"source_order": row["source_order"], "created_at": row["created_at"], "evidence_locator": row["evidence_locator"],
-			"text": clipText(original, maxText), "next_text_offset": nil}
+			"text": original, "next_text_offset": nil}
 		if int(integer(row["text_length"])) > maxText {
 			item["next_text_offset"] = maxText
 		}
 		items = append(items, item)
 	}
 	result := map[string]any{"conversation_id": id, "items": items, "offset": offset, "next_offset": nil}
+	result["kinds"] = args["kinds"]
+	if result["kinds"] == nil {
+		result["kinds"] = []string{"all"}
+		if proseDefault {
+			result["kinds"] = []string{"message"}
+		}
+	}
+	if args["roles"] != nil {
+		result["roles"] = args["roles"]
+	}
 	if hasMore {
 		result["next_offset"] = offset + len(items)
 	}
+	if len(items) > 0 {
+		first := items[0]
+		probe := map[string]any{}
+		for key, value := range result {
+			probe[key] = value
+		}
+		probe["items"], probe["next_offset"], probe["truncated"] = items[:1], offset+1, true
+		characters := []rune(asString(first["text"]))
+		for len(jsonText(probe)) > budget*3 && len(characters) > 0 {
+			characters = characters[:len(characters)/2]
+			first["text"], first["next_text_offset"] = string(characters), len(characters)
+		}
+		if len(characters) == 0 && integer(rows[0]["text_length"]) > 0 {
+			return nil, fmt.Errorf("max_output_tokens is too small for message metadata; increase the output budget")
+		}
+	}
 	fitConversationItems(result, budget)
+	if len(items) > 0 && len(result["items"].([]map[string]any)) == 0 {
+		return nil, fmt.Errorf("max_output_tokens is too small for one message; increase the output budget")
+	}
 	if len(result["items"].([]map[string]any)) < len(items) {
 		result["next_offset"] = offset + len(result["items"].([]map[string]any))
 	}
