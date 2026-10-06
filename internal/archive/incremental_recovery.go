@@ -398,7 +398,7 @@ func (c *Catalog) repairRetained(ctx context.Context, job string, names []string
 				if err := upsertConversationDocument(tx, conversationID); err != nil {
 					return err
 				}
-				for _, table := range []string{"agent_sessions", "tool_calls", "model_requests", "tool_ledger_inputs"} {
+				for _, table := range []string{"agent_sessions", "skill_usages", "tool_calls", "model_requests", "tool_ledger_inputs"} {
 					if _, err := tx.Exec("DELETE FROM "+table+" WHERE conversation_id=?", conversationID); err != nil {
 						return err
 					}

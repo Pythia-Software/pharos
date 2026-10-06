@@ -471,8 +471,9 @@ func (a *jsonlAdapter) Fingerprint() (string, error) {
 // jsonlExtractor versions the Claude and Codex parsers; bump it when parsing
 // changes so every file is parsed again. v8 retains tool result metadata (exit
 // codes, durations, interruptions); v9 retains Codex hosted web searches; v10
-// skips Claude entries replayed under a uuid already seen.
-const jsonlExtractor = "message-model-v10"
+// skips Claude entries replayed under a uuid already seen; v11 retains Claude
+// invoked_skills attachments for skill_usages.
+const jsonlExtractor = "message-model-v11"
 
 func (a *jsonlAdapter) accept(path string) bool {
 	relative, _ := filepath.Rel(a.config.Path, path)
@@ -903,6 +904,9 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 		}
 		if timestamp != "" {
 			ended = timestamp
+		}
+		if firstString(event["type"]) == "attachment" && firstString(mapValue(event["attachment"])["type"]) == "invoked_skills" {
+			messages = append(messages, MessageRecord{NativeID: defaultString(event["uuid"], fmt.Sprintf("skills-%d", integer(event["_line"]))), Role: "system", Kind: "metadata", Text: jsonText(event), CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true})
 		}
 		message := mapValue(event["message"])
 		if message == nil {

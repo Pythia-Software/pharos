@@ -12,8 +12,9 @@ import (
 // toolLedgerVersion names the derivation below. Conversations whose ledger
 // was built by another version are rebuilt by BackfillToolLedger. v5 records
 // each call's absolute path, so its repository can be resolved again when
-// the known checkouts change (see reresolveToolPaths).
-const toolLedgerVersion = "tools-v5"
+// the known checkouts change (see reresolveToolPaths). v7 derives skill_usages
+// and MCP resource-API attribution and structured MCP errors.
+const toolLedgerVersion = "tools-v7"
 
 // modelRequest is one model API request reconstructed from usage evidence.
 // ContextGrowth is how much the prompt grew since the previous request in the
@@ -220,6 +221,10 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 			}
 		}
 		call.Category, call.MCPServer = toolCategory(call.ToolName, message.Kind)
+		if mcpResourceTool(call.ToolName) {
+			call.Category = "mcp"
+			call.MCPServer = firstString(mapValue(input)["server"])
+		}
 		call.FilePath = toolFilePath(call.ToolName, input)
 		call.CWD = firstString(mapValueDefault(input)["workdir"], mapValueDefault(input)["cwd"])
 		if call.CWD == "" {
@@ -242,7 +247,7 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 				content = result.Text
 			} else {
 				content, images = toolResultText(payload["content"])
-				isError = payload["is_error"] == true
+				isError = payload["is_error"] == true || ((call.MCPServer != "" || call.Category == "mcp") && mcpResultError(payload["content"]))
 				details = mapValue(payload["details"])
 			}
 			call.ResultBytes = int64(len(content))

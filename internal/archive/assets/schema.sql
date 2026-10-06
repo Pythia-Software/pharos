@@ -496,6 +496,25 @@ CREATE TABLE IF NOT EXISTS tool_ledger_state (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS skill_usages (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  tool_call_id TEXT REFERENCES tool_calls(id) ON DELETE CASCADE,
+  agent_session_id TEXT,
+  evidence_message_id TEXT NOT NULL,
+  body_message_id TEXT,
+  skill_name TEXT NOT NULL,
+  skill_path TEXT,
+  evidence_type TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT,
+  content_bytes INTEGER
+);
+CREATE INDEX IF NOT EXISTS skill_usages_conversation_idx ON skill_usages(conversation_id);
+CREATE INDEX IF NOT EXISTS skill_usages_call_idx ON skill_usages(tool_call_id);
+CREATE INDEX IF NOT EXISTS skill_usages_name_idx ON skill_usages(skill_name,created_at);
+
 -- Instruction files and skills each conversation loaded, as its harness
 -- recorded them (see instructions.go for the kinds). bytes and hash (sha256)
 -- are of the last content loaded, NULL when the transcript names the file

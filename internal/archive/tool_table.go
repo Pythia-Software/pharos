@@ -34,6 +34,7 @@ var toolRollupDataset = func() sqlDataset {
 		"tool_cost_usd", "price_status"} {
 		columns[name] = "d." + name
 	}
+	columns["mcp_method"] = mcpMethodSQL("d.")
 	return sqlDataset{from: "FROM tool_usage_daily d", columns: columns}
 }()
 
@@ -55,8 +56,10 @@ var toolCallDataset = sqlDataset{
 		"repository_name": "r.display_name", "title": "w.title", "workspace_id": "t.workspace_id", "conversation_id": "t.conversation_id",
 		"source_kind": "w.source_kind", "provider": "t.provider", "model": "t.model", "model_family": "model_family(t.model)",
 		"session_kind": "COALESCE(a.kind,'root')", "agent_depth": "COALESCE(a.depth,0)",
-		"kind": "t.kind", "tool_name": "t.tool_name", "tool_category": "t.tool_category", "mcp_server": "t.mcp_server",
-		"command": "t.command", "program": "t.program", "subcommand": "t.subcommand", "command_category": "t.command_category",
+		"kind": "t.kind", "tool_name": "t.tool_name", "tool_category": "t.tool_category", "mcp_server": "t.mcp_server", "mcp_method": mcpMethodSQL("t."),
+		"skill_name": "(SELECT group_concat(skill_name, ', ') FROM (SELECT DISTINCT skill_name FROM skill_usages WHERE tool_call_id=t.id ORDER BY skill_name))",
+		"skill_path": "(SELECT group_concat(skill_path, ', ') FROM (SELECT DISTINCT skill_path FROM skill_usages WHERE tool_call_id=t.id ORDER BY skill_path))",
+		"command":    "t.command", "program": "t.program", "subcommand": "t.subcommand", "command_category": "t.command_category",
 		"command_name":  "NULLIF(TRIM(COALESCE(t.program,'')||' '||COALESCE(t.subcommand,'')),'')",
 		"command_count": "t.command_count", "has_pipe": "t.has_pipe", "has_redirect": "t.has_redirect", "has_heredoc": "t.has_heredoc",
 		"backgrounded": "t.backgrounded", "file_path": "t.file_path", "repo_path": "t.repo_path", "path_repository": "t.path_repository", "path_scope": "t.path_scope",
@@ -77,6 +80,8 @@ func sqlDatasetFor(dataset string) (sqlDataset, bool) {
 		return toolRollupDataset, true
 	case "tool_calls":
 		return toolCallDataset, true
+	case "skill_usages":
+		return skillUsageDataset, true
 	case "writing_messages":
 		return writingMessageDataset, true
 	}

@@ -53,7 +53,7 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 		return err
 	}
 	if priorVersion != toolLedgerVersion {
-		for _, table := range []string{"tool_calls", "model_requests", "tool_ledger_inputs"} {
+		for _, table := range []string{"skill_usages", "tool_calls", "model_requests", "tool_ledger_inputs"} {
 			if _, err := tx.Exec("DELETE FROM "+table+" WHERE conversation_id=?", conversationID); err != nil {
 				return err
 			}
@@ -93,13 +93,13 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 		return err
 	}
 	for index := range calls {
+		if calls[index].CWD == "" && len(roots) > 0 {
+			calls[index].CWD = roots[0].Location
+		}
 		if calls[index].FilePath == "" {
 			continue
 		}
 		cwd := calls[index].CWD
-		if cwd == "" && len(roots) > 0 {
-			cwd = roots[0].Location
-		}
 		var repo repoRoot
 		calls[index].PathAbsolute = absoluteToolPath(calls[index].FilePath, cwd)
 		calls[index].RepoPath, repo, calls[index].PathScope = resolveRepoPath(calls[index].FilePath, cwd, roots)
@@ -213,10 +213,39 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 			}
 		}
 	}
-	for _, kind := range []string{"call", "request"} {
+	usages := buildSkillUsages(conversation.Messages, calls)
+	if len(usages) > 0 {
+		statement, err := tx.Prepare(derivedUpsertSQL(`INSERT INTO skill_usages(id,workspace_id,conversation_id,tool_call_id,agent_session_id,
+			evidence_message_id,body_message_id,skill_name,skill_path,evidence_type,status,created_at,content_bytes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`))
+		if err != nil {
+			return err
+		}
+		defer statement.Close()
+		for _, usage := range usages {
+			id := stableID("skill-usage", conversationID, usage.Key)
+			write, err := needsWrite("skill", id, usage)
+			if err != nil {
+				return err
+			}
+			if !write {
+				continue
+			}
+			var callID any
+			if usage.CallKey != "" {
+				callID = stableID("tool-call", conversationID, usage.CallKey)
+			}
+			if _, err := statement.Exec(id, workspaceID, conversationID, callID, sessionID(usage.Stream), messageID(usage.EvidenceNativeID),
+				messageID(usage.BodyNativeID), usage.Name, nilIfEmpty(usage.Path), usage.Evidence, usage.Status, nilIfEmpty(usage.CreatedAt), nullableInt(usage.ContentBytes)); err != nil {
+				return err
+			}
+		}
+	}
+	for _, kind := range []string{"skill", "call", "request"} {
 		table := "tool_calls"
 		if kind == "request" {
 			table = "model_requests"
+		} else if kind == "skill" {
+			table = "skill_usages"
 		}
 		rows, err := queryMaps(tx, "SELECT id FROM "+table+" WHERE conversation_id=?", conversationID)
 		if err != nil {
@@ -610,7 +639,7 @@ func toolUsageRecord(book priceBook, row map[string]any) map[string]any {
 			row["tool_category"], row["mcp_server"], row["program"], row["subcommand"], row["command_category"]),
 		"day": nilIfEmpty(dayValue), "week": week, "month": month, "repository_name": row["repository_name"], "source_kind": row["source_kind"],
 		"provider": row["provider"], "model": nilIfEmpty(model), "model_family": nilIfEmpty(modelFamily(model)), "session_kind": row["session_kind"],
-		"tool_name": row["tool_name"], "tool_category": row["tool_category"], "mcp_server": row["mcp_server"], "program": row["program"],
+		"tool_name": row["tool_name"], "tool_category": row["tool_category"], "mcp_server": row["mcp_server"], "mcp_method": mcpMethod(asString(row["tool_name"]), row["mcp_server"]), "program": row["program"],
 		"subcommand": row["subcommand"], "command_name": nilIfEmpty(strings.TrimSpace(firstString(row["program"]) + " " + firstString(row["subcommand"]))),
 		"command_category": row["command_category"], "call_count": calls, "error_count": row["error_count"], "error_rate": errorRate,
 		"no_result_count": row["no_result_count"], "rejected_count": row["rejected_count"], "interrupted_count": row["interrupted_count"],

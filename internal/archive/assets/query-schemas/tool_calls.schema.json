@@ -428,6 +428,57 @@
       }
     },
     {
+      "name": "mcp_method",
+      "label": "MCP method",
+      "type": "text",
+      "group": "Tool",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "mcp_method",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "skill_name",
+      "label": "Skills",
+      "type": "text",
+      "group": "Tool",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "skill_name",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "skill_path",
+      "label": "Skill paths",
+      "type": "text",
+      "group": "Tool",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "skill_path",
+          "synthetic": true
+        }
+      }
+    },
+    {
       "name": "program",
       "label": "Program",
       "type": "text",

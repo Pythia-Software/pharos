@@ -197,7 +197,11 @@ func (c *Catalog) sharedDatasets(ctx context.Context, ids []string) (map[string]
 	if err != nil {
 		return nil, nil, err
 	}
-	rows := map[string][]map[string]any{"library": library, "usage": usage, "tools": tools, "tool_calls": toolCalls}
+	skills, err := skillUsageDataset.scopedRows(ctx, c.DB, "s.workspace_id IN ("+scope+")", args, "id")
+	if err != nil {
+		return nil, nil, err
+	}
+	rows := map[string][]map[string]any{"library": library, "usage": usage, "tools": tools, "tool_calls": toolCalls, "skill_usages": skills}
 	for dataset, list := range rows {
 		names, err := sharedFieldNames(dataset)
 		if err != nil {

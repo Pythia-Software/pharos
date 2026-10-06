@@ -735,7 +735,7 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 			continue
 		}
 		if force {
-			for _, table := range []string{"tool_calls", "model_requests", "tool_ledger_inputs"} {
+			for _, table := range []string{"skill_usages", "tool_calls", "model_requests", "tool_ledger_inputs"} {
 				if _, err := tx.Exec("DELETE FROM "+table+" WHERE conversation_id=?", conversationID); err != nil {
 					return 0, 0, err
 				}

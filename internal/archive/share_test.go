@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/gbdubs/pharos/internal/querytable"
 )
 
 func seedSharedWork(t *testing.T, catalog *Catalog) string {
@@ -176,6 +178,63 @@ func TestSharedExportScopesTablesToItsWorks(t *testing.T) {
 				t.Errorf("library row keeps %s", private)
 			}
 		}
+	}
+}
+
+func TestSharedExportMCPMethodPreset(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	seedToolCalls(t, catalog, 30)
+	methods := []struct {
+		name, method, category string
+		server                 any
+	}{
+		{"mcp__browser__navigate", "navigate", "web", "browser"},
+		{"mcp__pharos__search", "search", "mcp", "pharos"},
+		{"read_mcp_resource", "read_mcp_resource", "mcp", "local"},
+		{"list_mcp_resources", "list_mcp_resources", "mcp", nil},
+	}
+	for index, method := range methods {
+		if _, err := catalog.DB.Exec(`UPDATE tool_calls SET workspace_id='ws-0',conversation_id='conv-0',agent_session_id='session-0',
+			tool_name=?,mcp_server=?,tool_category=? WHERE id=?`, method.name, method.server, method.category, "call-"+firstString(index)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := context.Background()
+	page, _, err := catalog.SharedHTML(ctx, []string{"ws-0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := sharedPayload(t, page)
+	document, err := querySchemaDocument("tools")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema, err := querytable.LoadSchema(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	where := []querytable.WhereTerm{{Field: "mcp_method", Op: "is_not_null", Value: ""}}
+	result, err := querytable.Apply(payload.Datasets["tools"], querytable.Query{Where: where, Limit: 50}, schema)
+	if err != nil || result.Total != len(methods) {
+		t.Fatalf("shared MCP methods preset = %#v, %v", result, err)
+	}
+	for _, method := range methods {
+		found := false
+		for _, row := range result.Rows {
+			if row["tool_name"] == method.name {
+				found = true
+				if row["mcp_method"] != method.method || row["mcp_server"] != method.server || integer(row["call_count"]) != 1 {
+					t.Fatalf("shared method attribution = %#v", row)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("method missing from shared preset: %s", method.name)
+		}
+	}
+	metrics, err := querytable.Aggregate(payload.Datasets["tools"], querytable.AggregationRequest{Where: where, Aggregations: []querytable.Aggregation{{ID: "methods", Op: "sum", Field: "call_count", GroupBy: []string{"mcp_server", "mcp_method"}}}}, schema)
+	if err != nil || len(metrics.Metrics) != 1 || len(metrics.Metrics[0].Buckets) != len(methods) {
+		t.Fatalf("shared MCP method metrics = %#v, %v", metrics, err)
 	}
 }
 
