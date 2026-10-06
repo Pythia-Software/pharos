@@ -1,6 +1,6 @@
 // Package querytable implements the query-table wire contract for Pharos's
 // map-backed datasets. Its types and limits mirror Pythia Software query-table
-// v0.3.0. The upstream SQL compiler targets PostgreSQL; this executor keeps the
+// v0.5.0. The upstream SQL compiler targets PostgreSQL; this executor keeps the
 // same allowlist boundary while operating on SQLite-derived and in-memory rows.
 package querytable
 

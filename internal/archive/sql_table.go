@@ -7,6 +7,7 @@ import (
 	"maps"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -200,45 +201,69 @@ const maxSQLBuckets = 2000
 
 var registerRegexp sync.Once
 
-// registerSQLiteRegexp provides REGEXP for matches_regex filters.
+// registerSQLiteRegexp provides REGEXP for matches_regex filters, and
+// regexp_extract(pattern, value, numeric) for sorts on an extracted value.
 func registerSQLiteRegexp() {
 	registerRegexp.Do(func() {
 		var cache sync.Map
+		compiled := func(pattern any) *regexp.Regexp {
+			text, _ := pattern.(string)
+			if cached, ok := cache.Load(text); ok {
+				expression, _ := cached.(*regexp.Regexp)
+				return expression
+			}
+			expression, err := regexp.Compile(text)
+			if err != nil {
+				expression = nil
+			}
+			cache.Store(text, expression)
+			return expression
+		}
 		_ = sqlite.RegisterDeterministicScalarFunction("regexp", 2, func(ctx *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
-			pattern, _ := args[0].(string)
-			if args[1] == nil {
+			expression := compiled(args[0])
+			if args[1] == nil || expression == nil {
 				return int64(0), nil
 			}
-			var expression *regexp.Regexp
-			if cached, ok := cache.Load(pattern); ok {
-				expression, _ = cached.(*regexp.Regexp)
-			} else {
-				compiled, err := regexp.Compile(pattern)
-				if err != nil {
-					cache.Store(pattern, (*regexp.Regexp)(nil))
-					return int64(0), nil
-				}
-				expression = compiled
-				cache.Store(pattern, compiled)
-			}
-			if expression == nil {
-				return int64(0), nil
-			}
-			var text string
-			switch value := args[1].(type) {
-			case string:
-				text = value
-			case []byte:
-				text = string(value)
-			default:
-				text = fmt.Sprint(value)
-			}
-			if expression.MatchString(text) {
+			if expression.MatchString(sqliteText(args[1])) {
 				return int64(1), nil
 			}
 			return int64(0), nil
 		})
+		// As in querytable.Apply, a sort key is the first capture group, or the
+		// whole match without one; a null value, a non-match, or an invalid
+		// pattern sorts as NULL. A numeric field's key that reads as a number
+		// is one, so it orders numerically.
+		_ = sqlite.RegisterDeterministicScalarFunction("regexp_extract", 3, func(ctx *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+			expression := compiled(args[0])
+			if args[1] == nil || expression == nil {
+				return nil, nil
+			}
+			match := expression.FindStringSubmatch(sqliteText(args[1]))
+			if len(match) == 0 {
+				return nil, nil
+			}
+			extracted := match[0]
+			if len(match) > 1 {
+				extracted = match[1]
+			}
+			if numeric, _ := args[2].(int64); numeric != 0 {
+				if number, err := strconv.ParseFloat(extracted, 64); err == nil {
+					return number, nil
+				}
+			}
+			return extracted, nil
+		})
 	})
+}
+
+func sqliteText(value driver.Value) string {
+	switch value := value.(type) {
+	case string:
+		return value
+	case []byte:
+		return string(value)
+	}
+	return fmt.Sprint(value)
 }
 
 func (d sqlDataset) expr(field string) (string, error) {
@@ -303,6 +328,16 @@ func (d sqlDataset) clause(clause querytable.WhereClause, field querytable.Field
 	case "ends_with":
 		base = fmt.Sprintf("lower(COALESCE(%s,'')) LIKE ? ESCAPE '\\'", expression)
 		args = append(args, likePattern(clause.Value, "%", ""))
+	case "length_gt", "length_lt", "length_eq":
+		limit, err := querytable.ParseLength(clause.Value)
+		if err != nil {
+			return "", nil, fmt.Errorf("field %q: %w", clause.Field, err)
+		}
+		// SQLite's length counts a text value's characters; NULL and non-text
+		// values have no length, as in querytable.Apply.
+		comparison := map[string]string{"length_gt": ">", "length_lt": "<", "length_eq": "="}[clause.Op]
+		base = fmt.Sprintf("(typeof(%s) = 'text' AND length(%s) %s ?)", expression, expression, comparison)
+		args = append(args, limit)
 	case "=", "!=", ">", ">=", "<", "<=":
 		var value any = clause.Value
 		switch field.Kind {
@@ -443,14 +478,21 @@ func (d sqlDataset) Rows(ctx context.Context, q queryer, query querytable.Query,
 	if len(countRows) == 1 {
 		total = int(integer(countRows[0]["n"]))
 	}
-	orders := []string{}
+	orders, orderArgs := []string{}, []any{}
 	for _, order := range query.OrderBy {
-		if order.Extract != nil {
-			return querytable.Result{}, fmt.Errorf("sorting by an extracted value is not supported for this table")
-		}
 		expression, err := d.expr(order.Field)
 		if err != nil {
 			return querytable.Result{}, err
+		}
+		kind := schema.Fields[order.Field].Kind
+		if order.Extract != nil {
+			registerSQLiteRegexp()
+			numeric := 0
+			if kind == querytable.Number {
+				numeric = 1
+			}
+			expression = fmt.Sprintf("NULLIF(regexp_extract(?,%s,%d),'')", expression, numeric)
+			orderArgs = append(orderArgs, order.Extract.Regex)
 		}
 		nulls := "LAST"
 		if order.Nulls == "first" {
@@ -462,7 +504,7 @@ func (d sqlDataset) Rows(ctx context.Context, q queryer, query querytable.Query,
 		}
 		// Numbers and times are never '', so they sort on the bare column,
 		// which lets SQLite walk an index for the default newest-first page.
-		if kind := schema.Fields[order.Field].Kind; kind != querytable.Number && kind != querytable.Datetime && kind != querytable.Bool {
+		if order.Extract == nil && kind != querytable.Number && kind != querytable.Datetime && kind != querytable.Bool {
 			expression = "NULLIF(" + expression + ",'')"
 		}
 		orders = append(orders, fmt.Sprintf("%s %s NULLS %s", expression, direction, nulls))
@@ -471,7 +513,7 @@ func (d sqlDataset) Rows(ctx context.Context, q queryer, query querytable.Query,
 		orders = append(orders, id+" ASC")
 	}
 	statement := "SELECT " + d.selectList() + " " + d.from + where + " ORDER BY " + strings.Join(orders, ",") + " LIMIT ? OFFSET ?"
-	rows, err := queryMapsContext(ctx, q, statement, append(args, query.Limit, query.Offset)...)
+	rows, err := queryMapsContext(ctx, q, statement, append(append(args, orderArgs...), query.Limit, query.Offset)...)
 	if err != nil {
 		return querytable.Result{}, err
 	}

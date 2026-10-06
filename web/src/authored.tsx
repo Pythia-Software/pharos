@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { isOrGroup, type WhereTerm } from "@pythia-software/query-table-core";
+import { createSetFilter, isOrGroup, readSetFilter, type WhereTerm } from "@pythia-software/query-table-core";
 import type { QueryTableApi } from "@pythia-software/query-table-react";
 import type { CellContext } from "@pythia-software/query-table-ui";
 
@@ -274,7 +274,32 @@ export function CategoryPill({ category, label }: { category: string; label?: st
 
 // includesCategory reports whether where keeps only messages holding category.
 function includesCategory(where: WhereTerm[], category: string): boolean {
-  return where.some(term => !isOrGroup(term) && term.field === "categories" && term.op === "includes" && !term.negated && term.value === category);
+  return where.some(term => isCategoryTerm(term, category));
+}
+
+function isCategoryTerm(term: WhereTerm, category: string): boolean {
+  return !isOrGroup(term) && term.field === "categories" && term.op === "includes" && !term.negated && term.value === category;
+}
+
+// toggleCategory keeps, or stops keeping, only messages holding category. The
+// legend's categories collect in one ALL set filter, so the query builder
+// shows and edits them as one Categories filter.
+export function toggleCategory(where: WhereTerm[], category: string): WhereTerm[] {
+  const held = includesCategory(where, category);
+  const next: WhereTerm[] = [];
+  let collected = false;
+  for (let index = 0; index < where.length; index++) {
+    const set = readSetFilter(where, index);
+    if (set?.field === "categories" && set.metadata.mode === "all") {
+      const { id, values } = set.metadata;
+      next.push(...createSetFilter("categories", "all", held ? values.filter(value => value !== category) : collected ? values : [...values, category], id));
+      collected = true;
+      index += set.count - 1;
+    } else if (!held || !isCategoryTerm(where[index], category)) {
+      next.push(where[index]);
+    }
+  }
+  return held || collected ? next : [...next, ...createSetFilter("categories", "all", [category], `message-mix-${Date.now()}`)];
 }
 
 type MixResult = { messages: number; words: Record<string, number> };
@@ -301,9 +326,7 @@ export function MessageMix({ where, reload, onFilter }: { where: WhereTerm[]; re
   const words = state.result?.words ?? {};
   const total = Object.values(words).reduce((sum, value) => sum + value, 0);
   function toggle(category: string) {
-    onFilter(current => includesCategory(current, category)
-      ? current.filter(term => isOrGroup(term) || !(term.field === "categories" && term.op === "includes" && !term.negated && term.value === category))
-      : [...current, { field: "categories", op: "includes", value: category }]);
+    onFilter(current => toggleCategory(current, category));
   }
   return <section className="writing-mix authored-mix" aria-label="Where these messages' text came from">
     <h3>{state.result ? `${state.result.messages.toLocaleString()} message${state.result.messages === 1 ? "" : "s"} · ${total.toLocaleString()} words` : "Messages"}</h3>

@@ -252,6 +252,7 @@ const statusBadges: Record<string, (value: string, label: string) => React.React
   mcp_status: (value, label) => <span className={`mcp-call-state ${value}`}>{label}</span>,
   tool_status: (value, label) => <span className={`mcp-call-state ${value}`}>{label}</span>,
   authorship_category: (value, label) => <CategoryPill category={value} label={label} />,
+  authorship_categories: (value, label) => <CategoryPill category={value} label={label} />,
 };
 
 const filterPresentations = Object.fromEntries(Object.entries(schemas).map(([dataset, schema]) => {

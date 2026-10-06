@@ -153,7 +153,8 @@ func opAllowed(field Field, op string) bool {
 	}
 	switch field.Kind {
 	case Text:
-		return op == "=" || op == "!=" || op == "contains" || op == "starts_with" || op == "ends_with" || op == "matches_regex" || op == "not_matches_regex"
+		return op == "=" || op == "!=" || op == "contains" || op == "starts_with" || op == "ends_with" || op == "matches_regex" || op == "not_matches_regex" ||
+			op == "length_gt" || op == "length_lt" || op == "length_eq"
 	case Enum:
 		return op == "=" || op == "!="
 	case Number, Datetime:

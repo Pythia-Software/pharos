@@ -206,6 +206,7 @@
         "default": false
       },
       "filter": {
+        "editor": "set",
         "values": {
           "source": "static",
           "options": [
@@ -265,6 +266,7 @@
         "default": false
       },
       "filter": {
+        "editor": "set",
         "values": {
           "source": "static",
           "options": [
