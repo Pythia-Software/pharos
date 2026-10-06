@@ -544,9 +544,13 @@ func TestMCPForwardingMatchesDirect(t *testing.T) {
 	call := startMCP(t, server)
 	requests := []map[string]any{
 		{"name": "search_conversations", "arguments": map[string]any{"query": "tokenizer parser", "limit": 5}},
+		{"name": "search_messages", "arguments": map[string]any{"query": "tokenizer parser", "roles": []string{"user"}}},
+		{"name": "get_archive_status", "arguments": map[string]any{}},
+		{"name": "trace_worktree", "arguments": map[string]any{"query": "work-1"}},
 		{"name": "search_work", "arguments": map[string]any{"query": "parser"}},
 		{"name": "search_work", "arguments": map[string]any{}},
 		{"name": "get_work_detail", "arguments": map[string]any{"workspace_id": fixtureWorkspace(t, config)}},
+		{"name": "get_work_detail", "arguments": map[string]any{"workspace_id": fixtureWorkspace(t, config), "section": "conversations", "limit": 1}},
 		{"name": "trace", "arguments": map[string]any{"file": "missing.go"}},
 		{"name": "query_metrics", "arguments": map[string]any{"name": "total_tokens"}},
 		{"name": "get_receipt", "arguments": map[string]any{"id": "nothing"}},
@@ -876,6 +880,9 @@ func TestMCPHoldsNoCatalogHandleBetweenCalls(t *testing.T) {
 	for _, request := range []map[string]any{
 		{"name": "search_work", "arguments": map[string]any{}}, // warms the Library cache and its monitor connection
 		{"name": "search_conversations", "arguments": map[string]any{"query": "parser"}},
+		{"name": "search_messages", "arguments": map[string]any{"query": "parser"}},
+		{"name": "get_archive_status", "arguments": map[string]any{}},
+		{"name": "trace_worktree", "arguments": map[string]any{"query": "parser-session"}},
 		{"name": "get_work_detail", "arguments": map[string]any{"workspace_id": fixtureWorkspace(t, config)}},
 	} {
 		if text, isError := toolText(t, call("tools/call", request)); isError {

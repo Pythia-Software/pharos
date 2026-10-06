@@ -10,14 +10,17 @@ import (
 )
 
 var mcpTools = []map[string]any{
+	searchMessagesTool,
+	archiveStatusTool,
+	traceWorktreeTool,
 	{"name": "list_repositories", "description": "List the repositories Pharos has sessions for, most recently active first, with each one's conversation count, latest message, and latest capture, plus when Pharos last synced each source. Use it to find the repository name to pass as the repository filter; path finds the repository checked out at a directory.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string", "description": "Matches a repository's name, remote, aliases, or checkout paths."}, "path": map[string]any{"type": "string", "description": "An absolute directory, such as the current working directory."}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 100}, "max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
 	{"name": "search_conversations", "description": "Find relevant past conversations. Returns compact ranked cards and message handles, never transcripts. Start here, filtered by repository when you know it (list_repositories gives the names); then inspect an overview or passages.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}, "repository": map[string]any{"type": "string", "description": "A repository name or remote as list_repositories gives it, not a worktree or directory name. One Pharos has no record of is an error."}, "source": map[string]any{"type": "string"}, "provider": map[string]any{"type": "string"}, "file": map[string]any{"type": "string"}, "pr": map[string]any{"type": "integer"}, "from": map[string]any{"type": "string"}, "to": map[string]any{"type": "string"}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 20}, "offset": map[string]any{"type": "integer", "minimum": 0}, "max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
-	{"name": "get_conversation_overview", "description": "Get an extractive, cited overview of one conversation before reading messages.", "inputSchema": map[string]any{"type": "object", "required": []string{"conversation_id"}, "properties": map[string]any{"conversation_id": map[string]any{"type": "string"}, "max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
+	{"name": "get_conversation_overview", "description": "Get an extractive, cited overview with structured parent-agent lineage and source-attributed freshness before reading messages.", "inputSchema": map[string]any{"type": "object", "required": []string{"conversation_id"}, "properties": map[string]any{"conversation_id": map[string]any{"type": "string"}, "max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
 	{"name": "search_conversation_passages", "description": "Find short matching passages within a chosen conversation; returns message IDs for focused reading.", "inputSchema": map[string]any{"type": "object", "required": []string{"conversation_id", "query"}, "properties": map[string]any{"conversation_id": map[string]any{"type": "string"}, "query": map[string]any{"type": "string"}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 10}, "max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
-	{"name": "get_conversation_messages", "description": "Read a small bounded message window, optionally centered on a message ID. For a long message, request message_id with next_text_offset to continue its text.", "inputSchema": map[string]any{"type": "object", "required": []string{"conversation_id"}, "properties": map[string]any{"conversation_id": map[string]any{"type": "string"}, "around_message_id": map[string]any{"type": "string"}, "message_id": map[string]any{"type": "string"}, "text_offset": map[string]any{"type": "integer", "minimum": 0}, "offset": map[string]any{"type": "integer", "minimum": 0}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 12}, "max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
-	{"name": "search_work", "description": "Search archived AI work with structured repository, source, file, and PR filters.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}, "repository": map[string]any{"type": "string", "description": "A repository name or remote as list_repositories gives it, not a worktree or directory name. One Pharos has no record of is an error."}, "source": map[string]any{"type": "string"}, "file": map[string]any{"type": "string"}, "pr": map[string]any{"type": "integer"}, "limit": map[string]any{"type": "integer", "maximum": 100}}, "additionalProperties": true}},
-	{"name": "get_work_detail", "description": "Get bounded evidence-linked work metadata, changes, metrics, PRs, and receipt.", "inputSchema": map[string]any{"type": "object", "required": []string{"workspace_id"}, "properties": map[string]any{"workspace_id": map[string]any{"type": "string"}}}},
-	{"name": "get_conversation_excerpt", "description": "Compatibility alias for bounded get_conversation_messages.", "inputSchema": map[string]any{"type": "object", "required": []string{"conversation_id"}, "properties": map[string]any{"conversation_id": map[string]any{"type": "string"}, "limit": map[string]any{"type": "integer", "maximum": 12}, "offset": map[string]any{"type": "integer"}, "max_output_tokens": map[string]any{"type": "integer", "maximum": 4000}}}},
+	conversationMessagesTool("get_conversation_messages"),
+	{"name": "search_work", "description": "Ranked lexical/semantic discovery of archived AI work with repository, source, file, and PR filters and per-result source freshness. For exact worktree paths, basenames, branches, or agent IDs use trace_worktree instead; semantic matches are not exact identity evidence.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}, "repository": map[string]any{"type": "string", "description": "A repository name or remote as list_repositories gives it, not a worktree or directory name. One Pharos has no record of is an error."}, "source": map[string]any{"type": "string"}, "file": map[string]any{"type": "string"}, "pr": map[string]any{"type": "integer"}, "limit": map[string]any{"type": "integer", "maximum": 100}}, "additionalProperties": true}},
+	workDetailTool(),
+	conversationMessagesTool("get_conversation_excerpt"),
 	{"name": "get_change_set", "description": "Get a change inventory and preserved patch locator.", "inputSchema": map[string]any{"type": "object", "required": []string{"change_set_id"}, "properties": map[string]any{"change_set_id": map[string]any{"type": "string"}}}},
 	{"name": "trace", "description": "Trace work by changed file, PR number, or TL1 task/source ID.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"file": map[string]any{"type": "string"}, "pr": map[string]any{"type": "integer"}, "task": map[string]any{"type": "string"}, "limit": map[string]any{"type": "integer", "maximum": 100}}}},
 	{"name": "query_metrics", "description": "Rank work by a metric while retaining unknown/missing coverage.", "inputSchema": map[string]any{"type": "object", "required": []string{"name"}, "properties": map[string]any{"name": map[string]any{"type": "string"}, "minimum": map[string]any{"type": "number"}, "maximum": map[string]any{"type": "number"}, "limit": map[string]any{"type": "integer", "maximum": 100}}}},
@@ -133,7 +136,7 @@ func handleMCP(catalog *Catalog, request map[string]any) map[string]any {
 
 // repositoryFilterTools are the tools whose repository argument filters by
 // repository name or remote.
-var repositoryFilterTools = map[string]bool{"search_conversations": true, "search_work": true, "list_findings": true}
+var repositoryFilterTools = map[string]bool{"search_conversations": true, "search_messages": true, "search_work": true, "list_findings": true, "trace_worktree": true}
 
 func callMCP(catalog *Catalog, name string, args map[string]any) (any, error) {
 	limit := int(integer(valueOr(args["limit"], 50)))
@@ -147,6 +150,12 @@ func callMCP(catalog *Catalog, name string, args map[string]any) (any, error) {
 		}
 	}
 	switch name {
+	case "trace_worktree":
+		return catalog.traceWorktree(args)
+	case "search_messages":
+		return catalog.searchMessages(args)
+	case "get_archive_status":
+		return catalog.archiveStatus(args)
 	case "list_repositories":
 		return catalog.listRepositories(args)
 	case "search_conversations":
@@ -169,16 +178,22 @@ func callMCP(catalog *Catalog, name string, args map[string]any) (any, error) {
 		if value, ok := number(args["maximum"]); ok {
 			options.Maximum = &value
 		}
-		return catalog.Search(options)
-	case "get_work_detail":
-		value, err := catalog.workDetail(firstString(args["workspace_id"]), false)
+		result, err := catalog.Search(options)
 		if err != nil {
 			return nil, err
 		}
-		if value == nil {
-			return nil, fmt.Errorf("workspace not found")
+		if err := catalog.attachWorkspaceFreshness(result["items"].([]map[string]any)); err != nil {
+			return nil, err
 		}
-		return value, nil
+		freshness, err := catalog.archiveSourceStatus()
+		if err != nil {
+			return nil, err
+		}
+		result["freshness"] = map[string]any{"status": freshness["status"], "stale_sources": freshness["stale_sources"]}
+		result["search_mode"] = "ranked_lexical_and_semantic"
+		return result, nil
+	case "get_work_detail":
+		return catalog.boundedWorkDetail(args)
 	case "get_conversation_excerpt":
 		return catalog.conversationMessages(args)
 	case "get_change_set":

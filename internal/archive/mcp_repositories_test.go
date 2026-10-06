@@ -74,9 +74,11 @@ func TestMCPRepositoryFilterMustNameARepository(t *testing.T) {
 		('b','git@github.com:acme/api.git','api','["/work/acme/oslo"]','t','t')`); err != nil {
 		t.Fatal(err)
 	}
-	for _, tool := range []string{"search_conversations", "search_work", "list_findings"} {
+	for _, tool := range []string{"search_conversations", "search_messages", "search_work", "list_findings", "trace_worktree"} {
+		args := map[string]any{"query": "parser"}
 		for _, repository := range []string{"web", "WEB", "acme/api"} {
-			if _, err := callMCP(catalog, tool, map[string]any{"repository": repository}); err != nil {
+			args["repository"] = repository
+			if _, err := callMCP(catalog, tool, args); err != nil {
 				t.Errorf("%s accepts %q: %v", tool, repository, err)
 			}
 		}

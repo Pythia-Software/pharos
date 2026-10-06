@@ -190,6 +190,17 @@ func TestFindingLifecycle(t *testing.T) {
 	for back := 27; back >= 0; back-- {
 		fixture.conversation(dayTime(now.Format("2006-01-02")).AddDate(0, 0, -back), back%2 == 0)
 	}
+	for order, message := range []struct{ id, role, kind, text string }{
+		{"finding-prompt", "user", "message", "Run the Python check"},
+		{"finding-call", "assistant", "tool_call", "python scripts/check.py"},
+		{"finding-result", "tool", "tool_result", "zsh: command not found: python"},
+		{"finding-answer", "assistant", "message", "Retrying with python3"},
+	} {
+		addAuditMessage(t, catalog, message.id, "conv-2", message.role, message.kind, message.text, order, nil)
+	}
+	if _, err := catalog.DB.Exec(`UPDATE tool_calls SET call_message_id='finding-call',result_message_id='finding-result' WHERE id='call-2-0'`); err != nil {
+		t.Fatal(err)
+	}
 	if err := catalog.RefreshFindings(ctx, true); err != nil {
 		t.Fatal(err)
 	}
@@ -237,6 +248,24 @@ func TestFindingLifecycle(t *testing.T) {
 	evidence := detail.(map[string]any)["evidence"].(map[string]any)
 	if !strings.Contains(firstString(evidence["trust"]), "untrusted") || len(evidence["items"].([]findingHandle)) == 0 {
 		t.Fatalf("evidence: %v", evidence)
+	}
+	foundEvidence := false
+	for _, handle := range evidence["items"].([]findingHandle) {
+		if handle.MessageID != "finding-result" {
+			continue
+		}
+		foundEvidence = true
+		window := auditCall(t, catalog, "get_conversation_messages", map[string]any{"conversation_id": handle.ConversationID, "around_message_id": handle.MessageID})
+		visible := map[string]bool{}
+		for _, item := range window["items"].([]map[string]any) {
+			visible[firstString(item["message_id"])] = true
+		}
+		if !visible["finding-call"] || !visible["finding-result"] {
+			t.Fatalf("finding's documented evidence read hid the tool evidence: %#v", window)
+		}
+	}
+	if !foundEvidence {
+		t.Fatalf("finding did not retain the tool evidence handle: %#v", evidence)
 	}
 
 	// Into the cart, and the prompt names the finding and its evidence tool.

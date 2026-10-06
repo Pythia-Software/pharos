@@ -1072,6 +1072,154 @@ reconnect a client that previously saw an empty tool list. The page also offers 
 an agent through the conversation search tools and has it ask the user to turn
 on and reconnect Pharos when the tools are unavailable.
 
+### Auditing messages and archive coverage
+
+`search_messages` searches indexed message text lexically, without semantic
+fallback, title substring matches, a recent-message cutoff, or a top-500
+candidate limit. Repository, conversation, source, provider, role, kind, and
+message-date filters are applied before pagination. It returns timestamps,
+conversation coverage, message IDs, and original evidence locators. For example:
+
+```json
+{"query":"\"AWS account\"","repository":"xlsx-collect","roles":["user"],"from":"2026-05-01","to":"2026-05-31","limit":20,"max_output_tokens":1800}
+```
+
+The default `match_mode: "terms"` requires every unquoted term and honors
+quoted phrases. `match_mode: "phrase"` treats the whole query as one phrase.
+Punctuation-only tokens are ignored; a query containing no letters, digits, or
+combining marks is rejected with `query must contain searchable words`.
+Queries retain Unicode letters, digits, and combining marks, including accented
+words and CJK text. Matching follows SQLite FTS tokenization: it is
+case-insensitive and phrases match consecutive tokens, not exact punctuation
+or bytes. FTS operators are
+treated as ordinary terms, not executable query syntax. Date bounds apply to
+**message timestamps**, not conversation start dates; dates are UTC and an
+upper date includes the entire day. Undated messages are excluded only when a
+date bound is supplied. Results are oldest first, with message IDs breaking
+timestamp ties.
+
+Follow `next_offset` with the same query and filters until it is null. `total`
+counts all matching indexed messages, including mirrored source copies;
+returned rows are not collapsed across sources. Output budgets may shorten a
+page, but its continuation advances only over delivered rows. A budget too
+small for one result returns an explicit error instead of a stuck cursor.
+Pagination assumes the archive is unchanged between calls. Completing a search
+establishes only what is present in the index, not what happened outside it.
+
+`get_archive_status` lists known catalog sources across hosts with coverage,
+pending counts, errors, and explicit stale reasons. It distinguishes the latest
+recorded `last_index_at` from `last_successful_index_at`, because a failed sync
+can still write some data. `last_sync_at` is the last successful automatic sync.
+`last_capture_at` is when source bytes were last preserved, ignoring no-op
+captures; a null or omitted capture timestamp means unknown, not no capture.
+`capture_times_available` indicates whether this connection has a configured
+capture root. This read-only tool never starts capture, indexing, or repair.
+
+Use `source`, `host_id`, or `stale_only` to narrow its source list, and page with
+`next_offset`. Its summary `status`, `local_sources`, and `stale_sources` refer
+to the current host and remain unchanged by those filters. Other-host counts
+are separate. The age check uses the newer of the last successful index and
+successful automatic sync, exposed as `last_checked_at`; `lag_seconds` measures
+time since that check. A successful no-op sync proves the source was checked
+without inventing a newer `last_index_at` or `last_successful_index_at`. Failed
+attempts do not advance this check. Staleness includes an age check older than
+24 hours, unknown or
+incomplete coverage, pending records, and recorded index or sync errors. An
+archive with no known local sources is not reported as current.
+The freshness summaries on `search_messages`, `search_conversations`, and
+`search_work` use this same source-level logic,
+including automatic-only sources, newer automatic index times, and sync errors.
+
+Each message or conversation search result includes freshness attributed to its
+recorded conversation sightings, keyed by **host and source name**. Work-search
+results use workspace sightings. A source's sync failure does not make unrelated
+results stale. `conversation_indexed_at` and `workspace_indexed_at` describe
+catalog indexing; `last_sync_at` describes successful automatic synchronization;
+`source_last_capture_at` describes the latest preserved bytes for that source,
+**not the capture time of that individual message**. `evidence_capture_at` remains
+null where no exact capture association is recorded. `last_observed_at` is a
+catalog sighting, not a capture timestamp. Missing source attribution has status
+`unknown`, even if the global summary is current. For very small conversation
+search budgets, cards retain a compact status and a `get_conversation_overview`
+handle for full attribution and lineage.
+Source previews are bounded and carry `source_count`, `sources_truncated`, and
+`source_attribution_access` when necessary. Follow that paged work-detail handle
+to recover the full host/source associations, then use `get_archive_status` to
+inspect each source. An overview too small for metadata returns an explicit
+budget error, not an oversized response.
+Overview budgets prioritize the cited request and last-response previews:
+optional provenance is reduced or omitted before those texts are shortened.
+`provenance_truncated` marks this omission; request a larger overview budget to
+recover the additional lineage and freshness details.
+
+`get_conversation_messages` and its `get_conversation_excerpt` alias now return
+readable `kind: "message"` turns for unanchored windows by default, avoiding raw
+envelopes and large signatures. Anchored `around_message_id` reads default to
+all kinds, preserving cited tool calls and nearby results. Supply `roles` to
+narrow speakers, or `kinds` to select other records, for example
+`["message","tool_call","tool_result"]`. Use
+`kinds: ["all"]` for the previous unfiltered window behavior. Offsets and
+continuations count messages **after filtering**. Every window returns its
+effective `kinds` and any specified `roles`. To page forward, set `offset` to
+`next_offset`, copy the returned `kinds` and `roles`, and omit `around_message_id`.
+Keep `conversation_id`, `limit`, and `max_output_tokens` unchanged; stop when
+`next_offset` is null. In particular, an anchored default returns
+`kinds: ["all"]`: omitting that filter on the next read would switch to the
+unanchored message-only default and change the offset space. Resending the
+anchor recenters the window instead of paging forward. An `around_message_id` anchor
+can refer to a kind excluded by an explicit filter; the window shows nearby
+included turns. A direct `message_id` read defaults to all kinds so an evidence handle always remains
+readable; explicit role/kind filters still apply. Continue long text with
+`text_offset` set to the returned `next_text_offset`.
+Windows automatically shorten an oversized first message to a partial text
+chunk with `next_text_offset`; continue that message with `message_id` before
+moving to `next_offset`. Both window and direct reads preserve whitespace and
+Unicode character offsets. If even the metadata cannot fit, the tool explicitly
+asks for a larger budget instead of returning an empty, non-advancing page.
+
+### Work details and worktree provenance
+
+`get_work_detail` now defaults to a bounded `identity` section instead of
+returning every collection in one response. `available_sections` lists supported
+projections: `identity`, `conversations`, `lineage`, `agent_sessions`, `changes`,
+`outcomes`, `receipts`, `metrics`, `metric_ledger`, `attempts`, `handoffs`, `prs`,
+`sightings`, `conversation_sightings`, and `identity_links`. Request each section independently and page
+with `next_offset`, preserving the workspace ID, section, and other arguments.
+No fixed ledger or receipt cutoff applies. Transcript messages remain behind
+`get_conversation_messages` handles.
+
+Long string fields are previews with `truncated_fields` metadata. For lossless
+recovery, supply the section, the row's `item_offset` as `offset`, its `field`, and
+`text_offset`; advance with `next_text_offset` until null. Offsets are Unicode
+character counts and preserve whitespace. For example:
+
+```json
+{"workspace_id":"workspace_…","section":"receipts","offset":0,"field":"retained_json","text_offset":240,"max_output_tokens":1800}
+```
+
+`trace_worktree` accepts a `query` containing a path, basename, branch, or agent
+ID, optionally filtered by repository. It prioritizes exact metadata, aliases,
+and recorded path-component matches. If no metadata matches, it uses indexed
+phrase candidates with a case-sensitive literal check, never semantic fallback
+or a full archive text scan. That fallback follows FTS token boundaries and
+cannot find unindexed text or arbitrary substrings within tokens. Its
+`search_scope` and `lookup_strategy` make the coverage explicit. Known-entity
+results include `reference_search_access` for additional transcript references
+via `search_messages`. It also finds metadata-only workspaces with no conversations.
+Page results with `next_offset`; zero results mean no matching archived evidence,
+not that the worktree never existed. `search_work` remains ranked lexical/semantic
+discovery and labels that mode explicitly; prefer `trace_worktree` for identifiers.
+
+Results provide agent and native parent IDs, originating workspace metadata,
+assignment and report message handles, recorded first/last activity, recorded
+branch/head, and explicitly labeled commit/branch references extracted from
+cited messages. Reference previews and extraction are bounded, not exhaustive;
+read the report or cited message for complete context. Conversation overviews and
+ordinary conversation search cards also expose structured parent lineage.
+These are **recorded references**, not a claim that the named agent created the
+worktree. Reports do not verify current Git state, branch integration, active use,
+or safe deletion. The tool never inspects, mutates, or deletes a live worktree.
+
 **No open catalog between requests.** An agent client keeps its MCP server
 process for the whole session, so the server never holds the catalog open
 while idle, which would keep a release from closing it. For each `tools/list` and `tools/call` it rereads the
