@@ -77,8 +77,10 @@ func TestMCPLatencyReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer catalog.Close()
-	var workspace, conversation string
-	if err := catalog.DB.QueryRow("SELECT workspace_id,id FROM conversations ORDER BY id LIMIT 1 OFFSET (SELECT COUNT(*)/2 FROM conversations)").Scan(&workspace, &conversation); err != nil {
+	var workspace, conversation, traceIdentity, repository string
+	if err := catalog.DB.QueryRow(`SELECT c.workspace_id,c.id,c.native_id,COALESCE(r.display_name,'') FROM conversations c
+		JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id
+		ORDER BY c.id LIMIT 1 OFFSET (SELECT COUNT(*)/2 FROM conversations)`).Scan(&workspace, &conversation, &traceIdentity, &repository); err != nil {
 		t.Fatal(err)
 	}
 	requests := []map[string]any{
@@ -88,11 +90,27 @@ func TestMCPLatencyReport(t *testing.T) {
 		{"name": "get_conversation_overview", "arguments": map[string]any{"conversation_id": conversation}},
 		{"name": "get_conversation_messages", "arguments": map[string]any{"conversation_id": conversation, "limit": 8}},
 		{"name": "get_work_detail", "arguments": map[string]any{"workspace_id": workspace}},
+		{"name": "trace_worktree", "arguments": map[string]any{"query": traceIdentity, "repository": repository, "limit": 1}},
+		{"name": "trace_worktree", "arguments": map[string]any{"query": traceIdentity, "limit": 1}},
+		{"name": "trace_worktree", "arguments": map[string]any{"query": "pharos-trace-missing-identity", "repository": repository, "limit": 1}},
+		{"name": "trace_worktree", "arguments": map[string]any{"query": "tokenizer", "repository": repository, "limit": 1}},
 	}
 	label := func(request map[string]any) string {
 		arguments := request["arguments"].(map[string]any)
 		if request["name"] == "search_work" && arguments["query"] == nil {
 			return "search_work (unfiltered)"
+		}
+		if request["name"] == "trace_worktree" {
+			if arguments["query"] == "pharos-trace-missing-identity" {
+				return "trace_worktree (miss)"
+			}
+			if arguments["query"] == "tokenizer" {
+				return "trace_worktree (transcript fallback)"
+			}
+			if arguments["repository"] == nil {
+				return "trace_worktree (metadata, unfiltered)"
+			}
+			return "trace_worktree (metadata, filtered)"
 		}
 		return request["name"].(string)
 	}
