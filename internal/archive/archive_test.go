@@ -44,6 +44,9 @@ func testCatalog(t *testing.T) (*Catalog, Config) {
 	config.CatalogPath = filepath.Join(root, "catalog.sqlite3")
 	config.ArchiveRoot = filepath.Join(root, "archive")
 	config.StagingRoot = filepath.Join(root, "staging")
+	// The default is this Mac's own captures, which tests must neither read
+	// nor write.
+	config.CaptureRoot = filepath.Join(root, "captures")
 	config.APIToken = "test-token"
 	if err := os.MkdirAll(config.ArchiveRoot, 0o755); err != nil {
 		t.Fatal(err)

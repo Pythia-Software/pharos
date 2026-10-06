@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -42,19 +43,60 @@ type auditPool struct {
 	catalog    *Catalog
 	units      []syncUnit
 	checks     map[string]string
+	outcomes   map[string]string
+	issues     map[string]auditIssue
+	retries    map[string]bool
+	versions   map[string]string
 	discovered int
 	deferred   int
 	failure    error
 }
 
+// auditIssue is what an open mismatch was found against.
+type auditIssue struct {
+	IndexVersion    string `json:"index_version"`
+	SourceSignature string `json:"source_signature"`
+}
+
 func newAuditPool(catalog *Catalog) *auditPool {
-	pool := &auditPool{catalog: catalog, checks: map[string]string{}}
-	rows, err := queryMaps(catalog.DB, "SELECT source_name,unit,checked_at FROM sync_verifications WHERE host_id=? ORDER BY checked_at DESC LIMIT 20000", currentHost().ID)
+	pool := &auditPool{catalog: catalog, checks: map[string]string{}, outcomes: map[string]string{}, issues: map[string]auditIssue{}, retries: map[string]bool{}, versions: map[string]string{}}
+	rows, err := queryMaps(catalog.DB, "SELECT source_name,unit,checked_at,outcome FROM sync_verifications WHERE host_id=? ORDER BY checked_at DESC LIMIT 20000", currentHost().ID)
 	pool.failure = err
 	for _, row := range rows {
-		pool.checks[firstString(row["source_name"])+"/"+firstString(row["unit"])] = firstString(row["checked_at"])
+		key := firstString(row["source_name"]) + "/" + firstString(row["unit"])
+		pool.checks[key], pool.outcomes[key] = firstString(row["checked_at"]), firstString(row["outcome"])
+	}
+	issues, err := queryMaps(catalog.DB, "SELECT source_name,unit,detail_json FROM sync_integrity_issues WHERE host_id=? AND state='open'", currentHost().ID)
+	if pool.failure == nil {
+		pool.failure = err
+	}
+	for _, row := range issues {
+		var issue auditIssue
+		json.Unmarshal([]byte(firstString(row["detail_json"])), &issue)
+		pool.issues[firstString(row["source_name"])+"/"+firstString(row["unit"])] = issue
 	}
 	return pool
+}
+
+// retry reports whether a unit's open mismatch was found by other code or in
+// another version of its input. Auditing it again may now pass and resolve
+// it, so it goes before the least recently checked units: one unit is
+// audited per run, and an open mismatch would otherwise wait for every unit
+// never checked. A mismatch nothing has changed for would only be confirmed
+// again, and one audited since without a verdict (deferred) has had its turn;
+// both wait like any other unit.
+func (pool *auditPool) retry(unit syncUnit) bool {
+	key := unit.Source.Name + "/" + unit.ID
+	issue, open := pool.issues[key]
+	if !open || pool.outcomes[key] != "mismatch" {
+		return false
+	}
+	version, known := pool.versions[unit.Source.Name]
+	if !known {
+		version = sourceIndexVersion(mustAuditAdapter(unit.Source))
+		pool.versions[unit.Source.Name] = version
+	}
+	return issue.IndexVersion != version || issue.SourceSignature != partsSignature(unit.Parts)
 }
 
 func (pool *auditPool) consider(unit syncUnit) {
@@ -63,10 +105,17 @@ func (pool *auditPool) consider(unit syncUnit) {
 		pool.deferred++
 		return
 	}
+	key := func(unit syncUnit) string { return unit.Source.Name + "/" + unit.ID }
+	if pool.retry(unit) {
+		pool.retries[key(unit)] = true
+	}
 	pool.units = append(pool.units, unit)
 	sort.SliceStable(pool.units, func(left, right int) bool {
-		first, second := pool.units[left], pool.units[right]
-		return pool.checks[first.Source.Name+"/"+first.ID] < pool.checks[second.Source.Name+"/"+second.ID]
+		first, second := key(pool.units[left]), key(pool.units[right])
+		if pool.retries[first] != pool.retries[second] {
+			return pool.retries[first]
+		}
+		return pool.checks[first] < pool.checks[second]
 	})
 	if len(pool.units) > 64 {
 		pool.units = pool.units[:64]
@@ -76,7 +125,8 @@ func (pool *auditPool) consider(unit syncUnit) {
 func (pool *auditPool) preflightSkipped(source SourceConfig) {
 	rows, err := queryMaps(pool.catalog.DB, `SELECT p.item,p.size,p.version,COALESCE(p.signal,'') signal FROM source_item_states p
 		LEFT JOIN sync_verifications v ON v.host_id=p.host_id AND v.source_name=p.source_name AND v.unit=p.item
-		WHERE p.host_id=? AND p.source_name=? ORDER BY COALESCE(v.checked_at,''),p.item LIMIT 64`, currentHost().ID, source.Name)
+		LEFT JOIN sync_integrity_issues i ON i.host_id=p.host_id AND i.source_name=p.source_name AND i.unit=p.item AND i.state='open'
+		WHERE p.host_id=? AND p.source_name=? ORDER BY i.id IS NULL,COALESCE(v.checked_at,''),p.item LIMIT 64`, currentHost().ID, source.Name)
 	if err != nil {
 		pool.failure = err
 		return
@@ -707,6 +757,44 @@ func (s *Server) auditIntentional(ctx context.Context, runID string, names []str
 		}
 	}
 	return s.Catalog.auditPool(ctx, pool, runID)
+}
+
+// auditOpenIssues audits again every unit of the named sources (all when
+// none) with an open mismatch on this host, as a recovery that rebuilt their
+// rows must: the sampled audit after it reaches one unit, and an issue
+// resolves only when its own unit passes.
+func (s *Server) auditOpenIssues(ctx context.Context, runID string, names []string) {
+	rows, err := queryMapsContext(ctx, s.Catalog.DB, "SELECT DISTINCT source_name,unit FROM sync_integrity_issues WHERE host_id=? AND state='open'", currentHost().ID)
+	if err != nil {
+		return
+	}
+	open := map[string]map[string]bool{}
+	for _, row := range rows {
+		name := firstString(row["source_name"])
+		if open[name] == nil {
+			open[name] = map[string]bool{}
+		}
+		open[name][firstString(row["unit"])] = true
+	}
+	for _, source := range s.Config().Sources {
+		units := open[source.Name]
+		if ctx.Err() != nil || len(units) == 0 || !source.Enabled || !automaticProvider(source.Kind) || (len(names) > 0 && !slices.Contains(names, source.Name)) {
+			continue
+		}
+		adapter, err := syncAdapter(source)
+		if err != nil {
+			continue
+		}
+		setAdapterContext(adapter, ctx)
+		adapter.(partialAdapter).discoverParts(func(parts []sourcePart) bool {
+			if unit := unitOf(source, parts, false); units[unit.ID] && ctx.Err() == nil {
+				s.Catalog.recordVerification(unit, s.Catalog.auditUnit(ctx, unit, runID, 0))
+			}
+			return true
+		}, func(*WorkspaceRecord, []sourcePart) error {
+			return errors.New("issue audit discovery attempted to parse")
+		})
+	}
 }
 
 func (s *Server) startVerification(w http.ResponseWriter, r *http.Request, body map[string]any) {
