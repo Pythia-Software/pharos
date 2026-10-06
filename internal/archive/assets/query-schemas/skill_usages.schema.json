@@ -1,0 +1,479 @@
+{
+  "$schema": "https://github.com/Pythia-Software/query-table/schema/query-table.schema.json",
+  "name": "pharos_skill_usages",
+  "version": 1,
+  "idField": "id",
+  "defaultLimit": 50,
+  "defaultSort": [
+    {
+      "field": "created_at",
+      "dir": "desc",
+      "nulls": "last"
+    }
+  ],
+  "tiebreakSort": [
+    {
+      "field": "id",
+      "dir": "asc"
+    }
+  ],
+  "defaultSelect": [
+    {
+      "field": "created_at",
+      "width": 150
+    },
+    {
+      "field": "skill_name",
+      "width": 190
+    },
+    {
+      "field": "evidence_type",
+      "width": 160
+    },
+    {
+      "field": "status",
+      "width": 90
+    },
+    {
+      "field": "skill_path",
+      "width": 300
+    },
+    {
+      "field": "title",
+      "width": 230
+    }
+  ],
+  "fields": [
+    {
+      "name": "id",
+      "label": "Usage ID",
+      "type": "text",
+      "group": "Skill",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "id",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "created_at",
+      "label": "Recorded at",
+      "type": "datetime",
+      "group": "Time",
+      "bindings": {
+        "postgres": {
+          "expr": "created_at",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "day",
+      "label": "Day",
+      "type": "text",
+      "group": "Time",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "day",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "week",
+      "label": "Week",
+      "type": "text",
+      "group": "Time",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "week",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "month",
+      "label": "Month",
+      "type": "text",
+      "group": "Time",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "month",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "skill_name",
+      "label": "Skill",
+      "type": "text",
+      "group": "Skill",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "skill_name",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "skill_path",
+      "label": "Skill path",
+      "type": "text",
+      "group": "Skill",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "skill_path",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "evidence_type",
+      "label": "Evidence",
+      "type": "enum",
+      "group": "Skill",
+      "bindings": {
+        "postgres": {
+          "expr": "evidence_type",
+          "synthetic": true
+        }
+      },
+      "filter": {
+        "values": {
+          "source": "static",
+          "options": [
+            {
+              "value": "explicit_invocation",
+              "label": "Explicit invocation"
+            },
+            {
+              "value": "file_load",
+              "label": "File-load attempt"
+            },
+            {
+              "value": "harness_load",
+              "label": "Harness-reported load"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "status",
+      "label": "Status",
+      "type": "enum",
+      "group": "Skill",
+      "bindings": {
+        "postgres": {
+          "expr": "status",
+          "synthetic": true
+        }
+      },
+      "filter": {
+        "values": {
+          "source": "static",
+          "options": [
+            "ok",
+            "error",
+            "no_result"
+          ]
+        }
+      }
+    },
+    {
+      "name": "content_bytes",
+      "label": "Loaded content bytes",
+      "type": "number",
+      "group": "Skill",
+      "render": "number",
+      "bindings": {
+        "postgres": {
+          "expr": "content_bytes",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "provider",
+      "label": "Provider",
+      "type": "text",
+      "group": "Context",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "provider",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "source_kind",
+      "label": "Source Kind",
+      "type": "text",
+      "group": "Context",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "source_kind",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "model",
+      "label": "Model",
+      "type": "text",
+      "group": "Context",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "model",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "repository_name",
+      "label": "Repository Name",
+      "type": "text",
+      "group": "Context",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "repository_name",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "title",
+      "label": "Title",
+      "type": "text",
+      "group": "Context",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "title",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "session_kind",
+      "label": "Session Kind",
+      "type": "text",
+      "group": "Context",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "session_kind",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "tool_name",
+      "label": "Tool Name",
+      "type": "text",
+      "group": "Context",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "tool_name",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "mcp_server",
+      "label": "Mcp Server",
+      "type": "text",
+      "group": "Context",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "mcp_server",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "mcp_method",
+      "label": "Mcp Method",
+      "type": "text",
+      "group": "Context",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "mcp_method",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "agent_depth",
+      "label": "Agent depth",
+      "type": "number",
+      "group": "Context",
+      "render": "number",
+      "bindings": {
+        "postgres": {
+          "expr": "agent_depth",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "workspace_id",
+      "label": "workspace id",
+      "type": "text",
+      "group": "Evidence",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "workspace_id",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "conversation_id",
+      "label": "conversation id",
+      "type": "text",
+      "group": "Evidence",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "conversation_id",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "tool_call_id",
+      "label": "tool call id",
+      "type": "text",
+      "group": "Evidence",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "tool_call_id",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "evidence_message_id",
+      "label": "evidence message id",
+      "type": "text",
+      "group": "Evidence",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "evidence_message_id",
+          "synthetic": true
+        }
+      }
+    },
+    {
+      "name": "body_message_id",
+      "label": "body message id",
+      "type": "text",
+      "group": "Evidence",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "body_message_id",
+          "synthetic": true
+        }
+      }
+    }
+  ]
+}

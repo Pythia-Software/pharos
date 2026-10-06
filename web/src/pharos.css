@@ -333,6 +333,8 @@ button.usage-legend-item:hover { border-color: var(--line); color: var(--ink); }
 .tool-ledger-banner { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: -6px 0 16px; padding: 11px 14px; border: 1px solid var(--line); border-radius: 5px; background: color-mix(in srgb, var(--gold) 10%, var(--panel)); font-size: var(--fs-md); }
 .tool-ledger-banner button { flex: none; padding: 4px 12px; border: 1px solid var(--accent); border-radius: 4px; background: var(--accent); color: var(--panel); }
 .tools-page .qt-table th:last-child,.tools-page .qt-trailing-cell { width: 86px; min-width: 86px; max-width: 86px; }
+.tools-page .skill-usages .qt-table th:last-child,.tools-page .skill-usages .qt-trailing-cell { width: 180px; min-width: 180px; max-width: 180px; }
+.skill-usage-actions { display: inline-flex; gap: 6px; }
 .tool-dialog { width: min(920px, 100%); max-height: min(88vh, 900px); }
 .tool-dialog h2 { margin: 0 0 5px; font: 650 var(--fs-2xl)/1.2 var(--serif); }
 .tool-dialog-actions { display: flex; gap: 8px; }

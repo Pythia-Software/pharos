@@ -141,6 +141,9 @@ func (c *Catalog) Close() error {
 // the loaded-instructions record. A version-10 build merges repositories
 // without recording the retirement, so dismissals, prompts, and
 // measurements of the merged repository's findings would be orphaned.
+// skill_usages (tools-v7) needs no bump: it is derived from retained messages,
+// and an older build that rebuilds a ledger or reparses a file stamps it with
+// a version this build treats as stale and rebuilds.
 const catalogSchemaVersion = 12
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by

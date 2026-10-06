@@ -18,6 +18,7 @@ import writingMessagesDocument from "../../schemas/writing_messages.schema.json"
 import mcpCallsDocument from "../../schemas/mcp_calls.schema.json";
 import toolsDocument from "../../schemas/tools.schema.json";
 import toolCallsDocument from "../../schemas/tool_calls.schema.json";
+import skillUsagesDocument from "../../schemas/skill_usages.schema.json";
 import tl1AttemptsDocument from "../../schemas/tl1_attempts.schema.json";
 import { TL1Page } from "./tl1";
 import { FindingsPage, OptimizationSettingsPage, startFindingsChrome } from "./findings";
@@ -25,7 +26,7 @@ import { Icon } from "./icons";
 import { AuthoredMessages, CategoryPill, MessageMix, authoredRenderers } from "./authored";
 
 type Row = Record<string, any>;
-type Dataset = "library" | "usage" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "tl1_attempts";
+type Dataset = "library" | "usage" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts";
 type LibraryView = "table" | "conversation";
 type MessageView = "table" | "text";
 type TranscriptMessage = { role: string; text: unknown; raw_text?: unknown };
@@ -132,6 +133,7 @@ const schemas: Record<Dataset, FieldSchema<Row>> = {
   mcp_calls: loadSchema<Row>(mcpCallsDocument),
   tools: loadSchema<Row>(toolsDocument),
   tool_calls: loadSchema<Row>(toolCallsDocument),
+  skill_usages: loadSchema<Row>(skillUsagesDocument),
   tl1_attempts: loadSchema<Row>(tl1AttemptsDocument),
 };
 
@@ -274,6 +276,7 @@ const emptyMessages: Record<Dataset, string> = {
   mcp_calls: "No MCP calls match this query.",
   tools: "No tool use matches this query.",
   tool_calls: "No tool calls match this query.",
+  skill_usages: "No skill usage evidence matches this query.",
   tl1_attempts: "No TL1 runs match this query.",
 };
 
@@ -1753,6 +1756,7 @@ const toolSummaryPresets: Array<{ group: string; presets: ToolPreset[] }> = [
     { label: "Context carried", title: "Result tokens re-read by later requests until compaction", aggregations: [sum("carried_tokens", ["tool_name"], "Context carried by tool"), sum("carried_tokens", ["program"], "Context carried by program")] },
     { label: "Cost by tool", title: "API-equivalent cost of tool results and the output that requested them", aggregations: [sum("tool_cost_usd", ["tool_name"], "Cost by tool"), sum("context_cost_usd", ["tool_category"], "Context cost by category")] },
     { label: "MCP servers", title: "MCP calls, errors, and context by server", where: [{ field: "mcp_server", op: "is_not_null", value: "" }], aggregations: [sum("call_count", ["mcp_server"], "Calls by MCP server"), sum("error_count", ["mcp_server"], "Errors by MCP server"), sum("result_tokens", ["mcp_server"], "Context added by MCP server")] },
+    { label: "MCP methods", title: "MCP calls and errors by server and method, including resource APIs", where: [{ field: "mcp_method", op: "is_not_null", value: "" }], aggregations: [sum("call_count", ["mcp_server", "mcp_method"], "Calls by MCP method"), sum("error_count", ["mcp_server", "mcp_method"], "Errors by MCP method")] },
     { label: "Subagents", title: "Tool use by root agents versus subagents", aggregations: [sum("call_count", ["session_kind", "tool_category"], "Calls by agent kind")] },
   ] },
 ];
@@ -1832,6 +1836,8 @@ function ToolCallDialog({ id, onClose }: { id: string; onClose: () => void }) {
         <div><dt>Cost</dt><dd>{call.tool_cost_usd === null || call.tool_cost_usd === undefined ? "—" : formatUSD(Number(call.tool_cost_usd))}</dd></div>
         <div><dt>Exit code</dt><dd>{call.exit_code ?? "—"}</dd></div>
         <div><dt>Calls in request</dt><dd>{number(call.parallel_count)}</dd></div>
+        {call.mcp_server || call.mcp_method ? <div><dt>MCP</dt><dd>{[call.mcp_server, call.mcp_method].filter(Boolean).join(" · ")}</dd></div> : null}
+        {call.skill_name ? <div><dt>Skills</dt><dd>{String(call.skill_name)}</dd></div> : null}
       </dl>
       {call.error_signature ? <p className="muted">Error signature: {String(call.error_signature)}</p> : null}
       {call.title ? <p className="muted">{String(call.title)}{call.repository_name ? ` · ${call.repository_name}` : ""} · {String(call.provider)} {call.model ? `· ${call.model}` : ""}</p> : null}
@@ -1864,7 +1870,7 @@ function ToolLedgerBanner() {
   const running = status?.backfill.running ?? false;
   const wasRunning = useRef(false);
   useEffect(() => {
-    if (wasRunning.current && !running) { tableApis.get("tools")?.refresh(); tableApis.get("tool_calls")?.refresh(); }
+    if (wasRunning.current && !running) { tableApis.get("tools")?.refresh(); tableApis.get("tool_calls")?.refresh(); tableApis.get("skill_usages")?.refresh(); }
     wasRunning.current = running;
   }, [running]);
   async function build() {
@@ -1888,12 +1894,15 @@ function termKey(term: WhereTerm): string {
 }
 
 function ToolsPage() {
-  const [view, setView] = useState<"summary" | "calls">(() => new URLSearchParams(location.search).get("tools_view") === "summary" ? "summary" : "calls");
+  const [view, setView] = useState<"summary" | "calls" | "skills">(() => {
+    const selected = new URLSearchParams(location.search).get("tools_view");
+    return selected === "summary" || selected === "skills" ? selected : "calls";
+  });
   const [selected, setSelected] = useState<string | null>(null);
   // Filters the last preset added, so the next preset replaces them while
   // keeping filters the user added by hand.
   const presetWhere = useRef<Partial<Record<Dataset, string[]>>>({});
-  function choose(next: "summary" | "calls") { setView(next); updateURI("tools_view", next === "summary" ? next : ""); }
+  function choose(next: "summary" | "calls" | "skills") { setView(next); updateURI("tools_view", next === "calls" ? "" : next); }
   function apply(dataset: Dataset, preset: ToolPreset | null) {
     const added = presetWhere.current[dataset] ?? [];
     presetWhere.current[dataset] = (preset?.where ?? []).map(termKey);
@@ -1914,6 +1923,7 @@ function ToolsPage() {
       <div className="library-view-toggle" role="group" aria-label="Tool view">
         <button type="button" className={view === "calls" ? "active" : ""} aria-pressed={view === "calls"} onClick={() => choose("calls")}>Calls</button>
         <button type="button" className={view === "summary" ? "active" : ""} aria-pressed={view === "summary"} onClick={() => choose("summary")}>Summary</button>
+        <button type="button" className={view === "skills" ? "active" : ""} aria-pressed={view === "skills"} onClick={() => choose("skills")}>Skills</button>
       </div></div>
     <ToolLedgerBanner />
     <div hidden={view !== "summary"}>
@@ -1931,6 +1941,17 @@ function ToolsPage() {
         <button type="button" className="usage-preset-clear" onClick={() => apply("tool_calls", null)}>Clear metrics</button>
       </div>
       <QuerySurface dataset="tool_calls" trailing={row => <button type="button" className="mcp-detail-button" onClick={() => setSelected(String(row.id))}>Details</button>} />
+    </div>
+    <div className="skill-usages" hidden={view !== "skills"}>
+      <p className="muted">Explicit invocations, observed file-load attempts, and harness-reported loads. A listing is not usage, and a load does not prove the skill was followed. Status on file loads belongs to the parent tool call. Costs remain on that call and are not duplicated here.</p>
+      <div className="usage-presets" role="group" aria-label="Skill presets">
+        <button type="button" onClick={() => apply("skill_usages", { label: "By skill", title: "Count evidence by skill and type", aggregations: [count(["skill_name", "evidence_type"], "Evidence by skill")] })}>Evidence by skill</button>
+        <button type="button" onClick={() => apply("skill_usages", null)}>Clear metrics</button>
+      </div>
+      <QuerySurface dataset="skill_usages" trailing={row => <span className="skill-usage-actions">
+        {row.tool_call_id ? <button type="button" className="mcp-detail-button" onClick={() => setSelected(String(row.tool_call_id))}>Tool call</button> : null}
+        <button type="button" className="mcp-detail-button" onClick={() => openFindHit({ workspace_id: String(row.workspace_id), conversation_id: String(row.conversation_id), message_id: String(row.body_message_id ?? row.evidence_message_id), title: String(row.title), count: 1 })}>Evidence</button>
+      </span>} />
     </div>
     {selected ? <ToolCallDialog id={selected} onClose={() => setSelected(null)} /> : null}
   </div>;
