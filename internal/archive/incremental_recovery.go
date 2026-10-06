@@ -276,6 +276,7 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 				failure = err
 			}
 			s.updateRun(run.ID, func(run *SyncRun) { run.Phase = "verifying" })
+			s.auditOpenIssues(ctx, run.ID, names)
 			s.auditIntentional(ctx, run.ID, names)
 		}
 	})

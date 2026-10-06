@@ -398,6 +398,101 @@ func TestVerificationVisitsEveryStableInputAndWorkspaceMetrics(t *testing.T) {
 	}
 }
 
+// stableCodexDirectory is a codex source of count stable transcripts and
+// their units, ingested and each audited once, oldest check first.
+func stableCodexDirectory(t *testing.T, count int) (*Server, []syncUnit) {
+	t.Helper()
+	directory := t.TempDir()
+	for index := range count {
+		path := filepath.Join(directory, fmt.Sprintf("rollout-%d.jsonl", index))
+		writeSourceFile(t, path, codexLines(fmt.Sprintf("retry-%d", index), 3))
+		stamp := time.Now().Add(-time.Minute)
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source := SourceConfig{Name: "codex", Kind: "codex", Path: directory, Account: "local", Enabled: true}
+	server := automaticTestServer(t, source)
+	ingestSource(t, server.Catalog, source)
+	adapter, _ := MakeAdapter(source)
+	units := []syncUnit{}
+	adapter.(partialAdapter).discoverParts(func(parts []sourcePart) bool { units = append(units, unitOf(source, parts, false)); return true }, nil)
+	if len(units) != count {
+		t.Fatalf("units: %d", len(units))
+	}
+	for index, unit := range units {
+		result := server.Catalog.auditUnit(t.Context(), unit, fmt.Sprint(index), automaticAuditBytes)
+		if result.Outcome != "passed" {
+			t.Fatal(result)
+		}
+		if err := server.Catalog.recordVerification(unit, result); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	return server, units
+}
+
+// openIssueFoundBy records an open mismatch for unit found by the given index
+// version, as its latest verification.
+func openIssueFoundBy(t *testing.T, server *Server, unit syncUnit, version string) {
+	t.Helper()
+	detail := jsonText(map[string]any{"categories": []string{"metric_ledger"}, "index_version": version, "source_signature": partsSignature(unit.Parts)})
+	if _, err := server.Catalog.DB.Exec(`INSERT INTO sync_integrity_issues(id,host_id,source_name,unit,first_at,last_at,state,detail_json) VALUES(?,?,?,?,?,?,'open',?)`,
+		stableID("sync-integrity", unit.hostID(), unit.Source.Name, unit.ID), unit.hostID(), unit.Source.Name, unit.ID, now(), now(), detail); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Catalog.recordVerification(unit, auditResult{Outcome: "mismatch"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAutomaticAuditRetriesOpenMismatchFoundByOtherCode(t *testing.T) {
+	useHost(t, "host-a")
+	server, units := stableCodexDirectory(t, 3)
+	// The most recently checked unit: the rotation alone would reach it last.
+	fixed := units[2]
+	openIssueFoundBy(t, server, fixed, "codex:an-older-parser")
+	if !server.runAutomatic(server.life.ctx, syncSettings{Enabled: true, Interval: 60}) {
+		t.Fatal("automatic run not admitted")
+	}
+	if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_integrity_issues WHERE state='resolved' AND unit=?", fixed.ID) != 1 {
+		t.Fatal("a mismatch found by older code was not audited again")
+	}
+	if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_verifications WHERE outcome='passed' AND unit=?", fixed.ID) != 1 {
+		t.Fatal("the retry was not recorded")
+	}
+}
+
+func TestAutomaticAuditLeavesUnchangedMismatchToTheRotation(t *testing.T) {
+	useHost(t, "host-a")
+	server, units := stableCodexDirectory(t, 3)
+	adapter, _ := MakeAdapter(units[2].Source)
+	openIssueFoundBy(t, server, units[2], sourceIndexVersion(adapter))
+	if !server.runAutomatic(server.life.ctx, syncSettings{Enabled: true, Interval: 60}) {
+		t.Fatal("automatic run not admitted")
+	}
+	if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_integrity_issues WHERE state='open'") != 1 {
+		t.Fatal("a mismatch nothing changed for took the run's audit")
+	}
+	if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_verifications WHERE outcome='passed' AND unit=?", units[0].ID) != 1 {
+		t.Fatal("the least recently checked unit was not audited")
+	}
+}
+
+func TestRecoveryAuditsEveryOpenIssueAgain(t *testing.T) {
+	useHost(t, "host-a")
+	server, units := stableCodexDirectory(t, 3)
+	adapter, _ := MakeAdapter(units[0].Source)
+	for _, unit := range units[1:] {
+		openIssueFoundBy(t, server, unit, sourceIndexVersion(adapter))
+	}
+	server.auditOpenIssues(t.Context(), "recovery", []string{"codex"})
+	if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_integrity_issues WHERE state='resolved'") != 2 {
+		t.Fatal("recovery left issues its rebuilt rows no longer show")
+	}
+}
+
 func TestVerificationReadsOffHostCapturesAfterSourceRemoval(t *testing.T) {
 	useHost(t, "host-a")
 	source := stableCodexSource(t, 3)
