@@ -185,6 +185,68 @@ func TestMCPTraceWorktreePrioritizesMetadataAndUsesIndexedFallback(t *testing.T)
 	}
 }
 
+func TestMCPTraceWorktreeRepositoryFilteringAndPagination(t *testing.T) {
+	catalog := provenanceFixture(t)
+	for _, statement := range []string{
+		`UPDATE workspaces SET branch='shared-agent' WHERE id IN ('work','elsewhere')`,
+		`INSERT INTO repositories(id,display_name,canonical_remote,created_at,updated_at) VALUES('remote','remote-only','https://github.com/acme/audit-tools','t','t')`,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,repository_id,title,branch,indexed_at) VALUES
+			('remote-work','canonical','local','remote-work','remote','Remote work','shared-agent','2026-10-06'),
+			('unassigned','canonical','local','unassigned',NULL,'Unassigned work','shared-agent','2026-10-06'),
+			('metadata-only','canonical','local','metadata-only','repo','Metadata only','metadata-agent','2026-10-06')`,
+	} {
+		if _, err := catalog.DB.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, test := range []struct {
+		repository string
+		total      int
+	}{
+		{"audit", 3}, {"AUDIT", 3}, {"github.com/acme/audit", 3},
+		{"_udit", 3}, {"audit%", 3}, {"remote-only", 1}, {"other", 1}, {"", 5},
+	} {
+		t.Run(test.repository, func(t *testing.T) {
+			result := auditCall(t, catalog, "trace_worktree", map[string]any{"query": "shared-agent", "repository": test.repository, "limit": 100, "max_output_tokens": 4000})
+			if integer(result["total"]) != int64(test.total) || result["search_scope"] != "entity_metadata" {
+				t.Fatalf("wrong repository matches: %s", jsonText(result))
+			}
+		})
+	}
+	seen := map[string]bool{}
+	for offset := 0; offset < 3; offset++ {
+		result := auditCall(t, catalog, "trace_worktree", map[string]any{"query": "shared-agent", "repository": "audit", "limit": 1, "offset": offset, "max_output_tokens": 4000})
+		items := result["items"].([]map[string]any)
+		if integer(result["total"]) != 3 || len(items) != 1 || integer(result["offset"]) != int64(offset) {
+			t.Fatalf("wrong page: %s", jsonText(result))
+		}
+		identity := firstString(items[0]["workspace_id"]) + ":" + firstString(items[0]["conversation_id"])
+		if seen[identity] {
+			t.Fatalf("duplicate page item: %s", identity)
+		}
+		seen[identity] = true
+		if offset < 2 && integer(result["next_offset"]) != int64(offset+1) || offset == 2 && result["next_offset"] != nil {
+			t.Fatalf("wrong continuation: %s", jsonText(result))
+		}
+	}
+	metadata := auditCall(t, catalog, "trace_worktree", map[string]any{"query": "metadata-agent", "repository": "audit"})
+	if integer(metadata["total"]) != 1 || metadata["items"].([]map[string]any)[0]["conversation_id"] != nil {
+		t.Fatalf("filtered metadata-only workspace missing: %s", jsonText(metadata))
+	}
+	addAuditMessage(t, catalog, "other-reference", "other-conversation", "user", "message", "Discussion of agent-a123", 1, "2026-10-06")
+	for _, test := range []struct {
+		query string
+		total int
+	}{
+		{"agent-a123", 1}, {"metadata-agent", 0}, {"shared-agent-missing", 0},
+	} {
+		result := auditCall(t, catalog, "trace_worktree", map[string]any{"query": test.query, "repository": "other", "max_output_tokens": 4000})
+		if integer(result["total"]) != int64(test.total) || result["search_scope"] != "indexed_message_phrases" {
+			t.Fatalf("out-of-repository metadata blocked fallback: %s", jsonText(result))
+		}
+	}
+}
+
 func TestMCPTraceWorktreeMetadataWithoutMessages(t *testing.T) {
 	catalog := auditFixture(t)
 	if _, err := catalog.DB.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,location,branch,indexed_at)

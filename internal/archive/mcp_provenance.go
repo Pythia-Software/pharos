@@ -221,7 +221,7 @@ func (c *Catalog) traceWorktree(args map[string]any) (map[string]any, error) {
 		values[index] = query
 	}
 	if repository := firstString(args["repository"]); repository != "" {
-		base += " AND (r.display_name LIKE ? OR r.canonical_remote LIKE ?)"
+		base += " AND w.repository_id IN (SELECT id FROM repositories WHERE display_name LIKE ? OR canonical_remote LIKE ?)"
 		values = append(values, "%"+repository+"%", "%"+repository+"%")
 	}
 	transaction, err := c.DB.Begin()
