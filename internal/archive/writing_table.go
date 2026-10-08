@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gbdubs/pharos/internal/querytable"
 )
@@ -69,15 +70,23 @@ func (c *Catalog) writingData(ctx context.Context) ([]map[string]any, map[string
 }
 
 func (c *Catalog) computeWritingData(ctx context.Context) (writingTable, error) {
+	return c.computeWritingDataByPeriod(ctx, false)
+}
+
+func (c *Catalog) computeWritingDataByPeriod(ctx context.Context, hourly bool) (writingTable, error) {
 	parents, launched, err := foldedParents(ctx, c.DB)
 	if err != nil {
 		return writingTable{}, err
 	}
-	sums := []string{"workspace_id", "day", "COUNT(*) messages", "SUM(typed_words>0) typed_messages", "MAX(typed_words) longest_typed", "MIN(sent_at) first_sent", "MAX(sent_at) last_sent"}
+	period := "day"
+	if hourly {
+		period = "strftime('%Y-%m-%dT%H:00:00Z',sent_at)"
+	}
+	sums := []string{"workspace_id", period + " AS day", "COUNT(*) messages", "SUM(typed_words>0) typed_messages", "MAX(typed_words) longest_typed", "MIN(sent_at) first_sent", "MAX(sent_at) last_sent"}
 	for _, column := range authorshipColumns() {
 		sums = append(sums, "SUM("+column+") "+column)
 	}
-	result, err := c.DB.QueryContext(ctx, "SELECT "+strings.Join(sums, ",")+" FROM message_authorship GROUP BY workspace_id,day")
+	result, err := c.DB.QueryContext(ctx, "SELECT "+strings.Join(sums, ",")+" FROM message_authorship GROUP BY workspace_id,"+period)
 	if err != nil {
 		return writingTable{}, err
 	}
@@ -260,6 +269,30 @@ func (c *Catalog) writingSeries(ctx context.Context, request writingSeriesReques
 	if err != nil {
 		return nil, err
 	}
+	if request.Hourly {
+		table, hourlyErr := cachedValue(ctx, c, "writing-hourly:"+c.clock().Format("2006-01-02"), func(ctx context.Context) (writingTable, error) {
+			return c.computeWritingDataByPeriod(ctx, true)
+		})
+		if hourlyErr != nil {
+			return nil, hourlyErr
+		}
+		daily = table.daily
+	}
+	var start, end time.Time
+	for _, bound := range []struct {
+		raw    string
+		target *time.Time
+	}{{request.Start, &start}, {request.End, &end}} {
+		raw, target := bound.raw, bound.target
+		if raw == "" {
+			continue
+		}
+		parsed, ok := parseTime(raw)
+		if !ok {
+			return nil, fmt.Errorf("invalid writing series timestamp %q", raw)
+		}
+		*target = parsed
+	}
 	matched, err := querytable.Filter(rows, request.Where, schema)
 	if err != nil {
 		return nil, err
@@ -272,7 +305,18 @@ func (c *Catalog) writingSeries(ctx context.Context, request writingSeriesReques
 	for _, row := range matched {
 		counted := false
 		for day, entry := range daily[firstString(row["id"])] {
-			if request.From != "" && day < request.From || request.To != "" && day > request.To {
+			calendarDay := day
+			if request.Hourly {
+				at, ok := parseTime(day)
+				if !ok {
+					continue
+				}
+				calendarDay = at.Local().Format("2006-01-02")
+				if !start.IsZero() && at.Add(time.Hour).Compare(start) <= 0 || !end.IsZero() && at.Compare(end) >= 0 {
+					continue
+				}
+			}
+			if request.From != "" && calendarDay < request.From || request.To != "" && calendarDay > request.To {
 				continue
 			}
 			counted = true
@@ -300,6 +344,23 @@ func (c *Catalog) writingSeries(ctx context.Context, request writingSeriesReques
 		series = append(series, writingCounts(entry, map[string]any{"day": entry.day}))
 	}
 	sort.Slice(series, func(i, j int) bool { return firstString(series[i]["day"]) < firstString(series[j]["day"]) })
+	hourlySeries := series
+	if request.Hourly {
+		calendar := map[string]*writingDay{}
+		for key, entry := range byDay {
+			at, _ := parseTime(key)
+			day := at.Local().Format("2006-01-02")
+			if calendar[day] == nil {
+				calendar[day] = newWritingDay(day)
+			}
+			calendar[day].add(entry)
+		}
+		series = make([]map[string]any, 0, len(calendar))
+		for _, entry := range calendar {
+			series = append(series, writingCounts(entry, map[string]any{"day": entry.day}))
+		}
+		sort.Slice(series, func(i, j int) bool { return firstString(series[i]["day"]) < firstString(series[j]["day"]) })
+	}
 	first, last := "", ""
 	if len(series) > 0 {
 		first, last = firstString(series[0]["day"]), firstString(series[len(series)-1]["day"])
@@ -307,6 +368,9 @@ func (c *Catalog) writingSeries(ctx context.Context, request writingSeriesReques
 	result := map[string]any{
 		"works": works, "daily": series,
 		"totals": writingCounts(total, map[string]any{"first_day": nilIfEmpty(first), "last_day": nilIfEmpty(last)}),
+	}
+	if request.Hourly {
+		result["hourly"] = hourlySeries
 	}
 	if request.Split != "" {
 		values := make([]map[string]any, 0, len(split))
@@ -335,8 +399,11 @@ func writingCounts(entry *writingDay, into map[string]any) map[string]any {
 
 // writingSeriesRequest is the body of POST /api/query/writing/series.
 type writingSeriesRequest struct {
-	Where []querytable.WhereTerm `json:"where"`
-	Split string                 `json:"split,omitempty"`
-	From  string                 `json:"from,omitempty"`
-	To    string                 `json:"to,omitempty"`
+	Where  []querytable.WhereTerm `json:"where"`
+	Hourly bool                   `json:"hourly,omitempty"`
+	Start  string                 `json:"start,omitempty"`
+	End    string                 `json:"end,omitempty"`
+	Split  string                 `json:"split,omitempty"`
+	From   string                 `json:"from,omitempty"`
+	To     string                 `json:"to,omitempty"`
 }

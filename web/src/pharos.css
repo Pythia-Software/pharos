@@ -416,3 +416,9 @@ button.usage-legend-item:hover { border-color: var(--line); color: var(--ink); }
 @media (max-width: 760px) { .authored-head { flex-direction: column; } }
 .authored-unfold { display: inline; margin: 0; padding: 0 6px; border: 1px solid color-mix(in srgb, var(--span) 60%, var(--line)); border-radius: 999px; background: var(--panel); color: var(--muted); font-size: var(--fs-xs); line-height: 1.5; vertical-align: 1px; cursor: pointer; }
 .authored-unfold:hover { color: var(--ink); border-color: var(--span); }
+
+.usage-period-custom { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
+.usage-period-custom.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel)); }
+.usage-presets .usage-period-custom button { border: 0; background: transparent; padding-left: 3px; }
+.usage-period-custom input { width: 3.5em; min-width: 0; border: 0; border-radius: 3px; padding: 1px 0 1px 5px; background: transparent; color: var(--ink); font: inherit; }
+.usage-period-custom input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

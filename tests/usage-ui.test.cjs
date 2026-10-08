@@ -12,9 +12,9 @@ const html = source.slice(source.indexOf("r'''") + 4, source.lastIndexOf("'''"))
 
 const day = offset => { const d = new Date(); d.setDate(d.getDate() - offset); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 // The usage dataset's current day, week (Monday), and month keys.
-const periodKey = period => { const d = new Date(); if (period === 'week') d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; return period === 'month' ? key.slice(0, 7) : key; };
+const periodKey = period => { const d = new Date(); if (period === 'hour') { d.setUTCMinutes(0, 0, 0); return d.toISOString(); } if (period === 'week') d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; return period === 'month' ? key.slice(0, 7) : key; };
 const counts = (typed, pasted, harness) => ({ typed_words: typed, typed_chars: typed * 6, pasted_words: pasted, pasted_chars: pasted * 6, harness_words: harness, harness_chars: harness * 6 });
-const modelNames = ['opus-5-5', 'gpt-6-sol', 'gemini-3.8-flash', 'sonnet-5-5', 'gpt-5.3-codex', 'small-a', 'small-b', 'small-c', 'small-d', 'small-e', 'small-f', 'small-g', 'small-h', 'small-i'];
+const modelNames = ['opus-5-5', 'gpt-6-sol', 'gemini-3.8-flash', 'sonnet-5-5', 'gpt-5.3-codex', 'small-a', 'small-b', 'small-c', 'small-d', 'small-e', 'small-f', 'small-g', 'small-h', 'small-i', 'small-j', 'small-k', 'small-l', 'small-m', 'small-n', 'small-o', 'small-p', 'small-q', 'small-r', 'small-s'];
 
 test('Usage toggles between tokens and writing, remembers the choice, and charts follow table filters', async () => {
   const { decodeQuery, encodeQuery, EMPTY_QUERY } = await import(pathToFileURL(path.join(root, 'web/node_modules/@pythia-software/query-table-core/dist/index.js')).href);
@@ -36,13 +36,13 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
       if (url.pathname === '/api/query/writing/series') {
         const body = route.request().postDataJSON();
         series.push(body);
-        return json({ works: 2, daily: [{ day: day(1), typed_messages: 3, messages: 5, ...counts(120, 40, 900) }, { day: day(9), typed_messages: 2, messages: 2, ...counts(80, 0, 0) }], totals: { messages: 7, typed_messages: 5, first_day: day(9), ...counts(200, 40, 900) } });
+        return json({ works: 2, ...(body.hourly ? { hourly: [{ day: periodKey('hour'), typed_messages: 5, ...counts(200, 40, 900) }] } : {}), daily: [{ day: day(1), typed_messages: 3, messages: 5, ...counts(120, 40, 900) }, { day: day(9), typed_messages: 2, messages: 2, ...counts(80, 0, 0) }], totals: { messages: 7, typed_messages: 5, first_day: day(9), ...counts(200, 40, 900) } });
       }
       if (url.pathname === '/api/query/usage/aggregations') {
         const body = route.request().postDataJSON();
         aggregations.push(body);
         return json({ metrics: body.aggregations.map((aggregation, index) => ({ id: aggregation.id, buckets: aggregation.groupBy?.[1] === 'model_family'
-          ? [...modelNames.map((model, rank) => ({ keys: [periodKey(aggregation.groupBy[0]), model], value: 1400 - 100 * rank, count: 1 })), ...(aggregation.groupBy[0] === 'day' ? [{ keys: [day(1), modelNames[0]], value: 900, count: 1 }, { keys: [day(1), modelNames[1]], value: 100, count: 1 }] : [])]
+          ? [...modelNames.map((model, rank) => ({ keys: [periodKey(aggregation.groupBy[0]), model], value: aggregation.field === 'cost_usd' ? rank === 0 ? 17 : 1 : 3400 - 100 * rank, count: 1 })), ...(aggregation.groupBy[0] === 'day' ? [{ keys: [day(1), modelNames[0]], value: 900, count: 1 }, { keys: [day(1), modelNames[1]], value: 100, count: 1 }] : [])]
           : [{ keys: [periodKey(aggregation.groupBy?.[0] ?? 'day'), ...((aggregation.groupBy?.length ?? 0) > 1 ? ['claude'] : [])], value: aggregation.field === 'cost_usd' ? 1_250_000_000_000 : 2_500_000_000 * (index + 1), count: 1 }] })) });
       }
       if (url.pathname.endsWith('/distinct')) return json({ values: [], hasMore: false });
@@ -63,6 +63,55 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     assert.equal(await page.locator('.token-summary .mcp-metric').count(), 5);
     assert.equal(await page.getByRole('group', { name: 'Usage view' }).getByRole('button', { name: 'Machine Tokens' }).getAttribute('aria-pressed'), 'true');
     assert.equal(await page.locator('.refresh-prices-notice').count(), 0);
+    // Scale changes redraw locally and are remembered across reloads.
+    const scaleControls = page.getByRole('group', { name: 'Scale', exact: true });
+    const scaleRequests = aggregations.length;
+    const scaleQuery = new URL(page.url()).searchParams.get('q_usage');
+    assert.equal(await scaleControls.getByRole('button', { name: 'Half-and-half' }).getAttribute('aria-pressed'), 'true');
+    await page.locator('.usage-chart-break').waitFor();
+    await scaleControls.getByRole('button', { name: 'Linear', exact: true }).click();
+    assert.equal(await page.locator('.usage-chart-break').count(), 0);
+    assert.match(await page.locator('.usage-chart-bars').getAttribute('aria-label'), /linear scale/);
+    const linearGrid = await page.locator('.usage-chart-grid').evaluateAll(lines => lines.map(line => [line.textContent, line.style.bottom]));
+    await scaleControls.getByRole('button', { name: 'Logarithmic' }).click();
+    assert.match(await page.locator('.usage-chart-bars').getAttribute('aria-label'), /logarithmic scale/);
+    assert.notDeepEqual(await page.locator('.usage-chart-grid').evaluateAll(lines => lines.map(line => [line.textContent, line.style.bottom])), linearGrid);
+    assert.equal(aggregations.length, scaleRequests);
+    assert.equal(new URL(page.url()).searchParams.get('q_usage'), scaleQuery);
+    await page.reload();
+    await page.locator('.token-summary .mcp-metric').first().waitFor();
+    assert.equal(await scaleControls.getByRole('button', { name: 'Logarithmic' }).getAttribute('aria-pressed'), 'true');
+    await scaleControls.getByRole('button', { name: 'Half-and-half' }).click();
+    // Editable period controls use hourly data, combine buckets, and persist.
+    const by = page.getByRole('group', { name: 'By', exact: true });
+    await by.getByRole('button', { name: 'Hour', exact: true }).click();
+    await page.locator('.usage-chart h3', { hasText: 'Tokens per hour by token type' }).waitFor();
+    await page.waitForFunction(() => document.querySelector('.usage-chart-bars > span:last-child')?.getAttribute('aria-label')?.includes('Uncached input'));
+    assert.deepEqual(aggregations.at(-1).aggregations[0].groupBy, ['hour']);
+    await page.locator('.usage-chart-bars > span').last().focus();
+    await page.keyboard.press('Enter');
+    const hourQuery = decodeQuery(new URL(page.url()).searchParams.get('q_usage'));
+    const hourFrom = hourQuery.where.find(term => term.field === 'last_usage_at' && term.op === '>=');
+    assert.equal(new Date(hourFrom.value).getTime(), new Date(periodKey('hour')).getTime());
+    await page.locator('.usage-chart').getByRole('button', { name: 'All time', exact: true }).click();
+
+    await by.getByRole('spinbutton', { name: 'Number of hours' }).fill('6');
+    await page.locator('.usage-chart h3', { hasText: 'Tokens per 6 hours by token type' }).waitFor();
+    assert.equal(await by.getByRole('button', { name: 'N hours', exact: true }).getAttribute('aria-pressed'), 'true');
+    await page.getByRole('spinbutton', { name: 'Smoothing periods' }).fill('2');
+    assert.equal(await page.locator('.usage-rolling-unit').innerText(), '6-hour periods');
+    await page.getByRole('spinbutton', { name: 'Smoothing periods' }).fill('0');
+    await by.getByRole('spinbutton', { name: 'Number of days' }).fill('4');
+    await page.locator('.usage-chart h3', { hasText: 'Tokens per 4 days by token type' }).waitFor();
+    assert.deepEqual(aggregations.at(-1).aggregations[0].groupBy, ['day']);
+    await page.reload();
+    await page.locator('.usage-chart h3', { hasText: 'Tokens per 4 days by token type' }).waitFor();
+    assert.equal(await by.getByRole('spinbutton', { name: 'Number of days' }).inputValue(), '4');
+    assert.equal(await by.getByRole('spinbutton', { name: 'Number of hours' }).inputValue(), '6');
+    await by.getByRole('spinbutton', { name: 'Number of days' }).fill('0');
+    await by.getByRole('button', { name: 'Week', exact: true }).click();
+    assert.equal(await by.getByRole('spinbutton', { name: 'Number of days' }).inputValue(), '4');
+    await page.locator('.usage-chart h3', { hasText: 'Tokens per week by token type' }).waitFor();
     pricing = { ...pricing, unpriced_models: [{ model: 'new-model', provider: 'test', tokens: 50, first_day: day(1), last_day: day(1) }] };
     await page.evaluate(() => window.dispatchEvent(new Event('pharos:usage-refresh')));
     await page.locator('.refresh-prices-notice').waitFor();
@@ -95,6 +144,15 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     await page.locator('.usage-chart-legend').getByRole('button', { name: 'Show all', exact: true }).click();
     assert.equal(aggregations.length, tokenRequests);
 
+    // Cost share also falls back from token type, while token share supports it.
+    await page.locator('.usage-chart').getByRole('button', { name: '% Cost', exact: true }).click();
+    await page.locator('#usage .usage-chart h3', { hasText: 'Cost share per week by provider' }).waitFor();
+    assert.equal(await page.locator('.usage-chart').getByRole('button', { name: 'Token type' }).isDisabled(), true);
+    assert.equal(aggregations.at(-1).aggregations[0].field, 'cost_usd');
+    await page.locator('.usage-chart').getByRole('button', { name: '% Tokens', exact: true }).click();
+    await page.locator('#usage .usage-chart h3', { hasText: 'Token share per week by token type' }).waitFor();
+    assert.equal(await page.locator('.usage-chart').getByRole('button', { name: 'Token type' }).isDisabled(), false);
+
     // Cost can't split by token type, so the split falls back to provider.
     await page.locator('.usage-chart').getByRole('button', { name: 'Cost', exact: true }).click();
     await page.locator('#usage .usage-chart h3', { hasText: 'API cost per week by provider' }).waitFor();
@@ -113,33 +171,34 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     assert.doesNotMatch(await page.locator('.usage-chart-axis').innerText(), /peak/);
 
     // The hover key lists each series with its color, and Other names what it holds.
+    await page.locator('.usage-chart').getByRole('button', { name: 'Tokens', exact: true }).click();
     await page.locator('.usage-chart').getByRole('button', { name: 'Model', exact: true }).click();
     await page.locator('.usage-chart-legend', { hasText: 'Other (9)' }).waitFor();
     const swatchColors = () => page.locator('.usage-chart-legend .usage-legend-item:not(.usage-legend-clear)').evaluateAll(items => Object.fromEntries(items.map(item => [item.getAttribute('aria-label') ?? item.textContent.trim(), getComputedStyle(item.querySelector('.usage-swatch')).backgroundColor])));
     const initialColors = await swatchColors();
-    assert.deepEqual(await page.locator('.usage-legend-provider').allTextContents(), ['Anthropic', 'Google', 'OpenAI']);
+    assert.deepEqual(await page.locator('.usage-legend-provider').allTextContents(), ['Anthropic', 'Google', 'OpenAI', 'Other providers']);
     assert.deepEqual(await page.locator('.usage-chart-legend [role="group"][aria-label="Anthropic"] button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label'))), ['opus-5-5', 'sonnet-5-5']);
     await page.locator('.usage-chart-bars > span').last().hover();
     const tip = page.locator('.usage-chart-tip');
     await tip.waitFor();
-    assert.equal(await tip.locator(':scope > ul > li').count(), 6);
-    assert.equal(await tip.locator(':scope > ul > li .usage-swatch').count(), 6);
-    assert.match(await tip.locator('.usage-chart-tip-parts').innerText(), /small-a[\s\S]*small-b/);
+    assert.equal(await tip.locator(':scope > ul > li').count(), 16);
+    assert.equal(await tip.locator(':scope > ul > li .usage-swatch').count(), 16);
+    assert.match(await tip.locator('.usage-chart-tip-parts').innerText(), /small-k[\s\S]*small-l/);
     assert.match(await tip.innerText(), /Total/);
     await page.locator('.usage-chart-legend').getByRole('button', { name: 'opus-5-5', exact: true }).click();
     await page.getByRole('menu', { name: 'Filter opus-5-5' }).getByRole('menuitem', { name: /^Show all except this value/ }).click();
-    assert.equal(await page.locator('.usage-chart-bars > span').last().locator('i').count(), 5);
+    assert.equal(await page.locator('.usage-chart-bars > span').last().locator('i').count(), 15);
     assert.match(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), /Other \(9\)/);
     assert.doesNotMatch(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), /opus-5-5/);
     await page.locator('.usage-chart-legend').getByRole('button', { name: 'Show all', exact: true }).click();
     await page.locator('.usage-chart-legend').getByRole('button', { name: 'Other (9)' }).click();
     await page.locator('.usage-chart-legend').getByRole('button', { name: 'Other (4)' }).waitFor();
-    assert.equal(await page.locator('.usage-chart-legend').getByRole('button', { name: 'small-a' }).count(), 1);
+    assert.equal(await page.locator('.usage-chart-legend').getByRole('button', { name: 'small-k' }).count(), 1);
     await page.locator('.usage-chart-legend').getByRole('button', { name: 'Other (4)' }).click();
     assert.equal(await page.locator('.usage-chart-legend').getByRole('button', { name: /^Other/ }).count(), 0);
     const expandedColors = await swatchColors();
     assert.equal(new Set(Object.values(expandedColors)).size, modelNames.length);
-    for (const model of modelNames.slice(0, 5)) assert.equal(expandedColors[model], initialColors[model]);
+    for (const model of modelNames.slice(0, 15)) assert.equal(expandedColors[model], initialColors[model]);
     assert.deepEqual(await page.locator('.usage-legend-provider').allTextContents(), ['Anthropic', 'Google', 'OpenAI', 'Other providers']);
     assert.deepEqual(await page.locator('.usage-chart-bars > span').last().locator('i').evaluateAll(parts => parts.map(part => getComputedStyle(part).backgroundColor)), Object.values(expandedColors));
     const opus = page.locator('.usage-chart-legend').getByRole('button', { name: /^opus-5-5/ });
@@ -166,7 +225,7 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     await page.waitForFunction(() => document.querySelectorAll('.usage-chart-legend button[aria-pressed="true"]').length === 1);
     await opus.click();
     await menu.getByRole('menuitem', { name: /^Show all except this value/ }).click();
-    await page.waitForFunction(() => document.querySelectorAll('.usage-chart-legend button[aria-pressed="true"]').length === 13);
+    await page.waitForFunction(() => document.querySelectorAll('.usage-chart-legend button[aria-pressed="true"]').length === 23);
     assert.equal(await opus.getAttribute('aria-pressed'), 'false');
     assert.equal(await page.locator('.usage-chart-bars > span').last().locator('i').count(), modelNames.length - 1);
     const exceptQuery = decodeQuery(new URL(page.url()).searchParams.get('q_usage'));
@@ -201,11 +260,15 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     await opus.click();
     await menu.getByRole('menuitem', { name: 'Show all values', exact: true }).click();
     await page.waitForFunction(() => !document.querySelector('.usage-legend-clear'));
-    await page.locator('.usage-chart').getByRole('button', { name: '%', exact: true }).click();
+    await page.locator('.usage-chart').getByRole('button', { name: '% Tokens', exact: true }).click();
     await page.locator('#usage .usage-chart h3', { hasText: 'Token share per day by model' }).waitFor();
     await page.waitForFunction(() => document.querySelector('.usage-chart-bars > span:last-child')?.getAttribute('aria-label')?.includes('100% in all'));
     assert.match(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), /100% in all/);
     assert.deepEqual(await page.locator('.usage-chart-grid span').allTextContents(), ['25%', '50%', '75%', '100%']);
+    assert.equal(await scaleControls.getByRole('button', { name: 'Linear', exact: true }).getAttribute('aria-pressed'), 'true');
+    assert.equal(await scaleControls.getByRole('button', { name: 'Logarithmic' }).isDisabled(), true);
+    assert.equal(await scaleControls.getByRole('button', { name: 'Half-and-half' }).isDisabled(), true);
+
     assert.equal(await page.locator('.usage-chart-bars > span').last().locator('i').evaluateAll(parts => Math.round(parts.reduce((sum, part) => sum + parseFloat(part.style.height), 0))), 100);
     assert.equal(await page.locator('.usage-chart-bars > span').nth(28).locator('i').first().evaluate(part => Math.round(parseFloat(part.style.height))), 90);
     assert.deepEqual(await swatchColors(), expandedColors);
@@ -219,7 +282,7 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     const smoothingQuery = new URL(page.url()).searchParams.get('q_usage');
     await rolling.fill('2');
     await page.locator('.usage-chart-average-label', { hasText: '2-day rolling average' }).waitFor();
-    assert.match(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), /opus-5-5 20%/);
+    assert.match(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), /opus-5-5 7.8%/);
     assert.equal(aggregations.length, smoothingRequests);
     assert.equal(new URL(page.url()).searchParams.get('q_usage'), smoothingQuery);
     assert.deepEqual(await swatchColors(), expandedColors);
@@ -232,10 +295,28 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     await page.reload();
     await page.locator('.usage-chart-average-label', { hasText: '2-day rolling average' }).waitFor();
     assert.equal(await rolling.inputValue(), '2');
-    await page.waitForFunction(() => document.querySelector('.usage-chart-bars > span:last-child')?.getAttribute('aria-label')?.includes('opus-5-5 20%'));
+    await page.waitForFunction(() => document.querySelector('.usage-chart-bars > span:last-child')?.getAttribute('aria-label')?.includes('opus-5-5 7.8%'));
     await rolling.fill('0');
     await page.locator('.usage-chart-average-label').waitFor({ state: 'detached' });
-    assert.match(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), /opus-5-5 13\.3%/);
+    assert.match(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), /opus-5-5 6\.3%/);
+    // Cost share uses dollars rather than token counts and keeps percentage axes.
+    await page.locator('.usage-chart').getByRole('button', { name: '% Cost', exact: true }).click();
+    await page.locator('#usage .usage-chart h3', { hasText: 'Cost share per day by model' }).waitFor();
+    await page.waitForFunction(() => document.querySelector('.usage-chart-bars > span:last-child')?.getAttribute('aria-label')?.includes('opus-5-5 42.5%'));
+    assert.equal(aggregations.at(-1).aggregations[0].field, 'cost_usd');
+    assert.deepEqual(await page.locator('.usage-chart-grid span').allTextContents(), ['25%', '50%', '75%', '100%']);
+    assert.equal(await scaleControls.getByRole('button', { name: 'Logarithmic' }).isDisabled(), true);
+    await opus.click();
+    await menu.getByRole('menuitem', { name: /^Show only this value/ }).click();
+    await page.waitForFunction(() => document.querySelector('.usage-chart-bars > span:last-child')?.getAttribute('aria-label')?.includes('opus-5-5 100%'));
+    await page.locator('.usage-chart-legend').getByRole('button', { name: 'Show all', exact: true }).click();
+    await page.reload();
+    await page.waitForFunction(() => document.querySelector('.usage-chart-bars > span:last-child')?.getAttribute('aria-label')?.includes('opus-5-5 42.5%'));
+    assert.equal(await page.locator('.usage-chart').getByRole('button', { name: '% Cost', exact: true }).getAttribute('aria-pressed'), 'true');
+    await page.locator('.usage-chart').getByRole('button', { name: '% Tokens', exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('.usage-chart-bars > span:last-child')?.getAttribute('aria-label')?.includes('opus-5-5 6.3%'));
+    assert.equal(aggregations.at(-1).aggregations[0].field, 'total_tokens');
+
     await page.locator('.usage-chart').getByRole('button', { name: 'Cost', exact: true }).click();
     await page.locator('.usage-chart').getByRole('button', { name: 'Month', exact: true }).click();
     await page.locator('.usage-chart').getByRole('button', { name: '6 months' }).click();
@@ -247,6 +328,26 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     await page.getByRole('group', { name: 'Usage view' }).getByRole('button', { name: 'Human Words' }).click();
     await page.locator('.usage-chart h3', { hasText: 'Typed words per week' }).waitFor();
     assert.equal(new URL(page.url()).searchParams.get('usage'), 'writing');
+    await by.getByRole('button', { name: 'Hour', exact: true }).click();
+    await page.locator('.usage-chart h3', { hasText: 'Typed words per hour' }).waitFor();
+    await page.waitForFunction(() => document.querySelector('.usage-chart-bars > span:last-child')?.getAttribute('aria-label')?.includes('Typed 200'));
+    assert.equal(series.at(-1).hourly, true);
+    await by.getByRole('spinbutton', { name: 'Number of hours' }).fill('8');
+    await page.locator('.usage-chart h3', { hasText: 'Typed words per 8 hours' }).waitFor();
+    await by.getByRole('spinbutton', { name: 'Number of days' }).fill('2');
+    await page.locator('.usage-chart h3', { hasText: 'Typed words per 2 days' }).waitFor();
+    await page.reload();
+    await page.locator('.usage-chart h3', { hasText: 'Typed words per 2 days' }).waitFor();
+    assert.equal(await by.getByRole('spinbutton', { name: 'Number of days' }).inputValue(), '2');
+    assert.equal(await by.getByRole('spinbutton', { name: 'Number of hours' }).inputValue(), '8');
+    await by.getByRole('button', { name: 'Week', exact: true }).click();
+    await page.locator('.usage-chart h3', { hasText: 'Typed words per week' }).waitFor();
+
+    assert.equal(await scaleControls.getByRole('button', { name: 'Half-and-half' }).getAttribute('aria-pressed'), 'true');
+    await scaleControls.getByRole('button', { name: 'Logarithmic' }).click();
+    assert.match(await page.locator('.usage-chart-bars').getAttribute('aria-label'), /logarithmic scale/);
+    await scaleControls.getByRole('button', { name: 'Linear', exact: true }).click();
+
     await page.locator('.writing-table td.num', { hasText: '40' }).first().waitFor();
     assert.match(await page.locator('.usage-cards').innerText(), /200[\s\S]*Up to 240/);
     await page.locator('#usage .qt-row', { hasText: 'Deep work' }).waitFor();
@@ -265,6 +366,7 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     await page.reload();
     await page.locator('.usage-chart-average-label', { hasText: '3-week rolling average' }).waitFor();
     assert.equal(await rolling.inputValue(), '3');
+    assert.equal(await scaleControls.getByRole('button', { name: 'Linear', exact: true }).getAttribute('aria-pressed'), 'true');
     await rolling.fill('0');
 
     // All input stacks every category, and the series request carries the table filters.

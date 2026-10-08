@@ -211,6 +211,20 @@ func (c *Catalog) sharedDatasets(ctx context.Context, ids []string) (map[string]
 			list[index] = pickFields(row, names)
 		}
 	}
+	hourly, err := c.localUsageHourlyRows(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	names, err := sharedFieldNames("usage")
+	if err != nil {
+		return nil, nil, err
+	}
+	rows["usage_hourly"] = []map[string]any{}
+	for _, row := range hourly {
+		if slices.Contains(ids, firstString(row["workspace_id"])) {
+			rows["usage_hourly"] = append(rows["usage_hourly"], pickFields(row, names))
+		}
+	}
 	return rows, details, nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -282,7 +283,13 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 			}
 			needed = append(needed, aggregation.GroupBy...)
 		}
-		rows, err := s.queryTableRows(r.Context(), dataset, r.URL.Query(), libraryFieldsFor(needed...))
+		var rows []map[string]any
+		if dataset == "usage" && slices.Contains(needed, "hour") {
+			rows, err = s.Catalog.hourlyUsageForAggregation(r.Context(), request.Where, schema)
+			request.Where = nil
+		} else {
+			rows, err = s.queryTableRows(r.Context(), dataset, r.URL.Query(), libraryFieldsFor(needed...))
+		}
 		if err != nil {
 			writeError(w, err, http.StatusInternalServerError)
 			return
