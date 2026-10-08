@@ -316,7 +316,10 @@
     const action = ensureHeaderAction();
     const active = status?.activities?.some(activity => ['capture', 'capture-other', 'sync', 'index'].includes(activity.kind));
     const incremental = Boolean(window.pharosSync?.isBusy());
-    const busy = headerCaptureIndexRunning || Boolean(hostsBusy) || Boolean(active) || incremental || Boolean(upgradeStatus?.running) || Boolean(hostsData?.index.active || hostsData?.index.sync_active || hostsData?.capture.active);
+    // Source snapshots stop refreshing outside Settings. Use the live drive
+    // activity and locally awaited operations so a cached run cannot keep
+    // the header spinning after the drive panel reports that it finished.
+    const busy = headerCaptureIndexRunning || Boolean(hostsBusy) || Boolean(active) || incremental || Boolean(upgradeStatus?.running);
     if (action) {
       action.disabled = busy;
       action.setAttribute('aria-busy', String(busy));
