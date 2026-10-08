@@ -9,6 +9,63 @@ const { chromium } = createRequire(path.join(root, '.context/browser-tests/packa
 const source = fs.readFileSync(path.join(root, 'internal/archive/assets/ui.py'), 'utf8');
 const html = source.slice(source.indexOf("r'''") + 4, source.lastIndexOf("'''"));
 
+test('The header stops spinning when work finishes after leaving Settings', async () => {
+  const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  try {
+    for (const kind of ['capture', 'index', 'sync']) {
+      const page = await browser.newPage();
+      let active = true;
+      let hostReads = 0;
+      await page.route('http://sync.test/**', route => {
+        const url = new URL(route.request().url());
+        const json = body => route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) });
+        if (url.pathname.startsWith('/assets/')) {
+          const file = path.join(root, 'internal/archive/assets', path.basename(url.pathname));
+          return route.fulfill({ contentType: file.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.existsSync(file) ? fs.readFileSync(file) : '' });
+        }
+        if (!url.pathname.startsWith('/api/')) return route.fulfill({ contentType: 'text/html', body: html });
+        if (url.pathname === '/api/library/status') return json({ portable: true, idle: !active, drive: { name: 'Replica SSD', mounted: true, ejectable: false }, activities: active ? [{ kind, label: 'Indexing sources' }] : [] });
+        if (url.pathname === '/api/index') {
+          hostReads++;
+          return json({ active: active && kind === 'index', sync_active: active && kind === 'sync', hosts: [] });
+        }
+        if (url.pathname === '/api/capture') return json({ active: active && kind === 'capture', runs: [] });
+        if (url.pathname === '/api/activity') return json({ runs: active && kind !== 'capture' ? [{ id: 'external', kind: 'automatic-sync', state: 'running', phase: 'checking' }] : [] });
+        if (url.pathname === '/api/sources') return json({ enabled: 2, configured: 2, items: [] });
+        if (url.pathname === '/api/sync/status') return json({ settings: { enabled: false, interval_seconds: 300 }, busy: active, history: [], issues: [] });
+        if (url.pathname === '/api/sync/issues') return json({ issues: [] });
+        if (url.pathname === '/api/upgrade') return json({ running: false, needed: false, steps: [], repository_renames: {} });
+        return json({ items: [], rows: [], metrics: [], counts: {}, setup: {}, usage: { running: false } });
+      });
+      await page.goto('http://sync.test/settings/sources');
+      await page.evaluate(() => window.pharosLibrary.refreshSettings());
+      await page.waitForFunction(() => document.getElementById('headerSync')?.getAttribute('aria-busy') === 'true');
+      await page.evaluate(() => {
+        history.pushState(null, '', '/library');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      await page.waitForFunction(() => !document.getElementById('settings').classList.contains('active'));
+      // Settings no longer refreshes here. Let the external work finish
+      // while those source snapshots remain cached.
+      await page.evaluate(() => window.pharosLibrary.refreshSettings());
+      const readsBeforeFinish = hostReads;
+      active = false;
+      await page.evaluate(async () => {
+        await window.pharosSync.refresh();
+        await window.pharosLibrary.refresh();
+      });
+      await page.locator('#pharosDrive').click();
+      await page.getByRole('dialog', { name: 'Library drive' }).getByText('Nothing is running.', { exact: true }).waitFor();
+      assert.equal(await page.locator('#headerSync').getAttribute('aria-busy'), 'false', `${kind}: the spinner follows current drive activity`);
+      assert.equal(await page.locator('#headerSync').isEnabled(), true, `${kind}: another index can be started`);
+      assert.equal(await page.locator('#headerSync svg').evaluate(icon => getComputedStyle(icon).animationName), 'none', `${kind}: no spinning animation remains`);
+      assert.equal(hostReads, readsBeforeFinish, `${kind}: the cached settings snapshot was not refreshed`);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+});
+
 test('Index changes runs the incremental run, shares busy state with a Stop in the drive panel, and exposes cadence, source selection, resume and exhaustive verification', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
   const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
