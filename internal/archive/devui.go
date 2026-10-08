@@ -118,6 +118,9 @@ func (d *devUI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		// Tell this tab apart from the installed app's.
 		html := strings.Replace(uiHTML(source), "<title>Pharos</title>", "<title>Pharos (dev)</title>", 1)
+		// Dev previews open with annotation controls, without changing the
+		// library's optional-button preferences used by the installed app.
+		html = strings.Replace(html, "</body>", "<script>if(typeof setFeedbackEnabled==='function'){document.querySelector('#feedbackToggle').hidden=false;setFeedbackEnabled(true)}</script></body>", 1)
 		writeHTML(w, html)
 	case r.Method == http.MethodGet && uiAssets[r.URL.Path].name != "":
 		asset := uiAssets[r.URL.Path]

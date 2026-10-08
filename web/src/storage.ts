@@ -1,26 +1,24 @@
 import { localStorageAdapter, normalizeQueryState, type SavedQuery, type StorageAdapter } from "@pythia-software/query-table-core";
 import { preferences } from "./preferences";
+import { collectQuery, migrateSavedQueries, readBookmarks, removeBookmark, savedQueries } from "./bookmarks";
+import { queryDatasets, readRollingWindow, rollingQueryMatches, type QueryDataset } from "./query-links";
 
 // Saved queries and each table's default view are choices the user made, so
 // they live in the library and follow it between Macs. The last-used query
 // restores where this Mac left off, so it stays in this web view's storage.
 // Keys match the package's own localStorage adapter, whose saved queries this
 // replaces: ui.py moves an existing copy into the library once.
-const SAVED_PREFIX = "query-table:saved:";
 const DEFAULT_PREFIX = "query-table:default:";
 const MAX_SAVED_QUERIES = 100;
 const MAX_SAVED_NAME_LENGTH = 200;
 
+function datasetOf(key: string): QueryDataset | undefined {
+  return queryDatasets.find(dataset => key === `pharos_${dataset}`);
+}
 function readSaved(key: string): SavedQuery[] {
-  const stored = preferences().get<unknown>(SAVED_PREFIX + key, []);
-  if (!Array.isArray(stored)) return [];
-  const saved: SavedQuery[] = [];
-  for (const item of stored.slice(0, MAX_SAVED_QUERIES)) {
-    if (!item || typeof item !== "object" || typeof item.id !== "string" || !item.id || typeof item.name !== "string" || !item.name
-      || typeof item.savedAt !== "number" || !Number.isFinite(item.savedAt) || !item.query || typeof item.query !== "object") continue;
-    saved.push({ id: item.id, name: item.name, savedAt: item.savedAt, query: normalizeQueryState(item.query) });
-  }
-  return saved;
+  migrateSavedQueries();
+  const dataset = datasetOf(key);
+  return dataset ? savedQueries(dataset) : [];
 }
 
 function readDefaultId(key: string): string | null {
@@ -60,17 +58,17 @@ export function libraryStorageAdapter(): StorageAdapter {
       const items = readSaved(key);
       if (items.length >= MAX_SAVED_QUERIES) throw new Error(`At most ${MAX_SAVED_QUERIES} saved queries are allowed.`);
       if (items.some(saved => saved.name === normalizedName)) throw new Error(`Saved query "${normalizedName}" already exists.`);
-      const item: SavedQuery = {
-        id: `${savedAt}-${Math.round((savedAt * 9301 + 49297) % 233280)}`,
-        name: normalizedName,
-        savedAt,
-        query: normalizeQueryState(query),
-      };
-      preferences().set(SAVED_PREFIX + key, [...items, item]);
-      return item;
+      const dataset = datasetOf(key);
+      if (!dataset) throw new Error("Unknown saved-query dataset.");
+      const candidate = readRollingWindow(new URLSearchParams(location.search), dataset);
+      const window = candidate && rollingQueryMatches(query, candidate) ? candidate : undefined;
+      const bookmark = collectQuery(dataset, normalizeQueryState(query), normalizedName, { savedAt, window, dedupe: false });
+      return { id: bookmark.savedQueryId ?? bookmark.id, name: bookmark.title, savedAt, query: normalizeQueryState(query) };
     },
     async deleteSaved(key, id) {
-      preferences().set(SAVED_PREFIX + key, readSaved(key).filter(query => query.id !== id));
+      const dataset = datasetOf(key);
+      const item = readBookmarks().find(item => item.dataset === dataset && (item.savedQueryId ?? item.id) === id || item.id === id);
+      if (item) removeBookmark(item.id);
       if (readDefaultId(key) === id) writeDefaultId(key, null);
     },
   };

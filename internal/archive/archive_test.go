@@ -1125,7 +1125,7 @@ func TestEmbeddedUIIsServedWithoutPython(t *testing.T) {
 func TestAppRoutesServeUIOnDirectNavigation(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := NewServer(config, catalog)
-	for _, path := range []string{"/library?search=debug", "/sources", "/activity", "/health", "/work/workspace_123"} {
+	for _, path := range []string{"/", "/home", "/library?search=debug", "/sources", "/activity", "/health", "/work/workspace_123"} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		request.Header.Set("Authorization", "Bearer test-token")
 		response := httptest.NewRecorder()

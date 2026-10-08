@@ -5,9 +5,15 @@ import { useQueryTable, type QueryTableApi } from "@pythia-software/query-table-
 import { DataTable, FilterValueProvider, MetricsPanel, QueryBuilder, SelectionToolbar, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
 import "@pythia-software/query-table-ui/theme.css";
 import "./pharos.css";
+import { savedRollingWindow } from "./bookmarks";
 import { libraryStorageAdapter } from "./storage";
+import { HomePage } from "./home";
+import { QueryChip } from "./query-card";
+import { readRollingWindow, resolveRollingQuery, rollingQueryMatches } from "./query-links";
 import { preferences } from "./preferences";
 import { foldSeries, rollingAverageBuckets, validRollingPeriods, type ChartBucket, type ChartSeries } from "./chart-series";
+import { columnScale } from "./chart-scale";
+import { ColumnMarks } from "./column-marks";
 import { ChartLegendChip } from "./chart-legend-chip";
 import { isSliceTerm, readSlice, updateSlice, withSlice, type LegendAction, type SliceSelection } from "./chart-selection";
 import { UsageChartColorsProvider, useUsageChartPalette, useUsageTableRenderers } from "./usage-chart-colors";
@@ -97,6 +103,16 @@ type SharedExport = { works: Row[]; datasets: Record<string, Row[]>; tool_calls:
 const shared: SharedExport | null = (window as unknown as { pharosShare?: SharedExport | null }).pharosShare ?? null;
 
 const queryParameter = (dataset: Dataset) => `q_${dataset}`;
+function datasetIsVisible(dataset: Dataset) {
+  const params = new URLSearchParams(location.search), path = location.pathname;
+  if (dataset === "library") return path === "/library";
+  const usageView = params.get("usage") ?? preferences().get("pharos-usage-view", "tokens");
+  if (dataset === "usage") return path === "/usage" && usageView === "tokens";
+  if (dataset === "writing" || dataset === "writing_messages") return path === "/usage" && usageView === "writing" && (params.get("writing") === "messages") === (dataset === "writing_messages");
+  if (["tools", "tool_calls", "skill_usages"].includes(dataset)) return path === "/tools" && (params.get("tools_view") ?? "calls") === (dataset === "tools" ? "summary" : dataset === "skill_usages" ? "skills" : "calls");
+  return dataset === "mcp_calls" ? path === "/mcp" : path.startsWith("/tl1");
+}
+
 
 function updateURI(name: string, value: string) {
   const url = new URL(window.location.href);
@@ -106,6 +122,17 @@ function updateURI(name: string, value: string) {
     history.replaceState(null, "", url);
     window.dispatchEvent(new Event("pharos:uri-changed"));
   }
+}
+
+function useLocationRevision() {
+  const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    const changed = () => setRevision(value => value + 1);
+    const events = ["pharos:view", "pharos:route", "pharos:uri-changed"];
+    events.forEach(event => window.addEventListener(event, changed));
+    return () => events.forEach(event => window.removeEventListener(event, changed));
+  }, []);
+  return revision;
 }
 
 declare global {
@@ -317,17 +344,20 @@ const metricRenderers: RenderRegistry<Row> = {
 // filters apply; onFind hears how it went.
 function QuerySurface({ dataset, libraryView = "table", messageView = "table", find = "", onFind, trailing, header, selectable = false }: { dataset: Dataset; selectable?: boolean; libraryView?: LibraryView; messageView?: MessageView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode }) {
   const schema = schemas[dataset];
+  const locationRevision = useLocationRevision();
   const tableRenderers = useUsageTableRenderers(renderers);
   const onFindRef = useRef(onFind);
   onFindRef.current = onFind;
   const transport = useMemo(() => shared ? undefined : makeTransport(dataset, find, value => onFindRef.current?.(value)), [dataset, find]);
+  const [bookmarkRevision, setBookmarkRevision] = useState(0);
+  useEffect(() => { const changed = () => setBookmarkRevision(value => value + 1); window.addEventListener("pharos:bookmarks", changed); return () => window.removeEventListener("pharos:bookmarks", changed); }, []);
   // A shared file has no origin of its own to keep saved queries apart from other files'.
-  const storage = useMemo(() => shared ? memoryStorageAdapter() : libraryStorageAdapter(), []);
+  const storage = useMemo(() => shared ? memoryStorageAdapter() : libraryStorageAdapter(), [bookmarkRevision]);
   // A query in the URL (a link, or a drill-down from another table) starts
   // the table, rather than the last one used, which loads after it otherwise.
   const [urlQuery] = useState(() => {
     const token = new URLSearchParams(location.search).get(queryParameter(dataset));
-    return token === null ? undefined : decodeQuery(token);
+    return token === null ? undefined : resolveRollingQuery(decodeQuery(token), readRollingWindow(new URLSearchParams(location.search), dataset));
   });
   const api = useQueryTable<Row>({ schema, transport, clientRows: shared?.datasets[dataset], storage, debounceMs: 100, ...(urlQuery ? { initialQuery: urlQuery } : {}) });
   const apiRef = useRef(api);
@@ -353,9 +383,10 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
   const firstRouteQuery = useRef(true);
   useEffect(() => {
     const restore = () => {
+      if (!shared && !datasetIsVisible(dataset)) { firstRouteQuery.current = false; return; }
       const token = new URLSearchParams(window.location.search).get(queryParameter(dataset));
       if (token !== null) {
-        const restored = decodeQuery(token);
+        const restored = resolveRollingQuery(decodeQuery(token), readRollingWindow(new URLSearchParams(location.search), dataset));
         const canonicalToken = encodeQuery(restored);
         pendingRouteQuery.current = encodeQuery(apiRef.current.query) === canonicalToken ? null : canonicalToken;
         apiRef.current.setQuery(restored);
@@ -373,11 +404,23 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
   const initialQuery = useRef(true);
   useEffect(() => {
     if (initialQuery.current) { initialQuery.current = false; if (pendingRouteQuery.current !== null) return; }
+    if (!shared && !datasetIsVisible(dataset)) return;
     const token = encodeQuery(api.query);
     if (pendingRouteQuery.current !== null && token !== pendingRouteQuery.current) return;
+    const rolling = readRollingWindow(new URLSearchParams(location.search), dataset);
+    if (rolling && !rollingQueryMatches(api.query, rolling)) {
+      for (const name of ["window_days", "window_field", "window_dataset"]) updateURI(name, "");
+    } else if (!rolling) {
+      const savedWindow = savedRollingWindow(dataset, api.query);
+      if (savedWindow) {
+        updateURI("window_days", String(savedWindow.days)); updateURI("window_field", savedWindow.field); updateURI("window_dataset", dataset);
+      }
+    }
     pendingRouteQuery.current = null;
     updateURI(queryParameter(dataset), token);
-  }, [dataset, api.query]);
+  // Defer visibility synchronization to an effect: pharos:view precedes
+  // pharos:route during URL navigation, which must restore its query first.
+  }, [dataset, api.query, locationRevision]);
 
   return <FilterValueProvider value={filterPresentations[dataset]}>
     {header?.(api)}
@@ -588,6 +631,7 @@ function findParameters(query: string, kind: FindKind, fuzzy: boolean, caseSensi
 }
 
 function LibraryPage() {
+  const locationRevision = useLocationRevision();
   const read = () => new URLSearchParams(location.search);
   const [draft, setDraft] = useState(() => read().get("search") ?? "");
   const [search, setSearch] = useState(() => read().get("search") ?? "");
@@ -597,7 +641,23 @@ function LibraryPage() {
   const [separators, setSeparators] = useState(() => read().get("separators") === "1");
   const [view, setView] = useState<LibraryView>(() => read().get("view") === "conversation" ? "conversation" : "table");
   useEffect(() => { clearLibrarySearch = () => { setDraft(""); setSearch(""); updateURI("search", ""); }; return () => { clearLibrarySearch = undefined; }; }, []);
-  useEffect(() => { const restore = () => { const params = read(); const q = params.get("search") ?? ""; setDraft(q); setSearch(q); setKind((params.get("kind") as FindKind) || "text"); setFuzzy(params.get("fuzzy") !== "0"); setCaseSensitive(params.get("case") === "1"); setSeparators(params.get("separators") === "1"); setView(params.get("view") === "conversation" ? "conversation" : "table"); }; window.addEventListener("pharos:route", restore); return () => window.removeEventListener("pharos:route", restore); }, []);
+  useEffect(() => {
+    const restore = () => {
+      if (!shared && location.pathname !== "/library") return;
+      const params = read(), q = params.get("search") ?? "";
+      setDraft(q); setSearch(q); setKind((params.get("kind") as FindKind) || "text");
+      setFuzzy(params.get("fuzzy") !== "0"); setCaseSensitive(params.get("case") === "1"); setSeparators(params.get("separators") === "1");
+      setView(params.get("view") === "conversation" ? "conversation" : "table");
+    };
+    window.addEventListener("pharos:route", restore);
+    return () => window.removeEventListener("pharos:route", restore);
+  }, []);
+  useEffect(() => {
+    if (shared || location.pathname !== "/library") return;
+    updateURI("search", search); updateURI("kind", kind === "text" ? "" : kind);
+    updateURI("fuzzy", fuzzy ? "" : "0"); updateURI("case", caseSensitive ? "1" : ""); updateURI("separators", separators ? "1" : "");
+    updateURI("view", view === "conversation" ? view : "");
+  }, [locationRevision, search, kind, fuzzy, caseSensitive, separators, view]);
   function submit(event: FormEvent) { event.preventDefault(); const next = draft.trim(); setSearch(next); updateURI("search", next); }
   function chooseView(next: LibraryView) { setView(next); updateURI("view", next === "conversation" ? next : ""); }
   function clear() { setDraft(""); setSearch(""); updateURI("search", ""); }
@@ -914,53 +974,6 @@ function filterChange(api: QueryTableApi<Row>): FilterChange {
   return change => api.setQuery(previous => ({ ...previous, where: change(previous.where), offset: 0 }));
 }
 
-// niceTicks places two or three gridlines at round values up to peak.
-function niceTicks(peak: number): number[] {
-  if (!(peak > 0)) return [];
-  const raw = peak / 2.5, magnitude = 10 ** Math.floor(Math.log10(raw)), normal = raw / magnitude;
-  const step = (normal <= 1 ? 1 : normal <= 2 ? 2 : normal <= 5 ? 5 : 10) * magnitude, ticks: number[] = [];
-  for (let index = 1; index * step <= peak * 1.0001 && index < 10; index++) ticks.push(index * step);
-  return ticks;
-}
-
-// niceCeil rounds up to 1, 2, or 5 times a power of ten.
-function niceCeil(value: number): number {
-  const magnitude = 10 ** Math.floor(Math.log10(value)), normal = value / magnitude;
-  return (normal <= 1 ? 1 : normal <= 2 ? 2 : normal <= 5 ? 5 : 10) * magnitude;
-}
-
-// A column scale maps a value to a height, in percent of the plot.
-type ColumnScale = { y: (value: number) => number; ticks: number[]; split?: number };
-
-// columnScale is linear, unless a few columns dwarf the rest: when the tallest
-// is over twice the 80th percentile of non-empty columns (rounded up to a
-// round value), the lower half of the plot is linear up to that value and the
-// upper half logarithmic above it, so outliers stay comparable with each other
-// without flattening every other column.
-function columnScale(totals: number[]): ColumnScale {
-  const peak = Math.max(0, ...totals), filled = totals.filter(value => value > 0).sort((left, right) => left - right);
-  const split = filled.length >= 5 ? niceCeil(filled[Math.ceil(filled.length * 0.8) - 1]) : 0;
-  if (!(split > 0 && peak > 2 * split)) {
-    const scale = peak || 1;
-    return { y: value => 100 * value / scale, ticks: niceTicks(peak) };
-  }
-  const span = Math.log(peak / split);
-  const y = (value: number) => value <= split ? 50 * value / split : 50 + 50 * Math.log(value / split) / span;
-  // Powers of ten above the break, or 1-2-5 steps when fewer than two fit;
-  // labels closer than a tenth of the plot to the break or each other are dropped.
-  const candidates: number[] = [], powers: number[] = [];
-  for (let power = Math.floor(Math.log10(split)); power <= Math.ceil(Math.log10(peak)); power++)
-    for (const step of [1, 2, 5]) {
-      const value = step * 10 ** power;
-      if (value <= split || value > peak) continue;
-      candidates.push(value);
-      if (step === 1) powers.push(value);
-    }
-  const upper: number[] = [];
-  for (const value of powers.length >= 2 ? powers : candidates)
-    if (y(value) - Math.max(50, ...upper.map(y)) >= 10) upper.push(value);
-  return { y, ticks: [...niceTicks(split).filter(value => y(value) <= 40), ...upper], split };
-}
 
 function compactNumber(value: number): string {
   const n = Number(value) || 0, abs = Math.abs(n);
@@ -1122,19 +1135,10 @@ function StackedColumns({ title, controls, series, buckets: sourceBuckets, perio
       {ticks.map(tick => <div key={tick} className="usage-chart-grid" style={{ bottom: `${y(tick)}%` }} aria-hidden="true"><span>{tickFormat(tick)}</span></div>)}
       <div ref={bars} className={`usage-chart-bars ${density} ${loading ? "loading" : ""} ${onRange ? "pickable" : ""}`} role="list" aria-busy={loading} aria-label={split ? `${chartLabel}; linear up to ${tickFormat(split)}, logarithmic above` : chartLabel} {...picking}>
         {buckets.map((bucket, index) => {
-          // Each segment spans the heights of its stack's running totals, so a
-          // stack crossing the break is split at the same value as the axis.
-          let below = 0;
-          const parts = drawn.flatMap(item => {
-            const value = bucket.values[item.key] ?? 0, bottom = y(below);
-            below += value;
-            const height = y(below) - bottom;
-            return value > 0 && (!stacked || percent || height >= 0.5) ? [{ item, height }] : [];
-          });
           const className = [tip?.bucket.key === bucket.key && !drag ? "active" : "", picked && index >= picked[0] && index <= picked[1] ? "picked" : ""].filter(Boolean).join(" ");
           return <span key={bucket.key} role="listitem" tabIndex={0} aria-label={describe(bucket)} className={className} onMouseEnter={event => show(event, bucket)} onFocus={event => show(event, bucket)} onMouseLeave={() => setTip(null)} onBlur={() => setTip(null)}
             onKeyDown={onRange ? event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onRange(bucket, bucket); } } : undefined}>
-            {parts.map(({ item, height }, index) => <i key={item.key} className={index === parts.length - 1 ? "top" : ""} style={{ height: `${stacked ? height : Math.max(1.5, height)}%`, background: item.color }} />)}
+            <ColumnMarks bucket={bucket} series={drawn} scale={y} percent={percent} />
           </span>;
         })}
       </div>
@@ -1297,7 +1301,7 @@ function TokenChart({ where, onFilter, view, onChange }: { where: WhereTerm[]; o
 function PresetRow({ label, presets, onApply, clear }: { label: string; presets: UsagePreset[]; onApply: (preset: UsagePreset | null) => void; clear?: boolean }) {
   return <div className="usage-presets" role="group" aria-label={`${label} presets`}>
     <span className="usage-preset-label">{label}</span>
-    {presets.map(preset => <button key={preset.label} type="button" title={preset.title} onClick={() => onApply(preset)}>{preset.label}</button>)}
+    {presets.map(preset => <QueryChip key={preset.label} title={preset.label} description={preset.title} onClick={() => onApply(preset)} />)}
     {clear ? <button type="button" className="usage-preset-clear" onClick={() => onApply(null)}>Clear metrics</button> : null}
   </div>;
 }
@@ -1704,7 +1708,7 @@ function MCPPage() {
         <div className="mcp-metric"><span>Truncated</span><strong>{stats?.truncated_calls?.toLocaleString() ?? "—"}</strong></div>
       </div>
       <div className="usage-presets" role="group" aria-label="MCP metric presets">
-        {mcpMetrics.map(preset => <button key={preset.label} type="button" onClick={() => applyMetricPreset(preset.aggregations)}>{preset.label}</button>)}
+        {mcpMetrics.map(preset => <QueryChip key={preset.label} title={preset.label} description={`Explore ${preset.label.toLowerCase()} in MCP calls`} onClick={() => applyMetricPreset(preset.aggregations)} />)}
         <button type="button" className="usage-preset-clear" onClick={() => applyMetricPreset(null)}>Clear metrics</button>
       </div>
       <QuerySurface dataset="mcp_calls" trailing={row => <button type="button" className="mcp-detail-button" onClick={() => setSelectedCall(row as MCPCall)}>Details</button>} />
@@ -1895,10 +1899,16 @@ function termKey(term: WhereTerm): string {
 }
 
 function ToolsPage() {
-  const [view, setView] = useState<"summary" | "calls" | "skills">(() => {
+  const readView = (): "summary" | "calls" | "skills" => {
     const selected = new URLSearchParams(location.search).get("tools_view");
     return selected === "summary" || selected === "skills" ? selected : "calls";
-  });
+  };
+  const [view, setView] = useState(readView);
+  useEffect(() => {
+    const restore = () => { if (location.pathname === "/tools") setView(readView()); };
+    window.addEventListener("pharos:route", restore);
+    return () => window.removeEventListener("pharos:route", restore);
+  }, []);
   const [selected, setSelected] = useState<string | null>(null);
   // Filters the last preset added, so the next preset replaces them while
   // keeping filters the user added by hand.
@@ -1930,7 +1940,7 @@ function ToolsPage() {
     <div hidden={view !== "summary"}>
       {toolSummaryPresets.map(({ group, presets }) => <div key={group} className="usage-presets" role="group" aria-label={`${group} presets`}>
         <span className="usage-preset-label">{group}</span>
-        {presets.map(preset => <button key={preset.label} type="button" title={preset.title} onClick={() => apply("tools", preset)}>{preset.label}</button>)}
+        {presets.map(preset => <QueryChip key={preset.label} title={preset.label} description={preset.title} onClick={() => apply("tools", preset)} />)}
         {group === "Context" ? <button type="button" className="usage-preset-clear" onClick={() => apply("tools", null)}>Clear metrics</button> : null}
       </div>)}
       <QuerySurface dataset="tools" trailing={row => <button type="button" className="mcp-detail-button" title="Show the calls behind this row" onClick={() => drill(row)}>Calls</button>} />
@@ -1938,7 +1948,7 @@ function ToolsPage() {
     <div hidden={view !== "calls"}>
       <div className="usage-presets" role="group" aria-label="Call presets">
         <span className="usage-preset-label">Calls</span>
-        {toolCallPresets.map(preset => <button key={preset.label} type="button" title={preset.title} onClick={() => apply("tool_calls", preset)}>{preset.label}</button>)}
+        {toolCallPresets.map(preset => <QueryChip key={preset.label} title={preset.label} description={preset.title} onClick={() => apply("tool_calls", preset)} />)}
         <button type="button" className="usage-preset-clear" onClick={() => apply("tool_calls", null)}>Clear metrics</button>
       </div>
       <QuerySurface dataset="tool_calls" trailing={row => <button type="button" className="mcp-detail-button" onClick={() => setSelected(String(row.id))}>Details</button>} />
@@ -1946,7 +1956,7 @@ function ToolsPage() {
     <div className="skill-usages" hidden={view !== "skills"}>
       <p className="muted">Explicit invocations, observed file-load attempts, and harness-reported loads. A listing is not usage, and a load does not prove the skill was followed. Status on file loads belongs to the parent tool call. Costs remain on that call and are not duplicated here.</p>
       <div className="usage-presets" role="group" aria-label="Skill presets">
-        <button type="button" onClick={() => apply("skill_usages", { label: "By skill", title: "Count evidence by skill and type", aggregations: [count(["skill_name", "evidence_type"], "Evidence by skill")] })}>Evidence by skill</button>
+        <QueryChip title="Evidence by skill" description="Count evidence by skill and type" onClick={() => apply("skill_usages", { label: "By skill", title: "Count evidence by skill and type", aggregations: [count(["skill_name", "evidence_type"], "Evidence by skill")] })} />
         <button type="button" onClick={() => apply("skill_usages", null)}>Clear metrics</button>
       </div>
       <QuerySurface dataset="skill_usages" trailing={row => <span className="skill-usage-actions">
@@ -1959,6 +1969,7 @@ function ToolsPage() {
 }
 
 const mounts: Array<[string, React.ReactNode]> = [
+  ["homePage", <HomePage schemas={schemas} />],
   ["queryTableLibrary", <LibraryPage />],
   ["queryTableUsage", <UsagePage />],
   ["toolsPage", <ToolsPage />],
@@ -1975,6 +1986,7 @@ for (const [id, component] of mounts) {
 if (!shared) startFindingsChrome();
 window.pharosQueryTables = {
   refresh(dataset) {
+    window.dispatchEvent(new CustomEvent("pharos:data-refresh", { detail: dataset }));
     tableApis.get(dataset)?.refresh();
     if (dataset === "usage") {
       tableApis.get("writing")?.refresh();

@@ -1,0 +1,3566 @@
+{
+  "title": "Homepage query card implementation tracker",
+  "updated": "2026-10-08",
+  "query_table_version": "0.5.0",
+  "cards": [
+    {
+      "id": "conversation-01",
+      "category": "conversation",
+      "title": "Where did agents say they were confused?",
+      "window_days": 7,
+      "basis": "observed",
+      "recipe": "Search agent-authored text for a curated family of uncertainty phrases; group by phrase and repository; count distinct conversations as well as occurrences.",
+      "preview": "One highlighted excerpt above a short phrase ranking.",
+      "eligibility": "At least one exact match in agent text; exclude quoted user text and injected instructions where provenance permits.",
+      "destination": "Matched messages with surrounding turns and their conversations.",
+      "exploration_value": "Finds concrete moments worth clarifying in future instructions.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H11",
+        "H07",
+        "H02",
+        "H13"
+      ],
+      "blocked_on_pharos": "Add a canonical messages or phrase-match relation with role, message time, match family, source span and parent conversation.",
+      "calculation_gap": "Library find returns workspace membership; it cannot apply agent role and rolling time to the actual matched message through QueryState.",
+      "performance_note": "Use FTS before grouping; a recently active workspace can contain an old match and is not evidence of a recent phrase.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "conversation-02",
+      "category": "conversation",
+      "title": "What did I have to correct?",
+      "window_days": 7,
+      "basis": "observed",
+      "recipe": "Search human-authored messages for explicit corrections such as 'you misunderstood' and 'not what I asked'; rank recurring literal phrases and show context.",
+      "preview": "User correction paired with the immediately preceding agent response.",
+      "eligibility": "At least one correction phrase; label phrase matches rather than proven misunderstandings.",
+      "destination": "Correction messages and preceding agent turns.",
+      "exploration_value": "Makes repeated steering visible without claiming to read the user's mood.",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "correction-phrases"
+      ],
+      "current_preview": "Your messages containing explicit correction phrases.",
+      "blocked_on_query_table": [
+        "H11",
+        "H07"
+      ],
+      "blocked_on_pharos": "Expose correction phrase families and bounded neighbor-message hydration; preserve genuine human authorship.",
+      "calculation_gap": "writing_messages can filter literal human corrections by sent_at; it cannot return the paired preceding agent response as a normal metric result.",
+      "performance_note": "Date-bounded LIKE is viable for a small window but an indexed message search route is better at archive scale.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "conversation-03",
+      "category": "conversation",
+      "title": "What instructions am I repeating?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Normalize repeated human-authored instruction spans; cluster exact or near-exact repetitions across distinct conversations; separate templates and re-sent text.",
+      "preview": "Repeated sentence with a row of conversation marks.",
+      "eligibility": "A repeated span in at least three distinct conversations; confirm it is instruction text before naming it a rule.",
+      "destination": "Repeated spans grouped by conversation and repository.",
+      "exploration_value": "Suggests candidates for reusable instructions or skills.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H02",
+        "H11",
+        "H07",
+        "M05",
+        "L01"
+      ],
+      "blocked_on_pharos": "Extract repeated instruction spans and versioned clusters; exact fingerprints can be deterministic, while identifying instructions or semantic similarity needs classification.",
+      "calculation_gap": "Existing message text and authorship can provide candidates, but normalized instruction spans and near-duplicate clusters are not a dataset.",
+      "performance_note": "Materialize cluster memberships and support counts; do not normalize every transcript on reload.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "conversation-04",
+      "category": "conversation",
+      "title": "How many exchanges does a task take?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "For each canonical conversation count genuine human-to-agent exchanges; aggregate median, upper quartile and distribution by repository and task family when available.",
+      "preview": "Compact histogram with median marker; a small repository comparison.",
+      "eligibility": "Several complete conversations with human participation; exclude automated launch messages and report unfinished sessions separately.",
+      "destination": "Conversation-level exchange counts and transcripts.",
+      "exploration_value": "Reveals the shape of collaboration rather than just message volume.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H03",
+        "H06",
+        "H05"
+      ],
+      "blocked_on_pharos": "Expose conversation-level exchange facts, human/automation distinction, completion coverage and task-family labels when available.",
+      "calculation_gap": "Library turn_count and writing summaries are work-grain totals, not exact genuine exchanges per conversation in the selected period.",
+      "performance_note": "Distributions need per-conversation rows; alternatively group filtered message facts, then reduce the groups in a second stage.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "conversation-05",
+      "category": "conversation",
+      "title": "Where do conversations keep circling back?",
+      "window_days": 30,
+      "basis": "interpreted",
+      "recipe": "Classify repeated problem statements and alternating proposed fixes within each conversation; rank loops by number of returns and preserve supporting excerpts.",
+      "preview": "A three-step loop with repeated text highlighted.",
+      "eligibility": "Multiple evidenced returns to the same problem; similarity alone does not prove lack of progress.",
+      "destination": "Candidate loops with intervening turns and tool results.",
+      "exploration_value": "Finds topics whose explanation or diagnosis may need improvement.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M02",
+        "M03",
+        "H07",
+        "L01"
+      ],
+      "blocked_on_pharos": "Materialize evidence-backed loop episodes with repeated-topic links and intervening events.",
+      "calculation_gap": "No current metric or forthcoming scalar formula identifies semantic return-to-problem loops.",
+      "performance_note": "Query ranked episode facts; neither a histogram nor a repeated phrase alone establishes a loop.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "conversation-06",
+      "category": "conversation",
+      "title": "When do agents ask me to do their work?",
+      "window_days": 7,
+      "basis": "interpreted",
+      "recipe": "Classify agent requests for user action; distinguish useful decisions from requests to run commands, copy outputs or perform available routine actions.",
+      "preview": "Request excerpt with categories such as decision, command and information.",
+      "eligibility": "At least one classified request; capability availability requires evidence before calling a request avoidable.",
+      "destination": "Requests and the capabilities available in that session.",
+      "exploration_value": "Surfaces opportunities to reduce manual handoffs.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H07",
+        "H02",
+        "L01"
+      ],
+      "blocked_on_pharos": "Extract agent requests, action type and capability evidence; retain uncertainty about whether the action was avoidable.",
+      "calculation_gap": "Phrase filters can find candidate requests, but available capabilities and avoidable handoffs are not classified rows.",
+      "performance_note": "Run extraction at indexing and filter its annotations; avoid expensive classification during card eligibility checks.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "conversation-07",
+      "category": "conversation",
+      "title": "Which conversations end with explicit positive feedback?",
+      "window_days": 30,
+      "basis": "observed",
+      "recipe": "Find human-authored approval or thanks phrases; count distinct conversations and distinguish task acceptance from politeness through context.",
+      "preview": "Short user quote with a strip of linked conversations.",
+      "eligibility": "At least one positive-feedback match; do not label it objective correctness.",
+      "destination": "Feedback messages and the preceding result.",
+      "exploration_value": "Balances friction cards with examples worth repeating.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H11",
+        "H07",
+        "L01"
+      ],
+      "blocked_on_pharos": "Add positive-feedback/acceptance evidence with predecessor links; a literal-match-only card can ship earlier with an honest label.",
+      "calculation_gap": "Human-message phrase searches are possible now; acceptance versus politeness is not established by the filter.",
+      "performance_note": "Indexed literal candidates are inexpensive; classification can be cached by message hash and extractor version.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "conversation-08",
+      "category": "conversation",
+      "title": "Where did I change the goal midway?",
+      "window_days": 30,
+      "basis": "interpreted",
+      "recipe": "Identify explicit changes in requirements after work started; record the change point and summarize the original and revised request.",
+      "preview": "Two contrasting request fragments connected by a small pivot arrow.",
+      "eligibility": "An evidenced scope change; distinguish a changed goal from clarification of the same goal.",
+      "destination": "Before-and-after request messages and intervening work.",
+      "exploration_value": "Helps users understand what kinds of tasks need early alignment.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M02",
+        "H07",
+        "L01"
+      ],
+      "blocked_on_pharos": "Extract explicit scope changes and link original and revised requests to canonical work.",
+      "calculation_gap": "The archive contains requests in order, but a goal-change relation and before/after pair do not exist.",
+      "performance_note": "Index changes once; Query Table can already filter and group the resulting annotations.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "tools-01",
+      "category": "tools",
+      "title": "Which tool calls fail most often?",
+      "window_days": 7,
+      "basis": "observed",
+      "recipe": "Group calls by tool, program, subcommand or MCP method; compute failure count and failures divided by observed calls; rank both volume and rate.",
+      "preview": "Three labeled bars with failed and total counts.",
+      "eligibility": "Error-bearing groups with usable denominators; preserve no-result and interrupted statuses separately.",
+      "destination": "Failed calls plus the complete call population for each group.",
+      "exploration_value": "Reveals tool reliability in a way users can immediately investigate.",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "tool-failures"
+      ],
+      "current_preview": "The calls behind recurring tool failures.",
+      "blocked_on_query_table": [
+        "H05",
+        "H02",
+        "H09"
+      ],
+      "blocked_on_pharos": "Implement v2 SQLite/map execution and preserve call-grain versus daily-rollup measure semantics.",
+      "calculation_gap": "Current tool_calls supplies call_count and error_count; separate counts work, but an aggregate ratio is not a v0.5 metric.",
+      "performance_note": "SUM(error_count)/SUM(call_count) is enabled by v2; retain cube routing and minimum exposure before top-K.",
+      "after_metric_work": "available_after_integration"
+    },
+    {
+      "id": "tools-02",
+      "category": "tools",
+      "title": "Which error keeps coming back?",
+      "window_days": 30,
+      "basis": "observed",
+      "recipe": "Group failed calls by normalized error signature; count distinct conversations and repositories alongside total failures.",
+      "preview": "A prominent error fragment with a repository dot strip.",
+      "eligibility": "A repeated signature in more than one call or conversation; exclude volatile IDs and paths from grouping.",
+      "destination": "All calls with the selected signature and their raw results.",
+      "exploration_value": "Finds one fix that may benefit many sessions.",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "error-signatures"
+      ],
+      "current_preview": "Repeated error signatures, with the original calls.",
+      "blocked_on_query_table": [
+        "H05",
+        "H07",
+        "H09"
+      ],
+      "blocked_on_pharos": "Hydrate bounded raw error examples; keep signature normalization and mirror exclusion consistent.",
+      "calculation_gap": "Error signatures, timestamps, conversation IDs and repositories are already filterable/groupable and support distinct counts.",
+      "performance_note": "Group a bounded failed-call population; distinct conversation/repository counts may bypass sum-only summaries.",
+      "after_metric_work": "available_after_integration"
+    },
+    {
+      "id": "tools-03",
+      "category": "tools",
+      "title": "What do agents do after a failure?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Sequence calls after comparable failures; categorize unchanged retry, changed arguments, different tool and user intervention; measure next observed outcome.",
+      "preview": "Branching recovery path with counts on each branch.",
+      "eligibility": "Enough failure episodes with retained follow-up calls; unresolved tails remain unknown.",
+      "destination": "Failure episodes with their next calls and results.",
+      "exploration_value": "Exposes recovery strategies worth copying or improving.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M02",
+        "M03",
+        "H05",
+        "H07"
+      ],
+      "blocked_on_pharos": "Expose stream identity, stable event order, normalized actions and recovery episode facts.",
+      "calculation_gap": "Ordered calls exist in storage, but the metric contract cannot select the next relevant call or recovery episode.",
+      "performance_note": "Precompute episodes incrementally or use bounded ordered partitions; success tails and unfinished episodes remain explicit.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "tools-04",
+      "category": "tools",
+      "title": "Where do unchanged retries pile up?",
+      "window_days": 7,
+      "basis": "derived",
+      "recipe": "Normalize call arguments within each stream; find repeated equivalent failing calls before meaningful changes; aggregate excess attempts and their attributed cost.",
+      "preview": "Repeated command tiles with the changed attempt emphasized.",
+      "eligibility": "At least one repeated failure sequence; exclude polling, intentional sampling and status checks.",
+      "destination": "Retry sequences and argument differences.",
+      "exploration_value": "Makes repetitive dead ends obvious.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M02",
+        "M03",
+        "H02"
+      ],
+      "blocked_on_pharos": "Normalize call arguments and identify retry episodes by stream; make attributable costs queryable before paging.",
+      "calculation_gap": "Equivalent command filters exist, but adjacency, normalized argument identity and retry streaks are absent.",
+      "performance_note": "Use stream/order indexes and cached episode facts, not a Cartesian self-join over the tool ledger.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "tools-05",
+      "category": "tools",
+      "title": "Which calls consume the most recorded waiting time?",
+      "window_days": 7,
+      "basis": "observed",
+      "recipe": "Rank commands by total measured duration and show median and upper percentile where per-call timing is available; split reported from timestamp-derived durations.",
+      "preview": "Horizontal duration bars with a marked long tail.",
+      "eligibility": "Sufficient timed calls; show timing coverage and do not describe timestamp gaps as pure tool runtime.",
+      "destination": "Timed calls with duration source and slow examples.",
+      "exploration_value": "Finds test suites, builds or requests that dominate recorded elapsed time.",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "slow-commands"
+      ],
+      "current_preview": "Recorded elapsed time by command; includes approval waits.",
+      "blocked_on_query_table": [
+        "H06",
+        "H05",
+        "H09"
+      ],
+      "blocked_on_pharos": "Preserve duration_source and timed-call coverage; implement v2 distributions in SQLite or a prepared duration summary.",
+      "calculation_gap": "Total duration and maxima are queryable; median and p95 require distributions or additional scalar percentile support.",
+      "performance_note": "Exact quartiles/p95 scan or sort call samples; daily min/max/sum cannot reconstruct percentiles.",
+      "after_metric_work": "available_after_integration"
+    },
+    {
+      "id": "tools-06",
+      "category": "tools",
+      "title": "What starts failing after a change?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Compare error signatures and failure rates before and after an observed harness, tool configuration or project change; join by stable dimensions and exposure.",
+      "preview": "Before-and-after bars with a change marker.",
+      "eligibility": "Both periods have calls and comparable coverage; a change marker is association, not proof of cause.",
+      "destination": "Calls and recorded changes in the compared periods.",
+      "exploration_value": "Gives users a concrete lead when a workflow deteriorates.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H04",
+        "H05",
+        "M01"
+      ],
+      "blocked_on_pharos": "Expose tool/harness/project change events and compatible exposures around each anchor.",
+      "calculation_gap": "Failure counts exist but the dated configuration-change anchors and aligned populations are not a generic query source.",
+      "performance_note": "Reuse indexed bounded period scans or event-relative facts; preserve versions and avoid automatic causal claims.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "tools-07",
+      "category": "tools",
+      "title": "Where do edits fail to apply?",
+      "window_days": 7,
+      "basis": "observed",
+      "recipe": "Filter edit-related file_not_read, edit_no_match, file_not_found and related errors; group by file, repository and edit mechanism.",
+      "preview": "File names beside small stacked error marks.",
+      "eligibility": "At least one edit-related failure with a resolved path or known tool.",
+      "destination": "Failed edits and the reads or changes preceding them.",
+      "exploration_value": "Finds stale context and fragile editing patterns.",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "edit-failures"
+      ],
+      "current_preview": "Failed edit calls, grouped by repository path.",
+      "blocked_on_query_table": [
+        "H07",
+        "H09"
+      ],
+      "blocked_on_pharos": "Hydrate failed-call details and preceding reads if the cover needs a sequence.",
+      "calculation_gap": "Existing call fields support edit-related error filters and grouping by repository, path or mechanism.",
+      "performance_note": "Timestamp and error/path indexes are useful; command-text predicates may require trigram filtering or a fallback scan.",
+      "after_metric_work": "available_after_integration"
+    },
+    {
+      "id": "tools-08",
+      "category": "tools",
+      "title": "Which failures spread across repositories?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "For each error signature compute repository breadth, first and recent occurrence, and within-repository rates; rank errors common across otherwise different projects.",
+      "preview": "Small repository-by-error matrix.",
+      "eligibility": "A signature appears in at least two repositories with usable call populations.",
+      "destination": "Shared signatures split by repository and tool version when known.",
+      "exploration_value": "Distinguishes a shared environment problem from a local project issue.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H02",
+        "H05",
+        "H04",
+        "H12"
+      ],
+      "blocked_on_pharos": "Supply compatible call exposures and version/source coverage for each repository.",
+      "calculation_gap": "Distinct repositories by error signature is possible; exposure-normalized comparison and a failure heatmap are incomplete.",
+      "performance_note": "Distinct breadth plus counts can be computed from bounded calls; apply multi-repository eligibility before group limiting.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "context-01",
+      "category": "context",
+      "title": "Which outputs keep being paid for?",
+      "window_days": 7,
+      "basis": "observed",
+      "recipe": "Rank tool results by attributed context-carried tokens and API-equivalent context cost; retain the originating result and number of later requests.",
+      "preview": "One output source feeding repeated request marks.",
+      "eligibility": "Calls with retained results and usable carriage estimates; show estimation provenance.",
+      "destination": "Results ranked by context carried and attributed cost.",
+      "exploration_value": "Explains why a small early result can matter more than a large late one.",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "context-carried"
+      ],
+      "current_preview": "Tool output carried into later requests, in attributed tokens.",
+      "blocked_on_query_table": [
+        "H01",
+        "H05",
+        "H07"
+      ],
+      "blocked_on_pharos": "Persist or SQL-bind versioned per-call pricing components with provenance before sorting/aggregating.",
+      "calculation_gap": "carried_tokens and carried_requests are globally queryable now; per-call context cost is added only after page fetch.",
+      "performance_note": "Token ranking is indexable already; accurate dollar ranking needs a queryable priced fact rather than enrichment of a selected page.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "context-02",
+      "category": "context",
+      "title": "What floods the context window?",
+      "window_days": 7,
+      "basis": "observed",
+      "recipe": "Rank retained tool results by added tokens or bytes; group by command and include truncation and measured-versus-estimated provenance.",
+      "preview": "A few output blocks sized by added tokens, with a clipped-output marker.",
+      "eligibility": "At least one unusually large result relative to the user's own call distribution.",
+      "destination": "Large tool results and their original calls.",
+      "exploration_value": "Points to narrower searches and quieter commands.",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "large-outputs",
+        "truncated-outputs"
+      ],
+      "current_preview": "Result tokens added by each tool; inspect the largest outputs.; Truncated tool outputs and the calls that produced them.",
+      "blocked_on_query_table": [
+        "H06",
+        "H01",
+        "H07"
+      ],
+      "blocked_on_pharos": "Preserve measured versus estimated token provenance and fetch only a bounded result excerpt.",
+      "calculation_gap": "Result bytes/tokens, source and truncation can be filtered or ranked now; a formal personal outlier threshold adds statistical work.",
+      "performance_note": "Existing result-token indexes help top rows; exact personalized percentile thresholds need a separate distribution pass.",
+      "after_metric_work": "available_after_integration"
+    },
+    {
+      "id": "context-03",
+      "category": "context",
+      "title": "Which files get read again and again?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Resolve canonical repository paths; count repeated reads within streams and across conversations; separate unchanged content from reads after edits when content identity is available.",
+      "preview": "File ranking with read marks distributed along a session strip.",
+      "eligibility": "Repeated resolved-path reads; only call them unchanged when content evidence supports it.",
+      "destination": "Read events for the selected paths and intervening edits.",
+      "exploration_value": "Reveals stable context that may be worth packaging or loading differently.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H03",
+        "H02",
+        "M02",
+        "H07"
+      ],
+      "blocked_on_pharos": "Expose agent stream identity and normalized read events; join content fingerprints and intervening edits for the unchanged variant.",
+      "calculation_gap": "Paths and read categories support counts; distinguishing within-stream repeats and unchanged-content rereads needs extra identity/evidence.",
+      "performance_note": "A path-by-stream count projection is cheap; content identity must be stored rather than inferred from matching file names.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "context-04",
+      "category": "context",
+      "title": "Where do agents search without finding anything?",
+      "window_days": 7,
+      "basis": "derived",
+      "recipe": "Identify explicit empty search results; cluster queries and count subsequent searches before the first retained match; keep valid no-match exit codes distinct from errors.",
+      "preview": "Search fragments stepping from empty to a found result.",
+      "eligibility": "Retained search outputs distinguish empty from missing results.",
+      "destination": "Search sequences and the successful or unresolved end.",
+      "exploration_value": "Shows discovery friction that ordinary error counts miss.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M02",
+        "M03",
+        "H11"
+      ],
+      "blocked_on_pharos": "Extract explicit empty/found search outcomes and ordered search episodes, including result-count coverage.",
+      "calculation_gap": "Search queries exist, but a valid empty search outcome is not synonymous with status=error or no_result.",
+      "performance_note": "Query stored result-count/episode fields. Zero matches from rg should not be counted as a tool error.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "context-05",
+      "category": "context",
+      "title": "How long before the first meaningful action?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Sequence each session from its first request to its first edit, test, decision or other task-appropriate action; show preceding reads and searches.",
+      "preview": "Session strips with the first selected action marked.",
+      "eligibility": "Complete event ordering; label first edit or first test literally unless task-specific meaning is classified.",
+      "destination": "Sessions ordered by time and events before the selected milestone.",
+      "exploration_value": "Helps inspect whether agents spend too much effort orienting themselves.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M02",
+        "M03",
+        "H06",
+        "H07"
+      ],
+      "blocked_on_pharos": "Create first-request/first-edit/first-test facts; classify meaning only for the richer meaningful-action version.",
+      "calculation_gap": "Calls have timestamps, but request-to-first-action milestones and task-appropriate action semantics are not exposed.",
+      "performance_note": "Materialize per-stream milestone durations with provenance; a metric over precomputed durations is straightforward.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "context-06",
+      "category": "context",
+      "title": "What happens around compaction?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Compare events immediately before and after recorded compactions; count repeated reads, renewed searches and explicit re-explanations in matched windows.",
+      "preview": "Context trace with a compaction notch and repeated events on either side.",
+      "eligibility": "Recorded compactions with retained neighboring events; do not infer forgotten information merely from a reset.",
+      "destination": "Compaction episodes and their surrounding transcript windows.",
+      "exploration_value": "Makes the consequences of context resets inspectable.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M02",
+        "M03",
+        "H07"
+      ],
+      "blocked_on_pharos": "Expose compaction events and linked ordered message/call windows, plus repeat-event facts.",
+      "calculation_gap": "Library compaction_count can select affected work but does not locate compactions or surrounding rereads.",
+      "performance_note": "Maintain a compact event index and derive bounded before/after windows per event, not all conversation text each refresh.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "context-07",
+      "category": "context",
+      "title": "Which instructions are loaded most heavily?",
+      "window_days": 30,
+      "basis": "observed",
+      "recipe": "Group retained skill or instruction bodies by content bytes and distinct streams; show known context attribution only when the parent event supports it.",
+      "preview": "A few named instruction blocks sized by retained content.",
+      "eligibility": "Retained instruction bodies with size evidence; avoid inventing file size or charging a workflow to a skill load.",
+      "destination": "Instruction loading evidence and retained bodies.",
+      "exploration_value": "Reveals what occupies context before task work begins.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H13",
+        "H05",
+        "H07"
+      ],
+      "blocked_on_pharos": "Expose an instruction-load dataset with body size, identity, source type and parent event; deduplicate harness snapshots.",
+      "calculation_gap": "Skill content_bytes can be summed/ranked now; broader instruction bodies reside below Query Table and loading evidence has different grains.",
+      "performance_note": "Aggregate small load facts; carry costs only when the originating event supports them, avoiding double attribution across bodies.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "context-08",
+      "category": "context",
+      "title": "What do agents look at most?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Combine resolved file reads, search queries, reached domains and skill loads; rank by distinct sessions and show concentration by repository.",
+      "preview": "A compact attention map of paths and sources.",
+      "eligibility": "Known event attribution; keep reads, searches and loads as distinguishable event types.",
+      "destination": "The ranked sources and every supporting access event.",
+      "exploration_value": "Gives users a surprisingly concrete portrait of agent attention.",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "read-paths"
+      ],
+      "current_preview": "Read calls by repository path, with their source evidence.",
+      "blocked_on_query_table": [
+        "H13",
+        "H05",
+        "M01",
+        "M07"
+      ],
+      "blocked_on_pharos": "Normalize file reads, searches, URL visits and skill loads with source kind and canonical stream/session IDs.",
+      "calculation_gap": "Tool-call and skill tables each cover some attention events, but there is no unified typed source-event relation.",
+      "performance_note": "A prepared UNION-style host dataset can support ordinary grouping; distinct session counts prevent large outputs from dominating every ranking.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "verification-01",
+      "category": "verification",
+      "title": "Which tests fail repeatedly?",
+      "window_days": 7,
+      "basis": "observed",
+      "recipe": "Group observed test failures by normalized test or failure signature and command; include failure markers even when shell status was successful.",
+      "preview": "Test name and a red-green run strip.",
+      "eligibility": "Retained test-failure evidence; test identifiers require extraction from output.",
+      "destination": "Test calls with failure output and later passes when present.",
+      "exploration_value": "Finds recurring verification trouble that generic command status can hide.",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "test-failures"
+      ],
+      "current_preview": "Recorded test failures by command, ready to inspect.",
+      "blocked_on_query_table": [
+        "H11",
+        "H02",
+        "H07"
+      ],
+      "blocked_on_pharos": "Parse test-run summaries/identifiers and comparable test configuration; retain markers hidden by successful shell exits.",
+      "calculation_gap": "test_failure and normalized error signatures exist; exact test identifiers and a per-test run history require extraction.",
+      "performance_note": "Group a prepared test-results table instead of repeatedly parsing raw logs; a signature-based version can ship earlier.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "verification-02",
+      "category": "verification",
+      "title": "Which tests eventually turn green?",
+      "window_days": 7,
+      "basis": "derived",
+      "recipe": "Link comparable test runs within each stream; find failure-to-pass sequences and count intervening edits or attempts.",
+      "preview": "A failing run crossing into a passing run with edit ticks between.",
+      "eligibility": "Explicit comparable failure and pass evidence; a zero exit from an unrelated command is insufficient.",
+      "destination": "Recovery episodes with test identity, edits and results.",
+      "exploration_value": "Highlights successful debugging paths worth learning from.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M02",
+        "M03",
+        "H07"
+      ],
+      "blocked_on_pharos": "Create test-recovery episodes with test identity, order, configuration, edits and observed pass.",
+      "calculation_gap": "Failing and passing calls can be filtered separately but the contract cannot pair comparable runs within a stream.",
+      "performance_note": "Use indexed run identity/order and update episodes incrementally; do not treat any later successful command as a recovery.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "verification-03",
+      "category": "verification",
+      "title": "Where are edits followed by verification?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Within each work stream connect edit events to later related test, build or lint commands; aggregate coverage by repository and task family.",
+      "preview": "File or repository grid with verified, unobserved and unknown cells.",
+      "eligibility": "Retained edits and verification events; no retained test means no observed verification, not proof none occurred.",
+      "destination": "Edited work grouped by observed verification evidence.",
+      "exploration_value": "Helps inspect verification habits while preserving coverage limits.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M01",
+        "M02",
+        "M03",
+        "H05"
+      ],
+      "blocked_on_pharos": "Derive edit-to-check links and coverage states, with a conservative path/test relevance mapping.",
+      "calculation_gap": "Edit/test call categories exist; file relevance and after-edit verification links do not.",
+      "performance_note": "Materialize check coverage at work or edit grain; naive joining every edit to every later test is expensive and misleading.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "verification-04",
+      "category": "verification",
+      "title": "Which completions have no retained verification?",
+      "window_days": 7,
+      "basis": "interpreted",
+      "recipe": "Detect explicit agent completion claims and join them to observed checks after the last relevant edit; show claims without supporting retained checks.",
+      "preview": "Completion excerpt above a small empty check lane.",
+      "eligibility": "Explicit completion text plus usable event coverage; call it missing retained evidence rather than untested work.",
+      "destination": "Completion claims, final edits and all retained checks.",
+      "exploration_value": "Invites the user to verify claims against what actually happened.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M01",
+        "M02",
+        "H07",
+        "L01"
+      ],
+      "blocked_on_pharos": "Extract explicit claims and final relevant edits; join retained check evidence and source completeness.",
+      "calculation_gap": "Completion claims are transcript text, and missing retained checks cannot be inferred from a work outcome label alone.",
+      "performance_note": "Query annotated claim facts; keep no-observed-verification distinct from proved untested behavior.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "verification-05",
+      "category": "verification",
+      "title": "How many edit and test cycles does a fix take?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Sessionize alternating edits and comparable verification runs; count cycles until an observed pass; show median and distribution per failure family.",
+      "preview": "Edit-test beads ending in a green mark.",
+      "eligibility": "Comparable runs with retained ordering; unresolved sequences remain separate.",
+      "destination": "Cycle histories and grouped cycle counts.",
+      "exploration_value": "Quantifies iteration without equating fewer cycles with better work.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M02",
+        "M03",
+        "H03",
+        "H06"
+      ],
+      "blocked_on_pharos": "Derive comparable edit/test cycle episodes and their observed terminal state.",
+      "calculation_gap": "No episode/cycle input exists; v2 histogram over calls would show call values, not edit-test cycles per fix.",
+      "performance_note": "Prefer cycle facts at episode grain; staged grouping then a distribution is another route once cycle boundaries are explicit.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "verification-06",
+      "category": "verification",
+      "title": "Which checks are skipped after the final change?",
+      "window_days": 7,
+      "basis": "derived",
+      "recipe": "Find completed work where the last relevant check preceded the final relevant edit; distinguish pass-before-edit from check-after-edit.",
+      "preview": "Timeline with final edit positioned after the last check.",
+      "eligibility": "Relevant edits and checks plus an observed end state; relevance may require file-to-test mapping or classification.",
+      "destination": "Final edit and check order for each matched work.",
+      "exploration_value": "Reveals a specific verification gap users can address.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M02",
+        "M03",
+        "H01",
+        "H07"
+      ],
+      "blocked_on_pharos": "Materialize final relevant milestone facts with completeness and task/file relevance.",
+      "calculation_gap": "Dates are retained but last relevant edit/check order and observed finish are not an available metric field.",
+      "performance_note": "A stored last-edit-versus-last-check flag is cheap to filter; establishing relevance is Pharos work.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "verification-07",
+      "category": "verification",
+      "title": "Does a faster check change the workflow?",
+      "window_days": 90,
+      "basis": "derived",
+      "recipe": "Compare edit-test cycles, measured waiting and outcomes before and after an observed test command or configuration change; stratify comparable tasks.",
+      "preview": "Paired distributions for check duration and cycle count.",
+      "eligibility": "Known change point, usable durations and both cohorts; do not claim the change caused downstream differences.",
+      "destination": "Work cohorts with commands, durations and evidence of completion.",
+      "exploration_value": "Turns local tooling changes into something users can inspect over time.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H04",
+        "H03",
+        "H06",
+        "M01"
+      ],
+      "blocked_on_pharos": "Supply dated configuration transitions and episode-level cycle/duration/outcome facts.",
+      "calculation_gap": "Check durations exist; versioned check changes, comparable task cohorts and cycle counts are missing.",
+      "performance_note": "Align period populations before comparing distributions; exact percentiles and matched cohorts need bounded plans.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "verification-08",
+      "category": "verification",
+      "title": "Which sessions show review-driven rework?",
+      "window_days": 30,
+      "basis": "interpreted",
+      "recipe": "Detect retained review comments or explicit feedback and link the following edits and checks; cluster recurring review topics.",
+      "preview": "Review fragment with a small chain of follow-up changes.",
+      "eligibility": "Retained review or correction evidence linked to subsequent work; merging is not a quality label.",
+      "destination": "Feedback, responding edits and their checks.",
+      "exploration_value": "Finds the requirements that are repeatedly discovered during review.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M01",
+        "M02",
+        "H07",
+        "L01"
+      ],
+      "blocked_on_pharos": "Extract or import review/correction events and link responding edits and checks.",
+      "calculation_gap": "Some review evidence and patches may be retained, but review-topic annotations and response links are not a dataset.",
+      "performance_note": "Index review episodes and topics once; ordinary table filters can then explore them without runtime NLP.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "rework-01",
+      "category": "rework",
+      "title": "Which files draw the most back-and-forth?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Join canonical paths to conversation-level human exchanges, edit attempts and verification cycles; rank files while preserving their separate measures.",
+      "preview": "A file ranking with conversation and edit-cycle marks.",
+      "eligibility": "Resolved files with associated conversations; do not multiply conversation effort once per edit event.",
+      "destination": "Work involving each ranked file and its edit sequences.",
+      "exploration_value": "Finds areas that repeatedly require discussion and iteration.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M01",
+        "H03",
+        "H05",
+        "H07"
+      ],
+      "blocked_on_pharos": "Expose work-file membership with deduplicated conversation effort and file-level edit/cycle facts.",
+      "calculation_gap": "Calls and Library changed_files exist, but joining conversation effort to each file creates a grain/fanout problem.",
+      "performance_note": "Build one row per intended work-file membership; do not multiply human effort by the number of edit calls.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "rework-02",
+      "category": "rework",
+      "title": "Where do changes get undone?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Detect exact reversals or explicit revert events in retained patches or linked diffs; summarize changed-back spans and elapsed intervals.",
+      "preview": "A short diff fragment with forward and reverse arrows.",
+      "eligibility": "Retained patch or Git evidence supports reversal; repeated file edits alone are insufficient.",
+      "destination": "Original changes, reversal evidence and surrounding conversation.",
+      "exploration_value": "Surfaces second thoughts and unstable approaches.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M01",
+        "M02",
+        "H07"
+      ],
+      "blocked_on_pharos": "Parse exact reversal/revert evidence and link original and reversed changes with stable paths and timestamps.",
+      "calculation_gap": "Retained change sets can provide patches, but the Query Table datasets do not expose reversals.",
+      "performance_note": "Incrementally index reversals or explicitly linked Git reverts; compare stored patches outside homepage evaluation.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "rework-03",
+      "category": "rework",
+      "title": "Which files are repeatedly changed together?",
+      "window_days": 90,
+      "basis": "derived",
+      "recipe": "Build file co-change sets per canonical work; rank pairs by shared-work count and association after accounting for each file's frequency.",
+      "preview": "A small cluster of connected file names.",
+      "eligibility": "Repeated co-changes across distinct work; ignore generated-file bundles or label them separately.",
+      "destination": "Work touching the selected file pair or cluster.",
+      "exploration_value": "Reveals hidden coupling and likely companions to future edits.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H13",
+        "M05",
+        "H02",
+        "M07"
+      ],
+      "blocked_on_pharos": "Materialize sparse co-change edges and each file's marginal work count.",
+      "calculation_gap": "changed_files supports membership filtering, but not per-work pair generation and normalized pair association.",
+      "performance_note": "Pair generation is quadratic for large work sets; bound or exclude generated bundles and update edges incrementally.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "rework-04",
+      "category": "rework",
+      "title": "Where do small tasks turn into broad changes?",
+      "window_days": 30,
+      "basis": "interpreted",
+      "recipe": "Classify initial requests as narrow or broad; compare that scope to distinct files and directories changed, with examples of the largest expansions.",
+      "preview": "Initial request fragment opening into a branching file map.",
+      "eligibility": "An interpretable initial scope and linked change evidence; scope expansion can be legitimate.",
+      "destination": "Requests and their complete linked file sets.",
+      "exploration_value": "Helps users discover places where apparently local work has wide consequences.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H13",
+        "M01",
+        "H07",
+        "L01"
+      ],
+      "blocked_on_pharos": "Annotate initial scope and join canonical file/directory breadth with direct request evidence.",
+      "calculation_gap": "File breadth is counted, but initial request scope and expansion semantics are not classified.",
+      "performance_note": "Query stored request labels and changed-file counts; broad changes can be appropriate, so retain examples and task context.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "rework-05",
+      "category": "rework",
+      "title": "Which areas repeatedly trigger environment trouble?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Group setup, dependency, permission and build failures by repository and directory; relate them to the observed command population.",
+      "preview": "Directory rows with distinct error signatures.",
+      "eligibility": "Error classes and paths with usable attribution; avoid claiming the directory caused the error.",
+      "destination": "Environment-related failures and affected work.",
+      "exploration_value": "Finds recurring setup friction worth documenting once.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H05",
+        "H02",
+        "H13"
+      ],
+      "blocked_on_pharos": "Expose directory scope and relevant command populations, with stable environment-failure categories.",
+      "calculation_gap": "Existing error/path/repository fields provide candidates; normalized directories and compatible per-directory exposure require a projection.",
+      "performance_note": "Use indexed directory/error facts; derive directory identity once rather than repeatedly executing unsupported full-scope text transforms.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "rework-06",
+      "category": "rework",
+      "title": "Where are multiple agents touching the same files?",
+      "window_days": 7,
+      "basis": "derived",
+      "recipe": "Join time-overlapping agent streams and canonical edit paths; count overlap episodes and show actual conflict evidence separately.",
+      "preview": "Parallel lanes converging on the same file tile.",
+      "eligibility": "Reliable timestamps and shared resolved paths; overlap is not a merge conflict by itself.",
+      "destination": "Overlapping sessions and their recorded edits or conflicts.",
+      "exploration_value": "Makes coordination hotspots visible.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M01",
+        "M04",
+        "M07"
+      ],
+      "blocked_on_pharos": "Expose canonical edit events, stream assignment and reliable observed intervals; add separate conflict facts.",
+      "calculation_gap": "Streams and timestamps exist below Query Table; same-file concurrent edit intervals are not exposed.",
+      "performance_note": "Sweep indexed intervals within path/stream groups; pairwise global joins are costly and overlap does not prove conflict.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "rework-07",
+      "category": "rework",
+      "title": "What work keeps reopening?",
+      "window_days": 90,
+      "basis": "interpreted",
+      "recipe": "Link explicit revisits, follow-up tasks or semantically similar requests to the same work area; separate intentional iteration from unresolved recurrence.",
+      "preview": "A timeline of related tasks with their stated outcomes.",
+      "eligibility": "Explicit lineage or reviewed similarity evidence; do not label related work as a failed earlier fix.",
+      "destination": "Revisit chains and the evidence linking each step.",
+      "exploration_value": "Helps users see persistent themes across separate conversations.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M01",
+        "H07",
+        "L01"
+      ],
+      "blocked_on_pharos": "Materialize follow-up/revisit relations and distinguish continued iteration from recurrence.",
+      "calculation_gap": "TL1 revisit flags offer a narrow existing view; general reopened work across sources needs explicit links or reviewed similarity.",
+      "performance_note": "Follow stored lineage when known; similarity retrieval and classification should produce bounded queryable matches.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "rework-08",
+      "category": "rework",
+      "title": "Which parts of the repository are getting new attention?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Compare per-directory share of reads, edits and conversations with the previous equivalent window; rank meaningful increases and newly active areas.",
+      "preview": "A small directory map with current and previous intensity.",
+      "eligibility": "Both windows have usable activity coverage; keep reading and changing distinct.",
+      "destination": "Directory activity and the conversations driving its change.",
+      "exploration_value": "Makes emerging project interests and neglected areas discoverable.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H04",
+        "H12",
+        "H05"
+      ],
+      "blocked_on_pharos": "Add canonical directory event facts and compatible reading/editing populations.",
+      "calculation_gap": "Existing path activity can be grouped but directory buckets and current/previous shares are not a complete recipe.",
+      "performance_note": "Compare timestamp-bounded cohorts or daily directory rollups; keep read and change event types separate.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "human-01",
+      "category": "human",
+      "title": "How much am I actually writing?",
+      "window_days": 30,
+      "basis": "observed",
+      "recipe": "Sum estimated typed words by local day; separate pasted, copied, re-sent, template and harness text; optionally split by repository.",
+      "preview": "Shared Usage columns with typed words emphasized.",
+      "eligibility": "Authorship estimates exist for observed human messages; label typed-word estimation.",
+      "destination": "Human Words view and its message provenance.",
+      "exploration_value": "Makes the user's own contribution visible without mistaking injected text for writing.",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "human-words"
+      ],
+      "current_preview": "Words classified as typed or dictated, day by day.",
+      "blocked_on_query_table": [
+        "H08",
+        "H12",
+        "H09"
+      ],
+      "blocked_on_pharos": "Reuse existing authorship provenance and renderer; integrate the new metric transport for richer charts.",
+      "calculation_gap": "writing_messages can sum typed_words by day and repository; the current Human Words chart also has a custom series endpoint.",
+      "performance_note": "Daily authored facts are a good compact source; exact rolling hours need message-time bounds rather than only calendar dates.",
+      "after_metric_work": "available_after_integration"
+    },
+    {
+      "id": "human-02",
+      "category": "human",
+      "title": "Where do I spend the most effort explaining?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Aggregate estimated typed words, genuine human turns and repeat corrections per canonical work; rank repositories and conversations by each measure.",
+      "preview": "A repository ranking with words and exchanges as distinct marks.",
+      "eligibility": "Authorship evidence and canonical work joins; call it writing effort, not measured labor time.",
+      "destination": "High-writing conversations and their human messages.",
+      "exploration_value": "Shows which tasks demand sustained human explanation.",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "explaining-repos"
+      ],
+      "current_preview": "Your typed words across repositories in this window.",
+      "blocked_on_query_table": [
+        "H05",
+        "H03",
+        "H07"
+      ],
+      "blocked_on_pharos": "Supply correction annotations and work-scoped writing facts with the period applied to constituent messages.",
+      "calculation_gap": "Typed words and human turns can be grouped now; repeated corrections and canonical work/window facts are not consistently joined.",
+      "performance_note": "Additive word measures aggregate efficiently; avoid comparing all-time work totals to rolling-period events.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "human-03",
+      "category": "human",
+      "title": "Do shorter starting prompts lead to more follow-up?",
+      "window_days": 90,
+      "basis": "derived",
+      "recipe": "Measure genuine initial request length and later human exchanges; compare distributions within repository, task family and model where supported.",
+      "preview": "A scatter of starting words versus later exchanges, with cohort colors.",
+      "eligibility": "Enough comparable conversations and complete follow-up; observed association cannot prescribe an ideal prompt length.",
+      "destination": "Conversations in selected prompt-length cohorts.",
+      "exploration_value": "Lets users inspect their own prompting tradeoffs.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M01",
+        "M02",
+        "H03",
+        "H06",
+        "L02"
+      ],
+      "blocked_on_pharos": "Create initial-prompt/follow-up facts with task/model/repository cohorts and completion coverage.",
+      "calculation_gap": "Current writing summaries have overall averages but not the first genuine request plus later exchanges at conversation grain.",
+      "performance_note": "A prepared conversation source enables v2 scatter/box views; comparable cohorts and selection bias remain outside chart arithmetic.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "human-04",
+      "category": "human",
+      "title": "Which examples do I keep supplying?",
+      "window_days": 30,
+      "basis": "interpreted",
+      "recipe": "Extract human-provided examples, snippets and acceptance criteria; group recurring examples by task topic and source provenance.",
+      "preview": "An example fragment with repeated-use marks.",
+      "eligibility": "Retained human-supplied examples and inspectable grouping; do not confuse pasted logs with intentional examples.",
+      "destination": "Example-bearing messages and later work.",
+      "exploration_value": "Suggests reusable demonstrations or project guidance.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H11",
+        "H07",
+        "L01"
+      ],
+      "blocked_on_pharos": "Annotate example-bearing human spans and cluster recurring examples with source links.",
+      "calculation_gap": "Provenance can distinguish copied text, but an intentional example or acceptance criterion needs meaning extraction.",
+      "performance_note": "Store example/cluster memberships keyed by message hash; avoid runtime semantic scans.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "human-05",
+      "category": "human",
+      "title": "Which prompts are becoming reusable templates?",
+      "window_days": 90,
+      "basis": "derived",
+      "recipe": "Cluster repeated human starting requests after removing variable paths and identifiers; show stable text and varying parameters.",
+      "preview": "A prompt with constant text and highlighted variable slots.",
+      "eligibility": "A stable prompt pattern in several independent launches; preserve authorship and automated-template labels.",
+      "destination": "Prompt families and their task instances.",
+      "exploration_value": "Helps users collect workflows they have already invented.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H11",
+        "H13",
+        "M05",
+        "L01"
+      ],
+      "blocked_on_pharos": "Build deterministic prompt fingerprints plus reviewed semantic families and extracted variable spans.",
+      "calculation_gap": "Re-sent/template authorship offers candidates, but parameter-normalized reusable prompt families and variable slots are not query fields.",
+      "performance_note": "Aggregate family memberships; normalization/classification belongs to indexing, not the scalar expression interpreter.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "human-06",
+      "category": "human",
+      "title": "Where do I do the final step myself?",
+      "window_days": 30,
+      "basis": "interpreted",
+      "recipe": "Find explicit human messages stating they performed a fix, command or final integration after agent work; link the preceding obstacle.",
+      "preview": "Human action quote following a short obstacle chain.",
+      "eligibility": "Explicit human statement; do not infer actions from a silence or a session ending.",
+      "destination": "Handoff messages and the preceding attempts.",
+      "exploration_value": "Finds opportunities for better end-to-end workflows.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H07",
+        "M02",
+        "L01"
+      ],
+      "blocked_on_pharos": "Annotate explicit human completion actions and preceding obstacles.",
+      "calculation_gap": "A human message can be searched literally but does not directly expose an evidenced completed manual final action.",
+      "performance_note": "Query retained assertions and evidence; absent agent events do not prove the user performed work.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "human-07",
+      "category": "human",
+      "title": "How often do I intervene after a long agent run?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Detect human messages after long sequences of agent actions; categorize clarification, correction, new scope and approval only with reviewed evidence.",
+      "preview": "A long action strip ending in a human message excerpt.",
+      "eligibility": "Genuine human messages and sequenced agent events; idle gaps do not measure agent autonomy.",
+      "destination": "Intervention points and preceding agent runs.",
+      "exploration_value": "Helps users understand when to provide earlier guidance.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M02",
+        "M03",
+        "H07",
+        "L01"
+      ],
+      "blocked_on_pharos": "Derive action run lengths and interruption points; classify correction/new scope/approval separately.",
+      "calculation_gap": "Ordered messages/calls are retained but no action-run-to-human-intervention relation or category exists.",
+      "performance_note": "Materialize per-stream runs and join bounded human-message facts; idle wall gaps are not autonomous execution time.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "human-08",
+      "category": "human",
+      "title": "What can I launch with only a few words?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Find canonical work with short human launch requests, little later human writing, and explicit recorded completion or feedback; include automated context separately.",
+      "preview": "A tiny starting prompt alongside the observed result excerpt.",
+      "eligibility": "Short genuine request plus a supported end state; small input alone does not prove success.",
+      "destination": "Short-request work with injected context and outcomes visible.",
+      "exploration_value": "Finds low-friction workflows worth saving and repeating.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H01",
+        "H03",
+        "M01",
+        "H07"
+      ],
+      "blocked_on_pharos": "Expose initial request, injected context, later genuine words and explicit observed end-state evidence.",
+      "calculation_gap": "Work summaries can find little writing, but genuine launch length, later steering and supported completion need a conversation projection.",
+      "performance_note": "Query prepared work facts with count/coverage thresholds; do not use short total text as a success measure.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "skills-01",
+      "category": "skills",
+      "title": "Which skills am I actually using?",
+      "window_days": 30,
+      "basis": "observed",
+      "recipe": "Group skill evidence by name, distinct agent streams and evidence type; separate explicit invocation, file load and harness load.",
+      "preview": "Skill names with colored evidence-type marks.",
+      "eligibility": "At least one retained skill-usage record; listing availability is excluded.",
+      "destination": "Skill evidence rows and originating messages or calls.",
+      "exploration_value": "Exposes a capability many users may not know Pharos tracks.",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "skill-evidence"
+      ],
+      "current_preview": "Invocations and observed loads; evidence of use, not compliance.",
+      "blocked_on_query_table": [
+        "H08",
+        "H07",
+        "H09"
+      ],
+      "blocked_on_pharos": "Reuse identity normalization, mirror exclusion and originating-message links.",
+      "calculation_gap": "skill_usages already groups names, evidence types and distinct conversations with SQL-backed facts.",
+      "performance_note": "Group date-bounded skill evidence; retained listings must not become usage counts.",
+      "after_metric_work": "available_after_integration"
+    },
+    {
+      "id": "skills-02",
+      "category": "skills",
+      "title": "Which skills travel across projects?",
+      "window_days": 90,
+      "basis": "derived",
+      "recipe": "Count distinct repositories and task families per observed skill; rank breadth and show the specific work where each was loaded.",
+      "preview": "A skill in the center with several repository spokes.",
+      "eligibility": "Skill identity resolution and at least two repositories; loading does not prove the instructions were followed.",
+      "destination": "Cross-repository usage evidence for the skill.",
+      "exploration_value": "Reveals broadly useful skills already in the user's toolkit.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H02",
+        "H05",
+        "H07"
+      ],
+      "blocked_on_pharos": "Add task-family labels only for the richer variant and retain load-versus-following semantics.",
+      "calculation_gap": "Distinct repositories and streams per skill are available now; task families are optional extra annotations.",
+      "performance_note": "Use the skill-name/time and conversation indexes; apply cross-repository minimum support before top-K.",
+      "after_metric_work": "available_after_integration"
+    },
+    {
+      "id": "skills-03",
+      "category": "skills",
+      "title": "Which skills appear in low-friction work?",
+      "window_days": 90,
+      "basis": "derived",
+      "recipe": "Compare observed human exchanges, repeated failures and completion evidence in similar task cohorts with and without a skill load; preserve load timing.",
+      "preview": "Paired distributions with the skill name and sample sizes.",
+      "eligibility": "Both cohorts have enough comparable work; show association and selection bias rather than skill effectiveness as fact.",
+      "destination": "Matched work cohorts and skill-load evidence.",
+      "exploration_value": "Gives users candidates to investigate as useful workflow habits.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M01",
+        "H03",
+        "H04",
+        "H06",
+        "L02"
+      ],
+      "blocked_on_pharos": "Prepare comparable conversation cohorts with skill-load timing, human effort and explicit end-state evidence.",
+      "calculation_gap": "Skill facts and effort facts exist separately, but matched with/without task cohorts and load timing are not an exposed dataset.",
+      "performance_note": "Use semi-joins or one-row-per-work flags so skill evidence cannot multiply work usage; don't imply causality.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "skills-04",
+      "category": "skills",
+      "title": "Where do agents fail to load instructions?",
+      "window_days": 7,
+      "basis": "observed",
+      "recipe": "Find failing explicit skill invocations or reads of instruction files; group by skill path, harness and error class.",
+      "preview": "Instruction path beside the actual failure fragment.",
+      "eligibility": "Retained failed load event; missing usage records alone are insufficient.",
+      "destination": "Failed loads, raw results and later recovery attempts.",
+      "exploration_value": "Finds a fixable reason expected guidance may not reach agents.",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "skill-load-failures"
+      ],
+      "current_preview": "Skill evidence whose parent call recorded an error.",
+      "blocked_on_query_table": [
+        "H07",
+        "H09"
+      ],
+      "blocked_on_pharos": "Hydrate parent call errors and optional harness identity, preserving evidence status.",
+      "calculation_gap": "Failed skill invocations/loads, paths, provider and status can be filtered now; some precise error details need the originating call.",
+      "performance_note": "Date/name/status filtering over a small fact table is plausible; absence of evidence is not failed loading.",
+      "after_metric_work": "available_after_integration"
+    },
+    {
+      "id": "skills-05",
+      "category": "skills",
+      "title": "Which workflows reload the same skill?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Within each stream count repeated observed loads of the same resolved body; compare loaded bytes and event spacing with compaction markers.",
+      "preview": "Skill-load marks along a session with a compaction notch.",
+      "eligibility": "Repeated retained load evidence; deduplicate harness attachment snapshots.",
+      "destination": "Repeat loads and intervening events.",
+      "exploration_value": "Reveals opportunities to reduce redundant instruction loading.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M02",
+        "H03",
+        "H02"
+      ],
+      "blocked_on_pharos": "Expose deduplicated stream-level body loads and content fingerprints, optionally compaction events.",
+      "calculation_gap": "Grouping by conversation and skill counts repeats, but exact body identity, stream boundaries and compaction links are missing.",
+      "performance_note": "Group small load facts by stream/body; use an ordered event join only for timing around compaction.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "skills-06",
+      "category": "skills",
+      "title": "Which MCP methods are becoming useful?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Rank observed methods by growth in distinct sessions and repositories; include error rates, empty responses and retained result examples.",
+      "preview": "Method ranking with current and preceding-window activity.",
+      "eligibility": "Comparable coverage and both windows; label new methods only when prior coverage is adequate.",
+      "destination": "MCP method calls, arguments and result evidence.",
+      "exploration_value": "Encourages users to explore capabilities they have started adopting.",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "mcp-methods"
+      ],
+      "current_preview": "Recorded method calls across connected tools.",
+      "blocked_on_query_table": [
+        "H04",
+        "H05",
+        "H07"
+      ],
+      "blocked_on_pharos": "Supply compatible prior-window coverage, response-result counts and bounded examples.",
+      "calculation_gap": "MCP methods and session/repository counts are available, while period growth and empty-response measures need more facts.",
+      "performance_note": "Compare indexed MCP-call cohorts and denominators; a method first observed after incomplete capture is not certainly new.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "skills-07",
+      "category": "skills",
+      "title": "Which capabilities do agents keep searching for?",
+      "window_days": 30,
+      "basis": "interpreted",
+      "recipe": "Find explicit tool-discovery queries and capability requests; cluster requested functions, then connect them to subsequent resolved tool calls where retained.",
+      "preview": "Capability request leading to the tool ultimately found.",
+      "eligibility": "Retained discovery arguments or requests; searches alone do not prove a capability is missing.",
+      "destination": "Discovery episodes, available listings and follow-up calls.",
+      "exploration_value": "Reveals needs that might benefit from better discovery or reusable guidance.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H11",
+        "M02",
+        "H07",
+        "L01"
+      ],
+      "blocked_on_pharos": "Extract discovery episodes and capability labels with linked tool lists and follow-up calls.",
+      "calculation_gap": "Some discovery arguments are retained, but requested capability classes and subsequent resolution are not fields.",
+      "performance_note": "Candidate discovery calls can be indexed; classify and link episodes once, then query annotations.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "skills-08",
+      "category": "skills",
+      "title": "What changed after instruction updates?",
+      "window_days": 90,
+      "basis": "derived",
+      "recipe": "Align dated instruction or skill changes with repeated corrections, relevant failures and observed outcomes before and after; use comparable repositories and task populations.",
+      "preview": "Change marker between two distributions plus one recurring phrase.",
+      "eligibility": "Dated instruction change and exposure in both periods; causal attribution remains a hypothesis.",
+      "destination": "Instruction diffs and before-and-after work cohorts.",
+      "exploration_value": "Connects improvements in guidance to inspectable changes in behavior.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H04",
+        "M01",
+        "H05",
+        "L02"
+      ],
+      "blocked_on_pharos": "Capture dated instruction changes and prepared compatible task cohorts, using retained change evidence when possible.",
+      "calculation_gap": "Instruction loads exist but versioned instruction edits and before/after work exposures are not a queryable transition source.",
+      "performance_note": "Join change anchors to bounded exposures or materialized period facts; concurrent model/task changes need context.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "memory-01",
+      "category": "memory",
+      "title": "Which documentation do agents actually open?",
+      "window_days": 30,
+      "basis": "observed",
+      "recipe": "Rank reached hosts and URLs by distinct conversations; exclude search-result links that were merely returned and never opened.",
+      "preview": "Domain labels with small visit bars and page-title snippets.",
+      "eligibility": "Retained tool URL evidence of an actual visit.",
+      "destination": "Tool calls that reached the selected domains or pages.",
+      "exploration_value": "Reveals sources the user's agents really consult.",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "primary-domains"
+      ],
+      "current_preview": "Primary recorded hosts on tool calls; open the source URLs.",
+      "blocked_on_query_table": [
+        "H13",
+        "H07",
+        "H05"
+      ],
+      "blocked_on_pharos": "Expose reached URL rows with explicit source, parent call/conversation identity and bounded titles/excerpts.",
+      "calculation_gap": "Primary host/URL counts are available; the whole reached URL population lives in tool_urls and is not a Query Table source.",
+      "performance_note": "Index host/time and parent identity; count distinct calls/conversations rather than multiplying counts for several URLs in one call.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "memory-02",
+      "category": "memory",
+      "title": "What do agents research repeatedly?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Normalize web and local search queries; cluster repeats by stable terms and repository; show distinct sessions and the sources subsequently reached.",
+      "preview": "Repeated search phrase with its source trail.",
+      "eligibility": "A repeated query family in several sessions; semantic topic labels need inspected examples.",
+      "destination": "Search episodes and opened sources.",
+      "exploration_value": "Finds repeated research that may be worth saving as a reusable answer.",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "research-queries"
+      ],
+      "current_preview": "Exact recorded search queries ranked by frequency.",
+      "blocked_on_query_table": [
+        "H11",
+        "H02",
+        "H07",
+        "M02",
+        "L01"
+      ],
+      "blocked_on_pharos": "Normalize query fingerprints, classify richer research topics and link subsequent reached sources.",
+      "calculation_gap": "Exact repeated search_query counts work; normalized topic families and later sources require extraction/linking.",
+      "performance_note": "Exact fingerprint repeats can be precomputed cheaply; semantic topic clustering stays a separate cached annotation stage.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "memory-03",
+      "category": "memory",
+      "title": "Have I solved something like this before?",
+      "window_days": 90,
+      "basis": "interpreted",
+      "recipe": "Match recent task descriptions to earlier similar work inside the rolling window; rank by relevance and explicit resolution evidence rather than recency alone.",
+      "preview": "Two task fragments with the earlier observed resolution.",
+      "eligibility": "A supported similarity match and retained earlier outcome; do not promise the solution transfers.",
+      "destination": "Earlier work, evidence of resolution and the related recent request.",
+      "exploration_value": "Turns the archive into reusable experience.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H11",
+        "H07",
+        "L01"
+      ],
+      "blocked_on_pharos": "Produce a bounded similarity-match relation linked to supported earlier outcomes and relevant passages.",
+      "calculation_gap": "Semantic search infrastructure exists, but prior-solution relevance and explicit resolution are not metric rows or general formula operators.",
+      "performance_note": "Use indexed retrieval over versioned documents, then query its result rows; don't run embeddings as aggregate functions.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "memory-04",
+      "category": "memory",
+      "title": "Which decisions did we make and why?",
+      "window_days": 30,
+      "basis": "interpreted",
+      "recipe": "Extract explicit decisions and the stated rationale; cluster by project area and preserve rejected alternatives with message links.",
+      "preview": "Decision sentence over a two-branch alternatives sketch.",
+      "eligibility": "Explicit decision and rationale evidence; proposals remain proposals.",
+      "destination": "Decision passages and supporting conversation context.",
+      "exploration_value": "Makes design reasoning easy to recover.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H11",
+        "H07",
+        "L01"
+      ],
+      "blocked_on_pharos": "Extract decision facts with source passages, rationale and proposal-versus-decision status.",
+      "calculation_gap": "Purpose/outcome summaries do not constitute explicit decision/rationale/alternative records.",
+      "performance_note": "Incremental evidence extraction makes grouping/filtering ordinary and fast; render a host-owned excerpt cover.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "memory-05",
+      "category": "memory",
+      "title": "What alternatives did we leave unexplored?",
+      "window_days": 90,
+      "basis": "interpreted",
+      "recipe": "Extract explicitly deferred or rejected approaches; group by reason and connect them to the task they addressed.",
+      "preview": "Two alternative labels with a short reason excerpt.",
+      "eligibility": "Explicit alternative and status evidence; silence is not rejection.",
+      "destination": "Alternative discussions and the original task.",
+      "exploration_value": "Gives the user a source of ideas when circumstances change.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H11",
+        "H07",
+        "L01"
+      ],
+      "blocked_on_pharos": "Extract alternatives, explicit status, stated reason and task links.",
+      "calculation_gap": "The archive stores discussions but no deferred/rejected alternative fact table.",
+      "performance_note": "Store annotations once and fetch bounded source context; silence should not be classified as rejection.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "memory-06",
+      "category": "memory",
+      "title": "What questions remain explicitly open?",
+      "window_days": 7,
+      "basis": "interpreted",
+      "recipe": "Extract unresolved questions or deferred follow-ups from recent work; scan later retained evidence for an explicit resolution before suggesting.",
+      "preview": "An open question excerpt with its last observed mention.",
+      "eligibility": "Explicit open question with no found resolution in available later coverage; keep completeness visible.",
+      "destination": "Question passages and the later evidence checked.",
+      "exploration_value": "Helps reconnect loose ends across sessions.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M01",
+        "M02",
+        "H11",
+        "H07",
+        "L01"
+      ],
+      "blocked_on_pharos": "Create question/resolution annotations and a last-checked coverage state.",
+      "calculation_gap": "Open questions and later resolution links are not exposed, and absence requires later coverage checks.",
+      "performance_note": "Use incremental follow-up matching or indexed question identities, not repeated scans of every later transcript.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "memory-07",
+      "category": "memory",
+      "title": "Which domains are newly useful to me?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Compare reached domains with the preceding equivalent window; rank newly observed sources with repeated visits and readable page evidence.",
+      "preview": "A few domain badges with their first recent visit and topic.",
+      "eligibility": "New observed domains with enough visits; limited history cannot establish a first-ever visit.",
+      "destination": "New-source calls and the work that used them.",
+      "exploration_value": "Introduces useful resources already discovered by the user's agents.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H04",
+        "H13",
+        "H02"
+      ],
+      "blocked_on_pharos": "Expose reached URL/domain facts with first-observed dates and reliable prior-window coverage.",
+      "calculation_gap": "Primary-domain counts exist, but all reached domains and newly observed comparison need a normalized source and prior coverage.",
+      "performance_note": "Time/domain indexes plus bounded period differences are suitable; avoid defining first-ever from a partial archive.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "memory-08",
+      "category": "memory",
+      "title": "Where is the same knowledge being rediscovered?",
+      "window_days": 90,
+      "basis": "interpreted",
+      "recipe": "Link repeated explanations, decisions or research questions across conversations; show evidence of earlier answers and later rediscovery.",
+      "preview": "Earlier answer and later question joined by a repeated phrase.",
+      "eligibility": "Several supported knowledge matches; distinguish copied context from independent rediscovery.",
+      "destination": "Related passages ordered by time with their answers.",
+      "exploration_value": "Suggests knowledge worth collecting or making easier for agents to retrieve.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H11",
+        "H07",
+        "M05",
+        "L01"
+      ],
+      "blocked_on_pharos": "Materialize knowledge-topic/passages and earlier-answer-to-later-question links, separate copied context.",
+      "calculation_gap": "Knowledge equivalence and independent rediscovery cannot be expressed by v2 arithmetic over current tables.",
+      "performance_note": "Indexed semantic retrieval and cached links make the view queryable; the interpreter should consume those facts.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "cost-01",
+      "category": "cost",
+      "title": "Where does my API-equivalent cost go?",
+      "window_days": 30,
+      "basis": "observed",
+      "recipe": "Aggregate priced usage by day and stable repository, provider, model and flavor dimensions; split token components where recorded.",
+      "preview": "Shared Usage stacked columns with a consistent category palette.",
+      "eligibility": "Priced usage in the exact window; show unpriced coverage and avoid calling equivalent cost an invoice.",
+      "destination": "Usage grouped by the selected dimensions and underlying requests.",
+      "exploration_value": "Gives users familiar entry points into richer usage exploration.",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "usage-repos",
+        "cost-repos"
+      ],
+      "current_preview": "Daily tokens across your repositories.; Recorded usage priced at standard API rates, by repository.",
+      "blocked_on_query_table": [
+        "H05",
+        "H08",
+        "H12",
+        "H09"
+      ],
+      "blocked_on_pharos": "Add a stable flavor join for that variant and use time-grain facts appropriate to exact rolling windows.",
+      "calculation_gap": "Usage already provides additive token components and API-equivalent prices by session/day/model; flavor is not a current Usage dimension.",
+      "performance_note": "Current usage construction loads and prices the representative ledger before map filtering; materialized bounded usage/pricing facts will scale better than merely upgrading chart UI.",
+      "after_metric_work": "available_after_integration"
+    },
+    {
+      "id": "cost-02",
+      "category": "cost",
+      "title": "Which sessions are expensive outliers?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Compute cost per canonical work within comparable repository and task-family cohorts; rank tail observations and show their token and tool composition.",
+      "preview": "Cost distribution with one session marked and its component strip.",
+      "eligibility": "Priced work and enough comparable observations to define an outlier; incomplete work is separate.",
+      "destination": "Expensive work and its usage, tool results and transcript.",
+      "exploration_value": "Turns an alarming total into concrete sessions users can understand.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H03",
+        "H06",
+        "H01",
+        "H07"
+      ],
+      "blocked_on_pharos": "Supply task/cohort identity and period-scoped usage facts; expose summed cost per canonical task.",
+      "calculation_gap": "Library can rank work costs but those are work totals, not per-task totals for only the events inside a rolling window.",
+      "performance_note": "Group additive usage first, then compute the distribution/threshold; don't histogram session-day-model rows as task costs.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "cost-03",
+      "category": "cost",
+      "title": "Where does prompt caching help most?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Aggregate eligible input tokens by recorded cache state; compare recorded API-equivalent pricing with an explicit same-workload uncached scenario.",
+      "preview": "Cached and uncached bands with a scenario difference.",
+      "eligibility": "Cache-state coverage and compatible versioned rates; cache share alone is not dollar savings.",
+      "destination": "Usage by cache state and the scenario calculation.",
+      "exploration_value": "Explains a cost mechanism that is often invisible to users.",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "cache-reads"
+      ],
+      "current_preview": "Recorded cache-read tokens by model; inspect usage details.",
+      "blocked_on_query_table": [
+        "H05",
+        "M06",
+        "H09"
+      ],
+      "blocked_on_pharos": "Publish cache-state rate components or prepared recorded-versus-uncached scenario fields with pricing coverage.",
+      "calculation_gap": "Cache shares and historical pricing exist; an explicit compatible uncached workload cost is not a generic measure field.",
+      "performance_note": "Arithmetic is supported by v2 once rates are available; ratio of sums and priced coverage are necessary for correct aggregation.",
+      "after_metric_work": "needs_scenario_dataset"
+    },
+    {
+      "id": "cost-04",
+      "category": "cost",
+      "title": "What would this same usage cost at another price schedule?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Reprice the same recorded token components with selected historical or current versioned price tables; keep unpriced portions explicit.",
+      "preview": "Paired cost bars with price dates underneath.",
+      "eligibility": "Compatible token classes and known rates; this changes prices, not model behavior.",
+      "destination": "Recorded workload and both price calculations.",
+      "exploration_value": "Lets users distinguish changes in usage from changes in prices.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H05",
+        "M06",
+        "L04"
+      ],
+      "blocked_on_pharos": "Supply compatible versioned rate tables or explicit scenario price fields at the workload grain.",
+      "calculation_gap": "Historical cost_usd and cost_today_usd already support one comparison; arbitrary selected versioned schedules are additional data/scenario work.",
+      "performance_note": "Existing historical/today sums can ship now; arbitrary scenarios should reuse workload facts rather than reread and reprice every transcript.",
+      "after_metric_work": "needs_scenario_dataset"
+    },
+    {
+      "id": "cost-05",
+      "category": "cost",
+      "title": "How much cost sits inside repeated failure episodes?",
+      "window_days": 7,
+      "basis": "derived",
+      "recipe": "Link normalized failure episodes and recovery attempts to deduplicated attributable usage; show failing attempts, successful recovery and unattributed cost separately.",
+      "preview": "Cost bands along a retry sequence.",
+      "eligibility": "Episode boundaries and defensible attribution; do not label all failed work wasted or add overlapping episodes.",
+      "destination": "Failure episodes, attributed usage and recovery evidence.",
+      "exploration_value": "Helps users choose which recurring failures are economically worth fixing.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M02",
+        "M03",
+        "H03",
+        "H05"
+      ],
+      "blocked_on_pharos": "Materialize nonoverlapping episodes and attributable priced usage with explicit unknown or shared portions.",
+      "calculation_gap": "Failure filters and tool rollup cost exist separately; recovery episode attribution and globally queryable per-call dollars are absent.",
+      "performance_note": "Episode joins must avoid overlapping counts; query cost facts after attribution, not post-page enrichment.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "cost-06",
+      "category": "cost",
+      "title": "How does recorded usage compare with my subscription?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Compare recorded API-equivalent usage with a user-provided plan cost for a aligned billing period; show provider coverage and separate services.",
+      "preview": "Two labeled comparison bands with billing-period dates.",
+      "eligibility": "User-supplied billing terms and aligned usage; a plan fee and list-price equivalent are different quantities.",
+      "destination": "Usage included in the comparison and editable billing assumptions.",
+      "exploration_value": "Answers a common curiosity without pretending usage estimates are bills.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H04",
+        "M06",
+        "L04"
+      ],
+      "blocked_on_pharos": "Accept user billing inputs and build a labeled billing-period comparison source.",
+      "calculation_gap": "Usage estimates exist; subscription billing terms and an aligned comparison period are not archive observations.",
+      "performance_note": "Generic formulas can divide or compare prepared values; Query Table should not implement provider billing or equate list-price equivalent to an invoice.",
+      "after_metric_work": "needs_external_inputs"
+    },
+    {
+      "id": "cost-07",
+      "category": "cost",
+      "title": "What changes if I price this workload on a cheaper model?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Apply alternative model rates to the same classified token workload; break out incompatible or unknown token classes and display an explicit scenario.",
+      "preview": "Model-colored scenario bars with the unchanged workload labeled.",
+      "eligibility": "Known compatible rates and token categories; no prediction of quality, token count, latency or actual savings.",
+      "destination": "Workload components and all scenario assumptions.",
+      "exploration_value": "Gives users a starting point for model-cost experiments.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M06",
+        "H05",
+        "L04"
+      ],
+      "blocked_on_pharos": "Provide versioned compatible rate components and scenario labels, with unsupported token classes visible.",
+      "calculation_gap": "Alternate model prices and token-class compatibility are not current query fields; no formula predicts changed model behavior.",
+      "performance_note": "Compute several named scenarios over shared workload facts; changing prices alone does not model quality, token count or latency.",
+      "after_metric_work": "needs_scenario_dataset"
+    },
+    {
+      "id": "cost-08",
+      "category": "cost",
+      "title": "How sensitive is estimated energy use to my assumptions?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Apply configurable energy-per-token, data-center overhead and grid-intensity assumptions to recorded usage; compare plausible user-selected scenarios.",
+      "preview": "A narrow range band with assumption labels and repository contribution.",
+      "eligibility": "Recorded tokens and explicit assumption sets; present estimates and sensitivity rather than measured energy.",
+      "destination": "Token workload and editable energy assumptions.",
+      "exploration_value": "Makes the environmental view inspectable instead of presenting a falsely precise total.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M06",
+        "H05",
+        "L04"
+      ],
+      "blocked_on_pharos": "Expose the existing model's typed assumptions/components or a prepared sensitivity source with estimate provenance.",
+      "calculation_gap": "Pharos already has a carbon view and assumptions; scenario-derived energy values are not queryable generic usage measures.",
+      "performance_note": "The arithmetic is within v2's numeric profile; assumption ownership and ranges belong to Pharos, not a generic energy function.",
+      "after_metric_work": "needs_scenario_dataset"
+    },
+    {
+      "id": "models-01",
+      "category": "models",
+      "title": "Which models do I use for which work?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Join model usage to repository, task family and recorded outcome; compare mix and volume while retaining multi-model work explicitly.",
+      "preview": "Model-by-task mosaic using shared Usage colors.",
+      "eligibility": "Known model identity and task-family evidence; semantic task labels need classification.",
+      "destination": "Usage and work in the selected model-task cells.",
+      "exploration_value": "Reveals the user's actual division of labor across models.",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "usage-models"
+      ],
+      "current_preview": "Token use by model, day by day.",
+      "blocked_on_query_table": [
+        "M01",
+        "H05",
+        "H12",
+        "H13"
+      ],
+      "blocked_on_pharos": "Build work/model memberships with task labels and explicit multi-model attribution.",
+      "calculation_gap": "Model/repository usage is available; task-family and recorded outcome joins are not a deduplicated Usage source.",
+      "performance_note": "Avoid repeating work-level outcomes once per usage row without preserving the intended denominator.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "models-02",
+      "category": "models",
+      "title": "Which task families need the least human steering?",
+      "window_days": 90,
+      "basis": "derived",
+      "recipe": "Within comparable task families aggregate genuine human exchanges and explicit end states by model, harness and effort; show distributions and coverage.",
+      "preview": "Paired exchange distributions with model colors and sample sizes.",
+      "eligibility": "Comparable cohorts and human authorship evidence; avoid interpreting raw differences as a model leaderboard.",
+      "destination": "Matched work with steering counts and outcomes.",
+      "exploration_value": "Helps users explore which configurations fit their own work.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M01",
+        "H03",
+        "H06",
+        "L02"
+      ],
+      "blocked_on_pharos": "Publish one row per comparable conversation/task with configuration, human exchanges, completion coverage and cohort labels.",
+      "calculation_gap": "Effort/model data exists in separate grains; comparable task-family cohorts with genuine steering and outcomes are not available.",
+      "performance_note": "v2 can render scatter/box results over prepared facts; matching cohorts and censoring are Pharos responsibilities.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "models-03",
+      "category": "models",
+      "title": "Where do models disagree in parallel attempts?",
+      "window_days": 30,
+      "basis": "interpreted",
+      "recipe": "Link attempts at the same candidate or request and compare explicitly different diagnoses, proposed solutions or final outcomes.",
+      "preview": "Two contrasting response fragments with shared task context.",
+      "eligibility": "A known shared task or candidate identity and evidenced disagreement; unrelated tasks cannot be compared as votes.",
+      "destination": "All attempts for the candidate and the passages that differ.",
+      "exploration_value": "Surfaces uncertainty and alternative approaches worth considering.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H07",
+        "M01",
+        "M07",
+        "L01"
+      ],
+      "blocked_on_pharos": "Extract disagreement facts and paired response passages for known shared candidates.",
+      "calculation_gap": "TL1 candidate_id links parallel attempts, but semantic disagreement between diagnoses or proposals is not a metric field.",
+      "performance_note": "Candidate-based matching is cheap; content comparison should be computed/cached outside interactive aggregation.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "models-04",
+      "category": "models",
+      "title": "When does escalation change the result?",
+      "window_days": 90,
+      "basis": "derived",
+      "recipe": "Reconstruct explicit configuration-escalation chains; compare observed outcomes and incremental cost at each step by failure family.",
+      "preview": "A model ladder with outcome marks and cost increments.",
+      "eligibility": "Recorded lineage and escalation transitions; later success does not prove the initial model was incapable.",
+      "destination": "Escalation chains with configuration, cost and outcome evidence.",
+      "exploration_value": "Makes the economics and results of escalation visible.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M01",
+        "M02",
+        "M03",
+        "H05",
+        "M07"
+      ],
+      "blocked_on_pharos": "Materialize candidate escalation edges or episode rows with explicit predecessor/configuration transitions and prices.",
+      "calculation_gap": "TL1 outcomes/escalated counts provide totals but do not expose ordered escalation chains with incremental cost.",
+      "performance_note": "Query indexed lineage facts rather than reconstruct every candidate from task history on refresh.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "models-05",
+      "category": "models",
+      "title": "Which TL1 configurations advance most often?",
+      "window_days": 30,
+      "basis": "observed",
+      "recipe": "For comparable flavors and candidates compute advances, errors, escalations and revisits per attempt and per candidate; retain execution class and version.",
+      "preview": "A compact outcome mosaic per configuration.",
+      "eligibility": "TL1 attempts with dispositions and compatible definitions; do not mix definition revisions or independent and repeated attempts.",
+      "destination": "Attempt and candidate cohorts with their configurations.",
+      "exploration_value": "Opens the existing TL1 data to precise reusable questions.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H05",
+        "H02",
+        "H09"
+      ],
+      "blocked_on_pharos": "Upgrade map/v2 execution and constrain flavor/definition/execution-class populations; retain explicit per-attempt versus per-candidate measures.",
+      "calculation_gap": "TL1 attempt, candidate, configuration/version and outcome counters exist; cohort ratios require composed metrics and careful distinct identity.",
+      "performance_note": "Ratios of sums/distinct candidates are enabled by v2; cached TL1 rows can work until archive size warrants SQL facts.",
+      "after_metric_work": "available_after_integration"
+    },
+    {
+      "id": "models-06",
+      "category": "models",
+      "title": "How much work happens in subagents?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Traverse known parent lineage; aggregate descendant cost, calls and outcomes by depth while counting each stream once; keep unknown lineage separate.",
+      "preview": "A small branching tree with node sizes proportional to attributed work.",
+      "eligibility": "Recorded parent-child lineage and deduplicated usage; no addition of rolled-up parent totals to child totals.",
+      "destination": "Parent and descendant streams with their attributed usage.",
+      "exploration_value": "Gives delegation a concrete shape beyond a subagent count.",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "subagent-usage"
+      ],
+      "current_preview": "Attributed subagent tokens across repositories.",
+      "blocked_on_query_table": [
+        "M01",
+        "M07",
+        "H05"
+      ],
+      "blocked_on_pharos": "Publish canonical parent-child relations or ancestor memberships and own-stream usage facts.",
+      "calculation_gap": "Usage session_kind/depth supports breakdowns now, but parent IDs/closure and a tree result are not exposed in the current table.",
+      "performance_note": "Sum each stream once; a host-precomputed closure avoids arbitrary recursive expression execution and duplicate rolled-up parent cost.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "models-07",
+      "category": "models",
+      "title": "Where do delegated agents duplicate effort?",
+      "window_days": 7,
+      "basis": "derived",
+      "recipe": "Within shared parent tasks find repeated same-file reads, equivalent commands and overlapping edits across descendants; show timestamps and task assignments.",
+      "preview": "Parallel lanes repeating the same file or command.",
+      "eligibility": "Shared lineage and comparable events; duplication may be intentional validation and should be labeled neutrally.",
+      "destination": "Child sessions, assignments and repeated events.",
+      "exploration_value": "Helps inspect whether task boundaries could be clearer.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M01",
+        "M02",
+        "M04",
+        "H02"
+      ],
+      "blocked_on_pharos": "Expose descendant lineage, normalized actions, assignments and canonical read/edit events.",
+      "calculation_gap": "Calls can be grouped by path/command, but shared-parent assignments, descendant identity and temporal duplicate episodes are unavailable.",
+      "performance_note": "Index parent/stream/path/time; candidate matching and interval sweeps should be bounded, with intentional validation distinct from accidental duplication.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "models-08",
+      "category": "models",
+      "title": "What changed when I switched configurations?",
+      "window_days": 90,
+      "basis": "derived",
+      "recipe": "Align explicit changes in model, effort, flavor or harness with comparable work; compare token mix, recorded cost, errors and human exchanges across windows.",
+      "preview": "A change point with a compact set of before-and-after distributions.",
+      "eligibility": "Known configuration transition and comparable coverage; control task mix or show it prominently.",
+      "destination": "Work around the transition with configurations and supporting outcomes.",
+      "exploration_value": "Helps users evaluate their own experiments with evidence rather than memory.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H04",
+        "M01",
+        "H05",
+        "H06",
+        "L02"
+      ],
+      "blocked_on_pharos": "Supply configuration-change events and matched work facts with token mix and genuine human exchanges.",
+      "calculation_gap": "Usage has some model/harness version fields; explicit configuration transition anchors and comparable task effort/outcomes are incomplete.",
+      "performance_note": "Align cohorts and exposure before comparison; composition changes can explain the difference without a configuration effect.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "rhythm-01",
+      "category": "rhythm",
+      "title": "When am I writing to agents?",
+      "window_days": 30,
+      "basis": "observed",
+      "recipe": "Bucket genuine human messages and estimated typed words by the user's local day and hour; keep automated activity separate.",
+      "preview": "A restrained day-by-hour heatmap.",
+      "eligibility": "Human authorship and timestamps with known timezone; activity is not measured productivity.",
+      "destination": "Human messages in the selected time buckets.",
+      "exploration_value": "Reveals the rhythm of the user's participation.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H04",
+        "H12",
+        "H05"
+      ],
+      "blocked_on_pharos": "Expose explicit timezone-derived civil hour and weekday or implement the admitted time-bucket profile.",
+      "calculation_gap": "Human message timestamps and typed words are available, but local hour/day-of-week grouping fields and heatmap display are absent.",
+      "performance_note": "Aggregate message-time facts with index-friendly range filters; a display timezone alone does not implement local-hour grouping.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "rhythm-02",
+      "category": "rhythm",
+      "title": "Where does my attention switch most often?",
+      "window_days": 7,
+      "basis": "derived",
+      "recipe": "Order genuine human messages by time and canonical repository; count repository switches and show runs, with configurable gaps separating visits.",
+      "preview": "Colored repository ribbons across a day.",
+      "eligibility": "Timestamps and stable repository identity; message switches are a proxy for attention, not complete human activity.",
+      "destination": "Human-message sequences and repository switches.",
+      "exploration_value": "Makes fragmented collaboration visible without guessing what happened off-screen.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M02",
+        "M03",
+        "M07"
+      ],
+      "blocked_on_pharos": "Create human-message visit/switch events with stable cross-conversation ordering and an explicit gap rule.",
+      "calculation_gap": "writing_messages can order by sent_at/repository but cannot count transitions or define gap-separated visits as metrics.",
+      "performance_note": "Use a timestamp-ordered human event stream; materialize switch facts incrementally for frequent previews.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "rhythm-03",
+      "category": "rhythm",
+      "title": "How much agent work overlaps?",
+      "window_days": 7,
+      "basis": "derived",
+      "recipe": "Build observed agent-run intervals and compute concurrency over time; distinguish complete intervals, event-active estimates and missing ends.",
+      "preview": "Layered active lanes with a small concurrency curve.",
+      "eligibility": "Usable run timestamps and interval definitions; overlapping time is not automatically time saved.",
+      "destination": "Runs contributing to each overlapping interval.",
+      "exploration_value": "Shows the scale and shape of parallel work.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M04",
+        "H04",
+        "M07"
+      ],
+      "blocked_on_pharos": "Publish observed run intervals with missing-end coverage and event-active estimation labels.",
+      "calculation_gap": "Agent sessions/activity are retained, but reliable intervals and concurrency reductions are not Query Table metrics.",
+      "performance_note": "Union/sweep interval endpoints and bucket occupancy; do not sum durations or infer time saved from overlap.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "rhythm-04",
+      "category": "rhythm",
+      "title": "Which tasks disappear and then resume?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Find conversation or work resumes after long observed gaps; show the restart request and subsequent rereads or clarifications.",
+      "preview": "A split timeline with the restart excerpt bridging the gap.",
+      "eligibility": "Retained resumed activity on the same canonical work; silence alone is not abandonment.",
+      "destination": "Resumed work, gaps and events around restart.",
+      "exploration_value": "Helps recover interrupted work and inspect restart overhead.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M02",
+        "M03",
+        "H07"
+      ],
+      "blocked_on_pharos": "Materialize resume episodes and their restart messages/read/clarification facts.",
+      "calculation_gap": "Work activity dates identify recent work, while restart gaps and surrounding events require stream-level sequencing.",
+      "performance_note": "Partition by canonical work/stream and query stored gap episodes; no activity after a gap does not establish abandonment.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "rhythm-05",
+      "category": "rhythm",
+      "title": "What is the path from request to observed finish?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Sequence request, orientation, edit, verification and explicit finish milestones; group common paths and measure elapsed intervals with idle gaps visible.",
+      "preview": "A compact journey strip with a large gap or recurring loop emphasized.",
+      "eligibility": "Retained milestones; durations remain elapsed spans rather than continuous effort.",
+      "destination": "Work journeys and the evidence supporting each milestone.",
+      "exploration_value": "Makes complex workflows understandable at a glance.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M02",
+        "M03",
+        "M07",
+        "H06"
+      ],
+      "blocked_on_pharos": "Build request/orientation/edit/check/finish milestone facts with explicit elapsed spans, idle gaps and missing stages.",
+      "calculation_gap": "Isolated edit/test/outcome fields exist but no complete milestone journey relation is exposed.",
+      "performance_note": "Query prepared journey rows; ordering and completion semantics belong to the host, while generic rendering could be extensible.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "rhythm-06",
+      "category": "rhythm",
+      "title": "Where do approvals hold up recorded workflows?",
+      "window_days": 7,
+      "basis": "derived",
+      "recipe": "Pair explicit permission requests with approvals, rejections and subsequent continuation; summarize observed delay by action and harness.",
+      "preview": "A request-to-approval interval with its action label.",
+      "eligibility": "Paired permission events and usable timestamps; generic tool timestamp gaps do not prove approval wait.",
+      "destination": "Permission episodes and continuation evidence.",
+      "exploration_value": "Finds avoidable interruption patterns when the transcript supports them.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M02",
+        "M03",
+        "H06",
+        "H07"
+      ],
+      "blocked_on_pharos": "Extract permission episodes per harness and retain explicit pairing and duration source.",
+      "calculation_gap": "Rejection/error classes exist, but paired permission request, response and continuation timestamps are not standardized.",
+      "performance_note": "Only explicit paired events measure approval waiting; timestamp-derived tool gaps must not be silently repurposed.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "rhythm-07",
+      "category": "rhythm",
+      "title": "Are my conversation rounds getting longer?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Count actions and genuine exchanges per conversation round; compare matched distributions with the preceding window and inspect long-tail sessions.",
+      "preview": "Two small distributions with examples from the tail.",
+      "eligibility": "A stable round definition and comparable populations; do not interpret fewer human messages as better automatically.",
+      "destination": "Round-level events and their conversations.",
+      "exploration_value": "Helps users notice changes in interaction style over time.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M02",
+        "M03",
+        "H03",
+        "H04",
+        "H06"
+      ],
+      "blocked_on_pharos": "Derive genuine exchange rounds and action-run facts with comparable prior-window coverage.",
+      "calculation_gap": "Work-level turn counts exist but conversation-round definitions and per-round action counts are absent.",
+      "performance_note": "Analyze a prepared round population; a second grouped-distribution stage is useful when starting from raw events.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "rhythm-08",
+      "category": "rhythm",
+      "title": "How much time is tool work versus gaps between events?",
+      "window_days": 7,
+      "basis": "derived",
+      "recipe": "Union overlapping timed tool intervals within each stream; compare with observed session spans and label remaining gaps without assigning them to thinking or human work.",
+      "preview": "A timeline with timed calls and unclassified gaps.",
+      "eligibility": "Complete timed intervals and explicit coverage; never sum parallel durations as elapsed wall time.",
+      "destination": "Timed calls, overlap handling and unclassified intervals.",
+      "exploration_value": "Helps inspect workflow timing without inventing hidden activity.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M04",
+        "H05",
+        "M07"
+      ],
+      "blocked_on_pharos": "Publish timed intervals, observed spans and coverage at stream grain, or materialize union length and unclassified gaps.",
+      "calculation_gap": "Per-call timings can be summed but that gives incorrect elapsed time for overlap; session span completeness also varies.",
+      "performance_note": "Union overlap before computing fractions; open intervals and missing timings remain unknown.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "learning-01",
+      "category": "learning",
+      "title": "Which workflows would I happily repeat?",
+      "window_days": 90,
+      "basis": "interpreted",
+      "recipe": "Find work with explicit positive acceptance, usable verification, modest human steering and reusable task structure; show each criterion separately.",
+      "preview": "Starting prompt paired with acceptance evidence and a short workflow trace.",
+      "eligibility": "Supported acceptance and relevant verification; avoid a single opaque success score.",
+      "destination": "Candidate workflows with criteria and source passages.",
+      "exploration_value": "Offers positive examples the user can collect as future starting points.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M01",
+        "H05",
+        "H07",
+        "L01",
+        "L02"
+      ],
+      "blocked_on_pharos": "Prepare evidence-backed workflow criteria and source passages; preserve separate criteria instead of an opaque success score.",
+      "calculation_gap": "Work outcomes and writing can provide candidates, but explicit acceptance, relevant verification and reusable structure are not complete joined facts.",
+      "performance_note": "Query stored criteria at canonical work grain; recommendations and judgments are Pharos product logic.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "learning-02",
+      "category": "learning",
+      "title": "Which recoveries are worth learning from?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Rank failure-to-recovery episodes by recurrence, changed strategy and explicit observed resolution; show the pivotal changed call or instruction.",
+      "preview": "Failure fragment, pivotal action and observed recovery in three frames.",
+      "eligibility": "A retained failure and comparable successful follow-up; causal wording needs more than sequence alone.",
+      "destination": "Complete recovery episodes and their pivotal evidence.",
+      "exploration_value": "Turns mistakes into a library of useful techniques.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M02",
+        "M03",
+        "H07",
+        "M07"
+      ],
+      "blocked_on_pharos": "Publish recurring recovery episodes with resolution evidence and action-difference annotations.",
+      "calculation_gap": "Raw failures and later calls exist, but linked recovery episodes and the pivotal changed action do not.",
+      "performance_note": "Rank indexed episode facts by recurrence and useful evidence; don't rerun transcript sequence extraction for every refresh.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "learning-03",
+      "category": "learning",
+      "title": "Which improvements stayed improved?",
+      "window_days": 90,
+      "basis": "derived",
+      "recipe": "Join recorded fixes or findings to before-and-after failure exposure; inspect recurrence over successive windows and include confidence or small-sample labels.",
+      "preview": "A before-and-after rate trace with the fix date.",
+      "eligibility": "Dated fix and compatible ongoing exposure; absence of recurrence with no exposure is not success.",
+      "destination": "Fix evidence, relevant failures and observation denominators.",
+      "exploration_value": "Helps users understand which interventions are holding up.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H04",
+        "M01",
+        "H05",
+        "H09",
+        "L02"
+      ],
+      "blocked_on_pharos": "Expose fix/measurement and relevant call-population facts with observation coverage.",
+      "calculation_gap": "Pharos has findings and metric evidence below the table, but dated fixes plus compatible exposure/recurrence periods are not a registered source.",
+      "performance_note": "Reuse host measurement facts and period rollups; no recurrence with no exposure must not look like a successful fix.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "learning-04",
+      "category": "learning",
+      "title": "What new kinds of work am I trying?",
+      "window_days": 30,
+      "basis": "interpreted",
+      "recipe": "Classify requests into task families and compare with the preceding window; show newly observed families with representative requests.",
+      "preview": "Three request fragments with small first-observed timeline marks.",
+      "eligibility": "Task-family evidence and enough earlier coverage; do not claim first-ever activity from a short archive.",
+      "destination": "Work in the newly observed families.",
+      "exploration_value": "Encourages exploration and reflects expanding capability.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H04",
+        "H02",
+        "H07",
+        "L01"
+      ],
+      "blocked_on_pharos": "Materialize versioned task-family labels and representative requests, including multi-label membership semantics.",
+      "calculation_gap": "Purpose summaries offer text but not a stable task-family taxonomy with prior-window coverage.",
+      "performance_note": "Query label membership and aligned counts; reclassification revisions must invalidate cached comparisons.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "learning-05",
+      "category": "learning",
+      "title": "What combinations of tools are unusual for me?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "Build ordered workflow motifs within streams; compare recent sequences with the preceding window and surface supported uncommon combinations.",
+      "preview": "A novel three-tool path with a representative result fragment.",
+      "eligibility": "A valid recent motif and sufficient prior sequence coverage; novelty is not superiority.",
+      "destination": "Sessions containing the motif and their outcomes.",
+      "exploration_value": "Gives the conveyor surprising, concrete discoveries beyond top-N rankings.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M02",
+        "M03",
+        "M05",
+        "H02",
+        "H04"
+      ],
+      "blocked_on_pharos": "Produce bounded typed workflow motifs and marginal frequencies at stream grain.",
+      "calculation_gap": "Tool categories can be counted but ordered motifs and personal historical rarity are not fields.",
+      "performance_note": "Cap motif length and minimum support; avoid unbounded sequence mining or all-history rescans.",
+      "after_metric_work": "needs_derived_dataset"
+    },
+    {
+      "id": "learning-06",
+      "category": "learning",
+      "title": "What is the playbook for a new repository?",
+      "window_days": 30,
+      "basis": "interpreted",
+      "recipe": "Detect recently observed repositories and summarize evidenced recurring setup commands, test commands, documentation sources and early obstacles.",
+      "preview": "A tiny repository map with two real commands and one source.",
+      "eligibility": "Several retained sessions in a newly observed repository; distinguish common actions from recommended best practice.",
+      "destination": "The repository's startup work and supporting events.",
+      "exploration_value": "Turns the user's recent experience into a useful orientation view.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H04",
+        "H11",
+        "H07",
+        "L01"
+      ],
+      "blocked_on_pharos": "Build repository orientation facts with actual setup/test/source examples and explicit recently-observed status.",
+      "calculation_gap": "Repository commands, domains and first observed activity can be selected; an evidenced playbook involves extraction and interpretation.",
+      "performance_note": "Aggregate prepared repository events and hydrate a few examples; do not equate frequency with best practice.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "learning-07",
+      "category": "learning",
+      "title": "What deserves a reusable instruction or skill?",
+      "window_days": 90,
+      "basis": "interpreted",
+      "recipe": "Combine repeated human instructions, recurring recovery procedures and reused examples; rank candidate procedures by recurrence and explicit successful use.",
+      "preview": "Repeated rule plus two short evidenced workflow steps.",
+      "eligibility": "A repeatable procedure with inspectable evidence; suggestions require human judgment before becoming instructions.",
+      "destination": "Candidate procedures, repeated requests and observed outcomes.",
+      "exploration_value": "Connects exploration to durable improvements in the user's toolkit.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "M05",
+        "H02",
+        "H07",
+        "L01"
+      ],
+      "blocked_on_pharos": "Combine instruction/recovery/example annotations into candidate reusable procedures with evidence links.",
+      "calculation_gap": "Repeated rules, procedures and their explicit successful use are not normalized evidence relations.",
+      "performance_note": "This is a Pharos extractor/recommendation workflow; Query Table can filter and group its saved candidate facts.",
+      "after_metric_work": "needs_annotations"
+    },
+    {
+      "id": "learning-08",
+      "category": "learning",
+      "title": "What would I miss in an average?",
+      "window_days": 30,
+      "basis": "derived",
+      "recipe": "For distributions already supported by the data surface bimodality, a concentrated tail or cohort reversals; show the grouped and ungrouped views together.",
+      "preview": "Overall distribution beside two differently shaped cohorts.",
+      "eligibility": "Enough observations per cohort and a clear supported feature; avoid unstable statistical discoveries from tiny samples.",
+      "destination": "Full distributions, cohort definitions and the observations behind them.",
+      "exploration_value": "Exposes the power of complex aggregation through a surprising but inspectable view.",
+      "implementation_status": "Deferred",
+      "implemented_recipes": [],
+      "current_preview": "",
+      "blocked_on_query_table": [
+        "H03",
+        "H06",
+        "H04",
+        "H05",
+        "L02"
+      ],
+      "blocked_on_pharos": "Supply correct-grain populations/cohort labels and a supported feature detector; a manually chosen distribution can ship without automated claims.",
+      "calculation_gap": "v2 box/histogram can expose distributions, but detecting bimodality or cohort reversals needs statistical interpretation and compatible cohorts.",
+      "performance_note": "Use shared bins and support gates; do not infer robust surprises from a sparse population or different bin extents.",
+      "after_metric_work": "needs_derived_dataset"
+    }
+  ],
+  "implemented_recipes": [
+    {
+      "id": "correction-phrases",
+      "idea": "conversation-02",
+      "title": "Where am I correcting course?",
+      "description": "Your messages containing explicit correction phrases.",
+      "dataset": "writing_messages",
+      "field": "sent_at",
+      "unit": "messages",
+      "where": [
+        {
+          "field": "typed_message",
+          "op": "=",
+          "value": "true"
+        },
+        {
+          "any": [
+            {
+              "field": "text",
+              "op": "contains",
+              "value": "you misunderstand"
+            },
+            {
+              "field": "text",
+              "op": "contains",
+              "value": "you misunderstood"
+            },
+            {
+              "field": "text",
+              "op": "contains",
+              "value": "that's not what"
+            },
+            {
+              "field": "text",
+              "op": "contains",
+              "value": "that is not what"
+            },
+            {
+              "field": "text",
+              "op": "contains",
+              "value": "I meant"
+            }
+          ]
+        }
+      ],
+      "measures": [],
+      "tone": "var(--warn)",
+      "note": "Literal phrase matches; not a semantic classification"
+    },
+    {
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "calls",
+      "tone": "var(--bad)",
+      "id": "tool-failures",
+      "idea": "tools-01",
+      "title": "Which tools keep failing?",
+      "description": "The calls behind recurring tool failures.",
+      "days": [
+        1,
+        7,
+        30
+      ],
+      "where": [
+        {
+          "field": "error_count",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [
+        {
+          "id": "sum:error_count:tool_name",
+          "op": "sum",
+          "field": "error_count",
+          "groupBy": [
+            "tool_name"
+          ],
+          "label": "Failures by tool"
+        }
+      ]
+    },
+    {
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "calls",
+      "tone": "var(--warn)",
+      "id": "error-signatures",
+      "idea": "tools-02",
+      "title": "What error keeps coming back?",
+      "description": "Repeated error signatures, with the original calls.",
+      "where": [
+        {
+          "field": "error_count",
+          "op": ">",
+          "value": "0"
+        },
+        {
+          "field": "error_signature",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "measures": [
+        {
+          "id": "count::error_signature",
+          "op": "count",
+          "groupBy": [
+            "error_signature"
+          ],
+          "label": "Calls by error signature"
+        }
+      ]
+    },
+    {
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "ms",
+      "tone": "var(--gold)",
+      "id": "slow-commands",
+      "idea": "tools-05",
+      "title": "Where is the waiting?",
+      "description": "Recorded elapsed time by command; includes approval waits.",
+      "where": [
+        {
+          "field": "duration_ms",
+          "op": ">",
+          "value": "0"
+        },
+        {
+          "field": "command_name",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "measures": [
+        {
+          "id": "sum:duration_ms:command_name",
+          "op": "sum",
+          "field": "duration_ms",
+          "groupBy": [
+            "command_name"
+          ],
+          "label": "Recorded elapsed time by command"
+        }
+      ]
+    },
+    {
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "calls",
+      "tone": "var(--bad)",
+      "id": "edit-failures",
+      "idea": "tools-07",
+      "title": "Where do edits fail?",
+      "description": "Failed edit calls, grouped by repository path.",
+      "where": [
+        {
+          "field": "error_count",
+          "op": ">",
+          "value": "0"
+        },
+        {
+          "field": "tool_category",
+          "op": "=",
+          "value": "edit"
+        }
+      ],
+      "measures": [
+        {
+          "id": "count::repo_path",
+          "op": "count",
+          "groupBy": [
+            "repo_path"
+          ],
+          "label": "Failed edits by path"
+        }
+      ]
+    },
+    {
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "calls",
+      "tone": "var(--bad)",
+      "id": "test-failures",
+      "idea": "verification-01",
+      "title": "Which checks need attention?",
+      "description": "Recorded test failures by command, ready to inspect.",
+      "where": [
+        {
+          "field": "test_failure",
+          "op": "=",
+          "value": "true"
+        }
+      ],
+      "measures": [
+        {
+          "id": "count::command_name",
+          "op": "count",
+          "groupBy": [
+            "command_name"
+          ],
+          "label": "Calls with test failures"
+        }
+      ]
+    },
+    {
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "tokens",
+      "tone": "var(--heat-2)",
+      "id": "context-carried",
+      "idea": "context-01",
+      "title": "What keeps riding in context?",
+      "description": "Tool output carried into later requests, in attributed tokens.",
+      "where": [
+        {
+          "field": "carried_tokens",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [
+        {
+          "id": "sum:carried_tokens:tool_name",
+          "op": "sum",
+          "field": "carried_tokens",
+          "groupBy": [
+            "tool_name"
+          ],
+          "label": "Context carried by tool"
+        }
+      ],
+      "note": "Measured or estimated context attribution"
+    },
+    {
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "tokens",
+      "tone": "var(--heat-2)",
+      "id": "large-outputs",
+      "idea": "context-02",
+      "title": "What fills the context?",
+      "description": "Result tokens added by each tool; inspect the largest outputs.",
+      "where": [
+        {
+          "field": "result_tokens",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [
+        {
+          "id": "sum:result_tokens:tool_name",
+          "op": "sum",
+          "field": "result_tokens",
+          "groupBy": [
+            "tool_name"
+          ],
+          "label": "Result tokens by tool"
+        }
+      ],
+      "note": "Measured or estimated result tokens"
+    },
+    {
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "calls",
+      "tone": "var(--warn)",
+      "id": "truncated-outputs",
+      "idea": "context-02",
+      "title": "What gets cut short?",
+      "description": "Truncated tool outputs and the calls that produced them.",
+      "where": [
+        {
+          "field": "truncated",
+          "op": "=",
+          "value": "true"
+        }
+      ],
+      "measures": [
+        {
+          "id": "count::tool_name",
+          "op": "count",
+          "groupBy": [
+            "tool_name"
+          ],
+          "label": "Truncated outputs by tool"
+        }
+      ]
+    },
+    {
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "calls",
+      "tone": "var(--sea)",
+      "id": "read-paths",
+      "idea": "context-08",
+      "title": "What do agents read?",
+      "description": "Read calls by repository path, with their source evidence.",
+      "where": [
+        {
+          "field": "tool_category",
+          "op": "=",
+          "value": "read"
+        }
+      ],
+      "measures": [
+        {
+          "id": "count::repo_path",
+          "op": "count",
+          "groupBy": [
+            "repo_path"
+          ],
+          "label": "Read calls by path"
+        }
+      ]
+    },
+    {
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "calls",
+      "tone": "var(--heat-0)",
+      "id": "research-queries",
+      "idea": "memory-02",
+      "title": "What keeps getting researched?",
+      "description": "Exact recorded search queries ranked by frequency.",
+      "where": [
+        {
+          "field": "search_query",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "measures": [
+        {
+          "id": "count::search_query",
+          "op": "count",
+          "groupBy": [
+            "search_query"
+          ],
+          "label": "Calls by exact search query"
+        }
+      ]
+    },
+    {
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "calls",
+      "tone": "var(--heat-0)",
+      "id": "primary-domains",
+      "idea": "memory-01",
+      "title": "Where does research lead?",
+      "description": "Primary recorded hosts on tool calls; open the source URLs.",
+      "where": [
+        {
+          "field": "host",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "measures": [
+        {
+          "id": "count::host",
+          "op": "count",
+          "groupBy": [
+            "host"
+          ],
+          "label": "Calls by primary host"
+        }
+      ],
+      "note": "Primary hosts; not every reached URL"
+    },
+    {
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "calls",
+      "tone": "var(--sea)",
+      "id": "mcp-methods",
+      "idea": "skills-06",
+      "title": "Which MCP methods do I use?",
+      "description": "Recorded method calls across connected tools.",
+      "where": [
+        {
+          "field": "mcp_method",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "measures": [
+        {
+          "id": "count::mcp_method",
+          "op": "count",
+          "groupBy": [
+            "mcp_method"
+          ],
+          "label": "Calls by MCP method"
+        }
+      ]
+    },
+    {
+      "id": "skill-evidence",
+      "idea": "skills-01",
+      "title": "Which skills are showing up?",
+      "description": "Invocations and observed loads; evidence of use, not compliance.",
+      "dataset": "skill_usages",
+      "field": "created_at",
+      "unit": "records",
+      "measures": [
+        {
+          "id": "count::skill_name",
+          "op": "count",
+          "groupBy": [
+            "skill_name"
+          ],
+          "label": "Evidence by skill"
+        }
+      ],
+      "tone": "var(--sea)"
+    },
+    {
+      "id": "skill-load-failures",
+      "idea": "skills-04",
+      "title": "Which skill loads fail?",
+      "description": "Skill evidence whose parent call recorded an error.",
+      "dataset": "skill_usages",
+      "field": "created_at",
+      "unit": "records",
+      "where": [
+        {
+          "field": "status",
+          "op": "=",
+          "value": "error"
+        }
+      ],
+      "measures": [
+        {
+          "id": "count::skill_name",
+          "op": "count",
+          "groupBy": [
+            "skill_name"
+          ],
+          "label": "Failed skill evidence"
+        }
+      ],
+      "tone": "var(--warn)"
+    },
+    {
+      "id": "human-words",
+      "idea": "human-01",
+      "title": "How much am I writing?",
+      "description": "Words classified as typed or dictated, day by day.",
+      "dataset": "writing_messages",
+      "field": "sent_at",
+      "unit": "words",
+      "where": [
+        {
+          "field": "typed_words",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [
+        {
+          "id": "sum:typed_words:day",
+          "op": "sum",
+          "field": "typed_words",
+          "groupBy": [
+            "day"
+          ],
+          "label": "Your words per day"
+        }
+      ],
+      "tone": "var(--gold)"
+    },
+    {
+      "id": "explaining-repos",
+      "idea": "human-02",
+      "title": "Where do I explain the most?",
+      "description": "Your typed words across repositories in this window.",
+      "dataset": "writing_messages",
+      "field": "sent_at",
+      "unit": "words",
+      "where": [
+        {
+          "field": "typed_words",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [
+        {
+          "id": "sum:typed_words:repository_name",
+          "op": "sum",
+          "field": "typed_words",
+          "groupBy": [
+            "repository_name"
+          ],
+          "label": "Your words by repository"
+        }
+      ],
+      "tone": "var(--gold)",
+      "scope": "repository_name"
+    },
+    {
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "unit": "tokens",
+      "tone": "var(--heat-1)",
+      "id": "usage-models",
+      "idea": "models-01",
+      "title": "Which models do the work?",
+      "description": "Token use by model, day by day.",
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [
+        {
+          "id": "sum:total_tokens:day,model_family",
+          "op": "sum",
+          "field": "total_tokens",
+          "groupBy": [
+            "day",
+            "model_family"
+          ],
+          "label": "Daily tokens by model"
+        }
+      ],
+      "scope": "model_family"
+    },
+    {
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "unit": "tokens",
+      "tone": "var(--heat-1)",
+      "id": "usage-repos",
+      "idea": "cost-01",
+      "title": "Where does my usage go?",
+      "description": "Daily tokens across your repositories.",
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [
+        {
+          "id": "sum:total_tokens:day,repository_name",
+          "op": "sum",
+          "field": "total_tokens",
+          "groupBy": [
+            "day",
+            "repository_name"
+          ],
+          "label": "Daily tokens by repository"
+        }
+      ],
+      "scope": "repository_name"
+    },
+    {
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "unit": "USD",
+      "tone": "var(--gold)",
+      "id": "cost-repos",
+      "idea": "cost-01",
+      "title": "What is the API equivalent?",
+      "description": "Recorded usage priced at standard API rates, by repository.",
+      "where": [
+        {
+          "field": "cost_usd",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [
+        {
+          "id": "sum:cost_usd:day,repository_name",
+          "op": "sum",
+          "field": "cost_usd",
+          "groupBy": [
+            "day",
+            "repository_name"
+          ],
+          "label": "Daily API equivalent by repository"
+        }
+      ],
+      "scope": "repository_name",
+      "note": "API equivalent; partial and assumed pricing can contribute"
+    },
+    {
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "unit": "tokens",
+      "tone": "var(--heat-0)",
+      "id": "cache-reads",
+      "idea": "cost-03",
+      "title": "Where is caching used?",
+      "description": "Recorded cache-read tokens by model; inspect usage details.",
+      "where": [
+        {
+          "field": "cache_read_input_tokens",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [
+        {
+          "id": "sum:cache_read_input_tokens:day,model_family",
+          "op": "sum",
+          "field": "cache_read_input_tokens",
+          "groupBy": [
+            "day",
+            "model_family"
+          ],
+          "label": "Daily cache-read tokens by model"
+        }
+      ],
+      "scope": "model_family"
+    },
+    {
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "unit": "tokens",
+      "tone": "var(--heat-2)",
+      "id": "subagent-usage",
+      "idea": "models-06",
+      "title": "What happens in subagents?",
+      "description": "Attributed subagent tokens across repositories.",
+      "where": [
+        {
+          "field": "session_kind",
+          "op": "=",
+          "value": "subagent"
+        },
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [
+        {
+          "id": "sum:total_tokens:day,repository_name",
+          "op": "sum",
+          "field": "total_tokens",
+          "groupBy": [
+            "day",
+            "repository_name"
+          ],
+          "label": "Daily subagent tokens"
+        }
+      ],
+      "scope": "repository_name"
+    }
+  ],
+  "query_table_requests": [
+    {
+      "id": "H01",
+      "confidence": "high",
+      "title": "Filter evaluated row values before paging",
+      "gap": "Server computed fields support selection/order/measure/group, while computed WHERE remains deferred.",
+      "proposal": "Add capability-gated typed predicates over server-evaluated fields before total counts, page selection and all-matching metrics; retain unsupported clauses with diagnostics.",
+      "examples": [
+        "Repeated reads above a threshold",
+        "Long exchanges",
+        "Outlier cost or duration",
+        "Configured scenario values"
+      ],
+      "performance": "Push predicates into the authoritative relation; stable host projections or expression indexes may help measured hot definitions. Page-local filtering is incorrect.",
+      "evidence": [
+        "Q11",
+        "Q13",
+        "P1"
+      ]
+    },
+    {
+      "id": "H02",
+      "confidence": "high",
+      "title": "Filter grouped results before ranking and limiting",
+      "gap": "Metrics can order and limit groups, but have no HAVING/result predicate.",
+      "proposal": "Add validated aggregate-result predicates such as distinct conversations >= 3, observations >= 20, failures > 0 and rate > threshold. Evaluate before result LIMIT and expose final group count.",
+      "examples": [
+        "Repeated instructions",
+        "Cross-repository errors",
+        "Useful nonempty recommendations",
+        "Rates with minimum exposure"
+      ],
+      "performance": "Filter before top-K. Client filtering of a capped group list can miss eligible groups and produce incorrect recommendations.",
+      "evidence": [
+        "Q5",
+        "Q13",
+        "P2"
+      ]
+    },
+    {
+      "id": "H03",
+      "confidence": "high",
+      "title": "Reduce grouped results in a second explicit stage",
+      "gap": "Aggregate formulas have one input relation and one grouping step. Box/histogram inputs are individual rows; nested aggregates are rejected.",
+      "proposal": "Support a bounded group → typed result relation → project/filter → second reduction pipeline. Example: sum usage per conversation, then histogram those totals by repository. A host-supplied derived dataset remains an alternative.",
+      "examples": [
+        "Cost per task distributions",
+        "Conversation exchange distributions",
+        "Per-task verification cycles",
+        "Cohort-normalized comparisons"
+      ],
+      "performance": "Keep both stages on the server and limit stages/group cardinality. Intermediate relation semantics must preserve grain and row lineage.",
+      "evidence": [
+        "Q1",
+        "Q6",
+        "Q13",
+        "Q14"
+      ]
+    },
+    {
+      "id": "H04",
+      "confidence": "high",
+      "title": "Time buckets and aligned period comparisons",
+      "gap": "Relative bounds already exist upstream. Local-hour/date bucketing is not in the initial server profile; cohort comparison requires manual datasets or several requests.",
+      "proposal": "Expose tested timezone-aware time bucket fields/functions and current/previous or before/after period selection under one evaluation clock. Define gaps, unequal durations, civil versus elapsed time and rate denominators.",
+      "examples": [
+        "Newly useful tools and domains",
+        "Changed failure rates",
+        "Local-hour writing heatmap",
+        "Changes after configuration updates"
+      ],
+      "performance": "Lower relative ranges to indexed timestamp bounds; reuse period scans and existing daily facts. A formatting timezone does not change grouping timezone.",
+      "evidence": [
+        "Q9",
+        "Q3",
+        "Q11",
+        "P7"
+      ]
+    },
+    {
+      "id": "H05",
+      "confidence": "high",
+      "title": "Named measures and shared reductions at one grain",
+      "gap": "Two measures are paired for scatter, but general named measure bundles are absent; a metric batch compiles one separate statement per metric.",
+      "proposal": "Allow a grouped result to return named measures such as calls, failures, rate, timed calls, duration and price coverage. Reuse common input projections and aggregate leaves when possible, preserving a coherent snapshot.",
+      "examples": [
+        "Failure rate with numerator and denominator",
+        "Rankings with count and context",
+        "Coverage-aware cost views"
+      ],
+      "performance": "An HTTP batch is not necessarily one scan. Preserve Pharos cube rewrites and weighted sums rather than rescanning raw calls for every small preview.",
+      "evidence": [
+        "Q5",
+        "Q7",
+        "P2"
+      ]
+    },
+    {
+      "id": "H06",
+      "confidence": "high",
+      "title": "Scalar percentiles and explicit precision",
+      "gap": "Box summaries expose fixed quartiles; scalar MEDIAN is present only in Go and absent from the core aggregate set; arbitrary PERCENTILE is missing.",
+      "proposal": "Add typed median/percentile reductions usable in formulas and named measures, with shared TS/server conformance. Advertise exact or approximate algorithms, numeric sample count and precision.",
+      "examples": [
+        "p95 command waiting",
+        "Median exchanges",
+        "Cost outlier thresholds",
+        "Long-tail recovery attempts"
+      ],
+      "performance": "Exact ordering can be expensive and existing sum/min/max cubes cannot reconstruct quantiles. Offer sketches only with explicit approximation semantics.",
+      "evidence": [
+        "Q1",
+        "Q5",
+        "Q6",
+        "Q14"
+      ]
+    },
+    {
+      "id": "H07",
+      "confidence": "high",
+      "title": "Typed drillthrough and bounded evidence",
+      "gap": "Bucket inspection exists; a clicked histogram bin does not carry a bin-range selection, and there is no standardized selection-to-source or exemplar contract.",
+      "proposal": "Extend inspection with metric identity, typed group keys, selected range or mark and resolved query context. Provide a host resolver for contributing rows and bounded exemplar hydration; preserve source IDs and evidence locators.",
+      "examples": [
+        "A correction next to its earlier response",
+        "Specific calls behind a failure ranking",
+        "The sessions inside an outlier bin"
+      ],
+      "performance": "Fetch a few exemplars lazily or in one bounded batch. Do not attach full transcript content to every aggregate bucket.",
+      "evidence": [
+        "Q8",
+        "Q12",
+        "P6",
+        "P9"
+      ]
+    },
+    {
+      "id": "H08",
+      "confidence": "high",
+      "title": "A reusable compact plot presentation",
+      "gap": "Standalone MetricCard and headless useAggregations are already exported. The chart is internally tied to card chrome and normal axis/legend sizing.",
+      "proposal": "Offer a plot-only or compact presentation using the same computation, marks, color resolver and units as full views. Make compact label/legend/detail budgets explicit and expose a documented consumption API.",
+      "examples": [
+        "Homepage evidence covers",
+        "Usage chart miniatures",
+        "Shared Library and Tools suggestions"
+      ],
+      "performance": "Rendering remains bounded by marks and labels and should never trigger a second computation for presentation-only edits.",
+      "evidence": [
+        "Q8",
+        "Q4",
+        "Q12"
+      ]
+    },
+    {
+      "id": "H09",
+      "confidence": "high",
+      "title": "Coverage freshness clocks and execution budgets",
+      "gap": "The v2 compiler and integration guide already specify shared clock/snapshot identity and host-owned response metadata. Pharos has not adopted the contract; freshness, moving-window cache expiry and source coverage need an end-to-end agreement.",
+      "proposal": "Adopt and finish the existing contract with final input/sample/group counts, truncation/precision, host data revision, echoed as-of clock and cache expiry for moving windows. Carry host-provided source freshness/coverage separately from computational exactness. Enforce deadlines/cancellation and explicit rejected plans.",
+      "examples": [
+        "Hide empty suggestions",
+        "Meaningful zero with observed denominator",
+        "Honest comparisons across sources",
+        "Fast reloads with fresh relative windows"
+      ],
+      "performance": "Cache on data and definition revision plus resolved clock/window; LIMIT only bounds output. Host-level candidate scheduling should prioritize visible previews.",
+      "evidence": [
+        "Q2",
+        "Q5",
+        "Q7",
+        "P2",
+        "P9",
+        "Q15",
+        "Q16"
+      ]
+    },
+    {
+      "id": "H10",
+      "confidence": "high",
+      "title": "Portable execution profiles and conformance fixtures",
+      "gap": "The new Go planner emits PostgreSQL casts/functions. Pharos runs SQLite and its own map executor; v2 is not available by changing frontend dependencies.",
+      "proposal": "Provide a dialect-neutral validated execution plan or a documented adapter seam plus portable semantic fixtures. Add a SQLite profile where appropriate, or let Pharos implement the same negotiated v2 contract without pretending every function is portable.",
+      "examples": [
+        "All new all-matching formulas and distributions in Pharos"
+      ],
+      "performance": "Retain SQLite indexes, FTS and cube routing. Hosts own actual execution, deadlines and prepared views; conformance checks cover nulls, errors, lazy branches and numeric precision.",
+      "evidence": [
+        "P1",
+        "P2",
+        "P4",
+        "Q2",
+        "Q3",
+        "Q7"
+      ]
+    },
+    {
+      "id": "H11",
+      "confidence": "high",
+      "title": "An indexed search predicate seam",
+      "gap": "Library text search operates outside QueryState and reduces hits to workspaces; agent messages are not a Query Table root. Full-population regex metric inputs remain out of scope.",
+      "proposal": "Let a host advertise a persisted, typed indexed-search predicate/source that participates in the same counts, groups and cache identity as ordinary filters. Define matched-row versus parent-membership semantics and bounded-search coverage; Pharos supplies FTS and excerpt hydration.",
+      "examples": [
+        "Agent confusion in the last seven days",
+        "Human correction families",
+        "Repeated research phrases"
+      ],
+      "performance": "Apply role and message-time constraints to the match population. Do not replace indexed search with a regex scan of every transcript or filter workspace activity dates as if they were message dates.",
+      "evidence": [
+        "P5",
+        "P6",
+        "P9",
+        "Q1"
+      ]
+    },
+    {
+      "id": "H12",
+      "confidence": "high",
+      "title": "Grouped time series and heatmap presentation",
+      "gap": "Line charts are one chronological series; two-key output has a pivot/table route, but no explicit heatmap or shared stacked-series chart contract.",
+      "proposal": "Support time × category series with explicit missing/zero semantics, stacked or grouped marks, stable colors and an exact remainder; add a bounded two-key heatmap. Share full and compact renderers.",
+      "examples": [
+        "Usage by repository/model over time",
+        "Writing by local hour",
+        "Errors across repositories"
+      ],
+      "performance": "Bound time buckets and categories; preserve totals when folding an additive remainder. Do not smooth missing observations or sum rates across categories.",
+      "evidence": [
+        "Q4",
+        "Q12",
+        "P7"
+      ]
+    },
+    {
+      "id": "H13",
+      "confidence": "high",
+      "title": "Bounded expansion of set-valued dimensions",
+      "gap": "Arrays support membership filtering but are not admitted server row expressions; grouping a host list is not grouping each member.",
+      "proposal": "Offer an explicit explode-members stage or a normalized host relation with declared parent identity. Define event-count versus membership-count measures and restrict simultaneous expansions to prevent accidental cross products.",
+      "examples": [
+        "All reached documentation domains",
+        "All files touched by a work",
+        "Instruction/evidence tags with multiple labels"
+      ],
+      "performance": "Index normalized members or materialize them during ingestion. Carry distinct parent IDs to avoid multiplying usage or costs across memberships.",
+      "evidence": [
+        "Q3",
+        "P3",
+        "P5"
+      ]
+    },
+    {
+      "id": "H14",
+      "confidence": "high",
+      "title": "Editable bookmark metadata with stable IDs",
+      "gap": "SavedQuery carries name, timestamp and QueryState. StorageAdapter has saveNamed/delete, but no stable-ID update for name/description/order or discovery across dataset namespaces.",
+      "proposal": "Add optional stable-ID bookmark updates for title, description and user order, and a host-controlled way to enumerate relevant bookmarks across dataset namespaces. Keep queries as canonical storage and preserve existing adapters.",
+      "examples": [
+        "Rename and describe a collected card",
+        "Reorder a mixed-dataset collection",
+        "Keep one query identity across surfaces"
+      ],
+      "performance": "This is storage/API work rather than metric computation. Metadata changes should not invalidate arithmetic or recreate saved IDs.",
+      "evidence": [
+        "Q10"
+      ]
+    },
+    {
+      "id": "M01",
+      "confidence": "medium",
+      "title": "Registered relationships with explicit cardinality",
+      "gap": "The host can already supply a joined SourceSQL, but users cannot compose registered dataset relationships.",
+      "proposal": "Consider approved relation joins or semi-joins with declared grain and cardinality, not arbitrary SQL. Provide fanout-aware measures and source lineage.",
+      "examples": [
+        "Skill loads plus task effort",
+        "File changes plus conversations",
+        "Configuration changes plus outcomes"
+      ],
+      "performance": "Prejoin recurring relationships in Pharos first; index join keys and prevent multiplication of already-aggregated facts.",
+      "evidence": [
+        "Q2",
+        "Q13",
+        "P5"
+      ]
+    },
+    {
+      "id": "M02",
+      "confidence": "medium",
+      "title": "Ordered partition functions",
+      "gap": "Formula context rejects windows and source order is not exposed as an analytical operation.",
+      "proposal": "Consider LAG/LEAD, first/last-by-order, running counts and elapsed differences over a declared partition and stable event ordering.",
+      "examples": [
+        "What follows a failure",
+        "Human repository switches",
+        "Resumes after gaps"
+      ],
+      "performance": "Use partition/order indexes and bound the queried streams. Filter-after-window semantics may require earlier events outside a visible time window.",
+      "evidence": [
+        "Q1",
+        "Q13",
+        "P5"
+      ]
+    },
+    {
+      "id": "M03",
+      "confidence": "medium",
+      "title": "Sessionization and event episode or funnel recipes",
+      "gap": "Recovery and verification episodes do not exist as generic metric inputs.",
+      "proposal": "Consider deterministic, bounded sessionization and ordered-pattern extraction over typed events. Keep definitions explicit and let hosts supply materialized episode rows.",
+      "examples": [
+        "Retry streaks",
+        "Failure-to-pass cycles",
+        "Request-to-finish milestones"
+      ],
+      "performance": "Repeated homepage requests should query episode facts updated on ingestion rather than recompute every transcript sequence. Episode-boundary definitions are often domain-specific.",
+      "evidence": [
+        "Q13",
+        "P5"
+      ]
+    },
+    {
+      "id": "M04",
+      "confidence": "medium",
+      "title": "Interval union overlap and concurrency",
+      "gap": "SUM(duration) cannot compute wall time for parallel activity; no interval transform is exposed.",
+      "proposal": "Consider typed interval-union length, overlap episodes and time-bucket occupancy as optional reducers or prepared host facts.",
+      "examples": [
+        "Parallel agent work",
+        "Overlapping edits",
+        "Tool-active time versus gaps"
+      ],
+      "performance": "Sweep ordered interval endpoints rather than join every interval pair. Report open/missing endpoints and never substitute summed durations for elapsed time.",
+      "evidence": [
+        "Q13",
+        "P5"
+      ]
+    },
+    {
+      "id": "M05",
+      "confidence": "medium",
+      "title": "Co-occurrence and association over prepared sets",
+      "gap": "File pairs and workflow motifs require pair/sequence creation and normalized marginal counts.",
+      "proposal": "Consider bounded association reducers over prepared membership or edge datasets: support count, joint frequency and explicit marginals for lift. Keep pair generation and semantic labels in the host initially.",
+      "examples": [
+        "Files changed together",
+        "Repeated capability combinations",
+        "Uncommon tool paths"
+      ],
+      "performance": "Pair expansion can be quadratic; cap set size, use incremental sparse counts and minimum support before ranking.",
+      "evidence": [
+        "Q13",
+        "P5"
+      ]
+    },
+    {
+      "id": "M06",
+      "confidence": "medium",
+      "title": "Named scenario parameters and aligned variants",
+      "gap": "Literal arithmetic can already calculate a scenario once rates and inputs are fields, but no reusable parameter bundle or named variant output exists.",
+      "proposal": "Consider typed saved parameters with units and several labeled variants over the same prepared population. Hosts supply rates and billing data.",
+      "examples": [
+        "Alternative pricing",
+        "Cache counterfactual",
+        "Subscription comparison",
+        "Energy sensitivity"
+      ],
+      "performance": "Reuse workload projections across scenarios. Keep parameters out of display labels and external lookups out of expression execution.",
+      "evidence": [
+        "Q3",
+        "Q13",
+        "P7"
+      ]
+    },
+    {
+      "id": "M07",
+      "confidence": "medium",
+      "title": "An optional result renderer registration seam",
+      "gap": "Current chart families do not render transcript excerpts, event paths, parallel lanes or trees.",
+      "proposal": "Consider host-rendered result kinds with typed validated payloads, inspect callbacks, theme access and compact/full variants. Avoid building every domain-specific cover into the core library.",
+      "examples": [
+        "Decision covers",
+        "Recovery paths",
+        "Delegation trees",
+        "Co-change networks"
+      ],
+      "performance": "Bound nodes/edges/excerpts, preserve query identity and defer hydration. Keep nonserializable callbacks out of saved-query state.",
+      "evidence": [
+        "Q4",
+        "Q8"
+      ]
+    },
+    {
+      "id": "M08",
+      "confidence": "medium",
+      "title": "A batch scheduler for heterogeneous previews",
+      "gap": "A v2 metric batch shares one WHERE, while a carousel pool spans filters, windows and datasets.",
+      "proposal": "Consider a reusable headless runner for several query plans with concurrency caps, cancellation, partial completion, memoization and visible-first priorities; the host may implement this without changing QueryState.",
+      "examples": [
+        "Eligibility checks for a large suggestion pool",
+        "Fast first render",
+        "Refresh without ninety-six concurrent scans"
+      ],
+      "performance": "Group compatible candidates to share work, cache on explicit revisions/window anchors and fetch only a selected preview subset. Backend scan fusion is distinct from HTTP request batching.",
+      "evidence": [
+        "Q5",
+        "Q7",
+        "Q9"
+      ]
+    },
+    {
+      "id": "L01",
+      "confidence": "low",
+      "title": "Semantic interpretation inside metric expressions",
+      "gap": "Confusion loops, decisions, examples and scope changes require meaning extraction.",
+      "proposal": "Keep semantic extraction, embedding similarity and evidence-backed labels in Pharos. Query Table should consume their versioned annotations and indexed similarity result rows.",
+      "examples": [
+        "Knowledge rediscovery",
+        "Open questions",
+        "Decisions and alternatives",
+        "Reusable guidance candidates"
+      ],
+      "performance": "Do expensive extraction incrementally outside interactive queries; expose provenance and uncertain classifications.",
+      "evidence": [
+        "P5",
+        "Q3"
+      ]
+    },
+    {
+      "id": "L02",
+      "confidence": "low",
+      "title": "Automatic causal or quality judgments",
+      "gap": "Recorded outcomes and correlations cannot establish model superiority, productivity or cause.",
+      "proposal": "Offer explicit cohorts, denominators and underlying evidence. Keep domain scoring and recommendation ranking outside generic arithmetic; avoid a universal opaque success score.",
+      "examples": [
+        "Skill effectiveness",
+        "Prompt-length recommendations",
+        "Changes after configuration updates"
+      ],
+      "performance": "Matched populations and statistical uncertainty are host/domain work; charting cannot solve confounding.",
+      "evidence": [
+        "Q13",
+        "P5"
+      ]
+    },
+    {
+      "id": "L03",
+      "confidence": "low",
+      "title": "Arbitrary SQL or recursive graph analytics in saved metrics",
+      "gap": "These would widen a deliberately allowlisted expression API into a general database language.",
+      "proposal": "Prefer registered sources, narrow relational stages and host-produced lineage closures or episode facts. Do not add raw user SQL, arbitrary recursive queries or unrestricted transcript regex as a homepage shortcut.",
+      "examples": [
+        "Unbounded delegation traversal",
+        "All-history motif search",
+        "Custom join escape hatches"
+      ],
+      "performance": "Unbounded graph/pair/text scans are poor interactive workloads and require host access and resource boundaries.",
+      "evidence": [
+        "Q2",
+        "Q3",
+        "Q13"
+      ]
+    },
+    {
+      "id": "L04",
+      "confidence": "low",
+      "title": "Provider pricing billing or carbon models owned by Query Table",
+      "gap": "These require domain rate tables, assumptions and sometimes external/user data.",
+      "proposal": "Keep price books, billing inputs and energy models in Pharos. Query Table handles typed arithmetic, variants and visualization over prepared fields.",
+      "examples": [
+        "API versus subscription",
+        "Different model price schedule",
+        "Energy assumptions"
+      ],
+      "performance": "Version inputs and materialize compatible pricing components. Do not fetch providers as metric side effects.",
+      "evidence": [
+        "P7",
+        "Q3"
+      ]
+    },
+    {
+      "id": "L05",
+      "confidence": "low",
+      "title": "Automatically create database indexes or materializations for every saved formula",
+      "gap": "Expression execution does not imply a good database index, and definitions can change.",
+      "proposal": "Let the host measure plans and opt into projections, generated values, sketches or expression indexes. A core plan/explain hook is reasonable; automatic schema writes are not the default.",
+      "examples": [
+        "Repeated preview acceleration",
+        "Complex hot computed sorts"
+      ],
+      "performance": "Account for ingestion/write cost, data volume and definition revisions; avoid proliferating expensive indexes for speculative cards.",
+      "evidence": [
+        "Q11",
+        "P2"
+      ]
+    }
+  ]
+}
