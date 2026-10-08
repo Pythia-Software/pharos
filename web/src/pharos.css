@@ -76,6 +76,9 @@
 .pharos-query-page .qt-row > .qt-checkbox-cell:first-child { background: var(--panel); }
 .pharos-query-page .cm-editor { background: var(--panel); color: var(--ink); }
 .pharos-query-page .qt-btn--primary { color: var(--panel); background: var(--accent); }
+/* Offset step buttons have a hard-coded white background in query-table. */
+.pharos-query-page .qt-qb-num-step { background: var(--panel); }
+.pharos-query-page .qt-qb-num-step:hover:not(:disabled) { background: var(--qt-accent-bg); }
 /* The component's stock GitHub blues and its OS-driven dark dialog palette
    otherwise leak through on hover and in the Edit columns dialog. */
 .pharos-query-page .qt-btn--primary:hover:not(:disabled) { background: var(--accent-deep); border-color: var(--accent-deep); }
