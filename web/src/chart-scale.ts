@@ -60,4 +60,3 @@ export function columnScale(totals: number[], mode: ChartScale): ColumnScale {
     if (y(value) - Math.max(50, ...upper.map(y)) >= 10) upper.push(value);
   return { y, ticks: [...niceTicks(split).filter(value => y(value) <= 40), ...upper], split };
 }
-
