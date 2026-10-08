@@ -1034,24 +1034,45 @@ func summarizeSpans(text string, spans []authorSpan) spanSummary {
 }
 
 // authorshipGenerations returns the generation message_authorship should be
-// built for and the one it was built for. The tool ledger generation advances
-// whenever a conversation is re-ingested or identity links change, which is
-// when authorship can too.
+// built for and the one it was built for. Record writes invalidate message
+// classification even when they add no tools or model requests; the tool
+// ledger generation also captures changes to identity links and launch data.
 func (c *Catalog) authorshipGenerations() (want, built string, err error) {
 	ctx := context.Background()
 	if want, err = c.metaValue(ctx, "tool_ledger_generation"); err != nil {
 		return "", "", err
 	}
+	inputs, err := c.metaValue(ctx, "authorship_inputs_generation")
+	if err != nil {
+		return "", "", err
+	}
 	built, err = c.metaValue(ctx, "authorship_generation")
-	return want + "/" + authorshipVersion, built, err
+	return want + ":" + inputs + "/" + authorshipVersion, built, err
+}
+
+// bumpAuthorshipInputs runs in the record writer's transaction, so readers
+// see the invalidation with the messages and their classification metadata.
+func bumpAuthorshipInputs(tx execer) error {
+	_, err := tx.Exec(`INSERT INTO meta(key,value) VALUES('authorship_inputs_generation','1')
+		ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT)`)
+	return err
 }
 
 // refreshAuthorship starts a background rebuild when messages changed since
-// the last one. An index or sync calls it, whether or not it wrote anything:
-// that is someone asking for Pharos to be up to date.
+// the last one. An explicit index calls it, whether or not it wrote anything:
+// scheduled incremental indexing deliberately leaves classification pending.
 func (c *Catalog) refreshAuthorship() {
+	c.refreshAuthorshipInContext(nil)
+}
+
+// A coordinated manual index cancels its own classification when stopped;
+// page/source refreshes continue to use the service's background lifetime.
+func (c *Catalog) refreshAuthorshipInContext(parent context.Context) {
+	if parent != nil && parent.Err() != nil {
+		return
+	}
 	if want, built, err := c.authorshipGenerations(); err == nil && want != built {
-		c.startAuthorship(want)
+		c.startAuthorshipInContext(want, parent)
 	}
 }
 
@@ -1077,6 +1098,10 @@ func (c *Catalog) ensureAuthorship() (stale bool) {
 // rebuild is running already. A rebuild that succeeds checks again for
 // messages an index wrote while it ran.
 func (c *Catalog) startAuthorship(generation string) {
+	c.startAuthorshipInContext(generation, nil)
+}
+
+func (c *Catalog) startAuthorshipInContext(generation string, parent context.Context) {
 	state := &c.authorship
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -1085,15 +1110,26 @@ func (c *Catalog) startAuthorship(generation string) {
 	}
 	state.running = true
 	rebuild := func(ctx context.Context) {
+		if parent != nil {
+			workCtx, cancel := context.WithCancel(ctx)
+			stop := context.AfterFunc(parent, cancel)
+			defer stop()
+			defer cancel()
+			if parent.Err() != nil {
+				cancel()
+			}
+			ctx = workCtx
+		}
 		err := c.RebuildAuthorship(ctx, generation)
 		state.mu.Lock()
 		state.running, state.lastError = false, ""
-		if err != nil {
+		// Cancellation interrupts a rebuild; it must not block a later page retry.
+		if err != nil && ctx.Err() == nil {
 			state.lastError = err.Error()
 		}
 		state.mu.Unlock()
 		if err == nil && ctx.Err() == nil {
-			c.refreshAuthorship()
+			c.refreshAuthorshipInContext(parent)
 		}
 	}
 	if !c.runBackground(rebuild) {

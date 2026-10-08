@@ -297,6 +297,20 @@ func errorString(err error) string {
 }
 
 func (s *Server) finishDeferredSync(ctx context.Context) error {
+	return s.finishDeferredSyncPhases(ctx, false, nil)
+}
+
+// runPhase lets manual sync expose and measure each expensive stage. Keep the
+// same completion guards for Capture & index and manual incremental indexing.
+func (s *Server) finishDeferredSyncPhases(ctx context.Context, forceFindings bool, runPhase func(string, func() error) error) error {
+	if runPhase == nil {
+		runPhase = func(_ string, work func() error) error { return work() }
+	}
+	if err := runPhase("github", func() error { return s.Catalog.RefreshRepositoryForgeIDs(ctx) }); err != nil {
+		return err
+	}
+	// Repository merges can invalidate analyses, so snapshot dirty generations
+	// after GitHub resolution and before the remaining stages.
 	rows, err := queryMapsContext(ctx, s.Catalog.DB, "SELECT name,generation FROM sync_deferred WHERE generation>completed_generation")
 	if err != nil {
 		return err
@@ -311,46 +325,62 @@ func (s *Server) finishDeferredSync(ctx context.Context) error {
 			return err
 		})
 	}
-	if _, err := s.Catalog.ReconcileIdentitiesContext(ctx); err != nil {
-		return err
+	stages := []struct {
+		name string
+		work func() error
+	}{
+		{"identities", func() error { _, err := s.Catalog.ReconcileIdentitiesContext(ctx); return err }},
+		{"git", func() error { return s.Catalog.refreshMainIntegrations(ctx) }},
+		{"tools", func() error { return s.Catalog.ensureToolRollup(ctx) }},
+		{"authorship", func() error {
+			s.Catalog.refreshAuthorshipInContext(ctx)
+			for s.Catalog.authorshipRunning() {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(50 * time.Millisecond):
+				}
+			}
+			want, built, err := s.Catalog.authorshipGenerations()
+			if err != nil {
+				return err
+			}
+			if want != built {
+				return errors.New("authorship rebuild did not complete; dirty generation retained")
+			}
+			return nil
+		}},
+		{"findings", func() error {
+			// A page or another explicit action may already be discovering
+			// findings. Wait before asking for this run's fresh pass.
+			for {
+				running, _ := s.Catalog.findingsRunning()
+				if !running {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(50 * time.Millisecond):
+				}
+			}
+			return s.Catalog.RefreshFindings(ctx, forceFindings)
+		}},
 	}
-	if err := complete("identities"); err != nil {
-		return err
-	}
-	if err := s.Catalog.refreshMainIntegrations(ctx); err != nil {
-		return err
-	}
-	if err := complete("git"); err != nil {
-		return err
-	}
-	if err := s.Catalog.ensureToolRollup(ctx); err != nil {
-		return err
-	}
-	if err := complete("tools"); err != nil {
-		return err
-	}
-	s.Catalog.refreshAuthorship()
-	for s.Catalog.authorshipRunning() {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(50 * time.Millisecond):
+	for _, stage := range stages {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := runPhase(stage.name, func() error {
+			if err := stage.work(); err != nil {
+				return err
+			}
+			return complete(stage.name)
+		}); err != nil {
+			return err
 		}
 	}
-	want, built, err := s.Catalog.authorshipGenerations()
-	if err != nil {
-		return err
-	}
-	if want != built {
-		return errors.New("authorship rebuild did not complete; dirty generation retained")
-	}
-	if err := complete("authorship"); err != nil {
-		return err
-	}
-	if err := s.Catalog.RefreshFindings(ctx, false); err != nil {
-		return err
-	}
-	return complete("findings")
+	return nil
 }
 
 func (c *Catalog) repairRetained(ctx context.Context, job string, names []string, progress func(int, int)) error {

@@ -75,7 +75,6 @@ func NewServer(config Config, catalog *Catalog) *Server {
 		catalog.background = server.spawn
 		catalog.RepositoryAliases = config.RepositoryAliases
 		catalog.RepositorySeparate = config.RepositorySeparate
-		server.spawn(catalog.keepRepositoryForgeIDs)
 		catalog.setCaptureRoot(config.CaptureRoot)
 	}
 	return server

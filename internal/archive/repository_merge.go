@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -262,35 +261,13 @@ func (c *Catalog) saveRepositoryEvidence(ctx context.Context, items []repository
 	})
 }
 
-// forgeRefreshEvery is how often the service looks for repositories GitHub has
-// not been asked about yet, forgeRetry how long it waits before asking again
+// forgeRetry is how long Pharos waits before asking again
 // about one GitHub could not resolve (a private repository, a deleted one).
-const (
-	forgeRefreshEvery = 10 * time.Minute
-	forgeRetry        = 6 * time.Hour
-)
+const forgeRetry = 6 * time.Hour
 
 // forgeAttempts remembers, per catalog and repository, when GitHub was last
-// asked and had no answer. Ingest never asks; this job does.
+// asked and had no answer. Ingest never asks; manual refresh does.
 var forgeAttempts sync.Map
-
-// keepRepositoryForgeIDs runs for the life of the service, resolving the
-// repositories that indexing has added since the last pass.
-func (c *Catalog) keepRepositoryForgeIDs(ctx context.Context) {
-	timer := time.NewTimer(30 * time.Second)
-	defer timer.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-		}
-		if err := c.RefreshRepositoryForgeIDs(ctx); err != nil && ctx.Err() == nil {
-			fmt.Fprintf(os.Stderr, "Repository forge refresh: %v\n", err)
-		}
-		timer.Reset(forgeRefreshEvery)
-	}
-}
 
 // RefreshRepositoryForgeIDs asks GitHub, through the gh tool, about every
 // github.com repository that has no forge ID yet, then merges the rows that

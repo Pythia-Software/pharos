@@ -23,14 +23,21 @@ one minute, five minutes, fifteen minutes, thirty minutes, or a custom
 interval from one minute to one day. The initial suggested interval is five
 minutes. Sources and schedule are retained per host; an empty source
 selection means all supported, enabled sources. **Index changes now** (and
-the header button) runs the same discovery, ingestion, projection, and
-verification pipeline without enabling the schedule.
+the header button) runs that incremental pipeline without enabling the
+schedule, then refreshes GitHub repository identities, library-wide identity
+links, local Git integration, tool rollups, Human Words, and a full findings
+pass. The manual run remains active until those stages finish. GitHub is
+optional: missing or signed-out `gh` leaves existing repository data usable.
+Scheduled runs leave these expensive analyses pending, including Human Words;
+their totals reflect the most recent manual refresh.
 
 The page opens with the latest run's conversation count, elapsed time, CPU
 time, and observed RAM peak, followed by a table of the five most recent
 Index changes runs. Expand the history to see up to 200 retained runs.
 Each row identifies its sources and their conversation counts; **Details**
 shows per-source message counts, phase timings, and verification results.
+Manual history records `trigger: "manual"` and elapsed/process-wide CPU time
+for each analysis stage; scheduled history records `trigger: "automatic"`.
 Counts describe whole indexed conversations, not just newly added
 messages. Times use compact durations and relative timestamps; hover a
 timestamp for the exact date and time. Performance distributions,
@@ -81,7 +88,11 @@ Writes skip identical messages, change only affected FTS/trigram rows, share
 token accounting, and reuse unchanged ledger derivations. Changed workspaces
 publish their immediate Library projections in a measured batch. Identity,
 Git, Tools rollups, authorship, and findings work is marked pending rather
-than silently rebuilding the entire library after every append.
+than silently rebuilding the entire library after every append. Scheduled
+runs stop there. Manual Index changes finishes pending analyses even when
+the source scan finds no new changes, so it can catch up after automatic
+indexing or an interrupted refresh. Capture & index also reconciles pending
+work. Both keep dirty generations until the corresponding stage succeeds.
 
 Removed files do not delete retained conversation history. Removed Antigravity
 children leave current group totals but remain searchable historically.
@@ -158,7 +169,7 @@ Existing authentication applies to all endpoints. POST bodies are JSON.
 | `GET /api/sources/{name}/changes` | Read-only changed-unit discovery; reports completeness, errors, units and check duration; never advances indexed state. |
 | `GET /api/sync/status` | Settings, shared busy state, preservation boundary, history/statistics, coverage, issues and deferred work. |
 | `GET /api/sync/settings`, `POST /api/sync/settings` | `{"enabled":true,"interval_seconds":300,"sources":["codex"]}`; 60–86400 seconds. |
-| `POST /api/sync/check`, `POST /api/sync/stop` | Run now / request cancellation. |
+| `POST /api/sync/check`, `POST /api/sync/stop` | Manual incremental index plus expensive refresh stages / request cancellation. |
 | `GET /api/sync/history`, `GET /api/sync/issues` | Measured samples / local diagnostic evidence. |
 | `GET /api/sync/recovery?estimate=true&source=codex` | Retained size/group counts and measured copy/index estimate. |
 | `POST /api/sync/recovery` | `{"mode":"full","sources":["codex"]}`, `{"mode":"retained"}`, or `{"resume":"JOB_ID"}`. |
