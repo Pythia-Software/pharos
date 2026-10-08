@@ -100,9 +100,12 @@ Run a research agent by hand when prices are out of date. On the Usage page,
 **Copy refresh prices prompt** copies a prompt built from your catalog: which
 models are unpriced and when they were used, the newest price per provider,
 which models are priced by assumption, and the rules above. Paste it into a new
-agent session in this repository. The button is highlighted, with a count, when
+agent session in this repository. The button stays available after copying and
+is highlighted, with a count, when
 usage includes an unpriced model that you haven't copied a prompt for yet.
-Placeholders such as `<synthetic>` are ignored. The same prompt is available from
+Copying clears the new-model highlight, but a missing-price notice stays until
+the usage has a confirmed price. Placeholders such as `<synthetic>` are ignored.
+The same prompt is available from
 the command line:
 
 ```sh

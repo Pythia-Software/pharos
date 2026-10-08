@@ -716,8 +716,8 @@ async function copyText(text: string) {
   if (!copied) throw new Error("Clipboard unavailable");
 }
 
-// Highlights when usage includes a model with no confirmed price that the user
-// hasn't handed to an agent yet. Copying the prompt acknowledges those models.
+// Copying acknowledges new models, but doesn't resolve missing prices. Keep
+// the refresh prompt available for retries and routine price-history updates.
 function RefreshPricesButton() {
   const [status, setStatus] = useState<PricingStatus | null>(null);
   const [acknowledged, setAcknowledged] = useState(acknowledgedModels);
@@ -743,13 +743,13 @@ function RefreshPricesButton() {
     } catch { setCopied("failed"); }
     window.setTimeout(() => setCopied(""), 2500);
   }
-  if (!fresh.length) return null;
+  if (!status) return null;
   return <div className="refresh-prices-notice" role="status">
-    <button type="button" className="refresh-prices attention" title={`New unpriced models: ${fresh.map((model) => model.model).join(", ")}`} onClick={() => void copy()}>
+    <button type="button" className={`refresh-prices${fresh.length ? " attention" : ""}`} title={unpriced.length ? `Unpriced models: ${unpriced.map((model) => model.model).join(", ")}` : "Research current API prices and model aliases"} onClick={() => void copy()}>
       {copied === "copied" ? "Prompt copied" : copied === "failed" ? "Copy failed" : "Copy refresh prices prompt"}
-      {!copied ? <span className="refresh-prices-count" aria-label={`${fresh.length} new unpriced models`}>{fresh.length}</span> : null}
+      {!copied && fresh.length ? <span className="refresh-prices-count" aria-label={`${fresh.length} new unpriced models`}>{fresh.length}</span> : null}
     </button>
-    <p>{fresh.length === 1 ? "A new model has" : `${fresh.length} new models have`} no price definition. Cost totals may be incomplete until pricing is updated.</p>
+    {unpriced.length ? <p>{fresh.length ? (fresh.length === 1 ? "A new model has" : `${fresh.length} new models have`) : (unpriced.length === 1 ? "A model still has" : `${unpriced.length} models still have`)} no confirmed price definition. Cost totals may be incomplete until pricing is updated.</p> : null}
   </div>;
 }
 

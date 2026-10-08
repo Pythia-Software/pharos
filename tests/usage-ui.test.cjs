@@ -62,7 +62,9 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     assert.deepEqual(await page.locator('.token-summary .mcp-metric > span').allTextContents(), ['Total tokens', 'API price equivalent', 'Cache hit rate', 'Output tokens', 'Agent sessions']);
     assert.equal(await page.locator('.token-summary .mcp-metric').count(), 5);
     assert.equal(await page.getByRole('group', { name: 'Usage view' }).getByRole('button', { name: 'Machine Tokens' }).getAttribute('aria-pressed'), 'true');
-    assert.equal(await page.locator('.refresh-prices-notice').count(), 0);
+    await page.getByRole('button', { name: /Copy refresh prices prompt/ }).waitFor();
+    assert.equal(await page.locator('.refresh-prices.attention').count(), 0);
+    assert.equal(await page.locator('.refresh-prices-notice p').count(), 0);
     // Scale changes redraw locally and are remembered across reloads.
     const scaleControls = page.getByRole('group', { name: 'Scale', exact: true });
     const scaleRequests = aggregations.length;
@@ -115,7 +117,8 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     pricing = { ...pricing, unpriced_models: [{ model: 'new-model', provider: 'test', tokens: 50, first_day: day(1), last_day: day(1) }] };
     await page.evaluate(() => window.dispatchEvent(new Event('pharos:usage-refresh')));
     await page.locator('.refresh-prices-notice').waitFor();
-    assert.match(await page.locator('.refresh-prices-notice').innerText(), /A new model has no price definition/);
+    await page.locator('.refresh-prices.attention').waitFor();
+    assert.match(await page.locator('.refresh-prices-notice').innerText(), /A new model has no confirmed price definition/);
     assert.equal(await page.locator('.refresh-prices').evaluate(button => getComputedStyle(button).color), await page.locator('.refresh-prices-notice p').evaluate(blurb => getComputedStyle(blurb).color));
     assert.ok((await page.locator('.refresh-prices').evaluate(button => getComputedStyle(button).fontWeight)) >= 700);
     const toggle = await page.locator('.usage-heading-actions .library-view-toggle').boundingBox();
@@ -125,7 +128,21 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     await page.screenshot({ path: path.join(root, '.context/usage-pricing-alert.png') });
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.getByRole('button', { name: /Copy refresh prices prompt/ }).click();
-    await page.locator('.refresh-prices-notice').waitFor({ state: 'detached' });
+    await page.getByRole('button', { name: 'Prompt copied' }).waitFor();
+    assert.equal(await page.locator('.refresh-prices.attention').count(), 0);
+    assert.match(await page.locator('.refresh-prices-notice').innerText(), /A model still has no confirmed price definition/);
+    await page.reload();
+    await page.getByRole('button', { name: /Copy refresh prices prompt/ }).waitFor();
+    assert.equal(await page.locator('.refresh-prices.attention').count(), 0);
+    assert.match(await page.locator('.refresh-prices-notice').innerText(), /A model still has no confirmed price definition/);
+    pricing = { ...pricing, unpriced_models: [...pricing.unpriced_models, { model: 'gpt-6.1-sol', provider: 'codex', tokens: 100, first_day: day(1), last_day: day(0) }] };
+    await page.evaluate(() => window.dispatchEvent(new Event('pharos:usage-refresh')));
+    await page.locator('.refresh-prices.attention').waitFor();
+    assert.equal(await page.locator('.refresh-prices-count').textContent(), '1');
+    pricing = { ...pricing, unpriced_models: [] };
+    await page.evaluate(() => window.dispatchEvent(new Event('pharos:usage-refresh')));
+    await page.locator('.refresh-prices-notice p').waitFor({ state: 'detached' });
+    assert.equal(await page.getByRole('button', { name: /Copy refresh prices prompt/ }).count(), 1);
     assert.deepEqual(aggregations.at(-1).aggregations.map(a => a.field), ['uncached_input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens', 'output_tokens', 'unclassified_tokens']);
     assert.match(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), /2\.5B/);
     await page.locator('#usage .qt-row', { hasText: '2.5T' }).waitFor();
