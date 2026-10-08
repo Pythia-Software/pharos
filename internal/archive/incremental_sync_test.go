@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
@@ -8,9 +9,167 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestScheduledSyncDefersAnalysesAndManualSyncRefreshesGitHub(t *testing.T) {
+	useHost(t, "host-a")
+	calls := stubGitHub(t, true, map[string]string{"acme/sync": `{"id":42,"full_name":"acme/sync"}`})
+	server := automaticTestServer(t, stableCodexSource(t, 1))
+	catalog := server.Catalog
+	if _, err := catalog.DB.Exec(`INSERT INTO repositories(id,canonical_remote,normalized_remote,display_name,created_at,updated_at)
+		VALUES('github-sync','https://github.com/acme/sync.git','github.com/acme/sync','sync','t','t')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"authorship_generation", "tool_rollup_generation", "findings_generation"} {
+		if err := setMeta(catalog.DB, key, "old"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	background := catalog.background
+	started := 0
+	catalog.background = func(func(context.Context)) bool { started++; return false }
+	if !server.runAutomatic(server.life.ctx, syncSettings{Interval: 60}) {
+		t.Fatal("scheduled sync not admitted")
+	}
+	if started != 0 || stubbedCalls(t, calls) != "" {
+		t.Fatal("scheduled sync started an expensive analysis or GitHub lookup")
+	}
+	for _, key := range []string{"authorship_generation", "tool_rollup_generation", "findings_generation"} {
+		if value, err := catalog.metaValue(t.Context(), key); err != nil || value != "old" {
+			t.Fatalf("scheduled sync refreshed %s: %q %v", key, value, err)
+		}
+	}
+	if countRows(t, catalog, "SELECT COUNT(*) FROM sync_deferred WHERE generation>completed_generation") != 5 {
+		t.Fatal("scheduled sync lost deferred work")
+	}
+	catalog.background = background
+	// A manual no-op must still finish what the scheduled run left pending,
+	// and force a full findings pass even when today's generation exists.
+	if err := setMeta(catalog.DB, "findings_generation", catalog.findingsGeneration()); err != nil {
+		t.Fatal(err)
+	}
+	if !server.runManualSync(server.life.ctx, syncSettings{Interval: 60}) {
+		t.Fatal("manual sync not admitted")
+	}
+	var forge string
+	if err := catalog.DB.QueryRow("SELECT forge_id FROM repositories WHERE id='github-sync'").Scan(&forge); err != nil || forge != "42" {
+		t.Fatalf("manual sync did not resolve GitHub: %q %v", forge, err)
+	}
+	if !strings.Contains(stubbedCalls(t, calls), "api repos/acme/sync") {
+		t.Fatal("manual sync did not call GitHub")
+	}
+	if value, err := catalog.metaValue(t.Context(), "findings_built_at"); err != nil || value == "" {
+		t.Fatalf("manual sync skipped today's full findings update: %q %v", value, err)
+	}
+	if countRows(t, catalog, "SELECT COUNT(*) FROM sync_deferred WHERE generation>completed_generation") != 0 || catalog.ensureAuthorship() {
+		t.Fatal("manual no-op left analyses stale")
+	}
+}
+
+func TestSyncCheckStartsManualRun(t *testing.T) {
+	server := automaticTestServer(t, stableCodexSource(t, 1))
+	response := httptest.NewRecorder()
+	server.postIncrementalSync(response, httptest.NewRequest("POST", "/api/sync/check", nil), map[string]any{})
+	if response.Code != 202 {
+		t.Fatalf("manual button request failed: %d %s", response.Code, response.Body.String())
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		server.runsMu.RLock()
+		finished := len(server.runs) > 0 && server.runs[0].State != "running"
+		if finished && (server.runs[0].Kind != manualSyncRunKind || server.runs[0].State != "complete") {
+			t.Errorf("button ran the wrong pipeline: %+v", server.runs[0])
+		}
+		server.runsMu.RUnlock()
+		if finished {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("manual button run did not finish")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestManualSyncFailedAnalysisRetainsDirtyGeneration(t *testing.T) {
+	server := automaticTestServer(t, stableCodexSource(t, 1))
+	server.Catalog.background = func(func(context.Context)) bool { return false }
+	if !server.runManualSync(server.life.ctx, syncSettings{Interval: 60}) {
+		t.Fatal("manual sync not admitted")
+	}
+	if server.runs[0].State != "failed" || !strings.Contains(firstString(server.runs[0].Error), "authorship rebuild did not complete") {
+		t.Fatalf("analysis failure reported success: %+v", server.runs[0])
+	}
+	if countRows(t, server.Catalog, "SELECT COUNT(*) FROM sync_deferred WHERE name IN ('authorship','findings') AND generation>completed_generation") != 2 {
+		t.Fatal("failed analyses were marked complete")
+	}
+}
+
+func TestManualSyncRefreshesRecentHumanWords(t *testing.T) {
+	for _, alreadyIndexed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("already_indexed=%v", alreadyIndexed), func(t *testing.T) {
+			useHost(t, "host-a")
+			source := stableCodexSource(t, 1)
+			server := automaticTestServer(t, source)
+			catalog := server.Catalog
+			catalog.now = func() time.Time { return time.Date(2026, 9, 1, 1, 15, 0, 0, time.UTC) }
+			ingestSource(t, catalog, source)
+			generation, _, err := catalog.authorshipGenerations()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := catalog.RebuildAuthorship(t.Context(), generation); err != nil {
+				t.Fatal(err)
+			}
+			appendSourceFile(t, source.Path, `{"type":"event_msg","timestamp":"2026-09-01T01:00:00Z","payload":{"type":"user_message","message":"Please check why my recent words disappeared"}}`+"\n")
+			if alreadyIndexed {
+				// A prior index committed messages but never refreshed authorship.
+				ingestSource(t, catalog, source)
+			}
+			if !server.runManualSync(server.life.ctx, syncSettings{Interval: 60}) {
+				t.Fatal("manual sync not admitted")
+			}
+			if catalog.ensureAuthorship() {
+				t.Fatal("authorship still stale after sync's rebuild")
+			}
+			summary, err := catalog.UsageSummary(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			hour := summary["windows"].([]*usageSummaryWindow)[0]
+			if hour.HumanWords != 7 || hour.Messages != 1 {
+				t.Fatalf("recent typed message missing from summary: %+v", hour)
+			}
+			if countRows(t, catalog, "SELECT COUNT(*) FROM sync_deferred WHERE generation>completed_generation") != 0 {
+				t.Fatal("manual sync left analyses pending")
+			}
+			var encoded string
+			if err := catalog.DB.QueryRow("SELECT sample_json FROM sync_history ORDER BY id DESC LIMIT 1").Scan(&encoded); err != nil {
+				t.Fatal(err)
+			}
+			var sample syncMeasurement
+			if err := json.Unmarshal([]byte(encoded), &sample); err != nil {
+				t.Fatal(err)
+			}
+			phases := []string{}
+			for _, phase := range sample.Phases {
+				phases = append(phases, phase.Name)
+			}
+			for _, name := range []string{"github", "identities", "git", "tools", "authorship", "findings"} {
+				if !slices.Contains(phases, name) {
+					t.Fatalf("manual sync did not measure %s: %+v", name, sample)
+				}
+			}
+			if sample.Trigger != "manual" || sample.State != "complete" || server.runs[0].Kind != manualSyncRunKind {
+				t.Fatalf("manual sync incorrectly recorded: %+v", sample)
+			}
+
+		})
+	}
+}
 
 func stableCodexSource(t *testing.T, count int) SourceConfig {
 	t.Helper()
@@ -251,8 +410,12 @@ func TestManualActionPreemptsAutomaticWithoutConflict(t *testing.T) {
 	server := automaticTestServer(t, source)
 	entered := make(chan struct{})
 	prior := syncAdapter
+	var calls atomic.Int32
 	syncAdapter = func(config SourceConfig) (Adapter, error) {
-		return &cancellingAdapter{baseAdapter: baseAdapter{config: config}, entered: entered}, nil
+		if calls.Add(1) == 1 {
+			return &cancellingAdapter{baseAdapter: baseAdapter{config: config}, entered: entered}, nil
+		}
+		return prior(config)
 	}
 	t.Cleanup(func() { syncAdapter = prior })
 	done := make(chan struct{})
@@ -262,10 +425,9 @@ func TestManualActionPreemptsAutomaticWithoutConflict(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("automatic discovery did not start")
 	}
-	if !server.acquireManualIngest() {
-		t.Fatal("background run blocked manual action")
+	if !server.runManualSync(server.life.ctx, syncSettings{Interval: 60}) {
+		t.Fatal("background run blocked manual sync")
 	}
-	server.ingestMu.Unlock()
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):

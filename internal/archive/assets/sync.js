@@ -113,7 +113,7 @@
   };
   const sourceNames = run => run.sources?.length ? run.sources : [...new Set([
     ...(run.source_results || []).map(result => result.source),
-    ...(run.phases || []).filter(phase => !['audit', 'projections'].includes(phase.name)).map(phase => phase.name)
+    ...(run.phases || []).filter(phase => !['audit', 'projections', 'github', 'identities', 'git', 'tools', 'authorship', 'findings'].includes(phase.name)).map(phase => phase.name)
   ])];
   const resultLabel = run => run.state === 'failed' ? 'Failed' : run.state === 'interrupted' ? 'Stopped'
     : run.audit?.outcome === 'mismatch' ? 'Needs attention' : run.state && run.state !== 'complete' ? run.state
@@ -216,7 +216,7 @@
       action.disabled = true;
       action.setAttribute('aria-busy', 'true');
       const automatic = active.kind === 'automatic-sync';
-      action.title = automatic ? `Indexing changes: ${active.phase === 'verifying' ? 'verifying a conversation' : active.phase === 'checking' ? 'checking for changes' : `${active.conversations} conversations`}` : `${active.kind}: ${active.phase}`;
+      action.title = automatic ? `Indexing changes: ${active.phase === 'verifying' ? 'verifying a conversation' : active.phase === 'checking' ? 'checking for changes' : `${active.conversations} conversations`}` : active.kind === 'manual-sync' ? `Manual sync: ${active.phase}` : `${active.kind}: ${active.phase}`;
       action.setAttribute('aria-label', action.title);
     } else {
       action.setAttribute('aria-busy', 'false');
@@ -243,6 +243,7 @@
       element.append(phases.wrapper);
     }
     const audit = run.audit;
+    if (run.trigger) element.append(node('p', run.trigger === 'manual' ? 'Manual sync · includes analysis refreshes' : 'Automatic indexing · analyses deferred', 'muted'));
     if (audit) element.append(node('p', `Verification: ${audit.outcome || 'Unknown'} · ${number(audit.discovered_units)} discoverable units · ${number(audit.deferred_units)} deferred. ${audit.detail || ''}`));
     element.append(node('p', `CPU: ${percent(run.cpu_percent_one_core)} of one core · RAM at start: ${memory(run.rss_baseline_bytes)} · Allocated: ${memory(run.allocated_bytes)}`, 'muted'));
     if (run.finished_at) element.append(node('p', `Finished ${new Date(run.finished_at).toLocaleString()}`, 'muted'));
@@ -393,6 +394,7 @@
     const check = button('Index changes now', () => call('/api/sync/check', {}));
     check.disabled = Boolean(status.busy);
     controls.append(label, custom, check);
+    preferences.append(node('p', 'Automatic indexing updates conversations. Index changes now also refreshes GitHub, identities, Git integration, tool summaries, Human Words, and findings.', 'muted'));
     const schedule = node('p', `${status.pause_reason || 'Ready'} · Next run: `, 'muted');
     schedule.append(settings.enabled ? time(settings.next_at) : document.createTextNode('Off'));
     preferences.append(controls, schedule);
@@ -411,7 +413,7 @@
       };
       const sourceLabel = node('label', ''); sourceLabel.append(choice, document.createTextNode(` ${source.name}`)); sources.append(sourceLabel);
     }
-    preferences.append(sources, node('p', 'Indexing changes makes new conversations searchable without capturing them. Use Capture & index to also keep a copy of the source files and finish library-wide analysis.', 'muted'));
+    preferences.append(sources, node('p', 'Automatic indexing makes new conversations searchable without capturing them. Manual Index changes also refreshes library-wide analysis. Capture & index also keeps a copy of the source files.', 'muted'));
     dashboard.append(preferences);
     const sourceStatus = node('section', '', 'sync-panel');
     sourceStatus.append(node('h3', 'Source status'));

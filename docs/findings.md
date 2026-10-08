@@ -182,11 +182,13 @@ it saved so far.
 
 ## When it runs
 
-The full pass runs on the service's background executor after the tool rollup,
-on the first index after local midnight, when the detectors change, or when you
-choose **Refresh findings now**. Every other index measures only the findings
-being watched, the wins still accruing, and snoozes waiting for a pattern to get
-worse. On a 57 GB library the full pass takes about a minute and only reads the
+Manual **Index changes** runs a full pass after refreshing tool rollups and
+Human Words. Scheduled automatic indexing does not start findings work.
+Capture & index and separate index actions retain the daily refresh policy:
+a full pass on the first refresh after local midnight or a detector change,
+and otherwise measurements of watched findings, wins still accruing, and
+snoozes waiting for a pattern to get worse. **Refresh findings now** also
+requests a full pass. On a 57 GB library the full pass takes about a minute and only reads the
 source tables.
 
 ## Data

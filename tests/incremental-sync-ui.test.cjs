@@ -74,6 +74,8 @@ test('Index changes runs the incremental run, shares busy state with a Stop in t
     const errors = [];
     const requests = [];
     let active = true;
+    let activeKind = 'automatic-sync';
+    let activePhase = 'verifying';
     let settings = { enabled: true, interval_seconds: 300, sources: [], next_at: '2026-10-01T19:00:00Z' };
     page.on('pageerror', error => { if ((error.stack || '').includes('/assets/sync.js')) errors.push(error.message); });
     await page.route('http://sync.test/**', route => {
@@ -91,7 +93,7 @@ test('Index changes runs the incremental run, shares busy state with a Stop in t
         if (url.pathname === '/api/sync/settings') settings = { ...settings, ...body };
         return json({ accepted: true, stopped: true, run_id: 'manual', ...settings });
       }
-      if (url.pathname === '/api/activity') return json({ runs: active ? [{ id: 'auto', kind: 'automatic-sync', state: 'running', phase: 'verifying', conversations: 2 }] : [] });
+      if (url.pathname === '/api/activity') return json({ runs: active ? [{ id: 'auto', kind: activeKind, state: 'running', phase: activePhase, conversations: 2 }] : [] });
       if (url.pathname === '/api/sync/status') return json({
         settings, busy: active, pause_reason: active ? 'Indexing' : '',
         available_sources: [{ name: 'codex' }, { name: 'claude' }], sources: [{ name: 'codex' }, { name: 'claude' }],
@@ -144,6 +146,18 @@ test('Index changes runs the incremental run, shares busy state with a Stop in t
     await page.locator('#headerSync').click();
     await page.waitForFunction(() => !document.getElementById('headerSync').disabled);
     assert.deepEqual(requests.filter(request => ['/api/sync/check', '/api/library/update'].includes(request.path)).map(request => request.path), ['/api/sync/check']);
+    active = true;
+    activeKind = 'manual-sync';
+    for (const phase of ['refreshing tools', 'refreshing findings']) {
+      activePhase = phase;
+      await page.evaluate(() => window.pharosSync.refresh());
+      assert.equal(await page.locator('#headerSync').getAttribute('aria-label'), `Manual sync: ${phase}`);
+      assert.equal(await page.locator('#headerSync').isDisabled(), true);
+    }
+    active = false;
+    await page.evaluate(() => window.pharosSync.refresh());
+    assert.equal(await page.locator('#headerSync').isEnabled(), true);
+
     await dashboard.getByRole('button', { name: 'Resume repair' }).click();
     assert.deepEqual(requests.find(request => request.path === '/api/sync/recovery').body, { resume: 'repair' });
     await dashboard.getByRole('button', { name: 'Verify all retained inputs' }).click();
