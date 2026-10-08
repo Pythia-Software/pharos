@@ -38,14 +38,13 @@ func (env *findingEnv) preEdits() (map[string]*preEdit, error) {
 	if env.cachedPreEdits != nil {
 		return env.cachedPreEdits, nil
 	}
-	firsts, err := queryMapsContext(env.ctx, env.db, `SELECT t.conversation_id,MIN(t.sequence) first_edit FROM tool_calls t
+	firsts, err := env.featureRows("first-edits", `SELECT t.conversation_id,MIN(t.sequence) first_edit FROM tool_calls t
 		LEFT JOIN agent_sessions a ON a.id=t.agent_session_id
-		WHERE t.started_at>=? AND t.tool_category='edit' AND COALESCE(a.depth,0)=0 GROUP BY 1`, env.fromUTC)
+		WHERE t.started_at>=? AND t.tool_category='edit' AND COALESCE(a.depth,0)=0 /* finding partition */ GROUP BY 1`, "t.conversation_id", env.fromUTC)
 	if err != nil {
 		return nil, err
 	}
 	output := map[string]*preEdit{}
-	ids := []any{}
 	edits := map[string]int64{}
 	// sequence, result tokens, and carried tokens of each pre-edit call.
 	phaseCalls := map[string][][3]int64{}
@@ -55,48 +54,44 @@ func (env *findingEnv) preEdits() (map[string]*preEdit, error) {
 			continue
 		}
 		edits[id] = integer(row["first_edit"])
-		ids = append(ids, id)
 		output[id] = &preEdit{Files: map[string]*preEditFile{}}
 	}
-	for start := 0; start < len(ids); start += 300 {
-		end := min(start+300, len(ids))
-		rows, err := queryMapsContext(env.ctx, env.db, `SELECT t.id,t.conversation_id,t.sequence,t.tool_category,t.result_tokens,t.carried_tokens,t.output_tokens,COALESCE(t.model,'') model,
-			COALESCE(t.repo_path,'') repo_path,COALESCE(t.path_repository_id,'') path_repository,t.started_at,COALESCE(t.call_message_id,'') message_id
-			FROM tool_calls t LEFT JOIN agent_sessions a ON a.id=t.agent_session_id
-			WHERE t.conversation_id IN (`+placeholders(end-start)+`) AND t.tool_category IN ('read','search','command') AND COALESCE(a.depth,0)=0`, ids[start:end]...)
-		if err != nil {
-			return nil, err
+	rows, err := env.featureRows("pre-edit-calls", `SELECT t.id,t.conversation_id,t.sequence,t.tool_category,t.result_tokens,t.carried_tokens,t.output_tokens,COALESCE(t.model,'') model,
+ COALESCE(t.repo_path,'') repo_path,COALESCE(t.path_repository_id,'') path_repository,t.started_at,COALESCE(t.call_message_id,'') message_id
+ FROM (SELECT e.conversation_id,MIN(e.sequence) first_edit FROM tool_calls e LEFT JOIN agent_sessions b ON b.id=e.agent_session_id
+ WHERE e.started_at>=? AND e.tool_category='edit' AND COALESCE(b.depth,0)=0 /* finding partition */ GROUP BY 1) edits
+ JOIN tool_calls t ON t.conversation_id=edits.conversation_id AND t.sequence<edits.first_edit
+ LEFT JOIN agent_sessions a ON a.id=t.agent_session_id
+ WHERE t.tool_category IN ('read','search','command') AND COALESCE(a.depth,0)=0`, "e.conversation_id", env.fromUTC)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		id := firstString(row["conversation_id"])
+		if output[id] == nil || integer(row["sequence"]) >= edits[id] {
+			continue
 		}
-		for _, row := range rows {
-			id := firstString(row["conversation_id"])
-			if integer(row["sequence"]) >= edits[id] {
-				continue
-			}
-			phase := output[id]
-			phase.Calls++
-			phase.ResultTokens += integer(row["result_tokens"])
-			phase.Carried += integer(row["carried_tokens"])
-			phaseCalls[id] = append(phaseCalls[id], [3]int64{integer(row["sequence"]), integer(row["result_tokens"]), integer(row["carried_tokens"])})
-			value, _ := number(row["output_tokens"])
-			phase.Output += value
-			phase.Model = defaultString(phase.Model, firstString(row["model"]))
-			path := firstString(row["repo_path"])
-			conv := env.convs[id]
-			if firstString(row["tool_category"]) != "read" || path == "" || firstString(row["path_repository"]) != conv.RepositoryID {
-				continue
-			}
-			file := phase.Files[path]
-			if file == nil {
-				file = &preEditFile{CallID: firstString(row["id"]), MessageID: firstString(row["message_id"]), At: firstString(row["started_at"])}
-				phase.Files[path] = file
-			}
-			file.Reads++
-			file.Tokens += integer(row["result_tokens"])
-			file.Carried += integer(row["carried_tokens"])
+		phase := output[id]
+		phase.Calls++
+		phase.ResultTokens += integer(row["result_tokens"])
+		phase.Carried += integer(row["carried_tokens"])
+		phaseCalls[id] = append(phaseCalls[id], [3]int64{integer(row["sequence"]), integer(row["result_tokens"]), integer(row["carried_tokens"])})
+		value, _ := number(row["output_tokens"])
+		phase.Output += value
+		phase.Model = defaultString(phase.Model, firstString(row["model"]))
+		path := firstString(row["repo_path"])
+		conv := env.convs[id]
+		if firstString(row["tool_category"]) != "read" || path == "" || firstString(row["path_repository"]) != conv.RepositoryID {
+			continue
 		}
-		if env.ctx.Err() != nil {
-			return nil, env.ctx.Err()
+		file := phase.Files[path]
+		if file == nil {
+			file = &preEditFile{CallID: firstString(row["id"]), MessageID: firstString(row["message_id"]), At: firstString(row["started_at"])}
+			phase.Files[path] = file
 		}
+		file.Reads++
+		file.Tokens += integer(row["result_tokens"])
+		file.Carried += integer(row["carried_tokens"])
 	}
 	// Each call's result is re-read by the calls after it in the phase,
 	// counting a call as a request (parallel calls make this an
@@ -123,7 +118,8 @@ func detectOrientation(env *findingEnv) ([]*findingCandidate, error) {
 	wanted := env.wants("orientation")
 	// Hot files: read before the first edit in the most conversations.
 	files := map[string]map[string]map[string]bool{}
-	for id, phase := range phases {
+	for _, id := range sortedFindingKeys(phases) {
+		phase := phases[id]
 		conv := env.convs[id]
 		if conv.RepositoryID == "" || !env.inGate(conv.Day) {
 			continue
@@ -173,7 +169,8 @@ func detectOrientation(env *findingEnv) ([]*findingCandidate, error) {
 			Metric: findingMetric{Kind: "mean", Unit: "conversations", Value: "tokens"}, RemovableShare: findingOrientationRemovable}
 		readers := map[string]int{}
 		tokens := map[string]int64{}
-		for id, phase := range phases {
+		for _, id := range sortedFindingKeys(phases) {
+			phase := phases[id]
 			conv := env.convs[id]
 			if !env.inScope(scope, conv) {
 				continue
@@ -252,7 +249,8 @@ func detectExploration(env *findingEnv) ([]*findingCandidate, error) {
 	}
 	wanted := env.wants("exploration")
 	candidates := map[string]*findingCandidate{}
-	for id, phase := range phases {
+	for _, id := range sortedFindingKeys(phases) {
+		phase := phases[id]
 		conv := env.convs[id]
 		scope := env.scopeOf(conv)
 		if !strings.HasPrefix(scope, "repo:") {
@@ -352,7 +350,8 @@ func (env *findingEnv) outlierRemovable(candidates map[string]*findingCandidate)
 	// The typical request: tokens per request of the scope's conversations
 	// that aren't runaway.
 	sums := map[string][2]float64{}
-	for _, conv := range env.convs {
+	for _, conversationID := range sortedFindingKeys(env.convs) {
+		conv := env.convs[conversationID]
 		if conv.Requests == 0 || conv.Requests > runawayRequests || conv.Compactions > runawayCompactions {
 			continue
 		}
@@ -494,9 +493,9 @@ func heavyRemovable(shape, command string) float64 {
 const heavyResultTokens = 2000
 
 func detectHeavyOutput(env *findingEnv) ([]*findingCandidate, error) {
-	rows, err := queryMapsContext(env.ctx, env.db, `SELECT t.id,t.conversation_id,t.provider,COALESCE(t.program,'') program,COALESCE(t.subcommand,'') subcommand,t.command,
+	rows, err := env.featureRows("heavy-output", `SELECT t.rowid feature_order,t.id,t.conversation_id,t.provider,COALESCE(t.program,'') program,COALESCE(t.subcommand,'') subcommand,t.command,
 		t.result_tokens,t.carried_tokens,t.output_tokens,COALESCE(t.model,'') model,t.started_at,COALESCE(t.call_message_id,'') message_id
-		FROM tool_calls t WHERE t.started_at>=? AND t.tool_category='command' AND t.program IN ('rg','grep','git','sed','cat') AND t.result_tokens>0`, env.fromUTC)
+		FROM tool_calls t WHERE t.started_at>=? AND t.tool_category='command' AND t.program IN ('rg','grep','git','sed','cat') AND t.result_tokens>0 /* finding partition */ `, "t.conversation_id", env.fromUTC)
 	if err != nil {
 		return nil, err
 	}
@@ -512,7 +511,10 @@ func detectHeavyOutput(env *findingEnv) ([]*findingCandidate, error) {
 		if root == "" {
 			continue
 		}
-		shape := heavyShape(firstString(row["program"]), firstString(row["subcommand"]), firstString(row["command"]))
+		shape := firstString(row["feature_shape"])
+		if !env.featureCache {
+			shape = heavyShape(firstString(row["program"]), firstString(row["subcommand"]), firstString(row["command"]))
+		}
 		if shape == "" {
 			continue
 		}
@@ -641,7 +643,8 @@ const (
 func detectOutliers(env *findingEnv) ([]*findingCandidate, error) {
 	wanted := env.wants("outlier")
 	candidates := map[string]*findingCandidate{}
-	for _, conv := range env.convs {
+	for _, conversationID := range sortedFindingKeys(env.convs) {
+		conv := env.convs[conversationID]
 		scope := env.scopeOf(conv)
 		if !strings.HasPrefix(scope, "repo:") {
 			continue

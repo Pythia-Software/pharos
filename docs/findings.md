@@ -182,12 +182,14 @@ it saved so far.
 
 ## When it runs
 
-The full pass runs on the service's background executor after the tool rollup,
-on the first index after local midnight, when the detectors change, or when you
-choose **Refresh findings now**. Every other index measures only the findings
-being watched, the wins still accruing, and snoozes waiting for a pattern to get
-worse. On a 57 GB library the full pass takes about a minute and only reads the
-source tables.
+Manual **Index changes** runs a full pass after refreshing tool rollups and
+Human Words. Scheduled automatic indexing does not start findings work.
+Capture & index and separate index actions retain the daily refresh policy:
+a full pass on the first refresh after local midnight or a detector change,
+and otherwise measurements of watched findings, wins still accruing, and
+snoozes waiting for a pattern to get worse. **Refresh findings now** also
+requests a full pass. Full discovery reuses durable conversation features while still evaluating all
+candidates and measurement plans. See [the measured performance report](performance/incremental-analysis.md).
 
 ## Data
 
@@ -226,3 +228,36 @@ content. Neither tool changes any finding's state.
 every detector against a catalog opened read-only and prints the candidates with
 their gate numbers, which is safe beside a running service. `pharos findings
 --refresh` runs the full pass, and `pharos findings --json` prints the overview.
+
+## Incremental detector inputs
+
+`finding_tool_revisions` and `finding_message_revisions` track changes to
+conversation inputs. SQL triggers update them in the authoritative transaction,
+including deletions of a conversation's last call. `finding_feature_partitions`
+stores detector inputs per conversation; `finding_feature_builds` records the
+query, rule, and rolling-window version. Inputs include call groups, failures,
+instruction hunts, pre-edit work, command shapes, documentation hosts, MCP
+servers, and first user prompts. Prompt-only changes use their independent
+message revisions; Human Words retains its separate input generation.
+
+A pass reads context, user state, features, and revision tokens from one WAL
+snapshot. Changed partitions are reconstructed from raw evidence. Immutable
+Go inputs are reused only when their persisted revision and feature version
+still match, including writes by another process. Malformed persisted JSON is
+reconstructed for that conversation. Query/rule changes and window rollover
+rebuild features; `runFindingsPassReference` bypasses them for parity audits.
+The feature extraction version is `features-v2`; extraction changes must bump
+it. A restart may reload persisted JSON and has a different cost from a warm
+in-process refresh.
+
+Cached inputs do not skip candidate discovery, thresholds, persistence
+backtests, fixed intervention plans, savings, or regression decisions. Every
+manual refresh still runs these stages even when source scans are unchanged.
+Evidence traversal and equal-timestamp selections now use stable identity
+ordering; equal-sized failure-family candidates are considered in sorted order.
+This makes full and incremental passes reproducible while retaining the
+existing preference for the candidate with more affected conversations.
+
+Set `PHAROS_ANALYSIS_PROFILE=1` to print detector times. CPU profiles include
+`analysis` labels for detector attribution. The scratch-replica harness and
+full-reference comparisons are described in the performance report.

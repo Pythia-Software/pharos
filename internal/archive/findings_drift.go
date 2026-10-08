@@ -91,11 +91,11 @@ func instructionHunt(provider, category, toolName, program, command, filePath st
 }
 
 func detectDrift(env *findingEnv) ([]*findingCandidate, error) {
-	rows, err := queryMapsContext(env.ctx, env.db, `SELECT t.id,t.conversation_id,t.provider,t.tool_category,t.tool_name,COALESCE(t.program,'') program,COALESCE(t.command,'') command,
+	rows, err := env.featureRows("drift", `SELECT t.rowid feature_order,t.id,t.conversation_id,t.provider,t.tool_category,t.tool_name,COALESCE(t.program,'') program,COALESCE(t.command,'') command,
 		COALESCE(t.file_path,'') file_path,t.started_at,t.result_tokens,t.carried_tokens,t.output_tokens,COALESCE(t.model,'') model,COALESCE(t.call_message_id,'') message_id
 		FROM tool_calls t WHERE t.started_at>=? AND t.tool_category IN ('command','read','search')
 		AND (t.command LIKE '%AGENTS%' OR t.command LIKE '%CLAUDE%' OR t.command LIKE '%GEMINI%' OR t.command LIKE '%SKILL.md%'
-		OR t.file_path LIKE '%AGENTS%.md' OR t.file_path LIKE '%CLAUDE%.md' OR t.file_path LIKE '%GEMINI%.md' OR t.file_path LIKE '%SKILL.md')`, env.fromUTC)
+		OR t.file_path LIKE '%AGENTS%.md' OR t.file_path LIKE '%CLAUDE%.md' OR t.file_path LIKE '%GEMINI%.md' OR t.file_path LIKE '%SKILL.md') /* finding partition */ `, "t.conversation_id", env.fromUTC)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +110,13 @@ func detectDrift(env *findingEnv) ([]*findingCandidate, error) {
 			continue
 		}
 		conv := env.convs[root]
-		kind, file := instructionHunt(conv.Provider, firstString(row["tool_category"]), firstString(row["tool_name"]), firstString(row["program"]), firstString(row["command"]), firstString(row["file_path"]))
+		kind, file := firstString(row["feature_hunt_kind:"+conv.Provider]), firstString(row["feature_hunt_file:"+conv.Provider])
+		if harnessFiles[conv.Provider] == nil {
+			kind, file = firstString(row["feature_hunt_kind:"]), firstString(row["feature_hunt_file:"])
+		}
+		if !env.featureCache {
+			kind, file = instructionHunt(conv.Provider, firstString(row["tool_category"]), firstString(row["tool_name"]), firstString(row["program"]), firstString(row["command"]), firstString(row["file_path"]))
+		}
 		if kind == "" {
 			continue
 		}
@@ -130,7 +136,8 @@ func detectDrift(env *findingEnv) ([]*findingCandidate, error) {
 		return candidates[key]
 	}
 	counts := map[string]map[string]int{}
-	for _, conv := range env.convs {
+	for _, conversationID := range sortedFindingKeys(env.convs) {
+		conv := env.convs[conversationID]
 		if conv.RepositoryID == "" || harnessFiles[conv.Provider] == nil || conv.SourceKind == "tl1" {
 			continue
 		}

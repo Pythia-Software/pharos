@@ -17,6 +17,7 @@ import (
 )
 
 const automaticRunKind = "automatic-sync"
+const manualSyncRunKind = "manual-sync"
 
 type syncSettings struct {
 	Enabled  bool     `json:"enabled"`
@@ -149,21 +150,38 @@ func (s *Server) automaticLoop(ctx context.Context) {
 }
 
 func (s *Server) runAutomatic(parent context.Context, settings syncSettings) bool {
+	return s.runIncremental(parent, settings, false)
+}
+
+func (s *Server) runManualSync(parent context.Context, settings syncSettings) bool {
+	return s.runIncremental(parent, settings, true)
+}
+
+// Scheduled indexing leaves library-wide analysis pending. A manual request
+// uses the same incremental writer, then refreshes every derived analysis.
+func (s *Server) runIncremental(parent context.Context, settings syncSettings, manual bool) bool {
+	if manual && !s.acquireManualIngest() {
+		return false
+	}
 	s.auto.mu.Lock()
-	if s.auto.cancel != nil || s.auto.manualWaiters > 0 || !s.ingestMu.TryLock() {
+	if !manual && (s.auto.cancel != nil || s.auto.manualWaiters > 0 || !s.ingestMu.TryLock()) {
 		s.auto.mu.Unlock()
 		return false
 	}
 	ctx, cancel := context.WithCancel(parent)
 	done := make(chan struct{})
-	s.auto.cancel, s.auto.done = cancel, done
+	if !manual {
+		s.auto.cancel, s.auto.done = cancel, done
+	}
 	cold := !s.auto.cold
 	s.auto.cold = true
 	s.auto.mu.Unlock()
 	defer func() {
 		cancel()
 		s.auto.mu.Lock()
-		s.auto.cancel, s.auto.done = nil, nil
+		if !manual {
+			s.auto.cancel, s.auto.done = nil, nil
+		}
 		s.ingestMu.Unlock()
 		close(done)
 		s.auto.mu.Unlock()
@@ -173,7 +191,11 @@ func (s *Server) runAutomatic(parent context.Context, settings syncSettings) boo
 	for _, source := range sources {
 		names = append(names, source.Name)
 	}
-	run := s.startRunNamed(automaticRunKind, names)
+	kind := automaticRunKind
+	if manual {
+		kind = manualSyncRunKind
+	}
+	run := s.startRunNamed(kind, names)
 	registered, end := s.beginIngest(run.ID)
 	defer end()
 	stop := context.AfterFunc(registered, cancel)
@@ -276,6 +298,18 @@ func (s *Server) runAutomatic(parent context.Context, settings syncSettings) boo
 		audit = s.Catalog.auditPool(ctx, pool, run.ID)
 		meter.endPhase(phase)
 	}
+	if manual && ctx.Err() == nil {
+		err := s.finishDeferredSyncPhases(ctx, true, func(name string, work func() error) error {
+			s.updateRun(run.ID, func(run *SyncRun) { run.Phase = "refreshing " + name; run.CurrentSource = nil })
+			phase := meter.beginPhase(name)
+			err := work()
+			meter.endPhase(phase)
+			return err
+		})
+		if err != nil {
+			failure = err.Error()
+		}
+	}
 	state := "complete"
 	if ctx.Err() != nil {
 		state = "interrupted"
@@ -284,6 +318,10 @@ func (s *Server) runAutomatic(parent context.Context, settings syncSettings) boo
 	}
 	sample := meter.finish()
 	sample.RunID, sample.State, sample.ColdStart, sample.Audit = run.ID, state, cold, audit
+	sample.Trigger = "automatic"
+	if manual {
+		sample.Trigger = "manual"
+	}
 	sample.FinishedAt, sample.Sources, sample.SourceResults = now(), attemptedSources, results
 	sample.Workspaces, sample.Conversations, sample.Messages = totals(results)
 	sample.Class = "no_changes"
@@ -296,6 +334,10 @@ func (s *Server) runAutomatic(parent context.Context, settings syncSettings) boo
 		sample.Class = "cold_start"
 	} else if audit.Outcome == "deferred" || audit.Outcome == "read_error" {
 		sample.Class += "_audit_deferred"
+	}
+	if manual {
+		// Keep expensive manual-run costs out of automatic-run distributions.
+		sample.Class = "manual_" + sample.Class
 	}
 	if _, err := s.Catalog.DB.Exec(`INSERT INTO sync_history(host_id,run_id,finished_at,sample_json) VALUES(?,?,?,?)`, currentHost().ID, run.ID, sample.FinishedAt, jsonText(sample)); err != nil {
 		failure = err.Error()
@@ -531,7 +573,7 @@ func (s *Server) postIncrementalSync(w http.ResponseWriter, r *http.Request, bod
 			writeError(w, err, 500)
 			return
 		}
-		if !s.spawn(func(ctx context.Context) { s.runAutomatic(ctx, settings) }) {
+		if !s.spawn(func(ctx context.Context) { s.runManualSync(ctx, settings) }) {
 			writeError(w, errors.New("service stopping"), 503)
 			return
 		}

@@ -217,8 +217,12 @@ type priceBook struct {
 }
 
 func (c *Catalog) loadPriceBook() (priceBook, error) {
+	return c.loadPriceBookFrom(context.Background(), c.DB)
+}
+
+func (c *Catalog) loadPriceBookFrom(ctx context.Context, db queryer) (priceBook, error) {
 	book := priceBook{prices: map[string][]priceInterval{}, aliases: map[string][]aliasInterval{}, today: c.clock().Format("2006-01-02")}
-	prices, err := queryMaps(c.DB, `SELECT * FROM cost_on_date`)
+	prices, err := queryMapsContext(ctx, db, `SELECT * FROM cost_on_date`)
 	if err != nil {
 		return book, err
 	}
@@ -237,7 +241,7 @@ func (c *Catalog) loadPriceBook() (priceBook, error) {
 			assumption: integer(row["assumption"]) != 0,
 		})
 	}
-	aliases, err := queryMaps(c.DB, `SELECT * FROM model_alias_on_date`)
+	aliases, err := queryMapsContext(ctx, db, `SELECT * FROM model_alias_on_date`)
 	if err != nil {
 		return book, err
 	}

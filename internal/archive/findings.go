@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"runtime/pprof"
 	"sort"
 	"strings"
 	"sync"
@@ -266,6 +267,8 @@ type findingEnv struct {
 	// cachedCalls D1 and D7's (see callGroups).
 	cachedPreEdits map[string]*preEdit
 	cachedCalls    []callGroup
+	featureCache   bool
+	cachedPrompts  map[string]string
 }
 
 // callGroup is one conversation's calls of one tool and program.
@@ -288,31 +291,29 @@ func (env *findingEnv) callGroups() ([]callGroup, error) {
 		"%required argument%", "%flag provided but not defined%", "%unknown option%", "%missing required%"} {
 		usage = append(usage, signature+" LIKE '"+pattern+"'")
 	}
-	rows, err := env.db.QueryContext(env.ctx, `SELECT conversation_id,tool_category,tool_name,COALESCE(program,''),COUNT(*),SUM(status='error' AND test_failure=0),
-		SUM(tool_category='command' AND (instr(COALESCE(command,''),'--help')>0 OR COALESCE(subcommand,'') IN ('help','--help','-h') OR instr(COALESCE(command,'')||' ',' -h ')>0)),
-		SUM(status='error' AND test_failure=0 AND (`+strings.Join(usage, " OR ")+`)),
-		SUM(result_tokens+carried_tokens),SUM(result_tokens),SUM(carried_tokens),COALESCE(SUM(output_tokens),0),SUM(COALESCE(duration_ms,0)),
-		MAX(sequence),status,started_at,COALESCE(model,'')
-		FROM tool_calls WHERE started_at>=? GROUP BY 1,2,3,4`, env.fromUTC)
+	rows, err := env.featureRows("call-groups", `SELECT conversation_id,tool_category,tool_name,COALESCE(program,'') program,COUNT(*) calls,SUM(status='error' AND test_failure=0) errors,
+ SUM(tool_category='command' AND (instr(COALESCE(command,''),'--help')>0 OR COALESCE(subcommand,'') IN ('help','--help','-h') OR instr(COALESCE(command,'')||' ',' -h ')>0)) help,
+ SUM(status='error' AND test_failure=0 AND (`+strings.Join(usage, " OR ")+`)) usage,
+ SUM(result_tokens+carried_tokens) tokens,SUM(result_tokens) result_tokens,SUM(carried_tokens) carried,COALESCE(SUM(output_tokens),0) output,SUM(COALESCE(duration_ms,0)) duration_ms,
+ MAX(sequence) last_sequence,status,started_at,COALESCE(model,'') model
+ FROM tool_calls WHERE started_at>=? /* finding partition */ GROUP BY 1,2,3,4`, "conversation_id", env.fromUTC)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	groups := []callGroup{}
-	for rows.Next() {
-		var group callGroup
-		var lastStatus, lastAt, model sql.NullString
-		if err := rows.Scan(&group.Conversation, &group.Category, &group.Tool, &group.Program, &group.Calls, &group.Errors, &group.Help, &group.Usage,
-			&group.Tokens, &group.ResultTokens, &group.Carried, &group.Output, &group.DurationMS, &group.LastSequence, &lastStatus, &lastAt, &model); err != nil {
-			return nil, err
-		}
-		group.LastStatus, group.LastAt, group.Model = lastStatus.String, lastAt.String, model.String
+	for _, row := range rows {
+		// Preserve the old typed SQL scan contract. Trimming raw grouping
+		// strings can merge distinct program exposures.
+		group := callGroup{Conversation: asString(row["conversation_id"]), Category: asString(row["tool_category"]), Tool: asString(row["tool_name"]), Program: asString(row["program"]),
+			Calls: integer(row["calls"]), Errors: integer(row["errors"]), Help: integer(row["help"]), Usage: integer(row["usage"]), Tokens: integer(row["tokens"]), ResultTokens: integer(row["result_tokens"]),
+			Carried: integer(row["carried"]), DurationMS: integer(row["duration_ms"]), LastSequence: integer(row["last_sequence"]), LastStatus: asString(row["status"]), LastAt: asString(row["started_at"]), Model: asString(row["model"])}
+		group.Output, _ = number(row["output"])
 		if env.roots[group.Conversation] != "" {
 			groups = append(groups, group)
 		}
 	}
 	env.cachedCalls = groups
-	return groups, rows.Err()
+	return groups, nil
 }
 
 // findingDetector is one detector: it discovers candidates when env.discover
@@ -353,10 +354,12 @@ func knownFindingDetector(name string) bool {
 
 // findingsState tracks the pass in this process.
 type findingsState struct {
-	mu        sync.Mutex
-	running   bool
-	lastError string
-	phase     string
+	mu            sync.Mutex
+	running       bool
+	lastError     string
+	phase         string
+	featureMu     sync.Mutex
+	featureInputs map[string]*findingFeatureInput
 }
 
 func (env *findingEnv) inGate(day string) bool   { return day >= env.gateFrom && day <= env.today }
@@ -467,7 +470,7 @@ func (c *Catalog) loadFindingEnv(ctx context.Context, db queryer, discover bool,
 	for _, spec := range specs {
 		env.specs[spec.Detector] = append(env.specs[spec.Detector], spec)
 	}
-	book, err := c.loadPriceBook()
+	book, err := c.loadPriceBookFrom(ctx, db)
 	if err != nil {
 		return nil, err
 	}
@@ -799,18 +802,21 @@ func (c *Catalog) RefreshFindings(ctx context.Context, force bool) error {
 	}
 	state.running, state.phase = true, "starting"
 	state.mu.Unlock()
+	var err error
+	defer func() {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		state.running, state.phase, state.lastError = false, "", ""
+		if err != nil {
+			state.lastError = err.Error()
+		}
+	}()
 	started := time.Now()
 	built, _ := c.metaValue(ctx, "findings_generation")
 	full := force || built != c.findingsGeneration()
-	err := c.runFindingsPass(ctx, full)
-	state.mu.Lock()
-	state.running, state.phase, state.lastError = false, "", ""
-	if err != nil {
-		state.lastError = err.Error()
-	}
-	state.mu.Unlock()
+	err = c.runFindingsPass(ctx, full)
 	if err == nil && full {
-		_ = c.writeTransaction(ctx, "findings-meta", func(tx *sql.Tx) error {
+		err = c.writeTransaction(ctx, "findings-meta", func(tx *sql.Tx) error {
 			for key, value := range map[string]string{"findings_generation": c.findingsGeneration(), "findings_built_at": formatTime(c.clock()),
 				"findings_took_ms": fmt.Sprint(time.Since(started).Milliseconds())} {
 				if _, err := tx.Exec("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value); err != nil {
@@ -821,7 +827,7 @@ func (c *Catalog) RefreshFindings(ctx context.Context, force bool) error {
 		})
 	}
 	if err == nil && !full {
-		_ = c.writeTransaction(ctx, "findings-meta", func(tx *sql.Tx) error {
+		err = c.writeTransaction(ctx, "findings-meta", func(tx *sql.Tx) error {
 			_, err := tx.Exec("INSERT INTO meta(key,value) VALUES('findings_measured_at',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", formatTime(c.clock()))
 			return err
 		})
@@ -855,20 +861,33 @@ func (c *Catalog) setFindingsPhase(phase string) {
 // runFindingsPass measures the specs of every finding the user acted on,
 // discovers new candidates on a full pass, and stores the results.
 func (c *Catalog) runFindingsPass(ctx context.Context, full bool) error {
+	return c.runFindingsPassWithFeatures(ctx, full, true)
+}
+
+func (c *Catalog) runFindingsPassReference(ctx context.Context, full bool) error {
+	return c.runFindingsPassWithFeatures(ctx, full, false)
+}
+
+func (c *Catalog) runFindingsPassWithFeatures(ctx context.Context, full, features bool) error {
 	conn, err := c.DB.Conn(ctx)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	states, err := c.findingUserStates(ctx, conn)
+	snapshot, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	existing, err := loadFindingRows(ctx, conn, "")
+	defer snapshot.Rollback()
+	states, err := c.findingUserStates(ctx, snapshot)
 	if err != nil {
 		return err
 	}
-	retired, err := queryMapsContext(ctx, conn, "SELECT old_id,new_id FROM repository_retirements")
+	existing, err := loadFindingRows(ctx, snapshot, "")
+	if err != nil {
+		return err
+	}
+	retired, err := queryMapsContext(ctx, snapshot, "SELECT old_id,new_id FROM repository_retirements")
 	if err != nil {
 		return err
 	}
@@ -901,18 +920,24 @@ func (c *Catalog) runFindingsPass(ctx context.Context, full bool) error {
 		return nil
 	}
 	c.setFindingsPhase("reading conversations")
-	env, err := c.loadFindingEnv(ctx, conn, full, specs)
+	env, err := c.loadFindingEnv(ctx, snapshot, full, specs)
 	if err != nil {
 		return err
 	}
-	env.measuring, env.stored = measuring, existing
+	env.measuring, env.stored, env.featureCache = measuring, existing, features
 	candidates := []*findingCandidate{}
 	for _, detector := range findingDetectors {
 		if !full && len(env.specs[detector.name]) == 0 {
 			continue
 		}
 		c.setFindingsPhase(detector.name)
-		found, err := detector.run(env)
+		var found []*findingCandidate
+		var err error
+		started := time.Now()
+		pprof.Do(ctx, pprof.Labels("analysis", detector.name), func(context.Context) { found, err = detector.run(env) })
+		if os.Getenv("PHAROS_ANALYSIS_PROFILE") == "1" {
+			fmt.Fprintf(os.Stderr, "finding detector=%s elapsed=%s\n", detector.name, time.Since(started))
+		}
 		if err != nil {
 			return fmt.Errorf("%s detector: %w", detector.name, err)
 		}
@@ -951,6 +976,10 @@ func (c *Catalog) runFindingsPass(ctx context.Context, full bool) error {
 		kept = append(kept, candidate)
 	}
 	kept = dedupeFindingCandidates(kept)
+	if err := snapshot.Commit(); err != nil {
+		return err
+	}
+	env.db = conn
 	c.setFindingsPhase("saving")
 	if err := c.storeFindings(ctx, env, kept, existing, states, retired, full); err != nil {
 		return err
@@ -1309,7 +1338,21 @@ func defaultFacts(facts map[string]any) map[string]any {
 
 // limitHandles keeps the newest evidence.
 func limitHandles(handles []findingHandle, limit int) []findingHandle {
-	sort.SliceStable(handles, func(i, j int) bool { return handles[i].At > handles[j].At })
+	sort.Slice(handles, func(i, j int) bool {
+		a, b := handles[i], handles[j]
+		if a.At != b.At {
+			return a.At > b.At
+		}
+		// Stable identities resolve equal timestamps independently of map traversal.
+		left := [...]string{a.ConversationID, a.WorkspaceID, a.ToolCallID, a.MessageID, a.TaskID, a.Where, a.Did, a.Happened}
+		right := [...]string{b.ConversationID, b.WorkspaceID, b.ToolCallID, b.MessageID, b.TaskID, b.Where, b.Did, b.Happened}
+		for k := range left {
+			if left[k] != right[k] {
+				return left[k] < right[k]
+			}
+		}
+		return false
+	})
 	if len(handles) > limit {
 		handles = handles[:limit]
 	}
