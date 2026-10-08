@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -17,13 +18,17 @@ var usageTokenFields = []string{
 }
 
 // usageTimeFields are the calendar buckets derived from the ledger hour.
-var usageTimeFields = map[string]bool{"day": true, "week": true, "month": true}
+var usageTimeFields = map[string]bool{"hour": true, "day": true, "week": true, "month": true}
 
 // usageRows returns one row per agent session, local calendar day, and model.
 // Linked mirrors of the same work (for example a Conductor workspace and the
 // native Claude session it wraps) keep only the representative workspace, as
 // Library does, so the same requests are not counted twice.
 func (c *Catalog) usageRows(location *time.Location) ([]map[string]any, error) {
+	return c.usageRowsByPeriod(location, false)
+}
+
+func (c *Catalog) usageRowsByPeriod(location *time.Location, hourly bool) ([]map[string]any, error) {
 	ledger, err := c.representativeLedger()
 	if err != nil {
 		return nil, err
@@ -36,15 +41,20 @@ func (c *Catalog) usageRows(location *time.Location) ([]map[string]any, error) {
 	order := []string{}
 	for _, entry := range ledger {
 		model := ledgerModel(entry)
-		var day, week, month, at any
+		var day, week, month, at, hourKey any
 		if hour, ok := parseTime(firstString(entry["usage_hour"])); ok {
 			midnight := localMidnight(hour, location)
 			day = midnight.Format("2006-01-02")
 			week = midnight.AddDate(0, 0, -((int(midnight.Weekday()) + 6) % 7)).Format("2006-01-02")
 			month = midnight.Format("2006-01")
 			at = hour.UTC().Format(time.RFC3339)
+			hourKey = hour.UTC().Truncate(time.Hour).Format(time.RFC3339)
 		}
-		key := firstString(entry["agent_session_id"]) + "|" + firstString(day) + "|" + model
+		bucket := day
+		if hourly {
+			bucket = hourKey
+		}
+		key := firstString(entry["agent_session_id"]) + "|" + firstString(bucket) + "|" + model
 		row := grouped[key]
 		if row == nil {
 			row = map[string]any{
@@ -53,7 +63,7 @@ func (c *Catalog) usageRows(location *time.Location) ([]map[string]any, error) {
 				"source_kind": entry["source_kind"], "provider": entry["provider"], "model": model,
 				"harness": entry["harness"], "harness_version_first": entry["harness_version_first"], "harness_version_last": entry["harness_version_last"], "harness_version_source": entry["harness_version_source"], "model_family": modelFamily(model),
 				"session_kind": entry["session_kind"], "depth": integer(entry["depth"]), "attribution": entry["attribution"],
-				"day": day, "week": week, "month": month, "first_usage_at": at, "last_usage_at": at,
+				"hour": hourKey, "day": day, "week": week, "month": month, "first_usage_at": at, "last_usage_at": at,
 				"cost_usd": nil, "cost_today_usd": nil, "price_status": "", "priced_model": nil,
 			}
 			for _, field := range usageTokenFields {
@@ -93,6 +103,9 @@ func (c *Catalog) usageRows(location *time.Location) ([]map[string]any, error) {
 		if input := integer(row["input_tokens"]); input > 0 {
 			row["cache_read_share"] = float64(integer(row["cache_read_input_tokens"])) / float64(input) * 100
 		}
+		if !hourly {
+			delete(row, "hour")
+		}
 		rows = append(rows, row)
 	}
 	return rows, nil
@@ -103,6 +116,95 @@ func (c *Catalog) usageRows(location *time.Location) ([]map[string]any, error) {
 func (c *Catalog) localUsageRows(ctx context.Context) ([]map[string]any, error) {
 	key := "usage:" + time.Local.String() + ":" + c.clock().Format("2006-01-02")
 	return cachedValue(ctx, c, key, func(context.Context) ([]map[string]any, error) { return c.usageRows(time.Local) })
+}
+
+// Hourly chart data keeps the ledger's time precision without changing table rows.
+func (c *Catalog) localUsageHourlyRows(ctx context.Context) ([]map[string]any, error) {
+	key := "usage-hourly:" + time.Local.String() + ":" + c.clock().Format("2006-01-02")
+	return cachedValue(ctx, c, key, func(context.Context) ([]map[string]any, error) { return c.usageRowsByPeriod(time.Local, true) })
+}
+
+// Hourly charts keep row filters (for example a daily token threshold) at
+// the table's daily granularity, then apply timestamp bounds to the ledger hours.
+func (c *Catalog) hourlyUsageForAggregation(ctx context.Context, where []querytable.WhereTerm, schema querytable.Schema) ([]map[string]any, error) {
+	var rowWhere, hourWhere []querytable.WhereTerm
+	for _, term := range where {
+		timeOnly := true
+		for _, clause := range term.Predicates() {
+			if clause.Field != "first_usage_at" && clause.Field != "last_usage_at" && clause.Field != "hour" {
+				timeOnly = false
+			}
+		}
+		hasHour := false
+		for _, clause := range term.Predicates() {
+			hasHour = hasHour || clause.Field == "hour"
+		}
+		if timeOnly || hasHour {
+			hourWhere = append(hourWhere, term)
+		} else {
+			rowWhere = append(rowWhere, term)
+		}
+	}
+	daily, err := c.localUsageRows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	matched, err := querytable.Filter(daily, rowWhere, schema)
+	if err != nil {
+		return nil, err
+	}
+	ids := map[string]bool{}
+	for _, row := range matched {
+		ids[firstString(row["id"])] = true
+	}
+	hourly, err := c.localUsageHourlyRows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	kept := make([]map[string]any, 0, len(hourly))
+	for _, row := range hourly {
+		id := firstString(row["agent_session_id"]) + "|" + firstString(row["day"]) + "|" + firstString(row["model"])
+		if ids[id] {
+			kept = append(kept, row)
+		}
+	}
+	return querytable.Filter(kept, hourWhere, schema)
+}
+
+// aggregateUsage selects granularity per metric. An hour filter selects daily
+// table rows containing a matching hour; it does not turn daily counts into hours.
+func (c *Catalog) aggregateUsage(ctx context.Context, daily []map[string]any, request querytable.AggregationRequest, schema querytable.Schema) (querytable.AggregationResult, error) {
+	hourly, err := c.hourlyUsageForAggregation(ctx, request.Where, schema)
+	if err != nil {
+		return querytable.AggregationResult{}, err
+	}
+	dailyWhere := request.Where
+	if slices.Contains(whereFields(request.Where), "hour") {
+		ids := map[string]bool{}
+		for _, row := range hourly {
+			ids[firstString(row["agent_session_id"])+"|"+firstString(row["day"])+"|"+firstString(row["model"])] = true
+		}
+		selected := make([]map[string]any, 0, len(daily))
+		for _, row := range daily {
+			if ids[firstString(row["id"])] {
+				selected = append(selected, row)
+			}
+		}
+		daily, dailyWhere = selected, nil
+	}
+	result := querytable.AggregationResult{Metrics: []querytable.Metric{}}
+	for _, aggregation := range request.Aggregations {
+		rows, where := daily, dailyWhere
+		if aggregation.Field == "hour" || slices.Contains(aggregation.GroupBy, "hour") {
+			rows, where = hourly, nil
+		}
+		metric, err := querytable.Aggregate(rows, querytable.AggregationRequest{Where: where, Aggregations: []querytable.Aggregation{aggregation}}, schema)
+		if err != nil {
+			return querytable.AggregationResult{}, err
+		}
+		result.Metrics = append(result.Metrics, metric.Metrics...)
+	}
+	return result, nil
 }
 
 // representativeLedger reads the whole ledger less linked mirrors: only each

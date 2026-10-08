@@ -19,12 +19,12 @@ test('Usage table badges follow the active graph and preserve raw sorting and ce
   const monday = new Date(now);
   monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
   const week = `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, '0')}-${String(monday.getDate()).padStart(2, '0')}`;
-  const models = ['opus-5-5', 'sonnet-5-5', 'haiku-5', 'gpt-6-sol', 'gemini-3-pro', 'gemini-3-flash', 'gpt-5-codex'];
+  const models = ['opus-5-5', 'sonnet-5-5', 'haiku-5', 'gpt-6-sol', 'gemini-3-pro', 'gemini-3-flash', 'gpt-5-codex', ...Array.from({ length: 10 }, (_, index) => `extra-model-${index}`)];
   const rows = models.map((model, index) => ({
     id: `usage-${index}`, day, week, month: day.slice(0, 7), last_usage_at: now.toISOString(),
     repository_name: `example/repo-${index}`, provider: index < 3 ? 'claude' : index === 4 || index === 5 ? 'antigravity' : 'codex',
     model_family: model, model: `claude-${model}-20260928[1m]`, session_kind: 'root', title: 'Implement dashboard improvements',
-    total_tokens: 70000 - index * 8000, uncached_input_tokens: 60000 - index * 8000, output_tokens: 10000, cost_usd: 7 - index * 0.8,
+    total_tokens: 170000 - index * 8000, uncached_input_tokens: 160000 - index * 8000, output_tokens: 10000, cost_usd: 17 - index * 0.8,
   }));
   const requests = [], errors = [];
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -76,14 +76,14 @@ test('Usage table badges follow the active graph and preserve raw sorting and ce
     await checkFacet('provider', 'Claude', 'Claude');
     await split.getByRole('button', { name: 'Repository', exact: true }).click();
     await checkFacet('repository_name', rows[0].repository_name, rows[0].repository_name);
-    const folded = page.locator('td[data-qt-field="repository_name"]').filter({ hasText: rows[6].repository_name });
+    const folded = page.locator('td[data-qt-field="repository_name"]').filter({ hasText: rows[16].repository_name });
     const otherColor = await page.locator('.usage-chart-legend').getByRole('button', { name: 'Other (2)', exact: true }).locator('.usage-swatch').evaluate(element => getComputedStyle(element).backgroundColor);
     assert.equal(await folded.locator('.usage-facet-badge').evaluate(element => getComputedStyle(element).backgroundColor), otherColor);
     await page.locator('.usage-chart-legend').getByRole('button', { name: 'Other (2)', exact: true }).click();
-    await checkFacet('repository_name', rows[6].repository_name, rows[6].repository_name);
+    await checkFacet('repository_name', rows[16].repository_name, rows[16].repository_name);
     assert.notEqual(await folded.locator('.usage-facet-badge').evaluate(element => getComputedStyle(element).backgroundColor), otherColor);
     await split.getByRole('button', { name: 'Model', exact: true }).click();
-    for (const metric of ['Tokens', 'Cost', '%']) {
+    for (const metric of ['Tokens', 'Cost', '% Cost', '% Tokens']) {
       await page.locator('.usage-chart').getByRole('button', { name: metric, exact: true }).click();
       await checkFacet('model_family', rows[0].model_family, rows[0].model_family);
       await checkFacet('model_family', rows[0].model_family, rows[0].model, 'model');
