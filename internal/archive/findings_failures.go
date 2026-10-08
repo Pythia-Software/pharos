@@ -56,11 +56,11 @@ func failureExposureFor(call failureCall) failureExposure {
 }
 
 func detectFailures(env *findingEnv) ([]*findingCandidate, error) {
-	rows, err := queryMapsContext(env.ctx, env.db, `SELECT t.id,t.conversation_id,t.workspace_id,t.provider,COALESCE(t.model,'') model,COALESCE(t.program,'') program,
+	rows, err := env.featureRows("failures", `SELECT t.rowid feature_order,t.id,t.conversation_id,t.workspace_id,t.provider,COALESCE(t.model,'') model,COALESCE(t.program,'') program,
 		COALESCE(t.subcommand,'') subcommand,t.tool_name,t.tool_category,COALESCE(t.command,'') command,COALESCE(t.error_type,'') error_type,t.error_signature,
 		t.started_at,COALESCE(t.duration_ms,0) duration_ms,t.result_tokens,t.carried_tokens,t.output_tokens,COALESCE(t.call_message_id,'') call_message_id,
 		COALESCE(t.result_message_id,'') result_message_id,t.sequence
-		FROM tool_calls t WHERE t.started_at>=? AND t.status='error' AND t.test_failure=0 AND t.error_signature IS NOT NULL`, env.fromUTC)
+		FROM tool_calls t WHERE t.started_at>=? AND t.status='error' AND t.test_failure=0 AND t.error_signature IS NOT NULL /* finding partition */ `, "t.conversation_id", env.fromUTC)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +80,10 @@ func detectFailures(env *findingEnv) ([]*findingCandidate, error) {
 		if call.ErrorType == "user_rejected" || call.ErrorType == "timeout" || call.ErrorType == "interrupted" || failureNotice.MatchString(call.Signature) {
 			continue
 		}
-		family := failureFamily(call.Signature)
+		family := firstString(row["feature_family"])
+		if !env.featureCache {
+			family = failureFamily(call.Signature)
+		}
 		bySignature[family] = append(bySignature[family], call)
 	}
 	wanted := env.wants("failure")
@@ -141,7 +144,8 @@ func detectFailures(env *findingEnv) ([]*findingCandidate, error) {
 	}
 	// Each group's exposure is the most common among its calls.
 	needed := map[string]bool{}
-	for key, item := range groups {
+	for _, key := range sortedFindingKeys(groups) {
+		item := groups[key]
 		signature := key[strings.Index(key, "\x1f")+1:]
 		if !env.discover && wanted[key].Detector == "" {
 			delete(groups, key)
@@ -171,7 +175,8 @@ func detectFailures(env *findingEnv) ([]*findingCandidate, error) {
 		return nil, err
 	}
 	candidates := []*findingCandidate{}
-	for key, item := range groups {
+	for _, key := range sortedFindingKeys(groups) {
+		item := groups[key]
 		signature := key[strings.Index(key, "\x1f")+1:]
 		spec := findingSpec{Detector: "failure", Scope: item.scope, Pattern: signature,
 			Params: map[string]string{"exposure": item.exposure.Kind, "key": item.exposure.Key}}

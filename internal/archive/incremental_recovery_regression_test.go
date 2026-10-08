@@ -17,19 +17,17 @@ func TestToolRollupPublicationRetriesWithoutRebuildingTemporaryCube(t *testing.T
 	catalog.DB.SetMaxOpenConns(2)
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	book, err := catalog.loadPriceBook()
-	if err != nil {
-		t.Fatal(err)
-	}
 	connection, err := catalog.DB.Conn(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer connection.Close()
-	for _, statement := range []string{"PRAGMA busy_timeout=1", "CREATE TEMP TABLE tool_mirror_build(workspace_id TEXT PRIMARY KEY)", "CREATE TEMP TABLE tool_cube_build AS " + toolCubeSelect("temp.tool_mirror_build")} {
-		if _, err := connection.ExecContext(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := connection.ExecContext(ctx, "PRAGMA busy_timeout=1"); err != nil {
+		t.Fatal(err)
+	}
+	build, err := catalog.prepareToolRollup(ctx, connection, "test-generation", "2026-10-01", true)
+	if err != nil {
+		t.Fatal(err)
 	}
 	locker, err := catalog.beginWrite(ctx)
 	if err != nil {
@@ -41,7 +39,7 @@ func TestToolRollupPublicationRetriesWithoutRebuildingTemporaryCube(t *testing.T
 	go func() {
 		completed <- catalog.retryCatalogWrite(ctx, "test tool publication", nil, func() error {
 			attempts++
-			err := catalog.publishToolRollup(ctx, connection, book, "test-generation", "2026-10-01")
+			err := catalog.publishToolPartitions(ctx, connection, build)
 			if catalogBusy(err) {
 				select {
 				case firstFailure <- err:
@@ -70,7 +68,7 @@ func TestToolRollupPublicationRetriesWithoutRebuildingTemporaryCube(t *testing.T
 		t.Fatal("publication did not resume after the writer released")
 	}
 	var generation string
-	if err := catalog.DB.QueryRow("SELECT value FROM meta WHERE key='tool_rollup_generation'").Scan(&generation); err != nil || generation != "test-generation" {
+	if err := catalog.DB.QueryRow("SELECT value FROM meta WHERE key='tool_rollup_generation'").Scan(&generation); err != nil || generation != build.generation {
 		t.Fatalf("rollup generation was not atomically published: %q %v", generation, err)
 	}
 }

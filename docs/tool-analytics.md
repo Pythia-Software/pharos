@@ -2,7 +2,7 @@
 
 The Tools tab reads a ledger derived from retained messages: one `model_requests` row per model API request and one `tool_calls` row per tool call, joined to its result. Shell calls are also split into `tool_commands`, one row per simple command. The ledger is rebuilt with a conversation when it is ingested. A ledger version change makes existing conversations stale; start **Build tool ledger** in Tools or run `pharos build-tools` to rebuild from stored messages. This works without source files, so reclaimed TL1 work is covered too. On the library used to estimate this change, the full rebuild took roughly 1.5–2.5 hours; time depends on the machine and library size.
 
-The Tools table reads `tool_usage_daily`, one row per local day and summary dimension. The Tool calls table reads `tool_calls` for its rows, and answers counts, metrics, filter values, and column stats from `tool_call_cube`: the calls grouped by workspace, day, and every field with few values, a quarter as many rows. Both become stale when the ledger changes or the date does. Scheduled indexing leaves these summaries pending; manual **Index changes** and **Capture & index** rebuild them before completing. A rebuild reads every call, so pages keep serving the previous build while it runs, around half a minute on a large library. Substring searches on command, program, subcommand, and their combined command name use a trigram index to narrow calls before applying the exact filter. Regex searches use it when the pattern requires a literal of at least three ASCII characters; other patterns use the regular scan. Existing catalogs build the index in the background and use the regular scan until it is complete. Other filters the cube cannot apply, such as a duration range, are counted across every call. Column stats leave out the distinct counts of per-call numbers and of long text for the same reason.
+The Tools table reads `tool_usage_daily`, one row per local day and summary dimension. The Tool calls table reads `tool_calls` for its rows, and answers counts, metrics, filter values, and column stats from `tool_call_cube`: the calls grouped by workspace, day, and every field with few values, a quarter as many rows. Both become stale when the ledger changes or the date does. Scheduled indexing leaves these summaries pending; manual **Index changes** and **Capture & index** rebuild them before completing. Updates replace only dirty workspace partitions of the cube and their affected local days in the daily summaries. First builds, rule changes, day/timezone rollover, and broad attribution or pricing invalidations retain a full rebuild. Pages keep serving the previous completed build while construction runs. Substring searches on command, program, subcommand, and their combined command name use a trigram index to narrow calls before applying the exact filter. Regex searches use it when the pattern requires a literal of at least three ASCII characters; other patterns use the regular scan. Existing catalogs build the index in the background and use the regular scan until it is complete. Other filters the cube cannot apply, such as a duration range, are counted across every call. Column stats leave out the distinct counts of per-call numbers and of long text for the same reason.
 
 ## Calls and outcomes
 
@@ -57,3 +57,25 @@ Skill listings are availability, not usage. Loading instructions does not prove 
 MCP calls expose both `mcp_server` and `mcp_method`. Native `read_mcp_resource`, `list_mcp_resources`, and `list_mcp_resource_templates` use their `server` argument when supplied; discovery without a server is still categorized as MCP. Browser MCP calls keep their `web` category and server attribution, so filter on server presence rather than just the `mcp` category. Structured MCP `isError` results are failures even without an outer provider error flag. Single-tool Codex code-mode scripts retain existing attribution; arbitrary multi-tool scripts remain opaque rather than inventing calls, results, or costs.
 
 Existing libraries need **Build tool ledger** (or `pharos build-tools`) to derive this evidence from retained messages. The Claude parser now retains `invoked_skills` attachments; its version bump makes source indexing revisit available transcripts. A ledger rebuild alone cannot recover attachment evidence discarded by an older parser when the source or capture is gone.
+
+## Incremental publication and recovery
+
+Authoritative call edits record random revision tokens in `tool_rollup_dirty`
+in the same transaction. Workspace grouping metadata, agent-session depth,
+repository names, mirror links, model aliases, and price changes also invalidate
+summaries. A conversation moving between workspaces invalidates the mirror
+mapping. Mirror representatives are chosen from the build's own snapshot;
+restored and suppressed workspaces join the dirty set.
+
+Construction, daily aggregation, and pricing use one WAL read snapshot and
+connection-local temporary tables. Publication replaces affected cube and daily
+rows, mirror suppression, and completion metadata in one writer transaction.
+Only matching dirty tokens are removed, so activity arriving during a build
+remains pending. A publication nonce rejects an obsolete competing publisher.
+A busy writer retries publication while retaining the temporary construction;
+cancellation leaves the authoritative dirty set available for a later retry.
+
+`rebuildToolRollup` is the forced full recovery/reference path;
+`ensureToolRollup` uses partitions. The rollup version is `rollup-v4`.
+A current no-op performs metadata checks without rebuilding or publishing.
+See [the measured performance report](performance/incremental-analysis.md).

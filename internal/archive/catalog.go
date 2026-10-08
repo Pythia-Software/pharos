@@ -177,6 +177,9 @@ func (c *Catalog) Initialize() error {
 	if _, err := c.DB.Exec(schemaSQL()); err != nil {
 		return fmt.Errorf("initialize catalog: %w", err)
 	}
+	if err := c.ensureAnalysisPartitions(); err != nil {
+		return fmt.Errorf("initialize analysis partitions: %w", err)
+	}
 	if err := c.ensureTL1Schema(); err != nil {
 		return fmt.Errorf("initialize TL1 tables: %w", err)
 	}
@@ -1038,6 +1041,14 @@ func (c *Catalog) workDetail(id string, includeMessages bool) (map[string]any, e
 }
 
 func (c *Catalog) suppressMirrors(rows []map[string]any) []map[string]any {
+	links, _ := cachedValue(context.Background(), c, "identity-links", func(context.Context) ([]map[string]any, error) {
+		return queryMaps(c.DB, `SELECT a.workspace_id left_workspace,b.workspace_id right_workspace FROM conversation_identity_links l
+			JOIN conversations a ON a.id=l.left_id JOIN conversations b ON b.id=l.right_id`)
+	})
+	return suppressMirrorRows(rows, links)
+}
+
+func suppressMirrorRows(rows, links []map[string]any) []map[string]any {
 	byID := map[string]map[string]any{}
 	parent := map[string]string{}
 	for _, row := range rows {
@@ -1052,10 +1063,7 @@ func (c *Catalog) suppressMirrors(rows []map[string]any) []map[string]any {
 		}
 		return parent[id]
 	}
-	links, _ := cachedValue(context.Background(), c, "identity-links", func(context.Context) ([]map[string]any, error) {
-		return queryMaps(c.DB, `SELECT a.workspace_id left_workspace,b.workspace_id right_workspace FROM conversation_identity_links l
-			JOIN conversations a ON a.id=l.left_id JOIN conversations b ON b.id=l.right_id`)
-	})
+
 	for _, link := range links {
 		left, right := firstString(link["left_workspace"]), firstString(link["right_workspace"])
 		if parent[left] != "" && parent[right] != "" {
