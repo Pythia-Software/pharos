@@ -472,3 +472,46 @@ func TestAuthorshipRebuildsAfterIndex(t *testing.T) {
 	catalog.ensureAuthorship()
 	check("a page with older rules", 4, true)
 }
+
+func TestAuthorshipManualRefreshHonorsRunCancellation(t *testing.T) {
+	for _, builtGeneration := range []string{"", "1/authorship-v0"} {
+		t.Run("ledger="+builtGeneration, func(t *testing.T) {
+			catalog, _ := testCatalog(t)
+			if builtGeneration != "" {
+				if _, err := catalog.DB.Exec(`INSERT INTO meta(key,value) VALUES('authorship_generation',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, builtGeneration); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var rebuilds []func(context.Context)
+			catalog.background = func(work func(context.Context)) bool {
+				rebuilds = append(rebuilds, work)
+				return true
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			catalog.refreshAuthorshipInContext(ctx)
+			if len(rebuilds) != 1 || !catalog.authorshipRunning() {
+				t.Fatal("manual refresh did not start")
+			}
+			cancel()
+			rebuilds[0](t.Context())
+			if catalog.authorshipRunning() || catalog.authorship.lastError != "" {
+				t.Fatalf("stopped refresh: running=%v, error=%q", catalog.authorshipRunning(), catalog.authorship.lastError)
+			}
+			if built, err := catalog.metaValue(t.Context(), "authorship_generation"); err != nil || built != builtGeneration {
+				t.Fatalf("stopped classification was published: %q %v", built, err)
+			}
+			stats, err := catalog.AuthorshipStats(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stats["error"] != nil || stats["stale"] != true || len(rebuilds) != 2 || !catalog.authorshipRunning() {
+				t.Fatalf("page did not retry interrupted refresh: stats=%v, rebuilds=%d", stats, len(rebuilds))
+			}
+			rebuilds[1](t.Context())
+			if catalog.authorshipRunning() || catalog.ensureAuthorship() {
+				t.Fatal("page retry did not publish a current ledger")
+			}
+		})
+	}
+}

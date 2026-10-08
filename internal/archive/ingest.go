@@ -841,6 +841,9 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 	if err := recordCopyVersions(tx, host, workspaceID, conversationIDs, record, !authority.older); err != nil {
 		return 0, 0, err
 	}
+	if err := bumpAuthorshipInputs(tx); err != nil {
+		return 0, 0, err
+	}
 	return conversationCount, messageCount, nil
 }
 

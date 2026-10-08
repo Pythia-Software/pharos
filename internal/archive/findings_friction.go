@@ -157,6 +157,51 @@ func detectCLIFriction(env *findingEnv) ([]*findingCandidate, error) {
 // first message asked for (a TL1 flavor that says "run tl1m handoff --help").
 func discountPromptedHelp(env *findingEnv, candidate *findingCandidate) error {
 	program := candidate.Spec.Params["program"]
+	if env.featureCache {
+		if env.cachedPrompts == nil {
+			wanted := map[string]bool{}
+			groups, err := env.callGroups()
+			if err != nil {
+				return err
+			}
+			for _, group := range groups {
+				if group.Help > 0 && env.roots[group.Conversation] != "" {
+					wanted[env.roots[group.Conversation]] = true
+				}
+			}
+			if len(wanted) == 0 {
+				return nil
+			}
+			// Cache prompts independently of help activity: the wanted set changes
+			// as tools arrive, while prompt partitions use message revisions. The
+			// window start is stable within a day; roots below enforce the current
+			// upper bound and exclude mirrors/probes without version churn.
+			rows, err := env.featureRowsWithRevisions("first-user", `SELECT c.id conversation_id,substr(m.text,1,6000) text
+   FROM conversations c JOIN messages m ON m.id=(SELECT id FROM messages first WHERE first.conversation_id=c.id
+   AND +first.role='user' AND first.kind='message' ORDER BY first.source_order IS NULL,first.source_order,first.created_at LIMIT 1)
+   WHERE c.parent_id IS NULL AND c.agent_depth=0 AND c.started_at>=? /* finding partition */`, "c.id", "finding_message_revisions", env.fromUTC)
+			if err != nil {
+				return err
+			}
+			env.cachedPrompts = map[string]string{}
+			for _, row := range rows {
+				id := firstString(row["conversation_id"])
+				if wanted[id] {
+					env.cachedPrompts[id] = firstString(row["text"])
+				}
+			}
+		}
+		for id, obs := range candidate.Obs {
+			text := env.cachedPrompts[id]
+			if obs.HelpCalls > 0 && (strings.Contains(text, program+" --help") || strings.Contains(text, program+" help") || strings.Contains(text, program+" -h")) {
+				obs.Occurrences -= obs.HelpCalls
+				obs.HelpCalls = 0
+				obs.Hit = obs.UsageErrors > 0
+			}
+		}
+		return nil
+	}
+
 	ids := []any{}
 	for id, obs := range candidate.Obs {
 		if obs.HelpCalls > 0 {
@@ -306,17 +351,17 @@ var documentationServer = regexp.MustCompile(`(?i)docs?\b|context7|deepwiki|docu
 var generalHosts = regexp.MustCompile(`(?i)^(?:localhost|127\.|0\.0\.0\.0|\[::1\]|github\.com$|gist\.github|www\.google\.|google\.com$|bing\.com|duckduckgo|api\.|.*\.local$)`)
 
 func detectDocsHosts(env *findingEnv) ([]*findingCandidate, error) {
-	rows, err := queryMapsContext(env.ctx, env.db, `SELECT t.conversation_id,u.host,COUNT(*) fetches,MAX(t.started_at) last_at,SUM(t.result_tokens) result_tokens,SUM(t.carried_tokens) carried,
+	rows, err := env.featureRows("docs-hosts", `SELECT t.conversation_id,u.host,COUNT(*) fetches,MAX(t.started_at) last_at,SUM(t.result_tokens) result_tokens,SUM(t.carried_tokens) carried,
 		SUM(t.output_tokens) output,COALESCE(t.model,'') model,SUM(COALESCE(t.duration_ms,0)) duration_ms,MIN(u.url) url,MIN(t.id) call_id,MIN(COALESCE(t.call_message_id,'')) message_id
-		FROM tool_urls u JOIN tool_calls t ON t.id=u.tool_call_id WHERE t.started_at>=? AND u.source IN ('input','result') AND COALESCE(u.host,'')<>'' GROUP BY 1,2`, env.fromUTC)
+		FROM tool_urls u JOIN tool_calls t ON t.id=u.tool_call_id WHERE t.started_at>=? AND u.source IN ('input','result') AND COALESCE(u.host,'')<>'' /* finding partition */ GROUP BY 1,2`, "t.conversation_id", env.fromUTC)
 	if err != nil {
 		return nil, err
 	}
 	// Documentation MCP servers count like documentation sites: the same
 	// lookups again and again are a reference worth keeping in the repository.
-	servers, err := queryMapsContext(env.ctx, env.db, `SELECT t.conversation_id,'mcp:'||t.mcp_server host,COUNT(*) fetches,MAX(t.started_at) last_at,SUM(t.result_tokens) result_tokens,
+	servers, err := env.featureRows("docs-servers", `SELECT t.conversation_id,'mcp:'||t.mcp_server host,COUNT(*) fetches,MAX(t.started_at) last_at,SUM(t.result_tokens) result_tokens,
 		SUM(t.carried_tokens) carried,SUM(t.output_tokens) output,COALESCE(t.model,'') model,SUM(COALESCE(t.duration_ms,0)) duration_ms,MIN(t.tool_name) url,MIN(t.id) call_id,
-		MIN(COALESCE(t.call_message_id,'')) message_id FROM tool_calls t WHERE t.started_at>=? AND COALESCE(t.mcp_server,'')<>'' GROUP BY 1,2`, env.fromUTC)
+		MIN(COALESCE(t.call_message_id,'')) message_id FROM tool_calls t WHERE t.started_at>=? AND COALESCE(t.mcp_server,'')<>'' /* finding partition */ GROUP BY 1,2`, "t.conversation_id", env.fromUTC)
 	if err != nil {
 		return nil, err
 	}
@@ -391,7 +436,8 @@ func detectDocsHosts(env *findingEnv) ([]*findingCandidate, error) {
 	output := []*findingCandidate{}
 	for key, candidate := range candidates {
 		candidate.Obs = map[string]*findingObs{}
-		for _, conv := range env.convs {
+		for _, conversationID := range sortedFindingKeys(env.convs) {
+			conv := env.convs[conversationID]
 			if env.inScope(candidate.Spec.Scope, conv) {
 				candidate.Obs[conv.ID] = &findingObs{Unit: conv.ID, Conversation: conv.ID, Workspace: conv.WorkspaceID, Day: conv.Day, Provider: conv.Provider}
 			}

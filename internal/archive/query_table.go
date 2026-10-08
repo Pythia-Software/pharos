@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -287,7 +288,12 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 			writeError(w, err, http.StatusInternalServerError)
 			return
 		}
-		result, err := querytable.Aggregate(rows, request, schema)
+		var result querytable.AggregationResult
+		if dataset == "usage" && slices.Contains(needed, "hour") {
+			result, err = s.Catalog.aggregateUsage(r.Context(), rows, request, schema)
+		} else {
+			result, err = querytable.Aggregate(rows, request, schema)
+		}
 		if err != nil {
 			writeError(w, err, http.StatusBadRequest)
 			return

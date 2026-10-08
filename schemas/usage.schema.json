@@ -23,6 +23,7 @@
   "fields": [
     { "name": "id", "label": "Row ID", "type": "text", "select": { "default": false }, "bindings": { "postgres": { "expr": "id", "synthetic": true } } },
     { "name": "day", "label": "Day", "type": "text", "group": "Time", "aliases": ["date"], "bindings": { "postgres": { "expr": "day", "synthetic": true } } },
+    { "name": "hour", "label": "Hour", "type": "text", "group": "Time", "select": { "default": false }, "bindings": { "postgres": { "expr": "hour", "synthetic": true } } },
     { "name": "week", "label": "Week (Mon)", "type": "text", "group": "Time", "bindings": { "postgres": { "expr": "week", "synthetic": true } } },
     { "name": "month", "label": "Month", "type": "text", "group": "Time", "bindings": { "postgres": { "expr": "month", "synthetic": true } } },
     { "name": "first_usage_at", "label": "First usage", "type": "datetime", "group": "Time", "render": "datetime_rel", "select": { "default": false }, "bindings": { "postgres": { "expr": "first_usage_at", "synthetic": true } } },

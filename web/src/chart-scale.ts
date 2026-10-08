@@ -1,3 +1,7 @@
+export type ChartScale = "linear" | "logarithmic" | "half";
+export const defaultChartScale: ChartScale = "half";
+export const validChartScale = (value: unknown): value is ChartScale => value === "linear" || value === "logarithmic" || value === "half";
+
 // niceTicks places two or three gridlines at round values up to peak.
 function niceTicks(peak: number): number[] {
   if (!(peak > 0)) return [];
@@ -14,20 +18,31 @@ function niceCeil(value: number): number {
 }
 
 // A column scale maps a value to a height, in percent of the plot.
-type ColumnScale = { y: (value: number) => number; ticks: number[]; split?: number };
+export type ColumnScale = { y: (value: number) => number; ticks: number[]; split?: number };
 
-// columnScale is linear, unless a few columns dwarf the rest: when the tallest
-// is over twice the 80th percentile of non-empty columns (rounded up to a
-// round value), the lower half of the plot is linear up to that value and the
-// upper half logarithmic above it, so outliers stay comparable with each other
-// without flattening every other column.
-export function columnScale(totals: number[]): ColumnScale {
+export function columnScale(totals: number[], mode: ChartScale): ColumnScale {
   const peak = Math.max(0, ...totals), filled = totals.filter(value => value > 0).sort((left, right) => left - right);
-  const split = filled.length >= 5 ? niceCeil(filled[Math.ceil(filled.length * 0.8) - 1]) : 0;
-  if (!(split > 0 && peak > 2 * split)) {
+  const typical = filled.length >= 5 ? niceCeil(filled[Math.ceil(filled.length * 0.8) - 1]) : 0;
+  if (mode === "linear" || !peak) {
     const scale = peak || 1;
     return { y: value => 100 * value / scale, ticks: niceTicks(peak) };
   }
+  if (mode === "logarithmic") {
+    // log1p keeps empty columns at zero and supports costs below one dollar.
+    const y = (value: number) => 100 * Math.log1p(Math.max(0, value)) / Math.log1p(peak);
+    const candidates: number[] = [];
+    for (let power = Math.floor(Math.log10(Math.min(1, filled[0]))); power <= Math.ceil(Math.log10(peak)); power++)
+      for (const step of [1, 2, 5]) {
+        const value = step * 10 ** power;
+        if (value <= peak) candidates.push(value);
+      }
+    const ticks: number[] = [];
+    for (const value of candidates) if (y(value) - (ticks.length ? y(ticks[ticks.length - 1]) : 0) >= 10) ticks.push(value);
+    return { y, ticks };
+  }
+  // Keep the existing outlier break when useful; otherwise reserve the lower
+  // half for values up to a round number near one tenth of the peak.
+  const split = typical > 0 && peak > 2 * typical ? typical : niceCeil(peak / 10);
   const span = Math.log(peak / split);
   const y = (value: number) => value <= split ? 50 * value / split : 50 + 50 * Math.log(value / split) / span;
   // Powers of ten above the break, or 1-2-5 steps when fewer than two fit;

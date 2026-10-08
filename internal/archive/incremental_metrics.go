@@ -22,6 +22,7 @@ type syncPhase struct {
 
 type syncMeasurement struct {
 	RunID         string         `json:"run_id"`
+	Trigger       string         `json:"trigger,omitempty"`
 	FinishedAt    string         `json:"finished_at,omitempty"`
 	Sources       []string       `json:"sources,omitempty"`
 	SourceResults []IngestResult `json:"source_results,omitempty"`

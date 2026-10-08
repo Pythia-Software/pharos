@@ -1344,9 +1344,10 @@ Pharos always asks GitHub, through the `gh` command-line tool, for the numeric
 ID and current name of each github.com repository, which is how a rename such
 as `gbdubs/alexandria` to `Pythia-Software/pharos` is recognized. The lookup
 runs in the library upgrade's repository step and in the merge dry run. The
-service also runs it in the background, a few minutes after starting and then
-every ten minutes, for repositories it has not resolved yet (new rows from
-indexing), and merges the rows that turn out to be one repository. Ingest
+manual Index changes and Capture & index also look up repositories it has
+not resolved yet (new rows from indexing), and merge the rows that turn out
+to be one repository. Scheduled indexing does not start GitHub lookups, and
+there is no separate periodic forge refresh timer. Ingest
 itself makes no network requests. Requests are paused between calls, cached,
 and stop when the service stops; a repository GitHub cannot resolve (private,
 deleted) is not asked about again for six hours. `gh` is found on `PATH` and in

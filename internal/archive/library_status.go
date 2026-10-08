@@ -214,6 +214,9 @@ func (s *Server) libraryActivities() []libraryActivity {
 				activity.Label = "Indexing changes: verifying a conversation"
 			}
 		}
+		if run.Kind == manualSyncRunKind {
+			activity.Label = "Manual sync: " + run.Phase
+		}
 		if run.Kind == "library-update" {
 			activity.Label = "Capture & index: " + run.Phase
 		}
