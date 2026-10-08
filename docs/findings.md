@@ -188,8 +188,9 @@ Capture & index and separate index actions retain the daily refresh policy:
 a full pass on the first refresh after local midnight or a detector change,
 and otherwise measurements of watched findings, wins still accruing, and
 snoozes waiting for a pattern to get worse. **Refresh findings now** also
-requests a full pass. Full discovery reuses durable conversation features while still evaluating all
-candidates and measurement plans. See [the measured performance report](performance/incremental-analysis.md).
+requests a full pass. Full discovery reuses durable conversation features while
+still evaluating all candidates and measurement plans. See
+[the measured performance report](performance/incremental-analysis.md).
 
 ## Data
 
