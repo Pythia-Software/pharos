@@ -1,8 +1,9 @@
+import { applyUsageAggregations } from "./usage-aggregations";
 import { chartPeriods, earliestKey, isHourly, localDay, nextPeriod, parseDay, periodBuckets, periodKey, periodLabel, periodStart, periodUnit, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { columnScale, defaultChartScale, validChartScale, type ChartScale } from "./chart-scale";
 import React, { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { EMPTY_QUERY, applyAggregations, decodeQuery, encodeQuery, isOrGroup, loadSchema, predicatesOf, memoryStorageAdapter, matchesClause, toAggregationQuery, toServerQuery, type AggregationClause, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, applyAggregations, decodeQuery, encodeQuery, isOrGroup, loadSchema, memoryStorageAdapter, toAggregationQuery, toServerQuery, type AggregationClause, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { useQueryTable, type QueryTableApi } from "@pythia-software/query-table-react";
 import { DataTable, FilterValueProvider, MetricsPanel, QueryBuilder, SelectionToolbar, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
 import "@pythia-software/query-table-ui/theme.css";
@@ -1119,16 +1120,10 @@ function useAggregations(dataset: Dataset, where: WhereTerm[], aggregations: Agg
   useEffect(() => {
     if (shared) {
       const request = JSON.parse(key) as { where: WhereTerm[]; aggregations: AggregationClause[] };
-      let rows = shared.datasets[dataset];
-      if (dataset === "usage" && request.aggregations.some(aggregation => aggregation.groupBy?.includes("hour"))) {
-        const timeOnly = (term: WhereTerm) => predicatesOf(term).every(clause => ["first_usage_at", "last_usage_at", "hour"].includes(clause.field));
-        const rowWhere = request.where.filter(term => !timeOnly(term));
-        const matches = (row: Row, term: WhereTerm) => isOrGroup(term) ? term.any.some(clause => matchesClause(row, clause, schemas.usage)) : matchesClause(row, term, schemas.usage);
-        const ids = new Set(rows.filter(row => rowWhere.every(term => matches(row, term))).map(row => String(row.id)));
-        rows = (shared.datasets.usage_hourly ?? []).filter(row => ids.has(`${row.agent_session_id}|${row.day}|${row.model}`));
-        request.where = request.where.filter(timeOnly);
-      }
-      const result = applyAggregations(rows, { ...EMPTY_QUERY, where: request.where, aggregations: request.aggregations }, schemas[dataset]);
+      const rows = shared.datasets[dataset];
+      const result = dataset === "usage"
+        ? applyUsageAggregations(rows, shared.datasets.usage_hourly ?? [], request, schemas.usage)
+        : applyAggregations(rows, { ...EMPTY_QUERY, where: request.where, aggregations: request.aggregations }, schemas[dataset]);
       // The service returns time buckets newest first; so does a shared file.
       const timePosition = (aggregation: AggregationClause) => aggregation.groupBy.findIndex(field => field === "hour" || field === "day" || field === "week" || field === "month");
       request.aggregations.forEach((aggregation, index) => {

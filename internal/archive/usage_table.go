@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -134,7 +135,11 @@ func (c *Catalog) hourlyUsageForAggregation(ctx context.Context, where []queryta
 				timeOnly = false
 			}
 		}
-		if timeOnly {
+		hasHour := false
+		for _, clause := range term.Predicates() {
+			hasHour = hasHour || clause.Field == "hour"
+		}
+		if timeOnly || hasHour {
 			hourWhere = append(hourWhere, term)
 		} else {
 			rowWhere = append(rowWhere, term)
@@ -164,6 +169,42 @@ func (c *Catalog) hourlyUsageForAggregation(ctx context.Context, where []queryta
 		}
 	}
 	return querytable.Filter(kept, hourWhere, schema)
+}
+
+// aggregateUsage selects granularity per metric. An hour filter selects daily
+// table rows containing a matching hour; it does not turn daily counts into hours.
+func (c *Catalog) aggregateUsage(ctx context.Context, daily []map[string]any, request querytable.AggregationRequest, schema querytable.Schema) (querytable.AggregationResult, error) {
+	hourly, err := c.hourlyUsageForAggregation(ctx, request.Where, schema)
+	if err != nil {
+		return querytable.AggregationResult{}, err
+	}
+	dailyWhere := request.Where
+	if slices.Contains(whereFields(request.Where), "hour") {
+		ids := map[string]bool{}
+		for _, row := range hourly {
+			ids[firstString(row["agent_session_id"])+"|"+firstString(row["day"])+"|"+firstString(row["model"])] = true
+		}
+		selected := make([]map[string]any, 0, len(daily))
+		for _, row := range daily {
+			if ids[firstString(row["id"])] {
+				selected = append(selected, row)
+			}
+		}
+		daily, dailyWhere = selected, nil
+	}
+	result := querytable.AggregationResult{Metrics: []querytable.Metric{}}
+	for _, aggregation := range request.Aggregations {
+		rows, where := daily, dailyWhere
+		if aggregation.Field == "hour" || slices.Contains(aggregation.GroupBy, "hour") {
+			rows, where = hourly, nil
+		}
+		metric, err := querytable.Aggregate(rows, querytable.AggregationRequest{Where: where, Aggregations: []querytable.Aggregation{aggregation}}, schema)
+		if err != nil {
+			return querytable.AggregationResult{}, err
+		}
+		result.Metrics = append(result.Metrics, metric.Metrics...)
+	}
+	return result, nil
 }
 
 // representativeLedger reads the whole ledger less linked mirrors: only each

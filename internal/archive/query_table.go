@@ -283,18 +283,17 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 			}
 			needed = append(needed, aggregation.GroupBy...)
 		}
-		var rows []map[string]any
-		if dataset == "usage" && slices.Contains(needed, "hour") {
-			rows, err = s.Catalog.hourlyUsageForAggregation(r.Context(), request.Where, schema)
-			request.Where = nil
-		} else {
-			rows, err = s.queryTableRows(r.Context(), dataset, r.URL.Query(), libraryFieldsFor(needed...))
-		}
+		rows, err := s.queryTableRows(r.Context(), dataset, r.URL.Query(), libraryFieldsFor(needed...))
 		if err != nil {
 			writeError(w, err, http.StatusInternalServerError)
 			return
 		}
-		result, err := querytable.Aggregate(rows, request, schema)
+		var result querytable.AggregationResult
+		if dataset == "usage" && slices.Contains(needed, "hour") {
+			result, err = s.Catalog.aggregateUsage(r.Context(), rows, request, schema)
+		} else {
+			result, err = querytable.Aggregate(rows, request, schema)
+		}
 		if err != nil {
 			writeError(w, err, http.StatusBadRequest)
 			return

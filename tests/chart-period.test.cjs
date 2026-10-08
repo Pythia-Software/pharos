@@ -7,17 +7,21 @@ const loaded = { exports: {} };
 new Function('module', 'exports', outputFiles[0].text)(loaded, loaded.exports);
 const { periodStart, periodKey, nextPeriod, periodBuckets, earliestKey, validPeriodCount } = loaded.exports;
 
-test('hour buckets align actual timestamps and combine fixed N-hour intervals', () => {
-  assert.equal(periodKey(new Date('2026-10-08T13:42:19Z'), 'hour'), '2026-10-08T13:00:00.000Z');
-  assert.equal(periodKey(new Date('2026-10-08T13:42:19Z'), 'hours', 6), '2026-10-08T12:00:00.000Z');
-  const buckets = periodBuckets('hours', new Date('2026-10-08T01:30:00Z'), new Date('2026-10-09T02:00:00Z'), 6);
-  assert.equal(buckets.length, 5);
-  assert.equal(buckets[0].key, '2026-10-08T00:00:00.000Z');
-  for (const bucket of buckets) {
-    const end = new Date(bucket.date);
-    nextPeriod(end, 'hours', 6);
-    assert.equal(end - bucket.date, 6 * 3600000);
-  }
+test('hour buckets align actual timestamps and combine N-hour intervals in UTC', () => {
+  const previous = process.env.TZ;
+  process.env.TZ = 'UTC';
+  try {
+    assert.equal(periodKey(new Date('2026-10-08T13:42:19Z'), 'hour'), '2026-10-08T13:00:00.000Z');
+    assert.equal(periodKey(new Date('2026-10-08T13:42:19Z'), 'hours', 6), '2026-10-08T12:00:00.000Z');
+    const buckets = periodBuckets('hours', new Date('2026-10-08T01:30:00Z'), new Date('2026-10-09T02:00:00Z'), 6);
+    assert.equal(buckets.length, 5);
+    assert.equal(buckets[0].key, '2026-10-08T00:00:00.000Z');
+    for (const bucket of buckets) {
+      const end = new Date(bucket.date);
+      nextPeriod(end, 'hours', 6);
+      assert.equal(end - bucket.date, 6 * 3600000);
+    }
+  } finally { if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous; }
 });
 
 test('custom day groups have stable boundaries across adjacent queries', () => {
@@ -63,3 +67,39 @@ test('custom counts accept only positive whole numbers', () => {
   for (const count of [1, 6, 24, 10000]) assert.equal(validPeriodCount(count), true);
   for (const count of [0, -1, 1.5, Infinity, NaN, '', '6', 10001]) assert.equal(validPeriodCount(count), false);
 });
+
+for (const zone of ['America/Phoenix', 'America/Denver']) {
+  test(`multi-hour buckets align local midnight and traverse DST in ${zone}`, () => {
+    const previous = process.env.TZ;
+    process.env.TZ = zone;
+    try {
+      for (const count of [2, 3, 4, 6, 8, 12, 24]) {
+        for (const month of [2, 10]) {
+          const start = new Date(2026, month, month === 2 ? 7 : 31, 0);
+          const end = new Date(start);
+          end.setDate(end.getDate() + 4);
+          const buckets = periodBuckets('hours', start, end, count);
+          assert.equal(new Set(buckets.map(bucket => bucket.key)).size, buckets.length);
+          assert.equal(buckets[0].date.getTime(), start.getTime());
+          assert.equal(buckets.at(-1).date.getTime(), end.getTime());
+          for (let i = 0; i < buckets.length - 1; i++) {
+            const bucket = buckets[i], next = buckets[i + 1];
+            const stepped = new Date(bucket.date);
+            nextPeriod(stepped, 'hours', count);
+            assert.equal(stepped.getTime(), next.date.getTime());
+            assert.ok(next.date > bucket.date);
+            for (let at = bucket.date.getTime(); at < next.date.getTime(); at += 15 * 60000) {
+              assert.equal(periodKey(new Date(at), 'hours', count), bucket.key);
+            }
+            if (count === 24) assert.equal(bucket.date.getHours(), 0);
+          }
+        }
+      }
+      const at = new Date(2026, 9, 8, 13, 42);
+      assert.equal(periodStart(at, 'hours', 6).getHours(), 12);
+      assert.equal(periodStart(at, 'hours', 24).getHours(), 0);
+      const sixHours = periodBuckets('hours', new Date(2026, 9, 8), new Date(2026, 9, 9), 6);
+      assert.deepEqual(sixHours.map(bucket => bucket.date.getHours()), [0, 6, 12, 18, 0]);
+    } finally { if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous; }
+  });
+}

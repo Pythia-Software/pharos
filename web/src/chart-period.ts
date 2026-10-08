@@ -12,7 +12,15 @@ const pad2 = (value: number) => String(value).padStart(2, "0");
 export const localDay = (date: Date) => `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
 const hourMs = 3600000, dayMs = 24 * hourMs;
 
+// Divide local calendar days evenly; single hours keep both occurrences at DST fall-back.
+const localHours = (period: ChartPeriod, count: number) => period === "hours" && count > 1 && 24 % count === 0;
+
 export function periodStart(date: Date, period: ChartPeriod, count = 1): Date {
+  if (localHours(period, count)) {
+    const start = new Date(date);
+    start.setHours(Math.floor(date.getHours() / count) * count, 0, 0, 0);
+    return start;
+  }
   if (isHourly(period)) {
     const width = hourMs * (period === "hours" ? count : 1);
     return new Date(Math.floor(date.getTime() / width) * width);
@@ -49,7 +57,8 @@ export function earliestKey(values: unknown[]): Date | undefined {
 }
 
 export function nextPeriod(date: Date, period: ChartPeriod, count = 1) {
-  if (isHourly(period)) date.setTime(date.getTime() + hourMs * (period === "hours" ? count : 1));
+  if (localHours(period, count)) date.setHours((Math.floor(date.getHours() / count) + 1) * count, 0, 0, 0);
+  else if (isHourly(period)) date.setTime(date.getTime() + hourMs * (period === "hours" ? count : 1));
   else if (period === "day" || period === "days") date.setDate(date.getDate() + (period === "days" ? count : 1));
   else if (period === "week") date.setDate(date.getDate() + 7);
   else date.setMonth(date.getMonth() + 1);
@@ -60,7 +69,8 @@ export function periodBuckets(period: ChartPeriod, start: Date, end: Date, count
   // Build backwards so a long range retains the most recent 5,000 buckets.
   for (let date = new Date(last); date >= first && buckets.length < 5000;) {
     buckets.push({ key: periodKey(date, period, count), date: new Date(date), values: {} });
-    if (isHourly(period)) date.setTime(date.getTime() - hourMs * (period === "hours" ? count : 1));
+    if (localHours(period, count)) date.setHours((Math.floor(date.getHours() / count) - 1) * count, 0, 0, 0);
+    else if (isHourly(period)) date.setTime(date.getTime() - hourMs * (period === "hours" ? count : 1));
     else if (period === "month") date.setMonth(date.getMonth() - 1);
     else date.setDate(date.getDate() - (period === "week" ? 7 : period === "days" ? count : 1));
   }
