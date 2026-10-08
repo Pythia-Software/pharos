@@ -23,6 +23,7 @@
     "sonnet-5-5": { "provider": "anthropic", "class": "Sonnet", "color": "#9b651e" },
     "haiku": { "provider": "anthropic", "class": "Haiku", "color": "#e09270" },
     "haiku-4-5": { "provider": "anthropic", "class": "Haiku", "color": "#bf633e" },
+    "haiku-5-5": { "provider": "anthropic", "class": "Haiku", "color": "#ad6129" },
     "fable-5": { "provider": "anthropic", "class": "Fable", "color": "#e2a07a" },
     "fable-5-1": { "provider": "anthropic", "class": "Fable", "color": "#c67a50" },
     "gemini-3.8-flash": { "provider": "google", "class": "Flash", "color": "#669cf6" },
@@ -34,7 +35,8 @@
     "gpt-5.6-terra": { "provider": "openai", "class": "GPT", "color": "#439c72" },
     "gpt-6-astra": { "provider": "openai", "class": "GPT", "color": "#209a5d" },
     "gpt-6-luna": { "provider": "openai", "class": "GPT", "color": "#15844c" },
-    "gpt-6-sol": { "provider": "openai", "class": "GPT", "color": "#087743" }
+    "gpt-6-sol": { "provider": "openai", "class": "GPT", "color": "#087743" },
+    "gpt-6.1-sol": { "provider": "openai", "class": "GPT", "color": "#066638" }
   },
   "sources": {
     "claude": { "provider": "anthropic", "color": "#d97732" },

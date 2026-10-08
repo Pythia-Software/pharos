@@ -326,7 +326,8 @@ button.usage-legend-item:hover { border-color: var(--line); color: var(--ink); }
 @media (max-width: 900px) { .mcp-setup-grid { grid-template-columns: 1fr; } .mcp-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); } .mcp-call summary { grid-template-columns: 70px minmax(110px,1fr) 100px; } .mcp-call summary span:nth-last-child(-n+2) { display: none; } }
 @media (max-width: 560px) { .mcp-call summary { grid-template-columns: 65px minmax(0,1fr); } .mcp-call-time { display: none; } .mcp-call-detail { padding-left: 10px; } }
 .refresh-prices-notice { max-width: 280px; text-align: right; }
-.refresh-prices { display: inline-flex; align-items: center; gap: 8px; padding: 4px 11px; border: 1px solid var(--bad); border-radius: 4px; background: color-mix(in srgb, var(--bad) 10%, var(--panel)); color: var(--bad); font-weight: 700; }
+.refresh-prices { display: inline-flex; align-items: center; gap: 8px; padding: 4px 11px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); font-weight: 700; }
+.refresh-prices.attention { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, var(--panel)); color: var(--bad); }
 .refresh-prices-count { min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--bad); color: var(--panel); font-size: var(--fs-sm); font-weight: 700; line-height: 20px; text-align: center; }
 .refresh-prices-notice p { margin: 5px 0 0; color: var(--bad); font-size: var(--fs-sm); line-height: 1.35; }
 
