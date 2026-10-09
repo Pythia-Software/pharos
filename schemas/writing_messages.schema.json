@@ -59,6 +59,9 @@
         "postgres": {
           "expr": "id",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"id\""
         }
       }
     },
@@ -72,7 +75,14 @@
         "postgres": {
           "expr": "sent_at",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"sent_at\"",
+          "datetimeFormat": "utc-millis"
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -90,6 +100,9 @@
         "postgres": {
           "expr": "day",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"day\""
         }
       }
     },
@@ -105,6 +118,9 @@
         "postgres": {
           "expr": "week",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"week\""
         }
       }
     },
@@ -120,6 +136,9 @@
         "postgres": {
           "expr": "month",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"month\""
         }
       }
     },
@@ -137,6 +156,9 @@
         "postgres": {
           "expr": "text",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"text\""
         }
       }
     },
@@ -193,6 +215,9 @@
         "postgres": {
           "expr": "main_category",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"main_category\""
         }
       }
     },
@@ -249,6 +274,9 @@
         "postgres": {
           "expr": "categories",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"categories\""
         }
       }
     },
@@ -308,6 +336,9 @@
         "postgres": {
           "expr": "rules",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"rules\""
         }
       }
     },
@@ -323,6 +354,9 @@
         "postgres": {
           "expr": "has_source",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"has_source\""
         }
       }
     },
@@ -338,6 +372,9 @@
         "postgres": {
           "expr": "typed_message",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"typed_message\""
         }
       }
     },
@@ -354,7 +391,14 @@
         "postgres": {
           "expr": "typed_words",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"typed_words\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -368,12 +412,17 @@
         "align": "right"
       },
       "aggregate": {
-        "measure": false
+        "measure": false,
+        "groupable": true
       },
       "bindings": {
         "postgres": {
           "expr": "typed_share",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"typed_share\"",
+          "expressionNumeric": true
         }
       }
     },
@@ -390,7 +439,14 @@
         "postgres": {
           "expr": "other_words",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"other_words\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -407,7 +463,14 @@
         "postgres": {
           "expr": "pasted_words",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"pasted_words\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -424,7 +487,14 @@
         "postgres": {
           "expr": "copied_words",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"copied_words\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -441,7 +511,14 @@
         "postgres": {
           "expr": "prompt_words",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"prompt_words\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -458,7 +535,14 @@
         "postgres": {
           "expr": "machine_words",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"machine_words\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -475,7 +559,14 @@
         "postgres": {
           "expr": "quoted_words",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"quoted_words\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -492,7 +583,14 @@
         "postgres": {
           "expr": "resent_words",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"resent_words\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -509,7 +607,14 @@
         "postgres": {
           "expr": "template_words",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"template_words\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -526,7 +631,14 @@
         "postgres": {
           "expr": "attachment_words",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"attachment_words\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -543,7 +655,14 @@
         "postgres": {
           "expr": "harness_words",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"harness_words\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -560,7 +679,14 @@
         "postgres": {
           "expr": "automated_words",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"automated_words\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -577,7 +703,14 @@
         "postgres": {
           "expr": "words",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"words\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -594,7 +727,14 @@
         "postgres": {
           "expr": "chars",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"chars\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -611,7 +751,14 @@
         "postgres": {
           "expr": "message_count",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"message_count\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -624,6 +771,9 @@
         "postgres": {
           "expr": "title",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"title\""
         }
       }
     },
@@ -639,6 +789,9 @@
         "postgres": {
           "expr": "repository_name",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"repository_name\""
         }
       }
     },
@@ -693,6 +846,9 @@
         "postgres": {
           "expr": "source_kind",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"source_kind\""
         }
       }
     },
@@ -739,6 +895,9 @@
         "postgres": {
           "expr": "provider",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"provider\""
         }
       }
     },
@@ -754,6 +913,9 @@
         "postgres": {
           "expr": "subagent",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"subagent\""
         }
       }
     },
@@ -769,6 +931,9 @@
         "postgres": {
           "expr": "sender",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"sender\""
         }
       }
     },
@@ -784,6 +949,9 @@
         "postgres": {
           "expr": "conversation_id",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"conversation_id\""
         }
       }
     },
@@ -799,6 +967,9 @@
         "postgres": {
           "expr": "workspace_id",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"workspace_id\""
         }
       }
     },
@@ -814,6 +985,9 @@
         "postgres": {
           "expr": "work_id",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"work_id\""
         }
       }
     }

@@ -51,7 +51,7 @@ if command -v npm >/dev/null 2>&1; then
     # drifted from package-lock.json or been modified, and `npm ci` checks
     # every package against its recorded integrity hash.
     (cd "$ROOT/web" && npm ci --no-audit --no-fund)
-    (cd "$ROOT/web" && npm run build)
+    (cd "$ROOT/web" && npm run generate-schemas && npm run build)
 elif [ ! -f "$ROOT/internal/archive/assets/query-tables.js" ] || [ ! -f "$ROOT/internal/archive/assets/query-tables.css" ]; then
     echo "Node.js/npm is required to build the query-table frontend." >&2
     exit 1

@@ -139,12 +139,15 @@ GET  /api/query/{library|activity|usage|…}/field-stats?fields=a,b
 POST /api/query/{library|activity|usage|…}/aggregations
 ```
 
-The query endpoints implement the `@pythia-software/query-table-*` 0.5.0 wire
+The query endpoints implement the `@pythia-software/query-table-*` 0.6.0 wire
 contract. Their allowlisted field definitions live in [`schemas`](../schemas), and
-the same documents drive the React frontend and Go executor. Pharos uses a
-map-backed Go adapter because the upstream compiler currently emits PostgreSQL;
-the catalog remains SQLite and query values never become SQL text. Both the
-in-memory and SQLite executors support text length filters (`length_gt`,
+the same documents drive the React frontend and generated Go SQLite schemas.
+V2 rows and metrics use the upstream SQLite harness with formulas, paired
+metrics, distributions, shown-row scopes, and canonical computed definitions.
+Legacy queries retain Pharos's map adapter and indexed SQLite paths. See
+[`Query Table integration`](query-table-integration.md) for endpoints, bounds,
+local upstream patches, and performance verification. Query values never become
+SQL text. Both the in-memory and SQLite executors support text length filters (`length_gt`,
 `length_lt`, `length_eq`, counting characters; zero length matches empty text
 but not NULL) and sorts on a regex-extracted value (the first capture group, or
 the whole match; a number field's extraction orders numerically). Text-array

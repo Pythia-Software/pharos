@@ -194,6 +194,9 @@ func (c *Catalog) Initialize() error {
 	if _, err := c.DB.Exec("INSERT INTO messages_fts(messages_fts,rank) VALUES('crisismerge',32)"); err != nil {
 		return err
 	}
+	if _, err := c.DB.Exec(queryTableComputedDDL); err != nil {
+		return err
+	}
 	for _, migration := range []struct{ table, column, statement string }{
 		{"source_item_states", "indexed_by", "ALTER TABLE source_item_states ADD COLUMN indexed_by TEXT NOT NULL DEFAULT 'intentional'"},
 		{"source_states", "index_version", "ALTER TABLE source_states ADD COLUMN index_version TEXT"},

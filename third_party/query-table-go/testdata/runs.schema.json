@@ -1,0 +1,110 @@
+{
+  "$schema": "../query-table.schema.json",
+  "name": "runs",
+  "version": 1,
+  "idField": "id",
+  "defaultLimit": 100,
+  "defaultSort": [{ "field": "enqueued_at", "dir": "desc", "nulls": "last" }],
+  "tiebreakSort": [{ "field": "id", "dir": "desc" }],
+  "defaultSelect": [
+    { "field": "job_name" },
+    { "field": "platform" },
+    { "field": "overall" },
+    { "field": "total_ms" },
+    { "field": "is_starred", "width": 40 }
+  ],
+  "fields": [
+    {
+      "name": "id",
+      "label": "Run",
+      "type": "number",
+      "render": "link_run",
+      "select": { "default": false },
+      "bindings": { "postgres": { "expr": "r.id" } }
+    },
+    {
+      "name": "job_name",
+      "label": "Job",
+      "type": "text",
+      "group": "core",
+      "select": { "default": true },
+      "aggregate": { "groupable": false },
+      "bindings": { "postgres": { "expr": "r.job_name" } }
+    },
+    {
+      "name": "platform",
+      "label": "Platform",
+      "type": "enum",
+      "group": "core",
+      "select": { "default": true },
+      "filter": { "values": { "source": "static", "options": ["windows", "macos", "linux"] } },
+      "bindings": { "postgres": { "expr": "r.platform" } }
+    },
+    {
+      "name": "overall",
+      "label": "Overall",
+      "type": "enum",
+      "group": "core",
+      "render": "overall_pill",
+      "select": { "default": true },
+      "filter": { "values": { "source": "static", "options": ["PASS", "FAIL", "DIFFERENCES"] } },
+      "bindings": { "postgres": { "expr": "r.overall" } }
+    },
+    {
+      "name": "total_ms",
+      "label": "Total",
+      "type": "number",
+      "group": "core",
+      "render": "duration_ms",
+      "select": { "default": true, "align": "right" },
+      "bindings": { "postgres": { "expr": "r.total_ms" } }
+    },
+    {
+      "name": "worker",
+      "label": "Worker",
+      "type": "text",
+      "group": "core",
+      "aliases": ["runner", "executor"],
+      "bindings": { "postgres": { "expr": "r.worker" } }
+    },
+    {
+      "name": "enqueued_at",
+      "label": "Enqueued",
+      "type": "datetime",
+      "group": "core",
+      "render": "datetime_rel",
+      "source": { "kind": "backend", "path": "enqueued_at.Time" },
+      "bindings": { "postgres": { "expr": "r.enqueued_at" } }
+    },
+    {
+      "name": "is_starred",
+      "label": "Priority",
+      "type": "bool",
+      "group": "tagging",
+      "alias": "star",
+      "render": "tag_marker",
+      "select": { "width": 80 },
+      "sort": { "field": "is_starred" },
+      "source": { "kind": "backend", "synthetic": true },
+      "bindings": { "postgres": { "expr": "(r.labels ? 'priority')", "synthetic": true } }
+    },
+    {
+      "name": "error_codes",
+      "label": "Error codes",
+      "type": "textarray",
+      "group": "analysis",
+      "render": "code_tags",
+      "filter": { "pushdown": false },
+      "bindings": { "postgres": { "expr": "r.error_codes" } }
+    },
+    {
+      "name": "details",
+      "label": "Details",
+      "type": "text",
+      "group": "analysis",
+      "render": "detail_link",
+      "source": "derived",
+      "sort": { "enabled": false }
+    }
+  ]
+}

@@ -5,6 +5,7 @@ go 1.26.0
 toolchain go1.26.8
 
 require (
+	github.com/Pythia-Software/query-table/backends/go v0.6.0
 	golang.org/x/crypto v0.57.0
 	modernc.org/sqlite v1.39.1
 )
@@ -21,3 +22,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+replace github.com/Pythia-Software/query-table/backends/go => ./third_party/query-table-go

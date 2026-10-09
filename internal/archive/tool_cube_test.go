@@ -14,7 +14,7 @@ import (
 
 // seedToolCalls writes n tool calls with varied values, including nulls and
 // empty strings, across a few workspaces and sessions.
-func seedToolCalls(t *testing.T, catalog *Catalog, n int) {
+func seedToolCalls(t testing.TB, catalog *Catalog, n int) {
 	t.Helper()
 	random := rand.New(rand.NewSource(7))
 	pick := func(values ...any) any { return values[random.Intn(len(values))] }
