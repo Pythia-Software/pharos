@@ -371,6 +371,41 @@ downloads it automatically through the Go module proxy.
 
 ### Trying UI changes against a real library
 
+For backend and frontend development against an isolated production snapshot,
+run `tools/dev.sh` (macOS, APFS SSD, Python 3.11+, Go, and npm). Every launch
+builds the checkout, snapshots `/Volumes/euclid/Pharos` into the single shared
+`/Volumes/euclid/pharos-dev` directory, and starts the local backend on 8798
+and watched frontend on 8799. SQLite's online backup includes committed WAL
+contents and reads production without migrations. Captures and preserved files
+are separate APFS copy-on-write copies. Capture locks prevent copying while a
+capture is changing those files; stop the capture and retry if it is busy.
+The old dev copy is retained until preparation finishes. Each launch replaces
+all dev edits with a fresh copy of production.
+
+The generated dev configuration has its own API token, paths, and executable.
+Host source files (`hosts/*.toml`) and shared source declarations are retained,
+so existing Macs remain configured. Library-local source paths are relocated
+to the dev directory; paths to agent data on the Mac remain read-only sources.
+Integration credentials are not inherited from the production root configuration
+or environment. Automatic source sync is disabled in the copied catalog.
+Normal backend maintenance still runs against the dev database. Stop with Ctrl-C; all three
+dev processes stop together. The shared destination is locked for the entire
+run, so another workspace cannot refresh it while it is in use.
+
+```sh
+tools/dev.sh
+# Optional overrides, and browser-free startup:
+tools/dev.sh --source /Volumes/euclid/Pharos --destination /Volumes/euclid/pharos-dev --no-open
+```
+
+Frontend edits rebuild automatically; refresh the browser to see them. Go edits
+require stopping and rerunning the command, which takes a new snapshot.
+`--port N` and `--ui-port N` override the backend and frontend ports. Initial
+database copying needs approximately the catalog's size in free space (currently
+65 GB), and subsequent refreshes temporarily retain both database copies.
+This script refuses to replace a destination it did not create. Its safety
+checks can be run with `python3 -m unittest discover -s tools -p 'test_dev.py'`.
+
 `tools/dev-ui.sh` serves this checkout's UI on <http://127.0.0.1:8799/> against
 the Pharos service already running for the library at `PHAROS_LIBRARY`
 (default `/Volumes/euclid/Pharos`; set `PHAROS_CONFIG` for a per-user
