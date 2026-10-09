@@ -37,7 +37,7 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func testCatalog(t *testing.T) (*Catalog, Config) {
+func testCatalog(t testing.TB) (*Catalog, Config) {
 	t.Helper()
 	root := t.TempDir()
 	config := defaultConfig(filepath.Join(root, "archive.toml"))

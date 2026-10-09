@@ -1,9 +1,10 @@
 import { applyUsageAggregations } from "./usage-aggregations";
+import { withComputedCapabilityRefresh } from "./computed-column-store";
 import { chartPeriods, earliestKey, isHourly, localDay, nextPeriod, parseDay, periodBuckets, periodKey, periodLabel, periodStart, periodUnit, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { columnScale, defaultChartScale, validChartScale, type ChartScale } from "./chart-scale";
 import React, { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { EMPTY_QUERY, applyAggregations, decodeQuery, encodeQuery, isOrGroup, loadSchema, memoryStorageAdapter, toAggregationQuery, toServerQuery, type AggregationClause, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, httpComputedColumnStore, applyAggregations, decodeQuery, encodeQuery, isOrGroup, loadSchema, memoryStorageAdapter, toAggregationQuery, toServerQuery, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { useQueryTable, type QueryTableApi } from "@pythia-software/query-table-react";
 import { DataTable, FilterValueProvider, MetricsPanel, QueryBuilder, SelectionToolbar, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
 import "@pythia-software/query-table-ui/theme.css";
@@ -177,13 +178,26 @@ async function responseJSON<T>(response: Response): Promise<T> {
 
 // extra carries the Library's keyword search to every request, so rows,
 // metrics, and filter pickers all follow it. onFind hears how it went.
-function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary | null) => void): Transport<Row> {
+function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary | null) => void, capabilities?: MetricCapabilities): Transport<Row> {
   const endpoint = (suffix = "", params?: URLSearchParams) => {
     const query = new URLSearchParams(extra);
     params?.forEach((value, name) => query.set(name, value));
     return `/api/query/${dataset}${suffix}${query.size ? `?${query}` : ""}`;
   };
   return {
+    metricCapabilities: capabilities,
+    async fetchRowsV2(query, signal) {
+      const result = await responseJSON<FetchRowsResultV2<Row> & { find?: FindSummary }>(await fetch(endpoint("/rows-v2"), {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query), signal,
+      }));
+      onFind?.(result.find ?? null);
+      return result;
+    },
+    async fetchMetrics(query, signal) {
+      return responseJSON(await fetch(endpoint("/metrics"), {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query), signal,
+      }));
+    },
     async fetchRows(query: ServerQuery, signal?: AbortSignal) {
       const result = await responseJSON<{ rows: Row[]; total: number; find?: FindSummary }>(await fetch(endpoint(), {
         method: "POST",
@@ -350,7 +364,16 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
   const tableRenderers = useUsageTableRenderers(renderers);
   const onFindRef = useRef(onFind);
   onFindRef.current = onFind;
-  const transport = useMemo(() => shared ? undefined : makeTransport(dataset, find, value => onFindRef.current?.(value)), [dataset, find]);
+  const [capabilities, setCapabilities] = useState<{ metricCapabilities: MetricCapabilities; computedExecution: ComputedExecution }>();
+  const computedColumnStore = useMemo(() => {
+    if (shared) return undefined;
+    const store = httpComputedColumnStore("/api/query-computed-columns");
+    return withComputedCapabilityRefresh(store, async (signal) => {
+      const next = await responseJSON<{ metricCapabilities: MetricCapabilities; computedExecution: ComputedExecution }>(await fetch(`/api/query/${dataset}/capabilities`, { signal }));
+      setCapabilities(next);
+    });
+  }, [dataset]);
+  const transport = useMemo(() => shared ? undefined : makeTransport(dataset, find, value => onFindRef.current?.(value), capabilities?.metricCapabilities), [dataset, find, capabilities?.metricCapabilities]);
   const [bookmarkRevision, setBookmarkRevision] = useState(0);
   useEffect(() => { const changed = () => setBookmarkRevision(value => value + 1); window.addEventListener("pharos:bookmarks", changed); return () => window.removeEventListener("pharos:bookmarks", changed); }, []);
   // A shared file has no origin of its own to keep saved queries apart from other files'.
@@ -361,7 +384,7 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
     const token = new URLSearchParams(location.search).get(queryParameter(dataset));
     return token === null ? undefined : resolveRollingQuery(decodeQuery(token), readRollingWindow(new URLSearchParams(location.search), dataset));
   });
-  const api = useQueryTable<Row>({ schema, transport, clientRows: shared?.datasets[dataset], storage, debounceMs: 100, ...(urlQuery ? { initialQuery: urlQuery } : {}) });
+  const api = useQueryTable<Row>({ schema, transport, computedColumnStore, computedExecution: capabilities?.computedExecution, clientRows: shared?.datasets[dataset], storage, debounceMs: 100, ...(urlQuery ? { initialQuery: urlQuery } : {}) });
   const apiRef = useRef(api);
   apiRef.current = api;
   // A new search starts from its first page.
@@ -426,8 +449,8 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
 
   return <FilterValueProvider value={filterPresentations[dataset]}>
     {header?.(api)}
-    <QueryBuilder api={stableApi} fields={schema.fields} total={api.total} running={api.loading} />
-    <MetricsPanel aggregations={api.aggregations} fields={metricFields(schema.fields)} renderers={metricRenderers} />
+    <QueryBuilder api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />
+    <MetricsPanel api={stableApi} aggregations={api.aggregations} fields={metricFields(api.computed.catalogue)} renderers={metricRenderers} />
     {api.error ? <div className="query-table-error">{api.error.message}</div> : null}
     {selectable ? <SelectionToolbar selection={api.selection} actions={ids => <ShareSelection ids={ids} api={api} transport={transport} />} /> : null}
     {dataset === "library" && libraryView === "conversation" ? <ConversationResults api={api} searching={Boolean(find)} />

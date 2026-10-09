@@ -379,6 +379,11 @@ func (d sqlDataset) clause(clause querytable.WhereClause, field querytable.Field
 }
 
 func (d sqlDataset) where(terms []querytable.WhereTerm, schema querytable.Schema) (string, []any, error) {
+	var err error
+	terms, err = querytable.ResolveRelativeWhere(terms, schema, time.Now())
+	if err != nil {
+		return "", nil, err
+	}
 	parts := []string{}
 	args := []any{}
 	if d.base != "" {

@@ -45,6 +45,11 @@ func TestLibraryQueryTableCombinesKeywordSearchWithFilters(t *testing.T) {
 	if find := page["find"].(map[string]any); find["workspaces"] != float64(1) || find["limited"] != false {
 		t.Fatalf("keyword summary: %#v", find)
 	}
+	v2 := request(http.MethodPost, "/api/query/library/rows-v2?find=parser", `{"version":2,"profile":"qt-sqlite-v1","select":["title"],"limit":10}`)
+	v2Row := v2["rows"].([]any)[0].(map[string]any)
+	if v2["total"] != page["total"] || v2Row["id"] != row["id"] || !same(v2Row["find_hit"], row["find_hit"]) || v2Row["find_match_count"] != row["find_match_count"] || !same(v2["find"], page["find"]) {
+		t.Fatalf("v2 search evidence differs: %#v", v2)
+	}
 	// Filters narrow the keyword matches further.
 	if page := request(http.MethodPost, "/api/query/library?find=parser", `{"select":["title"],"where":[{"field":"source_kind","op":"=","value":"codex"}],"limit":10,"offset":0}`); page["total"] != float64(0) {
 		t.Fatalf("filter ignored with keyword search: %#v", page)

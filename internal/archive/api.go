@@ -138,6 +138,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{"error": fmt.Sprint(value)}, http.StatusInternalServerError)
 		}
 	}()
+	if r.URL.Path == "/api/query-computed-columns" {
+		s.queryComputedColumns(w, r)
+		return
+	}
 	if r.Method == http.MethodGet {
 		s.get(w, r)
 		return

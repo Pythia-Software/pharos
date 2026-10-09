@@ -88,6 +88,9 @@
         "postgres": {
           "expr": "id",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"id\""
         }
       }
     },
@@ -103,6 +106,9 @@
         "postgres": {
           "expr": "day",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"day\""
         }
       }
     },
@@ -118,6 +124,9 @@
         "postgres": {
           "expr": "week",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"week\""
         }
       }
     },
@@ -133,6 +142,9 @@
         "postgres": {
           "expr": "month",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"month\""
         }
       }
     },
@@ -153,6 +165,9 @@
         "postgres": {
           "expr": "repository_name",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"repository_name\""
         }
       }
     },
@@ -207,6 +222,9 @@
         "postgres": {
           "expr": "source_kind",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"source_kind\""
         }
       }
     },
@@ -250,6 +268,9 @@
         "postgres": {
           "expr": "provider",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"provider\""
         }
       }
     },
@@ -267,6 +288,9 @@
         "postgres": {
           "expr": "model_family",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"model_family\""
         }
       }
     },
@@ -287,6 +311,9 @@
         "postgres": {
           "expr": "model",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"model\""
         }
       }
     },
@@ -311,6 +338,9 @@
         "postgres": {
           "expr": "session_kind",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"session_kind\""
         }
       }
     },
@@ -328,6 +358,9 @@
         "postgres": {
           "expr": "tool_name",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"tool_name\""
         }
       }
     },
@@ -391,6 +424,9 @@
         "postgres": {
           "expr": "tool_category",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"tool_category\""
         }
       }
     },
@@ -411,6 +447,9 @@
         "postgres": {
           "expr": "mcp_server",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"mcp_server\""
         }
       }
     },
@@ -428,6 +467,9 @@
         "postgres": {
           "expr": "mcp_method",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"mcp_method\""
         }
       }
     },
@@ -449,6 +491,9 @@
         "postgres": {
           "expr": "program",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"program\""
         }
       }
     },
@@ -466,6 +511,9 @@
         "postgres": {
           "expr": "subcommand",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"subcommand\""
         }
       }
     },
@@ -489,6 +537,9 @@
         "postgres": {
           "expr": "command_name",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"command_name\""
         }
       }
     },
@@ -575,6 +626,9 @@
         "postgres": {
           "expr": "command_category",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"command_category\""
         }
       }
     },
@@ -591,7 +645,14 @@
         "postgres": {
           "expr": "call_count",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"call_count\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -607,7 +668,14 @@
         "postgres": {
           "expr": "error_count",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"error_count\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -620,12 +688,17 @@
         "align": "right"
       },
       "aggregate": {
-        "measure": false
+        "measure": false,
+        "groupable": true
       },
       "bindings": {
         "postgres": {
           "expr": "error_rate",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"error_rate\"",
+          "expressionNumeric": true
         }
       }
     },
@@ -643,7 +716,14 @@
         "postgres": {
           "expr": "no_result_count",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"no_result_count\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -660,7 +740,14 @@
         "postgres": {
           "expr": "rejected_count",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"rejected_count\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -677,7 +764,14 @@
         "postgres": {
           "expr": "interrupted_count",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"interrupted_count\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -694,7 +788,14 @@
         "postgres": {
           "expr": "timeout_count",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"timeout_count\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -711,7 +812,14 @@
         "postgres": {
           "expr": "nonzero_exit_count",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"nonzero_exit_count\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -728,7 +836,14 @@
         "postgres": {
           "expr": "hook_blocked_count",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"hook_blocked_count\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -745,7 +860,14 @@
         "postgres": {
           "expr": "truncated_count",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"truncated_count\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -762,7 +884,14 @@
         "postgres": {
           "expr": "timed_count",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"timed_count\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -779,7 +908,14 @@
         "postgres": {
           "expr": "total_duration_ms",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"total_duration_ms\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -792,12 +928,17 @@
         "align": "right"
       },
       "aggregate": {
-        "measure": false
+        "measure": false,
+        "groupable": true
       },
       "bindings": {
         "postgres": {
           "expr": "avg_duration_ms",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"avg_duration_ms\"",
+          "expressionNumeric": true
         }
       }
     },
@@ -815,7 +956,14 @@
         "postgres": {
           "expr": "max_duration_ms",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"max_duration_ms\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -832,7 +980,14 @@
         "postgres": {
           "expr": "input_bytes",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"input_bytes\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -849,7 +1004,14 @@
         "postgres": {
           "expr": "result_bytes",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"result_bytes\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -865,7 +1027,14 @@
         "postgres": {
           "expr": "result_tokens",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"result_tokens\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -882,7 +1051,14 @@
         "postgres": {
           "expr": "measured_count",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"measured_count\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -896,12 +1072,17 @@
         "align": "right"
       },
       "aggregate": {
-        "measure": false
+        "measure": false,
+        "groupable": true
       },
       "bindings": {
         "postgres": {
           "expr": "avg_result_tokens",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"avg_result_tokens\"",
+          "expressionNumeric": true
         }
       }
     },
@@ -918,7 +1099,14 @@
         "postgres": {
           "expr": "carried_tokens",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"carried_tokens\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -935,7 +1123,14 @@
         "postgres": {
           "expr": "output_tokens",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"output_tokens\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -952,7 +1147,14 @@
         "postgres": {
           "expr": "lines_added",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"lines_added\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -969,7 +1171,14 @@
         "postgres": {
           "expr": "lines_removed",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"lines_removed\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -983,12 +1192,17 @@
         "align": "right"
       },
       "aggregate": {
-        "measure": false
+        "measure": false,
+        "groupable": true
       },
       "bindings": {
         "postgres": {
           "expr": "work_count",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"work_count\"",
+          "expressionNumeric": true
         }
       }
     },
@@ -1005,7 +1219,14 @@
         "postgres": {
           "expr": "tool_cost_usd",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"tool_cost_usd\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -1022,7 +1243,14 @@
         "postgres": {
           "expr": "context_cost_usd",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"context_cost_usd\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -1039,7 +1267,14 @@
         "postgres": {
           "expr": "output_cost_usd",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"output_cost_usd\"",
+          "expressionNumeric": true
         }
+      },
+      "aggregate": {
+        "groupable": true
       }
     },
     {
@@ -1065,6 +1300,9 @@
         "postgres": {
           "expr": "price_status",
           "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"price_status\""
         }
       }
     }

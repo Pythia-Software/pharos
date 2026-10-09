@@ -1,12 +1,13 @@
 // Package querytable implements the query-table wire contract for Pharos's
 // map-backed datasets. Its types and limits mirror Pythia Software query-table
-// v0.5.0. The upstream SQL compiler targets PostgreSQL; this executor keeps the
-// same allowlist boundary while operating on SQLite-derived and in-memory rows.
+// v0.6.0. The map executor retains Pharos-specific text and regex conventions.
 package querytable
 
 import (
 	"encoding/json"
 	"fmt"
+
+	shared "github.com/Pythia-Software/query-table/backends/go"
 )
 
 const (
@@ -18,46 +19,12 @@ const (
 	MaxAggregations = 20
 )
 
-type WhereClause struct {
-	Field   string `json:"field"`
-	Op      string `json:"op"`
-	Value   string `json:"value"`
-	Negated bool   `json:"negated,omitempty"`
-}
-
-type WhereTerm struct {
-	Field   string        `json:"field,omitempty"`
-	Op      string        `json:"op,omitempty"`
-	Value   string        `json:"value,omitempty"`
-	Negated bool          `json:"negated,omitempty"`
-	Any     []WhereClause `json:"any,omitempty"`
-}
-
-func (t WhereTerm) IsGroup() bool { return t.Any != nil }
-func (t WhereTerm) Predicates() []WhereClause {
-	if t.IsGroup() {
-		return t.Any
-	}
-	return []WhereClause{{Field: t.Field, Op: t.Op, Value: t.Value, Negated: t.Negated}}
-}
-
-type OrderBy struct {
-	Field   string        `json:"field"`
-	Dir     string        `json:"dir"`
-	Nulls   string        `json:"nulls,omitempty"`
-	Extract *RegexExtract `json:"extract,omitempty"`
-}
-
-type RegexExtract struct {
-	Regex string `json:"regex"`
-}
-
-type Aggregation struct {
-	ID      string   `json:"id"`
-	Op      string   `json:"op"`
-	Field   string   `json:"field,omitempty"`
-	GroupBy []string `json:"groupBy,omitempty"`
-}
+// Share the upstream wire contract while retaining Pharos's map conventions.
+type WhereClause = shared.WhereClause
+type WhereTerm = shared.WhereTerm
+type OrderBy = shared.OrderBy
+type RegexExtract = shared.RegexExtract
+type Aggregation = shared.AggSpec
 
 type Query struct {
 	Select       []string      `json:"select"`
@@ -66,6 +33,15 @@ type Query struct {
 	Limit        int           `json:"limit"`
 	Offset       int           `json:"offset"`
 	Aggregations []Aggregation `json:"aggregations,omitempty"`
+}
+
+func (q *Query) UnmarshalJSON(data []byte) error {
+	wire, err := shared.DecodeSQLiteQuery(data)
+	if err != nil {
+		return err
+	}
+	*q = Query{Select: wire.Select, Where: wire.Where, OrderBy: []OrderBy(wire.OrderBy), Limit: wire.Limit, Offset: wire.Offset, Aggregations: wire.Aggregations}
+	return nil
 }
 
 func Decode(data []byte) (Query, error) {

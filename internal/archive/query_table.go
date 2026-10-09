@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -111,6 +112,10 @@ func queryTableRoute(path string) (dataset, operation string, ok bool) {
 }
 
 func (s *Server) getQueryTable(w http.ResponseWriter, r *http.Request, dataset, operation string) {
+	if operation == "capabilities" {
+		s.getQueryCapabilities(w, r, dataset)
+		return
+	}
 	if operation != "distinct" && operation != "field-stats" {
 		writeJSON(w, map[string]any{"error": "not found"}, http.StatusNotFound)
 		return
@@ -193,12 +198,22 @@ func (s *Server) getFieldStats(w http.ResponseWriter, r *http.Request, dataset s
 }
 
 func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset, operation string) {
+	if operation == "metrics" || operation == "rows-v2" {
+		s.postQueryV2(w, r, dataset, operation)
+		return
+	}
 	schema, err := s.queryTableSchema(dataset)
 	if err != nil {
 		writeError(w, err, http.StatusBadRequest)
 		return
 	}
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1_000_000))
+	r.Body = http.MaxBytesReader(w, r.Body, 1_000_000)
+	var body json.RawMessage
+	if err := decodeQueryBody(r, &body); err != nil {
+		writeError(w, err, 400)
+		return
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
 	if table, ok := sqlDatasetFor(dataset); ok {
 		s.postSQLQueryTable(w, r, dataset, operation, table, schema, decoder)
 		return

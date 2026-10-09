@@ -1,0 +1,611 @@
+diff --git a/backends/go/sqlite_v2_dataset.go b/backends/go/sqlite_v2_dataset.go
+--- a/backends/go/sqlite_v2_dataset.go
++++ b/backends/go/sqlite_v2_dataset.go
+@@ -286,11 +286,26 @@
+ 	}
+ 	if metrics != nil {
+ 		r := SQLiteMetricsV2Result{Metrics: []SQLiteMetricV2{}}
++		memo := map[string]SQLiteMetricV2{}
++		reductions := newSQLiteReductionCache(batch)
++		defer reductions.close(tx)
+ 		for i, p := range batch.Metrics {
++			key := p.Fingerprint + "\x00" + p.Scope
++			if previous, ok := memo[key]; ok {
++				previous = cloneSQLiteMetric(previous)
++				previous.ID = p.ID
++				r.Metrics = append(r.Metrics, previous)
++				continue
++			}
++			p, err := reductions.plan(ctx, tx, p)
++			if err != nil {
++				return SQLiteV2ExecutionResult{}, err
++			}
+ 			m, err := d.readV2Metric(ctx, tx, p, metrics.Metrics[i], total, *metrics, maxGroups)
+ 			if err != nil {
+ 				return SQLiteV2ExecutionResult{}, err
+ 			}
++			memo[key] = m
+ 			r.Metrics = append(r.Metrics, m)
+ 		}
+ 		out.Metrics = &r
+@@ -545,3 +560,41 @@
+ 	}
+ 	return c
+ }
++
++// Reuse identical plans only within the transaction after validating every plan.
++// Return independent results so callers cannot mutate a sibling metric.
++func cloneSQLiteMetric(m SQLiteMetricV2) SQLiteMetricV2 {
++	m.Buckets = append([]SQLiteMetricV2Bucket{}, m.Buckets...)
++	for i := range m.Buckets {
++		b := &m.Buckets[i]
++		b.Keys = append([]any{}, b.Keys...)
++		if b.Y != nil {
++			y := *b.Y
++			b.Y = &y
++		}
++		if b.NullCount != nil {
++			n := *b.NullCount
++			b.NullCount = &n
++		}
++		if b.InputErrorCount != nil {
++			n := *b.InputErrorCount
++			b.InputErrorCount = &n
++		}
++		switch d := b.Distribution.(type) {
++		case *MetricHistogramDistribution:
++			c := *d
++			c.Edges = append([]float64{}, d.Edges...)
++			c.Counts = append([]int64{}, d.Counts...)
++			b.Distribution = &c
++		case *MetricBoxDistribution:
++			c := *d
++			if d.Summary != nil {
++				summary := *d.Summary
++				summary.Outliers = append([]float64{}, d.Summary.Outliers...)
++				c.Summary = &summary
++			}
++			b.Distribution = &c
++		}
++	}
++	return m
++}
+diff --git a/backends/go/sqlite_v2.go b/backends/go/sqlite_v2.go
+--- a/backends/go/sqlite_v2.go
++++ b/backends/go/sqlite_v2.go
+@@ -117,6 +117,8 @@
+ 	b.args = append(b.args, p.Args...)
+ 	if sql != "" {
+ 		b.stage("SELECT * FROM " + b.rel + " WHERE " + sql)
++		// Filters over raw bindings can be flattened into an indexed window.
++		b.stages[len(b.stages)-1].Materialized = false
+ 	}
+ 	return nil
+ }
+@@ -182,6 +184,20 @@
+ 		} else if term.Extract != nil {
+ 			return "", diagnostic("unsupported_regex", "computed sorts do not support extraction")
+ 		}
++		// IDs are guaranteed scalar and canonical utc-millis is trusted host
++		// storage. Their raw BINARY keys preserve indexes; selected values and
++		// formula operands still pass the ordinary value/error guards.
++		f, base := b.schema.Fields[name]
++		if base && term.Extract == nil && (name == b.schema.IDField && f.Kind == FieldText || f.Kind == FieldDatetime && f.SQLiteDatetimeFormat == "utc-millis") {
++			raw := b.fields[name].Value
++			b.dependencies[name] = true
++			sql, err := orderTerm(raw+" COLLATE BINARY", term.Dir, term.Nulls)
++			if err != nil {
++				return "", err
++			}
++			out = append(out, sql)
++			continue
++		}
+ 		v, e := b.field(name)
+ 		if e != nil {
+ 			return "", e
+diff --git a/backends/go/relative_time.go b/backends/go/relative_time.go
+--- a/backends/go/relative_time.go
++++ b/backends/go/relative_time.go
+@@ -43,3 +43,21 @@
+ 	// captured server clock's precision (including for +0s).
+ 	return time.Unix(now.Unix()+offset/1000, int64(now.Nanosecond())+(offset%1000)*1_000_000).UTC(), nil
+ }
++
++// ResolveRelativeDatetime resolves a signed duration using one host clock.
++// Absolute operands are returned unchanged. Hosts with map-backed legacy paths
++// can share the compiler's duration grammar and bounds without duplicating it.
++func ResolveRelativeDatetime(value string, now time.Time) (string, error) {
++	if len(value) == 0 || value[0] != '+' && value[0] != '-' {
++		return value, nil
++	}
++	offset, err := parseRelativeDuration(value)
++	if err != nil {
++		return "", err
++	}
++	instant, err := relativeTimestamp(now, offset)
++	if err != nil {
++		return "", err
++	}
++	return instant.Format(time.RFC3339Nano), nil
++}
+diff --git a/backends/go/sqlite_v2_functions.go b/backends/go/sqlite_v2_functions.go
+--- a/backends/go/sqlite_v2_functions.go
++++ b/backends/go/sqlite_v2_functions.go
+@@ -58,6 +58,9 @@
+ // Decimal rendering matches the profile's documented decimal-domain checks;
+ // final row arithmetic still exposes the IEEE result.
+ func sqliteRat(n float64) *big.Rat {
++	if math.Trunc(n) == n && math.Abs(n) <= sqliteSafeInteger {
++		return big.NewRat(int64(n), 1)
++	}
+ 	r, ok := new(big.Rat).SetString(strconv.FormatFloat(n, 'g', -1, 64))
+ 	if !ok {
+ 		panic("finite numeric precondition")
+@@ -250,18 +253,19 @@
+ 	for _, op := range []string{"sum", "avg", "median"} {
+ 		op := op
+ 		out = append(out, SQLiteAggregateDescriptor{Name: "qt_v2_" + op, Arity: 1, New: func() SQLiteAggregateFunction {
+-			return &sqliteV2Aggregate{op: op, sum: new(big.Rat), abs: new(big.Rat)}
++			return &sqliteV2Aggregate{op: op}
+ 		}})
+ 	}
+ 	return append(out, sqliteDistributionAggregates()...)
+ }
+ 
+ type sqliteV2Aggregate struct {
+-	op       string
+-	n        int64
+-	sum, abs *big.Rat
+-	samples  []float64
+-	err      string
++	op                     string
++	n                      int64
++	sum, abs               *big.Rat
++	integerSum, integerAbs int64
++	samples                []float64
++	err                    string
+ }
+ 
+ func (a *sqliteV2Aggregate) Step(values []driver.Value) error {
+@@ -293,6 +297,18 @@
+ 		}
+ 		a.samples = append(a.samples, n)
+ 	} else {
++		// Safe integral populations need no per-sample rational allocation.
++		// Promote before the absolute bound is exceeded, also for AVG, so
++		// large/cancelling populations keep exact semantics and error priority.
++		if a.sum == nil && math.Trunc(n) == n && math.Abs(n) <= float64(sqliteSafeInteger-a.integerAbs) {
++			a.integerSum += int64(n)
++			a.integerAbs += int64(math.Abs(n))
++			return nil
++		}
++		if a.sum == nil {
++			a.sum = big.NewRat(a.integerSum, 1)
++			a.abs = big.NewRat(a.integerAbs, 1)
++		}
+ 		r := sqliteRat(n)
+ 		a.sum.Add(a.sum, r)
+ 		a.abs.Add(a.abs, new(big.Rat).Abs(r))
+@@ -305,6 +321,10 @@
+ 	}
+ 	if a.n == 0 {
+ 		return sqliteNumericJSON(nil, "")
++	}
++	if a.op != "median" && a.sum == nil {
++		a.sum = big.NewRat(a.integerSum, 1)
++		a.abs = big.NewRat(a.integerAbs, 1)
+ 	}
+ 	var exact *big.Rat
+ 	switch a.op {
+diff --git a/backends/go/sqlite_pharos_performance_test.go b/backends/go/sqlite_pharos_performance_test.go
+new file mode 100644
+--- /dev/null
++++ b/backends/go/sqlite_pharos_performance_test.go
+@@ -0,0 +1,109 @@
++package querytable
++
++import (
++	"context"
++	"database/sql/driver"
++	"encoding/json"
++	"math/big"
++	"reflect"
++	"testing"
++	"time"
++)
++
++func TestPharosIntegerReductionPromotion(t *testing.T) {
++	for _, op := range []string{"sum", "avg"} {
++		for _, values := range [][]float64{{1, 2, 3}, {1, 2, 0.1, 0.2}, {9007199254740991, -9007199254740991}, {9007199254740991, 1, -9007199254740991}, {1, -0.1, -0.9}, {1e-300, 1, -1}} {
++			a := &sqliteV2Aggregate{op: op}
++			sum, absolute := sqliteRat(0), sqliteRat(0)
++			for _, n := range values {
++				if err := a.Step([]driver.Value{n}); err != nil {
++					t.Fatal(err)
++				}
++				r := sqliteRat(n)
++				sum.Add(sum, r)
++				absolute.Add(absolute, new(big.Rat).Abs(r))
++			}
++			data, err := a.Value()
++			if err != nil {
++				t.Fatal(err)
++			}
++			var result sqliteNumericResult
++			if err = json.Unmarshal([]byte(data.(string)), &result); err != nil {
++				t.Fatal(err)
++			}
++			if op == "sum" && absolute.Cmp(sqliteRat(9007199254740991)) > 0 {
++				if result.Error != "unsafe_integer" {
++					t.Fatal(values, result)
++				}
++				continue
++			}
++			if op == "avg" {
++				sum.Quo(sum, sqliteRat(float64(len(values))))
++			}
++			if code := sqliteRatError(sum); code != "" {
++				if result.Error != code {
++					t.Fatal(values, result, code)
++				}
++				continue
++			}
++			want, _ := sum.Float64()
++			if result.Error != "" || result.Value == nil || *result.Value != want {
++				t.Fatalf("%s %v = %+v, want %g", op, values, result, want)
++			}
++		}
++	}
++}
++func TestPharosMetricCloneIndependence(t *testing.T) {
++	n := int64(2)
++	m := SQLiteMetricV2{Buckets: []SQLiteMetricV2Bucket{{Keys: []any{"a"}, NullCount: &n, Distribution: &MetricHistogramDistribution{Edges: []float64{0, 1}, Counts: []int64{2}}}}}
++	copy := cloneSQLiteMetric(m)
++	copy.Buckets[0].Keys[0] = "b"
++	*copy.Buckets[0].NullCount = 8
++	copy.Buckets[0].Distribution.(*MetricHistogramDistribution).Counts[0] = 9
++	if m.Buckets[0].Keys[0] != "a" || *m.Buckets[0].NullCount != 2 || m.Buckets[0].Distribution.(*MetricHistogramDistribution).Counts[0] != 2 {
++		t.Fatal("sibling metric mutated")
++	}
++}
++func TestPharosRelativeDatetimeResolver(t *testing.T) {
++	clock := time.Date(2026, 10, 8, 0, 0, 0, 123456789, time.UTC)
++	for _, value := range []string{"-1h", "+2d3h10m", "+0s"} {
++		resolved, err := ResolveRelativeDatetime(value, clock)
++		if err != nil {
++			t.Fatal(err)
++		}
++		offset, err := parseRelativeDuration(value)
++		if err != nil {
++			t.Fatal(err)
++		}
++		want, _ := relativeTimestamp(clock, offset)
++		if !reflect.DeepEqual(resolved, want.Format(time.RFC3339Nano)) {
++			t.Fatal(value, resolved)
++		}
++	}
++	if _, err := ResolveRelativeDatetime("-oops", clock); err == nil {
++		t.Fatal("invalid duration accepted")
++	}
++}
++
++func TestPharosReductionFusionPolicies(t *testing.T) {
++	schema := Schema{Name: "samples", IDField: "id", Fields: map[string]FieldSpec{
++		"id": {Kind: FieldText, Expr: "r.id", Sortable: true}, "x": {Kind: FieldNumber, Expr: "r.x", ExpressionNumeric: true},
++	}}
++	q := MetricQuery{Version: 2, Profile: SQLiteExpressionProfile, Limit: 5, Metrics: []AggSpec{{ID: "sum", Expression: "SUM([x])"}, {ID: "plus", Expression: "SUM([x])+2"}, {ID: "avg", Expression: "AVG([x])"}, {ID: "shown", Expression: "AVG([x])", Scope: "shownRows"}}}
++	batch, err := CompileSQLiteMetrics(context.Background(), q, schema, PlanOptions{SourceSQL: "SELECT * FROM samples"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	cache := newSQLiteReductionCache(batch)
++	key := sqliteReductionKey(batch.Metrics[0])
++	if !cache.shared[key] {
++		t.Fatal("identical reductions were not reusable")
++	}
++	fusion := cache.fusions[sqliteFusionKey(batch.Metrics[0])]
++	if fusion == nil || len(fusion.reductions) != 2 {
++		t.Fatal("compatible reductions did not fuse", fusion)
++	}
++	if sqliteFusionKey(batch.Metrics[0]) == sqliteFusionKey(batch.Metrics[3]) {
++		t.Fatal("different scopes shared a population")
++	}
++}
+diff --git a/backends/go/sqlite_v2_reuse.go b/backends/go/sqlite_v2_reuse.go
+new file mode 100644
+--- /dev/null
++++ b/backends/go/sqlite_v2_reuse.go
+@@ -0,0 +1,190 @@
++package querytable
++
++import (
++	"context"
++	"database/sql"
++	"fmt"
++	"strings"
++	"sync/atomic"
++	"time"
++)
++
++// Cache identical scalar reductions; fuse different reductions with exactly
++// matching validated inputs and grouping into one population scan. Distributions
++// retain their own streaming and sampling behavior.
++// All plans and revision envelopes have already validated. The temporary tables
++// contain bounded grouped results, belong to this execution, and are dropped
++// before returning the caller's transaction. No cache crosses snapshots.
++type sqliteReductionCache struct {
++	shared  map[string]bool
++	fusions map[string]*sqliteReductionFusion
++	tables  map[string]string
++}
++
++var sqliteReductionSequence atomic.Uint64
++
++func sqliteStageCTEs(stages []SQLStage) string {
++	ctes := make([]string, 0, len(stages))
++	for _, s := range stages {
++		mode := "MATERIALIZED"
++		if !s.Materialized {
++			mode = "NOT MATERIALIZED"
++		}
++		ctes = append(ctes, s.Name+" AS "+mode+" ("+s.SQL+")")
++	}
++	return "WITH " + strings.Join(ctes, ",\n")
++}
++
++func sqliteReductionKey(p MetricSQLPlan) string { return sqliteStageKey(p, p.SQLiteReductionStage) }
++func sqliteStageKey(p MetricSQLPlan, i int) string {
++	if i <= 0 || i >= len(p.Stages) {
++		return ""
++	}
++	prefix := sqliteStageCTEs(p.Stages[:i+1])
++	// Prefixes use numbered parameters. Ignore literals and quoted identifiers;
++	// later formula constants must not prevent reuse of an identical reduction.
++	n := 0
++	var quote byte
++	for i := 0; i < len(prefix); i++ {
++		c := prefix[i]
++		if quote != 0 {
++			if c == quote {
++				if i+1 < len(prefix) && prefix[i+1] == quote {
++					i++
++				} else {
++					quote = 0
++				}
++			}
++			continue
++		}
++		if c == '\'' || c == '"' || c == '`' {
++			quote = c
++			continue
++		}
++		if c != '?' {
++			continue
++		}
++		index := 0
++		for i+1 < len(prefix) && prefix[i+1] >= '0' && prefix[i+1] <= '9' {
++			i++
++			index = index*10 + int(prefix[i]-'0')
++		}
++		if index > n {
++			n = index
++		}
++	}
++	if n > len(p.Args) {
++		return ""
++	}
++	return fmt.Sprintf("%s\x00%#v", prefix, p.Args[:n])
++}
++
++type sqliteReductionFusion struct {
++	expressions []string
++	aliases     map[string]string
++	reductions  map[string]bool
++}
++
++func sqliteFusionKey(p MetricSQLPlan) string {
++	rowKey := sqliteStageKey(p, p.SQLiteReductionStage-1)
++	if rowKey == "" || len(p.SQLiteReductionColumns) == 0 {
++		return ""
++	}
++	return rowKey + "\x00" + p.SQLiteReductionFrom
++}
++func newSQLiteReductionCache(batch MetricBatchPlan) *sqliteReductionCache {
++	c := &sqliteReductionCache{shared: map[string]bool{}, fusions: map[string]*sqliteReductionFusion{}, tables: map[string]string{}}
++	first := map[string]string{}
++	for _, p := range batch.Metrics {
++		key := sqliteReductionKey(p)
++		if key == "" {
++			continue
++		}
++		if previous, ok := first[key]; ok && previous != p.Fingerprint {
++			c.shared[key] = true
++		} else {
++			first[key] = p.Fingerprint
++		}
++		fusionKey := sqliteFusionKey(p)
++		if fusionKey == "" {
++			continue
++		}
++		f := c.fusions[fusionKey]
++		if f == nil {
++			f = &sqliteReductionFusion{aliases: map[string]string{}, reductions: map[string]bool{}}
++			c.fusions[fusionKey] = f
++		}
++		f.reductions[key] = true
++		for _, col := range p.SQLiteReductionColumns {
++			if _, ok := f.aliases[col.SQL]; !ok {
++				f.aliases[col.SQL] = fmt.Sprintf("f%d", len(f.expressions))
++				f.expressions = append(f.expressions, col.SQL)
++			}
++		}
++	}
++	return c
++}
++func (c *sqliteReductionCache) plan(ctx context.Context, tx *sql.Tx, p MetricSQLPlan) (MetricSQLPlan, error) {
++	key := sqliteReductionKey(p)
++	if key == "" {
++		return p, nil
++	}
++	fusionKey := sqliteFusionKey(p)
++	if f := c.fusions[fusionKey]; f != nil && len(f.reductions) > 1 && len(f.expressions) <= 128 {
++		tableKey := "fusion\x00" + fusionKey
++		table, ok := c.tables[tableKey]
++		if !ok {
++			table = fmt.Sprintf("_qt_reduction_%d", sqliteReductionSequence.Add(1))
++			projections := make([]string, 0, len(f.expressions))
++			for _, expr := range f.expressions {
++				projections = append(projections, expr+" AS "+f.aliases[expr])
++			}
++			statement := "CREATE TEMP TABLE " + table + " AS " + sqliteStageCTEs(p.Stages[:p.SQLiteReductionStage]) + "\nSELECT " + strings.Join(projections, ",") + p.SQLiteReductionFrom
++			if _, err := tx.ExecContext(ctx, statement, p.Args...); err != nil {
++				return p, err
++			}
++			c.tables[tableKey] = table
++		}
++		projections := make([]string, 0, len(p.SQLiteReductionColumns))
++		for _, col := range p.SQLiteReductionColumns {
++			projections = append(projections, f.aliases[col.SQL]+" AS "+col.Name)
++		}
++		return sqliteReplaceStage(p, p.SQLiteReductionStage, "SELECT "+strings.Join(projections, ",")+" FROM "+table)
++	}
++	if c.shared[key] {
++		return c.reuseStage(ctx, tx, p, p.SQLiteReductionStage, "reduction\x00"+key)
++	}
++	return p, nil
++}
++func (c *sqliteReductionCache) reuseStage(ctx context.Context, tx *sql.Tx, p MetricSQLPlan, i int, key string) (MetricSQLPlan, error) {
++	table, ok := c.tables[key]
++	if !ok {
++		table = fmt.Sprintf("_qt_reduction_%d", sqliteReductionSequence.Add(1))
++		statement := "CREATE TEMP TABLE " + table + " AS " + sqliteStageCTEs(p.Stages[:i+1]) + "\nSELECT * FROM " + p.Stages[i].Name
++		if _, err := tx.ExecContext(ctx, statement, p.Args...); err != nil {
++			return p, err
++		}
++		c.tables[key] = table
++	}
++	return sqliteReplaceStage(p, i, "SELECT * FROM "+table)
++}
++func sqliteReplaceStage(p MetricSQLPlan, i int, statement string) (MetricSQLPlan, error) {
++	prefix := sqliteStageCTEs(p.Stages) + "\n"
++	if !strings.HasPrefix(p.SQL, prefix) {
++		return p, fmt.Errorf("invalid compiler stage envelope")
++	}
++	final := strings.TrimPrefix(p.SQL, prefix)
++	p.Stages = append([]SQLStage{}, p.Stages...)
++	p.Stages[i].SQL = statement
++	// Unreferenced earlier CTEs preserve numbered bindings without evaluating
++	// the source. SQLite permits unused positional arguments to these plans.
++	p.SQL = sqliteStageCTEs(p.Stages) + "\n" + final
++	return p, nil
++}
++func (c *sqliteReductionCache) close(tx *sql.Tx) {
++	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
++	defer cancel()
++	for _, table := range c.tables {
++		_, _ = tx.ExecContext(ctx, "DROP TABLE "+table)
++	}
++}
+diff --git a/backends/go/metrics.go b/backends/go/metrics.go
+--- a/backends/go/metrics.go
++++ b/backends/go/metrics.go
+@@ -279,7 +279,9 @@
+ 	}
+ 	selectGroups, by := groupSQL(groups)
+ 	reductions = append(selectGroups, append(reductions, "COUNT(*) AS count")...)
+-	b.stage("SELECT " + strings.Join(reductions, ",") + " FROM " + b.rel + by)
++	reductionFrom := " FROM " + b.rel + by
++	b.stage("SELECT " + strings.Join(reductions, ",") + reductionFrom)
++	reductionStage := len(b.stages) - 1
+ 	var lower func(*exprNode) (ValueSQL, error)
+ 	lower = func(n *exprNode) (ValueSQL, error) {
+ 		if v, ok := leaves[n]; ok {
+@@ -352,7 +354,16 @@
+ 			cols = append(cols, OutputColumn{ValueAlias: "y", Type: yv.Type})
+ 		}
+ 	}
+-	return b.finish(sql, scope, cols), nil
++	plan := b.finish(sql, scope, cols)
++	if b.sqlite {
++		plan.SQLiteReductionStage = reductionStage
++		plan.SQLiteReductionFrom = reductionFrom
++		for _, projection := range reductions {
++			split := strings.LastIndex(projection, " AS ") // Every output has a compiler-owned alias.
++			plan.SQLiteReductionColumns = append(plan.SQLiteReductionColumns, SQLiteReductionColumn{Name: projection[split+4:], SQL: projection[:split]})
++		}
++	}
++	return plan, nil
+ }
+ func groupSQL(groups []ValueSQL) ([]string, string) {
+ 	sels := []string{}
+diff --git a/backends/go/plan.go b/backends/go/plan.go
+--- a/backends/go/plan.go
++++ b/backends/go/plan.go
+@@ -48,7 +48,13 @@
+ }
+ type ValueSQL struct{ Value, Error, Type string }
+ type OutputColumn struct{ Field, ValueAlias, ErrorAlias, Type string }
++type SQLiteReductionColumn struct{ Name, SQL string }
+ type SQLPlan struct {
++	SQLiteReductionColumns []SQLiteReductionColumn
++	SQLiteReductionFrom    string
++	// Scalar SQLite metrics expose their reduction boundary for transaction-local
++	// reuse. Zero means no reusable reduction (rows and distributions).
++	SQLiteReductionStage        int
+ 	SQL                         string
+ 	Args                        []any
+ 	Stages                      []SQLStage
+diff --git a/backends/go/sqlite_store.go b/backends/go/sqlite_store.go
+--- a/backends/go/sqlite_store.go
++++ b/backends/go/sqlite_store.go
+@@ -54,19 +54,33 @@
+ 	if s.DB == nil {
+ 		return ComputedColumn{}, errors.New("nil SQLite database")
+ 	}
++	return sqliteSaveComputed(ctx, s.DB, scope, dataset, request)
++}
++
++// SaveIn lets a host validate the resulting canonical graph in the same
++// transaction before committing. The caller owns commit/rollback.
++func (s SQLiteComputedColumnStore) SaveIn(ctx context.Context, tx *sql.Tx, scope, dataset string, request SaveComputedColumnRequest) (ComputedColumn, error) {
++	if tx == nil {
++		return ComputedColumn{}, errors.New("nil SQLite transaction")
++	}
++	return sqliteSaveComputed(ctx, tx, scope, dataset, request)
++}
++func sqliteSaveComputed(ctx context.Context, db interface {
++	QueryRowContext(context.Context, string, ...any) *sql.Row
++}, scope, dataset string, request SaveComputedColumnRequest) (ComputedColumn, error) {
+ 	c := request.Column
+ 	if err := validateComputed(c); err != nil {
+ 		return ComputedColumn{}, err
+ 	}
+ 	var row *sql.Row
+ 	if request.ExpectedRevision == nil {
+-		row = s.DB.QueryRowContext(ctx, `INSERT INTO query_table_computed_columns (scope,dataset,id,label,language,language_version,source) VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING RETURNING revision`, scope, dataset, c.ID, c.Label, c.Expression.Language, c.Expression.Version, c.Expression.Source)
++		row = db.QueryRowContext(ctx, `INSERT INTO query_table_computed_columns (scope,dataset,id,label,language,language_version,source) VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING RETURNING revision`, scope, dataset, c.ID, c.Label, c.Expression.Language, c.Expression.Version, c.Expression.Source)
+ 	} else {
+ 		revision, err := strconv.ParseInt(*request.ExpectedRevision, 10, 64)
+ 		if err != nil || revision < 1 {
+ 			return ComputedColumn{}, ErrComputedConflict
+ 		}
+-		row = s.DB.QueryRowContext(ctx, `UPDATE query_table_computed_columns SET label=?,language=?,language_version=?,source=?,revision=revision+1,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE scope=? AND dataset=? AND id=? AND revision=? RETURNING revision`, c.Label, c.Expression.Language, c.Expression.Version, c.Expression.Source, scope, dataset, c.ID, revision)
++		row = db.QueryRowContext(ctx, `UPDATE query_table_computed_columns SET label=?,language=?,language_version=?,source=?,revision=revision+1,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE scope=? AND dataset=? AND id=? AND revision=? RETURNING revision`, c.Label, c.Expression.Language, c.Expression.Version, c.Expression.Source, scope, dataset, c.ID, revision)
+ 	}
+ 	var revision int64
+ 	if err := row.Scan(&revision); errors.Is(err, sql.ErrNoRows) {
+diff --git a/backends/go/computed_store.go b/backends/go/computed_store.go
+--- a/backends/go/computed_store.go
++++ b/backends/go/computed_store.go
+@@ -176,6 +176,11 @@
+ 			http.Error(w, err.Error(), http.StatusConflict)
+ 			return
+ 		}
++		var invalid *PlanDiagnostic
++		if errors.As(err, &invalid) {
++			http.Error(w, invalid.Error(), http.StatusBadRequest)
++			return
++		}
+ 		if err != nil {
+ 			http.Error(w, "could not save definition", http.StatusInternalServerError)
+ 			return

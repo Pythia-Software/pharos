@@ -1,6 +1,7 @@
 package querytable
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"regexp"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	shared "github.com/Pythia-Software/query-table/backends/go"
 )
 
 type Result struct {
@@ -141,6 +144,11 @@ func (left sortKey) compare(right sortKey, kind FieldKind) int {
 }
 
 func filterRows(rows []map[string]any, where []WhereTerm, schema Schema) ([]map[string]any, error) {
+	var err error
+	where, err = ResolveRelativeWhere(where, schema, time.Now())
+	if err != nil {
+		return nil, err
+	}
 	filtered := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
 		matches := true
@@ -600,6 +608,16 @@ type Metric struct {
 	ID      string   `json:"id"`
 	Buckets []Bucket `json:"buckets"`
 }
+
+func (r *AggregationRequest) UnmarshalJSON(data []byte) error {
+	var request shared.SQLiteAggregationRequest
+	if err := json.Unmarshal(data, &request); err != nil {
+		return err
+	}
+	r.Where, r.Aggregations = request.Where, request.Aggregations
+	return nil
+}
+
 type AggregationResult struct {
 	Metrics []Metric `json:"metrics"`
 }

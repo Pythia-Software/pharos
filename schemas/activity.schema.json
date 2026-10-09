@@ -18,21 +18,21 @@
     { "field": "error", "width": 260 }
   ],
   "fields": [
-    { "name": "id", "label": "Run ID", "type": "text", "select": { "default": false }, "bindings": { "postgres": { "expr": "id" } } },
-    { "name": "state", "label": "State", "type": "enum", "group": "Run", "render": "run_state", "filter": { "values": { "source": "static", "options": ["running", "complete", "failed"] } }, "bindings": { "postgres": { "expr": "state" } } },
-    { "name": "sources", "label": "Sources", "type": "textarray", "group": "Run", "render": "tags_pills", "filter": { "editor": "set" }, "bindings": { "postgres": { "expr": "sources" } } },
-    { "name": "current_source", "label": "Current source", "type": "text", "group": "Run", "bindings": { "postgres": { "expr": "current_source" } } },
-    { "name": "phase", "label": "Phase", "type": "enum", "group": "Run", "bindings": { "postgres": { "expr": "phase" } } },
-    { "name": "progress", "label": "Progress", "type": "number", "group": "Progress", "render": "sync_progress", "select": { "align": "right" }, "bindings": { "postgres": { "expr": "progress", "synthetic": true } } },
-    { "name": "completed_sources", "label": "Completed sources", "type": "number", "group": "Progress", "render": "number", "select": { "align": "right" }, "bindings": { "postgres": { "expr": "completed_sources" } } },
-    { "name": "total_sources", "label": "Total sources", "type": "number", "group": "Progress", "render": "number", "select": { "align": "right" }, "bindings": { "postgres": { "expr": "total_sources" } } },
-    { "name": "workspaces", "label": "Workspaces", "type": "number", "group": "Indexed", "render": "number", "select": { "align": "right" }, "bindings": { "postgres": { "expr": "workspaces" } } },
-    { "name": "conversations", "label": "Conversations", "type": "number", "group": "Indexed", "render": "number", "select": { "align": "right" }, "bindings": { "postgres": { "expr": "conversations" } } },
-    { "name": "messages", "label": "Messages", "type": "number", "group": "Indexed", "render": "number", "select": { "align": "right" }, "bindings": { "postgres": { "expr": "messages" } } },
-    { "name": "started_at", "label": "Started", "type": "datetime", "group": "Time", "render": "datetime_rel", "bindings": { "postgres": { "expr": "started_at" } } },
-    { "name": "updated_at", "label": "Updated", "type": "datetime", "group": "Time", "render": "datetime_rel", "bindings": { "postgres": { "expr": "updated_at" } } },
-    { "name": "completed_at", "label": "Completed", "type": "datetime", "group": "Time", "render": "datetime_rel", "bindings": { "postgres": { "expr": "completed_at" } } },
-    { "name": "error", "label": "Error", "type": "text", "group": "Result", "render": "truncate", "bindings": { "postgres": { "expr": "error" } } },
-    { "name": "result_summary", "label": "Results", "type": "text", "group": "Result", "render": "truncate", "bindings": { "postgres": { "expr": "result_summary", "synthetic": true } } }
+    { "name": "id", "label": "Run ID", "type": "text", "select": {"default": false}, "bindings": {"postgres": {"expr": "id"}, "sqlite": {"expr": "r.\"id\""}} },
+    { "name": "state", "label": "State", "type": "enum", "group": "Run", "render": "run_state", "filter": {"values": {"source": "static", "options": ["running", "complete", "failed"]}}, "bindings": {"postgres": {"expr": "state"}, "sqlite": {"expr": "r.\"state\""}} },
+    { "name": "sources", "label": "Sources", "type": "textarray", "group": "Run", "render": "tags_pills", "filter": {"editor": "set"}, "bindings": {"postgres": {"expr": "sources"}, "sqlite": {"expr": "r.\"sources\""}} },
+    { "name": "current_source", "label": "Current source", "type": "text", "group": "Run", "bindings": {"postgres": {"expr": "current_source"}, "sqlite": {"expr": "r.\"current_source\""}} },
+    { "name": "phase", "label": "Phase", "type": "enum", "group": "Run", "bindings": {"postgres": {"expr": "phase"}, "sqlite": {"expr": "r.\"phase\""}} },
+    { "name": "progress", "label": "Progress", "type": "number", "group": "Progress", "render": "sync_progress", "select": {"align": "right"}, "bindings": {"postgres": {"expr": "progress", "synthetic": true}, "sqlite": {"expr": "r.\"progress\"", "expressionNumeric": true}}, "aggregate": {"groupable": true} },
+    { "name": "completed_sources", "label": "Completed sources", "type": "number", "group": "Progress", "render": "number", "select": {"align": "right"}, "bindings": {"postgres": {"expr": "completed_sources"}, "sqlite": {"expr": "r.\"completed_sources\"", "expressionNumeric": true}}, "aggregate": {"groupable": true} },
+    { "name": "total_sources", "label": "Total sources", "type": "number", "group": "Progress", "render": "number", "select": {"align": "right"}, "bindings": {"postgres": {"expr": "total_sources"}, "sqlite": {"expr": "r.\"total_sources\"", "expressionNumeric": true}}, "aggregate": {"groupable": true} },
+    { "name": "workspaces", "label": "Workspaces", "type": "number", "group": "Indexed", "render": "number", "select": {"align": "right"}, "bindings": {"postgres": {"expr": "workspaces"}, "sqlite": {"expr": "r.\"workspaces\"", "expressionNumeric": true}}, "aggregate": {"groupable": true} },
+    { "name": "conversations", "label": "Conversations", "type": "number", "group": "Indexed", "render": "number", "select": {"align": "right"}, "bindings": {"postgres": {"expr": "conversations"}, "sqlite": {"expr": "r.\"conversations\"", "expressionNumeric": true}}, "aggregate": {"groupable": true} },
+    { "name": "messages", "label": "Messages", "type": "number", "group": "Indexed", "render": "number", "select": {"align": "right"}, "bindings": {"postgres": {"expr": "messages"}, "sqlite": {"expr": "r.\"messages\"", "expressionNumeric": true}}, "aggregate": {"groupable": true} },
+    { "name": "started_at", "label": "Started", "type": "datetime", "group": "Time", "render": "datetime_rel", "bindings": {"postgres": {"expr": "started_at"}, "sqlite": {"expr": "r.\"started_at\"", "datetimeFormat": "rfc3339"}}, "aggregate": {"groupable": true} },
+    { "name": "updated_at", "label": "Updated", "type": "datetime", "group": "Time", "render": "datetime_rel", "bindings": {"postgres": {"expr": "updated_at"}, "sqlite": {"expr": "r.\"updated_at\"", "datetimeFormat": "rfc3339"}}, "aggregate": {"groupable": true} },
+    { "name": "completed_at", "label": "Completed", "type": "datetime", "group": "Time", "render": "datetime_rel", "bindings": {"postgres": {"expr": "completed_at"}, "sqlite": {"expr": "r.\"completed_at\"", "datetimeFormat": "rfc3339"}}, "aggregate": {"groupable": true} },
+    { "name": "error", "label": "Error", "type": "text", "group": "Result", "render": "truncate", "bindings": {"postgres": {"expr": "error"}, "sqlite": {"expr": "r.\"error\""}} },
+    { "name": "result_summary", "label": "Results", "type": "text", "group": "Result", "render": "truncate", "bindings": {"postgres": {"expr": "result_summary", "synthetic": true}, "sqlite": {"expr": "r.\"result_summary\""}} }
   ]
 }
