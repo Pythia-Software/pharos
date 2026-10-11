@@ -5,7 +5,7 @@ import { queryDatasets, queryFromURL, queryURL, resolveRollingQuery, updateQuery
 export const BOOKMARKS_KEY = "pharos-bookmarks-v1";
 export type Bookmark = {
   id: string; title: string; url: string; description?: string; savedAt?: number;
-  dataset?: QueryDataset; savedQueryId?: string; templateId?: string;
+  dataset?: QueryDataset; savedQueryId?: string; templateId?: string; coverMetricId?: string;
 };
 
 export function readBookmarks(): Bookmark[] {
@@ -78,12 +78,16 @@ export function collectQuery(dataset: QueryDataset, query: QueryState, title: st
   return item;
 }
 
-export function updateBookmark(id: string, title: string, description: string, days?: number): Bookmark {
+export function updateBookmark(id: string, title: string, description: string, days?: number, coverMetricId?: string): Bookmark {
   if (!title.trim() || title.trim().length > 200 || description.length > 500) throw new Error("Use a title up to 200 characters and a description up to 500.");
   const items = readBookmarks(), current = items.find(item => item.id === id), spec = current && queryFromURL(current.url);
   if (!current) throw new Error("This saved view is no longer in your collection.");
   if (spec && items.some(item => item.id !== id && item.title === title.trim() && queryFromURL(item.url)?.dataset === spec.dataset)) throw new Error("Another saved query in this table has that name.");
   const updated = { ...current, title: title.trim(), description: description.trim() };
+  if (coverMetricId !== undefined) {
+    if (coverMetricId && !spec?.query.aggregations?.some(metric => metric.id === coverMetricId)) throw new Error("Choose a metric from this saved view.");
+    if (coverMetricId) updated.coverMetricId = coverMetricId; else delete updated.coverMetricId;
+  }
   if (days !== undefined && days !== spec?.window?.days) {
     updated.url = updateQueryWindowURL(current.url, days);
     if (current.templateId) updated.templateId = `${current.templateId.split(":")[0]}:${days}`;

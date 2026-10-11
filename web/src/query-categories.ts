@@ -24,7 +24,9 @@ export type QueryCategory = keyof typeof queryCategories;
 export function categoryForQuery(dataset?: QueryDataset, query?: QueryState): QueryCategory {
   const predicates = query?.where.flatMap(term => "any" in term ? term.any : [term]) ?? [];
   const measures = query?.aggregations ?? [];
-  const fields = new Set([...predicates.map(term => term.field), ...measures.flatMap(metric => [metric.field, ...metric.groupBy])]);
+  const fields = new Set([...predicates.map(term => term.field), ...measures.flatMap(metric => [metric.field, ...metric.groupBy,
+    ...[metric.expression, metric.expressionY, metric.distribution?.input].flatMap(expression => [...(expression ?? "").matchAll(/\[([^\]]+)\]/g)].map(match => match[1])),
+  ])]);
   const has = (...names: string[]) => names.some(name => fields.has(name));
   if (has("cost_usd", "cost_today_usd")) return "cost";
   if (has("error_count", "error_signature", "tool_error_count", "error_types", "test_failure") || predicates.some(term => term.field === "status" && term.op === "=" && term.value === "error")) return "errors";

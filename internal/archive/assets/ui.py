@@ -25,6 +25,16 @@ APP_HTML = r'''<!doctype html>
     .feedback-toolbar{position:fixed;right:22px;bottom:22px;z-index:10000;display:flex;gap:8px;padding:7px;background:var(--panel);border:1px solid var(--line);border-radius:6px;box-shadow:0 8px 30px #0003}.feedback-toolbar button{border:1px solid var(--line);background:var(--panel);color:var(--ink)}.feedback-toolbar button.active{background:var(--accent);border-color:var(--accent);color:var(--panel)}.feedback-count{min-width:22px;display:inline-block;padding:1px 6px;margin-left:4px;border-radius:6px;background:color-mix(in srgb,var(--accent) 18%,transparent);font-size:var(--fs-sm)}
     body.feedback-targeting,body.feedback-targeting *{cursor:crosshair!important}.feedback-highlight{display:none;position:fixed;z-index:9997;pointer-events:none;border:2px solid #7c3aed;border-radius:3px;background:#7c3aed18;box-shadow:0 0 0 1px #fff8}.feedback-highlight.visible{display:block}.feedback-highlight span{position:absolute;left:-2px;bottom:calc(100% + 4px);max-width:360px;padding:4px 7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:3px;background:#6d28d9;color:white;font:var(--fs-sm)/1.3 ui-monospace,SFMono-Regular,monospace;box-shadow:0 2px 8px #0004}
     .feedback-pin{position:fixed;z-index:9998;display:grid;place-items:center;width:25px;height:25px;padding:0;border:2px solid white;border-radius:50%;background:#7c3aed;color:white;text-align:center;font:bold var(--fs-sm)/1 ui-sans-serif,sans-serif;box-shadow:0 2px 8px #0005;pointer-events:none}.feedback-panel{position:fixed;z-index:10001;right:22px;bottom:78px;width:min(410px,calc(100vw - 28px));max-height:min(680px,calc(100vh - 110px));display:none;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:6px;box-shadow:0 18px 55px #0005;overflow:hidden}.feedback-panel.open{display:flex}.feedback-panel header{position:static;display:flex;align-items:center;gap:10px;padding:15px 16px;background:var(--panel);border-bottom:1px solid var(--line);backdrop-filter:none}.feedback-panel header strong{flex:1}.feedback-panel header button,.feedback-item button{padding:3px 7px}.feedback-list{overflow:auto;padding:12px}.feedback-item{padding:12px;margin-bottom:9px;border:1px solid var(--line);border-radius:5px;background:var(--bg)}.feedback-item-top{display:flex;gap:8px;align-items:flex-start}.feedback-number{flex:0 0 23px;height:23px;border-radius:50%;background:#7c3aed;color:white;text-align:center;font:bold var(--fs-sm)/23px ui-sans-serif,sans-serif}.feedback-note{flex:1;white-space:pre-wrap}.feedback-selector{margin-top:7px;color:var(--muted);font:var(--fs-xs)/1.35 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere}.feedback-actions{display:flex;align-items:center;gap:8px;padding:12px;border-top:1px solid var(--line)}.feedback-actions .primary{flex:1}.feedback-copy-option{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:var(--fs-sm);white-space:nowrap;cursor:pointer}.feedback-copy-option input{accent-color:var(--accent)}.feedback-composer-backdrop{position:fixed;inset:0;z-index:10002;display:none;place-items:center;padding:20px;background:#0005}.feedback-composer-backdrop.open{display:grid}.feedback-composer{width:min(520px,100%);padding:18px;background:var(--panel);border:1px solid var(--line);border-radius:6px;box-shadow:0 18px 60px #0007}.feedback-composer h2{margin-bottom:4px}.feedback-composer textarea{width:100%;min-height:120px;resize:vertical;margin:15px 0 12px;padding:6px 11px;border:1px solid var(--line);border-radius:5px;background:var(--bg);color:var(--ink);font:inherit}.feedback-composer .row{display:flex;justify-content:flex-end;gap:8px}.feedback-toast{position:fixed;z-index:10003;left:50%;bottom:28px;transform:translate(-50%,20px);padding:9px 14px;border-radius:4px;background:var(--ink);color:var(--panel);opacity:0;pointer-events:none;transition:.18s}.feedback-toast.visible{opacity:1;transform:translate(-50%,0)}
+    [data-feedback-drag],body.feedback-targeting [data-feedback-drag],body.feedback-targeting [data-feedback-drag] *{cursor:grab!important;touch-action:none;user-select:none;-webkit-user-select:none}
+    body.feedback-dragging,body.feedback-dragging *{cursor:grabbing!important}
+    .feedback-drag-handle{display:inline-grid;place-items:center;flex:none;align-self:center;width:26px;height:28px;padding:0!important;border:0!important;background:transparent!important;color:var(--muted);cursor:grab!important;touch-action:none}
+    .feedback-drag-handle:hover{color:var(--accent)}.feedback-drag-handle:focus-visible,[data-feedback-drag]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+    .feedback-toolbar{max-width:calc(100vw - 16px);flex-wrap:wrap}body.feedback-targeting .feedback-toolbar button:not(.feedback-drag-handle),.feedback-toolbar button:not(.feedback-drag-handle){cursor:pointer!important}
+    body.feedback-targeting .feedback-panel header button:not(.feedback-drag-handle),.feedback-panel header button:not(.feedback-drag-handle){cursor:pointer!important}.feedback-list{min-height:0}
+    .feedback-composer{max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:auto}.feedback-composer-heading{display:flex;align-items:center;gap:8px}.feedback-composer-heading h2{margin:0}
+    .feedback-highlight span{pointer-events:auto;max-width:min(360px,calc(100vw - 16px))}.feedback-pin{pointer-events:auto}
+    .feedback-toast{display:flex;align-items:center;gap:8px;max-width:calc(100vw - 16px);visibility:hidden;transition:opacity .18s,visibility .18s}.feedback-toast.visible{visibility:visible;pointer-events:auto}.feedback-toast .feedback-drag-handle{color:inherit}
+    .feedback-positioned{position:fixed!important;right:auto!important;bottom:auto!important;margin:0!important;transform:none!important}
     .optional-behavior{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:16px 0;border-bottom:1px solid var(--line)}.optional-behavior:last-child{border-bottom:0}.optional-behavior>div{min-width:0}.optional-behavior h3{margin:0;font-size:var(--fs-base)}.optional-behavior p{margin:4px 0 0}.optional-behavior .toggle{flex:none}.optional-behavior .toggle:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
     .settings-intro{margin:0 0 28px;max-width:650px}.settings-layout{display:grid;grid-template-columns:180px minmax(0,1fr);gap:44px;align-items:start}.settings-nav{position:sticky;top:24px;padding:6px 0 0}.settings-nav-label{display:block;margin:0 0 10px;padding-left:12px;color:var(--muted);font-size:var(--fs-xs);font-weight:700;letter-spacing:.09em;text-transform:uppercase}.settings-nav a{display:block;margin:2px 0;padding:8px 12px;border-left:2px solid transparent;border-radius:0 4px 4px 0;color:var(--muted);font-size:var(--fs-md);text-decoration:none}.settings-nav a:hover,.settings-nav a:focus-visible{color:var(--accent);background:color-mix(in srgb,var(--accent) 7%,transparent)}.settings-nav a[aria-current="page"]{border-left-color:var(--accent);background:color-mix(in srgb,var(--accent) 9%,transparent);color:var(--accent);font-weight:700}
     .settings-content{min-width:0}.settings-content .settings-section{padding:0;border:0}.settings-content .settings-section[hidden]{display:none}.settings-section-heading{display:flex;align-items:start;justify-content:space-between;gap:20px;margin-bottom:18px}.settings-section-heading h2{margin:0 0 4px}.settings-section-heading p{margin:0;max-width:660px}.settings-content .health{margin-top:0}.settings-content .source-card-head h3{margin-bottom:5px;font-size:var(--fs-xl)}.settings-content .findings-settings{max-width:none}.settings-content .findings-setting{margin-bottom:14px}
@@ -343,25 +353,26 @@ APP_HTML = r'''<!doctype html>
 </main>
 <aside class="drawer" id="bookmarksDrawer" aria-label="Bookmarks" data-feedback-label="Bookmarks drawer"><header class="drawer-head"><h2>Bookmarks</h2><button id="bookmarksClose" class="drawer-close" type="button" aria-label="Close bookmarks" title="Close (Escape)"><svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#ph-icon-close"/></svg></button></header><div class="drawer-tools"><button id="bookmarkAdd" type="button"><svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#ph-icon-star"/></svg> Bookmark this page</button></div><div class="drawer-body" id="bookmarksList"></div></aside><div id="bookmarkPopover" class="bookmark-popover" popover="auto" role="dialog" aria-labelledby="bookmarkPopoverTitle" data-feedback-label="Bookmark popover"><form id="bookmarkPopoverForm"><h2 id="bookmarkPopoverTitle">Bookmark added</h2><label>Name<input id="bookmarkName" type="text" autocomplete="off" spellcheck="false"></label><div class="bookmark-popover-actions"><button id="bookmarkRemove" type="button">Remove</button><button type="submit" class="primary">Done</button></div></form></div>
 <aside class="drawer" id="historyDrawer" aria-label="History" data-feedback-label="History drawer"><header class="drawer-head"><h2>History</h2><button id="historyClose" class="drawer-close" type="button" aria-label="Close history" title="Close (Escape)"><svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#ph-icon-close"/></svg></button></header><div class="drawer-tools"><input id="historyFilter" type="search" placeholder="Filter history…" aria-label="Filter history"><button id="historyClear" type="button">Clear</button></div><div class="drawer-body" id="historyList"></div></aside>
-<div class="feedback-highlight" id="feedbackHighlight" data-feedback-ui><span></span></div>
+<div class="feedback-highlight" id="feedbackHighlight" data-feedback-ui><span data-feedback-drag tabindex="0" role="button" aria-label="Move annotation target label" title="Drag to move the target label. Arrow keys move it when focused."></span></div>
 <div id="feedbackPins" data-feedback-ui></div>
 <aside class="feedback-panel" id="feedbackPanel" aria-label="UI feedback" data-feedback-ui>
-  <header><strong>UI feedback</strong><span class="muted" id="feedbackSummary"></span><button id="feedbackClose" aria-label="Close feedback panel"><svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#ph-icon-close"/></svg></button></header>
+  <header data-feedback-drag><button class="feedback-drag-handle" type="button" aria-label="Move feedback panel" title="Drag to move. Arrow keys move when focused."><svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#ph-icon-grip"/></svg></button><strong>UI feedback</strong><span class="muted" id="feedbackSummary"></span><button id="feedbackClose" aria-label="Close feedback panel"><svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#ph-icon-close"/></svg></button></header>
   <div class="feedback-list" id="feedbackList"></div>
   <div class="feedback-actions"><button id="feedbackClear">Clear</button><label class="feedback-copy-option"><input type="checkbox" id="feedbackClearOnCopy"> Clear on Copy</label><button class="primary" id="feedbackCopy">Copy feedback</button></div>
 </aside>
-<div class="feedback-toolbar" data-feedback-ui>
+<div class="feedback-toolbar" data-feedback-ui data-feedback-drag>
+  <button class="feedback-drag-handle" type="button" aria-label="Move annotation toolbar" title="Drag to move. Arrow keys move when focused."><svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#ph-icon-grip"/></svg></button>
   <button id="feedbackTarget" title="Click an element to annotate. Use Up and Down arrows to choose its parent or child." aria-pressed="false"><svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#ph-icon-target"/></svg> Annotate</button>
   <button id="feedbackOpen" title="View and copy UI feedback">Feedback <span class="feedback-count" id="feedbackCount">0</span></button>
 </div>
 <div class="feedback-composer-backdrop" id="feedbackComposer" data-feedback-ui>
   <section class="feedback-composer" role="dialog" aria-modal="true" aria-labelledby="feedbackComposerTitle">
-    <h2 id="feedbackComposerTitle">Add UI feedback</h2><div class="feedback-selector" id="feedbackTargetDescription"></div>
+    <div class="feedback-composer-heading" data-feedback-drag><button class="feedback-drag-handle" type="button" aria-label="Move annotation composer" title="Drag to move. Arrow keys move when focused."><svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#ph-icon-grip"/></svg></button><h2 id="feedbackComposerTitle">Add UI feedback</h2></div><div class="feedback-selector" id="feedbackTargetDescription"></div>
     <textarea id="feedbackNote" placeholder="What should change? Include what you expected and why."></textarea>
     <div class="row"><button id="feedbackCancel">Cancel</button><button class="primary" id="feedbackAdd">Add annotation</button></div>
   </section>
 </div>
-<div class="feedback-toast" id="feedbackToast" role="status" data-feedback-ui></div>
+<div class="feedback-toast" id="feedbackToast" role="status" data-feedback-ui data-feedback-drag><button class="feedback-drag-handle" type="button" aria-label="Move feedback status message" title="Drag to move. Arrow keys move when focused."><svg class="app-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#ph-icon-grip"/></svg></button><span id="feedbackToastMessage"></span></div>
 <script>
 const $=s=>document.querySelector(s), esc=s=>String(s??'');
 // A shared export embeds its works, and the rows of its tables, and has no service behind it: SHARE is that payload, and null in the app.
@@ -379,12 +390,67 @@ function iconLabel(name,label){return[icon(name),document.createTextNode(' '+lab
 function comboButton(segments,{label,className}={}){const group=node('div',className?`combo-button ${className}`:'combo-button');group.setAttribute('role','group');if(label)group.setAttribute('aria-label',label);group.buttons=segments.map(segment=>{const button=node('button',[segment.label?'':'combo-icon',segment.className].filter(Boolean).join(' '));button.type='button';if(segment.id)button.id=segment.id;if(segment.icon)button.append(icon(segment.icon));if(segment.label)button.append(segment.label);if(segment.ariaLabel)button.setAttribute('aria-label',segment.ariaLabel);if(segment.title)button.title=segment.title;if('pressed' in segment)button.setAttribute('aria-pressed',String(Boolean(segment.pressed)));if(segment.onClick)button.onclick=segment.onClick;return button});group.append(...group.buttons);return group}
 const FEEDBACK_KEY='pharos-ui-feedback-v1',FEEDBACK_DRAFT_KEY='pharos-ui-feedback-draft-v1',FEEDBACK_CLEAR_KEY='pharos-ui-feedback-clear-on-copy';
 let feedbackAnnotations=loadFeedback(),feedbackMode=false,feedbackTarget=null,feedbackHoverElement=null,feedbackHoverTrail=[],feedbackHoverIndex=0,feedbackToastTimer;
+const FEEDBACK_LAYOUT_KEY='pharos-ui-feedback-layout-v1',feedbackDraggables=new Map();
+const feedbackResizeObserver=new ResizeObserver(()=>requestAnimationFrame(restoreFeedbackLayout));
+let feedbackDrag=null;
+const feedbackLayout=(()=>{try{const value=JSON.parse(localStorage.getItem(FEEDBACK_LAYOUT_KEY)||'{}');return value&&typeof value==='object'&&!Array.isArray(value)?value:{}}catch{return{}}})();
+function saveFeedbackLayout(){try{localStorage.setItem(FEEDBACK_LAYOUT_KEY,JSON.stringify(feedbackLayout))}catch{}}
+// Panels use viewport coordinates; labels and pins keep an offset from their
+// target. Moving feedback never changes the element recorded in the report.
+function makeFeedbackDraggable(element,handle,key,anchor){
+  handle.setAttribute('data-feedback-drag','');
+  const controller={element,restore,finish};feedbackDraggables.set(key,controller);feedbackResizeObserver.observe(element);
+  function place(x,y,remember=false){
+    const rect=element.getBoundingClientRect(),inset=element.classList.contains('feedback-pin')?2:8;
+    x=Math.max(inset,Math.min(Math.max(inset,innerWidth-rect.width-inset),x));
+    y=Math.max(inset,Math.min(Math.max(inset,innerHeight-rect.height-inset),y));
+    element.classList.add('feedback-positioned');element.style.left=`${x}px`;element.style.top=`${y}px`;
+    if(remember){const origin=anchor?.()||{x:0,y:0};feedbackLayout[key]={x:x-origin.x,y:y-origin.y};saveFeedbackLayout()}
+  }
+  function restore(){
+    if(!element.getClientRects().length||feedbackDrag?.controller===controller)return;
+    const saved=feedbackLayout[key],origin=anchor?.();
+    if(saved&&Number.isFinite(saved.x)&&Number.isFinite(saved.y))place(saved.x+(origin?.x||0),saved.y+(origin?.y||0));
+    else if(origin)place(origin.x,origin.y);
+  }
+  function finish(event){
+    if(feedbackDrag?.controller!==controller||event&&event.pointerId!==feedbackDrag.pointerId)return;
+    const {pointerId,moved}=feedbackDrag;feedbackDrag=null;document.body.classList.remove('feedback-dragging');
+    if(handle.hasPointerCapture(pointerId))handle.releasePointerCapture(pointerId);
+    if(moved){const rect=element.getBoundingClientRect();place(rect.left,rect.top,true)}
+    if(element.id==='feedbackToast')feedbackToastTimer=setTimeout(()=>element.classList.remove('visible'),1800);
+  }
+  handle.addEventListener('pointerdown',event=>{
+    if(event.button!==0||feedbackDrag||event.target.closest('button,input,textarea,select,a,[contenteditable]')&&!event.target.closest('.feedback-drag-handle')&&event.target!==handle)return;
+    const rect=element.getBoundingClientRect();feedbackDrag={controller,pointerId:event.pointerId,x:event.clientX,y:event.clientY,left:rect.left,top:rect.top,moved:false};
+    handle.setPointerCapture(event.pointerId);document.body.classList.add('feedback-dragging');
+    if(element.id==='feedbackToast')clearTimeout(feedbackToastTimer);
+    event.preventDefault();
+  });
+  handle.addEventListener('pointermove',event=>{
+    if(feedbackDrag?.controller!==controller||event.pointerId!==feedbackDrag.pointerId)return;
+    const dx=event.clientX-feedbackDrag.x,dy=event.clientY-feedbackDrag.y;
+    if(!feedbackDrag.moved&&Math.hypot(dx,dy)<3)return;
+    feedbackDrag.moved=true;place(feedbackDrag.left+dx,feedbackDrag.top+dy);event.preventDefault();
+  });
+  for(const type of ['pointerup','pointercancel','lostpointercapture'])handle.addEventListener(type,finish);
+  handle.addEventListener('keydown',event=>{
+    if(event.target!==handle&&!event.target.closest('.feedback-drag-handle'))return;
+    const direction={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]}[event.key];
+    if(!direction)return;
+    event.preventDefault();event.stopPropagation();const rect=element.getBoundingClientRect(),step=event.shiftKey?1:10;
+    place(rect.left+direction[0]*step,rect.top+direction[1]*step,true);
+  });
+  restore();return controller;
+}
+function restoreFeedbackLayout(){for(const controller of feedbackDraggables.values())controller.restore()}
+function feedbackPinKey(item,index){return'pin:'+(item.id||`${item.selector}:${index}`)}
 // Saves works as one standalone file. The service is asked to build it first, so a failure (nothing to share, an error)
 // is reported here instead of being saved as the file; then the browser, or the macOS app, downloads it.
 async function shareDownload(ids){const url='/api/share?'+new URLSearchParams(ids.map(id=>['id',String(id)]));const r=await fetch(url+'&check=1');if(!r.ok)throw new Error((await r.json().catch(()=>({}))).error||r.statusText);const link=document.createElement('a');link.href=url;link.download='';document.body.append(link);link.click();link.remove()}
 window.pharosShareDownload=shareDownload;
 function loadFeedback(){try{const value=JSON.parse(localStorage.getItem(FEEDBACK_KEY)||'[]');return Array.isArray(value)?value:[]}catch{return[]}}
-function saveFeedback(){localStorage.setItem(FEEDBACK_KEY,JSON.stringify(feedbackAnnotations));renderFeedback()}
+function saveFeedback(){localStorage.setItem(FEEDBACK_KEY,JSON.stringify(feedbackAnnotations));const pins=new Set(feedbackAnnotations.map(feedbackPinKey));for(const key of Object.keys(feedbackLayout))if(key.startsWith('pin:')&&!pins.has(key))delete feedbackLayout[key];saveFeedbackLayout();renderFeedback()}
 function loadFeedbackDraft(){try{const value=JSON.parse(localStorage.getItem(FEEDBACK_DRAFT_KEY)||'null');return value?.target&&typeof value.note==='string'?value:null}catch{return null}}
 function saveFeedbackDraft(){if(!feedbackTarget){localStorage.removeItem(FEEDBACK_DRAFT_KEY);return}localStorage.setItem(FEEDBACK_DRAFT_KEY,JSON.stringify({target:feedbackTarget,note:$('#feedbackNote').value}))}
 function feedbackEscape(value){return window.CSS&&CSS.escape?CSS.escape(value):value.replace(/[^a-zA-Z0-9_-]/g,x=>'\\'+x)}
@@ -410,24 +476,31 @@ function feedbackRecord(element){
 }
 function isFeedbackUI(element){return element instanceof Element&&Boolean(element.closest('[data-feedback-ui]'))}
 const FEEDBACK_ENABLED_KEY='pharos-feedback-enabled';
-function setFeedbackEnabled(enabled){document.body.classList.toggle('feedback-enabled',enabled);const button=$('#feedbackToggle'),label=enabled?'Hide annotation toolbar':'Show annotation toolbar';button.setAttribute('aria-pressed',String(enabled));button.setAttribute('aria-label',label);button.title=label;if(!enabled){if(feedbackMode)setFeedbackMode(false);$('#feedbackPanel').classList.remove('open')}try{localStorage.setItem(FEEDBACK_ENABLED_KEY,String(enabled))}catch{}}
+function setFeedbackEnabled(enabled){document.body.classList.toggle('feedback-enabled',enabled);const button=$('#feedbackToggle'),label=enabled?'Hide annotation toolbar':'Show annotation toolbar';button.setAttribute('aria-pressed',String(enabled));button.setAttribute('aria-label',label);button.title=label;if(!enabled){if(feedbackMode)setFeedbackMode(false);$('#feedbackPanel').classList.remove('open')}else restoreFeedbackLayout();try{localStorage.setItem(FEEDBACK_ENABLED_KEY,String(enabled))}catch{}}
 function setFeedbackMode(enabled){feedbackMode=enabled;feedbackHoverElement=null;feedbackHoverTrail=[];feedbackHoverIndex=0;document.body.classList.toggle('feedback-targeting',enabled);$('#feedbackTarget').classList.toggle('active',enabled);$('#feedbackTarget').setAttribute('aria-pressed',String(enabled));$('#feedbackTarget').replaceChildren(...iconLabel(enabled?'close':'target',enabled?'Cancel':'Annotate'));if(!enabled)$('#feedbackHighlight').classList.remove('visible')}
 function feedbackTargetTrail(element){const trail=[];let current=element;while(current instanceof Element&&current!==document.body&&current!==document.documentElement&&!isFeedbackUI(current)){trail.push(current);current=current.parentElement}return trail}
-function highlightFeedbackTarget(element){feedbackHoverElement=element;const rect=element.getBoundingClientRect(),box=$('#feedbackHighlight'),level=feedbackHoverIndex?`parent ${feedbackHoverIndex} of ${feedbackHoverTrail.length-1} · `:'';box.style.left=`${rect.left}px`;box.style.top=`${rect.top}px`;box.style.width=`${rect.width}px`;box.style.height=`${rect.height}px`;box.querySelector('span').textContent=`↑ parent · ↓ child · ${level}${element.dataset.feedbackLabel||element.tagName.toLowerCase()} · ${feedbackSelector(element)}`;box.classList.add('visible')}
-function onFeedbackHover(event){if(!feedbackMode||isFeedbackUI(event.target))return;feedbackHoverTrail=feedbackTargetTrail(event.target);feedbackHoverIndex=0;if(feedbackHoverTrail.length)highlightFeedbackTarget(feedbackHoverTrail[0])}
+function highlightFeedbackTarget(element){feedbackHoverElement=element;const rect=element.getBoundingClientRect(),box=$('#feedbackHighlight'),level=feedbackHoverIndex?`parent ${feedbackHoverIndex} of ${feedbackHoverTrail.length-1} · `:'';box.style.left=`${rect.left}px`;box.style.top=`${rect.top}px`;box.style.width=`${rect.width}px`;box.style.height=`${rect.height}px`;box.querySelector('span').textContent=`↑ parent · ↓ child · ${level}${element.dataset.feedbackLabel||element.tagName.toLowerCase()} · ${feedbackSelector(element)}`;box.classList.add('visible');feedbackDraggables.get('target-label')?.restore()}
+function onFeedbackHover(event){if(!feedbackMode||feedbackDrag||isFeedbackUI(event.target))return;feedbackHoverTrail=feedbackTargetTrail(event.target);feedbackHoverIndex=0;if(feedbackHoverTrail.length)highlightFeedbackTarget(feedbackHoverTrail[0])}
 function stepFeedbackTarget(direction){if(!feedbackMode||!feedbackHoverTrail.length)return false;const next=Math.max(0,Math.min(feedbackHoverTrail.length-1,feedbackHoverIndex+direction));if(next===feedbackHoverIndex)return false;feedbackHoverIndex=next;highlightFeedbackTarget(feedbackHoverTrail[next]);return true}
 function onFeedbackClick(event){
   if(!feedbackMode||isFeedbackUI(event.target))return;
   event.preventDefault();event.stopImmediatePropagation();const element=feedbackHoverElement?.contains(event.target)?feedbackHoverElement:event.target;feedbackTarget=feedbackRecord(element);setFeedbackMode(false);
   openFeedbackComposer(feedbackTarget,'')
 }
-function openFeedbackComposer(target,note){feedbackTarget=target;$('#feedbackTargetDescription').textContent=`${target.label} · ${target.selector}`;$('#feedbackNote').value=note;$('#feedbackComposer').classList.add('open');saveFeedbackDraft();setTimeout(()=>$('#feedbackNote').focus(),0)}
+function openFeedbackComposer(target,note){feedbackTarget=target;$('#feedbackTargetDescription').textContent=`${target.label} · ${target.selector}`;$('#feedbackNote').value=note;$('#feedbackComposer').classList.add('open');restoreFeedbackLayout();saveFeedbackDraft();setTimeout(()=>$('#feedbackNote').focus(),0)}
 function closeFeedbackComposer(){feedbackTarget=null;localStorage.removeItem(FEEDBACK_DRAFT_KEY);$('#feedbackComposer').classList.remove('open')}
-function addFeedback(){const note=$('#feedbackNote').value.trim();if(!feedbackTarget||!note){$('#feedbackNote').focus();return}feedbackAnnotations.push({...feedbackTarget,note});saveFeedback();closeFeedbackComposer();$('#feedbackPanel').classList.add('open');feedbackToast('Annotation added')}
+function addFeedback(){const note=$('#feedbackNote').value.trim();if(!feedbackTarget||!note){$('#feedbackNote').focus();return}feedbackAnnotations.push({...feedbackTarget,note});saveFeedback();closeFeedbackComposer();$('#feedbackPanel').classList.add('open');restoreFeedbackLayout();feedbackToast('Annotation added')}
 function findFeedbackElement(selector){try{return document.querySelector(selector)}catch{return null}}
 function renderFeedbackPins(){
-  const root=$('#feedbackPins'),modal=document.querySelector('dialog[open]');root.replaceChildren();
-  feedbackAnnotations.forEach((item,index)=>{const element=findFeedbackElement(item.selector);if(!element||element.closest('.view:not(.active)')||modal&&!modal.contains(element))return;const rect=element.getBoundingClientRect();if(!rect.width&&!rect.height)return;const pin=node('span','feedback-pin',String(index+1));pin.style.left=`${Math.max(2,Math.min(innerWidth-27,rect.right-12))}px`;pin.style.top=`${Math.max(2,Math.min(innerHeight-27,rect.top-12))}px`;root.append(pin)})
+  const root=$('#feedbackPins'),modal=document.querySelector('dialog[open]'),visible=new Set();
+  feedbackAnnotations.forEach((item,index)=>{
+    const element=findFeedbackElement(item.selector);if(!element||element.closest('.view:not(.active)')||modal&&!modal.contains(element))return;
+    const rect=element.getBoundingClientRect();if(!rect.width&&!rect.height)return;
+    const key=feedbackPinKey(item,index);visible.add(key);let controller=feedbackDraggables.get(key);
+    if(!controller){const pin=node('button','feedback-pin');pin.type='button';root.append(pin);controller=makeFeedbackDraggable(pin,pin,key,()=>{const bounds=(findFeedbackElement(item.selector)||element).getBoundingClientRect();return{x:bounds.right-12,y:bounds.top-12}})}
+    controller.element.textContent=String(index+1);controller.element.setAttribute('aria-label',`Move annotation ${index+1} marker`);controller.element.title='Drag to move this marker. Arrow keys move when focused.';controller.restore();
+  });
+  for(const [key,controller] of feedbackDraggables)if(key.startsWith('pin:')&&!visible.has(key)){controller.finish();feedbackResizeObserver.unobserve(controller.element);controller.element.remove();feedbackDraggables.delete(key)}
 }
 function renderFeedback(){
   $('#feedbackCount').textContent=String(feedbackAnnotations.length);$('#feedbackSummary').textContent=`${feedbackAnnotations.length} annotation${feedbackAnnotations.length===1?'':'s'}`;$('#feedbackCopy').disabled=!feedbackAnnotations.length;$('#feedbackClear').disabled=!feedbackAnnotations.length;
@@ -451,8 +524,13 @@ async function copyFeedbackText(text){
 }
 function clearFeedback(){if(!feedbackAnnotations.length)return;feedbackAnnotations=[];saveFeedback();feedbackToast('Feedback cleared')}
 async function copyFeedback(){if(!feedbackAnnotations.length)return;const button=$('#feedbackCopy'),count=feedbackAnnotations.length,clearAfterCopy=$('#feedbackClearOnCopy').checked;button.disabled=true;try{await copyFeedbackText(feedbackMarkdown());if(clearAfterCopy){feedbackAnnotations=[];saveFeedback()}feedbackToast(`Copied ${count} annotation${count===1?'':'s'}${clearAfterCopy?' and cleared':''}`)}catch{feedbackToast('Could not copy feedback. Check clipboard access and try again.')}finally{button.disabled=!feedbackAnnotations.length}}
-function feedbackToast(message){const toast=$('#feedbackToast');toast.textContent=message;toast.classList.add('visible');clearTimeout(feedbackToastTimer);feedbackToastTimer=setTimeout(()=>toast.classList.remove('visible'),1800)}
-$('#feedbackClearOnCopy').checked=pharosPrefs.get(FEEDBACK_CLEAR_KEY,false)===true;$('#feedbackClearOnCopy').onchange=event=>pharosPrefs.set(FEEDBACK_CLEAR_KEY,event.target.checked);$('#feedbackTarget').onclick=()=>setFeedbackMode(!feedbackMode);$('#feedbackToggle').onclick=()=>setFeedbackEnabled(!document.body.classList.contains('feedback-enabled'));{let enabled=false;try{enabled=localStorage.getItem(FEEDBACK_ENABLED_KEY)==='true'}catch{}setFeedbackEnabled(enabled)}$('#feedbackOpen').onclick=()=>$('#feedbackPanel').classList.toggle('open');$('#feedbackClose').onclick=()=>$('#feedbackPanel').classList.remove('open');$('#feedbackCancel').onclick=closeFeedbackComposer;$('#feedbackAdd').onclick=addFeedback;$('#feedbackCopy').onclick=copyFeedback;$('#feedbackClear').onclick=clearFeedback;$('#feedbackNote').oninput=saveFeedbackDraft;$('#feedbackNote').onkeydown=e=>{if((e.metaKey||e.ctrlKey)&&e.key==='Enter')addFeedback()};
+function feedbackToast(message){const toast=$('#feedbackToast');$('#feedbackToastMessage').textContent=message;toast.classList.add('visible');restoreFeedbackLayout();clearTimeout(feedbackToastTimer);feedbackToastTimer=setTimeout(()=>toast.classList.remove('visible'),1800)}
+makeFeedbackDraggable($('.feedback-toolbar'),$('.feedback-toolbar'),'toolbar');
+makeFeedbackDraggable($('#feedbackPanel'),$('#feedbackPanel header'),'panel');
+makeFeedbackDraggable($('.feedback-composer'),$('.feedback-composer-heading'),'composer');
+makeFeedbackDraggable($('#feedbackToast'),$('#feedbackToast'),'toast');
+makeFeedbackDraggable($('#feedbackHighlight span'),$('#feedbackHighlight span'),'target-label',()=>{const rect=$('#feedbackHighlight').getBoundingClientRect();return{x:rect.left-2,y:rect.top-$('#feedbackHighlight span').offsetHeight-4}});
+$('#feedbackClearOnCopy').checked=pharosPrefs.get(FEEDBACK_CLEAR_KEY,false)===true;$('#feedbackClearOnCopy').onchange=event=>pharosPrefs.set(FEEDBACK_CLEAR_KEY,event.target.checked);$('#feedbackTarget').onclick=()=>setFeedbackMode(!feedbackMode);$('#feedbackToggle').onclick=()=>setFeedbackEnabled(!document.body.classList.contains('feedback-enabled'));{let enabled=false;try{enabled=localStorage.getItem(FEEDBACK_ENABLED_KEY)==='true'}catch{}setFeedbackEnabled(enabled)}$('#feedbackOpen').onclick=()=>{$('#feedbackPanel').classList.toggle('open');restoreFeedbackLayout()};$('#feedbackClose').onclick=()=>$('#feedbackPanel').classList.remove('open');$('#feedbackCancel').onclick=closeFeedbackComposer;$('#feedbackAdd').onclick=addFeedback;$('#feedbackCopy').onclick=copyFeedback;$('#feedbackClear').onclick=clearFeedback;$('#feedbackNote').oninput=saveFeedbackDraft;$('#feedbackNote').onkeydown=e=>{if((e.metaKey||e.ctrlKey)&&e.key==='Enter')addFeedback()};
 const feedbackDraft=loadFeedbackDraft();if(feedbackDraft)openFeedbackComposer(feedbackDraft.target,feedbackDraft.note);
 // Feedback controls sit above dialogs. Keep their pointer events from reaching
 // document-level outside-click handlers that would dismiss the dialog.
@@ -462,9 +540,9 @@ for(const type of ['pointerdown','mousedown'])document.addEventListener(type,eve
 // Native modal dialogs live in the browser's top layer, above every z-index.
 // Keep the feedback UI inside the active dialog so it remains visible and usable.
 const feedbackOverlay=[...document.querySelectorAll('#feedbackHighlight,#feedbackPins,#feedbackPanel,.feedback-toolbar,#feedbackComposer,#feedbackToast')];
-function placeFeedbackOverModal(){const modal=[...document.querySelectorAll('dialog[open]')].at(-1),host=modal||document.body;for(const element of feedbackOverlay)if(element.parentElement!==host)host.append(element);renderFeedbackPins()}
+function placeFeedbackOverModal(){const modal=[...document.querySelectorAll('dialog[open]')].at(-1),host=modal||document.body;for(const element of feedbackOverlay)if(element.parentElement!==host)host.append(element);renderFeedbackPins();restoreFeedbackLayout()}
 new MutationObserver(mutations=>{if(mutations.some(mutation=>mutation.type==='attributes'?mutation.target instanceof HTMLDialogElement:[...mutation.addedNodes,...mutation.removedNodes].some(node=>node instanceof HTMLDialogElement)))placeFeedbackOverModal()}).observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['open']});
-document.addEventListener('pointerover',onFeedbackHover,true);document.addEventListener('click',onFeedbackClick,true);document.addEventListener('keydown',event=>{if(feedbackMode&&(event.key==='ArrowUp'||event.key==='ArrowDown')){event.preventDefault();stepFeedbackTarget(event.key==='ArrowUp'?1:-1);return}if(event.key==='Escape'){if($('#feedbackComposer').classList.contains('open'))closeFeedbackComposer();else if(feedbackMode)setFeedbackMode(false);else $('#feedbackPanel').classList.remove('open')}if(event.altKey&&event.key.toLowerCase()==='a'){event.preventDefault();setFeedbackMode(!feedbackMode)}});addEventListener('resize',renderFeedbackPins);pageScroller.addEventListener('scroll',renderFeedbackPins,{passive:true});
+document.addEventListener('pointerover',onFeedbackHover,true);document.addEventListener('click',onFeedbackClick,true);document.addEventListener('keydown',event=>{if(feedbackMode&&(event.key==='ArrowUp'||event.key==='ArrowDown')){event.preventDefault();stepFeedbackTarget(event.key==='ArrowUp'?1:-1);return}if(event.key==='Escape'){if($('#feedbackComposer').classList.contains('open'))closeFeedbackComposer();else if(feedbackMode)setFeedbackMode(false);else $('#feedbackPanel').classList.remove('open')}if(event.altKey&&event.key.toLowerCase()==='a'){event.preventDefault();setFeedbackMode(!feedbackMode)}});addEventListener('resize',()=>{renderFeedbackPins();restoreFeedbackLayout()});pageScroller.addEventListener('scroll',renderFeedbackPins,{passive:true});
 // A shared export answers the reader's requests from its embedded works, as the service does: an overview without
 // messages, one conversation at a time, and a search across a work's conversations.
 function shareApi(path){

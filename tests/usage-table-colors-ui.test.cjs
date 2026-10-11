@@ -61,7 +61,7 @@ test('Usage table badges follow the active graph and preserve raw sorting and ce
     await page.goto(`http://usage-colors.test/usage?q_usage=${encodeURIComponent(encodeQuery(query))}&q_writing=${encodeURIComponent(encodeQuery(writingQuery))}`);
     await page.locator('#usage .qt-row').first().waitFor();
     assert.equal(await page.locator('.usage-facet-badge').count(), 0);
-    const split = page.getByRole('group', { name: 'Split', exact: true });
+    const split = page.getByRole('combobox', { name: 'Breakdown', exact: true });
     const checkFacet = async (field, label, value, tableField = field) => {
       const swatch = page.locator('.usage-chart-legend').getByRole('button', { name: label, exact: true }).locator('.usage-swatch');
       await swatch.waitFor();
@@ -72,9 +72,9 @@ test('Usage table badges follow the active graph and preserve raw sorting and ce
       assert.equal(await page.locator('.usage-facet-badge').evaluateAll(badges => badges.every(badge => badge.dataset.chartFacet === badge.closest('td').dataset.qtField || badge.dataset.chartFacet === 'model_family' && badge.closest('td').dataset.qtField === 'model')), true);
       for (const inactive of ['repository_name', 'provider', 'model_family', 'model'].filter(name => name !== field && !(field === 'model_family' && name === 'model'))) assert.equal(await page.locator(`td[data-qt-field="${inactive}"] .usage-facet-badge`).count(), 0);
     };
-    await split.getByRole('button', { name: 'Provider', exact: true }).click();
+    await split.selectOption({ label: 'Provider' });
     await checkFacet('provider', 'Claude', 'Claude');
-    await split.getByRole('button', { name: 'Repository', exact: true }).click();
+    await split.selectOption({ label: 'Repository' });
     await checkFacet('repository_name', rows[0].repository_name, rows[0].repository_name);
     const folded = page.locator('td[data-qt-field="repository_name"]').filter({ hasText: rows[16].repository_name });
     const otherColor = await page.locator('.usage-chart-legend').getByRole('button', { name: 'Other (2)', exact: true }).locator('.usage-swatch').evaluate(element => getComputedStyle(element).backgroundColor);
@@ -82,13 +82,13 @@ test('Usage table badges follow the active graph and preserve raw sorting and ce
     await page.locator('.usage-chart-legend').getByRole('button', { name: 'Other (2)', exact: true }).click();
     await checkFacet('repository_name', rows[16].repository_name, rows[16].repository_name);
     assert.notEqual(await folded.locator('.usage-facet-badge').evaluate(element => getComputedStyle(element).backgroundColor), otherColor);
-    await split.getByRole('button', { name: 'Model', exact: true }).click();
-    for (const metric of ['Tokens', 'Cost', '% Cost', '% Tokens']) {
-      await page.locator('.usage-chart').getByRole('button', { name: metric, exact: true }).click();
+    await split.selectOption({ label: 'Model' });
+    for (const metric of ['tokens', 'cost', 'percent_cost', 'percent']) {
+      await page.getByRole('combobox', { name: 'Metric', exact: true }).selectOption(metric);
       await checkFacet('model_family', rows[0].model_family, rows[0].model_family);
       await checkFacet('model_family', rows[0].model_family, rows[0].model, 'model');
     }
-    await page.getByRole('spinbutton', { name: 'Smoothing periods' }).fill('4');
+    await page.getByRole('combobox', { name: 'Smoothing', exact: true }).selectOption('4');
     await checkFacet('model_family', rows[0].model_family, rows[0].model_family);
     fs.mkdirSync(path.join(root, '.context'), { recursive: true });
     await page.locator('#usage').getByRole('button', { name: 'Collapse query builder', exact: true }).click();
@@ -102,23 +102,23 @@ test('Usage table badges follow the active graph and preserve raw sorting and ce
     await page.waitForFunction(() => document.querySelectorAll('#usage .qt-row').length === 1);
     assert.ok(requests.at(-1).where.some(term => term.field === 'model_family' && term.op === '=' && term.value === rows[0].model_family));
     await checkFacet('model_family', rows[0].model_family, rows[0].model_family);
-    await split.getByRole('button', { name: 'Agent', exact: true }).click();
+    await split.selectOption({ label: 'Agent' });
     await page.waitForFunction(() => document.querySelectorAll('.usage-facet-badge').length === 0);
-    await page.locator('.usage-chart').getByRole('button', { name: 'Tokens', exact: true }).click();
-    await split.getByRole('button', { name: 'Token type', exact: true }).click();
+    await page.getByRole('combobox', { name: 'Metric', exact: true }).selectOption('tokens');
+    await split.selectOption({ label: 'Token type' });
     assert.equal(await page.locator('.usage-facet-badge').count(), 0);
-    await page.locator('.usage-chart').getByRole('button', { name: 'Cost', exact: true }).click();
+    await page.getByRole('combobox', { name: 'Metric', exact: true }).selectOption('cost');
     await checkFacet('provider', 'Claude', 'claude');
     await page.getByRole('group', { name: 'Usage view' }).getByRole('button', { name: 'Human Words' }).click();
-    await split.getByRole('button', { name: 'Repository', exact: true }).click();
+    await split.selectOption({ label: 'Repository' });
     await checkFacet('repository_name', rows[0].repository_name, rows[0].repository_name);
-    await split.getByRole('button', { name: 'Provider', exact: true }).click();
+    await split.selectOption({ label: 'Provider' });
     const providerSwatch = page.locator('.usage-chart-legend .usage-swatch').first();
     await providerSwatch.waitFor();
     await page.locator('td[data-qt-field="providers"] .usage-facet-badge').waitFor();
     assert.equal(await page.locator('td[data-qt-field="providers"] .usage-facet-badge').evaluate(element => getComputedStyle(element).backgroundColor), await providerSwatch.evaluate(element => getComputedStyle(element).backgroundColor));
     assert.equal(await page.locator('td[data-qt-field="repository_name"] .usage-facet-badge').count(), 0);
-    await page.getByRole('group', { name: 'Show', exact: true }).getByRole('button', { name: 'All input', exact: true }).click();
+    await page.getByRole('combobox', { name: 'Metric', exact: true }).selectOption('all');
     await checkFacet('providers', 'Claude + Codex', 'claude,codex');
     await page.getByRole('group', { name: 'List', exact: true }).getByRole('button', { name: 'Messages', exact: true }).click();
     await page.waitForFunction(() => document.querySelectorAll('.usage-facet-badge').length === 0);

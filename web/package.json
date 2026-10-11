@@ -10,6 +10,7 @@
     "generate-schemas": "node generate-schemas.mjs",
     "check-schemas": "node generate-schemas.mjs --check",
     "test:computed-store": "node --test tests/computed-column-store.test.mjs",
+    "test:previews": "node --test tests/query-previews.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

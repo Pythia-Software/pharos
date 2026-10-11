@@ -937,16 +937,13 @@ function rangeLabel(bounds: TimeBounds): string {
   return bounds.from ? `Since ${day(bounds.from)}` : last ? `Through ${day(last)}` : "";
 }
 
-// The range presets set the time filter; one the presets don't name shows as
-// its own button, which clears it.
+// A date selection from the chart or table remains visible alongside presets.
 function RangeControl({ bounds, onChange }: { bounds: TimeBounds; onChange: (from?: Date) => void }) {
   const active = !bounds.from && !bounds.to ? "all" : bounds.from && !bounds.to ? chartRanges.find(([range]) => rangeStart(range).getTime() === bounds.from!.getTime())?.[0] : undefined;
-  return <div className="usage-presets chart-toggle" role="group" aria-label="Range">
-    <span className="usage-preset-label">Range</span>
-    {chartRanges.map(([range, text]) => <button key={range} type="button" aria-pressed={active === range} onClick={() => onChange(rangeStart(range))}>{text}</button>)}
-    <button type="button" aria-pressed={active === "all"} onClick={() => onChange()}>All time</button>
-    {active ? null : <button type="button" aria-pressed="true" className="chart-range-custom" title="Clear this time filter" onClick={() => onChange()}>{rangeLabel(bounds)}<span className="usage-legend-x" aria-label="Clear">×</span></button>}
-  </div>;
+  return <ChartSelect label="Range" value={active ?? "custom"}
+    options={[["all", "All time"], ...chartRanges.map(([range, text]): [string, string] => [range, `Last ${text}`]), ...(active ? [] : [["custom", rangeLabel(bounds), "Dates selected in the chart or table"] as [string, string, string]])]}
+    title="Dates included in the chart and table. Choose All time to clear the date filter."
+    onChange={range => { if (range !== "custom") onChange(range === "all" ? undefined : rangeStart(range as ChartRange)); }} />;
 }
 
 // Charts change their table's filters through this.
@@ -991,54 +988,61 @@ function Segmented<T extends string>({ label, value, options, onChange }: { labe
   </div>;
 }
 
-type PeriodView = { period: ChartPeriod; hours: number; days: number };
-function PeriodControl({ view, onChange }: { view: PeriodView; onChange: (next: Partial<PeriodView>) => void }) {
-  const custom = (period: "hours" | "days") => <CustomPeriod key={period} period={period} value={view[period]} active={view.period === period}
-    onSelect={() => onChange({ period })} onChange={value => onChange({ period, [period]: value })} />;
-  const button = (period: ChartPeriod, label: string) => <button type="button" aria-pressed={view.period === period} onClick={() => onChange({ period })}>{label}</button>;
-  return <div className="usage-presets chart-toggle" role="group" aria-label="By">
-    <span className="usage-preset-label">By</span>
-    {button("hour", "Hour")}{custom("hours")}{button("day", "Day")}{custom("days")}{button("week", "Week")}{button("month", "Month")}
-  </div>;
-}
-
-function CustomPeriod({ period, value, active, onSelect, onChange }: { period: "hours" | "days"; value: number; active: boolean; onSelect: () => void; onChange: (value: number) => void }) {
-  const [draft, setDraft] = useState(String(value));
-  useEffect(() => setDraft(String(value)), [value]);
-  return <span className={`usage-period-custom${active ? " active" : ""}`}>
-    <input type="number" aria-label={`Number of ${period}`} min={1} max={10000} step={1} value={draft} onFocus={onSelect}
-      onChange={event => { setDraft(event.target.value); if (validPeriodCount(event.target.valueAsNumber)) onChange(event.target.valueAsNumber); }}
-      onBlur={() => setDraft(String(value))} />
-    <button type="button" aria-label={`N ${period}`} aria-pressed={active} onClick={onSelect}>{period}</button>
-  </span>;
-}
-
-function ScaleControl({ value, onChange, percent = false }: { value: ChartScale; onChange: (next: ChartScale) => void; percent?: boolean }) {
-  const reason = percent ? "Percentage charts use a linear scale" : undefined;
-  return <Segmented label="Scale" value={percent ? "linear" : value}
-    options={[["linear", "Linear"], ["logarithmic", "Logarithmic", reason], ["half", "Half-and-half", reason]]} onChange={onChange} />;
-}
-
-function RollingControl({ value, period, count = 1, onChange }: { value: number; period: ChartPeriod; count?: number; onChange: (next: number) => void }) {
-  const unit = periodUnit(period, count);
-  const [draft, setDraft] = useState(String(value));
-  useEffect(() => setDraft(String(value)), [value]);
-  return <label className="usage-presets usage-rolling-control">
-    <span className="usage-preset-label">Smoothing</span>
-    <input type="number" aria-label="Smoothing periods" min={0} max={10} step={1} value={draft}
-      title="Trailing average including the current period (0 or 1 is off). Empty periods count as zero; the start of the range uses available periods only."
-      onChange={event => {
-        setDraft(event.target.value);
-        const next = event.target.valueAsNumber;
-        if (validRollingPeriods(next)) onChange(next);
-      }}
-      onBlur={() => setDraft(String(value))} />
-    <span className="usage-rolling-unit">{unit}{value === 1 ? "" : "s"}</span>
+function ChartSelect<T extends string>({ label, ariaLabel = label, value, options, onChange, title, disabled = false, note }: {
+  label: string; ariaLabel?: string; value: T; options: Array<[T, string, string?]>; onChange: (next: T) => void;
+  title?: string; disabled?: boolean; note?: string;
+}) {
+  return <label className="usage-chart-field usage-chart-picker">
+    <span className="usage-preset-label">{label}</span>
+    <span className="usage-chart-select">
+      <select aria-label={ariaLabel} value={value} disabled={disabled} title={title} onChange={event => onChange(event.target.value as T)}>
+        {options.map(([option, text, reason]) => <option key={option} value={option} disabled={Boolean(reason)} title={reason}>{text}</option>)}
+      </select>
+      <Icon name="chevron-down" className="usage-chart-caret" />
+    </span>
+    {note ? <span className="usage-chart-control-note">{note}</span> : null}
   </label>;
 }
 
-// A single series needs no legend unless the title does not name it (a split
-// that happens to hold one value). Hovering a column shows a key of the series
+type PeriodView = { period: ChartPeriod; hours: number; days: number };
+function PeriodControl({ view, onChange }: { view: PeriodView; onChange: (next: Partial<PeriodView>) => void }) {
+  const custom = view.period === "hours" || view.period === "days" ? view.period : null;
+  return <div className="usage-chart-field usage-period-control" role="group" aria-label="Chart interval">
+    <ChartSelect label="Interval" ariaLabel="Chart interval" value={view.period}
+      options={[["hour", "Hour"], ["day", "Day"], ["week", "Week"], ["month", "Month"], ["hours", "Custom hours…"], ["days", "Custom days…"]]}
+      title="Time covered by each chart column" onChange={period => onChange({ period })} />
+    {custom ? <CustomPeriod key={custom} period={custom} value={view[custom]} onChange={value => onChange({ [custom]: value })} /> : null}
+  </div>;
+}
+
+function CustomPeriod({ period, value, onChange }: { period: "hours" | "days"; value: number; onChange: (value: number) => void }) {
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
+  return <label className="usage-period-custom">
+    <span>Every</span>
+    <input type="number" aria-label={`Number of ${period}`} min={1} max={10000} step={1} value={draft}
+      onChange={event => { setDraft(event.target.value); if (validPeriodCount(event.target.valueAsNumber)) onChange(event.target.valueAsNumber); }}
+      onBlur={() => setDraft(String(value))} />
+    <span>{period}</span>
+  </label>;
+}
+
+function ScaleControl({ value, onChange, percent = false }: { value: ChartScale; onChange: (next: ChartScale) => void; percent?: boolean }) {
+  const descriptions = { linear: "Column heights are proportional to their values.", logarithmic: "Compresses large values so smaller values are easier to compare.", half: "Linear for smaller values, logarithmic for peaks." };
+  return <ChartSelect label="Scale" value={percent ? "linear" : value} disabled={percent}
+    options={[["linear", "Linear"], ["logarithmic", "Logarithmic"], ["half", "Linear + log"]]}
+    title={descriptions[percent ? "linear" : value]} note={percent ? "Shares use a linear scale." : undefined} onChange={onChange} />;
+}
+
+function RollingControl({ value, period, count = 1, onChange }: { value: number; period: ChartPeriod; count?: number; onChange: (next: number) => void }) {
+  const unit = chartPeriods[period].unit;
+  return <ChartSelect label="Smoothing" value={String(value <= 1 ? 0 : value)}
+    options={[["0", "Off"], ...Array.from({ length: 9 }, (_, index): [string, string] => [String(index + 2), `${(index + 2) * count} ${unit}s`])]}
+    title="Trailing average including the current interval. Off shows the original values. Empty intervals count as zero; the start of the range uses available intervals only."
+    onChange={next => onChange(Number(next))} />;
+}
+
+// The legend can name even a single series. Hovering a column shows a key of the series
 // it holds, largest first, with what a folded series contains.
 // With onSelect, clicking a key selects its series: only selected series are
 // drawn and the rest stay in the key, dimmed. With onRange, dragging across
@@ -1066,10 +1070,11 @@ function StackedColumns({ title, controls, series, buckets: sourceBuckets, perio
   const total = (bucket: ChartBucket) => drawn.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0);
   const { y, ticks, split } = percent ? { y: (value: number) => value, ticks: [25, 50, 75, 100], split: undefined } : columnScale(buckets.map(total), scale);
   const unit = periodUnit(period, periodCount), stacked = drawn.length > 1;
-  const averageLabel = rollingPeriods > 1 ? `${rollingPeriods}-${unit} rolling average` : "";
-  const chartLabel = `${averageLabel ? `${title}; ${averageLabel}` : title}; ${percent || scale === "linear" ? "linear" : scale === "logarithmic" ? "logarithmic" : "half-and-half"} scale`;
+  const averageDuration = (size: number) => `${size * periodCount}-${chartPeriods[period].unit}`;
+  const averageLabel = rollingPeriods > 1 ? `${averageDuration(rollingPeriods)} rolling average` : "";
+  const chartLabel = `${averageLabel ? `${title}; ${averageLabel}` : title}; ${percent || scale === "linear" ? "linear" : scale === "logarithmic" ? "logarithmic" : "linear and logarithmic"} scale`;
   const label = (date: Date) => isHourly(period) ? date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }) : period === "month" ? date.toLocaleDateString(undefined, { month: "short", year: "numeric" }) : date.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(period === "day" && buckets.length > 120 ? { year: "2-digit" } : {}) });
-  const heading = (bucket: ChartBucket) => `${period === "week" ? "Week of " : ""}${label(bucket.date)}${averageLabel ? ` · ${bucket.windowSize ?? rollingPeriods}-${unit} average` : ""}`;
+  const heading = (bucket: ChartBucket) => `${period === "week" ? "Week of " : ""}${label(bucket.date)}${averageLabel ? ` · ${averageDuration(bucket.windowSize ?? rollingPeriods)} average` : ""}`;
   const suffix = noun ? ` ${noun}` : "";
   const present = (bucket: ChartBucket) => drawn.filter(item => (bucket.values[item.key] ?? 0) > 0).sort((left, right) => bucket.values[right.key] - bucket.values[left.key]);
   const describe = (bucket: ChartBucket) => `${heading(bucket)}: `
@@ -1302,12 +1307,13 @@ function TokenChart({ where, onFilter, view, onChange }: { where: WhereTerm[]; o
   const unit = periodLabel(view.period, periodCount), splitName = tokenSplits.find(([value]) => value === split)?.[1].toLowerCase() ?? split;
   const title = `${percent ? cost ? "Cost share" : "Token share" : cost ? "API cost" : "Tokens"} per ${unit} by ${splitName}`;
   const controls = <>
-    <Segmented label="Show" value={view.metric} options={[["tokens", "Tokens"], ["cost", "Cost"], ["percent_cost", "% Cost"], ["percent", "% Tokens"]]} onChange={metric => onChange({ metric })} />
-    <Segmented label="Split" value={split} options={tokenSplits.map(([value, text]) => [value, text, value === "type" && cost ? "Cost is priced per request, not per token type" : undefined])} onChange={next => onChange({ split: next })} />
+    <ChartSelect label="Metric" value={view.metric} options={[["tokens", "Tokens"], ["cost", "API cost"], ["percent_cost", "Cost share (%)"], ["percent", "Token share (%)"]]} onChange={metric => onChange({ metric })} />
+    <ChartSelect label="Breakdown" value={split} options={tokenSplits.map(([value, text]) => [value, text, value === "type" && cost ? "Cost is priced per request, not per token type" : undefined])}
+      title={cost ? "Token type is only available for token metrics; cost is priced per request." : "How each chart column is divided"} onChange={next => onChange({ split: next })} />
     <PeriodControl view={view} onChange={onChange} />
+    <RangeControl bounds={bounds} onChange={from => onFilter(current => withTimeRange(current, usageTime, from))} />
     <ScaleControl value={view.scale} onChange={scale => onChange({ scale })} percent={percent} />
     <RollingControl value={view.rollingPeriods} period={view.period} count={periodCount} onChange={rollingPeriods => onChange({ rollingPeriods })} />
-    <RangeControl bounds={bounds} onChange={from => onFilter(current => withTimeRange(current, usageTime, from))} />
   </>;
   return <StackedColumns title={title} controls={controls} series={series.length ? series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={buckets} period={view.period} periodCount={periodCount} rollingPeriods={view.rollingPeriods} scale={view.scale}
     format={percent ? value => `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })}%` : cost ? formatUSD : compactNumber}
@@ -1316,10 +1322,23 @@ function TokenChart({ where, onFilter, view, onChange }: { where: WhereTerm[]; o
     selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => setSeriesLimit(limit => limit + 5)} onRange={pickRange(onFilter, usageTime, view.period, periodCount, period => onChange({ period }))} />;
 }
 
-function PresetRow({ label, presets, onApply, clear }: { label: string; presets: UsagePreset[]; onApply: (preset: UsagePreset | null) => void; clear?: boolean }) {
+// Compare what each preset controls. Filters, paging, and unrelated settings
+// can change while its sort, metrics, or chart still match.
+function presetMatches(preset: UsagePreset, query: QueryTableApi<Row>["query"], chart?: TokenChartView): boolean {
+  if (preset.chart) return Boolean(chart && Object.entries(preset.chart).every(([key, value]) => chart[key as keyof TokenChartView] === value));
+  if (preset.orderBy) return query.orderBy.length === preset.orderBy.length && preset.orderBy.every((clause, index) => {
+    const current = query.orderBy[index];
+    return current.field === clause.field && current.dir === clause.dir && (current.nulls ?? "last") === (clause.nulls ?? "last") && current.extract?.regex === clause.extract?.regex;
+  });
+  // IDs and presentation choices do not change the metric being calculated.
+  const metricToken = (aggregations: AggregationClause[]) => encodeQuery({ ...EMPTY_QUERY, aggregations: aggregations.map(({ id, label, display, layout, diagnostics, ...clause }, index) => ({ ...clause, id: String(index) })) });
+  return Boolean(preset.aggregations && metricToken(query.aggregations ?? []) === metricToken(preset.aggregations));
+}
+
+function PresetRow({ label, presets, query, chart, onApply, clear }: { label: string; presets: UsagePreset[]; query: QueryTableApi<Row>["query"]; chart?: TokenChartView; onApply: (preset: UsagePreset | null) => void; clear?: boolean }) {
   return <div className="usage-presets" role="group" aria-label={`${label} presets`}>
     <span className="usage-preset-label">{label}</span>
-    {presets.map(preset => <QueryChip key={preset.label} title={preset.label} description={preset.title} onClick={() => onApply(preset)} />)}
+    {presets.map(preset => <QueryChip key={preset.label} title={preset.label} description={preset.title} active={presetMatches(preset, query, chart)} onClick={() => onApply(preset)} />)}
     {clear ? <button type="button" className="usage-preset-clear" onClick={() => onApply(null)}>Clear metrics</button> : null}
   </div>;
 }
@@ -1342,8 +1361,8 @@ function TokenUsage() {
       <TokenSummary where={where} />
       <TokenChart where={where} onFilter={filterChange(api)} view={chart} onChange={update} />
       <div className="usage-preset-rows">
-        <PresetRow label="Cost" presets={costPresets} onApply={apply} />
-        <PresetRow label="Tokens" presets={usagePresets} onApply={apply} clear />
+        <PresetRow label="Cost" presets={costPresets} query={api.query} chart={chart} onApply={apply} />
+        <PresetRow label="Tokens" presets={usagePresets} query={api.query} chart={chart} onApply={apply} clear />
       </div>
     </>;
   }} />;
@@ -1512,14 +1531,15 @@ function WritingPanel({ where, onFilter, status, reload }: { where: WhereTerm[];
     </div>
     <StackedColumns title={`${view.scope === "typed" ? "Typed words" : "Words of user input"} per ${unit}${split ? ` by ${writingSplits.find(([value]) => value === split)?.[1].toLowerCase()}` : ""}`}
       controls={<>
-        <Segmented label="Show" value={view.scope} options={[["typed", "Typed"], ["all", "All input"]]} onChange={scope => update({ scope })} />
-        <Segmented label="Split" value={view.split} options={writingSplits} onChange={next => update({ split: next })} />
+        <ChartSelect label="Metric" value={view.scope} options={[["typed", "Typed words"], ["all", "All user input"]]} onChange={scope => update({ scope })} />
+        <ChartSelect label="Breakdown" value={view.split} options={writingSplits.map(([value, text]) => [value, value === "kind" ? "Text source" : text])}
+          title="How each chart column is divided" onChange={next => update({ split: next })} />
         <PeriodControl view={view} onChange={update} />
+        <RangeControl bounds={bounds} onChange={from => onFilter(current => withTimeRange(current, writingTime, from))} />
         <ScaleControl value={view.scale} onChange={scale => update({ scale })} />
         <RollingControl value={view.rollingPeriods} period={view.period} count={periodCount} onChange={rollingPeriods => update({ rollingPeriods })} />
-        <RangeControl bounds={bounds} onChange={from => onFilter(current => withTimeRange(current, writingTime, from))} />
       </>}
-      series={chartSeries} buckets={buckets} period={view.period} periodCount={periodCount} rollingPeriods={view.rollingPeriods} scale={view.scale} legend={Boolean(split) && chartSeries.length > 0}
+      series={chartSeries} buckets={buckets} period={view.period} periodCount={periodCount} rollingPeriods={view.rollingPeriods} scale={view.scale} legend={chartSeries.length > 0}
       format={value => value.toLocaleString()} tickFormat={compactNumber} noun="words" loading={chartData.loading} error={chartData.error}
       selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => setSeriesLimit(limit => limit + 5)} onRange={pickRange(onFilter, writingTime, view.period, periodCount, period => update({ period }))} />
     <div className="writing-mix">
@@ -1581,16 +1601,16 @@ function WritingUsage({ onStatus }: { onStatus: (status: AuthorshipStatus | null
     {toggle}
     <MessageMix where={toAggregationQuery(api.query, schemas.writing_messages).where} reload={reload} onFilter={filterChange(api)} />
     <div className="usage-preset-rows">
-      <PresetRow label="Sort" presets={messagePresets} onApply={preset => apply("writing_messages", preset)} />
-      <PresetRow label="Metrics" presets={messageMetricPresets} onApply={preset => apply("writing_messages", preset)} clear />
+      <PresetRow label="Sort" presets={messagePresets} query={api.query} onApply={preset => apply("writing_messages", preset)} />
+      <PresetRow label="Metrics" presets={messageMetricPresets} query={api.query} onApply={preset => apply("writing_messages", preset)} clear />
     </div>
   </>} />;
   return <QuerySurface key="conversations" dataset="writing" trailing={row => <button type="button" className="mcp-detail-button" title="List this conversation's messages, highlighted by where their text came from" onClick={() => drill(row)}>Messages</button>} header={api => <>
     <WritingPanel where={toAggregationQuery(api.query, schemas.writing).where} onFilter={filterChange(api)} status={status} reload={reload} />
     {toggle}
     <div className="usage-preset-rows">
-      <PresetRow label="Sort" presets={writingPresets} onApply={preset => apply("writing", preset)} />
-      <PresetRow label="Metrics" presets={writingMetricPresets} onApply={preset => apply("writing", preset)} clear />
+      <PresetRow label="Sort" presets={writingPresets} query={api.query} onApply={preset => apply("writing", preset)} />
+      <PresetRow label="Metrics" presets={writingMetricPresets} query={api.query} onApply={preset => apply("writing", preset)} clear />
     </div>
   </>} />;
 }

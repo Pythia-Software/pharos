@@ -1,7 +1,7 @@
 {
   "title": "Homepage query card implementation tracker",
-  "updated": "2026-10-08",
-  "query_table_version": "0.5.0",
+  "updated": "2026-10-09",
+  "query_table_version": "0.6.0",
   "cards": [
     {
       "id": "conversation-01",
@@ -213,18 +213,19 @@
       "exploration_value": "Reveals tool reliability in a way users can immediately investigate.",
       "implementation_status": "Partial implementation",
       "implemented_recipes": [
-        "tool-failures"
+        "tool-failures",
+        "tool-failure-rates"
       ],
-      "current_preview": "The calls behind recurring tool failures.",
+      "current_preview": "Failure-rate, failure-count and all-call metrics at call grain.",
       "blocked_on_query_table": [
         "H05",
         "H02",
         "H09"
       ],
-      "blocked_on_pharos": "Implement v2 SQLite/map execution and preserve call-grain versus daily-rollup measure semantics.",
-      "calculation_gap": "Current tool_calls supplies call_count and error_count; separate counts work, but an aggregate ratio is not a v0.5 metric.",
+      "blocked_on_pharos": "Add aggregate-result eligibility before top-N if minimum samples per tool are required.",
+      "calculation_gap": "Rate denominators now include successful calls; filtering small result groups before top-N remains unsupported.",
       "performance_note": "SUM(error_count)/SUM(call_count) is enabled by v2; retain cube routing and minimum exposure before top-K.",
-      "after_metric_work": "available_after_integration"
+      "after_metric_work": "available_with_v2"
     },
     {
       "id": "tools-02",
@@ -239,18 +240,19 @@
       "exploration_value": "Finds one fix that may benefit many sessions.",
       "implementation_status": "Partial implementation",
       "implemented_recipes": [
-        "error-signatures"
+        "error-signatures",
+        "error-reach"
       ],
-      "current_preview": "Repeated error signatures, with the original calls.",
+      "current_preview": "Signature frequencies, distinct conversations and repository reach.",
       "blocked_on_query_table": [
         "H05",
         "H07",
         "H09"
       ],
-      "blocked_on_pharos": "Hydrate bounded raw error examples; keep signature normalization and mirror exclusion consistent.",
-      "calculation_gap": "Error signatures, timestamps, conversation IDs and repositories are already filterable/groupable and support distinct counts.",
+      "blocked_on_pharos": "Hydrate bounded raw error examples; preserve signature normalization and mirror exclusion.",
+      "calculation_gap": "Distinct reach is executable; bounded raw error hydration remains host work.",
       "performance_note": "Group a bounded failed-call population; distinct conversation/repository counts may bypass sum-only summaries.",
-      "after_metric_work": "available_after_integration"
+      "after_metric_work": "available_with_v2"
     },
     {
       "id": "tools-03",
@@ -314,18 +316,19 @@
       "exploration_value": "Finds test suites, builds or requests that dominate recorded elapsed time.",
       "implementation_status": "Partial implementation",
       "implemented_recipes": [
-        "slow-commands"
+        "slow-commands",
+        "duration-distribution"
       ],
-      "current_preview": "Recorded elapsed time by command; includes approval waits.",
+      "current_preview": "Duration boxes, exact median, timed-call counts and histograms.",
       "blocked_on_query_table": [
         "H06",
         "H05",
         "H09"
       ],
-      "blocked_on_pharos": "Preserve duration_source and timed-call coverage; implement v2 distributions in SQLite or a prepared duration summary.",
-      "calculation_gap": "Total duration and maxima are queryable; median and p95 require distributions or additional scalar percentile support.",
+      "blocked_on_pharos": "Preserve duration_source and timed-call coverage; precise p95 needs a later reducer or prepared summary.",
+      "calculation_gap": "Exact duration distributions include medians; scalar MEDIAN is rejected by npm core 0.6.0, and arbitrary p95 is not in the SQLite expression profile.",
       "performance_note": "Exact quartiles/p95 scan or sort call samples; daily min/max/sum cannot reconstruct percentiles.",
-      "after_metric_work": "available_after_integration"
+      "after_metric_work": "available_with_v2"
     },
     {
       "id": "tools-06",
@@ -366,15 +369,15 @@
       "implemented_recipes": [
         "edit-failures"
       ],
-      "current_preview": "Failed edit calls, grouped by repository path.",
+      "current_preview": "Failed edit counts by path and mechanism, with distinct conversation counts.",
       "blocked_on_query_table": [
         "H07",
         "H09"
       ],
-      "blocked_on_pharos": "Hydrate failed-call details and preceding reads if the cover needs a sequence.",
-      "calculation_gap": "Existing call fields support edit-related error filters and grouping by repository, path or mechanism.",
+      "blocked_on_pharos": "Hydrate failed-call details and preceding reads for sequence covers.",
+      "calculation_gap": "Grouped measures execute now; the original sequence/excerpt cover still needs parent-call hydration.",
       "performance_note": "Timestamp and error/path indexes are useful; command-text predicates may require trigram filtering or a fallback scan.",
-      "after_metric_work": "available_after_integration"
+      "after_metric_work": "available_with_v2"
     },
     {
       "id": "tools-08",
@@ -387,19 +390,21 @@
       "eligibility": "A signature appears in at least two repositories with usable call populations.",
       "destination": "Shared signatures split by repository and tool version when known.",
       "exploration_value": "Distinguishes a shared environment problem from a local project issue.",
-      "implementation_status": "Deferred",
-      "implemented_recipes": [],
-      "current_preview": "",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "cross-repo-errors"
+      ],
+      "current_preview": "A repository-by-signature pivot with repository-breadth eligibility.",
       "blocked_on_query_table": [
         "H02",
         "H05",
         "H04",
         "H12"
       ],
-      "blocked_on_pharos": "Supply compatible call exposures and version/source coverage for each repository.",
-      "calculation_gap": "Distinct repositories by error signature is possible; exposure-normalized comparison and a failure heatmap are incomplete.",
+      "blocked_on_pharos": "Supply compatible repository call exposures and version/source coverage; original heatmap requires a renderer.",
+      "calculation_gap": "Recorded counts and reach are available; exposure-normalized comparison and native heatmaps remain deferred.",
       "performance_note": "Distinct breadth plus counts can be computed from bounded calls; apply multi-repository eligibility before group limiting.",
-      "after_metric_work": "needs_derived_dataset"
+      "after_metric_work": "partially_available_with_v2"
     },
     {
       "id": "context-01",
@@ -441,18 +446,20 @@
       "implementation_status": "Partial implementation",
       "implemented_recipes": [
         "large-outputs",
-        "truncated-outputs"
+        "truncated-outputs",
+        "output-distribution",
+        "output-duration"
       ],
-      "current_preview": "Result tokens added by each tool; inspect the largest outputs.; Truncated tool outputs and the calls that produced them.",
+      "current_preview": "Output histograms by token source and duration/output scatter; existing totals and truncation counts.",
       "blocked_on_query_table": [
         "H06",
         "H01",
         "H07"
       ],
-      "blocked_on_pharos": "Preserve measured versus estimated token provenance and fetch only a bounded result excerpt.",
-      "calculation_gap": "Result bytes/tokens, source and truncation can be filtered or ranked now; a formal personal outlier threshold adds statistical work.",
+      "blocked_on_pharos": "Retain token-source provenance and hydrate bounded raw output excerpts.",
+      "calculation_gap": "Distributions and paired metrics execute now; personal outlier classification is separate analysis.",
       "performance_note": "Existing result-token indexes help top rows; exact personalized percentile thresholds need a separate distribution pass.",
-      "after_metric_work": "available_after_integration"
+      "after_metric_work": "available_with_v2"
     },
     {
       "id": "context-03",
@@ -465,19 +472,21 @@
       "eligibility": "Repeated resolved-path reads; only call them unchanged when content evidence supports it.",
       "destination": "Read events for the selected paths and intervening edits.",
       "exploration_value": "Reveals stable context that may be worth packaging or loading differently.",
-      "implementation_status": "Deferred",
-      "implemented_recipes": [],
-      "current_preview": "",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "repeated-reads"
+      ],
+      "current_preview": "Read-call counts by repository/path and distinct conversation reach.",
       "blocked_on_query_table": [
         "H03",
         "H02",
         "M02",
         "H07"
       ],
-      "blocked_on_pharos": "Expose agent stream identity and normalized read events; join content fingerprints and intervening edits for the unchanged variant.",
-      "calculation_gap": "Paths and read categories support counts; distinguishing within-stream repeats and unchanged-content rereads needs extra identity/evidence.",
+      "blocked_on_pharos": "Expose canonical stream identity, fingerprints and intervening edit facts for unchanged rereads.",
+      "calculation_gap": "Repeated path counts are available; stream-specific unchanged-content repeats are not.",
       "performance_note": "A path-by-stream count projection is cheap; content identity must be stored rather than inferred from matching file names.",
-      "after_metric_work": "needs_derived_dataset"
+      "after_metric_work": "partially_available_with_v2"
     },
     {
       "id": "context-04",
@@ -1011,18 +1020,19 @@
       "exploration_value": "Makes the user's own contribution visible without mistaking injected text for writing.",
       "implementation_status": "Partial implementation",
       "implemented_recipes": [
-        "human-words"
+        "human-words",
+        "human-word-mix"
       ],
-      "current_preview": "Words classified as typed or dictated, day by day.",
+      "current_preview": "Daily word totals plus typed/dictated share and word denominators by repository.",
       "blocked_on_query_table": [
         "H08",
         "H12",
         "H09"
       ],
-      "blocked_on_pharos": "Reuse existing authorship provenance and renderer; integrate the new metric transport for richer charts.",
-      "calculation_gap": "writing_messages can sum typed_words by day and repository; the current Human Words chart also has a custom series endpoint.",
+      "blocked_on_pharos": "Preserve authorship provenance when adding further human-word comparisons.",
+      "calculation_gap": "V2 metrics and compact covers now execute; existing authorship provenance remains authoritative.",
       "performance_note": "Daily authored facts are a good compact source; exact rolling hours need message-time bounds rather than only calendar dates.",
-      "after_metric_work": "available_after_integration"
+      "after_metric_work": "available_with_v2"
     },
     {
       "id": "human-02",
@@ -1214,16 +1224,16 @@
       "implemented_recipes": [
         "skill-evidence"
       ],
-      "current_preview": "Invocations and observed loads; evidence of use, not compliance.",
+      "current_preview": "Skill frequencies, evidence-type pivot and distinct conversation counts.",
       "blocked_on_query_table": [
         "H08",
         "H07",
         "H09"
       ],
-      "blocked_on_pharos": "Reuse identity normalization, mirror exclusion and originating-message links.",
-      "calculation_gap": "skill_usages already groups names, evidence types and distinct conversations with SQL-backed facts.",
+      "blocked_on_pharos": "Preserve normalization, mirror exclusion and originating-message evidence links.",
+      "calculation_gap": "V2 measures and compact previews execute; loads do not establish instruction compliance.",
       "performance_note": "Group date-bounded skill evidence; retained listings must not become usage counts.",
-      "after_metric_work": "available_after_integration"
+      "after_metric_work": "available_with_v2"
     },
     {
       "id": "skills-02",
@@ -1236,18 +1246,20 @@
       "eligibility": "Skill identity resolution and at least two repositories; loading does not prove the instructions were followed.",
       "destination": "Cross-repository usage evidence for the skill.",
       "exploration_value": "Reveals broadly useful skills already in the user's toolkit.",
-      "implementation_status": "Deferred",
-      "implemented_recipes": [],
-      "current_preview": "",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "skill-reach"
+      ],
+      "current_preview": "Skills ranked by distinct repository and conversation reach, plus evidence-type pivot.",
       "blocked_on_query_table": [
         "H02",
         "H05",
         "H07"
       ],
-      "blocked_on_pharos": "Add task-family labels only for the richer variant and retain load-versus-following semantics.",
-      "calculation_gap": "Distinct repositories and streams per skill are available now; task families are optional extra annotations.",
+      "blocked_on_pharos": "Add task-family annotations for richer variants and a host spoke renderer if desired; retain load-versus-following semantics.",
+      "calculation_gap": "Ranked cross-project reach is executable; a spoke diagram and task-family labels are deferred.",
       "performance_note": "Use the skill-name/time and conversation indexes; apply cross-repository minimum support before top-K.",
-      "after_metric_work": "available_after_integration"
+      "after_metric_work": "available_with_v2"
     },
     {
       "id": "skills-03",
@@ -1290,15 +1302,15 @@
       "implemented_recipes": [
         "skill-load-failures"
       ],
-      "current_preview": "Skill evidence whose parent call recorded an error.",
+      "current_preview": "Failed skill evidence by name, path/provider and distinct conversation reach.",
       "blocked_on_query_table": [
         "H07",
         "H09"
       ],
-      "blocked_on_pharos": "Hydrate parent call errors and optional harness identity, preserving evidence status.",
-      "calculation_gap": "Failed skill invocations/loads, paths, provider and status can be filtered now; some precise error details need the originating call.",
+      "blocked_on_pharos": "Hydrate parent call errors while preserving evidence status and optional harness identity.",
+      "calculation_gap": "V2 grouped measures execute; original raw failure fragments still need parent-call hydration.",
       "performance_note": "Date/name/status filtering over a small fact table is plausible; absence of evidence is not failed loading.",
-      "after_metric_work": "available_after_integration"
+      "after_metric_work": "available_with_v2"
     },
     {
       "id": "skills-05",
@@ -1617,17 +1629,17 @@
         "usage-repos",
         "cost-repos"
       ],
-      "current_preview": "Daily tokens across your repositories.; Recorded usage priced at standard API rates, by repository.",
+      "current_preview": "Existing daily token/API-equivalent charts support v2 multi-metric bookmark covers.",
       "blocked_on_query_table": [
         "H05",
         "H08",
         "H12",
         "H09"
       ],
-      "blocked_on_pharos": "Add a stable flavor join for that variant and use time-grain facts appropriate to exact rolling windows.",
-      "calculation_gap": "Usage already provides additive token components and API-equivalent prices by session/day/model; flavor is not a current Usage dimension.",
+      "blocked_on_pharos": "Add a stable flavor join for that variant; retain whole local-calendar daily windows and pricing coverage.",
+      "calculation_gap": "V2 runs over daily Usage facts; flavor remains absent from the Usage schema.",
       "performance_note": "Current usage construction loads and prices the representative ledger before map filtering; materialized bounded usage/pricing facts will scale better than merely upgrading chart UI.",
-      "after_metric_work": "available_after_integration"
+      "after_metric_work": "available_with_v2"
     },
     {
       "id": "cost-02",
@@ -1640,19 +1652,21 @@
       "eligibility": "Priced work and enough comparable observations to define an outlier; incomplete work is separate.",
       "destination": "Expensive work and its usage, tool results and transcript.",
       "exploration_value": "Turns an alarming total into concrete sessions users can understand.",
-      "implementation_status": "Deferred",
-      "implemented_recipes": [],
-      "current_preview": "",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "expensive-work"
+      ],
+      "current_preview": "Lifetime work costs for recently active Library entries, plus a work-cost histogram.",
       "blocked_on_query_table": [
         "H03",
         "H06",
         "H01",
         "H07"
       ],
-      "blocked_on_pharos": "Supply task/cohort identity and period-scoped usage facts; expose summed cost per canonical task.",
-      "calculation_gap": "Library can rank work costs but those are work totals, not per-task totals for only the events inside a rolling window.",
+      "blocked_on_pharos": "Expose period-scoped usage per canonical task and task/cohort labels for the original outlier question.",
+      "calculation_gap": "This bounded variant uses lifetime work totals; period-incurred canonical task/cohort costs still need derived facts.",
       "performance_note": "Group additive usage first, then compute the distribution/threshold; don't histogram session-day-model rows as task costs.",
-      "after_metric_work": "needs_derived_dataset"
+      "after_metric_work": "partially_available_with_v2"
     },
     {
       "id": "cost-03",
@@ -1691,18 +1705,20 @@
       "eligibility": "Compatible token classes and known rates; this changes prices, not model behavior.",
       "destination": "Recorded workload and both price calculations.",
       "exploration_value": "Lets users distinguish changes in usage from changes in prices.",
-      "implementation_status": "Deferred",
-      "implemented_recipes": [],
-      "current_preview": "",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "price-comparison"
+      ],
+      "current_preview": "Historical versus today-priced API equivalents, paired by repository, with difference and totals.",
       "blocked_on_query_table": [
         "H05",
         "M06",
         "L04"
       ],
-      "blocked_on_pharos": "Supply compatible versioned rate tables or explicit scenario price fields at the workload grain.",
-      "calculation_gap": "Historical cost_usd and cost_today_usd already support one comparison; arbitrary selected versioned schedules are additional data/scenario work.",
+      "blocked_on_pharos": "Publish compatible versioned rate/scenario fields for arbitrary schedules; retain pricing coverage.",
+      "calculation_gap": "Two retained schedules are executable; arbitrary selected schedules need extra scenario facts.",
       "performance_note": "Existing historical/today sums can ship now; arbitrary scenarios should reuse workload facts rather than reread and reprice every transcript.",
-      "after_metric_work": "needs_scenario_dataset"
+      "after_metric_work": "partially_available_with_v2"
     },
     {
       "id": "cost-05",
@@ -1915,18 +1931,20 @@
       "eligibility": "TL1 attempts with dispositions and compatible definitions; do not mix definition revisions or independent and repeated attempts.",
       "destination": "Attempt and candidate cohorts with their configurations.",
       "exploration_value": "Opens the existing TL1 data to precise reusable questions.",
-      "implementation_status": "Deferred",
-      "implemented_recipes": [],
-      "current_preview": "",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "tl1-advancement"
+      ],
+      "current_preview": "Attempt-level advancement/escalation rates and counts within project/flavor/execution-class/version/configuration cohorts.",
       "blocked_on_query_table": [
         "H05",
         "H02",
         "H09"
       ],
-      "blocked_on_pharos": "Upgrade map/v2 execution and constrain flavor/definition/execution-class populations; retain explicit per-attempt versus per-candidate measures.",
-      "calculation_gap": "TL1 attempt, candidate, configuration/version and outcome counters exist; cohort ratios require composed metrics and careful distinct identity.",
+      "blocked_on_pharos": "Retain cohort dimensions and per-attempt versus per-candidate semantics; no automatic quality ranking.",
+      "calculation_gap": "Composed rates execute now; they count attempts and do not establish candidate-level outcomes or configuration quality.",
       "performance_note": "Ratios of sums/distinct candidates are enabled by v2; cached TL1 rows can work until archive size warrants SQL facts.",
-      "after_metric_work": "available_after_integration"
+      "after_metric_work": "available_with_v2"
     },
     {
       "id": "models-06",
@@ -2390,9 +2408,11 @@
       "eligibility": "Enough observations per cohort and a clear supported feature; avoid unstable statistical discoveries from tiny samples.",
       "destination": "Full distributions, cohort definitions and the observations behind them.",
       "exploration_value": "Exposes the power of complex aggregation through a surprising but inspectable view.",
-      "implementation_status": "Deferred",
-      "implemented_recipes": [],
-      "current_preview": "",
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "distribution-cohorts"
+      ],
+      "current_preview": "Pooled and provider-grouped duration histograms, plus medians.",
       "blocked_on_query_table": [
         "H03",
         "H06",
@@ -2400,15 +2420,16 @@
         "H05",
         "L02"
       ],
-      "blocked_on_pharos": "Supply correct-grain populations/cohort labels and a supported feature detector; a manually chosen distribution can ship without automated claims.",
-      "calculation_gap": "v2 box/histogram can expose distributions, but detecting bimodality or cohort reversals needs statistical interpretation and compatible cohorts.",
+      "blocked_on_pharos": "Add a supported feature detector and correct-grain compatible cohorts before making automatic statistical claims.",
+      "calculation_gap": "Manual distribution comparison is executable; automated bimodality/cohort-reversal claims require statistics and compatible cohorts.",
       "performance_note": "Use shared bins and support gates; do not infer robust surprises from a sparse population or different bin extents.",
-      "after_metric_work": "needs_derived_dataset"
+      "after_metric_work": "partially_available_with_v2"
     }
   ],
   "implemented_recipes": [
     {
       "id": "correction-phrases",
+      "category": "steering",
       "idea": "conversation-02",
       "title": "Where am I correcting course?",
       "description": "Your messages containing explicit correction phrases.",
@@ -2452,15 +2473,14 @@
         }
       ],
       "measures": [],
-      "tone": "var(--warn)",
       "note": "Literal phrase matches; not a semantic classification"
     },
     {
       "dataset": "tool_calls",
       "field": "started_at",
       "unit": "calls",
-      "tone": "var(--bad)",
       "id": "tool-failures",
+      "category": "errors",
       "idea": "tools-01",
       "title": "Which tools keep failing?",
       "description": "The calls behind recurring tool failures.",
@@ -2492,8 +2512,8 @@
       "dataset": "tool_calls",
       "field": "started_at",
       "unit": "calls",
-      "tone": "var(--warn)",
       "id": "error-signatures",
+      "category": "errors",
       "idea": "tools-02",
       "title": "What error keeps coming back?",
       "description": "Repeated error signatures, with the original calls.",
@@ -2517,6 +2537,24 @@
             "error_signature"
           ],
           "label": "Calls by error signature"
+        },
+        {
+          "id": "count_distinct:conversation_id:error_signature",
+          "op": "count_distinct",
+          "field": "conversation_id",
+          "groupBy": [
+            "error_signature"
+          ],
+          "label": "Conversations per signature"
+        },
+        {
+          "id": "count_distinct:repository_name:error_signature",
+          "op": "count_distinct",
+          "field": "repository_name",
+          "groupBy": [
+            "error_signature"
+          ],
+          "label": "Repositories per signature"
         }
       ]
     },
@@ -2524,8 +2562,8 @@
       "dataset": "tool_calls",
       "field": "started_at",
       "unit": "ms",
-      "tone": "var(--gold)",
       "id": "slow-commands",
+      "category": "tools",
       "idea": "tools-05",
       "title": "Where is the waiting?",
       "description": "Recorded elapsed time by command; includes approval waits.",
@@ -2557,8 +2595,8 @@
       "dataset": "tool_calls",
       "field": "started_at",
       "unit": "calls",
-      "tone": "var(--bad)",
       "id": "edit-failures",
+      "category": "errors",
       "idea": "tools-07",
       "title": "Where do edits fail?",
       "description": "Failed edit calls, grouped by repository path.",
@@ -2582,6 +2620,23 @@
             "repo_path"
           ],
           "label": "Failed edits by path"
+        },
+        {
+          "id": "count::error_type",
+          "op": "count",
+          "groupBy": [
+            "error_type"
+          ],
+          "label": "Edit failure mechanisms"
+        },
+        {
+          "id": "count_distinct:conversation_id:repo_path",
+          "op": "count_distinct",
+          "field": "conversation_id",
+          "groupBy": [
+            "repo_path"
+          ],
+          "label": "Conversations with failed edits"
         }
       ]
     },
@@ -2589,8 +2644,8 @@
       "dataset": "tool_calls",
       "field": "started_at",
       "unit": "calls",
-      "tone": "var(--bad)",
       "id": "test-failures",
+      "category": "errors",
       "idea": "verification-01",
       "title": "Which checks need attention?",
       "description": "Recorded test failures by command, ready to inspect.",
@@ -2616,8 +2671,8 @@
       "dataset": "tool_calls",
       "field": "started_at",
       "unit": "tokens",
-      "tone": "var(--heat-2)",
       "id": "context-carried",
+      "category": "context",
       "idea": "context-01",
       "title": "What keeps riding in context?",
       "description": "Tool output carried into later requests, in attributed tokens.",
@@ -2645,8 +2700,8 @@
       "dataset": "tool_calls",
       "field": "started_at",
       "unit": "tokens",
-      "tone": "var(--heat-2)",
       "id": "large-outputs",
+      "category": "context",
       "idea": "context-02",
       "title": "What fills the context?",
       "description": "Result tokens added by each tool; inspect the largest outputs.",
@@ -2674,8 +2729,8 @@
       "dataset": "tool_calls",
       "field": "started_at",
       "unit": "calls",
-      "tone": "var(--warn)",
       "id": "truncated-outputs",
+      "category": "context",
       "idea": "context-02",
       "title": "What gets cut short?",
       "description": "Truncated tool outputs and the calls that produced them.",
@@ -2701,8 +2756,8 @@
       "dataset": "tool_calls",
       "field": "started_at",
       "unit": "calls",
-      "tone": "var(--sea)",
       "id": "read-paths",
+      "category": "context",
       "idea": "context-08",
       "title": "What do agents read?",
       "description": "Read calls by repository path, with their source evidence.",
@@ -2728,8 +2783,8 @@
       "dataset": "tool_calls",
       "field": "started_at",
       "unit": "calls",
-      "tone": "var(--heat-0)",
       "id": "research-queries",
+      "category": "research",
       "idea": "memory-02",
       "title": "What keeps getting researched?",
       "description": "Exact recorded search queries ranked by frequency.",
@@ -2755,8 +2810,8 @@
       "dataset": "tool_calls",
       "field": "started_at",
       "unit": "calls",
-      "tone": "var(--heat-0)",
       "id": "primary-domains",
+      "category": "research",
       "idea": "memory-01",
       "title": "Where does research lead?",
       "description": "Primary recorded hosts on tool calls; open the source URLs.",
@@ -2783,8 +2838,8 @@
       "dataset": "tool_calls",
       "field": "started_at",
       "unit": "calls",
-      "tone": "var(--sea)",
       "id": "mcp-methods",
+      "category": "tools",
       "idea": "skills-06",
       "title": "Which MCP methods do I use?",
       "description": "Recorded method calls across connected tools.",
@@ -2808,6 +2863,7 @@
     },
     {
       "id": "skill-evidence",
+      "category": "skills",
       "idea": "skills-01",
       "title": "Which skills are showing up?",
       "description": "Invocations and observed loads; evidence of use, not compliance.",
@@ -2822,12 +2878,30 @@
             "skill_name"
           ],
           "label": "Evidence by skill"
+        },
+        {
+          "id": "count::skill_name,evidence_type",
+          "op": "count",
+          "groupBy": [
+            "skill_name",
+            "evidence_type"
+          ],
+          "label": "Skill evidence types"
+        },
+        {
+          "id": "count_distinct:conversation_id:skill_name",
+          "op": "count_distinct",
+          "field": "conversation_id",
+          "groupBy": [
+            "skill_name"
+          ],
+          "label": "Conversations per skill"
         }
-      ],
-      "tone": "var(--sea)"
+      ]
     },
     {
       "id": "skill-load-failures",
+      "category": "errors",
       "idea": "skills-04",
       "title": "Which skill loads fail?",
       "description": "Skill evidence whose parent call recorded an error.",
@@ -2849,12 +2923,30 @@
             "skill_name"
           ],
           "label": "Failed skill evidence"
+        },
+        {
+          "id": "count::skill_path,provider",
+          "op": "count",
+          "groupBy": [
+            "skill_path",
+            "provider"
+          ],
+          "label": "Failed skill paths and providers"
+        },
+        {
+          "id": "count_distinct:conversation_id:skill_name",
+          "op": "count_distinct",
+          "field": "conversation_id",
+          "groupBy": [
+            "skill_name"
+          ],
+          "label": "Conversations with failed skill evidence"
         }
-      ],
-      "tone": "var(--warn)"
+      ]
     },
     {
       "id": "human-words",
+      "category": "human",
       "idea": "human-01",
       "title": "How much am I writing?",
       "description": "Words classified as typed or dictated, day by day.",
@@ -2878,11 +2970,11 @@
           ],
           "label": "Your words per day"
         }
-      ],
-      "tone": "var(--gold)"
+      ]
     },
     {
       "id": "explaining-repos",
+      "category": "human",
       "idea": "human-02",
       "title": "Where do I explain the most?",
       "description": "Your typed words across repositories in this window.",
@@ -2907,15 +2999,14 @@
           "label": "Your words by repository"
         }
       ],
-      "tone": "var(--gold)",
       "scope": "repository_name"
     },
     {
       "dataset": "usage",
       "field": "first_usage_at",
       "unit": "tokens",
-      "tone": "var(--heat-1)",
       "id": "usage-models",
+      "category": "models",
       "idea": "models-01",
       "title": "Which models do the work?",
       "description": "Token use by model, day by day.",
@@ -2944,8 +3035,8 @@
       "dataset": "usage",
       "field": "first_usage_at",
       "unit": "tokens",
-      "tone": "var(--heat-1)",
       "id": "usage-repos",
+      "category": "usage",
       "idea": "cost-01",
       "title": "Where does my usage go?",
       "description": "Daily tokens across your repositories.",
@@ -2974,8 +3065,8 @@
       "dataset": "usage",
       "field": "first_usage_at",
       "unit": "USD",
-      "tone": "var(--gold)",
       "id": "cost-repos",
+      "category": "cost",
       "idea": "cost-01",
       "title": "What is the API equivalent?",
       "description": "Recorded usage priced at standard API rates, by repository.",
@@ -3005,8 +3096,8 @@
       "dataset": "usage",
       "field": "first_usage_at",
       "unit": "tokens",
-      "tone": "var(--heat-0)",
       "id": "cache-reads",
+      "category": "context",
       "idea": "cost-03",
       "title": "Where is caching used?",
       "description": "Recorded cache-read tokens by model; inspect usage details.",
@@ -3035,8 +3126,8 @@
       "dataset": "usage",
       "field": "first_usage_at",
       "unit": "tokens",
-      "tone": "var(--heat-2)",
       "id": "subagent-usage",
+      "category": "delegation",
       "idea": "models-06",
       "title": "What happens in subagents?",
       "description": "Attributed subagent tokens across repositories.",
@@ -3065,6 +3156,788 @@
         }
       ],
       "scope": "repository_name"
+    },
+    {
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "calls",
+      "id": "tool-failure-rates",
+      "idea": "tools-01",
+      "category": "errors",
+      "title": "Which tools fail most often?",
+      "description": "Failure rates with failed and total calls side by side.",
+      "measures": [
+        {
+          "id": "failure-rate",
+          "expression": "SUM([error_count])/NULLIF(SUM([call_count]),0)",
+          "op": "count",
+          "groupBy": [
+            "tool_name"
+          ],
+          "label": "Failure rate",
+          "display": {
+            "kind": "list",
+            "format": {
+              "kind": "percent",
+              "decimals": 1
+            }
+          },
+          "groupLimit": 8
+        },
+        {
+          "id": "failures",
+          "op": "sum",
+          "field": "error_count",
+          "groupBy": [
+            "tool_name"
+          ],
+          "label": "Failed calls"
+        },
+        {
+          "id": "calls",
+          "op": "sum",
+          "field": "call_count",
+          "groupBy": [
+            "tool_name"
+          ],
+          "label": "All calls"
+        }
+      ],
+      "eligibility": {
+        "metricId": "failures",
+        "minValue": 1
+      },
+      "note": "Includes successful calls in the denominator; sample sizes are shown in the full view"
+    },
+    {
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "calls",
+      "id": "duration-distribution",
+      "idea": "tools-05",
+      "category": "tools",
+      "title": "What does the waiting look like?",
+      "description": "Typical durations and the long tail, by command.",
+      "where": [
+        {
+          "field": "duration_ms",
+          "op": "is_not_null",
+          "value": ""
+        },
+        {
+          "field": "command_name",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "measures": [
+        {
+          "id": "duration-box",
+          "op": "count",
+          "groupBy": [
+            "command_name"
+          ],
+          "label": "Recorded call durations",
+          "distribution": {
+            "kind": "box",
+            "input": "[duration_ms]",
+            "whiskers": "tukey"
+          },
+          "display": {
+            "kind": "box",
+            "format": {
+              "kind": "duration",
+              "sourceUnit": "milliseconds"
+            }
+          },
+          "groupLimit": 8
+        },
+        {
+          "id": "timed-calls",
+          "op": "count",
+          "groupBy": [
+            "command_name"
+          ],
+          "label": "Timed calls"
+        },
+        {
+          "id": "duration-histogram",
+          "op": "count",
+          "groupBy": [],
+          "label": "Recorded waiting time",
+          "distribution": {
+            "kind": "histogram",
+            "input": "[duration_ms]",
+            "bins": 12
+          },
+          "display": {
+            "kind": "histogram",
+            "format": {
+              "kind": "duration",
+              "sourceUnit": "milliseconds"
+            }
+          },
+          "groupLimit": 4
+        }
+      ],
+      "note": "Only calls with recorded durations; includes approval waits"
+    },
+    {
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "calls",
+      "id": "output-distribution",
+      "idea": "context-02",
+      "category": "context",
+      "title": "How big are tool outputs?",
+      "description": "Output-token distributions with attribution sources separated.",
+      "where": [
+        {
+          "field": "result_tokens",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "measures": [
+        {
+          "id": "output-histogram",
+          "op": "count",
+          "groupBy": [
+            "result_tokens_source"
+          ],
+          "label": "Output tokens by attribution source",
+          "distribution": {
+            "kind": "histogram",
+            "input": "[result_tokens]",
+            "bins": 12
+          },
+          "display": {
+            "kind": "histogram"
+          },
+          "groupLimit": 4
+        },
+        {
+          "id": "output-median",
+          "op": "count",
+          "groupBy": [
+            "tool_name",
+            "result_tokens_source"
+          ],
+          "label": "Output medians and spread",
+          "distribution": {
+            "kind": "box",
+            "input": "[result_tokens]",
+            "whiskers": "tukey"
+          },
+          "display": {
+            "kind": "box"
+          },
+          "groupLimit": 8
+        }
+      ],
+      "note": "Measured and estimated token sources remain separate"
+    },
+    {
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "calls",
+      "id": "output-duration",
+      "idea": "context-02",
+      "category": "context",
+      "title": "Do slower tools produce more output?",
+      "description": "Average duration versus average output, by tool and token source.",
+      "where": [
+        {
+          "field": "duration_ms",
+          "op": "is_not_null",
+          "value": ""
+        },
+        {
+          "field": "result_tokens",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "measures": [
+        {
+          "id": "duration-output",
+          "expression": "AVG([duration_ms])",
+          "op": "count",
+          "groupBy": [
+            "tool_name",
+            "result_tokens_source"
+          ],
+          "label": "Duration and output",
+          "display": {
+            "kind": "scatter",
+            "xLabel": "Average duration",
+            "yLabel": "Average output tokens",
+            "xFormat": {
+              "kind": "duration",
+              "sourceUnit": "milliseconds"
+            }
+          },
+          "groupLimit": 24,
+          "expressionY": "AVG([result_tokens])"
+        }
+      ],
+      "note": "Observed association; timed calls only, with measured and estimated sources separated"
+    },
+    {
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "calls",
+      "id": "error-reach",
+      "idea": "tools-02",
+      "category": "errors",
+      "title": "Which errors reach the most projects?",
+      "description": "Error signatures ranked by distinct repositories, with conversation counts.",
+      "where": [
+        {
+          "field": "error_count",
+          "op": ">",
+          "value": "0"
+        },
+        {
+          "field": "error_signature",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "measures": [
+        {
+          "id": "error-repositories",
+          "op": "count_distinct",
+          "field": "repository_name",
+          "groupBy": [
+            "error_signature"
+          ],
+          "label": "Repositories per error",
+          "groupLimit": 8
+        },
+        {
+          "id": "error-conversations",
+          "op": "count_distinct",
+          "field": "conversation_id",
+          "groupBy": [
+            "error_signature"
+          ],
+          "label": "Conversations per error",
+          "groupLimit": 8
+        },
+        {
+          "id": "error-calls",
+          "op": "count",
+          "groupBy": [
+            "error_signature"
+          ],
+          "label": "Failed calls"
+        }
+      ],
+      "eligibility": {
+        "metricId": "error-repositories",
+        "minValue": 2
+      }
+    },
+    {
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "calls",
+      "id": "cross-repo-errors",
+      "idea": "tools-08",
+      "category": "errors",
+      "title": "Where do the same errors show up?",
+      "description": "A repository-by-error table of recorded failed calls.",
+      "where": [
+        {
+          "field": "error_count",
+          "op": ">",
+          "value": "0"
+        },
+        {
+          "field": "error_signature",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "measures": [
+        {
+          "id": "error-matrix",
+          "op": "count",
+          "groupBy": [
+            "repository_name",
+            "error_signature"
+          ],
+          "label": "Failed calls by repository and error",
+          "display": {
+            "kind": "table"
+          },
+          "groupLimit": 30
+        },
+        {
+          "id": "error-breadth",
+          "op": "count_distinct",
+          "field": "repository_name",
+          "groupBy": [
+            "error_signature"
+          ],
+          "label": "Repository reach",
+          "groupLimit": 8
+        }
+      ],
+      "eligibility": {
+        "metricId": "error-breadth",
+        "minValue": 2
+      },
+      "note": "Recorded counts; not normalized for repository call volume"
+    },
+    {
+      "id": "skill-reach",
+      "idea": "skills-02",
+      "category": "skills",
+      "title": "Which skills travel across projects?",
+      "description": "Skills ranked by repository reach, with conversations and evidence types.",
+      "dataset": "skill_usages",
+      "field": "created_at",
+      "unit": "repositories",
+      "measures": [
+        {
+          "id": "skill-repositories",
+          "op": "count_distinct",
+          "field": "repository_name",
+          "groupBy": [
+            "skill_name"
+          ],
+          "label": "Repositories per skill",
+          "groupLimit": 8
+        },
+        {
+          "id": "skill-conversations",
+          "op": "count_distinct",
+          "field": "conversation_id",
+          "groupBy": [
+            "skill_name"
+          ],
+          "label": "Conversations per skill",
+          "groupLimit": 8
+        },
+        {
+          "id": "skill-evidence-types",
+          "op": "count",
+          "groupBy": [
+            "skill_name",
+            "evidence_type"
+          ],
+          "label": "Evidence types by skill",
+          "display": {
+            "kind": "table"
+          }
+        }
+      ],
+      "eligibility": {
+        "metricId": "skill-repositories",
+        "minValue": 2
+      },
+      "note": "Observed invocations and loads; not evidence of instruction compliance"
+    },
+    {
+      "id": "tl1-advancement",
+      "idea": "models-05",
+      "category": "models",
+      "title": "Which TL1 configurations advance?",
+      "description": "Attempt-level advancement and escalation within project, flavor and version cohorts.",
+      "dataset": "tl1_attempts",
+      "field": "started_at",
+      "unit": "attempts",
+      "where": [
+        {
+          "field": "configuration",
+          "op": "is_not_null",
+          "value": ""
+        },
+        {
+          "field": "shape_version",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "measures": [
+        {
+          "id": "advancement-rate",
+          "expression": "SUM([advanced_count])/NULLIF(SUM([attempt_count]),0)",
+          "op": "count",
+          "groupBy": [
+            "project",
+            "flavor",
+            "execution_class",
+            "shape_version",
+            "configuration"
+          ],
+          "label": "Advancement rate",
+          "display": {
+            "kind": "table",
+            "format": {
+              "kind": "percent",
+              "decimals": 1
+            }
+          },
+          "groupLimit": 8
+        },
+        {
+          "id": "escalation-rate",
+          "expression": "SUM([escalated_count])/NULLIF(SUM([attempt_count]),0)",
+          "op": "count",
+          "groupBy": [
+            "project",
+            "flavor",
+            "execution_class",
+            "shape_version",
+            "configuration"
+          ],
+          "label": "Escalation rate",
+          "display": {
+            "kind": "table",
+            "format": {
+              "kind": "percent",
+              "decimals": 1
+            }
+          },
+          "groupLimit": 8
+        },
+        {
+          "id": "attempts",
+          "op": "sum",
+          "field": "attempt_count",
+          "groupBy": [
+            "project",
+            "flavor",
+            "execution_class",
+            "shape_version",
+            "configuration"
+          ],
+          "label": "Attempt counts"
+        }
+      ],
+      "eligibility": {
+        "metricId": "attempts",
+        "minValue": 3
+      },
+      "note": "Each attempt counts once; cohorts retain project, flavor, execution class and version. Rates do not establish configuration quality"
+    },
+    {
+      "id": "price-comparison",
+      "idea": "cost-04",
+      "category": "cost",
+      "title": "What would today’s prices change?",
+      "description": "Historical API equivalent versus today's rates for the same recorded usage.",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "unit": "USD",
+      "where": [
+        {
+          "field": "cost_usd",
+          "op": "is_not_null",
+          "value": ""
+        },
+        {
+          "field": "cost_today_usd",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "measures": [
+        {
+          "id": "price-pair",
+          "expression": "SUM([cost_usd])",
+          "op": "count",
+          "groupBy": [
+            "repository_name"
+          ],
+          "label": "Historical versus current pricing",
+          "display": {
+            "kind": "scatter",
+            "xLabel": "Historical API $",
+            "yLabel": "Today's API $",
+            "xFormat": {
+              "kind": "number",
+              "decimals": 2
+            },
+            "yFormat": {
+              "kind": "number",
+              "decimals": 2
+            }
+          },
+          "groupLimit": 8,
+          "expressionY": "SUM([cost_today_usd])"
+        },
+        {
+          "id": "price-difference",
+          "expression": "SUM([cost_today_usd])-SUM([cost_usd])",
+          "op": "count",
+          "groupBy": [
+            "repository_name"
+          ],
+          "label": "Today's minus historical API $",
+          "display": {
+            "kind": "list"
+          },
+          "groupLimit": 8
+        },
+        {
+          "id": "historical-cost",
+          "op": "sum",
+          "field": "cost_usd",
+          "groupBy": [
+            "repository_name"
+          ],
+          "label": "Historical API $"
+        },
+        {
+          "id": "current-cost",
+          "op": "sum",
+          "field": "cost_today_usd",
+          "groupBy": [
+            "repository_name"
+          ],
+          "label": "Today's API $"
+        }
+      ],
+      "note": "Uses the two retained price schedules; partial and assumed pricing may contribute"
+    },
+    {
+      "id": "expensive-work",
+      "idea": "cost-02",
+      "category": "cost",
+      "title": "Which recent work has the largest lifetime cost?",
+      "description": "Lifetime API-equivalent totals for recently active work, with a cost distribution.",
+      "dataset": "library",
+      "field": "activity_at",
+      "unit": "USD",
+      "where": [
+        {
+          "field": "cost_usd",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [
+        {
+          "id": "work-costs",
+          "op": "sum",
+          "field": "cost_usd",
+          "groupBy": [
+            "id",
+            "title"
+          ],
+          "label": "Lifetime work API $",
+          "display": {
+            "kind": "table"
+          },
+          "groupLimit": 8
+        },
+        {
+          "id": "work-cost-distribution",
+          "op": "count",
+          "groupBy": [],
+          "label": "Lifetime work cost distribution",
+          "distribution": {
+            "kind": "histogram",
+            "input": "[cost_usd]",
+            "bins": 12
+          },
+          "display": {
+            "kind": "histogram"
+          },
+          "groupLimit": 4
+        }
+      ],
+      "note": "Activity selects the work; costs cover its full retained lifetime, not just this window. Work is not necessarily one task"
+    },
+    {
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "calls",
+      "id": "distribution-cohorts",
+      "idea": "learning-08",
+      "category": "tools",
+      "title": "What does an average hide?",
+      "description": "Recorded duration distributions, overall and separated by provider.",
+      "where": [
+        {
+          "field": "duration_ms",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "measures": [
+        {
+          "id": "provider-durations",
+          "op": "count",
+          "groupBy": [
+            "provider"
+          ],
+          "label": "Recorded duration by provider",
+          "distribution": {
+            "kind": "histogram",
+            "input": "[duration_ms]",
+            "bins": 12
+          },
+          "display": {
+            "kind": "histogram",
+            "format": {
+              "kind": "duration",
+              "sourceUnit": "milliseconds"
+            }
+          },
+          "groupLimit": 4
+        },
+        {
+          "id": "all-durations",
+          "op": "count",
+          "groupBy": [],
+          "label": "All recorded durations",
+          "distribution": {
+            "kind": "histogram",
+            "input": "[duration_ms]",
+            "bins": 12
+          },
+          "display": {
+            "kind": "histogram",
+            "format": {
+              "kind": "duration",
+              "sourceUnit": "milliseconds"
+            }
+          },
+          "groupLimit": 4
+        },
+        {
+          "id": "provider-median",
+          "op": "count",
+          "groupBy": [
+            "provider"
+          ],
+          "label": "Provider medians and spread",
+          "distribution": {
+            "kind": "box",
+            "input": "[duration_ms]",
+            "whiskers": "tukey"
+          },
+          "display": {
+            "kind": "box",
+            "format": {
+              "kind": "duration",
+              "sourceUnit": "milliseconds"
+            }
+          },
+          "groupLimit": 8
+        }
+      ],
+      "note": "A distribution comparison; no automatic claim of bimodality, causality or provider quality"
+    },
+    {
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "calls",
+      "id": "repeated-reads",
+      "idea": "context-03",
+      "category": "context",
+      "title": "Which paths keep getting read?",
+      "description": "Recorded read calls ranked by path, with distinct conversation counts.",
+      "where": [
+        {
+          "field": "tool_category",
+          "op": "=",
+          "value": "read"
+        },
+        {
+          "field": "repo_path",
+          "op": "is_not_null",
+          "value": ""
+        }
+      ],
+      "measures": [
+        {
+          "id": "path-reads",
+          "op": "count",
+          "groupBy": [
+            "repository_name",
+            "repo_path"
+          ],
+          "label": "Read calls by repository path",
+          "display": {
+            "kind": "table"
+          },
+          "groupLimit": 8
+        },
+        {
+          "id": "read-conversations",
+          "op": "count_distinct",
+          "field": "conversation_id",
+          "groupBy": [
+            "repository_name",
+            "repo_path"
+          ],
+          "label": "Conversations reading each path",
+          "groupLimit": 8
+        }
+      ],
+      "eligibility": {
+        "metricId": "path-reads",
+        "minValue": 2
+      },
+      "note": "Counts retained read calls; does not establish unchanged content or within-stream retries"
+    },
+    {
+      "id": "human-word-mix",
+      "idea": "human-01",
+      "category": "human",
+      "title": "How much of my message text am I writing?",
+      "description": "Typed or dictated words as a share of retained message words, by repository.",
+      "dataset": "writing_messages",
+      "field": "sent_at",
+      "unit": "words",
+      "measures": [
+        {
+          "id": "typed-word-share",
+          "expression": "SUM([typed_words])/NULLIF(SUM([words]),0)",
+          "op": "count",
+          "groupBy": [
+            "repository_name"
+          ],
+          "label": "Typed or dictated share",
+          "display": {
+            "kind": "list",
+            "format": {
+              "kind": "percent",
+              "decimals": 1
+            }
+          },
+          "groupLimit": 8
+        },
+        {
+          "id": "typed-word-count",
+          "op": "sum",
+          "field": "typed_words",
+          "groupBy": [
+            "repository_name"
+          ],
+          "label": "Typed or dictated words"
+        },
+        {
+          "id": "retained-word-count",
+          "op": "sum",
+          "field": "words",
+          "groupBy": [
+            "repository_name"
+          ],
+          "label": "All retained message words"
+        }
+      ],
+      "eligibility": {
+        "metricId": "typed-word-count",
+        "minValue": 1
+      },
+      "note": "Uses existing authorship classification; retained message text can include pasted or injected content"
     }
   ],
   "query_table_requests": [
@@ -3144,7 +4017,9 @@
         "Q3",
         "Q11",
         "P7"
-      ]
+      ],
+      "implementation_status": "Partial implementation",
+      "current_status": "Signed elapsed datetime operands execute with one clock; Pharos retains whole local-calendar rolling windows. Native timezone buckets and aligned before/after period populations remain deferred."
     },
     {
       "id": "H05",
@@ -3162,7 +4037,9 @@
         "Q5",
         "Q7",
         "P2"
-      ]
+      ],
+      "implementation_status": "Partial implementation",
+      "current_status": "V2 supports composed scalar metrics and paired X/Y at one grain. The patched SQLite adapter reuses identical plans and shares/fuses compatible reductions. Home batches up to 20 metrics sharing the same population; arbitrary named multi-output relations remain deferred."
     },
     {
       "id": "H06",
@@ -3182,7 +4059,9 @@
         "Q5",
         "Q6",
         "Q14"
-      ]
+      ],
+      "implementation_status": "Partial implementation",
+      "current_status": "Exact box summaries deliver medians and quartiles through the browser and saved-view path. Scalar MEDIAN is supported by the Go adapter but rejected by npm core 0.6.0. Arbitrary scalar percentiles such as p95 remain outside the current SQLite expression profile."
     },
     {
       "id": "H07",
@@ -3201,7 +4080,9 @@
         "Q12",
         "P6",
         "P9"
-      ]
+      ],
+      "implementation_status": "Partial implementation",
+      "current_status": "Native MetricCard supports typed group inspection callbacks. Home opens the complete saved view; richer evidence hydration and range-aware contributor resolution remain host work."
     },
     {
       "id": "H08",
@@ -3219,7 +4100,9 @@
         "Q8",
         "Q4",
         "Q12"
-      ]
+      ],
+      "implementation_status": "Partial implementation",
+      "current_status": "Home uses the exported native MetricCard in a bounded compact wrapper. This is a Pharos presentation adapter; a dedicated upstream plot-only contract remains proposed."
     },
     {
       "id": "H09",
@@ -3242,7 +4125,9 @@
         "P9",
         "Q15",
         "Q16"
-      ]
+      ],
+      "implementation_status": "Partial implementation",
+      "current_status": "V2 returns computational coverage, processed rows and group counts with explicit execution budgets/cancellation. Host data freshness, provenance and cross-request snapshot guarantees remain separate."
     },
     {
       "id": "H10",
@@ -3261,7 +4146,9 @@
         "Q2",
         "Q3",
         "Q7"
-      ]
+      ],
+      "implementation_status": "Implemented for Pharos SQLite/map",
+      "current_status": "All ten schemas execute through the negotiated qt-sqlite-v1 profile, with canonical revisions, typed rows and integration/conformance coverage."
     },
     {
       "id": "H11",
@@ -3298,7 +4185,9 @@
         "Q4",
         "Q12",
         "P7"
-      ]
+      ],
+      "implementation_status": "Partial implementation",
+      "current_status": "Native line/bar series and pivots are available; Home retains calendar-aware Usage columns with shared colors. Native heatmaps and the full missing/zero/remainder series contract remain deferred."
     },
     {
       "id": "H13",
@@ -3332,7 +4221,9 @@
       "performance": "This is storage/API work rather than metric computation. Metadata changes should not invalidate arithmetic or recreate saved IDs.",
       "evidence": [
         "Q10"
-      ]
+      ],
+      "implementation_status": "Implemented in Pharos",
+      "current_status": "Stable bookmark metadata, ordering and cross-dataset collection are host-owned. Optional coverMetricId selects a saved metric without changing the query or bookmark ID."
     },
     {
       "id": "M01",
@@ -3474,7 +4365,9 @@
         "Q5",
         "Q7",
         "Q9"
-      ]
+      ],
+      "implementation_status": "Implemented in Pharos",
+      "current_status": "The headless preview runner batches compatible populations, caps metric batches at 20 and executions at three, publishes partial completion, isolates rejected formulas and supports cancellation and one-minute result reuse."
     },
     {
       "id": "L01",

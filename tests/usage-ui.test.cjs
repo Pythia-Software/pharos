@@ -66,27 +66,30 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     assert.equal(await page.locator('.refresh-prices.attention').count(), 0);
     assert.equal(await page.locator('.refresh-prices-notice p').count(), 0);
     // Scale changes redraw locally and are remembered across reloads.
-    const scaleControls = page.getByRole('group', { name: 'Scale', exact: true });
+    const scaleControls = page.getByRole('combobox', { name: 'Scale', exact: true });
     const scaleRequests = aggregations.length;
     const scaleQuery = new URL(page.url()).searchParams.get('q_usage');
-    assert.equal(await scaleControls.getByRole('button', { name: 'Half-and-half' }).getAttribute('aria-pressed'), 'true');
+    assert.equal(await scaleControls.inputValue(), 'half');
     await page.locator('.usage-chart-break').waitFor();
-    await scaleControls.getByRole('button', { name: 'Linear', exact: true }).click();
+    await scaleControls.selectOption('linear');
     assert.equal(await page.locator('.usage-chart-break').count(), 0);
     assert.match(await page.locator('.usage-chart-bars').getAttribute('aria-label'), /linear scale/);
     const linearGrid = await page.locator('.usage-chart-grid').evaluateAll(lines => lines.map(line => [line.textContent, line.style.bottom]));
-    await scaleControls.getByRole('button', { name: 'Logarithmic' }).click();
+    await scaleControls.selectOption('logarithmic');
     assert.match(await page.locator('.usage-chart-bars').getAttribute('aria-label'), /logarithmic scale/);
     assert.notDeepEqual(await page.locator('.usage-chart-grid').evaluateAll(lines => lines.map(line => [line.textContent, line.style.bottom])), linearGrid);
     assert.equal(aggregations.length, scaleRequests);
     assert.equal(new URL(page.url()).searchParams.get('q_usage'), scaleQuery);
     await page.reload();
     await page.locator('.token-summary .mcp-metric').first().waitFor();
-    assert.equal(await scaleControls.getByRole('button', { name: 'Logarithmic' }).getAttribute('aria-pressed'), 'true');
-    await scaleControls.getByRole('button', { name: 'Half-and-half' }).click();
+    assert.equal(await scaleControls.inputValue(), 'logarithmic');
+    await scaleControls.selectOption('half');
     // Editable period controls use hourly data, combine buckets, and persist.
-    const by = page.getByRole('group', { name: 'By', exact: true });
-    await by.getByRole('button', { name: 'Hour', exact: true }).click();
+    const by = page.getByRole('group', { name: 'Chart interval', exact: true });
+    const interval = by.getByRole('combobox', { name: 'Chart interval', exact: true });
+    assert.equal(await interval.inputValue(), 'week');
+    assert.equal(await by.getByRole('spinbutton').count(), 0);
+    await interval.selectOption('hour');
     await page.locator('.usage-chart h3', { hasText: 'Tokens per hour by token type' }).waitFor();
     await page.waitForFunction(() => document.querySelector('.usage-chart-bars > span:last-child')?.getAttribute('aria-label')?.includes('Uncached input'));
     assert.deepEqual(aggregations.at(-1).aggregations[0].groupBy, ['hour']);
@@ -95,24 +98,35 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     const hourQuery = decodeQuery(new URL(page.url()).searchParams.get('q_usage'));
     const hourFrom = hourQuery.where.find(term => term.field === 'last_usage_at' && term.op === '>=');
     assert.equal(new Date(hourFrom.value).getTime(), new Date(periodKey('hour')).getTime());
-    await page.locator('.usage-chart').getByRole('button', { name: 'All time', exact: true }).click();
+    await page.getByRole('combobox', { name: 'Range', exact: true }).selectOption('all');
 
+    await interval.selectOption('hours');
     await by.getByRole('spinbutton', { name: 'Number of hours' }).fill('6');
     await page.locator('.usage-chart h3', { hasText: 'Tokens per 6 hours by token type' }).waitFor();
-    assert.equal(await by.getByRole('button', { name: 'N hours', exact: true }).getAttribute('aria-pressed'), 'true');
-    await page.getByRole('spinbutton', { name: 'Smoothing periods' }).fill('2');
-    assert.equal(await page.locator('.usage-rolling-unit').innerText(), '6-hour periods');
-    await page.getByRole('spinbutton', { name: 'Smoothing periods' }).fill('0');
+    assert.equal(await interval.inputValue(), 'hours');
+    assert.equal(await by.getByRole('spinbutton').count(), 1);
+    await page.getByRole('combobox', { name: 'Smoothing', exact: true }).selectOption('2');
+    assert.equal(await page.getByRole('combobox', { name: 'Smoothing', exact: true }).locator('option[value="2"]').textContent(), '12 hours');
+    await page.locator('.usage-chart-average-label', { hasText: '12-hour rolling average' }).waitFor();
+    await page.getByRole('combobox', { name: 'Smoothing', exact: true }).selectOption('0');
+    await interval.selectOption('days');
     await by.getByRole('spinbutton', { name: 'Number of days' }).fill('4');
     await page.locator('.usage-chart h3', { hasText: 'Tokens per 4 days by token type' }).waitFor();
     assert.deepEqual(aggregations.at(-1).aggregations[0].groupBy, ['day']);
     await page.reload();
     await page.locator('.usage-chart h3', { hasText: 'Tokens per 4 days by token type' }).waitFor();
     assert.equal(await by.getByRole('spinbutton', { name: 'Number of days' }).inputValue(), '4');
+    assert.equal(await interval.inputValue(), 'days');
+    assert.equal(await by.getByRole('spinbutton', { name: 'Number of hours' }).count(), 0);
+    await interval.selectOption('hours');
     assert.equal(await by.getByRole('spinbutton', { name: 'Number of hours' }).inputValue(), '6');
+    await interval.selectOption('days');
     await by.getByRole('spinbutton', { name: 'Number of days' }).fill('0');
-    await by.getByRole('button', { name: 'Week', exact: true }).click();
+    await interval.selectOption('week');
+    assert.equal(await by.getByRole('spinbutton').count(), 0);
+    await interval.selectOption('days');
     assert.equal(await by.getByRole('spinbutton', { name: 'Number of days' }).inputValue(), '4');
+    await interval.selectOption('week');
     await page.locator('.usage-chart h3', { hasText: 'Tokens per week by token type' }).waitFor();
     pricing = { ...pricing, unpriced_models: [{ model: 'new-model', provider: 'test', tokens: 50, first_day: day(1), last_day: day(1) }] };
     await page.evaluate(() => window.dispatchEvent(new Event('pharos:usage-refresh')));
@@ -162,34 +176,34 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     assert.equal(aggregations.length, tokenRequests);
 
     // Cost share also falls back from token type, while token share supports it.
-    await page.locator('.usage-chart').getByRole('button', { name: '% Cost', exact: true }).click();
+    await page.getByRole('combobox', { name: 'Metric', exact: true }).selectOption('percent_cost');
     await page.locator('#usage .usage-chart h3', { hasText: 'Cost share per week by provider' }).waitFor();
-    assert.equal(await page.locator('.usage-chart').getByRole('button', { name: 'Token type' }).isDisabled(), true);
+    assert.equal(await page.getByRole('combobox', { name: 'Breakdown', exact: true }).locator('option[value="type"]').evaluate(option => option.disabled), true);
     assert.equal(aggregations.at(-1).aggregations[0].field, 'cost_usd');
-    await page.locator('.usage-chart').getByRole('button', { name: '% Tokens', exact: true }).click();
+    await page.getByRole('combobox', { name: 'Metric', exact: true }).selectOption('percent');
     await page.locator('#usage .usage-chart h3', { hasText: 'Token share per week by token type' }).waitFor();
-    assert.equal(await page.locator('.usage-chart').getByRole('button', { name: 'Token type' }).isDisabled(), false);
+    assert.equal(await page.getByRole('combobox', { name: 'Breakdown', exact: true }).locator('option[value="type"]').evaluate(option => option.disabled), false);
 
     // Cost can't split by token type, so the split falls back to provider.
-    await page.locator('.usage-chart').getByRole('button', { name: 'Cost', exact: true }).click();
+    await page.getByRole('combobox', { name: 'Metric', exact: true }).selectOption('cost');
     await page.locator('#usage .usage-chart h3', { hasText: 'API cost per week by provider' }).waitFor();
-    assert.equal(await page.locator('.usage-chart').getByRole('button', { name: 'Token type' }).isDisabled(), true);
+    assert.equal(await page.getByRole('combobox', { name: 'Breakdown', exact: true }).locator('option[value="type"]').evaluate(option => option.disabled), true);
     assert.deepEqual(aggregations.at(-1).aggregations[0].groupBy, ['week', 'provider']);
     await page.waitForFunction(() => document.querySelector('.usage-chart-bars > span:last-child')?.getAttribute('aria-label')?.includes('$1.3T'));
     assert.match(await page.locator('.usage-chart-grid').first().innerText(), /\$\d+(?:\.\d+)?[BT]/);
-    await page.locator('.usage-chart').getByRole('button', { name: 'Month', exact: true }).click();
+    await interval.selectOption('month');
     await page.locator('.usage-chart-legend', { hasText: 'Claude' }).waitFor();
 
     // Range sets how many columns show; gridlines replace the peak label.
-    await page.locator('.usage-chart').getByRole('button', { name: 'Day', exact: true }).click();
-    await page.locator('.usage-chart').getByRole('button', { name: '30 days' }).click();
+    await interval.selectOption('day');
+    await page.getByRole('combobox', { name: 'Range', exact: true }).selectOption('30d');
     await page.waitForFunction(() => document.querySelectorAll('.usage-chart-bars > span').length === 30);
     await page.locator('.usage-chart-grid').first().waitFor();
     assert.doesNotMatch(await page.locator('.usage-chart-axis').innerText(), /peak/);
 
     // The hover key lists each series with its color, and Other names what it holds.
-    await page.locator('.usage-chart').getByRole('button', { name: 'Tokens', exact: true }).click();
-    await page.locator('.usage-chart').getByRole('button', { name: 'Model', exact: true }).click();
+    await page.getByRole('combobox', { name: 'Metric', exact: true }).selectOption('tokens');
+    await page.getByRole('combobox', { name: 'Breakdown', exact: true }).selectOption('model_family');
     await page.locator('.usage-chart-legend', { hasText: 'Other (9)' }).waitFor();
     const swatchColors = () => page.locator('.usage-chart-legend .usage-legend-item:not(.usage-legend-clear)').evaluateAll(items => Object.fromEntries(items.map(item => [item.getAttribute('aria-label') ?? item.textContent.trim(), getComputedStyle(item.querySelector('.usage-swatch')).backgroundColor])));
     const initialColors = await swatchColors();
@@ -277,14 +291,14 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     await opus.click();
     await menu.getByRole('menuitem', { name: 'Show all values', exact: true }).click();
     await page.waitForFunction(() => !document.querySelector('.usage-legend-clear'));
-    await page.locator('.usage-chart').getByRole('button', { name: '% Tokens', exact: true }).click();
+    await page.getByRole('combobox', { name: 'Metric', exact: true }).selectOption('percent');
     await page.locator('#usage .usage-chart h3', { hasText: 'Token share per day by model' }).waitFor();
     await page.waitForFunction(() => document.querySelector('.usage-chart-bars > span:last-child')?.getAttribute('aria-label')?.includes('100% in all'));
     assert.match(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), /100% in all/);
     assert.deepEqual(await page.locator('.usage-chart-grid span').allTextContents(), ['25%', '50%', '75%', '100%']);
-    assert.equal(await scaleControls.getByRole('button', { name: 'Linear', exact: true }).getAttribute('aria-pressed'), 'true');
-    assert.equal(await scaleControls.getByRole('button', { name: 'Logarithmic' }).isDisabled(), true);
-    assert.equal(await scaleControls.getByRole('button', { name: 'Half-and-half' }).isDisabled(), true);
+    assert.equal(await scaleControls.inputValue(), 'linear');
+    assert.equal(await scaleControls.isDisabled(), true);
+    assert.equal(await page.locator('.usage-chart-control-note').innerText(), 'Shares use a linear scale.');
 
     assert.equal(await page.locator('.usage-chart-bars > span').last().locator('i').evaluateAll(parts => Math.round(parts.reduce((sum, part) => sum + parseFloat(part.style.height), 0))), 100);
     assert.equal(await page.locator('.usage-chart-bars > span').nth(28).locator('i').first().evaluate(part => Math.round(parseFloat(part.style.height))), 90);
@@ -292,12 +306,12 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     const plotBounds = await page.locator('.usage-chart-plot').boundingBox();
     const segmentTops = await page.locator('.usage-chart-bars > span').last().locator('i').evaluateAll(parts => parts.map(part => part.getBoundingClientRect().top));
     assert.ok(segmentTops.every(top => top >= plotBounds.y - 0.1), 'Expanded percentage stacks stay inside the plot instead of overlapping the legend');
-    const rolling = page.getByRole('spinbutton', { name: 'Smoothing periods' });
+    const rolling = page.getByRole('combobox', { name: 'Smoothing', exact: true });
     assert.equal(await rolling.inputValue(), '0');
-    assert.equal(await page.locator('.usage-rolling-unit').innerText(), 'days');
+    assert.equal(await page.getByRole('combobox', { name: 'Smoothing', exact: true }).locator('option[value="2"]').textContent(), '2 days');
     const smoothingRequests = aggregations.length;
     const smoothingQuery = new URL(page.url()).searchParams.get('q_usage');
-    await rolling.fill('2');
+    await rolling.selectOption('2');
     await page.locator('.usage-chart-average-label', { hasText: '2-day rolling average' }).waitFor();
     assert.match(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), /opus-5-5 7.8%/);
     assert.equal(aggregations.length, smoothingRequests);
@@ -305,65 +319,71 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     assert.deepEqual(await swatchColors(), expandedColors);
     await page.locator('.usage-chart-bars > span').last().hover();
     await page.locator('.usage-chart-tip-head', { hasText: '2-day average' }).waitFor();
-    await page.locator('.usage-chart').getByRole('button', { name: 'Week', exact: true }).click();
+    await interval.selectOption('week');
     assert.equal(await rolling.inputValue(), '2');
-    assert.equal(await page.locator('.usage-rolling-unit').innerText(), 'weeks');
-    await page.locator('.usage-chart').getByRole('button', { name: 'Day', exact: true }).click();
+    assert.equal(await page.getByRole('combobox', { name: 'Smoothing', exact: true }).locator('option[value="2"]').textContent(), '2 weeks');
+    await interval.selectOption('day');
     await page.reload();
     await page.locator('.usage-chart-average-label', { hasText: '2-day rolling average' }).waitFor();
     assert.equal(await rolling.inputValue(), '2');
     await page.waitForFunction(() => document.querySelector('.usage-chart-bars > span:last-child')?.getAttribute('aria-label')?.includes('opus-5-5 7.8%'));
-    await rolling.fill('0');
+    await rolling.selectOption('0');
     await page.locator('.usage-chart-average-label').waitFor({ state: 'detached' });
     assert.match(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), /opus-5-5 6\.3%/);
     // Cost share uses dollars rather than token counts and keeps percentage axes.
-    await page.locator('.usage-chart').getByRole('button', { name: '% Cost', exact: true }).click();
+    await page.getByRole('combobox', { name: 'Metric', exact: true }).selectOption('percent_cost');
     await page.locator('#usage .usage-chart h3', { hasText: 'Cost share per day by model' }).waitFor();
     await page.waitForFunction(() => document.querySelector('.usage-chart-bars > span:last-child')?.getAttribute('aria-label')?.includes('opus-5-5 42.5%'));
     assert.equal(aggregations.at(-1).aggregations[0].field, 'cost_usd');
     assert.deepEqual(await page.locator('.usage-chart-grid span').allTextContents(), ['25%', '50%', '75%', '100%']);
-    assert.equal(await scaleControls.getByRole('button', { name: 'Logarithmic' }).isDisabled(), true);
+    assert.equal(await scaleControls.isDisabled(), true);
     await opus.click();
     await menu.getByRole('menuitem', { name: /^Show only this value/ }).click();
     await page.waitForFunction(() => document.querySelector('.usage-chart-bars > span:last-child')?.getAttribute('aria-label')?.includes('opus-5-5 100%'));
     await page.locator('.usage-chart-legend').getByRole('button', { name: 'Show all', exact: true }).click();
     await page.reload();
     await page.waitForFunction(() => document.querySelector('.usage-chart-bars > span:last-child')?.getAttribute('aria-label')?.includes('opus-5-5 42.5%'));
-    assert.equal(await page.locator('.usage-chart').getByRole('button', { name: '% Cost', exact: true }).getAttribute('aria-pressed'), 'true');
-    await page.locator('.usage-chart').getByRole('button', { name: '% Tokens', exact: true }).click();
+    assert.equal(await page.getByRole('combobox', { name: 'Metric', exact: true }).inputValue(), 'percent_cost');
+    await page.getByRole('combobox', { name: 'Metric', exact: true }).selectOption('percent');
     await page.waitForFunction(() => document.querySelector('.usage-chart-bars > span:last-child')?.getAttribute('aria-label')?.includes('opus-5-5 6.3%'));
     assert.equal(aggregations.at(-1).aggregations[0].field, 'total_tokens');
 
-    await page.locator('.usage-chart').getByRole('button', { name: 'Cost', exact: true }).click();
-    await page.locator('.usage-chart').getByRole('button', { name: 'Month', exact: true }).click();
-    await page.locator('.usage-chart').getByRole('button', { name: '6 months' }).click();
-    await page.locator('.usage-chart').getByRole('button', { name: 'Provider', exact: true }).click();
-    assert.equal(await page.locator('.usage-rolling-unit').innerText(), 'months');
-    await rolling.fill('2');
+    await page.getByRole('combobox', { name: 'Metric', exact: true }).selectOption('cost');
+    await interval.selectOption('month');
+    await page.getByRole('combobox', { name: 'Range', exact: true }).selectOption('6m');
+    await page.getByRole('combobox', { name: 'Breakdown', exact: true }).selectOption('provider');
+    assert.equal(await page.getByRole('combobox', { name: 'Smoothing', exact: true }).locator('option[value="2"]').textContent(), '2 months');
+    await rolling.selectOption('2');
 
     // Switching to writing updates the URI, and the choice survives a plain /usage visit.
     await page.getByRole('group', { name: 'Usage view' }).getByRole('button', { name: 'Human Words' }).click();
     await page.locator('.usage-chart h3', { hasText: 'Typed words per week' }).waitFor();
+    await page.locator('.usage-chart-legend').getByRole('button', { name: 'Typed', exact: true }).waitFor();
+    assert.equal(await page.locator('.usage-chart-legend .usage-legend-chip').count(), 1);
     assert.equal(new URL(page.url()).searchParams.get('usage'), 'writing');
-    await by.getByRole('button', { name: 'Hour', exact: true }).click();
+    await interval.selectOption('hour');
     await page.locator('.usage-chart h3', { hasText: 'Typed words per hour' }).waitFor();
     await page.waitForFunction(() => document.querySelector('.usage-chart-bars > span:last-child')?.getAttribute('aria-label')?.includes('Typed 200'));
     assert.equal(series.at(-1).hourly, true);
+    await interval.selectOption('hours');
     await by.getByRole('spinbutton', { name: 'Number of hours' }).fill('8');
     await page.locator('.usage-chart h3', { hasText: 'Typed words per 8 hours' }).waitFor();
+    await interval.selectOption('days');
     await by.getByRole('spinbutton', { name: 'Number of days' }).fill('2');
     await page.locator('.usage-chart h3', { hasText: 'Typed words per 2 days' }).waitFor();
     await page.reload();
     await page.locator('.usage-chart h3', { hasText: 'Typed words per 2 days' }).waitFor();
     assert.equal(await by.getByRole('spinbutton', { name: 'Number of days' }).inputValue(), '2');
+    assert.equal(await interval.inputValue(), 'days');
+    await interval.selectOption('hours');
     assert.equal(await by.getByRole('spinbutton', { name: 'Number of hours' }).inputValue(), '8');
-    await by.getByRole('button', { name: 'Week', exact: true }).click();
+    await interval.selectOption('week');
     await page.locator('.usage-chart h3', { hasText: 'Typed words per week' }).waitFor();
 
-    assert.equal(await scaleControls.getByRole('button', { name: 'Half-and-half' }).getAttribute('aria-pressed'), 'true');
-    await scaleControls.getByRole('button', { name: 'Logarithmic' }).click();
+    assert.equal(await scaleControls.inputValue(), 'half');
+    await scaleControls.selectOption('logarithmic');
     assert.match(await page.locator('.usage-chart-bars').getAttribute('aria-label'), /logarithmic scale/);
-    await scaleControls.getByRole('button', { name: 'Linear', exact: true }).click();
+    await scaleControls.selectOption('linear');
 
     await page.locator('.writing-table td.num', { hasText: '40' }).first().waitFor();
     assert.match(await page.locator('.usage-cards').innerText(), /200[\s\S]*Up to 240/);
@@ -371,11 +391,11 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     await page.goto('http://usage-ui.test/usage');
     await page.locator('.usage-chart h3', { hasText: 'Typed words per week' }).waitFor();
     assert.equal(await rolling.inputValue(), '0');
-    assert.equal(await page.locator('.usage-rolling-unit').innerText(), 'weeks');
+    assert.equal(await page.getByRole('combobox', { name: 'Smoothing', exact: true }).locator('option[value="2"]').textContent(), '2 weeks');
     const writingBucketCount = await page.locator('.usage-chart-bars > span').count();
     const writingRequests = series.length;
     const writingCards = await page.locator('.usage-cards').innerText();
-    await rolling.fill('3');
+    await rolling.selectOption('3');
     await page.locator('.usage-chart-average-label', { hasText: '3-week rolling average' }).waitFor();
     assert.match(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), new RegExp(`Typed ${Math.round(200 / Math.min(3, writingBucketCount))}`));
     assert.equal(await page.locator('.usage-cards').innerText(), writingCards);
@@ -383,11 +403,11 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     await page.reload();
     await page.locator('.usage-chart-average-label', { hasText: '3-week rolling average' }).waitFor();
     assert.equal(await rolling.inputValue(), '3');
-    assert.equal(await scaleControls.getByRole('button', { name: 'Linear', exact: true }).getAttribute('aria-pressed'), 'true');
-    await rolling.fill('0');
+    assert.equal(await scaleControls.inputValue(), 'linear');
+    await rolling.selectOption('0');
 
     // All input stacks every category, and the series request carries the table filters.
-    await page.getByRole('button', { name: 'All input' }).click();
+    await page.getByRole('combobox', { name: 'Metric', exact: true }).selectOption('all');
     await page.locator('.usage-chart h3', { hasText: 'Words of user input per week' }).waitFor();
     assert.equal(await page.locator('.usage-chart-legend .usage-legend-chip').count(), 5);
     const typedChip = page.locator('.usage-chart-legend').getByRole('button', { name: 'Typed', exact: true });
