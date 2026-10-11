@@ -77,6 +77,10 @@ var libraryColumns = []libraryColumn{
 	{"providers", "(SELECT GROUP_CONCAT(DISTINCT cx.provider) FROM conversations cx WHERE cx.workspace_id=w.id)"},
 	{"models", "(SELECT GROUP_CONCAT(DISTINCT cx.model) FROM conversations cx WHERE cx.workspace_id=w.id AND cx.model IS NOT NULL)"},
 	{"efforts", "(SELECT GROUP_CONCAT(DISTINCT effort) FROM (SELECT cx.effort FROM conversations cx WHERE cx.workspace_id=w.id AND cx.effort IS NOT NULL UNION SELECT mx.effort FROM messages mx JOIN conversations cx ON cx.id=mx.conversation_id WHERE cx.workspace_id=w.id AND mx.effort IS NOT NULL))"},
+	{"model_efforts", `(SELECT GROUP_CONCAT(configuration, ', ') FROM (
+		SELECT model_effort(cx.model,cx.effort) configuration FROM conversations cx WHERE cx.workspace_id=w.id AND (cx.model IS NOT NULL OR cx.effort IS NOT NULL)
+		UNION SELECT model_effort(COALESCE(mx.model,cx.model),mx.effort) FROM messages mx JOIN conversations cx ON cx.id=mx.conversation_id
+		WHERE cx.workspace_id=w.id AND (mx.model IS NOT NULL OR mx.effort IS NOT NULL) ORDER BY configuration))`},
 	{"harnesses", "(SELECT GROUP_CONCAT(DISTINCT cx.harness) FROM conversations cx WHERE cx.workspace_id=w.id AND cx.harness IS NOT NULL)"},
 	{"harness_versions", "(SELECT GROUP_CONCAT(DISTINCT cx.harness_version_last) FROM conversations cx WHERE cx.workspace_id=w.id AND cx.harness_version_last IS NOT NULL)"},
 	{"changed_files", "(SELECT GROUP_CONCAT(DISTINCT cfx.path) FROM change_sets csx JOIN change_files cfx ON cfx.change_set_id=csx.id WHERE csx.workspace_id=w.id)"},

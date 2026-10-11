@@ -90,6 +90,7 @@ const toolRollupFromCube = `SELECT day,repository_name,source_kind,provider,COAL
 var toolCallCube = func() *sqlCube {
 	cube := &sqlCube{from: "FROM tool_call_cube", count: "call_count", dimensions: map[string]string{
 		"week": "date(day,'-6 days','weekday 1')", "month": "strftime('%Y-%m',day)", "model_family": "model_family(model)",
+		"model_effort": "model_effort(model,effort)",
 		"command_name": "NULLIF(TRIM(COALESCE(program,'')||' '||COALESCE(subcommand,'')),'')",
 		"mcp_method":   mcpMethodSQL(""),
 		// Per-call values that follow from a group.

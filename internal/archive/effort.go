@@ -8,6 +8,34 @@ func normalizeEffort(effort string) string {
 	return strings.ToLower(strings.TrimSpace(effort))
 }
 
+// modelEffort labels a recorded pair without inventing a default effort.
+func modelEffort(model, effort string) any {
+	model, effort = strings.TrimSpace(model), normalizeEffort(effort)
+	if model == "" && effort == "" {
+		return nil
+	}
+	if model == "" {
+		model = "Unknown model"
+	}
+	if effort == "" {
+		effort = "Unknown effort"
+	}
+	return model + " · " + effort
+}
+
+func configurationPredicate(modelColumn, effortColumn, model, effort string) (string, []any) {
+	clauses, args := []string{}, []any{}
+	if model != "" {
+		clauses = append(clauses, modelColumn+" LIKE ?")
+		args = append(args, "%"+model+"%")
+	}
+	if effort != "" {
+		clauses = append(clauses, effortColumn+"=?")
+		args = append(args, effort)
+	}
+	return strings.Join(clauses, " AND "), args
+}
+
 // effortSetting reads explicit configuration only. Thinking token counts and
 // budgets do not establish an effort level, and absence does not imply a default.
 // The boolean distinguishes a recorded reset (null/empty) from an absent field.

@@ -699,7 +699,7 @@ function LibraryPage() {
 }
 
 type ChartRange = "30d" | "90d" | "6m" | "1y";
-type TokenSplit = "type" | "provider" | "model_family" | "effort" | "repository_name" | "session_kind";
+type TokenSplit = "type" | "provider" | "model_family" | "model_effort" | "effort" | "repository_name" | "session_kind";
 type TokenChartView = { metric: "tokens" | "cost" | "percent" | "percent_cost"; split: TokenSplit; period: ChartPeriod; hours: number; days: number; rollingPeriods: number; scale: ChartScale };
 // A preset either fills the metric panels or sets the chart above them.
 type UsagePreset = { label: string; title: string; aggregations?: AggregationClause[]; chart?: Partial<TokenChartView>; orderBy?: OrderByClause[] };
@@ -738,6 +738,7 @@ const usagePresets: UsagePreset[] = [
     sum("total_tokens", ["model_family", "effort"], "Tokens by model and effort"),
     sum("cost_usd", ["effort"], "Cost by effort"),
   ] },
+  { label: "Model + effort", title: "Compare tokens and cost for each recorded model and effort pair", chart: { metric: "tokens", split: "model_effort", period: "week" } },
   { label: "Models", title: "Total tokens and cache reads by model and provider", aggregations: [
     sum("total_tokens", ["model_family", "provider"], "Tokens by model"),
     sum("cache_read_input_tokens", ["model_family"], "Cached input by model"),
@@ -1230,7 +1231,7 @@ const tokenTypes: ChartSeries[] = [
   { key: "output_tokens", label: "Output", color: "var(--heat-2)" },
   { key: "unclassified_tokens", label: "Unclassified", color: "var(--muted)" },
 ];
-const tokenSplits: Array<[TokenSplit, string]> = [["type", "Token type"], ["provider", "Provider"], ["model_family", "Model"], ["effort", "Effort"], ["repository_name", "Repository"], ["session_kind", "Agent"]];
+const tokenSplits: Array<[TokenSplit, string]> = [["type", "Token type"], ["provider", "Provider"], ["model_family", "Model"], ["model_effort", "Model + effort"], ["effort", "Effort"], ["repository_name", "Repository"], ["session_kind", "Agent"]];
 // Providers and agent kinds keep one color each whatever the filters; models
 // and repositories show the fifteen largest in view and fold the rest into Other.
 const fixedSplitOrder: Partial<Record<TokenSplit, string[]>> = { provider: ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"], session_kind: ["root", "subagent"] };

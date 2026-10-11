@@ -271,7 +271,8 @@ func (c *Catalog) Initialize() error {
 		return err
 	}
 	for _, index := range []string{
-		"CREATE INDEX IF NOT EXISTS messages_conversation_effort_idx ON messages(conversation_id,effort) WHERE effort IS NOT NULL",
+		"CREATE INDEX IF NOT EXISTS messages_conversation_model_effort_idx ON messages(conversation_id,effort,model) WHERE model IS NOT NULL OR effort IS NOT NULL",
+		"DROP INDEX IF EXISTS messages_conversation_effort_idx",
 		"CREATE INDEX IF NOT EXISTS agent_sessions_child_conversation_idx ON agent_sessions(child_conversation_id)",
 		"CREATE INDEX IF NOT EXISTS repositories_normalized_remote_idx ON repositories(normalized_remote)",
 		"CREATE INDEX IF NOT EXISTS repositories_root_commit_idx ON repositories(root_commit)",
@@ -871,13 +872,12 @@ func (c *Catalog) computeSearchRows(options SearchOptions, fields libraryFields)
 		where = append(where, "w.id IN (SELECT cp.workspace_id FROM conversations cp WHERE cp.provider=?)")
 		args = append(args, options.Provider)
 	}
-	if options.Model != "" {
-		where = append(where, "w.id IN (SELECT cm.workspace_id FROM conversations cm WHERE cm.model LIKE ?)")
-		args = append(args, "%"+options.Model+"%")
-	}
-	if effort := normalizeEffort(options.Effort); effort != "" {
-		where = append(where, "w.id IN (SELECT ce.workspace_id FROM conversations ce WHERE ce.effort=? UNION SELECT ce.workspace_id FROM messages me JOIN conversations ce ON ce.id=me.conversation_id WHERE me.effort=?)")
-		args = append(args, effort, effort)
+	if model, effort := strings.TrimSpace(options.Model), normalizeEffort(options.Effort); model != "" || effort != "" {
+		conversation, conversationArgs := configurationPredicate("ce.model", "ce.effort", model, effort)
+		message, messageArgs := configurationPredicate("COALESCE(me.model,ce.model)", "me.effort", model, effort)
+		where = append(where, "w.id IN (SELECT ce.workspace_id FROM conversations ce WHERE "+conversation+" UNION SELECT ce.workspace_id FROM messages me JOIN conversations ce ON ce.id=me.conversation_id WHERE (me.model IS NOT NULL OR me.effort IS NOT NULL) AND "+message+")")
+		args = append(args, conversationArgs...)
+		args = append(args, messageArgs...)
 	}
 	if options.From != "" {
 		where = append(where, "w.activity_at>=?")

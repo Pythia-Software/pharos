@@ -20,6 +20,7 @@ func PharosTl1AttemptsSchema() querytable.Schema {
 			"shape_version":     {Name: "shape_version", Kind: querytable.FieldText, Expr: "r.\"shape_version\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"shape_version\""},
 			"configuration":     {Name: "configuration", Kind: querytable.FieldText, Expr: "r.\"configuration\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"configuration\""},
 			"executor":          {Name: "executor", Kind: querytable.FieldEnum, Expr: "r.\"executor\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"executor\""},
+			"model_effort":      {Name: "model_effort", Kind: querytable.FieldText, Expr: "r.\"model_effort\"", Synthetic: false, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"model_effort\""},
 			"model":             {Name: "model", Kind: querytable.FieldText, Expr: "r.\"model\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"model\""},
 			"effort":            {Name: "effort", Kind: querytable.FieldText, Expr: "r.\"effort\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"effort\""},
 			"disposition":       {Name: "disposition", Kind: querytable.FieldEnum, Expr: "r.\"disposition\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"disposition\""},

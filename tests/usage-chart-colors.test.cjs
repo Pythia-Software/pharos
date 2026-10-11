@@ -26,6 +26,17 @@ test('reported model variants match their graph family without changing their va
   assert.equal(chartCellColor(palette, 'model', 'reported-alias', 'opus-5-5'), '#f4a664');
 });
 
+test('combined model-effort facet keeps distinct chart and table colors for each pair', () => {
+  const pairs = [
+    { key: 'low', value: 'claude-opus-5-5 · low', color: '#123456' },
+    { key: 'high', value: 'claude-opus-5-5 · high', color: '#654321' },
+  ];
+  const palette = chartFacetPalette('model_effort', pairs);
+  assert.equal(chartCellColor(palette, 'model_effort', pairs[0].value), '#123456');
+  assert.equal(chartCellColor(palette, 'model_effort', pairs[1].value), '#654321');
+  assert.equal(chartCellColor(palette, 'model', 'claude-opus-5-5'), undefined);
+});
+
 test('empty repository values and combined writing providers keep their exact graph keys', () => {
   const repository = chartFacetPalette('repository_name', [{ key: 's:', label: 'No repository', value: '', color: '#abcdef' }]);
   assert.equal(chartCellColor(repository, 'repository_name', null), '#abcdef');

@@ -79,9 +79,12 @@ func (c *Catalog) searchConversations(args map[string]any) (map[string]any, erro
 		clauses = append(clauses, "c.provider=?")
 		values = append(values, provider)
 	}
-	if effort := normalizeEffort(firstString(args["effort"])); effort != "" {
-		clauses = append(clauses, "(c.effort=? OR EXISTS(SELECT 1 FROM messages me WHERE me.conversation_id=c.id AND me.effort=?))")
-		values = append(values, effort, effort)
+	if model, effort := firstString(args["model"]), normalizeEffort(firstString(args["effort"])); model != "" || effort != "" {
+		conversation, conversationArgs := configurationPredicate("c.model", "c.effort", model, effort)
+		message, messageArgs := configurationPredicate("COALESCE(me.model,c.model)", "me.effort", model, effort)
+		clauses = append(clauses, "(("+conversation+") OR EXISTS(SELECT 1 FROM messages me WHERE me.conversation_id=c.id AND (me.model IS NOT NULL OR me.effort IS NOT NULL) AND "+message+"))")
+		values = append(values, conversationArgs...)
+		values = append(values, messageArgs...)
 	}
 	if file := firstString(args["file"]); file != "" {
 		clauses = append(clauses, `EXISTS(SELECT 1 FROM change_sets cs JOIN change_files cf ON cf.change_set_id=cs.id WHERE cs.workspace_id=w.id AND cf.path LIKE ?)`)

@@ -17,6 +17,7 @@ func PharosToolsSchema() querytable.Schema {
 			"provider":           {Name: "provider", Kind: querytable.FieldEnum, Expr: "r.\"provider\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"provider\""},
 			"model_family":       {Name: "model_family", Kind: querytable.FieldText, Expr: "r.\"model_family\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"model_family\""},
 			"model":              {Name: "model", Kind: querytable.FieldText, Expr: "r.\"model\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"model\""},
+			"model_effort":       {Name: "model_effort", Kind: querytable.FieldText, Expr: "r.\"model_effort\"", Synthetic: false, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"model_effort\""},
 			"effort":             {Name: "effort", Kind: querytable.FieldText, Expr: "r.\"effort\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"effort\""},
 			"session_kind":       {Name: "session_kind", Kind: querytable.FieldEnum, Expr: "r.\"session_kind\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"session_kind\""},
 			"tool_name":          {Name: "tool_name", Kind: querytable.FieldText, Expr: "r.\"tool_name\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"tool_name\""},

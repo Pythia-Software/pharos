@@ -366,7 +366,7 @@ func TestEffortLookupsUseCoveringMessageIndex(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if text := jsonText(plan); !strings.Contains(text, "COVERING INDEX messages_conversation_effort_idx") {
+			if text := jsonText(plan); !strings.Contains(text, "COVERING INDEX messages_conversation_model_effort_idx") {
 				t.Fatalf("effort lookup reads message rows: %s", text)
 			}
 		})
@@ -392,10 +392,10 @@ func TestEffortMessageIndexCreatedAfterLegacyColumnMigration(t *testing.T) {
 	}
 	defer catalog.Close()
 	var index string
-	if err := catalog.DB.QueryRow("SELECT sql FROM sqlite_master WHERE name='messages_conversation_effort_idx'").Scan(&index); err != nil {
+	if err := catalog.DB.QueryRow("SELECT sql FROM sqlite_master WHERE name='messages_conversation_model_effort_idx'").Scan(&index); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(index, "WHERE effort IS NOT NULL") {
+	if !strings.Contains(index, "WHERE model IS NOT NULL OR effort IS NOT NULL") {
 		t.Fatalf("missing partial effort index: %s", index)
 	}
 }

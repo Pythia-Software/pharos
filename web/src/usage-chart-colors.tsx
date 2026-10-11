@@ -9,7 +9,7 @@ const PaletteContext = createContext(emptyPalette);
 const PublishContext = createContext<(palette: ChartFacetPalette) => void>(() => {});
 
 export function chartFacetPalette(facet: string | null, series: ChartSeries[]): ChartFacetPalette {
-  if (!facet || !["repository_name", "provider", "providers", "model_family", "effort"].includes(facet)) return emptyPalette;
+  if (!facet || !["repository_name", "provider", "providers", "model_family", "effort", "model_effort"].includes(facet)) return emptyPalette;
   const colors = new Map<string, string>();
   for (const item of series) {
     const values = item.value !== undefined ? [item.value] : item.foldedValues ?? [];

@@ -32,6 +32,7 @@
     { "name": "repository_name", "label": "Repository", "type": "text", "group": "Context", "aliases": ["repo"], "bindings": {"postgres": {"expr": "r.display_name"}, "sqlite": {"expr": "r.\"repository_name\""}} },
     { "name": "provider", "label": "Provider", "type": "enum", "group": "Model", "aliases": ["service"], "filter": {"values": {"source": "static", "options": [{"value": "claude", "label": "Claude"}, {"value": "codex", "label": "Codex"}, {"value": "tl1", "label": "TL1"}, {"value": "chatgpt", "label": "ChatGPT"}, {"value": "antigravity", "label": "Antigravity"}, {"value": "canonical", "label": "Canonical"}]}}, "bindings": {"postgres": {"expr": "a.provider"}, "sqlite": {"expr": "r.\"provider\""}} },
     { "name": "model_family", "label": "Model", "type": "text", "group": "Model", "bindings": {"postgres": {"expr": "model_family", "synthetic": true}, "sqlite": {"expr": "r.\"model_family\""}} },
+    {"name": "model_effort", "label": "Model + effort", "type": "text", "group": "Model", "select": {"default": false}, "filter": {"values": {"source": "distinct"}}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "model_effort", "synthetic": true}, "sqlite": {"expr": "r.\"model_effort\""}}, "description": "Recorded model and effort pairs; missing effort is labeled Unknown effort."},
     { "name": "model", "label": "Reported model", "type": "text", "group": "Model", "select": {"default": false}, "bindings": {"postgres": {"expr": "model", "synthetic": true}, "sqlite": {"expr": "r.\"model\""}} },
     {
       "name": "effort",

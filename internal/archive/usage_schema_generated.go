@@ -18,6 +18,7 @@ func PharosUsageSchema() querytable.Schema {
 			"repository_name":                {Name: "repository_name", Kind: querytable.FieldText, Expr: "r.\"repository_name\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"repository_name\""},
 			"provider":                       {Name: "provider", Kind: querytable.FieldEnum, Expr: "r.\"provider\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"provider\""},
 			"model_family":                   {Name: "model_family", Kind: querytable.FieldText, Expr: "r.\"model_family\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"model_family\""},
+			"model_effort":                   {Name: "model_effort", Kind: querytable.FieldText, Expr: "r.\"model_effort\"", Synthetic: false, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"model_effort\""},
 			"model":                          {Name: "model", Kind: querytable.FieldText, Expr: "r.\"model\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"model\""},
 			"effort":                         {Name: "effort", Kind: querytable.FieldText, Expr: "r.\"effort\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"effort\""},
 			"source_kind":                    {Name: "source_kind", Kind: querytable.FieldEnum, Expr: "r.\"source_kind\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"source_kind\""},

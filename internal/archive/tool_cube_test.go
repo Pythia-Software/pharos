@@ -181,6 +181,8 @@ func TestToolCallCubeAnswersLikeTheCalls(t *testing.T) {
 	wheres := [][]querytable.WhereTerm{
 		nil,
 		{{Field: "tool_name", Op: "=", Value: "Bash"}},
+		{{Field: "model", Op: "=", Value: "claude-opus-5-5"}, {Field: "effort", Op: "=", Value: "high"}},
+		{{Field: "model_effort", Op: "=", Value: "claude-opus-5-5 · low"}},
 		{{Field: "status", Op: "=", Value: "error"}, {Field: "repository_name", Op: "is_not_null"}},
 		{{Field: "error_type", Op: "=", Value: "user_rejected"}},
 		{{Field: "exit_code", Op: "!=", Value: "0"}, {Field: "exit_code", Op: "is_not_null"}},
@@ -202,7 +204,7 @@ func TestToolCallCubeAnswersLikeTheCalls(t *testing.T) {
 	}
 	// Every measure the cube routes, for a few filters; counts for the rest.
 	full, counts := []querytable.Aggregation{{ID: "calls", Op: "count"}}, []querytable.Aggregation{{ID: "calls", Op: "count"}}
-	for _, group := range [][]string{nil, {"day"}, {"week", "tool_category"}, {"tool_name"}, {"error_type"}, {"command_name", "exit_code"}, {"host", "tool_name"}, {"model_family"}, {"repository_name"}} {
+	for _, group := range [][]string{nil, {"day"}, {"week", "tool_category"}, {"tool_name"}, {"error_type"}, {"command_name", "exit_code"}, {"host", "tool_name"}, {"model_family"}, {"model", "effort"}, {"model_effort"}, {"repository_name"}} {
 		counts = append(counts, querytable.Aggregation{ID: fmt.Sprint("count", group), Op: "count", GroupBy: group},
 			querytable.Aggregation{ID: fmt.Sprint("duration", group), Op: "sum", Field: "duration_ms", GroupBy: group})
 		full = append(full, querytable.Aggregation{ID: fmt.Sprint("count", group), Op: "count", GroupBy: group})
@@ -248,7 +250,7 @@ func TestToolCallCubeAnswersLikeTheCalls(t *testing.T) {
 			}
 		}
 	}
-	for _, field := range []string{"tool_name", "day", "week", "command_name", "model_family", "exit_code", "host", "title", "error_type"} {
+	for _, field := range []string{"tool_name", "day", "week", "command_name", "model_family", "model_effort", "exit_code", "host", "title", "error_type"} {
 		for _, search := range []string{"", "o"} {
 			got, err := toolCallDataset.Distinct(ctx, catalog.DB, field, search, 50, schema)
 			if err != nil {

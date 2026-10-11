@@ -395,6 +395,11 @@ func TestTL1CombinesAProjectAcrossMacs(t *testing.T) {
 	if err != nil || len(rows) != 6 {
 		t.Fatalf("tl1_attempts rows = %d %v", len(rows), err)
 	}
+	for _, row := range rows {
+		if row["model_effort"] != modelEffort(firstString(row["model"]), firstString(row["effort"])) {
+			t.Fatalf("attempt lost model and effort pair: %v", row)
+		}
+	}
 }
 
 func TestTL1ReingestCorrectsLegacyProviderInPlace(t *testing.T) {

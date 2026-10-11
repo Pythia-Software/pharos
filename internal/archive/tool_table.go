@@ -13,6 +13,11 @@ import (
 // SQLite functions must exist before the catalog opens its connections.
 func init() {
 	registerSQLiteRegexp()
+	_ = sqlite.RegisterDeterministicScalarFunction("model_effort", 2, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+		model, _ := args[0].(string)
+		effort, _ := args[1].(string)
+		return modelEffort(model, effort), nil
+	})
 	_ = sqlite.RegisterDeterministicScalarFunction("model_family", 1, func(ctx *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
 		model, _ := args[0].(string)
 		if strings.TrimSpace(model) == "" {
@@ -35,6 +40,7 @@ var toolRollupDataset = func() sqlDataset {
 		columns[name] = "d." + name
 	}
 	columns["mcp_method"] = mcpMethodSQL("d.")
+	columns["model_effort"] = "model_effort(d.model,d.effort)"
 	return sqlDataset{from: "FROM tool_usage_daily d", columns: columns}
 }()
 
@@ -55,6 +61,7 @@ var toolCallDataset = sqlDataset{
 		"month":           "strftime('%Y-%m',t.started_at,'localtime')",
 		"repository_name": "r.display_name", "title": "w.title", "workspace_id": "t.workspace_id", "conversation_id": "t.conversation_id",
 		"source_kind": "w.source_kind", "provider": "t.provider", "model": "t.model", "effort": "t.effort", "model_family": "model_family(t.model)",
+		"model_effort": "model_effort(t.model,t.effort)",
 		"session_kind": "COALESCE(a.kind,'root')", "agent_depth": "COALESCE(a.depth,0)",
 		"kind": "t.kind", "tool_name": "t.tool_name", "tool_category": "t.tool_category", "mcp_server": "t.mcp_server", "mcp_method": mcpMethodSQL("t."),
 		"skill_name": "(SELECT group_concat(skill_name, ', ') FROM (SELECT DISTINCT skill_name FROM skill_usages WHERE tool_call_id=t.id ORDER BY skill_name))",
