@@ -328,6 +328,12 @@ The app includes a dependency-free visual annotation tool. Choose **Annotate** i
 the bottom-right corner (or press Option-A), hover to identify an element, click
 it, and add a note. While hovering, press **Up Arrow** to select progressively
 higher parent elements or **Down Arrow** to return toward the original child.
+Drag the grip or heading to move the annotation toolbar, feedback panel, or note
+composer. The target label, numbered annotation markers, and status messages can
+also be dragged out of the way. Focus a grip or marker and use the arrow keys to
+move it (Shift moves one pixel at a time). Positions survive refreshes and stay
+within the window when it is resized; markers keep their offset from the
+annotated element as the page scrolls.
 **Feedback** shows the saved annotations and copies a
 structured Markdown report containing selectors, bounds, visible or selected
 text, computed styles, view context, and a source-file hint suitable for pasting

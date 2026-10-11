@@ -1,12 +1,13 @@
 import React from "react";
 import { CompactColumns } from "./column-marks";
+import { CompactMetric } from "./compact-metric";
 import { type QueryPreview } from "./curiosity-data";
 import { Icon } from "./icons";
 import { queryCategories, type QueryCategory } from "./query-categories";
 import "./query-card.css";
 
-export function QueryChip({ title, description, onClick }: { title: string; description: string; onClick: () => void }) {
-  return <button type="button" className="query-chip" title={description} onClick={onClick}><Icon name="compass" /><span>{title}</span><Icon name="arrow-right" /></button>;
+export function QueryChip({ title, description, active, onClick }: { title: string; description: string; active?: boolean; onClick: () => void }) {
+  return <button type="button" className="query-chip" title={description} aria-pressed={active} onClick={onClick}><Icon name="compass" /><span>{title}</span><Icon name="arrow-right" /></button>;
 }
 
 export function QueryCard({ id, title, description, url, windowLabel, category, preview, error, discovery, xray, lean = 0, onOpen, onReveal, onKeep, onEdit, onRemove, onMove, onDragStart, onDragEnd, onDrop, before }: {
@@ -27,6 +28,7 @@ export function QueryCard({ id, title, description, url, windowLabel, category, 
         <span className="query-cover-head"><Icon name="grip" /><span className="query-category">{style.label}</span><span className="query-window" title={windowLabel === "Saved" ? "The time range saved with this query" : "Local calendar days, including today"}>{windowLabel}</span></span>
         {preview?.state === "ready" ? <>
           {preview.buckets && preview.series ? <CompactColumns buckets={preview.buckets} series={preview.series} />
+            : preview.metrics ? <CompactMetric preview={preview} />
             : preview.ranking ? <span className="query-ranking">{preview.ranking.map((item, i) => <span className="query-rank" key={i} title={`${item.label}: ${item.value.toLocaleString()}`}><span className="query-rank-label">{item.label}</span><span className="query-rank-track"><i style={{ width: `${Math.max(2, item.value / max * 100)}%`, background: item.color }} /></span></span>)}</span>
             : <span className="query-excerpt">{preview.excerpt}</span>}
           <span className="query-result-summary">{preview.summary}</span>
@@ -36,6 +38,6 @@ export function QueryCard({ id, title, description, url, windowLabel, category, 
     </a>
     {xray ? onReveal ? <button type="button" className="query-xray-open" aria-label={`Bring ${title} into view`} title="Bring into view" onClick={onReveal} /> : null
       : discovery ? <button className="query-keep" type="button" aria-label={`Collect ${title}`} title="Add to your collection" onClick={onKeep}><Icon name="plus" /></button>
-      : <span className="query-card-tools"><button type="button" aria-label={`Edit ${title}`} title="Edit title and description" onClick={onEdit}><Icon name="edit" /></button><button type="button" aria-label={`Remove ${title}`} title="Remove from collection" onClick={onRemove}><Icon name="close" /></button></span>}
+      : <span className="query-card-tools"><button type="button" aria-label={`Edit ${title}`} title="Edit saved view" onClick={onEdit}><Icon name="edit" /></button><button type="button" aria-label={`Remove ${title}`} title="Remove from collection" onClick={onRemove}><Icon name="close" /></button></span>}
   </article>;
 }

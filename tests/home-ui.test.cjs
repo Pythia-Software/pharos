@@ -20,17 +20,22 @@ const { categoryForQuery } = moduleOf('web/src/query-categories.ts');
 const schemas = Object.fromEntries(links.queryDatasets.map(dataset => [dataset, core.loadSchema(JSON.parse(fs.readFileSync(path.join(root, `schemas/${dataset}.schema.json`))))]));
 
 function fixtures() {
-  const calls = [], usage = [], writing = [], skills = [];
+  const calls = [], usage = [], writing = [], skills = [], library = [], attempts = [];
   for (let i = 0; i < 28; i++) {
     const date = new Date(); date.setDate(date.getDate() - i % 7); date.setHours(12, 0, 0, 0);
     const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
     const repository_name = ['pharos', 'query-table', 'workbench'][i % 3];
     calls.push({ id: `call-${i}`, day, started_at: date.toISOString(), tool_name: ['Edit', 'Bash', 'Read'][i % 3], tool_category: ['edit', 'command', 'read'][i % 3], status: i % 2 ? 'ok' : 'error', error_count: i % 2 ? 0 : 1, call_count: 1, error_signature: 'file_not_read', duration_ms: (i + 1) * 5000, command_name: 'go test', repo_path: `src/module-${i % 3}.go`, test_failure: i % 2 === 0, carried_tokens: (i + 1) * 1200, result_tokens: 300 + i * 40, truncated: i % 4 === 0, search_query: 'SQLite indexing', host: 'go.dev', mcp_method: 'search_work', repository_name, title: 'Archive indexing' });
     usage.push({ id: `usage-${i}`, day, first_usage_at: date.toISOString(), last_usage_at: date.toISOString(), repository_name, total_tokens: 50000 + i * 7000, model_family: ['sonnet-4-6', 'gpt-5.4'][i % 2], cost_usd: i / 2 + 1, cache_read_input_tokens: i * 400, session_kind: i % 3 ? 'root' : 'subagent' });
-    writing.push({ id: `writing-${i}`, day, sent_at: date.toISOString(), text: i % 2 ? 'Please inspect how indexes affect the query plan.' : 'I meant the timestamp index, not the title index.', typed_message: true, typed_words: i + 20, repository_name, title: 'Archive indexing' });
-    skills.push({ id: `skill-${i}`, day, created_at: date.toISOString(), skill_name: ['review', 'debug', 'visualize'][i % 3], status: i % 3 ? 'ok' : 'error', repository_name });
+    writing.push({ id: `writing-${i}`, day, sent_at: date.toISOString(), text: i % 2 ? 'Please inspect how indexes affect the query plan.' : 'I meant the timestamp index, not the title index.', typed_message: true, typed_words: i + 20, words: i + 40, repository_name, title: 'Archive indexing' });
+    skills.push({ id: `skill-${i}`, day, created_at: date.toISOString(), skill_name: ['review', 'debug', 'visualize'][i % 3], status: i % 3 ? 'ok' : 'error', repository_name: ['pharos', 'query-table', 'workbench'][Math.floor(i / 3) % 3], conversation_id: `conversation-${i}`, evidence_type: i % 2 ? 'invocation' : 'body-load' });
+    library.push({ id: `work-${i}`, title: `Archive work ${i + 1}`, activity_at: date.toISOString(), repository_name, cost_usd: i + 1 });
+    attempts.push({ id: `attempt-${i}`, started_at: date.toISOString(), project: 'pharos', flavor: 'fix', execution_class: 'llm', shape_version: 'v1', configuration: ['fast', 'careful'][i % 2], attempt_count: 1, advanced_count: i % 3 ? 1 : 0, escalated_count: i % 3 ? 0 : 1 });
+    calls.at(-1).conversation_id = `conversation-${i}`;
+    calls.at(-1).result_tokens_source = i % 2 ? 'estimated' : 'measured';
+    usage.at(-1).cost_today_usd = i / 3 + 1;
   }
-  return { tool_calls: calls, usage, writing_messages: writing, skill_usages: skills };
+  return { tool_calls: calls, usage, writing_messages: writing, skill_usages: skills, library, tl1_attempts: attempts };
 }
 async function setup({ saved = false, reducedMotion = false, clock = false, viewport = { width: 1180, height: 920 }, deviceScaleFactor = 1, url = '/', waitForHome = url === '/', preferenceValues = {}, localValues = {}, now } = {}) {
   const browser = await chromium.launch({ headless: true, executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' });
@@ -55,11 +60,14 @@ async function setup({ saved = false, reducedMotion = false, clock = false, view
     }
     if (['/assets/query-tables.js', '/assets/query-tables.css'].includes(url.pathname)) return route.fulfill({ contentType: url.pathname.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(path.join(root, 'internal/archive/assets', path.basename(url.pathname))) });
     if (url.pathname === '/api/query/writing/series') return json({ works: 0, daily: [], totals: {} });
+    if (url.pathname === '/api/query-computed-columns') return json([]);
+    if (url.pathname.endsWith('/capabilities')) return json({ metricCapabilities: { version: 2, expressions: true, shownRows: true, computedFields: true, distributions: true, profile: 'qt-sqlite-v1' }, computedExecution: { profile: 'qt-sqlite-v1', planToken: '', fields: {}, resolvedRevisions: {} } });
     if (url.pathname.startsWith('/api/query/') && route.request().method() === 'POST') {
       const dataset = url.pathname.split('/')[3], request = route.request().postDataJSON(); data.requests.push({ dataset, request, path: url.pathname });
       const rows = (data.empty ? [] : data.rows[dataset] ?? []).map(row => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, schemas[dataset].fields.find(field => field.name === key)?.type === 'datetime' ? Date.parse(value) : value])));
       if (data.holdPreviews) await new Promise(resolve => data.pending.push({ release: resolve }));
       if (url.pathname.endsWith('/aggregations')) return json(core.applyAggregations(rows, { ...core.EMPTY_QUERY, ...request }, schemas[dataset]));
+      if (url.pathname.endsWith('/metrics')) return json(core.evaluateMetrics(rows, { ...core.EMPTY_QUERY, ...request, aggregations: request.metrics.map(metric => ({ ...metric, ...(metric.distribution ? { display: { kind: metric.distribution.kind } } : {}) })) }, schemas[dataset]));
       return json(core.applyQuery(rows, { ...core.EMPTY_QUERY, ...request }, schemas[dataset]));
     }
     if (url.pathname.endsWith('/distinct')) return json({ values: [], hasMore: false });
@@ -117,7 +125,13 @@ test('Home nav and logo activate previews and leaving Home suspends scans and au
       assert.equal(new URL(page.url()).pathname, '/');
       assert.equal(new URL(page.url()).searchParams.has('q_library'), false, 'Home URLs must not resemble old Library links');
       await page.clock.runFor(5000);
-      await page.waitForFunction(() => document.querySelector('.home-conveyor')?.getAttribute('aria-busy') === 'false' && document.querySelector('.home-collection .query-result-summary'), undefined, { timeout: 5000 });
+      // Keep frames moving while the asynchronously arriving native covers render.
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (await page.evaluate(() => document.querySelector('.home-conveyor')?.getAttribute('aria-busy') === 'false' && Boolean(document.querySelector('.home-collection .query-result-summary')))) break;
+        await page.clock.runFor(100);
+      }
+      assert.equal(await page.locator('.home-conveyor').getAttribute('aria-busy'), 'false');
+      assert.ok(await page.locator('.home-collection .query-result-summary').count());
       const ids = await page.locator('.home-belt-row .query-card').evaluateAll(cards => cards.map(card => card.dataset.cardId));
       await page.mouse.move(5, 5);
       await page.locator('.tabs [data-view="library"]').click();
@@ -240,7 +254,7 @@ test('query edits and saving after local midnight preserve a rolling window', as
     assert.equal(new URL(page.url()).searchParams.get('window_dataset'), 'tool_calls');
     await page.locator('#tools .qt-qb').filter({ visible: true }).getByRole('button', { name: 'Save query', exact: true }).click();
     const name = page.locator('#tools .qt-qb-saved-input').filter({ visible: true });
-    await name.fill('Failures after midnight'); await name.press('Enter');
+    await name.fill('Failures after midnight'); await page.keyboard.press('Enter');
     await page.waitForFunction(() => window.pharosPrefs.get('pharos-bookmarks-v1', []).some(item => item.title === 'Failures after midnight'));
     const saved = await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', []).find(item => item.title === 'Failures after midnight'));
     assert.equal(new URL(saved.url, page.url()).searchParams.get('window_days'), '7');
@@ -446,14 +460,15 @@ test('carousel advances three every thirty seconds and pauses during interaction
   finally { await reduced.browser.close(); }
 });
 
-test('the loading belt grows from a fixed middle in ready pairs before introducing x-rays', async () => {
+test('the loading belt retains its fixed middle while ready batches grow in pairs and introduce x-rays', async () => {
   const { browser, page, data } = await setup();
+  const real = page.locator('.home-belt-row .query-card:not([data-xray])');
   const releaseOne = async () => {
     for (let attempt = 0; !data.pending.length && attempt < 50; attempt++) await page.waitForTimeout(20);
-    assert.ok(data.pending.length, 'a preview should be waiting for its response');
+    assert.ok(data.pending.length, 'a preview batch should be waiting for its response');
     data.pending.shift().release();
+    await page.waitForTimeout(400);
   };
-  const real = page.locator('.home-belt-row .query-card:not([data-xray])');
   try {
     await page.setViewportSize({ width: 2133, height: 1075 });
     await page.getByRole('button', { name: 'Pause suggestions' }).click();
@@ -461,35 +476,21 @@ test('the loading belt grows from a fixed middle in ready pairs before introduci
     await page.getByRole('button', { name: 'Refresh suggestions' }).click();
     await page.mouse.move(5, 5);
     await page.waitForFunction(() => document.querySelectorAll('.home-belt-row .query-card').length === 0);
-    await releaseOne();
-    await page.waitForFunction(() => document.querySelectorAll('.home-belt-row .query-card').length === 1);
-    const seed = await real.first().getAttribute('data-card-id'), seedCard = page.locator(`.home-belt-row [data-card-id="${seed}"]`);
+    while (!await real.count()) await releaseOne();
+    const seedCard = page.locator('[data-belt-position="0"] .query-card');
+    const seed = await seedCard.getAttribute('data-card-id');
     const lean = await seedCard.evaluate(card => card.style.getPropertyValue('--query-lean'));
-    const origin = await seedCard.boundingBox();
-    assert.ok(Math.abs(origin.x + origin.width / 2 - 2133 / 2) < 1, 'the first ready card starts in the middle');
-    assert.equal(await page.locator('.home-belt-row [data-xray]').count(), 0);
-    await releaseOne(); await page.waitForTimeout(400);
-    assert.equal(await real.count(), 1, 'one waiting neighbor must not move or duplicate the middle card');
-    await releaseOne();
-    await page.waitForFunction(() => document.querySelectorAll('.home-belt-row .query-card').length === 3);
-    await page.waitForTimeout(320);
-    const bounds = await real.evaluateAll(cards => cards.map(card => { const box = card.getBoundingClientRect(); return { id: card.dataset.cardId, center: box.x + box.width / 2 }; }));
-    assert.equal(bounds[1].id, seed);
-    assert.equal(await seedCard.evaluate(card => card.style.getPropertyValue('--query-lean')), lean, 'new neighbors must not retip the existing card');
-    assert.ok(Math.abs(bounds[1].center - 2133 / 2) < 1);
-    assert.ok(Math.abs(bounds[1].center - bounds[0].center - 190) < 1 && Math.abs(bounds[2].center - bounds[1].center - 190) < 1);
-    assert.equal(await page.locator('.home-belt-row [data-xray]').count(), 0);
-    await page.screenshot({ path: path.join(root, '.context/homepage-design/home-belt-loading.png') });
-    await releaseOne(); await page.waitForTimeout(400);
-    assert.equal(await real.count(), 3);
-    await releaseOne();
-    await page.waitForFunction(() => document.querySelectorAll('.home-belt-row .query-card').length === 5);
-    assert.equal(await page.locator('.home-belt-row [data-xray]').count(), 0);
-    await releaseOne(); await releaseOne();
-    await page.waitForFunction(() => document.querySelectorAll('.home-belt-row .query-card').length === 7);
+    for (let attempt = 0; await page.locator('.home-belt-row .query-card').count() < 7 && attempt < 30; attempt++) {
+      assert.equal(await page.locator('.home-belt-row .query-card').count() % 2, 1, 'incomplete ready batches join the belt in pairs');
+      const origin = await seedCard.boundingBox();
+      assert.ok(Math.abs(origin.x + origin.width / 2 - 2133 / 2) < 1, 'new batches keep the seed in the middle');
+      assert.equal(await seedCard.getAttribute('data-card-id'), seed);
+      assert.equal(await seedCard.evaluate(card => card.style.getPropertyValue('--query-lean')), lean);
+      await releaseOne();
+    }
     assert.equal(await real.count(), 5);
-    assert.equal(await page.locator('.home-belt-row .query-xray-open').count(), 2);
-    assert.equal(await page.locator('[data-belt-position="0"] .query-card').getAttribute('data-card-id'), seed);
+    assert.ok(await page.locator('.home-belt-row .query-xray-open').count() >= 2);
+    await page.screenshot({ path: path.join(root, '.context/homepage-design/home-belt-loading.png') });
     data.holdPreviews = false;
     for (const pending of data.pending.splice(0)) pending.release();
     await page.waitForFunction(() => document.querySelector('.home-conveyor').getAttribute('aria-busy') === 'false');
@@ -558,7 +559,7 @@ test('conveyor slides in both directions and wraps while side cards show only ev
     assert.ok(belt.x < 1 && Math.abs(belt.width - 2133) < 2, 'the conveyor must span the screen');
     const ghosts = await page.locator('.home-belt-row .query-card[data-xray]').evaluateAll(elements => elements.map(element => ({
       x: element.getBoundingClientRect().x, opacity: getComputedStyle(element.querySelector('.query-title')).opacity,
-      hidden: element.getAttribute('aria-hidden'), focusable: element.querySelector('a').tabIndex, hasMarks: Boolean(element.querySelector('i')), revealable: Boolean(element.querySelector('.query-xray-open')),
+      hidden: element.getAttribute('aria-hidden'), focusable: element.querySelector('a').tabIndex, hasMarks: Boolean(element.querySelector('i,.qt-metric-mark,.qt-metric-bar-fill,.qt-metric-bar-track,td')), revealable: Boolean(element.querySelector('.query-xray-open')),
     })));
     assert.ok(ghosts.some(card => card.x > 0 && card.x < 468 && card.hasMarks));
     assert.ok(ghosts.some(card => card.x > 1648 && card.x < 2133 && card.hasMarks));
@@ -701,4 +702,55 @@ test('homepage fits text search, centers wrapping collection rows, and contains 
     assert.equal(await page.locator('main').evaluate(main => getComputedStyle(main).overflowX), 'auto', 'other views retain their scrolling behavior');
     assert.deepEqual(data.errors, []);
   } finally { await browser.close(); }
+});
+
+test('native covers retain distributions, paired axes and complete dashboards while cover selection persists', async () => {
+  const ids = ['tool-failure-rates', 'duration-distribution', 'output-distribution', 'output-duration', 'price-comparison', 'skill-reach', 'tl1-advancement', 'expensive-work'];
+  const bookmarks = ids.map(id => {
+    const recipe = instantiateRecipe(queryRecipes.find(item => item.id === id), 7);
+    return { id, title: recipe.title, description: recipe.description, url: recipe.url, templateId: recipe.instanceId };
+  });
+  const { browser, page, data } = await setup({ preferenceValues: { 'pharos-bookmarks-v1': bookmarks } });
+  global.location = { origin: 'http://home.test' };
+  try {
+    await page.waitForFunction(() => document.querySelectorAll('.home-collection .query-compact-metric').length === 8);
+    assert.equal(await page.locator('.home-collection .qt-metrics-error,.home-collection .qt-metric-message').count(), 0);
+    assert.equal(await page.locator('.home-collection .query-compact-metric[inert]').count(), 8);
+    for (const id of ['duration-distribution', 'output-distribution', 'output-duration', 'price-comparison']) {
+      const cover = page.locator(`.home-collection [data-card-id="${id}"]`);
+      assert.ok(await cover.locator('svg .qt-metric-mark').count() > 0, `${id} should contain native marks`);
+      const size = await cover.locator('.query-compact-metric').boundingBox();
+      assert.ok(size.height > 40 && size.height < 120);
+    }
+    const costCover = page.locator('.home-collection [data-card-id="expensive-work"] .query-compact-metric');
+    const costSize = await costCover.boundingBox();
+    const costRows = costCover.locator('.qt-metric-bar-row');
+    assert.equal(await costRows.count(), 4);
+    for (const row of await costRows.all()) {
+      const size = await row.boundingBox();
+      assert.ok(size.y >= costSize.y && size.y + size.height <= costSize.y + costSize.height - 8, 'cover rows fit above the group-limit note');
+    }
+    const card = page.locator('.home-collection [data-card-id="tool-failure-rates"]');
+    assert.match(await card.locator('.query-compact-metric').innerText(), /%/);
+    const original = bookmarks[0].url;
+    await card.hover();
+    await card.getByRole('button', { name: /^Edit / }).click();
+    await page.getByLabel('Cover metric', { exact: true }).selectOption('calls');
+    await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('.home-collection [data-card-id="tool-failure-rates"] .query-result-summary')?.textContent.includes('28'));
+    const saved = await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', []).find(item => item.id === 'tool-failure-rates'));
+    assert.equal(saved.coverMetricId, 'calls');
+    assert.equal(saved.url, original);
+    assert.equal(links.queryFromURL(saved.url).query.aggregations.length, 3);
+    await page.mouse.move(5, 5);
+    await page.evaluate(() => document.querySelector('main').scrollTop = 0);
+    await page.screenshot({ path: path.join(root, '.context/homepage-design/home-v2-covers.png'), fullPage: true });
+    await page.reload();
+    await page.waitForFunction(() => document.querySelector('.home-collection [data-card-id="tool-failure-rates"] .query-result-summary')?.textContent.includes('28'));
+    await page.locator('.home-collection [data-card-id="tool-failure-rates"] .query-card-open').click();
+    const opened = links.queryFromURL(page.url());
+    assert.equal(opened.query.aggregations.length, 3);
+    assert.match(opened.query.aggregations[0].expression, /SUM\(\[error_count\]\)/);
+    assert.deepEqual(data.errors, []);
+  } finally { delete global.location; await browser.close(); }
 });

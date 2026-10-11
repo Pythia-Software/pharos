@@ -72,6 +72,19 @@ so the next request uses its current execution revision. Library v2 requests
 retain keyword match summaries/hits and semantic
 search explanations. Shared HTML documents continue using the local executor.
 
+Home previews use the same v2 capability handshake, canonical computed revisions,
+row projection and metric execution. Compatible cards share requests of up to
+20 metrics, with three concurrent workers, cancellation and a one-minute result
+cache. Library search context and shown-row paging remain part of the population.
+Native metric covers retain the full dashboard results; a bookmark's optional
+`coverMetricId` changes only its cover, while its URL opens every saved metric.
+Rates, distinct counts and distribution medians are not added into totals.
+
+The npm core 0.6.0 expression validator rejects scalar `MEDIAN` even though the
+Go SQLite adapter supports it. Home recipes therefore expose exact medians and
+quartiles through native box distributions, which can also be opened and saved
+in the browser. Arbitrary scalar percentiles such as p95 remain unavailable.
+
 ## Sources, limits, and performance
 
 SQL datasets preserve Pharos's trusted joins, pricing boundary, and exclusion

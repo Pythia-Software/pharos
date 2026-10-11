@@ -11,6 +11,7 @@
     "check-schemas": "node generate-schemas.mjs --check",
     "test:usage-aggregations": "node --test tests/usage-aggregations.test.mjs",
     "test:computed-store": "node --test tests/computed-column-store.test.mjs",
+    "test:previews": "node --test tests/query-previews.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

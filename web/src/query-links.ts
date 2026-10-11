@@ -5,12 +5,13 @@ export type QueryDataset = typeof queryDatasets[number];
 export type RollingWindow = { days: number; field: string };
 const timeFields: Partial<Record<QueryDataset, string[]>> = {
   library: ["activity_at"], usage: ["first_usage_at"], tool_calls: ["started_at"],
-  skill_usages: ["created_at"], writing_messages: ["sent_at"],
+  skill_usages: ["created_at"], writing_messages: ["sent_at"], tl1_attempts: ["started_at"],
 };
 export const rollingWindowDays = [1, 7, 30, 90] as const;
 export function rollingWindowField(dataset: QueryDataset): string | undefined { return timeFields[dataset]?.[0]; }
 
-// Until QT's relative bounds land, URLs carry a host-owned rolling window.
+// URLs carry whole local calendar windows; elapsed relative offsets in QT
+// cannot express those boundaries across daylight saving changes.
 // Resolve it for both previews and navigation. These are local calendar days,
 // including today; daily Usage facts are never cut into imaginary partial rows.
 export function rollingBounds(days: number, clock = new Date()): [string, string] {

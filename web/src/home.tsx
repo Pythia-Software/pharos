@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { FieldSchema } from "@pythia-software/query-table-core";
 import { collectQuery, migrateSavedQueries, moveBookmark, readBookmarks, removeBookmark, updateBookmark, writeBookmarks, type Bookmark } from "./bookmarks";
-import { clearPreviewCache, loadQueryPreview, queryRecipes, suggestionPool, type QueryPreview, type QuerySuggestion } from "./curiosity-data";
+import { clearPreviewCache, loadQueryPreviews, queryRecipes, suggestionPool, type QueryPreview, type QuerySuggestion } from "./curiosity-data";
 import { queryFromURL, rollingWindowDays, rollingWindowField, type QueryDataset } from "./query-links";
 import { categoryForQuery } from "./query-categories";
 import { QueryCard } from "./query-card";
@@ -26,6 +26,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   const input = useRef<HTMLInputElement>(null), editor = useRef<HTMLDialogElement>(null);
   const [editing, setEditing] = useState<Bookmark | null>(null), [editTitle, setEditTitle] = useState(""), [editDescription, setEditDescription] = useState("");
   const [editDays, setEditDays] = useState("");
+  const [editCover, setEditCover] = useState("");
   const [editError, setEditError] = useState("");
   const [message, setMessage] = useState(""), [undo, setUndo] = useState<{ item: Bookmark; index: number } | null>(null);
   const [drag, setDrag] = useState<{ saved?: string; suggestion?: QuerySuggestion } | null>(null), [insertBefore, setInsertBefore] = useState<string | undefined>();
@@ -50,22 +51,14 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     setLoading(true);
     const saved = new Set(collection.map(item => item.templateId).filter(Boolean));
     const jobs = [
-      ...collection.map(item => ({ id: item.id, spec: queryFromURL(item.url), recipe: queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]), url: item.url })),
-      ...pool.filter(item => ![...saved].some(id => id!.split(":")[0] === item.id)).map(item => ({ id: item.instanceId, spec: { dataset: item.dataset, query: item.query, window: item.window }, recipe: item, url: item.url })),
+      ...collection.map(item => ({ id: item.id, spec: queryFromURL(item.url), options: { recipe: queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]), url: item.url, coverMetricId: item.coverMetricId } })),
+      ...pool.filter(item => ![...saved].some(id => id!.split(":")[0] === item.id)).map(item => ({ id: item.instanceId, spec: { dataset: item.dataset, query: item.query, window: item.window }, options: { recipe: item, url: item.url, suggested: true } })),
     ];
-    let cursor = 0;
-    async function work() {
-      while (cursor < jobs.length && !controller.signal.aborted) {
-        const job = jobs[cursor++];
-        if (!job.spec) continue;
-        try {
-          const preview = await loadQueryPreview(job.spec.dataset, job.spec.query, schemas[job.spec.dataset], { recipe: job.recipe, window: job.spec.window, url: job.url }, controller.signal);
-          if (!controller.signal.aborted) { setPreviews(current => ({ ...current, [job.id]: preview })); setErrors(current => { const next = { ...current }; delete next[job.id]; return next; }); }
-        } catch (error) { if (!controller.signal.aborted) { setErrors(current => ({ ...current, [job.id]: String(error) })); setPreviews(current => { const next = { ...current }; delete next[job.id]; return next; }); } }
-      }
-    }
-    // A mixed pool must never fan out into dozens of simultaneous scans.
-    void Promise.all([work(), work(), work()]).then(() => { if (!controller.signal.aborted) setLoading(false); });
+    void loadQueryPreviews(jobs.flatMap(job => job.spec ? [{ id: job.id, dataset: job.spec.dataset, query: job.spec.query, schema: schemas[job.spec.dataset], options: { ...job.options, window: job.spec.window } }] : []), (id, preview, error) => {
+      if (controller.signal.aborted) return;
+      if (preview) { setPreviews(current => ({ ...current, [id]: preview })); setErrors(current => { const next = { ...current }; delete next[id]; return next; }); }
+      else { setErrors(current => ({ ...current, [id]: String(error) })); setPreviews(current => { const next = { ...current }; delete next[id]; return next; }); }
+    }, controller.signal).then(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [active, collection, pool, generation, schemas]);
 
@@ -78,7 +71,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     return item && previews[id]?.state === "ready" && !errors[id] && !collectedTemplates.has(item.id) ? [item] : [];
   });
   useEffect(() => {
-    if (editing) { setEditTitle(editing.title); setEditDescription(editing.description ?? ""); setEditDays(String(queryFromURL(editing.url)?.window?.days ?? "")); setEditError(""); editor.current?.showModal(); }
+    if (editing) { setEditTitle(editing.title); setEditDescription(editing.description ?? ""); setEditDays(String(queryFromURL(editing.url)?.window?.days ?? "")); setEditCover(editing.coverMetricId ?? ""); setEditError(""); editor.current?.showModal(); }
   }, [editing]);
 
   function keep(item: QuerySuggestion, before?: string) {
@@ -138,8 +131,8 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     <dialog ref={editor} className="home-editor" aria-labelledby="homeEditorTitle" onCancel={() => setEditing(null)} onClose={() => setEditing(null)}><form onSubmit={event => {
       event.preventDefault(); if (!editing) return;
       try {
-        const updated = updateBookmark(editing.id, editTitle, editDescription, editDays ? Number(editDays) : undefined);
-        if (updated.url !== editing.url) {
+        const updated = updateBookmark(editing.id, editTitle, editDescription, editDays ? Number(editDays) : undefined, editCover);
+        if (updated.url !== editing.url || updated.coverMetricId !== editing.coverMetricId) {
           setPreviews(current => { const next = { ...current }; delete next[editing.id]; return next; });
           setErrors(current => { const next = { ...current }; delete next[editing.id]; return next; });
         }
@@ -149,6 +142,10 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
       <h2 id="homeEditorTitle">Make this view yours</h2>
       <label>Title<input autoFocus value={editTitle} maxLength={200} required onChange={event => setEditTitle(event.target.value)} /></label>
       <label>Description<textarea value={editDescription} maxLength={500} onChange={event => setEditDescription(event.target.value)} /></label>
+      {Boolean(editingSpec?.query.aggregations?.length) ? <label>Cover metric<select aria-label="Cover metric" aria-describedby="homeCoverHelp" value={editCover} onChange={event => setEditCover(event.target.value)}>
+        <option value="">First metric</option>
+        {editingSpec!.query.aggregations!.map(metric => <option key={metric.id} value={metric.id}>{metric.label ?? metric.expression ?? `${metric.op} ${metric.field ?? "rows"}`}</option>)}
+      </select><small id="homeCoverHelp">Choose the chart shown on this bookmark. All metrics stay in the saved view.</small></label> : null}
       {canEditWindow ? <label>Time window<select value={editDays} aria-describedby="homeWindowHelp" onChange={event => setEditDays(event.target.value)}>
         {!editingSpec?.window ? <option value="">Keep saved range</option> : null}
         {rollingWindowDays.map(days => <option key={days} value={days}>{days === 1 ? "Today" : `Last ${days} days`}</option>)}
