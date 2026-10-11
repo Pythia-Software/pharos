@@ -155,7 +155,7 @@ sharing.
 ### 5. See where the tokens go
 
 **Usage → Machine Tokens** breaks down tokens and API-equivalent cost by day,
-model, provider, repository, and agent. Costs use list prices on the day of use,
+model, effort level, provider, repository, and agent. Costs use list prices on the day of use,
 so treat them as a lower bound.
 
 ![The Usage tab: tokens per day split by model, with total cost, cost per month, and cost by provider](docs/images/usage.png)

@@ -336,6 +336,7 @@ func runSearchCLI(catalog *Catalog, args []string) error {
 	owner := flags.String("owner", "", "")
 	provider := flags.String("provider", "", "")
 	model := flags.String("model", "", "")
+	effort := flags.String("effort", "", "Recorded agent effort level")
 	from := flags.String("from", "", "")
 	to := flags.String("to", "", "")
 	flavor := flags.String("flavor", "", "")
@@ -353,7 +354,7 @@ func runSearchCLI(catalog *Catalog, args []string) error {
 	if query == "" && flags.NArg() > 0 {
 		query = flags.Arg(0)
 	}
-	options := SearchOptions{Query: query, Repository: *repository, Source: *source, File: *file, Owner: *owner, Provider: *provider, Model: *model, From: *from, To: *to, Flavor: *flavor, Version: *version, Outcome: *outcome, Error: *errorType, Metric: *metric, Limit: *limit}
+	options := SearchOptions{Query: query, Repository: *repository, Source: *source, File: *file, Owner: *owner, Provider: *provider, Model: *model, Effort: *effort, From: *from, To: *to, Flavor: *flavor, Version: *version, Outcome: *outcome, Error: *errorType, Metric: *metric, Limit: *limit}
 	if *prText != "" {
 		value, err := strconv.Atoi(*prText)
 		if err != nil {

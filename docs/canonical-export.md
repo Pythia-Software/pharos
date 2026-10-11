@@ -25,6 +25,7 @@ An export is one workspace object or `{"workspaces": [...]}`. Unknown keys are r
   },
   "conversations": [{
     "id": "provider-native-session-id", "provider": "codex", "parent_id": null,
+    "model": "gpt-6", "effort": "high",
     "aliases": ["conductor-declared-native-id"], "coverage": "complete",
     "messages": [{
       "id": "provider-event-id", "role": "user", "kind": "message",
@@ -48,3 +49,5 @@ An export is one workspace object or `{"workspaces": [...]}`. Unknown keys are r
 
 Roles and metric absence are preserved. Producers should classify subagent tool calls as `kind: "delegation"`; they are retained even though routine tool traffic is low priority. Never emit hidden reasoning.
 
+
+Conversations and messages accept optional `model` and `effort` fields. A message inherits the conversation effort when its field is absent; `effort: null` explicitly means unknown. Set effort on each message when configuration changes during a conversation. Levels are retained as normalized lowercase strings, including provider-specific and future values. Pharos does not infer effort from thinking token counts or thinking budgets.

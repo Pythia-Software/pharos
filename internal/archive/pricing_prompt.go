@@ -97,7 +97,7 @@ func (c *Catalog) pricingRefreshPrompt(health map[string]any) string {
 - ` + "`effective_from`" + ` (YYYY-MM-DD) is the day the price took effect, usually the launch or API-availability date. A price applies until the next row for the same model; an alias applies until the next row for the same alias.
 - Use canonical API model IDs without date suffixes (` + "`claude-opus-5-5`, `gpt-6-sol`" + `). Matching ignores a ` + "`claude-`" + ` prefix, ` + "`-YYYYMMDD`" + ` dates, and ` + "`-1m`/`[1m]`" + ` suffixes, so don't add rows that differ only by those.
 - Every row needs an ` + "`https://`" + ` ` + "`source_url`" + ` that you actually fetched and that states the value, plus ` + "`source_title`" + ` and ` + "`retrieved_at`" + ` (today). Prefer official pages; for past prices use web.archive.org snapshots. Never fill in a value from memory. If you can't cite it, leave it out and tell me.
-- Add every new row with ` + "`\"status\": \"proposed\"`" + `. I review proposed rows and confirm them myself. Never edit or delete ` + "`confirmed`" + ` or ` + "`rejected`" + ` rows.
+- Add every new row with ` + "`\"status\": \"proposed\"`" + `. After I approve, change only the approved rows to ` + "`\"status\": \"confirmed\"`" + `. Never edit or delete existing ` + "`confirmed`" + ` or ` + "`rejected`" + ` rows.
 - Only when a model genuinely has no published API price (for example, a Codex-only or pre-launch model), you may propose a row with ` + "`\"assumption\": true`" + ` priced from its closest published sibling. Its ` + "`notes`" + ` must name the sibling and explain why it's a reasonable basis.
 - Ignore placeholder model strings such as ` + "`<synthetic>`" + `; they aren't API calls.
 
@@ -110,7 +110,16 @@ func (c *Catalog) pricingRefreshPrompt(health map[string]any) string {
 		prompt.WriteString("Run `go test ./internal/archive -run 'Pricing|Price|Cost'` from the repository root and fix any problems it reports. ")
 	}
 	prompt.WriteString("`go run ./cmd/pharos pricing check` also validates the file and lists models that are still unpriced.\n\n")
-	prompt.WriteString("Finish with a table of every row you added (model or alias, effective_from, rates, source URL), plus anything you couldn't source and why. Don't commit. I'll review, confirm rows, and rebuild with `./launch.sh` so the app picks up the new prices.\n")
+	prompt.WriteString(`## Approval and handoff
+
+Present a table of every row you added (model or alias, effective_from, rates, source URL), plus anything you couldn't source and why. Then explicitly ask: "Do you approve these pricing changes?"
+
+Treat my explicit yes, my request to create a PR for these pricing changes, or a PR I create for them as approval. If I have already approved through one of these actions, proceed without asking again. A PR counts as approval only when I request it or create it myself.
+
+After approval, mark the approved rows ` + "`confirmed`" + ` and rerun the pricing checks. If I request a PR, confirm those rows before committing and opening the PR; that request also authorizes the necessary commit. Otherwise, leave the changes uncommitted. If I decline or have not answered, leave the rows ` + "`proposed`" + `.
+
+I'll rebuild with ` + "`./launch.sh`" + ` so the app picks up the new prices.
+`)
 	return prompt.String()
 }
 

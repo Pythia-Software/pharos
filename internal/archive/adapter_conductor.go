@@ -23,7 +23,7 @@ type conductorAdapter struct {
 	selected map[string]bool
 }
 
-const conductorExtractor = "conductor-v9-workflow-delegation"
+const conductorExtractor = "conductor-v11-effort-settings"
 
 // conductorPartExtractor versions the parser for per-session part states
 // (source_item_states). It changes separately from conductorExtractor, which
@@ -354,6 +354,22 @@ func firstPresent(values map[string]bool, choices ...string) string {
 	return ""
 }
 
+func conductorSessionEffort(session map[string]any) string {
+	// Both settings can be populated; only the active agent's setting applies.
+	column := ""
+	switch strings.ToLower(strings.TrimSpace(firstString(session["agent_type"]))) {
+	case "codex":
+		column = "codex_thinking_level"
+	case "claude":
+		column = "claude_effort_level"
+	}
+	if raw, exists := session[column]; column != "" && exists {
+		return normalizeEffort(firstString(raw))
+	}
+	// Older schemas may expose a generic setting instead.
+	return recordedEffort(session)
+}
+
 func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messageTable string, session map[string]any,
 	sidColumn, fkColumn string, scols, mcols, tables map[string]bool) (WorkspaceRecord, error) {
 	path = a.original(path)
@@ -369,6 +385,7 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 	messages := []MessageRecord{}
 	delegated := map[string]bool{}
 	currentModel := firstString(session["model"])
+	currentEffort := conductorSessionEffort(session)
 	for index, message := range rows {
 		field, text := "none", ""
 		for _, candidate := range []string{"content", "full_message", "text"} {
@@ -404,10 +421,22 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 				}
 			}
 		}
+		// Unset nullable columns carry no configuration change. Explicit
+		// resets in the event envelopes below still clear the current effort.
+		if effort := recordedEffort(message); effort != "" {
+			currentEffort = effort
+		}
+		for _, candidate := range []string{"content", "full_message", "text"} {
+			var envelope map[string]any
+			if json.Unmarshal([]byte(messageText(message[candidate])), &envelope) == nil {
+				currentEffort = updatedEffort(currentEffort, envelope, mapValue(envelope["payload"]), mapValue(envelope["message"]))
+			}
+		}
 		parsed := conductorEvents(baseID, role, text, createdAt, locator, delegated)
 		sender := conductorSender(message)
 		for item := range parsed {
 			parsed[item].Model = currentModel
+			parsed[item].Effort = currentEffort
 			if parsed[item].Role == "user" {
 				parsed[item].Sender = sender
 			}
@@ -418,7 +447,7 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 			alternative := messageText(message[candidate])
 			var envelope map[string]any
 			if alternative != text && json.Unmarshal([]byte(alternative), &envelope) == nil && hasUsageEvidence(envelope) {
-				parsed = append(parsed, MessageRecord{NativeID: baseID + ":accounting:" + candidate, Role: "system", Kind: "metadata", Text: alternative, Model: currentModel, CreatedAt: createdAt, EvidenceLocator: locator + ":" + candidate, Selected: true})
+				parsed = append(parsed, MessageRecord{NativeID: baseID + ":accounting:" + candidate, Role: "system", Kind: "metadata", Text: alternative, Model: currentModel, Effort: currentEffort, CreatedAt: createdAt, EvidenceLocator: locator + ":" + candidate, Selected: true})
 			}
 		}
 		messages = append(messages, parsed...)
@@ -573,10 +602,10 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 	}
 	metrics := reconciledTokenMetrics(WorkspaceRecord{Conversations: []ConversationRecord{{Messages: messages}}})
 	if session["context_token_count"] != nil || session["context_used_percent"] != nil {
-		messages = append(messages, MessageRecord{NativeID: sid + ":context-snapshot", Role: "system", Kind: "metadata", Text: jsonText(map[string]any{"type": "context_snapshot", "context_token_count": session["context_token_count"], "context_used_percent": session["context_used_percent"]}), Model: currentModel, CreatedAt: updated, EvidenceLocator: "sqlite:" + path + ":sessions:" + sid, Selected: true})
+		messages = append(messages, MessageRecord{NativeID: sid + ":context-snapshot", Role: "system", Kind: "metadata", Text: jsonText(map[string]any{"type": "context_snapshot", "context_token_count": session["context_token_count"], "context_used_percent": session["context_used_percent"]}), Model: currentModel, Effort: currentEffort, CreatedAt: updated, EvidenceLocator: "sqlite:" + path + ":sessions:" + sid, Selected: true})
 	}
 	aliases = uniqueStrings(append(aliases, sid))
-	return WorkspaceRecord{SourceID: sid, SourceKind: "conductor", Title: title, Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: updated, Location: location, Repository: repository, Metadata: metadata, PRs: prs, Metrics: metrics, Changes: changes, Conversations: []ConversationRecord{{NativeID: "conductor:" + sid, Provider: provider, Account: a.config.Account, Aliases: aliases, Origin: "sqlite:" + path, Harness: "conductor", Coverage: conductorExtractor, Messages: messages, Model: model, StartedAt: started, EndedAt: updated}}}, nil
+	return WorkspaceRecord{SourceID: sid, SourceKind: "conductor", Title: title, Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: updated, Location: location, Repository: repository, Metadata: metadata, PRs: prs, Metrics: metrics, Changes: changes, Conversations: []ConversationRecord{{NativeID: "conductor:" + sid, Provider: provider, Account: a.config.Account, Aliases: aliases, Origin: "sqlite:" + path, Harness: "conductor", Coverage: conductorExtractor, Messages: messages, Model: model, Effort: currentEffort, StartedAt: started, EndedAt: updated}}}, nil
 }
 
 // conductorSender names who sent a Conductor message row. Conductor records

@@ -20,7 +20,7 @@ var usageTokenFields = []string{
 // usageTimeFields are the calendar buckets derived from the ledger hour.
 var usageTimeFields = map[string]bool{"hour": true, "day": true, "week": true, "month": true}
 
-// usageRows returns one row per agent session, local calendar day, and model.
+// usageRows returns one row per agent session, local calendar day, model, and effort.
 // Linked mirrors of the same work (for example a Conductor workspace and the
 // native Claude session it wraps) keep only the representative workspace, as
 // Library does, so the same requests are not counted twice.
@@ -54,14 +54,15 @@ func (c *Catalog) usageRowsByPeriod(location *time.Location, hourly bool) ([]map
 		if hourly {
 			bucket = hourKey
 		}
-		key := firstString(entry["agent_session_id"]) + "|" + firstString(bucket) + "|" + model
+		key := firstString(entry["agent_session_id"]) + "|" + firstString(bucket) + "|" + model + "|" + firstString(entry["effort"])
 		row := grouped[key]
 		if row == nil {
 			row = map[string]any{
 				"id": key, "agent_session_id": entry["agent_session_id"], "conversation_id": entry["conversation_id"],
 				"workspace_id": entry["workspace_id"], "title": entry["title"], "repository_name": entry["repository_name"],
-				"source_kind": entry["source_kind"], "provider": entry["provider"], "model": model,
-				"harness": entry["harness"], "harness_version_first": entry["harness_version_first"], "harness_version_last": entry["harness_version_last"], "harness_version_source": entry["harness_version_source"], "model_family": modelFamily(model),
+				"source_kind": entry["source_kind"], "provider": entry["provider"], "model": model, "effort": nilIfEmpty(firstString(entry["effort"])),
+				"model_effort": modelEffort(model, firstString(entry["effort"])),
+				"harness":      entry["harness"], "harness_version_first": entry["harness_version_first"], "harness_version_last": entry["harness_version_last"], "harness_version_source": entry["harness_version_source"], "model_family": modelFamily(model),
 				"session_kind": entry["session_kind"], "depth": integer(entry["depth"]), "attribution": entry["attribution"],
 				"hour": hourKey, "day": day, "week": week, "month": month, "first_usage_at": at, "last_usage_at": at,
 				"cost_usd": nil, "cost_today_usd": nil, "price_status": "", "priced_model": nil,
@@ -163,7 +164,7 @@ func (c *Catalog) hourlyUsageForAggregation(ctx context.Context, where []queryta
 	}
 	kept := make([]map[string]any, 0, len(hourly))
 	for _, row := range hourly {
-		id := firstString(row["agent_session_id"]) + "|" + firstString(row["day"]) + "|" + firstString(row["model"])
+		id := usageDailyID(row)
 		if ids[id] {
 			kept = append(kept, row)
 		}
@@ -182,7 +183,7 @@ func (c *Catalog) aggregateUsage(ctx context.Context, daily []map[string]any, re
 	if slices.Contains(whereFields(request.Where), "hour") {
 		ids := map[string]bool{}
 		for _, row := range hourly {
-			ids[firstString(row["agent_session_id"])+"|"+firstString(row["day"])+"|"+firstString(row["model"])] = true
+			ids[usageDailyID(row)] = true
 		}
 		selected := make([]map[string]any, 0, len(daily))
 		for _, row := range daily {
@@ -249,7 +250,7 @@ func (c *Catalog) usageLedger(workspaceIDs []string) ([]map[string]any, error) {
 			args = append(args, id)
 		}
 	}
-	return queryMaps(c.DB, `SELECT u.agent_session_id,u.usage_hour,u.model usage_model,u.attribution,`+strings.Join(sums, ",")+`,
+	return queryMaps(c.DB, `SELECT u.agent_session_id,u.usage_hour,u.model usage_model,u.effort,u.attribution,`+strings.Join(sums, ",")+`,
 			a.kind session_kind,a.depth,a.provider,a.model session_model,a.conversation_id,
             CASE WHEN `+currentGroupConversation("c")+` THEN 1 ELSE 0 END current_group_member,
             c.harness,c.harness_version_first,c.harness_version_last,c.harness_version_source,
@@ -409,4 +410,9 @@ func sortUsageTimeBuckets(request querytable.AggregationRequest, result querytab
 			return firstString(buckets[i].Keys[position]) > firstString(buckets[j].Keys[position])
 		})
 	}
+}
+
+// usageDailyID is shared by both query protocols when expanding daily rows into hours.
+func usageDailyID(row map[string]any) string {
+	return firstString(row["agent_session_id"]) + "|" + firstString(row["day"]) + "|" + firstString(row["model"]) + "|" + firstString(row["effort"])
 }

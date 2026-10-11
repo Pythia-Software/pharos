@@ -484,7 +484,7 @@ func fitConversationCards(result map[string]any, budget int) {
 			for _, item := range items {
 				freshness := item["freshness"].(map[string]any)
 				item["freshness"] = map[string]any{"status": freshness["status"], "details_tool": "get_conversation_overview"}
-				for _, field := range []string{"lineage", "activity_at", "started_at", "ended_at", "indexed_at", "workspace_id", "provider", "model", "coverage", "message_count", "score", "relevance_reason"} {
+				for _, field := range []string{"lineage", "activity_at", "started_at", "ended_at", "indexed_at", "workspace_id", "provider", "model", "effort", "coverage", "message_count", "score", "relevance_reason"} {
 					delete(item, field)
 				}
 				item["snippet"] = clipText(firstString(item["snippet"]), 60)

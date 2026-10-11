@@ -82,7 +82,7 @@ and long-context premiums, so it is a lower bound.
 - **`effective_from`** is the date the price took effect. A price applies until the next row for the same model; an alias applies until the next row for the same alias.
 - **Model matching** ignores a `claude-` prefix, snapshot dates (`-20251001`), and `-1m`/`[1m]` context variants, so a single row covers `claude-opus-4-8`, `opus-4-8`, and `opus-4-8-1m`.
 - **Aliases** map names such as Claude Code's bare `opus` to the concrete model they meant on a given date.
-- **`status`**: `proposed` rows are imported but never used for cost. A person flips a row to `confirmed` after checking its source. `rejected` keeps a checked-and-wrong finding from being proposed again.
+- **`status`**: `proposed` rows are imported but never used for cost. After source review and user approval, a person or the agent flips approved rows to `confirmed`. `rejected` keeps a checked-and-wrong finding from being proposed again.
 - Every row must cite an `https://` source that states the price or mapping.
 - **`assumption: true`** marks a price no provider published, such as a Codex-only model priced like its closest API sibling, or pre-launch usage priced at the launch price. `notes` must explain the basis. These rows count toward cost, but that cost is shown as `≈$…` with status `assumed`, so you can filter it out.
 
@@ -112,6 +112,14 @@ the command line:
 pharos --config ~/Library/Application\ Support/AI\ Work\ Archive/archive.toml pricing prompt
 ```
 
-The agent adds only `proposed` rows. Review each row's source, flip the correct
-ones to `confirmed` (or `rejected`), and rebuild with `./launch.sh` so the app
-embeds the updated file.
+The agent initially adds `proposed` rows, presents their rates and sources, and
+explicitly asks whether you approve the pricing changes. An explicit yes, your
+request to create a PR for those changes, or a PR you create for them counts as
+approval. The agent then marks the approved rows `confirmed` and reruns the
+pricing checks. When you request a PR, it confirms the rows before committing
+and opening the PR. An agent opening a PR without your request does not count
+as approval. Rows remain `proposed` if you decline or have not answered.
+
+If you have already approved through one of those actions, the agent proceeds
+without asking again. Rebuild with `./launch.sh` so the app embeds the updated
+file.

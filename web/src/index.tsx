@@ -566,7 +566,7 @@ function ConversationResultCard({ row }: { row: Row }) {
     <div className="conversation-result-head">
       <div className="conversation-result-summary">
         <button className="conversation-result-title" type="button" onClick={() => window.pharosOpenDetail?.(String(row.id))}>{String(row.title ?? "Untitled work")}</button>
-        <div className="conversation-result-meta">{[row.repository_name, row.source_kind, models.join(", "), row.activity_at ? new Date(row.activity_at).toLocaleDateString() : ""].filter(Boolean).join(" · ")}</div>
+        <div className="conversation-result-meta">{[row.repository_name, row.source_kind, models.join(", "), row.efforts ? `Effort: ${row.efforts}` : "", row.activity_at ? new Date(row.activity_at).toLocaleDateString() : ""].filter(Boolean).join(" · ")}</div>
         <div className="conversation-result-facts">
           <span className="conversation-result-count">{turnCount} turn{turnCount === 1 ? "" : "s"}</span>
           <span className="conversation-result-count">{toolCount} tool use{toolCount === 1 ? "" : "s"}</span>
@@ -699,7 +699,7 @@ function LibraryPage() {
 }
 
 type ChartRange = "30d" | "90d" | "6m" | "1y";
-type TokenSplit = "type" | "provider" | "model_family" | "repository_name" | "session_kind";
+type TokenSplit = "type" | "provider" | "model_family" | "model_effort" | "effort" | "repository_name" | "session_kind";
 type TokenChartView = { metric: "tokens" | "cost" | "percent" | "percent_cost"; split: TokenSplit; period: ChartPeriod; hours: number; days: number; rollingPeriods: number; scale: ChartScale };
 // A preset either fills the metric panels or sets the chart above them.
 type UsagePreset = { label: string; title: string; aggregations?: AggregationClause[]; chart?: Partial<TokenChartView>; orderBy?: OrderByClause[] };
@@ -734,6 +734,11 @@ const costPresets: UsagePreset[] = [
 const usagePresets: UsagePreset[] = [
   { label: "Daily by provider", title: "Chart total tokens per day, split by provider", chart: { metric: "tokens", split: "provider", period: "day" } },
   { label: "Weekly cache mix", title: "Chart uncached input, cache reads, cache writes, and output per week", chart: { metric: "tokens", split: "type", period: "week" } },
+  { label: "Effort", title: "Tokens and cost by recorded effort level and model", aggregations: [
+    sum("total_tokens", ["model_family", "effort"], "Tokens by model and effort"),
+    sum("cost_usd", ["effort"], "Cost by effort"),
+  ] },
+  { label: "Model + effort", title: "Compare tokens and cost for each recorded model and effort pair", chart: { metric: "tokens", split: "model_effort", period: "week" } },
   { label: "Models", title: "Total tokens and cache reads by model and provider", aggregations: [
     sum("total_tokens", ["model_family", "provider"], "Tokens by model"),
     sum("cache_read_input_tokens", ["model_family"], "Cached input by model"),
@@ -1231,7 +1236,7 @@ const tokenTypes: ChartSeries[] = [
   { key: "output_tokens", label: "Output", color: "var(--heat-2)" },
   { key: "unclassified_tokens", label: "Unclassified", color: "var(--muted)" },
 ];
-const tokenSplits: Array<[TokenSplit, string]> = [["type", "Token type"], ["provider", "Provider"], ["model_family", "Model"], ["repository_name", "Repository"], ["session_kind", "Agent"]];
+const tokenSplits: Array<[TokenSplit, string]> = [["type", "Token type"], ["provider", "Provider"], ["model_family", "Model"], ["model_effort", "Model + effort"], ["effort", "Effort"], ["repository_name", "Repository"], ["session_kind", "Agent"]];
 // Providers and agent kinds keep one color each whatever the filters; models
 // and repositories show the fifteen largest in view and fold the rest into Other.
 const fixedSplitOrder: Partial<Record<TokenSplit, string[]>> = { provider: ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"], session_kind: ["root", "subagent"] };
@@ -1656,7 +1661,7 @@ function UsagePage() {
   return <UsageChartColorsProvider><div className="pharos-query-page usage-page">
     <div className="view-heading library-heading usage-heading">
       <div><h1>Usage</h1><p className="muted">{view === "tokens"
-        ? "Reconciled tokens per agent session, day, and model. Input includes cached input; filter to any provider, model, or repository and the chart follows. Cost is the API list-price equivalent on the day of use, at standard rates. It ignores long-context premiums and subscriptions, so treat it as a lower bound. ≈ marks costs priced by assumption."
+        ? "Reconciled tokens per agent session, day, model, and effort. Input includes cached input; filter to any provider, model, effort, or repository and the chart follows. Cost is the API list-price equivalent on the day of use, at standard rates. It ignores long-context premiums and subscriptions, so treat it as a lower bound. ≈ marks costs priced by assumption."
         : view === "writing"
           ? <>Text you typed or dictated into agent chats, per conversation or per message. Harness instructions, one-click prompts, attachments, pastes, and copied agent output are counted separately; filter the table and the chart and breakdown follow. {statusText ? <span className="meta">{statusText}</span> : null}</>
           : "Estimated inference electricity and CO₂e for the tokens in this library, using published research and explicit assumptions."}</p></div>
@@ -1827,7 +1832,7 @@ const toolCallPresets: ToolPreset[] = [
 // Filters that select the calls behind one summary row.
 function drillFilters(row: Row): WhereTerm[] {
   const where: WhereTerm[] = [];
-  for (const field of ["day", "tool_name", "program", "subcommand", "provider", "model", "repository_name", "session_kind", "source_kind"]) {
+  for (const field of ["day", "tool_name", "program", "subcommand", "provider", "model", "effort", "repository_name", "session_kind", "source_kind"]) {
     const value = row[field];
     where.push(value === null || value === undefined || value === "" ? { field, op: "is_null", value: "" } : { field, op: "=", value: String(value) });
   }
@@ -1887,7 +1892,7 @@ function ToolCallDialog({ id, onClose }: { id: string; onClose: () => void }) {
         {call.skill_name ? <div><dt>Skills</dt><dd>{String(call.skill_name)}</dd></div> : null}
       </dl>
       {call.error_signature ? <p className="muted">Error signature: {String(call.error_signature)}</p> : null}
-      {call.title ? <p className="muted">{String(call.title)}{call.repository_name ? ` · ${call.repository_name}` : ""} · {String(call.provider)} {call.model ? `· ${call.model}` : ""}</p> : null}
+      {call.title ? <p className="muted">{String(call.title)}{call.repository_name ? ` · ${call.repository_name}` : ""} · {String(call.provider)} {call.model ? `· ${call.model}` : ""}{call.effort ? ` · Effort: ${call.effort}` : ""}</p> : null}
       {Array.isArray(call.commands) && call.commands.length ? <><h3>Commands</h3><div className="mcp-tool-table-wrap"><table className="tool-commands"><thead><tr><th>#</th><th>Program</th><th>Category</th><th>Exit</th><th>Duration</th><th>Command</th></tr></thead><tbody>
         {call.commands.map((command: Row) => <tr key={command.position}><td>{command.operator && command.operator !== "script" ? command.operator : Number(command.position) + 1}</td><td>{[command.program, command.subcommand].filter(Boolean).join(" ")}</td><td>{command.category ?? ""}</td><td>{command.exit_code ?? ""}</td><td>{command.duration_ms === null || command.duration_ms === undefined ? "" : formatDurationMS(command.duration_ms)}</td><td className="tool-command-text">{String(command.command)}</td></tr>)}
       </tbody></table></div></> : null}

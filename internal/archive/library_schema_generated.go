@@ -42,6 +42,8 @@ func PharosLibrarySchema() querytable.Schema {
 			"harnesses":                 {Name: "harnesses", Kind: querytable.FieldText, Expr: "r.\"harnesses\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"harnesses\""},
 			"harness_versions":          {Name: "harness_versions", Kind: querytable.FieldText, Expr: "r.\"harness_versions\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"harness_versions\""},
 			"models":                    {Name: "models", Kind: querytable.FieldText, Expr: "r.\"models\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"models\""},
+			"model_efforts":             {Name: "model_efforts", Kind: querytable.FieldText, Expr: "r.\"model_efforts\"", Synthetic: false, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"model_efforts\""},
+			"efforts":                   {Name: "efforts", Kind: querytable.FieldText, Expr: "r.\"efforts\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"efforts\""},
 			"changed_files":             {Name: "changed_files", Kind: querytable.FieldText, Expr: "r.\"changed_files\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"changed_files\""},
 			"error_types":               {Name: "error_types", Kind: querytable.FieldText, Expr: "r.\"error_types\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"error_types\""},
 			"location":                  {Name: "location", Kind: querytable.FieldText, Expr: "r.\"location\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"location\""},

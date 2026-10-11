@@ -35,6 +35,10 @@
       "width": 80
     },
     {
+      "field": "effort",
+      "width": 90
+    },
+    {
       "field": "error_type",
       "width": 120
     },
@@ -343,6 +347,57 @@
           "expr": "r.\"model\""
         }
       }
+    },
+    {
+      "name": "model_effort",
+      "label": "Model + effort",
+      "type": "text",
+      "group": "Model",
+      "select": {
+        "default": false
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "model_effort",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"model_effort\""
+        }
+      },
+      "description": "Recorded model and effort pairs; missing effort is labeled Unknown effort."
+    },
+    {
+      "name": "effort",
+      "label": "Effort",
+      "type": "text",
+      "group": "Model",
+      "select": {
+        "default": true
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "effort",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"effort\""
+        }
+      },
+      "description": "Recorded agent effort level; unavailable when the source does not report it."
     },
     {
       "name": "session_kind",

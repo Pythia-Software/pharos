@@ -162,7 +162,7 @@ func (c *Catalog) TL1Overview(selection tl1Selection, window tl1Window) (map[str
 // Findings are tied to the review task that recorded them. Only tasks in the
 // selected window and definition scope are counted at every step.
 func tl1Followups(data *tl1Data) map[string]any {
-	type nextKey struct{ fromFlavor, fromConfig, fromModel, toFlavor, toConfig, toModel, toClass, outcome string }
+	type nextKey struct{ fromFlavor, fromConfig, fromModel, fromEffort, toFlavor, toConfig, toModel, toEffort, toClass, outcome string }
 	type afterKey struct {
 		nextKey
 		afterFlavor, afterClass, afterOutcome string
@@ -194,20 +194,20 @@ func tl1Followups(data *tl1Data) map[string]any {
 		}
 		return task.Attempts[len(task.Attempts)-1]
 	}
-	config := func(task *tl1Task) (string, string) {
+	config := func(task *tl1Task) (string, string, string) {
 		if attempt := final(task); attempt != nil {
-			return defaultString(nilIfEmpty(attempt.Configuration), "Unrecorded"), defaultString(nilIfEmpty(attempt.Model), "Unrecorded")
+			return defaultString(nilIfEmpty(attempt.Configuration), "Unrecorded"), defaultString(nilIfEmpty(attempt.Model), "Unrecorded"), defaultString(nilIfEmpty(attempt.Effort), "Unrecorded")
 		}
-		return "—", "—"
+		return "—", "—", "—"
 	}
 	for _, task := range data.Tasks {
 		if task.Parent == nil || data.TaskByID[task.Parent.ID] == nil {
 			continue
 		}
 		parent := task.Parent
-		fromConfig, fromModel := config(parent)
-		toConfig, toModel := config(task)
-		key := nextKey{parent.Flavor, fromConfig, fromModel, task.Flavor, toConfig, toModel, task.ExecutionClass, outcome(task)}
+		fromConfig, fromModel, fromEffort := config(parent)
+		toConfig, toModel, toEffort := config(task)
+		key := nextKey{parent.Flavor, fromConfig, fromModel, fromEffort, task.Flavor, toConfig, toModel, toEffort, task.ExecutionClass, outcome(task)}
 		if next[key] == nil {
 			next[key] = &counts{}
 		}
@@ -220,8 +220,8 @@ func tl1Followups(data *tl1Data) map[string]any {
 			continue
 		}
 		grandparent := parent.Parent
-		originConfig, originModel := config(grandparent)
-		origin := nextKey{grandparent.Flavor, originConfig, originModel, parent.Flavor, fromConfig, fromModel, parent.ExecutionClass, outcome(parent)}
+		originConfig, originModel, originEffort := config(grandparent)
+		origin := nextKey{grandparent.Flavor, originConfig, originModel, originEffort, parent.Flavor, fromConfig, fromModel, fromEffort, parent.ExecutionClass, outcome(parent)}
 		path := afterKey{origin, task.Flavor, task.ExecutionClass, outcome(task)}
 		if after[path] == nil {
 			after[path] = &counts{}
@@ -234,14 +234,14 @@ func tl1Followups(data *tl1Data) map[string]any {
 	}
 	nextRows := make([]map[string]any, 0, len(next))
 	for key, value := range next {
-		nextRows = append(nextRows, map[string]any{"from_flavor": key.fromFlavor, "from_configuration": key.fromConfig, "from_model": key.fromModel,
-			"next_flavor": key.toFlavor, "next_configuration": key.toConfig, "next_model": key.toModel, "next_class": key.toClass,
+		nextRows = append(nextRows, map[string]any{"from_flavor": key.fromFlavor, "from_configuration": key.fromConfig, "from_model": key.fromModel, "from_effort": key.fromEffort,
+			"next_flavor": key.toFlavor, "next_configuration": key.toConfig, "next_model": key.toModel, "next_effort": key.toEffort, "next_class": key.toClass,
 			"next_outcome": key.outcome, "paths": value.paths, "with_findings": value.withFindings, "findings": value.findings})
 	}
 	afterRows := make([]map[string]any, 0, len(after))
 	for key, value := range after {
-		afterRows = append(afterRows, map[string]any{"from_flavor": key.fromFlavor, "from_configuration": key.fromConfig, "from_model": key.fromModel,
-			"next_flavor": key.toFlavor, "next_configuration": key.toConfig, "next_model": key.toModel, "next_class": key.toClass, "next_outcome": key.outcome,
+		afterRows = append(afterRows, map[string]any{"from_flavor": key.fromFlavor, "from_configuration": key.fromConfig, "from_model": key.fromModel, "from_effort": key.fromEffort,
+			"next_flavor": key.toFlavor, "next_configuration": key.toConfig, "next_model": key.toModel, "next_effort": key.toEffort, "next_class": key.toClass, "next_outcome": key.outcome,
 			"after_flavor": key.afterFlavor, "after_class": key.afterClass, "after_outcome": key.afterOutcome,
 			"paths": value.paths, "with_findings": value.withFindings, "findings": value.findings})
 	}
