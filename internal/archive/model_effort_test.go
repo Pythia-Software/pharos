@@ -2,13 +2,29 @@ package archive
 
 import (
 	"context"
+	"database/sql/driver"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
 	"github.com/gbdubs/pharos/internal/querytable"
+	"modernc.org/sqlite"
 )
+
+var libraryModelEffortProbeCalls atomic.Int64
+
+func init() {
+	if err := sqlite.RegisterDeterministicScalarFunction("pharos_library_model_effort_probe", 2, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+		libraryModelEffortProbeCalls.Add(1)
+		model, _ := args[0].(string)
+		effort, _ := args[1].(string)
+		return modelEffort(model, effort), nil
+	}); err != nil {
+		panic(err)
+	}
+}
 
 func modelEffortFixture(t *testing.T) (*Catalog, Config, []string) {
 	t.Helper()
@@ -291,5 +307,42 @@ func TestModelEffortLookupsUseCoveringMessageIndex(t *testing.T) {
 		if text := jsonText(plan); !strings.Contains(text, "COVERING INDEX messages_conversation_model_effort_idx") {
 			t.Fatalf("Library pairs read message rows: %s", text)
 		}
+	}
+}
+
+func TestLibraryModelEffortFormatsDistinctPairs(t *testing.T) {
+	catalog, _, _ := modelEffortFixture(t)
+	var expression string
+	for _, column := range libraryColumns {
+		if column.name == "model_efforts" {
+			expression = strings.ReplaceAll(column.expr, "model_effort(", "pharos_library_model_effort_probe(")
+		}
+	}
+	query := "SELECT w.id," + expression + " AS model_efforts FROM workspaces w ORDER BY w.id"
+	read := func() ([]map[string]any, int64) {
+		t.Helper()
+		libraryModelEffortProbeCalls.Store(0)
+		rows, err := queryMaps(catalog.DB, query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rows, libraryModelEffortProbeCalls.Load()
+	}
+	want, calls := read()
+	// Six recorded pairs across four works; SQLite may evaluate the formatter
+	// again when emitting the sorted, distinct labels.
+	if calls == 0 || calls > 12 {
+		t.Fatalf("formatter called %d times for six pairs", calls)
+	}
+	if _, err := catalog.DB.Exec(`WITH RECURSIVE copies(n) AS (
+		VALUES(1) UNION ALL SELECT n+1 FROM copies WHERE n<100)
+		INSERT INTO messages(id,conversation_id,native_id,role,kind,model,effort,text,content_hash)
+		SELECT m.id||':copy:'||n,m.conversation_id,m.native_id||':copy:'||n,
+		m.role,m.kind,m.model,m.effort,m.text,m.content_hash FROM messages m CROSS JOIN copies`); err != nil {
+		t.Fatal(err)
+	}
+	got, repeatedCalls := read()
+	if !reflect.DeepEqual(got, want) || repeatedCalls != calls {
+		t.Fatalf("repeated messages changed pairs or formatter work: %v vs %v, %d vs %d calls", got, want, repeatedCalls, calls)
 	}
 }
