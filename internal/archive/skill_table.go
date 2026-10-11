@@ -23,6 +23,7 @@ func mcpMethodSQL(prefix string) string {
 var skillUsageDataset = sqlDataset{
 	from: `FROM skill_usages s JOIN workspaces w ON w.id=s.workspace_id
 		JOIN conversations c ON c.id=s.conversation_id LEFT JOIN repositories r ON r.id=w.repository_id
+		LEFT JOIN messages m ON m.id=s.evidence_message_id
 		LEFT JOIN tool_calls t ON t.id=s.tool_call_id LEFT JOIN agent_sessions a ON a.id=s.agent_session_id`,
 	base:    "s.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)",
 	lookups: map[string]bool{"id": true, "conversation_id": true, "workspace_id": true, "tool_call_id": true},
@@ -31,7 +32,7 @@ var skillUsageDataset = sqlDataset{
 		"evidence_message_id": "s.evidence_message_id", "body_message_id": "s.body_message_id",
 		"skill_name": "s.skill_name", "skill_path": "s.skill_path", "evidence_type": "s.evidence_type", "status": "s.status",
 		"created_at": "s.created_at", "day": "date(s.created_at,'localtime')", "week": "date(s.created_at,'localtime','-6 days','weekday 1')", "month": "strftime('%Y-%m',s.created_at,'localtime')",
-		"content_bytes": "s.content_bytes", "provider": "c.provider", "source_kind": "w.source_kind", "model": "COALESCE(t.model,c.model)",
+		"content_bytes": "s.content_bytes", "provider": "c.provider", "source_kind": "w.source_kind", "model": "COALESCE(t.model,c.model)", "effort": "CASE WHEN t.id IS NOT NULL THEN t.effort ELSE m.effort END",
 		"repository_name": "r.display_name", "title": "w.title", "tool_name": "t.tool_name", "mcp_server": "t.mcp_server", "mcp_method": mcpMethodSQL("t."),
 		"session_kind": "COALESCE(a.kind,'root')", "agent_depth": "COALESCE(a.depth,0)",
 	},

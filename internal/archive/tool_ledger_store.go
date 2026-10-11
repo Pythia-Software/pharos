@@ -12,7 +12,7 @@ import (
 
 // toolRollupVersion names the tool_usage_daily and tool_call_cube layouts
 // and their derivation.
-const toolRollupVersion = "rollup-v4"
+const toolRollupVersion = "rollup-v5-effort"
 
 // toolLedgerState tracks the in-process ledger backfill and rollup rebuilds.
 type toolLedgerState struct {
@@ -126,9 +126,9 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 		return stableID("message", conversationID, nativeID)
 	}
 	if len(requests) > 0 {
-		statement, err := tx.Prepare(derivedUpsertSQL(`INSERT INTO model_requests(id,conversation_id,agent_session_id,native_id,sequence,requested_at,model,
+		statement, err := tx.Prepare(derivedUpsertSQL(`INSERT INTO model_requests(id,conversation_id,agent_session_id,native_id,sequence,requested_at,model,effort,
 			input_tokens,uncached_input_tokens,cache_read_input_tokens,cache_creation_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,
-			context_growth_tokens,compacted_before,tool_call_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
+			context_growth_tokens,compacted_before,tool_call_count) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
 		if err != nil {
 			return err
 		}
@@ -144,7 +144,7 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 			counts := request.Counts
 			uncached := max(counts["input_tokens"]-counts["cache_read_input_tokens"]-counts["cache_creation_input_tokens"], 0)
 			if _, err := statement.Exec(requestID(request.Key), conversationID, sessionID(request.Stream), nilIfEmpty(request.NativeID), request.Sequence,
-				nilIfEmpty(request.RequestedAt), nilIfEmpty(request.Model), integer(counts["input_tokens"]), integer(uncached),
+				nilIfEmpty(request.RequestedAt), nilIfEmpty(request.Model), nilIfEmpty(request.Effort), integer(counts["input_tokens"]), integer(uncached),
 				integer(counts["cache_read_input_tokens"]), integer(counts["cache_creation_input_tokens"]), integer(counts["output_tokens"]),
 				integer(counts["reasoning_output_tokens"]), integer(counts["total_tokens"]), nullableInt(request.ContextGrowth),
 				boolInt(request.CompactedBefore), request.ToolCalls); err != nil {
@@ -156,11 +156,11 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 	}
 	if len(calls) > 0 {
 		callStatement, err := tx.Prepare(derivedUpsertSQL(`INSERT INTO tool_calls(id,workspace_id,conversation_id,agent_session_id,call_id,call_message_id,result_message_id,
-			sequence,provider,model,kind,tool_name,tool_category,mcp_server,command,program,subcommand,command_category,command_count,
+			sequence,provider,model,effort,kind,tool_name,tool_category,mcp_server,command,program,subcommand,command_category,command_count,
 			has_pipe,has_redirect,has_heredoc,backgrounded,file_path,started_at,ended_at,duration_ms,duration_source,status,error_type,exit_code,
 			interrupted,truncated,input_bytes,result_bytes,result_tokens,result_tokens_source,request_id,next_request_id,parallel_count,
 			output_tokens,carried_requests,carried_tokens,lines_added,lines_removed,url,host,hosts,url_count,search_query,error_signature,test_failure,repo_path,path_repository,path_repository_id,path_scope,path_absolute)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`))
 		if err != nil {
 			return err
 		}
@@ -191,7 +191,7 @@ func replaceToolLedger(tx *sql.Tx, workspaceID, conversationID string, conversat
 				}
 			}
 			if _, err := callStatement.Exec(id, workspaceID, conversationID, sessionID(call.Stream), nilIfEmpty(call.CallID),
-				messageID(call.CallNativeID), messageID(call.ResultNativeID), call.Sequence, conversation.Provider, nilIfEmpty(call.Model),
+				messageID(call.CallNativeID), messageID(call.ResultNativeID), call.Sequence, conversation.Provider, nilIfEmpty(call.Model), nilIfEmpty(call.Effort),
 				call.Kind, call.ToolName, call.Category, nilIfEmpty(call.MCPServer), nilIfEmpty(call.Command), nilIfEmpty(call.Program),
 				nilIfEmpty(call.Subcommand), nilIfEmpty(call.CommandCategory), call.CommandCount, boolInt(call.HasPipe), boolInt(call.HasRedirect),
 				boolInt(call.HasHeredoc), boolInt(call.Backgrounded), nilIfEmpty(call.FilePath), nilIfEmpty(call.StartedAt), nilIfEmpty(call.EndedAt),
@@ -303,7 +303,7 @@ func storedMessages(ctx context.Context, q queryer, conversationID any) ([]Messa
 		records = append(records, MessageRecord{
 			NativeID: firstString(message["native_id"]), Role: firstString(message["role"]), Kind: firstString(message["kind"]),
 			Text: firstString(message["text"]), RawText: firstString(message["raw_text"]), CreatedAt: firstString(message["created_at"]),
-			Model:          firstString(message["model"]),
+			Model: firstString(message["model"]), Effort: firstString(message["effort"]),
 			ParentNativeID: firstString(message["parent_native_id"]), CallID: firstString(message["call_id"]),
 			PreviousNativeID: firstString(message["previous_native_id"]),
 			EvidenceLocator:  firstString(message["evidence_locator"]), SourceOrder: int(integer(message["source_order"])), Selected: integer(message["selected"]) != 0,
@@ -349,7 +349,7 @@ func (c *Catalog) BackfillToolLedger(ctx context.Context, progress func(done, to
 		if err != nil {
 			return finish(index, err)
 		}
-		conversation := ConversationRecord{Provider: firstString(row["provider"]), Model: firstString(row["model"]), Messages: messages}
+		conversation := ConversationRecord{Provider: firstString(row["provider"]), Model: firstString(row["model"]), Effort: firstString(row["effort"]), Messages: messages}
 		if err := c.writeTransaction(ctx, "tool-ledger conversation="+firstString(row["id"]), func(tx *sql.Tx) error {
 			// The known checkouts are read in each write transaction: an index
 			// running alongside may add some, and re-resolves only the rows
@@ -505,7 +505,7 @@ func (c *Catalog) rebuildToolRollup(ctx context.Context, generation, day string)
 }
 
 // toolUsageColumns are tool_usage_daily's columns.
-var toolUsageColumns = []string{"id", "day", "week", "month", "repository_name", "source_kind", "provider", "model", "model_family", "session_kind",
+var toolUsageColumns = []string{"id", "day", "week", "month", "repository_name", "source_kind", "provider", "model", "effort", "model_family", "session_kind",
 	"tool_name", "tool_category", "mcp_server", "program", "subcommand", "command_name", "command_category", "call_count", "error_count", "error_rate",
 	"no_result_count", "rejected_count", "interrupted_count", "timeout_count", "nonzero_exit_count", "hook_blocked_count", "truncated_count",
 	"timed_count", "total_duration_ms", "avg_duration_ms", "max_duration_ms", "input_bytes", "result_bytes", "result_tokens", "measured_count",
@@ -544,10 +544,10 @@ func toolUsageRecord(book priceBook, row map[string]any) map[string]any {
 	outputCost := book.cost(defaultString(nilIfEmpty(model), "Unknown model"), dayValue, map[string]int64{"output_tokens": int64(outputTokens + 0.5)})
 	total := addCost(addCost(nil, contextCost.cost), outputCost.cost)
 	return map[string]any{
-		"id": stableID("tool-usage", dayValue, row["repository_name"], row["source_kind"], row["provider"], model, row["session_kind"], row["tool_name"],
+		"id": stableID("tool-usage", dayValue, row["repository_name"], row["source_kind"], row["provider"], model, row["effort"], row["session_kind"], row["tool_name"],
 			row["tool_category"], row["mcp_server"], row["program"], row["subcommand"], row["command_category"]),
 		"day": nilIfEmpty(dayValue), "week": week, "month": month, "repository_name": row["repository_name"], "source_kind": row["source_kind"],
-		"provider": row["provider"], "model": nilIfEmpty(model), "model_family": nilIfEmpty(modelFamily(model)), "session_kind": row["session_kind"],
+		"provider": row["provider"], "model": nilIfEmpty(model), "effort": row["effort"], "model_family": nilIfEmpty(modelFamily(model)), "session_kind": row["session_kind"],
 		"tool_name": row["tool_name"], "tool_category": row["tool_category"], "mcp_server": row["mcp_server"], "mcp_method": mcpMethod(asString(row["tool_name"]), row["mcp_server"]), "program": row["program"],
 		"subcommand": row["subcommand"], "command_name": nilIfEmpty(strings.TrimSpace(firstString(row["program"]) + " " + firstString(row["subcommand"]))),
 		"command_category": row["command_category"], "call_count": calls, "error_count": row["error_count"], "error_rate": errorRate,

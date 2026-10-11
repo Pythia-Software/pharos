@@ -66,7 +66,7 @@ func (c *Catalog) referenceSearchConversations(args map[string]any) (map[string]
 		clauses = append(clauses, "COALESCE(c.started_at,w.activity_at)<=?")
 		values = append(values, timeBound(to, true))
 	}
-	rows, err := queryMaps(c.DB, `SELECT c.id conversation_id,c.workspace_id,c.provider,c.model,c.coverage,c.started_at,c.ended_at,
+	rows, err := queryMaps(c.DB, `SELECT c.id conversation_id,c.workspace_id,c.provider,c.model,c.effort,c.coverage,c.started_at,c.ended_at,
 		substr(w.title,1,101) title,w.activity_at,substr(r.display_name,1,101) repository,
 		d.initiation,d.initiation_message_id,d.outcome conversation_outcome,d.outcome_message_id,d.vector_json,d.indexed_at,
 		(SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id) message_count
@@ -118,7 +118,7 @@ func (c *Catalog) referenceSearchConversations(args map[string]any) (map[string]
 		}
 		results = append(results, map[string]any{
 			"conversation_id": id, "workspace_id": row["workspace_id"], "title": clipText(firstString(row["title"]), 100),
-			"repository": row["repository"], "provider": row["provider"], "model": row["model"],
+			"repository": row["repository"], "provider": row["provider"], "model": row["model"], "effort": row["effort"],
 			"started_at": row["started_at"], "ended_at": row["ended_at"], "activity_at": row["activity_at"], "message_count": row["message_count"],
 			"coverage": row["coverage"], "indexed_at": row["indexed_at"],
 			"relevance_reason": strings.Join(reasons, ", "), "snippet": clipText(snippet, 180),

@@ -40,7 +40,7 @@ export function foldSeries(rows: Array<[string, string, number]>, byKey: Map<str
   for (const name of selected) if (!top.includes(name)) top.push(name);
   const rest = shown.filter(name => !top.includes(name));
   const styles = new Map([...new Set([...shown, ...selected])].sort().map(name => [name, chartSeriesStyle(scope, name)]));
-  if (scope === "model_family" || scope === "provider") top.sort((left, right) => styles.get(left)!.order!.localeCompare(styles.get(right)!.order!, undefined, { numeric: true }));
+  if (scope === "model_family" || scope === "provider" || scope === "effort") top.sort((left, right) => styles.get(left)!.order!.localeCompare(styles.get(right)!.order!, undefined, { numeric: true }));
   const series: ChartSeries[] = top.map(name => ({ key: `s:${name}`, label: label(name), color: styles.get(name)!.color, group: styles.get(name)!.group, value: name }));
   if (rest.length) series.push({ key: "other", label: `Other (${rest.length})`, color: otherSeriesColor, hiddenCount: rest.length, foldedValues: rest });
   for (const [bucketKey, name, value] of inView) {

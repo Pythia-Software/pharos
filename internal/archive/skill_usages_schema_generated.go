@@ -21,6 +21,7 @@ func PharosSkillUsagesSchema() querytable.Schema {
 			"provider":            {Name: "provider", Kind: querytable.FieldText, Expr: "r.\"provider\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"provider\""},
 			"source_kind":         {Name: "source_kind", Kind: querytable.FieldText, Expr: "r.\"source_kind\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"source_kind\""},
 			"model":               {Name: "model", Kind: querytable.FieldText, Expr: "r.\"model\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"model\""},
+			"effort":              {Name: "effort", Kind: querytable.FieldText, Expr: "r.\"effort\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"effort\""},
 			"repository_name":     {Name: "repository_name", Kind: querytable.FieldText, Expr: "r.\"repository_name\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"repository_name\""},
 			"title":               {Name: "title", Kind: querytable.FieldText, Expr: "r.\"title\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"title\""},
 			"session_kind":        {Name: "session_kind", Kind: querytable.FieldText, Expr: "r.\"session_kind\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"session_kind\""},

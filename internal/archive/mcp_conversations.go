@@ -79,6 +79,10 @@ func (c *Catalog) searchConversations(args map[string]any) (map[string]any, erro
 		clauses = append(clauses, "c.provider=?")
 		values = append(values, provider)
 	}
+	if effort := normalizeEffort(firstString(args["effort"])); effort != "" {
+		clauses = append(clauses, "(c.effort=? OR EXISTS(SELECT 1 FROM messages me WHERE me.conversation_id=c.id AND me.effort=?))")
+		values = append(values, effort, effort)
+	}
 	if file := firstString(args["file"]); file != "" {
 		clauses = append(clauses, `EXISTS(SELECT 1 FROM change_sets cs JOIN change_files cf ON cf.change_set_id=cs.id WHERE cs.workspace_id=w.id AND cf.path LIKE ?)`)
 		values = append(values, "%"+file+"%")
@@ -209,7 +213,7 @@ func (c *Catalog) conversationCards(cards []map[string]any, parsed string) error
 	for index, card := range cards {
 		ids[index] = card["conversation_id"]
 	}
-	rows, err := queryMaps(c.DB, `SELECT c.id conversation_id,c.workspace_id,c.provider,c.model,c.coverage,c.ended_at,
+	rows, err := queryMaps(c.DB, `SELECT c.id conversation_id,c.workspace_id,c.provider,c.model,c.effort,c.coverage,c.ended_at,
 		substr(w.title,1,101) title,substr(r.display_name,1,101) repository,d.initiation,d.initiation_message_id,d.indexed_at,
 		(SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id) message_count
 		FROM conversations c JOIN workspaces w ON w.id=c.workspace_id
@@ -224,7 +228,7 @@ func (c *Catalog) conversationCards(cards []map[string]any, parsed string) error
 	}
 	for _, card := range cards {
 		row := byID[firstString(card["conversation_id"])]
-		for _, key := range []string{"workspace_id", "repository", "provider", "model", "ended_at", "message_count", "coverage", "indexed_at"} {
+		for _, key := range []string{"workspace_id", "repository", "provider", "model", "effort", "ended_at", "message_count", "coverage", "indexed_at"} {
 			card[key] = row[key]
 		}
 		card["title"] = clipText(firstString(row["title"]), 100)
@@ -306,7 +310,7 @@ func (c *Catalog) collapseConversationMirrors(rows []map[string]any) []map[strin
 
 func (c *Catalog) conversationOverview(args map[string]any) (map[string]any, error) {
 	id := firstString(args["conversation_id"])
-	rows, err := queryMaps(c.DB, `SELECT c.id conversation_id,c.workspace_id,c.provider,c.model,c.coverage,c.started_at,c.ended_at,
+	rows, err := queryMaps(c.DB, `SELECT c.id conversation_id,c.workspace_id,c.provider,c.model,c.effort,c.coverage,c.started_at,c.ended_at,
 		substr(w.title,1,121) title,substr(w.outcome,1,201) outcome,w.activity_at,substr(r.display_name,1,101) repository,
 		d.initiation,d.initiation_message_id,d.outcome conversation_outcome,d.outcome_message_id,d.indexed_at,
 		(SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id) message_count
@@ -322,7 +326,7 @@ func (c *Catalog) conversationOverview(args map[string]any) (map[string]any, err
 	row := rows[0]
 	budget := mcpBudget(args, 700)
 	result := map[string]any{"conversation_id": id, "workspace_id": row["workspace_id"], "title": clipText(firstString(row["title"]), 120),
-		"repository": row["repository"], "provider": row["provider"], "model": row["model"], "coverage": row["coverage"],
+		"repository": row["repository"], "provider": row["provider"], "model": row["model"], "effort": row["effort"], "coverage": row["coverage"],
 		"started_at": row["started_at"], "ended_at": row["ended_at"], "indexed_at": row["indexed_at"], "message_count": row["message_count"],
 		"request":           map[string]any{"text": clipText(firstString(row["initiation"]), min(500, budget)), "message_id": row["initiation_message_id"]},
 		"last_response":     map[string]any{"text": clipText(firstString(row["conversation_outcome"]), min(500, budget)), "message_id": row["outcome_message_id"]},

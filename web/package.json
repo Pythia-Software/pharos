@@ -9,6 +9,7 @@
     "check-bundle": "esbuild src/index.tsx --bundle --minify --format=iife --target=safari17 --log-level=warning --outfile=node_modules/.cache/check-bundle/query-tables.js && cmp node_modules/.cache/check-bundle/query-tables.js ../internal/archive/assets/query-tables.js && cmp node_modules/.cache/check-bundle/query-tables.css ../internal/archive/assets/query-tables.css && echo 'query-table bundle matches web/src'",
     "generate-schemas": "node generate-schemas.mjs",
     "check-schemas": "node generate-schemas.mjs --check",
+    "test:usage-aggregations": "node --test tests/usage-aggregations.test.mjs",
     "test:computed-store": "node --test tests/computed-column-store.test.mjs",
     "typecheck": "tsc --noEmit"
   },

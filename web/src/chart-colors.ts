@@ -53,6 +53,12 @@ function generatedColor(key: string, provider?: Provider): string {
 }
 
 export function chartSeriesStyle(scope: string, name: string): SeriesStyle {
+  if (scope === "effort") {
+    const levels = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+    const colors = ["#85909b", "#b4c6ad", "#8eaf96", "#608e86", "#48718b", "#635788", "#854a75"];
+    const index = levels.indexOf(name.toLowerCase());
+    return { color: index < 0 ? generatedColor(`${scope}:${name}`) : colors[index], order: `${index < 0 ? 99 : index}:${name}` };
+  }
   if (scope === "model_family") {
     const key = modelColorKey(name), model = Object.hasOwn(models, key) ? models[key] : undefined, provider = model?.provider ?? modelProvider(key);
     const modelClass = model?.class ?? (/codex/.test(key) ? "Codex" : /gemini.*flash/.test(key) ? "Flash" : /gemini.*pro/.test(key) ? "Pro" : key.split(/[-.]/)[0]);

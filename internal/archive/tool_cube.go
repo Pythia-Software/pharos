@@ -23,7 +23,7 @@ var toolCubeGroups = func() []struct{ column, expr string } {
 		{"source_kind", "w.source_kind"}, {"day", "date(t.started_at,'localtime')"},
 		{"session_kind", "COALESCE(a.kind,'root')"}, {"agent_depth", "COALESCE(a.depth,0)"},
 	}
-	for _, column := range []string{"provider", "model", "kind", "tool_name", "tool_category", "mcp_server", "program", "subcommand",
+	for _, column := range []string{"provider", "model", "effort", "kind", "tool_name", "tool_category", "mcp_server", "program", "subcommand",
 		"command_category", "status", "error_type", "test_failure", "path_repository", "path_scope", "exit_code", "interrupted", "truncated", "has_pipe", "has_redirect", "has_heredoc",
 		"backgrounded", "host", "duration_source", "result_tokens_source"} {
 		groups = append(groups, struct{ column, expr string }{column, "t." + column})
@@ -71,7 +71,7 @@ func toolCubeSelect(mirrors string) string {
 }
 
 // toolRollupFromCube sums the cube into tool_usage_daily's groups and counts.
-const toolRollupFromCube = `SELECT day,repository_name,source_kind,provider,COALESCE(model,'') model,session_kind,
+const toolRollupFromCube = `SELECT day,repository_name,source_kind,provider,COALESCE(model,'') model,effort,session_kind,
 		tool_name,tool_category,mcp_server,program,subcommand,command_category,
 		SUM(call_count) call_count,SUM(CASE WHEN status='error' THEN call_count ELSE 0 END) error_count,
 		SUM(CASE WHEN status='no_result' THEN call_count ELSE 0 END) no_result_count,
@@ -84,7 +84,7 @@ const toolRollupFromCube = `SELECT day,repository_name,source_kind,provider,COAL
 		SUM(CASE WHEN result_tokens_source='measured' THEN call_count ELSE 0 END) measured_count,
 		SUM(carried_tokens_sum) carried_tokens,SUM(output_tokens_sum) output_tokens,
 		COALESCE(SUM(lines_added_sum),0) lines_added,COALESCE(SUM(lines_removed_sum),0) lines_removed,COUNT(DISTINCT workspace_id) work_count
-	FROM tool_call_cube GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12`
+	FROM tool_call_cube GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13`
 
 // toolCallCube describes tool_call_cube to the Tool calls table.
 var toolCallCube = func() *sqlCube {

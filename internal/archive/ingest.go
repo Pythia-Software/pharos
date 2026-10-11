@@ -1155,7 +1155,7 @@ func upsertConversation(tx *sql.Tx, workspaceID, workItemID string, value Conver
 			parent = found
 		}
 	}
-	_, err := tx.Exec(`INSERT INTO conversations(id,workspace_id,work_item_id,provider,model,account,native_id,parent_id,agent_depth,agent_path,agent_nickname,origin,origin_host_id,coverage,started_at,ended_at,aliases_json,harness,harness_version_first,harness_version_last,harness_version_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(provider,account,native_id) DO UPDATE SET workspace_id=excluded.workspace_id,work_item_id=COALESCE(excluded.work_item_id,conversations.work_item_id),parent_id=COALESCE(excluded.parent_id,conversations.parent_id),agent_depth=excluded.agent_depth,agent_path=COALESCE(excluded.agent_path,conversations.agent_path),agent_nickname=COALESCE(excluded.agent_nickname,conversations.agent_nickname),origin=COALESCE(excluded.origin,conversations.origin),origin_host_id=excluded.origin_host_id,model=COALESCE(excluded.model,conversations.model),coverage=excluded.coverage,started_at=COALESCE(excluded.started_at,conversations.started_at),ended_at=MAX(excluded.ended_at,conversations.ended_at),aliases_json=excluded.aliases_json,harness=COALESCE(excluded.harness,conversations.harness),harness_version_first=COALESCE(conversations.harness_version_first,excluded.harness_version_first),harness_version_last=COALESCE(excluded.harness_version_last,conversations.harness_version_last),harness_version_source=CASE WHEN excluded.harness_version_last IS NOT NULL THEN excluded.harness_version_source ELSE conversations.harness_version_source END`, id, workspaceID, workItem, value.Provider, nilIfEmpty(value.Model), value.Account, value.NativeID, parent, value.AgentDepth, nilIfEmpty(value.AgentPath), nilIfEmpty(value.AgentNickname), nilIfEmpty(value.Origin), host, defaultString(value.Coverage, "complete"), nilIfEmpty(value.StartedAt), nilIfEmpty(value.EndedAt), jsonText(value.Aliases), nilIfEmpty(value.Harness), nilIfEmpty(value.HarnessVersionFirst), nilIfEmpty(value.HarnessVersionLast), versionSource(value))
+	_, err := tx.Exec(`INSERT INTO conversations(id,workspace_id,work_item_id,provider,model,effort,account,native_id,parent_id,agent_depth,agent_path,agent_nickname,origin,origin_host_id,coverage,started_at,ended_at,aliases_json,harness,harness_version_first,harness_version_last,harness_version_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(provider,account,native_id) DO UPDATE SET workspace_id=excluded.workspace_id,work_item_id=COALESCE(excluded.work_item_id,conversations.work_item_id),parent_id=COALESCE(excluded.parent_id,conversations.parent_id),agent_depth=excluded.agent_depth,agent_path=COALESCE(excluded.agent_path,conversations.agent_path),agent_nickname=COALESCE(excluded.agent_nickname,conversations.agent_nickname),origin=COALESCE(excluded.origin,conversations.origin),origin_host_id=excluded.origin_host_id,model=COALESCE(excluded.model,conversations.model),effort=excluded.effort,coverage=excluded.coverage,started_at=COALESCE(excluded.started_at,conversations.started_at),ended_at=MAX(excluded.ended_at,conversations.ended_at),aliases_json=excluded.aliases_json,harness=COALESCE(excluded.harness,conversations.harness),harness_version_first=COALESCE(conversations.harness_version_first,excluded.harness_version_first),harness_version_last=COALESCE(excluded.harness_version_last,conversations.harness_version_last),harness_version_source=CASE WHEN excluded.harness_version_last IS NOT NULL THEN excluded.harness_version_source ELSE conversations.harness_version_source END`, id, workspaceID, workItem, value.Provider, nilIfEmpty(value.Model), nilIfEmpty(value.Effort), value.Account, value.NativeID, parent, value.AgentDepth, nilIfEmpty(value.AgentPath), nilIfEmpty(value.AgentNickname), nilIfEmpty(value.Origin), host, defaultString(value.Coverage, "complete"), nilIfEmpty(value.StartedAt), nilIfEmpty(value.EndedAt), jsonText(value.Aliases), nilIfEmpty(value.Harness), nilIfEmpty(value.HarnessVersionFirst), nilIfEmpty(value.HarnessVersionLast), versionSource(value))
 	if err != nil {
 		return "", err
 	}
@@ -1178,10 +1178,10 @@ func upsertMessage(tx *sql.Tx, conversationID string, value MessageRecord) (stri
 	var existingID, existingHash string
 	var stored MessageRecord
 	var storedSelected int
-	lookupErr := tx.QueryRow(`SELECT id,content_hash,role,kind,COALESCE(model,''),text,COALESCE(raw_text,''),COALESCE(source_order,0),
+	lookupErr := tx.QueryRow(`SELECT id,content_hash,role,kind,COALESCE(model,''),COALESCE(effort,''),text,COALESCE(raw_text,''),COALESCE(source_order,0),
 		COALESCE(created_at,''),COALESCE(parent_native_id,''),COALESCE(previous_native_id,''),COALESCE(call_id,''),
 		COALESCE(evidence_locator,''),selected,COALESCE(sender,'') FROM messages WHERE conversation_id=? AND native_id=?`, conversationID, value.NativeID).
-		Scan(&existingID, &existingHash, &stored.Role, &stored.Kind, &stored.Model, &stored.Text, &stored.RawText, &stored.SourceOrder,
+		Scan(&existingID, &existingHash, &stored.Role, &stored.Kind, &stored.Model, &stored.Effort, &stored.Text, &stored.RawText, &stored.SourceOrder,
 			&stored.CreatedAt, &stored.ParentNativeID, &stored.PreviousNativeID, &stored.CallID, &stored.EvidenceLocator, &storedSelected, &stored.Sender)
 	if lookupErr != nil && lookupErr != sql.ErrNoRows {
 		return "", false, lookupErr
@@ -1197,12 +1197,12 @@ func upsertMessage(tx *sql.Tx, conversationID string, value MessageRecord) (stri
 	if lookupErr == nil {
 		id = existingID
 	}
-	_, err := tx.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,model,text,raw_text,source_order,created_at,parent_native_id,previous_native_id,call_id,evidence_locator,content_hash,selected,sender)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(conversation_id,native_id) DO UPDATE SET
-		role=excluded.role,kind=excluded.kind,model=excluded.model,text=excluded.text,raw_text=excluded.raw_text,source_order=excluded.source_order,
+	_, err := tx.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,model,effort,text,raw_text,source_order,created_at,parent_native_id,previous_native_id,call_id,evidence_locator,content_hash,selected,sender)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(conversation_id,native_id) DO UPDATE SET
+		role=excluded.role,kind=excluded.kind,model=excluded.model,effort=excluded.effort,text=excluded.text,raw_text=excluded.raw_text,source_order=excluded.source_order,
 		created_at=excluded.created_at,parent_native_id=excluded.parent_native_id,previous_native_id=excluded.previous_native_id,call_id=excluded.call_id,
 		evidence_locator=excluded.evidence_locator,content_hash=excluded.content_hash,selected=excluded.selected,sender=excluded.sender`,
-		id, conversationID, value.NativeID, defaultString(value.Role, "unknown"), defaultString(value.Kind, "message"), nilIfEmpty(value.Model), value.Text,
+		id, conversationID, value.NativeID, defaultString(value.Role, "unknown"), defaultString(value.Kind, "message"), nilIfEmpty(value.Model), nilIfEmpty(value.Effort), value.Text,
 		nilIfEmpty(value.RawText), value.SourceOrder, nilIfEmpty(value.CreatedAt), nilIfEmpty(value.ParentNativeID), nilIfEmpty(value.PreviousNativeID),
 		nilIfEmpty(value.CallID), nilIfEmpty(value.EvidenceLocator), contentHash, selected, nilIfEmpty(value.Sender))
 	if err != nil {
@@ -1404,20 +1404,20 @@ func replaceAgentSessionsWithCostState(tx *sql.Tx, workspaceID, conversationID s
 			status = "reported-reconciled"
 		}
 		if _, err := tx.Exec(`INSERT INTO agent_sessions(
-			id,workspace_id,conversation_id,native_id,parent_id,delegation_message_id,kind,provider,model,depth,
+			id,workspace_id,conversation_id,native_id,parent_id,delegation_message_id,kind,provider,model,effort,depth,
 			started_at,ended_at,input_tokens,uncached_input_tokens,cache_read_input_tokens,
 			cache_creation_input_tokens,cache_creation_5m_input_tokens,cache_creation_1h_input_tokens,
 			output_tokens,reasoning_output_tokens,unclassified_tokens,total_tokens,usage_status)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
 			workspace_id=excluded.workspace_id,native_id=excluded.native_id,parent_id=excluded.parent_id,delegation_message_id=excluded.delegation_message_id,
-			child_conversation_id=NULL,kind=excluded.kind,provider=excluded.provider,model=excluded.model,depth=excluded.depth,
+			child_conversation_id=NULL,kind=excluded.kind,provider=excluded.provider,model=excluded.model,effort=excluded.effort,depth=excluded.depth,
 			started_at=excluded.started_at,ended_at=excluded.ended_at,input_tokens=excluded.input_tokens,
 			uncached_input_tokens=excluded.uncached_input_tokens,cache_read_input_tokens=excluded.cache_read_input_tokens,
 			cache_creation_input_tokens=excluded.cache_creation_input_tokens,cache_creation_5m_input_tokens=excluded.cache_creation_5m_input_tokens,
 			cache_creation_1h_input_tokens=excluded.cache_creation_1h_input_tokens,output_tokens=excluded.output_tokens,
 			reasoning_output_tokens=excluded.reasoning_output_tokens,unclassified_tokens=excluded.unclassified_tokens,total_tokens=excluded.total_tokens,usage_status=excluded.usage_status`,
 			ids[summary.nativeID], workspaceID, conversationID, summary.nativeID, parentID, delegationMessageID,
-			kind, conversation.Provider, nilIfEmpty(conversation.Model), depth, nilIfEmpty(summary.startedAt), nilIfEmpty(summary.endedAt),
+			kind, conversation.Provider, nilIfEmpty(conversation.Model), nilIfEmpty(sessionMessageEffort(summary.messageIndexes, conversation.Messages)), depth, nilIfEmpty(summary.startedAt), nilIfEmpty(summary.endedAt),
 			integer(summary.counts["input_tokens"]), integer(summary.counts["uncached_input_tokens"]),
 			integer(summary.counts["cache_read_input_tokens"]), integer(summary.counts["cache_creation_input_tokens"]),
 			integer(summary.counts["cache_creation_5m_input_tokens"]), integer(summary.counts["cache_creation_1h_input_tokens"]),
@@ -1434,11 +1434,11 @@ func replaceAgentSessionsWithCostState(tx *sql.Tx, workspaceID, conversationID s
 			}
 			hour := defaultString(bucket.hour, usageHour(conversation.StartedAt))
 			if _, err := tx.Exec(`INSERT INTO agent_session_usage(
-				agent_session_id,usage_hour,model,attribution,input_tokens,uncached_input_tokens,cache_read_input_tokens,
+				agent_session_id,usage_hour,model,effort,attribution,input_tokens,uncached_input_tokens,cache_read_input_tokens,
 				cache_creation_input_tokens,cache_creation_5m_input_tokens,cache_creation_1h_input_tokens,
 				output_tokens,reasoning_output_tokens,unclassified_tokens,total_tokens)
-				VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-				ON CONFLICT(agent_session_id,usage_hour,model,attribution) DO UPDATE SET
+				VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+				ON CONFLICT(agent_session_id,usage_hour,model,effort,attribution) DO UPDATE SET
 					input_tokens=input_tokens+excluded.input_tokens,
 					uncached_input_tokens=uncached_input_tokens+excluded.uncached_input_tokens,
 					cache_read_input_tokens=cache_read_input_tokens+excluded.cache_read_input_tokens,
@@ -1449,7 +1449,7 @@ func replaceAgentSessionsWithCostState(tx *sql.Tx, workspaceID, conversationID s
 					reasoning_output_tokens=reasoning_output_tokens+excluded.reasoning_output_tokens,
 					unclassified_tokens=unclassified_tokens+excluded.unclassified_tokens,
 					total_tokens=total_tokens+excluded.total_tokens`,
-				ids[summary.nativeID], hour, defaultString(bucket.model, strings.TrimSpace(conversation.Model)), bucket.attribution,
+				ids[summary.nativeID], hour, defaultString(bucket.model, strings.TrimSpace(conversation.Model)), bucket.effort, bucket.attribution,
 				integer(counts["input_tokens"]),
 				integer(max(counts["input_tokens"]-counts["cache_read_input_tokens"]-counts["cache_creation_input_tokens"], 0)),
 				integer(counts["cache_read_input_tokens"]), integer(counts["cache_creation_input_tokens"]),

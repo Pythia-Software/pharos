@@ -68,7 +68,7 @@ func (a *chatGPTAdapter) Discover(emit func(WorkspaceRecord) error) error {
 			}
 			text := messageText(content["parts"])
 			if text != "" {
-				messages = append(messages, MessageRecord{RawText: accountingRaw(message), NativeID: defaultString(message["id"], nodeID), Role: defaultString(author["role"], "unknown"), Text: text, Kind: "message", CreatedAt: iso(message["create_time"]), ParentNativeID: firstString(node["parent"]), EvidenceLocator: fmt.Sprintf("%s:mapping:%s", a.original(file), nodeID), Selected: true})
+				messages = append(messages, MessageRecord{RawText: accountingRaw(message), Model: firstString(mapValue(message["metadata"])["model_slug"]), Effort: recordedEffort(mapValue(message["metadata"])), NativeID: defaultString(message["id"], nodeID), Role: defaultString(author["role"], "unknown"), Text: text, Kind: "message", CreatedAt: iso(message["create_time"]), ParentNativeID: firstString(node["parent"]), EvidenceLocator: fmt.Sprintf("%s:mapping:%s", a.original(file), nodeID), Selected: true})
 			}
 		}
 		sort.SliceStable(messages, func(i, j int) bool {

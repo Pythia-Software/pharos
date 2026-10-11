@@ -35,6 +35,10 @@
       "width": 90
     },
     {
+      "field": "effort",
+      "width": 90
+    },
+    {
       "field": "skill_path",
       "width": 300
     },
@@ -320,6 +324,30 @@
         "sqlite": {
           "expr": "r.\"model\""
         }
+      }
+    },
+    {
+      "name": "effort",
+      "label": "Effort",
+      "type": "text",
+      "group": "Context",
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "effort",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"effort\""
+        }
+      },
+      "description": "Recorded agent effort level; unavailable when the source does not report it.",
+      "select": {
+        "default": true
       }
     },
     {

@@ -26,7 +26,7 @@ func init() {
 // summary dimension (tool, shell program, model, repository, agent kind).
 var toolRollupDataset = func() sqlDataset {
 	columns := map[string]string{}
-	for _, name := range []string{"id", "day", "week", "month", "repository_name", "source_kind", "provider", "model", "model_family", "session_kind",
+	for _, name := range []string{"id", "day", "week", "month", "repository_name", "source_kind", "provider", "model", "effort", "model_family", "session_kind",
 		"tool_name", "tool_category", "mcp_server", "program", "subcommand", "command_name", "command_category", "call_count", "error_count", "error_rate",
 		"no_result_count", "rejected_count", "interrupted_count", "timeout_count", "nonzero_exit_count", "hook_blocked_count", "truncated_count",
 		"timed_count", "total_duration_ms", "avg_duration_ms", "max_duration_ms", "input_bytes", "result_bytes", "result_tokens", "measured_count",
@@ -54,7 +54,7 @@ var toolCallDataset = sqlDataset{
 		"week":            "date(t.started_at,'localtime','-6 days','weekday 1')",
 		"month":           "strftime('%Y-%m',t.started_at,'localtime')",
 		"repository_name": "r.display_name", "title": "w.title", "workspace_id": "t.workspace_id", "conversation_id": "t.conversation_id",
-		"source_kind": "w.source_kind", "provider": "t.provider", "model": "t.model", "model_family": "model_family(t.model)",
+		"source_kind": "w.source_kind", "provider": "t.provider", "model": "t.model", "effort": "t.effort", "model_family": "model_family(t.model)",
 		"session_kind": "COALESCE(a.kind,'root')", "agent_depth": "COALESCE(a.depth,0)",
 		"kind": "t.kind", "tool_name": "t.tool_name", "tool_category": "t.tool_category", "mcp_server": "t.mcp_server", "mcp_method": mcpMethodSQL("t."),
 		"skill_name": "(SELECT group_concat(skill_name, ', ') FROM (SELECT DISTINCT skill_name FROM skill_usages WHERE tool_call_id=t.id ORDER BY skill_name))",
@@ -192,7 +192,7 @@ func (c *Catalog) toolCallDetail(ctx context.Context, id string) (map[string]any
 		if requestID == nil {
 			continue
 		}
-		requests, err := queryMapsContext(ctx, c.DB, `SELECT id,native_id,requested_at,model,input_tokens,cache_read_input_tokens,
+		requests, err := queryMapsContext(ctx, c.DB, `SELECT id,native_id,requested_at,model,effort,input_tokens,cache_read_input_tokens,
 			cache_creation_input_tokens,output_tokens,context_growth_tokens,compacted_before,tool_call_count FROM model_requests WHERE id=?`, requestID)
 		if err != nil {
 			return nil, err

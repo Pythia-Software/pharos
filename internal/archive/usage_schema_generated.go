@@ -19,6 +19,7 @@ func PharosUsageSchema() querytable.Schema {
 			"provider":                       {Name: "provider", Kind: querytable.FieldEnum, Expr: "r.\"provider\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"provider\""},
 			"model_family":                   {Name: "model_family", Kind: querytable.FieldText, Expr: "r.\"model_family\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"model_family\""},
 			"model":                          {Name: "model", Kind: querytable.FieldText, Expr: "r.\"model\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"model\""},
+			"effort":                         {Name: "effort", Kind: querytable.FieldText, Expr: "r.\"effort\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"effort\""},
 			"source_kind":                    {Name: "source_kind", Kind: querytable.FieldEnum, Expr: "r.\"source_kind\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"source_kind\""},
 			"harness":                        {Name: "harness", Kind: querytable.FieldText, Expr: "r.\"harness\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"harness\""},
 			"harness_version_first":          {Name: "harness_version_first", Kind: querytable.FieldText, Expr: "r.\"harness_version_first\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"harness_version_first\""},

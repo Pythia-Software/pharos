@@ -1,4 +1,4 @@
-"""Backfill Codex model changes from turn_context events without reindexing text.
+"""Backfill Codex model and effort changes from turn_context events without reindexing text.
 
 Usage: python3 tools/backfill_codex_models.py PATH_TO_CATALOG
 """
@@ -12,9 +12,10 @@ import sqlite3
 from pathlib import Path
 
 
-def model_changes(path: Path) -> tuple[list[int], list[str]]:
+def configuration_changes(path: Path) -> tuple[list[int], list[tuple[str | None, str | None]]]:
     lines: list[int] = []
-    models: list[str] = []
+    configurations: list[tuple[str | None, str | None]] = []
+    model = effort = None
     with path.open("rb") as source:
         for number, raw in enumerate(source, 1):
             if b"turn_context" not in raw and b"session_meta" not in raw:
@@ -25,18 +26,31 @@ def model_changes(path: Path) -> tuple[list[int], list[str]]:
                 continue
             if event.get("type") not in {"turn_context", "session_meta"}:
                 continue
-            model = event.get("payload", {}).get("model")
-            if isinstance(model, str) and model and (not models or model != models[-1]):
+            payload = event.get("payload", {})
+            reported_model = payload.get("model")
+            if isinstance(reported_model, str) and reported_model:
+                model = reported_model
+            if event.get("type") == "turn_context" or any(key in payload for key in ("effort", "reasoning_effort", "model_reasoning_effort")):
+                reported_effort = payload.get("effort", payload.get("reasoning_effort", payload.get("model_reasoning_effort")))
+                effort = reported_effort.strip().lower() or None if isinstance(reported_effort, str) else None
+            configuration = (model, effort)
+            if not configurations or configuration != configurations[-1]:
                 lines.append(number)
-                models.append(model)
-    return lines, models
+                configurations.append(configuration)
+    return lines, configurations
 
 
 def backfill(db: sqlite3.Connection) -> tuple[int, int, int]:
     db.execute("PRAGMA busy_timeout=10000")
+    db.execute("PRAGMA foreign_keys=ON")
     columns = {row[1] for row in db.execute("PRAGMA table_info(messages)")}
     if "model" not in columns:
         db.execute("ALTER TABLE messages ADD COLUMN model TEXT")
+    for table in ("messages", "conversations"):
+        columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+        if "effort" not in columns:
+            db.execute(f"ALTER TABLE {table} ADD COLUMN effort TEXT")
+    tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     conversations = db.execute(
         "SELECT c.id,c.origin FROM conversations c JOIN workspaces w ON w.id=c.workspace_id "
         "WHERE w.source_kind='codex' AND c.provider='codex' AND c.origin IS NOT NULL"
@@ -47,20 +61,23 @@ def backfill(db: sqlite3.Connection) -> tuple[int, int, int]:
         if not path.is_file():
             missing += 1
             continue
-        lines, models = model_changes(path)
-        if not models:
+        lines, configurations = configuration_changes(path)
+        if not configurations:
             continue
-        db.execute(
-            "UPDATE conversations SET model=? WHERE id=? AND (model IS NULL OR model<>?)",
-            (models[-1], conversation_id, models[-1]),
+        model, effort = configurations[-1]
+        cursor = db.execute(
+            "UPDATE conversations SET model=COALESCE(?,model),effort=? WHERE id=? "
+            "AND (model IS NOT COALESCE(?,model) OR effort IS NOT ?)",
+            (model, effort, conversation_id, model, effort),
         )
+        changed = cursor.rowcount > 0
         updated_conversations += 1
         rows = db.execute(
             "SELECT source_order,evidence_locator FROM messages WHERE conversation_id=? ORDER BY source_order",
             (conversation_id,),
         ).fetchall()
-        ranges: list[tuple[str, int, int]] = []
-        current_model: str | None = None
+        ranges: list[tuple[tuple[str | None, str | None], int, int]] = []
+        current_configuration = None
         start = end = 0
         prefix = origin + ":"
         for source_order, locator in rows:
@@ -71,23 +88,30 @@ def backfill(db: sqlite3.Connection) -> tuple[int, int, int]:
             except ValueError:
                 continue
             index = bisect.bisect_right(lines, line) - 1
-            model = models[index] if index >= 0 else None
-            if model is None:
+            configuration = configurations[index] if index >= 0 else None
+            if configuration is None:
                 continue
-            if current_model != model or source_order != end + 1:
-                if current_model is not None:
-                    ranges.append((current_model, start, end))
-                current_model, start = model, source_order
+            if current_configuration != configuration or source_order != end + 1:
+                if current_configuration is not None:
+                    ranges.append((current_configuration, start, end))
+                current_configuration, start = configuration, source_order
             end = source_order
-        if current_model is not None:
-            ranges.append((current_model, start, end))
-        for model, first, last in ranges:
+        if current_configuration is not None:
+            ranges.append((current_configuration, start, end))
+        for (model, effort), first, last in ranges:
             cursor = db.execute(
-                "UPDATE messages SET model=? WHERE conversation_id=? AND source_order BETWEEN ? AND ? "
-                "AND (model IS NULL OR model<>?)",
-                (model, conversation_id, first, last, model),
+                "UPDATE messages SET model=COALESCE(?,model),effort=? WHERE conversation_id=? AND source_order BETWEEN ? AND ? "
+                "AND (model IS NOT COALESCE(?,model) OR effort IS NOT ?)",
+                (model, effort, conversation_id, first, last, model, effort),
             )
             updated_messages += cursor.rowcount
+            changed = changed or cursor.rowcount > 0
+        # These derived rows are rebuilt from corrected messages on the next app
+        # startup/build-tools; stale fingerprints must not hide the correction.
+        if changed:
+            for table in ("agent_sessions", "tool_ledger_state", "conversation_derivation_inputs"):
+                if table in tables:
+                    db.execute(f"DELETE FROM {table} WHERE conversation_id=?", (conversation_id,))
         if updated_conversations % 100 == 0:
             db.commit()
             print(f"{updated_conversations} conversations, {updated_messages} messages", flush=True)

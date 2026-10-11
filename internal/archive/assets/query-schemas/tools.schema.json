@@ -43,6 +43,10 @@
       "width": 120
     },
     {
+      "field": "effort",
+      "width": 90
+    },
+    {
       "field": "call_count",
       "width": 85
     },
@@ -316,6 +320,30 @@
           "expr": "r.\"model\""
         }
       }
+    },
+    {
+      "name": "effort",
+      "label": "Effort",
+      "type": "text",
+      "group": "Model",
+      "select": {
+        "default": true
+      },
+      "filter": {
+        "values": {
+          "source": "distinct"
+        }
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "effort",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"effort\""
+        }
+      },
+      "description": "Recorded agent effort level; unavailable when the source does not report it."
     },
     {
       "name": "session_kind",

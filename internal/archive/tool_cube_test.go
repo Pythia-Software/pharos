@@ -47,13 +47,13 @@ func seedToolCalls(t testing.TB, catalog *Catalog, n int) {
 		w := random.Intn(4)
 		started := start.Add(time.Duration(random.Intn(5*24*60)) * time.Minute)
 		program := pick("git", "go", "rg", nil, "")
-		exec(`INSERT INTO tool_calls(id,workspace_id,conversation_id,agent_session_id,sequence,provider,model,kind,tool_name,tool_category,
+		exec(`INSERT INTO tool_calls(id,workspace_id,conversation_id,agent_session_id,sequence,provider,model,effort,kind,tool_name,tool_category,
 				mcp_server,command,program,subcommand,command_category,has_pipe,file_path,host,hosts,url,search_query,started_at,ended_at,
 				duration_ms,duration_source,status,error_type,exit_code,interrupted,truncated,input_bytes,result_bytes,result_tokens,
 				result_tokens_source,output_tokens,carried_requests,carried_tokens,lines_added,lines_removed)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			fmt.Sprint("call-", index), fmt.Sprint("ws-", w), fmt.Sprint("conv-", w), pick(fmt.Sprint("session-", w), nil), index,
-			pick("claude", "codex"), pick("claude-opus-5-5", "opus-5-5[1m]", "gpt-5", nil, ""), pick("tool_call", "delegation"),
+			pick("claude", "codex"), pick("claude-opus-5-5", "opus-5-5[1m]", "gpt-5", nil, ""), pick("low", "high", "xhigh", nil), pick("tool_call", "delegation"),
 			pick("Bash", "Read", "Edit", "WebFetch"), pick("command", "read", "web"), pick(nil, "pharos"),
 			pick("git status", "go test ./...", nil, ""), program, pick("status", "test", nil), pick("vcs", "test", nil),
 			random.Intn(2), pick("/a/b.go", nil, ""), pick("github.com", "example.com", nil, ""), pick(`["github.com"]`, "[]", nil),
@@ -71,7 +71,7 @@ func seedToolCalls(t testing.TB, catalog *Catalog, n int) {
 // toolRollupFromCalls is how tool_usage_daily was grouped before
 // tool_call_cube: directly from the calls.
 const toolRollupFromCalls = `SELECT date(t.started_at,'localtime') day,r.display_name repository_name,w.source_kind,t.provider,
-		COALESCE(t.model,'') model,COALESCE(a.kind,'root') session_kind,t.tool_name,t.tool_category,t.mcp_server,t.program,t.subcommand,t.command_category,
+		COALESCE(t.model,'') model,t.effort,COALESCE(a.kind,'root') session_kind,t.tool_name,t.tool_category,t.mcp_server,t.program,t.subcommand,t.command_category,
 		COUNT(*) call_count,SUM(COALESCE(t.status,'')='error') error_count,SUM(COALESCE(t.status,'')='no_result') no_result_count,
 		SUM(COALESCE(t.error_type,'')='user_rejected') rejected_count,SUM(t.interrupted) interrupted_count,SUM(COALESCE(t.error_type,'')='timeout') timeout_count,
 		SUM(COALESCE(t.error_type,'')='nonzero_exit') nonzero_exit_count,SUM(COALESCE(t.error_type,'')='hook_blocked') hook_blocked_count,SUM(t.truncated) truncated_count,
@@ -84,7 +84,7 @@ const toolRollupFromCalls = `SELECT date(t.started_at,'localtime') day,r.display
 	LEFT JOIN repositories r ON r.id=w.repository_id
 	LEFT JOIN agent_sessions a ON a.id=t.agent_session_id
 	WHERE t.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)
-	GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12`
+	GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13`
 
 // same compares two results that should agree. Floats may differ in the
 // last places: sums taken in another order, or scores from float32 vectors.
@@ -162,7 +162,7 @@ func TestToolCallCubeAnswersLikeTheCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := func(row map[string]any) string {
-		return fmt.Sprint(row["day"], row["repository_name"], row["source_kind"], row["provider"], row["model"], row["session_kind"],
+		return fmt.Sprint(row["day"], row["repository_name"], row["source_kind"], row["provider"], row["model"], row["effort"], row["session_kind"],
 			row["tool_name"], row["tool_category"], row["mcp_server"], row["program"], row["subcommand"], row["command_category"])
 	}
 	byKey := map[string]map[string]any{}

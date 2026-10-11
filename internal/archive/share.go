@@ -108,7 +108,7 @@ func sharedWork(work map[string]any) map[string]any {
 	conversations, _ := work["conversations"].([]map[string]any)
 	kept := make([]map[string]any, 0, len(conversations))
 	for _, conversation := range conversations {
-		item := pick(conversation, "id", "provider", "model", "native_id", "coverage", "started_at", "ended_at",
+		item := pick(conversation, "id", "provider", "model", "effort", "native_id", "coverage", "started_at", "ended_at",
 			"harness", "harness_version_first", "harness_version_last", "harness_version_source", "token_usage",
 			"parent_id", "message_count", "first_prompt")
 		messages, _ := conversation["messages"].([]map[string]any)
@@ -124,7 +124,7 @@ func sharedMessages(messages []map[string]any) []map[string]any {
 	for _, message := range messages {
 		// Not evidence_locator, which names a file on the sharer's disk, or
 		// the ownership and ordering bookkeeping the reader never shows.
-		item := pick(message, "id", "native_id", "role", "kind", "model", "text", "raw_text", "created_at", "parent_native_id", "call_id")
+		item := pick(message, "id", "native_id", "role", "kind", "model", "effort", "text", "raw_text", "created_at", "parent_native_id", "call_id")
 		if authorship, ok := message["authorship"].(map[string]any); ok {
 			// A span's source names another of the sharer's conversations.
 			spans, _ := authorship["spans"].([]map[string]any)

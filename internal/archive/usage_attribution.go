@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const usageAttributionVersion = "2"
+const usageAttributionVersion = "3"
 
 func claudeChildren(conversations []ConversationRecord, root ConversationRecord) []ConversationRecord {
 	if root.Provider != "claude" || root.AgentDepth != 0 {
@@ -182,7 +182,7 @@ func (c *Catalog) repairUsageAttribution(ctx context.Context, progress func(int,
 			return index, err
 		}
 		workspaceID := firstString(row["id"])
-		items, err := queryMapsContext(ctx, c.DB, `SELECT id,native_id,parent_id,provider,model,agent_depth,started_at FROM conversations
+		items, err := queryMapsContext(ctx, c.DB, `SELECT id,native_id,parent_id,provider,model,effort,agent_depth,started_at FROM conversations
 			WHERE workspace_id=? ORDER BY agent_depth,native_id`, workspaceID)
 		if err != nil {
 			return index, err
@@ -199,7 +199,7 @@ func (c *Catalog) repairUsageAttribution(ctx context.Context, progress func(int,
 			if before, _, ok := strings.Cut(nativeID, ":subagent:"); ok {
 				parentNativeID = before
 			}
-			conversations = append(conversations, ConversationRecord{NativeID: nativeID, ParentNativeID: parentNativeID, Provider: firstString(item["provider"]), Model: firstString(item["model"]), AgentDepth: int(integer(item["agent_depth"])), StartedAt: firstString(item["started_at"]), Messages: messages})
+			conversations = append(conversations, ConversationRecord{NativeID: nativeID, ParentNativeID: parentNativeID, Provider: firstString(item["provider"]), Model: firstString(item["model"]), Effort: firstString(item["effort"]), AgentDepth: int(integer(item["agent_depth"])), StartedAt: firstString(item["started_at"]), Messages: messages})
 		}
 		err = c.writeTransaction(ctx, "usage-repair workspace="+workspaceID, func(tx *sql.Tx) error {
 			for j, conversation := range conversations {

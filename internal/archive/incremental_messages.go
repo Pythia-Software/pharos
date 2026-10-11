@@ -12,19 +12,19 @@ type messageWriter struct {
 	states       map[string]messageWriteState
 }
 
-const messageWriteSQL = `INSERT INTO messages(id,conversation_id,native_id,role,kind,model,text,raw_text,source_order,created_at,parent_native_id,previous_native_id,call_id,evidence_locator,content_hash,selected,sender)
-	VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(conversation_id,native_id) DO UPDATE SET
-	role=excluded.role,kind=excluded.kind,model=excluded.model,text=excluded.text,raw_text=excluded.raw_text,source_order=excluded.source_order,
+const messageWriteSQL = `INSERT INTO messages(id,conversation_id,native_id,role,kind,model,effort,text,raw_text,source_order,created_at,parent_native_id,previous_native_id,call_id,evidence_locator,content_hash,selected,sender)
+	VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(conversation_id,native_id) DO UPDATE SET
+	role=excluded.role,kind=excluded.kind,model=excluded.model,effort=excluded.effort,text=excluded.text,raw_text=excluded.raw_text,source_order=excluded.source_order,
 	created_at=excluded.created_at,parent_native_id=excluded.parent_native_id,previous_native_id=excluded.previous_native_id,call_id=excluded.call_id,
 	evidence_locator=excluded.evidence_locator,content_hash=excluded.content_hash,selected=excluded.selected,sender=excluded.sender
-	WHERE (messages.role,messages.kind,messages.model,messages.text,messages.raw_text,messages.source_order,messages.created_at,
+	WHERE (messages.role,messages.kind,messages.model,messages.effort,messages.text,messages.raw_text,messages.source_order,messages.created_at,
 		messages.parent_native_id,messages.previous_native_id,messages.call_id,messages.evidence_locator,messages.content_hash,messages.selected,messages.sender)
-	IS NOT (excluded.role,excluded.kind,excluded.model,excluded.text,excluded.raw_text,excluded.source_order,excluded.created_at,
+	IS NOT (excluded.role,excluded.kind,excluded.model,excluded.effort,excluded.text,excluded.raw_text,excluded.source_order,excluded.created_at,
 		excluded.parent_native_id,excluded.previous_native_id,excluded.call_id,excluded.evidence_locator,excluded.content_hash,excluded.selected,excluded.sender)`
 
 func newMessageWriter(tx *sql.Tx, conversation string) (*messageWriter, error) {
 	writer := &messageWriter{conversation: conversation, states: map[string]messageWriteState{}}
-	rows, err := tx.Query(`SELECT native_id,id,content_hash,role,kind,COALESCE(model,''),text,COALESCE(raw_text,''),COALESCE(source_order,0),
+	rows, err := tx.Query(`SELECT native_id,id,content_hash,role,kind,COALESCE(model,''),COALESCE(effort,''),text,COALESCE(raw_text,''),COALESCE(source_order,0),
 		COALESCE(created_at,''),COALESCE(parent_native_id,''),COALESCE(previous_native_id,''),COALESCE(call_id,''),
 		COALESCE(evidence_locator,''),selected,COALESCE(sender,'') FROM messages WHERE conversation_id=?`, conversation)
 	if err != nil {
@@ -35,7 +35,7 @@ func newMessageWriter(tx *sql.Tx, conversation string) (*messageWriter, error) {
 		var state messageWriteState
 		var selected int
 		message := &state.message
-		if err := rows.Scan(&native, &state.id, &state.hash, &message.Role, &message.Kind, &message.Model, &message.Text, &message.RawText,
+		if err := rows.Scan(&native, &state.id, &state.hash, &message.Role, &message.Kind, &message.Model, &message.Effort, &message.Text, &message.RawText,
 			&message.SourceOrder, &message.CreatedAt, &message.ParentNativeID, &message.PreviousNativeID, &message.CallID, &message.EvidenceLocator, &selected, &message.Sender); err != nil {
 			rows.Close()
 			return nil, err
@@ -64,7 +64,7 @@ func (writer *messageWriter) write(message MessageRecord) (string, bool, error) 
 	if exists && state.message == message && state.hash == hash {
 		return id, false, nil
 	}
-	_, err := writer.statement.Exec(id, writer.conversation, message.NativeID, message.Role, message.Kind, nilIfEmpty(message.Model), message.Text,
+	_, err := writer.statement.Exec(id, writer.conversation, message.NativeID, message.Role, message.Kind, nilIfEmpty(message.Model), nilIfEmpty(message.Effort), message.Text,
 		nilIfEmpty(message.RawText), message.SourceOrder, nilIfEmpty(message.CreatedAt), nilIfEmpty(message.ParentNativeID), nilIfEmpty(message.PreviousNativeID),
 		nilIfEmpty(message.CallID), nilIfEmpty(message.EvidenceLocator), hash, boolInt(message.Selected), nilIfEmpty(message.Sender))
 	if err != nil {
