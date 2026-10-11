@@ -127,3 +127,61 @@ test('Usage table badges follow the active graph and preserve raw sorting and ce
     await browser.close();
   }
 });
+
+test('Model + effort chart separates levels of one model and filters the table by the clicked pair', async () => {
+  const { applyQuery, applyAggregations, loadSchema, encodeQuery, EMPTY_QUERY } = await import(pathToFileURL(path.join(root, 'web/node_modules/@pythia-software/query-table-core/dist/index.js')).href);
+  const schema = loadSchema(JSON.parse(fs.readFileSync(path.join(root, 'schemas/usage.schema.json'), 'utf8')));
+  const now = new Date(), day = now.toISOString().slice(0, 10);
+  const monday = new Date(now); monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+  const rows = ['high', 'low'].map((effort, index) => ({
+    id: `pair-${effort}`, model: 'claude-opus-5-5', model_family: 'opus-5-5', effort,
+    model_effort: `claude-opus-5-5 · ${effort}`, provider: 'claude', session_kind: 'root',
+    day, week: monday.toISOString().slice(0, 10), month: day.slice(0, 7), total_tokens: (index + 1) * 1000,
+  }));
+  const requests = [], errors = [];
+  const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1500, height: 1100 } });
+    page.on('pageerror', error => errors.push(error.message));
+    await page.route('http://model-effort.test/**', route => {
+      const url = new URL(route.request().url());
+      const json = body => route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) });
+      if (!url.pathname.startsWith('/api/') && !url.pathname.startsWith('/assets/')) return route.fulfill({ contentType: 'text/html', body: html });
+      if (url.pathname.startsWith('/assets/query-tables.')) return route.fulfill({ contentType: url.pathname.endsWith('.js') ? 'application/javascript' : 'text/css', body: fs.readFileSync(path.join(root, 'internal/archive', url.pathname)) });
+      if (url.pathname === '/api/query/usage') {
+        const query = { ...EMPTY_QUERY, ...route.request().postDataJSON() };
+        requests.push(query);
+        return json(applyQuery(rows, query, schema));
+      }
+      if (url.pathname === '/api/query/usage/aggregations') return json(applyAggregations(rows, { ...EMPTY_QUERY, ...route.request().postDataJSON() }, schema));
+      if (url.pathname.endsWith('/distinct')) return json({ values: [], hasMore: false });
+      if (url.pathname.endsWith('/field-stats')) return json({});
+      if (url.pathname === '/api/health/pricing' || url.pathname === '/api/pricing') return json({ priced_tokens: 3000, total_tokens: 3000, unpriced_models: [], unpriced_tokens: 0 });
+      return route.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"not stubbed"}' });
+    });
+    const query = { ...EMPTY_QUERY, select: [{ field: 'model_effort', width: 300 }, { field: 'model', width: 200 }, { field: 'effort', width: 100 }, { field: 'total_tokens', width: 100 }],
+      orderBy: [{ field: 'model', dir: 'asc' }, { field: 'effort', dir: 'asc' }],
+      aggregations: [{ id: 'pairs', op: 'sum', field: 'total_tokens', groupBy: ['model', 'effort'] }] };
+    await page.goto(`http://model-effort.test/usage?q_usage=${encodeURIComponent(encodeQuery(query))}`);
+    await page.locator('#usage .qt-row').first().waitFor();
+    await page.getByRole('group', { name: 'Split', exact: true }).getByRole('button', { name: 'Model + effort', exact: true }).click();
+    const legend = page.locator('.usage-chart-legend');
+    const high = legend.getByRole('button', { name: rows[0].model_effort, exact: true });
+    const low = legend.getByRole('button', { name: rows[1].model_effort, exact: true });
+    await high.waitFor(); await low.waitFor();
+    assert.notEqual(await high.locator('.usage-swatch').evaluate(el => getComputedStyle(el).backgroundColor), await low.locator('.usage-swatch').evaluate(el => getComputedStyle(el).backgroundColor));
+    await page.locator('td[data-qt-field="model_effort"] .usage-facet-badge').first().waitFor();
+    fs.mkdirSync(path.join(root, '.context'), { recursive: true });
+    await page.screenshot({ path: path.join(root, '.context/model-effort-chart.png'), fullPage: true });
+    await high.click();
+    await page.getByRole('menuitem', { name: 'Show only this value Replace the current selection', exact: true }).click();
+    await page.waitForFunction(() => document.querySelectorAll('#usage .qt-row').length === 1);
+    assert.equal(await page.locator('td[data-qt-field="effort"]').innerText(), 'high');
+    assert.ok(requests.at(-1).where.some(term => term.field === 'model_effort' && term.value === rows[0].model_effort));
+    assert.deepEqual(requests.at(-1).orderBy.map(key => key.field), ['model', 'effort']);
+    assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+  }
+});

@@ -144,7 +144,8 @@ func (c *Catalog) Close() error {
 // skill_usages (tools-v7) needs no bump: it is derived from retained messages,
 // and an older build that rebuilds a ledger or reparses a file stamps it with
 // a version this build treats as stale and rebuilds.
-const catalogSchemaVersion = 12
+// 13: effort is part of the usage ledger key; older writers would merge effort buckets.
+const catalogSchemaVersion = 13
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.
@@ -203,6 +204,12 @@ func (c *Catalog) Initialize() error {
 		{"messages", "raw_text", "ALTER TABLE messages ADD COLUMN raw_text TEXT"},
 		{"messages", "source_order", "ALTER TABLE messages ADD COLUMN source_order INTEGER"},
 		{"messages", "model", "ALTER TABLE messages ADD COLUMN model TEXT"},
+		{"messages", "effort", "ALTER TABLE messages ADD COLUMN effort TEXT"},
+		{"conversations", "effort", "ALTER TABLE conversations ADD COLUMN effort TEXT"},
+		{"agent_sessions", "effort", "ALTER TABLE agent_sessions ADD COLUMN effort TEXT"},
+		{"model_requests", "effort", "ALTER TABLE model_requests ADD COLUMN effort TEXT"},
+		{"tool_calls", "effort", "ALTER TABLE tool_calls ADD COLUMN effort TEXT"},
+		{"tool_usage_daily", "effort", "ALTER TABLE tool_usage_daily ADD COLUMN effort TEXT"},
 		{"messages", "previous_native_id", "ALTER TABLE messages ADD COLUMN previous_native_id TEXT"},
 		{"messages", "sender", "ALTER TABLE messages ADD COLUMN sender TEXT"},
 		{"message_authorship", "harness_words", "ALTER TABLE message_authorship ADD COLUMN harness_words INTEGER NOT NULL DEFAULT 0"},
@@ -260,7 +267,12 @@ func (c *Catalog) Initialize() error {
 			}
 		}
 	}
+	if err := c.migrateEffortUsage(); err != nil {
+		return err
+	}
 	for _, index := range []string{
+		"CREATE INDEX IF NOT EXISTS messages_conversation_model_effort_idx ON messages(conversation_id,effort,model) WHERE model IS NOT NULL OR effort IS NOT NULL",
+		"DROP INDEX IF EXISTS messages_conversation_effort_idx",
 		"CREATE INDEX IF NOT EXISTS agent_sessions_child_conversation_idx ON agent_sessions(child_conversation_id)",
 		"CREATE INDEX IF NOT EXISTS repositories_normalized_remote_idx ON repositories(normalized_remote)",
 		"CREATE INDEX IF NOT EXISTS repositories_root_commit_idx ON repositories(root_commit)",
@@ -561,7 +573,7 @@ func (c *Catalog) backfillChildSessionKinds() error {
 }
 
 func (c *Catalog) backfillAgentSessions() error {
-	conversations, err := queryMaps(c.DB, `SELECT c.id,c.workspace_id,c.provider,c.model,c.started_at,c.agent_depth FROM conversations c
+	conversations, err := queryMaps(c.DB, `SELECT c.id,c.workspace_id,c.provider,c.model,c.effort,c.started_at,c.agent_depth FROM conversations c
 		WHERE NOT EXISTS(SELECT 1 FROM agent_sessions a WHERE a.conversation_id=c.id)`)
 	if err != nil {
 		return err
@@ -579,11 +591,11 @@ func (c *Catalog) backfillAgentSessions() error {
 // exact per-event timeline needs RefineUsageTimeline, which re-reads messages.
 func (c *Catalog) seedSessionUsage() error {
 	_, err := c.DB.Exec(`INSERT OR IGNORE INTO agent_session_usage(
-		agent_session_id,usage_hour,model,attribution,input_tokens,uncached_input_tokens,cache_read_input_tokens,
+		agent_session_id,usage_hour,model,effort,attribution,input_tokens,uncached_input_tokens,cache_read_input_tokens,
 		cache_creation_input_tokens,cache_creation_5m_input_tokens,cache_creation_1h_input_tokens,
 		output_tokens,reasoning_output_tokens,unclassified_tokens,total_tokens)
 		SELECT a.id,COALESCE(strftime('%Y-%m-%dT%H:00:00Z',COALESCE(a.started_at,a.ended_at,c.started_at)),''),
-			COALESCE(TRIM(a.model),''),'session-start',a.input_tokens,
+			COALESCE(TRIM(a.model),''),COALESCE(a.effort,''),'session-start',a.input_tokens,
 			MAX(a.input_tokens-a.cache_read_input_tokens-a.cache_creation_input_tokens,0),a.cache_read_input_tokens,
 			a.cache_creation_input_tokens,a.cache_creation_5m_input_tokens,a.cache_creation_1h_input_tokens,
 			a.output_tokens,a.reasoning_output_tokens,a.unclassified_tokens,a.total_tokens
@@ -596,7 +608,7 @@ func (c *Catalog) seedSessionUsage() error {
 // conversations whose usage is only placed at session start. It is bounded to
 // those conversations and commits each one separately.
 func (c *Catalog) RefineUsageTimeline(progress func(done, total int)) (int, error) {
-	conversations, err := queryMaps(c.DB, `SELECT c.id,c.workspace_id,c.provider,c.model,c.started_at,c.agent_depth FROM conversations c
+	conversations, err := queryMaps(c.DB, `SELECT c.id,c.workspace_id,c.provider,c.model,c.effort,c.started_at,c.agent_depth FROM conversations c
 		WHERE c.id IN (SELECT a.conversation_id FROM agent_session_usage u JOIN agent_sessions a ON a.id=u.agent_session_id
 			WHERE u.attribution='session-start')
 		AND NOT EXISTS (SELECT 1 FROM usage_attribution_state s WHERE s.workspace_id=c.workspace_id AND s.version=?)`, usageAttributionVersion)
@@ -624,7 +636,7 @@ func (c *Catalog) rebuildAgentSessions(row map[string]any) error {
 	if err != nil {
 		return err
 	}
-	conversation := ConversationRecord{Provider: firstString(row["provider"]), Model: firstString(row["model"]), StartedAt: firstString(row["started_at"]), AgentDepth: int(integer(row["agent_depth"])), Messages: records}
+	conversation := ConversationRecord{Provider: firstString(row["provider"]), Model: firstString(row["model"]), Effort: firstString(row["effort"]), StartedAt: firstString(row["started_at"]), AgentDepth: int(integer(row["agent_depth"])), Messages: records}
 	if err := replaceAgentSessions(tx, firstString(row["workspace_id"]), firstString(row["id"]), conversation); err != nil {
 		tx.Rollback()
 		return err
@@ -758,10 +770,10 @@ func integer(value any) int64 {
 }
 
 type SearchOptions struct {
-	Query, Repository, Source, File, Owner, Provider, Model, From, To, Flavor, Version, Outcome, Error, Metric string
-	PR                                                                                                         *int
-	Minimum, Maximum                                                                                           *float64
-	ChangedOnly                                                                                                bool
+	Query, Repository, Source, File, Owner, Provider, Model, Effort, From, To, Flavor, Version, Outcome, Error, Metric string
+	PR                                                                                                                 *int
+	Minimum, Maximum                                                                                                   *float64
+	ChangedOnly                                                                                                        bool
 	// Substring adds matches inside words, from the substring index.
 	Substring     bool
 	Limit, Offset int
@@ -860,9 +872,12 @@ func (c *Catalog) computeSearchRows(options SearchOptions, fields libraryFields)
 		where = append(where, "w.id IN (SELECT cp.workspace_id FROM conversations cp WHERE cp.provider=?)")
 		args = append(args, options.Provider)
 	}
-	if options.Model != "" {
-		where = append(where, "w.id IN (SELECT cm.workspace_id FROM conversations cm WHERE cm.model LIKE ?)")
-		args = append(args, "%"+options.Model+"%")
+	if model, effort := strings.TrimSpace(options.Model), normalizeEffort(options.Effort); model != "" || effort != "" {
+		conversation, conversationArgs := configurationPredicate("ce.model", "ce.effort", model, effort)
+		message, messageArgs := configurationPredicate("COALESCE(me.model,ce.model)", "me.effort", model, effort)
+		where = append(where, "w.id IN (SELECT ce.workspace_id FROM conversations ce WHERE "+conversation+" UNION SELECT ce.workspace_id FROM messages me JOIN conversations ce ON ce.id=me.conversation_id WHERE (me.model IS NOT NULL OR me.effort IS NOT NULL) AND "+message+")")
+		args = append(args, conversationArgs...)
+		args = append(args, messageArgs...)
 	}
 	if options.From != "" {
 		where = append(where, "w.activity_at>=?")

@@ -8,8 +8,8 @@ new Function('module', 'exports', outputFiles[0].text)(loaded, loaded.exports);
 const { applyUsageAggregations, loadSchema } = loaded.exports;
 const schema = loadSchema(require('../schemas/usage.schema.json'));
 const daily = [
-  { id: 'session|2026-09-20|model', agent_session_id: 'session', day: '2026-09-20', model: 'model', total_tokens: 1020, first_usage_at: '2026-09-20T23:00:00Z' },
-  { id: 'session|2026-09-21|model', agent_session_id: 'session', day: '2026-09-21', model: 'model', total_tokens: 2130, first_usage_at: '2026-09-21T01:00:00Z' },
+  { id: 'session|2026-09-20|model|', agent_session_id: 'session', day: '2026-09-20', model: 'model', total_tokens: 1020, first_usage_at: '2026-09-20T23:00:00Z' },
+  { id: 'session|2026-09-21|model|', agent_session_id: 'session', day: '2026-09-21', model: 'model', total_tokens: 2130, first_usage_at: '2026-09-21T01:00:00Z' },
 ];
 const hourly = [
   { ...daily[0], hour: '2026-09-20T23:00:00Z', total_tokens: 1020 },

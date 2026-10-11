@@ -14,19 +14,19 @@ import (
 // each call's absolute path, so its repository can be resolved again when
 // the known checkouts change (see reresolveToolPaths). v7 derives skill_usages
 // and MCP resource-API attribution and structured MCP errors.
-const toolLedgerVersion = "tools-v7"
+const toolLedgerVersion = "tools-v8-effort"
 
 // modelRequest is one model API request reconstructed from usage evidence.
 // ContextGrowth is how much the prompt grew since the previous request in the
 // same agent stream, net of that request's own output; it is what tool
 // results (and any user turns) added to the context.
 type modelRequest struct {
-	Key, NativeID, Stream, Model, RequestedAt string
-	FirstIndex, Sequence                      int
-	Counts                                    tokenCounts
-	ContextGrowth                             *int64
-	CompactedBefore                           bool
-	ToolCalls                                 int
+	Key, NativeID, Stream, Model, Effort, RequestedAt string
+	FirstIndex, Sequence                              int
+	Counts                                            tokenCounts
+	ContextGrowth                                     *int64
+	CompactedBefore                                   bool
+	ToolCalls                                         int
 
 	aliases []string // keys of events merged into this request
 }
@@ -47,7 +47,7 @@ type toolCommand struct {
 type toolCall struct {
 	Key, CallID, Stream, Kind, CallNativeID, ResultNativeID    string
 	Sequence                                                   int
-	ToolName, Category, MCPServer, Model                       string
+	ToolName, Category, MCPServer, Model, Effort               string
 	Command, Program, Subcommand, CommandCategory, FilePath    string
 	CommandCount                                               int
 	HasPipe, HasRedirect, HasHeredoc, Backgrounded             bool
@@ -207,7 +207,7 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 			continue
 		}
 		seen[key] = true
-		call := toolCall{Key: key, CallID: message.CallID, Stream: streams[index], Kind: message.Kind, CallNativeID: message.NativeID, Sequence: len(calls), StartedAt: message.CreatedAt, Model: defaultString(nilIfEmpty(strings.TrimSpace(message.Model)), conversationModel), resultIndex: -1, ParallelCount: 1}
+		call := toolCall{Key: key, CallID: message.CallID, Stream: streams[index], Kind: message.Kind, CallNativeID: message.NativeID, Sequence: len(calls), StartedAt: message.CreatedAt, Model: defaultString(nilIfEmpty(strings.TrimSpace(message.Model)), conversationModel), Effort: message.Effort, resultIndex: -1, ParallelCount: 1}
 		var envelope map[string]any
 		_ = json.Unmarshal([]byte(message.Text), &envelope)
 		call.ToolName = defaultString(envelope["tool"], "tool")
@@ -290,6 +290,9 @@ func buildToolLedger(messages []MessageRecord, conversationModel string) ([]mode
 		if request := byKey[call.RequestKey]; request != nil {
 			call.ParallelCount = max(emitted[call.RequestKey], 1)
 			call.OutputTokens = request.Counts["output_tokens"] / float64(call.ParallelCount)
+			if call.Effort == "" {
+				call.Effort = request.Effort
+			}
 			if call.Model == "" {
 				call.Model = request.Model
 			}
@@ -360,7 +363,7 @@ func ledgerRequests(messages []MessageRecord, streams []string, conversationMode
 			return
 		}
 		model := strings.TrimSpace(messages[finalIndex].Model)
-		requests = append(requests, modelRequest{Key: key, NativeID: nativeID, Stream: streams[firstIndex], Model: defaultString(nilIfEmpty(model), conversationModel), RequestedAt: messages[firstIndex].CreatedAt, FirstIndex: firstIndex, Counts: counts})
+		requests = append(requests, modelRequest{Key: key, NativeID: nativeID, Stream: streams[firstIndex], Model: defaultString(nilIfEmpty(model), conversationModel), Effort: messages[finalIndex].Effort, RequestedAt: messages[firstIndex].CreatedAt, FirstIndex: firstIndex, Counts: counts})
 	}
 	for key, finalIndex := range final {
 		add(key, nativeIDs[key], first[key], finalIndex)

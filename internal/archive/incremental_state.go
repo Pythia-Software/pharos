@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const conversationDerivationVersion = "sessions-ledger-instructions-v1"
+const conversationDerivationVersion = "sessions-ledger-instructions-v2-effort"
 
 func physicalPartCount(parts []sourcePart) int {
 	count := 0

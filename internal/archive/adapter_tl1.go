@@ -288,7 +288,7 @@ func (a *tl1Adapter) Fingerprint() (string, error) {
 	return hashBytes([]byte(a.indexVersion() + ":" + strings.Join(rows, "\n"))), nil
 }
 
-func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v1" }
+func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v2-effort" }
 
 func (a *tl1Adapter) Discover(emit func(WorkspaceRecord) error) error {
 	a.snapshots = nil
@@ -716,13 +716,13 @@ func (a *tl1Adapter) transcript(installation tl1Installation, taskID string, att
 	model := firstString(attempt["model"])
 	var source ConversationRecord
 	if provider == "codex" && codexExecTranscript(path) {
-		conversation, ok, err := parseCodexExec(path, a.original(path))
+		conversation, ok, err := parseCodexExec(path, a.original(path), recordedEffort(attempt))
 		if err != nil || !ok {
 			return ConversationRecord{}, false, err
 		}
 		source = conversation
 	} else {
-		parser := jsonlAdapter{baseAdapter: baseAdapter{config: SourceConfig{Name: "tl1-transcript", Kind: provider, Path: filepath.Dir(path), Account: a.config.Account}, capability: "retrieval-only", view: a.view}, provider: provider}
+		parser := jsonlAdapter{baseAdapter: baseAdapter{config: SourceConfig{Name: "tl1-transcript", Kind: provider, Path: filepath.Dir(path), Account: a.config.Account}, capability: "retrieval-only", view: a.view}, provider: provider, initialEffort: recordedEffort(attempt)}
 		record, ok, err := parser.parse(path)
 		if err != nil || !ok || len(record.Conversations) == 0 {
 			return ConversationRecord{}, false, err
@@ -776,7 +776,7 @@ func codexExecTranscript(path string) bool {
 // Codex attempts. Only completed items are kept; turn.completed usage feeds
 // token accounting through its raw event. origin is the path the file stands
 // for (see baseAdapter.original), which its origin and evidence locators name.
-func parseCodexExec(path, origin string) (ConversationRecord, bool, error) {
+func parseCodexExec(path, origin string, initialEffort ...string) (ConversationRecord, bool, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return ConversationRecord{}, false, nil
@@ -790,10 +790,14 @@ func parseCodexExec(path, origin string) (ConversationRecord, bool, error) {
 	reader := bufio.NewReaderSize(io.LimitReader(file, info.Size()), 64*1024)
 	messages := []MessageRecord{}
 	threadID := ""
+	effort := ""
+	if len(initialEffort) > 0 {
+		effort = initialEffort[0]
+	}
 	line := 0
 	turns := 0
 	add := func(id, role, kind, text, callID string, raw string) {
-		messages = append(messages, MessageRecord{NativeID: id, Role: role, Kind: kind, Text: text, CallID: callID, RawText: raw, EvidenceLocator: fmt.Sprintf("%s:%d", origin, line), Selected: true})
+		messages = append(messages, MessageRecord{NativeID: id, Role: role, Kind: kind, Text: text, Effort: effort, CallID: callID, RawText: raw, EvidenceLocator: fmt.Sprintf("%s:%d", origin, line), Selected: true})
 	}
 	for {
 		encoded, readErr := reader.ReadBytes('\n')
@@ -813,6 +817,7 @@ func parseCodexExec(path, origin string) (ConversationRecord, bool, error) {
 			}
 			continue
 		}
+		effort = updatedEffort(effort, event, mapValue(event["item"]))
 		switch firstString(event["type"]) {
 		case "thread.started":
 			threadID = defaultString(event["thread_id"], threadID)
@@ -856,7 +861,7 @@ func parseCodexExec(path, origin string) (ConversationRecord, bool, error) {
 		return ConversationRecord{}, false, nil
 	}
 	nativeID := defaultString(threadID, strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)))
-	return ConversationRecord{NativeID: nativeID, Provider: "codex", Origin: origin, Harness: "tl1", Coverage: "complete", Messages: messages, Observed: info.ModTime().UnixNano()}, true, nil
+	return ConversationRecord{NativeID: nativeID, Provider: "codex", Effort: effort, Origin: origin, Harness: "tl1", Coverage: "complete", Messages: messages, Observed: info.ModTime().UnixNano()}, true, nil
 }
 
 func tl1FlavorRow(installationID string, row map[string]any) map[string]any {

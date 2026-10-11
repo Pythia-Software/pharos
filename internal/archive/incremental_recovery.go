@@ -419,7 +419,7 @@ func (c *Catalog) repairRetained(ctx context.Context, job string, names []string
 				if err != nil {
 					return err
 				}
-				conversation := ConversationRecord{Provider: firstString(row["provider"]), Model: firstString(row["model"]), NativeID: firstString(row["native_id"]), Account: firstString(row["account"]), Origin: firstString(row["origin"]), StartedAt: firstString(row["started_at"]), EndedAt: firstString(row["ended_at"]), AgentDepth: int(integer(row["agent_depth"])), AgentPath: firstString(row["agent_path"]), AgentNickname: firstString(row["agent_nickname"]), Coverage: firstString(row["coverage"]), Harness: firstString(row["harness"]), HarnessVersionFirst: firstString(row["harness_version_first"]), HarnessVersionLast: firstString(row["harness_version_last"]), HarnessVersionSource: firstString(row["harness_version_source"]), Messages: messages}
+				conversation := ConversationRecord{Provider: firstString(row["provider"]), Model: firstString(row["model"]), Effort: firstString(row["effort"]), NativeID: firstString(row["native_id"]), Account: firstString(row["account"]), Origin: firstString(row["origin"]), StartedAt: firstString(row["started_at"]), EndedAt: firstString(row["ended_at"]), AgentDepth: int(integer(row["agent_depth"])), AgentPath: firstString(row["agent_path"]), AgentNickname: firstString(row["agent_nickname"]), Coverage: firstString(row["coverage"]), Harness: firstString(row["harness"]), HarnessVersionFirst: firstString(row["harness_version_first"]), HarnessVersionLast: firstString(row["harness_version_last"]), HarnessVersionSource: firstString(row["harness_version_source"]), Messages: messages}
 				if err := deleteConversationFTS(tx, conversationID); err != nil {
 					return err
 				}

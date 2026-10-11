@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL,
   provider TEXT NOT NULL,
   model TEXT,
+  effort TEXT,
   account TEXT NOT NULL,
   native_id TEXT NOT NULL,
   parent_id TEXT REFERENCES conversations(id),
@@ -153,6 +154,7 @@ CREATE TABLE IF NOT EXISTS messages (
   role TEXT NOT NULL,
   kind TEXT NOT NULL DEFAULT 'message',
   model TEXT,
+  effort TEXT,
   text TEXT NOT NULL,
   raw_text TEXT,
   source_order INTEGER,
@@ -261,6 +263,7 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   kind TEXT NOT NULL,
   provider TEXT NOT NULL,
   model TEXT,
+  effort TEXT,
   depth INTEGER NOT NULL DEFAULT 0,
   started_at TEXT,
   ended_at TEXT,
@@ -290,6 +293,7 @@ CREATE TABLE IF NOT EXISTS agent_session_usage (
   agent_session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
   usage_hour TEXT NOT NULL,
   model TEXT NOT NULL DEFAULT '',
+  effort TEXT NOT NULL DEFAULT '',
   attribution TEXT NOT NULL,
   input_tokens INTEGER NOT NULL DEFAULT 0,
   uncached_input_tokens INTEGER NOT NULL DEFAULT 0,
@@ -301,7 +305,7 @@ CREATE TABLE IF NOT EXISTS agent_session_usage (
   reasoning_output_tokens INTEGER NOT NULL DEFAULT 0,
   unclassified_tokens INTEGER NOT NULL DEFAULT 0,
   total_tokens INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY(agent_session_id, usage_hour, model, attribution)
+  PRIMARY KEY(agent_session_id, usage_hour, model, effort, attribution)
 );
 CREATE INDEX IF NOT EXISTS agent_session_usage_hour_idx ON agent_session_usage(usage_hour);
 CREATE TABLE IF NOT EXISTS usage_attribution_state (
@@ -370,6 +374,7 @@ CREATE TABLE IF NOT EXISTS model_requests (
   sequence INTEGER NOT NULL,
   requested_at TEXT,
   model TEXT,
+  effort TEXT,
   input_tokens INTEGER NOT NULL DEFAULT 0,
   uncached_input_tokens INTEGER NOT NULL DEFAULT 0,
   cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
@@ -394,6 +399,7 @@ CREATE TABLE IF NOT EXISTS tool_calls (
   sequence INTEGER NOT NULL,
   provider TEXT NOT NULL,
   model TEXT,
+  effort TEXT,
   kind TEXT NOT NULL,
   tool_name TEXT NOT NULL,
   tool_category TEXT NOT NULL,
@@ -555,6 +561,7 @@ CREATE TABLE IF NOT EXISTS tool_usage_daily (
   source_kind TEXT,
   provider TEXT,
   model TEXT,
+  effort TEXT,
   model_family TEXT,
   session_kind TEXT,
   tool_name TEXT,

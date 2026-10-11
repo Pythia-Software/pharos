@@ -16,11 +16,11 @@ import (
 )
 
 type MessageRecord struct {
-	accounting                                                                                              *messageAccounting
-	NativeID, Role, Kind, Text, Model, CreatedAt, ParentNativeID, PreviousNativeID, CallID, EvidenceLocator string
-	RawText                                                                                                 string
-	SourceOrder                                                                                             int
-	Selected                                                                                                bool
+	accounting                                                                                                      *messageAccounting
+	NativeID, Role, Kind, Text, Model, Effort, CreatedAt, ParentNativeID, PreviousNativeID, CallID, EvidenceLocator string
+	RawText                                                                                                         string
+	SourceOrder                                                                                                     int
+	Selected                                                                                                        bool
 	// Sender names who sent user-role input when the source records it:
 	// "account:<id>" for a person, "agent:<session>" for another agent, or
 	// "automation:<name>" for a script. Empty means the source is silent.
@@ -28,16 +28,16 @@ type MessageRecord struct {
 }
 
 type ConversationRecord struct {
-	NativeID, Provider, Model, Account, ParentNativeID, Origin, Coverage, StartedAt, EndedAt string
-	AgentDepth                                                                               int    `json:"AgentDepth,omitempty"`
-	AgentPath                                                                                string `json:"AgentPath,omitempty"`
-	AgentNickname                                                                            string `json:"AgentNickname,omitempty"`
-	Harness                                                                                  string `json:"Harness,omitempty"`
-	HarnessVersionFirst                                                                      string `json:"HarnessVersionFirst,omitempty"`
-	HarnessVersionLast                                                                       string `json:"HarnessVersionLast,omitempty"`
-	HarnessVersionSource                                                                     string `json:"HarnessVersionSource,omitempty"`
-	Aliases                                                                                  []string
-	Messages                                                                                 []MessageRecord
+	NativeID, Provider, Model, Effort, Account, ParentNativeID, Origin, Coverage, StartedAt, EndedAt string
+	AgentDepth                                                                                       int    `json:"AgentDepth,omitempty"`
+	AgentPath                                                                                        string `json:"AgentPath,omitempty"`
+	AgentNickname                                                                                    string `json:"AgentNickname,omitempty"`
+	Harness                                                                                          string `json:"Harness,omitempty"`
+	HarnessVersionFirst                                                                              string `json:"HarnessVersionFirst,omitempty"`
+	HarnessVersionLast                                                                               string `json:"HarnessVersionLast,omitempty"`
+	HarnessVersionSource                                                                             string `json:"HarnessVersionSource,omitempty"`
+	Aliases                                                                                          []string
+	Messages                                                                                         []MessageRecord
 	// Instructions are the instruction files and skills the transcript
 	// recorded as loaded (see instructions.go).
 	Instructions []InstructionRecord `json:"Instructions,omitempty"`
@@ -299,7 +299,7 @@ func ensureEOF(decoder *json.Decoder) error {
 
 type canonicalAdapter struct{ baseAdapter }
 
-const exportIndexVersion = "token-events-v2"
+const exportIndexVersion = "token-events-v3-effort"
 
 func (a *canonicalAdapter) indexVersion() string { return exportIndexVersion }
 
@@ -384,13 +384,13 @@ func (a *canonicalAdapter) workspace(row map[string]any, file string, index int)
 			if id == "" {
 				id = fmt.Sprintf("m%d", mindex)
 			}
-			messages = append(messages, MessageRecord{RawText: accountingRaw(message), NativeID: id, Role: defaultString(message["role"], "unknown"), Kind: defaultString(message["kind"], "message"), Text: messageText(firstNonNil(message["text"], message["content"])), CreatedAt: iso(firstNonNil(message["created_at"], message["timestamp"])), ParentNativeID: firstString(message["parent_id"]), CallID: firstString(message["call_id"]), Selected: defaultBool(message["selected"], true), EvidenceLocator: fmt.Sprintf("%s:%d:%d", a.original(file), cindex, mindex)})
+			messages = append(messages, MessageRecord{RawText: accountingRaw(message), Model: firstString(message["model"], conversation["model"]), Effort: exportedEffort(message, conversation), NativeID: id, Role: defaultString(message["role"], "unknown"), Kind: defaultString(message["kind"], "message"), Text: messageText(firstNonNil(message["text"], message["content"])), CreatedAt: iso(firstNonNil(message["created_at"], message["timestamp"])), ParentNativeID: firstString(message["parent_id"]), CallID: firstString(message["call_id"]), Selected: defaultBool(message["selected"], true), EvidenceLocator: fmt.Sprintf("%s:%d:%d", a.original(file), cindex, mindex)})
 		}
 		nativeID := firstString(conversation["id"], conversation["native_id"])
 		if nativeID == "" {
 			nativeID = fmt.Sprintf("%s-%d", strings.TrimSuffix(filepath.Base(file), filepath.Ext(file)), cindex)
 		}
-		conversations = append(conversations, ConversationRecord{NativeID: nativeID, Provider: defaultString(conversation["provider"], a.config.Kind), Account: a.config.Account, Model: firstString(conversation["model"]), ParentNativeID: firstString(conversation["parent_id"]), Origin: firstString(conversation["origin"]), Coverage: defaultString(conversation["coverage"], "complete"), Messages: messages, StartedAt: iso(conversation["started_at"]), EndedAt: iso(conversation["ended_at"]), Aliases: stringSlice(conversation["aliases"]), Harness: defaultString(conversation["harness"], "canonical"), HarnessVersionFirst: firstString(conversation["harness_version_first"]), HarnessVersionLast: firstString(conversation["harness_version_last"])})
+		conversations = append(conversations, ConversationRecord{NativeID: nativeID, Provider: defaultString(conversation["provider"], a.config.Kind), Account: a.config.Account, Model: firstString(conversation["model"]), Effort: recordedEffort(conversation), ParentNativeID: firstString(conversation["parent_id"]), Origin: firstString(conversation["origin"]), Coverage: defaultString(conversation["coverage"], "complete"), Messages: messages, StartedAt: iso(conversation["started_at"]), EndedAt: iso(conversation["ended_at"]), Aliases: stringSlice(conversation["aliases"]), Harness: defaultString(conversation["harness"], "canonical"), HarnessVersionFirst: firstString(conversation["harness_version_first"]), HarnessVersionLast: firstString(conversation["harness_version_last"])})
 	}
 	sid := firstString(row["id"], row["source_id"])
 	if sid == "" {
@@ -457,6 +457,8 @@ func defaultBool(value any, fallback bool) bool {
 type jsonlAdapter struct {
 	baseAdapter
 	provider string
+	// TL1 records the attempt's initial setting independently of its transcript.
+	initialEffort string
 }
 
 var codexForkFilename = regexp.MustCompile(`([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})_([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl$`)
@@ -473,7 +475,7 @@ func (a *jsonlAdapter) Fingerprint() (string, error) {
 // codes, durations, interruptions); v9 retains Codex hosted web searches; v10
 // skips Claude entries replayed under a uuid already seen; v11 retains Claude
 // invoked_skills attachments for skill_usages.
-const jsonlExtractor = "message-model-v11"
+const jsonlExtractor = "message-model-v12-effort"
 
 func (a *jsonlAdapter) accept(path string) bool {
 	relative, _ := filepath.Rel(a.config.Path, path)
@@ -652,7 +654,7 @@ func (a *jsonlAdapter) parseFile(path string) (WorkspaceRecord, sourcePart, bool
 func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRecord, bool, error) {
 	origin := a.original(path)
 	meta := map[string]any{}
-	model := ""
+	model, effort := "", a.initialEffort
 	harness, versionFirst, versionLast := "codex", "", ""
 	messages := []MessageRecord{}
 	usage := map[string]float64{}
@@ -709,10 +711,12 @@ func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRec
 				meta = payload
 			}
 			model = defaultString(payload["model"], model)
+			effort = updatedEffort(effort, payload)
 			continue
 		}
 		if etype == "turn_context" {
 			model = defaultString(payload["model"], model)
+			effort = recordedEffort(payload)
 			continue
 		}
 		role, text, kind, sender := "", "", "", ""
@@ -730,7 +734,7 @@ func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRec
 		} else if etype == "response_item" && firstString(payload["type"]) == "message" {
 			role = defaultString(payload["role"], "unknown")
 			if role == "user" {
-				base := MessageRecord{RawText: accountingRaw(event), NativeID: firstString(payload["id"], event["id"]), Model: model, CreatedAt: iso(event["timestamp"]), EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true, Sender: codexSender(meta)}
+				base := MessageRecord{RawText: accountingRaw(event), NativeID: firstString(payload["id"], event["id"]), Model: model, Effort: effort, CreatedAt: iso(event["timestamp"]), EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true, Sender: codexSender(meta)}
 				if base.NativeID == "" {
 					base.NativeID = fmt.Sprintf("line-%d", integer(event["_line"]))
 				}
@@ -788,7 +792,7 @@ func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRec
 			} else if query := firstString(action["query"]); query != "" {
 				summary += ": " + query
 			}
-			base := MessageRecord{Model: model, CallID: callID, CreatedAt: iso(event["timestamp"]), EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true}
+			base := MessageRecord{Model: model, Effort: effort, CallID: callID, CreatedAt: iso(event["timestamp"]), EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true}
 			call, result := base, base
 			call.NativeID, call.Role, call.Kind, call.RawText = id, "assistant", "tool_call", accountingRaw(event)
 			call.Text = jsonText(map[string]any{"tool": "web_search", "input": action})
@@ -816,7 +820,7 @@ func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRec
 			if id == "" {
 				id = fmt.Sprintf("line-%d", integer(event["_line"]))
 			}
-			messages = append(messages, MessageRecord{RawText: accountingRaw(event), NativeID: id, Role: role, Kind: kind, Text: text, Model: model, CallID: firstString(payload["call_id"]), CreatedAt: iso(event["timestamp"]), EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true, Sender: sender})
+			messages = append(messages, MessageRecord{RawText: accountingRaw(event), NativeID: id, Role: role, Kind: kind, Text: text, Model: model, Effort: effort, CallID: firstString(payload["call_id"]), CreatedAt: iso(event["timestamp"]), EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true, Sender: sender})
 		}
 	}
 	for callID, extra := range details {
@@ -847,7 +851,7 @@ func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRec
 		started = iso(events[0]["timestamp"])
 		ended = iso(events[len(events)-1]["timestamp"])
 	}
-	record := WorkspaceRecord{SourceID: nativeID, SourceKind: "codex", Title: defaultString(meta["title"], "Codex "+short(nativeID)), Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: ended, Location: cwd, Repository: repository, Metadata: map[string]any{"originator": meta["originator"], "branch": git["branch"], "head_ref": git["commit_hash"]}, Conversations: []ConversationRecord{{NativeID: nativeID, Provider: "codex", Account: a.config.Account, Model: model, ParentNativeID: parentNativeID, AgentDepth: agentDepth, AgentPath: firstString(meta["agent_path"], spawn["agent_path"]), AgentNickname: firstString(meta["agent_nickname"], spawn["agent_nickname"]), Origin: origin, Coverage: "complete", Messages: messages, StartedAt: started, EndedAt: ended, Harness: harness, HarnessVersionFirst: versionFirst, HarnessVersionLast: versionLast, Instructions: codexInstructions(events)}}, Metrics: metrics}
+	record := WorkspaceRecord{SourceID: nativeID, SourceKind: "codex", Title: defaultString(meta["title"], "Codex "+short(nativeID)), Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: ended, Location: cwd, Repository: repository, Metadata: map[string]any{"originator": meta["originator"], "branch": git["branch"], "head_ref": git["commit_hash"]}, Conversations: []ConversationRecord{{NativeID: nativeID, Provider: "codex", Account: a.config.Account, Model: model, Effort: effort, ParentNativeID: parentNativeID, AgentDepth: agentDepth, AgentPath: firstString(meta["agent_path"], spawn["agent_path"]), AgentNickname: firstString(meta["agent_nickname"], spawn["agent_nickname"]), Origin: origin, Coverage: "complete", Messages: messages, StartedAt: started, EndedAt: ended, Harness: harness, HarnessVersionFirst: versionFirst, HarnessVersionLast: versionLast, Instructions: codexInstructions(events)}}, Metrics: metrics}
 	record.Metrics = reconciledTokenMetrics(record)
 	return record, true, nil
 }
@@ -860,7 +864,7 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 	if root := claudeRootPath(path); root != path {
 		rootID = strings.TrimSuffix(filepath.Base(root), filepath.Ext(root))
 	}
-	cwd, started, ended, model, branch, title := "", "", "", "", "", ""
+	cwd, started, ended, model, effort, branch, title := "", "", "", "", a.initialEffort, "", ""
 	harness, versionFirst, versionLast := "claude-code", "", ""
 	tokens := map[string]float64{"input_tokens": 0, "output_tokens": 0, "cache_tokens": 0}
 	delegated := map[string]bool{}
@@ -912,13 +916,14 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 		if message == nil {
 			message = event
 		}
+		effort = updatedEffort(effort, event, message)
 		role := defaultString(event["type"], firstString(message["role"]))
 		if firstString(event["subtype"]) == "compact_boundary" {
-			messages = append(messages, MessageRecord{NativeID: fmt.Sprintf("compact-%d", integer(event["_line"])), Role: "system", Kind: "metadata", Text: jsonText(event), Model: model, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true})
+			messages = append(messages, MessageRecord{NativeID: fmt.Sprintf("compact-%d", integer(event["_line"])), Role: "system", Kind: "metadata", Text: jsonText(event), Model: model, Effort: effort, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true})
 		}
 		if role != "user" && role != "assistant" {
 			if hasUsageEvidence(event) {
-				messages = append(messages, MessageRecord{NativeID: fmt.Sprintf("usage-%d", integer(event["_line"])), Role: "system", Kind: "metadata", Text: jsonText(event), Model: model, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true})
+				messages = append(messages, MessageRecord{NativeID: fmt.Sprintf("usage-%d", integer(event["_line"])), Role: "system", Kind: "metadata", Text: jsonText(event), Model: model, Effort: effort, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true})
 			}
 			continue
 		}
@@ -930,7 +935,7 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 		if baseID == "" {
 			baseID = fmt.Sprintf("line-%d", integer(event["_line"]))
 		}
-		item := MessageRecord{NativeID: baseID, Role: role, Kind: "message", Text: text, Model: model, PreviousNativeID: parent, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true}
+		item := MessageRecord{NativeID: baseID, Role: role, Kind: "message", Text: text, Model: model, Effort: effort, PreviousNativeID: parent, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true}
 		if role != "user" {
 			if text != "" {
 				messages = append(messages, item)
@@ -993,11 +998,11 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 				} else {
 					continue
 				}
-				messages = append(messages, MessageRecord{NativeID: fmt.Sprintf("%s:block:%d", baseID, index), Role: blockRole, Kind: kind, Text: blockText, Model: model, PreviousNativeID: parent, CallID: callID, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d:block:%d", origin, integer(event["_line"]), index), Selected: true})
+				messages = append(messages, MessageRecord{NativeID: fmt.Sprintf("%s:block:%d", baseID, index), Role: blockRole, Kind: kind, Text: blockText, Model: model, Effort: effort, PreviousNativeID: parent, CallID: callID, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d:block:%d", origin, integer(event["_line"]), index), Selected: true})
 			}
 		}
 		if usage := mapValue(message["usage"]); usage != nil {
-			messages = append(messages, MessageRecord{RawText: jsonText(event), NativeID: baseID + ":usage", Role: "system", Kind: "metadata", Text: jsonText(map[string]any{"type": "token_usage", "usage": usage, "usage_message_id": firstString(message["id"])}), Model: model, PreviousNativeID: parent, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true})
+			messages = append(messages, MessageRecord{RawText: jsonText(event), NativeID: baseID + ":usage", Role: "system", Kind: "metadata", Text: jsonText(map[string]any{"type": "token_usage", "usage": usage, "usage_message_id": firstString(message["id"])}), Model: model, Effort: effort, PreviousNativeID: parent, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true})
 			for _, key := range []string{"input_tokens", "output_tokens"} {
 				if value, ok := number(usage[key]); ok {
 					tokens[key] += value
@@ -1031,7 +1036,7 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 	if rootID != "" {
 		depth = 1
 	}
-	record := WorkspaceRecord{SourceID: sourceID, SourceKind: "claude", Title: defaultString(title, "Claude "+short(sourceID)), Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: ended, Location: cwd, Repository: repository, Metadata: map[string]any{"branch": branch}, Conversations: []ConversationRecord{{NativeID: nativeID, Provider: "claude", Account: a.config.Account, Model: model, ParentNativeID: rootID, AgentDepth: depth, Origin: origin, Coverage: "complete", Messages: messages, StartedAt: started, EndedAt: ended, Harness: harness, HarnessVersionFirst: versionFirst, HarnessVersionLast: versionLast, Instructions: claudeInstructions(events)}}, Metrics: metrics}
+	record := WorkspaceRecord{SourceID: sourceID, SourceKind: "claude", Title: defaultString(title, "Claude "+short(sourceID)), Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: ended, Location: cwd, Repository: repository, Metadata: map[string]any{"branch": branch}, Conversations: []ConversationRecord{{NativeID: nativeID, Provider: "claude", Account: a.config.Account, Model: model, Effort: effort, ParentNativeID: rootID, AgentDepth: depth, Origin: origin, Coverage: "complete", Messages: messages, StartedAt: started, EndedAt: ended, Harness: harness, HarnessVersionFirst: versionFirst, HarnessVersionLast: versionLast, Instructions: claudeInstructions(events)}}, Metrics: metrics}
 	record.Metrics = reconciledTokenMetrics(record)
 	return record, true, nil
 }

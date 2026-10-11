@@ -489,7 +489,7 @@ type agentSessionSummary struct {
 // accounting event that reported it. Events without a timestamp are placed at
 // the session start and marked, so trends never silently invent precision.
 type usageBucket struct {
-	hour, model, attribution string
+	hour, model, effort, attribution string
 }
 
 func usageHour(timestamp string) string {
@@ -501,7 +501,7 @@ func usageHour(timestamp string) string {
 }
 
 func (s *agentSessionSummary) addUsage(message MessageRecord, counts tokenCounts) {
-	bucket := usageBucket{hour: usageHour(message.CreatedAt), model: strings.TrimSpace(message.Model), attribution: "request"}
+	bucket := usageBucket{hour: usageHour(message.CreatedAt), model: strings.TrimSpace(message.Model), effort: message.Effort, attribution: "request"}
 	if bucket.hour == "" {
 		bucket.attribution = "session-start"
 	}
@@ -557,6 +557,10 @@ func agentSessionSummariesWithCostState(messages []MessageRecord, suppressCostSt
 			}
 		}
 	}
+	sessionEfforts := map[string]string{}
+	for key, session := range sessions {
+		sessionEfforts[key] = sessionMessageEffort(session.messageIndexes, messages)
+	}
 	for index, report := range conversationTokenReportsWithCostState(messages, suppressCostState) {
 		if report.counts == nil {
 			continue
@@ -594,7 +598,13 @@ func agentSessionSummariesWithCostState(messages []MessageRecord, suppressCostSt
 			}
 		}
 		addTokenCounts(sessions[key].counts, report.counts)
-		sessions[key].addUsage(messages[index], report.counts)
+		message := messages[index]
+		if report.scope != "request" && report.scope != "thread" {
+			// A run/session claim can span effort changes. Only label it when
+			// the entire session has one recorded configuration.
+			message.Effort = sessionEfforts[key]
+		}
+		sessions[key].addUsage(message, report.counts)
 	}
 	for _, session := range sessions {
 		session.startedAt, session.endedAt = "", ""
@@ -685,4 +695,17 @@ func hasUsageEvidence(event map[string]any) bool {
 		}
 	}
 	return false
+}
+
+func sessionMessageEffort(indexes []int, messages []MessageRecord) string {
+	if len(indexes) == 0 {
+		return ""
+	}
+	effort := messages[indexes[0]].Effort
+	for _, index := range indexes[1:] {
+		if messages[index].Effort != effort {
+			return ""
+		}
+	}
+	return effort
 }

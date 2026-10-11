@@ -1,7 +1,7 @@
 import { EMPTY_QUERY, applyAggregations, isOrGroup, matchesClause, predicatesOf, type AggregationRequest, type FieldSchema, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 
 type Row = Record<string, any>;
-const dailyID = (row: Row) => `${row.agent_session_id}|${row.day}|${row.model}`;
+const dailyID = (row: Row) => `${row.agent_session_id}|${row.day}|${row.model}|${row.effort ?? ""}`;
 
 // Keep each shared-file metric at its own granularity, just as the service does.
 export function applyUsageAggregations(daily: Row[], hourly: Row[], request: AggregationRequest, schema: FieldSchema<Row>) {

@@ -648,7 +648,7 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 		}
 		ids := map[string]bool{}
 		for _, row := range hours {
-			ids[firstString(row["agent_session_id"])+"|"+firstString(row["day"])+"|"+firstString(row["model"])] = true
+			ids[usageDailyID(row)] = true
 		}
 		selected := []map[string]any{}
 		for _, row := range sourceRows {
@@ -746,7 +746,7 @@ func (s *Server) executeUsageMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQL
 	if hasHourFilter {
 		ids := map[string]bool{}
 		for _, row := range hours {
-			ids[firstString(row["agent_session_id"])+"|"+firstString(row["day"])+"|"+firstString(row["model"])] = true
+			ids[usageDailyID(row)] = true
 		}
 		kept := []map[string]any{}
 		for _, row := range daily {
@@ -792,7 +792,7 @@ func (s *Server) executeUsageMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQL
 		}
 		selected := []map[string]any{}
 		for _, row := range hours {
-			if ids[firstString(row["agent_session_id"])+"|"+firstString(row["day"])+"|"+firstString(row["model"])] {
+			if ids[usageDailyID(row)] {
 				selected = append(selected, row)
 			}
 		}

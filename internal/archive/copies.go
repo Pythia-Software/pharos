@@ -197,7 +197,7 @@ func rederiveWorkspace(tx *sql.Tx, workspaceID string, merged map[string]bool) e
 }
 
 func rederiveWorkspaceMode(tx *sql.Tx, workspaceID string, merged map[string]bool, force bool) error {
-	rows, err := queryMaps(tx, "SELECT id,provider,model,started_at,ended_at,agent_depth FROM conversations WHERE workspace_id=? ORDER BY started_at,id", workspaceID)
+	rows, err := queryMaps(tx, "SELECT id,provider,model,effort,started_at,ended_at,agent_depth FROM conversations WHERE workspace_id=? ORDER BY started_at,id", workspaceID)
 	if err != nil {
 		return err
 	}
@@ -208,7 +208,7 @@ func rederiveWorkspaceMode(tx *sql.Tx, workspaceID string, merged map[string]boo
 		if err != nil {
 			return err
 		}
-		conversation := ConversationRecord{Provider: firstString(row["provider"]), Model: firstString(row["model"]), StartedAt: firstString(row["started_at"]),
+		conversation := ConversationRecord{Provider: firstString(row["provider"]), Model: firstString(row["model"]), Effort: firstString(row["effort"]), StartedAt: firstString(row["started_at"]),
 			EndedAt: firstString(row["ended_at"]), AgentDepth: int(integer(row["agent_depth"])), Messages: messages}
 		union.Conversations = append(union.Conversations, conversation)
 		if !merged[id] || force {

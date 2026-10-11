@@ -42,7 +42,7 @@ var antigravityProducts = map[string]string{"antigravity": "Antigravity", "antig
 
 // antigravityExtractor versions the parser; bump it when parsing changes so
 // every transcript is parsed again.
-const antigravityExtractor = "antigravity-v2-group-membership"
+const antigravityExtractor = "antigravity-v3-effort"
 
 const (
 	antigravitySummaries = "conversation_summaries.db"
@@ -752,7 +752,7 @@ func (a *antigravityAdapter) record(id, path string, summary antigravitySummary,
 	// selected is the model setting as the person named it ("Gemini 3.8
 	// Flash (High)"); served is the API model that answered a request
 	// ("gemini-3.8-flash"), which is what prices are listed under.
-	selected, served, started, ended := "", "", "", ""
+	selected, served, started, ended, effort := "", "", "", "", ""
 	requestsDatabase := a.original(a.requestsDatabase(id))
 	type pendingCall struct{ id, tool, kind string }
 	pending := []pendingCall{}
@@ -774,7 +774,8 @@ func (a *antigravityAdapter) record(id, path string, summary antigravitySummary,
 		if requested && request.model != "" {
 			served = request.model
 		}
-		base := MessageRecord{NativeID: step, Model: defaultString(served, selected), CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, line), Selected: true}
+		effort = updatedEffort(effort, event, request.usage)
+		base := MessageRecord{NativeID: step, Model: defaultString(served, selected), Effort: effort, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, line), Selected: true}
 		content, stepType, failed := firstString(event["content"]), firstString(event["type"]), firstString(event["status"]) == "ERROR"
 		switch {
 		case stepType == "USER_INPUT":
@@ -782,6 +783,8 @@ func (a *antigravityAdapter) record(id, path string, summary antigravitySummary,
 			for _, block := range context {
 				if match := antigravityModel.FindStringSubmatch(block[1]); block[0] == "user_settings_change" && match != nil {
 					selected = strings.TrimSpace(match[1])
+					effort = antigravitySelectedEffort(selected)
+					base.Effort = effort
 					base.Model = defaultString(served, selected)
 				}
 			}
@@ -912,7 +915,7 @@ func (a *antigravityAdapter) record(id, path string, summary antigravitySummary,
 	versionFirst, versionLast = installedVersionForActivity(installed, started, ended)
 	return WorkspaceRecord{SourceID: id, SourceKind: "antigravity", Title: defaultString(summary.Title, product+" "+short(id)), Account: a.config.Account, Purpose: purpose, Outcome: outcome,
 		ActivityAt: ended, Location: location, Repository: a.repository(location, ""), Metadata: metadata,
-		Conversations: []ConversationRecord{{NativeID: id, Provider: "antigravity", Account: a.config.Account, Model: defaultString(served, selected), ParentNativeID: summary.Parent, AgentDepth: depth,
+		Conversations: []ConversationRecord{{NativeID: id, Provider: "antigravity", Account: a.config.Account, Model: defaultString(served, selected), Effort: effort, ParentNativeID: summary.Parent, AgentDepth: depth,
 			AgentNickname: summary.Agent, Origin: origin, Harness: antigravityHarness(app), HarnessVersionFirst: versionFirst, HarnessVersionLast: versionLast, HarnessVersionSource: "installed-app", Coverage: "complete", Messages: messages, StartedAt: started, EndedAt: ended}}}
 }
 
@@ -927,4 +930,15 @@ func antigravityMedia(value any) []string {
 		}
 	}
 	return types
+}
+
+// The model selector records explicit effort suffixes separately from API model IDs.
+func antigravitySelectedEffort(selected string) string {
+	value := strings.ToLower(strings.TrimSpace(selected))
+	for _, effort := range []string{"minimal", "low", "medium", "high", "xhigh", "max"} {
+		if strings.HasSuffix(value, " ("+effort+")") {
+			return effort
+		}
+	}
+	return ""
 }
