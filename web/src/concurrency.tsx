@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { clipIntervals, concurrencyMetrics, concurrencySpans, concurrencyUnit, mergeIntervals, minute, ribbonPath, stackSegments, workSessions, type ConcurrencyCounting, type ConcurrencyData, type ConcurrencyMetrics, type ConcurrencyMode, type ConcurrencyThread, type Interval, type Segment } from "./concurrency-data";
+import { clipIntervals, concurrencyMetrics, concurrencySpans, concurrencyUnit, conversationTimings, formatConcurrencyDuration as duration, mergeIntervals, minute, ribbonPath, stackSegments, workSessions, type ConcurrencyCounting, type ConcurrencyData, type ConcurrencyMetrics, type ConcurrencyMode, type ConcurrencyThread, type Interval, type Segment } from "./concurrency-data";
 import { concurrencyRangePresets, readConcurrencySettings, resolveConcurrencyRange, saveConcurrencySettings, shiftCalendarDay, type ConcurrencyRange, type ConcurrencySettings } from "./concurrency-settings";
 import { closeConcurrencyModal, loadConcurrencyData } from "./concurrency-store";
 import { Icon } from "./icons";
@@ -10,7 +10,6 @@ const palette = ["var(--sea)", "var(--gold)", "var(--heat-0)", "var(--heat-1)", 
   "color-mix(in srgb,var(--sea) 45%,var(--gold))", "color-mix(in srgb,var(--heat-1) 55%,var(--heat-3))",
   "color-mix(in srgb,var(--sea) 40%,var(--heat-0))", "color-mix(in srgb,var(--gold) 65%,var(--heat-2))",
   "color-mix(in srgb,var(--heat-0) 40%,var(--heat-1))", "color-mix(in srgb,var(--heat-2) 60%,var(--heat-0))"];
-const duration = (ms: number) => ms < minute ? `${Math.round(ms / 1000)}s` : ms < 60 * minute ? `${Math.round(ms / minute)}m` : `${Math.floor(ms / (60 * minute))}h ${Math.round(ms / minute) % 60}m`;
 const percent = (value: number) => `${Math.round(value * 100)}%`;
 const sumSpans = (spans: Interval[]) => spans.reduce((total, [a, b]) => total + b - a, 0);
 type Hover = { time: number; unit: string | null; conversation?: string };
@@ -200,6 +199,7 @@ function ConcurrencyPanel() {
   const highlighted = selected ?? hover?.unit ?? null;
   const focusedThreads = rangeThreads.filter(thread => concurrencyUnit(thread, counting) === highlighted && thread.agent_depth === 0).sort((a, b) => Number(b.id === hover?.conversation) - Number(a.id === hover?.conversation));
   const scopedRows = rangeThreads.filter(thread => thread.agent_depth === 0 && (!selected || concurrencyUnit(thread, counting) === selected)).sort((a, b) => sumSpans(b.turns) - sumSpans(a.turns));
+  const rowTimings = useMemo(() => conversationTimings(rangeThreads, gap), [rangeThreads, gap]);
   const modelRange = useMemo(() => concurrencySpans(rangeThreads, "model", gap, counting), [rangeThreads, gap, counting]);
   const userRange = useMemo(() => concurrencySpans(rangeThreads, "user", gap, counting), [rangeThreads, gap, counting]);
   const visibleMetrics = useMemo(() => {
@@ -239,7 +239,7 @@ function ConcurrencyPanel() {
       {scopedRows.length ? <table><thead><tr><th scope="col">Repository</th><th scope="col">Conversation</th><th scope="col">Model time</th><th scope="col">Thread time</th><th scope="col" className="concurrency-open-cell" aria-label="Open conversation"><span className="concurrency-open-text">Open conversation</span><span className="concurrency-open-icon" aria-hidden="true">↗</span></th></tr></thead><tbody>{scopedRows.map(thread => <tr key={thread.id} className={selected === concurrencyUnit(thread, counting) ? "selected" : ""}>
         <td><span className="concurrency-conversation-repo" title={thread.repository}><i style={{ background: colors.get(concurrencyUnit(thread, counting)) }} /><span>{thread.repository}</span></span></td>
         <td><button type="button" className="concurrency-thread-button" title={thread.title} onClick={() => chooseUnit(concurrencyUnit(thread, counting))}><span>{thread.title}</span></button></td>
-        <td>{duration(sumSpans(modelRange.get(concurrencyUnit(thread, counting)) ?? []))}</td><td>{duration(sumSpans(userRange.get(concurrencyUnit(thread, counting)) ?? []))}</td>
+        <td>{duration(rowTimings.get(thread.id)!.model)}</td><td>{duration(rowTimings.get(thread.id)!.threaded)}</td>
         <td className="concurrency-open-cell"><a href={`/work/${encodeURIComponent(thread.work_id)}?conversation=${encodeURIComponent(thread.conversation_id)}`} target="_blank" rel="noreferrer" aria-label={`Open conversation: ${thread.title}`} title="Open conversation"><span className="concurrency-open-text">Open conversation </span>↗</a></td>
       </tr>)}</tbody></table> : <p className="muted">No observed conversations in this selection.</p>}
     </details>

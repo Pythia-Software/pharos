@@ -16,6 +16,12 @@ export type Segment = { start: number; end: number; unit: string; workspace: str
 export type ConcurrencyMetrics = { average: number; parallel: number; peak: number; working: number };
 export const minute = 60_000;
 
+export function formatConcurrencyDuration(ms: number): string {
+  if (ms < minute) return `${Math.round(ms / 1000)}s`;
+  const minutes = Math.round(ms / minute);
+  return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
 export function mergeIntervals(intervals: Interval[], gap = 0): Interval[] {
   const result: Interval[] = [];
   for (const [start, end] of intervals.filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b) && b > a).slice().sort((a, b) => a[0] - b[0])) {
@@ -49,6 +55,17 @@ export function concurrencySpans(threads: ConcurrencyThread[], mode: Concurrency
 
 export function workspaceSpans(threads: ConcurrencyThread[], mode: ConcurrencyMode, gap: number): Map<string, Interval[]> {
   return concurrencySpans(threads, mode, gap);
+}
+
+// Table rows always describe root conversations, independently of the chart's
+// counting choice. Linked delegated model activity belongs to that root only.
+export function conversationTimings(threads: ConcurrencyThread[], gap: number): Map<string, { model: number; threaded: number }> {
+  const model = concurrencySpans(threads, "model", gap, "agent");
+  const threaded = concurrencySpans(threads, "user", gap, "agent");
+  const total = (spans: Interval[] = []) => spans.reduce((sum, [a, b]) => sum + b - a, 0);
+  return new Map(threads.filter(thread => thread.agent_depth === 0).map(thread => [thread.id, {
+    model: total(model.get(thread.id)), threaded: total(threaded.get(thread.id)),
+  }]));
 }
 
 export function workSessions(threads: ConcurrencyThread[]): Interval[] {

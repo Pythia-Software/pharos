@@ -3,7 +3,7 @@ import test from "node:test";
 import { build } from "esbuild";
 
 const compiled = await build({ entryPoints: ["src/concurrency-data.ts"], bundle: true, write: false, platform: "node", format: "esm" });
-const { mergeIntervals, workspaceSpans, concurrencySpans, concurrencyUnit, workSessions, concurrencyMetrics, stackSegments, zonedDayBounds } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString("base64")}`);
+const { mergeIntervals, workspaceSpans, concurrencySpans, concurrencyUnit, conversationTimings, formatConcurrencyDuration, clipIntervals, workSessions, concurrencyMetrics, stackSegments, zonedDayBounds } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString("base64")}`);
 const store = await build({ entryPoints: ["src/concurrency-store.ts"], bundle: true, write: false, platform: "node", format: "esm" });
 const { threadedSummaryWindow, openConcurrencyModal, closeConcurrencyModal } = await import(`data:text/javascript;base64,${Buffer.from(store.outputFiles[0].text).toString("base64")}`);
 const settingsModule = await build({ entryPoints: ["src/concurrency-settings.ts"], bundle: true, write: false, platform: "node", format: "esm" });
@@ -12,6 +12,29 @@ const minute = 60_000;
 const thread = (id, workspace_id, turns, model_spans = turns, agent_depth = 0) => ({ id, workspace_id, turns, model_spans, agent_depth });
 const repoThread = (workspace, repository, spans) => ({ ...thread(workspace, workspace, spans), repository });
 const rowsAt = (segments, time) => Object.fromEntries(segments.filter(s => s.start <= time && time < s.end).map(s => [s.workspace, s.bottom]));
+
+test("duration rounding carries minutes into the next hour", () => {
+  for (const [seconds, expected] of [[0, "0s"], [12.4, "12s"], [60, "1m"], [3590, "1h 0m"], [3580, "1h 0m"], [3540, "59m"], [7180, "2h 0m"], [7140, "1h 59m"], [7200, "2h 0m"]]) {
+    assert.equal(formatConcurrencyDuration(seconds * 1000), expected);
+  }
+});
+
+test("conversation table timings separate roots sharing a workspace and include only linked compute", () => {
+  const first = thread("first", "same", [[0, minute], [3 * minute, 4 * minute]], [[0, minute]]);
+  const second = thread("second", "same", [[minute, 3 * minute]], [[minute, 3 * minute]]);
+  const child = { ...thread("child", "same", [[0, 4 * minute]], [[30_000, 90_000]], 1), root_conversation_id: "first" };
+  const timings = conversationTimings([first, second, child], 15);
+  assert.deepEqual([...timings], [["first", { model: 90_000, threaded: 4 * minute }], ["second", { model: 2 * minute, threaded: 2 * minute }]]);
+  assert.equal(conversationTimings([first, second, child], 0).get("first").threaded, 2 * minute);
+});
+
+test("conversation table timings respect the selected range and clipped gap bridges", () => {
+  const first = thread("first", "same", [[0, minute], [3 * minute, 4 * minute]], [[0, minute]]);
+  const second = thread("second", "same", [[minute, 3 * minute]]);
+  const bounds = [minute, 3 * minute];
+  const threads = [first, second].map(t => ({ ...t, turns: clipIntervals(t.turns, bounds), model_spans: clipIntervals(t.model_spans, bounds), continuous_spans: clipIntervals(mergeIntervals(t.turns, 15 * minute), bounds) }));
+  assert.deepEqual([...conversationTimings(threads, 15)], [["first", { model: 0, threaded: 2 * minute }], ["second", { model: 2 * minute, threaded: 2 * minute }]]);
+});
 
 test("simultaneous workspaces start grouped by repository", () => {
   const threads = [repoThread("a", "alpha", [[0, 20]]), repoThread("b", "beta", [[0, 20]]), repoThread("c", "alpha", [[0, 20]])];
