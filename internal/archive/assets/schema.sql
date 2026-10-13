@@ -1097,8 +1097,30 @@ CREATE TABLE IF NOT EXISTS text_search_documents (
 CREATE INDEX IF NOT EXISTS text_search_surface_idx ON text_search_documents(surface,message_rowid);
 CREATE INDEX IF NOT EXISTS text_search_conversation_idx ON text_search_documents(conversation_id,message_rowid);
 INSERT OR IGNORE INTO meta(key,value) VALUES('text_search_generation','0');
-CREATE TRIGGER IF NOT EXISTS text_search_message_insert AFTER INSERT ON messages BEGIN
-  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_generation';
+INSERT OR IGNORE INTO meta(key,value) VALUES('text_search_cursor_version','2'),
+ ('text_search_append_generation','0'),('text_search_span_generation','0'),('text_search_insert_conflict','0');
+-- Replace the initial, overly broad invalidation triggers on existing catalogs.
+DROP TRIGGER IF EXISTS text_search_message_insert;
+DROP TRIGGER IF EXISTS text_search_message_delete;
+DROP TRIGGER IF EXISTS text_search_message_update;
+DROP TRIGGER IF EXISTS text_search_message_authorship_spans_insert;
+DROP TRIGGER IF EXISTS text_search_message_authorship_spans_delete;
+DROP TRIGGER IF EXISTS text_search_message_authorship_spans_update;
+DROP TRIGGER IF EXISTS text_search_conversations_update;
+DROP TRIGGER IF EXISTS text_search_workspaces_update;
+DROP TRIGGER IF EXISTS text_search_repositories_update;
+-- SQLite serializes writers. Remember conflicts before REPLACE deletes its
+-- victim (possibly without firing DELETE); an ordinary UPSERT does not fire
+-- AFTER INSERT. Each attempted insert resets this flag, including no-op upserts.
+CREATE TRIGGER IF NOT EXISTS text_search_message_before_insert_v2 BEFORE INSERT ON messages BEGIN
+ UPDATE meta SET value=EXISTS(SELECT 1 FROM messages WHERE id=new.id OR
+   (conversation_id=new.conversation_id AND native_id=new.native_id)) WHERE key='text_search_insert_conflict';
+END;
+CREATE TRIGGER IF NOT EXISTS text_search_message_insert_v2 AFTER INSERT ON messages BEGIN
+  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_generation' AND
+    ((SELECT value FROM meta WHERE key='text_search_insert_conflict')='1' OR new.rowid<(SELECT MAX(rowid) FROM messages));
+  -- Fuzzy expansion depends on the vocabulary; its cursors also watch appends.
+  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_append_generation';
   -- REPLACE can assign a new rowid without firing a DELETE trigger.
   DELETE FROM text_search_documents WHERE message_id=new.id;
   INSERT INTO text_search_documents(message_rowid,message_id,conversation_id,surface,byte_length)
@@ -1108,11 +1130,13 @@ CREATE TRIGGER IF NOT EXISTS text_search_message_insert AFTER INSERT ON messages
   WHERE new.kind IN ('message','thinking','reasoning','analysis') AND
     (new.role IN ('user','assistant') OR new.kind IN ('thinking','reasoning','analysis'));
 END;
-CREATE TRIGGER IF NOT EXISTS text_search_message_delete AFTER DELETE ON messages BEGIN
+CREATE TRIGGER IF NOT EXISTS text_search_message_delete_v2 AFTER DELETE ON messages BEGIN
   UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_generation';
   DELETE FROM text_search_documents WHERE message_rowid=old.rowid;
 END;
-CREATE TRIGGER IF NOT EXISTS text_search_message_update AFTER UPDATE ON messages BEGIN
+CREATE TRIGGER IF NOT EXISTS text_search_message_update_v2 AFTER UPDATE ON messages
+WHEN (old.rowid,old.id,old.conversation_id,old.role,old.kind,old.text,old.created_at,old.content_hash,old.evidence_locator,old.selected)
+ IS NOT (new.rowid,new.id,new.conversation_id,new.role,new.kind,new.text,new.created_at,new.content_hash,new.evidence_locator,new.selected) BEGIN
   UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_generation';
   DELETE FROM text_search_documents WHERE message_rowid=old.rowid;
   INSERT INTO text_search_documents(message_rowid,message_id,conversation_id,surface,byte_length)
@@ -1123,26 +1147,51 @@ CREATE TRIGGER IF NOT EXISTS text_search_message_update AFTER UPDATE ON messages
     (new.role IN ('user','assistant') OR new.kind IN ('thinking','reasoning','analysis'));
 END;
 
-CREATE TRIGGER IF NOT EXISTS text_search_message_authorship_spans_insert AFTER INSERT ON message_authorship_spans BEGIN
+CREATE TRIGGER IF NOT EXISTS text_search_message_authorship_spans_insert_v2 AFTER INSERT ON message_authorship_spans BEGIN
+ UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_span_generation';
+END;
+
+CREATE TRIGGER IF NOT EXISTS text_search_message_authorship_spans_delete_v2 AFTER DELETE ON message_authorship_spans BEGIN
+ UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_span_generation';
+END;
+
+CREATE TRIGGER IF NOT EXISTS text_search_message_authorship_spans_update_v2 AFTER UPDATE ON message_authorship_spans
+WHEN (old.message_id,old.position,old.category,old.start_byte,old.end_byte)
+ IS NOT (new.message_id,new.position,new.category,new.start_byte,new.end_byte) BEGIN
+ UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_span_generation';
+END;
+
+CREATE TRIGGER IF NOT EXISTS text_search_conversations_update_v2 AFTER UPDATE OF workspace_id,provider ON conversations
+WHEN (old.workspace_id,old.provider) IS NOT (new.workspace_id,new.provider) BEGIN
  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_generation';
 END;
 
-CREATE TRIGGER IF NOT EXISTS text_search_message_authorship_spans_delete AFTER DELETE ON message_authorship_spans BEGIN
+CREATE TRIGGER IF NOT EXISTS text_search_workspaces_update_v2 AFTER UPDATE OF source_kind,repository_id ON workspaces
+WHEN (old.source_kind,old.repository_id) IS NOT (new.source_kind,new.repository_id) BEGIN
  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_generation';
 END;
 
-CREATE TRIGGER IF NOT EXISTS text_search_message_authorship_spans_update AFTER UPDATE ON message_authorship_spans BEGIN
+CREATE TRIGGER IF NOT EXISTS text_search_repositories_update_v2 AFTER UPDATE OF display_name,canonical_remote ON repositories
+WHEN (old.display_name,old.canonical_remote) IS NOT (new.display_name,new.canonical_remote) BEGIN
  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_generation';
 END;
 
-CREATE TRIGGER IF NOT EXISTS text_search_conversations_update AFTER UPDATE OF workspace_id,provider ON conversations BEGIN
+-- Rebuilding an existing FTS mapping changes the cursor's physical order even
+-- if the message body itself did not change. Ordinary mappings append above it.
+CREATE TRIGGER IF NOT EXISTS text_search_fts_before_insert_v2 BEFORE INSERT ON message_fts_rows
+WHEN EXISTS(SELECT 1 FROM message_fts_rows WHERE
+ (message_id=new.message_id AND fts_rowid IS NOT new.fts_rowid) OR
+ (fts_rowid=new.fts_rowid AND message_id IS NOT new.message_id)) BEGIN
  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_generation';
 END;
-
-CREATE TRIGGER IF NOT EXISTS text_search_workspaces_update AFTER UPDATE OF source_kind,repository_id ON workspaces BEGIN
+CREATE TRIGGER IF NOT EXISTS text_search_fts_delete_v2 AFTER DELETE ON message_fts_rows BEGIN
  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_generation';
 END;
-
-CREATE TRIGGER IF NOT EXISTS text_search_repositories_update AFTER UPDATE OF display_name,canonical_remote ON repositories BEGIN
+CREATE TRIGGER IF NOT EXISTS text_search_fts_update_v2 AFTER UPDATE ON message_fts_rows
+WHEN (old.message_id,old.fts_rowid) IS NOT (new.message_id,new.fts_rowid) BEGIN
+ UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_generation';
+END;
+CREATE TRIGGER IF NOT EXISTS text_search_fts_insert_v2 AFTER INSERT ON message_fts_rows
+WHEN new.fts_rowid<(SELECT MAX(fts_rowid) FROM message_fts_rows) BEGIN
  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_generation';
 END;

@@ -6,7 +6,7 @@ import { SearchSelect } from "./search-select";
 import { Icon } from "./icons";
 
 type Hit = { message_id: string; conversation_id: string; workspace_id: string; snippet: string; start_byte: number; end_byte: number; range_kind: string };
-type Batch = { items: Hit[]; complete: boolean; next_cursor?: string; skipped_oversize: number; elapsed_ms: number; stop_reason: string; coverage: string };
+type Batch = { items: Hit[]; complete: boolean; next_cursor?: string; skipped_oversize: number; elapsed_ms: number; stop_reason: string; stop_message?: string; coverage: string };
 type Options = { conversationID: string; workspaceID: string; title: string; reveal: (hit: Hit | null) => void; position: (id: string) => number };
 type Handle = { open: (term?: string, options?: { regex?: boolean; caseSensitive?: boolean; output?: boolean }) => void; close: () => void; destroy: () => void };
 declare global { interface Window { pharosMountConversationSearch?: (host: HTMLElement, options: Options) => Handle; } }
@@ -62,6 +62,7 @@ function ConversationSearch({ options, host, register }: { options: Options; hos
       {error ? <p role="alert" className="text-editor-error">{error}</p> : null}
       {result ? <><div className="conversation-search-hits">{hits.map((hit, index) => <button type="button" key={`${hit.message_id}:${hit.start_byte}`} aria-current={index === active ? "true" : undefined} onClick={() => reveal(index)}>{hit.snippet}</button>)}</div>
         <p className="text-editor-scope-note">{result.elapsed_ms} ms · {result.complete ? "All eligible messages checked." : `Stopped: ${result.stop_reason.replaceAll("_", " ")}. More messages may match.`}{result.skipped_oversize ? ` ${result.skipped_oversize} oversized messages were skipped.` : ""} Navigation reveals matching messages in the transcript.</p>
+        {result.stop_message ? <p role="status">{result.stop_message}</p> : null}
         {result.next_cursor ? <button type="button" disabled={busy || !applied} onClick={() => applied && void run(applied, result.next_cursor)}>Next search batch</button> : null}
         <details><summary>Search coverage</summary>{result.coverage}</details>
       </> : null}

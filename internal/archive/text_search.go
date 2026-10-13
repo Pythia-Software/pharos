@@ -21,7 +21,8 @@ import (
 // TextSearchOptions is shared by HTTP, Library Find, and MCP search_text.
 // Searches enumerate messages in stable reverse index order, not relevance.
 // A cursor resumes work, including pages with zero matches. It is invalidated
-// by message edits; catalog maintenance and MCP call logging do not invalidate it.
+// by relevant edits, deletes, or index reordering. Ordinary appends are safe;
+// fuzzy searches also watch vocabulary changes and spans watch classification.
 type TextSearchOptions struct {
 	Query              string     `json:"query"`
 	Mode               string     `json:"mode,omitempty"`
@@ -77,6 +78,7 @@ type textSearchResult struct {
 	NextCursor      string              `json:"next_cursor"`
 	Complete        bool                `json:"complete"`
 	StopReason      string              `json:"stop_reason"`
+	StopMessage     string              `json:"stop_message,omitempty"`
 	Count           int                 `json:"count"`
 	CountRelation   string              `json:"count_relation"`
 	Strategy        string              `json:"strategy"`
@@ -101,9 +103,13 @@ type textSearchCursor struct {
 
 var textSearchEpoch = fmt.Sprint(time.Now().UnixNano())
 
-func (c *Catalog) textSearchGeneration(ctx context.Context) (string, error) {
+func (c *Catalog) textSearchGeneration(ctx context.Context, o TextSearchOptions) (string, error) {
 	var generation string
-	err := c.DB.QueryRowContext(ctx, `SELECT value FROM meta WHERE key='text_search_generation'`).Scan(&generation)
+	err := c.DB.QueryRowContext(ctx, `SELECT
+ CASE WHEN EXISTS(SELECT 1 FROM meta WHERE key='text_search_cursor_version' AND value='2') THEN
+ '2:' || value || ':' || CASE WHEN ? THEN COALESCE((SELECT value FROM meta WHERE key='text_search_span_generation'),'0') ELSE '-' END ||
+ ':' || CASE WHEN ? THEN COALESCE((SELECT value FROM meta WHERE key='text_search_append_generation'),'0') ELSE '-' END
+ ELSE '1:' || value END FROM meta WHERE key='text_search_generation'`, textSpanSurface(o.Surface), o.Fuzzy).Scan(&generation)
 	if err == sql.ErrNoRows {
 		v, e := c.catalogVersion(ctx)
 		return fmt.Sprintf("%s:%d", textSearchEpoch, v), e
@@ -113,6 +119,19 @@ func (c *Catalog) textSearchGeneration(ctx context.Context) (string, error) {
 func encodeTextCursor(cursor textSearchCursor) string {
 	raw, _ := json.Marshal(cursor)
 	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+// A timeout without a consumed position cannot be resumed safely. In
+// particular, SQL may spend the entire budget rejecting candidates before it
+// yields a row. Do not give callers an identical cursor to retry indefinitely.
+func (r *textSearchResult) stopPage(cursor textSearchCursor, before int64) {
+	if cursor.Before < before {
+		r.NextCursor = encodeTextCursor(cursor)
+		return
+	}
+	r.NextCursor = ""
+	r.StopReason = "time_budget_no_progress"
+	r.StopMessage = "The time budget expired before a resumable position was reached. Narrow the search or increase the time budget and retry; this is not a complete result."
 }
 func validateTextTree(n *textQuery, depth int, count *int) error {
 	if n == nil {
@@ -326,6 +345,13 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	if span {
 		result.Coverage = "Matches individual stored authorship spans, never text outside the category. Classification may be absent or stale; search does not rebuild it."
 	}
+	// Read before expanding terms so a vocabulary append during expansion is
+	// detected by the same generation check as an append during verification.
+	generation, e := c.textSearchGeneration(ctx, o)
+	if e != nil {
+		return result, e
+	}
+	result.Generation = generation
 	if err = c.expandTextQuery(ctx, node, o, result.Expansions); err != nil {
 		return result, fmt.Errorf("query expansion: %w", err)
 	}
@@ -336,11 +362,6 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	scan := node.Op == "literal" || node.Op == "regex"
 	strict := o.CaseSensitive || o.Separators
 	ordered := node.needsOrderedVerifier()
-	generation, e := c.textSearchGeneration(ctx)
-	if e != nil {
-		return result, e
-	}
-	result.Generation = generation
 	result.Strategy = "word_index"
 	from := `messages_fts f CROSS JOIN messages m ON m.id=f.message_id`
 	ready, e := c.textSearchReady(ctx)
@@ -456,6 +477,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	}
 	result.Count = cursor.Count
 	result.SkippedOversize = cursor.Skipped
+	pageBefore := cursor.Before
 	clauses := []string{match, key + "<?", textSurfacePredicate(o.Surface)}
 	if !scan && ready && small && o.Surface != "prose" {
 		surface := o.Surface
@@ -548,7 +570,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	if e != nil {
 		if ctx.Err() != nil && parent.Err() == nil {
 			result.StopReason = "time_budget"
-			result.NextCursor = encodeTextCursor(cursor)
+			result.stopPage(cursor, pageBefore)
 			return result, nil
 		}
 		return result, e
@@ -695,14 +717,14 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 			result.StopReason = "complete"
 		}
 	} else {
-		result.NextCursor = encodeTextCursor(cursor)
+		result.stopPage(cursor, pageBefore)
 	}
 	// Detect writes that overlapped this page instead of mixing source versions.
 	_ = rows.Close()
 	{
 		checkCtx, checkCancel := context.WithTimeout(parent, 100*time.Millisecond)
 		defer checkCancel()
-		after, e := c.textSearchGeneration(checkCtx)
+		after, e := c.textSearchGeneration(checkCtx, o)
 		if e != nil {
 			return result, e
 		}

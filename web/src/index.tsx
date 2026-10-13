@@ -617,7 +617,7 @@ function ConversationResults({ api, searching }: { api: QueryTableApi<Row>; sear
 
 type FindHit = { workspace_id: string; conversation_id?: string; title: string; provider?: string; started_at?: string; message_id?: string; role?: string; message_kind?: string; snippet?: string; path?: string; old_path?: string; url?: string; url_source?: string; tool_name?: string; tool_call_id?: string; attribution?: string; count: number };
 // What the Library's keyword search found within the stored table filters.
-type SearchProgress = { complete: boolean; stop_reason: string; next_cursor: string; count: number; count_relation: string; candidates: number; verified_bytes: number; skipped_oversize: number; elapsed_ms: number; strategy: string; coverage: string; expansions?: Record<string,string[]> };
+type SearchProgress = { complete: boolean; stop_reason: string; stop_message?: string; next_cursor: string; count: number; count_relation: string; candidates: number; verified_bytes: number; skipped_oversize: number; elapsed_ms: number; strategy: string; coverage: string; expansions?: Record<string,string[]> };
 type FindSummary = { workspaces: number; limited: boolean; search?: SearchProgress };
 
 function openFindHit(hit: FindHit) {
@@ -684,7 +684,7 @@ function UserMessageSurface({ header, messageView }: { messageView: MessageView;
   useEffect(() => setFound(null), [find]);
   return <QuerySurface dataset="writing_messages" messageView={messageView} header={api => header(api, !!find)} find={find} onFind={setFound} controls={(api, builder) => <>
     <MessageTableSearch api={api} value={value} active={!!applied} initialError={error} onApply={next => { setValue(next); setApplied(next); setCursor(""); setError(""); }} onClear={() => { setValue(newMessageSearch()); setApplied(null); setCursor(""); setError(""); }} layout={builder} />
-    {find && found?.search ? <div className="library-find-status" role="status"><p>{found.search.complete ? "All eligible messages checked." : "Partial search batch; more messages may match."} Table filters and metrics apply to the matching messages in this batch. Ordering is within this batch.</p><p>{found.search.elapsed_ms} ms · {found.search.candidates.toLocaleString()} candidates checked{found.search.skipped_oversize ? ` · ${found.search.skipped_oversize} oversized messages skipped` : ""}.</p>{found.search.next_cursor ? <button type="button" onClick={() => setCursor(found.search!.next_cursor)}>Next message search batch</button> : null}{cursor ? <button type="button" onClick={() => setCursor("")}>Restart message search</button> : null}</div> : null}
+    {find && found?.search ? <div className="library-find-status" role="status"><p>{found.search.complete ? "All eligible messages checked." : "Partial search batch; more messages may match."} Table filters and metrics apply to the matching messages in this batch. Ordering is within this batch.</p><p>{found.search.elapsed_ms} ms · {found.search.candidates.toLocaleString()} candidates checked{found.search.skipped_oversize ? ` · ${found.search.skipped_oversize} oversized messages skipped` : ""}.</p>{found.search.stop_message ? <p>{found.search.stop_message}</p> : null}{found.search.next_cursor ? <button type="button" onClick={() => setCursor(found.search!.next_cursor)}>Next message search batch</button> : null}{cursor ? <button type="button" onClick={() => setCursor("")}>Restart message search</button> : null}</div> : null}
   </>} />;
 }
 
@@ -741,6 +741,7 @@ function LibraryPage() {
         workspaceScope={{ filters: workspaceFilterLabels(api), editor: builder }} orderControl={<SearchOrder api={api} batched={!!found?.search} />} />
     {find && found ? <div className="library-find-status muted" role="status">
       <p><strong>{found.workspaces.toLocaleString()} matching workspace{found.workspaces === 1 ? "" : "s"}{found.search ? " in this batch" : ""}.</strong>{found.search ? found.search.complete ? " All eligible messages have been checked." : found.search.next_cursor ? " More messages remain to check. Continue the search to see the next batch." : " Some messages could not be checked." : found.limited ? " Search limit reached; narrow the search." : ""}</p>
+      {found.search?.stop_message ? <p>{found.search.stop_message}</p> : null}
       {kind === "text" && applied ? <p className="library-search-summary">Results for: {textSearchSummary(applied)}</p> : null}
       {found.workspaces === 0 && found.search?.complete ? <p>No messages matched these rules. Try “any of these rules,” remove a restriction, or choose a broader message scope.</p> : null}
       {found.search?.skipped_oversize ? <p>{found.search.skipped_oversize.toLocaleString()} large messages were skipped. Missing results may still be in those messages.</p> : null}

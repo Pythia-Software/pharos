@@ -52,6 +52,8 @@ func TestTextSearchReplica(t *testing.T) {
 	}{
 		{"rare", TextSearchOptions{Query: "heliotrope", Surface: "all"}},
 		{"common", TextSearchOptions{Query: "test"}},
+		{"common_filtered_date", TextSearchOptions{Query: "test", From: "2100-01-01"}},
+		{"common_filtered_role", TextSearchOptions{Query: "test", Roles: []string{"pharos_missing_role"}}},
 		{"boolean", TextSearchOptions{Query: `(timeout OR deadlock) NOT retry`}},
 		{"later_or_branch", TextSearchOptions{Query: `pharosabsenttoken OR test`}},
 		{"failed_or_branch", TextSearchOptions{Query: `(test AND pharosabsenttoken) OR search`}},
@@ -86,6 +88,9 @@ func TestTextSearchReplica(t *testing.T) {
 			t.Logf("pass=%d case=%s ms=%d strategy=%s hits=%d candidates=%d bytes=%d complete=%t stop=%s skipped=%d", pass, tc.name, result.ElapsedMS, result.Strategy, len(result.Items), result.Candidates, result.VerifiedBytes, result.Complete, result.StopReason, result.SkippedOversize)
 			if result.ElapsedMS > 2500 {
 				t.Errorf("interactive budget exceeded: %s took %dms", tc.name, result.ElapsedMS)
+			}
+			if result.Candidates == 0 && result.NextCursor != "" {
+				t.Errorf("%s offered continuation without consuming a candidate", tc.name)
 			}
 		}
 	}
