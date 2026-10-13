@@ -302,6 +302,14 @@ func readCapturedAuditRecord(ctx context.Context, unit syncUnit) (*WorkspaceReco
 			paths = append(paths, filepath.Join(unit.Source.Path, antigravitySummaries))
 			paths = append(paths, antigravity.runLogs()...)
 		}
+		if jsonl, ok := adapter.(*jsonlAdapter); ok {
+			files, databases, err := jsonlAuditDependencies(jsonl, paths)
+			if err != nil {
+				return "", err
+			}
+			paths = append(paths, files...)
+			paths = append(paths, databases...)
+		}
 		values := []string{}
 		for _, path := range paths {
 			for _, dependency := range []string{path, path + "-wal"} {
@@ -343,6 +351,41 @@ func readCapturedAuditRecord(ctx context.Context, unit syncUnit) (*WorkspaceReco
 	return record, read, nil
 }
 
+// Naming stores contribute to a transcript's signal even though they are not
+// transcript parts. Freeze them too, and include them in captured-read stability
+// checks. All known Codex name schemas matter: an empty newest row overrides an
+// older name. Claude only needs the indexes beside this unit's transcripts.
+func jsonlAuditDependencies(adapter *jsonlAdapter, paths []string) ([]string, []string, error) {
+	files := []string{}
+	if adapter.provider == "codex" {
+		info, err := os.Stat(adapter.config.Path)
+		if err != nil || !info.IsDir() {
+			return files, nil, err
+		}
+		index := filepath.Join(adapter.config.Path, "session_index.jsonl")
+		if info, err := os.Stat(index); err == nil && info.Mode().IsRegular() {
+			files = append(files, index)
+		} else if err != nil && !os.IsNotExist(err) {
+			return nil, nil, err
+		}
+		databases, err := codexNamingDatabases(adapter.config.Path)
+		return files, databases, err
+	}
+	seen := map[string]bool{}
+	for _, path := range paths {
+		index := filepath.Join(filepath.Dir(path), "sessions-index.json")
+		if seen[index] {
+			continue
+		}
+		seen[index] = true
+		if info, err := os.Stat(index); err == nil && info.Mode().IsRegular() {
+			files = append(files, index)
+		}
+	}
+	slices.Sort(files)
+	return files, nil, nil
+}
+
 func freezeAuditRecord(ctx context.Context, unit syncUnit, dir string, budget int64) (*WorkspaceRecord, []sourcePart, error) {
 	if unit.Reader != nil && captureViewOf(unit.Reader) != nil {
 		return readCapturedAuditRecord(ctx, unit)
@@ -370,7 +413,8 @@ func freezeAuditRecord(ctx context.Context, unit syncUnit, dir string, budget in
 	manifest := &captureManifest{Host: currentHost()}
 	view := &captureView{host: currentHost(), dir: dir, manifest: manifest, mappings: []capturePathMapping{{Original: unit.Source.Path, Captured: dir}}}
 	if info, err := os.Stat(unit.Source.Path); err == nil && !info.IsDir() {
-		view.mappings = []capturePathMapping{{Original: unit.Source.Path, Captured: filepath.Join(dir, filepath.Base(unit.Source.Path))}}
+		// Single-file Claude sources can also read an index beside the file.
+		view.mappings = []capturePathMapping{{Original: filepath.Dir(unit.Source.Path), Captured: dir}}
 	}
 	files := []string{}
 	databases := []string{}
@@ -383,6 +427,15 @@ func freezeAuditRecord(ctx context.Context, unit syncUnit, dir string, budget in
 		} else {
 			files = append(files, part.item)
 		}
+	}
+	if unit.Source.Kind == "codex" || unit.Source.Kind == "claude" {
+		adapter := &jsonlAdapter{baseAdapter: baseAdapter{config: unit.Source, ctx: ctx}, provider: unit.Source.Kind}
+		namingFiles, namingDatabases, err := jsonlAuditDependencies(adapter, files)
+		if err != nil {
+			return nil, nil, err
+		}
+		files = append(files, namingFiles...)
+		databases = append(databases, namingDatabases...)
 	}
 	if unit.Source.Kind == "antigravity" {
 		adapter := &antigravityAdapter{baseAdapter: baseAdapter{config: unit.Source, ctx: ctx}}
@@ -433,6 +486,7 @@ func freezeAuditRecord(ctx context.Context, unit syncUnit, dir string, budget in
 			return nil, nil, err
 		}
 	}
+	databaseStates := map[string]sqliteSourceState{}
 	for _, path := range databases {
 		state, err := sqliteDependencyState(path)
 		if err != nil {
@@ -456,6 +510,7 @@ func freezeAuditRecord(ctx context.Context, unit syncUnit, dir string, budget in
 		if err != nil || state != after {
 			return nil, nil, errAuditUnstable
 		}
+		databaseStates[path] = state
 		rel, _ := filepath.Rel(dir, destination)
 		manifest.Snapshots = append(manifest.Snapshots, &capturedSnapshot{Path: path, Captured: filepath.ToSlash(rel), Source: state})
 	}
@@ -463,7 +518,6 @@ func freezeAuditRecord(ctx context.Context, unit syncUnit, dir string, budget in
 	config.Path = dir
 	if info, err := os.Stat(unit.Source.Path); err == nil && !info.IsDir() {
 		config.Path = filepath.Join(dir, filepath.Base(unit.Source.Path))
-		view.mappings = []capturePathMapping{{Original: unit.Source.Path, Captured: config.Path}}
 	}
 	adapter, err := MakeAdapter(config)
 	if err != nil {
@@ -491,6 +545,12 @@ func freezeAuditRecord(ctx context.Context, unit syncUnit, dir string, budget in
 		}
 		after, err := os.Stat(copied)
 		if err != nil || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
+			return nil, nil, errAuditUnstable
+		}
+	}
+	for path, before := range databaseStates {
+		after, err := sqliteDependencyState(path)
+		if err != nil || before != after {
 			return nil, nil, errAuditUnstable
 		}
 	}
@@ -533,7 +593,7 @@ func copyStableAuditFile(ctx context.Context, path, destination string, info os.
 	return os.Chtimes(destination, info.ModTime(), info.ModTime())
 }
 
-var auditCategories = []string{"workspaces", "conversations", "conversation_group_membership", "messages", "search", "conversation_documents", "agent_sessions", "agent_session_usage", "agent_session_messages", "model_requests", "tool_calls", "tool_commands", "tool_urls", "metrics", "metric_ledger", "summaries"}
+var auditCategories = []string{"workspaces", "workspace_names", "conversations", "conversation_group_membership", "messages", "search", "conversation_documents", "agent_sessions", "agent_session_usage", "agent_session_messages", "model_requests", "tool_calls", "tool_commands", "tool_urls", "metrics", "metric_ledger", "summaries"}
 var auditSearchWord = regexp.MustCompile(`[\p{L}\p{N}]{3,24}`)
 
 func snapshotAuditScope(ctx context.Context, catalog *Catalog, record WorkspaceRecord, budget int64) (map[string][]map[string]any, error) {
@@ -723,6 +783,12 @@ func normalizeAuditRows(table string, rows []map[string]any) string {
 	for _, row := range rows {
 		fields := map[string]any{}
 		for key, value := range row {
+			// A unit audit verifies source naming evidence. The resolved title
+			// also depends on linked works and global authorship classification,
+			// neither of which an isolated reference ingest can reconstruct.
+			if table == "workspace_names" && !slices.Contains([]string{"workspace_id", "source_title", "source_scope"}, key) {
+				continue
+			}
 			if slices.Contains([]string{"indexed_at", "updated_at", "built_at", "computed_at", "refined_at"}, key) || (table == "summaries" && key == "created_at") {
 				continue
 			}
@@ -734,7 +800,7 @@ func normalizeAuditRows(table string, rows []map[string]any) string {
 					continue
 				}
 			}
-			if table == "workspaces" && slices.Contains([]string{"repository_id", "head_ref", "base_ref", "branch", "location_history_json"}, key) {
+			if table == "workspaces" && slices.Contains([]string{"title", "repository_id", "head_ref", "base_ref", "branch", "location_history_json"}, key) {
 				continue
 			}
 			fields[key] = value

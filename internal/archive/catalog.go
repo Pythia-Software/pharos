@@ -145,7 +145,9 @@ func (c *Catalog) Close() error {
 // and an older build that rebuilds a ledger or reparses a file stamps it with
 // a version this build treats as stale and rebuilds.
 // 13: effort is part of the usage ledger key; older writers would merge effort buckets.
-const catalogSchemaVersion = 13
+// 14: workspace_names retains source titles separately from resolved titles.
+// Older writers would overwrite the display title without updating its inputs.
+const catalogSchemaVersion = 14
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.
@@ -401,6 +403,9 @@ func (c *Catalog) Initialize() error {
 		return err
 	}
 	if err := c.backfillChildSessionKinds(); err != nil {
+		return err
+	}
+	if err := c.ensureWorkspaceNames(); err != nil {
 		return err
 	}
 	if err := c.backfillConversationDocuments(); err != nil {

@@ -42,10 +42,23 @@ func planCapture(source SourceConfig) (capturePlan, error) {
 	jsonl := func(file string) bool { return strings.HasSuffix(strings.ToLower(file), ".jsonl") }
 	switch strings.ToLower(source.Kind) {
 	case "claude":
-		plan.files = plan.walk(source.Path, info, "", jsonl)
+		plan.files = plan.walk(source.Path, info, "", func(file string) bool {
+			return jsonl(file) || filepath.Base(file) == "sessions-index.json"
+		})
 	case "codex":
 		adapter := jsonlAdapter{baseAdapter: baseAdapter{config: source}, provider: "codex"}
-		plan.files = plan.walk(source.Path, info, "", func(file string) bool { return jsonl(file) && adapter.accept(file) })
+		plan.files = plan.walk(source.Path, info, "", func(file string) bool {
+			return jsonl(file) && adapter.accept(file) || info.IsDir() && file == filepath.Join(source.Path, "session_index.jsonl")
+		})
+		if info.IsDir() {
+			databases, err := codexNamingDatabases(source.Path)
+			if err != nil {
+				return plan, fmt.Errorf("Codex names are unavailable: %w", err)
+			}
+			for _, database := range databases {
+				plan.databases = append(plan.databases, captureItem{database, filepath.Base(database)})
+			}
+		}
 	case "canonical", "tl1-export":
 		plan.files = plan.walk(source.Path, info, "", func(file string) bool {
 			return !info.IsDir() || strings.HasSuffix(strings.ToLower(file), ".json")

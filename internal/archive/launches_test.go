@@ -213,12 +213,13 @@ func TestAuthorshipLinksHeadlessRunsToLaunchingCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	byTitle := map[string]map[string]any{}
+	byWorkspace := map[string]map[string]any{}
 	for _, row := range writing {
-		byTitle[firstString(row["title"])] = row
+		byWorkspace[firstString(row["id"])] = row
 	}
-	row := byTitle["labeler"]
-	if byTitle["script-1"] != nil || byTitle["named"] != nil || byTitle["ambiguous"] == nil || row == nil ||
+	workspaceKey := func(kind, id string) string { return stableID("workspace", kind, "local", id) }
+	row := byWorkspace[workspaceKey("claude", "labeler")]
+	if byWorkspace[workspaceKey("claude", "script-1")] != nil || byWorkspace[workspaceKey("claude", "named")] != nil || byWorkspace[workspaceKey("claude", "ambiguous")] == nil || row == nil ||
 		integer(row["launched_works"]) != 8 || integer(row["subagent_works"]) != 0 || integer(row["typed_words"]) != 7 || integer(row["automated_words"]) != 8*int64(len(strings.Fields(prompt))) {
 		t.Fatalf("writing rows = %#v", writing)
 	}

@@ -139,6 +139,10 @@ file read, and tool call in between, marked with how many tokens it added to the
 context. The rail on the right tracks context size and turns across the whole
 conversation, and you can click it to jump to any point.
 
+Work names use recorded source titles, names from declared session identities,
+or a cached excerpt of the first words classified as human-authored. See
+[Conversation and work names](docs/conversation-naming.md) for naming and capture rules.
+
 ![A conversation in Pharos: turns with prompt and outcome previews, an activity timeline of commands and reads with context-growth markers, and a context minimap on the right](docs/images/conversation.png)
 
 **Share** saves conversations as one standalone HTML file you can send or
