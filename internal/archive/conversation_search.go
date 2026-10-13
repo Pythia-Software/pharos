@@ -17,6 +17,8 @@ type LibraryFindOptions struct {
 	Fuzzy, CaseSensitive, Separators bool
 	Limit, Offset                    int
 	limited                          *bool
+	Search                           TextSearchOptions
+	searchResult                     *textSearchResult
 }
 
 type libraryHit struct {
@@ -44,6 +46,8 @@ var libraryWords = regexp.MustCompile(`[\pL\pN]+`)
 func quoteFTS(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
 
 func (c *Catalog) LibraryFind(ctx context.Context, o LibraryFindOptions) (map[string]any, error) {
+	var searchResult textSearchResult
+	o.searchResult = &searchResult
 	hits, limited, err := c.libraryFindHits(ctx, o)
 	if err != nil {
 		return nil, err
@@ -55,18 +59,23 @@ func (c *Catalog) LibraryFind(ctx context.Context, o LibraryFindOptions) (map[st
 		offset = total
 	}
 	end := min(offset+limit, total)
-	return map[string]any{"items": hits[offset:end], "total": total, "limit": limit, "offset": offset, "limited": limited}, nil
+	searchResult.Items = nil
+	return map[string]any{"items": hits[offset:end], "total": total, "limit": limit, "offset": offset, "limited": limited, "search": searchResult}, nil
 }
 
-// libraryFindHits returns every hit, most relevant first, and whether the
-// search stopped at its 5,000-record limit.
+// libraryFindHits returns a bounded batch and whether more work remains.
+// Text uses reverse index order and execution budgets; files and URLs retain
+// their existing ordering and 5,000-record cap.
 func (c *Catalog) libraryFindHits(ctx context.Context, o LibraryFindOptions) ([]libraryHit, bool, error) {
 	o.Query = strings.TrimSpace(o.Query)
-	if o.Query == "" {
+	if o.Query == "" && o.Search.Where == nil {
 		return []libraryHit{}, false, nil
 	}
-	if len(o.Query) > 500 {
-		return nil, false, fmt.Errorf("search query is too long (maximum 500 characters)")
+	if o.Search.Where != nil && o.Kind != "" && o.Kind != "text" {
+		return nil, false, fmt.Errorf("visual text rules cannot be used for file or URL searches")
+	}
+	if len(o.Query) > 2000 {
+		return nil, false, fmt.Errorf("search query is too long (maximum 2,000 bytes)")
 	}
 	limited := false
 	o.limited = &limited
@@ -158,18 +167,21 @@ func sameCasing(a, b string) bool {
 	return style(a) == style(b)
 }
 
-func (c *Catalog) fuzzyTerms(ctx context.Context, word string) ([]string, error) {
+func (c *Catalog) fuzzyTermsWith(ctx context.Context, word string, prefixLength, edits, expansionLimit int) ([]string, error) {
 	terms := []string{strings.ToLower(word)}
 	if len([]rune(word)) < 4 {
 		return terms, nil
 	}
-	// Restrict expansion to the first two letters and the edit-distance length
+	// Restrict expansion to the requested prefix and the edit-distance length
 	// band. Do not cap the vocabulary scan: common prefixes can have more than
 	// 10,000 terms, with the actual correction beyond the first 10,000.
-	prefix := strings.ToLower(string([]rune(word)[:2]))
+	prefix := strings.ToLower(string([]rune(word)[:min(prefixLength, len([]rune(word)))]))
 	maxDistance := 1
 	if len([]rune(word)) >= 7 {
 		maxDistance = 2
+	}
+	if edits > 0 {
+		maxDistance = edits
 	}
 	rows, err := c.DB.QueryContext(ctx, `SELECT term FROM messages_vocab WHERE term>=? AND term<? AND length(term) BETWEEN ? AND ?`,
 		prefix, prefix+"\uffff", len([]rune(word))-maxDistance, len([]rune(word))+maxDistance)
@@ -209,133 +221,41 @@ func (c *Catalog) fuzzyTerms(ctx context.Context, word string) ([]string, error)
 		}
 		return candidates[i].distance < candidates[j].distance
 	})
-	for _, item := range candidates[:min(24, len(candidates))] {
+	for _, item := range candidates[:min(expansionLimit, len(candidates))] {
 		terms = append(terms, item.term)
 	}
 	return terms, nil
 }
 
 func (c *Catalog) findText(ctx context.Context, o LibraryFindOptions) ([]libraryHit, error) {
-	phrase := len(o.Query) >= 2 && strings.HasPrefix(o.Query, `"`) && strings.HasSuffix(o.Query, `"`)
-	query := o.Query
-	if phrase {
-		query = strings.TrimSuffix(strings.TrimPrefix(query, `"`), `"`)
-	}
-	words := libraryWords.FindAllString(query, -1)
-	if len(words) == 0 {
-		return []libraryHit{}, nil
-	}
-	clauses := make([]string, 0, len(words))
-	if phrase {
-		clauses = append(clauses, quoteFTS(strings.Join(words, " ")))
-	} else {
-		for _, word := range words {
-			terms := []string{strings.ToLower(word)}
-			if o.Fuzzy {
-				var err error
-				terms, err = c.fuzzyTerms(ctx, word)
-				if err != nil {
-					return nil, err
-				}
-			}
-			quoted := make([]string, len(terms))
-			for i, term := range terms {
-				quoted[i] = quoteFTS(term)
-			}
-			clauses = append(clauses, "("+strings.Join(quoted, " OR ")+")")
-		}
-	}
-	fts := strings.Join(clauses, " AND ")
-	rows, err := queryMapsContext(ctx, c.DB, `SELECT m.id message_id,m.text,m.role,m.kind,m.conversation_id,
-		c.provider,c.started_at,w.id workspace_id,w.title FROM messages_fts f
-		JOIN messages m ON m.id=f.message_id JOIN conversations c ON c.id=m.conversation_id
-		JOIN workspaces w ON w.id=c.workspace_id WHERE messages_fts MATCH ?
-		AND m.selected=1 AND m.kind IN ('message','thinking','reasoning','analysis')
-		AND (m.role IN ('user','assistant') OR m.kind IN ('thinking','reasoning','analysis'))
-		ORDER BY bm25(messages_fts),m.created_at DESC LIMIT 5001`, fts)
+	options := o.Search
+	options.Query = o.Query
+	options.Fuzzy = o.Fuzzy
+	options.CaseSensitive = o.CaseSensitive
+	options.Separators = o.Separators
+	options.SelectedOnly = true
+	options.Limit = 5000
+	result, err := c.SearchText(ctx, options)
 	if err != nil {
 		return nil, err
 	}
-	if len(rows) > 5000 {
-		*o.limited = true
-		rows = rows[:5000]
+	if o.limited != nil {
+		*o.limited = !result.Complete
 	}
-	groups := map[string]*libraryHit{}
-	ordered := []libraryHit{}
-	for _, row := range rows {
-		body := firstString(row["text"])
-		start, end, ok := textMatch(body, query, words, phrase, o)
-		if !ok {
+	if o.searchResult != nil {
+		*o.searchResult = result
+	}
+	groups := map[string]int{}
+	hits := []libraryHit{}
+	for _, item := range result.Items {
+		if i, ok := groups[item.ConversationID]; ok {
+			hits[i].Count++
 			continue
 		}
-		id := firstString(row["conversation_id"])
-		hit := groups[id]
-		if hit == nil {
-			hit = &libraryHit{WorkspaceID: firstString(row["workspace_id"]), ConversationID: id, Title: firstString(row["title"]), Provider: firstString(row["provider"]), StartedAt: firstString(row["started_at"]), MessageID: firstString(row["message_id"]), Role: firstString(row["role"]), MessageKind: firstString(row["kind"]), Snippet: searchSnippet(body, start, end)}
-			groups[id] = hit
-			ordered = append(ordered, *hit)
-		}
-		hit.Count++
+		groups[item.ConversationID] = len(hits)
+		hits = append(hits, item.libraryHit)
 	}
-	for i := range ordered {
-		ordered[i].Count = groups[ordered[i].ConversationID].Count
-	}
-	return ordered, nil
-}
-
-func textMatch(body, query string, words []string, phrase bool, o LibraryFindOptions) (int, int, bool) {
-	if phrase {
-		if o.Separators {
-			haystack, needle := body, query
-			if !o.CaseSensitive {
-				haystack, needle = strings.ToLower(haystack), strings.ToLower(needle)
-			}
-			at := strings.Index(haystack, needle)
-			return at, at + len(query), at >= 0
-		}
-		parts := make([]string, len(words))
-		for i, word := range words {
-			parts[i] = regexp.QuoteMeta(word)
-		}
-		pattern := strings.Join(parts, `[^\pL\pN]+`)
-		if !o.CaseSensitive {
-			pattern = "(?i)" + pattern
-		}
-		at := regexp.MustCompile(pattern).FindStringIndex(body)
-		if at == nil {
-			return 0, 0, false
-		}
-		return at[0], at[1], true
-	}
-	// FTS has already required every query term. Verify casing and surface a
-	// useful excerpt; fuzzy matches are checked against whole text tokens.
-	matchStart, matchEnd := -1, -1
-	for _, word := range words {
-		found := false
-		for _, index := range libraryWords.FindAllStringIndex(body, -1) {
-			term := body[index[0]:index[1]]
-			a, b := term, word
-			if !o.CaseSensitive {
-				a, b = strings.ToLower(a), strings.ToLower(b)
-			}
-			if a == b || (o.Fuzzy && (!o.CaseSensitive || sameCasing(a, b)) && (fuzzyRoot(a) == fuzzyRoot(b) || editDistance(a, b, 2) <= func() int {
-				if len([]rune(b)) >= 7 {
-					return 2
-				}
-				return 1
-			}())) {
-				found = true
-				if matchStart < 0 {
-					matchStart, matchEnd = index[0], index[1]
-				}
-				break
-			}
-		}
-		if !found {
-			return 0, 0, false
-		}
-	}
-	return matchStart, matchEnd, true
+	return hits, nil
 }
 
 func searchSnippet(body string, start, end int) string {
@@ -354,15 +274,25 @@ func searchSnippet(body string, start, end int) string {
 }
 
 func (c *Catalog) findFiles(ctx context.Context, o LibraryFindOptions) ([]libraryHit, error) {
+	comparison := "instr(lower(cf.path),lower(?))>0 OR instr(lower(COALESCE(cf.old_path,'')),lower(?))>0"
+	if o.CaseSensitive {
+		comparison = "instr(cf.path,?)>0 OR instr(COALESCE(cf.old_path,''),?)>0"
+	}
+	scope := ""
+	args := []any{o.Query, o.Query}
+	if o.Search.WorkspaceIDs != nil {
+		scope = " AND cs.workspace_id IN (SELECT value FROM json_each(?))"
+		args = append(args, jsonText(o.Search.WorkspaceIDs))
+	}
 	rows, err := queryMapsContext(ctx, c.DB, `WITH matching_changes AS (
 		SELECT cf.path,cf.old_path,cs.id change_set_id,cs.workspace_id,cs.created_at,cs.attempt_id
 		FROM change_files cf JOIN change_sets cs ON cs.id=cf.change_set_id
-		WHERE instr(lower(cf.path),lower(?))>0 OR instr(lower(COALESCE(cf.old_path,'')),lower(?))>0
+		WHERE (`+comparison+`)`+scope+`
 		ORDER BY cs.created_at DESC LIMIT 5001
 	) SELECT cf.path,cf.old_path,cf.change_set_id,cf.workspace_id,cf.created_at,cf.attempt_id,w.title,
 		c.id conversation_id,c.provider,c.started_at,c.ended_at,c.work_item_id
 		FROM matching_changes cf JOIN workspaces w ON w.id=cf.workspace_id
-		LEFT JOIN conversations c ON c.workspace_id=w.id`, o.Query, o.Query)
+		LEFT JOIN conversations c ON c.workspace_id=w.id`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -451,10 +381,16 @@ func (c *Catalog) findURLs(ctx context.Context, o LibraryFindOptions) ([]library
 	if o.CaseSensitive {
 		comparison = "instr(u.url,?)>0 OR instr(COALESCE(u.host,''),?)>0"
 	}
+	scope := ""
+	args := []any{needle, needle}
+	if o.Search.WorkspaceIDs != nil {
+		scope = " AND t.workspace_id IN (SELECT value FROM json_each(?))"
+		args = append(args, jsonText(o.Search.WorkspaceIDs))
+	}
 	rows, err := queryMapsContext(ctx, c.DB, `SELECT u.url,u.source,t.id tool_call_id,t.tool_name,t.call_message_id,t.conversation_id,
 		t.workspace_id,w.title,c.provider,c.started_at FROM tool_urls u JOIN tool_calls t ON t.id=u.tool_call_id
 		JOIN conversations c ON c.id=t.conversation_id JOIN workspaces w ON w.id=t.workspace_id
-		WHERE u.source<>'search_result' AND (`+comparison+`) ORDER BY t.started_at DESC LIMIT 5001`, needle, needle)
+		WHERE u.source<>'search_result' AND (`+comparison+`)`+scope+` ORDER BY t.started_at DESC LIMIT 5001`, args...)
 	if err != nil {
 		return nil, err
 	}

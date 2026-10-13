@@ -1,0 +1,62 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { build } from "esbuild";
+const built = await build({ entryPoints: ["src/search-composer-state.ts"], bundle: true, write: false, platform: "node", format: "esm" });
+const m = await import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString("base64")}`);
+const schema = { name: "test", idField: "id", fields: [], defaultSort: [{ field: "activity_at", dir: "desc" }], defaultLimit: 50 };
+test("composer carries scope, exclusions, OR filters, advanced sort and metrics without cursor", () => {
+ const d = m.freshSearch(schema);
+ d.text.root.children[0].text = "parser";
+ d.text.root.children.push({ ...d.text.root.children[0], id: "negative", text: "retry", exclude: true });
+ d.text.scope.provider = "claude"; d.text.scope.workspace_id = "w";
+ d.text.caseSensitive = true;
+ d.query.where = [{ any: [{ field: "title", op: "contains", value: "test" }, { field: "title", op: "contains", value: "fix", negated: true }] }];
+ d.query.orderBy = [{ field: "title", dir: "asc", nulls: "first", extract: { regex: "[A-Z]+" } }];
+ d.query.aggregations = [{ id: "count", op: "count", groupBy: ["provider"] }];
+ d.query.offset = 250;
+ const url = new URL(m.searchURL(d), "http://localhost");
+ assert.equal(url.pathname, "/library");
+ assert.equal(url.searchParams.has("text_cursor"), false);
+ const restored = m.restoreSearch(url.searchParams, schema);
+ assert.deepEqual(restored.query, { ...d.query, offset: 0 });
+ assert.deepEqual(restored.text.scope, d.text.scope);
+ assert.equal(restored.text.root.children[1].exclude, true);
+ assert.equal(restored.text.caseSensitive, true);
+});
+for (const kind of ["file", "url"]) {
+ test(`${kind} target keeps case independent of text case, fuzzy and message scope`, () => {
+  const d = m.freshSearch(schema); d.kind = kind; d.file = kind === "file" ? "parser.go" : "example.com/Parser";
+  d.text.fuzzy = true; d.text.scope.provider = "claude";
+  for (const textCase of [false, true]) for (const fileCase of [false, true]) {
+   d.text.caseSensitive = textCase; d.fileCase = fileCase;
+   const params = new URL(m.searchURL(d), "http://localhost").searchParams;
+   assert.equal(params.get("kind"), kind); assert.equal(params.get("search"), d.file);
+   assert.equal(params.get("case"), fileCase ? "1" : null);
+   for (const key of ["text_builder", "fuzzy", "text_provider"]) assert.equal(params.has(key), false);
+   const restored = m.restoreSearch(params, schema);
+   assert.equal(restored.kind, kind); assert.equal(restored.fileCase, fileCase);
+  }
+ });
+}
+test("legacy plain search and file links still restore", () => {
+ const old = m.restoreSearch(new URLSearchParams("search=cache+OR+buffer&text_plain=1&text_surface=user"), schema);
+ assert.equal(old.text.editor, "visual"); assert.equal(old.text.root.children[0].text, "cache OR buffer");
+ const file = m.restoreSearch(new URLSearchParams("search=README&kind=file&case=1"), schema);
+ assert.equal(file.fileCase, true); assert.equal(file.kind, "file");
+});
+test("fresh searches never reuse another draft's workspace restrictions", () => {
+ const a = m.freshSearch(schema); a.query.where.push({ field: "title", op: "=", value: "A" }); a.text.scope.workspace_id = "w";
+ const b = m.freshSearch(schema); assert.deepEqual(b.query.where, []); assert.equal(b.text.scope.workspace_id, "");
+});
+test("corrupt workspace query is visible instead of silently broadening the search", () => {
+ const state = m.restoreSearch(new URLSearchParams("q_library=not-a-query"), schema);
+ assert.match(state.error, /workspace filters could not be read/);
+});
+test("rolling windows travel with the query until their date filters change", () => {
+ const params = new URL(m.searchURL(m.freshSearch(schema)), "http://localhost").searchParams;
+ params.set("window_dataset", "library"); params.set("window_field", "activity_at"); params.set("window_days", "7");
+ const d = m.restoreSearch(params, schema);
+ assert.equal(new URL(m.searchURL(d), "http://localhost").searchParams.get("window_days"), "7");
+ d.query.where = [];
+ assert.equal(new URL(m.searchURL(d), "http://localhost").searchParams.has("window_days"), false);
+});

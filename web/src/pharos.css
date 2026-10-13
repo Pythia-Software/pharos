@@ -99,7 +99,7 @@
 .pharos-query-page .qt-qb button[title="Copy a URL for this query"] { display: none; }
 
 .semantic-search { display: flex; gap: 9px; width: min(760px, 100%); margin: 0 0 14px; }
-.semantic-search input { flex: 1; min-width: 120px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--ink); padding: 6px 12px; }
+.semantic-search input:not([type=checkbox]) { flex: 1; min-width: 120px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--ink); padding: 6px 12px; }
 .semantic-search select { min-width: 145px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--ink); padding: 6px 8px; }
 .semantic-search button { background: var(--accent); color: var(--panel); }
 .semantic-search button.semantic-search-clear { background: var(--panel); color: var(--ink); border: 1px solid var(--line); }
@@ -432,3 +432,5 @@ button.usage-legend-item:hover { border-color: var(--line); color: var(--ink); }
 .usage-period-custom { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: var(--fs-sm); white-space: nowrap; }
 .usage-period-custom input { width: 5em; min-width: 0; height: 28px; }
 .usage-chart-select select:focus-visible, .usage-period-custom input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 600px) { .semantic-search { flex-wrap: wrap; } .semantic-search input:not([type=checkbox]) { flex-basis: 55%; } }
+.library-find-status button { margin: 0 8px 8px 0; }

@@ -1,8 +1,16 @@
+import { MessageTableSearch, newMessageSearch, readMessageSearch } from "./message-table-search";
+import "./conversation-search";
+import { TextSearchEditor, type LibrarySearchKind as FindKind } from "./text-search-editor";
+import { SearchHelp } from "./search-help";
+import { RecordSearchEditor, recordSearchTargets } from "./record-search-editor";
+import { SearchDialog } from "./search-dialog";
+import { SearchOrder } from "./search-order";
+import { emptyTextSearch, readTextSearch, textFindParameters, textSearchSummary, type TextSearchDraft } from "./text-search-model";
 import { applyUsageAggregations } from "./usage-aggregations";
 import { withComputedCapabilityRefresh } from "./computed-column-store";
 import { chartPeriods, earliestKey, isHourly, localDay, nextPeriod, parseDay, periodBuckets, periodKey, periodLabel, periodStart, periodUnit, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { columnScale, defaultChartScale, validChartScale, type ChartScale } from "./chart-scale";
-import React, { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { EMPTY_QUERY, httpComputedColumnStore, applyAggregations, decodeQuery, encodeQuery, isOrGroup, loadSchema, memoryStorageAdapter, toAggregationQuery, toServerQuery, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { useQueryTable, type QueryTableApi } from "@pythia-software/query-table-react";
@@ -178,6 +186,10 @@ async function responseJSON<T>(response: Response): Promise<T> {
 
 // extra carries the Library's keyword search to every request, so rows,
 // metrics, and filter pickers all follow it. onFind hears how it went.
+function recordBudget(dataset: Dataset, where: WhereTerm[]) {
+  const fields = dataset === "tool_calls" ? ["command", "file_path"] : dataset === "writing_messages" ? ["text"] : dataset === "mcp_calls" ? ["arguments_json", "error_text"] : [];
+  return where.some(term => ("any" in term ? term.any : [term]).some(c => fields.includes(c.field))) ? new URLSearchParams({ interactive_search: "1" }) : undefined;
+}
 function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary | null) => void, capabilities?: MetricCapabilities): Transport<Row> {
   const endpoint = (suffix = "", params?: URLSearchParams) => {
     const query = new URLSearchParams(extra);
@@ -187,14 +199,14 @@ function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary
   return {
     metricCapabilities: capabilities,
     async fetchRowsV2(query, signal) {
-      const result = await responseJSON<FetchRowsResultV2<Row> & { find?: FindSummary }>(await fetch(endpoint("/rows-v2"), {
+      const result = await responseJSON<FetchRowsResultV2<Row> & { find?: FindSummary }>(await fetch(endpoint("/rows-v2", recordBudget(dataset, query.where)), {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query), signal,
       }));
       onFind?.(result.find ?? null);
       return result;
     },
     async fetchMetrics(query, signal) {
-      return responseJSON(await fetch(endpoint("/metrics"), {
+      return responseJSON(await fetch(endpoint("/metrics", recordBudget(dataset, query.where)), {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query), signal,
       }));
     },
@@ -357,8 +369,8 @@ const metricRenderers: RenderRegistry<Row> = {
 // header renders between the filters and the metric panels, so a chart there
 // can follow the table's filters.
 // find, for the Library, is a keyword search that narrows the rows before the
-// filters apply; onFind hears how it went.
-function QuerySurface({ dataset, libraryView = "table", messageView = "table", find = "", onFind, trailing, header, selectable = false }: { dataset: Dataset; selectable?: boolean; libraryView?: LibraryView; messageView?: MessageView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode }) {
+// pagination applies; onFind hears how it went.
+function QuerySurface({ dataset, libraryView = "table", messageView = "table", find = "", onFind, trailing, header, controls, selectable = false }: { dataset: Dataset; selectable?: boolean; libraryView?: LibraryView; messageView?: MessageView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode }) {
   const schema = schemas[dataset];
   const locationRevision = useLocationRevision();
   const tableRenderers = useUsageTableRenderers(renderers);
@@ -449,7 +461,7 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
 
   return <FilterValueProvider value={filterPresentations[dataset]}>
     {header?.(api)}
-    <QueryBuilder api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />
+    {controls ? controls(api, <QueryBuilder api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={stableApi} dataset={dataset} layout={<QueryBuilder api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />} /> : <QueryBuilder api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />}
     <MetricsPanel api={stableApi} aggregations={api.aggregations} fields={metricFields(api.computed.catalogue)} renderers={metricRenderers} />
     {api.error ? <div className="query-table-error">{api.error.message}</div> : null}
     {selectable ? <SelectionToolbar selection={api.selection} actions={ids => <ShareSelection ids={ids} api={api} transport={transport} />} /> : null}
@@ -603,10 +615,10 @@ function ConversationResults({ api, searching }: { api: QueryTableApi<Row>; sear
   </div>;
 }
 
-type FindKind = "text" | "file" | "url";
 type FindHit = { workspace_id: string; conversation_id?: string; title: string; provider?: string; started_at?: string; message_id?: string; role?: string; message_kind?: string; snippet?: string; path?: string; old_path?: string; url?: string; url_source?: string; tool_name?: string; tool_call_id?: string; attribution?: string; count: number };
-// What the Library's keyword search found before the table's filters applied.
-type FindSummary = { workspaces: number; limited: boolean };
+// What the Library's keyword search found within the stored table filters.
+type SearchProgress = { complete: boolean; stop_reason: string; stop_message?: string; next_cursor: string; count: number; count_relation: string; candidates: number; verified_bytes: number; skipped_oversize: number; elapsed_ms: number; strategy: string; coverage: string; expansions?: Record<string,string[]> };
+type FindSummary = { workspaces: number; limited: boolean; search?: SearchProgress };
 
 function openFindHit(hit: FindHit) {
   const params = new URLSearchParams();
@@ -619,7 +631,10 @@ function openFindHit(hit: FindHit) {
 function findHitLabel(hit: FindHit): string {
   if (hit.url) return `Open tool call${hit.tool_name ? ` · ${hit.tool_name}` : ""}`;
   if (hit.path) return hit.attribution === "workspace" ? "Open work · conversation unknown" : "Open conversation";
-  return `Open ${hit.role === "user" ? "user message" : hit.message_kind === "message" ? "agent response" : "agent thought"}`;
+  if (hit.role === "user") return "Open message from a person";
+  if (["thinking", "reasoning", "analysis"].includes(hit.message_kind ?? "")) return "Open saved agent reasoning";
+  if (hit.role === "assistant" && hit.message_kind === "message") return "Open agent reply";
+  return "Open matching message";
 }
 
 function findHitText(hit: FindHit): string {
@@ -645,56 +660,97 @@ function FindMatchCell({ row }: { row: Row }) {
   return <button type="button" className="library-find-cell" title={`${findHitText(hit)}\n\n${count.toLocaleString()} match${count === 1 ? "" : "es"} · ${findHitLabel(hit)}`} onClick={event => { event.stopPropagation(); openFindHit(hit); }}>Open match{count > 1 ? ` (${count.toLocaleString()})` : ""}</button>;
 }
 
-function findParameters(query: string, kind: FindKind, fuzzy: boolean, caseSensitive: boolean, separators: boolean): string {
-  if (!query) return "";
-  const params = new URLSearchParams({ find: query });
-  if (kind !== "text") params.set("find_kind", kind);
-  if (kind === "text" && !fuzzy) params.set("find_fuzzy", "0");
-  if (kind === "text" && caseSensitive) params.set("find_case", "1");
-  if (kind === "text" && separators) params.set("find_separators", "1");
-  return params.toString();
+function workspaceFilterLabels(api: QueryTableApi<Row>): string[] {
+  const describe = (clause: { field: string; op: string; value: string; negated?: boolean }) => {
+    const label = api.computed.catalogue.find(field => field.name === clause.field)?.label ?? clause.field;
+    const value = filterPresentations.library.label?.(clause.field, clause.value) ?? clause.value;
+    return `${clause.negated ? "NOT " : ""}${label} ${clause.op.replaceAll("_", " ")}${value ? ` ${value}` : ""}`;
+  };
+  return api.query.where.map(term => "any" in term ? `(${term.any.map(describe).join(" OR ")})` : describe(term));
+}
+
+function UserMessageSurface({ header, messageView }: { messageView: MessageView; header: (api: QueryTableApi<Row>, searching: boolean) => React.ReactNode }) {
+  if (shared) return <QuerySurface dataset="writing_messages" messageView={messageView} header={api => header(api, false)} />;
+  const [initial] = useState(readMessageSearch), [value, setValue] = useState(initial.draft);
+  const [applied, setApplied] = useState<TextSearchDraft | null>(initial.active ? initial.draft : null), [error, setError] = useState(initial.error);
+  const [cursor, setCursor] = useState(() => new URLSearchParams(location.search).get("message_cursor") ?? "");
+  const [found, setFound] = useState<FindSummary | null>(null);
+  useEffect(() => {
+    const restore = () => { if (!datasetIsVisible("writing_messages")) return; const next = readMessageSearch(); setValue(next.draft); setApplied(next.active ? next.draft : null); setError(next.error); setCursor(new URLSearchParams(location.search).get("message_cursor") ?? ""); };
+    window.addEventListener("pharos:route", restore); return () => window.removeEventListener("pharos:route", restore);
+  }, []);
+  useEffect(() => { if (datasetIsVisible("writing_messages") && !error) { updateURI("message_query", applied ? JSON.stringify(applied) : ""); updateURI("message_cursor", cursor); } }, [applied, cursor, error]);
+  const find = applied ? textFindParameters(applied, cursor) : "";
+  useEffect(() => setFound(null), [find]);
+  return <QuerySurface dataset="writing_messages" messageView={messageView} header={api => header(api, !!find)} find={find} onFind={setFound} controls={(api, builder) => <>
+    <MessageTableSearch api={api} value={value} active={!!applied} initialError={error} onApply={next => { setValue(next); setApplied(next); setCursor(""); setError(""); }} onClear={() => { setValue(newMessageSearch()); setApplied(null); setCursor(""); setError(""); }} layout={builder} />
+    {find && found?.search ? <div className="library-find-status" role="status"><p>{found.search.complete ? "All eligible messages checked." : "Partial search batch; more messages may match."} Table filters and metrics apply to the matching messages in this batch. Ordering is within this batch.</p><p>{found.search.elapsed_ms} ms · {found.search.candidates.toLocaleString()} candidates checked{found.search.skipped_oversize ? ` · ${found.search.skipped_oversize} oversized messages skipped` : ""}.</p>{found.search.stop_message ? <p>{found.search.stop_message}</p> : null}{found.search.next_cursor ? <button type="button" onClick={() => setCursor(found.search!.next_cursor)}>Next message search batch</button> : null}{cursor ? <button type="button" onClick={() => setCursor("")}>Restart message search</button> : null}</div> : null}
+  </>} />;
 }
 
 function LibraryPage() {
   const locationRevision = useLocationRevision();
-  const read = () => new URLSearchParams(location.search);
-  const [draft, setDraft] = useState(() => read().get("search") ?? "");
-  const [search, setSearch] = useState(() => read().get("search") ?? "");
-  const [kind, setKind] = useState<FindKind>(() => (read().get("kind") as FindKind) || "text");
-  const [fuzzy, setFuzzy] = useState(() => read().get("fuzzy") !== "0");
-  const [caseSensitive, setCaseSensitive] = useState(() => read().get("case") === "1");
-  const [separators, setSeparators] = useState(() => read().get("separators") === "1");
-  const [view, setView] = useState<LibraryView>(() => read().get("view") === "conversation" ? "conversation" : "table");
-  useEffect(() => { clearLibrarySearch = () => { setDraft(""); setSearch(""); updateURI("search", ""); }; return () => { clearLibrarySearch = undefined; }; }, []);
+  const [initial] = useState(() => readTextSearch(new URLSearchParams(location.search)));
+  const [editorValue, setEditorValue] = useState(initial.draft);
+  const [applied, setApplied] = useState<TextSearchDraft | null>(initial.active ? initial.draft : null);
+  const [initialError, setInitialError] = useState(initial.error);
+  const [cursor, setCursor] = useState(() => new URLSearchParams(location.search).get("text_cursor") ?? "");
+  const [kind, setKind] = useState<FindKind>(() => (new URLSearchParams(location.search).get("kind") as FindKind) || "text");
+  const [fileDraft, setFileDraft] = useState(() => new URLSearchParams(location.search).get("search") ?? "");
+  const [fileSearch, setFileSearch] = useState(fileDraft);
+  const [fileCase, setFileCase] = useState(() => new URLSearchParams(location.search).get("case") === "1");
+  const [fileCaseDraft, setFileCaseDraft] = useState(fileCase);
+  const [view, setView] = useState<LibraryView>(() => new URLSearchParams(location.search).get("view") === "conversation" ? "conversation" : "table");
+  const clearText = () => { const empty = emptyTextSearch(); setEditorValue(empty); setApplied(null); setCursor(""); setInitialError(""); };
+  useEffect(() => { clearLibrarySearch = () => { clearText(); setFileSearch(""); setFileDraft(""); }; return () => { clearLibrarySearch = undefined; }; }, []);
   useEffect(() => {
     const restore = () => {
       if (!shared && location.pathname !== "/library") return;
-      const params = read(), q = params.get("search") ?? "";
-      setDraft(q); setSearch(q); setKind((params.get("kind") as FindKind) || "text");
-      setFuzzy(params.get("fuzzy") !== "0"); setCaseSensitive(params.get("case") === "1"); setSeparators(params.get("separators") === "1");
+      const params = new URLSearchParams(location.search), next = readTextSearch(params);
+      setEditorValue(next.draft); setApplied(next.active ? next.draft : null); setInitialError(next.error);
+      setKind((params.get("kind") as FindKind) || "text"); setCursor(params.get("text_cursor") ?? "");
+      setFileDraft(params.get("search") ?? ""); setFileSearch(params.get("search") ?? "");
+      setFileCase(params.get("case") === "1"); setFileCaseDraft(params.get("case") === "1");
       setView(params.get("view") === "conversation" ? "conversation" : "table");
     };
     window.addEventListener("pharos:route", restore);
     return () => window.removeEventListener("pharos:route", restore);
   }, []);
   useEffect(() => {
-    if (shared || location.pathname !== "/library") return;
-    updateURI("search", search); updateURI("kind", kind === "text" ? "" : kind);
-    updateURI("fuzzy", fuzzy ? "" : "0"); updateURI("case", caseSensitive ? "1" : ""); updateURI("separators", separators ? "1" : "");
-    updateURI("view", view === "conversation" ? view : "");
-  }, [locationRevision, search, kind, fuzzy, caseSensitive, separators, view]);
-  function submit(event: FormEvent) { event.preventDefault(); const next = draft.trim(); setSearch(next); updateURI("search", next); }
-  function chooseView(next: LibraryView) { setView(next); updateURI("view", next === "conversation" ? next : ""); }
-  function clear() { setDraft(""); setSearch(""); updateURI("search", ""); }
-  const find = shared ? "" : findParameters(search, kind, fuzzy, caseSensitive, separators);
+    if (shared || location.pathname !== "/library" || initialError) return;
+    const url = new URL(location.href);
+    for (const key of [...url.searchParams.keys()]) if (key.startsWith("text_") || ["search", "fuzzy", "case", "separators", "kind"].includes(key)) url.searchParams.delete(key);
+    if (kind === "text") {
+      if (applied) url.searchParams.set("text_builder", JSON.stringify(applied));
+      if (cursor) url.searchParams.set("text_cursor", cursor);
+    } else { url.searchParams.set("kind", kind); if (fileSearch) url.searchParams.set("search", fileSearch); if (fileCase) url.searchParams.set("case", "1"); }
+    if (view === "conversation") url.searchParams.set("view", view); else url.searchParams.delete("view");
+    if (url.href !== location.href) { history.replaceState(null, "", url); window.dispatchEvent(new Event("pharos:uri-changed")); }
+  }, [locationRevision, applied, kind, cursor, view, fileSearch, fileCase, initialError]);
+  const fileParams = new URLSearchParams({ find: fileSearch, find_kind: kind });
+  if (fileCase) fileParams.set("find_case", "1");
+  const find = shared ? "" : kind === "text" ? applied ? textFindParameters(applied, cursor) : "" : fileSearch ? fileParams.toString() : "";
   const [found, setFound] = useState<FindSummary | null>(null);
   useEffect(() => { setFound(null); }, [find]);
   return <div className={`pharos-query-page${find ? " library-searching" : ""}`}>
-    <div className="view-heading library-heading"><div><h1>{shared ? "Conversations" : "Find past work"}</h1></div><div className="library-view-toggle" role="group" aria-label="Library result view"><button type="button" className={view === "table" ? "active" : ""} aria-pressed={view === "table"} onClick={() => chooseView("table")}>Table</button><button type="button" className={view === "conversation" ? "active" : ""} aria-pressed={view === "conversation"} onClick={() => chooseView("conversation")}>Conversations</button></div></div>
-    {shared ? null : <form className="semantic-search" onSubmit={submit}><select aria-label="Search type" value={kind} onChange={event => { const next = event.target.value as FindKind; setKind(next); updateURI("kind", next === "text" ? "" : next); }}><option value="text">Conversation text</option><option value="file">Modified file</option><option value="url">Tool URL</option></select><input type="search" value={draft} onChange={event => setDraft(event.target.value)} placeholder={kind === "text" ? "Words or an exact phrase in quotes…" : kind === "file" ? "File path or name…" : "URL or host…"} aria-label="Search library" /><button type="submit">Search</button>{search ? <button type="button" className="semantic-search-clear" onClick={clear}>Clear</button> : null}</form>}
-    {shared ? null : kind === "text" ? <div className="search-options" role="group" aria-label="Text search options"><label><input type="checkbox" checked={fuzzy} onChange={event => { setFuzzy(event.target.checked); updateURI("fuzzy", event.target.checked ? "" : "0"); }} /> Fuzzy words</label><label><input type="checkbox" checked={caseSensitive} onChange={event => { setCaseSensitive(event.target.checked); updateURI("case", event.target.checked ? "1" : ""); }} /> Case sensitive</label><label title="For quoted phrases, require punctuation and spaces exactly as typed"><input type="checkbox" checked={separators} onChange={event => { setSeparators(event.target.checked); updateURI("separators", event.target.checked ? "1" : ""); }} /> Match separators</label></div> : null}
-    {search && found ? <p className="library-find-status muted">{found.limited ? "At least " : ""}{found.workspaces.toLocaleString()} result{found.workspaces === 1 ? "" : "s"} match “{search}”; the filters below narrow them further.{found.limited ? " Search reached its 5,000-record limit; narrow the query for complete results." : ""}</p> : null}
-    <QuerySurface dataset="library" libraryView={view} find={find} onFind={setFound} selectable={!shared && view === "table"} {...(find ? { trailing: (row: Row) => <FindMatchCell row={row} /> } : {})} />
+    <div className="view-heading library-heading"><div><h1>{shared ? "Conversations" : "Find past work"}</h1></div><div className="library-view-toggle" role="group" aria-label="Library result view"><button type="button" className={view === "table" ? "active" : ""} aria-pressed={view === "table"} onClick={() => setView("table")}>Table</button><button type="button" className={view === "conversation" ? "active" : ""} aria-pressed={view === "conversation"} onClick={() => setView("conversation")}>Conversations</button></div></div>
+    <QuerySurface dataset="library" libraryView={view} find={find} onFind={setFound} selectable={!shared && view === "table"} {...(find ? { trailing: (row: Row) => <FindMatchCell row={row} /> } : {})} controls={shared ? undefined : (api, builder) => <>
+      <TextSearchEditor value={editorValue} active={!!applied} initialError={initialError} kind={kind} onKind={next => { setKind(next); setCursor(""); }}
+        onApply={next => { setEditorValue(next); setApplied(next); setInitialError(""); setCursor(""); }} onClear={clearText}
+        file={{ text: fileDraft, caseSensitive: fileCaseDraft, active: !!fileSearch, dirty: fileDraft.trim() !== fileSearch || fileCaseDraft !== fileCase, onText: setFileDraft, onCase: setFileCaseDraft, onApply: () => { setFileSearch(fileDraft.trim()); setFileCase(fileCaseDraft); }, onClear: () => { setFileDraft(""); setFileSearch(""); } }}
+        workspaceScope={{ filters: workspaceFilterLabels(api), editor: builder }} orderControl={<SearchOrder api={api} batched={!!found?.search} />} />
+    {find && found ? <div className="library-find-status muted" role="status">
+      <p><strong>{found.workspaces.toLocaleString()} matching workspace{found.workspaces === 1 ? "" : "s"}{found.search ? " in this batch" : ""}.</strong>{found.search ? found.search.complete ? " All eligible messages have been checked." : found.search.next_cursor ? " More messages remain to check. Continue the search to see the next batch." : " Some messages could not be checked." : found.limited ? " Search limit reached; narrow the search." : ""}</p>
+      {found.search?.stop_message ? <p>{found.search.stop_message}</p> : null}
+      {kind === "text" && applied ? <p className="library-search-summary">Results for: {textSearchSummary(applied)}</p> : null}
+      {found.workspaces === 0 && found.search?.complete ? <p>No messages matched these rules. Try “any of these rules,” remove a restriction, or choose a broader message scope.</p> : null}
+      {found.search?.skipped_oversize ? <p>{found.search.skipped_oversize.toLocaleString()} large messages were skipped. Missing results may still be in those messages.</p> : null}
+      {found.search ? <details><summary>Search details and coverage</summary><p>{found.search.candidates.toLocaleString()} candidates checked; {(found.search.verified_bytes / 1048576).toFixed(1)} MiB verified in {found.search.elapsed_ms} ms. {found.search.complete ? "Complete" : `Stopped: ${found.search.stop_reason.replaceAll("_", " ")}`}. Table counts and metrics describe this batch.</p><p>{found.search.coverage}</p>{found.search.expansions && Object.keys(found.search.expansions).length ? <p>Word variations: {Object.entries(found.search.expansions).map(([word, terms]) => `${word} → ${terms.join(", ")}`).join("; ")}</p> : null}</details> : null}
+      {found.search?.next_cursor ? <button type="button" onClick={() => setCursor(found.search!.next_cursor)}>Continue to next batch</button> : null}
+      {cursor ? <button type="button" onClick={() => setCursor("")}>Start over</button> : null}
+    </div> : null}
+    {cursor && !found ? <button type="button" onClick={() => setCursor("")}>Restart search from the beginning</button> : null}
+    </>} />
   </div>;
 }
 
@@ -1602,9 +1658,9 @@ function WritingUsage({ onStatus }: { onStatus: (status: AuthorshipStatus | null
       <button type="button" className={view === "text" ? "active" : ""} aria-pressed={view === "text"} onClick={() => chooseView("text")}>Highlighted text</button>
     </div> : null}
   </div>;
-  if (rows === "messages") return <QuerySurface key="messages" dataset="writing_messages" messageView={view} header={api => <>
+  if (rows === "messages") return <UserMessageSurface key="messages" messageView={view} header={(api, searching) => <>
     {toggle}
-    <MessageMix where={toAggregationQuery(api.query, schemas.writing_messages).where} reload={reload} onFilter={filterChange(api)} />
+    {!searching ? <MessageMix where={toAggregationQuery(api.query, schemas.writing_messages).where} reload={reload} onFilter={filterChange(api)} /> : null}
     <div className="usage-preset-rows">
       <PresetRow label="Sort" presets={messagePresets} query={api.query} onApply={preset => apply("writing_messages", preset)} />
       <PresetRow label="Metrics" presets={messageMetricPresets} query={api.query} onApply={preset => apply("writing_messages", preset)} clear />
@@ -2016,6 +2072,7 @@ function ToolsPage() {
 }
 
 const mounts: Array<[string, React.ReactNode]> = [
+  ["searchComposerDialog", <SearchDialog schema={schemas.library} />],
   ["homePage", <HomePage schemas={schemas} />],
   ["queryTableLibrary", <LibraryPage />],
   ["queryTableUsage", <UsagePage />],
@@ -2058,3 +2115,5 @@ window.pharosQueryTables = {
     }));
   },
 };
+
+window.dispatchEvent(new Event("pharos:search-ready"));
