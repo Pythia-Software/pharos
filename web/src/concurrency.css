@@ -1,0 +1,77 @@
+.concurrency-dialog { position: fixed; width: min(1120px,calc(100vw - 40px)); max-height: calc(100dvh - 64px); box-sizing: border-box; margin: auto; overflow: auto; padding: 22px 24px 18px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); box-shadow: 0 24px 80px #0006; }
+.concurrency-dialog::backdrop { background: #0b1710aa; }
+.concurrency-dialog-heading { position: static; display: flex; align-items: start; justify-content: space-between; gap: 16px; margin: 0 0 16px; padding: 0; border: 0; background: none; box-shadow: none; }
+.concurrency-dialog-heading h2 { margin: 0; font: 400 25px/1.2 var(--serif); }
+.concurrency-dialog-heading p { margin: 5px 0 0; font-size: 13px; color: var(--muted); }
+.concurrency-close { display: grid; place-items: center; flex: none; width: 30px; height: 30px; padding: 5px; color: var(--ink); background: none; border: 1px solid var(--line); border-radius: 4px; }
+.concurrency-controls { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+.concurrency-controls>label,.concurrency-control { display: flex; flex-direction: column; gap: 5px; min-width: 120px; flex: 1; color: var(--muted); font-size: 12px; line-height: 20px; }
+.concurrency-control-label { display: flex; align-items: center; gap: 4px; height: 20px; }
+.concurrency-info-button { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; flex: none; padding: 1px; border: 1px solid transparent; border-radius: 50%; color: var(--muted); background: transparent; cursor: pointer; }
+.concurrency-info-button svg { width: 16px; height: 16px; }
+.concurrency-info-button:hover { border-color: var(--line); color: var(--accent); background: color-mix(in srgb,var(--accent) 9%,var(--panel)); }
+.concurrency-info-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.concurrency-info-dialog { width: min(640px,calc(100vw - 32px)); max-height: calc(100dvh - 64px); box-sizing: border-box; padding: 22px 24px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); box-shadow: 0 24px 80px #0006; overflow: auto; }
+.concurrency-info-dialog::backdrop { background: #0b1710aa; }
+.concurrency-info-dialog h3 { margin: 18px 0 5px; font-size: 14px; font-weight: 600; }
+.concurrency-info-dialog p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.concurrency-controls select { width: 100%; min-width: 0; padding: 6px 24px 6px 8px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink); background-color: var(--panel); font: 13px var(--sans); }
+.concurrency-controls select:disabled { opacity: .55; }
+.concurrency-custom-range { display: flex; flex-wrap: wrap; align-items: end; gap: 10px 16px; margin: -4px 0 16px; font-size: 12px; }
+.concurrency-custom-range label { display: flex; flex-direction: column; gap: 5px; color: var(--muted); }
+.concurrency-custom-range input { box-sizing: border-box; min-height: 30px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); font: 13px var(--sans); }
+.concurrency-custom-range>span { padding-bottom: 7px; }
+.concurrency-plot-summary { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; margin-bottom: 10px; }
+.concurrency-metrics { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.concurrency-metrics strong { font-weight: 500; color: var(--ink); }
+.concurrency-working-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; font-size: 12px; }
+.concurrency-plot-summary button { padding: 2px 8px; color: var(--ink); border: 1px solid var(--line); border-radius: 4px; background: var(--panel); font: inherit; }
+.concurrency-chart { position: relative; width: 100%; min-width: 0; }
+.concurrency-chart svg { display: block; width: 100%; touch-action: none; user-select: none; -webkit-user-select: none; cursor: crosshair; }
+.concurrency-pick { pointer-events: none; stroke: var(--accent); stroke-width: 1; fill: color-mix(in srgb,var(--accent) 12%,transparent); }
+.concurrency-pick-label { position: absolute; top: -3px; width: 300px; max-width: 100%; box-sizing: border-box; padding: 2px 6px; border-radius: 4px; background: var(--ink); color: var(--panel); font-size: 11px; text-align: center; pointer-events: none; }
+.concurrency-chart text { font: 12px var(--sans); fill: var(--muted); }
+.concurrency-chart .concurrency-axis-title { fill: var(--ink); }
+.concurrency-grid,.concurrency-frame { stroke: var(--line); stroke-width: 1; }
+.concurrency-hover-guide line { stroke: var(--ink); stroke-width: 1; }
+.concurrency-hover-detail { min-height: 35px; padding: 7px 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.concurrency-hover-detail strong { color: var(--ink); font-weight: 500; }
+.concurrency-chart-footer { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; margin: 0 0 13px; }
+.concurrency-repositories { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; }
+.concurrency-repositories span { display: inline-flex; align-items: center; gap: 6px; }
+.concurrency-repositories i,.concurrency-conversation-repo i { display: inline-block; width: 9px; height: 9px; flex: none; border-radius: 2px; }
+.concurrency-view-note { font-size: 12px; white-space: nowrap; }
+.concurrency-conversations { padding-top: 10px; border-top: 1px solid var(--line); }
+.concurrency-conversations summary { color: var(--ink); font-size: 13px; }
+.concurrency-clear-selection { margin: 9px 0; }
+.concurrency-conversations table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; margin-top: 8px; }
+.concurrency-conversations th { text-align: left; font-weight: 400; color: var(--muted); }
+.concurrency-conversations th:first-child { width: 16%; }
+.concurrency-conversations th:nth-child(2) { width: 50%; }
+.concurrency-conversations th:nth-child(3),.concurrency-conversations th:nth-child(4) { width: 10%; }
+.concurrency-conversations th:nth-child(5) { width: 14%; }
+.concurrency-conversations td,.concurrency-conversations th { padding: 6px; vertical-align: middle; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.concurrency-conversations td:first-child { padding-left: 0; }
+.concurrency-thread-button { display: block; width: 100%; min-width: 0; background: none; border: 0; color: var(--ink); font: inherit; text-align: left; padding: 0; }
+.concurrency-thread-button>span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.concurrency-conversations .concurrency-open-cell { text-align: right; }
+.concurrency-open-cell>a { font-size: 12px; color: var(--accent); white-space: nowrap; }
+.concurrency-open-icon { display: none; }
+.concurrency-conversation-repo { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.concurrency-conversation-repo>span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.concurrency-conversations tr.selected { background: color-mix(in srgb,var(--gold) 7%,transparent); }
+.usage-heading-tools { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: flex-start; gap: 8px; }
+.concurrency-open-button { padding: 4px 11px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); font: var(--fs-md) var(--sans); }
+@media(max-width:700px) {
+  .concurrency-dialog { padding: 18px 16px; width: calc(100vw - 24px); max-height: calc(100dvh - 32px); }
+  .concurrency-info-dialog { padding: 18px 16px; }
+  .concurrency-open-text { display: none; }
+  .concurrency-open-icon { display: inline; }
+  .concurrency-conversations th:first-child { width: 18%; }
+  .concurrency-conversations th:nth-child(3),.concurrency-conversations th:nth-child(4) { width: 12%; }
+  .concurrency-conversations th:nth-child(5) { width: 8%; }
+  .usage-heading { flex-direction: column; align-items: stretch; }
+  .usage-heading .usage-heading-actions { width: 100%; align-items: flex-start; }
+  .usage-heading .library-view-toggle { flex-wrap: wrap; max-width: 100%; box-sizing: border-box; }
+  .usage-heading-tools { justify-content: flex-start; max-width: 100%; }
+}

@@ -41,6 +41,8 @@ import { TL1Page } from "./tl1";
 import { FindingsPage, OptimizationSettingsPage, startFindingsChrome } from "./findings";
 import { Icon } from "./icons";
 import { AuthoredMessages, CategoryPill, MessageMix, authoredRenderers } from "./authored";
+import { ConcurrencyModal, concurrencyPrototypeEnabled } from "./concurrency";
+import { openConcurrencyModal, startConcurrencySummary } from "./concurrency-store";
 
 type Row = Record<string, any>;
 type Dataset = "library" | "usage" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts";
@@ -164,7 +166,9 @@ declare global {
 
 const schemas: Record<Dataset, FieldSchema<Row>> = {
   library: loadSchema<Row>(libraryDocument),
-  usage: loadSchema<Row>(usageDocument),
+  // The reused prototype snapshot runs a schema-12 backend, before effort
+  // tracking. Leave that optional column out of its default token table.
+  usage: loadSchema<Row>(concurrencyPrototypeEnabled ? { ...usageDocument, defaultSelect: usageDocument.defaultSelect.filter(column => column.field !== "effort") } : usageDocument),
   writing: loadSchema<Row>(writingDocument),
   writing_messages: loadSchema<Row>(writingMessagesDocument),
   mcp_calls: loadSchema<Row>(mcpCallsDocument),
@@ -1397,7 +1401,7 @@ function UsagePage() {
           <button type="button" className={view === "tokens" ? "active" : ""} aria-pressed={view === "tokens"} onClick={() => choose("tokens")}>Machine Tokens</button>
           <button type="button" className={view === "carbon" ? "active" : ""} aria-pressed={view === "carbon"} onClick={() => choose("carbon")}>Carbon Impact</button>
         </div>}
-        {view === "tokens" && !shared ? <RefreshPricesButton /> : null}
+        {view === "tokens" && !shared ? <div className="usage-heading-tools"><RefreshPricesButton />{concurrencyPrototypeEnabled ? <button type="button" className="concurrency-open-button" onClick={openConcurrencyModal}>Parallelism…</button> : null}</div> : null}
       </div>
     </div>
     {view === "tokens" ? <TokenUsage /> : view === "writing" ? <WritingUsage onStatus={setStatus} /> : <CarbonImpact />}
@@ -1741,6 +1745,10 @@ function ToolsPage() {
   </div>;
 }
 
+if (!shared && concurrencyPrototypeEnabled && location.pathname === "/usage" && new URLSearchParams(location.search).get("usage") === "concurrency") {
+  const url = new URL(location.href);url.searchParams.set("usage", "tokens");url.searchParams.set("parallelism", "1");history.replaceState(null, "", url);
+}
+
 const mounts: Array<[string, React.ReactNode]> = [
   ["searchComposerDialog", <SearchDialog schema={schemas.library} />],
   ["homePage", <HomePage schemas={schemas} />],
@@ -1758,6 +1766,12 @@ for (const [id, component] of mounts) {
   if (element) createRoot(element).render(component);
 }
 if (!shared) startFindingsChrome();
+if (!shared && concurrencyPrototypeEnabled) {
+  const modalHost = document.createElement("div");
+  modalHost.id = "parallelismModal";document.body.append(modalHost);
+  createRoot(modalHost).render(<ConcurrencyModal />);
+  startConcurrencySummary();
+}
 window.pharosQueryTables = {
   refresh(dataset) {
     window.dispatchEvent(new CustomEvent("pharos:data-refresh", { detail: dataset }));
