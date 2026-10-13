@@ -134,7 +134,7 @@ function formatted(value: number | null | undefined, unit = "count") {
   if (value == null) return "—";
   if (unit === "ms") return duration(value);
   if (unit === "date")
-    return new Date(value).toISOString().slice(5, 16).replace("T", " ");
+    return localMetricDateTime.format(new Date(value));
   if (unit === "usd")
     return value.toLocaleString(undefined, {
       style: "currency",
@@ -150,6 +150,13 @@ function formatted(value: number | null | undefined, unit = "count") {
     });
   return value.toLocaleString(undefined, { maximumFractionDigits: 0 });
 }
+const localMetricDateTime = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  timeZoneName: "short",
+});
 const localDateTime = new Intl.DateTimeFormat(undefined, {
   year: "numeric",
   month: "short",
@@ -181,7 +188,9 @@ function cellTitle(metric: Metric, spec: Spec) {
   const exact =
     metric.value == null
       ? ""
-      : `${metric.value.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${spec.unit}\n`;
+      : spec.unit === "date"
+        ? `${localTime(metric.value)}\n`
+        : `${metric.value.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${spec.unit}\n`;
   return `${exact}${spec.definition}\n${metric.quality} · ${metric.known}/${metric.total} retained coverage. ${metric.value === null ? "No sufficient retained evidence." : "Source coverage may be incomplete."}`;
 }
 

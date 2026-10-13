@@ -92,6 +92,67 @@ func TestDelegationCanonicalHierarchyAndAccounting(t *testing.T) {
 	}
 }
 
+func TestDelegationTopLevelConversationLabels(t *testing.T) {
+	for _, tc := range []struct {
+		name, secondPrompt             string
+		second, derived, parentOmitted bool
+	}{
+		{name: "single root"},
+		{name: "child parent recovered from launch", parentOmitted: true},
+		{name: "multiple derived roots", second: true, derived: true, secondPrompt: "Second root prompt"},
+		{name: "root without derived session", second: true, secondPrompt: "Second root prompt"},
+		{name: "root without prompt", second: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := testCatalog(t)
+			seedDelegation(t, c)
+			run := func(query string, args ...any) {
+				t.Helper()
+				if _, err := c.DB.Exec(query, args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			run(`INSERT INTO conversation_documents(conversation_id,initiation,vector_json,model,indexed_at) VALUES('root','First root prompt','[]','test','2026-01-01')`)
+			if tc.parentOmitted {
+				run(`UPDATE conversations SET parent_id=NULL WHERE id='child'`)
+			}
+			if tc.second {
+				run(`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('root-two','delegation-work','codex','local','root-two-native')`)
+				if tc.secondPrompt != "" {
+					run(`INSERT INTO conversation_documents(conversation_id,initiation,vector_json,model,indexed_at) VALUES('root-two',?,'[]','test','2026-01-01')`, tc.secondPrompt)
+				}
+				if tc.derived {
+					run(`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider,usage_status) VALUES('root-two-session','delegation-work','root-two','main','main','codex','unavailable')`)
+				}
+			}
+			s, err := c.delegationSnapshot(context.Background(), "delegation-work")
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "Delegated work"
+			if tc.second {
+				want = "First root prompt"
+			}
+			if got := s.ByID["root-session"].Label; got != want {
+				t.Fatalf("first root label = %q, want %q", got, want)
+			}
+			if tc.second {
+				id := "conversation:root-two"
+				if tc.derived {
+					id = "root-two-session"
+				}
+				want = firstString(tc.secondPrompt, "root-two-native")
+				if got := s.ByID[id].Label; got != want {
+					t.Fatalf("second root label = %q, want %q", got, want)
+				}
+			}
+			if got := s.ByID["child-session"].Label; got != "Review with Codex" {
+				t.Fatalf("child assignment label changed: %q", got)
+			}
+		})
+	}
+}
+
 func TestDelegationEffortUsesOwnSessionAndConversation(t *testing.T) {
 	c, _ := testCatalog(t)
 	seedDelegation(t, c)

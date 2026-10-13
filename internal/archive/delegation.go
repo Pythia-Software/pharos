@@ -292,11 +292,11 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 		cid := firstString(row["conversation_id"])
 		cv := conv[cid]
 		label := firstString(cv["agent_nickname"], row["assignment"], cv["prompt"])
-		if row["native_id"] == "main" && firstString(cv["parent_id"]) == "" {
-			label = workspaceTitle
-		}
 		if label == "" {
 			label = firstString(row["native_id"], cv["native_id"])
+			if row["native_id"] == "main" {
+				label = firstString(cv["native_id"], label)
+			}
 		}
 		n := &delegationNode{ID: id, WorkspaceID: workspace, ConversationID: cid, Provider: firstString(row["provider"], cv["provider"]), Model: firstString(row["model"], cv["model"]), Label: label, Coverage: firstString(cv["coverage"]), Usage: firstString(row["usage_status"]), Start: delegationTime(row["started_at"]), End: delegationTime(row["ended_at"]), Self: map[string]delegationMetric{}, All: map[string]delegationMetric{}}
 		n.Effort = firstString(row["effort"])
@@ -418,6 +418,20 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 			p.children = append(p.children, n)
 		} else {
 			s.Roots = append(s.Roots, n)
+		}
+	}
+	// Resolve launches before counting top-level conversations: a child stream
+	// may omit its conversation parent but still have exact delegation evidence.
+	var topLevel []*delegationNode
+	for _, n := range s.Roots {
+		if raw[n.ID]["native_id"] == "main" && n.ParentID == "" && n.ExternalParent == nil && firstString(conv[n.ConversationID]["parent_id"]) == "" {
+			topLevel = append(topLevel, n)
+		}
+	}
+	for _, n := range topLevel {
+		n.Label = firstString(conv[n.ConversationID]["prompt"], n.Label)
+		if len(topLevel) == 1 {
+			n.Label = firstString(workspaceTitle, n.Label)
 		}
 	}
 	owner := func(sid, cid string) *delegationNode {

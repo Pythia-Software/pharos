@@ -65,6 +65,7 @@ const specs = keys.map((id) => ({
   id,
   label:
     {
+      start: "First evidence",
       tokens: "Tokens",
       cost: "API cost",
       calls: "Tool calls",
@@ -1050,6 +1051,28 @@ test("workspace sessions pages contain forty rows and keep navigation on the las
   await pagination.getByRole("button", { name: "Previous", exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll(".delegation-table tbody tr").length === 40);
   assert.match(await pagination.innerText(), /1–40 of 45 sessions/);
+  assert.deepEqual(errors, []);
+});
+
+test("First evidence uses local time and readable tooltips in the table and inbox", async (t) => {
+  const { page, errors } = await fixture(t);
+  const columns = page.locator(".delegation-columns");
+  await columns.locator("summary").click();
+  await columns.getByLabel("First evidence", { exact: true }).check();
+  await columns.locator("summary").click();
+  const index = await page.getByRole("button", { name: "First evidence", exact: true }).first().evaluate(button => button.closest("th").cellIndex + 1);
+  const cell = page.locator('tr[data-session="s-root"] td').nth(index);
+  assert.match(await cell.innerText(), /Sep 24, 6:00 AM MDT/);
+  const title = await cell.getAttribute("title");
+  assert.match(title, /Sep 24, 2026, 6:00:00 AM MDT/);
+  assert.ok(!title.includes(start.toLocaleString("en-US")));
+  assert.ok(!title.includes(" date"));
+  await page.locator('tr[data-session="s-root"] .delegation-name').click();
+  await waitForReader(page, "s-root");
+  await page.getByRole("combobox", { name: "Session comparison metric", exact: true }).selectOption("self:start");
+  const compact = page.locator('.delegation-inbox-row[data-session="s-root"] .delegation-inbox-metric');
+  assert.match(await compact.innerText(), /Sep 24, 6:00 AM MDT/);
+  assert.equal(await compact.getAttribute("title"), title);
   assert.deepEqual(errors, []);
 });
 
