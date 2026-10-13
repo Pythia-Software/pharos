@@ -2,6 +2,7 @@ package archive
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,8 @@ import (
 
 var mcpTools = []map[string]any{
 	searchMessagesTool,
+	textSearchTool,
+	textSearchCapabilitiesTool,
 	archiveStatusTool,
 	traceWorktreeTool,
 	{"name": "list_repositories", "description": "List the repositories Pharos has sessions for, most recently active first, with each one's conversation count, latest message, and latest capture, plus when Pharos last synced each source. Use it to find the repository name to pass as the repository filter; path finds the repository checked out at a directory.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string", "description": "Matches a repository's name, remote, aliases, or checkout paths."}, "path": map[string]any{"type": "string", "description": "An absolute directory, such as the current working directory."}, "limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 100}, "max_output_tokens": map[string]any{"type": "integer", "minimum": 200, "maximum": 4000}}}},
@@ -68,6 +71,9 @@ func mcpToolError(request map[string]any, message string) map[string]any {
 // handleMCP answers one request. Only tools/list and tools/call use catalog,
 // which may be nil for the others.
 func handleMCP(catalog *Catalog, request map[string]any) map[string]any {
+	return handleMCPContext(context.Background(), catalog, request)
+}
+func handleMCPContext(ctx context.Context, catalog *Catalog, request map[string]any) map[string]any {
 	method := firstString(request["method"])
 	if method == "notifications/initialized" {
 		return nil
@@ -101,7 +107,7 @@ func handleMCP(catalog *Catalog, request map[string]any) map[string]any {
 			status = "disabled"
 			value = "MCP is turned off in Pharos"
 		} else {
-			value, err = callMCP(catalog, name, arguments)
+			value, err = callMCPContext(ctx, catalog, name, arguments)
 			if err != nil {
 				status = "error"
 				value = err.Error()
@@ -136,9 +142,12 @@ func handleMCP(catalog *Catalog, request map[string]any) map[string]any {
 
 // repositoryFilterTools are the tools whose repository argument filters by
 // repository name or remote.
-var repositoryFilterTools = map[string]bool{"search_conversations": true, "search_messages": true, "search_work": true, "list_findings": true, "trace_worktree": true}
+var repositoryFilterTools = map[string]bool{"search_conversations": true, "search_messages": true, "search_text": true, "search_work": true, "list_findings": true, "trace_worktree": true}
 
 func callMCP(catalog *Catalog, name string, args map[string]any) (any, error) {
+	return callMCPContext(context.Background(), catalog, name, args)
+}
+func callMCPContext(ctx context.Context, catalog *Catalog, name string, args map[string]any) (any, error) {
 	limit := int(integer(valueOr(args["limit"], 50)))
 	if limit > 100 {
 		limit = 100
@@ -150,6 +159,10 @@ func callMCP(catalog *Catalog, name string, args map[string]any) (any, error) {
 		}
 	}
 	switch name {
+	case "search_text":
+		return catalog.searchTextMCP(ctx, args)
+	case "get_search_capabilities":
+		return catalog.textSearchCapabilities(ctx)
 	case "trace_worktree":
 		return catalog.traceWorktree(args)
 	case "search_messages":

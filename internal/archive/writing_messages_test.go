@@ -165,7 +165,7 @@ func TestSpanRulesMatchTheSchema(t *testing.T) {
 	reasons := []string{"", "Launched with claude -p by a command", "Sent by a headless claude -p run", "Sent by a codex exec run", "Sent by a headless agy -p run",
 		"Sent by automation nightly", "Sent by another agent session", "Sent by TL1 orchestration", "Sub-agent conversation",
 		"Sent by a headless claude -p or SDK run Conductor did not start", "Harness context", "Repeated prompt: sent in 6 sessions on 4 days", "Slash command",
-		"Attachment reference", "Generated page feedback", "Code block", "Quoted with >", "Matches agent output from 3h earlier", "Already sent 2d earlier",
+		"Attachment reference", "Generated page feedback", "Human feedback comment", "Code block", "Quoted with >", "Matches agent output from 3h earlier", "Already sent 2d earlier",
 		"Line already sent in other conversations", "Sent 4s after the previous message, faster than typing", "Log, trace, code, or data", "Table",
 		"Formatted like agent output", "Mostly identifiers, paths, or code", "Path, URL, or ID"}
 	for _, label := range harnessLabels {

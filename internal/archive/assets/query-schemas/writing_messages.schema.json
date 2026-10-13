@@ -307,6 +307,7 @@
             "Path, URL, or ID",
             "Sent faster than typing",
             "Generated page feedback",
+            "Human feedback comment",
             "Quoted with >",
             "Matches recent agent output",
             "Already sent earlier",

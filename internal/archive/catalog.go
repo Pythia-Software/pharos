@@ -278,6 +278,10 @@ func (c *Catalog) Initialize() error {
 		"CREATE INDEX IF NOT EXISTS repositories_root_commit_idx ON repositories(root_commit)",
 		"CREATE INDEX IF NOT EXISTS repositories_forge_id_idx ON repositories(forge_id)",
 		"CREATE INDEX IF NOT EXISTS message_authorship_work_idx ON message_authorship(work_id)",
+		// The summary only reads the timestamp and word count, not the large
+		// spans_json in each authorship record. Keep zero-word rows out too.
+		"CREATE INDEX IF NOT EXISTS message_authorship_summary_idx ON message_authorship(sent_at,typed_words) WHERE typed_words>0",
+		"CREATE INDEX IF NOT EXISTS agent_sessions_summary_idx ON agent_sessions(id,workspace_id,model)",
 	} {
 		if _, err := c.DB.Exec(index); err != nil {
 			return err
