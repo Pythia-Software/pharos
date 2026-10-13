@@ -203,6 +203,7 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/library.js":       {"library.js", "text/javascript; charset=utf-8"},
 	"/assets/sync.js":          {"sync.js", "text/javascript; charset=utf-8"},
 	"/assets/carbon.js":        {"carbon.js", "text/javascript; charset=utf-8"},
+	"/assets/menu-bar.js":      {"menu-bar.js", "text/javascript; charset=utf-8"},
 }
 
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {
@@ -366,6 +367,12 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.Catalog.pricingStatus(), 200)
 	case path == "/api/usage/summary":
 		value, err := s.Catalog.UsageSummary(r.Context())
+		writeResult(w, value, err)
+	case path == "/api/menu-bar/status":
+		value, err := s.menuBarStatus(r.Context())
+		writeResult(w, value, err)
+	case path == "/api/menu-bar/usage":
+		value, err := s.menuBarUsage(r.Context())
 		writeResult(w, value, err)
 	case path == "/api/tools/status":
 		value, err := s.Catalog.ToolLedgerStatus(r.Context())
