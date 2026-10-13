@@ -841,7 +841,10 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 	if err := recordCopyVersions(tx, host, workspaceID, conversationIDs, record, !authority.older); err != nil {
 		return 0, 0, err
 	}
-	if err := bumpAuthorshipInputs(tx); err != nil {
+	if err := refreshWorkspaceNames(tx, []string{workspaceID}); err != nil {
+		return 0, 0, err
+	}
+	if err := invalidateWorkspaceAuthorship(tx, workspaceID, len(merged) > 0); err != nil {
 		return 0, 0, err
 	}
 	return conversationCount, messageCount, nil
@@ -1103,18 +1106,25 @@ func boolInt(value any) int {
 
 func upsertWorkspace(tx *sql.Tx, record WorkspaceRecord, repoID string, metadata map[string]any, allow bool) (string, error) {
 	id := stableID("workspace", record.SourceKind, record.Account, record.SourceID)
-	_, err := tx.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,repository_id,title,purpose,outcome,location,location_history_json,base_ref,head_ref,branch,owner,flavor,version,lifecycle,activity_at,activity_source,terminal,custody_version,reclamation_authority,preservation_completeness,indexed_at)
+	title, err := workspaceTitleForIngest(tx, record, defaultString(record.Title, record.SourceID))
+	if err != nil {
+		return "", err
+	}
+	_, err = tx.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,repository_id,title,purpose,outcome,location,location_history_json,base_ref,head_ref,branch,owner,flavor,version,lifecycle,activity_at,activity_source,terminal,custody_version,reclamation_authority,preservation_completeness,indexed_at)
 	VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_kind,source_account,source_id) DO UPDATE SET
 	repository_id=COALESCE(excluded.repository_id,workspaces.repository_id),title=excluded.title,purpose=COALESCE(excluded.purpose,workspaces.purpose),outcome=COALESCE(excluded.outcome,workspaces.outcome),location=COALESCE(excluded.location,workspaces.location),location_history_json=excluded.location_history_json,
 	base_ref=COALESCE(excluded.base_ref,workspaces.base_ref),head_ref=COALESCE(excluded.head_ref,workspaces.head_ref),branch=COALESCE(excluded.branch,workspaces.branch),owner=COALESCE(excluded.owner,workspaces.owner),flavor=COALESCE(excluded.flavor,workspaces.flavor),version=COALESCE(excluded.version,workspaces.version),lifecycle=excluded.lifecycle,
 	activity_at=CASE WHEN excluded.activity_at IS NULL THEN workspaces.activity_at WHEN workspaces.activity_at IS NULL OR excluded.activity_at>workspaces.activity_at THEN excluded.activity_at ELSE workspaces.activity_at END,
 	activity_source=CASE WHEN excluded.activity_at IS NOT NULL AND (excluded.activity_at>=workspaces.activity_at OR workspaces.activity_at IS NULL) THEN excluded.activity_source ELSE workspaces.activity_source END,
-	terminal=excluded.terminal,custody_version=COALESCE(excluded.custody_version,workspaces.custody_version),reclamation_authority=excluded.reclamation_authority,preservation_completeness=excluded.preservation_completeness,indexed_at=excluded.indexed_at`, id, record.SourceKind, record.Account, record.SourceID, nilIfEmpty(repoID), defaultString(record.Title, record.SourceID), nilIfEmpty(record.Purpose), nilIfEmpty(record.Outcome), nilIfEmpty(record.Location), "[]", nilIfEmpty(firstString(metadata["base_ref"])), nilIfEmpty(firstString(metadata["head_ref"])), nilIfEmpty(firstString(metadata["branch"])), nilIfEmpty(firstString(metadata["owner"])), nilIfEmpty(firstString(metadata["flavor"])), nilIfEmpty(firstString(metadata["version"])), defaultString(metadata["lifecycle"], "active"), nilIfEmpty(record.ActivityAt), record.SourceKind+":native", boolInt(metadata["terminal"]), nilIfEmpty(firstString(metadata["custody_version"])), boolInt(allow), "source", now())
+	terminal=excluded.terminal,custody_version=COALESCE(excluded.custody_version,workspaces.custody_version),reclamation_authority=excluded.reclamation_authority,preservation_completeness=excluded.preservation_completeness,indexed_at=excluded.indexed_at`, id, record.SourceKind, record.Account, record.SourceID, nilIfEmpty(repoID), title, nilIfEmpty(record.Purpose), nilIfEmpty(record.Outcome), nilIfEmpty(record.Location), "[]", nilIfEmpty(firstString(metadata["base_ref"])), nilIfEmpty(firstString(metadata["head_ref"])), nilIfEmpty(firstString(metadata["branch"])), nilIfEmpty(firstString(metadata["owner"])), nilIfEmpty(firstString(metadata["flavor"])), nilIfEmpty(firstString(metadata["version"])), defaultString(metadata["lifecycle"], "active"), nilIfEmpty(record.ActivityAt), record.SourceKind+":native", boolInt(metadata["terminal"]), nilIfEmpty(firstString(metadata["custody_version"])), boolInt(allow), "source", now())
 	if err != nil {
 		return "", err
 	}
 	err = tx.QueryRow("SELECT id FROM workspaces WHERE source_kind=? AND source_account=? AND source_id=?", record.SourceKind, record.Account, record.SourceID).Scan(&id)
 	if err != nil {
+		return "", err
+	}
+	if err := recordWorkspaceSourceTitle(tx, id, record); err != nil {
 		return "", err
 	}
 	_, err = tx.Exec(`UPDATE workspaces SET main_merge_commit=COALESCE(?,main_merge_commit),main_merge_title=COALESCE(?,main_merge_title),main_merge_url=COALESCE(?,main_merge_url),main_merge_method=COALESCE(?,main_merge_method) WHERE id=?`,
@@ -1839,6 +1849,11 @@ func (c *Catalog) ReconcileIdentitiesContext(ctx context.Context) (int, error) {
 				}
 			}
 		}
+	}
+	if err := c.writeTransaction(ctx, "resolve linked workspace names", func(tx *sql.Tx) error {
+		return refreshWorkspaceNames(tx, nil)
+	}); err != nil {
+		return 0, err
 	}
 	var after int
 	if err := c.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM conversation_identity_links").Scan(&after); err != nil {

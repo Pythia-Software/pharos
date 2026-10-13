@@ -1391,6 +1391,9 @@ func (c *Catalog) storeAuthorship(ctx context.Context, results []authorResult, l
 			return err
 		}
 	}
+	if err := cacheAuthoredWorkspaceNames(tx, results); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

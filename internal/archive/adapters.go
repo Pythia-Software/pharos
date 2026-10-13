@@ -459,13 +459,20 @@ type jsonlAdapter struct {
 	provider string
 	// TL1 records the attempt's initial setting independently of its transcript.
 	initialEffort string
+	names         map[string]transcriptName
 }
 
 var codexForkFilename = regexp.MustCompile(`([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})_([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl$`)
 
 func (a *jsonlAdapter) Fingerprint() (string, error) {
 	fingerprint, err := pathFingerprint(a.config.Path, func(path string, entry os.DirEntry) bool {
-		return strings.HasSuffix(strings.ToLower(entry.Name()), ".jsonl") && a.accept(path)
+		if strings.HasSuffix(strings.ToLower(entry.Name()), ".jsonl") && a.accept(path) {
+			return true
+		}
+		if a.provider == "claude" {
+			return entry.Name() == "sessions-index.json"
+		}
+		return filepath.Dir(path) == a.config.Path && (entry.Name() == "session_index.jsonl" || codexStateName(strings.TrimSuffix(entry.Name(), "-wal")))
 	})
 	return jsonlExtractor + ":" + fingerprint, err
 }
@@ -475,7 +482,7 @@ func (a *jsonlAdapter) Fingerprint() (string, error) {
 // codes, durations, interruptions); v9 retains Codex hosted web searches; v10
 // skips Claude entries replayed under a uuid already seen; v11 retains Claude
 // invoked_skills attachments for skill_usages.
-const jsonlExtractor = "message-model-v12-effort"
+const jsonlExtractor = "message-model-v13-names"
 
 func (a *jsonlAdapter) accept(path string) bool {
 	relative, _ := filepath.Rel(a.config.Path, path)
@@ -547,6 +554,11 @@ func (a *jsonlAdapter) discoverParts(unchanged func([]sourcePart) bool, emit fun
 	if a.provider == "claude" {
 		sort.Strings(roots)
 	}
+	names, err := a.transcriptNames(roots)
+	if err != nil {
+		return err
+	}
+	a.names = names
 	for _, root := range roots {
 		if err := a.context().Err(); err != nil {
 			return err
@@ -562,7 +574,11 @@ func (a *jsonlAdapter) discoverParts(unchanged func([]sourcePart) bool, emit fun
 			parts := make([]sourcePart, 0, len(paths))
 			for _, path := range paths {
 				if info := infos[path]; info != nil {
-					parts = append(parts, sourcePart{item: a.original(path), size: info.Size(), version: info.ModTime().UnixNano()})
+					part := sourcePart{item: a.original(path), size: info.Size(), version: info.ModTime().UnixNano()}
+					if name, ok := a.names[path]; ok {
+						part.signal = name.signal()
+					}
+					parts = append(parts, part)
 				}
 			}
 			if len(parts) == len(paths) && unchanged(parts) {
@@ -648,6 +664,22 @@ func (a *jsonlAdapter) parseFile(path string) (WorkspaceRecord, sourcePart, bool
 		record, ok, err = a.claude(path, events)
 	}
 	observe(&record, part.version)
+	if name, exists := a.names[path]; exists {
+		part.signal = name.signal()
+		if name.id == record.SourceID {
+			if a.provider == "codex" && name.custom && !meaningfulWorkspaceTitle(name.title, record.SourceID) {
+				record.Metadata["title_cleared"] = true
+			}
+			if meaningfulWorkspaceTitle(name.title, record.SourceID) && (name.custom || !meaningfulWorkspaceTitle(record.Title, record.SourceID)) {
+				// A transcript rename wins over a potentially stale project index.
+				if firstString(record.Metadata["title_kind"]) != "custom" && !(name.custom && record.Metadata["title_custom_observed"] == true) {
+					record.Title = name.title
+					record.Metadata["title_evidence"] = name.evidence
+				}
+			}
+			observe(&record, max(part.version, name.observed))
+		}
+	}
 	return record, part, ok, err
 }
 
@@ -864,7 +896,8 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 	if root := claudeRootPath(path); root != path {
 		rootID = strings.TrimSuffix(filepath.Base(root), filepath.Ext(root))
 	}
-	cwd, started, ended, model, effort, branch, title := "", "", "", "", a.initialEffort, "", ""
+	cwd, started, ended, model, effort, branch, title, customTitle := "", "", "", "", a.initialEffort, "", "", ""
+	customTitleSeen := false
 	harness, versionFirst, versionLast := "claude-code", "", ""
 	tokens := map[string]float64{"input_tokens": 0, "output_tokens": 0, "cache_tokens": 0}
 	delegated := map[string]bool{}
@@ -901,6 +934,12 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 		}
 		if firstString(event["type"]) == "ai-title" {
 			title = defaultString(event["aiTitle"], title)
+			continue
+		}
+		if firstString(event["type"]) == "custom-title" {
+			customTitle = firstString(event["customTitle"])
+			customTitleSeen = true
+			continue
 		}
 		timestamp := iso(event["timestamp"])
 		if started == "" {
@@ -1036,7 +1075,13 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 	if rootID != "" {
 		depth = 1
 	}
-	record := WorkspaceRecord{SourceID: sourceID, SourceKind: "claude", Title: defaultString(title, "Claude "+short(sourceID)), Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: ended, Location: cwd, Repository: repository, Metadata: map[string]any{"branch": branch}, Conversations: []ConversationRecord{{NativeID: nativeID, Provider: "claude", Account: a.config.Account, Model: model, Effort: effort, ParentNativeID: rootID, AgentDepth: depth, Origin: origin, Coverage: "complete", Messages: messages, StartedAt: started, EndedAt: ended, Harness: harness, HarnessVersionFirst: versionFirst, HarnessVersionLast: versionLast, Instructions: claudeInstructions(events)}}, Metrics: metrics}
+	record := WorkspaceRecord{SourceID: sourceID, SourceKind: "claude", Title: defaultString(firstString(customTitle, title), "Claude "+short(sourceID)), Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: ended, Location: cwd, Repository: repository, Metadata: map[string]any{"branch": branch}, Conversations: []ConversationRecord{{NativeID: nativeID, Provider: "claude", Account: a.config.Account, Model: model, Effort: effort, ParentNativeID: rootID, AgentDepth: depth, Origin: origin, Coverage: "complete", Messages: messages, StartedAt: started, EndedAt: ended, Harness: harness, HarnessVersionFirst: versionFirst, HarnessVersionLast: versionLast, Instructions: claudeInstructions(events)}}, Metrics: metrics}
+	if customTitle != "" {
+		record.Metadata["title_kind"] = "custom"
+	}
+	if customTitleSeen {
+		record.Metadata["title_custom_observed"] = true
+	}
 	record.Metrics = reconciledTokenMetrics(record)
 	return record, true, nil
 }
