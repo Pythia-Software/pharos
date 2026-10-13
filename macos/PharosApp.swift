@@ -120,8 +120,10 @@ final class ArchiveService: ObservableObject {
     private var service: Process?
     private var release = ReleaseState.none
     private var terminationObserver: NSObjectProtocol?
+    private(set) var menuBar: MenuBarController!
 
     init() {
+        defer { menuBar = MenuBarController(service: self) }
         // Here rather than on a view: with its window closed, Pharos keeps
         // running, and a view's observer would be gone when it quits.
         terminationObserver = NotificationCenter.default.addObserver(
@@ -146,6 +148,18 @@ final class ArchiveService: ObservableObject {
     }
 
     var installationFolder: URL { Bundle.main.bundleURL.deletingLastPathComponent() }
+
+    /// Native menu requests use the same authenticated loopback service as
+    /// the web view, but do not depend on its cookies or window lifetime.
+    func localRequest(_ path: String, method: String = "GET") -> URLRequest? {
+        guard url != nil, let endpoint = lock.withLock({ self.endpoint }),
+              let target = URL(string: path, relativeTo: endpoint.url) else { return nil }
+        var request = URLRequest(url: target, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
+        request.httpMethod = method
+        request.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+        if method == "POST" { request.httpBody = Data("{}".utf8); request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+        return request
+    }
 
     var canSetUpHere: Bool {
         let readOnly = (try? installationFolder.resourceValues(forKeys: [.volumeIsReadOnlyKey]))?.volumeIsReadOnly == true
@@ -622,10 +636,19 @@ struct ArchiveWebView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             setFullScreenClass(webView.window?.styleMask.contains(.fullScreen) == true)
+            service?.menuBar.navigationFinished()
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard let webView else { return }
+            if message.name == "pharosMenuBar" {
+                guard message.frameInfo.isMainFrame, let page = message.frameInfo.request.url,
+                      page.scheme == origin.scheme, page.host == origin.host, page.port == origin.port,
+                      let settings = message.body as? [String: Any] else { return }
+                if settings["refreshUsage"] as? Bool == true { service?.menuBar.invalidateUsage(); return }
+                service?.menuBar.applyPreferences(settings)
+                return
+            }
             if let background = (message.body as? [String: Any])?["background"] as? String {
                 if let color = Self.color(css: background) { webView.underPageBackgroundColor = color }
                 return
@@ -807,11 +830,13 @@ struct ArchiveWebView: NSViewRepresentable {
             name: Self.libraryHandler
         )
         configuration.userContentController.add(context.coordinator, name: Self.windowMessageName)
+        configuration.userContentController.add(context.coordinator, name: "pharosMenuBar")
         configuration.userContentController.addUserScript(
             WKUserScript(source: Self.windowChromeScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
         )
         let view = ArchiveWKWebView(frame: .zero, configuration: configuration)
         context.coordinator.webView = view
+        service.menuBar.webView = view
         view.onMoveToWindow = { [weak coordinator = context.coordinator] in coordinator?.observeFullScreen(of: $0) }
         view.uiDelegate = context.coordinator
         view.navigationDelegate = context.coordinator
@@ -826,6 +851,7 @@ struct ArchiveWebView: NSViewRepresentable {
 
     static func dismantleNSView(_ view: ArchiveWKWebView, coordinator: Coordinator) {
         view.configuration.userContentController.removeScriptMessageHandler(forName: windowMessageName)
+        view.configuration.userContentController.removeScriptMessageHandler(forName: "pharosMenuBar")
         view.configuration.userContentController.removeScriptMessageHandler(
             forName: "pharosClipboard",
             contentWorld: .page
@@ -1068,12 +1094,30 @@ struct FirstRunView: View {
     }
 }
 
+struct MenuBarWindowBridge: NSViewRepresentable {
+    @Environment(\.openWindow) private var openWindow
+    let service: ArchiveService
+    final class WindowView: NSView {
+        weak var controller: MenuBarController?
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let window { controller?.window = window }
+        }
+    }
+    func makeNSView(context: Context) -> WindowView {
+        let open = openWindow
+        service.menuBar.openWindow = { open(id: "pharos") }
+        let view = WindowView(); view.controller = service.menuBar; return view
+    }
+    func updateNSView(_ view: WindowView, context: Context) {}
+}
+
 @main struct PharosApp: App {
     @StateObject private var service = ArchiveService()
     @StateObject private var updates = UpdateNotice()
     @AppStorage("checkForUpdatesOnLaunch") private var checkForUpdatesOnLaunch = false
     var body: some Scene {
-        WindowGroup("Pharos") {
+        WindowGroup("Pharos", id: "pharos") {
             Group {
                 if let disconnection = service.disconnected {
                     LibraryDisconnectedView(disconnection: disconnection, ejecting: service.ejecting,
@@ -1092,6 +1136,7 @@ struct FirstRunView: View {
                 }
             }
             .background(WindowChrome())
+            .background(MenuBarWindowBridge(service: service))
             .sheet(isPresented: Binding(get: { updates.status != nil }, set: { if !$0 { updates.status = nil } })) {
                 UpdateNoticeSheet(notice: updates)
             }
