@@ -142,7 +142,7 @@ func handleMCPContext(ctx context.Context, catalog *Catalog, request map[string]
 
 // repositoryFilterTools are the tools whose repository argument filters by
 // repository name or remote.
-var repositoryFilterTools = map[string]bool{"search_conversations": true, "search_messages": true, "search_text": true, "search_work": true, "list_findings": true, "trace_worktree": true}
+var repositoryFilterTools = map[string]bool{"search_conversations": true, "search_messages": true, "search_text": true, "search_work": true, "query_statistics": true, "list_findings": true, "trace_worktree": true}
 
 func callMCP(catalog *Catalog, name string, args map[string]any) (any, error) {
 	return callMCPContext(context.Background(), catalog, name, args)
@@ -159,6 +159,10 @@ func callMCPContext(ctx context.Context, catalog *Catalog, name string, args map
 		}
 	}
 	switch name {
+	case "list_metrics":
+		return listMetrics(args)
+	case "query_statistics":
+		return catalog.queryStatistics(name, args)
 	case "search_text":
 		return catalog.searchTextMCP(ctx, args)
 	case "get_search_capabilities":
@@ -172,6 +176,9 @@ func callMCPContext(ctx context.Context, catalog *Catalog, name string, args map
 	case "list_repositories":
 		return catalog.listRepositories(args)
 	case "search_conversations":
+		if metricCall(args) {
+			return catalog.queryStatistics(name, args)
+		}
 		return catalog.searchConversations(args)
 	case "get_conversation_overview":
 		return catalog.conversationOverview(args)
@@ -180,6 +187,9 @@ func callMCPContext(ctx context.Context, catalog *Catalog, name string, args map
 	case "get_conversation_messages":
 		return catalog.conversationMessages(args)
 	case "search_work":
+		if metricCall(args) {
+			return catalog.queryStatistics(name, args)
+		}
 		options := SearchOptions{Query: firstString(args["query"]), Repository: firstString(args["repository"]), Source: firstString(args["source"]), File: firstString(args["file"]), Owner: firstString(args["owner"]), Provider: firstString(args["provider"]), Model: firstString(args["model"]), Effort: firstString(args["effort"]), From: firstString(args["from"]), To: firstString(args["to"]), Flavor: firstString(args["flavor"]), Version: firstString(args["version"]), Outcome: firstString(args["outcome"]), Error: firstString(args["error"]), Metric: firstString(args["metric"]), Limit: limit}
 		if args["pr"] != nil {
 			value := int(integer(args["pr"]))

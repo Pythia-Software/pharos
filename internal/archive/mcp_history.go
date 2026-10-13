@@ -69,6 +69,9 @@ var mcpLoggedArguments = []string{
 	"message_id", "around_message_id", "text_offset", "change_set_id", "task", "name",
 	"match_mode", "roles", "kinds", "host_id", "stale_only",
 	"section", "field",
+	"entity", "metric_scope", "metric_quality", "metric_filters", "order_by", "result_mode", "result_type", "select", "workspace_ids", "group_by", "aggregations",
+	"include_metrics",
+	"retain_snapshot", "release_snapshot",
 }
 
 func mcpArgumentSummary(args map[string]any) string {
@@ -90,6 +93,9 @@ func mcpResultCount(value any) *int {
 	if !ok {
 		return nil
 	}
+	if count, ok := object["returned_count"].(int); ok {
+		return &count
+	}
 	switch items := object["items"].(type) {
 	case []map[string]any:
 		count := len(items)
@@ -107,6 +113,9 @@ func mcpResultTruncated(value any) bool {
 		return false
 	}
 	if object["truncated"] == true || object["next_text_offset"] != nil {
+		return true
+	}
+	if complete, ok := object["population_complete"].(bool); ok && !complete {
 		return true
 	}
 	items, ok := object["items"].([]map[string]any)

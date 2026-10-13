@@ -232,7 +232,12 @@ func (c *Catalog) ensureLibrary() error {
 // RefreshLibrary recomputes up to batch dirty workspaces in one short write
 // transaction and reports how many it cleared.
 func (c *Catalog) RefreshLibrary(ctx context.Context, batch int) (int, error) {
-	return c.refreshLibrary(ctx, batch, nil)
+	count, err := c.refreshLibrary(ctx, batch, nil)
+	if err != nil {
+		return count, err
+	}
+	metrics, err := c.refreshMetricProjections(ctx, batch)
+	return max(count, metrics), err
 }
 
 func (c *Catalog) refreshLibraryWorkspaces(ctx context.Context, workspaces []string) error {

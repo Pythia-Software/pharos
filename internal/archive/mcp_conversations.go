@@ -335,6 +335,40 @@ func (c *Catalog) conversationOverview(args map[string]any) (map[string]any, err
 		"last_response":     map[string]any{"text": clipText(firstString(row["conversation_outcome"]), min(500, budget)), "message_id": row["outcome_message_id"]},
 		"workspace_outcome": clipText(firstString(row["outcome"]), 200),
 		"note":              "Extractive previews; inspect cited messages before treating an outcome as verified."}
+	if args["include_metrics"] == true {
+		if _, err := c.refreshMetricProjections(context.Background(), 1, firstString(row["workspace_id"])); err != nil {
+			return nil, err
+		}
+		values, err := queryMaps(c.DB, `SELECT p.metrics_json metrics,
+			EXISTS(SELECT 1 FROM mcp_metric_dirty d WHERE d.workspace_id=c.workspace_id) metric_pending,
+			CASE WHEN `+currentGroupConversation("c")+` THEN 1 ELSE 0 END current_group_member
+			FROM conversations c LEFT JOIN mcp_metric_projection p ON p.entity='conversation' AND p.entity_id=c.id WHERE c.id=?`, id)
+		if err != nil {
+			return nil, err
+		}
+		raw := any(nil)
+		if len(values) > 0 {
+			raw = values[0]["metrics"]
+		}
+		metrics, err := decodeMetrics(raw)
+		if err != nil {
+			return nil, err
+		}
+		if len(values) > 0 && integer(values[0]["current_group_member"]) == 0 {
+			metrics = absentMetrics("unavailable")
+			result["metrics_unavailable_reason"] = "inactive_group_member"
+		} else if len(values) > 0 && integer(values[0]["metric_pending"]) != 0 {
+			for name, value := range metrics {
+				value.Status = "pending"
+				metrics[name] = value
+			}
+		}
+		request := statisticsRequest{Scope: "conversation", Quality: "complete"}
+		for _, d := range metricDefinitions {
+			request.Metrics = append(request.Metrics, d.Name)
+		}
+		result["metrics"] = statisticsMetricEvidence(statisticsRow{ID: id, Workspace: firstString(row["workspace_id"]), Metrics: metrics}, request)
+	}
 	if err := c.attachConversationProvenance([]map[string]any{result}); err != nil {
 		return nil, err
 	}
