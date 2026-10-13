@@ -287,8 +287,6 @@
 }
 .delegation-table-scroll {
   overflow: auto;
-  height: var(--delegation-table-height, auto);
-  max-height: var(--delegation-table-height, 560px);
   border: 1px solid var(--line);
   border-radius: 4px;
   margin-top: 10px;
@@ -296,26 +294,6 @@
 .delegation-table-size {
   max-width: 100%;
   min-width: 0;
-}
-.delegation-resize-footer {
-  display: flex;
-  justify-content: end;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-}
-.delegation-resize-footer small {
-  font-size: var(--fs-3xs);
-}
-.delegation-table-resize {
-  touch-action: none;
-  cursor: nwse-resize;
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  padding: 2px 5px;
-  font-size: 18px;
-  line-height: 1;
 }
 .delegation-table {
   border-collapse: separate;
@@ -608,23 +586,12 @@
   font-size: var(--fs-xs);
   margin-top: 3px;
 }
-.delegation-session-heading button {
-  font-size: var(--fs-xs);
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  color: var(--accent);
-  background: var(--panel);
-  padding: 4px 7px;
-}
 .conversation-head:has(.delegation-session-heading) .conversation-title-row {
   margin-top: 12px;
 }
 @media (max-width: 700px) {
   .delegation-session-heading {
     flex-wrap: wrap;
-  }
-  .delegation-session-heading button {
-    margin-left: auto;
   }
 }
 .delegation-context > button,

@@ -1,16 +1,40 @@
 # Delegation explorer
 
-The workspace detail page keeps its conversation reader as the main surface.
-A **Workspace Sessions** toolbar sits above it and selects the transcript,
-replacing the conversation dropdown. A single button beside the sliding
+The workspace route `/work/{workspace}` opens an overview without fetching a
+transcript. Selecting a session opens `/work/{workspace}/conversation/{conversation}`
+and animates the overview into an inbox sidebar alongside the existing reader.
+The panes scroll independently. Their divider supports dragging, keyboard
+resizing, and double-click reset; its width is remembered. Below 720 pixels of
+sidebar width, the usage table becomes a compact hierarchy with one comparison
+metric selectable from every Self and Self + children column. Hierarchy boxes,
+selection highlighting, sorting, branch collapse, and pagination remain available.
+Widening the sidebar restores the full table. Parallel activity stays available
+in the sidebar with its full-workspace overview, range selection, explicit detail
+expansion, and tool-call popovers; event grouping adapts to its narrower axis.
+
+The reader toolbar shows the selected session number, assignment, provider,
+model, and effort above a borderless transcript. It returns to the overview
+and toggles visibility of workspace sessions. Browser Back/Forward retains analysis state and the per-conversation reading position
+and expanded top-level turns for the mounted workspace. A newly opened
+single-turn session expands its turn by default, including long sessions;
+returning to a session preserves its saved open/closed state. Direct conversation and
+tool-message links open the reader, including legacy conversation query links.
+On screens below 960 pixels, the conversation fills the screen and Workspace
+Sessions opens a modal navigator sheet with a backdrop, focus trap, and Escape
+to dismiss. Selecting a session dismisses the sheet. Reduced-motion settings
+disable layout animations. Standalone Share exports keep their original reader.
+
+A **Workspace Sessions** toolbar selects the transcript, replacing the
+conversation dropdown. A single button beside the sliding
 Hierarchy & usage / Parallel activity switch shows or hides the session content.
 The toolbar remains visible while collapsed, and choosing a view opens it.
 The views sit directly on the workspace without an enclosing disclosure panel. The selected row and conversation header
 share a background highlight, session outline number, and assignment label.
 Workspace totals sit alongside the workspace title and remain visible when the
 explorer is collapsed. The native workspace header omits its old Usage disclosure.
-The conversation header adds parent navigation, a child-session picker, and **Parallel activity**, which
-fits the timeline to that session and its descendants. Delegation entries gain
+The conversation header shows self usage and a child-session picker. Parent
+sessions and parallel activity are reached through the workspace navigator.
+Cross-workspace parent references retain their direct navigation link. Delegation entries gain
 links to child transcripts when their turns are materialized. Child transcripts
 open in the existing reader, with its search, context rail, and lazy tool output.
 
@@ -18,7 +42,8 @@ The explorer has a hierarchy/usage table and a shared-axis activity view. Nested
 boxes and level badges frame each visible subtree. Parallel heavy borders retain
 every enclosing level on both sides, including during horizontal scrolling.
 A lighter divider beneath each parent separates it from its children. The table
-can be resized using its corner handle or arrow keys, with dimensions saved.
+uses the full overview width and grows with its rows, scrolling naturally with the overview. The inbox sidebar width is adjusted with
+its divider.
 The two orders are hierarchy and metric ranking. Clicking a metric header cycles
 through descending, ascending, and hierarchy; the Execution session header
 returns to hierarchy. Headers are the sole sorting controls. The explorer has no
@@ -46,7 +71,7 @@ or choose Whole workspace to reset. Zoom/pan buttons and UTC input fields
 are omitted in favor of direct manipulation. Breadcrumbs, local-time bounds (in the browser's timezone), visible
 span, archive offset, and zoom factor describe the viewport. Short neighboring
 calls are grouped at the current resolution; errors keep independent references.
-Clicking a session label or lane background opens and scrolls to its conversation,
+Clicking a session label or lane background opens its conversation in the reader,
 matching the hierarchy table. Each lane has an independent Activity button to
 expand or collapse its tool categories; labels occupy a separate band above the
 spans. The displayed conversation is highlighted independently of expansion.
@@ -114,7 +139,12 @@ return HTTP 409 rather than silently reordering a later page.
 windowed/grouped tool marks with explicit end-evidence status, independent error
 references, inferred background intervals, and evidence clusters. Neither endpoint sends tool outputs or full
 transcripts. Compact ledgers are streamed into a cached snapshot inside one
-read transaction. The cache invalidates on catalog commits. Analysis currently
+read transaction. A separate retention policy keeps at most four completed
+workspace snapshots, evicts the least recently requested snapshot, and expires
+snapshots after five idle minutes during requests or cache maintenance. Catalog
+changes drop outdated snapshots; delegation snapshots rebuild only on demand
+and are excluded from background cache warming. Concurrent requests share
+in-flight work, which may temporarily exceed the completed-snapshot limit. Analysis currently
 limits a workspace to 10,000 sessions/conversations and 500,000 tool/request
 observations; pages, ancestor context, and lane requests are capped at 100;
 omitted context is reported. A lane reports mark

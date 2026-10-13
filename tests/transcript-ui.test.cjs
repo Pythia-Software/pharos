@@ -155,11 +155,12 @@ test('conversation and message Name and ID buttons copy in one click', async t =
   assert.equal(await head.getByRole('button',{name:'Copy conversation ID'}).locator('use').getAttribute('href'),'#ph-icon-check');
 });
 
-test('deferred long turns retain profiles and spend before materialization', async t => {
+test('single long turns open by default and retain profiles and spend', async t => {
   const request=event('usage','message',{message:{id:'long-request',usage:{input_tokens:12000,output_tokens:100},content:[{type:'text',text:'Final response'}]}});
   const page=await fixture(t,[human(),...Array.from({length:301},(_,i)=>event('filler-'+i,'message','Filler')),request]);
   assert.equal(await page.locator('.conversation-panel').getAttribute('data-deferred'),'true');
-  assert.equal(await page.locator('.turn-body .timeline-entry').count(),0,'Bodies remain lazy');
+  assert.equal(await page.locator('.turn').getAttribute('open'),'');
+  assert.ok(await page.locator('.turn-body .timeline-entry').count()>0,'The single turn is materialized on first access');
   assert.equal(await page.locator('.turn > summary .overview-spend').getAttribute('data-tokens'),'12100');
   const marker=page.locator('.token-map .event-marker');
   assert.equal(await marker.getAttribute('data-context'),'12000');
@@ -170,7 +171,7 @@ test('deferred long turns retain profiles and spend before materialization', asy
   assert.equal(await page.getByRole('button',{name:/Highest-spend turn/}).count(),0);
   await marker.click();
   assert.equal(await page.locator('.turn').getAttribute('open'),'');
-  assert.equal(await marker.count(),1,'No duplicate profile after materialization');
+  assert.equal(await marker.count(),1,'No duplicate profile after reopening');
 });
 
 test('many lazy turns keep all profiles, compactions, nested usage and highest-spend navigation', async t => {
@@ -364,14 +365,17 @@ async function workFixture(t, overrides = {}) {
     receipt:{outcome:'preserved',package_bytes:1024,package_hash:'receipt-hash'},
     conversations:[{provider:'claude',native_id:'one',coverage:'complete',messages:[human(),read()]}], ...overrides };
   await serveWork(page, work);
-  await page.evaluate(async () => {
-    await detail('work');
+  await page.evaluate(async conversation => {
+    // Reader-specific tests open a conversation explicitly; the normal work
+    // route now starts at the workspace overview (covered by delegation-ui).
+    if(conversation)history.replaceState(null,'',`/work/work?conversation=${encodeURIComponent(conversation)}`);
+    await detail('work',true);
     document.querySelector('#transcript-test-root').replaceChildren(document.querySelector('#detailBody'));
-  });
+  }, work.conversations?.length ? work.conversations[0].id || 'conversation-0' : '');
   return page;
 }
 
-test('workspace leads with transcript and keeps supporting information collapsed', async t => {
+test('explicit conversation route keeps supporting information collapsed in the fallback reader', async t => {
   const page = await workFixture(t);
   const text = await transcript(page).innerText();
   assert.match(text,/Improve archive search · #42/);
@@ -1193,10 +1197,10 @@ test('conversation find highlights what the Show filter shows and expands throug
   assert.equal(await page.locator('.conversation-find-hidden').isVisible(),false);
   await page.getByLabel('Tool output').check();
   assert.ok(await page.locator('.conversation-find-match').count()>calls);
-  await page.getByLabel('Case sensitive').check();
+  await page.locator('.conversation-find').getByLabel('Case sensitive').check();
   await search.fill('Alpha');
   assert.equal(await page.locator('.conversation-find-match').count(),1);
-  await page.getByLabel('Case sensitive').uncheck();
+  await page.locator('.conversation-find').getByLabel('Case sensitive').uncheck();
   await page.getByLabel('Regex').check();
   await search.fill('alpha|Alpha');
   assert.ok(await page.locator('.conversation-find-match').count()>1);
@@ -1286,13 +1290,12 @@ test('large conversations defer turn bodies and reveal later turns on demand', a
   assert.equal(await page.locator('.conversation-find-match').count(),1);
 });
 
-test('a single oversized turn also starts as a summary', async t => {
+test('a single oversized turn opens by default and still pages its events', async t => {
   const messages=[event('human-large','message','Large prompt',0,{role:'user'})];
   for(let index=0;index<350;index++)messages.push(event(`reply-large-${index}`,'message',`Response ${index}`,index));
   const page=await fixture(t,messages);
   assert.equal(await page.locator('.turn').count(),1);
-  assert.equal(await page.locator('.turn-body .timeline-entry').count(),0);
-  await page.locator('.turn > summary').click();
+  assert.equal(await page.locator('.turn').evaluate(element=>element.open),true);
   // The first page renders at once; the rest follow as the reader scrolls.
   assert.equal(await page.locator('.turn-body .timeline-entry').count(),151);
   assert.match(await page.locator('.sequence-more').innerText(),/Show 150 more · 200 events not shown/);

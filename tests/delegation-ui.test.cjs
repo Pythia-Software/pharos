@@ -211,14 +211,16 @@ const work = {
   prs: [],
   identity_links: [],
 };
-async function fixture(t) {
+async function fixture(t, options = {}) {
   const page = await browser.newPage({
-    viewport: { width: 1400, height: 1000 },
+    viewport: options.viewport || { width: 1400, height: 1000 },
     timezoneId: "America/Denver",
     locale: "en-US",
+    reducedMotion: "reduce",
   });
   t.after(() => page.close());
   const errors = [];
+  const transcriptRequests = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.route("http://delegation.test/**", (route) => {
     const url = new URL(route.request().url());
@@ -257,9 +259,10 @@ async function fixture(t) {
     if (pathname === "/api/work/work") body = work;
     if (pathname.startsWith("/api/work/work/conversations/")) {
       const conv = pathname.split("/").at(-1);
+      transcriptRequests.push(conv);
       body = {
         ...work.conversations.find((c) => c.id === conv),
-        messages: messages(conv),
+        messages: options.messages ? options.messages(conv) : messages(conv),
       };
     }
     if (pathname === "/api/work/work/delegation") {
@@ -374,10 +377,10 @@ async function fixture(t) {
       contentType: "application/json",
     });
   });
-  await page.goto("http://delegation.test/work/work?explorer=table");
-  await page.locator(".delegation-table tbody tr").first().waitFor();
-  await page.locator(".delegation-context").waitFor();
-  return { page, errors };
+  await page.goto("http://delegation.test" + (options.url || "/work/work?explorer=table"));
+  if (options.url?.includes("conversation")) await page.locator(".delegation-session-heading").waitFor();
+  else await page.locator(".delegation-table tbody tr").first().waitFor();
+  return { page, errors, transcriptRequests };
 }
 test("Pharos table keeps hierarchy, absolute values, complete metric families and global tint", async (t) => {
   const { page, errors } = await fixture(t);
@@ -731,88 +734,45 @@ test("hierarchy frames span every cell and header sorting cycles back to hierarc
   assert.deepEqual(errors, []);
 });
 
-test("table resizes persist, and explorer selection matches the transcript heading", async (t) => {
+test("overview table fills the page and session identity stays in the borderless reader header", async (t) => {
   const { page, errors } = await fixture(t);
+  const table = page.locator(".delegation-table-size");
+  const width = (await table.boundingBox()).width;
+  assert.equal(await page.locator(".delegation-resize-footer").count(), 0);
+  assert.equal(await page.getByRole("button", { name: "Resize execution session table", exact: true }).count(), 0);
+  assert.equal(await page.locator(".delegation-table-scroll").evaluate(el => getComputedStyle(el).maxHeight), "none");
+  await page.locator('tr[data-session="s-child"] td').nth(1).click();
+  await page.waitForFunction(() => document.querySelector(".delegation-session-heading")?.dataset.session === "s-child");
+  await page.locator('.delegation-inbox-row.current[data-session="s-child"]').waitFor();
+  assert.equal(new URL(page.url()).pathname, "/work/work/conversation/child");
   assert.equal(await page.locator(".conversation-selector").count(), 0);
-  const table = page.locator(".delegation-table-size"),
-    scroll = page.locator(".delegation-table-scroll");
-  const before = await table.boundingBox(),
-    beforeHeight = await scroll.evaluate((el) => el.clientHeight);
-  const grip = await page
-    .getByRole("button", {
-      name: "Resize execution session table",
-      exact: true,
-    })
-    .boundingBox();
-  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+  assert.match(await page.locator(".delegation-session-heading").innerText(), /Session 1.1[\s\S]*codex · gpt-test · high/);
+  const bar = page.locator(".workspace-reader-bar");
+  assert.equal(await bar.locator(".delegation-session-heading").count(), 1);
+  assert.equal(await page.locator(".conversation-panel .delegation-session-heading").count(), 0);
+  assert.equal(await page.locator(".conversation-panel").evaluate(el => getComputedStyle(el).borderTopWidth), "0px");
+  assert.equal(await page.locator(".conversation-panel").evaluate(el => getComputedStyle(el).borderRadius), "0px");
+  const reader = await page.locator(".workspace-reader").boundingBox();
+  const header = await bar.boundingBox();
+  assert.equal(header.x, reader.x - 8);
+  await page.locator(".workspace-reader-content").evaluate(el => el.scrollTop = 300);
+  assert.equal((await bar.boundingBox()).y, header.y);
+  const divider = page.getByRole("separator", { name: "Resize workspace sessions sidebar", exact: true });
+  const edge = await divider.boundingBox();
+  await page.mouse.move(edge.x + edge.width / 2, edge.y + edge.height / 2);
   await page.mouse.down();
-  await page.mouse.move(
-    grip.x + grip.width / 2 - 160,
-    grip.y + grip.height / 2 + 100,
-  );
+  await page.mouse.move(edge.x + edge.width / 2 + 80, edge.y + edge.height / 2);
   await page.mouse.up();
-  assert.ok((await table.boundingBox()).width < before.width - 150);
-  assert.ok(
-    (await scroll.evaluate((el) => el.clientHeight)) >= beforeHeight + 95,
-  );
-  const resized = await table.boundingBox();
+  const sidebarWidth = Number(await divider.getAttribute("aria-valuenow"));
+  assert.ok(sidebarWidth >= 475);
   await page.reload();
   await page.locator(".delegation-session-heading").waitFor();
-  assert.equal((await table.boundingBox()).width, resized.width);
-  await page.locator('tr[data-session="s-child"]').locator("td").nth(1).click();
-  await page.waitForFunction(
-    () =>
-      document.querySelector(".delegation-session-heading")?.dataset.session ===
-      "s-child",
-  );
-  assert.equal(
-    await page.locator(".delegation-current").getAttribute("data-session"),
-    "s-child",
-  );
-  await page.waitForFunction(() => {
-    const heading = document.querySelector(".delegation-session-heading");
-    const main = document.querySelector("main").getBoundingClientRect();
-    return heading.getBoundingClientRect().top >= main.top && heading.getBoundingClientRect().top < main.top + 30;
-  });
-  assert.equal(await page.locator(".conversation-panel").evaluate(el => document.activeElement === el), true);
-  // Selecting the already displayed session should navigate to its header too.
-  await page.getByRole("button", { name: "Choose session ↑", exact: true }).click();
-  await page.locator('tr[data-session="s-child"] .delegation-name').click();
-  await page.waitForFunction(() => document.querySelector(".delegation-session-heading").getBoundingClientRect().top < document.querySelector("main").getBoundingClientRect().top + 30);
-  assert.equal(
-    await page.locator(".delegation-session-number").innerText(),
-    "Session 1.1",
-  );
-  assert.match(
-    await page.locator(".delegation-session-heading").innerText(),
-    /Review implementation[\s\S]*codex · gpt-test · high/,
-  );
-  assert.match(
-    await page
-      .locator(".delegation-current .delegation-session-meta")
-      .innerText(),
-    /high/,
-  );
-  assert.notEqual(
-    await page
-      .locator(".delegation-current .delegation-label-cell")
-      .evaluate((el) => getComputedStyle(el).backgroundColor),
-    await page
-      .locator('tr[data-session="s-root"] .delegation-label-cell')
-      .evaluate((el) => getComputedStyle(el).backgroundColor),
-  );
-  await page.setViewportSize({ width: 390, height: 850 });
-  assert.equal(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth > innerWidth,
-    ),
-    false,
-  );
-  const edge = await page
-    .locator('tr[data-session="s-nested"] .delegation-frame-side.right')
-    .first()
-    .boundingBox();
-  assert.ok(edge.x + edge.width <= 390);
+  assert.equal(Number(await divider.getAttribute("aria-valuenow")), sidebarWidth);
+  await page.locator(".workspace-nav-bar").getByRole("button", { name: "Open workspace overview", exact: true }).click();
+  await page.locator(".delegation-table tbody tr").first().waitFor();
+  assert.equal((await table.boundingBox()).width, width);
+  assert.equal(new URL(page.url()).pathname, "/work/work");
+  assert.equal(await page.locator(".workspace-reader").isVisible(), false);
   assert.deepEqual(errors, []);
 });
 
@@ -965,14 +925,12 @@ test("parallel row navigation, activity expansion and tool-call popovers are ind
   assert.equal(await page.locator(".delegation-lane.detailed").count(), 0);
   await childLane.locator(".delegation-name").click();
   await page.waitForFunction(() => document.querySelector(".delegation-session-heading")?.dataset.session === "s-child");
-  await page.waitForFunction(() => {
-    const heading = document.querySelector(".delegation-session-heading").getBoundingClientRect();
-    const main = document.querySelector("main").getBoundingClientRect();
-    return heading.top >= main.top && heading.top < main.top + 30;
-  });
+  assert.equal(new URL(page.url()).pathname, "/work/work/conversation/child");
+  await page.waitForFunction(() => document.activeElement === document.querySelector(".conversation-panel"));
   assert.equal(await page.locator(".delegation-lane.detailed").count(), 0);
   assert.equal(await childLane.locator(".delegation-activity-toggle").getAttribute("aria-expanded"), "false");
-  await page.getByRole("button", { name: "Choose session ↑", exact: true }).click();
+  await page.locator(".workspace-reader-bar").getByRole("button", { name: "Hide workspace sessions", exact: true }).click();
+  await page.getByRole("button", { name: "Show workspace sessions", exact: true }).click();
   await page.getByRole("tab", { name: "Parallel activity", exact: true }).click();
   await childLane.locator(".delegation-mark").first().waitFor();
   const beforeExpansion = page.url();
@@ -997,7 +955,7 @@ test("parallel row navigation, activity expansion and tool-call popovers are ind
   const jump = menu.getByRole("button", { name: "Jump to tool call ↗", exact: true });
   assert.equal(await jump.evaluate(el => document.activeElement === el), true);
   const menuBox = await menu.boundingBox(), snippetBox = await snippet.boundingBox();
-  assert.ok(menuBox.y >= snippetBox.y + snippetBox.height && menuBox.y < snippetBox.y + snippetBox.height + 10);
+  assert.ok(menuBox.x >= 0 && menuBox.x + menuBox.width <= 1400 && menuBox.y >= 0 && menuBox.y + menuBox.height <= 1000);
   await page.keyboard.press("Escape");
   assert.equal(await menu.count(), 0);
   assert.equal(await snippet.evaluate(el => document.activeElement === el), true);
@@ -1012,6 +970,8 @@ test("parallel row navigation, activity expansion and tool-call popovers are ind
 
 test("child transcripts and their parents use the native conversation reader and launch links", async (t) => {
   const { page, errors } = await fixture(t);
+  await page.locator('tr[data-session="s-root"] .delegation-name').click();
+  await page.locator(".delegation-context").waitFor();
   await page
     .getByRole("button", { name: "Open child", exact: false })
     .first()
@@ -1019,21 +979,11 @@ test("child transcripts and their parents use the native conversation reader and
   await page.waitForFunction(
     () => new URL(location.href).searchParams.get("conversation") === "child",
   );
-  await page
-    .locator(".delegation-context")
-    .getByRole("button", { name: /Parent/ })
-    .waitFor();
-  assert.match(
-    await page.locator(".delegation-context").innerText(),
-    /Parent · Build the feature/,
-  );
-  await page
-    .locator(".delegation-context")
-    .getByRole("button", { name: /Parent/ })
-    .click();
-  await page.waitForFunction(
-    () => new URL(location.href).searchParams.get("conversation") === "root",
-  );
+  await waitForReader(page, "s-child");
+  const context = page.locator(".delegation-context");
+  assert.equal(await context.getByRole("button", { name: /Parent|Parallel activity/ }).count(), 0);
+  assert.match(await context.innerText(), /self tokens/);
+  await openInboxSession(page, "s-root");
   await page
     .getByRole("tab", { name: "Parallel activity", exact: true })
     .click();
@@ -1084,6 +1034,12 @@ test("workspace sessions pages contain forty rows and keep navigation on the las
   });
   await page.reload();
   await page.waitForFunction(() => document.querySelectorAll(".delegation-table tbody tr").length === 40);
+  const scroll = page.locator(".delegation-table-scroll");
+  assert.ok((await scroll.boundingBox()).height > 1000);
+  assert.equal(await scroll.evaluate(el => el.scrollHeight > el.clientHeight), false);
+  await page.locator(".workspace-overview").evaluate(el => el.scrollTop = 650);
+  assert.ok(await page.locator(".workspace-overview").evaluate(el => el.scrollTop) >= 650);
+  assert.equal(await scroll.evaluate(el => el.scrollTop), 0);
   const pagination = page.locator(".delegation-pagination");
   assert.match(await pagination.innerText(), /1–40 of 45 sessions/);
   assert.equal(await pagination.getByRole("button", { name: "Previous", exact: true }).isDisabled(), true);
@@ -1094,5 +1050,192 @@ test("workspace sessions pages contain forty rows and keep navigation on the las
   await pagination.getByRole("button", { name: "Previous", exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll(".delegation-table tbody tr").length === 40);
   assert.match(await pagination.innerText(), /1–40 of 45 sessions/);
+  assert.deepEqual(errors, []);
+});
+
+async function waitForReader(page, session) {
+  await page.waitForFunction(id => document.querySelector(".delegation-session-heading")?.dataset.session === id && document.activeElement === document.querySelector(".conversation-panel"), session);
+}
+async function openInboxSession(page, session) {
+  await page.locator(`.delegation-inbox-row[data-session="${session}"] .delegation-name`).click();
+  await waitForReader(page, session);
+}
+
+test("overview loads no transcript; compact comparison sorting carries back to the full table", async (t) => {
+  const { page, errors, transcriptRequests } = await fixture(t);
+  assert.deepEqual(transcriptRequests, []);
+  assert.equal(await page.locator(".conversation-panel").count(), 0);
+  await page.locator('tr[data-session="s-root"] .delegation-name').click();
+  await waitForReader(page, "s-root");
+  assert.deepEqual(transcriptRequests, ["root"]);
+  const metric = page.getByRole("combobox", { name: "Session comparison metric", exact: true });
+  assert.equal(await metric.locator("option").count(), keys.length * 2);
+  await metric.selectOption("self:tokens");
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("delegation_scope") === "self");
+  await page.getByRole("button", { name: "Sort Tokens, currently descending", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector(".delegation-inbox-row").dataset.session === "s-nested");
+  await page.locator(".workspace-reader-bar").getByRole("button", { name: "Hide workspace sessions", exact: true }).click();
+  assert.equal(await page.locator(".workspace-overview").evaluate(el => el.inert), true);
+  await page.getByRole("button", { name: "Show workspace sessions", exact: true }).click();
+  assert.equal(await page.locator(".workspace-overview").evaluate(el => el.inert), false);
+  await page.locator(".workspace-nav-bar").getByRole("button", { name: "Open workspace overview", exact: true }).click();
+  await page.locator(".delegation-table tbody tr").first().waitFor();
+  assert.equal(await page.locator(".delegation-table tbody tr").first().getAttribute("data-session"), "s-nested");
+  assert.equal(new URL(page.url()).searchParams.get("delegation_direction"), "asc");
+  assert.equal(await page.locator(".workspace-reader").isVisible(), false);
+  assert.deepEqual(errors, []);
+});
+
+test("single long turns open on first visit and retain the user's closed state when revisited", async (t) => {
+  const singleTurn = conv => [
+    { id: `prompt-${conv}`, native_id: `prompt-${conv}`, kind: "message", role: "user", text: "Run a long task", created_at: new Date(start).toISOString() },
+    ...Array.from({ length: 310 }, (_, i) => ({ id: `reply-${conv}-${i}`, native_id: `reply-${conv}-${i}`, kind: "message", role: "assistant", text: `Progress ${i}`, created_at: new Date(start + i * 1000).toISOString() })),
+  ];
+  const { page, errors } = await fixture(t, { messages: singleTurn });
+  await page.locator('tr[data-session="s-child"] .delegation-name').click();
+  await waitForReader(page, "s-child");
+  const turn = page.locator(".workspace-reader-content .turn-list > .turn");
+  assert.equal(await turn.count(), 1);
+  assert.equal(await turn.evaluate(el => el.open), true);
+  assert.ok(await turn.locator(".timeline-entry").count() > 0);
+  assert.equal(await page.getByRole("button", { name: "Show in sessions ←", exact: true }).count(), 0);
+  assert.equal(await page.locator(".workspace-reader-content .turn-list").evaluate(el => getComputedStyle(el).backgroundColor), "rgba(0, 0, 0, 0)");
+  await turn.locator(":scope > summary").click();
+  assert.equal(await turn.evaluate(el => el.open), false);
+  await openInboxSession(page, "s-root");
+  assert.equal(await turn.evaluate(el => el.open), true);
+  await openInboxSession(page, "s-child");
+  assert.equal(await turn.evaluate(el => el.open), false);
+  assert.deepEqual(errors, []);
+});
+
+test("browser history restores reader position and expanded turns with independent pane scrolling", async (t) => {
+  const longMessages = conv => Array.from({ length: 36 }, (_, i) => [
+    { id: `prompt-${conv}-${i}`, kind: "message", role: "user", text: `Task ${i} in ${conv}`, created_at: new Date(start + i * 3000).toISOString() },
+    { id: `reply-${conv}-${i}`, kind: "message", role: "assistant", text: `Results for ${conv}, turn ${i}.\n`.repeat(12), created_at: new Date(start + i * 3000 + 1000).toISOString() },
+  ]).flat();
+  const { page, errors } = await fixture(t, { messages: longMessages });
+  const overviewURL = page.url();
+  await page.locator('tr[data-session="s-root"] .delegation-name').click();
+  await waitForReader(page, "s-root");
+  const reader = page.locator(".workspace-reader-content");
+  await reader.locator(".turn-list > .turn").nth(8).locator(":scope > summary").click();
+  await reader.evaluate(el => { el.scrollTop = 820; });
+  const position = await reader.evaluate(el => el.scrollTop);
+  const turns = await reader.locator(".turn-list > .turn").evaluateAll(turns => turns.map(turn => turn.open));
+  assert.ok(position > 700);
+  const sidebarPosition = await page.locator(".workspace-overview").evaluate(el => el.scrollTop);
+  await reader.evaluate(el => { el.scrollTop += 50; });
+  assert.equal(await page.locator(".workspace-overview").evaluate(el => el.scrollTop), sidebarPosition);
+  await reader.evaluate((el, top) => { el.scrollTop = top; }, position);
+  await openInboxSession(page, "s-child");
+  assert.equal(await reader.evaluate(el => el.scrollTop), 0);
+  await page.goBack();
+  await waitForReader(page, "s-root");
+  assert.ok(Math.abs(await reader.evaluate(el => el.scrollTop) - position) <= 2, `Restored ${await reader.evaluate(el => el.scrollTop)}, expected ${position}`);
+  assert.deepEqual(await reader.locator(".turn-list > .turn").evaluateAll(turns => turns.map(turn => turn.open)), turns);
+  await page.goBack();
+  await page.locator(".delegation-table tbody tr").first().waitFor();
+  assert.equal(page.url(), overviewURL);
+  assert.equal(await page.locator(".workspace-reader").isVisible(), false);
+  await page.goForward();
+  await waitForReader(page, "s-root");
+  assert.ok(Math.abs(await reader.evaluate(el => el.scrollTop) - position) <= 2);
+  assert.deepEqual(errors, []);
+});
+
+test("mobile reader uses a dismissible session sheet and keeps conversation selection explicit", async (t) => {
+  const { page, errors } = await fixture(t, { viewport: { width: 390, height: 850 } });
+  await page.locator('tr[data-session="s-child"] .delegation-name').click();
+  await waitForReader(page, "s-child");
+  const navigator = page.locator(".workspace-overview");
+  assert.equal(await navigator.evaluate(el => el.inert), true);
+  assert.equal(await page.locator(".workspace-divider").isVisible(), false);
+  await page.getByRole("button", { name: "Show workspace sessions", exact: true }).click();
+  const sheet = page.getByRole("dialog", { name: "Workspace sessions", exact: true });
+  await sheet.waitFor();
+  assert.equal(await sheet.getAttribute("aria-modal"), "true");
+  assert.equal(await page.locator(".workspace-reader").evaluate(el => el.inert), true);
+  await page.keyboard.press("Control+f");
+  assert.equal(await sheet.evaluate(el => el.contains(document.activeElement)), true);
+  await sheet.locator('button[aria-label="Close workspace sessions"]').focus();
+  await page.keyboard.press("Shift+Tab");
+  assert.equal(await sheet.evaluate(el => el.contains(document.activeElement)), true);
+  await page.keyboard.press("Escape");
+  assert.equal(await sheet.count(), 0);
+  assert.equal(await page.getByRole("button", { name: "Show workspace sessions", exact: true }).evaluate(el => document.activeElement === el), true);
+  await page.getByRole("button", { name: "Show workspace sessions", exact: true }).click();
+  await openInboxSession(page, "s-nested");
+  assert.equal(await sheet.count(), 0);
+  assert.equal(await page.locator(".workspace-reader").evaluate(el => el.inert), false);
+  assert.equal(new URL(page.url()).pathname, "/work/work/conversation/nested");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await page.locator(".workspace-reader-bar").getByRole("button", { name: "Open workspace overview", exact: true }).click();
+  await page.locator(".delegation-table tbody tr").first().waitFor();
+  assert.equal(await navigator.evaluate(el => el.inert), false);
+  assert.deepEqual(errors, []);
+});
+
+test("conversation deep links retain the tool anchor and canonicalize legacy links", async (t) => {
+  const { page, errors } = await fixture(t, { url: "/work/work/conversation/child?explorer=parallel&delegation_session=s-child&message=prompt-child" });
+  await waitForReader(page, "s-child");
+  await page.locator('[data-message-id="prompt-child"].authorship-target').waitFor();
+  assert.equal(new URL(page.url()).searchParams.get("message"), "prompt-child");
+  assert.equal(await page.locator('.delegation-lane-current[data-session="s-child"]').count(), 1);
+  await page.goto("http://delegation.test/work/work?conversation=nested&delegation_session=s-nested");
+  await waitForReader(page, "s-nested");
+  assert.equal(new URL(page.url()).pathname, "/work/work/conversation/nested");
+  assert.equal(await page.locator('.delegation-inbox-row.current[data-session="s-nested"]').count(), 1);
+  assert.deepEqual(errors, []);
+});
+
+test("slow earlier transcript responses cannot replace the latest inbox selection", async (t) => {
+  const { page, errors } = await fixture(t);
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  let requested;
+  const requestStarted = new Promise(resolve => { requested = resolve; });
+  await page.route("http://delegation.test/api/work/work/conversations/child", async route => {
+    requested();
+    await held;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ...work.conversations[1], messages: messages("child") }) });
+  });
+  await page.locator('tr[data-session="s-child"] .delegation-name').click();
+  await requestStarted;
+  await openInboxSession(page, "s-nested");
+  const response = page.waitForResponse(response => response.url().endsWith("/conversations/child"));
+  release();
+  await response;
+  await page.waitForTimeout(100);
+  assert.equal(new URL(page.url()).pathname, "/work/work/conversation/nested");
+  assert.equal(await page.locator(".delegation-session-heading").getAttribute("data-session"), "s-nested");
+  assert.equal(await page.locator(".conversation-panel").count(), 1);
+  assert.deepEqual(errors, []);
+});
+
+test("Back restores timeline bounds and branch collapse from the overview route", async (t) => {
+  const { page, errors } = await fixture(t);
+  await page.getByRole("button", { name: "Collapse Review implementation", exact: true }).click();
+  await page.getByRole("tab", { name: "Parallel activity", exact: true }).click();
+  await page.locator(".delegation-mark").first().waitFor();
+  const axis = await page.locator(".delegation-axis > div").boundingBox();
+  await page.mouse.move(axis.x + axis.width * .2, axis.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(axis.x + axis.width * .8, axis.y + 20, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForFunction(() => Number.parseFloat(document.querySelector(".delegation-viewport").style.width) < 100);
+  const bounds = new URL(page.url()).searchParams;
+  await page.locator('.delegation-lane[data-session="s-root"] .delegation-name').click();
+  await waitForReader(page, "s-root");
+  await page.getByRole("slider", { name: "Timeline window start", exact: true }).focus();
+  await page.keyboard.press("Home");
+  await page.waitForFunction(() => new URL(location.href).searchParams.get("delegation_start") === String(Date.parse("2026-09-24T12:00:00Z")));
+  await page.goBack();
+  await page.locator(".delegation-mark").first().waitFor();
+  assert.equal(await page.locator(".workspace-reader").isVisible(), false);
+  assert.equal(new URL(page.url()).searchParams.get("delegation_start"), bounds.get("delegation_start"));
+  assert.equal(new URL(page.url()).searchParams.get("delegation_end"), bounds.get("delegation_end"));
+  assert.equal(await page.locator('.delegation-lane[data-session="s-nested"]').count(), 0);
+  assert.equal(await page.getByRole("tab", { name: "Parallel activity", exact: true }).getAttribute("aria-selected"), "true");
   assert.deepEqual(errors, []);
 });

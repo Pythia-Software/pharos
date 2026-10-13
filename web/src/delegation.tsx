@@ -87,8 +87,10 @@ type Props = {
   workspace: string;
   conversation: string;
   contextHost: HTMLElement | null;
+  headingHost?: HTMLElement | null;
   statsHost?: HTMLElement | null;
-  openConversation: (id: string, message?: string) => Promise<void>;
+  compact?: boolean;
+  openConversation: (id: string, message?: string, session?: string) => Promise<void>;
 };
 type Tint = "all" | "off" | "sort";
 type Range = [number, number];
@@ -259,117 +261,6 @@ function FrameEdges({
   );
 }
 
-function ResizableTable({ children }: { children: React.ReactNode }) {
-  const host = useRef<HTMLDivElement>(null);
-  const [size, setSize] = useState<{
-    width: number | null;
-    height: number | null;
-  }>(
-    preferences().get("pharos-delegation-table-size", {
-      width: null,
-      height: null,
-    }),
-  );
-  const drag = useRef<{
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  } | null>(null);
-  useEffect(() => {
-    preferences().set("pharos-delegation-table-size", size);
-  }, [size]);
-  function resize(width: number, height: number) {
-    const maximum = host.current?.parentElement?.clientWidth || width;
-    setSize({
-      width: Math.max(Math.min(320, maximum), Math.min(maximum, width)),
-      height: Math.max(180, Math.min(1200, height)),
-    });
-  }
-  return (
-    <div
-      ref={host}
-      className="delegation-table-size"
-      style={
-        {
-          width: size.width ? `min(100%, ${size.width}px)` : "100%",
-          "--delegation-table-height": size.height
-            ? `${size.height}px`
-            : undefined,
-        } as React.CSSProperties
-      }
-    >
-      {children}
-      <div className="delegation-resize-footer">
-        <small>Drag the corner to resize</small>
-        <button
-          type="button"
-          className="delegation-table-resize"
-          aria-label="Resize execution session table"
-          title="Drag to resize. Arrow keys adjust width or height; double-click or Home resets."
-          onDoubleClick={() => setSize({ width: null, height: null })}
-          onKeyDown={(event) => {
-            if (event.key === "Home") {
-              event.preventDefault();
-              setSize({ width: null, height: null });
-              return;
-            }
-            if (!event.key.startsWith("Arrow")) return;
-            event.preventDefault();
-            const width = host.current!.clientWidth,
-              height = host.current!.querySelector(
-                ".delegation-table-scroll",
-              )!.clientHeight;
-            resize(
-              width +
-                (event.key === "ArrowRight"
-                  ? 40
-                  : event.key === "ArrowLeft"
-                    ? -40
-                    : 0),
-              height +
-                (event.key === "ArrowDown"
-                  ? 40
-                  : event.key === "ArrowUp"
-                    ? -40
-                    : 0),
-            );
-          }}
-          onPointerDown={(event) => {
-            if (event.button !== 0) return;
-            event.preventDefault();
-            drag.current = {
-              x: event.clientX,
-              y: event.clientY,
-              width: host.current!.clientWidth,
-              height: host.current!.querySelector(".delegation-table-scroll")!
-                .clientHeight,
-            };
-            event.currentTarget.setPointerCapture(event.pointerId);
-          }}
-          onPointerMove={(event) => {
-            if (!drag.current) return;
-            const d = drag.current;
-            resize(
-              d.width + event.clientX - d.x,
-              d.height + event.clientY - d.y,
-            );
-          }}
-          onPointerUp={(event) => {
-            drag.current = null;
-            event.currentTarget.releasePointerCapture(event.pointerId);
-          }}
-          onLostPointerCapture={() => {
-            drag.current = null;
-          }}
-        >
-          ↘
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function ColumnPicker({
   metrics,
   columns,
@@ -511,13 +402,15 @@ export function DelegationExplorer({
   workspace,
   conversation,
   contextHost,
+  headingHost,
   statsHost,
+  compact = false,
   openConversation,
 }: Props) {
   const contentID = useId();
   const endpoint = `/api/work/${encodeURIComponent(workspace)}`;
   const initial = new URLSearchParams(location.search);
-  const [open, setOpen] = useState(initial.has("explorer"));
+  const [open, setOpen] = useState(initial.get("sessions") !== "hidden");
   const [tab, setTab] = useState(
     initial.get("explorer") === "parallel" ? "parallel" : "table",
   );
@@ -560,6 +453,25 @@ export function DelegationExplorer({
   const [revision, setRevision] = useState(0),
     [selected, setSelected] = useState(initial.get("delegation_session") || "");
   const [range, setRange] = useState<Range | null>(null);
+  useEffect(() => {
+    const restore = () => {
+      const params = new URLSearchParams(location.search);
+      setSelected(params.get("delegation_session") || "");
+      setTab(params.get("explorer") === "parallel" ? "parallel" : "table");
+      setOpen(params.get("sessions") !== "hidden");
+      setMode(params.get("delegation_mode") === "rank" ? "rank" : "hierarchy");
+      setSort(params.get("delegation_sort") || "tokens");
+      setScope(params.get("delegation_scope") || "all");
+      setDirection(params.get("delegation_direction") || "desc");
+      setCollapsed(new Set((params.get("delegation_collapsed") || "").split(",").filter(Boolean)));
+      setCursor("");
+      setPages([]);
+      const from = Number(params.get("delegation_start")), to = Number(params.get("delegation_end"));
+      setRange(params.has("delegation_start") && to > from ? [from, to] : null);
+    };
+    window.addEventListener("pharos:workspace-history", restore);
+    return () => window.removeEventListener("pharos:workspace-history", restore);
+  }, []);
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
@@ -681,6 +593,8 @@ export function DelegationExplorer({
     const url = new URL(location.href);
     if (opened) url.searchParams.set("explorer", tab);
     else url.searchParams.delete("explorer");
+    if (opened) url.searchParams.delete("sessions");
+    else url.searchParams.set("sessions", "hidden");
     if (url.href !== location.href) history.replaceState(null, "", url);
   }
   function display(next: string) {
@@ -688,6 +602,7 @@ export function DelegationExplorer({
     setOpen(true);
     const url = new URL(location.href);
     url.searchParams.set("explorer", next);
+    url.searchParams.delete("sessions");
     history.replaceState(null, "", url);
   }
   function toggle(n: Session) {
@@ -729,14 +644,6 @@ export function DelegationExplorer({
   const shownSession = current.find((n) => n.id === selected) || current[0];
   const childSessions =
     data?.focus.filter((n) => current.some((c) => c.id === n.parent_id)) || [];
-  const parents = [
-    ...new Map(
-      current
-        .map((n) => byID.get(n.parent_id || ""))
-        .filter((n): n is Session => !!n && n.conversation_id !== conversation)
-        .map((n) => [n.id, n]),
-    ).values(),
-  ];
   function externalURL(ref: Reference, message?: string) {
     const params = new URLSearchParams({ conversation: ref.conversation_id });
     if (message) params.set("message", message);
@@ -760,24 +667,9 @@ export function DelegationExplorer({
         byID.get(n.parent_id)?.conversation_id === n.conversation_id
           ? n.message_id
           : undefined),
+      n.id,
     );
   };
-  function focusBranch(n: Session) {
-    setSelected(n.id);
-    if (
-      n.subtree_start != null &&
-      n.subtree_end != null &&
-      data?.start != null &&
-      data?.end != null
-    )
-      setRange(
-        clampRange(
-          [n.subtree_start, n.subtree_end + 1],
-          [data.start, Math.max(data.start + 1, data.end)],
-        ),
-      );
-    display("parallel");
-  }
   // Delegation launch entries acquire a link when the reader materializes a turn.
   useEffect(() => {
     if (!contextHost || !data) return;
@@ -821,46 +713,29 @@ export function DelegationExplorer({
       added.forEach((el) => el.remove());
     };
   }, [contextHost, data, conversation]);
+  const heading = shownSession && (
+    <div
+      className="delegation-session-heading"
+      data-session={shownSession.id}
+    >
+      <span className="delegation-session-number">
+        Session {shownSession.outline}
+      </span>
+      <div>
+        <strong>{shownSession.label}</strong>
+        <small>
+          {shownSession.provider} ·{" "}
+          {shownSession.model || "model unknown"} ·{" "}
+          {shownSession.effort || "unknown"}
+        </small>
+      </div>
+    </div>
+  );
   const context =
     contextHost &&
     createPortal(
       <>
-        {shownSession && (
-          <div
-            className="delegation-session-heading"
-            data-session={shownSession.id}
-          >
-            <span className="delegation-session-number">
-              Session {shownSession.outline}
-            </span>
-            <div>
-              <strong>{shownSession.label}</strong>
-              <small>
-                {shownSession.provider} ·{" "}
-                {shownSession.model || "model unknown"} ·{" "}
-                {shownSession.effort || "unknown"}
-              </small>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                display("table");
-                requestAnimationFrame(() => {
-                  const target =
-                    document.querySelector(
-                      `tr[data-session="${CSS.escape(shownSession.id)}"] .delegation-name`,
-                    ) || document.querySelector(".delegation-panel");
-                  target?.scrollIntoView({
-                    behavior: "smooth",
-                    block: "center",
-                  });
-                });
-              }}
-            >
-              Choose session ↑
-            </button>
-          </div>
-        )}
+        {!headingHost && heading}
         <div className="delegation-context">
           {current
             .filter((n) => n.external_parent)
@@ -874,20 +749,6 @@ export function DelegationExplorer({
                 {n.external_parent!.label}
               </button>
             ))}
-          {parents.map((n) => (
-            <button
-              key={n.id}
-              title={`Parent session: ${n.label}`}
-              onClick={() =>
-                openNode(
-                  n,
-                  current.find((c) => c.parent_id === n.id)?.message_id,
-                )
-              }
-            >
-              ← Parent · {n.label.slice(0, 60)}
-            </button>
-          ))}
           {current.length > 0 && (
             <span title="Reconciled usage of this conversation's sessions">
               {formatted(
@@ -935,11 +796,6 @@ export function DelegationExplorer({
                 Open child · {n.external_child!.provider} · another workspace ↗
               </button>
             ))}
-          {current.length > 0 && (
-            <button onClick={() => focusBranch(current[0])}>
-              Parallel activity ↗
-            </button>
-          )}
         </div>
       </>,
       contextHost,
@@ -963,6 +819,7 @@ export function DelegationExplorer({
   return (
     <>
       {context}
+      {headingHost && createPortal(heading, headingHost)}
       {statsHost && createPortal(totals, statsHost)}
       <section className="delegation-panel" aria-label="Workspace sessions">
         <div className="delegation-controls delegation-toolbar">
@@ -1018,7 +875,7 @@ export function DelegationExplorer({
               </button>
             ))}
           </div>
-          {open && data && tab === "table" && (
+          {open && data && tab === "table" && !compact && (
             <>
               <span className="delegation-controls-spacer" />
               <select
@@ -1066,9 +923,33 @@ export function DelegationExplorer({
           )}
           {data && (
             <>
-              {tab === "table" ? (
+              {tab === "table" && compact ? (
+                <InboxSessions
+                  rows={rows}
+                  data={data}
+                  metrics={orderedMetrics}
+                  shown={shownSession?.id || ""}
+                  mode={mode}
+                  metric={sort}
+                  scope={scope}
+                  direction={direction}
+                  tint={tint}
+                  collapsed={collapsed}
+                  toggle={toggle}
+                  openNode={openNode}
+                  hierarchy={showHierarchy}
+                  sortColumn={sortColumn}
+                  choose={(metric, scope) => {
+                    setSort(metric);
+                    setScope(scope);
+                    setMode("rank");
+                    setDirection("desc");
+                    resetPage();
+                  }}
+                />
+              ) : tab === "table" ? (
                 <>
-                  <ResizableTable>
+                  <div className="delegation-table-size">
                     <div
                       className="delegation-table-scroll"
                       aria-busy={loading}
@@ -1312,7 +1193,7 @@ export function DelegationExplorer({
                       </table>
                       {!rows.length && <p>No sessions match these filters.</p>}
                     </div>
-                  </ResizableTable>
+                  </div>
                 </>
               ) : range && data.start != null && data.end != null ? (
                 <ParallelActivity
@@ -1392,6 +1273,61 @@ export function DelegationExplorer({
       </section>
     </>
   );
+}
+
+function InboxSessions({ rows, data, metrics, shown, mode, metric, scope, direction, tint, collapsed, toggle, openNode, hierarchy, sortColumn, choose }: {
+  rows: Session[];
+  data: Analysis;
+  metrics: Spec[];
+  shown: string;
+  mode: string;
+  metric: string;
+  scope: string;
+  direction: string;
+  tint: Tint;
+  collapsed: Set<string>;
+  toggle: (node: Session) => void;
+  openNode: (node: Session) => void;
+  hierarchy: () => void;
+  sortColumn: (metric: string, scope: string) => void;
+  choose: (metric: string, scope: string) => void;
+}) {
+  const spec = metrics.find(m => m.id === metric) || metrics[0];
+  const family = scope === "self" ? "self" : "all";
+  const ranked = mode === "rank";
+  const frames = ranked ? new Map<string, HierarchyFrame>() : hierarchyFrames(rows, !!data.next_cursor);
+  return <div className="delegation-inbox-list">
+    <div className="delegation-inbox-controls">
+      <button onClick={hierarchy} aria-pressed={!ranked}>Hierarchy</button>
+      <select aria-label="Session comparison metric" value={`${family}:${spec.id}`} onChange={event => {
+        const [scope, id] = event.target.value.split(":");
+        choose(id, scope);
+      }}>
+        {["self", "all"].map(family => <optgroup key={family} label={family === "self" ? "Self" : "Self + children"}>
+          {metrics.map(spec => <option key={spec.id} value={`${family}:${spec.id}`}>{family === "self" ? "Self" : "Self + children"} · {spec.label}</option>)}
+        </optgroup>)}
+      </select>
+      <button onClick={() => sortColumn(spec.id, family)} aria-label={`Sort ${spec.label}${ranked ? `, currently ${direction === "desc" ? "descending" : "ascending"}` : ""}`} title="Descending → ascending → hierarchy">{ranked ? direction === "desc" ? "↓" : "↑" : "↕"}</button>
+    </div>
+    <div className="delegation-inbox-heading"><span>{ranked ? "Metric ranking" : "Session hierarchy"}</span><span>{spec.label}</span></div>
+    {rows.map(n => {
+      const value = (family === "self" ? n.self : n.all)[spec.id];
+      const maximum = data.maxima[family]?.[spec.id] || 0;
+      const strength = tint !== "off" && (tint !== "sort" || ranked) && value?.value != null ? tintStrength(value.value, maximum) : 0;
+      const frame = frames.get(n.id);
+      return <div key={n.id} data-session={n.id} className={`delegation-inbox-row ${n.id === shown ? "current" : ""}`} onClick={event => { if (!(event.target as HTMLElement).closest("button")) openNode(n); }} style={{ paddingLeft: (ranked ? 0 : Math.min(n.depth, 8)) * 10 + 10, paddingTop: frame?.start != null ? 5 : undefined, paddingBottom: frame?.ends.length ? frame.ends.length * 6 + 3 : undefined }}>
+        <FrameEdges frame={frame} edge="left" />
+        <FrameEdges frame={frame} edge="right" />
+        <button className="delegation-chevron" aria-label={`${collapsed.has(n.id) ? "Expand" : "Collapse"} ${n.label}`} aria-expanded={!collapsed.has(n.id)} disabled={!n.child_count || ranked} onClick={() => toggle(n)}>{n.child_count && !ranked ? <Icon name={collapsed.has(n.id) ? "chevron-right" : "chevron-down"} /> : "·"}</button>
+        <button className="delegation-name" onClick={() => openNode(n)} title={`${n.outline} · ${n.label}\n${n.provider} · ${n.model} · ${n.effort || "unknown"}`} aria-current={n.id === shown ? "true" : undefined}>
+          <span><b>{n.outline}</b> {n.label}</span>
+          <small>{n.provider} · {n.model || "unknown model"} · {n.effort || "unknown"}</small>
+        </button>
+        <button className="delegation-inbox-metric" onClick={() => openNode(n)} title={value ? cellTitle(value, spec) : "No retained evidence"} style={strength ? { background: `color-mix(in srgb, var(--delegation-tint) ${strength * 45}%, transparent)` } : undefined}>{formatted(value?.value, spec.unit)}{value?.quality === "partial" ? "+" : ""}</button>
+      </div>;
+    })}
+    {!rows.length && <p>No retained sessions.</p>}
+  </div>;
 }
 
 function TimelineOverview({
@@ -1626,6 +1562,16 @@ function ParallelActivity({
   const closeMark = useCallback(() => setMark(null), []);
   const [pending, setPending] = useState(true);
   const track = useRef<HTMLDivElement>(null);
+  const [trackWidth, setTrackWidth] = useState(900);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    const observer = new ResizeObserver(() => {
+      clearTimeout(timer);
+      timer = setTimeout(() => setTrackWidth(track.current?.clientWidth || 900), 150);
+    });
+    if (track.current) observer.observe(track.current);
+    return () => { clearTimeout(timer); observer.disconnect(); };
+  }, []);
   // A page may carry extra ancestor context; lane requests remain bounded.
   const laneRows = useMemo(() => {
     const included = new Set(data.rows.map((n) => n.id));
@@ -1649,7 +1595,7 @@ function ParallelActivity({
       start: String(range[0]),
       end: String(range[1]),
       sessions: ids,
-      width: String(track.current?.clientWidth || 900),
+      width: String(trackWidth),
     });
     readJSON<Activity>(`${endpoint}/parallel?${params}`, controller.signal)
       .then(setActivity, (e) => {
@@ -1659,7 +1605,7 @@ function ParallelActivity({
         if (!controller.signal.aborted) setPending(false);
       });
     return () => controller.abort();
-  }, [endpoint, ids, data.snapshot, range]);
+  }, [endpoint, ids, data.snapshot, range, trackWidth]);
   const visibleActivity =
     activity?.start === range[0] && activity?.end === range[1]
       ? activity
@@ -2163,7 +2109,8 @@ declare global {
         element: HTMLElement,
         props: Props,
       ) => {
-        conversation: (id: string, host: HTMLElement) => void;
+        conversation: (id: string, host: HTMLElement | null) => void;
+        layout: (compact: boolean) => void;
         destroy: () => void;
       };
     };
@@ -2181,6 +2128,10 @@ export function installDelegationExplorer() {
       return {
         conversation(id, host) {
           current = { ...current, conversation: id, contextHost: host };
+          owned.render(<DelegationExplorer {...current} />);
+        },
+        layout(compact) {
+          current = { ...current, compact };
           owned.render(<DelegationExplorer {...current} />);
         },
         destroy() {
