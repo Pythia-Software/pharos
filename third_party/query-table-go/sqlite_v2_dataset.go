@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -161,8 +162,7 @@ func (d SQLiteV2Dataset) ExecuteV2(ctx context.Context, db *sql.DB, rows *Server
 	}
 	return sqliteRead(ctx, db, func(tx *sql.Tx) (SQLiteV2ExecutionResult, error) { return d.ExecuteV2In(ctx, tx, rows, metrics, o) })
 }
-func (d SQLiteV2Dataset) ExecuteV2In(ctx context.Context, tx *sql.Tx, rows *ServerQueryV2, metrics *MetricQuery, o PlanOptions) (SQLiteV2ExecutionResult, error) {
-	var out SQLiteV2ExecutionResult
+func (d SQLiteV2Dataset) ExecuteV2In(ctx context.Context, tx *sql.Tx, rows *ServerQueryV2, metrics *MetricQuery, o PlanOptions) (out SQLiteV2ExecutionResult, err error) {
 	maxRows, maxGroups, maxPopulation, e := d.limits()
 	if e != nil {
 		return out, e
@@ -288,7 +288,12 @@ func (d SQLiteV2Dataset) ExecuteV2In(ctx context.Context, tx *sql.Tx, rows *Serv
 		r := SQLiteMetricsV2Result{Metrics: []SQLiteMetricV2{}}
 		memo := map[string]SQLiteMetricV2{}
 		reductions := newSQLiteReductionCache(batch)
-		defer reductions.close(tx)
+		defer func() {
+			if cleanupErr := reductions.close(tx); cleanupErr != nil {
+				out = SQLiteV2ExecutionResult{}
+				err = errors.Join(err, cleanupErr)
+			}
+		}()
 		for i, p := range batch.Metrics {
 			key := p.Fingerprint + "\x00" + p.Scope
 			if previous, ok := memo[key]; ok {

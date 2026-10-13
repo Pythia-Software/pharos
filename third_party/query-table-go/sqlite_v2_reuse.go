@@ -3,6 +3,7 @@ package querytable
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -23,24 +24,12 @@ type sqliteReductionCache struct {
 
 var sqliteReductionSequence atomic.Uint64
 
-func sqliteStageCTEs(stages []SQLStage) string {
-	ctes := make([]string, 0, len(stages))
-	for _, s := range stages {
-		mode := "MATERIALIZED"
-		if !s.Materialized {
-			mode = "NOT MATERIALIZED"
-		}
-		ctes = append(ctes, s.Name+" AS "+mode+" ("+s.SQL+")")
-	}
-	return "WITH " + strings.Join(ctes, ",\n")
-}
-
 func sqliteReductionKey(p MetricSQLPlan) string { return sqliteStageKey(p, p.SQLiteReductionStage) }
 func sqliteStageKey(p MetricSQLPlan, i int) string {
 	if i <= 0 || i >= len(p.Stages) {
 		return ""
 	}
-	prefix := sqliteStageCTEs(p.Stages[:i+1])
+	prefix := sqlStageCTEs(p.Stages[:i+1])
 	// Prefixes use numbered parameters. Ignore literals and quoted identifiers;
 	// later formula constants must not prevent reuse of an identical reduction.
 	n := 0
@@ -49,12 +38,32 @@ func sqliteStageKey(p MetricSQLPlan, i int) string {
 		c := prefix[i]
 		if quote != 0 {
 			if c == quote {
-				if i+1 < len(prefix) && prefix[i+1] == quote {
+				if quote != ']' && i+1 < len(prefix) && prefix[i+1] == quote {
 					i++
 				} else {
 					quote = 0
 				}
 			}
+			continue
+		}
+		// Authorized source SQL can contain comments and bracket identifiers.
+		// Their question marks and quotes are not numbered bindings.
+		if c == '-' && i+1 < len(prefix) && prefix[i+1] == '-' {
+			for i < len(prefix) && prefix[i] != '\n' {
+				i++
+			}
+			continue
+		}
+		if c == '/' && i+1 < len(prefix) && prefix[i+1] == '*' {
+			i += 2
+			for i+1 < len(prefix) && !(prefix[i] == '*' && prefix[i+1] == '/') {
+				i++
+			}
+			i++
+			continue
+		}
+		if c == '[' {
+			quote = ']'
 			continue
 		}
 		if c == '\'' || c == '"' || c == '`' {
@@ -67,7 +76,11 @@ func sqliteStageKey(p MetricSQLPlan, i int) string {
 		index := 0
 		for i+1 < len(prefix) && prefix[i+1] >= '0' && prefix[i+1] <= '9' {
 			i++
-			index = index*10 + int(prefix[i]-'0')
+			digit := int(prefix[i] - '0')
+			if index > len(p.Args)/10 || index*10+digit > len(p.Args) {
+				return ""
+			}
+			index = index*10 + digit
 		}
 		if index > n {
 			n = index
@@ -139,7 +152,7 @@ func (c *sqliteReductionCache) plan(ctx context.Context, tx *sql.Tx, p MetricSQL
 			for _, expr := range f.expressions {
 				projections = append(projections, expr+" AS "+f.aliases[expr])
 			}
-			statement := "CREATE TEMP TABLE " + table + " AS " + sqliteStageCTEs(p.Stages[:p.SQLiteReductionStage]) + "\nSELECT " + strings.Join(projections, ",") + p.SQLiteReductionFrom
+			statement := "CREATE TEMP TABLE " + table + " AS " + sqlStageCTEs(p.Stages[:p.SQLiteReductionStage]) + "\nSELECT " + strings.Join(projections, ",") + p.SQLiteReductionFrom
 			if _, err := tx.ExecContext(ctx, statement, p.Args...); err != nil {
 				return p, err
 			}
@@ -160,7 +173,7 @@ func (c *sqliteReductionCache) reuseStage(ctx context.Context, tx *sql.Tx, p Met
 	table, ok := c.tables[key]
 	if !ok {
 		table = fmt.Sprintf("_qt_reduction_%d", sqliteReductionSequence.Add(1))
-		statement := "CREATE TEMP TABLE " + table + " AS " + sqliteStageCTEs(p.Stages[:i+1]) + "\nSELECT * FROM " + p.Stages[i].Name
+		statement := "CREATE TEMP TABLE " + table + " AS " + sqlStageCTEs(p.Stages[:i+1]) + "\nSELECT * FROM " + p.Stages[i].Name
 		if _, err := tx.ExecContext(ctx, statement, p.Args...); err != nil {
 			return p, err
 		}
@@ -169,7 +182,7 @@ func (c *sqliteReductionCache) reuseStage(ctx context.Context, tx *sql.Tx, p Met
 	return sqliteReplaceStage(p, i, "SELECT * FROM "+table)
 }
 func sqliteReplaceStage(p MetricSQLPlan, i int, statement string) (MetricSQLPlan, error) {
-	prefix := sqliteStageCTEs(p.Stages) + "\n"
+	prefix := sqlStageCTEs(p.Stages) + "\n"
 	if !strings.HasPrefix(p.SQL, prefix) {
 		return p, fmt.Errorf("invalid compiler stage envelope")
 	}
@@ -178,13 +191,17 @@ func sqliteReplaceStage(p MetricSQLPlan, i int, statement string) (MetricSQLPlan
 	p.Stages[i].SQL = statement
 	// Unreferenced earlier CTEs preserve numbered bindings without evaluating
 	// the source. SQLite permits unused positional arguments to these plans.
-	p.SQL = sqliteStageCTEs(p.Stages) + "\n" + final
+	p.SQL = sqlStageCTEs(p.Stages) + "\n" + final
 	return p, nil
 }
-func (c *sqliteReductionCache) close(tx *sql.Tx) {
+func (c *sqliteReductionCache) close(tx *sql.Tx) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
+	var cleanupErr error
 	for _, table := range c.tables {
-		_, _ = tx.ExecContext(ctx, "DROP TABLE "+table)
+		if _, err := tx.ExecContext(ctx, "DROP TABLE "+table); err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("drop SQLite reduction %s: %w", table, err))
+		}
 	}
+	return cleanupErr
 }

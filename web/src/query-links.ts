@@ -1,4 +1,4 @@
-import { decodeQuery, encodeQuery, type QueryState } from "@pythia-software/query-table-core";
+import { decodeQueryStrict, localQuerySnapshotCache, encodeQuery, type QueryState } from "@pythia-software/query-table-core";
 
 export const queryDatasets = ["library", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts"] as const;
 export type QueryDataset = typeof queryDatasets[number];
@@ -27,14 +27,16 @@ export function readRollingWindow(params: URLSearchParams, dataset: QueryDataset
   return { days, field };
 }
 
-export function updateQueryWindowURL(url: string, days: number): string {
-  const spec = queryFromURL(url), field = spec && (spec.window?.field ?? rollingWindowField(spec.dataset));
+export function updateQueryWindowURL(url: string, days: number, fallback?: QueryState): string {
+  const spec = queryFromURL(url, fallback), field = spec && (spec.window?.field ?? rollingWindowField(spec.dataset));
   if (!spec || !field || !rollingWindowDays.some(value => value === days)) throw new Error("This view does not support that time window.");
   const window = { days, field };
   // Replace direct date selections, including older fixed ranges. Leave other
   // predicates (and compound date expressions) intact rather than rewriting
   // the user's logical query. Relative bounds are renewed on every evaluation.
-  const query = resolveRollingQuery({ ...spec.query, where: spec.query.where.filter(term => !("field" in term && term.field === field && !term.negated && ["=", ">", ">=", "<", "<="].includes(term.op))) }, window);
+  const source = spec.query.grouping?.source ?? spec.query;
+  const adjusted = { ...source, where: source.where.filter(term => !("field" in term && term.field === field && !term.negated && ["=", ">", ">=", "<", "<="].includes(term.op))) };
+  const query = resolveRollingQuery(spec.query.grouping ? { ...spec.query, grouping: { ...spec.query.grouping, source: adjusted } } : adjusted, window);
   const parsed = new URL(url, location.origin);
   parsed.searchParams.set(`q_${spec.dataset}`, encodeQuery(query));
   parsed.searchParams.set("window_days", String(days)); parsed.searchParams.set("window_field", field); parsed.searchParams.set("window_dataset", spec.dataset);
@@ -44,6 +46,7 @@ export function updateQueryWindowURL(url: string, days: number): string {
 
 export function resolveRollingQuery(query: QueryState, window?: RollingWindow, clock = new Date()): QueryState {
   if (!window) return query;
+  if (query.grouping) return { ...query, offset: 0, grouping: { ...query.grouping, source: resolveRollingQuery(query.grouping.source, window, clock) } };
   const [from, to] = rollingBounds(window.days, clock);
   return { ...query, offset: 0, where: [
     ...query.where.filter(term => !("field" in term && term.field === window.field && !term.negated && [">=", "<"].includes(term.op))),
@@ -52,6 +55,7 @@ export function resolveRollingQuery(query: QueryState, window?: RollingWindow, c
 }
 
 export function rollingQueryMatches(query: QueryState, window: RollingWindow): boolean {
+  if (query.grouping) return rollingQueryMatches(query.grouping.source, window);
   // An open table may still carry yesterday's resolved dates. Sorting or
   // paging does not turn its calendar window into a fixed range. Count local
   // days, rather than hours, so spans crossing daylight saving still match.
@@ -83,7 +87,7 @@ export function queryURL(dataset: QueryDataset, query: QueryState, window?: Roll
   return `${path}?${params}`;
 }
 
-export function queryFromURL(url: string): { dataset: QueryDataset; query: QueryState; window?: RollingWindow } | undefined {
+export function queryFromURL(url: string, fallback?: QueryState): { dataset: QueryDataset; query: QueryState; window?: RollingWindow } | undefined {
   try {
     const parsed = new URL(url, location.origin);
     if (parsed.origin !== location.origin) return;
@@ -96,7 +100,14 @@ export function queryFromURL(url: string): { dataset: QueryDataset; query: Query
       : path === "/mcp" ? "mcp_calls" : path.startsWith("/tl1") ? "tl1_attempts" : undefined;
     if (dataset) {
       const token = params.get(`q_${dataset}`);
-      if (token !== null) return { dataset, query: decodeQuery(token), window: readRollingWindow(params, dataset) };
+      if (token !== null) {
+        if (params.getAll(`q_${dataset}`).length !== 1) return;
+        const query = token.startsWith("@") ? fallback ?? (() => {
+          const snapshot = localQuerySnapshotCache().get(`pharos_${dataset}`, token.slice(1));
+          return snapshot ? decodeQueryStrict(snapshot.token) : undefined;
+        })() : decodeQueryStrict(token);
+        if (query) return { dataset, query, window: readRollingWindow(params, dataset) };
+      }
     }
   } catch { /* Old non-query bookmarks are still valid collection entries. */ }
 }

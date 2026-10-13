@@ -1,0 +1,76 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { build } from 'esbuild';
+const built=await build({stdin:{contents:`export * from './src/storage'; export * from './src/bookmarks'; export * from './src/query-links'; export { encodeQuery, normalizeQueryState, createQueryLinkService, httpQuerySnapshotStore } from '@pythia-software/query-table-core';`,resolveDir:process.cwd()},bundle:true,write:false,platform:'node',format:'esm'});
+const m=await import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString('base64')}`);
+const prefs=new Map(),cache=new Map(),snapshots=new Map();
+let fail=false,writes=0;
+globalThis.location=new URL('http://localhost/tools');
+globalThis.window={pharosPrefs:{get:(key,fallback)=>prefs.get(key)??fallback,set:(key,value)=>prefs.set(key,value),remove:key=>prefs.delete(key),keys:prefix=>[...prefs.keys()].filter(key=>key.startsWith(prefix))},dispatchEvent(){}};
+globalThis.localStorage={getItem:key=>cache.get(key)??null,setItem:(key,value)=>cache.set(key,value),removeItem:key=>cache.delete(key)};
+globalThis.fetch=async (input,options)=>{
+ const url=new URL(input,location.origin),key=url.searchParams.get('dataset')+':'+url.searchParams.get('code');
+ if(options?.method==='PUT'){
+  writes++;
+  if(fail)return new Response('unavailable',{status:507});
+  const snapshot=JSON.parse(options.body);snapshots.set(key,snapshot);
+  return Response.json(snapshot);
+ }
+ return snapshots.has(key)?Response.json(snapshots.get(key)):new Response('',{status:404});
+};
+const query=m.normalizeQueryState({select:[{field:'tool_name'}],where:[{field:'status',op:'=',value:'error'}],orderBy:[],limit:25,offset:0});
+test('named saves create durable links, resolve on another Mac and keep defaults during updates',async()=>{
+ const storage=m.libraryStorageAdapter();
+ const saved=await storage.saveNamed('pharos_tool_calls','Errors',query,10);
+ await storage.setDefaultSaved('pharos_tool_calls',saved.id);
+ const bookmark=m.readBookmarks()[0];
+ assert.match(new URL(bookmark.url,location.origin).searchParams.get('q_tool_calls'),/^@[A-Za-z0-9_-]{22}$/);
+ cache.clear();
+ assert.deepEqual((await storage.loadDefaultSaved('pharos_tool_calls')).query,query);
+ const links=m.createQueryLinkService('pharos_tool_calls',m.httpQuerySnapshotStore('/api/query-snapshots'));
+ assert.deepEqual(await links.resolve(new URL(bookmark.url,location.origin).href,'q_tool_calls'),query);
+ const changed={...query,limit:50};
+ const updated=await storage.updateNamed('pharos_tool_calls',saved.id,changed,20);
+ assert.equal(updated.id,saved.id);
+ assert.equal((await storage.loadDefaultSaved('pharos_tool_calls')).id,saved.id);
+ assert.deepEqual((await storage.loadDefaultSaved('pharos_tool_calls')).query,changed);
+ const oldURL=bookmark.url;
+ cache.clear();
+ assert.deepEqual(await links.resolve(new URL(oldURL,location.origin).href,'q_tool_calls'),query);
+});
+test('failed snapshot saves leave the named query and collection unchanged',async()=>{
+ const storage=m.libraryStorageAdapter(),before=JSON.stringify(m.readBookmarks());
+ fail=true;
+ await assert.rejects(storage.updateNamed('pharos_tool_calls',m.readBookmarks()[0].savedQueryId,{...query,limit:75},30),/507/);
+ await assert.rejects(storage.saveNamed('pharos_tool_calls','Another',query,30),/507/);
+ fail=false;
+ assert.equal(JSON.stringify(m.readBookmarks()),before);
+});
+test('editing overflow links is local and strict navigation rejects missing or duplicate state',async()=>{
+ const storage=m.libraryStorageAdapter(),links=m.createQueryLinkService('pharos_tool_calls',storage.snapshots,{maxUrlBytes:100});
+ const before=writes,local=links.local(query,location.href,'q_tool_calls');
+ assert.equal(local.kind,'local');assert.equal(writes,before);
+ assert.deepEqual(await links.resolve(local.url,'q_tool_calls'),query);
+ await assert.rejects(links.resolve(`${location.href}?q_tool_calls=@aaaaaaaaaaaaaaaaaaaaaa`,'q_tool_calls'),/unavailable|missing|expired/i);
+ assert.equal(m.queryFromURL('/tools?q_tool_calls=invalid'),undefined);
+ assert.equal(m.queryFromURL(`/tools?q_tool_calls=${m.encodeQuery(query)}&q_tool_calls=${m.encodeQuery(query)}`),undefined);
+});
+
+test('rolling grouped views renew source bounds without rewriting HAVING or metrics',()=>{
+ const window={field:'started_at',days:7},clock=new Date('2026-10-13T12:00:00Z');
+ const grouped=m.normalizeQueryState({grouping:{source:{...query,where:[{field:'status',op:'=',value:'error'}]},keys:['tool_name'],summaries:[{id:'group_rows',op:'count'}]},select:[{field:'tool_name'},{field:'group_rows'}],where:[{field:'group_rows',op:'>=',value:'5'}],orderBy:[],limit:25,offset:0});
+ const resolved=m.resolveRollingQuery(grouped,window,clock);
+ assert.deepEqual(resolved.where,grouped.where);
+ assert.deepEqual(resolved.grouping.source.where.slice(-2).map(term=>term.value),m.rollingBounds(7,clock));
+ assert.ok(m.rollingQueryMatches(resolved,window));
+ const updated=m.queryFromURL(m.updateQueryWindowURL(m.queryURL('tool_calls',resolved,window),1));
+ assert.deepEqual(updated.query.where,grouped.where);
+ assert.ok(m.rollingQueryMatches(updated.query,{field:'started_at',days:1}));
+});
+
+test('native bookmarks created before dataset metadata can still be updated',async()=>{
+ const items=m.readBookmarks();
+ prefs.set(m.BOOKMARKS_KEY,[...items,{id:'old-native',title:'Legacy native bookmark',url:m.queryURL('tool_calls',query)}]);
+ const updated=await m.libraryStorageAdapter().updateNamed('pharos_tool_calls','old-native',{...query,limit:75},30);
+ assert.equal(updated.id,'old-native');assert.equal(updated.query.limit,75);
+});

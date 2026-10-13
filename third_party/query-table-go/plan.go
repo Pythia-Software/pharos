@@ -46,10 +46,29 @@ type SQLStage struct {
 	Name, SQL    string
 	Materialized bool
 }
+
+func sqlStageCTEs(stages []SQLStage) string {
+	ctes := make([]string, 0, len(stages))
+	for _, s := range stages {
+		mode := "MATERIALIZED"
+		if !s.Materialized {
+			mode = "NOT MATERIALIZED"
+		}
+		ctes = append(ctes, s.Name+" AS "+mode+" ("+s.SQL+")")
+	}
+	return "WITH " + strings.Join(ctes, ",\n")
+}
+
 type ValueSQL struct{ Value, Error, Type string }
 type OutputColumn struct{ Field, ValueAlias, ErrorAlias, Type string }
 type SQLiteReductionColumn struct{ Name, SQL string }
+type scalarReduction struct {
+	stage   int
+	from    string
+	columns []SQLiteReductionColumn
+}
 type SQLPlan struct {
+	reduction              *scalarReduction
 	SQLiteReductionColumns []SQLiteReductionColumn
 	SQLiteReductionFrom    string
 	// Scalar SQLite metrics expose their reduction boundary for transaction-local
@@ -66,24 +85,31 @@ type SQLPlan struct {
 	RequiresSnapshot bool
 }
 type planBuilder struct {
-	sqlite       bool
-	projection   []string
-	emitInputs   map[int][]string
-	rowMemo      map[string]ValueSQL
-	ctx          context.Context
-	schema       Schema
-	options      PlanOptions
-	args         []any
-	stages       []SQLStage
-	rel          string
-	serial       int
-	fields       map[string]ValueSQL
-	revisions    map[string]string
-	visiting     map[string]bool
-	dependencies map[string]bool
-	checked      map[string]bool
-	definitions  map[string]ComputedColumn
-	nodes        int
+	sqlite        bool
+	sourceFrom    string
+	lateSource    bool
+	lateWindow    int
+	lateStage     int
+	earlyBindings map[string]bool
+	sourceColumns map[string]string
+	sourceAliases map[string]string
+	projection    []string
+	emitInputs    map[int][]string
+	rowMemo       map[string]ValueSQL
+	ctx           context.Context
+	schema        Schema
+	options       PlanOptions
+	args          []any
+	stages        []SQLStage
+	rel           string
+	serial        int
+	fields        map[string]ValueSQL
+	revisions     map[string]string
+	visiting      map[string]bool
+	dependencies  map[string]bool
+	checked       map[string]bool
+	definitions   map[string]ComputedColumn
+	nodes         int
 }
 
 func newPlan(ctx context.Context, s Schema, o PlanOptions) (*planBuilder, error) {
@@ -101,7 +127,7 @@ func newPlanDialect(ctx context.Context, s Schema, o PlanOptions, sqlite bool) (
 	if o.Now.IsZero() {
 		o.Now = time.Now()
 	}
-	b := &planBuilder{sqlite: sqlite, emitInputs: map[int][]string{}, rowMemo: map[string]ValueSQL{}, ctx: ctx, schema: s, options: o, args: append([]any{}, o.SourceArgs...), fields: map[string]ValueSQL{}, revisions: map[string]string{}, visiting: map[string]bool{}, dependencies: map[string]bool{}, checked: map[string]bool{}, definitions: map[string]ComputedColumn{}}
+	b := &planBuilder{sourceFrom: "(" + o.SourceSQL + ")", sourceColumns: map[string]string{}, sourceAliases: map[string]string{}, sqlite: sqlite, emitInputs: map[int][]string{}, rowMemo: map[string]ValueSQL{}, ctx: ctx, schema: s, options: o, args: append([]any{}, o.SourceArgs...), fields: map[string]ValueSQL{}, revisions: map[string]string{}, visiting: map[string]bool{}, dependencies: map[string]bool{}, checked: map[string]bool{}, definitions: map[string]ComputedColumn{}}
 	// Project bindings exactly once in the source namespace. Internal aliases do
 	// not depend on request names, labels or trusted SQL identifiers.
 	names := make([]string, 0, len(s.Fields))
@@ -121,6 +147,8 @@ func newPlanDialect(ctx context.Context, s Schema, o PlanOptions, sqlite bool) (
 			expr = "(" + expr + ")::text"
 		}
 		cols = append(cols, expr+" AS "+v)
+		b.sourceColumns[v] = expr + " AS " + v
+		b.sourceAliases[n] = v
 		b.fields[n] = ValueSQL{Value: v, Error: b.nullError(), Type: expressionType(f.Kind)}
 	}
 	if len(cols) > 512 {
@@ -203,14 +231,29 @@ func (b *planBuilder) pruneRowInputs(final string) {
 	for i := len(b.stages) - 1; i >= 0; i-- {
 		stage := &b.stages[i]
 		body := stage.SQL
+		if i == 0 && !b.sqlite {
+			aliases := []string{}
+			for alias := range b.sourceColumns {
+				if live[alias] {
+					aliases = append(aliases, alias)
+				}
+			}
+			sort.Strings(aliases)
+			columns := []string{}
+			for _, alias := range aliases {
+				columns = append(columns, b.sourceColumns[alias])
+			}
+			if len(columns) == 0 {
+				columns = append(columns, "1 AS qt_row")
+			}
+			stage.SQL = "SELECT " + strings.Join(columns, ",") + " FROM " + b.sourceFrom + " AS r"
+			continue
+		}
 		if inputs, ok := b.emitInputs[i]; ok {
 			passThrough := strings.HasPrefix(body, "SELECT * FROM ")
 			suffix := strings.TrimPrefix(body, "SELECT *, ")
 			if passThrough {
 				suffix = strings.TrimPrefix(body, "SELECT * ")
-			}
-			for _, alias := range rowAliasPattern.FindAllString(suffix, -1) {
-				live[alias] = true
 			}
 			retained := []string{}
 			for _, alias := range inputs {
@@ -230,6 +273,9 @@ func (b *planBuilder) pruneRowInputs(final string) {
 				prefix += strings.Join(retained, ",") + ", "
 			}
 			stage.SQL = prefix + suffix
+			for _, alias := range rowAliasPattern.FindAllString(suffix, -1) {
+				live[alias] = true
+			}
 		} else {
 			for _, alias := range rowAliasPattern.FindAllString(body, -1) {
 				live[alias] = true
@@ -238,16 +284,15 @@ func (b *planBuilder) pruneRowInputs(final string) {
 	}
 }
 func (b *planBuilder) finish(sql, scope string, cols []OutputColumn) SQLPlan {
-	b.pruneRowInputs(sql)
-	ctes := []string{}
-	for _, s := range b.stages {
-		mode := "MATERIALIZED"
-		if !s.Materialized {
-			mode = "NOT MATERIALIZED"
-		}
-		ctes = append(ctes, s.Name+" AS "+mode+" ("+s.SQL+")")
+	if b.earlyBindings != nil {
+		b.deferRowBindings(b.lateWindow, b.lateStage, b.earlyBindings)
 	}
-	full := "WITH " + strings.Join(ctes, ",\n") + "\n" + sql
+	b.pruneRowInputs(sql)
+	stages := b.stages
+	if b.lateSource {
+		stages = append([]SQLStage{{Name: b.sourceFrom, SQL: b.options.SourceSQL, Materialized: false}}, stages...)
+	}
+	full := sqlStageCTEs(stages) + "\n" + sql
 	deps := []string{}
 	for d := range b.dependencies {
 		deps = append(deps, d)
@@ -258,7 +303,7 @@ func (b *planBuilder) finish(sql, scope string, cols []OutputColumn) SQLPlan {
 	for _, d := range deps {
 		fmt.Fprintf(h, "\x00%s=%s", d, b.revisions[strings.TrimPrefix(d, "@computed/")])
 	}
-	return SQLPlan{SQL: full, Args: b.args, Stages: b.stages, Columns: cols, Dependencies: deps, ResolvedRevisions: b.revisions, Profile: b.profile(), Fingerprint: hex.EncodeToString(h.Sum(nil)), Scope: scope, RequiresSnapshot: true}
+	return SQLPlan{SQL: full, Args: b.args, Stages: stages, Columns: cols, Dependencies: deps, ResolvedRevisions: b.revisions, Profile: b.profile(), Fingerprint: hex.EncodeToString(h.Sum(nil)), Scope: scope, RequiresSnapshot: true}
 }
 func (b *planBuilder) field(name string) (ValueSQL, error) {
 	if len(b.stages) > 500 {
@@ -559,6 +604,7 @@ func (b *planBuilder) filter(where []WhereTerm) error {
 	}
 	for _, term := range where {
 		for _, p := range term.Predicates() {
+			b.dependencies[p.Field] = true
 			if p.Op == "matches_regex" || p.Op == "not_matches_regex" {
 				return diagnostic("unsupported_regex", "regex filters are outside this server profile")
 			}
@@ -669,16 +715,29 @@ func compileComputedRowsDialect(ctx context.Context, q WireQuery, s Schema, o Pl
 	}
 	window += " OFFSET " + b.param(q.Offset, "bigint")
 	b.stage(window)
+	windowStage := len(b.stages) - 1
+	early := map[string]bool{}
+	for name := range b.dependencies {
+		if alias, ok := b.sourceAliases[name]; ok {
+			early[alias] = true
+		}
+	}
+	// PostgreSQL late bindings join the authorized source only after the bounded
+	// window. Preserve raw identity as well as all hidden global sort values.
+	lateStage := -1
+	if !sqlite {
+		early[b.sourceAliases[s.IDField]] = true
+		b.stage("SELECT * FROM " + b.rel)
+		lateStage = len(b.stages) - 1
+	}
 	cols := []OutputColumn{}
 	selects := []string{}
 	for i, n := range q.Select {
 		v, e := b.field(n)
-		if b.sqlite {
-			if f, ok := s.Fields[n]; ok && f.Kind == FieldTextArray {
-				v = b.fields[n]
-				v.Type = "textarray"
-				e = nil
-			}
+		if f, ok := s.Fields[n]; ok && f.Kind == FieldTextArray {
+			v = b.fields[n]
+			v.Type = "textarray"
+			e = nil
 		}
 		if e != nil {
 			return SQLPlan{}, e
@@ -694,6 +753,9 @@ func compileComputedRowsDialect(ctx context.Context, q WireQuery, s Schema, o Pl
 	// ORDER BY is repeated to preserve the selected page's ordering through
 	// materialized select-only projections. The population window is already fixed.
 	sql := "SELECT " + strings.Join(selects, ",") + " FROM " + b.rel + " ORDER BY " + order
+	if !sqlite {
+		b.deferRowBindings(windowStage, lateStage, early)
+	}
 	return b.finish(sql, "shownRows", cols), nil
 }
 

@@ -474,3 +474,7 @@ button.usage-legend-item:hover { border-color: var(--line); color: var(--ink); }
 }
 @media (max-width: 600px) { .semantic-search { flex-wrap: wrap; } .semantic-search input:not([type=checkbox]) { flex-basis: 55%; } }
 .library-find-status button { margin: 0 8px 8px 0; }
+
+.query-exploration-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 12px 0; }
+.query-exploration-controls button { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; background: var(--bg); color: inherit; cursor: pointer; }
+.query-exploration-controls button[aria-pressed="true"] { border-color: var(--accent); }

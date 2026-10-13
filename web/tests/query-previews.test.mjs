@@ -252,3 +252,29 @@ test("cancellation prevents publication and leaves no aborted result in the cach
   await loadQueryPreviews([job("n", [{ id: "n", op: "count", groupBy: [] }])], () => assert.fail("aborted result published"), controller.signal);
   assert.equal(requests.filter(request => request.path.endsWith("metrics")).length, 1);
 });
+
+test("grouped saved views preview the full source before HAVING and result paging", async t => {
+ const requests=fixture(t,(path,request)=>path.includes('/population')?response({rows:core.applyQuery(rows,{...core.EMPTY_QUERY,where:request.where,limit:10000},schemas.tool_calls).rows,total:8,complete:true}):undefined);
+ const grouped=core.normalizeQueryState({
+  grouping:{source:query([],{where:[{field:'duration_ms',op:'>',value:'200'}],limit:1,offset:99}),keys:['repository_name'],summaries:[{id:'group_rows',op:'count'}]},
+  select:[{field:'repository_name'},{field:'group_rows'}],where:[{field:'group_rows',op:'>=',value:'4'}],orderBy:[{field:'repository_name',dir:'asc'}],limit:1,offset:1,
+  aggregations:[{id:'groups',op:'count',expression:'COUNT()',groupBy:[]}],
+ });
+ const preview=await loadQueryPreview('tool_calls',grouped,schemas.tool_calls);
+ assert.equal(preview.state,'ready');assert.equal(preview.metrics[0].result.buckets[0].value,2);
+ assert.equal(requests.filter(r=>r.path.includes('/population')).length,1);
+ assert.equal(requests.filter(r=>r.path.includes('/rows-v2')||r.path.endsWith('/metrics')).length,0);
+});
+
+test("calendar previews retain empty local-date buckets and reject partial sources", async t => {
+ const population=[{...rows[0],started_at:'2026-03-08T08:00:00Z'},{...rows[1],started_at:'2026-03-09T07:00:00Z'}];
+ let complete=true;
+ const requests=fixture(t,path=>path.includes('/population')?response({rows:population,total:2,complete}):undefined);
+ const q=query([{id:'days',op:'count',expression:'COUNT()',groupBy:['started_at'],dateGrouping:{field:'started_at',interval:'day',timeZone:'America/Denver',includeEmpty:true,range:'custom',start:'2026-03-07',end:'2026-03-10'}}]);
+ const preview=await loadQueryPreview('tool_calls',q,schemas.tool_calls);
+ assert.equal(preview.metrics[0].result.buckets.reduce((sum,bucket)=>sum+bucket.count,0),2);
+ assert.ok(preview.metrics[0].result.buckets.some(bucket=>bucket.count===0));
+ complete=false;clearPreviewCache();
+ await assert.rejects(loadQueryPreview('tool_calls',q,schemas.tool_calls),/incomplete/);
+ assert.equal(requests.filter(r=>r.path.endsWith('/metrics')).length,0);
+});

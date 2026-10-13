@@ -1,3 +1,7 @@
+> For the next-release source integration and local worktree setup, see
+> [Query Table local development](query-table-local-development.md). The release
+> integration below records the earlier 0.6.0 upgrade.
+
 # Query Table 0.6.0 in Pharos
 
 Pharos pins core, React, UI, and codegen to npm **0.6.0**, and the Go adapter to
