@@ -48,6 +48,6 @@
     { "name": "candidate_id", "label": "Candidate ID", "type": "text", "group": "Evidence", "select": {"default": false}, "bindings": {"postgres": {"expr": "candidate_id", "synthetic": true}, "sqlite": {"expr": "r.\"candidate_id\""}} },
     { "name": "task_id", "label": "Task ID", "type": "text", "group": "Evidence", "select": {"default": false}, "bindings": {"postgres": {"expr": "task_id", "synthetic": true}, "sqlite": {"expr": "r.\"task_id\""}} },
     { "name": "attempt_id", "label": "Attempt ID", "type": "text", "group": "Evidence", "select": {"default": false}, "bindings": {"postgres": {"expr": "attempt_id", "synthetic": true}, "sqlite": {"expr": "r.\"attempt_id\""}} },
-    { "name": "workspace_id", "label": "Workspace ID", "type": "text", "group": "Evidence", "select": {"default": false}, "bindings": {"postgres": {"expr": "workspace_id", "synthetic": true}, "sqlite": {"expr": "r.\"workspace_id\""}} }
+    { "name": "workspace_id", "relationship": {"objectType": "pharos_library", "key": {"id": "workspace_id"}}, "label": "Workspace ID", "type": "text", "group": "Evidence", "select": {"default": false}, "bindings": {"postgres": {"expr": "workspace_id", "synthetic": true}, "sqlite": {"expr": "r.\"workspace_id\""}} }
   ]
 }

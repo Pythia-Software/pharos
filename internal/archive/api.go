@@ -139,6 +139,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{"error": fmt.Sprint(value)}, http.StatusInternalServerError)
 		}
 	}()
+	if r.URL.Path == "/api/query-object-references" {
+		s.queryObjectReferences(w, r)
+		return
+	}
+	if r.URL.Path == "/api/query-snapshots" {
+		s.querySnapshots(w, r)
+		return
+	}
 	if r.URL.Path == "/api/query-computed-columns" {
 		s.queryComputedColumns(w, r)
 		return
@@ -1031,7 +1039,7 @@ func writeHTML(w http.ResponseWriter, value string) {
 	// query-table evaluates computed columns in a Blob-backed Web Worker. Keep
 	// every network-capable directive same-origin while allowing that isolated
 	// worker; child-src is included for older WebKit worker CSP handling.
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; worker-src 'self' blob:; child-src 'self' blob:")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; worker-src 'self' blob:; child-src 'self' blob:")
 	w.WriteHeader(200)
 	_, _ = w.Write([]byte(value))
 }

@@ -195,7 +195,7 @@ func (c *Catalog) Initialize() error {
 	if _, err := c.DB.Exec("INSERT INTO messages_fts(messages_fts,rank) VALUES('crisismerge',32)"); err != nil {
 		return err
 	}
-	if _, err := c.DB.Exec(queryTableComputedDDL); err != nil {
+	if _, err := c.DB.Exec(queryTableComputedDDL + ";" + qtQuerySnapshotsDDL); err != nil {
 		return err
 	}
 	for _, migration := range []struct{ table, column, statement string }{

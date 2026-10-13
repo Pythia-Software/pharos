@@ -1,5 +1,5 @@
 import { formatMetricOutput } from "@pythia-software/query-table-ui";
-import { validateComputedColumn, toMetricQuery, toServerQueryV2, type ComputedColumn, type AggregationClause, type AggregationResult, type AggregationResultEntry, type ComputedExecution, type FieldSchema, type MetricCapabilities, type MetricQuery, type QueryState } from "@pythia-software/query-table-core";
+import { applyQuery, evaluateMetrics, prepareGrouping, withoutGrouping, validateComputedColumn, toMetricQuery, toServerQueryV2, type ComputedColumn, type AggregationClause, type AggregationResult, type AggregationResultEntry, type ComputedExecution, type FieldSchema, type MetricCapabilities, type MetricQuery, type QueryState } from "@pythia-software/query-table-core";
 import { categoryForQuery, queryCategories } from "./query-categories";
 import { foldSeries, type ChartBucket, type ChartSeries } from "./chart-series";
 import { resolveRollingQuery, type QueryDataset, type RollingWindow } from "./query-links";
@@ -184,7 +184,20 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
       const valid: { item: Item; request: MetricQuery }[] = [];
       for (const item of items) {
         try {
-          if (item.query.aggregations?.length) {
+          if (item.query.grouping || item.query.aggregations?.some(metric => metric.dateGrouping)) {
+            const source = item.query.grouping?.source ?? item.query;
+            const population = await fetchPreview<{ rows: Record<string, unknown>[]; total: number; complete: boolean; find?: Payload["find"] }>(
+              `/api/query/${item.job.dataset}/population${item.search}`, signal, { where: source.where });
+            if (!population.complete || population.rows.length !== population.total) throw new Error("The preview source is incomplete.");
+            const now = clock.getTime();
+            const prepared = item.query.grouping ? prepareGrouping(population.rows, item.job.schema, item.query.grouping, { now }) : undefined;
+            const schema = prepared?.schema ?? item.job.schema;
+            const rows = prepared?.rows ?? population.rows;
+            const query = withoutGrouping(item.query);
+            const page = applyQuery(rows, query, schema, { now });
+            const metrics = evaluateMetrics(rows, query, schema, { now, shownRows: page.rows, maxRows: 10_000, maxGroups: 2000 });
+            finish(item, { ...page, metrics: metrics.metrics, find: population.find }, schema);
+          } else if (item.query.aggregations?.length) {
             const request = toMetricQuery(item.query, ctx.schema, ctx.execution);
             if (request.diagnostics.length) throw new Error(request.diagnostics.map(d => d.message).join(" · "));
             valid.push({ item, request });

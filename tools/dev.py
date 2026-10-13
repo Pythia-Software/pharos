@@ -237,7 +237,7 @@ def main():
                 except (OSError, urllib.error.URLError):
                     pass
                 time.sleep(1)
-            launch(["npm", "run", "watch"], ROOT / "web")
+            launch(["npm", "run", "watch:local"], ROOT / "web")
             command = [str(binary), "--config", config, "dev-ui", "--assets", str(ROOT / "internal/archive/assets"), "--port", str(args.ui_port)]
             if args.no_open:
                 command.append("--no-open")

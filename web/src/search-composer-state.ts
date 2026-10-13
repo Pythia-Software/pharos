@@ -1,4 +1,4 @@
-import { decodeQuery, EMPTY_QUERY, encodeQuery, type FieldSchema, type QueryState } from "@pythia-software/query-table-core";
+import { decodeQueryStrict, localQuerySnapshotCache, EMPTY_QUERY, encodeQuery, type FieldSchema, type QueryState } from "@pythia-software/query-table-core";
 import { emptyTextSearch, readTextSearch, type TextSearchDraft } from "./text-search-model";
 import { readRollingWindow, resolveRollingQuery, rollingQueryMatches, type RollingWindow } from "./query-links";
 export type SearchComposerState = { text: TextSearchDraft; kind: "text" | "file" | "url"; file: string; fileCase: boolean; query: QueryState; window?: RollingWindow; error?: string };
@@ -9,13 +9,11 @@ export function restoreSearch(params: URLSearchParams, schema: FieldSchema): Sea
   const state = freshSearch(schema), text = readTextSearch(params);
   const token = params.get("q_library");
   try { if (token) {
-    // decodeQuery deliberately falls back to an empty query for bad tokens.
-    // A search composer must report a corrupt filter envelope before that can
-    // silently broaden the search being handed to Library.
-    const envelope = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(token.replaceAll("-", "+").replaceAll("_", "/")), c => c.charCodeAt(0))));
-    if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) throw new Error("Invalid query");
+    if (params.getAll("q_library").length !== 1) throw new Error("Duplicate query state");
+    const snapshot = token.startsWith("@") ? localQuerySnapshotCache().get(schema.name, token.slice(1)) : null;
+    if (token.startsWith("@") && !snapshot) throw new Error("This query link needs resolution");
     state.window = readRollingWindow(params, "library");
-    state.query = resolveRollingQuery(decodeQuery(token), state.window);
+    state.query = resolveRollingQuery(decodeQueryStrict(snapshot?.token ?? token), state.window);
   } }
   catch { state.error = "The saved workspace filters could not be read. Reset the search to start again."; }
   state.kind = params.get("kind") === "file" ? "file" : params.get("kind") === "url" ? "url" : "text";

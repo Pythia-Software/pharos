@@ -1,7 +1,7 @@
-import { localStorageAdapter, normalizeQueryState, type SavedQuery, type StorageAdapter } from "@pythia-software/query-table-core";
+import { localStorageAdapter, normalizeQueryState, type SavedQuery, type StorageAdapter, httpQuerySnapshotStore, createQueryLinkService } from "@pythia-software/query-table-core";
 import { preferences } from "./preferences";
-import { collectQuery, migrateSavedQueries, readBookmarks, removeBookmark, savedQueries } from "./bookmarks";
-import { queryDatasets, readRollingWindow, rollingQueryMatches, type QueryDataset } from "./query-links";
+import { collectDurableQuery, replaceSavedQuery, migrateSavedQueries, readBookmarks, removeBookmark, savedQueries } from "./bookmarks";
+import { queryDatasets, readRollingWindow, rollingQueryMatches, queryURL, type QueryDataset } from "./query-links";
 
 // Saved queries and each table's default view are choices the user made, so
 // they live in the library and follow it between Macs. The last-used query
@@ -34,6 +34,7 @@ function writeDefaultId(key: string, id: string | null) {
 export function libraryStorageAdapter(): StorageAdapter {
   const local = localStorageAdapter();
   return {
+    snapshots: httpQuerySnapshotStore("/api/query-snapshots"),
     loadLast: key => local.loadLast(key),
     saveLast: (key, query) => local.saveLast(key, query),
     async listSaved(key) {
@@ -62,8 +63,18 @@ export function libraryStorageAdapter(): StorageAdapter {
       if (!dataset) throw new Error("Unknown saved-query dataset.");
       const candidate = readRollingWindow(new URLSearchParams(location.search), dataset);
       const window = candidate && rollingQueryMatches(query, candidate) ? candidate : undefined;
-      const bookmark = collectQuery(dataset, normalizeQueryState(query), normalizedName, { savedAt, window, dedupe: false });
+      const bookmark = await collectDurableQuery(dataset, normalizeQueryState(query), normalizedName, { savedAt, window, dedupe: false });
       return { id: bookmark.savedQueryId ?? bookmark.id, name: bookmark.title, savedAt, query: normalizeQueryState(query) };
+    },
+    async updateNamed(key, id, query, savedAt) {
+      const dataset = datasetOf(key);
+      if (!dataset) throw new Error("Unknown saved-query dataset.");
+      const candidate = readRollingWindow(new URLSearchParams(location.search), dataset);
+      const window = candidate && rollingQueryMatches(query, candidate) ? candidate : undefined;
+      const service = createQueryLinkService(key, httpQuerySnapshotStore("/api/query-snapshots"));
+      const link = await service.durable(query, new URL(queryURL(dataset, query, window), location.origin).href, `q_${dataset}`);
+      const url = new URL(link.url);
+      return replaceSavedQuery(dataset, id, query, savedAt, `${url.pathname}${url.search}${url.hash}`);
     },
     async deleteSaved(key, id) {
       const dataset = datasetOf(key);

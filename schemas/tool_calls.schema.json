@@ -1769,7 +1769,7 @@
       }
     },
     {
-      "name": "workspace_id",
+      "name": "workspace_id", "relationship": {"objectType": "pharos_library", "key": {"id": "workspace_id"}},
       "label": "Workspace ID",
       "type": "text",
       "group": "Evidence",
@@ -1787,7 +1787,7 @@
       }
     },
     {
-      "name": "conversation_id",
+      "name": "conversation_id", "relationship": {"objectType": "pharos_conversations", "key": {"id": "conversation_id"}},
       "label": "Conversation ID",
       "type": "text",
       "group": "Evidence",

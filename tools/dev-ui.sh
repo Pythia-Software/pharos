@@ -73,7 +73,7 @@ if [ "$WATCH" -eq 1 ]; then
         echo "web/node_modules is missing; run (cd web && npm ci), or pass --no-watch." >&2
         exit 1
     fi
-    (cd web && exec npm run --silent watch) &
+    (cd web && exec npm run --silent watch:local) &
     WATCHER=$!
     trap 'kill "$WATCHER" 2>/dev/null || true' EXIT INT TERM
 fi

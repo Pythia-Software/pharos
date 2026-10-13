@@ -132,6 +132,17 @@ func compileMetricDialect(ctx context.Context, q MetricQuery, spec AggSpec, s Sc
 			return SQLPlan{}, err
 		}
 		b.stage("SELECT * FROM " + b.rel + " ORDER BY " + order + " LIMIT " + b.param(q.Limit, "bigint") + " OFFSET " + b.param(q.Offset, "bigint"))
+		if !sqlite {
+			b.lateWindow = len(b.stages) - 1
+			b.earlyBindings = map[string]bool{b.sourceAliases[s.IDField]: true}
+			for name := range b.dependencies {
+				if alias, ok := b.sourceAliases[name]; ok {
+					b.earlyBindings[alias] = true
+				}
+			}
+			b.stage("SELECT * FROM " + b.rel)
+			b.lateStage = len(b.stages) - 1
+		}
 	}
 	groups := []ValueSQL{}
 	for _, name := range spec.GroupBy {
@@ -355,13 +366,18 @@ func compileMetricDialect(ctx context.Context, q MetricQuery, spec AggSpec, s Sc
 		}
 	}
 	plan := b.finish(sql, scope, cols)
+	if b.lateSource {
+		reductionStage++ // finish prepends the shared authorized source.
+	}
+	plan.reduction = &scalarReduction{stage: reductionStage, from: reductionFrom}
+	for _, projection := range reductions {
+		split := strings.LastIndex(projection, " AS ") // Every output has a compiler-owned alias.
+		plan.reduction.columns = append(plan.reduction.columns, SQLiteReductionColumn{Name: projection[split+4:], SQL: projection[:split]})
+	}
 	if b.sqlite {
 		plan.SQLiteReductionStage = reductionStage
 		plan.SQLiteReductionFrom = reductionFrom
-		for _, projection := range reductions {
-			split := strings.LastIndex(projection, " AS ") // Every output has a compiler-owned alias.
-			plan.SQLiteReductionColumns = append(plan.SQLiteReductionColumns, SQLiteReductionColumn{Name: projection[split+4:], SQL: projection[:split]})
-		}
+		plan.SQLiteReductionColumns = plan.reduction.columns
 	}
 	return plan, nil
 }

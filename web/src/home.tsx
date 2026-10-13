@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { FieldSchema } from "@pythia-software/query-table-core";
-import { collectQuery, migrateSavedQueries, moveBookmark, readBookmarks, removeBookmark, updateBookmark, writeBookmarks, type Bookmark } from "./bookmarks";
+import { collectDurableQuery, migrateSavedQueries, moveBookmark, readBookmarks, removeBookmark, updateBookmark, writeBookmarks, type Bookmark } from "./bookmarks";
 import { clearPreviewCache, loadQueryPreviews, queryRecipes, suggestionPool, type QueryPreview, type QuerySuggestion } from "./curiosity-data";
 import { queryFromURL, rollingWindowDays, rollingWindowField, type QueryDataset } from "./query-links";
 import { categoryForQuery } from "./query-categories";
@@ -50,7 +50,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     setLoading(true);
     const saved = new Set(collection.map(item => item.templateId).filter(Boolean));
     const jobs = [
-      ...collection.map(item => ({ id: item.id, spec: queryFromURL(item.url), options: { recipe: queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]), url: item.url, coverMetricId: item.coverMetricId } })),
+      ...collection.map(item => ({ id: item.id, spec: queryFromURL(item.url, item.query), options: { recipe: queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]), url: item.url, coverMetricId: item.coverMetricId } })),
       ...pool.filter(item => ![...saved].some(id => id!.split(":")[0] === item.id)).map(item => ({ id: item.instanceId, spec: { dataset: item.dataset, query: item.query, window: item.window }, options: { recipe: item, url: item.url, suggested: true } })),
     ];
     void loadQueryPreviews(jobs.flatMap(job => job.spec ? [{ id: job.id, dataset: job.spec.dataset, query: job.spec.query, schema: schemas[job.spec.dataset], options: { ...job.options, window: job.spec.window } }] : []), (id, preview, error) => {
@@ -70,12 +70,12 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     return item && previews[id]?.state === "ready" && !errors[id] && !collectedTemplates.has(item.id) ? [item] : [];
   });
   useEffect(() => {
-    if (editing) { setEditTitle(editing.title); setEditDescription(editing.description ?? ""); setEditDays(String(queryFromURL(editing.url)?.window?.days ?? "")); setEditCover(editing.coverMetricId ?? ""); setEditError(""); editor.current?.showModal(); }
+    if (editing) { setEditTitle(editing.title); setEditDescription(editing.description ?? ""); setEditDays(String(queryFromURL(editing.url, editing.query)?.window?.days ?? "")); setEditCover(editing.coverMetricId ?? ""); setEditError(""); editor.current?.showModal(); }
   }, [editing]);
 
-  function keep(item: QuerySuggestion, before?: string) {
+  async function keep(item: QuerySuggestion, before?: string) {
     try {
-      const saved = collectQuery(item.dataset, item.query, item.title, { description: item.description, templateId: item.instanceId, window: item.window });
+      const saved = await collectDurableQuery(item.dataset, item.query, item.title, { description: item.description, templateId: item.instanceId, window: item.window });
       if (before) moveBookmark(saved.id, before);
       setMessage(`Collected “${item.title}”.`); setUndo(null);
       setPreviews(current => ({ ...current, [saved.id]: current[item.instanceId] }));
@@ -99,13 +99,13 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     setUndo({ item, index: collection.findIndex(other => other.id === item.id) }); removeBookmark(item.id); setMessage(`Removed “${item.title}”.`);
   }
   const finishDrag = () => { setDrag(null); setInsertBefore(undefined); };
-  const editingSpec = editing && queryFromURL(editing.url);
+  const editingSpec = editing && queryFromURL(editing.url, editing.query);
   const canEditWindow = editingSpec && Boolean(editingSpec.window?.field ?? rollingWindowField(editingSpec.dataset));
   return <div className="curiosity-home" data-feedback-label="Home dashboard">
     <div className="home-intro"><h1>{welcome}</h1><HomeSearch schema={schemas.library} /></div>
     <div className={`home-collection${drag ? " accepting" : ""}`} role="region" aria-label="Your collection" onDragOver={event => { if (drag) { event.preventDefault(); const target = (event.target as Element).closest("[data-card-id]"); setInsertBefore(target?.getAttribute("data-card-id") ?? undefined); } }} onDrop={event => drop(event)}>
       {collection.map(item => {
-        const spec = queryFromURL(item.url), recipe = queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]);
+        const spec = queryFromURL(item.url, item.query), recipe = queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]);
         return <QueryCard key={item.id} id={item.id} title={item.title} description={item.description ?? "A saved view of your work."} url={item.url} windowLabel={spec?.window ? `${spec.window.days}d` : "Saved"} category={recipe?.category ?? categoryForQuery(spec?.dataset ?? item.dataset, spec?.query)}
           preview={spec ? previews[item.id] : { state: "ready", total: 0, summary: "Bookmarked page", excerpt: item.url.split("?")[0].slice(1) || "Home" }} error={errors[item.id]} before={insertBefore === item.id}
           onOpen={() => navigate(item.url)} onEdit={() => setEditing(item)} onRemove={() => remove(item)} onMove={direction => move(item.id, direction)}

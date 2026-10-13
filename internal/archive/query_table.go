@@ -112,6 +112,10 @@ func queryTableRoute(path string) (dataset, operation string, ok bool) {
 }
 
 func (s *Server) getQueryTable(w http.ResponseWriter, r *http.Request, dataset, operation string) {
+	if operation == "item" {
+		s.getQueryItem(w, r, dataset)
+		return
+	}
 	if operation == "capabilities" {
 		s.getQueryCapabilities(w, r, dataset)
 		return
@@ -220,6 +224,10 @@ func (s *Server) getFieldStats(w http.ResponseWriter, r *http.Request, dataset s
 }
 
 func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset, operation string) {
+	if operation == "population" {
+		s.postQueryPopulation(w, r, dataset)
+		return
+	}
 	if operation == "metrics" || operation == "rows-v2" {
 		s.postQueryV2(w, r, dataset, operation)
 		return

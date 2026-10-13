@@ -9,3 +9,5 @@ dist/
 build/
 archive.toml
 .archive-data/
+go.work
+go.work.sum

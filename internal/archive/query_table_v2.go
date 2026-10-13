@@ -578,9 +578,12 @@ func queryV2LibraryFields(ctx context.Context, db *sql.DB, schema qt.Schema, row
 	return slices.Sorted(maps.Keys(fields)), nil
 }
 
-func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.Values, schema qt.Schema, rowRequest *qt.ServerQueryV2, metrics *qt.MetricQuery) (queryV2ExecutionResult, error) {
+func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.Values, schema qt.Schema, rowRequest *qt.ServerQueryV2, metrics *qt.MetricQuery, populationLimit ...int) (queryV2ExecutionResult, error) {
 	clock := time.Now()
 	d := queryV2Dataset(dataset, schema)
+	if len(populationLimit) > 0 {
+		d.MaxPopulation = min(d.MaxPopulation, populationLimit[0])
+	}
 	table, sqlBacked := sqlDatasetFor(dataset)
 	var sourceRows, usageHours []map[string]any
 	var libraryNames []string

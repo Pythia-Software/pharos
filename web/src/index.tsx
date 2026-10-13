@@ -16,7 +16,7 @@ import { chartPeriods, earliestKey, isHourly, localDay, parseDay, periodBuckets,
 import { defaultChartScale, validChartScale, type ChartScale } from "./chart-scale";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { EMPTY_QUERY, httpComputedColumnStore, applyAggregations, decodeQuery, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, toServerQuery, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereTerm } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, httpComputedColumnStore, applyAggregations, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, toServerQuery, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
 import { useQueryTable, type QueryTableApi } from "@pythia-software/query-table-react";
 import { DataTable, FilterValueProvider, MetricsPanel, QueryBuilder, SelectionToolbar, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
 import "@pythia-software/query-table-ui/theme.css";
@@ -47,6 +47,12 @@ import { ConcurrencyModal, concurrencyPrototypeEnabled } from "./concurrency";
 import { openConcurrencyModal, startConcurrencySummary } from "./concurrency-store";
 
 type Row = Record<string, any>;
+const emptyPopulation: Row[] = [];
+const relationships: RelationshipAdapter = {
+  async resolve(references, signal) {
+    return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
+  },
+};
 type Dataset = "library" | "usage" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts";
 type LibraryView = "table" | "conversation";
 type MessageView = "table" | "text";
@@ -159,6 +165,7 @@ declare global {
     pharosMessageCard?: (message: TranscriptMessage) => HTMLElement;
     pharosTurnSummaries?: (conversation: Row) => TurnSummary[];
     pharosQueryTables?: {
+      createLink: () => Promise<{ url: string; query?: QueryState; dataset?: Dataset }>;
       refresh: (dataset: Dataset) => void;
       filterRepository: (repository: string) => void;
       filterModel: (model: string) => void;
@@ -179,6 +186,8 @@ const schemas: Record<Dataset, FieldSchema<Row>> = {
   skill_usages: loadSchema<Row>(skillUsagesDocument),
   tl1_attempts: loadSchema<Row>(tl1AttemptsDocument),
 };
+
+window.addEventListener("pharos:route", () => window.dispatchEvent(new PopStateEvent("popstate")));
 
 const tableApis = new Map<Dataset, QueryTableApi<Row>>();
 let clearLibrarySearch: (() => void) | undefined;
@@ -203,6 +212,10 @@ function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary
   };
   return {
     metricCapabilities: capabilities,
+    async fetchRow(id, signal) {
+      const result = await responseJSON<{ row: Row | null }>(await fetch(`/api/query/${dataset}/item?id=${encodeURIComponent(String(id))}`, { signal }));
+      return result.row;
+    },
     async fetchRowsV2(query, signal) {
       const result = await responseJSON<FetchRowsResultV2<Row> & { find?: FindSummary }>(await fetch(endpoint("/rows-v2", recordBudget(dataset, query.where)), {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query), signal,
@@ -395,13 +408,52 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
   useEffect(() => { const changed = () => setBookmarkRevision(value => value + 1); window.addEventListener("pharos:bookmarks", changed); return () => window.removeEventListener("pharos:bookmarks", changed); }, []);
   // A shared file has no origin of its own to keep saved queries apart from other files'.
   const storage = useMemo(() => shared ? memoryStorageAdapter() : libraryStorageAdapter(), [bookmarkRevision]);
-  // A query in the URL (a link, or a drill-down from another table) starts
-  // the table, rather than the last one used, which loads after it otherwise.
-  const [urlQuery] = useState(() => {
-    const token = new URLSearchParams(location.search).get(queryParameter(dataset));
-    return token === null ? undefined : resolveRollingQuery(decodeQuery(token), readRollingWindow(new URLSearchParams(location.search), dataset));
+  const [explore, setExplore] = useState(false);
+  const [population, setPopulation] = useState<{ key: string; rows: Row[]; total: number }>();
+  const [populationError, setPopulationError] = useState<Error>();
+  const [populationRevision, setPopulationRevision] = useState(0);
+  const propertyStorage = useMemo(() => jsonPropertyViewStorage(
+    key => preferences().get<string | null>(key, null),
+    (key, value) => preferences().set(key, value),
+  ), []);
+  const canonicalizeQuery = useMemo(() => (query: QueryState) => {
+    const rolling = readRollingWindow(new URLSearchParams(location.search), dataset);
+    return rolling && rollingQueryMatches(query, rolling) ? resolveRollingQuery(query, rolling) : query;
+  }, [dataset, locationRevision]);
+  const validateQuery = useMemo(() => (query: QueryState) => {
+    if (!explore || shared) return;
+    const key = JSON.stringify([find, (query.grouping?.source ?? query).where, populationRevision]);
+    if (population?.key !== key) throw populationError ?? new Error("Loading the complete source population…");
+  }, [explore, population, populationError, find, populationRevision]);
+  const visible = shared || datasetIsVisible(dataset);
+  const api = useQueryTable<Row>({ schema, transport: explore ? undefined : transport,
+    computedColumnStore, computedExecution: explore ? undefined : capabilities?.computedExecution,
+    clientRows: shared?.datasets[dataset] ?? (explore ? population?.rows ?? emptyPopulation : undefined),
+    storage, debounceMs: 100, syncUrl: Boolean(visible), canonicalizeQuery, validateQuery,
+    itemDetails: { queryParameter: queryParameter(dataset), storage: propertyStorage, relationships: shared ? undefined : relationships,
+      loadRow: shared ? undefined : async (id, signal) => {
+        const row = await transport!.fetchRow!(id, signal);
+        return row ? { row, loadedFields: Object.keys(row) } : null;
+      } },
+    onRefresh: () => { if (explore) setPopulationRevision(value => value + 1); },
   });
-  const api = useQueryTable<Row>({ schema, transport, computedColumnStore, computedExecution: capabilities?.computedExecution, clientRows: shared?.datasets[dataset], storage, debounceMs: 100, ...(urlQuery ? { initialQuery: urlQuery } : {}) });
+  const sourceWhere = JSON.stringify((api.query.grouping?.source ?? api.query).where);
+  const populationKey = JSON.stringify([find, (api.query.grouping?.source ?? api.query).where, populationRevision]);
+  useEffect(() => {
+    if (shared || !explore || !visible) return;
+    const controller = new AbortController();
+    setPopulationError(undefined);
+    const timer = setTimeout(() => {
+      fetch(`/api/query/${dataset}/population${find ? `?${find}` : ""}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ where: JSON.parse(sourceWhere) }), signal: controller.signal,
+      }).then(response => responseJSON<{ rows: Row[]; total: number; complete: boolean; find?: FindSummary }>(response)).then(result => {
+        if (!result.complete || result.rows.length !== result.total) throw new Error("The source population is incomplete.");
+        if (!controller.signal.aborted) { setPopulation({ key: populationKey, rows: result.rows, total: result.total }); onFindRef.current?.(result.find ?? null); }
+      }).catch(error => { if (!controller.signal.aborted) setPopulationError(error instanceof Error ? error : new Error(String(error))); });
+    }, 100);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [dataset, find, sourceWhere, explore, visible, populationRevision]);
   const apiRef = useRef(api);
   apiRef.current = api;
   // A new search starts from its first page.
@@ -421,36 +473,10 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
   useEffect(() => {
     return () => { tableApis.delete(dataset); };
   }, [dataset]);
-  const pendingRouteQuery = useRef<string | null>(null);
-  const firstRouteQuery = useRef(true);
   useEffect(() => {
-    const restore = () => {
-      if (!shared && !datasetIsVisible(dataset)) { firstRouteQuery.current = false; return; }
-      const token = new URLSearchParams(window.location.search).get(queryParameter(dataset));
-      if (token !== null) {
-        const restored = resolveRollingQuery(decodeQuery(token), readRollingWindow(new URLSearchParams(location.search), dataset));
-        const canonicalToken = encodeQuery(restored);
-        pendingRouteQuery.current = encodeQuery(apiRef.current.query) === canonicalToken ? null : canonicalToken;
-        apiRef.current.setQuery(restored);
-      } else if (!firstRouteQuery.current) {
-        const defaultsToken = encodeQuery(apiRef.current.defaults);
-        pendingRouteQuery.current = encodeQuery(apiRef.current.query) === defaultsToken ? null : defaultsToken;
-        apiRef.current.setQuery(apiRef.current.defaults);
-      }
-      firstRouteQuery.current = false;
-    };
-    restore();
-    window.addEventListener("pharos:route", restore);
-    return () => window.removeEventListener("pharos:route", restore);
-  }, [dataset]);
-  const initialQuery = useRef(true);
-  useEffect(() => {
-    if (initialQuery.current) { initialQuery.current = false; if (pendingRouteQuery.current !== null) return; }
-    if (!shared && !datasetIsVisible(dataset)) return;
-    const token = encodeQuery(api.query);
-    if (pendingRouteQuery.current !== null && token !== pendingRouteQuery.current) return;
+    if (!visible || api.error) return;
     const rolling = readRollingWindow(new URLSearchParams(location.search), dataset);
-    if (rolling && !rollingQueryMatches(api.query, rolling)) {
+    if (rolling && !rollingQueryMatches(api.query.grouping?.source ?? api.query, rolling)) {
       for (const name of ["window_days", "window_field", "window_dataset"]) updateURI(name, "");
     } else if (!rolling) {
       const savedWindow = savedRollingWindow(dataset, api.query);
@@ -458,22 +484,25 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
         updateURI("window_days", String(savedWindow.days)); updateURI("window_field", savedWindow.field); updateURI("window_dataset", dataset);
       }
     }
-    pendingRouteQuery.current = null;
-    updateURI(queryParameter(dataset), token);
-  // Defer visibility synchronization to an effect: pharos:view precedes
-  // pharos:route during URL navigation, which must restore its query first.
-  }, [dataset, api.query, locationRevision]);
+  }, [dataset, api.query, visible, api.error]);
+  useEffect(() => { if (!shared && (api.query.grouping || api.query.aggregations?.some(metric => metric.dateGrouping))) setExplore(true); }, [api.query.grouping, api.query.aggregations]);
 
   return <FilterValueProvider value={filterPresentations[dataset]}>
-    {header?.(api)}
-    {controls ? controls(api, <QueryBuilder api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={stableApi} dataset={dataset} layout={<QueryBuilder api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />} /> : <QueryBuilder api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />}
-    <MetricsPanel api={stableApi} aggregations={api.aggregations} fields={metricFields(api.computed.catalogue)} renderers={metricRenderers} />
-    {api.error ? <div className="query-table-error">{api.error.message}</div> : null}
-    {selectable ? <SelectionToolbar selection={api.selection} actions={ids => <ShareSelection ids={ids} api={api} transport={transport} />} /> : null}
-    {dataset === "library" && libraryView === "conversation" ? <ConversationResults api={api} searching={Boolean(find)} />
-      : dataset === "writing_messages" && messageView === "text" ? <AuthoredMessages api={api} emptyMessage={api.error ? failedMessage : emptyMessages[dataset]} /> : <DataTable
+    {!shared ? <div className="query-exploration-controls">
+      <button type="button" aria-pressed={explore} disabled={Boolean(api.query.grouping || api.query.aggregations?.some(metric => metric.dateGrouping))} onClick={() => setExplore(value => !value)}>
+        {explore ? "Return to table mode" : "Explore groups and calendar metrics"}
+      </button>
+      {explore ? <span className="muted">{population?.key === populationKey ? `${population.total.toLocaleString()} source rows` : "Loading source…"} · Edit source filters to narrow the population.</span> : null}
+    </div> : null}
+    {!api.query.grouping ? header?.(api) : null}
+    {api.query.grouping ? <QueryBuilder api={stableApi} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <QueryBuilder api={stableApi} fields={(api.query.grouping ? api.schema!.fields : api.computed.catalogue)} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={stableApi} dataset={dataset} layout={<QueryBuilder api={stableApi} fields={(api.query.grouping ? api.schema!.fields : api.computed.catalogue)} total={api.total} running={api.loading} />} /> : <QueryBuilder api={stableApi} fields={(api.query.grouping ? api.schema!.fields : api.computed.catalogue)} total={api.total} running={api.loading} />}
+    <MetricsPanel api={stableApi} aggregations={api.aggregations} fields={metricFields((api.query.grouping ? api.schema!.fields : api.computed.catalogue))} renderers={metricRenderers} />
+    {api.error || (explore && populationError) ? <div className="query-table-error">{((explore && populationError) || api.error)?.message}</div> : null}
+    {selectable && !api.query.grouping ? <SelectionToolbar selection={api.selection} actions={ids => <ShareSelection ids={ids} api={api} transport={transport} />} /> : null}
+    {dataset === "library" && libraryView === "conversation" && !api.query.grouping ? <ConversationResults api={api} searching={Boolean(find)} />
+      : dataset === "writing_messages" && messageView === "text" && !api.query.grouping ? <AuthoredMessages api={api} emptyMessage={api.error ? failedMessage : emptyMessages[dataset]} /> : <DataTable
       maxHeight={100000}
-      {...(selectable ? { selection: api.selection } : {})}
+      {...(selectable && !api.query.grouping ? { selection: api.selection } : {})}
       fields={api.visibleFields}
       rows={api.rows}
       query={api.query}
@@ -481,10 +510,11 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
       renderers={tableRenderers}
       rowId={api.rowId}
       columnDrag={api.columnDrag}
+      itemDetails={api.itemDetails ?? undefined}
       total={api.total}
       loading={api.loading}
       emptyMessage={api.error ? failedMessage : find ? "No work matches this search and these filters." : emptyMessages[dataset]}
-      {...(trailing ? { trailing: (row: Row) => trailing(row, api), trailingLabel: dataset === "mcp_calls" || dataset === "tool_calls" ? "View" : dataset === "tools" || dataset === "writing" ? "Drill in" : dataset === "library" ? "Match" : "Actions" } : {})}
+      {...(trailing && !api.query.grouping ? { trailing: (row: Row) => trailing(row, api), trailingLabel: dataset === "mcp_calls" || dataset === "tool_calls" ? "View" : dataset === "tools" || dataset === "writing" ? "Drill in" : dataset === "library" ? "Match" : "Actions" } : {})}
     />}
   </FilterValueProvider>;
 }
@@ -1775,6 +1805,13 @@ if (!shared && concurrencyPrototypeEnabled) {
   startConcurrencySummary();
 }
 window.pharosQueryTables = {
+  async createLink() {
+    const entry = [...tableApis.entries()].find(([dataset]) => datasetIsVisible(dataset));
+    if (!entry) return { url: location.href };
+    const [dataset, api] = entry, query = api.query;
+    const link = await api.links.create(query);
+    return { url: link.url, query, dataset };
+  },
   refresh(dataset) {
     window.dispatchEvent(new CustomEvent("pharos:data-refresh", { detail: dataset }));
     tableApis.get(dataset)?.refresh();
