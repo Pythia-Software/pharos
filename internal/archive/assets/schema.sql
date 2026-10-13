@@ -1084,3 +1084,65 @@ CREATE TABLE IF NOT EXISTS tool_ledger_inputs (
  row_kind TEXT NOT NULL,row_id TEXT NOT NULL,fingerprint TEXT NOT NULL,
  PRIMARY KEY(conversation_id,row_kind,row_id)
 );
+
+-- Small-surface search metadata. Text stays in messages; old catalogs backfill
+-- incrementally instead of blocking startup on a multi-GB table scan.
+CREATE TABLE IF NOT EXISTS text_search_documents (
+  message_rowid INTEGER PRIMARY KEY,
+  message_id TEXT NOT NULL UNIQUE,
+  conversation_id TEXT NOT NULL,
+  surface TEXT NOT NULL,
+  byte_length INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS text_search_surface_idx ON text_search_documents(surface,message_rowid);
+CREATE INDEX IF NOT EXISTS text_search_conversation_idx ON text_search_documents(conversation_id,message_rowid);
+INSERT OR IGNORE INTO meta(key,value) VALUES('text_search_generation','0');
+CREATE TRIGGER IF NOT EXISTS text_search_message_insert AFTER INSERT ON messages BEGIN
+  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_generation';
+  -- REPLACE can assign a new rowid without firing a DELETE trigger.
+  DELETE FROM text_search_documents WHERE message_id=new.id;
+  INSERT INTO text_search_documents(message_rowid,message_id,conversation_id,surface,byte_length)
+  SELECT new.rowid,new.id,new.conversation_id,
+    CASE WHEN new.kind IN ('thinking','reasoning','analysis') THEN 'reasoning' ELSE new.role END,
+    length(CAST(new.text AS BLOB))
+  WHERE new.kind IN ('message','thinking','reasoning','analysis') AND
+    (new.role IN ('user','assistant') OR new.kind IN ('thinking','reasoning','analysis'));
+END;
+CREATE TRIGGER IF NOT EXISTS text_search_message_delete AFTER DELETE ON messages BEGIN
+  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_generation';
+  DELETE FROM text_search_documents WHERE message_rowid=old.rowid;
+END;
+CREATE TRIGGER IF NOT EXISTS text_search_message_update AFTER UPDATE ON messages BEGIN
+  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_generation';
+  DELETE FROM text_search_documents WHERE message_rowid=old.rowid;
+  INSERT INTO text_search_documents(message_rowid,message_id,conversation_id,surface,byte_length)
+  SELECT new.rowid,new.id,new.conversation_id,
+    CASE WHEN new.kind IN ('thinking','reasoning','analysis') THEN 'reasoning' ELSE new.role END,
+    length(CAST(new.text AS BLOB))
+  WHERE new.kind IN ('message','thinking','reasoning','analysis') AND
+    (new.role IN ('user','assistant') OR new.kind IN ('thinking','reasoning','analysis'));
+END;
+
+CREATE TRIGGER IF NOT EXISTS text_search_message_authorship_spans_insert AFTER INSERT ON message_authorship_spans BEGIN
+ UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_generation';
+END;
+
+CREATE TRIGGER IF NOT EXISTS text_search_message_authorship_spans_delete AFTER DELETE ON message_authorship_spans BEGIN
+ UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_generation';
+END;
+
+CREATE TRIGGER IF NOT EXISTS text_search_message_authorship_spans_update AFTER UPDATE ON message_authorship_spans BEGIN
+ UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_generation';
+END;
+
+CREATE TRIGGER IF NOT EXISTS text_search_conversations_update AFTER UPDATE OF workspace_id,provider ON conversations BEGIN
+ UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_generation';
+END;
+
+CREATE TRIGGER IF NOT EXISTS text_search_workspaces_update AFTER UPDATE OF source_kind,repository_id ON workspaces BEGIN
+ UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_generation';
+END;
+
+CREATE TRIGGER IF NOT EXISTS text_search_repositories_update AFTER UPDATE OF display_name,canonical_remote ON repositories BEGIN
+ UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_generation';
+END;
