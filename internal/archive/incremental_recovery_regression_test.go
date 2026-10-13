@@ -174,7 +174,8 @@ func TestVerificationIncludesDeletedConductorSessionsFromOlderCaptures(t *testin
 	}
 	summary = server.verifyAllInputs(t.Context(), "history-corruption", nil)
 	if summary.Checked != 2 || summary.Passed != 1 || summary.Mismatch != 1 {
-		t.Fatalf("historical corruption was not detected: %+v", summary)
+		checks, err := queryMaps(catalog.DB, "SELECT outcome,detail FROM sync_verifications")
+		t.Fatalf("historical corruption was not detected: %+v; checks=%+v err=%v", summary, checks, err)
 	}
 }
 

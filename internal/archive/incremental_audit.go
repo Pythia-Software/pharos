@@ -567,6 +567,12 @@ func snapshotAuditScope(ctx context.Context, catalog *Catalog, record WorkspaceR
 	var bytes int64
 	for _, table := range tables {
 		name := firstString(table["name"])
+		// This derived index refers to this catalog's message rowids. Seeding
+		// messages in a reference catalog assigns new rowids; its triggers rebuild
+		// the metadata instead of copying those physical references.
+		if name == "text_search_documents" {
+			continue
+		}
 		if strings.HasPrefix(name, "sqlite_") || strings.HasPrefix(name, "messages_fts") || strings.HasPrefix(name, "messages_trigram") || strings.HasPrefix(name, "sync_") || name == "source_item_states" || name == "source_record_states" || name == "tool_call_cube" || name == "tool_usage_daily" {
 			continue
 		}

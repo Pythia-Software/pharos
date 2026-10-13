@@ -427,3 +427,57 @@ checkout's factors and sources so comparisons reflect the branch. The branch
 never opens the catalog, but buttons act on the real library. A UI change that
 needs a new or changed endpoint needs the branch's service instead. The tab
 title reads "Pharos (dev)".
+
+The concurrency visual prototype reuses an existing dev snapshot without
+refreshing it or upgrading its catalog. The timing reader opens SQLite read-only;
+the exported personal data stays in `.context/` and is served only by an opted-in,
+authenticated dev UI. With the snapshot's backend already running:
+
+```sh
+python3 tools/concurrency-prototype.py \
+  --catalog /Volumes/euclid/pharos-dev/catalog/catalog.sqlite3 \
+  --output .context/concurrency-real-data.json
+go run ./cmd/pharos --config /Volumes/euclid/pharos-dev/library.toml dev-ui \
+  --assets internal/archive/assets --port 8801 \
+  --concurrency-data .context/concurrency-real-data.json
+```
+
+Open `/usage?usage=tokens&parallelism=1` in that dev UI, or choose
+**Parallelism…** beside the pricing prompt in the Machine Tokens header. The URL opens a compact
+modal with one selectable view. The summary's **Parallelism** link opens it over
+the current page; adding `parallelism=1` to any page URL opens the same modal,
+and closing it preserves that page and its other URL parameters.
+Graph, counting unit, gap, date range, repository, selection, zoom, and conversation-list choices
+persist in the library's interface preferences.
+Range offers individual days, the last 3/7/30 captured days, all captured time,
+and an inclusive custom From–Through range. Presets end at the latest captured
+day and require enough timing coverage. Dragging shows the selected interval
+and its duration before zooming; Escape cancels a drag.
+The info button beside View opens calculation definitions and timing coverage
+in a separate modal. Conversation rows start with the repository, followed by
+the title and timing columns, with the open link last; selecting a ribbon or
+title highlights its workspace or session, according to Count by.
+The header's Usage summary includes **Parallelism**, using the saved counting
+unit, gap and repository for each full trailing window, including idle time. Timing windows
+outside the prototype export show unavailable instead of treating seven days as all time.
+The legacy `/usage?usage=concurrency` link redirects to the modal.
+
+Ribbon rows prefer continuity: continuing workspaces keep their row while it
+fits within the active count, and arriving checkouts reuse rows last occupied
+by the same repository when available. Simultaneous arrivals are grouped by
+repository. Shrinking stacks compact to exactly the active workspace count;
+zoom crops the selected range's layout without reassigning rows.
+
+Count by selects **Workspaces** (one unit per checkout) or **Sessions** (one unit
+per independently started root conversation, including overlapping conversations
+in the same checkout). It applies to both Threaded and Model activity, the chart,
+its statistics and the header summary. Source mirrors are removed; linked
+delegated compute is folded into its root conversation and workspace.
+Model activity is an input-to-response estimate,
+excluding observed tool waits; it is not measured inference telemetry. The user
+view bridges gaps only within a root conversation, up to one hour. Both use a
+fixed one-hour idle cutoff for working time and its 2+ workspace or session percentage.
+Average parallelism divides workspace or session time by the full selected date range
+(24 hours for an ordinary day), or by the full interval when zoomed, including idle time.
+The reader defaults to the last seven captured days and the `America/Denver` timezone;
+`--days` and `--timezone` override those defaults.

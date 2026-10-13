@@ -166,6 +166,54 @@ test("Library searches retain indexed options and never share batches or cached 
   assert.equal(requests.filter(request => request.path.includes("/metrics")).length, 2);
 });
 
+test("legacy Library previews preserve default-on fuzzy matching and explicit opt-out", async t => {
+  const requests = fixture(t);
+  const jobs = ["", "&fuzzy=0"].map((suffix, index) => ({ ...job(`legacy-${index}`, [], { url: `/library?search=migration${suffix}` }), dataset: "library", schema: schemas.library }));
+  await loadQueryPreviews(jobs, (_id, _preview, error) => assert.ifError(error));
+  const fuzzy = requests.filter(request => request.path.includes("rows-v2")).map(request => new URL(request.path, global.location.origin).searchParams.get("find_fuzzy"));
+  assert.deepEqual(fuzzy.sort(), ["0", "1"]);
+});
+
+test("visual Library bookmarks preserve their tree, scope, cursor, and incomplete coverage", async t => {
+  const requests = fixture(t, path => path.includes("rows-v2") ? response({ total: 0, rows: [], find: { search: { complete: false } } }) : undefined);
+  const draft = { editor: "visual", match: "rules", text: "", mode: "advanced", fuzzy: false, caseSensitive: false, separators: false,
+    root: { kind: "group", join: "any", exclude: false, children: ["cache", "buffer"].map(text => ({ kind: "words", text, other: "", distance: "8", exclude: false })) },
+    scope: { surface: "user", roles: [], kinds: [], repository: "pharos", provider: "", source: "", from: "", to: "", conversation_id: "", workspace_id: "" } };
+  const url = `/library?${new URLSearchParams({ text_builder: JSON.stringify(draft), text_cursor: "saved-cursor" })}`;
+  const preview = await loadQueryPreview("library", query([]), schemas.library, { url });
+  const params = new URL(requests.find(r => r.path.includes("rows-v2")).path, global.location.origin).searchParams;
+  assert.deepEqual(JSON.parse(params.get("find_where")), { op: "or", children: [{ op: "term", text: "cache" }, { op: "term", text: "buffer" }] });
+  assert.equal(params.get("find_surface"), "user");
+  assert.equal(params.get("find_repository"), "pharos");
+  assert.equal(params.get("find_cursor"), "saved-cursor");
+  assert.match(preview.note, /Partial search batch/);
+  assert.equal(preview.summary, "No matches in this search batch");
+});
+
+test("Human Words bookmark previews preserve the bounded message search and cursor", async t => {
+  const requests = fixture(t, path => path.includes("rows-v2") ? response({ total: 0, rows: [], find: { search: { complete: false } } }) : undefined);
+  const draft = { editor: "visual", match: "rules", text: "", mode: "advanced", fuzzy: false, caseSensitive: false, separators: false,
+    root: { kind: "group", join: "any", exclude: false, children: ["cache", "buffer"].map(text => ({ kind: "words", text, other: "", distance: "8", exclude: false })) },
+    scope: { surface: "user", roles: [], kinds: [], repository: "pharos", provider: "", source: "", from: "", to: "", conversation_id: "", workspace_id: "" } };
+  const url = `/usage?${new URLSearchParams({ message_query: JSON.stringify(draft), message_cursor: "saved-cursor" })}`;
+  const preview = await loadQueryPreview("writing_messages", query([]), schemas.writing_messages, { url });
+  const params = new URL(requests.find(r => r.path.includes("rows-v2")).path, global.location.origin).searchParams;
+  assert.deepEqual(JSON.parse(params.get("find_where")), { op: "or", children: [{ op: "term", text: "cache" }, { op: "term", text: "buffer" }] });
+  assert.equal(params.get("find_surface"), "user");
+  assert.equal(params.get("find_repository"), "pharos");
+  assert.equal(params.get("find_cursor"), "saved-cursor");
+  assert.match(preview.note, /Partial search batch/);
+  assert.equal(preview.summary, "No matches in this search batch");
+});
+
+test("a broken visual bookmark fails visibly without unfiltering itself or other previews", async t => {
+  const requests = fixture(t), results = new Map();
+  await loadQueryPreviews([{ ...job("broken", [], { url: "/library?text_builder=broken" }), dataset: "library", schema: schemas.library }, job("good", [])], (id, preview, error) => results.set(id, { preview, error }));
+  assert.match(String(results.get("broken").error), /saved search could not be opened/);
+  assert.equal(results.get("good").preview.total, 10);
+  assert.equal(requests.some(request => request.path.startsWith("/api/query/library/")), false);
+});
+
 test("row excerpts preserve the saved offset and cap only the preview length", async t => {
   const requests = fixture(t);
   await loadQueryPreview("tool_calls", query([], { limit: 2, offset: 5 }), schemas.tool_calls);

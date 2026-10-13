@@ -99,7 +99,7 @@
 .pharos-query-page .qt-qb button[title="Copy a URL for this query"] { display: none; }
 
 .semantic-search { display: flex; gap: 9px; width: min(760px, 100%); margin: 0 0 14px; }
-.semantic-search input { flex: 1; min-width: 120px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--ink); padding: 6px 12px; }
+.semantic-search input:not([type=checkbox]) { flex: 1; min-width: 120px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--ink); padding: 6px 12px; }
 .semantic-search select { min-width: 145px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--ink); padding: 6px 8px; }
 .semantic-search button { background: var(--accent); color: var(--panel); }
 .semantic-search button.semantic-search-clear { background: var(--panel); color: var(--ink); border: 1px solid var(--line); }
@@ -432,3 +432,45 @@ button.usage-legend-item:hover { border-color: var(--line); color: var(--ink); }
 .usage-period-custom { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: var(--fs-sm); white-space: nowrap; }
 .usage-period-custom input { width: 5em; min-width: 0; height: 28px; }
 .usage-chart-select select:focus-visible, .usage-period-custom input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Filters, totals, and chart share one analysis surface. Dividers distinguish
+   usage selection, results, and chart display settings without separate cards. */
+.carbon-analysis { overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.carbon-analysis > .carbon-filters { margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.carbon-filter-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.carbon-filter-heading h3 { margin: 0; font-size: var(--fs-base); }
+.carbon-filter-heading button { font: inherit; font-size: var(--fs-sm); }
+.carbon-filter-heading { margin-bottom: 8px; }
+.carbon-filters .usage-chart-controls { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.carbon-analysis > .carbon-summary { padding: 12px 16px; border: 0; border-radius: 0; background: none; }
+.carbon-analysis > .usage-chart { margin: 0; padding: 12px 16px; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: none; }
+.carbon-analysis > p, .carbon-analysis > button { margin: 0 16px 10px; }
+.carbon-impact > #carbonCard.carbon-card { margin-top: 14px; padding: 14px 16px; }
+.carbon-analysis .usage-chart-controls { gap: 8px 12px; }
+.carbon-analysis .usage-chart-legend { margin-bottom: 6px; }
+.carbon-analysis .usage-legend-group[role="group"] { gap: 2px; margin-right: 8px; padding-right: 10px; }
+.carbon-analysis .usage-legend-provider { padding-right: 2px; }
+.usage-page:has(.carbon-impact) .usage-heading p { margin: 6px 0 0; }
+.usage-date-range { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.usage-custom-dates { display: flex; flex-wrap: wrap; gap: 6px 10px; }
+.usage-custom-dates label { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 120px; font-size: var(--fs-xs); color: var(--muted); }
+.usage-custom-dates input { box-sizing: border-box; width: 100%; min-width: 0; height: 30px; padding: 3px 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); font: inherit; }
+.usage-custom-dates input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.usage-custom-dates input[aria-invalid="true"] { border-color: var(--bad); }
+.usage-custom-dates .query-table-error { width: 100%; }
+@media (max-width: 760px) {
+  .carbon-filters .usage-chart-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .carbon-filters .usage-chart-controls > :first-child { grid-column: 1 / -1; }
+  .carbon-filters .usage-date-range.custom { grid-column: 1 / -1; }
+  .carbon-filters .usage-chart-controls:has(.usage-date-range.custom) > :nth-child(2) { grid-column: 1 / -1; }
+  .carbon-analysis .usage-chart-controls .usage-period-control { grid-column: 1 / -1; }
+  .usage-page:has(.carbon-impact) .usage-heading { gap: 10px; margin-bottom: 12px; }
+}
+@media (max-width: 760px) {
+  .usage-heading { flex-direction: column; }
+  .usage-heading-actions { align-items: flex-start; max-width: 100%; }
+  .usage-heading .library-view-toggle { flex-wrap: wrap; }
+  .usage-heading .library-view-toggle button { margin-top: 0; }
+}
+@media (max-width: 600px) { .semantic-search { flex-wrap: wrap; } .semantic-search input:not([type=checkbox]) { flex-basis: 55%; } }
+.library-find-status button { margin: 0 8px 8px 0; }

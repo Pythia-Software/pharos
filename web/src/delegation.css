@@ -1,0 +1,1116 @@
+.delegation-panel {
+  --delegation-tint: #7775b9;
+  min-width: 0;
+  margin: 16px 0;
+}
+.delegation-body {
+  min-width: 0;
+}
+.delegation-controls .delegation-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  border: 0;
+  padding: 4px 0;
+  background: none;
+  color: var(--ink);
+  font-weight: 600;
+}
+.delegation-toggle .app-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--gold);
+}
+.delegation-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  position: relative;
+  isolation: isolate;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.delegation-tabs::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 3px auto 3px 3px;
+  width: calc((100% - 6px) / 2);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+  box-shadow: 0 1px 3px #0002;
+  transition: transform 160ms ease;
+}
+.delegation-tabs[data-view="parallel"]::before {
+  transform: translateX(100%);
+}
+.delegation-controls .delegation-tabs button {
+  border: 0;
+  background: none;
+  padding: 4px 10px;
+  min-height: 26px;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.delegation-controls .delegation-tabs button[aria-selected="true"] {
+  color: var(--accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .delegation-tabs::before {
+    transition: none;
+  }
+}
+.delegation-totals {
+  display: flex;
+  gap: 22px;
+  flex-wrap: wrap;
+  padding: 0;
+}
+.delegation-totals > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.delegation-totals small {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+.delegation-totals strong {
+  font: 500 var(--fs-lg)/1.2 var(--serif);
+  font-variant-numeric: tabular-nums;
+}
+.work-heading:has(.delegation-workspace-stats:not(:empty)) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 24px;
+  row-gap: 4px;
+}
+.work-heading:has(.delegation-workspace-stats:not(:empty)) > h1 {
+  grid-column: 1;
+  grid-row: 1;
+}
+.work-heading:has(.delegation-workspace-stats:not(:empty)) > .meta {
+  grid-column: 1;
+  grid-row: 2;
+}
+.work-heading:has(.delegation-workspace-stats:not(:empty)) > .work-controls {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+.delegation-workspace-stats {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  padding-left: 24px;
+  border-left: 1px solid var(--line);
+}
+.delegation-workspace-stats:empty {
+  display: none;
+}
+.delegation-workspace-stats .delegation-totals {
+  gap: 20px;
+}
+@media (max-width: 1050px) {
+  .work-heading:has(.delegation-workspace-stats:not(:empty)) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .delegation-workspace-stats {
+    grid-column: 1;
+    grid-row: 3;
+    border-left: 0;
+    padding: 9px 0 3px;
+  }
+  .work-heading:has(.delegation-workspace-stats:not(:empty)) > .work-controls {
+    grid-row: 4;
+  }
+}
+.delegation-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+  margin: 8px 0;
+  font-size: var(--fs-xs);
+}
+.delegation-toolbar {
+  align-items: center;
+  margin: 0 0 12px;
+}
+.delegation-toolbar > select,
+.delegation-toolbar .delegation-columns > summary {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: 34px;
+}
+/* A short transcript still needs room to scroll its session header into view. */
+.conversation-host > .conversation-panel {
+  scroll-margin-top: 12px;
+}
+.delegation-controls-spacer {
+  flex: 1;
+}
+.delegation-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--muted);
+}
+.delegation-controls
+  :is(input[type="search"], select, input[type="datetime-local"]) {
+  font: inherit;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px 7px;
+  min-width: 0;
+}
+.delegation-controls button {
+  font-size: var(--fs-xs);
+  padding: 4px 8px;
+  min-height: 28px;
+}
+.delegation-controls form {
+  display: flex;
+  gap: 6px;
+  align-items: end;
+  flex-wrap: wrap;
+}
+.delegation-controls small {
+  color: var(--muted);
+  max-width: 450px;
+  font-size: var(--fs-xs);
+  align-self: center;
+}
+.delegation-controls .delegation-check {
+  flex-direction: row;
+  align-items: center;
+  align-self: center;
+}
+.delegation-columns {
+  position: relative;
+  align-self: center;
+}
+.delegation-columns > summary {
+  cursor: pointer;
+  border: 1px solid var(--line);
+  padding: 4px 8px;
+  border-radius: 4px;
+  list-style: none;
+}
+.delegation-columns > div {
+  position: absolute;
+  z-index: 5;
+  top: 100%;
+  left: 0;
+  width: 290px;
+  max-width: 75vw;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 9px;
+  box-shadow: 0 8px 22px #0002;
+}
+.delegation-columns p {
+  margin: 0 0 8px;
+  color: var(--muted);
+  line-height: 1.4;
+  font-size: var(--fs-xs);
+}
+.delegation-column-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+  border-radius: 3px;
+  position: relative;
+}
+.delegation-column-option.dragging {
+  opacity: 0.45;
+}
+.delegation-column-option.drop-before::before,
+.delegation-column-option.drop-after::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--gold);
+  z-index: 1;
+}
+.delegation-column-option.drop-before::before {
+  top: -2px;
+}
+.delegation-column-option.drop-after::after {
+  bottom: -2px;
+}
+.delegation-column-option label {
+  flex: 1;
+  cursor: pointer;
+}
+.delegation-column-grip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 0;
+  color: var(--muted);
+  cursor: grab;
+  padding: 3px;
+  flex: none;
+  min-height: 22px;
+}
+.delegation-column-grip:active {
+  cursor: grabbing;
+}
+.delegation-column-grip .app-icon {
+  width: 14px;
+  height: 14px;
+}
+.delegation-column-announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.delegation-columns label {
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink);
+}
+.delegation-table-scroll {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  margin-top: 10px;
+}
+.delegation-table-size {
+  max-width: 100%;
+  min-width: 0;
+}
+.delegation-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: max-content;
+  min-width: 100%;
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.delegation-table :is(th, td) {
+  padding: 6px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 65%, transparent);
+  text-align: right;
+  white-space: nowrap;
+}
+.delegation-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+.delegation-table th {
+  background: var(--panel);
+  font-weight: 500;
+}
+.delegation-table th button {
+  font: inherit;
+  white-space: nowrap;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--ink);
+  width: 100%;
+  text-align: inherit;
+  cursor: pointer;
+}
+.delegation-table th button:hover {
+  color: var(--accent);
+}
+.delegation-table tbody td {
+  position: relative;
+  padding-top: var(--delegation-row-top);
+  padding-bottom: var(--delegation-row-bottom);
+  border-bottom: 0;
+  box-shadow: inset 0 -1px color-mix(in srgb, var(--line) 65%, transparent);
+  cursor: pointer;
+}
+.delegation-frame-edges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+.delegation-frame-edges i {
+  display: block;
+  position: absolute;
+}
+.delegation-frame-side {
+  top: 0;
+  width: 4px;
+}
+.delegation-frame-line {
+  height: 4px;
+}
+.delegation-frame-line.start {
+  top: 0;
+}
+.delegation-frame-line.parent-divider {
+  height: 1px;
+}
+.delegation-table .delegation-border-cell {
+  position: sticky;
+  right: 0;
+  z-index: 2;
+  padding-left: 0;
+  padding-right: 0;
+  background: var(--panel);
+}
+.delegation-table thead .delegation-border-cell {
+  z-index: 4;
+}
+.delegation-level {
+  font-size: var(--fs-3xs);
+  font-weight: 600;
+  color: var(--ink);
+  border: 1px solid var(--delegation-level-color);
+  border-radius: 3px;
+  padding: 1px 3px;
+  background: color-mix(
+    in srgb,
+    var(--delegation-level-color) 12%,
+    var(--panel)
+  );
+  flex: none;
+}
+.delegation-table .delegation-family {
+  font-family: var(--serif);
+  font-size: var(--fs-sm);
+  text-align: center;
+  padding: 7px;
+}
+.delegation-table .family-all {
+  border-left: 2px solid var(--line);
+}
+.delegation-table .delegation-label-cell {
+  text-align: left;
+  width: 330px;
+  max-width: 550px;
+  position: sticky;
+  left: 0;
+  background: var(--panel);
+  z-index: 1;
+  padding-left: 6px;
+}
+.delegation-table th.delegation-label-cell {
+  z-index: 4;
+  font-family: var(--serif);
+  font-size: var(--fs-sm);
+}
+.delegation-table tr:hover td {
+  box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--gold) 4%, transparent);
+}
+.delegation-current .delegation-label-cell {
+  background: color-mix(in srgb, var(--gold) 17%, var(--panel));
+}
+.delegation-table tr.delegation-current td {
+  box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--gold) 17%, transparent);
+}
+.delegation-current .delegation-name {
+  color: var(--ink);
+  font-weight: 650;
+}
+.delegation-ancestor .delegation-name {
+  color: var(--muted);
+}
+.delegation-partial {
+  color: var(--muted);
+  margin-left: 2px;
+}
+.delegation-node {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  position: relative;
+  min-height: 31px;
+}
+.delegation-node > div:last-child {
+  min-width: 0;
+}
+.delegation-name {
+  display: block;
+  max-width: 310px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.delegation-name:hover {
+  text-decoration: underline;
+}
+.delegation-node small,
+.delegation-lane-label small {
+  display: block;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+.delegation-outline {
+  font-size: 10px;
+  color: var(--muted);
+  padding-right: 3px;
+  flex: none;
+}
+.delegation-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 14px;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--muted);
+  font-size: 17px;
+}
+.delegation-chevron .app-icon {
+  width: 14px;
+  height: 14px;
+}
+.delegation-chevron:disabled {
+  opacity: 0.55;
+}
+.delegation-pagination {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+.delegation-pagination span {
+  flex: 1;
+}
+.delegation-pagination button {
+  font-size: var(--fs-xs);
+  padding: 4px 8px;
+}
+.delegation-definitions {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  margin-top: 12px;
+}
+.delegation-definitions summary {
+  cursor: pointer;
+}
+.delegation-definitions p {
+  max-width: 850px;
+  line-height: 1.5;
+}
+.delegation-definitions dl {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 5px 12px;
+}
+.delegation-definitions dt {
+  color: var(--ink);
+}
+.delegation-definitions dd {
+  margin: 0;
+}
+.delegation-definitions > button {
+  display: block;
+  margin: 6px 0;
+  font-size: var(--fs-xs);
+}
+.delegation-error {
+  padding: 10px;
+  border: 1px solid var(--bad);
+  border-radius: 4px;
+  color: var(--bad);
+  font-size: var(--fs-sm);
+}
+.delegation-context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  padding: 10px 0 0;
+}
+.delegation-session-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  margin: -10px -14px 0;
+  background: color-mix(in srgb, var(--gold) 17%, var(--panel));
+}
+.delegation-session-number {
+  flex: none;
+  color: var(--ink);
+  font-weight: 650;
+  border: 1px solid var(--gold);
+  border-radius: 4px;
+  padding: 4px 7px;
+  font-size: var(--fs-sm);
+}
+.delegation-session-heading > div {
+  flex: 1;
+  min-width: 0;
+}
+.delegation-session-heading strong {
+  display: block;
+  font: 600 var(--fs-lg)/1.3 var(--serif);
+  overflow-wrap: anywhere;
+}
+.delegation-session-heading small {
+  display: block;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  margin-top: 3px;
+}
+.conversation-head:has(.delegation-session-heading) .conversation-title-row {
+  margin-top: 12px;
+}
+@media (max-width: 700px) {
+  .delegation-session-heading {
+    flex-wrap: wrap;
+  }
+}
+.delegation-context > button,
+.delegation-context summary,
+.delegation-transcript-link {
+  color: var(--accent);
+  font: inherit;
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.delegation-context > details {
+  position: relative;
+}
+.delegation-child-menu {
+  position: absolute;
+  z-index: 5;
+  top: 100%;
+  left: 0;
+  width: 400px;
+  max-width: 70vw;
+  max-height: 350px;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: 0 6px 20px #0002;
+  padding: 6px;
+  border-radius: 4px;
+}
+.delegation-child-menu button {
+  display: block;
+  text-align: left;
+  width: 100%;
+  padding: 7px;
+  background: none;
+  border: 0;
+  font-size: var(--fs-xs);
+}
+.delegation-child-menu :is(strong, small) {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.delegation-child-menu small {
+  color: var(--muted);
+  margin-top: 3px;
+}
+.delegation-transcript-link {
+  display: block;
+  margin-top: 4px;
+  font-size: var(--fs-xs);
+}
+.delegation-parallel {
+  --activity-model: #473466;
+  --activity-read: #528aa1;
+  --activity-write: #709061;
+  --activity-run: #bd985b;
+  --activity-git: #65857e;
+  --activity-network: #6286b8;
+  --activity-delegate: #967ba9;
+  --activity-wait: #bb7366;
+  --activity-poll: #9a9390;
+  --activity-other: #82908e;
+}
+.delegation-overview-wrap {
+  margin-top: 14px;
+}
+.delegation-overview-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--fs-xs);
+  margin: 6px 0;
+}
+.delegation-overview-label small {
+  color: var(--muted);
+  font-size: inherit;
+}
+.delegation-overview {
+  position: relative;
+  height: 56px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  touch-action: none;
+  cursor: crosshair;
+  user-select: none;
+}
+.delegation-histogram {
+  position: absolute;
+  inset: 3px 1px 0;
+  display: flex;
+  align-items: end;
+  gap: 1px;
+  pointer-events: none;
+}
+.delegation-histogram i {
+  flex: 1;
+  background: color-mix(in srgb, var(--accent) 40%, var(--panel));
+  min-height: 1px;
+}
+.delegation-dim {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  pointer-events: none;
+}
+.delegation-viewport {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border: 1px solid var(--gold);
+  background: color-mix(in srgb, var(--gold) 8%, transparent);
+  cursor: grab;
+  min-width: 2px;
+}
+.delegation-overview[data-dragging="pan"] .delegation-viewport {
+  cursor: grabbing;
+}
+.delegation-viewport > span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  background: var(--gold);
+  opacity: 0.8;
+  cursor: ew-resize;
+}
+.delegation-viewport > span:first-child {
+  left: 0;
+}
+.delegation-viewport > span:last-child {
+  right: 0;
+}
+.delegation-viewport:focus,
+.delegation-viewport > span:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.delegation-overview-bounds {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  line-height: 1.8;
+  color: var(--muted);
+  gap: 10px;
+}
+.delegation-breadcrumbs {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  align-items: center;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  margin: 9px 0;
+}
+.delegation-breadcrumbs button {
+  color: var(--accent);
+  border: 0;
+  background: none;
+  font: inherit;
+  padding: 0;
+}
+.delegation-window {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  margin: 9px 0;
+  color: var(--muted);
+}
+.delegation-drag-hint {
+  margin-left: auto;
+  color: var(--accent);
+}
+.delegation-legend {
+  display: flex;
+  gap: 7px 12px;
+  flex-wrap: wrap;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+.delegation-legend span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.delegation-legend i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+.delegation-legend .model {
+  background: var(--activity-model);
+}
+.delegation-legend .error {
+  background: var(--bad);
+}
+.delegation-evidence-note {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  line-height: 1.5;
+  max-width: 1000px;
+  margin: 8px 0;
+}
+.delegation-lane-scroll {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  max-height: 570px;
+}
+.delegation-axis,
+.delegation-lane {
+  display: grid;
+  grid-template-columns: 260px minmax(350px, 1fr);
+  min-width: 610px;
+}
+.delegation-axis {
+  height: 38px;
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+.delegation-axis > span {
+  padding: 7px;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--panel);
+}
+.delegation-axis > div {
+  position: relative;
+  margin-right: 22px;
+}
+.delegation-axis small {
+  position: absolute;
+  top: 5px;
+  line-height: 1.3;
+  pointer-events: none;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  font-size: 10px;
+}
+.delegation-axis small > span {
+  display: block;
+}
+.delegation-axis > div,
+.delegation-lane-track {
+  touch-action: none;
+  user-select: none;
+  cursor: crosshair;
+}
+.delegation-lane-scroll[data-selecting="true"] .delegation-mark {
+  cursor: crosshair;
+}
+.delegation-brush {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 4;
+  background: color-mix(in srgb, var(--gold) 22%, transparent);
+  border-left: 2px solid var(--gold);
+  border-right: 2px solid var(--gold);
+  pointer-events: none;
+}
+.delegation-axis small:first-child {
+  transform: none;
+}
+.delegation-axis small:last-child {
+  transform: translateX(-100%);
+}
+.delegation-lane {
+  min-height: 44px;
+  position: relative;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 65%, transparent);
+}
+.delegation-lane.detailed {
+  min-height: 308px;
+}
+.delegation-lane-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  font-size: var(--fs-xs);
+  height: 44px;
+}
+.delegation-lane-label .delegation-name {
+  flex: 1;
+  min-width: 0;
+}
+.delegation-lane-label strong {
+  font-weight: 500;
+}
+.delegation-lane-label .delegation-activity-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  padding: 3px 5px;
+  margin-right: 4px;
+  color: var(--accent);
+  font-size: 10px;
+}
+.delegation-activity-toggle .app-icon {
+  width: 12px;
+  height: 12px;
+}
+.delegation-activity-toggle[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+}
+.delegation-lane-current .delegation-lane-label {
+  background: color-mix(in srgb, var(--gold) 18%, var(--panel));
+}
+.delegation-lane-current .delegation-name {
+  color: var(--accent);
+}
+.delegation-lane-track {
+  position: relative;
+  min-width: 0;
+  margin-right: 22px;
+}
+.delegation-gridline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid color-mix(in srgb, var(--line) 40%, transparent);
+  pointer-events: none;
+}
+.delegation-model-bg {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  background: var(--activity-model);
+  opacity: 0.8;
+  border-radius: 2px;
+  min-width: 1px;
+}
+.delegation-mark {
+  position: absolute;
+  border: 0;
+  border-radius: 1px;
+  height: 12px;
+  min-width: 3px;
+  padding: 0;
+  z-index: 1;
+  font:
+    9px/10px ui-monospace,
+    SFMono-Regular,
+    monospace;
+  color: white;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.delegation-mark:hover {
+  filter: brightness(1.15);
+  z-index: 2;
+}
+.delegation-mark:focus-visible {
+  outline: 2px solid var(--gold);
+  z-index: 2;
+}
+.delegation-mark.failed {
+  background: var(--bad) !important;
+  border: 0;
+  box-shadow: none;
+}
+.delegation-category-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--muted);
+  background: var(--panel);
+  padding: 0 4px;
+  pointer-events: none;
+}
+.delegation-truncation {
+  grid-column: 2;
+  color: var(--bad);
+  font-size: var(--fs-xs);
+}
+.delegation-event-detail {
+  position: fixed;
+  z-index: 120;
+  display: grid;
+  gap: 8px;
+  width: min(320px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  box-sizing: border-box;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 8px 28px #0003;
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.delegation-event-detail small {
+  color: var(--muted);
+}
+.delegation-event-detail button {
+  font-size: inherit;
+  padding: 3px 7px;
+}
+.delegation-event-heading {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+.delegation-event-heading button {
+  padding: 2px;
+  flex-shrink: 0;
+}
+.delegation-event-heading .app-icon {
+  width: 14px;
+  height: 14px;
+}
+.delegation-event-detail .delegation-event-jump {
+  padding: 7px 10px;
+  width: 100%;
+  font-weight: 600;
+}
+.delegation-parallel .read {
+  background: var(--activity-read);
+}
+.delegation-parallel .write {
+  background: var(--activity-write);
+}
+.delegation-parallel .run {
+  background: var(--activity-run);
+}
+.delegation-parallel .git {
+  background: var(--activity-git);
+}
+.delegation-parallel .network {
+  background: var(--activity-network);
+}
+.delegation-parallel .delegate {
+  background: var(--activity-delegate);
+}
+.delegation-parallel .wait {
+  background: var(--activity-wait);
+}
+.delegation-parallel .poll {
+  background: var(--activity-poll);
+}
+.delegation-parallel .other {
+  background: var(--activity-other);
+}
+@media (max-width: 700px) {
+  .delegation-controls {
+    position: relative;
+  }
+  .delegation-columns {
+    position: static;
+  }
+  .delegation-columns > div {
+    left: 0;
+    max-width: 100%;
+  }
+  .delegation-controls input[type="search"] {
+    width: 190px;
+  }
+  .delegation-totals {
+    gap: 12px;
+  }
+  .delegation-totals strong {
+    font-size: var(--fs-md);
+  }
+  .delegation-table .delegation-label-cell {
+    max-width: 250px;
+  }
+  .delegation-name {
+    max-width: 180px;
+  }
+  .delegation-definitions dl {
+    grid-template-columns: 110px 1fr;
+  }
+  .delegation-overview-label {
+    flex-direction: column;
+    align-items: start;
+    gap: 2px;
+  }
+  .delegation-overview-bounds {
+    font-size: 8px;
+  }
+  .delegation-lane-label .delegation-name {
+    max-width: 180px;
+  }
+  .delegation-context > button {
+    max-width: 260px;
+  }
+}

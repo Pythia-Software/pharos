@@ -100,6 +100,7 @@ func (s *Server) Serve() error {
 	server := &http.Server{Handler: s, ReadHeaderTimeout: 5 * time.Second, BaseContext: func(net.Listener) context.Context { return s.life.ctx }}
 	s.spawn(s.Catalog.maintainLibrary)
 	s.spawn(s.Catalog.maintainSubstringIndex)
+	s.spawn(s.Catalog.maintainTextSearch)
 	s.spawn(s.Catalog.maintainToolSearch)
 	s.spawn(func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
 	s.spawn(s.automaticLoop)
@@ -203,6 +204,7 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/library.js":       {"library.js", "text/javascript; charset=utf-8"},
 	"/assets/sync.js":          {"sync.js", "text/javascript; charset=utf-8"},
 	"/assets/carbon.js":        {"carbon.js", "text/javascript; charset=utf-8"},
+	"/assets/menu-bar.js":      {"menu-bar.js", "text/javascript; charset=utf-8"},
 }
 
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {
@@ -234,10 +236,25 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		options.ctx = r.Context()
 		value, err := s.Catalog.Search(options)
 		writeResult(w, value, err)
+	case path == "/api/search/text/capabilities":
+		value, err := s.Catalog.textSearchCapabilities(r.Context())
+		writeResult(w, value, err)
+	case path == "/api/search/text/options":
+		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+		defer cancel()
+		value, err := s.Catalog.textSearchEditorOptions(ctx)
+		writeResult(w, value, err)
+	case path == "/api/search/text":
+		writeError(w, fmt.Errorf("POST required"), http.StatusMethodNotAllowed)
 	case path == "/api/library/find":
 		q := r.URL.Query()
+		options, err := textOptionsFromValues(q, "")
+		if err != nil {
+			writeError(w, err, http.StatusBadRequest)
+			return
+		}
 		value, err := s.Catalog.LibraryFind(r.Context(), LibraryFindOptions{
-			Kind: q.Get("kind"), Query: q.Get("q"), Fuzzy: q.Get("fuzzy") != "0",
+			Search: options, Kind: q.Get("kind"), Query: q.Get("q"), Fuzzy: q.Get("fuzzy") != "0",
 			CaseSensitive: q.Get("case") == "1", Separators: q.Get("separators") == "1",
 			Limit: queryInt(r, "limit", 50), Offset: queryInt(r, "offset", 0),
 		})
@@ -257,6 +274,9 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		var value any
 		var err error
 		switch {
+		case len(parts) == 2 && (parts[1] == "delegation" || parts[1] == "parallel"):
+			s.getDelegation(w, r, parts[0], parts[1] == "parallel")
+			return
 		case len(parts) == 1:
 			value, err = nilIfNoMap(s.Catalog.WorkOverview(parts[0]))
 		case len(parts) == 3 && parts[1] == "conversations":
@@ -367,6 +387,12 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/usage/summary":
 		value, err := s.Catalog.UsageSummary(r.Context())
 		writeResult(w, value, err)
+	case path == "/api/menu-bar/status":
+		value, err := s.menuBarStatus(r.Context())
+		writeResult(w, value, err)
+	case path == "/api/menu-bar/usage":
+		value, err := s.menuBarUsage(r.Context())
+		writeResult(w, value, err)
 	case path == "/api/tools/status":
 		value, err := s.Catalog.ToolLedgerStatus(r.Context())
 		writeResult(w, value, err)
@@ -453,6 +479,48 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 	}
 	path := r.URL.Path
 	switch {
+	case path == "/api/search/text" || path == "/api/search/text/validate":
+		if r.Method != "POST" {
+			writeError(w, fmt.Errorf("POST required"), http.StatusMethodNotAllowed)
+			return
+		}
+		var options TextSearchOptions
+		raw, _ := json.Marshal(body)
+		if len(raw) > 64000 {
+			writeError(w, fmt.Errorf("search request exceeds 64 KB"), http.StatusRequestEntityTooLarge)
+			return
+		}
+		if err := json.Unmarshal(raw, &options); err != nil {
+			writeError(w, err, http.StatusBadRequest)
+			return
+		}
+		if path == "/api/search/text/validate" {
+			if err := normalizeTextOptions(&options); err != nil {
+				writeError(w, err, http.StatusBadRequest)
+				return
+			}
+			node, err := prepareTextQuery(options)
+			if err == nil {
+				_, _, err = compileTextPattern(node, options.CaseSensitive)
+			}
+			if err != nil {
+				writeError(w, err, http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, map[string]any{"where": node}, http.StatusOK)
+			return
+		}
+		if options.Limit == 0 {
+			options.Limit = 50
+		}
+		options.Limit = clamp(options.Limit, 1, 100)
+		value, err := s.Catalog.SearchText(r.Context(), options)
+		if err != nil {
+			writeError(w, err, http.StatusBadRequest)
+		} else {
+			writeJSON(w, value, http.StatusOK)
+		}
+
 	case strings.HasPrefix(path, "/api/sync/") || path == "/api/library/update":
 		s.postIncrementalSync(w, r, body)
 	case path == "/api/upgrade":

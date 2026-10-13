@@ -4,6 +4,7 @@ import { categoryForQuery, queryCategories } from "./query-categories";
 import { foldSeries, type ChartBucket, type ChartSeries } from "./chart-series";
 import { resolveRollingQuery, type QueryDataset, type RollingWindow } from "./query-links";
 import type { QueryRecipe } from "./curiosity-data";
+import { readTextSearch, textFindParameters } from "./text-search-model";
 
 export type PreviewMetric = { clause: AggregationClause; result: AggregationResultEntry };
 export type QueryPreview = {
@@ -15,7 +16,7 @@ export type QueryPreview = {
 type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; suggested?: boolean };
 export type PreviewJob = { id: string; dataset: QueryDataset; query: QueryState; schema: FieldSchema; options?: PreviewOptions };
 type Context = { schema: FieldSchema; execution: ComputedExecution; capabilities: MetricCapabilities };
-type Payload = { metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number };
+type Payload = { metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number; find?: { search?: { complete: boolean } } };
 type Cached = { at: number; payload: Payload; schema: FieldSchema };
 const cache = new Map<string, Cached>();
 export function clearPreviewCache() { cache.clear(); }
@@ -44,6 +45,21 @@ async function fetchPreview<T>(url: string, signal?: AbortSignal, request?: unkn
 
 function searchContext(job: PreviewJob): string {
   const params = new URL(job.options?.url ?? "/", location.origin).searchParams, find = new URLSearchParams();
+  if (job.dataset === "writing_messages" && params.has("message_query")) {
+    const saved = readTextSearch(new URLSearchParams({ text_builder: params.get("message_query")! }));
+    if (saved.error) throw new Error(saved.error);
+    const search = saved.active && textFindParameters(saved.draft, params.get("message_cursor") ?? "");
+    if (!search) throw new Error("This saved message search has unfinished rules. Open it to finish the search.");
+    return `?${search}`;
+  }
+  if (job.dataset === "library" && (!params.has("kind") || params.get("kind") === "text")) {
+    const saved = readTextSearch(params);
+    if (saved.error) throw new Error(saved.error);
+    if (!saved.active) return "";
+    const search = textFindParameters(saved.draft, params.get("text_cursor") ?? "");
+    if (!search) throw new Error("This saved search has unfinished rules. Open it to finish the search.");
+    return `?${search}`;
+  }
   if (job.dataset === "library" && params.get("search")) {
     find.set("find", params.get("search")!);
     for (const [source, target] of [["kind", "find_kind"], ["case", "find_case"], ["fuzzy", "find_fuzzy"], ["separators", "find_separators"]]) if (params.has(source)) find.set(target, params.get(source)!);
@@ -53,10 +69,11 @@ function searchContext(job: PreviewJob): string {
 
 function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema: FieldSchema): QueryPreview {
   const options = job.options ?? {}, recipe = options.recipe;
+  const searchNote = payload.find?.search ? payload.find.search.complete ? "This search batch" : "Partial search batch; open the search to continue" : undefined;
   const tone = queryCategories[recipe?.category ?? categoryForQuery(job.dataset, query)].tone;
   if (!query.aggregations?.length) {
     const total = Number(payload.total) || 0, row = payload.rows?.[0];
-    return { state: total > 0 ? "ready" : "empty", total, summary: total > 0 ? `${formatPreviewValue(total, "")} matching ${recipe?.unit ?? "rows"}` : "No matching observations", excerpt: String(row?.text ?? row?.title ?? row?.command ?? "Open the saved view").slice(0, 180), note: recipe?.note };
+    return { state: total > 0 ? "ready" : "empty", total, summary: total > 0 ? `${formatPreviewValue(total, "")} matching ${recipe?.unit ?? "rows"}` : searchNote ? "No matches in this search batch" : "No matching observations", excerpt: String(row?.text ?? row?.title ?? row?.command ?? "Open the saved view").slice(0, 180), note: [recipe?.note, searchNote].filter(Boolean).join(" · ") || undefined };
   }
   const metrics = query.aggregations.map(clause => {
     const result = payload.metrics?.find(item => item.id === clause.id);
@@ -80,7 +97,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   const summary = additive ? `${limited ? "Shown: " : ""}${formatPreviewValue(total, unit)}${unit && !["USD", "ms"].includes(unit) ? ` ${unit}` : ""}`
     : scalar ? formatMetricOutput(values[0].value, clause.display?.format).text
     : `${formatPreviewValue(result.processedRows ?? total, "")} observations · ${clause.label ?? clause.op}`;
-  const notes = [recipe?.note, result.scope === "shownRows" ? "Covers the saved table page" : undefined, result.coverage === "partial" ? "Partial results" : undefined,
+  const notes = [recipe?.note, searchNote, result.scope === "shownRows" ? "Covers the saved table page" : undefined, result.coverage === "partial" ? "Partial results" : undefined,
     result.groupCount !== undefined && result.groupCount > result.buckets.length ? `${result.buckets.length} of ${result.groupCount} groups returned` : undefined,
     result.buckets.some(bucket => bucket.error || bucket.yError) ? "Some groups have calculation errors" : undefined];
   let ready = values.length > 0;
@@ -132,7 +149,11 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     return pending;
   }
   const clock = new Date();
-  const resolved = jobs.map(job => ({ job, query: resolveRollingQuery(job.query, job.options?.window, clock), search: searchContext(job) }));
+  const resolved: { job: PreviewJob; query: QueryState; search: string }[] = [];
+  for (const job of jobs) {
+    try { resolved.push({ job, query: resolveRollingQuery(job.query, job.options?.window, clock), search: searchContext(job) }); }
+    catch (error) { publish(job.id, undefined, error); }
+  }
   type Item = typeof resolved[number];
   const groups = new Map<string, Item[]>();
   for (const item of resolved) {
@@ -177,13 +198,13 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
       if (!valid.length || signal?.aborted) return;
       const request = { ...valid[0].request, expectedRevisions: Object.assign({}, ...valid.map(({ request }) => request.expectedRevisions)), metrics: valid.flatMap(({ request }, i) => request.metrics.map((metric, j) => ({ ...metric, id: `preview:${i}:${j}` }))) };
       try {
-        const body = await fetchPreview<AggregationResult>(`/api/query/${valid[0].item.job.dataset}/metrics${valid[0].item.search}`, signal, request);
+        const body = await fetchPreview<AggregationResult & Pick<Payload, "find">>(`/api/query/${valid[0].item.job.dataset}/metrics${valid[0].item.search}`, signal, request);
         valid.forEach(({ item, request }, i) => {
           const metrics = request.metrics.map((metric, j) => {
             const result = body.metrics.find(result => result.id === `preview:${i}:${j}`);
             return result ? { ...result, id: metric.id } : undefined;
           }).filter((result): result is AggregationResultEntry => Boolean(result));
-          finish(item, { metrics }, ctx.schema);
+          finish(item, { metrics, find: body.find }, ctx.schema);
         });
       } catch (error) {
         // A server-rejected formula must not take healthy siblings down with it.
