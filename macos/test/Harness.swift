@@ -228,18 +228,59 @@ func ejectTests(_ args: [String]) {
     let listed: [(pid: pid_t, path: String)] = [(1, "/usr/bin/true"), (2, canonicalPath(app) + "/Contents/MacOS/pharos"),
                                                 (getpid(), canonicalPath(app) + "/Contents/MacOS/PharosApp"), (3, canonicalPath(app) + " 2/Contents/MacOS/pharos")]
     check(DriveProcesses.running(from: app, in: listed) == [2], "only other processes inside the app count: \(DriveProcesses.running(from: app, in: listed))")
+    check(DriveProcesses.command(in: ["pharos", "mcp"]) == "mcp", "an MCP command is recognized")
+    check(DriveProcesses.command(in: ["pharos", "--config", "/library with spaces/mcp", "mcp"]) == "mcp",
+          "the config path is skipped when finding the command")
+    check(DriveProcesses.command(in: ["pharos", "--config", "mcp", "serve"]) == "serve",
+          "a config path named mcp does not make a service an MCP server")
 
     // The service, and an agent's MCP server, both running from the image.
     let process = serveLibrary(pharos, config: config, service: service, token: token)
-    let agent = Process()
-    agent.executableURL = URL(fileURLWithPath: pharos)
-    agent.arguments = ["mcp"]
-    let input = Pipe()
-    agent.standardInput = input
-    agent.standardOutput = FileHandle.nullDevice
-    agent.standardError = FileHandle.nullDevice
-    try! agent.run()
+    func startAgent(_ arguments: [String] = ["mcp"], executable: String? = nil, output: Any = FileHandle.nullDevice) -> Process {
+        let agent = Process()
+        agent.executableURL = URL(fileURLWithPath: executable ?? pharos)
+        agent.arguments = arguments
+        agent.standardInput = Pipe()
+        agent.standardOutput = output
+        agent.standardError = FileHandle.nullDevice
+        try! agent.run()
+        return agent
+    }
+    var agent = startAgent()
     check(wait(3) { DriveProcesses.running(from: app).contains(agent.processIdentifier) }, "the MCP server runs from the app on the image")
+
+    let otherExecutable = app.deletingLastPathComponent().appendingPathComponent("other-pharos")
+    try! FileManager.default.copyItem(atPath: pharos, toPath: otherExecutable.path)
+    let otherAgent = startAgent(["--config", config, "mcp"], executable: otherExecutable.path)
+
+    let stoppedForQuit = DriveProcesses.stopMCP(runningFrom: app)
+    check(stoppedForQuit == [agent.processIdentifier] && wait(3) { !agent.isRunning }, "the quit sweep stops the MCP server: \(stoppedForQuit)")
+    check(process.isRunning, "the quit sweep leaves the archive service to shut down gracefully")
+    check(otherAgent.isRunning, "Quit leaves an MCP server running from another executable alone")
+    otherAgent.terminate()
+    check(wait(3) { !otherAgent.isRunning }, "the other MCP server stopped after its own termination")
+    check(DriveProcesses.stopMCP(runningFrom: app).isEmpty && process.isRunning,
+          "repeated quit cleanup does not signal the archive service")
+
+    agent = startAgent(["--config", config, "mcp"])
+    check(DriveProcesses.stopMCP(runningFrom: app) == [agent.processIdentifier] && wait(3) { !agent.isRunning },
+          "Quit also stops an MCP server launched with an explicit config")
+    let initialized = Pipe()
+    let answered = DispatchSemaphore(value: 0)
+    initialized.fileHandleForReading.readabilityHandler = { handle in
+        if !handle.availableData.isEmpty { answered.signal() }
+    }
+    agent = startAgent(output: initialized)
+    let input = agent.standardInput as! Pipe
+    try! input.fileHandleForWriting.write(contentsOf: Data("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n".utf8))
+    check(answered.wait(timeout: .now() + 3) == .success, "the MCP server initialized before suspending it")
+    initialized.fileHandleForReading.readabilityHandler = nil
+    check(kill(agent.processIdentifier, SIGSTOP) == 0, "suspend an MCP server so it cannot handle SIGTERM")
+    let forced = DriveProcesses.stopMCP(runningFrom: app, grace: 0.2)
+    let ended = wait(3) { !agent.isRunning }
+    check(forced == [agent.processIdentifier] && ended && agent.terminationStatus == SIGKILL,
+          "Quit kills an MCP server that remains after the grace period (PIDs: \(forced), exited: \(ended), status: \(ended ? agent.terminationStatus : -1))")
+    agent = startAgent()
 
     check(ServiceClient.release(service, token: token) == .released && wait(5) { !process.isRunning }, "the service released the library and exited \(process.terminationStatus)")
     let busy = run("/usr/sbin/diskutil", "eject", mount.path)
