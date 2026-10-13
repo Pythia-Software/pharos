@@ -11,6 +11,7 @@ const localRequire = createRequire(path.join(root, '.context/browser-tests/packa
 const { chromium } = localRequire('playwright');
 const source = fs.readFileSync(['src/pharos/ui.py', 'internal/archive/assets/ui.py'].map(name => path.join(root, name)).find(file => fs.existsSync(file)), 'utf8');
 const html = source.slice(source.indexOf("r'''") + 4, source.lastIndexOf("'''"));
+const sharedReaderSearch = html.slice(html.indexOf('function setupConversationSearch('), html.indexOf('\nfunction setupTokenOverview('));
 let browser;
 before(async () => {
   const chrome = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -155,11 +156,12 @@ test('conversation and message Name and ID buttons copy in one click', async t =
   assert.equal(await head.getByRole('button',{name:'Copy conversation ID'}).locator('use').getAttribute('href'),'#ph-icon-check');
 });
 
-test('deferred long turns retain profiles and spend before materialization', async t => {
+test('single long turns open by default and retain profiles and spend', async t => {
   const request=event('usage','message',{message:{id:'long-request',usage:{input_tokens:12000,output_tokens:100},content:[{type:'text',text:'Final response'}]}});
   const page=await fixture(t,[human(),...Array.from({length:301},(_,i)=>event('filler-'+i,'message','Filler')),request]);
   assert.equal(await page.locator('.conversation-panel').getAttribute('data-deferred'),'true');
-  assert.equal(await page.locator('.turn-body .timeline-entry').count(),0,'Bodies remain lazy');
+  assert.equal(await page.locator('.turn').getAttribute('open'),'');
+  assert.ok(await page.locator('.turn-body .timeline-entry').count()>0,'The single turn is materialized on first access');
   assert.equal(await page.locator('.turn > summary .overview-spend').getAttribute('data-tokens'),'12100');
   const marker=page.locator('.token-map .event-marker');
   assert.equal(await marker.getAttribute('data-context'),'12000');
@@ -170,7 +172,7 @@ test('deferred long turns retain profiles and spend before materialization', asy
   assert.equal(await page.getByRole('button',{name:/Highest-spend turn/}).count(),0);
   await marker.click();
   assert.equal(await page.locator('.turn').getAttribute('open'),'');
-  assert.equal(await marker.count(),1,'No duplicate profile after materialization');
+  assert.equal(await marker.count(),1,'No duplicate profile after reopening');
 });
 
 test('many lazy turns keep all profiles, compactions, nested usage and highest-spend navigation', async t => {
@@ -305,6 +307,11 @@ async function fixture(t, messages, viewport = { width: 1280, height: 900 }, con
     return route.fulfill({ body: '', contentType: 'application/javascript' });
   });
   await page.goto('http://transcript.test/');
+  // This harness stubs the React bundle and tests the standalone shared
+  // reader's local finder. Native bounded search is covered by delegation-ui.
+  await page.evaluate(search => {
+    setupConversationSearch = new Function('panel', 'conversation', `const SHARE = true;\n${search}\nreturn setupConversationSearch(panel,conversation);`);
+  }, sharedReaderSearch);
   await page.addStyleTag({ content: 'main > :not(#transcript-test-root), body > :not(main):not(.conversation-map):not(.conversation-find):not(.conversation-find-rail):not(.conversation-map-window) { display:none !important } #transcript-test-root { max-width:1100px;margin:20px auto; }' });
   await page.evaluate(({messages,conversation}) => {
     // Render inside the app's main, which is the page's scroller.
@@ -364,14 +371,17 @@ async function workFixture(t, overrides = {}) {
     receipt:{outcome:'preserved',package_bytes:1024,package_hash:'receipt-hash'},
     conversations:[{provider:'claude',native_id:'one',coverage:'complete',messages:[human(),read()]}], ...overrides };
   await serveWork(page, work);
-  await page.evaluate(async () => {
-    await detail('work');
+  await page.evaluate(async conversation => {
+    // Reader-specific tests open a conversation explicitly; the normal work
+    // route now starts at the workspace overview (covered by delegation-ui).
+    if(conversation)history.replaceState(null,'',`/work/work?conversation=${encodeURIComponent(conversation)}`);
+    await detail('work',true);
     document.querySelector('#transcript-test-root').replaceChildren(document.querySelector('#detailBody'));
-  });
+  }, work.conversations?.length ? work.conversations[0].id || 'conversation-0' : '');
   return page;
 }
 
-test('workspace leads with transcript and keeps supporting information collapsed', async t => {
+test('explicit conversation route keeps supporting information collapsed in the fallback reader', async t => {
   const page = await workFixture(t);
   const text = await transcript(page).innerText();
   assert.match(text,/Improve archive search · #42/);
@@ -386,9 +396,8 @@ test('workspace leads with transcript and keeps supporting information collapsed
   await page.locator('.archive-details > summary').click();
   assert.match(await transcript(page).innerText(),/Retained checkpoint/);
   assert.match(await transcript(page).innerText(),/receipt-hash/);
-  await page.locator('#detailBody').getByText('Usage',{exact:true}).click();
-  assert.match(await transcript(page).innerText(),/Input tokens/);
-  if(process.env.TRANSCRIPT_SCREENSHOTS){await page.locator('.archive-details > summary').click();await page.locator('#detailBody').getByText('Usage',{exact:true}).click();await page.screenshot({path:path.join(root,'.context/browser-tests/screenshots/workspace-conversation-first.png'),fullPage:true})}
+  assert.equal(await page.locator('#detailBody .work-disclosure > summary').getByText('Usage',{exact:true}).count(),0);
+  if(process.env.TRANSCRIPT_SCREENSHOTS){await page.locator('.archive-details > summary').click();await page.screenshot({path:path.join(root,'.context/browser-tests/screenshots/workspace-conversation-first.png'),fullPage:true})}
   await page.evaluate(()=>{window.filteredRepository='';window.pharosQueryTables={filterRepository:value=>{window.filteredRepository=value}}});
   await page.getByRole('button',{name:'pharos',exact:true}).click();
   assert.equal(await page.evaluate(()=>window.filteredRepository),'pharos');
@@ -1194,10 +1203,10 @@ test('conversation find highlights what the Show filter shows and expands throug
   assert.equal(await page.locator('.conversation-find-hidden').isVisible(),false);
   await page.getByLabel('Tool output').check();
   assert.ok(await page.locator('.conversation-find-match').count()>calls);
-  await page.getByLabel('Case sensitive').check();
+  await page.locator('.conversation-find').getByLabel('Case sensitive').check();
   await search.fill('Alpha');
   assert.equal(await page.locator('.conversation-find-match').count(),1);
-  await page.getByLabel('Case sensitive').uncheck();
+  await page.locator('.conversation-find').getByLabel('Case sensitive').uncheck();
   await page.getByLabel('Regex').check();
   await search.fill('alpha|Alpha');
   assert.ok(await page.locator('.conversation-find-match').count()>1);
@@ -1287,13 +1296,12 @@ test('large conversations defer turn bodies and reveal later turns on demand', a
   assert.equal(await page.locator('.conversation-find-match').count(),1);
 });
 
-test('a single oversized turn also starts as a summary', async t => {
+test('a single oversized turn opens by default and still pages its events', async t => {
   const messages=[event('human-large','message','Large prompt',0,{role:'user'})];
   for(let index=0;index<350;index++)messages.push(event(`reply-large-${index}`,'message',`Response ${index}`,index));
   const page=await fixture(t,messages);
   assert.equal(await page.locator('.turn').count(),1);
-  assert.equal(await page.locator('.turn-body .timeline-entry').count(),0);
-  await page.locator('.turn > summary').click();
+  assert.equal(await page.locator('.turn').evaluate(element=>element.open),true);
   // The first page renders at once; the rest follow as the reader scrolls.
   assert.equal(await page.locator('.turn-body .timeline-entry').count(),151);
   assert.match(await page.locator('.sequence-more').innerText(),/Show 150 more · 200 events not shown/);

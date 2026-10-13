@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 )
@@ -23,13 +24,18 @@ import (
 //     so the next visit does not wait.
 //
 // Cached values are shared between requests and must never be modified.
+// Workspace delegation snapshots use a bounded, idle-expiring LRU and are
+// rebuilt on demand rather than warmed after commits.
 type derivedCache struct {
 	mu       sync.Mutex
 	versions dataVersionMonitor
 	// generation advances whenever the monitor reconnects, so a value
 	// computed against the previous connection's versions is not stored.
 	generation int64
-	entries    map[string]*derivedEntry
+	// version is the latest observation on this monitor, including reads that
+	// happen while a computation is running outside mu.
+	version int64
+	entries map[string]*derivedEntry
 }
 
 type derivedEntry struct {
@@ -45,10 +51,48 @@ type derivedEntry struct {
 // recentUse is how long after its last request a value is kept warm.
 const recentUse = 30 * time.Minute
 
+const (
+	delegationCacheLimit = 4
+	delegationCacheIdle  = 5 * time.Minute
+)
+
+// pruneDelegationEntries runs with mu held. Pending computations remain shared
+// by their callers, even if they temporarily exceed the completed-value limit.
+// Removing a completed entry does not invalidate callers holding its snapshot.
+func (cache *derivedCache) pruneDelegationEntries(version int64, now time.Time) {
+	completed := map[string]*derivedEntry{}
+	for key, entry := range cache.entries {
+		if !strings.HasPrefix(key, "delegation:") {
+			continue
+		}
+		select {
+		case <-entry.ready:
+		default:
+			continue
+		}
+		if entry.version != version || now.Sub(entry.usedAt) >= delegationCacheIdle {
+			delete(cache.entries, key)
+			continue
+		}
+		completed[key] = entry
+	}
+	for len(completed) > delegationCacheLimit {
+		oldest := ""
+		for key, entry := range completed {
+			if oldest == "" || entry.usedAt.Before(completed[oldest].usedAt) {
+				oldest = key
+			}
+		}
+		delete(cache.entries, oldest)
+		delete(completed, oldest)
+	}
+}
+
 func (cache *derivedCache) close() {
 	cache.versions.close()
 	cache.entries = nil
 	cache.generation++
+	cache.version = 0
 }
 
 // cachedValue returns key's value while the catalog is unchanged, and
@@ -74,6 +118,8 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 		cache.mu.Unlock()
 		return compute(ctx)
 	}
+	cache.version = version
+	cache.pruneDelegationEntries(version, time.Now())
 	entry := cache.entries[key]
 	if entry == nil || entry.version != version {
 		usedAt := time.Time{}
@@ -97,6 +143,10 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 			delete(cache.entries, key)
 		}
 		close(entry.ready)
+		// The catalog may have changed while this computation was in flight.
+		// Use the monitor's latest observed version, so an old completion does
+		// not evict snapshots built for a newer commit.
+		cache.pruneDelegationEntries(cache.version, time.Now())
 	} else if request {
 		entry.usedAt = time.Now()
 	}
@@ -118,6 +168,8 @@ func (c *Catalog) catalogVersion(ctx context.Context) (int64, error) {
 	if err != nil {
 		cache.entries = nil
 		cache.generation++
+	} else {
+		cache.version = version
 	}
 	return version, err
 }
@@ -133,6 +185,12 @@ func (c *Catalog) warmCaches(ctx context.Context) {
 		return
 	}
 	version, err := c.catalogVersion(ctx)
+	if err == nil {
+		cache := &c.derived
+		cache.mu.Lock()
+		cache.pruneDelegationEntries(cache.version, time.Now())
+		cache.mu.Unlock()
+	}
 	if err != nil || version != c.quietVersion {
 		c.quietVersion = version
 		return
@@ -158,6 +216,9 @@ func (c *Catalog) warmCaches(ctx context.Context) {
 	cache.mu.Lock()
 	stale := map[string]func(context.Context) (any, error){}
 	for key, entry := range cache.entries {
+		if strings.HasPrefix(key, "delegation:") {
+			continue
+		}
 		if entry.version != version && time.Since(entry.usedAt) < recentUse {
 			stale[key] = entry.compute
 		}

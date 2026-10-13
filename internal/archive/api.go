@@ -274,6 +274,9 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		var value any
 		var err error
 		switch {
+		case len(parts) == 2 && (parts[1] == "delegation" || parts[1] == "parallel"):
+			s.getDelegation(w, r, parts[0], parts[1] == "parallel")
+			return
 		case len(parts) == 1:
 			value, err = nilIfNoMap(s.Catalog.WorkOverview(parts[0]))
 		case len(parts) == 3 && parts[1] == "conversations":

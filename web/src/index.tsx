@@ -1,3 +1,5 @@
+import { installDelegationExplorer } from "./delegation";
+import { installWorkspaceInbox } from "./workspace-inbox";
 import { MessageTableSearch, newMessageSearch, readMessageSearch } from "./message-table-search";
 import "./conversation-search";
 import { TextSearchEditor, type LibrarySearchKind as FindKind } from "./text-search-editor";
@@ -1765,7 +1767,7 @@ for (const [id, component] of mounts) {
   const element = document.getElementById(id);
   if (element) createRoot(element).render(component);
 }
-if (!shared) startFindingsChrome();
+if (!shared) { startFindingsChrome(); installWorkspaceInbox(); installDelegationExplorer(); }
 if (!shared && concurrencyPrototypeEnabled) {
   const modalHost = document.createElement("div");
   modalHost.id = "parallelismModal";document.body.append(modalHost);
