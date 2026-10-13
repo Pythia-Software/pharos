@@ -12,7 +12,9 @@
     "test:usage-aggregations": "node --test tests/usage-aggregations.test.mjs",
     "test:computed-store": "node --test tests/computed-column-store.test.mjs",
     "test:previews": "node --test tests/query-previews.test.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:text-search": "node --test tests/text-search-model.test.mjs",
+    "test:search-composer": "node --test tests/search-composer.test.mjs"
   },
   "dependencies": {
     "@pythia-software/query-table-core": "0.6.0",

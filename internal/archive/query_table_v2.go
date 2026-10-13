@@ -436,10 +436,17 @@ func (s *Server) postQueryV2(w http.ResponseWriter, r *http.Request, dataset, op
 		writeError(w, err, 400)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), queryTableDeadline)
+	deadline := queryTableDeadline
+	if r.URL.Query().Get("interactive_search") == "1" {
+		deadline = 2500 * time.Millisecond
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), deadline)
 	defer cancel()
 	result, err := s.executeQueryV2(ctx, dataset, r.URL.Query(), schema, rowRequest, metrics)
 	if err != nil {
+		if deadline != queryTableDeadline && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			err = fmt.Errorf("This exact record query exceeded 2.5 seconds. Add a workspace, conversation, or date filter, or use Library's bounded text search for broad searches.")
+		}
 		writeError(w, err, 400)
 		return
 	}
@@ -449,7 +456,15 @@ func (s *Server) postQueryV2(w http.ResponseWriter, r *http.Request, dataset, op
 			Find *libraryFindSummary `json:"find,omitempty"`
 		}{result.Rows, result.Find}, 200)
 	} else {
-		writeJSON(w, result.Metrics, 200)
+		if result.Find != nil {
+			encoded, _ := json.Marshal(result.Metrics)
+			var payload map[string]any
+			_ = json.Unmarshal(encoded, &payload)
+			payload["find"] = result.Find
+			writeJSON(w, payload, 200)
+		} else {
+			writeJSON(w, result.Metrics, 200)
+		}
 	}
 }
 
@@ -582,6 +597,13 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 			}
 			table.toolSearchIndexed = ready
 		}
+		if dataset == "writing_messages" {
+			var err error
+			table, find, err = s.Catalog.messageFindDataset(ctx, params, table)
+			if err != nil {
+				return queryV2ExecutionResult{}, err
+			}
+		}
 		where := []qt.WhereTerm{}
 		if rowRequest != nil {
 			where = rowRequest.Where
@@ -603,7 +625,32 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 		if dataset == "library" {
 			libraryNames, err = queryV2LibraryFields(ctx, s.Catalog.DB, schema, rowRequest, metrics, clock)
 			if err == nil {
-				sourceRows, find, err = s.libraryRows(ctx, params, libraryFieldsFor(libraryNames...), &evidence)
+				var where []querytable.WhereTerm
+				if rowRequest != nil {
+					where = rowRequest.Where
+				}
+				if metrics != nil {
+					where = metrics.Where
+				}
+				// Computed predicates remain in the v2 engine. Only complete
+				// AND terms over stored fields can safely narrow candidates.
+				localSchema, e := s.queryTableSchema("library")
+				if e != nil {
+					return queryV2ExecutionResult{}, e
+				}
+				early := []querytable.WhereTerm{}
+				for _, term := range where {
+					safe := true
+					for _, p := range term.Predicates() {
+						if _, ok := localSchema.Fields[p.Field]; !ok {
+							safe = false
+						}
+					}
+					if safe {
+						early = append(early, term)
+					}
+				}
+				sourceRows, find, err = s.libraryRows(ctx, params, libraryFieldsFor(libraryNames...), &evidence, early)
 			}
 		} else {
 			sourceRows, err = s.queryTableRows(ctx, dataset, params, libraryFieldsFor(names...))
@@ -697,6 +744,10 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 	if err := release(); err != nil {
 		return result, err
 	}
+	if find != nil {
+		summary := find.summary()
+		result.Find = &summary
+	}
 	if result.Rows != nil {
 		switch dataset {
 		case "tool_calls":
@@ -710,7 +761,8 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 			}
 			if find != nil {
 				find.attach(result.Rows.Rows)
-				result.Find = &libraryFindSummary{Workspaces: len(find.matches), Limited: find.limited}
+				summary := find.summary()
+				result.Find = &summary
 			}
 		}
 	}

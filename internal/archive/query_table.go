@@ -33,10 +33,10 @@ func librarySearch(ctx context.Context, values url.Values) SearchOptions {
 
 // queryTableRows returns a dataset's rows. Library rows carry at least fields,
 // the ones the request filters, sorts, or groups on (see libraryFields).
-func (s *Server) queryTableRows(ctx context.Context, dataset string, values url.Values, fields libraryFields) ([]map[string]any, error) {
+func (s *Server) queryTableRows(ctx context.Context, dataset string, values url.Values, fields libraryFields, where ...[]querytable.WhereTerm) ([]map[string]any, error) {
 	switch dataset {
 	case "library":
-		rows, _, err := s.libraryRows(ctx, values, fields, nil)
+		rows, _, err := s.libraryRows(ctx, values, fields, nil, where...)
 		return rows, err
 	case "activity":
 		payload := s.activity()
@@ -141,6 +141,14 @@ func (s *Server) getQueryTable(w http.ResponseWriter, r *http.Request, dataset, 
 			writeError(w, err, http.StatusInternalServerError)
 			return
 		}
+		if dataset == "writing_messages" {
+			var e error
+			table, _, e = s.Catalog.messageFindDataset(r.Context(), r.URL.Query(), table)
+			if e != nil {
+				writeError(w, e, http.StatusBadRequest)
+				return
+			}
+		}
 		result, err := table.Distinct(r.Context(), s.Catalog.DB, field, r.URL.Query().Get("q"), limit, schema)
 		if err != nil {
 			writeError(w, err, http.StatusBadRequest)
@@ -149,7 +157,11 @@ func (s *Server) getQueryTable(w http.ResponseWriter, r *http.Request, dataset, 
 		writeJSON(w, result, http.StatusOK)
 		return
 	}
-	rows, err := s.queryTableRows(r.Context(), dataset, r.URL.Query(), libraryFieldsFor(field))
+	// Metadata ignores the table's filters, so its Library search has a
+	// different workspace scope. It cannot resume the filtered table's cursor.
+	values := r.URL.Query()
+	values.Del("find_cursor")
+	rows, err := s.queryTableRows(r.Context(), dataset, values, libraryFieldsFor(field))
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
@@ -164,7 +176,8 @@ func (s *Server) getQueryTable(w http.ResponseWriter, r *http.Request, dataset, 
 
 // getFieldStats answers GET /api/query/{dataset}/field-stats?fields=a,b with
 // dataset-wide stats for the column picker. Like distinct values, they ignore
-// the table's filters but follow the Library's semantic ?search= result set.
+// the table's filters but follow the Library's semantic ?search= and keyword
+// find= result sets. Keyword metadata starts its own batch without a table cursor.
 func (s *Server) getFieldStats(w http.ResponseWriter, r *http.Request, dataset string, schema querytable.Schema) {
 	names := []string{}
 	for name := range strings.SplitSeq(r.URL.Query().Get("fields"), ",") {
@@ -183,10 +196,19 @@ func (s *Server) getFieldStats(w http.ResponseWriter, r *http.Request, dataset s
 			writeError(w, err, http.StatusInternalServerError)
 			return
 		}
+		if dataset == "writing_messages" {
+			table, _, err = s.Catalog.messageFindDataset(r.Context(), r.URL.Query(), table)
+			if err != nil {
+				writeError(w, err, http.StatusBadRequest)
+				return
+			}
+		}
 		result, err = table.FieldStats(r.Context(), s.Catalog.DB, fields, schema)
 	} else {
 		var rows []map[string]any
-		if rows, err = s.queryTableRows(r.Context(), dataset, r.URL.Query(), libraryFieldsFor(fields...)); err == nil {
+		values := r.URL.Query()
+		values.Del("find_cursor")
+		if rows, err = s.queryTableRows(r.Context(), dataset, values, libraryFieldsFor(fields...)); err == nil {
 			result, err = querytable.FieldStats(rows, fields, schema)
 		}
 	}
@@ -250,7 +272,7 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 		var find *libraryFindSet
 		var err error
 		if dataset == "library" {
-			rows, find, err = s.libraryRows(r.Context(), r.URL.Query(), libraryFieldsFor(needed...), &evidence)
+			rows, find, err = s.libraryRows(r.Context(), r.URL.Query(), libraryFieldsFor(needed...), &evidence, query.Where)
 		} else {
 			rows, err = s.queryTableRows(r.Context(), dataset, r.URL.Query(), libraryFieldsFor(needed...))
 		}
@@ -280,7 +302,7 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 				writeJSON(w, struct {
 					querytable.Result
 					Find libraryFindSummary `json:"find"`
-				}{result, libraryFindSummary{Workspaces: len(find.matches), Limited: find.limited}}, http.StatusOK)
+				}{result, find.summary()}, http.StatusOK)
 				return
 			}
 		}
@@ -298,7 +320,14 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 			}
 			needed = append(needed, aggregation.GroupBy...)
 		}
-		rows, err := s.queryTableRows(r.Context(), dataset, r.URL.Query(), libraryFieldsFor(needed...))
+		var rows []map[string]any
+		var find *libraryFindSet
+		var err error
+		if dataset == "library" {
+			rows, find, err = s.libraryRows(r.Context(), r.URL.Query(), libraryFieldsFor(needed...), nil, request.Where)
+		} else {
+			rows, err = s.queryTableRows(r.Context(), dataset, r.URL.Query(), libraryFieldsFor(needed...), request.Where)
+		}
 		if err != nil {
 			writeError(w, err, http.StatusInternalServerError)
 			return
@@ -316,7 +345,15 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 		if dataset == "usage" {
 			sortUsageTimeBuckets(request, result)
 		}
-		writeJSON(w, result, http.StatusOK)
+		if find != nil {
+			encoded, _ := json.Marshal(result)
+			var payload map[string]any
+			_ = json.Unmarshal(encoded, &payload)
+			payload["find"] = find.summary()
+			writeJSON(w, payload, 200)
+		} else {
+			writeJSON(w, result, http.StatusOK)
+		}
 	default:
 		writeJSON(w, map[string]any{"error": "not found"}, http.StatusNotFound)
 	}

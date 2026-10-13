@@ -8,6 +8,7 @@ import { QueryCard } from "./query-card";
 import { QueryConveyor } from "./query-conveyor";
 import { Icon } from "./icons";
 import "./home.css";
+import { HomeSearch } from "./search-composer";
 
 const welcomes = ["What will you discover in your work?", "How will you be more efficient today?", "What could your past work teach you?", "Which pattern is worth a closer look?", "Where will curiosity take you today?"];
 const isHome = () => ["/", "/home"].includes(location.pathname);
@@ -21,9 +22,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true), [generation, setGeneration] = useState(0);
   const [welcome] = useState(() => welcomes[Math.floor(Math.random() * welcomes.length)]);
-  const [draft, setDraft] = useState(""), [kind, setKind] = useState("text");
-  const [fuzzy, setFuzzy] = useState(true), [caseSensitive, setCaseSensitive] = useState(false), [separators, setSeparators] = useState(false);
-  const input = useRef<HTMLInputElement>(null), editor = useRef<HTMLDialogElement>(null);
+  const editor = useRef<HTMLDialogElement>(null);
   const [editing, setEditing] = useState<Bookmark | null>(null), [editTitle, setEditTitle] = useState(""), [editDescription, setEditDescription] = useState("");
   const [editDays, setEditDays] = useState("");
   const [editCover, setEditCover] = useState("");
@@ -43,7 +42,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     window.addEventListener("pharos:data-refresh", refresh); document.addEventListener("visibilitychange", visibility);
     return () => { window.removeEventListener("pharos:bookmarks", bookmarks); window.removeEventListener("pharos:route", route); window.removeEventListener("pharos:view", route); window.removeEventListener("pharos:data-refresh", refresh); document.removeEventListener("visibilitychange", visibility); };
   }, []);
-  useEffect(() => { if (active) { input.current?.focus({ preventScroll: true }); setGeneration(value => value + 1); } }, [active]);
+  useEffect(() => { if (active) { setGeneration(value => value + 1); } }, [active]);
 
   useEffect(() => {
     if (!active) return;
@@ -103,17 +102,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   const editingSpec = editing && queryFromURL(editing.url);
   const canEditWindow = editingSpec && Boolean(editingSpec.window?.field ?? rollingWindowField(editingSpec.dataset));
   return <div className="curiosity-home" data-feedback-label="Home dashboard">
-    <div className="home-intro"><h1>{welcome}</h1><form role="search" onSubmit={event => {
-      event.preventDefault(); const params = new URLSearchParams();
-      if (draft.trim()) params.set("search", draft.trim()); if (kind !== "text") params.set("kind", kind);
-      if (!fuzzy) params.set("fuzzy", "0"); if (caseSensitive) params.set("case", "1"); if (separators) params.set("separators", "1");
-      navigate(`/library${params.size ? `?${params}` : ""}`);
-    }}>
-      <div className="home-search"><Icon name="search" /><input ref={input} type="search" value={draft} onChange={event => setDraft(event.target.value)} aria-label="Search your library" autoComplete="off" spellCheck={false}
-        placeholder={kind === "file" ? "A file path or name…" : kind === "url" ? "A URL or host…" : "Search your conversations, ideas, and past work…"} /><button type="submit" aria-label="Search library"><Icon name="arrow-right" /></button></div>
-      <div className="home-search-types library-view-toggle" role="group" aria-label="Search type"><span className="home-search-thumb" aria-hidden="true" style={{ transform: `translateX(${["text", "file", "url"].indexOf(kind) * 100}%)` }} />{[["text", "Conversation text", "search"], ["file", "Modified file", "read"], ["url", "Tool URL", "web"]].map(([value, label, icon]) => <button key={value} type="button" aria-pressed={kind === value} onClick={() => { setKind(value); input.current?.focus(); }}><Icon name={icon as "search"} /><span>{label}</span></button>)}</div>
-      {kind === "text" ? <fieldset className="home-search-options" aria-label="Text search options"><label><input type="checkbox" checked={fuzzy} onChange={event => setFuzzy(event.target.checked)} /> Fuzzy words</label><label><input type="checkbox" checked={caseSensitive} onChange={event => setCaseSensitive(event.target.checked)} /> Case sensitive</label><label title="For quoted phrases, require punctuation and spaces exactly as typed"><input type="checkbox" checked={separators} onChange={event => setSeparators(event.target.checked)} /> Match separators</label></fieldset> : null}
-    </form></div>
+    <div className="home-intro"><h1>{welcome}</h1><HomeSearch schema={schemas.library} /></div>
     <div className={`home-collection${drag ? " accepting" : ""}`} role="region" aria-label="Your collection" onDragOver={event => { if (drag) { event.preventDefault(); const target = (event.target as Element).closest("[data-card-id]"); setInsertBefore(target?.getAttribute("data-card-id") ?? undefined); } }} onDrop={event => drop(event)}>
       {collection.map(item => {
         const spec = queryFromURL(item.url), recipe = queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]);

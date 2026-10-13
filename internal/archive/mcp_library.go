@@ -303,7 +303,7 @@ func (s *Server) mcpRPC(w http.ResponseWriter, r *http.Request, request map[stri
 		writeJSON(w, map[string]any{"error": "this service has a different catalog open"}, http.StatusConflict)
 		return
 	}
-	response := handleMCP(catalog, request)
+	response := handleMCPContext(r.Context(), catalog, request)
 	if response == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
