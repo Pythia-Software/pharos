@@ -525,6 +525,9 @@ final class ArchiveService: ObservableObject {
     func stop() {
         monitor?.stop()
         stopService()
+        if library != nil {
+            DriveProcesses.stopMCP(runningFrom: Bundle.main.bundleURL)
+        }
     }
 
     deinit {
