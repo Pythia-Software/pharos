@@ -2,6 +2,9 @@ package archive
 
 import (
 	"context"
+	"reflect"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -51,5 +54,168 @@ func TestUsageSummaryWindows(t *testing.T) {
 	}
 	if len(windows) != 6 {
 		t.Fatalf("windows: %#v", windows)
+	}
+}
+
+func TestUsageSummaryLedgerMatchesUsagePage(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	catalog.background = func(func(context.Context)) bool { return false }
+	for _, item := range []struct {
+		id, source, model string
+		total             int64
+	}{
+		{"native", "codex", " gpt-6-sol ", 100},
+		{"wrapper", "conductor", "gpt-6-sol", 999},
+		{"zero-native", "codex", "gpt-6-sol", 0},
+		{"zero-wrapper", "conductor", "", 7},
+		{"unknown", "claude", "", 11},
+	} {
+		if _, err := catalog.DB.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at)
+			VALUES(?,?,'local',?,?,'2026-09-23')`, item.id, item.source, item.id, item.id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := catalog.DB.Exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id)
+			VALUES(?,?,'codex','local',?)`, "c-"+item.id, item.id, item.id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := catalog.DB.Exec(`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider,model)
+			VALUES(?,?,?,'main','root','codex',?)`, "s-"+item.id, item.id, "c-"+item.id, nilIfEmpty(item.model)); err != nil {
+			t.Fatal(err)
+		}
+		// Separate effort/attribution buckets must retain per-row rounding.
+		for _, effort := range []string{"high", "low"} {
+			if _, err := catalog.DB.Exec(`INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,effort,attribution,
+				total_tokens,uncached_input_tokens,cache_read_input_tokens,cache_creation_input_tokens,
+				cache_creation_1h_input_tokens,output_tokens,unclassified_tokens)
+				VALUES(?,?,' ',?,'request',?,1,2,3,1,2,1)`, "s-"+item.id, "2026-09-21T01:00:00Z", effort, item.total); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err := catalog.DB.Exec(`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json)
+		VALUES('c-native','c-wrapper','mirror',1,'{}'),('c-zero-native','c-zero-wrapper','mirror',1,'{}')`); err != nil {
+		t.Fatal(err)
+	}
+	// The representative has older usage than its wrapper. Choosing mirrors
+	// after restricting a query to a recent window would count the wrapper.
+	if _, err := catalog.DB.Exec(`UPDATE agent_session_usage SET usage_hour='2026-08-01T01:00:00Z' WHERE agent_session_id='s-native'`); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := catalog.representativeLedger()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := make([]usageSummaryEntry, 0, len(legacy))
+	for _, row := range legacy {
+		tokens := map[string]int64{}
+		for _, field := range []string{"total_tokens", "uncached_input_tokens", "cache_read_input_tokens",
+			"cache_creation_input_tokens", "cache_creation_1h_input_tokens", "output_tokens", "unclassified_tokens"} {
+			tokens[field] = integer(row[field])
+		}
+		want = append(want, usageSummaryEntry{workspaceID: firstString(row["workspace_id"]), hour: firstString(row["usage_hour"]), model: ledgerModel(row), tokens: tokens})
+	}
+	got, err := catalog.usageSummaryLedger(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := func(rows []usageSummaryEntry) {
+		sort.Slice(rows, func(i, j int) bool {
+			return rows[i].workspaceID+rows[i].hour+rows[i].model < rows[j].workspaceID+rows[j].hour+rows[j].model
+		})
+	}
+	order(want)
+	order(got)
+	if len(got) != 6 || !reflect.DeepEqual(got, want) {
+		t.Fatalf("summary ledger differs from Usage: got %+v, want %+v", got, want)
+	}
+	catalog.now = func() time.Time { return time.Date(2026, 9, 21, 2, 15, 0, 0, time.UTC) }
+	summary, err := catalog.UsageSummary(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	windows := summary["windows"].([]*usageSummaryWindow)
+	// Two 7-token rows and two 11-token rows, each rounded independently.
+	if windows[0].Tokens != 26 || windows[5].Tokens != 236 {
+		t.Fatalf("fractional/mirrored totals: 1h=%d all=%d", windows[0].Tokens, windows[5].Tokens)
+	}
+}
+
+func TestUsageSummaryUsesCoveringIndexes(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	// Simulate opening an existing catalog that predates these indexes.
+	if _, err := catalog.DB.Exec(`DROP INDEX message_authorship_summary_idx; DROP INDEX agent_sessions_summary_idx`); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []struct {
+		sql     string
+		indexes []string
+	}{
+		{usageSummaryAuthorshipSQL, []string{"message_authorship_summary_idx"}},
+		{usageSummaryLedgerSQL, []string{"agent_sessions_summary_idx", "workspaces_library_idx"}},
+	} {
+		plan, err := queryMaps(catalog.DB, "EXPLAIN QUERY PLAN "+query.sql)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, index := range query.indexes {
+			found := false
+			for _, step := range plan {
+				found = found || strings.Contains(firstString(step["detail"]), "COVERING INDEX "+index)
+			}
+			if !found {
+				t.Fatalf("query reads full records instead of %s: %v", index, plan)
+			}
+		}
+	}
+}
+
+func TestUsageSummaryEmptyAndCanceled(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	catalog.background = func(func(context.Context)) bool { return false }
+	summary, err := catalog.UsageSummary(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, window := range summary["windows"].([]*usageSummaryWindow) {
+		if window.Tokens != 0 || window.Messages != 0 || window.HumanWords != 0 || window.CostUSD != nil || window.CarbonTokens != nil {
+			t.Fatalf("empty window: %+v", window)
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := catalog.UsageSummary(ctx); err != context.Canceled {
+		t.Fatalf("canceled summary: %v", err)
+	}
+}
+
+func BenchmarkUsageSummary(b *testing.B) {
+	catalog, _ := testCatalog(b)
+	catalog.background = func(func(context.Context)) bool { return false }
+	catalog.now = func() time.Time { return time.Date(2026, 9, 21, 2, 15, 0, 0, time.UTC) }
+	// Approximately the real catalog's 46,500 hourly ledger entries, with
+	// workspace text large enough to reveal accidental full-record reads.
+	if _, err := catalog.DB.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,purpose,indexed_at)
+		VALUES('w','codex','local','w','Work',?,'2026-09-21');
+		INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','codex','local','c')`, strings.Repeat("purpose ", 128*1024)); err != nil {
+		b.Fatal(err)
+	}
+	if _, err := catalog.DB.Exec(`WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<500)
+		INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider,model)
+		SELECT 's'||x,'w','c','s'||x,'root','codex','gpt-6-sol' FROM n;
+		WITH RECURSIVE hours(h) AS (VALUES(0) UNION ALL SELECT h+1 FROM hours WHERE h<95)
+		INSERT INTO agent_session_usage(agent_session_id,usage_hour,model,effort,attribution,total_tokens,uncached_input_tokens,output_tokens)
+		SELECT a.id,strftime('%Y-%m-%dT%H:00:00Z','2026-09-21',printf('-%d hours',h)),'','','request',101,99,2
+		FROM agent_sessions a CROSS JOIN hours`); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := catalog.UsageSummary(b.Context()); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
