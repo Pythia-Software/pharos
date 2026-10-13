@@ -29,6 +29,9 @@ type devUI struct {
 	token  string
 	cookie string
 	proxy  *httputil.ReverseProxy
+	// Optional, read-only timing snapshot for visual prototypes. Kept outside
+	// assets so personal library data is never bundled into a build.
+	concurrencyData string
 }
 
 func newDevUI(assets string, service *url.URL, token string, port int) *devUI {
@@ -110,6 +113,15 @@ func (d *devUI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/api/usage/concurrency-prototype" && d.concurrencyData != "":
+		payload, err := os.ReadFile(d.concurrencyData)
+		if err != nil {
+			writeError(w, err, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = w.Write(payload)
 	case r.Method == http.MethodGet && isUIPage(r.URL.Path):
 		source, err := os.ReadFile(filepath.Join(d.assets, "ui.py"))
 		if err != nil {
@@ -118,6 +130,9 @@ func (d *devUI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		// Tell this tab apart from the installed app's.
 		html := strings.Replace(uiHTML(source), "<title>Pharos</title>", "<title>Pharos (dev)</title>", 1)
+		if d.concurrencyData != "" {
+			html = strings.Replace(html, "<html", "<html data-concurrency-prototype", 1)
+		}
 		// Dev previews open with annotation controls, without changing the
 		// library's optional-button preferences used by the installed app.
 		html = strings.Replace(html, "</body>", "<script>if(typeof setFeedbackEnabled==='function'){document.querySelector('#feedbackToggle').hidden=false;setFeedbackEnabled(true)}</script></body>", 1)
@@ -136,6 +151,7 @@ func runDevUICLI(config Config, args []string) error {
 	port := flags.Int("port", 8799, "")
 	assets := flags.String("assets", filepath.Join("internal", "archive", "assets"), "")
 	noOpen := flags.Bool("no-open", false, "")
+	concurrencyData := flags.String("concurrency-data", "", "Read-only concurrency prototype JSON produced by tools/concurrency-prototype.py")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -153,9 +169,20 @@ func runDevUICLI(config Config, args []string) error {
 	if err != nil {
 		return err
 	}
+	defer listener.Close()
 	target := fmt.Sprintf("http://127.0.0.1:%d/?token=%s", *port, url.QueryEscape(config.APIToken))
 	fmt.Printf("Serving the UI in %s against %s\n%s\n", *assets, service, target)
 	handler := newDevUI(*assets, service, config.APIToken, *port)
+	if *concurrencyData != "" {
+		data, err := os.ReadFile(*concurrencyData)
+		if err != nil {
+			return fmt.Errorf("read concurrency prototype: %w", err)
+		}
+		if !json.Valid(data) {
+			return fmt.Errorf("concurrency prototype must contain valid JSON")
+		}
+		handler.concurrencyData = *concurrencyData
+	}
 	if !*noOpen {
 		_ = exec.Command("open", target).Run()
 	}
