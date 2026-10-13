@@ -139,6 +139,10 @@ file read, and tool call in between, marked with how many tokens it added to the
 context. The rail on the right tracks context size and turns across the whole
 conversation, and you can click it to jump to any point.
 
+Work names use recorded source titles, names from declared session identities,
+or a cached excerpt of the first words classified as human-authored. See
+[Conversation and work names](docs/conversation-naming.md) for naming and capture rules.
+
 ![A conversation in Pharos: turns with prompt and outcome previews, an activity timeline of commands and reads with context-growth markers, and a context minimap on the right](docs/images/conversation.png)
 
 **Share** saves conversations as one standalone HTML file you can send or
@@ -187,6 +191,9 @@ away, with a running tally of what the fixes saved. See [Findings](docs/findings
 The **MCP** tab gives you a copyable stdio configuration for your agent client.
 Your agents can then search and read past conversations and findings. The
 tools are read-only, and one switch turns them off for every client.
+Agents can also filter and sort by usage metrics, retrieve compact IDs and
+statistics, or ask for counts and averages through `query_statistics`.
+See [MCP statistics](docs/mcp-statistics.md) for scopes, quality, and paging.
 
 ### 8. Unplug safely
 

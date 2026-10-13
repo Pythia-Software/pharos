@@ -23,7 +23,7 @@ type conductorAdapter struct {
 	selected map[string]bool
 }
 
-const conductorExtractor = "conductor-v11-effort-settings"
+const conductorExtractor = "conductor-v12-workspace-names"
 
 // conductorPartExtractor versions the parser for per-session part states
 // (source_item_states). It changes separately from conductorExtractor, which
@@ -467,6 +467,14 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 		}
 	}
 	wcols := keySet(workspace)
+	titleScope := "session"
+	if !meaningfulWorkspaceTitle(title, sid) {
+		name := firstString(workspace["workspace_name"])
+		if meaningfulWorkspaceTitle(name, sid) && name != firstString(workspace["directory_name"]) {
+			title = name
+			titleScope = "workspace"
+		}
+	}
 	location := ""
 	for _, key := range []string{"worktree_path", "workspace_path", "path", "cwd"} {
 		if wcols[key] && firstString(workspace[key]) != "" {
@@ -568,6 +576,7 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 		archiveCommit = firstString(workspace["archive_commit"])
 	}
 	metadata := map[string]any{"branch": nilIfEmpty(branch), "head_ref": nilIfEmpty(archiveCommit), "lifecycle": lifecycle, "terminal": lifecycle == "archived" || lifecycle == "closed"}
+	metadata["title_scope"] = titleScope
 	if scols["status"] {
 		metadata["status"] = session["status"]
 	}

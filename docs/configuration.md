@@ -635,8 +635,8 @@ captures/<host-id>/
 
 | Kind | Captured |
 | --- | --- |
-| `claude` | every `*.jsonl` under the path, including `<session>/subagents/**` |
-| `codex` | `*.jsonl` under `sessions/` and `archived_sessions/`, and `rollout*` files |
+| `claude` | every `*.jsonl` under the path, including `<session>/subagents/**`, and project `sessions-index.json` title metadata |
+| `codex` | `*.jsonl` under `sessions/` and `archived_sessions/`, `rollout*` files, `session_index.jsonl` names, and snapshots of state databases with `threads.name` |
 | `antigravity` | each conversation's `brain/<id>/.system_generated/logs/transcript_full.jsonl` (or `transcript.jsonl` when that is all there is), `annotations/*.pbtxt` titles, and snapshots of `conversation_summaries.db` and of each conversation's `conversations/<id>.db` (its model requests and token usage) |
 | `conductor` | a snapshot of each SQLite database that has session and message tables (not, for example, `cache.db`) |
 | `tl1` | the registry, then for each installation the adapter reads a snapshot of its database (`files/installations/<id>/`), its `transcripts/**/*.jsonl`, and procedural attempts' script logs (`<attempt>-script.log`, `-script.stderr.log`, `-script.stdout.log`) |

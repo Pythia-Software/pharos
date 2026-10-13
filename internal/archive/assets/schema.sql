@@ -85,6 +85,25 @@ CREATE TABLE IF NOT EXISTS work_items (
 );
 CREATE INDEX IF NOT EXISTS work_items_workspace_idx ON work_items(workspace_id);
 
+-- Original source names and the cached first human-authored words are kept
+-- apart from workspaces.title, the resolved display name read by every UI.
+CREATE TABLE IF NOT EXISTS workspace_names (
+  workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+  source_title TEXT NOT NULL,
+  source_scope TEXT,
+  display_title TEXT NOT NULL,
+  display_source TEXT NOT NULL DEFAULT 'source',
+  display_workspace_id TEXT,
+  display_conflicts INTEGER NOT NULL DEFAULT 0,
+  override_title TEXT,
+  authored_title TEXT,
+  authored_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+  authored_hash TEXT,
+  authored_at TEXT,
+  authored_version TEXT,
+  authorship_input_hash TEXT
+);
+
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
