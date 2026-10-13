@@ -19,7 +19,7 @@ import (
 // normalizeMessages, transcriptStructure, transcriptCategory, and
 // findableText (internal/archive/assets/ui.py). tests/transcript-find-fixtures.json
 // holds cases both implementations must agree on.
-var transcriptKinds = []string{"prompts", "response", "replies", "thinking", "edits", "commands", "reads", "tools", "agents", "events"}
+var transcriptKinds = []string{"prompts", "response", "replies", "thinking", "edits", "commands", "reads", "tools", "agents", "events", "usage"}
 
 // transcriptEvent is one event as the reader shows it: a stored message, or
 // one block of a message that holds several.
@@ -572,6 +572,13 @@ func transcriptCategory(event transcriptEvent, finalReply bool) string {
 			return "response"
 		}
 		return "replies"
+	}
+	value := jsonObject(event.value)
+	if payload := jsonObject(value["payload"]); payload != nil {
+		value = payload
+	}
+	if value["type"] == "token_usage" {
+		return "usage"
 	}
 	switch event.toolCategory() {
 	case "edit":

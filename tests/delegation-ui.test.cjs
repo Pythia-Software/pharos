@@ -1076,6 +1076,33 @@ test("First evidence uses local time and readable tooltips in the table and inbo
   assert.deepEqual(errors, []);
 });
 
+test("conversation search stays scoped to the inbox reader and reveals retained hits", async (t) => {
+  const { page, errors } = await fixture(t, { url: "/work/work/conversation/child" });
+  await waitForReader(page, "s-child");
+  const requests = [];
+  await page.route("http://delegation.test/api/search/text", route => {
+    requests.push(route.request().postDataJSON());
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify({
+      items: [{ message_id: "reply-child", conversation_id: "child", workspace_id: "work", snippet: "Reviewed the change.", start_byte: 0, end_byte: 8, range_kind: "literal" }],
+      complete: true, skipped_oversize: 0, elapsed_ms: 1, stop_reason: "complete", coverage: "Fixture coverage",
+    }) });
+  });
+  await page.getByRole("button", { name: "Find", exact: true }).click();
+  const search = page.locator(".workspace-reader-content .conversation-search-composer");
+  await search.getByRole("combobox", { name: "Match using", exact: true }).selectOption("literal");
+  await search.getByRole("textbox", { name: "Text to find exactly", exact: true }).fill("Reviewed");
+  await search.getByRole("button", { name: "Search messages", exact: true }).click();
+  await search.getByRole("button", { name: "Reviewed the change.", exact: true }).click();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].workspace_id, "work");
+  assert.equal(requests[0].conversation_id, "child");
+  const hit = page.locator('[data-message-id="reply-child"].authorship-target');
+  assert.equal(await hit.locator("mark.conversation-find-match").innerText(), "Reviewed");
+  await search.getByRole("button", { name: "Close conversation search", exact: true }).click();
+  assert.equal(await hit.count(), 0);
+  assert.deepEqual(errors, []);
+});
+
 async function waitForReader(page, session) {
   await page.waitForFunction(id => document.querySelector(".delegation-session-heading")?.dataset.session === id && document.activeElement === document.querySelector(".conversation-panel"), session);
 }

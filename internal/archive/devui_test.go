@@ -10,6 +10,50 @@ import (
 	"testing"
 )
 
+func TestDevUIConcurrencyPrototypeIsOptionalAndAuthenticated(t *testing.T) {
+	assets := t.TempDir()
+	if err := os.WriteFile(filepath.Join(assets, "ui.py"), []byte("APP_HTML = r'''<!doctype html><html><title>Pharos</title></html>'''\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data := filepath.Join(t.TempDir(), "timings.json")
+	if err := os.WriteFile(data, []byte(`{"threads":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service := httptest.NewServer(http.NotFoundHandler())
+	defer service.Close()
+	target, _ := url.Parse(service.URL)
+	handler := newDevUI(assets, target, "secret", 8801)
+	serve := func(path string, authenticated, crossOrigin bool) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, path, nil)
+		if authenticated {
+			r.AddCookie(&http.Cookie{Name: "pharos_dev_token_8801", Value: "secret"})
+		}
+		if crossOrigin {
+			r.Header.Set("Sec-Fetch-Site", "cross-site")
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	if w := serve("/usage", true, false); strings.Contains(w.Body.String(), "data-concurrency-prototype") {
+		t.Fatal("prototype enabled without a data file")
+	}
+	handler.concurrencyData = data
+	if w := serve("/usage", true, false); !strings.Contains(w.Body.String(), "<html data-concurrency-prototype>") {
+		t.Fatal("prototype not enabled for the opted-in dev UI")
+	}
+	path := "/api/usage/concurrency-prototype"
+	if w := serve(path, false, false); w.Code != http.StatusUnauthorized {
+		t.Fatal("personal timings available without authentication")
+	}
+	if w := serve(path, true, true); w.Code != http.StatusForbidden {
+		t.Fatal("cross-origin timings request accepted")
+	}
+	if w := serve(path, true, false); w.Code != http.StatusOK || w.Body.String() != `{"threads":[]}` || w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("prototype response: %d %s", w.Code, w.Body.String())
+	}
+}
+
 func TestDevUIServesCheckoutAndForwardsAPIWithToken(t *testing.T) {
 	var forwarded *http.Request
 	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

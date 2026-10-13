@@ -11,6 +11,7 @@ const localRequire = createRequire(path.join(root, '.context/browser-tests/packa
 const { chromium } = localRequire('playwright');
 const source = fs.readFileSync(['src/pharos/ui.py', 'internal/archive/assets/ui.py'].map(name => path.join(root, name)).find(file => fs.existsSync(file)), 'utf8');
 const html = source.slice(source.indexOf("r'''") + 4, source.lastIndexOf("'''"));
+const sharedReaderSearch = html.slice(html.indexOf('function setupConversationSearch('), html.indexOf('\nfunction setupTokenOverview('));
 let browser;
 before(async () => {
   const chrome = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -306,6 +307,11 @@ async function fixture(t, messages, viewport = { width: 1280, height: 900 }, con
     return route.fulfill({ body: '', contentType: 'application/javascript' });
   });
   await page.goto('http://transcript.test/');
+  // This harness stubs the React bundle and tests the standalone shared
+  // reader's local finder. Native bounded search is covered by delegation-ui.
+  await page.evaluate(search => {
+    setupConversationSearch = new Function('panel', 'conversation', `const SHARE = true;\n${search}\nreturn setupConversationSearch(panel,conversation);`);
+  }, sharedReaderSearch);
   await page.addStyleTag({ content: 'main > :not(#transcript-test-root), body > :not(main):not(.conversation-map):not(.conversation-find):not(.conversation-find-rail):not(.conversation-map-window) { display:none !important } #transcript-test-root { max-width:1100px;margin:20px auto; }' });
   await page.evaluate(({messages,conversation}) => {
     // Render inside the app's main, which is the page's scroller.

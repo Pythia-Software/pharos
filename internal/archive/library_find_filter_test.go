@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -71,5 +72,49 @@ func TestLibraryQueryTableCombinesKeywordSearchWithFilters(t *testing.T) {
 	distinct := request(http.MethodGet, "/api/query/library/distinct?field=title&q=&find=parser", "")
 	if encoded, _ := json.Marshal(distinct); strings.Contains(string(encoded), "Bravo") || !strings.Contains(string(encoded), "Charlie") {
 		t.Fatalf("distinct values ignore the keyword search: %s", encoded)
+	}
+}
+
+func TestLibraryFindFiltersBeforeGlobalCandidateLimit(t *testing.T) {
+	catalog, config := libraryFixture(t)
+	tx, e := catalog.DB.Begin()
+	if e != nil {
+		t.Fatal(e)
+	}
+	for i := 0; i < 5100; i++ {
+		id := fmt.Sprintf("unrelated-%05d", i)
+		if _, e = tx.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES(?,'cb',?,'user','message','parser common words',?)`, id, id, id); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if _, e = tx.Exec(`INSERT INTO messages_fts(message_id,text) SELECT id,text FROM messages`); e != nil {
+		t.Fatal(e)
+	}
+	if e = tx.Commit(); e != nil {
+		t.Fatal(e)
+	}
+	if e = catalog.refreshAllLibrary(t.Context()); e != nil {
+		t.Fatal(e)
+	}
+	server := NewServer(config, catalog)
+	for _, endpoint := range []string{"/api/query/library", "/api/query/library/rows-v2"} {
+		body := `{"select":["title"],"where":[{"field":"title","op":"=","value":"Charlie"}],"limit":10}`
+		if strings.Contains(endpoint, "v2") {
+			body = `{"version":2,"profile":"qt-sqlite-v1",` + body[1:]
+		}
+		req := httptest.NewRequest(http.MethodPost, endpoint+"?find=parser&find_fuzzy=0", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer test-token")
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, req)
+		if response.Code != http.StatusOK {
+			t.Fatal(response.Code, response.Body.String())
+		}
+		var result map[string]any
+		if e = json.Unmarshal(response.Body.Bytes(), &result); e != nil {
+			t.Fatal(e)
+		}
+		if result["total"] != float64(1) || result["find"].(map[string]any)["limited"] != false {
+			t.Fatalf("early scope failed: %s", response.Body.String())
+		}
 	}
 }
