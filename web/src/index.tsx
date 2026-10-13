@@ -1,3 +1,4 @@
+import { installDelegationExplorer } from "./delegation";
 import { applyUsageAggregations } from "./usage-aggregations";
 import { withComputedCapabilityRefresh } from "./computed-column-store";
 import { chartPeriods, earliestKey, isHourly, localDay, nextPeriod, parseDay, periodBuckets, periodKey, periodLabel, periodStart, periodUnit, validPeriodCount, type ChartPeriod } from "./chart-period";
@@ -2030,7 +2031,7 @@ for (const [id, component] of mounts) {
   const element = document.getElementById(id);
   if (element) createRoot(element).render(component);
 }
-if (!shared) startFindingsChrome();
+if (!shared) { startFindingsChrome(); installDelegationExplorer(); }
 window.pharosQueryTables = {
   refresh(dataset) {
     window.dispatchEvent(new CustomEvent("pharos:data-refresh", { detail: dataset }));

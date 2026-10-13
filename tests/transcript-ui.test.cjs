@@ -386,9 +386,8 @@ test('workspace leads with transcript and keeps supporting information collapsed
   await page.locator('.archive-details > summary').click();
   assert.match(await transcript(page).innerText(),/Retained checkpoint/);
   assert.match(await transcript(page).innerText(),/receipt-hash/);
-  await page.locator('#detailBody').getByText('Usage',{exact:true}).click();
-  assert.match(await transcript(page).innerText(),/Input tokens/);
-  if(process.env.TRANSCRIPT_SCREENSHOTS){await page.locator('.archive-details > summary').click();await page.locator('#detailBody').getByText('Usage',{exact:true}).click();await page.screenshot({path:path.join(root,'.context/browser-tests/screenshots/workspace-conversation-first.png'),fullPage:true})}
+  assert.equal(await page.locator('#detailBody .work-disclosure > summary').getByText('Usage',{exact:true}).count(),0);
+  if(process.env.TRANSCRIPT_SCREENSHOTS){await page.locator('.archive-details > summary').click();await page.screenshot({path:path.join(root,'.context/browser-tests/screenshots/workspace-conversation-first.png'),fullPage:true})}
   await page.evaluate(()=>{window.filteredRepository='';window.pharosQueryTables={filterRepository:value=>{window.filteredRepository=value}}});
   await page.getByRole('button',{name:'pharos',exact:true}).click();
   assert.equal(await page.evaluate(()=>window.filteredRepository),'pharos');

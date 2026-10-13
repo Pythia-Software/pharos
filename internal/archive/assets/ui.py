@@ -1452,17 +1452,19 @@ function setupTokenOverview(panel,conversation={}){
 }
 
 function detail(id,fromLocation=false){return pageLoad(()=>renderDetail(id,fromLocation))}
+let delegationExplorer=null;
 async function renderDetail(id,fromLocation){
+delegationExplorer?.destroy();delegationExplorer=null;
 const w=await api('/api/work/'+encodeURIComponent(id));show('detail',true);if(!fromLocation)setRoute('/work/'+encodeURIComponent(id));recordVisit(false,w.title||'Untitled work');conversationMapCleanups.splice(0).forEach(cleanup=>cleanup());
 const root=$('#detailBody');root.replaceChildren();
 for(const key of ['prs','attempts','handoffs','changes','metrics','conversations','identity_links'])w[key] ||= [];
 const header=node('header','work-heading'),context=node('div','meta'),appendContext=value=>{if(!value)return;if(context.childNodes.length)context.append(document.createTextNode(' · '));context.append(value instanceof Node?value:document.createTextNode(value))};
 if(w.repository_name&&SHARE)appendContext(w.repository_name);else if(w.repository_name){const repository=node('button','work-repository-link',w.repository_name);repository.type='button';repository.title=`Show Library work for ${w.repository_name}`;repository.onclick=()=>{window.pharosQueryTables?.filterRepository?.(w.repository_name);show('library')};appendContext(repository)}else appendContext('Repository not identified');appendContext(w.branch);appendContext(w.activity_at?timeLabel(w.activity_at):null);
-header.append(node('h1','',w.title),context);
+const workspaceStats=node('div','delegation-workspace-stats');header.append(node('h1','',w.title),context,workspaceStats);
 const controls=node('div','work-controls');
 for(const pr of workPullRequests(w)){const link=node(pr.url?'a':'span','chip',pr.title?`${pr.title} · #${pr.number}`:`PR #${pr.number}`);link.title=pr.relationship||pr.title||'';if(pr.url){link.href=pr.url;link.target='_blank';link.rel='noreferrer'}controls.append(link)}
 if(w.main_merge_commit)controls.append(mainIntegrationLink(w));
-if(!SHARE&&w.conversations?.length){const share=node('button','button-with-icon share-link');share.type='button';share.append(icon('arrow-down'),document.createTextNode('Share'));share.title='Download this conversation, with tables of its tool use and token usage, as a standalone HTML file to send or publish. It includes the full transcript, tool output, and file paths.';share.onclick=()=>shareDownload([w.id]).catch(error=>feedbackToast(`Could not share: ${error.message}`));controls.append(share)}
+if(!SHARE&&w.conversations?.length){const share=node('button','button-with-icon share-link');share.type='button';share.append(icon('arrow-down'),document.createTextNode('Share'));share.title='Share this workspace as a standalone HTML file, with its conversations, tool use, and token usage. It includes the full transcript, tool output, and file paths.';share.onclick=()=>shareDownload([w.id]).catch(error=>feedbackToast(`Could not share: ${error.message}`));controls.append(share)}
 const disclosure=(label,className)=>{const d=node('details',className);d.append(node('summary','',label));return d};
 const archive=disclosure('Archive details','archive-details'),archiveBody=node('div','archive-body');archive.append(archiveBody);
 if(w.location)archiveBody.append(node('div','file',w.location));
@@ -1471,7 +1473,7 @@ if(w.attempts.length||w.handoffs.length){const p=node('section','panel');p.appen
 
 if(w.identity_links.length){const p=node('section','panel');p.append(node('h2','','Related source identities'));w.identity_links.forEach(x=>p.append(node('div','meta',`${x.related_provider} · ${x.relationship} · confidence ${x.confidence}`)));archiveBody.append(p)}
 if(w.receipt){const p=node('section','panel');p.append(node('h2','','Preservation receipt'),node('div','meta',`${w.receipt.outcome} · ${formatBytes(w.receipt.package_bytes)} logical size · ${w.receipt.package_hash}`));archiveBody.append(p)}
-if(w.metrics.length){const p=disclosure('Usage','work-disclosure'),metricLabels={input_tokens:'Input tokens',output_tokens:'Output tokens',cache_creation_input_tokens:'Cache creation tokens',cache_read_input_tokens:'Cache read tokens',cache_tokens:'Cached input tokens',thinking_tokens:'Thinking tokens',total_tokens:'Total tokens'};w.metrics.forEach(m=>{const r=node('div','metric'),amount=typeof m.value==='number'&&/tokens?/i.test(m.unit||m.name)?compactCount(m.value):typeof m.value==='number'?m.value.toLocaleString():m.value,value=m.value===null?`unknown · ${m.status}`:/^bytes?$/i.test(m.unit||'')?`${formatBytes(m.value)} · ${m.status}`:`${amount} ${m.unit} · ${m.status}`;r.append(node('span','',metricLabels[m.name]||m.name),node('span','',value));p.append(r)});controls.append(p)}
+if(SHARE&&w.metrics.length){const p=disclosure('Usage','work-disclosure'),metricLabels={input_tokens:'Input tokens',output_tokens:'Output tokens',cache_creation_input_tokens:'Cache creation tokens',cache_read_input_tokens:'Cache read tokens',cache_tokens:'Cached input tokens',thinking_tokens:'Thinking tokens',total_tokens:'Total tokens'};w.metrics.forEach(m=>{const r=node('div','metric'),amount=typeof m.value==='number'&&/tokens?/i.test(m.unit||m.name)?compactCount(m.value):typeof m.value==='number'?m.value.toLocaleString():m.value,value=m.value===null?`unknown · ${m.status}`:/^bytes?$/i.test(m.unit||'')?`${formatBytes(m.value)} · ${m.status}`:`${amount} ${m.unit} · ${m.status}`;r.append(node('span','',metricLabels[m.name]||m.name),node('span','',value));p.append(r)});controls.append(p)}
 
 const conversations=w.conversations,roots=[w.location,...(parsedJSON(w.repository_locations_json)||[])],host=node('div','conversation-host'),workPath=`/api/work/${encodeURIComponent(id)}`;
 let activeIndex=0,mounting=0;
@@ -1495,7 +1497,8 @@ try{await loadConversation(index)}catch(error){if(ticket===mounting)host.replace
 if(ticket!==mounting)return;
 c.title||=w.title;host.replaceChildren(renderConversation(c,roots));
 const panel=host.querySelector('.conversation-panel');
-if(conversations.length>1){const choice=node('div','conversation-choice'),label=node('label','',`Showing conversation #${index+1} from this workspace`);selector=node('select','conversation-selector');selector.id='workspaceConversation';selector.setAttribute('aria-label','Choose conversation from this workspace');label.htmlFor=selector.id;conversations.forEach((other,i)=>{const option=node('option','',conversationLabel(i));option.value=String(i);selector.append(option)});selector.value=String(index);selector.onchange=()=>selectConversation(Number(selector.value));choice.append(label,selector);panel.querySelector('.conversation-head').prepend(choice)}
+if(delegationExplorer){const context=node('div');panel.querySelector('.conversation-head').prepend(context);delegationExplorer.conversation(c.id,context)}
+if(conversations.length>1&&(SHARE||!window.pharosDelegation)){const choice=node('div','conversation-choice'),label=node('label','',`Showing conversation #${index+1} from this workspace`);selector=node('select','conversation-selector');selector.id='workspaceConversation';selector.setAttribute('aria-label','Choose conversation from this workspace');label.htmlFor=selector.id;conversations.forEach((other,i)=>{const option=node('option','',conversationLabel(i));option.value=String(i);selector.append(option)});selector.value=String(index);selector.onchange=()=>selectConversation(Number(selector.value));choice.append(label,selector);panel.querySelector('.conversation-head').prepend(choice)}
 panel.workspaceFind={total:conversations.length,active:index,label:conversationLabel,
 search:settings=>{const key=JSON.stringify(settings);if(findState.key!==key){findState.key=key;findState.hits=[];findState.search=searchConversations(settings).then(hits=>{if(findState.key===key)findState.hits=hits;return hits})}return findState.search},
 open:(target,settings,direction)=>void selectConversation(target).then(()=>{const opened=host.querySelector('.conversation-panel');opened?.openConversationSearch?.(settings.term,settings);opened?.navigateConversationSearch?.(direction)}),
@@ -1513,7 +1516,17 @@ header.append(controls);root.append(header);
 const warnings=conversations.filter(c=>/partial|incomplete|missing|truncat|failed/i.test(c.coverage||''));
 if(warnings.length)root.append(node('div','coverage-warning',`Transcript coverage: ${warnings.map(c=>`${c.provider||'Agent'} · ${c.coverage}`).join('; ')}. Some activity may be unavailable.`));
 if(/partial|incomplete|failed/i.test(w.preservation_completeness||''))root.append(node('div','coverage-warning',`Preservation · ${w.preservation_completeness}. See Archive details.`));
-const focus=new URLSearchParams(location.search),focusIndex=conversations.findIndex(c=>c.id===focus.get('conversation')),matchedIndex=focusIndex<0?await matchingLibraryConversation(focus.get('search')||''):-1,initialIndex=Math.max(0,focusIndex,matchedIndex);root.append(...SHARE?[host]:[host,archive]);if(conversations.length){if(focusIndex<0)updateConversationURL(initialIndex,'replace');await mount(initialIndex);if(focusIndex>=0&&focus.get('message'))revealMessage(host,focus.get('message'))}else host.append(empty('No conversation was retained for this workspace.'));
+const focus=new URLSearchParams(location.search),focusIndex=conversations.findIndex(c=>c.id===focus.get('conversation')),matchedIndex=focusIndex<0?await matchingLibraryConversation(focus.get('search')||''):-1,initialIndex=Math.max(0,focusIndex,matchedIndex);
+const explorer=node('div','delegation-host');
+root.append(...SHARE?[host]:[explorer,host,archive]);
+const mountExplorer=()=>{
+if(SHARE||delegationExplorer||!explorer.isConnected||!window.pharosDelegation)return;
+host.querySelector('.conversation-choice')?.remove();
+delegationExplorer=window.pharosDelegation.mount(explorer,{workspace:id,conversation:conversations[activeIndex]?.id||'',contextHost:null,statsHost:workspaceStats,openConversation:async(conversation,message)=>{const index=conversations.findIndex(c=>c.id===conversation);if(index<0)return;host.style.minHeight=pageScroller.clientHeight+'px';await selectConversation(index);if(index!==activeIndex)return;await new Promise(resolve=>requestAnimationFrame(resolve));if(message){const params=new URLSearchParams(location.search);params.set('message',message);history.replaceState(null,'',location.pathname+'?'+params);revealMessage(host,message)}else{const panel=host.querySelector('.conversation-panel');if(!panel)return;panel.tabIndex=-1;panel.focus({preventScroll:true});panel.scrollIntoView({behavior:'smooth',block:'start'})}}});
+const panel=host.querySelector('.conversation-panel:not(.conversation-loading)');if(panel){const context=node('div');panel.querySelector('.conversation-head').prepend(context);delegationExplorer.conversation(conversations[activeIndex].id,context)}
+};
+mountExplorer();if(!SHARE&&!window.pharosDelegation)addEventListener('pharos:delegation-ready',mountExplorer,{once:true});
+if(conversations.length){if(focusIndex<0)updateConversationURL(initialIndex,'replace');await mount(initialIndex);if(focusIndex>=0&&focus.get('message'))revealMessage(host,focus.get('message'))}else host.append(empty('No conversation was retained for this workspace.'));
 if(!conversations.length&&w.summary){const summary=node('section','panel');summary.append(node('h2','','Retained account · transcript unavailable'));for(const key of ['initiation','outcome','failures'])if(w.summary[key]){summary.append(node('div','meta',key),contentView(w.summary[key]))}archiveBody.prepend(summary)}
 }
 function formatBytes(value){if(value==null||!Number.isFinite(Number(value)))return'Unavailable';const amount=Math.max(0,Number(value)),units=['B','KB','MB','GB','TB','PB'];if(amount===0)return'0 B';const power=Math.min(Math.floor(Math.log(amount)/Math.log(1000)),units.length-1),scaled=amount/(1000**power),digits=scaled<10&&power>0?1:0;return`${scaled.toFixed(digits)} ${units[power]}`}
