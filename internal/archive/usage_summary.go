@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -44,7 +45,7 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 	}
 
 	c.ensureAuthorship()
-	rows, err := c.DB.QueryContext(ctx, "SELECT sent_at,typed_words FROM message_authorship WHERE typed_words>0")
+	rows, err := c.DB.QueryContext(ctx, usageSummaryAuthorshipSQL)
 	if err != nil {
 		return nil, err
 	}
@@ -67,11 +68,11 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 		return nil, err
 	}
 
-	ledger, err := c.representativeLedger()
+	ledger, err := c.usageSummaryLedger(ctx)
 	if err != nil {
 		return nil, err
 	}
-	book, err := c.loadPriceBook()
+	book, err := c.loadPriceBookFrom(ctx, c.DB)
 	if err != nil {
 		return nil, err
 	}
@@ -80,15 +81,19 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 		return nil, err
 	}
 	for _, entry := range ledger {
-		hour, ok := parseTime(firstString(entry["usage_hour"]))
+		hour, ok := parseTime(entry.hour)
 		day := ""
 		if ok {
 			day = localMidnight(hour, time.Local).Format("2006-01-02")
 		}
-		tokens := ledgerTokens(entry)
-		priced := book.cost(ledgerModel(entry), day, tokens)
-		tier, _ := carbon.tier(ledgerModel(entry))
-		carbonParts := carbonTokens(entry)
+		priced := book.cost(entry.model, day, entry.tokens)
+		tier, _ := carbon.tier(entry.model)
+		carbonParts := map[string]int64{
+			"uncached_input": entry.tokens["uncached_input_tokens"] + entry.tokens["unclassified_tokens"],
+			"cache_write":    entry.tokens["cache_creation_input_tokens"],
+			"cache_read":     entry.tokens["cache_read_input_tokens"],
+			"output":         entry.tokens["output_tokens"],
+		}
 		for index, window := range windows {
 			share := 1.0
 			if !cutoffs[index].IsZero() {
@@ -100,7 +105,7 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 			if share == 0 {
 				continue
 			}
-			window.Tokens += int64(float64(tokens["total_tokens"])*share + .5)
+			window.Tokens += int64(float64(entry.tokens["total_tokens"])*share + .5)
 			if window.CarbonTokens == nil {
 				window.CarbonTokens = map[string]map[string]float64{}
 			}
@@ -117,4 +122,78 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 		}
 	}
 	return map[string]any{"generated_at": now.UTC().Format(time.RFC3339), "windows": windows, "carbon_factors": carbon}, nil
+}
+
+type usageSummaryEntry struct {
+	workspaceID, hour, model string
+	tokens                   map[string]int64
+}
+
+const usageSummaryAuthorshipSQL = `SELECT sent_at,typed_words FROM message_authorship WHERE typed_words>0`
+
+// The summary reads only its aggregate inputs. The general Usage
+// ledger joins conversation/repository metadata and reads workspace rows
+// whose purpose/outcome can occupy many overflow pages. Covering indexes
+// keep this query off those records, and typed scans avoid materializing
+// metadata maps for every ledger row. INDEXED BY prevents SQLite from choosing
+// the primary-key indexes, which would fetch the full records again.
+const usageSummaryLedgerSQL = `SELECT a.workspace_id,w.source_kind,u.usage_hour,u.model,COALESCE(a.model,''),
+	u.total_tokens,u.uncached_input_tokens,u.cache_read_input_tokens,u.cache_creation_input_tokens,
+	u.cache_creation_1h_input_tokens,u.output_tokens,u.unclassified_tokens
+	FROM agent_session_usage u
+	JOIN agent_sessions a INDEXED BY agent_sessions_summary_idx ON a.id=u.agent_session_id
+	JOIN workspaces w INDEXED BY workspaces_library_idx ON w.id=a.workspace_id
+	WHERE u.total_tokens>0`
+
+func (c *Catalog) usageSummaryLedger(ctx context.Context) ([]usageSummaryEntry, error) {
+	rows, err := c.DB.QueryContext(ctx, usageSummaryLedgerSQL)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ledger []usageSummaryEntry
+	var workspaces []map[string]any
+	seen := map[string]bool{}
+	for rows.Next() {
+		var entry usageSummaryEntry
+		var source, sessionModel string
+		var total, input, read, write, write1h, output, unclassified int64
+		if err := rows.Scan(&entry.workspaceID, &source, &entry.hour, &entry.model, &sessionModel,
+			&total, &input, &read, &write, &write1h, &output, &unclassified); err != nil {
+			return nil, err
+		}
+		entry.model = strings.TrimSpace(entry.model)
+		if entry.model == "" {
+			entry.model = strings.TrimSpace(sessionModel)
+		}
+		if entry.model == "" {
+			entry.model = "Unknown model"
+		}
+		entry.tokens = map[string]int64{
+			"total_tokens": total, "uncached_input_tokens": input, "cache_read_input_tokens": read,
+			"cache_creation_input_tokens": write, "cache_creation_1h_input_tokens": write1h,
+			"output_tokens": output, "unclassified_tokens": unclassified,
+		}
+		ledger = append(ledger, entry)
+		if !seen[entry.workspaceID] {
+			seen[entry.workspaceID] = true
+			workspaces = append(workspaces, map[string]any{"id": entry.workspaceID, "source_kind": source})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Match representativeLedger: choose among workspaces with positive usage
+	// across all time, even when a mirror has no usage in a trailing window.
+	representative := map[string]bool{}
+	for _, workspace := range c.suppressMirrors(workspaces) {
+		representative[firstString(workspace["id"])] = true
+	}
+	kept := ledger[:0]
+	for _, entry := range ledger {
+		if representative[entry.workspaceID] {
+			kept = append(kept, entry)
+		}
+	}
+	return kept, nil
 }
