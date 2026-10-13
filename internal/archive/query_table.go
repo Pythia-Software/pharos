@@ -219,6 +219,18 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 		return
 	}
 	switch {
+	case dataset == "usage" && operation == "carbon":
+		var request carbonSeriesRequest
+		if err := decoder.Decode(&request); err != nil {
+			writeError(w, fmt.Errorf("carbon json: %w", err), http.StatusBadRequest)
+			return
+		}
+		value, err := s.Catalog.carbonSeries(r.Context(), request, schema)
+		if err != nil {
+			writeError(w, err, http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, value, http.StatusOK)
 	case dataset == "writing" && operation == "series":
 		var request writingSeriesRequest
 		if err := decoder.Decode(&request); err != nil {

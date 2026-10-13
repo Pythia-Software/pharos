@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/gbdubs/pharos/internal/querytable"
 )
 
 // The CO₂ calculator turns reconciled token categories into an estimate of
@@ -18,11 +20,11 @@ import (
 // is placed in a size tier whose energy per output token comes from published
 // measurements of comparable models, and input, cache-write, and cache-read
 // tokens are charged as fractions of that. carbon/co2_factors.json holds every
-// factor with its source; the Settings card applies data-center overhead (PUE)
+// factor with its source; the Usage card applies data-center overhead (PUE)
 // and a grid's carbon intensity, which the reader can change.
 
 // carbonCategories are the token categories the calculator prices, in the
-// order the Settings card lists them. Output includes reasoning.
+// order the Usage card lists them. Output includes reasoning.
 var carbonCategories = []string{"uncached_input", "cache_write", "cache_read", "output"}
 
 // carbonScenarios pair the low, central, and high value of every factor.
@@ -345,9 +347,129 @@ func (c *Catalog) carbonHealth() (map[string]any, error) {
 		"generated_at": c.clock().UTC().Format(time.RFC3339)}, nil
 }
 
-// CarbonHealth is the cached Settings section for the CO₂ calculator.
+// CarbonHealth provides cached whole-library totals for the CO₂ calculator.
 func (c *Catalog) CarbonHealth(ctx context.Context) (map[string]any, error) {
 	return cachedValue(ctx, c, "health:carbon", func(context.Context) (map[string]any, error) {
 		return c.carbonHealth()
 	})
+}
+
+// carbonSeriesRequest uses the Usage dataset's filters, but its view state is
+// independent of Machine Tokens. Assumptions are applied by the calculator UI.
+type carbonSeriesRequest struct {
+	Where  []querytable.WhereTerm `json:"where"`
+	Hourly bool                   `json:"hourly"`
+	Split  string                 `json:"split"`
+}
+
+type carbonPoint struct {
+	Day    string                      `json:"day"`
+	Value  string                      `json:"value"`
+	Tokens map[string]map[string]int64 `json:"tokens"`
+}
+
+func addCarbonTokens(target map[string]map[string]int64, tier string, counts map[string]int64) {
+	if target[tier] == nil {
+		target[tier] = map[string]int64{}
+	}
+	for category, count := range counts {
+		target[tier][category] += count
+	}
+}
+
+// carbonSeries returns counts before energy assumptions, so chart and totals
+// can recalculate together without refetching. Filter at ledger-hour precision
+// even for daily charts: a partial-day range must not include the whole day.
+func (c *Catalog) carbonSeries(ctx context.Context, request carbonSeriesRequest, schema querytable.Schema) (map[string]any, error) {
+	if !slices.Contains([]string{"", "provider", "repository_name", "tier"}, request.Split) {
+		return nil, fmt.Errorf("carbon series cannot split by %q", request.Split)
+	}
+	doc, err := loadCarbonDocument()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := c.hourlyUsageForAggregation(ctx, request.Where, schema)
+	if err != nil {
+		return nil, err
+	}
+	total := &carbonWindow{Key: "filtered", Tokens: map[string]map[string]int64{}}
+	points := map[[2]string]*carbonPoint{}
+	unmatched := map[string]int64{}
+	undated := int64(0)
+	unknownModelTokens, unclassified := int64(0), int64(0)
+	for _, row := range rows {
+		model := firstString(row["model"])
+		tier, matched := doc.tier(model)
+		counts := carbonTokens(row)
+		unclassified += integer(row["unclassified_tokens"])
+		addCarbonTokens(total.Tokens, tier, counts)
+		if !matched {
+			if placeholderModel(model) {
+				unknownModelTokens += integer(row["total_tokens"])
+			} else {
+				unmatched[model] += integer(row["total_tokens"])
+			}
+		}
+		day := firstString(row["day"])
+		if request.Hourly {
+			day = firstString(row["hour"])
+		}
+		if day == "" {
+			undated += integer(row["total_tokens"])
+			continue
+		}
+		value := firstString(row[request.Split])
+		if request.Split == "tier" {
+			value = tier
+		}
+		key := [2]string{day, value}
+		point := points[key]
+		if point == nil {
+			point = &carbonPoint{Day: day, Value: value, Tokens: map[string]map[string]int64{}}
+			points[key] = point
+		}
+		addCarbonTokens(point.Tokens, tier, counts)
+	}
+	series := make([]*carbonPoint, 0, len(points))
+	for _, point := range points {
+		series = append(series, point)
+	}
+	sort.Slice(series, func(i, j int) bool {
+		if series[i].Day == series[j].Day {
+			return series[i].Value < series[j].Value
+		}
+		return series[i].Day < series[j].Day
+	})
+	models := make([]map[string]any, 0, len(unmatched))
+	for model, tokens := range unmatched {
+		models = append(models, map[string]any{"model": model, "tokens": tokens})
+	}
+	sort.Slice(models, func(i, j int) bool {
+		left, right := integer(models[i]["tokens"]), integer(models[j]["tokens"])
+		if left == right {
+			return firstString(models[i]["model"]) < firstString(models[j]["model"])
+		}
+		return left > right
+	})
+	// Choices come from the full retained usage, so one filter cannot hide
+	// the other filter's options or strand a selection with no matching rows.
+	all, err := c.localUsageRows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	choices := map[string][]string{}
+	for _, field := range []string{"repository_name", "provider"} {
+		values := map[string]bool{}
+		for _, row := range all {
+			values[firstString(row[field])] = true
+		}
+		choices[field] = make([]string, 0, len(values))
+		for value := range values {
+			choices[field] = append(choices[field], value)
+		}
+		sort.Strings(choices[field])
+	}
+	return map[string]any{"factors": doc, "windows": []*carbonWindow{total}, "series": series,
+		"choices": choices, "default_tier_models": models, "default_tier_unknown_tokens": unknownModelTokens,
+		"unclassified_tokens": unclassified, "undated_tokens": undated}, nil
 }
