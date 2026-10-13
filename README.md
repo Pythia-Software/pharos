@@ -187,6 +187,9 @@ away, with a running tally of what the fixes saved. See [Findings](docs/findings
 The **MCP** tab gives you a copyable stdio configuration for your agent client.
 Your agents can then search and read past conversations and findings. The
 tools are read-only, and one switch turns them off for every client.
+Agents can also filter and sort by usage metrics, retrieve compact IDs and
+statistics, or ask for counts and averages through `query_statistics`.
+See [MCP statistics](docs/mcp-statistics.md) for scopes, quality, and paging.
 
 ### 8. Unplug safely
 

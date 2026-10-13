@@ -136,7 +136,7 @@ func handleMCP(catalog *Catalog, request map[string]any) map[string]any {
 
 // repositoryFilterTools are the tools whose repository argument filters by
 // repository name or remote.
-var repositoryFilterTools = map[string]bool{"search_conversations": true, "search_messages": true, "search_work": true, "list_findings": true, "trace_worktree": true}
+var repositoryFilterTools = map[string]bool{"search_conversations": true, "search_messages": true, "search_work": true, "query_statistics": true, "list_findings": true, "trace_worktree": true}
 
 func callMCP(catalog *Catalog, name string, args map[string]any) (any, error) {
 	limit := int(integer(valueOr(args["limit"], 50)))
@@ -150,6 +150,10 @@ func callMCP(catalog *Catalog, name string, args map[string]any) (any, error) {
 		}
 	}
 	switch name {
+	case "list_metrics":
+		return listMetrics(args)
+	case "query_statistics":
+		return catalog.queryStatistics(name, args)
 	case "trace_worktree":
 		return catalog.traceWorktree(args)
 	case "search_messages":
@@ -159,6 +163,9 @@ func callMCP(catalog *Catalog, name string, args map[string]any) (any, error) {
 	case "list_repositories":
 		return catalog.listRepositories(args)
 	case "search_conversations":
+		if metricCall(args) {
+			return catalog.queryStatistics(name, args)
+		}
 		return catalog.searchConversations(args)
 	case "get_conversation_overview":
 		return catalog.conversationOverview(args)
@@ -167,6 +174,9 @@ func callMCP(catalog *Catalog, name string, args map[string]any) (any, error) {
 	case "get_conversation_messages":
 		return catalog.conversationMessages(args)
 	case "search_work":
+		if metricCall(args) {
+			return catalog.queryStatistics(name, args)
+		}
 		options := SearchOptions{Query: firstString(args["query"]), Repository: firstString(args["repository"]), Source: firstString(args["source"]), File: firstString(args["file"]), Owner: firstString(args["owner"]), Provider: firstString(args["provider"]), Model: firstString(args["model"]), Effort: firstString(args["effort"]), From: firstString(args["from"]), To: firstString(args["to"]), Flavor: firstString(args["flavor"]), Version: firstString(args["version"]), Outcome: firstString(args["outcome"]), Error: firstString(args["error"]), Metric: firstString(args["metric"]), Limit: limit}
 		if args["pr"] != nil {
 			value := int(integer(args["pr"]))

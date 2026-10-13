@@ -315,6 +315,9 @@ func (c *Catalog) Initialize() error {
 	if err := c.ensureLibrary(); err != nil {
 		return err
 	}
+	if err := c.ensureMetricSchema(); err != nil {
+		return fmt.Errorf("initialize MCP metrics: %w", err)
+	}
 	if _, err := c.DB.Exec(`INSERT OR IGNORE INTO declared_native_aliases(conversation_id,account,native_id)
 		SELECT c.id,c.account,alias.value FROM conversations c JOIN json_each(CASE WHEN json_valid(c.aliases_json) THEN c.aliases_json ELSE '[]' END) alias
 		WHERE alias.type='text' AND alias.value<>'' AND NOT EXISTS(SELECT 1 FROM meta WHERE key='declared_native_aliases_version')`); err != nil {
