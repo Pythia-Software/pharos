@@ -468,7 +468,13 @@ something else keeps the drive busy, an alert shows what `diskutil` said.
 Pharos also watches the library's volume, by UUID, through DiskArbitration.
 Ejecting from Finder or with `diskutil eject` while Pharos runs is refused with
 "Pharos is running from euclid. Use Eject in Pharos, or quit Pharos, to eject
-it." Quitting Pharos stops its service the same way as a release.
+it." Quitting a library's Pharos.app stops its service the same way as a release
+and stops agents' MCP servers running from that app (SIGTERM, then SIGKILL after
+3 seconds). This cleanup targets the `mcp` command; the service keeps its
+graceful shutdown so it can finish a write. Quit leaves the drive mounted; eject
+it in Finder afterward. Quitting a per-user install, such as one in
+Applications, leaves agents' MCP servers running so they can keep answering
+without the app.
 
 **Unplugging without ejecting.** The service notices within about a second that
 the catalog's directory is gone, or that SQLite's memory-mapped index has
@@ -503,9 +509,10 @@ Both use a throwaway disk image and never launch Pharos.
 
 While Pharos runs it has the catalog open, whatever else it is doing, so the
 way to disconnect the library's drive is **Eject** at the right of the drive
-panel's title (above): it also stops agents' Pharos MCP servers, which quitting
-Pharos does not. Quitting stops the service and closes the catalog (above);
-eject the drive in Finder afterwards once nothing else runs from it.
+panel's title (above): it releases the library, stops agents' Pharos MCP servers,
+and ejects the drive. Quitting the library's app also stops its service and MCP
+servers and closes the catalog (above); eject the drive in Finder afterwards
+once nothing else runs from it.
 Unplugging without ejecting is only "probably fine" when nothing is running:
 every commit is atomic and flushed, so nothing committed is lost, but work in
 progress is, and the next run redoes it.
@@ -568,9 +575,10 @@ once; otherwise it first lists the work an eject stops (each resumes the next
 time it runs) and asks to **Stop and eject**. It goes through the app's eject
 handler (above), so it stops agents' Pharos MCP servers too; a reason Pharos
 kept the library shows under the title. A plain browser cannot eject and shows
-no button: quit Pharos (or stop `pharos serve`), stop other processes running
-from the drive, including agents' Pharos MCP servers, then eject it in Finder or
-with `diskutil eject`.
+no button: quit the library's Pharos.app, which stops its service and MCP servers,
+stop any other processes running from the drive, then eject it in Finder or with
+`diskutil eject`. If serving directly with `pharos serve`, stop that service and
+agents' MCP servers by hand before ejecting.
 
 ## Capture
 

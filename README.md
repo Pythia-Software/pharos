@@ -204,6 +204,22 @@ For everything else (the CLI, the HTTP API, configuration keys, code signing,
 backups, and development), see the [technical overview](docs/technical-overview.md)
 and [configuration reference](docs/configuration.md).
 
+### Keep Pharos in the Mac menu bar
+
+The Mac app shows a still, monochrome lighthouse with a separate status dot:
+green when idle, yellow while working, and red when Pharos needs attention.
+It keeps updating with the main window closed. Click it to reopen Pharos or
+see rolling 24-hour words typed, tokens used, and estimated carbon impact.
+
+**Settings → App preferences → macOS menu bar** turns the icon on or off and
+chooses which menu lines appear. Their order is fixed. Last-index freshness
+and the three usage metrics are on by default; estimated API cost, last
+successful backup, library size and free space, Index changes now, and safe
+Eject are optional. Eject appears only for an ejectable library drive.
+Carbon uses the assumptions in Usage → Carbon Impact; API cost is the same
+list-price estimate used in Usage. These preferences follow the library
+between Macs.
+
 ## Make it yours
 
 Pharos is built around one person's workflow: the agents I use, the questions

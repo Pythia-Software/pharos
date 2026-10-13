@@ -45,7 +45,7 @@ func newDevUI(assets string, service *url.URL, token string, port int) *devUI {
 				r.Out.Header.Del(name)
 			}
 			r.Out.Header.Set("Authorization", "Bearer "+token)
-			if r.Out.URL.Path == "/api/health/carbon" || r.Out.URL.Path == "/api/usage/summary" {
+			if r.Out.URL.Path == "/api/health/carbon" || r.Out.URL.Path == "/api/query/usage/carbon" || r.Out.URL.Path == "/api/usage/summary" {
 				r.Out.Header.Set("Accept-Encoding", "identity")
 			}
 		},
@@ -63,7 +63,7 @@ func newDevUI(assets string, service *url.URL, token string, port int) *devUI {
 func (d *devUI) withLocalCarbonFactors(response *http.Response) error {
 	field := ""
 	switch response.Request.URL.Path {
-	case "/api/health/carbon":
+	case "/api/health/carbon", "/api/query/usage/carbon":
 		field = "factors"
 	case "/api/usage/summary":
 		field = "carbon_factors"

@@ -397,7 +397,9 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     const writingCards = await page.locator('.usage-cards').innerText();
     await rolling.selectOption('3');
     await page.locator('.usage-chart-average-label', { hasText: '3-week rolling average' }).waitFor();
-    assert.match(await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label'), new RegExp(`Typed ${Math.round(200 / Math.min(3, writingBucketCount))}`));
+    const averagedWords = (await page.locator('.usage-chart-bars > span').last().getAttribute('aria-label')).match(/Typed ([\d,.]+) words/);
+    assert.ok(averagedWords, 'The chart should describe its typed-word average');
+    assert.ok(Math.abs(Number(averagedWords[1].replace(/,/g, '')) - 200 / Math.min(3, writingBucketCount)) < 0.001);
     assert.equal(await page.locator('.usage-cards').innerText(), writingCards);
     assert.equal(series.length, writingRequests);
     await page.reload();

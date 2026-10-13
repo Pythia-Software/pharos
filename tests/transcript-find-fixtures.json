@@ -42,7 +42,7 @@
     {"kind": "tool_result", "path": ["reads", "agents"]},
     {"kind": "message", "path": ["replies", "agents"]},
     {"kind": "delegation_result", "path": ["agents"]},
-    {"kind": "metadata", "path": ["events"]},
+    {"kind": "metadata", "path": ["usage"]},
     {"kind": "context", "path": ["events"]},
     {"kind": "message", "path": ["response"]},
     {"kind": "message", "path": ["prompts"]},

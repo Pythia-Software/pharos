@@ -1,10 +1,20 @@
+import { MessageTableSearch, newMessageSearch, readMessageSearch } from "./message-table-search";
+import "./conversation-search";
+import { TextSearchEditor, type LibrarySearchKind as FindKind } from "./text-search-editor";
+import { SearchHelp } from "./search-help";
+import { RecordSearchEditor, recordSearchTargets } from "./record-search-editor";
+import { SearchDialog } from "./search-dialog";
+import { SearchOrder } from "./search-order";
+import { emptyTextSearch, readTextSearch, textFindParameters, textSearchSummary, type TextSearchDraft } from "./text-search-model";
+import { CarbonImpact } from "./carbon-impact";
+import { ChartSelect, PeriodControl, RangeControl, ScaleControl, RollingControl, StackedColumns, chartPeriodCount, chartSpan, pickRange, timeBounds, withTimeRange, usageTime, writingTime, type FilterChange } from "./usage-chart";
 import { applyUsageAggregations } from "./usage-aggregations";
 import { withComputedCapabilityRefresh } from "./computed-column-store";
-import { chartPeriods, earliestKey, isHourly, localDay, nextPeriod, parseDay, periodBuckets, periodKey, periodLabel, periodStart, periodUnit, validPeriodCount, type ChartPeriod } from "./chart-period";
-import { columnScale, defaultChartScale, validChartScale, type ChartScale } from "./chart-scale";
-import React, { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { chartPeriods, earliestKey, isHourly, localDay, parseDay, periodBuckets, periodKey, periodLabel, validPeriodCount, type ChartPeriod } from "./chart-period";
+import { defaultChartScale, validChartScale, type ChartScale } from "./chart-scale";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { EMPTY_QUERY, httpComputedColumnStore, applyAggregations, decodeQuery, encodeQuery, isOrGroup, loadSchema, memoryStorageAdapter, toAggregationQuery, toServerQuery, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, httpComputedColumnStore, applyAggregations, decodeQuery, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, toServerQuery, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereTerm } from "@pythia-software/query-table-core";
 import { useQueryTable, type QueryTableApi } from "@pythia-software/query-table-react";
 import { DataTable, FilterValueProvider, MetricsPanel, QueryBuilder, SelectionToolbar, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
 import "@pythia-software/query-table-ui/theme.css";
@@ -15,9 +25,7 @@ import { HomePage } from "./home";
 import { QueryChip } from "./query-card";
 import { readRollingWindow, resolveRollingQuery, rollingQueryMatches } from "./query-links";
 import { preferences } from "./preferences";
-import { foldSeries, rollingAverageBuckets, validRollingPeriods, type ChartBucket, type ChartSeries } from "./chart-series";
-import { ColumnMarks } from "./column-marks";
-import { ChartLegendChip } from "./chart-legend-chip";
+import { foldSeries, validRollingPeriods, type ChartSeries } from "./chart-series";
 import { isSliceTerm, readSlice, updateSlice, withSlice, type LegendAction, type SliceSelection } from "./chart-selection";
 import { UsageChartColorsProvider, useUsageChartPalette, useUsageTableRenderers } from "./usage-chart-colors";
 import libraryDocument from "../../schemas/library.schema.json";
@@ -148,7 +156,6 @@ declare global {
     pharosApi?: (path: string) => Promise<Row>;
     pharosMessageCard?: (message: TranscriptMessage) => HTMLElement;
     pharosTurnSummaries?: (conversation: Row) => TurnSummary[];
-    pharosCarbon?: { refresh: () => Promise<void> };
     pharosQueryTables?: {
       refresh: (dataset: Dataset) => void;
       filterRepository: (repository: string) => void;
@@ -182,6 +189,10 @@ async function responseJSON<T>(response: Response): Promise<T> {
 
 // extra carries the Library's keyword search to every request, so rows,
 // metrics, and filter pickers all follow it. onFind hears how it went.
+function recordBudget(dataset: Dataset, where: WhereTerm[]) {
+  const fields = dataset === "tool_calls" ? ["command", "file_path"] : dataset === "writing_messages" ? ["text"] : dataset === "mcp_calls" ? ["arguments_json", "error_text"] : [];
+  return where.some(term => ("any" in term ? term.any : [term]).some(c => fields.includes(c.field))) ? new URLSearchParams({ interactive_search: "1" }) : undefined;
+}
 function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary | null) => void, capabilities?: MetricCapabilities): Transport<Row> {
   const endpoint = (suffix = "", params?: URLSearchParams) => {
     const query = new URLSearchParams(extra);
@@ -191,14 +202,14 @@ function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary
   return {
     metricCapabilities: capabilities,
     async fetchRowsV2(query, signal) {
-      const result = await responseJSON<FetchRowsResultV2<Row> & { find?: FindSummary }>(await fetch(endpoint("/rows-v2"), {
+      const result = await responseJSON<FetchRowsResultV2<Row> & { find?: FindSummary }>(await fetch(endpoint("/rows-v2", recordBudget(dataset, query.where)), {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query), signal,
       }));
       onFind?.(result.find ?? null);
       return result;
     },
     async fetchMetrics(query, signal) {
-      return responseJSON(await fetch(endpoint("/metrics"), {
+      return responseJSON(await fetch(endpoint("/metrics", recordBudget(dataset, query.where)), {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query), signal,
       }));
     },
@@ -361,8 +372,8 @@ const metricRenderers: RenderRegistry<Row> = {
 // header renders between the filters and the metric panels, so a chart there
 // can follow the table's filters.
 // find, for the Library, is a keyword search that narrows the rows before the
-// filters apply; onFind hears how it went.
-function QuerySurface({ dataset, libraryView = "table", messageView = "table", find = "", onFind, trailing, header, selectable = false }: { dataset: Dataset; selectable?: boolean; libraryView?: LibraryView; messageView?: MessageView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode }) {
+// pagination applies; onFind hears how it went.
+function QuerySurface({ dataset, libraryView = "table", messageView = "table", find = "", onFind, trailing, header, controls, selectable = false }: { dataset: Dataset; selectable?: boolean; libraryView?: LibraryView; messageView?: MessageView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode }) {
   const schema = schemas[dataset];
   const locationRevision = useLocationRevision();
   const tableRenderers = useUsageTableRenderers(renderers);
@@ -453,7 +464,7 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
 
   return <FilterValueProvider value={filterPresentations[dataset]}>
     {header?.(api)}
-    <QueryBuilder api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />
+    {controls ? controls(api, <QueryBuilder api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={stableApi} dataset={dataset} layout={<QueryBuilder api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />} /> : <QueryBuilder api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />}
     <MetricsPanel api={stableApi} aggregations={api.aggregations} fields={metricFields(api.computed.catalogue)} renderers={metricRenderers} />
     {api.error ? <div className="query-table-error">{api.error.message}</div> : null}
     {selectable ? <SelectionToolbar selection={api.selection} actions={ids => <ShareSelection ids={ids} api={api} transport={transport} />} /> : null}
@@ -607,10 +618,10 @@ function ConversationResults({ api, searching }: { api: QueryTableApi<Row>; sear
   </div>;
 }
 
-type FindKind = "text" | "file" | "url";
 type FindHit = { workspace_id: string; conversation_id?: string; title: string; provider?: string; started_at?: string; message_id?: string; role?: string; message_kind?: string; snippet?: string; path?: string; old_path?: string; url?: string; url_source?: string; tool_name?: string; tool_call_id?: string; attribution?: string; count: number };
-// What the Library's keyword search found before the table's filters applied.
-type FindSummary = { workspaces: number; limited: boolean };
+// What the Library's keyword search found within the stored table filters.
+type SearchProgress = { complete: boolean; stop_reason: string; stop_message?: string; next_cursor: string; count: number; count_relation: string; candidates: number; verified_bytes: number; skipped_oversize: number; elapsed_ms: number; strategy: string; coverage: string; expansions?: Record<string,string[]> };
+type FindSummary = { workspaces: number; limited: boolean; search?: SearchProgress };
 
 function openFindHit(hit: FindHit) {
   const params = new URLSearchParams();
@@ -623,7 +634,10 @@ function openFindHit(hit: FindHit) {
 function findHitLabel(hit: FindHit): string {
   if (hit.url) return `Open tool call${hit.tool_name ? ` · ${hit.tool_name}` : ""}`;
   if (hit.path) return hit.attribution === "workspace" ? "Open work · conversation unknown" : "Open conversation";
-  return `Open ${hit.role === "user" ? "user message" : hit.message_kind === "message" ? "agent response" : "agent thought"}`;
+  if (hit.role === "user") return "Open message from a person";
+  if (["thinking", "reasoning", "analysis"].includes(hit.message_kind ?? "")) return "Open saved agent reasoning";
+  if (hit.role === "assistant" && hit.message_kind === "message") return "Open agent reply";
+  return "Open matching message";
 }
 
 function findHitText(hit: FindHit): string {
@@ -649,60 +663,100 @@ function FindMatchCell({ row }: { row: Row }) {
   return <button type="button" className="library-find-cell" title={`${findHitText(hit)}\n\n${count.toLocaleString()} match${count === 1 ? "" : "es"} · ${findHitLabel(hit)}`} onClick={event => { event.stopPropagation(); openFindHit(hit); }}>Open match{count > 1 ? ` (${count.toLocaleString()})` : ""}</button>;
 }
 
-function findParameters(query: string, kind: FindKind, fuzzy: boolean, caseSensitive: boolean, separators: boolean): string {
-  if (!query) return "";
-  const params = new URLSearchParams({ find: query });
-  if (kind !== "text") params.set("find_kind", kind);
-  if (kind === "text" && !fuzzy) params.set("find_fuzzy", "0");
-  if (kind === "text" && caseSensitive) params.set("find_case", "1");
-  if (kind === "text" && separators) params.set("find_separators", "1");
-  return params.toString();
+function workspaceFilterLabels(api: QueryTableApi<Row>): string[] {
+  const describe = (clause: { field: string; op: string; value: string; negated?: boolean }) => {
+    const label = api.computed.catalogue.find(field => field.name === clause.field)?.label ?? clause.field;
+    const value = filterPresentations.library.label?.(clause.field, clause.value) ?? clause.value;
+    return `${clause.negated ? "NOT " : ""}${label} ${clause.op.replaceAll("_", " ")}${value ? ` ${value}` : ""}`;
+  };
+  return api.query.where.map(term => "any" in term ? `(${term.any.map(describe).join(" OR ")})` : describe(term));
+}
+
+function UserMessageSurface({ header, messageView }: { messageView: MessageView; header: (api: QueryTableApi<Row>, searching: boolean) => React.ReactNode }) {
+  if (shared) return <QuerySurface dataset="writing_messages" messageView={messageView} header={api => header(api, false)} />;
+  const [initial] = useState(readMessageSearch), [value, setValue] = useState(initial.draft);
+  const [applied, setApplied] = useState<TextSearchDraft | null>(initial.active ? initial.draft : null), [error, setError] = useState(initial.error);
+  const [cursor, setCursor] = useState(() => new URLSearchParams(location.search).get("message_cursor") ?? "");
+  const [found, setFound] = useState<FindSummary | null>(null);
+  useEffect(() => {
+    const restore = () => { if (!datasetIsVisible("writing_messages")) return; const next = readMessageSearch(); setValue(next.draft); setApplied(next.active ? next.draft : null); setError(next.error); setCursor(new URLSearchParams(location.search).get("message_cursor") ?? ""); };
+    window.addEventListener("pharos:route", restore); return () => window.removeEventListener("pharos:route", restore);
+  }, []);
+  useEffect(() => { if (datasetIsVisible("writing_messages") && !error) { updateURI("message_query", applied ? JSON.stringify(applied) : ""); updateURI("message_cursor", cursor); } }, [applied, cursor, error]);
+  const find = applied ? textFindParameters(applied, cursor) : "";
+  useEffect(() => setFound(null), [find]);
+  return <QuerySurface dataset="writing_messages" messageView={messageView} header={api => header(api, !!find)} find={find} onFind={setFound} controls={(api, builder) => <>
+    <MessageTableSearch api={api} value={value} active={!!applied} initialError={error} onApply={next => { setValue(next); setApplied(next); setCursor(""); setError(""); }} onClear={() => { setValue(newMessageSearch()); setApplied(null); setCursor(""); setError(""); }} layout={builder} />
+    {find && found?.search ? <div className="library-find-status" role="status"><p>{found.search.complete ? "All eligible messages checked." : "Partial search batch; more messages may match."} Table filters and metrics apply to the matching messages in this batch. Ordering is within this batch.</p><p>{found.search.elapsed_ms} ms · {found.search.candidates.toLocaleString()} candidates checked{found.search.skipped_oversize ? ` · ${found.search.skipped_oversize} oversized messages skipped` : ""}.</p>{found.search.stop_message ? <p>{found.search.stop_message}</p> : null}{found.search.next_cursor ? <button type="button" onClick={() => setCursor(found.search!.next_cursor)}>Next message search batch</button> : null}{cursor ? <button type="button" onClick={() => setCursor("")}>Restart message search</button> : null}</div> : null}
+  </>} />;
 }
 
 function LibraryPage() {
   const locationRevision = useLocationRevision();
-  const read = () => new URLSearchParams(location.search);
-  const [draft, setDraft] = useState(() => read().get("search") ?? "");
-  const [search, setSearch] = useState(() => read().get("search") ?? "");
-  const [kind, setKind] = useState<FindKind>(() => (read().get("kind") as FindKind) || "text");
-  const [fuzzy, setFuzzy] = useState(() => read().get("fuzzy") !== "0");
-  const [caseSensitive, setCaseSensitive] = useState(() => read().get("case") === "1");
-  const [separators, setSeparators] = useState(() => read().get("separators") === "1");
-  const [view, setView] = useState<LibraryView>(() => read().get("view") === "conversation" ? "conversation" : "table");
-  useEffect(() => { clearLibrarySearch = () => { setDraft(""); setSearch(""); updateURI("search", ""); }; return () => { clearLibrarySearch = undefined; }; }, []);
+  const [initial] = useState(() => readTextSearch(new URLSearchParams(location.search)));
+  const [editorValue, setEditorValue] = useState(initial.draft);
+  const [applied, setApplied] = useState<TextSearchDraft | null>(initial.active ? initial.draft : null);
+  const [initialError, setInitialError] = useState(initial.error);
+  const [cursor, setCursor] = useState(() => new URLSearchParams(location.search).get("text_cursor") ?? "");
+  const [kind, setKind] = useState<FindKind>(() => (new URLSearchParams(location.search).get("kind") as FindKind) || "text");
+  const [fileDraft, setFileDraft] = useState(() => new URLSearchParams(location.search).get("search") ?? "");
+  const [fileSearch, setFileSearch] = useState(fileDraft);
+  const [fileCase, setFileCase] = useState(() => new URLSearchParams(location.search).get("case") === "1");
+  const [fileCaseDraft, setFileCaseDraft] = useState(fileCase);
+  const [view, setView] = useState<LibraryView>(() => new URLSearchParams(location.search).get("view") === "conversation" ? "conversation" : "table");
+  const clearText = () => { const empty = emptyTextSearch(); setEditorValue(empty); setApplied(null); setCursor(""); setInitialError(""); };
+  useEffect(() => { clearLibrarySearch = () => { clearText(); setFileSearch(""); setFileDraft(""); }; return () => { clearLibrarySearch = undefined; }; }, []);
   useEffect(() => {
     const restore = () => {
       if (!shared && location.pathname !== "/library") return;
-      const params = read(), q = params.get("search") ?? "";
-      setDraft(q); setSearch(q); setKind((params.get("kind") as FindKind) || "text");
-      setFuzzy(params.get("fuzzy") !== "0"); setCaseSensitive(params.get("case") === "1"); setSeparators(params.get("separators") === "1");
+      const params = new URLSearchParams(location.search), next = readTextSearch(params);
+      setEditorValue(next.draft); setApplied(next.active ? next.draft : null); setInitialError(next.error);
+      setKind((params.get("kind") as FindKind) || "text"); setCursor(params.get("text_cursor") ?? "");
+      setFileDraft(params.get("search") ?? ""); setFileSearch(params.get("search") ?? "");
+      setFileCase(params.get("case") === "1"); setFileCaseDraft(params.get("case") === "1");
       setView(params.get("view") === "conversation" ? "conversation" : "table");
     };
     window.addEventListener("pharos:route", restore);
     return () => window.removeEventListener("pharos:route", restore);
   }, []);
   useEffect(() => {
-    if (shared || location.pathname !== "/library") return;
-    updateURI("search", search); updateURI("kind", kind === "text" ? "" : kind);
-    updateURI("fuzzy", fuzzy ? "" : "0"); updateURI("case", caseSensitive ? "1" : ""); updateURI("separators", separators ? "1" : "");
-    updateURI("view", view === "conversation" ? view : "");
-  }, [locationRevision, search, kind, fuzzy, caseSensitive, separators, view]);
-  function submit(event: FormEvent) { event.preventDefault(); const next = draft.trim(); setSearch(next); updateURI("search", next); }
-  function chooseView(next: LibraryView) { setView(next); updateURI("view", next === "conversation" ? next : ""); }
-  function clear() { setDraft(""); setSearch(""); updateURI("search", ""); }
-  const find = shared ? "" : findParameters(search, kind, fuzzy, caseSensitive, separators);
+    if (shared || location.pathname !== "/library" || initialError) return;
+    const url = new URL(location.href);
+    for (const key of [...url.searchParams.keys()]) if (key.startsWith("text_") || ["search", "fuzzy", "case", "separators", "kind"].includes(key)) url.searchParams.delete(key);
+    if (kind === "text") {
+      if (applied) url.searchParams.set("text_builder", JSON.stringify(applied));
+      if (cursor) url.searchParams.set("text_cursor", cursor);
+    } else { url.searchParams.set("kind", kind); if (fileSearch) url.searchParams.set("search", fileSearch); if (fileCase) url.searchParams.set("case", "1"); }
+    if (view === "conversation") url.searchParams.set("view", view); else url.searchParams.delete("view");
+    if (url.href !== location.href) { history.replaceState(null, "", url); window.dispatchEvent(new Event("pharos:uri-changed")); }
+  }, [locationRevision, applied, kind, cursor, view, fileSearch, fileCase, initialError]);
+  const fileParams = new URLSearchParams({ find: fileSearch, find_kind: kind });
+  if (fileCase) fileParams.set("find_case", "1");
+  const find = shared ? "" : kind === "text" ? applied ? textFindParameters(applied, cursor) : "" : fileSearch ? fileParams.toString() : "";
   const [found, setFound] = useState<FindSummary | null>(null);
   useEffect(() => { setFound(null); }, [find]);
   return <div className={`pharos-query-page${find ? " library-searching" : ""}`}>
-    <div className="view-heading library-heading"><div><h1>{shared ? "Conversations" : "Find past work"}</h1></div><div className="library-view-toggle" role="group" aria-label="Library result view"><button type="button" className={view === "table" ? "active" : ""} aria-pressed={view === "table"} onClick={() => chooseView("table")}>Table</button><button type="button" className={view === "conversation" ? "active" : ""} aria-pressed={view === "conversation"} onClick={() => chooseView("conversation")}>Conversations</button></div></div>
-    {shared ? null : <form className="semantic-search" onSubmit={submit}><select aria-label="Search type" value={kind} onChange={event => { const next = event.target.value as FindKind; setKind(next); updateURI("kind", next === "text" ? "" : next); }}><option value="text">Conversation text</option><option value="file">Modified file</option><option value="url">Tool URL</option></select><input type="search" value={draft} onChange={event => setDraft(event.target.value)} placeholder={kind === "text" ? "Words or an exact phrase in quotes…" : kind === "file" ? "File path or name…" : "URL or host…"} aria-label="Search library" /><button type="submit">Search</button>{search ? <button type="button" className="semantic-search-clear" onClick={clear}>Clear</button> : null}</form>}
-    {shared ? null : kind === "text" ? <div className="search-options" role="group" aria-label="Text search options"><label><input type="checkbox" checked={fuzzy} onChange={event => { setFuzzy(event.target.checked); updateURI("fuzzy", event.target.checked ? "" : "0"); }} /> Fuzzy words</label><label><input type="checkbox" checked={caseSensitive} onChange={event => { setCaseSensitive(event.target.checked); updateURI("case", event.target.checked ? "1" : ""); }} /> Case sensitive</label><label title="For quoted phrases, require punctuation and spaces exactly as typed"><input type="checkbox" checked={separators} onChange={event => { setSeparators(event.target.checked); updateURI("separators", event.target.checked ? "1" : ""); }} /> Match separators</label></div> : null}
-    {search && found ? <p className="library-find-status muted">{found.limited ? "At least " : ""}{found.workspaces.toLocaleString()} result{found.workspaces === 1 ? "" : "s"} match “{search}”; the filters below narrow them further.{found.limited ? " Search reached its 5,000-record limit; narrow the query for complete results." : ""}</p> : null}
-    <QuerySurface dataset="library" libraryView={view} find={find} onFind={setFound} selectable={!shared && view === "table"} {...(find ? { trailing: (row: Row) => <FindMatchCell row={row} /> } : {})} />
+    <div className="view-heading library-heading"><div><h1>{shared ? "Conversations" : "Find past work"}</h1></div><div className="library-view-toggle" role="group" aria-label="Library result view"><button type="button" className={view === "table" ? "active" : ""} aria-pressed={view === "table"} onClick={() => setView("table")}>Table</button><button type="button" className={view === "conversation" ? "active" : ""} aria-pressed={view === "conversation"} onClick={() => setView("conversation")}>Conversations</button></div></div>
+    <QuerySurface dataset="library" libraryView={view} find={find} onFind={setFound} selectable={!shared && view === "table"} {...(find ? { trailing: (row: Row) => <FindMatchCell row={row} /> } : {})} controls={shared ? undefined : (api, builder) => <>
+      <TextSearchEditor value={editorValue} active={!!applied} initialError={initialError} kind={kind} onKind={next => { setKind(next); setCursor(""); }}
+        onApply={next => { setEditorValue(next); setApplied(next); setInitialError(""); setCursor(""); }} onClear={clearText}
+        file={{ text: fileDraft, caseSensitive: fileCaseDraft, active: !!fileSearch, dirty: fileDraft.trim() !== fileSearch || fileCaseDraft !== fileCase, onText: setFileDraft, onCase: setFileCaseDraft, onApply: () => { setFileSearch(fileDraft.trim()); setFileCase(fileCaseDraft); }, onClear: () => { setFileDraft(""); setFileSearch(""); } }}
+        workspaceScope={{ filters: workspaceFilterLabels(api), editor: builder }} orderControl={<SearchOrder api={api} batched={!!found?.search} />} />
+    {find && found ? <div className="library-find-status muted" role="status">
+      <p><strong>{found.workspaces.toLocaleString()} matching workspace{found.workspaces === 1 ? "" : "s"}{found.search ? " in this batch" : ""}.</strong>{found.search ? found.search.complete ? " All eligible messages have been checked." : found.search.next_cursor ? " More messages remain to check. Continue the search to see the next batch." : " Some messages could not be checked." : found.limited ? " Search limit reached; narrow the search." : ""}</p>
+      {found.search?.stop_message ? <p>{found.search.stop_message}</p> : null}
+      {kind === "text" && applied ? <p className="library-search-summary">Results for: {textSearchSummary(applied)}</p> : null}
+      {found.workspaces === 0 && found.search?.complete ? <p>No messages matched these rules. Try “any of these rules,” remove a restriction, or choose a broader message scope.</p> : null}
+      {found.search?.skipped_oversize ? <p>{found.search.skipped_oversize.toLocaleString()} large messages were skipped. Missing results may still be in those messages.</p> : null}
+      {found.search ? <details><summary>Search details and coverage</summary><p>{found.search.candidates.toLocaleString()} candidates checked; {(found.search.verified_bytes / 1048576).toFixed(1)} MiB verified in {found.search.elapsed_ms} ms. {found.search.complete ? "Complete" : `Stopped: ${found.search.stop_reason.replaceAll("_", " ")}`}. Table counts and metrics describe this batch.</p><p>{found.search.coverage}</p>{found.search.expansions && Object.keys(found.search.expansions).length ? <p>Word variations: {Object.entries(found.search.expansions).map(([word, terms]) => `${word} → ${terms.join(", ")}`).join("; ")}</p> : null}</details> : null}
+      {found.search?.next_cursor ? <button type="button" onClick={() => setCursor(found.search!.next_cursor)}>Continue to next batch</button> : null}
+      {cursor ? <button type="button" onClick={() => setCursor("")}>Start over</button> : null}
+    </div> : null}
+    {cursor && !found ? <button type="button" onClick={() => setCursor("")}>Restart search from the beginning</button> : null}
+    </>} />
   </div>;
 }
 
-type ChartRange = "30d" | "90d" | "6m" | "1y";
 type TokenSplit = "type" | "provider" | "model_family" | "model_effort" | "effort" | "repository_name" | "session_kind";
 type TokenChartView = { metric: "tokens" | "cost" | "percent" | "percent_cost"; split: TokenSplit; period: ChartPeriod; hours: number; days: number; rollingPeriods: number; scale: ChartScale };
 // A preset either fills the metric panels or sets the chart above them.
@@ -844,119 +898,7 @@ function RefreshPricesButton() {
   </div>;
 }
 
-// Stacked column charts by day, week (Monday), or month over the table's time
-// filter, or all time. Keys match the usage dataset's day, week, and month
-// fields.
-const chartRanges: Array<[ChartRange, string]> = [["30d", "30 days"], ["90d", "90 days"], ["6m", "6 months"], ["1y", "1 year"]];
-const pad2 = (value: number) => String(value).padStart(2, "0");
-const chartPeriodCount = (view: { period: ChartPeriod; hours: number; days: number }) => view.period === "hours" ? view.hours : view.period === "days" ? view.days : 1;
-
-// rangeStart is the local midnight a range preset starts from.
-function rangeStart(range: ChartRange): Date {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  if (range === "30d") start.setDate(start.getDate() - 29);
-  else if (range === "90d") start.setDate(start.getDate() - 89);
-  else if (range === "6m") { start.setMonth(start.getMonth() - 6); start.setDate(start.getDate() + 1); }
-  else { start.setFullYear(start.getFullYear() - 1); start.setDate(start.getDate() + 1); }
-  return start;
-}
-
-// The charts and the table share one time filter: a row matches when its
-// activity, from its first to its last timestamp, overlaps the range. Dragging
-// across columns, a range preset, and a filter typed into the table all set it.
-type TimeFields = { first: string; last: string };
-const usageTime: TimeFields = { first: "first_usage_at", last: "last_usage_at" };
-const writingTime: TimeFields = { first: "first_message_at", last: "last_message_at" };
-// to is exclusive.
-type TimeBounds = { from?: Date; to?: Date };
-
-// parseStamp reads a datetime filter value as the service does: RFC 3339, or a
-// zone-less date or time as UTC.
-function parseStamp(raw: string): Date | undefined {
-  let text = raw.trim().replace(" ", "T");
-  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) text += "T00:00:00";
-  if (/T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(text)) text += "Z";
-  const date = new Date(text);
-  return Number.isNaN(date.getTime()) ? undefined : date;
-}
-
-// localStamp writes a time as RFC 3339 with the local offset, so a day
-// boundary picked in the chart is local midnight to the service too.
-function localStamp(date: Date): string {
-  const offset = -date.getTimezoneOffset(), hours = Math.floor(Math.abs(offset) / 60);
-  return `${localDay(date)}T${pad2(date.getHours())}:${pad2(date.getMinutes())}:00${offset < 0 ? "-" : "+"}${pad2(hours)}:${pad2(Math.abs(offset) % 60)}`;
-}
-
-function isTimeTerm(term: WhereTerm, fields: TimeFields): term is WhereClause {
-  return !isOrGroup(term) && (term.field === fields.first || term.field === fields.last) && !term.negated && [">", ">=", "<", "<="].includes(term.op);
-}
-
-function timeBounds(where: WhereTerm[], fields: TimeFields): TimeBounds {
-  const bounds: TimeBounds = {};
-  for (const term of where) {
-    if (!isTimeTerm(term, fields)) continue;
-    const at = parseStamp(term.value);
-    if (!at) continue;
-    if (term.op === ">" || term.op === ">=") { if (!bounds.from || at > bounds.from) bounds.from = at; }
-    else {
-      const end = term.op === "<=" ? new Date(at.getTime() + 1) : at;
-      if (!bounds.to || end < bounds.to) bounds.to = end;
-    }
-  }
-  return bounds;
-}
-
-function withTimeRange(where: WhereTerm[], fields: TimeFields, from?: Date, to?: Date): WhereTerm[] {
-  const kept = where.filter(term => !isTimeTerm(term, fields));
-  if (from) kept.push({ field: fields.last, op: ">=", value: localStamp(from) });
-  if (to) kept.push({ field: fields.first, op: "<", value: localStamp(to) });
-  return kept;
-}
-
-// chartSpan is the first and last day a chart shows: the time filter's range,
-// else from the earliest data to today.
-function chartSpan(bounds: TimeBounds, earliest?: Date): [Date, Date] {
-  const end = bounds.to ? new Date(bounds.to.getTime() - 1) : new Date();
-  return [bounds.from ?? (earliest && earliest < end ? earliest : end), end];
-}
-
-// bucketRange is the time from the first bucket's start to the last one's end.
-// A range reaching into the future is left open, so it keeps today.
-function bucketRange(first: ChartBucket, last: ChartBucket, period: ChartPeriod, count = 1): [Date, Date | undefined, Date] {
-  const from = new Date(first.date), to = new Date(last.date);
-  nextPeriod(to, period, count);
-  return [from, to > new Date() ? undefined : to, to];
-}
-
-// A range picked in a chart shows enough columns to read: a short one moves to
-// a finer period.
-function finerPeriod(period: ChartPeriod, from: Date, to: Date): ChartPeriod {
-  const days = (to.getTime() - from.getTime()) / 86_400_000;
-  if (period === "month" && days < 240) period = "week";
-  if (period === "week" && days < 56) period = "day";
-  return period;
-}
-
-function rangeLabel(bounds: TimeBounds): string {
-  const year = new Date().getFullYear();
-  const day = (date: Date) => date.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(date.getFullYear() !== year ? { year: "numeric" } : {}) });
-  const last = bounds.to ? new Date(bounds.to.getTime() - 1) : undefined;
-  if (bounds.from && last) return localDay(bounds.from) === localDay(last) ? day(last) : `${day(bounds.from)} – ${day(last)}`;
-  return bounds.from ? `Since ${day(bounds.from)}` : last ? `Through ${day(last)}` : "";
-}
-
-// A date selection from the chart or table remains visible alongside presets.
-function RangeControl({ bounds, onChange }: { bounds: TimeBounds; onChange: (from?: Date) => void }) {
-  const active = !bounds.from && !bounds.to ? "all" : bounds.from && !bounds.to ? chartRanges.find(([range]) => rangeStart(range).getTime() === bounds.from!.getTime())?.[0] : undefined;
-  return <ChartSelect label="Range" value={active ?? "custom"}
-    options={[["all", "All time"], ...chartRanges.map(([range, text]): [string, string] => [range, `Last ${text}`]), ...(active ? [] : [["custom", rangeLabel(bounds), "Dates selected in the chart or table"] as [string, string, string]])]}
-    title="Dates included in the chart and table. Choose All time to clear the date filter."
-    onChange={range => { if (range !== "custom") onChange(range === "all" ? undefined : rangeStart(range as ChartRange)); }} />;
-}
-
 // Charts change their table's filters through this.
-type FilterChange = (change: (where: WhereTerm[]) => WhereTerm[]) => void;
 function filterChange(api: QueryTableApi<Row>): FilterChange {
   return change => api.setQuery(previous => ({ ...previous, where: change(previous.where), offset: 0 }));
 }
@@ -994,199 +936,6 @@ function Segmented<T extends string>({ label, value, options, onChange }: { labe
   return <div className="usage-presets chart-toggle" role="group" aria-label={label}>
     <span className="usage-preset-label">{label}</span>
     {options.map(([option, text, disabledReason]) => <button key={option} type="button" aria-pressed={value === option} disabled={Boolean(disabledReason)} title={disabledReason} onClick={() => onChange(option)}>{text}</button>)}
-  </div>;
-}
-
-function ChartSelect<T extends string>({ label, ariaLabel = label, value, options, onChange, title, disabled = false, note }: {
-  label: string; ariaLabel?: string; value: T; options: Array<[T, string, string?]>; onChange: (next: T) => void;
-  title?: string; disabled?: boolean; note?: string;
-}) {
-  return <label className="usage-chart-field usage-chart-picker">
-    <span className="usage-preset-label">{label}</span>
-    <span className="usage-chart-select">
-      <select aria-label={ariaLabel} value={value} disabled={disabled} title={title} onChange={event => onChange(event.target.value as T)}>
-        {options.map(([option, text, reason]) => <option key={option} value={option} disabled={Boolean(reason)} title={reason}>{text}</option>)}
-      </select>
-      <Icon name="chevron-down" className="usage-chart-caret" />
-    </span>
-    {note ? <span className="usage-chart-control-note">{note}</span> : null}
-  </label>;
-}
-
-type PeriodView = { period: ChartPeriod; hours: number; days: number };
-function PeriodControl({ view, onChange }: { view: PeriodView; onChange: (next: Partial<PeriodView>) => void }) {
-  const custom = view.period === "hours" || view.period === "days" ? view.period : null;
-  return <div className="usage-chart-field usage-period-control" role="group" aria-label="Chart interval">
-    <ChartSelect label="Interval" ariaLabel="Chart interval" value={view.period}
-      options={[["hour", "Hour"], ["day", "Day"], ["week", "Week"], ["month", "Month"], ["hours", "Custom hours…"], ["days", "Custom days…"]]}
-      title="Time covered by each chart column" onChange={period => onChange({ period })} />
-    {custom ? <CustomPeriod key={custom} period={custom} value={view[custom]} onChange={value => onChange({ [custom]: value })} /> : null}
-  </div>;
-}
-
-function CustomPeriod({ period, value, onChange }: { period: "hours" | "days"; value: number; onChange: (value: number) => void }) {
-  const [draft, setDraft] = useState(String(value));
-  useEffect(() => setDraft(String(value)), [value]);
-  return <label className="usage-period-custom">
-    <span>Every</span>
-    <input type="number" aria-label={`Number of ${period}`} min={1} max={10000} step={1} value={draft}
-      onChange={event => { setDraft(event.target.value); if (validPeriodCount(event.target.valueAsNumber)) onChange(event.target.valueAsNumber); }}
-      onBlur={() => setDraft(String(value))} />
-    <span>{period}</span>
-  </label>;
-}
-
-function ScaleControl({ value, onChange, percent = false }: { value: ChartScale; onChange: (next: ChartScale) => void; percent?: boolean }) {
-  const descriptions = { linear: "Column heights are proportional to their values.", logarithmic: "Compresses large values so smaller values are easier to compare.", half: "Linear for smaller values, logarithmic for peaks." };
-  return <ChartSelect label="Scale" value={percent ? "linear" : value} disabled={percent}
-    options={[["linear", "Linear"], ["logarithmic", "Logarithmic"], ["half", "Linear + log"]]}
-    title={descriptions[percent ? "linear" : value]} note={percent ? "Shares use a linear scale." : undefined} onChange={onChange} />;
-}
-
-function RollingControl({ value, period, count = 1, onChange }: { value: number; period: ChartPeriod; count?: number; onChange: (next: number) => void }) {
-  const unit = chartPeriods[period].unit;
-  return <ChartSelect label="Smoothing" value={String(value <= 1 ? 0 : value)}
-    options={[["0", "Off"], ...Array.from({ length: 9 }, (_, index): [string, string] => [String(index + 2), `${(index + 2) * count} ${unit}s`])]}
-    title="Trailing average including the current interval. Off shows the original values. Empty intervals count as zero; the start of the range uses available intervals only."
-    onChange={next => onChange(Number(next))} />;
-}
-
-// The legend can name even a single series. Hovering a column shows a key of the series
-// it holds, largest first, with what a folded series contains.
-// With onSelect, clicking a key selects its series: only selected series are
-// drawn and the rest stay in the key, dimmed. With onRange, dragging across
-// columns (or clicking or pressing Enter on one) picks a time range.
-function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, periodCount = 1, rollingPeriods = 0, scale = defaultChartScale, format, tickFormat = format, noun, loading, error, legend = false, selected = [], excluded = false, percent = false, onSelect, onExpand, onRange }: {
-  title: string; controls: React.ReactNode; series: ChartSeries[]; buckets: ChartBucket[]; period: ChartPeriod; periodCount?: number;
-  format: (value: number) => string; tickFormat?: (value: number) => string; noun: string; loading: boolean; error: string; legend?: boolean;
-  selected?: string[]; excluded?: boolean; percent?: boolean; rollingPeriods?: number; scale?: ChartScale; onSelect?: (key: string | null, action: LegendAction) => void; onExpand?: () => void; onRange?: (first: ChartBucket, last: ChartBucket) => void;
-}) {
-  const root = useRef<HTMLDivElement>(null), tipRef = useRef<HTMLDivElement>(null), bars = useRef<HTMLDivElement>(null);
-  const [tip, setTip] = useState<{ bucket: ChartBucket; x: number; width: number; top: number } | null>(null);
-  const [drag, setDrag] = useState<{ anchor: number; current: number } | null>(null);
-  // Pointer events can outrun rendering, so the handlers read the drag from a ref.
-  const dragRef = useRef(drag);
-  const moveDrag = (next: typeof drag) => { dragRef.current = next; setDrag(next); };
-  const drawn = selected.length ? series.filter(item => excluded ? !selected.includes(item.key) : selected.includes(item.key)) : series;
-  const averagedBuckets = useMemo(() => rollingAverageBuckets(sourceBuckets, rollingPeriods), [sourceBuckets, rollingPeriods]);
-  useEffect(() => setTip(null), [rollingPeriods]);
-  const buckets = percent ? averagedBuckets.map(bucket => {
-    const total = drawn.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0);
-    const values = Object.fromEntries(drawn.map(item => [item.key, total ? 100 * (bucket.values[item.key] ?? 0) / total : 0]));
-    const parts = Object.fromEntries(Object.entries(bucket.parts ?? {}).map(([key, entries]) => [key, entries.map(([name, value]) => [name, total ? 100 * value / total : 0] as [string, number])]));
-    return { ...bucket, values, parts };
-  }) : averagedBuckets;
-  const total = (bucket: ChartBucket) => drawn.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0);
-  const { y, ticks, split } = percent ? { y: (value: number) => value, ticks: [25, 50, 75, 100], split: undefined } : columnScale(buckets.map(total), scale);
-  const unit = periodUnit(period, periodCount), stacked = drawn.length > 1;
-  const averageDuration = (size: number) => `${size * periodCount}-${chartPeriods[period].unit}`;
-  const averageLabel = rollingPeriods > 1 ? `${averageDuration(rollingPeriods)} rolling average` : "";
-  const chartLabel = `${averageLabel ? `${title}; ${averageLabel}` : title}; ${percent || scale === "linear" ? "linear" : scale === "logarithmic" ? "logarithmic" : "linear and logarithmic"} scale`;
-  const label = (date: Date) => isHourly(period) ? date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }) : period === "month" ? date.toLocaleDateString(undefined, { month: "short", year: "numeric" }) : date.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(period === "day" && buckets.length > 120 ? { year: "2-digit" } : {}) });
-  const heading = (bucket: ChartBucket) => `${period === "week" ? "Week of " : ""}${label(bucket.date)}${averageLabel ? ` · ${averageDuration(bucket.windowSize ?? rollingPeriods)} average` : ""}`;
-  const suffix = noun ? ` ${noun}` : "";
-  const present = (bucket: ChartBucket) => drawn.filter(item => (bucket.values[item.key] ?? 0) > 0).sort((left, right) => bucket.values[right.key] - bucket.values[left.key]);
-  const describe = (bucket: ChartBucket) => `${heading(bucket)}: `
-    + (present(bucket).map(item => `${item.label} ${format(bucket.values[item.key])}`).join(", ") || "none")
-    + (stacked ? `; ${format(total(bucket))}${suffix} in all` : suffix) + (bucket.detail ? `; ${bucket.detail}` : "");
-  useLayoutEffect(() => {
-    const element = tipRef.current, box = root.current;
-    if (!tip || !element || !box) return;
-    const width = element.offsetWidth, right = tip.x + tip.width / 2 + 10;
-    element.style.left = `${right + width <= box.offsetWidth - 4 ? right : Math.max(0, tip.x - tip.width / 2 - 10 - width)}px`;
-    element.style.top = `${Math.max(0, Math.min(tip.top, box.offsetHeight - element.offsetHeight - 4))}px`;
-  }, [tip]);
-  function show(event: React.SyntheticEvent<HTMLElement>, bucket: ChartBucket) {
-    const box = root.current?.getBoundingClientRect(), at = event.currentTarget.getBoundingClientRect(), plot = event.currentTarget.parentElement?.getBoundingClientRect();
-    if (box && plot) setTip({ bucket, x: at.left - box.left + at.width / 2, width: at.width, top: plot.top - box.top });
-  }
-  useEffect(() => {
-    if (!drag) return;
-    const cancel = (event: KeyboardEvent) => { if (event.key === "Escape") moveDrag(null); };
-    window.addEventListener("keydown", cancel);
-    return () => window.removeEventListener("keydown", cancel);
-  }, [Boolean(drag)]);
-  const indexAt = (x: number) => {
-    const box = bars.current?.getBoundingClientRect();
-    return box?.width ? Math.max(0, Math.min(buckets.length - 1, Math.floor((x - box.left) / box.width * buckets.length))) : 0;
-  };
-  const span = (value: { anchor: number; current: number } | null) => value ? [Math.min(value.anchor, value.current), Math.max(value.anchor, value.current)] : null;
-  const picked = span(drag);
-  const picking = onRange && buckets.length ? {
-    onPointerDown(event: React.PointerEvent<HTMLDivElement>) {
-      if (event.button !== 0) return;
-      event.currentTarget.setPointerCapture(event.pointerId);
-      const index = indexAt(event.clientX);
-      moveDrag({ anchor: index, current: index });
-    },
-    onPointerMove(event: React.PointerEvent<HTMLDivElement>) {
-      const current = dragRef.current, index = indexAt(event.clientX);
-      if (current && index !== current.current) moveDrag({ ...current, current: index });
-    },
-    onPointerUp() {
-      const range = span(dragRef.current);
-      if (!range) return;
-      moveDrag(null);
-      setTip(null);
-      onRange(buckets[range[0]], buckets[range[1]]);
-    },
-    onPointerCancel() { moveDrag(null); },
-  } : {};
-  const density = buckets.length > 300 ? "denser" : buckets.length > 120 ? "dense" : "";
-  const middle = buckets[Math.floor(buckets.length / 2)], last = buckets[buckets.length - 1];
-  const selectable = (item: ChartSeries) => Boolean(onSelect) && item.value !== undefined;
-  return <div className="usage-chart" ref={root}>
-    <div className="usage-chart-head"><h3>{title}{averageLabel ? <span className="usage-chart-average-label"> {averageLabel}</span> : null}</h3><div className="usage-chart-controls">{controls}</div></div>
-    {series.length > 1 || legend || onRange ? <div className="usage-chart-legend">
-      {series.length > 1 || legend ? [...new Set(series.map(item => item.group))].map(group => {
-        const items = series.filter(item => item.group === group).map(item => {
-          const on = selected.length > 0 && (excluded ? !selected.includes(item.key) : selected.includes(item.key)), dimmed = selected.length > 0 && !on;
-          const content = <><span className="usage-swatch" style={{ background: item.color }} />{item.label}</>;
-          return item.hiddenCount && onExpand ? <button key={item.key} type="button" className="usage-legend-item" title={`Show next ${Math.min(5, item.hiddenCount)} values`} onClick={onExpand}>{content}</button>
-            : selectable(item) ? <ChartLegendChip key={item.key} item={item} active={on} dimmed={dimmed} selectionActive={selected.length > 0} soleSelection={on && !excluded && selected.length === 1} onAction={action => onSelect!(item.key, action)} />
-            : <span key={item.key} className={`usage-legend-item${dimmed ? " dimmed" : ""}`}>{content}</span>;
-        });
-        return group ? <div key={group} className="usage-legend-group" role="group" aria-label={group}><span className="usage-legend-provider">{group}</span>{items}</div>
-          : <React.Fragment key="ungrouped">{items}</React.Fragment>;
-      }) : null}
-      {selected.length > 0 ? <button type="button" className="usage-legend-item usage-legend-clear" onClick={() => onSelect?.(null, "clear")}>Show all</button> : null}
-      {onRange ? <span className="usage-chart-hint">{series.some(selectable) ? "Click a key for filter options · drag" : "Drag"} across columns to filter dates</span> : null}
-    </div> : null}
-    {error ? <p className="query-table-error">{error}</p> : null}
-    <div className={`usage-chart-plot${split ? " broken" : ""}`}>
-      {split ? <div className="usage-chart-log" aria-hidden="true"><span>log scale</span></div> : null}
-      {ticks.map(tick => <div key={tick} className="usage-chart-grid" style={{ bottom: `${y(tick)}%` }} aria-hidden="true"><span>{tickFormat(tick)}</span></div>)}
-      <div ref={bars} className={`usage-chart-bars ${density} ${loading ? "loading" : ""} ${onRange ? "pickable" : ""}`} role="list" aria-busy={loading} aria-label={split ? `${chartLabel}; linear up to ${tickFormat(split)}, logarithmic above` : chartLabel} {...picking}>
-        {buckets.map((bucket, index) => {
-          const className = [tip?.bucket.key === bucket.key && !drag ? "active" : "", picked && index >= picked[0] && index <= picked[1] ? "picked" : ""].filter(Boolean).join(" ");
-          return <span key={bucket.key} role="listitem" tabIndex={0} aria-label={describe(bucket)} className={className} onMouseEnter={event => show(event, bucket)} onFocus={event => show(event, bucket)} onMouseLeave={() => setTip(null)} onBlur={() => setTip(null)}
-            onKeyDown={onRange ? event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onRange(bucket, bucket); } } : undefined}>
-            <ColumnMarks bucket={bucket} series={drawn} scale={y} percent={percent} />
-          </span>;
-        })}
-      </div>
-      {split ? <div className="usage-chart-break" aria-hidden="true"><span>{tickFormat(split)}</span></div> : null}
-      {picked ? <div className="usage-chart-pick" style={{ left: `${100 * picked[0] / buckets.length}%`, width: `${100 * (picked[1] - picked[0] + 1) / buckets.length}%` }} aria-hidden="true">
-        <span>{picked[0] === picked[1] ? heading(buckets[picked[0]]) : `${label(buckets[picked[0]].date)} – ${label(buckets[picked[1]].date)}`}</span>
-      </div> : null}
-    </div>
-    {buckets.length === 5000 ? <p className="muted">Showing the latest 5,000 periods. Narrow the date range to see earlier activity.</p> : null}
-    <div className="usage-chart-axis"><span>{buckets.length ? label(buckets[0].date) : ""}</span><span>{middle && buckets.length > 4 ? label(middle.date) : ""}</span><span>{!last ? "" : last.key !== periodKey(new Date(), period, periodCount) ? label(last.date) : period === "day" ? "today" : `this ${unit}`}</span></div>
-    {tip && !drag ? <div className="usage-chart-tip" ref={tipRef} role="status">
-      <div className="usage-chart-tip-head">{heading(tip.bucket)}</div>
-      {present(tip.bucket).length ? <ul>{present(tip.bucket).map(item => {
-        const parts = [...(tip.bucket.parts?.[item.key] ?? [])].sort((left, right) => right[1] - left[1]);
-        return <li key={item.key}>
-          <span className="usage-chart-tip-row"><span className="usage-swatch" style={{ background: item.color }} /><span className="usage-chart-tip-label">{item.label}</span><span className="usage-chart-tip-value">{format(tip.bucket.values[item.key])}</span></span>
-          {parts.length ? <ul className="usage-chart-tip-parts">
-            {parts.slice(0, 4).map(([name, value]) => <li key={name} className="usage-chart-tip-row"><span className="usage-chart-tip-label">{name}</span><span className="usage-chart-tip-value">{format(value)}</span></li>)}
-            {parts.length > 4 ? <li className="usage-chart-tip-more">+{parts.length - 4} more</li> : null}
-          </ul> : null}
-        </li>;
-      })}</ul> : <div className="usage-chart-tip-more">Nothing in this {unit}</div>}
-      {stacked && present(tip.bucket).length > 1 ? <div className="usage-chart-tip-row usage-chart-tip-total"><span className="usage-chart-tip-label">Total</span><span className="usage-chart-tip-value">{format(total(tip.bucket))}{suffix}</span></div> : null}
-      {tip.bucket.detail ? <div className="usage-chart-tip-more">{tip.bucket.detail}</div> : null}
-    </div> : null}
   </div>;
 }
 
@@ -1255,17 +1004,6 @@ function splitLabel(split: TokenSplit, value: unknown): string {
   if (split === "provider") return optionLabels(schemas.usage.fields).get("provider")?.get(text) ?? text;
   if (split === "session_kind") return sessionKindLabels[text] ?? text;
   return text;
-}
-
-// Picking a range in a chart filters the table to it, moving to a finer
-// period when the range is short.
-function pickRange(onFilter: FilterChange, fields: TimeFields, period: ChartPeriod, count: number, onPeriod: (next: ChartPeriod) => void) {
-  return (first: ChartBucket, last: ChartBucket) => {
-    const [from, to, end] = bucketRange(first, last, period, count);
-    onFilter(where => withTimeRange(where, fields, from, to));
-    const finer = finerPeriod(period, from, end);
-    if (finer !== period) onPeriod(finer);
-  };
 }
 
 // Split by a row field, the key filters the table to the values clicked; the
@@ -1606,9 +1344,9 @@ function WritingUsage({ onStatus }: { onStatus: (status: AuthorshipStatus | null
       <button type="button" className={view === "text" ? "active" : ""} aria-pressed={view === "text"} onClick={() => chooseView("text")}>Highlighted text</button>
     </div> : null}
   </div>;
-  if (rows === "messages") return <QuerySurface key="messages" dataset="writing_messages" messageView={view} header={api => <>
+  if (rows === "messages") return <UserMessageSurface key="messages" messageView={view} header={(api, searching) => <>
     {toggle}
-    <MessageMix where={toAggregationQuery(api.query, schemas.writing_messages).where} reload={reload} onFilter={filterChange(api)} />
+    {!searching ? <MessageMix where={toAggregationQuery(api.query, schemas.writing_messages).where} reload={reload} onFilter={filterChange(api)} /> : null}
     <div className="usage-preset-rows">
       <PresetRow label="Sort" presets={messagePresets} query={api.query} onApply={preset => apply("writing_messages", preset)} />
       <PresetRow label="Metrics" presets={messageMetricPresets} query={api.query} onApply={preset => apply("writing_messages", preset)} clear />
@@ -1637,18 +1375,6 @@ function initialUsageView(): UsageView {
   return saved === "writing" || saved === "carbon" ? saved : "tokens";
 }
 
-function CarbonImpact() {
-  useEffect(() => {
-    const refresh = () => { void window.pharosCarbon?.refresh(); };
-    refresh();
-    window.addEventListener("pharos:usage-refresh", refresh);
-    return () => window.removeEventListener("pharos:usage-refresh", refresh);
-  }, []);
-  return <section aria-label="Carbon Impact" data-feedback-label="Carbon Impact">
-    <div id="carbonCard" className="carbon-card" aria-busy="true" />
-  </section>;
-}
-
 function UsagePage() {
   const [view, setView] = useState<UsageView>(initialUsageView);
   const [status, setStatus] = useState<AuthorshipStatus | null>(null);
@@ -1658,7 +1384,7 @@ function UsagePage() {
     return () => window.removeEventListener("pharos:route", restore);
   }, []);
   function choose(next: UsageView) {
-    setView(next); store(usageViewKey, next); updateURI("usage", next === "writing" ? next : "");
+    setView(next); store(usageViewKey, next); updateURI("usage", next === "tokens" ? "" : next);
     if (next !== "writing") { updateURI("writing", ""); updateURI("messages", ""); }
   }
   const statusText = !status ? "" : status.error ? `Last update failed: ${status.error}` : status.running ? "Updating…" : status.built_at ? `Updated ${new Date(status.built_at).toLocaleString()}` : "Waiting to build";
@@ -2024,6 +1750,7 @@ if (!shared && concurrencyPrototypeEnabled && location.pathname === "/usage" && 
 }
 
 const mounts: Array<[string, React.ReactNode]> = [
+  ["searchComposerDialog", <SearchDialog schema={schemas.library} />],
   ["homePage", <HomePage schemas={schemas} />],
   ["queryTableLibrary", <LibraryPage />],
   ["queryTableUsage", <UsagePage />],
@@ -2072,3 +1799,5 @@ window.pharosQueryTables = {
     }));
   },
 };
+
+window.dispatchEvent(new Event("pharos:search-ready"));
