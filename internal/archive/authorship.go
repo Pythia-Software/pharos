@@ -24,7 +24,7 @@ import (
 // docs/human-authorship.md.
 
 // authorshipVersion names the classification rules; a new version rebuilds.
-const authorshipVersion = "authorship-v6"
+const authorshipVersion = "authorship-v7"
 
 const (
 	// authorshipWindow bounds how far back agent output is looked for. Your
@@ -562,6 +562,8 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 	}
 	bodyStart += len(text[bodyStart:]) - len(strings.TrimLeft(text[bodyStart:], " \t\r\n"))
 	body := strings.TrimSpace(text[bodyStart:])
+	feedback := pageFeedbackReports(text, bodyStart)
+	claimFeedbackMetadata(l, feedback)
 	if use := c.templates[templateKey(text)]; use != nil && use.template() {
 		l.claim(0, len(text), spanTemplate, fmt.Sprintf("Repeated prompt: sent in %d sessions on %d days", len(use.sessions), len(use.days)), textOrigin{})
 	}
@@ -571,21 +573,20 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 	for _, match := range attachmentPattern.FindAllStringIndex(text, -1) {
 		l.claim(match[0], match[1], spanAttachment, "Attachment reference", textOrigin{})
 	}
-	if strings.HasPrefix(strings.TrimSpace(body), "## Page Feedback:") {
-		l.claim(bodyStart, len(text), spanPasted, "Generated page feedback", textOrigin{})
-	}
-	for _, match := range fencePattern.FindAllStringIndex(text, -1) {
+	comparisonText := maskFeedback(text, feedback, false)
+	heuristicText := maskFeedback(text, feedback, true)
+	for _, match := range fencePattern.FindAllStringIndex(heuristicText, -1) {
 		l.claim(match[0], match[1], spanPasted, "Code block", textOrigin{})
 	}
 	lines := textLines(text)
 	for _, line := range lines {
-		if strings.HasPrefix(strings.TrimLeft(text[line[0]:line[1]], " "), ">") {
+		if strings.HasPrefix(strings.TrimLeft(heuristicText[line[0]:line[1]], " "), ">") {
 			l.claim(line[0], line[1], spanQuoted, "Quoted with >", textOrigin{})
 		}
 	}
 	// Harness text is left out of word runs, or its closing words and the
 	// first words typed after it would match every earlier session's.
-	tokens := wordTokens(text)
+	tokens := wordTokens(comparisonText)
 	for len(tokens) > 0 && tokens[0].start < bodyStart {
 		tokens = tokens[1:]
 	}
@@ -598,14 +599,19 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 	}
 	// A reused line counts as re-sent on its own only when it is too long to
 	// be a phrase typed again by chance; shorter ones only mark pasted output.
-	keys, repeated := c.repeatedLines(input.ConversationID, text, lines, bodyStart)
+	keys, repeated := c.repeatedLines(input.ConversationID, comparisonText, lines, bodyStart)
 	for index, line := range lines {
-		value := text[line[0]:line[1]]
+		value := comparisonText[line[0]:line[1]]
 		if use := c.lines[keys[index]]; repeated[index] && use != nil && len(wordTokens(value)) >= shingleWords && !machineLine(value) {
 			l.claim(line[0], line[1], spanResent, "Line already sent in other conversations", use.origin)
 		}
 	}
-	claimStructuredBlocks(l, text, lines, repeated)
+	for _, report := range feedback {
+		for _, note := range report.notes {
+			l.claim(note[0], note[1], spanTyped, "Human feedback comment", textOrigin{})
+		}
+	}
+	claimStructuredBlocks(l, heuristicText, lines, repeated)
 	if remaining := l.unclaimed(); hasPrevious && remaining >= typingCheckMinChars {
 		seconds := input.SentAt.Sub(previous).Seconds()
 		if seconds <= 0 || float64(remaining)/seconds > typingCharsPerSecond {
@@ -614,7 +620,7 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 	}
 	// After the speed check, so pasted identifiers still count as text that
 	// arrived too fast to type.
-	claimIdentifiers(l, text, lines, bodyStart)
+	claimIdentifiers(l, heuristicText, lines, bodyStart)
 	c.userText.add(input.SentAt, textOrigin{input.ConversationID, input.ID}, hashes)
 	c.rememberLines(textOrigin{input.ConversationID, input.ID}, keys)
 	return l.spans()
