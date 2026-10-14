@@ -38,7 +38,7 @@ function fixtures() {
   return { tool_calls: calls, usage, writing_messages: writing, skill_usages: skills, library, tl1_attempts: attempts };
 }
 async function setup({ saved = false, reducedMotion = false, clock = false, viewport = { width: 1180, height: 920 }, deviceScaleFactor = 1, url = '/', waitForHome = url === '/', preferenceValues = {}, localValues = {}, now } = {}) {
-  const browser = await chromium.launch({ headless: true, executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' });
+  const browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' });
   const page = await browser.newPage({ viewport, deviceScaleFactor, timezoneId: 'America/Denver', reducedMotion: reducedMotion ? 'reduce' : 'no-preference' });
   if (clock) await page.clock.install();
   if (now) await page.clock.setFixedTime(now);

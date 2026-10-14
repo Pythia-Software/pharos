@@ -13,7 +13,7 @@ const factors = JSON.parse(fs.readFileSync(path.join(root, 'carbon/co2_factors.j
 
 test('Usage Carbon Impact estimates CO2e and recalculates from its controls', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  const browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
     const page = await browser.newPage();
     const errors = [];
@@ -160,7 +160,7 @@ test('Usage Carbon Impact estimates CO2e and recalculates from its controls', as
 
 test('Calculation shows live cache arithmetic, assumptions, and sources with progressive detail', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  const browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 1100 } });
     const requests = [], errors = [];
@@ -292,7 +292,7 @@ test('Calculation shows live cache arithmetic, assumptions, and sources with pro
 
 test('Carbon filters, dates, and chart controls stay distinct from assumptions and handle stale responses', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  const browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 1100 } });
     await page.addInitScript(() => {
