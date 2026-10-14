@@ -25,7 +25,7 @@ const message = {
 
 test('Human Words lists single messages as a table or as text highlighted by where it came from', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  const browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
     const page = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
     const errors = [], queries = [], mixes = [];

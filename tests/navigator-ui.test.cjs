@@ -12,7 +12,7 @@ const html = source.slice(source.indexOf("r'''") + 4, source.lastIndexOf("'''"))
 
 test('navigator restores routes, library search, view, and query filters', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  const browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
     const page = await browser.newPage();
     const errors = [];
@@ -71,7 +71,7 @@ test('navigator restores routes, library search, view, and query filters', async
 
 test('Past Work shows linked GitHub PRs and origin/main merges', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  const browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
     const page = await browser.newPage();
     await page.route('http://navigator.test/**', route => {

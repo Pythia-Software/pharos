@@ -11,7 +11,7 @@ const html = source.slice(source.indexOf("r'''") + 4, source.lastIndexOf("'''"))
 
 test('TL1 pages show follow-up outcomes and omit redundant configuration chips', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  const browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     const errors = [];

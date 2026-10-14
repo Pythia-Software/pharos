@@ -28,7 +28,7 @@ test('Usage table badges follow the active graph and preserve raw sorting and ce
   }));
   const requests = [], errors = [];
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  const browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
     page.on('pageerror', error => errors.push(error.message));
@@ -140,7 +140,7 @@ test('Model + effort chart separates levels of one model and filters the table b
   }));
   const requests = [], errors = [];
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  const browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
     const page = await browser.newPage({ viewport: { width: 1500, height: 1100 } });
     page.on('pageerror', error => errors.push(error.message));
