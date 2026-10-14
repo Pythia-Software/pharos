@@ -22,6 +22,7 @@ export type QueryCategory = keyof typeof queryCategories;
 // Older and manually saved QT queries have no recipe ID. Infer their subject
 // from query fields, never from the user-editable title or description.
 export function categoryForQuery(dataset?: QueryDataset, query?: QueryState): QueryCategory {
+  if (query?.grouping) return categoryForQuery(dataset, query.grouping.source);
   const predicates = query?.where.flatMap(term => "any" in term ? term.any : [term]) ?? [];
   const measures = query?.aggregations ?? [];
   const fields = new Set([...predicates.map(term => term.field), ...measures.flatMap(metric => [metric.field, ...metric.groupBy,

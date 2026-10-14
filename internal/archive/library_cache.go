@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -15,10 +16,9 @@ import (
 // large catalog. libraryCache keeps the last set until anything it depends on
 // may have changed:
 //
-//   - Any commit to the catalog, by this process or another (ingest runs as a
-//     separate CLI). PRAGMA data_version changes whenever a connection other
-//     than the one reading it commits, so it is read on a dedicated read-only
-//     connection that never writes; every commit then counts.
+//   - A change to cached-view inputs, by this process or another (ingest runs
+//     as a separate CLI). Transactional triggers advance query_cache_generation;
+//     publishing equivalent projections and writing progress do not invalidate it.
 //   - The local date, since cost_today_usd prices usage at today's rates.
 //
 // Cached row maps are shared between requests and must never be modified.
@@ -54,13 +54,13 @@ func (c *Catalog) clock() time.Time {
 }
 
 // cachedLibraryRows returns the unfiltered Library rows with at least fields,
-// rebuilding them only after a commit, a date change, or a request for fields
+// rebuilding them only after source changes, a date change, or a request for fields
 // they lack. Concurrent misses wait for one rebuild.
 func (c *Catalog) cachedLibraryRows(ctx context.Context, fields libraryFields) ([]map[string]any, error) {
 	cache := &c.library
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
-	// Read the version before building: a commit during the build leaves the
+	// Read the version before building: source changes during the build leave the
 	// rows tagged older than they are, which only costs an extra rebuild.
 	version, versionErr := cache.dataVersion(ctx, c.Path)
 	day := c.clock().Format("2006-01-02")
@@ -102,11 +102,9 @@ func (cache *libraryCache) close() {
 	cache.rows = nil
 }
 
-// dataVersionMonitor reads PRAGMA data_version on a dedicated read-only
-// connection that never writes, so every commit to the catalog, by any
-// connection or process, changes the version it reports. Callers serialize
-// access, and must discard values tagged with earlier versions after an
-// error, since the reopened connection starts a new sequence.
+// dataVersionMonitor reads the transactional cached-view generation on a
+// dedicated read-only connection. Older catalogs fall back to data_version.
+// Callers serialize access and discard cached values after a read error.
 type dataVersionMonitor struct {
 	monitor *sql.DB
 	conn    *sql.Conn
@@ -129,7 +127,11 @@ func (m *dataVersionMonitor) read(ctx context.Context, path string) (int64, erro
 		m.monitor, m.conn = monitor, conn
 	}
 	var version int64
-	if err := m.conn.QueryRowContext(ctx, "PRAGMA data_version").Scan(&version); err != nil {
+	err := m.conn.QueryRowContext(ctx, "SELECT value FROM query_cache_generation WHERE id=1").Scan(&version)
+	if err != nil && strings.Contains(err.Error(), "no such table") {
+		err = m.conn.QueryRowContext(ctx, "PRAGMA data_version").Scan(&version)
+	}
+	if err != nil {
 		m.close()
 		return 0, err
 	}

@@ -197,7 +197,7 @@ type cartContext struct {
 }
 
 func (c *Catalog) loadCartContext(ctx context.Context) (*cartContext, error) {
-	rows, err := loadFindingRows(ctx, c.DB, "")
+	rows, err := loadFindingRowsAt(ctx, c.DB, c.clock(), "")
 	if err != nil {
 		return nil, err
 	}

@@ -58,8 +58,11 @@ type FieldSpec struct {
 	Name         string
 	Kind         FieldKind
 	Expr         string
-	Synthetic    bool
-	ServerFilter bool // false → field is client-only; Compile rejects filters on it
+	// ValueErrorExpr is an optional trusted SQL error sidecar for materialized
+	// expression values. It is never accepted from a query request.
+	ValueErrorExpr string
+	Synthetic      bool
+	ServerFilter   bool // false → field is client-only; Compile rejects filters on it
 	// ArrayCaseSensitive preserves exact text-array membership keys. Default false.
 	ArrayCaseSensitive bool
 	// FilterOps is nil for the type's default matrix; a non-nil slice is the

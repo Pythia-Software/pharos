@@ -222,6 +222,26 @@
 /* The same composer sits on Home, in the menu dialog, and next to results. */
 .home-intro:has(.shared-search-composer) { max-width: 1080px; }
 .shared-search-composer { text-align: left; min-width: 0; }
+.home-search-disclosure { margin-bottom: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); box-shadow: 0 4px 18px #34230d0b; text-align: left; transition: border-color 240ms ease, box-shadow 240ms ease; }
+.home-search-disclosure:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
+.home-search-trigger { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 54px; padding: 14px 16px; border: 0; border-radius: 10px; background: transparent; color: var(--ink); font: var(--fs-md)/1.5 var(--sans); text-align: left; cursor: text; }
+.home-search-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.home-search-trigger > .app-icon { width: 18px; height: 18px; flex-shrink: 0; color: var(--muted); }
+.home-search-trigger > .app-icon:last-child { width: 14px; height: 14px; margin-left: auto; transition: transform 260ms ease; }
+.home-search-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-search-placeholder { color: var(--muted); }
+.home-search-disclosure.is-expanded > .home-search-trigger { cursor: pointer; }
+.home-search-disclosure.is-expanded > .home-search-trigger > .app-icon:last-child { transform: rotate(180deg); }
+.home-search-expansion { display: grid; grid-template-rows: 0fr; opacity: 0; visibility: hidden; transition: grid-template-rows 280ms cubic-bezier(.2,.7,.2,1), opacity 200ms ease, visibility 0s 280ms; }
+.home-search-disclosure.is-expanded > .home-search-expansion { grid-template-rows: 1fr; opacity: 1; visibility: visible; transition-delay: 0s; }
+.home-search-content { min-height: 0; overflow: hidden; }
+.home-search-content .text-search-editor { border: 0; border-top: 1px solid var(--line); border-radius: 0 0 10px 10px; box-shadow: none; margin-bottom: 0; padding-bottom: 0; }
+.home-search-content .text-editor-toolbar { border-radius: 0; }
+.home-search-content .text-query-frame { border: 0; border-radius: 0; padding: 0; background: transparent; }
+.home-search-content .text-editor-meta:empty { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .home-search-disclosure, .home-search-expansion, .home-search-trigger > .app-icon:last-child { transition: none; }
+}
 #searchDialog.search-dialog { width: min(1060px, calc(100vw - 24px)); max-width: calc(100vw - 24px); max-height: calc(100dvh - 32px); padding: 18px; overflow: auto; box-sizing: border-box; }
 #searchDialog .search-dialog-heading { margin: 0 0 16px; }
 #searchDialog .text-search-editor { margin-bottom: 0; }

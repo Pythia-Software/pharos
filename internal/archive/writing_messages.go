@@ -38,8 +38,9 @@ var writingMessageDataset = func() sqlDataset {
 		from: `FROM message_authorship ma JOIN messages m ON m.id=ma.message_id JOIN conversations c ON c.id=ma.conversation_id
 			LEFT JOIN workspaces w ON w.id=COALESCE(ma.work_id,ma.workspace_id) LEFT JOIN repositories r ON r.id=w.repository_id`,
 		countFrom: "FROM message_authorship ma", countAlias: "ma",
-		lookups: map[string]bool{"id": true, "conversation_id": true, "workspace_id": true, "work_id": true, "day": true},
-		columns: columns,
+		lookups:    map[string]bool{"id": true, "conversation_id": true, "workspace_id": true, "work_id": true, "day": true},
+		columns:    columns,
+		timestamps: map[string]string{"sent_at": "ma.sent_at"},
 	}
 }()
 

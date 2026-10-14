@@ -12,15 +12,15 @@ import (
 // the Writing and TL1 tables, and the per-workspace costs behind the Library's
 // cost columns. Each takes up to a couple of seconds to compute on a large
 // catalog, and a page asks for it several times at once (rows, chart,
-// metrics), so derivedCache keeps each value until the next commit (see
-// dataVersionMonitor):
+// metrics), so derivedCache keeps each value until its source generation changes
+// (see dataVersionMonitor). Projection, audit and progress writes do not evict it:
 //
 //   - A key names the value and whatever else it depends on, such as the local
 //     date for costs at today's prices.
 //   - Concurrent requests for a missing value wait for one computation. It
 //     finishes even if the request that started it is abandoned, since the
 //     others still want it and the next request can use it.
-//   - After a commit, warmCaches recomputes the values pages used recently,
+//   - After source changes, warmCaches recomputes the values pages used recently,
 //     so the next visit does not wait.
 //
 // Cached values are shared between requests and must never be modified.
@@ -110,53 +110,77 @@ func cachedValue[T any](ctx context.Context, c *Catalog, key string, compute fun
 // used, which keeps it warm.
 func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(context.Context) (any, error), request bool) (any, error) {
 	cache := &c.derived
-	cache.mu.Lock()
-	version, err := cache.versions.read(ctx, c.Path)
-	if err != nil {
-		cache.entries = nil
-		cache.generation++
-		cache.mu.Unlock()
-		return compute(ctx)
-	}
-	cache.version = version
-	cache.pruneDelegationEntries(version, time.Now())
-	entry := cache.entries[key]
-	if entry == nil || entry.version != version {
-		usedAt := time.Time{}
-		if entry != nil {
-			usedAt = entry.usedAt
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		entry = &derivedEntry{version: version, ready: make(chan struct{}), compute: compute, usedAt: usedAt}
-		if cache.entries == nil {
-			cache.entries = map[string]*derivedEntry{}
+		cache.mu.Lock()
+		version, err := cache.versions.read(ctx, c.Path)
+		if err != nil {
+			cache.entries = nil
+			cache.generation++
+			cache.mu.Unlock()
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return compute(ctx)
 		}
-		cache.entries[key] = entry
-		if request {
+		cache.version = version
+		cache.pruneDelegationEntries(version, time.Now())
+		entry := cache.entries[key]
+		if entry != nil && entry.version != version {
+			select {
+			case <-entry.ready:
+			default:
+				// Finish the existing build before starting the latest generation.
+				// Several commits during a slow read must not launch several whole-
+				// catalog scans for the same value. New callers still get fresh data.
+				cache.mu.Unlock()
+				select {
+				case <-entry.ready:
+					continue
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+		}
+		if entry == nil || entry.version != version {
+			usedAt := time.Time{}
+			if entry != nil {
+				usedAt = entry.usedAt
+			}
+			entry = &derivedEntry{version: version, ready: make(chan struct{}), compute: compute, usedAt: usedAt}
+			if cache.entries == nil {
+				cache.entries = map[string]*derivedEntry{}
+			}
+			cache.entries[key] = entry
+			if request {
+				entry.usedAt = time.Now()
+			}
+			generation := cache.generation
+			cache.mu.Unlock()
+			value, err := compute(context.WithoutCancel(ctx))
+			cache.mu.Lock()
+			entry.value, entry.err = value, err
+			if (err != nil || cache.generation != generation) && cache.entries[key] == entry {
+				delete(cache.entries, key)
+			}
+			close(entry.ready)
+			// The catalog may have changed while this computation was in flight.
+			// Use the monitor's latest observed version, so an old completion does
+			// not evict snapshots built for a newer commit.
+			cache.pruneDelegationEntries(cache.version, time.Now())
+		} else if request {
 			entry.usedAt = time.Now()
 		}
-		generation := cache.generation
 		cache.mu.Unlock()
-		value, err := compute(context.WithoutCancel(ctx))
-		cache.mu.Lock()
-		entry.value, entry.err = value, err
-		if (err != nil || cache.generation != generation) && cache.entries[key] == entry {
-			delete(cache.entries, key)
+		select {
+		case <-entry.ready:
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
-		close(entry.ready)
-		// The catalog may have changed while this computation was in flight.
-		// Use the monitor's latest observed version, so an old completion does
-		// not evict snapshots built for a newer commit.
-		cache.pruneDelegationEntries(cache.version, time.Now())
-	} else if request {
-		entry.usedAt = time.Now()
+		return entry.value, entry.err
 	}
-	cache.mu.Unlock()
-	select {
-	case <-entry.ready:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	return entry.value, entry.err
 }
 
 // catalogVersion reads the catalog's data version on the cache's monitor.

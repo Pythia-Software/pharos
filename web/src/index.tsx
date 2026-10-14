@@ -11,12 +11,13 @@ import { emptyTextSearch, readTextSearch, textFindParameters, textSearchSummary,
 import { CarbonImpact } from "./carbon-impact";
 import { ChartSelect, PeriodControl, RangeControl, ScaleControl, RollingControl, StackedColumns, chartPeriodCount, chartSpan, pickRange, timeBounds, withTimeRange, usageTime, writingTime, type FilterChange } from "./usage-chart";
 import { applyUsageAggregations } from "./usage-aggregations";
+import { applyUsageTablePreset, usageGroupPresets, usageComparisonPresets, usageTablePresetMatches, type UsageTablePreset } from "./usage-queries";
 import { withComputedCapabilityRefresh } from "./computed-column-store";
 import { chartPeriods, earliestKey, isHourly, localDay, parseDay, periodBuckets, periodKey, periodLabel, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { defaultChartScale, validChartScale, type ChartScale } from "./chart-scale";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { EMPTY_QUERY, httpComputedColumnStore, applyAggregations, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, toServerQuery, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, httpComputedColumnStore, applyAggregations, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, toServerQuery, type ComputedColumnStore, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
 import { useQueryTable, type QueryTableApi } from "@pythia-software/query-table-react";
 import { DataTable, FilterValueProvider, MetricsPanel, QueryBuilder, SelectionToolbar, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
 import "@pythia-software/query-table-ui/theme.css";
@@ -24,6 +25,7 @@ import "./pharos.css";
 import { savedRollingWindow } from "./bookmarks";
 import { libraryStorageAdapter } from "./storage";
 import { HomePage } from "./home";
+import { groupSourceQuery } from "./group-drilldown";
 import { QueryChip } from "./query-card";
 import { readRollingWindow, resolveRollingQuery, rollingQueryMatches } from "./query-links";
 import { preferences } from "./preferences";
@@ -47,7 +49,6 @@ import { ConcurrencyModal, concurrencyPrototypeEnabled } from "./concurrency";
 import { openConcurrencyModal, startConcurrencySummary } from "./concurrency-store";
 
 type Row = Record<string, any>;
-const emptyPopulation: Row[] = [];
 const relationships: RelationshipAdapter = {
   async resolve(references, signal) {
     return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
@@ -187,9 +188,17 @@ const schemas: Record<Dataset, FieldSchema<Row>> = {
   tl1_attempts: loadSchema<Row>(tl1AttemptsDocument),
 };
 
-window.addEventListener("pharos:route", () => window.dispatchEvent(new PopStateEvent("popstate")));
-
 const tableApis = new Map<Dataset, QueryTableApi<Row>>();
+// Host routes can reveal a previously mounted, inactive table. Restore the
+// destination directly: a synthetic popstate fires before React updates active
+// flags, so it can miss that table and restore the outgoing one instead.
+window.addEventListener("pharos:route", () => {
+  const destination = [...tableApis.keys()].find(dataset => datasetIsVisible(dataset));
+  if (destination) void tableApis.get(destination)?.restoreLocation(location.href).catch(() => {
+    // Query Table's restoration state displays unavailable/invalid links.
+  });
+});
+
 let clearLibrarySearch: (() => void) | undefined;
 
 async function responseJSON<T>(response: Response): Promise<T> {
@@ -204,7 +213,7 @@ function recordBudget(dataset: Dataset, where: WhereTerm[]) {
   const fields = dataset === "tool_calls" ? ["command", "file_path"] : dataset === "writing_messages" ? ["text"] : dataset === "mcp_calls" ? ["arguments_json", "error_text"] : [];
   return where.some(term => ("any" in term ? term.any : [term]).some(c => fields.includes(c.field))) ? new URLSearchParams({ interactive_search: "1" }) : undefined;
 }
-function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary | null) => void, capabilities?: MetricCapabilities): Transport<Row> {
+function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary | null) => void, capabilities?: MetricCapabilities, queryCapabilities?: QueryCapabilitiesV3): Transport<Row> {
   const endpoint = (suffix = "", params?: URLSearchParams) => {
     const query = new URLSearchParams(extra);
     params?.forEach((value, name) => query.set(name, value));
@@ -212,6 +221,14 @@ function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary
   };
   return {
     metricCapabilities: capabilities,
+    queryCapabilities,
+    ...(queryCapabilities?.version === 3 ? { async fetchQueryV3(query: Parameters<NonNullable<Transport<Row>["fetchQueryV3"]>>[0], signal?: AbortSignal) {
+      const result = await responseJSON<QueryResultV3 & { find?: FindSummary }>(await fetch(endpoint("/query-v3"), {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query), signal,
+      }));
+      onFind?.(result.find ?? null);
+      return result;
+    } } : {}),
     async fetchRow(id, signal) {
       const result = await responseJSON<{ row: Row | null }>(await fetch(`/api/query/${dataset}/item?id=${encodeURIComponent(String(id))}`, { signal }));
       return result.row;
@@ -263,6 +280,9 @@ const renderers: RenderRegistry<Row> = {
     return context.value ? <Icon name="check" /> : defaultRenderers.bool_check(context);
   },
   number(context: CellContext<Row>) {
+    if (context.value != null && ["card_rate", "card_escalation"].includes(context.field.name)) return `${(Number(context.value) * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
+    if (context.value != null && context.field.name === "usage_cache_hit_percent") return `${Number(context.value).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
+    if (context.value != null && context.field.name === "usage_price_delta") return formatUSD(Number(context.value));
     const value = Number(context.value);
     if (/(^token_count$|_tokens$)/.test(context.field.name) && Number.isFinite(value) && Math.abs(value) >= 1e6)
       return <span title={value.toLocaleString()}>{compactNumber(value)}</span>;
@@ -384,34 +404,46 @@ const metricRenderers: RenderRegistry<Row> = {
   },
 };
 
+function usageGroupFields(fields: FieldSchema<Row>["fields"], query: QueryState): FieldSchema<Row>["fields"] {
+  const summaries = new Map(query.grouping?.summaries.map(column => [column.id, column]));
+  return fields.map(field => {
+    const column = summaries.get(field.name);
+    return column ? { ...field, ...(column.label ? { label: column.label } : {}),
+      ...(!field.render && field.type === "number" ? { render: column.expression === "MEDIAN([duration_ms])" ? "duration_ms" : column.id === "card_price_delta" ? "usd" : "number" } : {}) } : field;
+  });
+}
+
 // header renders between the filters and the metric panels, so a chart there
 // can follow the table's filters.
 // find, for the Library, is a keyword search that narrows the rows before the
 // pagination applies; onFind hears how it went.
-function QuerySurface({ dataset, libraryView = "table", messageView = "table", find = "", onFind, trailing, header, controls, selectable = false }: { dataset: Dataset; selectable?: boolean; libraryView?: LibraryView; messageView?: MessageView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode }) {
+function QuerySurface({ dataset, libraryView = "table", messageView = "table", find = "", onFind, trailing, header, controls, presets, selectable = false }: { dataset: Dataset; selectable?: boolean; libraryView?: LibraryView; messageView?: MessageView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode }) {
   const schema = schemas[dataset];
   const locationRevision = useLocationRevision();
   const tableRenderers = useUsageTableRenderers(renderers);
   const onFindRef = useRef(onFind);
   onFindRef.current = onFind;
-  const [capabilities, setCapabilities] = useState<{ metricCapabilities: MetricCapabilities; computedExecution: ComputedExecution }>();
+  const [capabilities, setCapabilities] = useState<{ metricCapabilities: MetricCapabilities; queryCapabilities?: QueryCapabilitiesV3; computedExecution: ComputedExecution }>();
   const computedColumnStore = useMemo(() => {
     if (shared) return undefined;
-    const store = httpComputedColumnStore("/api/query-computed-columns");
+    const backendStore = httpComputedColumnStore("/api/query-computed-columns");
+    // Group projections have a derived schema name. Canonical definitions and
+    // their execution handshake still belong to this surface's source dataset.
+    const store: ComputedColumnStore = {
+      ...backendStore,
+      list: (_dataset: string, signal?: AbortSignal) => backendStore.list(schema.name, signal),
+      save: (_dataset, column, expectedRevision) => backendStore.save(schema.name, column, expectedRevision),
+    };
     return withComputedCapabilityRefresh(store, async (signal) => {
-      const next = await responseJSON<{ metricCapabilities: MetricCapabilities; computedExecution: ComputedExecution }>(await fetch(`/api/query/${dataset}/capabilities`, { signal }));
+      const next = await responseJSON<{ metricCapabilities: MetricCapabilities; queryCapabilities?: QueryCapabilitiesV3; computedExecution: ComputedExecution }>(await fetch(`/api/query/${dataset}/capabilities`, { signal }));
       setCapabilities(next);
     });
   }, [dataset]);
-  const transport = useMemo(() => shared ? undefined : makeTransport(dataset, find, value => onFindRef.current?.(value), capabilities?.metricCapabilities), [dataset, find, capabilities?.metricCapabilities]);
+  const transport = useMemo(() => shared ? undefined : makeTransport(dataset, find, value => onFindRef.current?.(value), capabilities?.metricCapabilities, capabilities?.queryCapabilities), [dataset, find, capabilities?.metricCapabilities, capabilities?.queryCapabilities]);
   const [bookmarkRevision, setBookmarkRevision] = useState(0);
   useEffect(() => { const changed = () => setBookmarkRevision(value => value + 1); window.addEventListener("pharos:bookmarks", changed); return () => window.removeEventListener("pharos:bookmarks", changed); }, []);
   // A shared file has no origin of its own to keep saved queries apart from other files'.
   const storage = useMemo(() => shared ? memoryStorageAdapter() : libraryStorageAdapter(), [bookmarkRevision]);
-  const [explore, setExplore] = useState(false);
-  const [population, setPopulation] = useState<{ key: string; rows: Row[]; total: number }>();
-  const [populationError, setPopulationError] = useState<Error>();
-  const [populationRevision, setPopulationRevision] = useState(0);
   const propertyStorage = useMemo(() => jsonPropertyViewStorage(
     key => preferences().get<string | null>(key, null),
     (key, value) => preferences().set(key, value),
@@ -420,40 +452,17 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
     const rolling = readRollingWindow(new URLSearchParams(location.search), dataset);
     return rolling && rollingQueryMatches(query, rolling) ? resolveRollingQuery(query, rolling) : query;
   }, [dataset, locationRevision]);
-  const validateQuery = useMemo(() => (query: QueryState) => {
-    if (!explore || shared) return;
-    const key = JSON.stringify([find, (query.grouping?.source ?? query).where, populationRevision]);
-    if (population?.key !== key) throw populationError ?? new Error("Loading the complete source population…");
-  }, [explore, population, populationError, find, populationRevision]);
   const visible = shared || datasetIsVisible(dataset);
-  const api = useQueryTable<Row>({ schema, transport: explore ? undefined : transport,
-    computedColumnStore, computedExecution: explore ? undefined : capabilities?.computedExecution,
-    clientRows: shared?.datasets[dataset] ?? (explore ? population?.rows ?? emptyPopulation : undefined),
-    storage, debounceMs: 100, syncUrl: Boolean(visible), canonicalizeQuery, validateQuery,
+  const api = useQueryTable<Row>({ schema, transport,
+    computedColumnStore, computedExecution: capabilities?.computedExecution,
+    clientRows: shared?.datasets[dataset], active: Boolean(visible),
+    storage, debounceMs: 100, syncUrl: Boolean(visible), canonicalizeQuery,
     itemDetails: { queryParameter: queryParameter(dataset), storage: propertyStorage, relationships: shared ? undefined : relationships,
       loadRow: shared ? undefined : async (id, signal) => {
         const row = await transport!.fetchRow!(id, signal);
         return row ? { row, loadedFields: Object.keys(row) } : null;
       } },
-    onRefresh: () => { if (explore) setPopulationRevision(value => value + 1); },
   });
-  const sourceWhere = JSON.stringify((api.query.grouping?.source ?? api.query).where);
-  const populationKey = JSON.stringify([find, (api.query.grouping?.source ?? api.query).where, populationRevision]);
-  useEffect(() => {
-    if (shared || !explore || !visible) return;
-    const controller = new AbortController();
-    setPopulationError(undefined);
-    const timer = setTimeout(() => {
-      fetch(`/api/query/${dataset}/population${find ? `?${find}` : ""}`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ where: JSON.parse(sourceWhere) }), signal: controller.signal,
-      }).then(response => responseJSON<{ rows: Row[]; total: number; complete: boolean; find?: FindSummary }>(response)).then(result => {
-        if (!result.complete || result.rows.length !== result.total) throw new Error("The source population is incomplete.");
-        if (!controller.signal.aborted) { setPopulation({ key: populationKey, rows: result.rows, total: result.total }); onFindRef.current?.(result.find ?? null); }
-      }).catch(error => { if (!controller.signal.aborted) setPopulationError(error instanceof Error ? error : new Error(String(error))); });
-    }, 100);
-    return () => { clearTimeout(timer); controller.abort(); };
-  }, [dataset, find, sourceWhere, explore, visible, populationRevision]);
   const apiRef = useRef(api);
   apiRef.current = api;
   // A new search starts from its first page.
@@ -474,36 +483,36 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
     return () => { tableApis.delete(dataset); };
   }, [dataset]);
   useEffect(() => {
-    if (!visible || api.error) return;
+    if (!visible || !api.restoration.ready || api.error) return;
     const rolling = readRollingWindow(new URLSearchParams(location.search), dataset);
     if (rolling && !rollingQueryMatches(api.query.grouping?.source ?? api.query, rolling)) {
-      for (const name of ["window_days", "window_field", "window_dataset"]) updateURI(name, "");
+      for (const name of ["window_days", "window_field", "window_dataset", "window_mode"]) updateURI(name, "");
     } else if (!rolling) {
       const savedWindow = savedRollingWindow(dataset, api.query);
       if (savedWindow) {
         updateURI("window_days", String(savedWindow.days)); updateURI("window_field", savedWindow.field); updateURI("window_dataset", dataset);
+        updateURI("window_mode", savedWindow.mode === "relative" ? "relative" : "");
       }
     }
-  }, [dataset, api.query, visible, api.error]);
-  useEffect(() => { if (!shared && (api.query.grouping || api.query.aggregations?.some(metric => metric.dateGrouping))) setExplore(true); }, [api.query.grouping, api.query.aggregations]);
+  }, [dataset, api.query, visible, api.restoration.ready, api.error]);
+
+  // Inactive controllers retain their query state, but their controls must not
+  // mount: filter nullability/autocomplete and header charts issue metadata
+  // requests independently of useQueryTable's active row-fetch flag.
+  if (!visible) return null;
 
   return <FilterValueProvider value={filterPresentations[dataset]}>
-    {!shared ? <div className="query-exploration-controls">
-      <button type="button" aria-pressed={explore} disabled={Boolean(api.query.grouping || api.query.aggregations?.some(metric => metric.dateGrouping))} onClick={() => setExplore(value => !value)}>
-        {explore ? "Return to table mode" : "Explore groups and calendar metrics"}
-      </button>
-      {explore ? <span className="muted">{population?.key === populationKey ? `${population.total.toLocaleString()} source rows` : "Loading source…"} · Edit source filters to narrow the population.</span> : null}
-    </div> : null}
     {!api.query.grouping ? header?.(api) : null}
+    {presets?.(api)}
     {api.query.grouping ? <QueryBuilder api={stableApi} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <QueryBuilder api={stableApi} fields={(api.query.grouping ? api.schema!.fields : api.computed.catalogue)} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={stableApi} dataset={dataset} layout={<QueryBuilder api={stableApi} fields={(api.query.grouping ? api.schema!.fields : api.computed.catalogue)} total={api.total} running={api.loading} />} /> : <QueryBuilder api={stableApi} fields={(api.query.grouping ? api.schema!.fields : api.computed.catalogue)} total={api.total} running={api.loading} />}
-    <MetricsPanel api={stableApi} aggregations={api.aggregations} fields={metricFields((api.query.grouping ? api.schema!.fields : api.computed.catalogue))} renderers={metricRenderers} />
-    {api.error || (explore && populationError) ? <div className="query-table-error">{((explore && populationError) || api.error)?.message}</div> : null}
+    <MetricsPanel api={stableApi} aggregations={api.aggregations} fields={metricFields(api.query.grouping ? usageGroupFields(api.schema!.fields, api.query) : api.computed.catalogue)} renderers={metricRenderers} />
+    {api.error ? <div className="query-table-error">{api.error?.message}</div> : null}
     {selectable && !api.query.grouping ? <SelectionToolbar selection={api.selection} actions={ids => <ShareSelection ids={ids} api={api} transport={transport} />} /> : null}
     {dataset === "library" && libraryView === "conversation" && !api.query.grouping ? <ConversationResults api={api} searching={Boolean(find)} />
       : dataset === "writing_messages" && messageView === "text" && !api.query.grouping ? <AuthoredMessages api={api} emptyMessage={api.error ? failedMessage : emptyMessages[dataset]} /> : <DataTable
       maxHeight={100000}
       {...(selectable && !api.query.grouping ? { selection: api.selection } : {})}
-      fields={api.visibleFields}
+      fields={api.query.grouping ? usageGroupFields(api.visibleFields, api.query) : api.visibleFields}
       rows={api.rows}
       query={api.query}
       onQueryChange={api.setQuery}
@@ -514,7 +523,11 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
       total={api.total}
       loading={api.loading}
       emptyMessage={api.error ? failedMessage : find ? "No work matches this search and these filters." : emptyMessages[dataset]}
-      {...(trailing && !api.query.grouping ? { trailing: (row: Row) => trailing(row, api), trailingLabel: dataset === "mcp_calls" || dataset === "tool_calls" ? "View" : dataset === "tools" || dataset === "writing" ? "Drill in" : dataset === "library" ? "Match" : "Actions" } : {})}
+      {...(api.query.grouping ? { trailing: (row: Row) => {
+        const complete = api.query.grouping!.keys.every(key => Object.hasOwn(row, key));
+        return <button type="button" className="mcp-detail-button" disabled={!complete} title={complete ? "Open the source records for this group, keeping source filters" : "Include all group key columns to inspect the source records"} onClick={() => api.setQuery(groupSourceQuery(api.query, row, schema))}>Records</button>;
+      }, trailingLabel: "Inspect" }
+        : trailing ? { trailing: (row: Row) => trailing(row, api), trailingLabel: dataset === "mcp_calls" || dataset === "tool_calls" ? "View" : dataset === "tools" || dataset === "writing" ? "Drill in" : dataset === "library" ? "Match" : "Actions" } : {})}
     />}
   </FilterValueProvider>;
 }
@@ -791,54 +804,16 @@ function LibraryPage() {
 
 type TokenSplit = "type" | "provider" | "model_family" | "model_effort" | "effort" | "repository_name" | "session_kind";
 type TokenChartView = { metric: "tokens" | "cost" | "percent" | "percent_cost"; split: TokenSplit; period: ChartPeriod; hours: number; days: number; rollingPeriods: number; scale: ChartScale };
-// A preset either fills the metric panels or sets the chart above them.
+// Chart shortcuts and the writing page's metric/sort shortcuts.
 type UsagePreset = { label: string; title: string; aggregations?: AggregationClause[]; chart?: Partial<TokenChartView>; orderBy?: OrderByClause[] };
 const sum = (field: string, groupBy: string[], label: string): AggregationClause => ({ id: `${field}:${groupBy.join(",")}`, op: "sum", field, groupBy, label });
-const costPresets: UsagePreset[] = [
-  { label: "Total cost", title: "Total API-equivalent cost, per month, and by provider", aggregations: [
-    sum("cost_usd", [], "Total cost"),
-    sum("cost_usd", ["month"], "Cost per month"),
-    sum("cost_usd", ["provider"], "Cost by provider"),
-  ] },
-  { label: "Daily cost", title: "Chart API-equivalent cost per day, split by provider", chart: { metric: "cost", split: "provider", period: "day" } },
-  { label: "Weekly cost", title: "API-equivalent cost per week, by model and by repository", aggregations: [
-    sum("cost_usd", ["week", "model_family"], "Cost per week by model"),
-    sum("cost_usd", ["repository_name"], "Cost by repository"),
-  ] },
-  { label: "Cost by model", title: "Cost by model, with the cost of the same tokens at today's prices", aggregations: [
-    sum("cost_usd", ["model_family"], "Cost by model"),
-    sum("cost_today_usd", ["model_family"], "Same tokens at today's prices"),
-  ] },
-  { label: "Most expensive work", title: "Workspaces ranked by API-equivalent cost", aggregations: [sum("cost_usd", ["title"], "Cost by work")] },
-  { label: "Price changes", title: "Cost as billed on the day versus the same usage at today's prices, per month", aggregations: [
-    sum("cost_usd", ["month"], "Cost at the day's prices"),
-    sum("cost_today_usd", ["month"], "Cost at today's prices"),
-  ] },
-  { label: "Subagent cost", title: "Chart root agent versus subagent cost per week", chart: { metric: "cost", split: "session_kind", period: "week" } },
-  { label: "Price coverage", title: "Cost and tokens by price status: priced, assumed, partial, or unpriced", aggregations: [
-    sum("cost_usd", ["price_status"], "Cost by price status"),
-    sum("total_tokens", ["price_status"], "Tokens by price status"),
-  ] },
-];
-
-const usagePresets: UsagePreset[] = [
+const usageChartPresets: UsagePreset[] = [
   { label: "Daily by provider", title: "Chart total tokens per day, split by provider", chart: { metric: "tokens", split: "provider", period: "day" } },
   { label: "Weekly cache mix", title: "Chart uncached input, cache reads, cache writes, and output per week", chart: { metric: "tokens", split: "type", period: "week" } },
-  { label: "Effort", title: "Tokens and cost by recorded effort level and model", aggregations: [
-    sum("total_tokens", ["model_family", "effort"], "Tokens by model and effort"),
-    sum("cost_usd", ["effort"], "Cost by effort"),
-  ] },
-  { label: "Model + effort", title: "Compare tokens and cost for each recorded model and effort pair", chart: { metric: "tokens", split: "model_effort", period: "week" } },
-  { label: "Models", title: "Total tokens and cache reads by model and provider", aggregations: [
-    sum("total_tokens", ["model_family", "provider"], "Tokens by model"),
-    sum("cache_read_input_tokens", ["model_family"], "Cached input by model"),
-    sum("uncached_input_tokens", ["model_family"], "Uncached input by model"),
-  ] },
-  { label: "Repositories", title: "Total tokens by repository, overall and per week", aggregations: [
-    sum("total_tokens", ["repository_name"], "Tokens by repository"),
-    sum("total_tokens", ["week", "repository_name"], "Tokens per week by repository"),
-  ] },
+  { label: "Daily cost", title: "Chart API-equivalent cost per day, split by provider", chart: { metric: "cost", split: "provider", period: "day" } },
+  { label: "Model + effort", title: "Chart tokens for each recorded model and effort pair", chart: { metric: "tokens", split: "model_effort", period: "week" } },
   { label: "Subagents", title: "Chart root agent versus subagent tokens per week", chart: { metric: "tokens", split: "session_kind", period: "week" } },
+  { label: "Subagent cost", title: "Chart root agent versus subagent cost per week", chart: { metric: "cost", split: "session_kind", period: "week" } },
 ];
 
 const byDesc = (field: string): OrderByClause[] => [{ field, dir: "desc" }];
@@ -1126,25 +1101,39 @@ function TokenUsage() {
   const [chart, setChart] = useState<TokenChartView>(() => readStored(tokenChartKey, defaultTokenChart, view =>
     ["tokens", "cost", "percent", "percent_cost"].includes(view.metric) && tokenSplits.some(([value]) => value === view.split) && Object.hasOwn(chartPeriods, view.period) && validPeriodCount(view.hours) && validPeriodCount(view.days) && validRollingPeriods(view.rollingPeriods) && validChartScale(view.scale)));
   const update = (next: Partial<TokenChartView>) => setChart(previous => { const merged = { ...previous, ...next }; store(tokenChartKey, merged); return merged; });
-  function apply(preset: UsagePreset | null) {
-    if (preset?.chart) {
-      update(preset.chart);
-      document.querySelector("#usage .usage-chart")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-      return;
-    }
-    tableApis.get("usage")?.setQuery(previous => ({ ...previous, aggregations: preset?.aggregations ?? [], offset: 0 }));
-  }
   return <QuerySurface dataset="usage" header={api => {
     const where = toAggregationQuery(api.query, schemas.usage).where;
     return <>
       <TokenSummary where={where} />
       <TokenChart where={where} onFilter={filterChange(api)} view={chart} onChange={update} />
-      <div className="usage-preset-rows">
-        <PresetRow label="Cost" presets={costPresets} query={api.query} chart={chart} onApply={apply} />
-        <PresetRow label="Tokens" presets={usagePresets} query={api.query} chart={chart} onApply={apply} clear />
-      </div>
+      <PresetRow label="Chart" presets={usageChartPresets} query={api.query} chart={chart} onApply={preset => { if (preset?.chart) update(preset.chart); }} />
     </>;
-  }} />;
+  }} presets={api => <UsageTableQueries api={api} />} />;
+}
+
+function UsageTableQueries({ api }: { api: QueryTableApi<Row> }) {
+  const grouped = Boolean(api.query.grouping);
+  const apply = (preset: UsageTablePreset) => {
+    api.setQuery(previous => applyUsageTablePreset(previous, preset));
+  };
+  const row = (label: string, presets: UsageTablePreset[]) => <div className="usage-presets" role="group" aria-label={`${label} presets`}>
+    <span className="usage-preset-label">{label}</span>
+    {label === "Group by" ? <QueryChip title="Rows" description="Restore the original usage rows, filters, columns and metrics" active={!grouped} onClick={() => {
+      api.setQuery(previous => previous.grouping?.source ?? previous);
+    }} /> : null}
+    {presets.map(preset => <QueryChip key={preset.label} title={preset.label} description={preset.title} active={usageTablePresetMatches(api.query, preset)} onClick={() => apply(preset)} />)}
+  </div>;
+  const source = api.query.grouping?.source ?? api.query;
+  return <section className="usage-table-queries" aria-label="Usage table queries">
+    {row("Group by", usageGroupPresets)}
+    {row("Compare", usageComparisonPresets)}
+    {grouped ? <div className="usage-group-context">
+      <RangeControl bounds={timeBounds(source.where, usageTime)} editable shortRanges onChange={(from, to) => api.setQuery(previous => previous.grouping ? {
+        ...previous, offset: 0, grouping: { ...previous.grouping, source: { ...previous.grouping.source, where: withTimeRange(previous.grouping.source.where, usageTime, from, to), offset: 0 } },
+      } : previous)} />
+      <span className="muted">Summaries use all matching source rows. API costs can include assumed or partial prices; unpriced tokens still count.</span>
+    </div> : null}
+  </section>;
 }
 
 const tokenSummaryAggregations: AggregationClause[] = [
@@ -1423,7 +1412,7 @@ function UsagePage() {
   return <UsageChartColorsProvider><div className="pharos-query-page usage-page">
     <div className="view-heading library-heading usage-heading">
       <div><h1>Usage</h1><p className="muted">{view === "tokens"
-        ? "Reconciled tokens per agent session, day, model, and effort. Input includes cached input; filter to any provider, model, effort, or repository and the chart follows. Cost is the API list-price equivalent on the day of use, at standard rates. It ignores long-context premiums and subscriptions, so treat it as a lower bound. ≈ marks costs priced by assumption."
+        ? "Explore reconciled usage as individual rows or group by repository, model, effort, agent, work, or time. Grouped tables compare cost, tokens, distinct sessions, and cache reuse across the current source filters. Cost is the API list-price equivalent on the day of use, at standard rates. It ignores long-context premiums and subscriptions, so treat it as a lower bound. ≈ marks costs priced by assumption."
         : view === "writing"
           ? <>Text you typed or dictated into agent chats, per conversation or per message. Harness instructions, one-click prompts, attachments, pastes, and copied agent output are counted separately; filter the table and the chart and breakdown follow. {statusText ? <span className="meta">{statusText}</span> : null}</>
           : "Estimated inference electricity and CO₂e for the tokens in this library, using published research and explicit assumptions."}</p></div>

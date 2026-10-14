@@ -99,6 +99,7 @@ type RegexExtract struct {
 // columns. Compiled by CompileAggregation; the metric panel runs one per spec
 // over the WHERE-filtered set (no paging).
 type AggSpec struct {
+	DateGrouping *MetricDateGrouping `json:"dateGrouping,omitempty"`
 	Diagnostics  []string            `json:"diagnostics,omitempty"`
 	Display      *MetricDisplayHint  `json:"display,omitempty"`
 	Expression   string              `json:"expression,omitempty"`

@@ -2,6 +2,9 @@ import { EMPTY_QUERY, type AggregationClause, type QueryState, type WhereTerm } 
 import { type QueryCategory } from "./query-categories";
 import { queryURL, resolveRollingQuery, type QueryDataset, type RollingWindow } from "./query-links";
 import { richerQueryRecipes } from "./query-recipes-v2";
+import { enrichCardRecipe, newCardRecipes, type CardExploration } from "./card-recipes";
+import { wishlistCardRecipes } from "./wishlist-card-recipes";
+import type { CardCover } from "./card-cover";
 export { clearPreviewCache, loadQueryPreview, loadQueryPreviews, formatPreviewValue } from "./query-previews";
 export type { QueryPreview } from "./query-previews";
 
@@ -10,6 +13,9 @@ export type QueryRecipe = {
   field: string; days?: number[]; where?: WhereTerm[]; measures: AggregationClause[];
   unit: string; category: QueryCategory; scope?: string; note?: string;
   eligibility?: { metricId: string; minValue: number };
+  exploration?: CardExploration;
+  cover?: CardCover;
+  calendarTimezone?: "local";
 };
 export type QuerySuggestion = QueryRecipe & { query: QueryState; window: RollingWindow; url: string; instanceId: string };
 const agg = (op: AggregationClause["op"], field: string, groupBy: string[], label: string): AggregationClause => ({ id: `${op}:${field}:${groupBy.join(",")}`, op, ...(field ? { field } : {}), groupBy, label });
@@ -23,7 +29,7 @@ const usage = { dataset: "usage" as const, field: "first_usage_at", unit: "token
 
 // Only executable, evidence-based recipes belong here. The full idea tracker
 // records richer variants we cannot answer at their required grain yet.
-export const queryRecipes: QueryRecipe[] = [
+const baseRecipes: QueryRecipe[] = [
   { id: "correction-phrases", category: "steering", idea: "conversation-02", title: "Where am I correcting course?", description: "Your messages containing explicit correction phrases.", dataset: "writing_messages", field: "sent_at", unit: "messages", where: [equal("typed_message", "true"), { any: ["you misunderstand", "you misunderstood", "that's not what", "that is not what", "I meant"].map(value => ({ field: "text", op: "contains" as const, value })) }], measures: [], note: "Literal phrase matches; not a semantic classification" },
   { ...calls, id: "tool-failures", category: "errors", idea: "tools-01", title: "Which tools keep failing?", description: "The calls behind recurring tool failures.", days: [1, 7, 30], where: [positive("error_count")], measures: [sum("error_count", ["tool_name"], "Failures by tool")] },
   { ...calls, id: "error-signatures", category: "errors", idea: "tools-02", title: "What error keeps coming back?", description: "Repeated error signatures, with the original calls.", where: [positive("error_count"), { field: "error_signature", op: "is_not_null", value: "" }], measures: [count(["error_signature"], "Calls by error signature"), distinct("conversation_id", ["error_signature"], "Conversations per signature"), distinct("repository_name", ["error_signature"], "Repositories per signature")] },
@@ -33,7 +39,7 @@ export const queryRecipes: QueryRecipe[] = [
   { ...calls, id: "context-carried", category: "context", idea: "context-01", title: "What keeps riding in context?", description: "Tool output carried into later requests, in attributed tokens.", where: [positive("carried_tokens")], measures: [sum("carried_tokens", ["tool_name"], "Context carried by tool")], unit: "tokens", note: "Measured or estimated context attribution" },
   { ...calls, id: "large-outputs", category: "context", idea: "context-02", title: "What fills the context?", description: "Result tokens added by each tool; inspect the largest outputs.", where: [positive("result_tokens")], measures: [sum("result_tokens", ["tool_name"], "Result tokens by tool")], unit: "tokens", note: "Measured or estimated result tokens" },
   { ...calls, id: "truncated-outputs", category: "context", idea: "context-02", title: "What gets cut short?", description: "Truncated tool outputs and the calls that produced them.", where: [equal("truncated", "true")], measures: [count(["tool_name"], "Truncated outputs by tool")] },
-  { ...calls, id: "read-paths", category: "context", idea: "context-08", title: "What do agents read?", description: "Read calls by repository path, with their source evidence.", where: [equal("tool_category", "read")], measures: [count(["repo_path"], "Read calls by path")] },
+  { ...calls, id: "read-paths", category: "context", idea: "context-08", title: "What do agents read?", description: "Most-read repository paths, ranked by read calls.", where: [equal("tool_category", "read")], measures: [count(["repo_path"], "Read calls by path")] },
   { ...calls, id: "research-queries", category: "research", idea: "memory-02", title: "What keeps getting researched?", description: "Exact recorded search queries ranked by frequency.", where: [{ field: "search_query", op: "is_not_null", value: "" }], measures: [count(["search_query"], "Calls by exact search query")] },
   { ...calls, id: "primary-domains", category: "research", idea: "memory-01", title: "Where does research lead?", description: "Primary recorded hosts on tool calls; open the source URLs.", where: [{ field: "host", op: "is_not_null", value: "" }], measures: [count(["host"], "Calls by primary host")], note: "Primary hosts; not every reached URL" },
   { ...calls, id: "mcp-methods", category: "tools", idea: "skills-06", title: "Which MCP methods do I use?", description: "Recorded method calls across connected tools.", where: [{ field: "mcp_method", op: "is_not_null", value: "" }], measures: [count(["mcp_method"], "Calls by MCP method")] },
@@ -47,12 +53,26 @@ export const queryRecipes: QueryRecipe[] = [
   { ...usage, id: "cache-reads", category: "context", idea: "cost-03", title: "Where is caching used?", description: "Recorded cache-read tokens by model; inspect usage details.", where: [positive("cache_read_input_tokens")], measures: [sum("cache_read_input_tokens", ["day", "model_family"], "Daily cache-read tokens by model")], scope: "model_family" },
   { ...usage, id: "subagent-usage", category: "delegation", idea: "models-06", title: "What happens in subagents?", description: "Attributed subagent tokens across repositories.", where: [equal("session_kind", "subagent"), positive("total_tokens")], measures: [sum("total_tokens", ["day", "repository_name"], "Daily subagent tokens")], scope: "repository_name" },
   ...richerQueryRecipes,
+  ...newCardRecipes,
+  ...wishlistCardRecipes,
 ];
+export const queryRecipes = baseRecipes.map(enrichCardRecipe);
 
 export function instantiateRecipe(recipe: QueryRecipe, days: number, clock = new Date()): QuerySuggestion {
-  const window = { days, field: recipe.field };
-  const query = resolveRollingQuery({ ...EMPTY_QUERY, where: recipe.where ?? [], aggregations: recipe.measures }, window, clock);
-  return { ...recipe, window, query, url: queryURL(recipe.dataset, query, window), instanceId: `${recipe.id}:${days}` };
+  const window: RollingWindow = { days, field: recipe.field, mode: "relative" };
+  const measures = recipe.calendarTimezone === "local" ? recipe.measures.map(metric => metric.dateGrouping ? { ...metric, dateGrouping: { ...metric.dateGrouping, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC" } } : metric) : recipe.measures;
+  const source = { ...EMPTY_QUERY, where: recipe.where ?? [], aggregations: measures };
+  const view = recipe.exploration;
+  const coverMetric = recipe.cover?.mode === "source" ? recipe.measures.find(metric => metric.id === recipe.cover!.metricId) : undefined;
+  const keys = coverMetric?.groupBy ?? view?.keys ?? [];
+  const query = resolveRollingQuery(view ? {
+    ...EMPTY_QUERY,
+    grouping: { source, keys, summaries: view.summaries, representative: view.representative ?? null },
+    select: [...keys, ...view.summaries.map(column => column.id)].map(field => ({ field })),
+    where: view.having ?? [], orderBy: [{ field: view.valueField, dir: "desc", nulls: "last" }, ...(view.tieBreakField ? [{ field: view.tieBreakField, dir: "desc" as const }] : []), ...keys.map(field => ({ field, dir: "asc" as const }))],
+    aggregations: view.coverMetric && !coverMetric ? [view.coverMetric] : [],
+  } : source, window, clock);
+  return { ...recipe, measures, window, query, url: queryURL(recipe.dataset, query, window), instanceId: `${recipe.id}:${days}` };
 }
 
 export function shuffled<T>(items: T[]): T[] {
@@ -61,8 +81,8 @@ export function shuffled<T>(items: T[]): T[] {
   return result;
 }
 
-export function suggestionPool(clock = new Date()): QuerySuggestion[] {
+export function suggestionPool(clock = new Date(), recipes = queryRecipes): QuerySuggestion[] {
   // One explicit window per question per visit. Keep the mix broad, without
   // filling the belt with three nearly identical windows of the same card.
-  return shuffled(queryRecipes).map((recipe, index) => instantiateRecipe(recipe, (recipe.days ?? [7, 30, 90])[index % (recipe.days?.length ?? 3)], clock));
+  return shuffled(recipes).map((recipe, index) => instantiateRecipe(recipe, (recipe.days ?? [7, 30, 90])[index % (recipe.days?.length ?? 3)], clock));
 }

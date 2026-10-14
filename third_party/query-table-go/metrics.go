@@ -100,6 +100,9 @@ func compileMetric(ctx context.Context, q MetricQuery, spec AggSpec, s Schema, o
 	return compileMetricDialect(ctx, q, spec, s, o, false)
 }
 func compileMetricDialect(ctx context.Context, q MetricQuery, spec AggSpec, s Schema, o PlanOptions, sqlite bool) (SQLPlan, error) {
+	if spec.DateGrouping != nil {
+		return SQLPlan{}, diagnostic("unsupported_date_grouping", "calendar grouping requires the negotiated v3 executor")
+	}
 	if len(spec.Diagnostics) > 0 {
 		return SQLPlan{}, diagnostic("invalid_metric", "metric contains unresolved diagnostics")
 	}
@@ -132,7 +135,7 @@ func compileMetricDialect(ctx context.Context, q MetricQuery, spec AggSpec, s Sc
 			return SQLPlan{}, err
 		}
 		b.stage("SELECT * FROM " + b.rel + " ORDER BY " + order + " LIMIT " + b.param(q.Limit, "bigint") + " OFFSET " + b.param(q.Offset, "bigint"))
-		if !sqlite {
+		if !sqlite && !schemaHasErrors(s) {
 			b.lateWindow = len(b.stages) - 1
 			b.earlyBindings = map[string]bool{b.sourceAliases[s.IDField]: true}
 			for name := range b.dependencies {
@@ -356,7 +359,7 @@ func compileMetricDialect(ctx context.Context, q MetricQuery, spec AggSpec, s Sc
 		sql += " LIMIT " + b.param(spec.GroupLimit, "integer")
 	}
 	cols := []OutputColumn{}
-	if b.sqlite {
+	{
 		for i, g := range groups {
 			cols = append(cols, OutputColumn{Field: spec.GroupBy[i], ValueAlias: fmt.Sprintf("group%d", i), Type: g.Type})
 		}
@@ -440,7 +443,11 @@ func metricOrder(spec AggSpec, groups int, paired, distribution bool) (string, e
 }
 func (b *planBuilder) aggregatePolicy(n *exprNode, op string, seen map[string]bool) error {
 	if n.op == "field" {
-		if strings.HasPrefix(n.text, "@computed/") {
+		_, materialized := b.schema.Fields[n.text]
+		// V3 stages canonical computed values after checking their definitions,
+		// revisions and reducer policy against the source schema. A materialized
+		// binding is now an ordinary typed input, with any field policy retained.
+		if strings.HasPrefix(n.text, "@computed/") && !materialized {
 			id := strings.TrimPrefix(n.text, "@computed/")
 			if seen[id] {
 				return nil

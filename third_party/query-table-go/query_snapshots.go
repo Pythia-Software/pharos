@@ -41,7 +41,10 @@ var ErrQuerySnapshotQuota = errors.New("query snapshot storage quota exceeded")
 var ErrQuerySnapshotConflict = errors.New("query snapshot code already identifies different state")
 var querySnapshotCode = regexp.MustCompile(`^[A-Za-z0-9_-]{22}$`)
 
-func validateQuerySnapshot(snapshot QuerySnapshot) error {
+// ValidateQuerySnapshot checks the portable snapshot envelope and bounds both
+// encoded and expanded state. It does not authorize a scope or execute a query.
+// Custom repositories must call it on direct writes as well as HTTP writes.
+func ValidateQuerySnapshot(snapshot QuerySnapshot) error {
 	if snapshot.Version != 1 || !querySnapshotCode.MatchString(snapshot.Code) || len(snapshot.Token) > 2*1024*1024 {
 		return errors.New("invalid query snapshot")
 	}
@@ -73,21 +76,53 @@ func validateQuerySnapshot(snapshot QuerySnapshot) error {
 type SQLQuerySnapshotStore struct{ DB *sql.DB }
 
 func (s SQLQuerySnapshotStore) Save(ctx context.Context, scope, dataset string, snapshot QuerySnapshot) (QuerySnapshot, error) {
-	if err := validateQuerySnapshot(snapshot); err != nil {
+	return saveQuerySnapshotIn(ctx, s.DB, scope, dataset, snapshot)
+}
+
+// SaveIn participates in a host-owned transaction. The host can serialize quota
+// checks and insertion in that transaction, and owns commit/rollback. An existing
+// code with the same token returns its original timestamp even at quota.
+func (s SQLQuerySnapshotStore) SaveIn(ctx context.Context, tx *sql.Tx, scope, dataset string, snapshot QuerySnapshot) (QuerySnapshot, error) {
+	if tx == nil {
+		return QuerySnapshot{}, errors.New("nil query snapshot transaction")
+	}
+	return saveQuerySnapshotIn(ctx, tx, scope, dataset, snapshot)
+}
+
+type querySnapshotSQL interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func saveQuerySnapshotIn(ctx context.Context, db querySnapshotSQL, scope, dataset string, snapshot QuerySnapshot) (QuerySnapshot, error) {
+	if err := ValidateQuerySnapshot(snapshot); err != nil {
 		return QuerySnapshot{}, err
 	}
-	if _, err := s.DB.ExecContext(ctx, `INSERT INTO query_table_query_snapshots(scope,dataset,code,token,created_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`, scope, dataset, snapshot.Code, snapshot.Token, time.Now().UnixMilli()); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO query_table_query_snapshots(scope,dataset,code,token,created_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`, scope, dataset, snapshot.Code, snapshot.Token, time.Now().UnixMilli()); err != nil {
 		return QuerySnapshot{}, err
 	}
-	stored, err := s.Resolve(ctx, scope, dataset, snapshot.Code)
+	stored, err := resolveQuerySnapshotIn(ctx, db, scope, dataset, snapshot.Code)
 	if err == nil && stored.Token != snapshot.Token {
 		return QuerySnapshot{}, ErrQuerySnapshotConflict
 	}
 	return stored, err
 }
 func (s SQLQuerySnapshotStore) Resolve(ctx context.Context, scope, dataset, code string) (QuerySnapshot, error) {
+	return resolveQuerySnapshotIn(ctx, s.DB, scope, dataset, code)
+}
+
+// ResolveIn lets quota policy recognize an idempotent save before rejecting a
+// new write. The lookup uses the same authorized transaction as SaveIn.
+func (s SQLQuerySnapshotStore) ResolveIn(ctx context.Context, tx *sql.Tx, scope, dataset, code string) (QuerySnapshot, error) {
+	if tx == nil {
+		return QuerySnapshot{}, errors.New("nil query snapshot transaction")
+	}
+	return resolveQuerySnapshotIn(ctx, tx, scope, dataset, code)
+}
+
+func resolveQuerySnapshotIn(ctx context.Context, db querySnapshotSQL, scope, dataset, code string) (QuerySnapshot, error) {
 	snapshot := QuerySnapshot{Version: 1, Code: code}
-	err := s.DB.QueryRowContext(ctx, `SELECT token,created_at FROM query_table_query_snapshots WHERE scope=$1 AND dataset=$2 AND code=$3`, scope, dataset, code).Scan(&snapshot.Token, &snapshot.CreatedAt)
+	err := db.QueryRowContext(ctx, `SELECT token,created_at FROM query_table_query_snapshots WHERE scope=$1 AND dataset=$2 AND code=$3`, scope, dataset, code).Scan(&snapshot.Token, &snapshot.CreatedAt)
 	return snapshot, err
 }
 
@@ -121,7 +156,7 @@ func NewQuerySnapshotsHandler(repo QuerySnapshotRepository, authorize func(*http
 		if r.Method == http.MethodPut {
 			decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2*1024*1024+1024))
 			decoder.DisallowUnknownFields()
-			if decoder.Decode(&snapshot) != nil || decoder.Decode(new(any)) != io.EOF || snapshot.Code != code || validateQuerySnapshot(snapshot) != nil {
+			if decoder.Decode(&snapshot) != nil || decoder.Decode(new(any)) != io.EOF || snapshot.Code != code || ValidateQuerySnapshot(snapshot) != nil {
 				http.Error(w, "invalid query snapshot", 400)
 				return
 			}

@@ -368,7 +368,7 @@ func (c *Catalog) decideInterventions(ctx context.Context, env *findingEnv, cand
 	if err != nil {
 		return err
 	}
-	rows, err := loadFindingRows(ctx, c.DB, "")
+	rows, err := loadFindingRowsAt(ctx, c.DB, c.clock(), "")
 	if err != nil {
 		return err
 	}

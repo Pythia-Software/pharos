@@ -1,12 +1,10 @@
 package archive
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -16,12 +14,8 @@ import (
 	qt "github.com/Pythia-Software/query-table/backends/go"
 )
 
-// These are complete populations, never a page masquerading as clientRows.
-// Large ledgers stay on SQL; callers narrow source WHERE before exploring.
+// Immutable query configuration is stored independently of dataset contents.
 const qtQuerySnapshotsDDL = qt.QuerySnapshotsDDL
-
-const queryExplorationRows = 10_000
-const queryExplorationBytes = 16 << 20
 
 func (s *Server) querySnapshots(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), queryTableDeadline)
@@ -79,74 +73,6 @@ func querySourceFields(schema qt.Schema) []string {
 	}
 	slices.Sort(names)
 	return names
-}
-
-func (s *Server) postQueryPopulation(w http.ResponseWriter, r *http.Request, dataset string) {
-	schema, err := sqliteQuerySchema(dataset)
-	if err != nil {
-		writeError(w, err, 400)
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1_000_000)
-	var input struct {
-		Where []qt.WhereTerm `json:"where"`
-	}
-	decoder := json.NewDecoder(r.Body)
-	var body json.RawMessage
-	if err = decoder.Decode(&body); err != nil {
-		writeError(w, err, 400)
-		return
-	}
-	if err = requireQueryEOF(decoder); err != nil {
-		writeError(w, err, 400)
-		return
-	}
-	if len(bytes.TrimSpace(body)) == 0 || bytes.TrimSpace(body)[0] != '{' {
-		writeError(w, errors.New("expected a query object"), 400)
-		return
-	}
-	decoder = json.NewDecoder(bytes.NewReader(body))
-	decoder.DisallowUnknownFields()
-	if err = decoder.Decode(&input); err != nil {
-		writeError(w, err, 400)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), queryTableDeadline)
-	defer cancel()
-	request := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{
-		Select: querySourceFields(schema), Where: input.Where, Limit: queryExplorationRows,
-	}}
-	result, err := s.executeQueryV2(ctx, dataset, r.URL.Query(), schema, &request, nil, queryExplorationRows)
-	if err != nil {
-		var diagnostic *qt.PlanDiagnostic
-		if errors.As(err, &diagnostic) && diagnostic.Code == "resource_limit" && diagnostic.Message == "matching population exceeds host budget" {
-			err = fmt.Errorf("Narrow the source filters to at most %d rows for groups and calendar metrics.", queryExplorationRows)
-		}
-		writeError(w, err, 400)
-		return
-	}
-	if result.Find != nil && (result.Find.Limited || result.Find.Search != nil && !result.Find.Search.Complete) {
-		writeError(w, errors.New("The text search is incomplete. Narrow the search before exploring groups or calendar metrics."), 400)
-		return
-	}
-	if result.Rows.Total > queryExplorationRows {
-		writeError(w, fmt.Errorf("This source has %d rows. Narrow its source filters to at most %d rows for groups and calendar metrics.", result.Rows.Total, queryExplorationRows), 400)
-		return
-	}
-	payload := map[string]any{"rows": result.Rows.Rows, "total": result.Rows.Total, "complete": true, "find": result.Find}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		writeError(w, err, 500)
-		return
-	}
-	if len(encoded) > queryExplorationBytes {
-		writeError(w, errors.New("This source exceeds the 16 MB exploration limit. Narrow its source filters."), 400)
-		return
-	}
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, _ = w.Write(encoded)
 }
 
 func requireQueryEOF(decoder *json.Decoder) error {

@@ -4,7 +4,7 @@ import { Icon } from "./icons";
 import { SearchHelp } from "./search-help";
 import { SearchSelect } from "./search-select";
 import { SearchInput } from "./search-input";
-import { chooseScope, conditionSummary, newGroup, newRule, querySyntax, scopeChoice, scopes, searchRequest, sourceLabel, visualFromQuery, type RuleKind, type SearchIssue, type TextCondition, type TextGroup, type TextQuery, type TextScope, type TextSearchDraft } from "./text-search-model";
+import { chooseScope, compileRules, conditionSummary, newGroup, newRule, querySyntax, scopeChoice, scopes, searchRequest, sourceLabel, visualFromQuery, type RuleKind, type SearchIssue, type TextCondition, type TextGroup, type TextQuery, type TextScope, type TextSearchDraft } from "./text-search-model";
 import "./text-search-editor.css";
 
 const EditorDOMPrefix = createContext("");
@@ -113,8 +113,10 @@ function GroupEditor({ group, onChange, issues, subject, path = "1", number = ""
   const content = <>
     <div className="text-group-heading">
       {depth ? <strong>{groupLabel}</strong> : subject}
-      <label>{depth ? "match" : "must match"}<SearchSelect id={`${prefix}${group.id}-join`} aria-label={`Match rules in group ${path}`} value={group.join} onChange={e => onChange({ ...group, join: e.target.value as "all" | "any" })}><option value="all">{depth ? "all of these" : "all text clauses"}</option><option value="any">{depth ? "any of these" : "any text clause"}</option></SearchSelect></label>
-      <SearchHelp label={`Matching group ${path}`}>{group.join === "all" ? "Every positive condition must match within the same message or chosen text span." : "At least one positive condition must match within the same message or chosen text span."} AND NOT rejects any match of its bracketed conditions, within {depth ? groupLabel : "the entire text group"} only.{depth ? "" : " Message and workspace filters always apply as additional AND conditions."}</SearchHelp>
+      {group.children.length > 1 ? <>
+        <label>{depth ? "match" : "must match"}<SearchSelect id={`${prefix}${group.id}-join`} aria-label={`Match rules in group ${path}`} value={group.join} onChange={e => onChange({ ...group, join: e.target.value as "all" | "any" })}><option value="all">{depth ? "all of these" : "all text clauses"}</option><option value="any">{depth ? "any of these" : "any text clause"}</option></SearchSelect></label>
+        <SearchHelp label={`Matching group ${path}`}>{group.join === "all" ? "Every positive condition must match within the same message or chosen text span." : "At least one positive condition must match within the same message or chosen text span."} AND NOT rejects any match of its bracketed conditions, within {depth ? groupLabel : "the entire text group"} only.{depth ? "" : " Message and workspace filters always apply as additional AND conditions."}</SearchHelp>
+      </> : null}
       {depth ? <AddClause group={group} onChange={onChange} path={path} depth={depth} /> : null}
       {onRemove ? <ConditionOptions node={group} path={path} scopeLabel={parentLabel} onExclude={exclude => onChange({ ...group, exclude })} onRemove={onRemove} /> : null}
     </div>
@@ -165,6 +167,7 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
   const [choices, setChoices] = useState<{ providers: string[]; sources: string[] }>({ providers: [], sources: [] });
   const [choicesError, setChoicesError] = useState(false);
   const pending = useRef<AbortController>();
+  const previousRules = useRef<{ visual: Pick<TextSearchDraft, "editor" | "root" | "match" | "text">; text: string; mode: string; separators: boolean }>();
   const form = useRef<HTMLFormElement>(null);
   const baseline = JSON.stringify(value);
   useEffect(() => { if (value === draft && !initialError) return; pending.current?.abort(); setBusy(false); setDraft(value); if (value.root.id !== draft.root.id) setAddedFields([]); setError(initialError ?? ""); setShowIssues(false); }, [value, initialError]);
@@ -179,28 +182,45 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
   const compiled = searchRequest(draft);
   const selectedScope = scopeChoice(draft.scope);
   const issueList = showIssues ? compiled.issues : [];
-  const run = async (convert = false) => {
+  const run = async () => {
     setShowIssues(true); setError("");
     if (filterError) return;
     if (!compiled.request) { form.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus(); return; }
     const controller = new AbortController(); pending.current?.abort(); pending.current = controller; setBusy(true);
     try {
-      const node = await validate(compiled.request, controller.signal);
+      await validate(compiled.request, controller.signal);
       if (controller.signal.aborted) return;
-      if (convert) {
-        const visual = visualFromQuery(node, draft.separators);
-        const next = { ...draft, ...visual }; setDraft(next); onDraft?.(next);
-      }
-      else onApply(draft);
+      onApply(draft);
     } catch (cause) { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { if (!controller.signal.aborted) setBusy(false); }
   };
   const editSyntax = () => {
     if (draft.fuzzy) { setError("Turn off “Include word variations” before switching to query syntax, so the converted query keeps the same matching rules."); return; }
-    if (!compiled.request?.where) { patch({ editor: "syntax" }); return; }
-    const node = compiled.request.where as TextQuery;
-    try { patch({ editor: "syntax", text: querySyntax(node, draft.separators), mode: draft.match === "rules" ? "advanced" : draft.match }); }
+    const node = draft.match === "rules" ? compileRules(draft.root).where : { op: draft.match, text: draft.text } as TextQuery;
+    try {
+      const text = node ? querySyntax(node, draft.separators) : "";
+      const mode = draft.match === "rules" ? "advanced" : draft.match;
+      previousRules.current = { visual: { editor: "visual", root: draft.root, match: draft.match, text: draft.text }, text, mode, separators: draft.separators };
+      patch({ editor: "syntax", text, mode });
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+  };
+  const editRules = async () => {
+    const previous = previousRules.current;
+    if (previous && previous.text === draft.text && previous.mode === draft.mode && previous.separators === draft.separators) {
+      patch(previous.visual); return;
+    }
+    if (!draft.text.trim()) {
+      patch({ editor: "visual", root: newGroup(), match: draft.mode === "literal" || draft.mode === "regex" ? draft.mode : "rules", text: "" }); return;
+    }
+    // Editor navigation only parses the text. Unfinished workspace or date
+    // filters must not prevent returning to Rules.
+    const controller = new AbortController(); pending.current?.abort(); pending.current = controller; setBusy(true); setError("");
+    try {
+      const node = await validate({ query: draft.text, mode: draft.mode, separators: draft.separators, case_sensitive: draft.caseSensitive }, controller.signal);
+      if (!controller.signal.aborted) patch(visualFromQuery(node, draft.separators));
+    } catch (cause) { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { if (!controller.signal.aborted) setBusy(false); }
   };
   const textKind = kind === "text";
   const visualRules = textKind && draft.editor === "visual" && draft.match === "rules";
@@ -215,7 +235,7 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
     }}>
       {!selectedScope ? <option value="custom">Custom message scope</option> : null}
       <optgroup label="Messages">{scopes.slice(0, 8).filter(s => !allowedScopes || allowedScopes.includes(s.id)).map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</optgroup>
-      <optgroup label="Parts of people's messages">{scopes.slice(8).filter(s => !allowedScopes || allowedScopes.includes(s.id)).map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</optgroup>
+      <optgroup label="Parts of user messages">{scopes.slice(8).filter(s => !allowedScopes || allowedScopes.includes(s.id)).map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</optgroup>
       {!textOnly ? <optgroup label="Files and links"><option value="file">Modified files</option><option value="url">Tool URLs</option></optgroup> : null}
     </SearchSelect>
     <SearchHelp label="Search target">{targetDescription}{textKind ? scopes.slice(8).some(s => s.id === selectedScope?.id) ? " All text rules apply within the same classified span." : " All text rules apply within the same message." : ""}</SearchHelp>
@@ -271,7 +291,7 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
     <div className="text-editor-toolbar">
       <span className="text-editor-caption">Query</span>
       <div className="text-editor-tabs" role="group" aria-label="Search editor">
-        <button type="button" aria-label="Visual editor" aria-pressed={!textKind || draft.editor === "visual"} disabled={busy} onClick={() => { if (textKind && draft.editor !== "visual") void run(true); }}><Icon name="edit" />Rules</button>
+        <button type="button" aria-label="Visual editor" aria-pressed={!textKind || draft.editor === "visual"} disabled={busy} onClick={() => { if (textKind && draft.editor !== "visual") void editRules(); }}><Icon name="edit" />Rules</button>
         <button type="button" aria-label="Query syntax" aria-pressed={textKind && draft.editor === "syntax"} disabled={busy || !textKind} onClick={() => { if (draft.editor !== "syntax") editSyntax(); }}>Syntax</button>
       </div>
       <SearchHelp label="Editor mode">{textKind ? "Rules and Syntax are two ways to edit the text group. The search target, additional AND filters, and result order apply to both editors. Ordinary text in Rules is never interpreted as query syntax." : "File and URL searches use plain text. Choose a message search target to use query syntax."}</SearchHelp>

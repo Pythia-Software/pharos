@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gbdubs/pharos/internal/querytable"
 )
@@ -124,6 +125,16 @@ func (s *Server) getQueryTable(w http.ResponseWriter, r *http.Request, dataset, 
 		writeJSON(w, map[string]any{"error": "not found"}, http.StatusNotFound)
 		return
 	}
+	// Keep one low-priority scan active, with separate queue and execution
+	// budgets. A cold scan gets the normal query deadline after acquiring a slot.
+	ctx, release, err := s.beginQueryMetadata(r.Context())
+	if err != nil {
+		writeError(w, err, http.StatusRequestTimeout)
+		return
+	}
+	defer release()
+	r = r.WithContext(ctx)
+
 	schema, err := s.queryTableSchema(dataset)
 	if err != nil {
 		writeError(w, err, http.StatusBadRequest)
@@ -224,8 +235,12 @@ func (s *Server) getFieldStats(w http.ResponseWriter, r *http.Request, dataset s
 }
 
 func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset, operation string) {
+	if operation == "query-v3" {
+		s.postQueryV3(w, r, dataset)
+		return
+	}
 	if operation == "population" {
-		s.postQueryPopulation(w, r, dataset)
+		writeError(w, fmt.Errorf("complete-population downloads are disabled; use server query execution"), http.StatusGone)
 		return
 	}
 	if operation == "metrics" || operation == "rows-v2" {
@@ -447,4 +462,19 @@ func (s *Server) postSQLQueryTable(w http.ResponseWriter, r *http.Request, datas
 	default:
 		writeJSON(w, map[string]any{"error": "not found"}, http.StatusNotFound)
 	}
+}
+
+func (s *Server) beginQueryMetadata(parent context.Context) (context.Context, func(), error) {
+	if err := parent.Err(); err != nil {
+		return nil, nil, err
+	}
+	waiting, cancelWait := context.WithTimeout(parent, 10*time.Second)
+	defer cancelWait()
+	select {
+	case s.queryMetadata <- struct{}{}:
+	case <-waiting.Done():
+		return nil, nil, waiting.Err()
+	}
+	execution, cancel := context.WithTimeout(parent, queryTableDeadline)
+	return execution, func() { cancel(); <-s.queryMetadata }, nil
 }

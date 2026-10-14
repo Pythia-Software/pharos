@@ -173,6 +173,62 @@ def free_port(port):
         sock.bind(("127.0.0.1", port))
 
 
+def reuse_library(source, destination, port, binary):
+    """Keep a recognized dev snapshot when only the executable needs restarting."""
+    if not destination.is_dir() or not (destination / MARKER).is_file():
+        raise RuntimeError(f"No recognized dev library to reuse: {destination}")
+    if Path((destination / MARKER).read_text().strip()).resolve() != source:
+        raise RuntimeError("The dev library belongs to a different production source")
+    config_path = destination / "library.toml"
+    config = tomllib.loads(config_path.read_text())
+    if (config.get("port") != port or config.get("executable") != str(binary)
+            or config.get("host") != "127.0.0.1" or config.get("library") is not True
+            or not config.get("api_token")):
+        raise RuntimeError("Reused dev library must keep its configured port and executable")
+    for key, default in (("catalog_path", "catalog/catalog.sqlite3"),
+                         ("archive_root", "preserved"), ("capture_root", "captures"),
+                         ("staging_root", "staging")):
+        path = configured_path(config, destination, key, default)
+        if destination not in path.parents:
+            raise RuntimeError(f"Reused dev library {key} is outside its isolated directory")
+        if key == "catalog_path" and not path.is_file():
+            raise RuntimeError(f"Reused dev catalog is missing: {path}")
+    print(f"Reusing dev library: {destination}", flush=True)
+    return config["api_token"]
+
+
+def wait_for_projections(server, port, token):
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/ready?projections=1",
+        headers={"Authorization": f"Bearer {token}"})
+    print("Waiting for Library, metrics and text-search projections before opening the UI", flush=True)
+    last_report = None
+    while True:
+        if server.poll() is not None:
+            raise RuntimeError(f"Backend exited with status {server.returncode}")
+        try:
+            with urllib.request.urlopen(request, timeout=3) as response:
+                status = json.load(response)
+        except urllib.error.HTTPError as error:
+            if error.code < 500:
+                raise
+            time.sleep(1)
+            continue
+        except (OSError, urllib.error.URLError):
+            time.sleep(1)
+            continue
+        if status.get("projections_ready"):
+            print("Query projections ready", flush=True)
+            return
+        progress = (status["library_pending"], status["metrics_pending"], status["text_search_ready"])
+        if progress != last_report:
+            print(f"Preparing queries: {progress[0]:,} Library workspaces, "
+                  f"{progress[1]:,} metrics workspaces pending; "
+                  f"text search {'ready' if progress[2] else 'indexing'}", flush=True)
+            last_report = progress
+        time.sleep(1)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, default=Path("/Volumes/euclid/Pharos"))
@@ -180,6 +236,8 @@ def main():
     parser.add_argument("--port", type=int, default=8798, help="Backend port (default: 8798)")
     parser.add_argument("--ui-port", type=int, default=8799)
     parser.add_argument("--no-open", action="store_true")
+    parser.add_argument("--reuse-library", action="store_true",
+                        help="Restart against the existing dev snapshot instead of copying production again")
     args = parser.parse_args()
     source = args.source.expanduser().resolve()
     destination = args.destination.expanduser().absolute()
@@ -213,7 +271,8 @@ def main():
                 subprocess.run(["npm", "ci"], cwd=ROOT / "web", check=True)
             subprocess.run(["npm", "run", "build"], cwd=ROOT / "web", check=True)
             subprocess.run(["go", "build", "-o", str(binary), "./cmd/pharos"], cwd=ROOT, check=True)
-            token = refresh(source, destination, args.port, binary)
+            token = (reuse_library(source, destination, args.port, binary) if args.reuse_library
+                     else refresh(source, destination, args.port, binary))
             env = os.environ.copy()
             for name in ("GITHUB_TOKEN", "PHAROS_TL1_TOKEN", "PHAROS_API_TOKEN", "PHAROS_PARENT_PID"):
                 env.pop(name, None)
@@ -237,12 +296,15 @@ def main():
                 except (OSError, urllib.error.URLError):
                     pass
                 time.sleep(1)
+            wait_for_projections(server, args.port, token)
             launch(["npm", "run", "watch:local"], ROOT / "web")
             command = [str(binary), "--config", config, "dev-ui", "--assets", str(ROOT / "internal/archive/assets"), "--port", str(args.ui_port)]
             if args.no_open:
                 command.append("--no-open")
             launch(command)
-            print(f"Dev library: {destination}\nFrontend: http://127.0.0.1:{args.ui_port}/\nCtrl-C stops all dev processes. Rerun to refresh from production.", flush=True)
+            print(f"Dev library: {destination}\nFrontend: http://127.0.0.1:{args.ui_port}/\n"
+                  "Ctrl-C stops all dev processes. Rerun to refresh from production; "
+                  "--reuse-library keeps this snapshot.", flush=True)
             while all(child.poll() is None for child in children):
                 time.sleep(1)
             raise RuntimeError("A dev process exited; stopping the remaining processes")

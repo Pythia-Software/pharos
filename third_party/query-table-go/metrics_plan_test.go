@@ -547,3 +547,28 @@ func TestPostgresComputedGroupingPolicy(t *testing.T) {
 		t.Fatal(r)
 	}
 }
+
+func TestPostgresShownRowsRetainsErrorSidecars(t *testing.T) {
+	s := metricSchema()
+	field := s.Fields["x"]
+	field.ValueErrorExpr = "CASE WHEN r.id=3 THEN 'unavailable' ELSE NULL END"
+	s.Fields["x"] = field
+	q := MetricQuery{Version: 2, OrderBy: []OrderBy{{Field: "id", Dir: "asc"}}, Limit: 2, Metrics: []AggSpec{{ID: "shown", Expression: "SUM([x])", Scope: "shownRows"}}}
+	batch, err := CompileMetrics(context.Background(), q, s, metricOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := executePlan(t, batch.Metrics[0].SQLPlan)
+	if len(rows) != 1 || rows[0]["value"] != float64(10) || rows[0]["error"] != nil {
+		t.Fatal(rows)
+	}
+	q.Offset = 1
+	batch, err = CompileMetrics(context.Background(), q, s, metricOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows = executePlan(t, batch.Metrics[0].SQLPlan)
+	if len(rows) != 1 || rows[0]["error"] != "unavailable" {
+		t.Fatal(rows)
+	}
+}

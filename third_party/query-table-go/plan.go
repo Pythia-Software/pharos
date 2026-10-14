@@ -30,6 +30,9 @@ func (f DefinitionResolverFunc) ResolveComputed(c context.Context, id string) (C
 type PlanOptions struct {
 	// ComputedGroupable is a trusted host allowlist of computed IDs permitted as group keys.
 	ComputedGroupable map[string]bool
+	// ComputedFilterable is a host allowlist for canonical computed predicates.
+	// The existing v2 default remains closed unless explicitly enabled.
+	ComputedFilterable map[string]bool
 	// ValidatePlanToken must verify the host token against the current actor, dataset, profile, snapshot and expiry.
 	ValidatePlanToken func(context.Context, string) error
 	// ValidateSnapshot verifies and binds a requested snapshot to the active transaction.
@@ -150,6 +153,15 @@ func newPlanDialect(ctx context.Context, s Schema, o PlanOptions, sqlite bool) (
 		b.sourceColumns[v] = expr + " AS " + v
 		b.sourceAliases[n] = v
 		b.fields[n] = ValueSQL{Value: v, Error: b.nullError(), Type: expressionType(f.Kind)}
+		if f.ValueErrorExpr != "" {
+			alias := fmt.Sprintf("f%d", len(names)+i)
+			projection := f.ValueErrorExpr + " AS " + alias
+			cols = append(cols, projection)
+			b.sourceColumns[alias] = projection
+			value := b.fields[n]
+			value.Error = alias
+			b.fields[n] = value
+		}
 	}
 	if len(cols) > 512 {
 		return nil, diagnostic("schema_limit", "v2 profile supports at most 512 projected schema fields")
@@ -161,6 +173,9 @@ func newPlanDialect(ctx context.Context, s Schema, o PlanOptions, sqlite bool) (
 	b.stages[0].Materialized = false
 	for i := range names {
 		b.projection = append(b.projection, fmt.Sprintf("f%d", i))
+		if s.Fields[names[i]].ValueErrorExpr != "" {
+			b.projection = append(b.projection, fmt.Sprintf("f%d", len(names)+i))
+		}
 	}
 	return b, nil
 }
@@ -327,7 +342,7 @@ func (b *planBuilder) field(name string) (ValueSQL, error) {
 			}
 			raw := b.emit("("+v.Value+")::text::numeric", b.nullError(), "number").Value
 			valid := "(abs(" + raw + ") <= 1e100::numeric AND (" + raw + "=0 OR abs(" + raw + ") >= 1e-300::numeric))"
-			v = b.emit("CASE WHEN "+valid+" THEN ("+raw+")::double precision END", "CASE WHEN "+v.Value+" IS NOT NULL AND NOT ("+valid+") THEN 'numeric_range'::text END", "number")
+			v = b.emit("CASE WHEN "+valid+" THEN ("+raw+")::double precision END", "COALESCE("+v.Error+",CASE WHEN "+v.Value+" IS NOT NULL AND NOT ("+valid+") THEN 'numeric_range'::text END)", "number")
 			b.fields[name] = v
 			b.checked[name] = true
 		}
@@ -335,7 +350,7 @@ func (b *planBuilder) field(name string) (ValueSQL, error) {
 			valid := "octet_length(" + v.Value + ") <= 100000"
 			// Formula values use deterministic codepoint ordering. Keep the
 			// source projection's native collation for host text filters/LOWER.
-			v = b.emit("(CASE WHEN "+valid+" THEN "+v.Value+" END) COLLATE \"C\"", "CASE WHEN NOT ("+valid+") THEN 'text_range'::text END", "text")
+			v = b.emit("(CASE WHEN "+valid+" THEN "+v.Value+" END) COLLATE \"C\"", "COALESCE("+v.Error+",CASE WHEN NOT ("+valid+") THEN 'text_range'::text END)", "text")
 			b.fields[name] = v
 			b.checked[name] = true
 		}
@@ -362,7 +377,7 @@ func (b *planBuilder) field(name string) (ValueSQL, error) {
 		return ValueSQL{}, diagnostic("definition_invalid", "resolver returned a different ID")
 	}
 	if err = validateComputed(c); err != nil {
-		return ValueSQL{}, err
+		return ValueSQL{}, &PlanDiagnostic{Code: "definition_invalid", Message: err.Error(), Field: name}
 	}
 	expected, ok := b.options.ExpectedRevisions[id]
 	if !ok || expected == "" || c.Revision != expected {
@@ -610,23 +625,51 @@ func (b *planBuilder) filter(where []WhereTerm) error {
 			}
 		}
 	}
-	s := b.schema
-	s.Fields = map[string]FieldSpec{}
-	for n, f := range b.schema.Fields {
-		f.Expr = b.fields[n].Value
-		f.SortExpr = f.Expr
-		s.Fields[n] = f
+	s, err := b.filterSchema(where)
+	if err != nil {
+		return err
 	}
 	q := WireQuery{Where: where}
 	p, _, err := CompileAt(q, s, len(b.args)+1, b.options.Now)
 	if err != nil {
-		return err
+		return diagnostic("filter", err.Error())
 	}
 	b.args = append(b.args, p.Args...)
 	if p.WhereSQL != "" {
 		b.stage("SELECT * FROM " + b.rel + " WHERE " + p.WhereSQL)
 	}
 	return nil
+}
+
+func (b *planBuilder) filterSchema(where []WhereTerm) (Schema, error) {
+	s := b.schema
+	s.Fields = map[string]FieldSpec{}
+	for name, f := range b.schema.Fields {
+		f.Expr = b.fields[name].Value
+		f.SortExpr = f.Expr
+		s.Fields[name] = f
+	}
+	for _, term := range where {
+		for _, predicate := range term.Predicates() {
+			if !strings.HasPrefix(predicate.Field, "@computed/") {
+				continue
+			}
+			id := strings.TrimPrefix(predicate.Field, "@computed/")
+			if field, ok := b.schema.Fields[predicate.Field]; ok && field.ValueErrorExpr != "" && field.ServerFilter {
+				continue
+			}
+			if !b.options.ComputedFilterable[id] {
+				return s, diagnostic("filter_disabled", "computed filtering requires host policy for "+predicate.Field)
+			}
+			v, err := b.field(predicate.Field)
+			if err != nil {
+				return s, err
+			}
+			f := resultField(predicate.Field, v.Type, v.Value, false)
+			s.Fields[predicate.Field] = f
+		}
+	}
+	return s, nil
 }
 
 // key projects NULL-only expressions for ORDER BY/GROUP BY, where a bare
@@ -753,10 +796,19 @@ func compileComputedRowsDialect(ctx context.Context, q WireQuery, s Schema, o Pl
 	// ORDER BY is repeated to preserve the selected page's ordering through
 	// materialized select-only projections. The population window is already fixed.
 	sql := "SELECT " + strings.Join(selects, ",") + " FROM " + b.rel + " ORDER BY " + order
-	if !sqlite {
+	if !sqlite && !schemaHasErrors(s) {
 		b.deferRowBindings(windowStage, lateStage, early)
 	}
 	return b.finish(sql, "shownRows", cols), nil
+}
+
+func schemaHasErrors(s Schema) bool {
+	for _, f := range s.Fields {
+		if f.ValueErrorExpr != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // CompileRowExpression builds a standalone typed value/error projection over an

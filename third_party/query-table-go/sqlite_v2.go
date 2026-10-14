@@ -62,13 +62,13 @@ func (b *planBuilder) sqliteField(name string, v ValueSQL) (ValueSQL, error) {
 	raw := v.Value
 	if v.Type == "datetime" {
 		payload := b.emit("qt_v2_datetime("+raw+","+b.param(f.SQLiteDatetimeFormat, "text")+")", "NULL", "text")
-		out := b.emit("json_extract("+payload.Value+",'$.value') COLLATE BINARY", "json_extract("+payload.Value+",'$.error')", "datetime")
+		out := b.emit("json_extract("+payload.Value+",'$.value') COLLATE BINARY", "COALESCE("+v.Error+",json_extract("+payload.Value+",'$.error'))", "datetime")
 		b.fields[name] = out
 		b.checked[name] = true
 		return out, nil
 	}
 	// Storage failures remain per-value diagnostics for lazy formula branches.
-	errSQL := "qt_v2_field_error(" + raw + ",'" + v.Type + "')"
+	errSQL := "COALESCE(" + v.Error + ",qt_v2_field_error(" + raw + ",'" + v.Type + "'))"
 	out := b.emit("CASE WHEN "+errSQL+" IS NULL THEN "+raw+" END"+b.collation(), errSQL, v.Type)
 	b.fields[name] = out
 	b.checked[name] = true
@@ -102,16 +102,18 @@ func (b *planBuilder) sqliteReduction(op, raw, inputError, typ string) (string, 
 	}
 }
 func (b *planBuilder) sqliteFilter(where []WhereTerm) error {
-	s := b.schema
-	s.Fields = map[string]FieldSpec{}
-	for name, f := range b.schema.Fields {
-		f.Expr = b.fields[name].Value
-		f.SortExpr = f.Expr
-		s.Fields[name] = f
+	for _, term := range where {
+		for _, predicate := range term.Predicates() {
+			b.dependencies[predicate.Field] = true
+		}
+	}
+	s, e := b.filterSchema(where)
+	if e != nil {
+		return e
 	}
 	p, e := CompileSQLiteWhere(where, s, SQLiteOptions{Now: b.options.Now})
 	if e != nil {
-		return e
+		return diagnostic("filter", e.Error())
 	}
 	sql := sqliteNumberParameters(p.SQL, len(b.args))
 	b.args = append(b.args, p.Args...)
