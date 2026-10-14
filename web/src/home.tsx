@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { FieldSchema } from "@pythia-software/query-table-core";
 import { collectDurableQuery, migrateSavedQueries, moveBookmark, readBookmarks, removeBookmark, updateBookmark, writeBookmarks, type Bookmark } from "./bookmarks";
-import { clearPreviewCache, loadQueryPreviews, queryRecipes, suggestionPool, type QueryPreview, type QuerySuggestion } from "./curiosity-data";
+import { clearPreviewCache, instantiateRecipe, loadQueryPreviews, queryRecipes, suggestionPool, type QueryPreview, type QuerySuggestion } from "./curiosity-data";
 import { queryFromURL, rollingWindowDays, rollingWindowField, type QueryDataset } from "./query-links";
 import { categoryForQuery } from "./query-categories";
 import { QueryCard } from "./query-card";
@@ -9,6 +9,10 @@ import { QueryConveyor } from "./query-conveyor";
 import { Icon } from "./icons";
 import "./home.css";
 import { HomeSearch } from "./search-composer";
+import { CardLibrary } from "./card-library";
+import { cardTemplates } from "./card-library-model";
+import { defaultCardCover } from "./card-cover";
+import { cardLoadingPresentation } from "./card-loading-model";
 
 const welcomes = ["What will you discover in your work?", "How will you be more efficient today?", "What could your past work teach you?", "Which pattern is worth a closer look?", "Where will curiosity take you today?"];
 const isHome = () => ["/", "/home"].includes(location.pathname);
@@ -17,7 +21,8 @@ function navigate(url: string) { window.pharosNavigate?.(url); }
 export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchema<Record<string, any>>> }) {
   const [active, setActive] = useState(isHome);
   const [collection, setCollection] = useState<Bookmark[]>(readBookmarks);
-  const [pool, setPool] = useState<QuerySuggestion[]>(suggestionPool);
+  const [pool, setPool] = useState<QuerySuggestion[]>(() => suggestionPool(new Date(), cardTemplates()));
+  const [library, setLibrary] = useState(() => new URLSearchParams(location.search).get("cards") === "library");
   const [previews, setPreviews] = useState<Record<string, QueryPreview>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true), [generation, setGeneration] = useState(0);
@@ -34,24 +39,26 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   useEffect(() => {
     migrateSavedQueries(); setCollection(readBookmarks());
     const bookmarks = () => setCollection(readBookmarks());
-    const route = () => setActive(isHome());
+    const route = () => { setActive(isHome()); setLibrary(new URLSearchParams(location.search).get("cards") === "library"); };
+    const templates = () => { setPool(suggestionPool(new Date(), cardTemplates())); setGeneration(value => value + 1); };
+    window.addEventListener("pharos:card-templates", templates);
     const visibility = () => setHidden(document.hidden);
     const refresh = () => { clearPreviewCache(); setGeneration(value => value + 1); };
     window.addEventListener("pharos:bookmarks", bookmarks); window.addEventListener("pharos:route", route);
     window.addEventListener("pharos:view", route);
     window.addEventListener("pharos:data-refresh", refresh); document.addEventListener("visibilitychange", visibility);
-    return () => { window.removeEventListener("pharos:bookmarks", bookmarks); window.removeEventListener("pharos:route", route); window.removeEventListener("pharos:view", route); window.removeEventListener("pharos:data-refresh", refresh); document.removeEventListener("visibilitychange", visibility); };
+    return () => { window.removeEventListener("pharos:card-templates", templates); window.removeEventListener("pharos:bookmarks", bookmarks); window.removeEventListener("pharos:route", route); window.removeEventListener("pharos:view", route); window.removeEventListener("pharos:data-refresh", refresh); document.removeEventListener("visibilitychange", visibility); };
   }, []);
   useEffect(() => { if (active) { setGeneration(value => value + 1); } }, [active]);
 
   useEffect(() => {
-    if (!active) return;
+    if (!active || library) return;
     const controller = new AbortController();
     setLoading(true);
     const saved = new Set(collection.map(item => item.templateId).filter(Boolean));
     const jobs = [
-      ...collection.map(item => ({ id: item.id, spec: queryFromURL(item.url, item.query), options: { recipe: queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]), url: item.url, coverMetricId: item.coverMetricId } })),
-      ...pool.filter(item => ![...saved].some(id => id!.split(":")[0] === item.id)).map(item => ({ id: item.instanceId, spec: { dataset: item.dataset, query: item.query, window: item.window }, options: { recipe: item, url: item.url, suggested: true } })),
+      ...collection.map(item => ({ id: item.id, spec: queryFromURL(item.url, item.query), options: { recipe: queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]), url: item.url, coverMetricId: item.coverMetricId, cover: item.cover } })),
+      ...pool.filter(item => ![...saved].some(id => id!.split(":")[0] === item.id)).map(item => ({ id: item.instanceId, spec: { dataset: item.dataset, query: item.query, window: item.window }, options: { recipe: item, cover: item.cover, url: item.url, suggested: true } })),
     ];
     void loadQueryPreviews(jobs.flatMap(job => job.spec ? [{ id: job.id, dataset: job.spec.dataset, query: job.spec.query, schema: schemas[job.spec.dataset], options: { ...job.options, window: job.spec.window } }] : []), (id, preview, error) => {
       if (controller.signal.aborted) return;
@@ -59,7 +66,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
       else { setErrors(current => ({ ...current, [id]: String(error) })); setPreviews(current => { const next = { ...current }; delete next[id]; return next; }); }
     }, controller.signal).then(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [active, collection, pool, generation, schemas]);
+  }, [active, library, collection, pool, generation, schemas]);
 
   const collectedTemplates = new Set(collection.map(item => item.templateId?.split(":")[0]));
   const poolById = new Map(pool.map(item => [item.instanceId, item]));
@@ -70,12 +77,12 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     return item && previews[id]?.state === "ready" && !errors[id] && !collectedTemplates.has(item.id) ? [item] : [];
   });
   useEffect(() => {
-    if (editing) { setEditTitle(editing.title); setEditDescription(editing.description ?? ""); setEditDays(String(queryFromURL(editing.url, editing.query)?.window?.days ?? "")); setEditCover(editing.coverMetricId ?? ""); setEditError(""); editor.current?.showModal(); }
+    if (editing) { setEditTitle(editing.title); setEditDescription(editing.description ?? ""); setEditDays(String(queryFromURL(editing.url, editing.query)?.window?.days ?? "")); const metricId = editing.coverMetricId ?? editing.cover?.metricId ?? ""; setEditCover(coverChoices.some(choice => choice.id === metricId) ? metricId : ""); setEditError(""); editor.current?.showModal(); }
   }, [editing]);
 
   async function keep(item: QuerySuggestion, before?: string) {
     try {
-      const saved = await collectDurableQuery(item.dataset, item.query, item.title, { description: item.description, templateId: item.instanceId, window: item.window });
+      const saved = await collectDurableQuery(item.dataset, item.query, item.title, { description: item.description, templateId: item.instanceId, window: item.window, cover: item.cover ?? defaultCardCover(item) });
       if (before) moveBookmark(saved.id, before);
       setMessage(`Collected “${item.title}”.`); setUndo(null);
       setPreviews(current => ({ ...current, [saved.id]: current[item.instanceId] }));
@@ -100,13 +107,19 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   }
   const finishDrag = () => { setDrag(null); setInsertBefore(undefined); };
   const editingSpec = editing && queryFromURL(editing.url, editing.query);
+  const editingRecipe = queryRecipes.find(recipe => recipe.id === editing?.templateId?.split(":")[0]);
   const canEditWindow = editingSpec && Boolean(editingSpec.window?.field ?? rollingWindowField(editingSpec.dataset));
-  return <div className="curiosity-home" data-feedback-label="Home dashboard">
+  const coverChoices = editingSpec?.query.grouping
+    ? [...editingSpec.query.grouping.summaries.filter(column => column.op !== "row").map(column => ({ id: column.id, label: `${column.label ?? column.id} · grouped rows` })), ...(editingSpec.query.grouping.source.aggregations ?? []).map(metric => ({ id: metric.id, label: `${metric.label ?? metric.id} · observations` }))]
+    : editingSpec?.query.aggregations?.map(metric => ({ id: metric.id, label: metric.label ?? metric.id })) ?? [];
+  return library && active ? <CardLibrary schemas={schemas} onOpen={navigate} onKeep={item => void keep(item)} collected={collectedTemplates} message={message} /> : <div className="curiosity-home" data-feedback-label="Home dashboard">
     <div className="home-intro"><h1>{welcome}</h1><HomeSearch schema={schemas.library} /></div>
+    <div className="home-card-library-nav"><a href="/home?cards=library" className="home-card-library-link" onClick={event => { if (!event.metaKey && !event.ctrlKey) { event.preventDefault(); navigate("/home?cards=library"); } }}><Icon name="compass" /> Browse the card library</a></div>
     <div className={`home-collection${drag ? " accepting" : ""}`} role="region" aria-label="Your collection" onDragOver={event => { if (drag) { event.preventDefault(); const target = (event.target as Element).closest("[data-card-id]"); setInsertBefore(target?.getAttribute("data-card-id") ?? undefined); } }} onDrop={event => drop(event)}>
       {collection.map(item => {
         const spec = queryFromURL(item.url, item.query), recipe = queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]);
-        return <QueryCard key={item.id} id={item.id} title={item.title} description={item.description ?? "A saved view of your work."} url={item.url} windowLabel={spec?.window ? `${spec.window.days}d` : "Saved"} category={recipe?.category ?? categoryForQuery(spec?.dataset ?? item.dataset, spec?.query)}
+        return <QueryCard key={item.id} id={item.id} title={item.title} description={item.description ?? "A saved view of your work."} url={item.url} windowLabel={spec?.window ? `Last ${spec.window.days}d` : "Saved"} category={recipe?.category ?? categoryForQuery(spec?.dataset ?? item.dataset, spec?.query)}
+          loadingSpec={spec ? cardLoadingPresentation(spec.query, { recipe, cover: item.cover, metricId: item.coverMetricId, days: spec.window?.days }) : undefined}
           preview={spec ? previews[item.id] : { state: "ready", total: 0, summary: "Bookmarked page", excerpt: item.url.split("?")[0].slice(1) || "Home" }} error={errors[item.id]} before={insertBefore === item.id}
           onOpen={() => navigate(item.url)} onEdit={() => setEditing(item)} onRemove={() => remove(item)} onMove={direction => move(item.id, direction)}
           onDragStart={event => dragStart(event, { saved: item.id }, item.url)} onDragEnd={finishDrag} onDrop={event => drop(event, item.id)} />;
@@ -116,7 +129,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     </div>
     <div className="home-feedback" role="status">{message}{undo ? <button type="button" onClick={() => { const items = readBookmarks(); items.splice(Math.min(undo.index, items.length), 0, undo.item); writeBookmarks(items); setUndo(null); setMessage("Restored to your collection."); }}>Undo</button> : null}</div>
     <QueryConveyor items={eligible} previews={previews} loading={loading} hasErrors={Object.keys(errors).length > 0} active={active} suspended={hidden || !active || Boolean(drag) || Boolean(editing)}
-      onRefresh={() => { clearPreviewCache(); setPreviews({}); setErrors({}); setPool(suggestionPool()); }} onOpen={navigate} onKeep={keep} onDragStart={(event, item) => dragStart(event, { suggestion: item }, item.url)} onDragEnd={finishDrag} />
+      onRefresh={() => { clearPreviewCache(); setPreviews({}); setErrors({}); setPool(suggestionPool(new Date(), cardTemplates())); }} onOpen={navigate} onKeep={keep} onDragStart={(event, item) => dragStart(event, { suggestion: item }, item.url)} onDragEnd={finishDrag} />
     <dialog ref={editor} className="home-editor" aria-labelledby="homeEditorTitle" onCancel={() => setEditing(null)} onClose={() => setEditing(null)}><form onSubmit={event => {
       event.preventDefault(); if (!editing) return;
       try {
@@ -131,16 +144,20 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
       <h2 id="homeEditorTitle">Make this view yours</h2>
       <label>Title<input autoFocus value={editTitle} maxLength={200} required onChange={event => setEditTitle(event.target.value)} /></label>
       <label>Description<textarea value={editDescription} maxLength={500} onChange={event => setEditDescription(event.target.value)} /></label>
-      {Boolean(editingSpec?.query.aggregations?.length) ? <label>Cover metric<select aria-label="Cover metric" aria-describedby="homeCoverHelp" value={editCover} onChange={event => setEditCover(event.target.value)}>
+      {Boolean(coverChoices.length) ? <label>Cover metric<select aria-label="Cover metric" aria-describedby="homeCoverHelp" value={editCover} onChange={event => setEditCover(event.target.value)}>
         <option value="">First metric</option>
-        {editingSpec!.query.aggregations!.map(metric => <option key={metric.id} value={metric.id}>{metric.label ?? metric.expression ?? `${metric.op} ${metric.field ?? "rows"}`}</option>)}
-      </select><small id="homeCoverHelp">Choose the chart shown on this bookmark. All metrics stay in the saved view.</small></label> : null}
+        {coverChoices.map(metric => <option key={metric.id} value={metric.id}>{metric.label}</option>)}
+      </select><small id="homeCoverHelp">Choose the value shown on this bookmark. The full comparison stays in the saved view.</small></label> : null}
       {canEditWindow ? <label>Time window<select value={editDays} aria-describedby="homeWindowHelp" onChange={event => setEditDays(event.target.value)}>
         {!editingSpec?.window ? <option value="">Keep saved range</option> : null}
-        {rollingWindowDays.map(days => <option key={days} value={days}>{days === 1 ? "Today" : `Last ${days} days`}</option>)}
-      </select><small id="homeWindowHelp">{editDays ? "Includes today. Moves forward each day with your work." : "Keeps the dates and time filters already in this view."}</small></label>
+        {rollingWindowDays.map(days => <option key={days} value={days}>{days === 1 ? "Past 24 hours" : `Past ${days} days`}</option>)}
+      </select><small id="homeWindowHelp">{editDays ? "Last N days, through now. Evaluated when this query runs." : "Keeps the dates and time filters already in this view."}</small></label>
         : <p className="home-editor-window-note">This bookmarked page uses its own time controls.</p>}
       {editError ? <p role="alert">{editError}</p> : null}
+      {editingRecipe?.exploration && !editingSpec?.query.grouping ? <div className="home-editor-upgrade"><button type="button" onClick={() => {
+        const next = instantiateRecipe(editingRecipe, Number(editDays) || 30);
+        editor.current?.close(); navigate(next.url);
+      }}>Try grouped comparison <Icon name="arrow-right" /></button><small>Open the latest version of this question. Save it from the table to keep it.</small></div> : null}
       <div className="home-editor-actions"><button type="button" onClick={() => editor.current?.close()}>Cancel</button><button type="submit">Save changes</button></div>
     </form></dialog>
   </div>;

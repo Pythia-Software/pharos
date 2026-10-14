@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createRequire } = require('node:module');
 const root = path.resolve(__dirname, '..');
-const { chromium, webkit } = createRequire(path.join(root, '.context/browser-tests/package.json'))('playwright');
+const { chromium, webkit } = process.env.PLAYWRIGHT_MODULE ? require(process.env.PLAYWRIGHT_MODULE) : createRequire(path.join(root, '.context/browser-tests/package.json'))('playwright');
 const source = fs.readFileSync(path.join(root, 'internal/archive/assets/ui.py'), 'utf8');
 const html = source.slice(source.indexOf("r'''") + 4, source.lastIndexOf("'''"));
 let browser;
@@ -94,10 +94,12 @@ test('panel, pins and status messages retain positions and keep original annotat
   const record = await page.evaluate(() => JSON.stringify(feedbackAnnotations));
 
   const panel = page.locator('#feedbackPanel');
-  const panelPosition = await drag(page, panel, page.getByRole('button', { name: 'Move feedback panel' }), -600, -300);
-  await page.locator('#feedbackClose').click();
+  const toolbar = page.locator('.feedback-toolbar');
+  assert.equal(await panel.evaluate(element => element.closest('.feedback-toolbar') !== null), true);
+  const panelPosition = await drag(page, toolbar, page.getByRole('button', { name: 'Move annotation toolbar' }), -600, -300);
   await page.locator('#feedbackOpen').click();
-  samePosition(await panel.boundingBox(), panelPosition);
+  await page.locator('#feedbackOpen').click();
+  samePosition(await toolbar.boundingBox(), panelPosition);
 
   const pin = page.locator('.feedback-pin');
   const pinPosition = await drag(page, pin, pin, 100, 70);
@@ -117,10 +119,10 @@ test('panel, pins and status messages retain positions and keep original annotat
     renderFeedbackPins();feedbackToast('Move this status message');
   });
   await page.locator('#feedbackOpen').click();
-  samePosition(await panel.boundingBox(), panelPosition);
+  samePosition(await toolbar.boundingBox(), panelPosition);
   samePosition(await pin.boundingBox(), pinPosition);
   samePosition(await toast.boundingBox(), toastPosition);
-  await page.locator('.feedback-item button').click();
+  await page.getByRole('button', { name: 'Remove annotation 1' }).click();
   assert.equal(await pin.count(), 0);
   assert.equal(await page.evaluate(() => Object.keys(feedbackLayout).some(key => key.startsWith('pin:'))), false);
 });
@@ -172,11 +174,191 @@ test('dragging above a native modal preserves the modal and the moved positions 
   assert.equal(await modal.isVisible(), true);
   await page.locator('#feedbackNote').fill('Improve this modal');
   await page.locator('#feedbackAdd').click();
-  await drag(page, page.locator('#feedbackPanel'), page.getByRole('button', { name: 'Move feedback panel' }), -600, -300);
+  assert.equal(await page.locator('#feedbackPanel').evaluate(element => element.parentElement.classList.contains('feedback-toolbar')), true);
+  await page.locator('#feedbackOpen').click();
+  samePosition(await toolbar.boundingBox(), toolbarPosition);
   await modal.getByRole('button', { name: 'Close review' }).click();
   await page.waitForFunction(() => document.querySelector('.feedback-toolbar').parentElement === document.body);
   samePosition(await toolbar.boundingBox(), toolbarPosition);
   assert.equal(await page.locator('.feedback-pin').count(), 0);
   await page.evaluate(() => openFeedbackComposer(feedbackAnnotations[0], 'Another note'));
   samePosition(await page.locator('.feedback-composer').boundingBox(), composerPosition);
+});
+
+async function annotate(page, note = 'Improve the example control') {
+  await page.locator('#feedbackTarget').click();
+  await page.locator('#annotationFixture').click();
+  await page.locator('#feedbackNote').fill(note);
+  await page.locator('#feedbackAdd').click();
+}
+
+async function clipboardBridge(page, fail = false) {
+  await page.evaluate(fail => {
+    window.feedbackClipboard = [];
+    Object.defineProperty(window, 'webkit', { configurable: true, value: { messageHandlers: { pharosClipboard: {
+      postMessage: async text => { if (fail) throw new Error('denied'); window.feedbackClipboard.push(text); },
+    } } } });
+  }, fail);
+}
+
+test('feedback expands within the toolbar and both feedback controls disappear when empty', async t => {
+  const page = await fixture(t), toolbar = page.locator('.feedback-toolbar'), panel = page.locator('#feedbackPanel');
+  assert.equal(await page.locator('#feedbackOpen').isVisible(), false);
+  assert.equal(await page.locator('#feedbackQuickCopy').isVisible(), false);
+  const collapsed = await toolbar.boundingBox();
+  await annotate(page);
+  assert.equal(await page.locator('#feedbackOpen').getAttribute('aria-expanded'), 'true');
+  assert.equal(await page.locator('#feedbackQuickCopy').isVisible(), true);
+  assert.equal(await panel.evaluate(element => element.closest('.feedback-toolbar') !== null), true);
+  assert.equal(await panel.locator('header').count(), 0);
+  assert.ok((await toolbar.boundingBox()).height > collapsed.height + 100);
+  assert.equal(await page.getByRole('button', { name: 'Move annotation toolbar' }).count(), 1);
+  await page.locator('#feedbackOpen').click();
+  assert.equal(await panel.isVisible(), false);
+  assert.equal(await page.locator('#feedbackOpen').getAttribute('aria-expanded'), 'false');
+  await page.locator('#feedbackOpen').click();
+  await page.getByRole('button', { name: 'Remove annotation 1' }).click();
+  assert.equal(await panel.isVisible(), false);
+  assert.equal(await page.locator('#feedbackOpen').isVisible(), false);
+  assert.equal(await page.locator('#feedbackQuickCopy').isVisible(), false);
+  assert.equal(await page.locator('#feedbackTarget').isVisible(), true);
+});
+
+test('quick copy works with details closed and honors clear-on-copy', async t => {
+  const page = await fixture(t);
+  await clipboardBridge(page);
+  await annotate(page, 'Copy me while collapsed');
+  const copyColors = () => page.locator('#feedbackCopy, #feedbackQuickCopy').evaluateAll(buttons => buttons.map(button => ({
+    background: getComputedStyle(button).backgroundColor, color: getComputedStyle(button).color, title: button.title,
+  })));
+  const yellow = await copyColors();
+  assert.equal(yellow[0].background, yellow[1].background);
+  assert.equal(yellow[0].background, 'rgb(234, 176, 74)');
+  await page.locator('#feedbackOpen').click();
+  await page.locator('#feedbackQuickCopy').click();
+  await page.waitForFunction(() => window.feedbackClipboard.length === 1);
+  assert.match(await page.evaluate(() => window.feedbackClipboard[0]), /Copy me while collapsed/);
+  assert.equal(await page.locator('#feedbackPanel').isVisible(), false);
+  assert.equal(await page.locator('#feedbackCount').innerText(), '1');
+  await page.locator('#feedbackOpen').click();
+  await page.locator('#feedbackClearOnCopy').check();
+  const red = await copyColors();
+  assert.equal(red[0].background, red[1].background);
+  assert.notEqual(red[0].background, yellow[0].background);
+  assert.equal(red[0].title, 'Copy and clear feedback');
+  await page.locator('#feedbackClearOnCopy').uncheck();
+  assert.deepEqual(await copyColors(), yellow);
+  await page.locator('#feedbackClearOnCopy').check();
+  await page.locator('#feedbackOpen').click();
+  await page.reload();
+  assert.deepEqual(await copyColors(), red);
+  assert.equal(await page.locator('#feedbackPanel').isVisible(), false);
+  await page.locator('#feedbackQuickCopy').click();
+  await page.waitForFunction(() => feedbackAnnotations.length === 0);
+  assert.equal(await page.locator('#feedbackOpen').isVisible(), false);
+  assert.equal(await page.locator('#feedbackQuickCopy').isVisible(), false);
+});
+
+test('failed quick copy keeps feedback and restores both copy buttons', async t => {
+  const page = await fixture(t);
+  await clipboardBridge(page, true);
+  await annotate(page, 'Keep this after clipboard failure');
+  await page.locator('#feedbackClearOnCopy').check();
+  await page.locator('#feedbackOpen').click();
+  await page.locator('#feedbackQuickCopy').click();
+  await page.waitForFunction(() => !feedbackCopying);
+  assert.equal(await page.locator('#feedbackCount').innerText(), '1');
+  assert.equal(await page.locator('#feedbackQuickCopy').isEnabled(), true);
+  assert.equal(await page.locator('#feedbackCopy').isEnabled(), true);
+  assert.match(await page.locator('#feedbackToast').innerText(), /Could not copy feedback/);
+});
+
+test('inline editing saves only the note, supports cancel, and survives reload', async t => {
+  const page = await fixture(t);
+  await annotate(page, 'Original feedback');
+  const original = await page.evaluate(() => ({ ...feedbackAnnotations[0] }));
+  await page.getByRole('button', { name: 'Edit annotation 1', exact: true }).click();
+  const field = page.getByRole('textbox', { name: 'Edit annotation 1 feedback' });
+  await field.fill('  ');
+  assert.equal(await page.getByRole('button', { name: 'Save', exact: true }).isEnabled(), false);
+  await field.fill('Discard this draft');
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  assert.match(await page.locator('#feedbackList').innerText(), /Original feedback/);
+  await page.getByRole('button', { name: 'Edit annotation 1', exact: true }).click();
+  await field.fill('Escape this draft');
+  await field.press('Escape');
+  assert.equal(await page.locator('#feedbackPanel').isVisible(), true);
+  assert.equal(await field.count(), 0);
+  await page.getByRole('button', { name: 'Edit annotation 1', exact: true }).click();
+  await field.fill('Updated feedback');
+  await field.press('Control+Enter');
+  assert.deepEqual(await page.evaluate(() => feedbackAnnotations), [{ ...original, note: 'Updated feedback' }]);
+  await clipboardBridge(page);
+  await page.locator('#feedbackOpen').click();
+  await page.locator('#feedbackQuickCopy').click();
+  assert.match(await page.evaluate(() => window.feedbackClipboard[0]), /Updated feedback/);
+  await page.reload();
+  await page.locator('#feedbackOpen').click();
+  assert.match(await page.locator('#feedbackList').innerText(), /Updated feedback/);
+  assert.equal(await page.locator('#feedbackCount').innerText(), '1');
+});
+
+test('list numbers and marker clicks reveal targets while marker dragging only moves the marker', async t => {
+  const page = await fixture(t);
+  await annotate(page);
+  await page.evaluate(() => { document.querySelector('main').scrollTop = 600; });
+  await page.locator('.feedback-item').getByRole('button', { name: 'Go to annotation 1' }).click();
+  await page.waitForFunction(() => document.querySelector('main').scrollTop === 0);
+  await page.locator('#feedbackOpen').click();
+  const pin = page.locator('.feedback-pin');
+  await drag(page, pin, pin, 80, 50);
+  assert.equal(await page.locator('#feedbackPanel').isVisible(), false);
+  await pin.click();
+  assert.equal(await page.locator('#feedbackPanel').isVisible(), true);
+  await page.evaluate(() => document.querySelector('#annotationFixture').remove());
+  await page.locator('.feedback-item').getByRole('button', { name: 'Go to annotation 1' }).click();
+  assert.match(await page.locator('#feedbackToast').innerText(), /unavailable/);
+});
+
+test('expanded feedback stays reachable near viewport edges and on a narrow screen', async t => {
+  const page = await fixture(t), toolbar = page.locator('.feedback-toolbar');
+  await annotate(page);
+  await page.locator('#feedbackOpen').click();
+  await drag(page, toolbar, page.getByRole('button', { name: 'Move annotation toolbar' }), -20, -20);
+  await page.locator('#feedbackOpen').click();
+  await page.getByRole('button', { name: 'Edit annotation 1', exact: true }).click();
+  await page.setViewportSize({ width: 360, height: 420 });
+  await page.waitForFunction(() => {
+    const bounds = document.querySelector('.feedback-toolbar').getBoundingClientRect();
+    return bounds.left >= 0 && bounds.top >= 0 && bounds.right <= innerWidth && bounds.bottom <= innerHeight;
+  });
+  await page.screenshot({ path: path.join(root, '.context/feedback-unified-narrow.png') });
+  await page.getByRole('textbox', { name: 'Edit annotation 1 feedback' }).fill('Edited on a narrow screen');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.setViewportSize({ width: 1200, height: 900 });
+  await page.locator('#feedbackOpen').click();
+  await page.locator('#feedbackOpen').click();
+  await page.screenshot({ path: path.join(root, '.context/feedback-unified-expanded.png') });
+  await toolbar.screenshot({ path: path.join(root, '.context/feedback-unified-panel.png') });
+});
+
+
+test('clicking a marker scrolls the expanded feedback list to its matching entry', async t => {
+  const page = await fixture(t);
+  await annotate(page);
+  await page.evaluate(() => {
+    const original = feedbackAnnotations[0];
+    feedbackAnnotations = Array.from({ length: 18 }, (_, index) => ({ ...original, id: `annotation-${index}`, note: `Feedback entry ${index + 1}` }));
+    saveFeedback();setFeedbackExpanded(false);
+  });
+  await page.locator('.feedback-pin').getByText('18', { exact: true }).click();
+  assert.equal(await page.locator('#feedbackPanel').isVisible(), true);
+  assert.ok(await page.locator('#feedbackList').evaluate(element => element.scrollTop > 0));
+  const list = await page.locator('#feedbackList').boundingBox(), entry = await page.locator('.feedback-item').last().boundingBox();
+  assert.ok(entry.y >= list.y && entry.y + entry.height <= list.y + list.height + 1);
+  await page.getByRole('button', { name: 'Edit annotation 18', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Edit annotation 18 feedback' }).fill('Draft kept while collapsed');
+  await page.locator('#feedbackOpen').click();
+  await page.locator('#feedbackOpen').click();
+  assert.equal(await page.getByRole('textbox', { name: 'Edit annotation 18 feedback' }).inputValue(), 'Draft kept while collapsed');
 });

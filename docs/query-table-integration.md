@@ -57,6 +57,21 @@ V2 adds:
 | `POST /api/query/{dataset}/metrics` | Scalar formulas, paired X/Y, multi-key groups, top-N, MEDIAN, boxes/histograms |
 | `GET/PUT /api/query-computed-columns?dataset=pharos_{dataset}` | Canonical computed definitions with optimistic revisions |
 
+V3 adds `POST /api/query/{dataset}/query-v3` for grouped rows and calendar
+metrics across every supported dataset. `/capabilities` negotiates its profile
+and budgets. Source WHERE runs before summaries; result WHERE is HAVING, followed
+by result sorting/paging and metrics. Group rows have stable synthetic identities
+and retain enum/boolean/datetime types. Canonical computed predicates and summary
+inputs are resolved against the authorized store and revision envelope. The
+frontend uses V3 when grouping, calendar buckets or computed predicates require
+it; ordinary pages and metrics keep their existing V2 execution path.
+
+V3 allows 10 million matching source rows, 512 MiB of narrow staging, 10,000
+groups and 10,000 shown rows, with a 30-second deadline. Incomplete searches,
+invalid values, cancelled requests and exceeded budgets return errors rather
+than partial groups. The old 10,000-row browser population cap does not apply.
+See `query-table-local-development.md` for snapshot provenance and live evidence.
+
 These endpoints use Pharos authentication and same-origin checks. The computed
 DDL is additive and runs during catalog initialization. A computed save runs in
 one transaction, validates the edited definition's transitive graph, and preserves
@@ -116,7 +131,7 @@ pool. Temporary tables are rolled back; host page enrichment happens after the
 connection is released. Large text values and many concurrent requests still
 increase memory usage; the row caps are not a byte-level memory guarantee.
 
-Limits fail explicitly rather than returning approximate populations:
+V2 limits fail explicitly rather than returning approximate populations:
 
 - 20 metrics per batch; 10,000 shown rows; 2,000 result groups before top-N.
 - 250,000 matching SQL rows, or 250,000 total map-source rows before staging.

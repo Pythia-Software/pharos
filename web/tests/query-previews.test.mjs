@@ -5,13 +5,24 @@ import { build } from "esbuild";
 import * as core from "@pythia-software/query-table-core";
 
 const compiled = await build({ entryPoints: ["src/curiosity-data.ts"], bundle: true, write: false, platform: "node", format: "esm" });
-const { queryRecipes, loadQueryPreviews, loadQueryPreview, clearPreviewCache } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString("base64")}`);
-const schemas = Object.fromEntries(["tool_calls", "skill_usages", "writing_messages", "usage", "library", "tl1_attempts"].map(dataset => [dataset, core.loadSchema(JSON.parse(readFileSync(`../schemas/${dataset}.schema.json`, "utf8")))]));
+const { queryRecipes, instantiateRecipe, loadQueryPreviews, loadQueryPreview, clearPreviewCache } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString("base64")}`);
+const schemas = Object.fromEntries(["tool_calls", "skill_usages", "writing_messages", "usage", "library", "tl1_attempts", "mcp_calls"].map(dataset => [dataset, core.loadSchema(JSON.parse(readFileSync(`../schemas/${dataset}.schema.json`, "utf8")))]));
 const execution = { profile: "qt-sqlite-v1", planToken: "", fields: {}, resolvedRevisions: {} };
 const rows = Array.from({ length: 10 }, (_, i) => ({ id: String(i), call_count: 1, error_count: i < 2 ? 1 : 0, tool_name: "Bash", command_name: "go test", duration_ms: (i + 1) * 100, result_tokens: i * 10, result_tokens_source: i % 2 ? "estimated" : "measured", repository_name: i % 2 ? "one" : "two", conversation_id: String(i), started_at: Date.now() }));
 function query(aggregations, extra = {}) { return { ...core.EMPTY_QUERY, aggregations, ...extra }; }
 function job(id, aggregations, options = {}, extra = {}) { return { id, dataset: "tool_calls", schema: schemas.tool_calls, query: query(aggregations, extra), options }; }
 const response = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+const queryCapabilities = { version: 3, profile: execution.profile, groupedRows: true, calendarGrouping: true, computedSourceFilters: true, regex: false, maxRows: 10000, maxGroups: 10000, maxPopulation: 250000 };
+function serverQuery(request, population = rows) {
+  const state = { ...core.EMPTY_QUERY, ...request.result, select: request.result.select.map(field => ({ field })), aggregations: request.metrics,
+    ...(request.grouping ? { grouping: { ...request.grouping, source: { ...core.EMPTY_QUERY, ...request.source, select: request.source.select.map(field => ({ field })) } } } : {}) };
+  const prepared = state.grouping ? core.prepareGrouping(population, schemas.tool_calls, state.grouping, { now: request.now }) : undefined;
+  const schema = prepared?.schema ?? schemas.tool_calls;
+  const page = core.applyQuery(population, state, schemas.tool_calls, { now: request.now });
+  const metrics = core.evaluateMetrics(population, state, schemas.tool_calls, { now: request.now, shownRows: page.rows });
+  return { version: 3, now: request.now, sourceTotal: prepared?.inputs.length ?? population.length, rows: request.rows ? page.rows : [], total: page.total, metrics: metrics.metrics,
+    schema: { name: schema.name, idField: schema.idField, fields: schema.fields.map(({ name, type }) => ({ name, type })) }, execution };
+}
 function fixture(t, intercept = () => undefined) {
   clearPreviewCache();
   const priorFetch = global.fetch, priorLocation = global.location;
@@ -23,7 +34,8 @@ function fixture(t, intercept = () => undefined) {
     const replacement = await intercept(path, request, init);
     if (replacement) return replacement;
     if (path.includes("computed-columns")) return response([]);
-    if (path.endsWith("capabilities")) return response({ metricCapabilities: { version: 2, expressions: true, distributions: true }, computedExecution: execution });
+    if (path.endsWith("capabilities")) return response({ metricCapabilities: { version: 2, expressions: true, distributions: true }, computedExecution: execution, queryCapabilities });
+    if (path.includes("query-v3")) return response(serverQuery(request));
     if (path.includes("rows-v2")) return response(core.applyQuery(rows, request, schemas.tool_calls));
     const metrics = request.metrics.map(metric => ({ ...metric, ...(metric.distribution ? { display: { kind: metric.distribution.kind } } : {}) }));
     return response(core.evaluateMetrics(rows, query(metrics, request), schemas.tool_calls));
@@ -32,11 +44,14 @@ function fixture(t, intercept = () => undefined) {
   return requests;
 }
 
-test("every recipe projects completely to the v2 contract and matches the tracker", () => {
+test("every recipe projects completely to its execution contract and matches the tracker", () => {
   const tracker = JSON.parse(readFileSync("../docs/homepage-query-cards.json", "utf8"));
   assert.deepEqual(tracker.implemented_recipes, JSON.parse(JSON.stringify(queryRecipes)));
   for (const recipe of queryRecipes) {
-    const request = core.toMetricQuery(query(recipe.measures, { where: recipe.where ?? [] }), schemas[recipe.dataset], execution);
+    const state = query(recipe.measures, { where: recipe.where ?? [] });
+    const request = recipe.measures.some(metric => metric.dateGrouping)
+      ? core.toQueryRequestV3(state, schemas[recipe.dataset], queryCapabilities, execution, { now: Date.now(), rows: false })
+      : core.toMetricQuery(state, schemas[recipe.dataset], execution);
     assert.deepEqual(request.diagnostics, [], recipe.id);
     assert.equal(request.metrics.length, recipe.measures.length, recipe.id);
   }
@@ -254,7 +269,7 @@ test("cancellation prevents publication and leaves no aborted result in the cach
 });
 
 test("grouped saved views preview the full source before HAVING and result paging", async t => {
- const requests=fixture(t,(path,request)=>path.includes('/population')?response({rows:core.applyQuery(rows,{...core.EMPTY_QUERY,where:request.where,limit:10000},schemas.tool_calls).rows,total:8,complete:true}):undefined);
+ const requests=fixture(t);
  const grouped=core.normalizeQueryState({
   grouping:{source:query([],{where:[{field:'duration_ms',op:'>',value:'200'}],limit:1,offset:99}),keys:['repository_name'],summaries:[{id:'group_rows',op:'count'}]},
   select:[{field:'repository_name'},{field:'group_rows'}],where:[{field:'group_rows',op:'>=',value:'4'}],orderBy:[{field:'repository_name',dir:'asc'}],limit:1,offset:1,
@@ -262,19 +277,68 @@ test("grouped saved views preview the full source before HAVING and result pagin
  });
  const preview=await loadQueryPreview('tool_calls',grouped,schemas.tool_calls);
  assert.equal(preview.state,'ready');assert.equal(preview.metrics[0].result.buckets[0].value,2);
- assert.equal(requests.filter(r=>r.path.includes('/population')).length,1);
+ assert.equal(requests.filter(r=>r.path.includes('/query-v3')).length,1);
+ assert.equal(requests.filter(r=>r.path.includes('/population')).length,0);
  assert.equal(requests.filter(r=>r.path.includes('/rows-v2')||r.path.endsWith('/metrics')).length,0);
 });
 
-test("calendar previews retain empty local-date buckets and reject partial sources", async t => {
+test("calendar previews execute on the server and preserve server failures", async t => {
  const population=[{...rows[0],started_at:'2026-03-08T08:00:00Z'},{...rows[1],started_at:'2026-03-09T07:00:00Z'}];
  let complete=true;
- const requests=fixture(t,path=>path.includes('/population')?response({rows:population,total:2,complete}):undefined);
+ const requests=fixture(t,(path,request)=>path.includes('/query-v3') ? complete ? response(serverQuery(request,population)) : response({error:'The search is incomplete.'},400) : undefined);
  const q=query([{id:'days',op:'count',expression:'COUNT()',groupBy:['started_at'],dateGrouping:{field:'started_at',interval:'day',timeZone:'America/Denver',includeEmpty:true,range:'custom',start:'2026-03-07',end:'2026-03-10'}}]);
  const preview=await loadQueryPreview('tool_calls',q,schemas.tool_calls);
  assert.equal(preview.metrics[0].result.buckets.reduce((sum,bucket)=>sum+bucket.count,0),2);
  assert.ok(preview.metrics[0].result.buckets.some(bucket=>bucket.count===0));
  complete=false;clearPreviewCache();
  await assert.rejects(loadQueryPreview('tool_calls',q,schemas.tool_calls),/incomplete/);
- assert.equal(requests.filter(r=>r.path.endsWith('/metrics')).length,0);
+ assert.equal(requests.filter(r=>r.path.endsWith('/metrics')||r.path.includes('/population')).length,0);
+});
+
+test("headline numbers represent complete additive measures with their units", async t => {
+  fixture(t);
+  const metric = { id: "calls", op: "count", groupBy: [], label: "Calls" };
+  const complete = await loadQueryPreview("tool_calls", query([metric]), schemas.tool_calls);
+  assert.deepEqual(complete.headlineMetric, { value: "10", unit: "calls" });
+  const formatted = await loadQueryPreview("tool_calls", query([{ ...metric, id: "formatted", display: { kind: "value", format: { kind: "number", decimals: 2 } } }]), schemas.tool_calls);
+  assert.deepEqual(formatted.headlineMetric, { value: "10.00", unit: "" });
+  const zero = await loadQueryPreview("tool_calls", query([{ id: "zero", op: "sum", field: "error_count", groupBy: [] }], { where: [{ field: "error_count", op: "=", value: "0" }] }), schemas.tool_calls);
+  assert.equal(zero.headlineMetric.value, "0", "measured zero remains a real headline");
+  const average = await loadQueryPreview("tool_calls", query([{ id: "average", op: "avg", field: "duration_ms", groupBy: [] }]), schemas.tool_calls);
+  assert.equal(average.headlineMetric, undefined, "observation counts do not become fabricated average headlines");
+});
+
+test("truncated and errored measures never produce a headline total", async t => {
+  let partial = true;
+  const requests = fixture(t, (path, request) => {
+    if (path.endsWith("metrics")) return response({ metrics: request.metrics.map(metric => ({ id: metric.id, coverage: partial ? "partial" : "exact", groupCount: partial ? 20 : 2, buckets: [{ keys: ["Bash"], value: 5, count: 5 }, ...partial ? [] : [{ keys: ["Read"], value: null, count: 1, error: "Cannot calculate" }]], processedRows: 100 })) });
+  });
+  const metric = { id: "calls", op: "count", groupBy: ["tool_name"] };
+  const preview = await loadQueryPreview("tool_calls", query([metric]), schemas.tool_calls);
+  assert.equal(preview.headlineMetric, undefined);
+  assert.match(preview.summary, /^Shown:/);
+  assert.match(preview.note, /Partial results/);
+  assert.doesNotMatch(preview.note, /groups returned|\d+ of \d+/);
+  partial = false;
+  const errored = await loadQueryPreview("tool_calls", query([{ ...metric, id: "errored" }]), schemas.tool_calls);
+  assert.equal(errored.headlineMetric, undefined);
+  assert.match(errored.note, /calculation errors/);
+  assert.ok(requests.length);
+});
+
+
+test("labelled covers fetch friendly titles beyond twelve visible groups", async t => {
+ const population=Array.from({length:25},(_,i)=>({id:`u-${i}`,workspace_id:`w-${i}`,agent_session_id:`s-${i}`,title:`Friendly work ${i}`,first_usage_at:Date.now()-1000,last_usage_at:new Date().toISOString(),total_tokens:1000-i,cost_usd:100-i}));
+ const requests=fixture(t,(path,request)=>{
+  if(!path.includes("/usage/query-v3"))return;
+  const state={...core.EMPTY_QUERY,...request.result,select:request.result.select.map(field=>({field})),aggregations:request.metrics,grouping:{...request.grouping,source:{...core.EMPTY_QUERY,...request.source,select:request.source.select.map(field=>({field}))}}};
+  const prepared=core.prepareGrouping(population,schemas.usage,state.grouping,{now:request.now});
+  const page=core.applyQuery(population,state,schemas.usage,{now:request.now});
+  return response({version:3,now:request.now,sourceTotal:population.length,...page,metrics:core.evaluateMetrics(population,state,schemas.usage,{now:request.now,shownRows:page.rows}).metrics,execution,schema:{name:prepared.schema.name,idField:prepared.schema.idField,fields:prepared.schema.fields.map(({name,type})=>({name,type}))}});
+ });
+ const recipe=queryRecipes.find(recipe=>recipe.id==="usage-work"),item=instantiateRecipe(recipe,7),cover={mode:"result",metricId:recipe.exploration.valueField,maxGroups:20};
+ const preview=await loadQueryPreview("usage",item.query,schemas.usage,{recipe,cover});
+ assert.equal(requests.find(({path})=>path.includes("/usage/query-v3")).request.result.limit,20);
+ assert.equal(Object.keys(preview.groupLabels).length,20);
+ assert.equal(preview.groupLabels[JSON.stringify(["w-19"])],"Friendly work 19");
 });

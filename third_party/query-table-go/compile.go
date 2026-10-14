@@ -611,7 +611,7 @@ func safeIdent(name string) string {
 
 // validateBasicMetricShape guards v1 entry points against dropping v2 intent.
 func validateBasicMetricShape(spec AggSpec) error {
-	if spec.Expression != "" || spec.ExpressionY != "" || spec.Distribution != nil || (spec.Scope != "" && spec.Scope != "allMatching") || len(spec.Sort) > 0 || spec.GroupLimit != 0 || len(spec.Diagnostics) > 0 || (spec.Display != nil && spec.Display.Kind == "scatter") {
+	if spec.DateGrouping != nil || spec.Expression != "" || spec.ExpressionY != "" || spec.Distribution != nil || (spec.Scope != "" && spec.Scope != "allMatching") || len(spec.Sort) > 0 || spec.GroupLimit != 0 || len(spec.Diagnostics) > 0 || (spec.Display != nil && spec.Display.Kind == "scatter") {
 		return fmt.Errorf("modern metrics require CompileMetrics")
 	}
 	return nil

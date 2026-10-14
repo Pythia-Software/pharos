@@ -55,6 +55,7 @@ type SQLiteComputedRow struct {
 	Values map[string]SQLiteComputedValue `json:"values"`
 }
 type SQLiteComputedFieldCapability struct {
+	Filter  bool   `json:"filter,omitempty"`
 	Type    string `json:"type"`
 	Select  bool   `json:"select"`
 	Sort    bool   `json:"sort"`
@@ -433,7 +434,7 @@ func (d SQLiteV2Dataset) readV2Metric(ctx context.Context, tx *sql.Tx, p MetricS
 			return out, diagnostic("resource_limit", "group population exceeds host budget")
 		}
 		for _, c := range p.Columns {
-			v[c.ValueAlias] = sqliteV2TypedValue(v[c.ValueAlias], c.Type)
+			v[c.ValueAlias] = typedQueryValue(v[c.ValueAlias], c.Type)
 		}
 		b := SQLiteMetricV2Bucket{Keys: []any{}, Value: v["value"], Count: v["count"].(int64), Error: sqliteErrorCode(v["error"])}
 		for i := range spec.GroupBy {
@@ -521,6 +522,70 @@ func (d SQLiteV2Dataset) DescribeComputedIn(ctx context.Context, tx *sql.Tx, ids
 			return SQLiteComputedExecution{}, e
 		}
 		out.Fields[name] = d.capabilityForPlan(name, p)
+	}
+	return out, nil
+}
+
+// ComputedDescription keeps the editable catalogue separate from the valid
+// execution envelope. Only successfully compiled transitive graphs advertise
+// capabilities/revisions; infrastructure and context errors fail the request.
+type ComputedDescription struct {
+	Execution   SQLiteComputedExecution    `json:"execution"`
+	Diagnostics map[string]*PlanDiagnostic `json:"diagnostics"`
+}
+
+func (d SQLiteV2Dataset) DescribeComputedPartialIn(ctx context.Context, tx *sql.Tx, ids []string, o PlanOptions) (ComputedDescription, error) {
+	out := ComputedDescription{Execution: SQLiteComputedExecution{Profile: SQLiteExpressionProfile, Fields: map[string]SQLiteComputedFieldCapability{}, ResolvedRevisions: map[string]string{}}, Diagnostics: map[string]*PlanDiagnostic{}}
+	if err := ctx.Err(); err != nil {
+		return out, err
+	}
+	if _, _, _, err := d.limits(); err != nil {
+		return out, err
+	}
+	if tx == nil {
+		return out, fmt.Errorf("nil SQLite transaction")
+	}
+	if len(ids) > 64 {
+		return out, diagnostic("dependency_limit", "too many computed fields")
+	}
+	o = d.options(tx, o)
+	original := o.Resolver
+	var infrastructure error
+	o.Resolver = DefinitionResolverFunc(func(ctx context.Context, id string) (ComputedColumn, error) {
+		column, err := original.ResolveComputed(ctx, id)
+		var issue *PlanDiagnostic
+		if err != nil && !errors.As(err, &issue) {
+			infrastructure = err
+		}
+		return column, err
+	})
+	for _, id := range ids {
+		if err := ctx.Err(); err != nil {
+			return ComputedDescription{}, err
+		}
+		id = strings.TrimPrefix(id, "@computed/")
+		if !computedID.MatchString(id) {
+			return ComputedDescription{}, diagnostic("definition_invalid", "invalid computed ID")
+		}
+		valid, err := d.DescribeComputedIn(ctx, tx, []string{id}, o)
+		if infrastructure != nil {
+			return ComputedDescription{}, infrastructure
+		}
+		if err != nil {
+			var issue *PlanDiagnostic
+			if !errors.As(err, &issue) {
+				return ComputedDescription{}, err
+			}
+			copy := *issue
+			out.Diagnostics[id] = &copy
+			continue
+		}
+		for name, field := range valid.Fields {
+			out.Execution.Fields[name] = field
+		}
+		for name, revision := range valid.ResolvedRevisions {
+			out.Execution.ResolvedRevisions[name] = revision
+		}
 	}
 	return out, nil
 }

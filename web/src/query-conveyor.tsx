@@ -1,9 +1,10 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { QueryPreview, QuerySuggestion } from "./curiosity-data";
 import { QueryCard } from "./query-card";
+import { cardLoadingPresentation } from "./card-loading-model";
 import { Icon } from "./icons";
 
-const CARD_WIDTH = 172, GAP = 18, STRIDE = CARD_WIDTH + GAP, SLIDE_MS = 2040;
+const SLIDE_MS = 2040;
 const REVEAL_MS = 340;
 const leans = [-1.8, 1.3, -1, 1.9, -.9, 1.2];
 const leanFor = (id: string) => leans[Array.from(id).reduce((hash, character) => (hash * 31 + character.charCodeAt(0)) >>> 0, 0) % leans.length];
@@ -33,7 +34,8 @@ export function QueryConveyor({ items, previews, loading, hasErrors, active, sus
   onDragStart: (event: React.DragEvent, item: QuerySuggestion) => void; onDragEnd: () => void;
 }) {
   const section = useRef<HTMLElement>(null), heading = useRef<HTMLDivElement>(null), row = useRef<HTMLDivElement>(null);
-  const [layout, setLayout] = useState({ width: innerWidth, frame: Math.min(1124, innerWidth - 56), overhang: 28, edge: 0 });
+  const [layout, setLayout] = useState({ width: innerWidth, frame: Math.min(1124, innerWidth - 56), overhang: 28, edge: 0, cardWidth: 240, gap: 18 });
+  const CARD_WIDTH = layout.cardWidth, GAP = layout.gap, STRIDE = CARD_WIDTH + GAP;
   const [published, setPublished] = useState<QuerySuggestion[]>([]), [center, setCenter] = useState<string>();
   const [entering, setEntering] = useState<string[]>([]), lastReveal = useRef(0), pendingFocus = useRef<string>();
   const [clockReset, setClockReset] = useState(0);
@@ -60,7 +62,9 @@ export function QueryConveyor({ items, previews, loading, hasErrors, active, sus
       const frame = heading.current!.getBoundingClientRect(), host = section.current!.getBoundingClientRect(), main = scroller.getBoundingClientRect();
       if (!frame.width) return;
       finishMovement();
-      setLayout({ width: scroller.clientWidth, frame: frame.width, overhang: frame.left - main.left, edge: main.left - host.left });
+      const style = getComputedStyle(section.current!);
+      setLayout({ width: scroller.clientWidth, frame: frame.width, overhang: frame.left - main.left, edge: main.left - host.left,
+        cardWidth: parseFloat(style.getPropertyValue("--query-card-width")) || 240, gap: parseFloat(style.getPropertyValue("--query-card-gap")) || 18 });
     };
     measure();
     const observer = new ResizeObserver(measure);
@@ -147,7 +151,7 @@ export function QueryConveyor({ items, previews, loading, hasErrors, active, sus
   const canNavigate = published.length > count && !movement;
   const held = paused || interacting || suspended || Boolean(movement) || populating || !canNavigate;
   return <section ref={section} className="home-conveyor" aria-label="Different angles on your work" aria-busy={populating} tabIndex={-1}
-    style={{ "--belt-viewport-width": `${layout.width}px`, "--conveyor-edge": `${layout.edge}px` } as React.CSSProperties}
+    style={{ "--belt-viewport-width": `${layout.width}px`, "--conveyor-edge": `${layout.edge}px`, "--query-card-stride": `${STRIDE}px` } as React.CSSProperties}
     onKeyDown={event => {
       if (!event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
         event.preventDefault(); if (canNavigate) { section.current?.focus({ preventScroll: true }); move(event.key === "ArrowLeft" ? -3 : 3); }
@@ -166,8 +170,8 @@ export function QueryConveyor({ items, previews, loading, hasErrors, active, sus
         style={{ left: (layout.width - CARD_WIDTH) / 2 + (positions[0] ?? 0) * STRIDE, "--belt-start": first, "--belt-end": last, "--belt-shift": movement ? -movement.offset : 0 } as React.CSSProperties}
         onTransitionEnd={event => { if (event.target === row.current && event.propertyName === "--belt-shift") finishMovement(); }}>
         {slots.map(({ position, item, lean, cycle, onscreen }) => <div className={`home-belt-slot${entering.includes(item.instanceId) ? " arriving" : ""}`} key={`${item.instanceId}:${cycle}`} data-belt-position={position} style={{ "--belt-index": position } as React.CSSProperties}>
-          <QueryCard discovery xray={position < first || position > last} id={item.instanceId} title={item.title} description={item.description} url={item.url} windowLabel={`${item.window.days}d`} category={item.category} lean={lean}
-            preview={previews[item.instanceId]} onReveal={onscreen && !movement ? () => move(position, true) : undefined} onOpen={() => onOpen(item.url)} onKeep={() => onKeep(item)} onDragStart={event => onDragStart(event, item)} onDragEnd={onDragEnd} />
+          <QueryCard discovery xray={position < first || position > last} id={item.instanceId} title={item.title} description={item.description} url={item.url} windowLabel={`Last ${item.window.days}d`} category={item.category} lean={lean}
+            loadingSpec={cardLoadingPresentation(item.query, { recipe: item, cover: item.cover, days: item.window.days })} preview={previews[item.instanceId]} onReveal={onscreen && !movement ? () => move(position, true) : undefined} onOpen={() => onOpen(item.url)} onKeep={() => onKeep(item)} onDragStart={event => onDragStart(event, item)} onDragEnd={onDragEnd} />
         </div>)}
       </div>
       {!items.length ? <p className="home-discovery-empty">{loading ? "Looking for interesting angles in your library…" : hasErrors ? "Some previews could not load. Refresh to try again." : "No matching angles in these recent windows yet. As your library grows, new views will appear here."}<a href="/library" onClick={event => { event.preventDefault(); onOpen("/library"); }}>Explore the library <Icon name="arrow-right" /></a></p> : null}

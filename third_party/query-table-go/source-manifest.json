@@ -1,0 +1,43 @@
+{
+  "upstreamCommit": "ad41521cf735c70d073280c832102d27c117da3c",
+  "localChanges": [
+    "calendar.go: ignore cleared filters; narrow, budget and release each calendar scratch table; key rows in bounded batches",
+    "query_v3_execute.go: share the UTF-8 staging size counter",
+    "query_v3_staging.go: check calendar scratch payload and key/ordinal budgets before and after copying"
+  ],
+  "files": {
+    "calendar.go": "9fb8a4edb5ca9f6fa4049c033a55015ccd7e2f0310d29bb2194bf833655f76d3",
+    "compile.go": "9ad6c6a0ec7c4a88f5959142f0ce79c8869c0b7e7f6813dd868b16e340bfde66",
+    "computed_resolver.go": "487dcf0aae231ae26bab158750e0f1cad3883f73586e808aa73cae8d9e935ef6",
+    "computed_store.go": "01a74bd8d582d14be4a2209c9faa55af19289c1dd91b40264767c97411e572d0",
+    "distribution.go": "34a38b02bf7e68f628e2a451320ca42407494d99387ffc5f4ea1cac9c8dbeef5",
+    "execution.go": "ab87d5b76ace00eb0340a0ef47be271eee55678fe2c2562adc8214a4699e71a9",
+    "expression.go": "bf9f38a4b104e38e0a9ba337d605ac318eb3e5712452e05e8b8ee3bbc85c5abe",
+    "metrics.go": "29296b11df2d4e51d98dc789c40a4f6def191ef5999f3e8aee8046d95642972e",
+    "metrics_combined.go": "09a32701fc10ec1375c1ac70b67155e46b469b7c1eda7600c253969d92d86703",
+    "plan.go": "00245e7ccb78691109bfcbb5a2826cbdf7a0cd7c31e486ca8988ca00aaf74269",
+    "postgres_sql_tokens.go": "c822f1ba4050e3353f9386a62c3bb8be52502d688119f19ac1dd01f2cb55c341",
+    "protocol_v2.go": "68f245156d73d17c5bfabf8133463c6bdb9be179dff647ebda3e28d93c6cb469",
+    "query.go": "81151ddbf427916d7dfdd435bea20c685e20875e1e11c32600d6c71a61024199",
+    "query_snapshots.go": "28b6c9938493dc73556e41857aaaa52963ed97ccc3a7a375da950e993d18f2a6",
+    "query_v3.go": "b27c7b160bf60772e4937e97d6f0798f34b10da14fdc3022343bbcd84bd7008a",
+    "query_v3_computed.go": "051faead648a397dc20f5e9231e985128ebed06a416e5a82106e4eab0acf76b9",
+    "query_v3_execute.go": "a97f4f51a6a6389041e105920deee24cd3d0d5d1c305bab2665c41fe4c046bfe",
+    "query_v3_http.go": "fbad54697d8b478466abf01fcc94b91e1dc6b9ae70a990c31a8d18f0b388e43b",
+    "query_v3_staging.go": "691b7a39ac7fbeed3d23fabd5e2286c2b59b2e4d15d287d20ff95d8e5181c8a0",
+    "relationships.go": "e205a520851b5346023c39f6c3393ce517b8d5fe7edb9083ac71a68b05364747",
+    "relative_time.go": "86f2786945d5b5444de05887aa76fc4616032f46294f77bfcdb49a9fe32bc178",
+    "row_bindings.go": "6cad19ba40c0deb6de9fb9b260e932d91be932fa1be9ab1146fc5f93a6647a74",
+    "schema.go": "ddcd2bc1dd3110ad00ddd6558585377b1ef6a9a3ee39700700bad5920e23c8a7",
+    "sqlite_compile.go": "fad8496f579dc7fbbdd69ca74b32754a9da281027e8b8b725bb7e90bf42abcb0",
+    "sqlite_dataset.go": "7f78f20cd9f81bfd0fe976d4c5782aeebffc42901c97277fb6427c518ed75465",
+    "sqlite_decode.go": "ca58b7933b75368833ea18cf68dfc6cc67a7b9d50fa28c6f4181bee36473ef57",
+    "sqlite_distribution.go": "592b35c602d2d3e45326b5c99e0b7123cc3097ecf8ad3ac494d98c35e19404a0",
+    "sqlite_functions.go": "f4b9e78bc296b77cc687327ddceff741179be338f1ff410c9f13f53ad0591280",
+    "sqlite_store.go": "d6a148c7e47eb55b4a35a115a9877c4f8e8246439e04bf42934a5b0b302525bd",
+    "sqlite_v2.go": "20ecc984c4fce4ef6def87d51f58c9b697fa4c4a6344260f45585be5b806e469",
+    "sqlite_v2_dataset.go": "9ccf1cd186c6d5994e432074b805437164855b41ccae4f0c9c6c3b376a4d238c",
+    "sqlite_v2_functions.go": "887a86641c8a406364e9b48e887914fe60226c2eed3ebd4516539e0a3c6348aa",
+    "sqlite_v2_reuse.go": "ef4930561d350fb74d83b6bf386f8109e2eec8d791ee92a5ec459e76c5d8ee58"
+  }
+}

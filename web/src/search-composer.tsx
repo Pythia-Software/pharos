@@ -1,9 +1,11 @@
-import React, { useEffect, useRef, useSyncExternalStore } from "react";
+import React, { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import type { FieldSchema } from "@pythia-software/query-table-core";
 import { TextSearchEditor } from "./text-search-editor";
 import { SearchOrderControl } from "./search-order";
 import { filterIssue, SearchFilters, SearchFilterFields } from "./search-filters";
 import { freshSearch, searchURL, type SearchComposerState } from "./search-composer-state";
+import { conditionSummary } from "./text-search-model";
+import { Icon } from "./icons";
 
 // Home and the menu dialog share an unfinished draft. Editing is entirely
 // local: validation runs on submit and only Library fetches workspace results.
@@ -31,11 +33,36 @@ export function SearchComposer({ schema, state, onChange, onSubmit = next => win
 }
 export function HomeSearch({ schema }: { schema: FieldSchema }) {
   const state = useSearchDraft(schema);
-  const host = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  const id = useId();
   useEffect(() => {
-    const focus = () => { if (["/", "/home"].includes(location.pathname) && !document.querySelector("dialog[open]")) requestAnimationFrame(() => host.current?.querySelector<HTMLInputElement>('input:not([type="checkbox"])')?.focus({ preventScroll: true })); };
-    focus(); window.addEventListener("pharos:view", focus);
-    return () => window.removeEventListener("pharos:view", focus);
+    const collapse = () => { if (["/", "/home"].includes(location.pathname)) setExpanded(false); };
+    window.addEventListener("pharos:view", collapse);
+    return () => window.removeEventListener("pharos:view", collapse);
   }, []);
-  return <div ref={host}><SearchComposer key={state.text.root.id} schema={schema} state={state} onChange={replaceSearchDraft} /></div>;
+  useEffect(() => {
+    if (content.current) content.current.inert = !expanded;
+    if (!expanded) return;
+    const frame = requestAnimationFrame(() => content.current?.querySelector<HTMLElement>('textarea, input:not([type="checkbox"])')?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
+  }, [expanded]);
+  const text = state.text;
+  const hasRules = text.root.children.some(condition => condition.kind === "group" || condition.text.trim());
+  const summary = state.kind !== "text" ? state.file : text.editor === "syntax" || text.match !== "rules" ? text.text : hasRules ? conditionSummary(text.root) : "";
+  return <div className={`home-search-disclosure${expanded ? " is-expanded" : ""}`} onKeyDown={event => {
+    if (event.key === "Escape" && expanded && !event.defaultPrevented && !document.querySelector(".text-condition-popup, .search-help-bubble")) {
+      event.preventDefault(); setExpanded(false); trigger.current?.focus();
+    }
+  }}>
+    <button ref={trigger} type="button" className="home-search-trigger" aria-label={expanded ? "Collapse search" : "Search your library"} aria-expanded={expanded} aria-controls={id} onClick={() => setExpanded(!expanded)}>
+      <Icon name="search" /><span className={summary ? "home-search-preview" : "home-search-placeholder"}>{summary || "Search your library…"}</span><Icon name="chevron-down" />
+    </button>
+    <div className="home-search-expansion" aria-hidden={!expanded}>
+      <div ref={content} id={id} className="home-search-content">
+        <SearchComposer key={state.text.root.id} schema={schema} state={state} onChange={replaceSearchDraft} />
+      </div>
+    </div>
+  </div>;
 }

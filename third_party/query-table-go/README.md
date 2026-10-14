@@ -1,7 +1,15 @@
 # Pharos's Query Table Go adapter
 
-The production sources track Query Table commit **43b0182** (the next-release
-source integration), with its snapshot quota hook from the Miami worktree.
+The production sources track Phoenix commit **ad41521cf735c70d073280c832102d27c117da3c**,
+which includes the V3 executor, computed-cell errors, default and hidden-field
+sorting, calendar empty-series handling, and separate identities for errored
+group keys. The HTTP deadline fix returns 504 for an execution timeout.
+`source-manifest.json` records the exact production file hashes, baseline and
+local calendar fixes. Calendar metrics stage only their own dependencies, check
+scratch budgets including date keys, release each copy promptly, and key rows in
+bounded batches.
+The vendored source itself is the retained snapshot; the older frontend source
+archives are historical and do not describe this Go revision.
 Existing adapter regressions and local fixtures are retained; snapshot tests
 also track upstream. The upstream MIT license is retained in `LICENSE`. The root `go.mod` pins the module
 version and replaces it with this directory, so clean checkouts build without

@@ -79,11 +79,11 @@ func (c *Catalog) ensureMetricSchema() error {
 }
 
 func (c *Catalog) refreshMetricProjections(ctx context.Context, batch int, workspaceIDs ...string) (int, error) {
-	tx, err := c.beginWrite(ctx)
+	tx, finish, err := c.beginTrackedWrite(ctx, "metric-projection")
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback(); finish() }()
 	where, args := "", []any{}
 	if workspaceIDs != nil {
 		where = " WHERE workspace_id IN (SELECT value FROM json_each(?))"
@@ -204,11 +204,11 @@ func (c *Catalog) projectWorkspaceMetrics(ctx context.Context, tx *sql.Tx, book 
 				hasChildren = true
 			}
 		}
-		var childCount int
-		if err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM conversations WHERE parent_id=?", cid).Scan(&childCount); err != nil {
+		var childExists bool
+		if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM conversations WHERE parent_id=?)", cid).Scan(&childExists); err != nil {
 			return err
 		}
-		hasChildren = hasChildren || childCount > 0
+		hasChildren = hasChildren || childExists
 		unassigned := false
 		for _, u := range usage {
 			if firstString(u["native_id"]) == "main" {

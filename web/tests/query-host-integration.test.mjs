@@ -65,7 +65,9 @@ test('rolling grouped views renew source bounds without rewriting HAVING or metr
  assert.ok(m.rollingQueryMatches(resolved,window));
  const updated=m.queryFromURL(m.updateQueryWindowURL(m.queryURL('tool_calls',resolved,window),1));
  assert.deepEqual(updated.query.where,grouped.where);
- assert.ok(m.rollingQueryMatches(updated.query,{field:'started_at',days:1}));
+ assert.deepEqual(updated.window,{field:'started_at',days:1,mode:'relative'});
+ assert.ok(m.rollingQueryMatches(updated.query,updated.window));
+ assert.deepEqual(updated.query.grouping.source.where.slice(-2).map(term=>term.value),['-1d','+0s']);
 });
 
 test('native bookmarks created before dataset metadata can still be updated',async()=>{

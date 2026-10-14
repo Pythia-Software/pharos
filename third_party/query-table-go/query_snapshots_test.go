@@ -71,12 +71,12 @@ func TestQuerySnapshotCompressedBounds(t *testing.T) {
 	_, _ = writer.Write(bytes.Repeat([]byte("x"), 4*1024*1024+1))
 	_ = writer.Close()
 	q := QuerySnapshot{Version: 1, Code: "aaaaaaaaaaaaaaaaaaaaaa", Token: "2d." + base64.RawURLEncoding.EncodeToString(compressed.Bytes())}
-	if err := validateQuerySnapshot(q); err == nil {
+	if err := ValidateQuerySnapshot(q); err == nil {
 		t.Fatal("oversized expanded state accepted")
 	}
 	for _, token := range []string{"3j.e30", "2j.bnVsbA", "2d.AA"} {
 		q.Token = token
-		if validateQuerySnapshot(q) == nil {
+		if ValidateQuerySnapshot(q) == nil {
 			t.Fatal(token)
 		}
 	}

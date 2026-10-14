@@ -29,16 +29,15 @@ func TestQueryExplorationHTTP(t *testing.T) {
 	}
 	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts"} {
 		t.Run(dataset, func(t *testing.T) {
-			w := call("POST", "/api/query/"+dataset+"/population", `{"where":[]}`)
+			w := call("POST", "/api/query/"+dataset+"/rows-v2", `{"version":2,"profile":"qt-sqlite-v1","select":["id"],"limit":1}`)
 			if w.Code != 200 {
 				t.Fatal(w.Code, w.Body.String())
 			}
 			var result struct {
-				Rows     []map[string]any `json:"rows"`
-				Total    int              `json:"total"`
-				Complete bool             `json:"complete"`
+				Rows  []map[string]any `json:"rows"`
+				Total int              `json:"total"`
 			}
-			if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || !result.Complete || len(result.Rows) != result.Total {
+			if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || len(result.Rows) > 1 {
 				t.Fatalf("incomplete: %s %v", w.Body.String(), err)
 			}
 			if len(result.Rows) > 0 {
@@ -51,7 +50,7 @@ func TestQueryExplorationHTTP(t *testing.T) {
 		})
 	}
 	for _, body := range []string{`null`, `[]`, `{"where":[]} {}`, `{"where":[],"limit":1}`, `{"where":[{"field":"not_a_field","op":"=","value":"x"}]}`} {
-		if w := call("POST", "/api/query/tool_calls/population", body); w.Code != 400 {
+		if w := call("POST", "/api/query/tool_calls/population", body); w.Code != http.StatusGone {
 			t.Fatal(w.Code, w.Body.String())
 		}
 	}
@@ -65,17 +64,16 @@ func TestQueryExplorationHTTP(t *testing.T) {
 	}
 }
 
-func TestQueryExplorationNeverReturnsAPage(t *testing.T) {
+func TestQueryPopulationDownloadsDisabled(t *testing.T) {
 	catalog, config := testCatalog(t)
-	seedToolCalls(t, catalog, queryExplorationRows+1)
 	server := NewServer(config, catalog)
-	w := queryExplorationCall(server, config.APIToken, "POST", "/api/query/tool_calls/population", `{"where":[]}`)
-	if w.Code != 400 || !strings.Contains(w.Body.String(), "Narrow") || strings.Contains(w.Body.String(), `"rows"`) {
-		t.Fatal(w.Code, w.Body.String())
-	}
-	w = queryExplorationCall(server, config.APIToken, "POST", "/api/query/tool_calls/population", `{"where":[{"field":"tool_name","op":"=","value":"shell_command"}]}`)
-	if w.Code != 200 {
-		t.Fatal(w.Code, w.Body.String())
+	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts"} {
+		for _, body := range []string{`{"where":[]}`, `{"where":[{"field":"tool_name","op":"=","value":"shell_command"}]}`} {
+			w := queryExplorationCall(server, config.APIToken, "POST", "/api/query/"+dataset+"/population", body)
+			if w.Code != http.StatusGone || strings.Contains(w.Body.String(), `"rows"`) || !strings.Contains(w.Body.String(), "server query execution") {
+				t.Fatal(w.Code, w.Body.String())
+			}
+		}
 	}
 }
 

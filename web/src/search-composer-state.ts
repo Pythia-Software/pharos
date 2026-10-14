@@ -27,6 +27,7 @@ export function searchURL(state: SearchComposerState): string {
   const params = new URLSearchParams({ q_library: encodeQuery({ ...state.query, offset: 0 }) });
   if (state.window && rollingQueryMatches(state.query, state.window)) {
     params.set("window_dataset", "library"); params.set("window_field", state.window.field); params.set("window_days", String(state.window.days));
+    if (state.window.mode === "relative") params.set("window_mode", "relative");
   }
   if (state.kind === "text") params.set("text_builder", JSON.stringify(state.text));
   else { params.set("kind", state.kind); params.set("search", state.file.trim()); if (state.fileCase) params.set("case", "1"); }

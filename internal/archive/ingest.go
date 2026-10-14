@@ -1356,10 +1356,16 @@ func linkAliasesContext(ctx context.Context, tx *sql.Tx, conversationID string, 
 func replaceMetrics(tx *sql.Tx, workspaceID string, values []map[string]any) error {
 	for _, value := range values {
 		extractor := defaultString(value["extractor_version"], "core-v1")
-		if _, err := tx.Exec("DELETE FROM metrics WHERE workspace_id=? AND conversation_id IS NULL AND name=? AND extractor_version=?", workspaceID, firstString(value["name"]), extractor); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`INSERT INTO metrics(workspace_id,conversation_id,name,value,unit,status,extractor_version,coverage,definition,observed_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, workspaceID, nil, firstString(value["name"]), value["value"], defaultString(value["unit"], "count"), defaultString(value["status"], "observed"), extractor, value["coverage"], nilIfEmpty(firstString(value["definition"])), defaultString(value["observed_at"], now())); err != nil {
+		// Preserve the row identity instead of deleting/reinserting identical
+		// facts on every index pass. Observation time can still advance without
+		// evicting cached views or generating deletion/insertion invalidations.
+		if _, err := tx.Exec(`INSERT INTO metrics(workspace_id,conversation_id,name,value,unit,status,extractor_version,coverage,definition,observed_at) VALUES(?,?,?,?,?,?,?,?,?,?)
+ ON CONFLICT(workspace_id,name,extractor_version) WHERE conversation_id IS NULL DO UPDATE SET
+ value=excluded.value,unit=excluded.unit,status=excluded.status,coverage=excluded.coverage,
+ definition=excluded.definition,observed_at=excluded.observed_at
+ WHERE metrics.value IS NOT excluded.value OR metrics.unit IS NOT excluded.unit
+ OR metrics.status IS NOT excluded.status OR metrics.coverage IS NOT excluded.coverage
+ OR metrics.definition IS NOT excluded.definition OR metrics.observed_at IS NOT excluded.observed_at`, workspaceID, nil, firstString(value["name"]), value["value"], defaultString(value["unit"], "count"), defaultString(value["status"], "observed"), extractor, value["coverage"], nilIfEmpty(firstString(value["definition"])), defaultString(value["observed_at"], now())); err != nil {
 			return err
 		}
 	}
