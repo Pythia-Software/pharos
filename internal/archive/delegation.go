@@ -176,7 +176,19 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 	if err != nil {
 		return nil, err
 	}
-	sessions, err := queryMapsContext(ctx, tx, `SELECT a.*,substr(CASE WHEN json_valid(m.text) THEN COALESCE(json_extract(m.text,'$.input.description'),json_extract(m.text,'$.input.prompt'),json_extract(m.text,'$.input.task'),m.text) ELSE m.text END,1,180) assignment FROM agent_sessions a LEFT JOIN messages m ON m.id=a.delegation_message_id WHERE a.workspace_id=? ORDER BY a.started_at,a.id LIMIT 10001`, workspace)
+	// Providers normalize launch arguments into input, but use different task
+	// fields. Codex can retain a readable task_name beside an encrypted message.
+	// Extract before clipping: the name may follow a very large message. Unknown
+	// structured payloads and opaque messages must not become display labels.
+	sessions, err := queryMapsContext(ctx, tx, `SELECT a.*,substr(CASE WHEN json_valid(m.text) THEN
+ (SELECT value FROM json_each(m.text,'$.input')
+  WHERE type='text' AND key IN ('task_name','description','prompt','Prompt','task','message')
+   AND trim(value,char(9)||char(10)||char(13)||' ')<>'' AND value NOT GLOB 'gAAAA*'
+  ORDER BY CASE key WHEN 'task_name' THEN 0 WHEN 'description' THEN 1 WHEN 'prompt' THEN 2 WHEN 'Prompt' THEN 3 WHEN 'task' THEN 4 ELSE 5 END
+  LIMIT 1)
+ ELSE m.text END,1,180) assignment
+ FROM agent_sessions a LEFT JOIN messages m ON m.id=a.delegation_message_id
+ WHERE a.workspace_id=? ORDER BY a.started_at,a.id LIMIT 10001`, workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +303,10 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 		}
 		cid := firstString(row["conversation_id"])
 		cv := conv[cid]
-		label := firstString(cv["agent_nickname"], row["assignment"], cv["prompt"])
+		label := firstString(row["assignment"])
+		if row["native_id"] == "main" {
+			label = firstString(cv["agent_nickname"], label, cv["prompt"])
+		}
 		if label == "" {
 			label = firstString(row["native_id"], cv["native_id"])
 			if row["native_id"] == "main" {

@@ -153,6 +153,55 @@ func TestDelegationTopLevelConversationLabels(t *testing.T) {
 	}
 }
 
+func TestDelegationAssignmentLabels(t *testing.T) {
+	for _, tc := range []struct{ name, text, want string }{
+		{"codex task name after opaque message", `{"tool":"spawn_agent","input":{"fork_turns":"all","message":"gAAAA` + strings.Repeat("x", 12000) + `","task_name":"tooling_independent_review"}}`, "tooling_independent_review"},
+		{"task name before longer description", `{"input":{"task_name":"review","description":"Review all of the implementation"}}`, "review"},
+		{"claude description", `{"tool":"Task","input":{"description":"Check network","prompt":"Longer instructions"}}`, "Check network"},
+		{"prompt", `{"input":{"prompt":"Review the implementation"}}`, "Review the implementation"},
+		{"antigravity prompt", `{"tool":"invoke_subagent","input":{"Prompt":"check tests"}}`, "check tests"},
+		{"antigravity prompt before task", `{"input":{"Prompt":"Check the tests","task":"Longer task instructions"}}`, "Check the tests"},
+		{"task", `{"input":{"task":"Check the build"}}`, "Check the build"},
+		{"plaintext codex message", `{"input":{"message":"Inspect the renderer"}}`, "Inspect the renderer"},
+		{"blank names use prompt", `{"input":{"task_name":"\t\n ","description":"","prompt":"Check the CLI"}}`, "Check the CLI"},
+		{"structured fields use prose", `{"input":{"task_name":{},"description":["bad"],"prompt":false,"task":12,"message":"Check the API"}}`, "Check the API"},
+		{"legacy prose", "Review the release", "Review the release"},
+		{"bounded prose", `{"input":{"message":"` + strings.Repeat("é", 200) + `"}}`, strings.Repeat("é", 180)},
+		{"unknown payload", `{"tool":"spawn_agent","input":{"fork_turns":"all"}}`, ""},
+		{"opaque message only", `{"input":{"message":"gAAAA` + strings.Repeat("x", 300) + `"}}`, ""},
+		{"structured task only", `{"input":{"task":{"instructions":"Check the build"}}}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := testCatalog(t)
+			seedDelegation(t, c)
+			for _, update := range []struct {
+				query string
+				args  []any
+			}{
+				{`UPDATE messages SET text=? WHERE id='launch'`, []any{tc.text}},
+				{`UPDATE agent_sessions SET delegation_message_id='launch' WHERE id='embedded'`, nil},
+				{`UPDATE conversations SET agent_nickname='Parent nickname' WHERE id='root'`, nil},
+				{`UPDATE conversations SET agent_nickname='Child nickname' WHERE id='child'`, nil},
+				{`INSERT INTO conversation_documents(conversation_id,initiation,vector_json,model,indexed_at) VALUES('root','Parent request','[]','test','2026-01-01')`, nil},
+			} {
+				if _, err := c.DB.Exec(update.query, update.args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s, err := c.delegationSnapshot(context.Background(), "delegation-work")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, node := range []struct{ id, fallback string }{{"child-session", "Child nickname"}, {"embedded", "other-execution"}} {
+				want := firstString(tc.want, node.fallback)
+				if got := s.ByID[node.id].Label; got != want {
+					t.Fatalf("%s label = %q, want %q", node.id, got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestDelegationEffortUsesOwnSessionAndConversation(t *testing.T) {
 	c, _ := testCatalog(t)
 	seedDelegation(t, c)
