@@ -132,3 +132,31 @@ func TestDevUIServesCheckoutAndForwardsAPIWithToken(t *testing.T) {
 		t.Fatalf("service down: %d %s", down.Code, down.Body.String())
 	}
 }
+
+func TestDevUIDeepLoginPreservesFiltersAndReplacesStaleCookie(t *testing.T) {
+	service, _ := url.Parse("http://127.0.0.1:8806")
+	handler := newDevUI(t.TempDir(), service, "current-secret", 8807)
+	path := "/usage?machine_view=time&activity_days=14&activity_repo=repo%2Fa"
+	request := httptest.NewRequest(http.MethodGet, path+"&token=current-secret", nil)
+	request.AddCookie(&http.Cookie{Name: handler.cookie, Value: "old-secret"})
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("deep login: %d", response.Code)
+	}
+	location, err := url.Parse(response.Header().Get("Location"))
+	if err != nil || location.Path != "/usage" || location.Query().Get("machine_view") != "time" || location.Query().Get("activity_days") != "14" || location.Query().Get("activity_repo") != "repo/a" || location.Query().Has("token") {
+		t.Fatalf("login lost filters or retained token: %q", response.Header().Get("Location"))
+	}
+	cookies := response.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != handler.cookie || cookies[0].Value != "current-secret" || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteStrictMode {
+		t.Fatal("login did not replace stale cookie securely")
+	}
+	for _, path := range []string{"/usage?token=old-secret", "/api/ready?token=current-secret", "//evil.test/usage?token=current-secret"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusUnauthorized || response.Header().Get("Set-Cookie") != "" {
+			t.Fatalf("unexpected login at %s: %d", path, response.Code)
+		}
+	}
+}

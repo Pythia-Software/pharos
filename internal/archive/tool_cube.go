@@ -90,9 +90,12 @@ const toolRollupFromCube = `SELECT day,repository_name,source_kind,provider,COAL
 var toolCallCube = func() *sqlCube {
 	cube := &sqlCube{from: "FROM tool_call_cube", count: "call_count", dimensions: map[string]string{
 		"week": "date(day,'-6 days','weekday 1')", "month": "strftime('%Y-%m',day)", "model_family": "model_family(model)",
-		"model_effort": "model_effort(model,effort)",
-		"command_name": "NULLIF(TRIM(COALESCE(program,'')||' '||COALESCE(subcommand,'')),'')",
-		"mcp_method":   mcpMethodSQL(""),
+		"model_effort":   "model_effort(model,effort)",
+		"command_name":   "NULLIF(TRIM(COALESCE(program,'')||' '||COALESCE(subcommand,'')),'')",
+		"operation_key":  "machine_operation_key(tool_name,mcp_server,program,subcommand)",
+		"operation_name": "machine_operation_name(tool_name,mcp_server,program,subcommand)",
+		"activity":       "machine_activity(tool_category,command_category,tool_name,mcp_server,program)",
+		"mcp_method":     mcpMethodSQL(""),
 		// Per-call values that follow from a group.
 		"call_count": "1", "error_count": "(status='error')",
 	}, present: map[string]string{}, measures: map[string]cubeMeasure{}}

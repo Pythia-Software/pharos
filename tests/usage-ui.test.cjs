@@ -61,7 +61,7 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     await page.locator('.token-summary .mcp-metric').first().waitFor();
     assert.deepEqual(await page.locator('.token-summary .mcp-metric > span').allTextContents(), ['Total tokens', 'API price equivalent', 'Cache hit rate', 'Output tokens', 'Agent sessions']);
     assert.equal(await page.locator('.token-summary .mcp-metric').count(), 5);
-    assert.equal(await page.getByRole('group', { name: 'Usage view' }).getByRole('button', { name: 'Machine Tokens' }).getAttribute('aria-pressed'), 'true');
+    assert.equal(await page.getByRole('group', { name: 'Usage view' }).getByRole('button', { name: 'Machine Activity' }).getAttribute('aria-pressed'), 'true');
     await page.getByRole('button', { name: /Copy refresh prices prompt/ }).waitFor();
     assert.equal(await page.locator('.refresh-prices.attention').count(), 0);
     assert.equal(await page.locator('.refresh-prices-notice p').count(), 0);
@@ -233,6 +233,7 @@ test('Usage toggles between tokens and writing, remembers the choice, and charts
     assert.deepEqual(await page.locator('.usage-legend-provider').allTextContents(), ['Anthropic', 'Google', 'OpenAI', 'Other providers']);
     assert.deepEqual(await page.locator('.usage-chart-bars > span').last().locator('i').evaluateAll(parts => parts.map(part => getComputedStyle(part).backgroundColor)), Object.values(expandedColors));
     const opus = page.locator('.usage-chart-legend').getByRole('button', { name: /^opus-5-5/ });
+    await page.locator('#usage .usage-chart').scrollIntoViewIfNeeded();
     await opus.click();
     const menu = page.getByRole('menu', { name: 'Filter opus-5-5' });
     await menu.waitFor();

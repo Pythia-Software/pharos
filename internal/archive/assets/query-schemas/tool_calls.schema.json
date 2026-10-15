@@ -1769,7 +1769,13 @@
       }
     },
     {
-      "name": "workspace_id", "relationship": {"objectType": "pharos_library", "key": {"id": "workspace_id"}},
+      "name": "workspace_id",
+      "relationship": {
+        "objectType": "pharos_library",
+        "key": {
+          "id": "workspace_id"
+        }
+      },
       "label": "Workspace ID",
       "type": "text",
       "group": "Evidence",
@@ -1787,7 +1793,13 @@
       }
     },
     {
-      "name": "conversation_id", "relationship": {"objectType": "pharos_conversations", "key": {"id": "conversation_id"}},
+      "name": "conversation_id",
+      "relationship": {
+        "objectType": "pharos_conversations",
+        "key": {
+          "id": "conversation_id"
+        }
+      },
       "label": "Conversation ID",
       "type": "text",
       "group": "Evidence",
@@ -1820,6 +1832,75 @@
         "sqlite": {
           "expr": "r.\"call_id\""
         }
+      }
+    },
+    {
+      "name": "activity",
+      "label": "Activity",
+      "description": "Recorded command/tool category. Unclassified tools keep their specific name.",
+      "type": "text",
+      "group": "Activity",
+      "render": "machine_activity",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "activity",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"activity\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "operation_name",
+      "label": "Command family / tool",
+      "description": "Parsed program and named subcommand, or the exact named tool/MCP method. Flags and targets remain on the raw invocation.",
+      "type": "text",
+      "group": "Activity",
+      "render": "text",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "operation_name",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"operation_name\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
+      }
+    },
+    {
+      "name": "operation_key",
+      "label": "Operation identity",
+      "description": "Stable identity for the parsed command family or server-qualified tool; used to filter its exact supporting calls.",
+      "type": "text",
+      "group": "Activity",
+      "render": "text",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "operation_key",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"operation_key\""
+        }
+      },
+      "aggregate": {
+        "groupable": true
       }
     }
   ]
