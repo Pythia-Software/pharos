@@ -243,30 +243,56 @@ func openCaptureAdapter(target captureTarget) (Adapter, *captureManifest, *captu
 // changed. ok is false for a source that cannot be told apart from what was
 // indexed without parsing, or if ctx ends the count.
 func (c *Catalog) captureIndexWork(ctx context.Context, target captureTarget) (needed int, ok bool) {
+	needed, _, _, ok = c.captureIndexWorkMeasured(ctx, target)
+	return
+}
+
+func (c *Catalog) captureIndexWorkMeasured(ctx context.Context, target captureTarget) (needed int, model string, size *activitySize, ok bool) {
 	adapter, _, view, err := openCaptureAdapter(target)
 	if err != nil {
-		return 0, false
+		return 0, "", nil, false
 	}
+	setAdapterContext(adapter, ctx)
 	partial, incremental := adapter.(partialAdapter)
 	if !incremental {
-		return 0, false
+		return 0, "", nil, false
 	}
 	tracker, err := c.newPartTracker(view.host.ID, target.Source, partial, view)
 	if err != nil {
-		return 0, false
+		return 0, "", nil, false
+	}
+	size = &activitySize{}
+	sizeKnown := true
+	count := func(parts []sourcePart) {
+		needed++
+		amount, unit := partWorkSize(parts)
+		if unit == "" || (size.Unit != "" && size.Unit != unit) {
+			sizeKnown = false
+		}
+		size.Unit, size.Total = unit, size.Total+amount
 	}
 	// Passing over every group keeps the adapter from parsing any; a group it
 	// parses anyway (its parts could not all be read) is counted as needed.
 	err = partial.discoverParts(func(parts []sourcePart) bool {
 		if ctx.Err() == nil && !tracker.unchanged(parts) {
-			needed++
+			count(parts)
 		}
 		return true
-	}, func(*WorkspaceRecord, []sourcePart) error {
-		needed++
+	}, func(_ *WorkspaceRecord, parts []sourcePart) error {
+		count(parts)
 		return nil
 	})
-	return needed, err == nil && ctx.Err() == nil
+	if !sizeKnown {
+		size = nil
+	}
+	// A recovery generation forces fresh work but is not an extractor change.
+	// Reuse comparable rebuild history across generations, separately from
+	// ordinary updates that can skip writes when the record digest is current.
+	model = adapter.Config().Kind + ":" + sourceIndexVersion(adapter) + ":changes"
+	if modeOf(ctx).force {
+		model = adapter.Config().Kind + ":" + sourceIndexVersion(adapter) + ":rebuild"
+	}
+	return needed, model, size, err == nil && ctx.Err() == nil
 }
 
 // IndexCapture parses one host's captured source into the catalog. It reads
@@ -298,11 +324,17 @@ func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progre
 		return result
 	}
 	marker := loadIndexMarker(target.Dir)
+	if progress != nil {
+		progress("indexing retained snapshots", result.Workspaces, result.Conversations, result.Messages, result.SkippedCurrent, result.Processed)
+	}
 	if err := c.indexGenerations(ctx, adapter, view, marker, &result); err != nil {
 		if ctx.Err() == nil {
 			result.Error = fmt.Sprintf("superseded snapshots: %v", err)
 		}
 		return result
+	}
+	if progress != nil {
+		progress("saving index", result.Workspaces, result.Conversations, result.Messages, result.SkippedCurrent, result.Processed)
 	}
 	for _, snapshot := range manifest.Snapshots {
 		marker.add(snapshot.Path, snapshot.CapturedAt)

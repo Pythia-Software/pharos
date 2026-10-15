@@ -83,7 +83,7 @@ func TestLibraryActivityCompletionEstimate(t *testing.T) {
 	active := server.startRunNamed(indexRunKind, []string{"claude"})
 	server.updateRun(active.ID, func(run *SyncRun) { run.StartedAt = formatTime(started) })
 	activities := server.libraryStatus()["activities"].([]libraryActivity)
-	if got, want := activities[0].EstimatedCompletionAt, formatTime(started.Add(2*time.Minute)); got != want {
-		t.Fatalf("completion: %s, want %s", got, want)
+	if got := activities[0].EstimatedCompletionAt; got != "" {
+		t.Fatalf("unscoped duration produced an ETA without a workload: %s", got)
 	}
 }

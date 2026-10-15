@@ -237,17 +237,15 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 			tracker.writer = "automatic"
 		}
 	}
-	process := func(record *WorkspaceRecord, parts []sourcePart) error {
+	processRecord := func(record *WorkspaceRecord, parts []sourcePart) error {
 		started := time.Now()
 		defer func() { result.WriteSeconds += time.Since(started).Seconds() }()
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		result.Parsed += physicalPartCount(parts)
-		result.Processed++
 		if record == nil {
 			err := tracker.hold(c, parts)
-			report("indexing")
 			return err
 		}
 		digest, err := workspaceRecordDigest(*record)
@@ -260,7 +258,6 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 			AND source_account=? AND source_id=?`, host, config.Name, record.SourceKind, record.Account, record.SourceID).Scan(&storedDigest); err == nil && storedDigest == digest {
 			if !mode.force {
 				result.SkippedCurrent++
-				report("indexing")
 				return tracker.hold(c, parts)
 			}
 		} else if err != nil && err != sql.ErrNoRows {
@@ -270,7 +267,6 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 		// recorded as current and never be parsed again.
 		if !mode.force && resume && !incremental && c.recordUsesCurrentExtractor(adapter, *record, host) {
 			result.SkippedCurrent++
-			report("indexing")
 			return tracker.hold(c, parts)
 		}
 		copied, older, conversations, messages := false, false, 0, 0
@@ -348,13 +344,11 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 				return err
 			}
 			result.Older++
-			report("indexing")
 			return nil
 		}
 		c.boundWAL(walSizeLimit)
 		if copied {
 			result.SkippedCurrent++
-			report("indexing")
 			return nil
 		}
 		result.Workspaces++
@@ -366,9 +360,20 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 		if result.Workspaces == 1 || result.Workspaces%25 == 0 {
 			cursor(record.SourceID)
 		}
-		report("indexing")
 		return nil
 	}
+	process := func(record *WorkspaceRecord, parts []sourcePart) error {
+		err := processRecord(record, parts)
+		if err == nil {
+			result.Processed++
+			if mode.processed != nil {
+				mode.processed(parts)
+			}
+			report("indexing")
+		}
+		return err
+	}
+
 	if !incremental {
 		return adapter.Discover(func(record WorkspaceRecord) error { return process(&record, nil) })
 	}

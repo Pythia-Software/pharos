@@ -144,7 +144,7 @@ test('The header joins the drive indicator and Index changes into one combo butt
   } finally { await browser.close(); }
 });
 
-test('Running now shows historical completion estimates without disconnect controls', async () => {
+test('Running now explains measured stage progress, ranges, and unavailable estimates', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
   const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
@@ -153,13 +153,16 @@ test('Running now shows historical completion estimates without disconnect contr
     page.on('pageerror', error => errors.push(error.message));
     const started = new Date('2026-10-01T16:00:00Z');
     await page.clock.install({ time: new Date(started.getTime() + 120_000) });
-    let activities = [{ kind: 'index', label: 'Indexing captures', detail: '120 of 600 conversations', progress: 0.2,
-      started_at: started.toISOString(), estimated_completion_at: new Date(started.getTime() + 420_000).toISOString() }];
+    let statusUnavailable = false;
+    let activities = [{ kind: 'index', label: 'Indexing captures', detail: 'codex · 1 of 3 sources finished', progress: 0.2,
+      started_at: started.toISOString(), work: {phase: 'indexing', source: 'codex', unit: 'conversation group', done: 120, total: 600, size: {unit: 'byte', done: 60000000, total: 300000000}, next: 'Remaining sources and identity links'},
+      estimate: {state: 'estimating', low_seconds: 180, high_seconds: 300, unit: 'byte', units_per_second: 1000000, basis: 'Recent pace of this stage; adjusts as work completes'} }];
     await page.route('http://drive-estimate.test/**', route => {
       const url = new URL(route.request().url());
       const json = body => route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) });
       if (url.pathname === '/assets/library.js') return route.fulfill({ contentType: 'application/javascript', body: fs.readFileSync(path.join(root, 'internal/archive/assets/library.js')) });
       if (!url.pathname.startsWith('/api/') && !url.pathname.startsWith('/assets/')) return route.fulfill({ contentType: 'text/html', body: html });
+      if (url.pathname === '/api/library/status' && statusUnavailable) return route.fulfill({status: 503, json: {error: 'temporarily unavailable'}});
       if (url.pathname === '/api/library/status') return json({ idle: !activities.length, portable: true, library_dir: '/Volumes/Pharos SSD/Pharos',
         drive: { name: 'Pharos SSD', location: 'external', ejectable: true }, activities,
         unplug: { action: 'eject', summary: 'Disconnecting advice must not appear.' } });
@@ -171,8 +174,12 @@ test('Running now shows historical completion estimates without disconnect contr
     await page.goto('http://drive-estimate.test/library');
     await page.locator('#pharosDrive').click();
     const panel = page.getByRole('dialog', { name: 'Library drive' });
-    await panel.getByText('Started 2m ago', { exact: true }).waitFor();
-    await panel.getByText('Estimated complete in 5m', { exact: true }).waitFor();
+    await panel.getByText('2 min elapsed', { exact: true }).waitFor();
+    await panel.getByText('This stage: ~3–5 min left', { exact: true }).waitFor();
+    assert.equal(await panel.getByRole('progressbar').getAttribute('aria-valuenow'), '20');
+    assert.match(await panel.textContent(), /120 of 600 conversation groups processed/);
+    assert.match(await panel.textContent(), /1.0 MB\/sec/);
+    assert.match(await panel.textContent(), /After this: Remaining sources and identity links/);
     const info = await panel.locator('.pharos-activity-info').boundingBox();
     const timing = await panel.locator('.pharos-activity-timing').boundingBox();
     assert.ok(timing.x >= info.x + info.width, 'timing sits to the right of the activity');
@@ -186,24 +193,50 @@ test('Running now shows historical completion estimates without disconnect contr
     await page.setViewportSize({ width: 320, height: 900 });
     assert.equal(await panel.evaluate(element => element.scrollWidth <= element.clientWidth), true, 'timing fits a narrow popover');
     await page.setViewportSize({ width: 1280, height: 900 });
-    activities = [{ kind: 'backup', label: 'Backing up', started_at: started.toISOString(), estimated_completion_at: new Date(started.getTime() + 420_000).toISOString() }];
-    await page.clock.runFor(61_000);
-    await panel.getByText('Started 3m ago', { exact: true }).waitFor();
-    await panel.getByText('Estimated complete in 4m', { exact: true }).waitFor();
-    activities = [{ kind: 'maintenance', label: 'Updating findings' }];
-    await page.clock.runFor(2100);
-    await panel.getByText('Started unknown', { exact: true }).waitFor();
-    await panel.getByText('Estimated complete unknown', { exact: true }).waitFor();
-    activities = [{ kind: 'index', label: 'Indexing captures', estimated_completion_at: started.toISOString() }];
-    await page.clock.runFor(2100);
-    await panel.getByText('Estimated complete overdue', { exact: true }).waitFor();
-    activities = [{ kind: 'index', label: 'Indexing captures', estimated_completion_at: 'invalid' }];
-    await page.clock.runFor(2100);
-    await panel.getByText('Estimated complete unknown', { exact: true }).waitFor();
+    // A new stage and a new run start at their own fraction, even after a
+    // previous one nearly finished. There is no persistent synthetic floor.
+    activities = [{ id: 'second-run', kind: 'index', label: 'Indexing captures', started_at: started.toISOString(),
+      work: {phase: 'indexing', source: 'claude', unit: 'conversation group', done: 1, total: 100},
+      estimate: {state: 'learning', basis: 'Measuring the pace of this stage'} }];
+    await page.evaluate(() => window.pharosLibrary.refresh());
+    await panel.getByText('Measuring pace…', {exact: true}).waitFor();
+    assert.equal(await panel.getByRole('progressbar').getAttribute('aria-valuenow'), '1');
+    activities[0].work.done = 0;
+    await page.evaluate(() => window.pharosLibrary.refresh());
+    assert.equal(await panel.getByRole('progressbar').getAttribute('aria-valuenow'), '0');
+    activities = [{kind: 'maintenance', label: 'Updating findings',
+      estimate: {state: 'unknown', basis: 'Looking for recurring patterns; no measurable total'} }];
+    await page.evaluate(() => window.pharosLibrary.refresh());
+    await panel.getByText('Time remaining not known', {exact: true}).waitFor();
+    assert.equal(await panel.getByRole('progressbar').getAttribute('aria-valuenow'), null);
+    assert.doesNotMatch(await panel.textContent(), /elapsed|%/);
+    activities = [{kind: 'index', label: 'Indexing captures', progress: 0.5,
+      estimate: {state: 'stalled', basis: 'No recent completed work; the current item may be large or waiting'} }];
+    await page.evaluate(() => window.pharosLibrary.refresh());
+    await panel.getByText('Waiting for progress…', {exact: true}).waitFor();
+    assert.doesNotMatch(await panel.textContent(), /overdue|left/);
+    activities[0].estimate = {state: 'stopping', basis: 'Stopping after the current record is safe'};
+    await page.evaluate(() => window.pharosLibrary.refresh());
+    await panel.getByText('Stopping safely…', {exact: true}).waitFor();
+    // Concurrent maintenance keeps its own bar and timing; an unknown stage
+    // cannot hide the source's known progress or inherit its ETA.
+    activities = [{kind: 'index', label: 'Indexing captures', work: {phase: 'indexing', unit: 'conversation group', done: 20, total: 100},
+      estimate: {state: 'estimating', low_seconds: 30, high_seconds: 50, basis: 'Recent pace'}},
+      {kind: 'maintenance', label: 'Upgrading the library', work: {phase: 'Building tool ledger', unit: 'conversation', done: 1, total: 50},
+        estimate: {state: 'learning', basis: 'Measuring the pace of this stage'}}];
+    await page.evaluate(() => window.pharosLibrary.refresh());
+    assert.deepEqual(await panel.getByRole('progressbar').evaluateAll(bars => bars.map(bar => bar.getAttribute('aria-valuenow'))), ['20', '2']);
+    await panel.getByText('This stage: ~30–50 sec left', {exact: true}).waitFor();
+    await panel.getByText('Measuring pace…', {exact: true}).waitFor();
+    statusUnavailable = true;
+    await page.evaluate(() => window.pharosLibrary.refresh());
+    await panel.getByText(/Status unavailable. Showing the last reported counts/).waitFor();
+    assert.doesNotMatch(await panel.locator('.pharos-activity-timing').allTextContents().then(lines => lines.join(' ')), /left/);
+    statusUnavailable = false;
     activities = [];
-    await page.clock.runFor(2100);
+    await page.evaluate(() => window.pharosLibrary.refresh());
     await panel.getByText('Nothing is running.').waitFor();
-    assert.doesNotMatch(await panel.textContent(), /Estimated complete|Started|Disconnecting|Eject/);
+    assert.doesNotMatch(await panel.textContent(), /Time remaining|This stage:|elapsed|Disconnecting|Eject/);
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });
@@ -233,7 +266,7 @@ test('Capture & index starts a pending upgrade through the shared action', async
           steps: [{ id: 'usage', label: 'Correct token attribution', detail: 'Recounting', unit: 'workspace', pending: 10 }], repository_renames: {} });
       }
       if (url.pathname === '/api/library/status') return json({ idle: !running, portable: true, drive: { name: 'Pharos SSD', ejectable: false },
-        activities: running ? [{ kind: 'maintenance', label: 'Upgrading the library', detail: 'Step: usage', progress: 0.2, writes: true }] : [] });
+        activities: running ? [{ kind: 'maintenance', label: 'Upgrading the library', detail: 'Step: usage', work: {phase: 'Correct token attribution', unit: 'workspace', done: 2, total: 10}, progress: 0.2, writes: true }] : [] });
       if (url.pathname === '/api/activity') return json({ active: 0, runs: [] });
       if (url.pathname === '/api/sources') return json({ enabled: 0, items: [] });
       if (url.pathname.startsWith('/api/')) return json({ items: [] });
@@ -297,7 +330,7 @@ test('standalone maintenance stays separate from a library update', async () => 
     assert.equal(await panel.locator('.pharos-activity').count(), 4);
     assert.equal(await panel.locator('.pharos-activity-head').getByText('Capture & index', { exact: true }).count(), 0);
     assert.equal(await panel.locator('.pharos-activity', { hasText: 'Building substring search' }).locator('.pharos-bar').count(), 1);
-    assert.match(await page.locator('#pharosDrive').getAttribute('title'), /Building substring search 50%/);
+    assert.match(await page.locator('#pharosDrive').getAttribute('title'), /Building substring search · current stage 50%/);
 
     const started = new Date(Date.now() - 10_000).toISOString();
     recentRun = { id: 'recent-index', kind: 'capture-index', state: 'complete', started_at: started, completed_at: new Date().toISOString() };
@@ -306,7 +339,7 @@ test('standalone maintenance stays separate from a library update', async () => 
       { kind: 'maintenance', label: 'Building substring search', detail: '50 of 100 conversations', progress: 0.5 },
     ];
     await page.evaluate(() => window.pharosLibrary.refresh());
-    await panel.getByText('Finishing capture & index').waitFor();
+    await panel.getByText('Looking up merges in Git', {exact: true}).waitFor();
     assert.equal(await panel.locator('.pharos-activity').count(), 2);
     assert.equal(await panel.getByText('Building substring search').count(), 1);
     assert.deepEqual(errors, []);
@@ -337,7 +370,7 @@ test('the update action stays busy while a completed index hands off to upgrade'
         steps: [{ id: 'usage', label: 'Correct token attribution', detail: 'Recounting', unit: 'workspace', pending: 10 }], repository_renames: {} });
       }
       if (url.pathname === '/api/library/status') return json({ idle: !upgradeRunning, portable: true, drive: { name: 'Pharos SSD', ejectable: false },
-        activities: upgradeRunning ? [{ kind: 'maintenance', label: 'Upgrading the library', detail: 'Step: usage', progress: 0.1 }] : [] });
+        activities: upgradeRunning ? [{ kind: 'maintenance', label: 'Upgrading the library', detail: 'Step: usage', work: {phase: 'Correct token attribution', unit: 'workspace', done: 1, total: 10}, progress: 0.1 }] : [] });
       if (url.pathname === '/api/sources') return json({ enabled: 1, items: [] });
       if (url.pathname === '/api/library/update') {
         indexStarts++;

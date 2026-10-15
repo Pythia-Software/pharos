@@ -216,6 +216,7 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 			run.CurrentSource = source.Name
 			run.Phase = "checking"
 			run.CompletedSources = index
+			run.InputsChecked = 0
 		})
 		adapter, err := syncAdapter(source)
 		if err != nil {
@@ -251,7 +252,16 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 				continue
 			}
 		}
-		mode := ingestMode{automatic: true, discovered: func(parts []sourcePart, changed bool) { pool.consider(unitOf(source, parts, changed)) }, written: func(id string) { changedWorkspaces[id] = true }}
+		checked := 0
+		mode := ingestMode{automatic: true, discovered: func(parts []sourcePart, changed bool) {
+			pool.consider(unitOf(source, parts, changed))
+			checked++
+			// Discovery is streamed. Report checks without adding a second full
+			// filesystem scan just to manufacture a denominator for the bar.
+			if checked == 1 || checked%100 == 0 {
+				s.updateRun(run.ID, func(run *SyncRun) { run.InputsChecked = checked })
+			}
+		}, written: func(id string) { changedWorkspaces[id] = true }}
 		baseW, baseC, baseM := totals(results)
 		result := s.Catalog.IngestContext(withIngestMode(ctx, mode), adapter, func(phase string, w, c, m, skipped, processed int) {
 			s.updateRun(run.ID, func(run *SyncRun) {
@@ -259,6 +269,9 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 				run.Workspaces = baseW + w
 				run.Conversations = baseC + c
 				run.Messages = baseM + m
+				run.InputsChecked = checked
+				run.setWork(phase, source.Name, "conversation group", float64(processed), 0)
+				run.Work.Next = "Refresh the Library view and verify changed inputs"
 			})
 		})
 		results = append(results, result)
@@ -280,6 +293,7 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 		s.updateRun(run.ID, func(run *SyncRun) { run.Results = slices.Clone(results); run.CompletedSources = index + 1 })
 	}
 	if len(changedWorkspaces) > 0 && ctx.Err() == nil {
+		s.updateRun(run.ID, func(run *SyncRun) { run.Phase, run.CurrentSource = "refreshing the Library view", nil })
 		phase := meter.beginPhase("projections")
 		ids := []string{}
 		for id := range changedWorkspaces {
