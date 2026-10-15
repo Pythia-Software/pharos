@@ -199,6 +199,11 @@ func bucketRange(field, value string) (from, to string, ok bool) {
 // maxSQLBuckets bounds a metric's groups; the UI shows the largest first.
 const maxSQLBuckets = 2000
 
+// Complete analytical reads either return every group or an explicit error.
+// The larger bound permits repository × operation × day timelines without
+// changing the ordinary query table's largest-group previews.
+const maxCompleteSQLBuckets = 50000
+
 var registerRegexp sync.Once
 
 // registerSQLiteRegexp provides REGEXP for matches_regex filters, and
@@ -575,6 +580,10 @@ func (d sqlDataset) Distinct(ctx context.Context, q queryer, fieldName, search s
 }
 
 func (d sqlDataset) Aggregate(ctx context.Context, q queryer, request querytable.AggregationRequest, schema querytable.Schema) (querytable.AggregationResult, error) {
+	bucketLimit := maxSQLBuckets
+	if request.RequireComplete {
+		bucketLimit = maxCompleteSQLBuckets + 1
+	}
 	if err := schema.ValidateQuery(querytable.Query{Where: request.Where, Limit: 1}); err != nil {
 		return querytable.AggregationResult{}, err
 	}
@@ -654,7 +663,7 @@ func (d sqlDataset) Aggregate(ctx context.Context, q queryer, request querytable
 			}
 			groupBy = " GROUP BY " + strings.Join(positions, ",")
 		}
-		statement, statementArgs := fmt.Sprintf("SELECT %s%s AS value,COUNT(*) AS n %s%s%s ORDER BY value DESC LIMIT %d", selectKeys, measure, d.from, where, groupBy, maxSQLBuckets), args
+		statement, statementArgs := fmt.Sprintf("SELECT %s%s AS value,COUNT(*) AS n %s%s%s ORDER BY value DESC LIMIT %d", selectKeys, measure, d.from, where, groupBy, bucketLimit), args
 		if routed {
 			if cubeMeasure, ok := d.cube.measure(aggregation, schema); ok {
 				cubeKeys := ""
@@ -662,12 +671,15 @@ func (d sqlDataset) Aggregate(ctx context.Context, q queryer, request querytable
 					cubeKeys += fmt.Sprintf("%s AS k%d,", d.cube.dimensions[field], index)
 				}
 				statement, statementArgs = fmt.Sprintf("SELECT %s%s AS value,COALESCE(SUM(%s),0) AS n %s%s%s ORDER BY value DESC LIMIT %d",
-					cubeKeys, cubeMeasure, d.cube.count, d.cube.from, cubeWhere, groupBy, maxSQLBuckets), cubeArgs
+					cubeKeys, cubeMeasure, d.cube.count, d.cube.from, cubeWhere, groupBy, bucketLimit), cubeArgs
 			}
 		}
 		rows, err := queryMapsContext(ctx, q, statement, statementArgs...)
 		if err != nil {
 			return result, err
+		}
+		if request.RequireComplete && len(rows) > maxCompleteSQLBuckets {
+			return querytable.AggregationResult{}, fmt.Errorf("complete aggregation exceeds %d groups; choose a shorter period or a single repository", maxCompleteSQLBuckets)
 		}
 		buckets := make([]querytable.Bucket, 0, len(rows))
 		for _, row := range rows {

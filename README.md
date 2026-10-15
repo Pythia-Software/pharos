@@ -158,9 +158,22 @@ sharing.
 
 ### 5. See where the tokens go
 
-**Usage → Machine Tokens** breaks down tokens and API-equivalent cost by day,
+**Usage → Machine Activity** has three views: **Machine Tokens**, **Machine
+Parallelism**, and **Machine Time**, with shared period, repository, provider,
+and model filters. Machine Tokens breaks down tokens and API-equivalent cost by day,
 model, effort level, provider, repository, and agent. Costs use list prices on the day of use,
 so treat them as a lower bound.
+
+Machine Time compares total duration, call volume, and time per timed run by
+repository, activity, parsed command family, or specific tool. Named scripts
+and server-qualified MCP tools keep separate identities. Chart selections and
+the native raw-call query table share filters, so full invocations and source
+conversations remain inspectable. Previous-period averages use total duration
+divided by timed calls; missing durations stay separate. It reports tool time,
+including overlapping calls, rather than
+total agent compute or elapsed work time. Machine Parallelism uses the existing
+captured timing snapshot when available. Both views have an explicitly labeled
+**Example data** option for exploring the design without a populated library.
 
 ![The Usage tab: tokens per day split by model, with total cost, cost per month, and cost by provider](docs/images/usage.png)
 
