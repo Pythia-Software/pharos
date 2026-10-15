@@ -1306,8 +1306,61 @@ test('a single oversized turn opens by default and still pages its events', asyn
   assert.equal(await page.locator('.turn-body .timeline-entry').count(),151);
   assert.match(await page.locator('.sequence-more').innerText(),/Show 150 more · 200 events not shown/);
   await page.locator('.sequence-more').scrollIntoViewIfNeeded();
-  await page.waitForFunction(()=>document.querySelectorAll('.turn-body .timeline-entry').length===301);
-  await page.locator('.sequence-more').click();
+  await page.waitForFunction(()=>document.querySelectorAll('.turn-body .timeline-entry').length>=301);
+  // Scrolling to click can itself load the final page. Exercise the explicit
+  // control in place if it remains, accepting either supported paging path.
+  await page.evaluate(()=>document.querySelector('.sequence-more')?.click());
   assert.equal(await page.locator('.turn-body .timeline-entry').count(),351);
   assert.equal(await page.locator('.sequence-more').count(),0);
+});
+
+test('jumps within a long turn render matching pages and keep skipped history available', async t => {
+  const messages=[human('Large conversation')];
+  for(let index=0;index<2000;index++)messages.push(event(`jump-${index}`,'message',`Response ${index}`,index,{id:`jump-${index}`}));
+  const page=await fixture(t,messages);
+  const reveal=ids=>page.evaluate(ids=>document.querySelector('.conversation-panel').reveal(message=>ids.includes(message.id)),ids);
+  await reveal(['jump-1750']);
+  assert.equal(await page.locator('[data-message-id="jump-1750"]').count(),1);
+  assert.equal(await page.locator('[data-message-id="jump-1000"]').count(),0,'Skipped events stay unrendered');
+  assert.equal(await page.locator('.turn-body .timeline-entry').count(),301,'Only the initial page and the target page render');
+  assert.match(await page.locator('.sequence-more').first().innerText(),/Show 150 earlier · 1,500 events not shown/);
+  await page.locator('.sequence-more').first().evaluate(button=>button.click());
+  assert.equal(await page.locator('[data-message-id="jump-1500"]').count(),1,'Earlier control loads the page adjacent to the target');
+  assert.equal(await page.locator('[data-message-id="jump-1000"]').count(),0);
+  await reveal(['jump-700','jump-1900']);
+  for(const id of ['jump-700','jump-1750','jump-1900'])assert.equal(await page.locator(`[data-message-id="${id}"]`).count(),1);
+  assert.ok(await page.locator('.turn-body .timeline-entry').count()<800,'Multiple distant matches do not fill the gaps');
+  // Explicitly load the rest and verify that paging preserves order and events.
+  await page.evaluate(()=>{
+    const panel=document.querySelector('.conversation-panel');
+    while(panel.querySelector('.sequence-more'))panel.querySelector('.sequence-more').click();
+  });
+  const ids=await page.locator('.turn-body .timeline-entry[data-message-id]').evaluateAll(rows=>rows.map(row=>row.dataset.messageId));
+  assert.deepEqual(ids,Array.from({length:2000},(_,index)=>`jump-${index}`));
+});
+
+test('parsed message bodies are reused and update when an original replaces a preview', async t => {
+  const page=await fixture(t,[]);
+  const result=await page.evaluate(()=>{
+    const message={text:JSON.stringify({tool:'read',input:{path:'before'}}),raw_text:JSON.stringify({type:'token_count'})};
+    const first=messageJSON(message),raw=messageJSON(message,true),same=messageJSON(message)===first&&messageJSON(message,true)===raw;
+    const normalized=normalizeMessages([message])[0],shared=messageJSON(normalized)===first;
+    normalized.text=JSON.stringify({tool:'read',input:{path:'after'}});normalized.raw_text=normalized.text;
+    return {same,shared,path:toolPayload(normalized).input.path,raw:messageJSON(normalized,true).input.path,source:messageJSON(message).input.path,missing:messageJSON({})};
+  });
+  assert.deepEqual(result,{same:true,shared:true,path:'after',raw:'after',source:'before',missing:null});
+});
+
+test('deep message links reveal distant nested agent events with bounded rendering', async t => {
+  const messages=[human('Review the archive')];
+  for(let index=0;index<600;index++)messages.push(event(`parent-${index}`,'message',`Parent response ${index}`,index));
+  messages.push(event('nested-agent','delegation',{tool:'Task',input:{description:'Inspect the large transcript'}},600,{call_id:'nested-call'}));
+  for(let index=0;index<1600;index++)messages.push(event(`nested-${index}`,'message',`Nested response ${index}`,index,{id:`nested-${index}`,parent_native_id:'nested-call'}));
+  const page=await fixture(t,messages);
+  await page.evaluate(()=>revealMessage(document.querySelector('#transcript-test-root'),'nested-1450',true));
+  const target=page.locator('[data-message-id="nested-1450"]');
+  await target.waitFor({state:'visible'});
+  assert.equal(await target.count(),1);
+  assert.ok(await page.locator('.turn-body .timeline-entry').count()<550,'Both the parent sequence and nested sequence skip intervening pages');
+  assert.equal(await page.locator('[data-message-id="nested-800"]').count(),0);
 });

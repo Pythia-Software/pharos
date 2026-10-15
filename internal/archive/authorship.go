@@ -1443,9 +1443,21 @@ func (c *Catalog) AuthorshipStats(ctx context.Context) (map[string]any, error) {
 // so the transcript reader can say where its text came from and link to the
 // conversation holding copied text.
 func (c *Catalog) attachAuthorship(conversationID any, messages []map[string]any) error {
-	rows, err := queryMaps(c.DB, "SELECT message_id,typed_words,pasted_words,spans_json FROM message_authorship WHERE conversation_id=?", conversationID)
-	if err != nil || len(rows) == 0 {
+	attach, err := c.messageAuthorshipAttacher(conversationID)
+	if err != nil {
 		return err
+	}
+	for _, message := range messages {
+		attach(message)
+	}
+	return nil
+}
+
+// Prepare once so reader rows can attach spans before their bodies are clipped.
+func (c *Catalog) messageAuthorshipAttacher(conversationID any) (func(map[string]any), error) {
+	rows, err := queryMaps(c.DB, "SELECT message_id,typed_words,pasted_words,spans_json FROM message_authorship WHERE conversation_id=?", conversationID)
+	if err != nil {
+		return nil, err
 	}
 	byID := map[string]map[string]any{}
 	decoded := map[string][]authorSpan{}
@@ -1472,17 +1484,17 @@ func (c *Catalog) attachAuthorship(conversationID any, messages []map[string]any
 		found, err := queryMaps(c.DB, `SELECT c.id,c.workspace_id,w.title FROM conversations c JOIN workspaces w ON w.id=c.workspace_id
 			WHERE c.id IN (`+placeholders(len(ids))+`)`, ids...)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for _, row := range found {
 			workspaces[firstString(row["id"])] = row
 		}
 	}
-	for _, message := range messages {
+	return func(message map[string]any) {
 		id := firstString(message["id"])
 		row := byID[id]
 		if row == nil {
-			continue
+			return
 		}
 		text := firstString(message["text"])
 		parts := []map[string]any{}
@@ -1498,8 +1510,7 @@ func (c *Catalog) attachAuthorship(conversationID any, messages []map[string]any
 			parts = append(parts, part)
 		}
 		message["authorship"] = map[string]any{"typed_words": row["typed_words"], "pasted_words": row["pasted_words"], "spans": parts}
-	}
-	return nil
+	}, nil
 }
 
 func excerpt(value string, limit int) string {

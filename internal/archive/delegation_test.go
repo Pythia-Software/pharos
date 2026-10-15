@@ -92,6 +92,69 @@ func TestDelegationCanonicalHierarchyAndAccounting(t *testing.T) {
 	}
 }
 
+func TestDelegationResultEvidenceKeepsConversationAndResultScope(t *testing.T) {
+	c, _ := testCatalog(t)
+	seedDelegation(t, c)
+	// A call ID can be reused in another conversation. Only result messages
+	// in the launch's own conversation can supply its exact child handle.
+	for _, message := range []struct{ id, conversation, kind, text string }{
+		{"root-result", "root", "tool_result", strings.Repeat("r", 9000)},
+		{"not-a-result", "child", "message", "must not match"},
+	} {
+		if _, err := c.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,call_id,content_hash)
+			VALUES(?,?,?,'tool',?,?,'nested-call',?)`, message.id, message.conversation, message.id, message.kind, message.text, message.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := c.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,call_id,content_hash)
+		VALUES('root-launch','root','root-launch','assistant','delegation','{}','nested-call','root-launch');
+		INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,delegation_message_id,kind,provider,usage_status)
+		VALUES('root-launch-session','delegation-work','root','reused-call','root-launch','subagent','codex','unavailable')`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := queryMaps(c.DB, delegationResultEvidenceSQL, "delegation-work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]string{}
+	for _, row := range rows {
+		byID[firstString(row["id"])] = firstString(row["text"])
+	}
+	if len(rows) != 2 || byID["nested-alias"] != `{"details":{"agentId":"exact-child"}}` || byID["root-launch-session"] != strings.Repeat("r", 8192) {
+		t.Fatalf("match result kind, conversation and bounded body: %v", byID)
+	}
+}
+
+func TestDelegationMessageCountsRetainMembershipAndUnknownTimes(t *testing.T) {
+	c, _ := testCatalog(t)
+	seedDelegation(t, c)
+	if _, err := c.DB.Exec(`UPDATE messages SET created_at='2026-01-01T00:00:03Z' WHERE id='user';
+		INSERT INTO agent_session_messages(agent_session_id,message_id,source_order) VALUES
+		('root-session','user',0),('embedded','user',0),('child-session','nested-launch',0),('child-session','nested-result',1)`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := queryMaps(c.DB, delegationMessageCountsSQL, "delegation-work", "delegation-work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]map[string]any{}
+	for _, row := range rows {
+		byID[firstString(row["agent_session_id"])] = row
+	}
+	if len(rows) != 3 {
+		t.Fatalf("count only recorded membership: %v", rows)
+	}
+	for _, id := range []string{"root-session", "embedded"} {
+		row := byID[id]
+		if integer(row["messages"]) != 1 || integer(row["turns"]) != 1 || row["start"] != "2026-01-01T00:00:03Z" || row["end"] != row["start"] {
+			t.Fatalf("each session retains its own membership: %v", row)
+		}
+	}
+	if row := byID["child-session"]; integer(row["messages"]) != 2 || integer(row["turns"]) != 0 || row["start"] != nil || row["end"] != nil {
+		t.Fatalf("events with unknown timestamps still count: %v", row)
+	}
+}
+
 func TestDelegationTopLevelConversationLabels(t *testing.T) {
 	for _, tc := range []struct {
 		name, secondPrompt             string

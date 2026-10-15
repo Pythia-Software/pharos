@@ -698,6 +698,11 @@ func queryMaps(q queryer, statement string, args ...any) ([]map[string]any, erro
 }
 
 func queryMapsContext(ctx context.Context, q queryer, statement string, args ...any) ([]map[string]any, error) {
+	return queryMapsTransformContext(ctx, q, statement, nil, args...)
+}
+
+// transform runs before retaining each row, so large reader bodies can be released as they arrive.
+func queryMapsTransformContext(ctx context.Context, q queryer, statement string, transform func(map[string]any), args ...any) ([]map[string]any, error) {
 	rows, err := q.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return nil, err
@@ -724,6 +729,9 @@ func queryMapsContext(ctx context.Context, q queryer, statement string, args ...
 				value = string(data)
 			}
 			row[column] = value
+		}
+		if transform != nil {
+			transform(row)
 		}
 		output = append(output, row)
 	}
@@ -1042,6 +1050,11 @@ func (c *Catalog) workDetail(id string, includeMessages bool) (map[string]any, e
 			WHERE s.workspace_id=? ORDER BY s.last_seen_at DESC,s.host_id,s.source_name`},
 	}
 	for _, query := range queries {
+		// The reader overview does not use these potentially large ledgers.
+		// Skip their queries rather than loading and then discarding the rows.
+		if !includeMessages && (query.key == "agent_sessions" || query.key == "metric_ledger" || query.key == "sightings") {
+			continue
+		}
 		values, e := queryMaps(c.DB, query.sql, id)
 		if e != nil {
 			return nil, e
