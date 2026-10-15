@@ -224,7 +224,7 @@ func TestQueryV2LibraryDependencies(t *testing.T) {
 	} {
 		t.Run(sample.name, func(t *testing.T) {
 			clock := time.Now()
-			fields, err := queryV2LibraryFields(context.Background(), catalog.DB, schema, sample.rows, sample.metrics, clock)
+			fields, err := queryV2SourceFields(context.Background(), catalog.DB, schema, sample.rows, sample.metrics, clock)
 			if err != nil || !reflect.DeepEqual(fields, sample.fields) {
 				t.Fatalf("fields=%v, want=%v, err=%v", fields, sample.fields, err)
 			}

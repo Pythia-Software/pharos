@@ -107,10 +107,14 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 			table, find, err = s.Catalog.messageFindDataset(ctx, params, table)
 		}
 		if err == nil {
+			required, err = s.queryV3SourceFields(ctx, schema, q)
+		}
+		if err == nil {
 			var bounds map[string][2]string
 			bounds, err = queryBucketBounds(ctx, s.Catalog.DB, where)
 			if err == nil {
-				d.SourceSQL, d.SourceArgs = table.v2WindowedSource(schema, where, time.UnixMilli(q.Now), bounds)
+				projected, _ := table.project(required).preferCoveringScan(where)
+				d.SourceSQL, d.SourceArgs = projected.v2WindowedSource(schema, where, time.UnixMilli(q.Now), bounds)
 			}
 		}
 	} else {
@@ -181,7 +185,16 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 			q.Result.Where = nil
 		}
 	}
-	tx, release, err := beginQueryV3(ctx, s.Catalog.DB)
+	// Small summary/map populations benefit from memory scratch storage: SQLite's
+	// ephemeral CTE B-trees otherwise write pages even with a temp cache. Keep the
+	// full raw tool ledger and message payloads on the spill-capable path. The
+	// executor still enforces the same staging-byte budget before any copy.
+	memoryScratch := dataset == "tools" || dataset == "skill_usages" || !sqlBacked && len(rows) <= 100_000
+	mode := 1
+	if memoryScratch {
+		mode = 2
+	}
+	tx, release, err := beginQueryWithTempStore(ctx, s.Catalog.DB, mode)
 	if err != nil {
 		return qt.QueryResultV3{}, nil, err
 	}

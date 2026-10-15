@@ -40,7 +40,7 @@ var libraryColumns = []libraryColumn{
 	{"conversation_count", "(SELECT COUNT(*) FROM conversations cx WHERE cx.workspace_id=w.id AND " + currentGroupConversation("cx") + ")"},
 	// A unary + on role keeps a workspace's messages found through its
 	// conversations, not messages_prose_idx (see libraryPreviewSelect).
-	{"turn_count", "(SELECT COUNT(*) FROM conversations tx JOIN messages tm ON tm.conversation_id=tx.id WHERE tx.workspace_id=w.id AND " + currentGroupConversation("tx") + " AND +tm.role='user' AND tm.kind='message')"},
+	{"turn_count", "(SELECT COUNT(*) FROM conversations tx JOIN messages tm INDEXED BY messages_conversation_idx ON tm.conversation_id=tx.id WHERE tx.workspace_id=w.id AND " + currentGroupConversation("tx") + " AND +tm.role='user' AND tm.kind='message')"},
 	{"changed_file_count", "(SELECT COUNT(*) FROM change_sets csx JOIN change_files cfx ON cfx.change_set_id=csx.id WHERE csx.workspace_id=w.id)"},
 	// A unary + on name keeps metrics found through their workspace, not
 	// metrics_name_value_idx, which holds every workspace's metric of that name.
@@ -166,8 +166,15 @@ func libraryDerivedSelect(filter string) string {
 
 // libraryVersion identifies the projection's table, columns, and triggers.
 func libraryVersion() string {
-	digest := sha256.Sum256([]byte(libraryTableDDL() + "\n" + libraryDerivedSelect("1") + "\n" + strings.Join(libraryTriggerDDL(), "\n")))
+	// The conversation index hint changes the plan of COUNT(*), not its values.
+	// Keep existing projections valid across this performance-only change.
+	definition := strings.ReplaceAll(libraryProjectionDefinition(), " INDEXED BY messages_conversation_idx", "")
+	digest := sha256.Sum256([]byte(definition))
 	return hex.EncodeToString(digest[:])
+}
+
+func libraryProjectionDefinition() string {
+	return libraryTableDDL() + "\n" + libraryDerivedSelect("1") + "\n" + strings.Join(libraryTriggerDDL(), "\n")
 }
 
 // ensureLibrary creates or rebuilds the stored projection and its triggers.
@@ -183,6 +190,15 @@ func (c *Catalog) ensureLibrary() error {
 	err := c.DB.QueryRow("SELECT value FROM meta WHERE key='workspace_library_version'").Scan(&current)
 	if err != nil && err != sql.ErrNoRows {
 		return err
+	}
+	// Development builds that briefly hashed the equivalent index hint already
+	// rebuilt the same columns. Retag them without another whole-library scan.
+	withHint := sha256.Sum256([]byte(libraryProjectionDefinition()))
+	if current == hex.EncodeToString(withHint[:]) && current != version {
+		if _, err := c.DB.Exec("UPDATE meta SET value=? WHERE key='workspace_library_version'", version); err != nil {
+			return err
+		}
+		current = version
 	}
 	if current == version {
 		legacy, err := queryMaps(c.DB, "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'workspace_query_stats_%'")
@@ -669,8 +685,8 @@ func (c *Catalog) libraryPage(ctx context.Context, rows []map[string]any) ([]map
 // on one of this workspace's.
 func libraryPreviewSelect(filter string) string {
 	return `SELECT w.id workspace_id,
-		(SELECT fm.id FROM conversations fc JOIN messages fm ON fm.conversation_id=fc.id WHERE fc.workspace_id=w.id AND +fm.role='user' AND fm.kind='message' ORDER BY fm.created_at,fm.id LIMIT 1) first_input_id,
-		(SELECT lm.id FROM conversations lc JOIN messages lm ON lm.conversation_id=lc.id WHERE lc.workspace_id=w.id AND +lm.role='assistant' AND lm.kind='message' ORDER BY lm.created_at DESC,lm.id DESC LIMIT 1) last_response_id
+		(SELECT fm.id FROM conversations fc JOIN messages fm INDEXED BY messages_conversation_idx ON fm.conversation_id=fc.id WHERE fc.workspace_id=w.id AND +fm.role='user' AND fm.kind='message' ORDER BY fm.created_at,fm.id LIMIT 1) first_input_id,
+		(SELECT lm.id FROM conversations lc JOIN messages lm INDEXED BY messages_conversation_idx ON lm.conversation_id=lc.id WHERE lc.workspace_id=w.id AND +lm.role='assistant' AND lm.kind='message' ORDER BY lm.created_at DESC,lm.id DESC LIMIT 1) last_response_id
 		FROM workspaces w WHERE ` + filter
 }
 

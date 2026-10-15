@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,6 +40,80 @@ type sqlDataset struct {
 	toolSearchIndexed bool // the command trigram index is complete
 	// cube, when set, answers what it can in place of the rows (see sqlCube).
 	cube *sqlCube
+	// Joins to unique primary keys can be omitted when no consumed expression
+	// references them. Explicit pruning lets SQLite choose a covering count
+	// index before its later unused-LEFT-JOIN elimination pass.
+	optionalJoins      map[string]string
+	pageFrom           string
+	pageIndexes        map[string]string
+	coveringIndex      string
+	rangeCoveringIndex string
+	coveredFields      map[string]bool
+	timeCoveringFields map[string]bool
+}
+
+func (d sqlDataset) preferCoveringScan(terms []querytable.WhereTerm) (sqlDataset, bool) {
+	if d.coveringIndex == "" {
+		return d, false
+	}
+	for field := range d.columns {
+		if !d.coveredFields[field] {
+			return d, false
+		}
+	}
+	for _, term := range terms {
+		for _, clause := range term.Predicates() {
+			if d.lookups[clause.Field] && clause.Op == "=" && clause.Value != "" {
+				return d, false
+			}
+		}
+	}
+	index := d.coveringIndex
+	for _, term := range terms {
+		if !term.IsGroup() && !term.Negated && slices.Contains([]string{"started_at", "day", "week", "month"}, term.Field) {
+			index = d.rangeCoveringIndex
+			covered := true
+			for field := range d.columns {
+				covered = covered && d.timeCoveringFields[field]
+			}
+			if covered {
+				index = d.pageIndexes["started_at"]
+			}
+		}
+	}
+	d.from = strings.Replace(d.from, d.pageFrom, d.pageFrom+" INDEXED BY "+sqlIdentifier(index), 1)
+	return d, true
+}
+
+func (d sqlDataset) project(fields []string) sqlDataset {
+	columns := make(map[string]string, len(fields))
+	for _, field := range fields {
+		if expression, ok := d.columns[field]; ok {
+			columns[field] = expression
+		}
+	}
+	d.columns = columns
+	for changed := true; changed; {
+		changed = false
+		for alias, join := range d.optionalJoins {
+			remaining := strings.Replace(d.from, join, "", 1)
+			if remaining == d.from {
+				continue
+			}
+			uses := func(sql string) bool {
+				return slices.ContainsFunc(sqlQualifier.FindAllStringSubmatch(sql, -1), func(match []string) bool { return match[1] == alias })
+			}
+			used := uses(remaining + " " + d.base)
+			for _, expression := range columns {
+				used = used || uses(expression)
+			}
+			if !used {
+				d.from = remaining
+				changed = true
+			}
+		}
+	}
+	return d
 }
 
 // sqlCube is a table of a dataset's rows grouped by fields with few values,

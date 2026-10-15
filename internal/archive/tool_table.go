@@ -54,6 +54,21 @@ var toolCallDataset = sqlDataset{
 	timestamps: map[string]string{"started_at": "t.started_at"},
 	cube:       toolCallCube,
 	lookups:    map[string]bool{"id": true, "conversation_id": true, "workspace_id": true},
+	optionalJoins: map[string]string{
+		"r": " LEFT JOIN repositories r ON r.id=w.repository_id",
+		"a": "LEFT JOIN agent_sessions a ON a.id=t.agent_session_id",
+	},
+	pageFrom:           "FROM tool_calls t",
+	pageIndexes:        map[string]string{"started_at": "tool_calls_page_idx", "duration_ms": "tool_calls_duration_page_idx", "result_tokens": "tool_calls_result_tokens_page_idx", "carried_tokens": "tool_calls_carried_page_idx"},
+	coveringIndex:      "tool_calls_analytics_idx",
+	rangeCoveringIndex: "tool_calls_analytics_time_idx",
+	coveredFields: map[string]bool{
+		"id": true, "workspace_id": true, "provider": true, "tool_name": true, "tool_category": true, "model": true, "model_family": true, "effort": true, "model_effort": true,
+		"duration_ms": true, "result_tokens": true, "carried_tokens": true, "output_tokens": true, "parallel_count": true, "carried_requests": true, "status": true, "error_type": true,
+		"started_at": true, "day": true, "week": true, "month": true, "call_count": true, "error_count": true,
+		"repository_name": true, "source_kind": true,
+	},
+	timeCoveringFields: map[string]bool{"id": true, "workspace_id": true, "provider": true, "duration_ms": true, "started_at": true, "day": true, "week": true, "month": true, "call_count": true},
 	columns: map[string]string{
 		"id": "t.id", "call_id": "t.call_id", "sequence": "t.sequence",
 		"started_at": "t.started_at", "ended_at": "t.ended_at",

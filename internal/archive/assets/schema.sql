@@ -231,6 +231,8 @@ CREATE TABLE IF NOT EXISTS message_authorship (
 CREATE INDEX IF NOT EXISTS message_authorship_conversation_idx ON message_authorship(conversation_id);
 CREATE INDEX IF NOT EXISTS message_authorship_day_idx ON message_authorship(day);
 CREATE INDEX IF NOT EXISTS message_authorship_sent_idx ON message_authorship(sent_at);
+CREATE INDEX IF NOT EXISTS message_authorship_page_idx
+  ON message_authorship(sent_at DESC,message_id ASC,conversation_id);
 -- Derived with message_authorship: each labelled span of a user message, in
 -- order. start_byte and end_byte index messages.text. rule names the rule that
 -- claimed the span without its particulars, so spans can be grouped by it;
@@ -459,6 +461,18 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 CREATE INDEX IF NOT EXISTS tool_calls_conversation_idx ON tool_calls(conversation_id, sequence);
 CREATE INDEX IF NOT EXISTS tool_calls_workspace_idx ON tool_calls(workspace_id);
 CREATE INDEX IF NOT EXISTS tool_calls_started_idx ON tool_calls(started_at);
+-- Cover chronological pages and date-bounded provider/duration queries without
+-- reading the wide tool payload. ID ordering matches the stable row tiebreak.
+CREATE INDEX IF NOT EXISTS tool_calls_page_idx
+  ON tool_calls(started_at DESC,id ASC,workspace_id,provider,duration_ms);
+-- Match the typed numeric order used by Query Table, including invalid values
+-- sorting as NULL. Every Pharos connection registers this deterministic guard.
+CREATE INDEX IF NOT EXISTS tool_calls_duration_page_idx
+  ON tool_calls(CASE WHEN qt_v2_field_error(duration_ms,'number') IS NULL THEN duration_ms END DESC,id ASC,workspace_id);
+CREATE INDEX IF NOT EXISTS tool_calls_result_tokens_page_idx
+  ON tool_calls(CASE WHEN qt_v2_field_error(result_tokens,'number') IS NULL THEN result_tokens END DESC,id ASC,workspace_id);
+CREATE INDEX IF NOT EXISTS tool_calls_carried_page_idx
+  ON tool_calls(CASE WHEN qt_v2_field_error(carried_tokens,'number') IS NULL THEN carried_tokens END DESC,id ASC,workspace_id);
 -- The Tool calls presets that rank every call by one of these would otherwise
 -- sort the whole table.
 CREATE INDEX IF NOT EXISTS tool_calls_duration_idx ON tool_calls(duration_ms);
@@ -540,6 +554,7 @@ CREATE TABLE IF NOT EXISTS skill_usages (
 CREATE INDEX IF NOT EXISTS skill_usages_conversation_idx ON skill_usages(conversation_id);
 CREATE INDEX IF NOT EXISTS skill_usages_call_idx ON skill_usages(tool_call_id);
 CREATE INDEX IF NOT EXISTS skill_usages_name_idx ON skill_usages(skill_name,created_at);
+CREATE INDEX IF NOT EXISTS skill_usages_page_idx ON skill_usages(created_at DESC,id ASC,workspace_id,conversation_id);
 
 -- Instruction files and skills each conversation loaded, as its harness
 -- recorded them (see instructions.go for the kinds). bytes and hash (sha256)
