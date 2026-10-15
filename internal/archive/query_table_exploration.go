@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"time"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
 )
@@ -93,10 +92,14 @@ func (s pharosQuerySnapshotStore) Resolve(ctx context.Context, scope, dataset, c
 	return (qt.SQLQuerySnapshotStore{DB: s.Catalog.DB}).Resolve(ctx, scope, dataset, code)
 }
 func (s pharosQuerySnapshotStore) Save(ctx context.Context, scope, dataset string, snapshot qt.QuerySnapshot) (qt.QuerySnapshot, error) {
+	if err := qt.ValidateQuerySnapshot(snapshot); err != nil {
+		return qt.QuerySnapshot{}, err
+	}
+	store := qt.SQLQuerySnapshotStore{DB: s.Catalog.DB}
 	var stored qt.QuerySnapshot
 	err := s.Catalog.writeTransaction(ctx, "query-snapshot", func(tx *sql.Tx) error {
-		stored = qt.QuerySnapshot{Version: 1, Code: snapshot.Code}
-		err := tx.QueryRowContext(ctx, `SELECT token,created_at FROM query_table_query_snapshots WHERE scope=? AND dataset=? AND code=?`, scope, dataset, snapshot.Code).Scan(&stored.Token, &stored.CreatedAt)
+		var err error
+		stored, err = store.ResolveIn(ctx, tx, scope, dataset, snapshot.Code)
 		if err == nil {
 			if stored.Token != snapshot.Token {
 				return qt.ErrQuerySnapshotConflict
@@ -113,9 +116,7 @@ func (s pharosQuerySnapshotStore) Save(ctx context.Context, scope, dataset strin
 		if count >= querySnapshotCount || bytes+int64(len(snapshot.Token)) > querySnapshotBytes {
 			return qt.ErrQuerySnapshotQuota
 		}
-		stored = snapshot
-		stored.CreatedAt = time.Now().UnixMilli()
-		_, err = tx.ExecContext(ctx, `INSERT INTO query_table_query_snapshots(scope,dataset,code,token,created_at) VALUES(?,?,?,?,?)`, scope, dataset, stored.Code, stored.Token, stored.CreatedAt)
+		stored, err = store.SaveIn(ctx, tx, scope, dataset, snapshot)
 		return err
 	})
 	return stored, err

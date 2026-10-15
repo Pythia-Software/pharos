@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	qt "github.com/Pythia-Software/query-table/backends/go"
 )
 
 func queryExplorationCall(server *Server, token, method, path, body string) *httptest.ResponseRecorder {
@@ -144,6 +147,26 @@ func TestQuerySnapshotQuotaPreservesExistingLinks(t *testing.T) {
 	w = queryExplorationCall(server, config.APIToken, "PUT", strings.Replace(path, "aaaaaaaaaaaaaaaaaaaaaa", old, 1), strings.Replace(body, "aaaaaaaaaaaaaaaaaaaaaa", old, 1))
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
+	}
+}
+
+func TestQuerySnapshotDirectWritesValidateBeforeStorage(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	store := pharosQuerySnapshotStore{Catalog: catalog}
+	for _, snapshot := range []qt.QuerySnapshot{
+		{Version: 2, Code: "aaaaaaaaaaaaaaaaaaaaaa", Token: "2j.e30"},
+		{Version: 1, Code: "short", Token: "2j.e30"},
+		{Version: 1, Code: "aaaaaaaaaaaaaaaaaaaaaa", Token: "2j.invalid!"},
+		{Version: 1, Code: "aaaaaaaaaaaaaaaaaaaaaa", Token: "2j.bnVsbA"},
+		{Version: 1, Code: "aaaaaaaaaaaaaaaaaaaaaa", Token: "2d.invalid!"},
+	} {
+		if _, err := store.Save(context.Background(), queryTableScope, "pharos_tool_calls", snapshot); err == nil {
+			t.Fatalf("invalid direct snapshot committed: %+v", snapshot)
+		}
+	}
+	var count int
+	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM query_table_query_snapshots").Scan(&count); err != nil || count != 0 {
+		t.Fatal("invalid snapshots reached storage", count, err)
 	}
 }
 

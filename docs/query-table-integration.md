@@ -1,19 +1,38 @@
-> For the next-release source integration and local worktree setup, see
-> [Query Table local development](query-table-local-development.md). The release
-> integration below records the earlier 0.6.0 upgrade.
+# Query Table 0.7.0 in Pharos
 
-# Query Table 0.6.0 in Pharos
+Pharos pins core, React, UI and codegen to the published npm **0.7.0** packages,
+and the Go adapter to **v0.7.0**. The npm lockfile records registry URLs and
+integrities; `go.sum` records the released Go module. The prerelease npm archives,
+Go replacement, vendored adapter and historical patch have been removed. Clean
+builds use these releases without another Query Table checkout.
 
-Pharos pins core, React, UI, and codegen to npm **0.6.0**, and the Go adapter to
-**v0.6.0**. These were the registry's latest versions when verified on October
-8, 2026 (America/Denver). The SQLite guide supplied for this upgrade and the
-release's `docs/backend-sqlite.md` define the adapter contract.
+The [upstream migration guide](https://github.com/Pythia-Software/query-table/blob/v0.7.0/docs/host-integration-next-release.md)
+and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.7.0/CHANGELOG.md)
+define the release contract. Optional worktree linking is described in
+[local development](query-table-local-development.md). The earlier
+[upstream handoff](query-table-upstream-handoff.md) and
+[next-release handoff](query-table-next-release-handoff.md) are historical records.
 
-The Go module is temporarily replaced by the self-contained patched copy in
-`third_party/query-table-go`. Its license, tests, source provenance, and removal
-procedure are included there. The upstream handoff and portable patch are in
-[`query-table-upstream-handoff.md`](query-table-upstream-handoff.md) and
-[`../patches/query-table/v0.6.0-pharos.patch`](../patches/query-table/v0.6.0-pharos.patch).
+## Release feature coverage
+
+| Release feature | Pharos integration |
+| --- | --- |
+| Server grouping, HAVING, summaries, MEDIAN and representative rows | All ten backend datasets negotiate V3; Usage presets and Home comparison tables use it. Source actions remain available through Records. |
+| Calendar intervals, IANA timezones, empty buckets and explicit ranges | Standard metric workbench and Home previews execute on the server, with dependency, population and scratch budgets. Daily Usage facts retain their daily granularity. |
+| Canonical computed source predicates, grouping and partial capabilities | Capability discovery uses `DescribeComputedPartialIn` on the V3 dataset; invalid graphs stay editable with per-definition diagnostics. V2 save validation uses the same partial API in a host transaction. Catalogues over 64 definitions are described in bounded batches. |
+| Independent collection URL parameters and explicit router lifecycle | Every table supplies top-level `queryParameter`; `pharos:route` calls `restoreLocation`. `restoration.ready` gates host query work and `active` pauses hidden tables. |
+| Compressed links, immutable snapshots and actionable HTTP failures | Save, Share, Bookmark and Home collections promote durable links. Snapshots use exported validation and `ResolveIn`/`SaveIn` inside the catalog's serialized quota transaction. The frontend preserves typed quota/access/conflict errors and leaves previous saves intact on failure. |
+| Item modals, popovers, expansions, property layouts and relationships | Complete item loaders, library-backed property preferences and authorized reference batches are enabled. Synthetic group identities never load source items. |
+| Configurable cell displays and searchable JSON inspectors | Standard table/column/property editors expose the release controls; MCP arguments use JSON display. |
+| Compact covers, visible limits, Other remainders, label wrapping and underline lists | Home covers use native `MetricView`/`MetricsCards` display options while destination queries retain their full results. |
+| Shared editor panels, menus, column-role themes and fit-to-screen persistence | The published UI components and theme supply these controls. Pharos sets role colors for light/dark appearances. |
+| SQLite metric reuse, reduction fusion, indexed windows and exact reductions | The released Go adapter supplies these optimizations; host source planning, connection leases and regression/benchmark fixtures remain in place. |
+
+The release's DuckDB backend, PostgreSQL adapter, standalone public demo and
+saved-query prototype are alternative integrations and examples. Pharos uses its
+existing SQLite catalog and library-backed saved-query UI; the standard
+`QueryBuilder` already provides Save/Update/Default actions. The optional
+`savedQueryControls` slot is available for a future custom presentation.
 
 ## Schemas and build
 
@@ -70,7 +89,7 @@ V3 allows 10 million matching source rows, 512 MiB of narrow staging, 10,000
 groups and 10,000 shown rows, with a 30-second deadline. Incomplete searches,
 invalid values, cancelled requests and exceeded budgets return errors rather
 than partial groups. The old 10,000-row browser population cap does not apply.
-See `query-table-local-development.md` for snapshot provenance and live evidence.
+See `query-table-local-development.md` for release builds and optional local links.
 
 These endpoints use Pharos authentication and same-origin checks. The computed
 DDL is additive and runs during catalog initialization. A computed save runs in
@@ -99,10 +118,9 @@ Native metric covers retain the full dashboard results; a bookmark's optional
 `coverMetricId` changes only its cover, while its URL opens every saved metric.
 Rates, distinct counts and distribution medians are not added into totals.
 
-The npm core 0.6.0 expression validator rejects scalar `MEDIAN` even though the
-Go SQLite adapter supports it. Home recipes therefore expose exact medians and
-quartiles through native box distributions, which can also be opened and saved
-in the browser. Arbitrary scalar percentiles such as p95 remain unavailable.
+Scalar `MEDIAN` is supported in both the browser core and the Go SQLite profile.
+Home comparison recipes use it directly; native box distributions expose exact
+quartiles and spread. Arbitrary scalar percentiles such as p95 remain unavailable.
 
 ## Sources, limits, and performance
 
@@ -154,12 +172,11 @@ daily rows. Preparation/enrichment works with a one-connection pool.
 
 ## Verification
 
-Run the host and nested adapter separately:
+Run the release integration checks:
 
 ```sh
-go test ./...
-go vet ./...
-(cd third_party/query-table-go && go test ./... && go vet ./...)
+GOWORK=off go test ./...
+GOWORK=off go vet ./...
 go test -race ./internal/archive ./internal/querytable \
   -run 'TestGeneratedQuerySchemas|TestQueryV2|TestRelativeDatetimeMapFiltering|TestLibraryQueryTableCombinesKeywordSearchWithFilters'
 go test ./internal/archive -run '^$' \
@@ -179,6 +196,5 @@ Synthetic and joined tool-ledger stress workloads use 10,000, 100,000, and
 histograms, indexed shown rows, twenty identical metrics, twenty distinct
 formulas, and twenty mixed metrics. Measurements and remaining optimization
 requests are in the upstream handoff. These are local stress measurements,
-not production latency guarantees. Browser UI automation was unavailable in the
-session (no enabled browser); frontend checks and authenticated HTTP execution
-were verified instead.
+not production latency guarantees. The earlier upgrade measurements are retained in the historical handoff;
+release validation uses the published packages and the checked-in browser fixtures.

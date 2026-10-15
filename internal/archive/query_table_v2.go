@@ -362,16 +362,6 @@ func (s *Server) getQueryCapabilities(w http.ResponseWriter, r *http.Request, da
 		writeError(w, err, 500)
 		return
 	}
-	// Canonical local definitions may be used as group keys; result budgets apply.
-	d.ComputedGroupable = map[string]bool{}
-	for _, id := range ids {
-		d.ComputedGroupable[id] = true
-	}
-	execution, unavailable, err := describeQueryComputed(ctx, tx, d, ids)
-	if err != nil {
-		writeError(w, err, 500)
-		return
-	}
 	v3 := queryV3Dataset(schema)
 	// Capability validation uses the same schema-only source as V2's description.
 	// Actual execution replaces it with the authorized dataset source.
@@ -380,27 +370,38 @@ func (s *Server) getQueryCapabilities(w http.ResponseWriter, r *http.Request, da
 		writeError(w, err, 500)
 		return
 	}
-	writeJSON(w, map[string]any{"metricCapabilities": d.Capabilities(), "queryCapabilities": v3.Capabilities(), "computedExecution": queryV3ComputedHandshake(execution), "computedDiagnostics": unavailable}, 200)
+	execution, unavailable, err := describeQueryComputed(ctx, tx, v3, ids)
+	if err != nil {
+		writeError(w, err, 500)
+		return
+	}
+	writeJSON(w, map[string]any{"metricCapabilities": d.Capabilities(), "queryCapabilities": v3.Capabilities(), "computedExecution": execution, "computedDiagnostics": unavailable}, 200)
+}
+
+type queryComputedDescriber interface {
+	DescribeComputedPartialIn(context.Context, *sql.Tx, []string, qt.PlanOptions) (qt.ComputedDescription, error)
 }
 
 // Schema changes can invalidate persisted formulas. Keep the complete store
 // catalogue repairable, advertising only definitions whose whole graph compiles.
 // Database and context failures still fail the request rather than hiding data.
-func describeQueryComputed(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2Dataset, ids []string) (qt.SQLiteComputedExecution, map[string]*qt.PlanDiagnostic, error) {
+func describeQueryComputed(ctx context.Context, tx *sql.Tx, d queryComputedDescriber, ids []string) (qt.SQLiteComputedExecution, map[string]*qt.PlanDiagnostic, error) {
 	execution := qt.SQLiteComputedExecution{Profile: qt.SQLiteExpressionProfile, ResolvedRevisions: map[string]string{}, Fields: map[string]qt.SQLiteComputedFieldCapability{}}
 	unavailable := map[string]*qt.PlanDiagnostic{}
-	for _, id := range ids {
-		current, err := d.DescribeComputedIn(ctx, tx, []string{id}, qt.PlanOptions{Identity: d.Scope + ":" + d.Dataset})
+	// The adapter bounds each description to 64 definitions. A saved catalogue
+	// can be larger even though one execution references at most 64 definitions.
+	batches := slices.Collect(slices.Chunk(ids, 64))
+	if len(batches) == 0 {
+		batches = [][]string{nil}
+	}
+	for _, batch := range batches {
+		current, err := d.DescribeComputedPartialIn(ctx, tx, batch, qt.PlanOptions{})
 		if err != nil {
-			var diagnostic *qt.PlanDiagnostic
-			if !errors.As(err, &diagnostic) {
-				return execution, unavailable, err
-			}
-			unavailable[id] = diagnostic
-			continue
+			return execution, unavailable, err
 		}
-		maps.Copy(execution.ResolvedRevisions, current.ResolvedRevisions)
-		maps.Copy(execution.Fields, current.Fields)
+		maps.Copy(execution.ResolvedRevisions, current.Execution.ResolvedRevisions)
+		maps.Copy(execution.Fields, current.Execution.Fields)
+		maps.Copy(unavailable, current.Diagnostics)
 	}
 	return execution, unavailable, nil
 }

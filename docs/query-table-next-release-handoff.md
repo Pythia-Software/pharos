@@ -1,3 +1,7 @@
+> Historical prerelease integration record. Pharos now uses the published
+> [0.7.0 packages](query-table-integration.md); source archives, the Go vendor,
+> the patch and the snapshot-packaging script described below have been retired.
+
 # Query Table next-release handoff from the Pharos integration
 
 Current integration update (2026-10-13): Pharos negotiates V3 server execution for
