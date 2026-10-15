@@ -222,6 +222,7 @@ async function fixture(t, options = {}) {
   t.after(() => page.close());
   const errors = [];
   const transcriptRequests = [];
+  const fixtureNodes = options.nodes || nodes;
   page.on("pageerror", (e) => errors.push(e.message));
   await page.route("http://delegation.test/**", (route) => {
     const url = new URL(route.request().url());
@@ -270,7 +271,7 @@ async function fixture(t, options = {}) {
       assert.equal(url.searchParams.get("limit"), "40");
       const conv = url.searchParams.get("conversation");
       const query = url.searchParams.get("search") || "";
-      let rows = nodes.filter(
+      let rows = fixtureNodes.filter(
         (n) =>
           !query ||
           n.label.toLowerCase().includes(query.toLowerCase()) ||
@@ -288,10 +289,10 @@ async function fixture(t, options = {}) {
           (url.searchParams.get("collapsed") || "").split(","),
         );
         rows = rows.filter((n) => {
-          let parent = nodes.find((p) => p.id === n.parent_id);
+          let parent = fixtureNodes.find((p) => p.id === n.parent_id);
           while (parent) {
             if (collapsed.has(parent.id)) return false;
-            parent = nodes.find((p) => p.id === parent.parent_id);
+            parent = fixtureNodes.find((p) => p.id === parent.parent_id);
           }
           return true;
         });
@@ -300,10 +301,10 @@ async function fixture(t, options = {}) {
         snapshot: "fixture-v1",
         rows,
         ancestors: [],
-        focus: nodes,
+        focus: fixtureNodes,
         matched: Object.fromEntries(rows.map((n) => [n.id, true])),
         total: rows.length,
-        session_count: 3,
+        session_count: fixtureNodes.length,
         offset: 0,
         next_cursor: "",
         metrics: specs,
@@ -1007,6 +1008,37 @@ test("child transcripts and their parents use the native conversation reader and
     ),
     false,
   );
+  assert.deepEqual(errors, []);
+});
+
+test("cross-workspace children keep nesting and open the actual child transcript", async (t) => {
+  const child = {
+    ...nodes[1],
+    conversation_id: "outside-child",
+    workspace_id: "outside-work",
+    external_child: { conversation_id: "outside-child", workspace_id: "outside-work", provider: "codex", label: "Review implementation" },
+    self: Object.fromEntries(keys.map(k => [k, metric(null, "unknown")])),
+  };
+  const nested = { ...nodes[2], conversation_id: "outside-nested", external_child: { conversation_id: "outside-nested", workspace_id: "nested-work", provider: "claude", label: "Review timing" } };
+  const { page, errors } = await fixture(t, { nodes: [nodes[0], child, nested] });
+  assert.equal(await page.locator('tr[data-session="s-nested"]').getAttribute("data-session"), "s-nested");
+  await page.locator('tr[data-session="s-root"] .delegation-name').click();
+  await waitForReader(page, "s-root");
+  await page.evaluate(() => { window.pharosNavigate = target => { window.__externalTarget = target; }; });
+  await page.locator('.delegation-transcript-link').click();
+  assert.equal(await page.evaluate(() => window.__externalTarget), "/work/outside-work?conversation=outside-child");
+  await page.locator(".delegation-child-menu").evaluate(el => { el.closest("details").open = true; });
+  assert.equal(await page.locator(".delegation-child-menu button").count(), 1);
+  assert.equal(await page.locator(".delegation-context").getByRole("button", { name: /Open child/ }).count(), 0);
+  assert.deepEqual(errors, []);
+});
+
+test("an unresolved launch does not advertise a child transcript", async (t) => {
+  const placeholder = { ...nodes[1], conversation_id: "root", self: Object.fromEntries(keys.map(k => [k, metric(0)])) };
+  const { page, errors } = await fixture(t, { nodes: [nodes[0], placeholder] });
+  await page.locator('tr[data-session="s-root"] .delegation-name').click();
+  await waitForReader(page, "s-root");
+  assert.equal(await page.locator(".delegation-transcript-link").count(), 0);
   assert.deepEqual(errors, []);
 });
 
