@@ -220,6 +220,9 @@ func (s *Server) indexTargets(ctx context.Context, runID string, targets []captu
 			} else if !ok {
 				run.State, run.Phase = "failed", "failed"
 			}
+			if ok {
+				run.Progress = fraction(1, 1)
+			}
 			run.CurrentSource, run.CompletedAt, run.Error = nil, now(), failure
 		})
 	}()
@@ -230,6 +233,7 @@ func (s *Server) indexTargets(ctx context.Context, runID string, targets []captu
 			break
 		}
 		label := target.label()
+		meter := plan.meter(index)
 		base := IngestResult{}
 		for _, result := range results {
 			base.Workspaces += result.Workspaces
@@ -237,14 +241,16 @@ func (s *Server) indexTargets(ctx context.Context, runID string, targets []captu
 			base.Messages += result.Messages
 			base.SkippedCurrent += result.SkippedCurrent
 		}
-		result := s.Catalog.IndexCapture(ctx, target, func(phase string, w, c, m, skipped, processed int) {
+		result := s.Catalog.IndexCapture(meter.context(ctx), target, func(phase string, w, c, m, skipped, processed int) {
 			s.updateRun(runID, func(run *SyncRun) {
 				run.CurrentSource, run.Phase, run.CompletedSources = label, phase, index
 				plan.report(run, index, processed)
+				meter.report(run, phase, label, processed)
 				run.Workspaces, run.Conversations = base.Workspaces+w, base.Conversations+c
 				run.Messages, run.SkippedCurrent = base.Messages+m, base.SkippedCurrent+skipped
 			})
 		})
+		meter.record(s, ctx, result)
 		results = append(results, result)
 		plan.finish(index)
 		s.updateRun(runID, func(run *SyncRun) {
@@ -261,6 +267,7 @@ func (s *Server) indexTargets(ctx context.Context, runID string, targets []captu
 	// is still linked, checkpointed and looked up in Git; only a release
 	// (before an eject) skips the linking and the authorship rebuild.
 	serviceUp := s.life.ctx.Err() == nil
+	s.updateRun(runID, func(run *SyncRun) { run.Phase, run.CurrentSource = "linking identities", nil; run.Progress = nil })
 	if wroteRecords(results) {
 		if serviceUp {
 			if _, err := s.Catalog.ReconcileIdentities(); err != nil {
@@ -276,6 +283,7 @@ func (s *Server) indexTargets(ctx context.Context, runID string, targets []captu
 	// Before the run reports complete, so Usage sees the rebuild running. It
 	// also picks up a rebuild an eject stopped, even if this index wrote nothing.
 	if serviceUp {
+		s.updateRun(runID, func(run *SyncRun) { run.Phase = "refreshing authorship" })
 		s.Catalog.refreshAuthorship()
 	}
 }
@@ -287,6 +295,8 @@ func (s *Server) indexTargets(ctx context.Context, runID string, targets []captu
 // such source does not take the conversation count from the rest.
 type indexPlan struct {
 	needed []int
+	models []string
+	sizes  []*activitySize
 	// conversationsBefore and unitsBefore are what the targets already
 	// finished account for, in conversations and in bar steps.
 	conversationsBefore, unitsBefore int
@@ -323,15 +333,16 @@ func (p *indexPlan) finish(index int) {
 // measure it against.
 func (s *Server) countIndexWork(ctx context.Context, runID string, targets []captureTarget) *indexPlan {
 	s.updateRun(runID, func(run *SyncRun) { run.Phase = "counting" })
-	plan := &indexPlan{needed: make([]int, len(targets))}
+	plan := &indexPlan{needed: make([]int, len(targets)), models: make([]string, len(targets)), sizes: make([]*activitySize, len(targets))}
 	conversations := 0
 	for index, target := range targets {
 		count, ok := 0, false
 		if ctx.Err() == nil {
-			count, ok = s.Catalog.captureIndexWork(ctx, target)
+			count, plan.models[index], plan.sizes[index], ok = s.Catalog.captureIndexWorkMeasured(ctx, target)
 		}
 		if !ok {
 			count = -1
+			plan.sizes[index] = nil
 		}
 		plan.needed[index] = count
 		conversations += max(count, 0)

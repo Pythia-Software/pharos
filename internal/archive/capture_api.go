@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sync"
 	"syscall"
+	"time"
 )
 
 func runCaptureCLI(config Config, names []string) error {
@@ -225,7 +226,14 @@ func (s *Server) startCapture(w http.ResponseWriter, body map[string]any) {
 				s.recordActivityDuration("capture", run.StartedAt, now())
 			}
 		}()
-		summary = session.Run(ctx, sources, func(result CaptureSourceResult) { s.captures.progress(run.ID, result) })
+		var previous CaptureSourceResult
+		summary = session.Run(ctx, sources, func(result CaptureSourceResult) {
+			if previous.Phase == "copying files" && result.Phase != previous.Phase && result.Name == previous.Name && len(result.Errors) == 0 && ctx.Err() == nil {
+				s.recordWorkTiming("capture", captureWork(previous), time.Now())
+			}
+			previous = result
+			s.captures.progress(run.ID, result)
+		})
 	})
 	if !started {
 		s.ingestMu.Unlock()

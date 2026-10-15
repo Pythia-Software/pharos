@@ -211,7 +211,9 @@ See [MCP statistics](docs/mcp-statistics.md) for scopes, quality, and paging.
 ### 8. Unplug safely
 
 The drive badge in the header shows what Pharos is doing with the library right
-now, with estimated completion times based on recent successful runs. Use
+now, with measured stage progress and time ranges based on workload size and
+recent processing speed. The panel explains when the remaining work is still
+unknown; see [progress and estimates](docs/progress-estimates.md). Use
 **Eject** in its panel instead of pulling the drive: Pharos stops its own work
 at a safe point, closes the library, stops agents' Pharos MCP servers running
 from the drive, quits, and ejects it.

@@ -894,6 +894,7 @@ func (s *Server) startVerification(w http.ResponseWriter, r *http.Request, body 
 				s.updateRun(run.ID, func(run *SyncRun) {
 					run.Phase = "verifying retained inputs"
 					run.DoneConversations = summary.Checked
+					run.setWork(run.Phase, firstString(run.CurrentSource), "input", float64(summary.Checked), 0)
 					run.Verification = &summary
 				})
 			}, names)

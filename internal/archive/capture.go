@@ -163,6 +163,8 @@ type captureError struct {
 }
 
 type captureRunRecord struct {
+	Phase              string         `json:"phase,omitempty"`
+	PhaseStartedAt     string         `json:"phase_started_at,omitempty"`
 	StartedAt          string         `json:"started_at"`
 	FinishedAt         string         `json:"finished_at,omitempty"`
 	FilesSeen          int            `json:"files_seen"`
@@ -397,7 +399,7 @@ func (s *captureSession) source(ctx context.Context, source SourceConfig, progre
 	}
 	c.dir = filepath.Join(s.hostDir, source.Name)
 	c.result.Dir = c.dir
-	c.report()
+	c.phase("discovering files")
 	manifest, err := loadCaptureManifest(c.dir)
 	if err != nil {
 		return c.finish(err)
@@ -428,6 +430,7 @@ func (s *captureSession) source(ctx context.Context, source SourceConfig, progre
 	}
 	err = c.captureFiles(plan.files, present)
 	if err == nil {
+		c.phase("copying database snapshots")
 		err = c.captureDatabases(plan.databases, present)
 	}
 	if err == nil && plan.complete {
@@ -436,6 +439,7 @@ func (s *captureSession) source(ctx context.Context, source SourceConfig, progre
 	if err != nil {
 		c.fail("", err)
 	}
+	c.phase("saving capture manifest")
 	err = c.commit(true)
 	if err == nil {
 		c.removePruned(true)
@@ -485,6 +489,11 @@ func (c *sourceCapture) report() {
 	if c.progress != nil {
 		c.progress(c.result.clone())
 	}
+}
+
+func (c *sourceCapture) phase(phase string) {
+	c.result.Phase, c.result.PhaseStartedAt = phase, now()
+	c.report()
 }
 
 func (c *sourceCapture) fail(path string, err error) {
@@ -651,7 +660,7 @@ func (c *sourceCapture) captureFiles(items []captureItem, present map[string]boo
 	if err := c.ensureSpace(c.result.BytesPlanned); err != nil {
 		return err
 	}
-	c.report()
+	c.phase("copying files")
 	for _, job := range jobs {
 		if err := c.ctx.Err(); err != nil {
 			return err

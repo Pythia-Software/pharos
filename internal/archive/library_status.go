@@ -27,15 +27,19 @@ import (
 // libraryActivity is one piece of work that holds or writes the library.
 type libraryActivity struct {
 	timingKind string
+	ID         string `json:"id,omitempty"`
 	// Kind is sync, index, capture, capture-other (a capture by another
 	// process, such as the CLI), backup, git, or maintenance.
 	Kind   string `json:"kind"`
 	Label  string `json:"label"`
 	Detail string `json:"detail,omitempty"`
-	// Progress is between 0 and 1 when it can be estimated.
-	Progress              *float64 `json:"progress"`
-	StartedAt             string   `json:"started_at,omitempty"`
-	EstimatedCompletionAt string   `json:"estimated_completion_at,omitempty"`
+	// Progress is the measured fraction of Work's current stage, not of the
+	// whole operation. nil means no trustworthy denominator is available.
+	Progress              *float64          `json:"progress"`
+	StartedAt             string            `json:"started_at,omitempty"`
+	EstimatedCompletionAt string            `json:"estimated_completion_at,omitempty"`
+	Work                  *activityWork     `json:"work,omitempty"`
+	Estimate              *activityEstimate `json:"estimate,omitempty"`
 	// Writes is true for work that writes to the library's drive; a backup
 	// only reads it.
 	Writes bool `json:"writes"`
@@ -202,7 +206,7 @@ func (s *Server) libraryActivities() []libraryActivity {
 		if run.State != "running" {
 			continue
 		}
-		activity := libraryActivity{Kind: "sync", Label: "Indexing sources", StartedAt: run.StartedAt, Writes: true, timingKind: activityTimingKind(run.Kind),
+		activity := libraryActivity{ID: run.ID, Kind: "sync", Label: "Indexing sources", StartedAt: run.StartedAt, Writes: true, timingKind: activityTimingKind(run.Kind),
 			OnEject: "Stops between workspaces; the next index resumes it.", Stoppable: true, StopPath: "/api/index/cancel", Stopping: run.StopRequested}
 		if run.Kind == automaticRunKind {
 			activity.Automatic = true
@@ -218,15 +222,10 @@ func (s *Server) libraryActivities() []libraryActivity {
 			activity.Label = "Manual sync: " + run.Phase
 		}
 		if run.Kind == "library-update" {
-			activity.Label = "Capture & index: " + run.Phase
+			activity.Label = "Capture & index"
 		}
 		if run.Kind == "verification" {
 			activity.Label = "Verifying retained inputs"
-		}
-		// Sources are the only unit of progress a run reports; one source
-		// would sit at 0% until it is done.
-		if run.TotalSources > 1 {
-			activity.Progress = fraction(float64(run.CompletedSources), float64(run.TotalSources))
 		}
 		if run.Kind == indexRunKind {
 			activity.Kind, activity.Label = "index", "Indexing captures"
@@ -235,7 +234,7 @@ func (s *Server) libraryActivities() []libraryActivity {
 			// measures itself against them rather than the sources.
 			if run.Phase == "counting" {
 				activity.Progress = nil
-			} else if run.Progress != nil {
+			} else if run.Phase == "indexing" && run.Progress != nil {
 				activity.Progress = run.Progress
 			}
 		}
@@ -256,6 +255,23 @@ func (s *Server) libraryActivities() []libraryActivity {
 			}
 		}
 		activity.Detail = strings.Join(parts, " · ")
+		sourceSummary := ""
+		if run.TotalSources > 0 {
+			sourceSummary = fmt.Sprintf("%d of %d sources finished", run.CompletedSources, run.TotalSources)
+		}
+		if run.Work != nil {
+			work := *run.Work // snapshots must not share the mutable run
+			activity.Work = &work
+			activity.Detail = strings.Join(nonemptyParts(work.Source, sourceSummary), " · ")
+		} else if run.Phase != "starting" && run.Phase != "counting" {
+			activity.Detail = strings.Join(nonemptyParts(firstString(run.CurrentSource), run.Phase, sourceSummary), " · ")
+		}
+		if run.InputsChecked > 0 && run.CurrentSource != nil {
+			activity.Detail += fmt.Sprintf(" · %d input groups checked", run.InputsChecked)
+		}
+		if run.Messages > 0 {
+			activity.Detail += fmt.Sprintf(" · %d messages written", run.Messages)
+		}
 		activities = append(activities, activity)
 	}
 	s.runsMu.RUnlock()
@@ -265,19 +281,18 @@ func (s *Server) libraryActivities() []libraryActivity {
 			continue
 		}
 		serviceCapture = true
-		done := float64(run.CompletedSources)
+		var work *activityWork
 		parts := []string{}
 		for _, result := range run.Results {
 			if result.State == "running" {
 				parts = append(parts, result.Name)
-				if result.BytesPlanned > 0 {
-					done += min(float64(result.BytesCopied)/float64(result.BytesPlanned), 1)
-				}
+				w := captureWork(result)
+				work = &w
 			}
 		}
 		parts = append(parts, fmt.Sprintf("%d of %d sources", run.CompletedSources, run.TotalSources), humanBytes(run.BytesCopied)+" copied")
-		activities = append(activities, libraryActivity{Kind: "capture", Label: "Capturing " + currentHost().Label, Detail: strings.Join(parts, " · "),
-			Progress: fraction(done, float64(run.TotalSources)), StartedAt: run.StartedAt, Writes: true,
+		activities = append(activities, libraryActivity{ID: run.ID, Kind: "capture", Label: "Capturing " + currentHost().Label, Detail: strings.Join(nonemptyParts(parts...), " · "),
+			Work: work, StartedAt: run.StartedAt, Writes: true,
 			OnEject: "Stops between files; the next capture resumes it, and what was captured stays valid."})
 	}
 	if !serviceCapture && s.captureActive() {
@@ -288,7 +303,8 @@ func (s *Server) libraryActivities() []libraryActivity {
 	if active, runs := s.backups.status(); active && len(runs) > 0 {
 		run := runs[0]
 		detail := fmt.Sprintf("To %s · %s · %s copied", run.Destination, defaultString(run.Phase, "starting"), humanBytes(run.BytesCopied))
-		activities = append(activities, libraryActivity{Kind: "backup", Label: "Backing up", Detail: detail, StartedAt: run.StartedAt,
+		activities = append(activities, libraryActivity{ID: run.ID, Kind: "backup", Label: "Backing up", Detail: detail, StartedAt: run.StartedAt,
+			Work:    &activityWork{Phase: run.Phase, Unit: "byte", Done: float64(run.BytesCopied)},
 			OnEject: "Stops; the next backup carries on from what was copied."})
 	}
 	if running, since, reason := s.tasks.gitRunning(); running {
@@ -298,19 +314,27 @@ func (s *Server) libraryActivities() []libraryActivity {
 	if upgrade := s.Catalog.upgrade(); upgrade != nil {
 		upgrade.mu.Lock()
 		running, step, done, total, since := upgrade.running, upgrade.step, upgrade.done, upgrade.total, upgrade.startedAt
+		unit, label := "item", step
+		for _, planned := range upgrade.planned {
+			if planned.ID == step {
+				unit, label = defaultString(planned.Unit, "item"), defaultString(planned.Label, step)
+			}
+		}
 		upgrade.mu.Unlock()
-		if running && step != "tools" {
+		if running {
 			detail := "Step: " + step
 			if total > 0 {
 				detail = fmt.Sprintf("Step: %s, %d of %d", step, done, total)
 			}
 			activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Upgrading the library", Detail: detail,
+				ID: "upgrade:" + since, Work: &activityWork{Phase: label, Unit: unit, Done: float64(done), Total: float64(total), Next: "Remaining library upgrade steps"},
 				Progress: fraction(float64(done), float64(total)), StartedAt: since, Writes: true,
 				OnEject: "Stops after the unit in progress; starting the upgrade again resumes it."})
 		}
 	}
-	if tools := s.Catalog.toolLedgerProgress(); tools.running {
+	if tools := s.Catalog.toolLedgerProgress(); tools.running && !s.Catalog.upgradeRunning() {
 		activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Building the Tools ledger",
+			ID: "tools", Work: &activityWork{Phase: "Building the Tools ledger", Unit: "conversation", Done: float64(tools.done), Total: float64(tools.total)},
 			Detail: fmt.Sprintf("%d of %d conversations", tools.done, tools.total), Progress: fraction(float64(tools.done), float64(tools.total)),
 			Writes: true, OnEject: "Stops between conversations; building the ledger again resumes it."})
 	}
@@ -326,6 +350,7 @@ func (s *Server) libraryActivities() []libraryActivity {
 	}
 	if progress, err := s.Catalog.substringIndexProgress(context.Background()); err == nil && !progress.Ready && progress.Total > 0 {
 		activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Building substring search",
+			ID: "substring", Work: &activityWork{Phase: "Building substring search", Unit: "conversation", Done: float64(progress.Done), Total: float64(progress.Total)},
 			Detail:   fmt.Sprintf("%d of %d conversations", progress.Done, progress.Total),
 			Progress: fraction(float64(progress.Done), float64(progress.Total)), Writes: true,
 			OnEject: "Stops between batches; it carries on when Pharos next opens the library."})
@@ -376,17 +401,7 @@ func (s *Server) libraryStatus() map[string]any {
 	config := s.Config()
 	drive := libraryDriveOf(config)
 	activities := s.libraryActivities()
-	for index := range activities {
-		activity := &activities[index]
-		if activity.Kind == "git" && strings.Contains(activity.Detail, "first scan of this catalog") {
-			continue
-		}
-		if duration := s.activityDuration(defaultString(activity.timingKind, activity.Kind)); duration > 0 && activity.StartedAt != "" {
-			if started, err := time.Parse(time.RFC3339Nano, activity.StartedAt); err == nil {
-				activity.EstimatedCompletionAt = formatTime(started.Add(duration))
-			}
-		}
-	}
+	s.estimateActivities(activities, time.Now())
 	writing := slices.ContainsFunc(activities, func(activity libraryActivity) bool { return activity.Writes })
 	// A stopped Library view refresh is not running, so it is not an
 	// activity; it is listed with what it left so it can be resumed.

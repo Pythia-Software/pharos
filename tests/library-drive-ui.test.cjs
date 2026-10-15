@@ -471,7 +471,7 @@ describe('library, drive and captures UI', { skip }, () => {
       await chip.click();
       const panel = page.getByRole('dialog', { name: 'Library drive' });
       await panel.getByText('Capture by another process', { exact: true }).waitFor();
-      assert.match(await panel.textContent(), /Estimated complete unknown/);
+      assert.match(await panel.textContent(), /Time remaining not known/);
       const eject = panel.getByRole('button', { name: `Eject ${volume}`, exact: true });
       assert.equal(await eject.textContent(), '⏏ Eject');
       assert.match(await eject.getAttribute('title'), /stops agents' Pharos MCP servers/);

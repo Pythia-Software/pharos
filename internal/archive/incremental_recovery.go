@@ -215,6 +215,7 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 				s.updateRun(run.ID, func(run *SyncRun) {
 					run.Phase = "rebuilding retained messages"
 					run.Progress = fraction(float64(done), float64(total))
+					run.setWork(run.Phase, firstString(run.CurrentSource), "workspace", float64(done), float64(total))
 				})
 			})
 			return
@@ -231,8 +232,21 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 		}
 		s.updateRun(run.ID, func(run *SyncRun) { run.Phase = "capturing fresh evidence" })
 		if len(sources) > 0 {
+			completed := 0
+			var previous CaptureSourceResult
 			summary, err := Capture(ctx, config, sources, func(result CaptureSourceResult) {
-				s.updateRun(run.ID, func(run *SyncRun) { run.CurrentSource = result.Name; run.Messages = result.FilesCopied })
+				if previous.Phase == "copying files" && result.Phase != previous.Phase && result.Name == previous.Name && len(result.Errors) == 0 && ctx.Err() == nil {
+					s.recordWorkTiming("capture", captureWork(previous), time.Now())
+				}
+				previous = result
+				if result.State != "running" {
+					completed++
+				}
+				s.updateRun(run.ID, func(run *SyncRun) {
+					work := captureWork(result)
+					run.Phase, run.CurrentSource, run.Work = work.Phase, result.Name, &work
+					run.TotalSources, run.CompletedSources = len(sources), completed
+				})
 			})
 			if err != nil {
 				failure = err
@@ -248,22 +262,31 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 			failure = err
 			return
 		}
+		s.updateRun(run.ID, func(run *SyncRun) { run.CurrentSource = nil; run.TotalSources, run.CompletedSources = len(targets), 0 })
+		indexCtx := withIngestMode(ctx, ingestMode{force: mode == "full"})
+		plan := s.countIndexWork(indexCtx, run.ID, targets)
 		for index, target := range targets {
 			if ctx.Err() != nil {
 				return
 			}
 			baseW, baseC, baseM := totals(results)
-			result := s.Catalog.IndexCapture(withIngestMode(ctx, ingestMode{force: mode == "full"}), target, func(phase string, w, c, m, skipped, processed int) {
+			meter := plan.meter(index)
+			result := s.Catalog.IndexCapture(meter.context(indexCtx), target, func(phase string, w, c, m, skipped, processed int) {
 				s.updateRun(run.ID, func(run *SyncRun) {
 					run.Phase = phase
 					run.CurrentSource = target.label()
 					run.TotalSources = len(targets)
 					run.CompletedSources = index
+					plan.report(run, index, processed)
+					meter.report(run, phase, target.label(), processed)
 					run.Workspaces = baseW + w
 					run.Conversations = baseC + c
 					run.Messages = baseM + m
 				})
 			})
+			meter.record(s, ctx, result)
+			plan.finish(index)
+			s.updateRun(run.ID, func(run *SyncRun) { run.CompletedSources = index + 1; plan.report(run, index+1, 0) })
 			results = append(results, result)
 			if result.Error != nil {
 				failure = fmt.Errorf("%s: %v", target.label(), result.Error)
@@ -271,8 +294,14 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 			s.Catalog.DB.Exec("UPDATE sync_recovery_jobs SET progress_json=?,updated_at=? WHERE id=?", jsonText(results), now(), job)
 		}
 		if ctx.Err() == nil {
-			s.updateRun(run.ID, func(run *SyncRun) { run.Phase = "reconciling deferred work" })
-			if err := s.finishDeferredSync(ctx); err != nil {
+			s.updateRun(run.ID, func(run *SyncRun) {
+				run.Phase, run.CurrentSource = "reconciling deferred work", nil
+				run.Progress = nil
+			})
+			if err := s.finishDeferredSyncPhases(ctx, false, func(name string, work func() error) error {
+				s.updateRun(run.ID, func(run *SyncRun) { run.Phase = "refreshing " + name })
+				return work()
+			}); err != nil {
 				failure = err
 			}
 			s.updateRun(run.ID, func(run *SyncRun) { run.Phase = "verifying" })
