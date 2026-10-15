@@ -1,3 +1,7 @@
+> Historical prerelease integration record. Pharos now uses the published
+> [0.7.0 packages](query-table-integration.md); source archives, the Go vendor,
+> the patch and the snapshot-packaging script described below have been retired.
+
 # Query Table SQLite/Go upstream handoff
 
 ## Release and reproducible patch
@@ -7,7 +11,7 @@ Pharos integrated Query Table **0.6.0** (Go **v0.6.0**, release commit
 confirmed these versions on October 8, 2026 (America/Denver).
 
 Please review and implement the changes in
-[`../patches/query-table/v0.6.0-pharos.patch`](../patches/query-table/v0.6.0-pharos.patch).
+`patches/query-table/v0.6.0-pharos.patch` (retired with the 0.7.0 upgrade; available in Git history).
 The patch applies at the Query Table repository root:
 
 ```sh

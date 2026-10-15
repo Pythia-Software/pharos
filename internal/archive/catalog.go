@@ -436,6 +436,9 @@ func (c *Catalog) Initialize() error {
 			return err
 		}
 	}
+	if err := c.ensureQueryCacheGeneration(); err != nil {
+		return fmt.Errorf("initialize query cache invalidation: %w", err)
+	}
 	// Last, so a query open skips Initialize only after all of it succeeded.
 	return c.recordInitializedBuild()
 }

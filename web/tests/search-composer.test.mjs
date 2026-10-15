@@ -60,3 +60,16 @@ test("rolling windows travel with the query until their date filters change", ()
  d.query.where = [];
  assert.equal(new URL(m.searchURL(d), "http://localhost").searchParams.has("window_days"), false);
 });
+
+test("relative windows round trip through search URLs and disappear after a manual date edit", () => {
+ const state = m.freshSearch(schema);
+ state.window = { days: 7, field: "activity_at", mode: "relative" };
+ state.query.where = [{ field: "activity_at", op: ">=", value: "-7d" }, { field: "activity_at", op: "<", value: "+0s" }];
+ const params = new URL(m.searchURL(state), "http://localhost").searchParams;
+ assert.equal(params.get("window_mode"), "relative");
+ const restored = m.restoreSearch(params, schema);
+ assert.deepEqual(restored.window, state.window); assert.deepEqual(restored.query.where, state.query.where);
+ restored.query.where[0] = { ...restored.query.where[0], value: "2026-01-01T00:00:00Z" };
+ const edited = new URL(m.searchURL(restored), "http://localhost").searchParams;
+ for (const key of ["window_mode", "window_days", "window_field", "window_dataset"]) assert.equal(edited.has(key), false);
+});

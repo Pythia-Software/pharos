@@ -19,6 +19,23 @@
   --qt-bg-muted: var(--qt-header-bg);
   --qt-fg: var(--ink);
   --qt-radius: 4px;
+  --qt-column-key-color: #6553a3;
+  --qt-column-aggregate-color: #7942a8;
+  --qt-column-row-color: #a14272;
+}
+
+/* Related role hues stay legible on Pharos's dark green surfaces. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --qt-column-key-color: #bbacf1;
+    --qt-column-aggregate-color: #d5a5ef;
+    --qt-column-row-color: #f1a3c7;
+  }
+}
+:root[data-theme="dark"] {
+  --qt-column-key-color: #bbacf1;
+  --qt-column-aggregate-color: #d5a5ef;
+  --qt-column-row-color: #f1a3c7;
 }
 
 /* Shared line icons also fit the third-party query controls' compact rows. */
@@ -46,6 +63,7 @@
 .pharos-query-page .qt-table thead { z-index: 1; }
 .pharos-query-page .qt-table tfoot { position: static; }
 .pharos-query-page .qt-th { font-family: var(--serif); color: var(--ink); }
+.pharos-query-page .qt-header-role { font-family: var(--sans); }
 /* Denser rows than the component's 8px/12px default; narrow screens keep its touch padding. */
 @media (min-width: 641px) { .pharos-query-page :is(.qt-th, .qt-cell) { padding: 6px 10px; } }
 .pharos-query-page .qt-btn,
@@ -130,6 +148,11 @@
 .usage-heading-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex: none; }
 .usage-preset-rows { margin: 4px 0 14px; }
 .usage-preset-rows .usage-presets { margin: 0 0 4px; }
+.usage-table-queries { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.usage-table-queries .usage-presets { margin: 0 0 6px; }
+.usage-table-queries .usage-presets:last-child { margin-bottom: 0; }
+.usage-group-context { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; margin-top: 10px; font-size: var(--fs-sm); }
+.usage-source-status { margin: 0 0 12px; }
 .usage-chart { position: relative; margin: 14px 0 16px; padding: 14px 16px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
 .usage-chart-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 10px 16px; margin-bottom: 8px; }
 .usage-chart-head h3, .writing-mix h3 { margin: 2px 0 0; font-size: var(--fs-base); }

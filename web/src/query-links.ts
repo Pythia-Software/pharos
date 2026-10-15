@@ -2,18 +2,16 @@ import { decodeQueryStrict, localQuerySnapshotCache, encodeQuery, type QueryStat
 
 export const queryDatasets = ["library", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts"] as const;
 export type QueryDataset = typeof queryDatasets[number];
-export type RollingWindow = { days: number; field: string };
+export type RollingWindow = { days: number; field: string; mode?: "relative" | "calendar" };
 const timeFields: Partial<Record<QueryDataset, string[]>> = {
-  library: ["activity_at"], usage: ["first_usage_at"], tool_calls: ["started_at"],
+  mcp_calls: ["called_at"], library: ["activity_at"], usage: ["first_usage_at"], tool_calls: ["started_at"],
   skill_usages: ["created_at"], writing_messages: ["sent_at"], tl1_attempts: ["started_at"],
 };
 export const rollingWindowDays = [1, 7, 30, 90] as const;
 export function rollingWindowField(dataset: QueryDataset): string | undefined { return timeFields[dataset]?.[0]; }
 
-// URLs carry whole local calendar windows; elapsed relative offsets in QT
-// cannot express those boundaries across daylight saving changes.
-// Resolve it for both previews and navigation. These are local calendar days,
-// including today; daily Usage facts are never cut into imaginary partial rows.
+// New cards use native elapsed offsets in their saved query and URL. Legacy
+// calendar-window links keep their original interpretation until edited.
 export function rollingBounds(days: number, clock = new Date()): [string, string] {
   const start = new Date(clock), end = new Date(clock);
   start.setHours(0, 0, 0, 0); start.setDate(start.getDate() - days + 1);
@@ -24,13 +22,13 @@ export function rollingBounds(days: number, clock = new Date()): [string, string
 export function readRollingWindow(params: URLSearchParams, dataset: QueryDataset): RollingWindow | undefined {
   const days = Number(params.get("window_days")), field = params.get("window_field") ?? "";
   if (params.get("window_dataset") !== dataset || !rollingWindowDays.some(value => value === days) || !timeFields[dataset]?.includes(field)) return;
-  return { days, field };
+  return { days, field, mode: params.get("window_mode") === "relative" ? "relative" : "calendar" };
 }
 
 export function updateQueryWindowURL(url: string, days: number, fallback?: QueryState): string {
   const spec = queryFromURL(url, fallback), field = spec && (spec.window?.field ?? rollingWindowField(spec.dataset));
   if (!spec || !field || !rollingWindowDays.some(value => value === days)) throw new Error("This view does not support that time window.");
-  const window = { days, field };
+  const window: RollingWindow = { days, field, mode: "relative" };
   // Replace direct date selections, including older fixed ranges. Leave other
   // predicates (and compound date expressions) intact rather than rewriting
   // the user's logical query. Relative bounds are renewed on every evaluation.
@@ -39,15 +37,16 @@ export function updateQueryWindowURL(url: string, days: number, fallback?: Query
   const query = resolveRollingQuery(spec.query.grouping ? { ...spec.query, grouping: { ...spec.query.grouping, source: adjusted } } : adjusted, window);
   const parsed = new URL(url, location.origin);
   parsed.searchParams.set(`q_${spec.dataset}`, encodeQuery(query));
-  parsed.searchParams.set("window_days", String(days)); parsed.searchParams.set("window_field", field); parsed.searchParams.set("window_dataset", spec.dataset);
+  parsed.searchParams.set("window_mode", "relative"); parsed.searchParams.set("window_days", String(days)); parsed.searchParams.set("window_field", field); parsed.searchParams.set("window_dataset", spec.dataset);
   // Search text, chart options and all other URL context stay with the view.
   return `${parsed.pathname}${parsed.search}${parsed.hash}`;
 }
 
 export function resolveRollingQuery(query: QueryState, window?: RollingWindow, clock = new Date()): QueryState {
   if (!window) return query;
+  if (window.mode === "relative" && rollingQueryMatches(query, window)) return query;
   if (query.grouping) return { ...query, offset: 0, grouping: { ...query.grouping, source: resolveRollingQuery(query.grouping.source, window, clock) } };
-  const [from, to] = rollingBounds(window.days, clock);
+  const [from, to] = window.mode === "relative" ? [`-${window.days}d`, "+0s"] : rollingBounds(window.days, clock);
   return { ...query, offset: 0, where: [
     ...query.where.filter(term => !("field" in term && term.field === window.field && !term.negated && [">=", "<"].includes(term.op))),
     { field: window.field, op: ">=", value: from }, { field: window.field, op: "<", value: to },
@@ -63,6 +62,7 @@ export function rollingQueryMatches(query: QueryState, window: RollingWindow): b
   if (bounds.length !== 2) return false;
   const from = bounds.find(term => "field" in term && term.op === ">="), to = bounds.find(term => "field" in term && term.op === "<");
   if (!from || !to || !("field" in from) || !("field" in to)) return false;
+  if (window.mode === "relative") return from.value === `-${window.days}d` && to.value === "+0s";
   const start = new Date(from.value), end = new Date(to.value);
   if (![start, end].every(date => Number.isFinite(date.getTime()) && date.getHours() === 0 && date.getMinutes() === 0 && date.getSeconds() === 0 && date.getMilliseconds() === 0)) return false;
   start.setDate(start.getDate() + window.days);
@@ -70,7 +70,7 @@ export function rollingQueryMatches(query: QueryState, window: RollingWindow): b
 }
 
 export function queryURL(dataset: QueryDataset, query: QueryState, window?: RollingWindow): string {
-  const params = new URLSearchParams({ [`q_${dataset}`]: encodeQuery(query) });
+  const params = new URLSearchParams({ [`q_${dataset}`]: encodeQuery(window?.mode === "relative" ? resolveRollingQuery(query, window) : query) });
   let path = "/library";
   if (["tools", "tool_calls", "skill_usages"].includes(dataset)) {
     path = "/tools";
@@ -82,6 +82,7 @@ export function queryURL(dataset: QueryDataset, query: QueryState, window?: Roll
   } else if (dataset === "mcp_calls") path = "/mcp";
   else if (dataset === "tl1_attempts") path = "/tl1/runs";
   if (window) {
+    if (window.mode === "relative") params.set("window_mode", "relative");
     params.set("window_days", String(window.days)); params.set("window_field", window.field); params.set("window_dataset", dataset);
   }
   return `${path}?${params}`;

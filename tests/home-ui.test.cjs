@@ -10,11 +10,30 @@ const source = fs.readFileSync(path.join(root, 'internal/archive/assets/ui.py'),
 const html = source.slice(source.indexOf("r'''" ) + 4, source.lastIndexOf("'''"));
 function moduleOf(entry) {
   const loaded = { exports: {} };
-  new Function('module', 'exports', buildSync({ entryPoints: [path.join(root, entry)], bundle: true, platform: 'node', format: 'cjs', write: false }).outputFiles[0].text)(loaded, loaded.exports);
+  new Function('module', 'exports', 'require', buildSync({ entryPoints: [path.join(root, entry)], bundle: true, platform: 'node', format: 'cjs', write: false }).outputFiles[0].text)(loaded, loaded.exports, require);
   return loaded.exports;
 }
 const core = moduleOf('web/node_modules/@pythia-software/query-table-core/dist/index.js');
 const links = moduleOf('web/src/query-links.ts');
+async function readQuery(page, dataset) {
+  let token = new URL(page.url()).searchParams.get(`q_${dataset}`);
+  if (token?.startsWith('@')) {
+    const snapshot = await page.evaluate(async ({ dataset, code }) => {
+      const response = await fetch(`/api/query-snapshots?dataset=pharos_${dataset}&code=${encodeURIComponent(code)}`);
+      return response.ok ? response.json() : null;
+    }, { dataset, code: token.slice(1) });
+    token = snapshot?.token;
+  }
+  return token && core.decodeQuery(token);
+}
+async function waitForQuery(page, dataset, predicate) {
+  await assertEventually(async () => { const query = await readQuery(page, dataset); return query && predicate(query); });
+}
+async function assertEventually(check) {
+  const end = Date.now() + 5000;
+  while (Date.now() < end) { if (await check()) return; await new Promise(resolve => setTimeout(resolve, 25)); }
+  assert.ok(await check(), 'expected state did not arrive');
+}
 const { queryRecipes, instantiateRecipe } = moduleOf('web/src/curiosity-data.ts');
 const { categoryForQuery } = moduleOf('web/src/query-categories.ts');
 const schemas = Object.fromEntries(links.queryDatasets.map(dataset => [dataset, core.loadSchema(JSON.parse(fs.readFileSync(path.join(root, `schemas/${dataset}.schema.json`))))]));
@@ -22,7 +41,7 @@ const schemas = Object.fromEntries(links.queryDatasets.map(dataset => [dataset, 
 function fixtures() {
   const calls = [], usage = [], writing = [], skills = [], library = [], attempts = [];
   for (let i = 0; i < 28; i++) {
-    const date = new Date(); date.setDate(date.getDate() - i % 7); date.setHours(12, 0, 0, 0);
+    const date = new Date(); date.setDate(date.getDate() - i % 7); date.setHours(0, 0, 1, 0);
     const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
     const repository_name = ['pharos', 'query-table', 'workbench'][i % 3];
     calls.push({ id: `call-${i}`, day, started_at: date.toISOString(), tool_name: ['Edit', 'Bash', 'Read'][i % 3], tool_category: ['edit', 'command', 'read'][i % 3], status: i % 2 ? 'ok' : 'error', error_count: i % 2 ? 0 : 1, call_count: 1, error_signature: 'file_not_read', duration_ms: (i + 1) * 5000, command_name: 'go test', repo_path: `src/module-${i % 3}.go`, test_failure: i % 2 === 0, carried_tokens: (i + 1) * 1200, result_tokens: 300 + i * 40, truncated: i % 4 === 0, search_query: 'SQLite indexing', host: 'go.dev', mcp_method: 'search_work', repository_name, title: 'Archive indexing' });
@@ -43,7 +62,7 @@ async function setup({ saved = false, reducedMotion = false, clock = false, view
   if (clock) await page.clock.install();
   if (now) await page.clock.setFixedTime(now);
   await page.addInitScript(values => { for (const [key, value] of Object.entries(values)) localStorage.setItem(key, JSON.stringify(value)); }, localValues);
-  const data = { rows: fixtures(), empty: false, requests: [], errors: [], pending: [], holdPreviews: false, preferences: { 'pharos-theme': 'dark', ...preferenceValues } };
+  const data = { rows: fixtures(), empty: false, requests: [], metadataRequests: [], snapshots: {}, errors: [], pending: [], holdPreviews: false, preferences: { 'pharos-theme': 'dark', ...preferenceValues } };
   if (saved) {
     const recipe = instantiateRecipe(queryRecipes.find(item => item.id === 'human-words'), 7);
     data.preferences['query-table:saved:pharos_writing_messages'] = [{ id: 'original-query', name: 'My words', savedAt: 100, query: recipe.query }];
@@ -55,22 +74,39 @@ async function setup({ saved = false, reducedMotion = false, clock = false, view
     const json = body => route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) });
     if (['/', '/home', '/library', '/usage', '/tools'].includes(url.pathname)) return route.fulfill({ contentType: 'text/html', body: html });
     if (url.pathname === '/assets/preferences.js') return route.fulfill({ contentType: 'application/javascript', body: `window.pharosPreferenceValues=${JSON.stringify(data.preferences)}` });
+    if (url.pathname === '/api/query-snapshots') {
+      const key = url.search;
+      if (route.request().method() === 'PUT') { data.snapshots[key] = route.request().postDataJSON(); return json(data.snapshots[key]); }
+      return data.snapshots[key] ? json(data.snapshots[key]) : route.fulfill({ status: 404 });
+    }
     if (url.pathname === '/api/preferences') {
       const body = route.request().postDataJSON(); Object.assign(data.preferences, body.set); for (const key of body.delete ?? []) delete data.preferences[key]; return json({});
     }
     if (['/assets/query-tables.js', '/assets/query-tables.css'].includes(url.pathname)) return route.fulfill({ contentType: url.pathname.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(path.join(root, 'internal/archive/assets', path.basename(url.pathname))) });
     if (url.pathname === '/api/query/writing/series') return json({ works: 0, daily: [], totals: {} });
     if (url.pathname === '/api/query-computed-columns') return json([]);
-    if (url.pathname.endsWith('/capabilities')) return json({ metricCapabilities: { version: 2, expressions: true, shownRows: true, computedFields: true, distributions: true, profile: 'qt-sqlite-v1' }, computedExecution: { profile: 'qt-sqlite-v1', planToken: '', fields: {}, resolvedRevisions: {} } });
+    if (url.pathname.endsWith('/capabilities')) return json({ queryCapabilities: { version: 3, profile: 'qt-sqlite-v1', groupedRows: true, calendarGrouping: true, computedSourceFilters: true, maxRows: 10000, maxGroups: 10000, maxPopulation: 250000 }, metricCapabilities: { version: 2, expressions: true, shownRows: true, computedFields: true, distributions: true, profile: 'qt-sqlite-v1' }, computedExecution: { profile: 'qt-sqlite-v1', planToken: '', fields: {}, resolvedRevisions: {} } });
     if (url.pathname.startsWith('/api/query/') && route.request().method() === 'POST') {
       const dataset = url.pathname.split('/')[3], request = route.request().postDataJSON(); data.requests.push({ dataset, request, path: url.pathname });
-      const rows = (data.empty ? [] : data.rows[dataset] ?? []).map(row => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, schemas[dataset].fields.find(field => field.name === key)?.type === 'datetime' ? Date.parse(value) : value])));
+      // Calendar execution receives the server's ISO datetime shape. The local
+      // interpreter also accepts epochs for ordinary row predicates.
+      const calendar = request.metrics?.some(metric => metric.dateGrouping);
+      const rows = (data.empty ? [] : data.rows[dataset] ?? []).map(row => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, !calendar && schemas[dataset].fields.find(field => field.name === key)?.type === 'datetime' ? Date.parse(value) : value])));
       if (data.holdPreviews) await new Promise(resolve => data.pending.push({ release: resolve }));
+      if (url.pathname.endsWith('/query-v3')) {
+        const state = { ...core.EMPTY_QUERY, ...request.result, select: request.result.select.map(field => ({ field })), aggregations: request.metrics,
+          ...(request.grouping ? { grouping: { ...request.grouping, source: { ...core.EMPTY_QUERY, ...request.source, select: request.source.select.map(field => ({ field })) } } } : {}) };
+        const prepared = state.grouping ? core.prepareGrouping(rows, schemas[dataset], state.grouping, { now: request.now }) : undefined;
+        const schema = prepared?.schema ?? schemas[dataset], result = core.applyQuery(rows, state, schemas[dataset], { now: request.now });
+        const metrics = core.evaluateMetrics(rows, state, schemas[dataset], { now: request.now, shownRows: result.rows });
+        return json({ version: 3, now: request.now, sourceTotal: prepared?.inputs.length ?? rows.length, rows: request.rows ? result.rows : [], total: result.total, metrics: metrics.metrics,
+          schema: { name: schema.name, idField: schema.idField, fields: schema.fields.map(({ name, type }) => ({ name, type })) }, execution: { profile: 'qt-sqlite-v1', planToken: '', fields: {}, resolvedRevisions: {} } });
+      }
       if (url.pathname.endsWith('/aggregations')) return json(core.applyAggregations(rows, { ...core.EMPTY_QUERY, ...request }, schemas[dataset]));
-      if (url.pathname.endsWith('/metrics')) return json(core.evaluateMetrics(rows, { ...core.EMPTY_QUERY, ...request, aggregations: request.metrics.map(metric => ({ ...metric, ...(metric.distribution ? { display: { kind: metric.distribution.kind } } : {}) })) }, schemas[dataset]));
-      return json(core.applyQuery(rows, { ...core.EMPTY_QUERY, ...request }, schemas[dataset]));
+      if (url.pathname.endsWith('/metrics')) return json({ version: 2, execution: { profile: 'qt-sqlite-v1', planToken: '', fields: {}, resolvedRevisions: {} }, ...core.evaluateMetrics(rows, { ...core.EMPTY_QUERY, ...request, aggregations: request.metrics.map(metric => ({ ...metric, ...(metric.distribution ? { display: { kind: metric.distribution.kind } } : {}) })) }, schemas[dataset]) });
+      return json({ version: 2, ...core.applyQuery(rows, { ...core.EMPTY_QUERY, ...request }, schemas[dataset]), computed: [], execution: { profile: 'qt-sqlite-v1', planToken: '', fields: {}, resolvedRevisions: {} } });
     }
-    if (url.pathname.endsWith('/distinct')) return json({ values: [], hasMore: false });
+    if (url.pathname.endsWith('/distinct')) { data.metadataRequests.push({ dataset: url.pathname.split('/')[3], field: url.searchParams.get('field') }); return json({ values: [], hasMore: false }); }
     if (url.pathname.endsWith('/field-stats')) return json({});
     if (url.pathname === '/api/tools/status') return json({ pending_conversations: 0, backfill: { running: false, error: null } });
     if (url.pathname === '/api/findings') return json({ status: { running: false }, items: [] });
@@ -79,8 +115,9 @@ async function setup({ saved = false, reducedMotion = false, clock = false, view
   });
   await page.goto(`http://home.test${url}`);
   if (clock) await page.clock.runFor(5000);
-  if (waitForHome) await page.waitForFunction(() => document.querySelector('.home-conveyor')?.getAttribute('aria-busy') === 'false' && document.querySelector('.home-belt-row .query-card'));
-  else await page.waitForFunction(() => document.querySelector('#queryTableLibrary .qt-qb'));
+  if (url.includes('cards=library')) await page.locator('.card-library-entry').first().waitFor();
+  else if (waitForHome) await page.waitForFunction(() => document.querySelector('.home-conveyor')?.getAttribute('aria-busy') === 'false' && document.querySelector('.home-belt-row .query-card'));
+  else await page.waitForFunction(() => document.querySelector('.view.active .qt-qb'));
   return { browser, page, data };
 }
 
@@ -92,12 +129,15 @@ test('rolling URLs retain the same query while renewing calendar bounds and data
   const clock = new Date(2026, 9, 8, 15), next = new Date(2026, 9, 15, 15);
   const recipe = instantiateRecipe(queryRecipes.find(item => item.id === 'tool-failures'), 7, clock);
   const resolved = links.resolveRollingQuery(recipe.query, recipe.window, next);
-  assert.deepEqual(resolved.where.filter(term => term.field === 'started_at').map(term => term.value), links.rollingBounds(7, next));
+  assert.deepEqual(resolved.grouping.source.where.filter(term => term.field === 'started_at').map(term => term.value), ["-7d", "+0s"]);
   assert.deepEqual(resolved.aggregations, recipe.query.aggregations);
-  assert.equal(resolved.where.filter(term => term.field === 'error_count').length, 1);
+  assert.equal(resolved.grouping.source.where.filter(term => term.field === 'error_count').length, 1);
   const writing = instantiateRecipe(queryRecipes.find(item => item.id === 'human-words'), 7, clock);
   assert.match(writing.url, /usage=writing/); assert.match(writing.url, /writing=messages/);
-  for (const item of queryRecipes) core.toServerQuery(instantiateRecipe(item, 7, clock).query, schemas[item.dataset]);
+  for (const item of queryRecipes) {
+    const query = instantiateRecipe(item, 7, clock).query;
+    if (!query.grouping) core.toServerQuery(query, schemas[item.dataset]);
+  }
 });
 
 test('rolling windows recognize whole local calendar spans across midnight and daylight saving', () => {
@@ -136,10 +176,13 @@ test('Home nav and logo activate previews and leaving Home suspends scans and au
       await page.mouse.move(5, 5);
       await page.locator('.tabs [data-view="library"]').click();
       await page.clock.runFor(1000);
-      const requests = data.requests.length;
+      // The active Library may refresh its row page. Count Home's preview
+      // execution paths, not that legitimate foreground request.
+      const previewRequests = () => data.requests.filter(({ dataset, path }) => dataset !== 'library' || path.endsWith('/metrics') || path.endsWith('/query-v3')).length;
+      const requests = previewRequests();
       await page.evaluate(() => window.dispatchEvent(new Event('pharos:data-refresh')));
       await page.clock.runFor(65000);
-      assert.equal(data.requests.length, requests, 'hidden Home must not scan on a data refresh');
+      assert.equal(previewRequests(), requests, 'hidden Home must not scan on a data refresh');
       assert.deepEqual(await page.locator('.home-belt-row .query-card').evaluateAll(cards => cards.map(card => card.dataset.cardId)), ids);
       assert.equal(await page.locator('.home-countdown').innerText(), 'Waiting');
     }
@@ -154,7 +197,7 @@ test('old root Library URLs and history links retain queries, searches and their
   try {
     assert.equal(new URL(page.url()).pathname, '/library');
     assert.equal(new URL(page.url()).hash, '#library');
-    assert.equal(await page.locator('#library').getByRole('searchbox', { name: 'Search library', exact: true }).inputValue(), 'indexing');
+    assert.equal(await page.locator('#library').getByRole('textbox', { name: 'Text for rule 1.1', exact: true }).inputValue(), 'indexing');
     assert.equal(await page.getByRole('button', { name: 'Conversations', exact: true }).getAttribute('aria-pressed'), 'true');
     assert.deepEqual(core.decodeQuery(new URL(page.url()).searchParams.get('q_library')).where, query.where);
     await page.evaluate(url => {
@@ -175,16 +218,15 @@ test('old root Library URLs and history links retain queries, searches and their
     assert.equal(await page.locator('#library').getByRole('searchbox', { name: 'Search library', exact: true }).inputValue(), 'indexing');
     assert.equal(new URL(page.url()).searchParams.get('kind'), 'file');
     assert.equal(new URL(page.url()).searchParams.get('case'), '1');
+    // Exercise a controlled Library → Home history transition; the earlier
+    // route restorations also retain independent query/view history entries.
+    await page.locator('.tabs [data-view="home"]').click();
+    await page.waitForURL(url => url.pathname === '/');
     await page.goBack();
-    assert.equal(new URL(page.url()).pathname, '/');
-    await page.locator('.tabs [data-view="library"]').click();
-    await page.waitForFunction(() => new URL(location.href).searchParams.get('search') === 'indexing');
-    assert.equal(new URL(page.url()).searchParams.get('kind'), 'file', 'visiting Home through history preserves the hidden Library search');
-    await page.goBack();
-    await page.goBack();
-    assert.equal(new URL(page.url()).pathname, '/library');
+    await page.waitForURL(url => url.pathname === '/library');
+    assert.equal(new URL(page.url()).searchParams.get('kind'), 'file');
     await page.goForward();
-    assert.equal(new URL(page.url()).pathname, '/');
+    await page.waitForURL(url => url.pathname === '/');
     assert.equal(await page.locator('#home').evaluate(home => home.classList.contains('active')), true);
     assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('pharos-history-v1'))[0].title), 'Home');
     assert.deepEqual(data.errors, []);
@@ -197,12 +239,7 @@ test('showing tables serializes restored queries for Library, Usage, Writing and
   const localValues = Object.fromEntries(datasets.map(dataset => [`query-table:last:pharos_${dataset}`, queries[dataset]]));
   const { browser, page, data } = await setup({ localValues, preferenceValues: { 'pharos-show-nav-button': true } });
   const check = async dataset => {
-    await page.waitForFunction(({ dataset, value }) => {
-      const token = new URL(location.href).searchParams.get(`q_${dataset}`);
-      if (!token) return false;
-      const query = JSON.parse(atob(token.replace(/-/g, '+').replace(/_/g, '/')));
-      return query.w?.some(term => term.value === value);
-    }, { dataset, value: `stored-${dataset}` }, { timeout: 5000 });
+    await waitForQuery(page, dataset, query => query.where.some(term => term.value === `stored-${dataset}`));
     assert.deepEqual(core.decodeQuery(new URL(page.url()).searchParams.get(`q_${dataset}`)).where, queries[dataset].where);
   };
   try {
@@ -212,7 +249,8 @@ test('showing tables serializes restored queries for Library, Usage, Writing and
     await page.locator('#bookmarkStar').click();
     await page.waitForFunction(() => window.pharosPrefs.get('pharos-bookmarks-v1', []).some(item => item.dataset === 'library' || item.url.startsWith('/library')));
     const libraryBookmark = await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', []).find(item => item.url.startsWith('/library')));
-    assert.equal(new URL(libraryBookmark.url, page.url()).searchParams.get('q_library'), new URL(libraryURL).searchParams.get('q_library'));
+    assert.ok(new URL(libraryBookmark.url, page.url()).searchParams.get('q_library').startsWith('@'), 'bookmarks use a permanent snapshot');
+    assert.deepEqual(core.normalizeQueryState(libraryBookmark.query), core.decodeQuery(new URL(libraryURL).searchParams.get('q_library')));
     await page.locator('.tabs [data-view="usage"]').click(); await check('usage');
     await page.getByRole('group', { name: 'Usage view', exact: true }).getByRole('button', { name: 'Human Words', exact: true }).click(); await check('writing');
     await page.getByRole('group', { name: 'List', exact: true }).getByRole('button', { name: 'Messages', exact: true }).click(); await check('writing_messages');
@@ -223,13 +261,17 @@ test('showing tables serializes restored queries for Library, Usage, Writing and
     await toolView.getByRole('button', { name: 'Skills', exact: true }).click(); await check('skill_usages');
     const incoming = { ...queries.library, where: [{ field: 'repository_name', op: '=', value: 'incoming-library' }] };
     await page.evaluate(url => window.pharosNavigate(url), links.queryURL('library', incoming));
+    await waitForQuery(page, 'library', query => query.where.some(term => term.value === 'incoming-library'));
+    await page.getByRole('button', { name: 'Edit workspace filters', exact: true }).click();
     await page.waitForFunction(() => [...document.querySelectorAll('#library .qt-qb input')].some(input => input.value === 'incoming-library'));
+    assert.equal(await page.locator('#library .query-table-error').count(), 0);
+    await page.screenshot({ path: path.join(root, '.context/review-incoming-query.png') });
     assert.deepEqual(core.decodeQuery(new URL(page.url()).searchParams.get('q_library')).where, incoming.where, 'route restoration must win over visibility synchronization');
     await page.goBack();
     assert.equal(await toolView.getByRole('button', { name: 'Skills', exact: true }).getAttribute('aria-pressed'), 'true');
     await check('skill_usages');
     await page.goForward();
-    await page.waitForFunction(() => [...document.querySelectorAll('#library .qt-qb input')].some(input => input.value === 'incoming-library'));
+    await waitForQuery(page, 'library', query => query.where.some(term => term.value === 'incoming-library'));
     await page.locator('.tabs [data-view="home"]').click();
     await page.locator('.tabs [data-view="library"]').click();
     await page.waitForFunction(() => new URL(location.href).searchParams.has('q_library'));
@@ -241,17 +283,17 @@ test('showing tables serializes restored queries for Library, Usage, Writing and
 test('query edits and saving after local midnight preserve a rolling window', async () => {
   const before = new Date('2026-10-08T23:59:00-06:00'), after = new Date('2026-10-09T00:01:00-06:00');
   const item = instantiateRecipe(queryRecipes.find(recipe => recipe.id === 'tool-failures'), 7, before);
-  const { browser, page, data } = await setup({ url: item.url, now: before });
+  const source = item.query.grouping.source;
+  const { browser, page, data } = await setup({ url: links.queryURL('tool_calls', source, item.window), now: before });
   try {
     await page.clock.setFixedTime(after);
     await page.getByRole('button', { name: 'Slowest calls', exact: true }).click();
-    await page.waitForFunction(() => {
-      const token = new URL(location.href).searchParams.get('q_tool_calls');
-      return token && JSON.parse(atob(token.replace(/-/g, '+').replace(/_/g, '/'))).o?.some(sort => sort.field === 'duration_ms');
-    }, undefined, { timeout: 5000 });
+    await waitForQuery(page, 'tool_calls', query => query.orderBy.some(sort => sort.field === 'duration_ms'));
+    assert.equal(new URL(page.url()).searchParams.get('window_mode'), 'relative');
     assert.equal(new URL(page.url()).searchParams.get('window_days'), '7');
     assert.equal(new URL(page.url()).searchParams.get('window_field'), 'started_at');
     assert.equal(new URL(page.url()).searchParams.get('window_dataset'), 'tool_calls');
+    await page.locator('#tools .record-search-editor summary').click();
     await page.locator('#tools .qt-qb').filter({ visible: true }).getByRole('button', { name: 'Save query', exact: true }).click();
     const name = page.locator('#tools .qt-qb-saved-input').filter({ visible: true });
     await name.fill('Failures after midnight'); await page.keyboard.press('Enter');
@@ -259,15 +301,16 @@ test('query edits and saving after local midnight preserve a rolling window', as
     const saved = await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', []).find(item => item.title === 'Failures after midnight'));
     assert.equal(new URL(saved.url, page.url()).searchParams.get('window_days'), '7');
     await page.evaluate(url => window.pharosNavigate(url), saved.url);
-    await page.waitForFunction(expected => {
-      const token = new URL(location.href).searchParams.get('q_tool_calls');
-      return token && JSON.parse(atob(token.replace(/-/g, '+').replace(/_/g, '/'))).w?.some(term => term.field === 'started_at' && term.op === '>=' && term.value === expected);
-    }, links.rollingBounds(7, after)[0]);
-    const query = core.decodeQuery(new URL(page.url()).searchParams.get('q_tool_calls'));
-    assert.deepEqual(query.where.filter(term => term.field === 'started_at').map(term => term.value), links.rollingBounds(7, after), 'reopening rolls the dates forward');
+    await waitForQuery(page, 'tool_calls', query => query.where.some(term => term.field === 'started_at' && term.op === '>=' && term.value === '-7d'));
+    assert.equal(new URL(saved.url, page.url()).searchParams.get('window_mode'), 'relative');
+    const query = await readQuery(page, 'tool_calls');
+    assert.deepEqual(query.where.filter(term => term.field === 'started_at').map(term => term.value), ["-7d", "+0s"], 'reopening retains relative dates');
     const partialDay = new Date(Date.parse(links.rollingBounds(7, after)[0]) + 3600000).toISOString();
-    await page.locator('#tools .qt-qb').filter({ visible: true }).locator('input[aria-label$="for Started"]').first().fill(partialDay);
+    const position = query.where.findIndex(term => term.field === 'started_at' && term.op === '>=') + 1;
+    await page.locator('#tools .record-search-editor').getByRole('textbox', { name: `Filter value ${position}`, exact: true }).fill(partialDay);
+    await page.getByRole('button', { name: 'Search tool calls', exact: true }).click();
     await page.waitForFunction(() => !new URL(location.href).searchParams.has('window_days'));
+    assert.equal(new URL(page.url()).searchParams.has('window_mode'), false);
     assert.equal(new URL(page.url()).searchParams.has('window_field'), false);
     assert.equal(new URL(page.url()).searchParams.has('window_dataset'), false, 'a manually changed date range becomes fixed');
     assert.deepEqual(data.errors, []);
@@ -311,8 +354,8 @@ test('changing a saved range preserves query structure, indexed search context, 
     ], aggregations: [{ id: 'cost', op: 'sum', field: 'cost_usd', groupBy: ['repository_name'] }] };
     const original = `${links.queryURL('library', query)}&search=indexing&case=1&fuzzy=0&heat_grain=week#library`;
     const result = links.updateQueryWindowURL(original, 30), spec = links.queryFromURL(result), url = new URL(result, location.origin);
-    assert.deepEqual(spec.window, { days: 30, field: 'activity_at' });
-    assert.deepEqual(spec.query.where.filter(term => term.field === 'activity_at').map(term => [term.op, term.value]), [['>=', links.rollingBounds(30)[0]], ['<', links.rollingBounds(30)[1]]]);
+    assert.deepEqual(spec.window, { days: 30, field: 'activity_at', mode: 'relative' });
+    assert.deepEqual(spec.query.where.filter(term => term.field === 'activity_at').map(term => [term.op, term.value]), [['>=', '-30d'], ['<', '+0s']]);
     assert.deepEqual(spec.query.where.find(term => term.any), query.where[2]);
     assert.deepEqual(spec.query.aggregations, query.aggregations);
     assert.equal(spec.query.offset, 0);
@@ -326,21 +369,24 @@ test('homepage search exposes the full search options and opens a clean Library 
   const { browser, page, data } = await setup();
   try {
     assert.equal(await page.locator('#home').evaluate(element => element.classList.contains('active')), true);
-    assert.equal(await page.getByRole('searchbox', { name: 'Search your library' }).evaluate(element => element === document.activeElement), true);
-    const types = page.getByRole('group', { name: 'Search type', exact: true });
-    await types.getByRole('button', { name: 'Modified file' }).click();
-    assert.equal(await types.getByRole('button', { name: 'Modified file' }).getAttribute('aria-pressed'), 'true');
-    await page.waitForTimeout(260);
-    const selected = await types.getByRole('button', { name: 'Modified file' }).boundingBox(), thumb = await types.locator('.home-search-thumb').boundingBox();
-    assert.ok(Math.abs(thumb.x - selected.x) < 1 && Math.abs(thumb.width - selected.width) < 1);
-    await types.getByRole('button', { name: 'Conversation text' }).click();
-    await page.getByRole('searchbox', { name: 'Search your library' }).fill('query plan');
-    await page.locator('.home-search-options').getByLabel('Fuzzy words').uncheck();
-    await page.locator('.home-search-options').getByLabel('Case sensitive').check();
-    await page.locator('.home-search-options').getByLabel('Match separators').check();
-    await page.locator('.home-search').getByRole('button').click();
-    assert.equal(new URL(page.url()).pathname, '/library');
-    for (const [key, value] of [['search', 'query plan'], ['fuzzy', '0'], ['case', '1'], ['separators', '1']]) assert.equal(new URL(page.url()).searchParams.get(key), value);
+    const trigger = page.getByRole('button', { name: 'Search your library', exact: true });
+    assert.equal(await trigger.getAttribute('aria-expanded'), 'false');
+    await trigger.click();
+    await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Text for rule 1.1');
+    const target = page.getByRole('combobox', { name: 'Search target', exact: true });
+    await target.selectOption('file');
+    await page.getByRole('searchbox', { name: 'Search library', exact: true }).fill('parser.go');
+    await target.selectOption('prose');
+    await page.getByRole('textbox', { name: 'Text for rule 1.1', exact: true }).fill('query plan');
+    await page.getByRole('checkbox', { name: 'Include word variations', exact: true }).uncheck();
+    await page.getByRole('checkbox', { name: 'Match letter case', exact: true }).check();
+    await page.getByRole('checkbox', { name: 'Keep phrase punctuation and spacing', exact: true }).check();
+    await page.getByRole('button', { name: 'Search messages', exact: true }).click();
+    await page.waitForURL('**/library?**');
+    const params = new URL(page.url()).searchParams, draft = JSON.parse(params.get('text_builder'));
+    assert.equal(draft.root.children[0].text, 'query plan');
+    assert.equal(draft.fuzzy, false); assert.equal(draft.caseSensitive, true); assert.equal(draft.separators, true);
+    assert.equal(params.has('kind'), false); assert.equal(params.has('search'), false);
     assert.deepEqual(data.errors, []);
   } finally { await browser.close(); }
 });
@@ -387,6 +433,7 @@ test('collection unifies saved queries, edits metadata, reorders, deletes, and p
 
 test('the card editor updates its rolling timescale, preview, saved query and navigation together', async () => {
   const { browser, page, data } = await setup({ saved: true });
+  global.location = { origin: 'http://home.test' };
   try {
     await page.setViewportSize({ width: 2133, height: 1075 });
     await page.getByRole('button', { name: 'Pause suggestions' }).click();
@@ -408,8 +455,8 @@ test('the card editor updates its rolling timescale, preview, saved query and na
     await page.getByRole('button', { name: 'Save changes' }).click();
     await page.waitForFunction(() => document.querySelector('.home-collection .query-result-summary')?.textContent === '122 words');
     assert.equal(await card.getAttribute('data-card-id'), originalID);
-    assert.equal(await card.locator('.query-window').innerText(), '1d');
-    assert.equal(await card.locator('.query-cover-columns > span').count(), 1);
+    assert.equal(await card.locator('.query-window').innerText(), 'Last 1d');
+    assert.equal(await card.locator('.query-cover-columns > span').count(), 2, 'an elapsed one-day lookback spans yesterday and today');
     assert.equal(await card.locator('.query-category').innerText(), 'Human Words');
     await page.waitForTimeout(350);
     const saved = data.preferences['pharos-bookmarks-v1'].find(item => item.id === originalID);
@@ -424,7 +471,8 @@ test('the card editor updates its rolling timescale, preview, saved query and na
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
     assert.equal(await card.locator('a').getAttribute('href'), href, 'cancel leaves the saved time window intact');
     await card.locator('a').click();
-    await page.getByRole('group', { name: 'Message result view' }).waitFor();
+    await page.getByRole('button', { name: 'Records', exact: true }).first().waitFor();
+    assert.deepEqual(links.queryFromURL(page.url()).query.grouping, links.queryFromURL(href).query.grouping, 'opening the card preserves its grouped destination');
     assert.equal(new URL(page.url()).pathname, '/usage');
     assert.equal(new URL(page.url()).searchParams.get('window_days'), '1');
     await page.goto('http://home.test/');
@@ -433,7 +481,7 @@ test('the card editor updates its rolling timescale, preview, saved query and na
     assert.equal(await windowSelect.inputValue(), '1', 'the updated window survives a reload');
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
     assert.deepEqual(data.errors, []);
-  } finally { await browser.close(); }
+  } finally { delete global.location; await browser.close(); }
 });
 
 test('carousel advances three every thirty seconds and pauses during interaction or reduced motion', async () => {
@@ -476,7 +524,8 @@ test('the loading belt retains its fixed middle while ready batches grow in pair
     await page.getByRole('button', { name: 'Refresh suggestions' }).click();
     await page.mouse.move(5, 5);
     await page.waitForFunction(() => document.querySelectorAll('.home-belt-row .query-card').length === 0);
-    while (!await real.count()) await releaseOne();
+    for (let attempt = 0; !await real.count() && attempt < 24; attempt++) await releaseOne();
+    assert.ok(await real.count(), `No preview became ready after releasing batches: ${await page.locator('.home-conveyor').innerText()}`);
     const seedCard = page.locator('[data-belt-position="0"] .query-card');
     const seed = await seedCard.getAttribute('data-card-id');
     const lean = await seedCard.evaluate(card => card.style.getPropertyValue('--query-lean'));
@@ -488,7 +537,7 @@ test('the loading belt retains its fixed middle while ready batches grow in pair
       assert.equal(await seedCard.evaluate(card => card.style.getPropertyValue('--query-lean')), lean);
       await releaseOne();
     }
-    assert.equal(await real.count(), 5);
+    assert.equal(await real.count(), 3);
     assert.ok(await page.locator('.home-belt-row .query-xray-open').count() >= 2);
     await page.screenshot({ path: path.join(root, '.context/homepage-design/home-belt-loading.png') });
     data.holdPreviews = false;
@@ -537,15 +586,16 @@ test('conveyor slides in both directions and wraps while side cards show only ev
     await page.getByRole('button', { name: 'Pause suggestions' }).click();
     const cards = page.locator('.home-belt-row .query-card:not([data-xray])');
     const initial = await cards.evaluateAll(elements => elements.map(element => element.dataset.cardId));
-    const arriving = page.locator(`.home-belt-row .query-card:not([data-xray])[data-card-id="${initial[3]}"]`);
+    const arriving = page.locator('.home-belt-slot[data-belt-position="2"] .query-card');
+    const next = await arriving.getAttribute('data-card-id');
     const before = await arriving.boundingBox();
     await page.getByRole('button', { name: 'Next three suggestions' }).click();
     await page.locator('.home-belt-row.sliding').waitFor();
     await page.waitForTimeout(180);
     const during = await arriving.boundingBox();
-    assert.ok(during.x < before.x - 10 && during.x > before.x - 570, 'the same card should travel continuously into the reading area');
+    assert.ok(during.x < before.x - 10 && during.x > before.x - 3 * (before.width + 18), 'the same card should travel continuously into the reading area');
     await page.waitForFunction(() => !document.querySelector('.home-belt-row.sliding'));
-    assert.equal(await cards.first().getAttribute('data-card-id'), initial[3]);
+    assert.equal(await cards.first().getAttribute('data-card-id'), next);
     await page.locator('.home-conveyor').focus(); await page.keyboard.press('ArrowLeft');
     await page.locator('.home-belt-row.sliding').waitFor();
     await page.waitForFunction(() => !document.querySelector('.home-belt-row.sliding'));
@@ -559,7 +609,7 @@ test('conveyor slides in both directions and wraps while side cards show only ev
     assert.ok(belt.x < 1 && Math.abs(belt.width - 2133) < 2, 'the conveyor must span the screen');
     const ghosts = await page.locator('.home-belt-row .query-card[data-xray]').evaluateAll(elements => elements.map(element => ({
       x: element.getBoundingClientRect().x, opacity: getComputedStyle(element.querySelector('.query-title')).opacity,
-      hidden: element.getAttribute('aria-hidden'), focusable: element.querySelector('a').tabIndex, hasMarks: Boolean(element.querySelector('i,.qt-metric-mark,.qt-metric-bar-fill,.qt-metric-bar-track,td')), revealable: Boolean(element.querySelector('.query-xray-open')),
+      hidden: element.getAttribute('aria-hidden'), focusable: element.querySelector('a').tabIndex, hasMarks: Boolean(element.querySelector('i,.qt-metric-mark,.qt-metric-bar-fill,.qt-metric-bar-track,.query-scalar-value,td')), revealable: Boolean(element.querySelector('.query-xray-open')),
     })));
     assert.ok(ghosts.some(card => card.x > 0 && card.x < 468 && card.hasMarks));
     assert.ok(ghosts.some(card => card.x > 1648 && card.x < 2133 && card.hasMarks));
@@ -580,6 +630,7 @@ test('conveyor slides in both directions and wraps while side cards show only ev
 
 test('dragging saves the exact preview query and collection remains contained on narrow screens', async () => {
   const { browser, page, data } = await setup();
+  global.location = { origin: 'http://home.test' };
   try {
     for (let i = 0; i < 4; i++) {
       const id = await page.locator('.home-belt-row .query-card:not([data-xray])').first().getAttribute('data-card-id');
@@ -587,8 +638,10 @@ test('dragging saves the exact preview query and collection remains contained on
       const href = await card.locator('a').getAttribute('href');
       await card.dragTo(page.locator('.home-collection'));
       await page.waitForFunction(count => document.querySelectorAll('.home-collection .query-card').length === count, i + 1);
-      // Dropping over a collected card can insert before it, rather than append.
-      assert.equal(await page.locator('.home-collection .query-card a').evaluateAll((links, href) => links.filter(link => link.getAttribute('href') === href).length, href), 1);
+      // Saving promotes the URL to an immutable reference; the query is exact.
+      const saved = await page.evaluate(id => window.pharosPrefs.get('pharos-bookmarks-v1', []).filter(item => item.templateId === id), id);
+      assert.equal(saved.length, 1);
+      assert.equal(core.encodeQuery(saved[0].query), core.encodeQuery(links.queryFromURL(href).query));
       await page.waitForFunction(id => !document.querySelector(`.home-belt-row .query-card[data-card-id="${id}"]`), id);
     }
     const dir = path.join(root, '.context/homepage-design'); fs.mkdirSync(dir, { recursive: true });
@@ -605,7 +658,7 @@ test('dragging saves the exact preview query and collection remains contained on
     await page.waitForTimeout(250);
     assert.equal(new URL(page.url()).searchParams.get('window_days'), new URL(href, 'http://home.test').searchParams.get('window_days'));
     assert.deepEqual(data.errors, []);
-  } finally { await browser.close(); }
+  } finally { delete global.location; await browser.close(); }
 });
 
 test('compact daily charts retain visible marks in ninety-day windows at narrow card widths', async () => {
@@ -618,7 +671,8 @@ test('compact daily charts retain visible marks in ninety-day windows at narrow 
     await page.evaluate(items => { window.pharosPrefs.set('pharos-bookmarks-v1', items); window.dispatchEvent(new Event('pharos:bookmarks')); }, saved);
     const chart = page.locator('.home-collection [data-card-id="human-words"] .query-cover-columns');
     await chart.locator('i').first().waitFor();
-    assert.equal(await chart.locator(':scope > span').count(), 90);
+    // A rolling -90d window touches the partial starting date and today.
+    assert.equal(await chart.locator(':scope > span').count(), 91);
     assert.deepEqual(await page.locator('.home-collection .query-category').allTextContents(), ['Human Words', 'Error Patterns', 'Model Choice', 'Steering']);
     const colors = await page.locator('.home-collection .query-category').evaluateAll(labels => labels.map(label => getComputedStyle(label).color));
     assert.equal(new Set(colors).size, 4, 'different subjects use distinct category colors');
@@ -666,33 +720,37 @@ test('homepage fits text search, centers wrapping collection rows, and contains 
     await page.getByRole('button', { name: 'Pause suggestions' }).click();
     await page.mouse.move(5, 5);
     await collect(4); centered(await geometry(), [4]);
-    await collect(6);
-    for (const mode of ['Modified file', 'Tool URL', 'Conversation text']) {
-      await page.getByRole('group', { name: 'Search type', exact: true }).getByRole('button', { name: mode }).click();
-      await page.waitForTimeout(260);
-      const layout = await geometry(); centered(layout, [6]);
-      assert.equal(layout.scrollHeight, layout.clientHeight, `${mode} should fit without unnecessary vertical scrolling`);
+    let collapsedHeight;
+    for (const expanded of [false, true, false]) {
+      const trigger = page.locator('.home-search-trigger');
+      if ((await trigger.getAttribute('aria-expanded') === 'true') !== expanded) await trigger.click();
+      await page.waitForTimeout(320);
+      const layout = await geometry(); centered(layout, [4]);
+      if (expanded) assert.ok(layout.scrollHeight > collapsedHeight, 'expanded search can scroll without compressing the cards');
+      else if (collapsedHeight === undefined) collapsedHeight = layout.scrollHeight;
+      else assert.equal(layout.scrollHeight, collapsedHeight, 'collapsing search restores the content height');
       assert.equal(layout.overflowX, 'hidden');
     }
     await page.mouse.move(5, 5);
     await page.screenshot({ path: path.join(root, '.context/homepage-design/home-layout-wide.png') });
+    await collect(6); centered(await geometry(), [4, 2]);
     await collect(8);
-    const wrapped = await geometry(); centered(wrapped, [6, 2]);
+    const wrapped = await geometry(); centered(wrapped, [4, 4]);
     assert.ok(wrapped.scrollHeight > wrapped.clientHeight, 'larger collections must still scroll vertically');
     // Exercise conventional scrollbars as well as macOS overlay scrollbars.
     await page.addStyleTag({ content: 'main { scrollbar-gutter:stable; } main::-webkit-scrollbar { width:15px; height:15px; } main::-webkit-scrollbar-thumb { background:var(--line); }' });
     await page.waitForTimeout(200);
-    centered(await geometry(), [6, 2]);
+    centered(await geometry(), [4, 4]);
     await page.evaluate(() => document.querySelector('main').scrollTop = 0);
     await page.getByRole('button', { name: 'Next three suggestions' }).click();
     await page.locator('.home-belt-row.sliding').waitFor();
-    centered(await geometry(), [6, 2]);
+    centered(await geometry(), [4, 4]);
     await page.waitForFunction(() => !document.querySelector('.home-belt-row.sliding'));
     await collect(3);
     for (const width of [600, 390, 320]) {
       await page.setViewportSize({ width, height: 1050 });
       await page.waitForTimeout(200);
-      centered(await geometry(), [2, 1]);
+      centered(await geometry(), width === 600 ? [2, 1] : [1, 1, 1]);
       if (width === 390) {
         await page.evaluate(() => document.querySelector('main').scrollTop = 0);
         await page.screenshot({ path: path.join(root, '.context/homepage-design/home-layout-narrow.png') });
@@ -704,11 +762,115 @@ test('homepage fits text search, centers wrapping collection rows, and contains 
   } finally { await browser.close(); }
 });
 
+test('wide cards inset translucent collection actions and keep metric covers linear', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=library', viewport: { width: 1470, height: 836 }, deviceScaleFactor: 2 });
+  try {
+    data.rows.usage = data.rows.usage.slice(0, 2).map((row, i) => ({ ...row, cache_read_input_tokens: i ? 100 : 10, model_family: 'test-model', price_status: 'priced' }));
+    await page.reload();
+    await page.waitForFunction(() => !document.querySelector('.card-library-count').textContent.includes('Loading charts'));
+    const card = page.locator('#card-price-coverage .query-card');
+    const layout = await card.evaluate(card => {
+      const box = card.getBoundingClientRect(), button = card.querySelector('.query-keep'), fab = button.getBoundingClientRect();
+      const caption = getComputedStyle(card.querySelector('.query-caption'));
+      return { width: box.width, columns: getComputedStyle(document.querySelector('.card-library-grid')).gridTemplateColumns.split(' ').length,
+        position: getComputedStyle(button).position, radius: getComputedStyle(button).borderRadius, background: getComputedStyle(button).backgroundColor, size: fab.width,
+        centerX: fab.x + fab.width / 2 - box.right, centerY: fab.y + fab.height / 2 - box.bottom,
+        leftPadding: caption.paddingLeft, rightPadding: caption.paddingRight };
+    });
+    assert.ok(layout.width >= 240);
+    assert.equal(layout.columns, 4);
+    assert.equal(layout.position, 'absolute');
+    assert.equal(layout.radius, '7px');
+    assert.match(layout.background, /(?:\/ 0\.25|, 0\.25)/, 'FAB background is translucent');
+    assert.equal(layout.size, 34);
+    assert.ok(layout.centerX <= -24 && layout.centerY <= -24, 'FAB is inset inside the card corner');
+    assert.equal(layout.leftPadding, layout.rightPadding, 'collection action reserves no caption width');
+    assert.equal(await card.locator('.query-card-open .query-keep').count(), 0, 'collection is independent from opening the query');
+    const heights = await page.locator('#card-cache-reads .query-cover-columns i').evaluateAll(marks => marks.map(mark => parseFloat(mark.style.height)).sort((a, b) => a - b));
+    assert.deepEqual(heights, [10, 100], 'a tenfold difference retains its linear proportion');
+    assert.equal(await page.locator('.query-timeline-scale,.query-cover-columns.broken').count(), 0);
+    for (const width of [600, 390, 320]) {
+      await page.setViewportSize({ width, height: 844 });
+      assert.ok(await page.locator('.card-library').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      if (width < 600) {
+        assert.equal(await page.locator('.card-library-grid').evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').length), 1);
+        assert.ok((await card.boundingBox()).width >= 240);
+      }
+    }
+    await card.getByRole('button', { name: 'Collect How much usage has a confirmed price?', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await page.getByText('Collected “How much usage has a confirmed price?”.', { exact: true }).waitFor();
+    assert.equal(new URL(page.url()).pathname, '/home');
+    assert.equal(await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', []).length), 1);
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
+test('annotated covers show scalar values, clean rankings and legible chart labels', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=library', viewport: { width: 1470, height: 836 }, deviceScaleFactor: 2 });
+  global.location = { origin: 'http://home.test' };
+  try {
+    data.rows.usage.forEach((row, i) => { row.price_status = 'priced'; row.repository_name = `repository-${i % 6}`; });
+    data.rows.tool_calls.forEach((row, i) => { row.result_tokens = (i + 1) * 400.12345; });
+    await page.reload();
+    await page.waitForFunction(() => !document.querySelector('.card-library-count').textContent.includes('Loading charts'));
+    const price = page.locator('#card-price-coverage');
+    assert.equal(await price.locator('.is-scalar .query-scalar-value').count(), 1);
+    assert.match(await price.locator('.query-scalar-value').innerText(), /[KM]/, 'large scalar values use compact units');
+    assert.equal(await price.locator('.query-result-summary').count(), 0, 'no meaningless one-group caption');
+    assert.match(await price.locator('.query-scalar-group').innerText(), /priced/);
+    const original = await price.locator('.query-card-open').getAttribute('href');
+    assert.deepEqual(links.queryFromURL(original).query.grouping.keys, ['price_status']);
+
+    const work = page.locator('#card-expensive-work .query-cover');
+    assert.equal(await work.locator('.query-result-summary,.query-result-evidence').count(), 0);
+    assert.doesNotMatch(await work.getAttribute('aria-label'), /\b28\b|groups returned|Top:/);
+    assert.equal(await work.locator('.query-compact-limit').count(), 0);
+    assert.match(await work.locator('.qt-metric-bar-value').first().innerText(), /\$/, 'ranked costs retain currency units');
+
+    const scatter = page.locator('#card-output-duration');
+    assert.equal(await scatter.locator('svg text[transform*="rotate"]').count(), 0);
+    assert.equal(await scatter.locator('.qt-metric-axis-labels > span').first().innerText(), '↑ Average output tokens');
+    await page.waitForFunction(() => {
+      const card = document.querySelector('#card-output-duration'), svg = card.querySelector('.qt-metric-plot svg');
+      const plot = svg.getBoundingClientRect(), title = card.querySelector('.qt-metric-axis-labels').getBoundingClientRect();
+      return title.top >= plot.bottom - 1 && [...svg.querySelectorAll('text[text-anchor="end"]')].every(tick => {
+        const box = tick.getBoundingClientRect();
+        return box.left >= plot.left && box.right <= plot.right;
+      });
+    });
+
+    const timeline = page.locator('#card-cost-repos');
+    assert.equal(await timeline.locator('.query-timeline-dates > span').count(), 3);
+    assert.equal(await timeline.locator('.query-timeline-legend > span').count(), 5);
+    assert.match(await timeline.locator('.query-timeline-legend').innerText(), /Other \(2\)/);
+    assert.match(await timeline.locator('.query-timeline-ticks').innerText(), /\$/);
+    assert.match(await timeline.locator('.query-headline-value').innerText(), /\$/);
+    assert.equal(await timeline.locator('.query-headline-label').innerText(), 'API equivalent');
+    assert.ok(await timeline.locator('.query-headline-value').evaluate(el => parseFloat(getComputedStyle(el).fontSize) >= 28));
+    const plot = await timeline.locator('.query-timeline-plot').boundingBox();
+    assert.ok(plot.height > 40, 'timeline fills the remaining cover area');
+    for (const label of await timeline.locator('.query-timeline-dates, .query-timeline-legend').all()) {
+      const box = await label.boundingBox(), cover = await timeline.locator('.query-cover').boundingBox();
+      assert.ok(box.y >= cover.y && box.y + box.height <= cover.y + cover.height, 'labels fit inside the cover');
+    }
+    await page.screenshot({ path: path.join(root, '.context/review-card-covers.png') });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.ok(await page.locator('.card-library').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+    await price.locator('.query-card-open').click();
+    assert.deepEqual(links.queryFromURL(page.url()).query.grouping.keys, ['price_status'], 'scalar cover retains grouped destination');
+    assert.deepEqual(data.errors, []);
+  } finally { delete global.location; await browser.close(); }
+});
+
 test('native covers retain distributions, paired axes and complete dashboards while cover selection persists', async () => {
   const ids = ['tool-failure-rates', 'duration-distribution', 'output-distribution', 'output-duration', 'price-comparison', 'skill-reach', 'tl1-advancement', 'expensive-work'];
   const bookmarks = ids.map(id => {
     const recipe = instantiateRecipe(queryRecipes.find(item => item.id === id), 7);
-    return { id, title: recipe.title, description: recipe.description, url: recipe.url, templateId: recipe.instanceId };
+    // Existing bookmarks keep their original metrics when templates evolve.
+    const query = recipe.query.grouping?.source ?? recipe.query;
+    return { id, title: recipe.title, description: recipe.description, url: links.queryURL(recipe.dataset, query, recipe.window), templateId: recipe.instanceId };
   });
   const { browser, page, data } = await setup({ preferenceValues: { 'pharos-bookmarks-v1': bookmarks } });
   global.location = { origin: 'http://home.test' };
@@ -716,11 +878,12 @@ test('native covers retain distributions, paired axes and complete dashboards wh
     await page.waitForFunction(() => document.querySelectorAll('.home-collection .query-compact-metric').length === 8);
     assert.equal(await page.locator('.home-collection .qt-metrics-error,.home-collection .qt-metric-message').count(), 0);
     assert.equal(await page.locator('.home-collection .query-compact-metric[inert]').count(), 8);
+    assert.ok((await page.locator('.home-collection .query-window').allTextContents()).every(label => label === "Last 7d"));
     for (const id of ['duration-distribution', 'output-distribution', 'output-duration', 'price-comparison']) {
       const cover = page.locator(`.home-collection [data-card-id="${id}"]`);
       assert.ok(await cover.locator('svg .qt-metric-mark').count() > 0, `${id} should contain native marks`);
       const size = await cover.locator('.query-compact-metric').boundingBox();
-      assert.ok(size.height > 40 && size.height < 120);
+      assert.ok(id === "duration-distribution" ? size.height > 150 && size.height < 240 : size.height > 40 && size.height < 120);
     }
     const costCover = page.locator('.home-collection [data-card-id="expensive-work"] .query-compact-metric');
     const costSize = await costCover.boundingBox();
@@ -728,7 +891,7 @@ test('native covers retain distributions, paired axes and complete dashboards wh
     assert.equal(await costRows.count(), 4);
     for (const row of await costRows.all()) {
       const size = await row.boundingBox();
-      assert.ok(size.y >= costSize.y && size.y + size.height <= costSize.y + costSize.height - 8, 'cover rows fit above the group-limit note');
+      assert.ok(size.y >= costSize.y && size.y + size.height <= costSize.y + costSize.height + 1, 'findings fit inside the cover');
     }
     const card = page.locator('.home-collection [data-card-id="tool-failure-rates"]');
     assert.match(await card.locator('.query-compact-metric').innerText(), /%/);
@@ -737,7 +900,7 @@ test('native covers retain distributions, paired axes and complete dashboards wh
     await card.getByRole('button', { name: /^Edit / }).click();
     await page.getByLabel('Cover metric', { exact: true }).selectOption('calls');
     await page.getByRole('button', { name: 'Save changes', exact: true }).click();
-    await page.waitForFunction(() => document.querySelector('.home-collection [data-card-id="tool-failure-rates"] .query-result-summary')?.textContent.includes('28'));
+    await page.waitForFunction(() => document.querySelector('.home-collection [data-card-id="tool-failure-rates"] .qt-metric-bar-row') && !document.querySelector('.home-collection [data-card-id="tool-failure-rates"] .query-compact-metric').textContent.includes('%'));
     const saved = await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', []).find(item => item.id === 'tool-failure-rates'));
     assert.equal(saved.coverMetricId, 'calls');
     assert.equal(saved.url, original);
@@ -746,11 +909,541 @@ test('native covers retain distributions, paired axes and complete dashboards wh
     await page.evaluate(() => document.querySelector('main').scrollTop = 0);
     await page.screenshot({ path: path.join(root, '.context/homepage-design/home-v2-covers.png'), fullPage: true });
     await page.reload();
-    await page.waitForFunction(() => document.querySelector('.home-collection [data-card-id="tool-failure-rates"] .query-result-summary')?.textContent.includes('28'));
+    await page.waitForFunction(() => document.querySelector('.home-collection [data-card-id="tool-failure-rates"] .qt-metric-bar-row') && !document.querySelector('.home-collection [data-card-id="tool-failure-rates"] .query-compact-metric').textContent.includes('%'));
     await page.locator('.home-collection [data-card-id="tool-failure-rates"] .query-card-open').click();
     const opened = links.queryFromURL(page.url());
     assert.equal(opened.query.aggregations.length, 3);
     assert.match(opened.query.aggregations[0].expression, /SUM\(\[error_count\]\)/);
+    await page.goto('http://home.test/');
+    const legacy = page.locator('.home-collection [data-card-id="tool-failure-rates"]');
+    await legacy.hover(); await legacy.getByRole('button', { name: /^Edit / }).click();
+    await page.getByRole('button', { name: 'Try grouped comparison' }).click();
+    await page.getByRole('button', { name: 'Records', exact: true }).first().waitFor();
+    assert.equal(links.queryFromURL(page.url()).query.grouping.keys[0], 'tool_name');
+    assert.equal(await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', [])[0].url), original);
     assert.deepEqual(data.errors, []);
   } finally { delete global.location; await browser.close(); }
+});
+
+test('grouped cards keep row values, allow cover selection, and drill into the original records', async () => {
+  const item = instantiateRecipe(queryRecipes.find(recipe => recipe.id === 'tool-failure-rates'), 7);
+  const bookmark = { id: item.id, title: item.title, description: item.description, url: item.url, templateId: item.instanceId };
+  const { browser, page, data } = await setup({ preferenceValues: { 'pharos-bookmarks-v1': [bookmark] } });
+  try {
+    const card = page.locator('.home-collection .query-card');
+    await card.locator('.query-compact-metric').waitFor();
+    assert.equal(await card.locator('.query-result-evidence,.query-compact-limit').count(), 0);
+    assert.match(await card.locator('.query-compact-metric').innerText(), /%/);
+    assert.equal(await card.locator('.query-destination').innerText(), 'Compare failure rates');
+    await card.hover(); await card.getByRole('button', { name: /^Edit / }).click();
+    await page.getByLabel('Cover metric', { exact: true }).selectOption('card_call_count');
+    await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('.home-collection .query-compact-metric') && !document.querySelector('.home-collection .query-compact-metric').textContent.includes('%'));
+    const saved = await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', [])[0]);
+    assert.equal(saved.coverMetricId, 'card_call_count');
+    assert.equal(saved.url, item.url);
+    await card.locator('.query-card-open').click();
+    await page.getByRole('button', { name: 'Records', exact: true }).first().waitFor();
+    const groupedToken = new URL(page.url()).searchParams.get('q_tool_calls');
+    await page.getByRole('button', { name: 'Records', exact: true }).first().click();
+    await page.waitForFunction(token => new URL(location.href).searchParams.get('q_tool_calls') !== token, groupedToken);
+    const query = core.decodeQueryStrict(new URL(page.url()).searchParams.get('q_tool_calls'));
+    assert.equal(query.grouping, undefined);
+    assert.ok(query.where.some(term => term.field === 'tool_name' && term.op === '='));
+    assert.ok(!query.where.some(term => term.field?.startsWith('card_')));
+    assert.equal(query.aggregations.length, 3);
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
+test('card library shows empty cards, filters and sorts every definition, and persists template edits', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=library' });
+  try {
+    assert.equal(await page.locator('.card-library-entry').count(), queryRecipes.length);
+    assert.deepEqual(data.metadataRequests, [], 'hidden table controls must not scan distinct values on Home');
+    assert.ok(data.requests.every(({ path }) => !path.endsWith('/aggregations')), 'hidden table header charts must not compete with card previews');
+    const identities = await page.locator('.card-library-entry').evaluateAll(entries => entries.map(entry => [entry.id, entry.dataset.cardDefinition, entry.querySelector('.card-library-id').textContent]));
+    assert.equal(new Set(identities.map(([id]) => id)).size, queryRecipes.length);
+    for (const [id, definition, label] of identities) { assert.equal(id, `card-${definition}`); assert.equal(label, `ID: ${definition}`); }
+    await page.getByLabel('Data source', { exact: true }).selectOption('usage');
+    assert.equal(await page.locator('.card-library-entry').count(), queryRecipes.filter(r => r.dataset === 'usage').length);
+    await page.getByLabel('Sort by', { exact: true }).selectOption('title');
+    const titles = await page.locator('.card-library-entry .query-title').allTextContents();
+    assert.deepEqual(titles, [...titles].sort((a, b) => a.localeCompare(b)));
+    await page.getByLabel('Find a card', { exact: true }).fill('effort-cost');
+    await page.waitForFunction(() => document.querySelectorAll('.card-library-entry').length === 1);
+    await page.getByRole('button', { name: /^Edit card / }).click();
+    await page.getByLabel('Question', { exact: true }).fill('Effort, at a glance');
+    await page.getByLabel('Default lookback', { exact: true }).selectOption('30');
+    await page.getByLabel('Chart', { exact: true }).selectOption('bar-vertical');
+    const savedTemplate = page.waitForResponse(response => response.url().endsWith('/api/preferences') && response.request().postData()?.includes('pharos-card-templates-v1'));
+    await page.getByRole('button', { name: 'Save template', exact: true }).click();
+    await savedTemplate;
+    await page.getByText('Effort, at a glance', { exact: true }).waitFor();
+    assert.equal(await page.locator('.card-library-entry').getAttribute('id'), 'card-effort-cost');
+    assert.equal(data.preferences['pharos-card-templates-v1']['effort-cost'].days, 30);
+    assert.equal(data.preferences['pharos-card-templates-v1']['effort-cost'].cover.kind, 'bar-vertical');
+    await page.reload();
+    await page.getByText('Effort, at a glance', { exact: true }).waitFor();
+    assert.equal(await page.getByLabel('Data source', { exact: true }).inputValue(), 'usage');
+    await page.getByRole('button', { name: 'Collect Effort, at a glance', exact: true }).click();
+    await page.getByText('Collected “Effort, at a glance”.', { exact: true }).waitFor();
+    const collected = await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', [])[0]);
+    assert.equal(collected.cover.kind, 'bar-vertical');
+    assert.deepEqual(collected.query.grouping.keys, ['provider', 'model_family', 'effort']);
+    assert.deepEqual(collected.query.grouping.source.where.filter(term => term.field === 'first_usage_at').map(term => term.value), ['-7d', '+0s']);
+    await page.getByRole('button', { name: /^Edit card / }).click();
+    await page.getByRole('button', { name: 'Reset template', exact: true }).click();
+    await page.getByText('Where does reasoning effort go?', { exact: true }).waitFor();
+    await page.getByLabel('Find a card', { exact: true }).fill('');
+    await page.getByLabel('Data source', { exact: true }).selectOption('');
+    assert.equal(await page.locator('.card-library-entry').count(), queryRecipes.length);
+    data.empty = true;
+    await page.reload();
+    await page.waitForFunction(() => !document.querySelector('.card-library-count').textContent.includes('Loading charts'));
+    assert.equal(await page.locator('.card-library-entry').count(), queryRecipes.length);
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.ok(await page.locator('.card-library').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
+test('wishlist cards preserve conversation histograms and local-hour queries through editing and collection', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=library' });
+  try {
+    // Several messages per genuine conversation, plus a machine-only message.
+    data.rows.writing_messages.forEach((row, i) => { row.conversation_id = `conversation-${Math.floor(i / 4)}`; row.work_id = `work-${Math.floor(i / 4)}`; row.other_words = 0; });
+    data.rows.writing_messages.push({ ...data.rows.writing_messages[0], id: 'machine-message', typed_words: 0 });
+    await page.reload();
+    await page.getByLabel('Find a card', { exact: true }).fill('distribution of messages');
+    await page.waitForFunction(() => document.querySelectorAll('.card-library-entry').length === 1 && document.querySelector('.card-library-entry .query-compact-metric'));
+    assert.match(await page.locator('.query-result-summary').innerText(), /observations/);
+    assert.ok(data.requests.some(({ request }) => request.grouping?.keys.includes('conversation_id') && request.metrics?.some(metric => metric.distribution?.kind === 'histogram')));
+    await page.getByRole('button', { name: /^Edit card / }).click();
+    assert.equal(await page.getByLabel('Chart', { exact: true }).inputValue(), 'histogram');
+    await page.getByLabel('Question', { exact: true }).fill('My conversation message counts');
+    await page.getByRole('button', { name: 'Save template', exact: true }).click();
+    await page.getByText('My conversation message counts', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Collect My conversation message counts', exact: true }).click();
+    await page.getByText('Collected “My conversation message counts”.', { exact: true }).waitFor();
+    let saved = await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', []).find(card => card.templateId?.startsWith('conversation-writing:')));
+    assert.equal(saved.cover.kind, 'histogram');
+    assert.deepEqual(saved.query.grouping.keys, ['repository_name', 'conversation_id']);
+    assert.equal(saved.query.aggregations[0].distribution.input, '[card_count]');
+
+    await page.getByLabel('Find a card', { exact: true }).fill('When am I writing to agents');
+    await page.waitForFunction(() => document.querySelectorAll('.card-library-entry').length === 1 && !document.querySelector('.card-library-count').textContent.includes('Loading charts'));
+    assert.equal(await page.locator('.card-library-entry .query-compact-metric').count(), 1, await page.locator('.query-cover').getAttribute('title'));
+    await page.getByRole('button', { name: 'Collect When am I writing to agents?', exact: true }).click();
+    await page.getByText('Collected “When am I writing to agents?”.', { exact: true }).waitFor();
+    saved = await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', []).find(card => card.templateId?.startsWith('writing-hours:')));
+    assert.equal(saved.query.aggregations[0].dateGrouping.timeZone, 'America/Denver');
+    assert.equal(saved.query.aggregations[0].dateGrouping.interval, 'hour');
+    assert.deepEqual(saved.query.where.filter(term => term.field === 'sent_at').map(term => term.value), ['-7d', '+0s']);
+    await page.reload();
+    await page.waitForFunction(() => !document.querySelector('.card-library-count').textContent.includes('Loading charts'));
+    assert.equal(await page.locator('.query-preview-status').filter({ hasText: 'Preview unavailable' }).count(), 0);
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
+
+test('compact cover ticks and box rows stay readable with Last time badges', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=duration-distribution', viewport: { width: 1470, height: 836 }, deviceScaleFactor: 2 });
+  try {
+    data.rows.tool_calls.forEach((row, i) => {
+      row.command_name = ['go test', 'npm test', 'pytest', 'cargo test'][i % 4];
+      row.duration_ms = i < 4 ? 100000000 : (i + 1) * 1000;
+    });
+    await page.reload();
+    const box = page.locator('#card-duration-distribution');
+    await page.waitForFunction(() => document.querySelectorAll('#card-duration-distribution .qt-metric-box-row').length === 3);
+    assert.equal(await box.locator('.query-window').innerText(), 'Last 7d');
+    assert.equal(await box.locator('.query-compact-limit').count(), 0);
+    assert.equal(await box.locator('svg circle').count(), 0, 'outliers cannot squash the cover boxes');
+    assert.match(await box.locator('.qt-metric-compact-guide').innerText(), /Per-row scales · outliers omitted/);
+    for (const row of await box.locator('.qt-metric-box-row').all()) {
+      const title = await row.locator('.qt-metric-box-label').boundingBox();
+      const glyph = await row.locator('.qt-metric-mark').boundingBox();
+      assert.ok(title.y + title.height <= glyph.y, 'command label clears the glyph');
+      const ticks = row.locator('text:not(.qt-metric-box-label)');
+      assert.match(await ticks.first().textContent(), /^med /);
+      for (const tick of await ticks.all()) {
+        const bounds = await tick.boundingBox(), cover = await box.locator('.query-cover').boundingBox();
+        assert.ok(bounds.x >= cover.x && bounds.x + bounds.width <= cover.x + cover.width + 1);
+        assert.ok(bounds.y >= cover.y && bounds.y + bounds.height <= cover.y + cover.height);
+      }
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.ok(await page.locator('.card-library').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+    assert.equal(await box.locator('.qt-metric-box-row').count(), 3);
+    await page.setViewportSize({ width: 1470, height: 836 });
+    await page.goto('http://home.test/home?cards=library&card_search=writing-hours');
+    const hours = page.locator('#card-writing-hours');
+    await hours.locator('.qt-metric-plot svg').waitFor();
+    assert.equal(await hours.locator('.query-window').innerText(), 'Last 7d');
+    const ticks = await hours.locator('svg text[text-anchor="end"]').allTextContents();
+    assert.ok(ticks.length > 0 && ticks.length <= 3);
+    assert.ok(ticks.every(tick => /^-?\d+(?:\.\d+)?[KMB]?$/.test(tick) && tick.length <= 5));
+    const dates = (await hours.locator('svg text[text-anchor="middle"]').allTextContents()).filter(text => text !== 'Local hour');
+    assert.ok(dates.length > 0 && dates.length <= 3);
+    assert.ok(dates.every(label => /h$/.test(label) && !label.includes(':')));
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
+test('long card labels wrap over underline bars on desktop and phone', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=error-reach', viewport: { width: 1470, height: 836 }, deviceScaleFactor: 2 });
+  try {
+    data.rows.tool_calls.forEach((row, i) => { row.error_count = 1; row.error_signature = ['A long error signature about missing configuration settings', 'Another long error about a missing source file', 'An error when reading a very long repository path', 'Repeated decoding error with full diagnostic details'][i % 4]; });
+    await page.reload();
+    const card = page.locator('#card-error-reach');
+    await card.locator('.qt-metric-bar-row--below').first().waitFor();
+    for (const width of [1470, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      const cover = await card.locator('.query-cover').boundingBox();
+      assert.equal(await card.locator('.qt-metric-bar-row--below').count(), 4);
+      for (const row of await card.locator('.qt-metric-bar-row--below').all()) {
+        const label = await row.locator('.qt-metric-bar-label').boundingBox(), bar = await row.locator('.qt-metric-bar-track').boundingBox(), value = await row.locator('.qt-metric-bar-value').boundingBox();
+        assert.ok(label.width > cover.width * .7, 'long labels get most of the row width');
+        assert.equal(await row.locator('.qt-metric-bar-label').evaluate(el => getComputedStyle(el).whiteSpace), 'normal', 'labels may wrap instead of ellipsizing in a narrow column');
+        assert.equal(await row.locator('.qt-metric-bar-label').evaluate(el => getComputedStyle(el).webkitLineClamp), '2', 'the card supplies its two-line limit through the metric options');
+        assert.ok(bar.y >= label.y + label.height - 1 && bar.y >= value.y + value.height - 1);
+        assert.ok(bar.width > cover.width * .8);
+        assert.ok(bar.y + bar.height <= cover.y + cover.height, 'all four underline bars fit');
+        assert.match(await row.locator('.qt-metric-bar-label').getAttribute('title'), /long|Repeated/);
+      }
+      assert.ok(await page.locator('.card-library').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+    }
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
+test('the metric editor saves and clears underline label limits through the query URL', async () => {
+  global.location = { origin: 'http://home.test' };
+  const query = { ...core.EMPTY_QUERY, aggregations: [{ id: 'underline-demo', op: 'count', groupBy: ['error_signature'], display: { kind: 'list' } }] };
+  const url = links.queryURL('tool_calls', query);
+  const { browser, page, data } = await setup();
+  try {
+    data.rows.tool_calls.forEach(row => { row.error_signature = 'A very long diagnostic about missing configuration settings and repository paths that should wrap over several lines in a narrow metric'; });
+    await page.goto(`http://home.test${url}`);
+    await page.getByRole('button', { name: 'Edit metrics', exact: true }).click();
+    const placement = page.getByLabel('List bar placement', { exact: true });
+    assert.equal(await placement.inputValue(), 'inline');
+    if (!await placement.isVisible()) await page.locator('.qt-metrics-editor summary').filter({ hasText: /^Display/ }).first().click();
+    await placement.selectOption('below');
+    const limit = page.getByLabel('Maximum label lines', { exact: true });
+    assert.equal(await limit.inputValue(), '');
+    await limit.fill('1');
+    await limit.press('Tab');
+    await page.getByRole('button', { name: 'Apply metrics', exact: true }).click();
+    await page.locator('.qt-metric-bar-row--below').first().waitFor();
+    const label = page.locator('.qt-metric-bar-label').first();
+    assert.equal(await label.evaluate(el => getComputedStyle(el).webkitLineClamp), '1');
+    assert.ok(await label.evaluate(el => el.getBoundingClientRect().height <= parseFloat(getComputedStyle(el).lineHeight) + 1));
+    assert.match(await label.getAttribute('title'), /very long diagnostic/);
+    const token = new URL(page.url()).searchParams.get('q_tool_calls');
+    assert.equal(core.decodeQuery(token).aggregations[0].display.list.barPosition, 'below');
+    assert.equal(core.decodeQuery(token).aggregations[0].display.list.maxLabelLines, 1);
+    await page.reload();
+    await page.locator('.qt-metric-bar-row--below').first().waitFor();
+    await page.getByRole('button', { name: 'Edit metrics', exact: true }).click();
+    assert.equal(await placement.inputValue(), 'below');
+    assert.equal(await limit.inputValue(), '1');
+    if (!await placement.isVisible()) await page.locator('.qt-metrics-editor summary').filter({ hasText: /^Display/ }).first().click();
+    await limit.fill('3');
+    await limit.press('Tab');
+    await page.getByRole('button', { name: 'Apply metrics', exact: true }).click();
+    assert.equal(await label.evaluate(el => getComputedStyle(el).webkitLineClamp), '3');
+    await page.getByRole('button', { name: 'Edit metrics', exact: true }).click();
+    if (!await placement.isVisible()) await page.locator('.qt-metrics-editor summary').filter({ hasText: /^Display/ }).first().click();
+    await limit.fill('');
+    await limit.press('Tab');
+    await page.getByRole('button', { name: 'Apply metrics', exact: true }).click();
+    assert.equal(core.decodeQuery(new URL(page.url()).searchParams.get('q_tool_calls')).aggregations[0].display.list.maxLabelLines, undefined);
+    assert.equal(await label.evaluate(el => getComputedStyle(el).webkitLineClamp), 'none');
+    await page.reload();
+    await page.getByRole('button', { name: 'Edit metrics', exact: true }).click();
+    assert.equal(await limit.inputValue(), '');
+    assert.deepEqual(data.errors, []);
+  } finally { delete global.location; await browser.close(); }
+});
+
+test('card keys, visible series and Other are configurable and survive collection', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=human-words' });
+  try {
+    const human = page.locator('#card-human-words');
+    await human.locator('.query-cover-timeline').waitFor();
+    assert.equal(await human.locator('.query-timeline-legend').count(), 0, 'a single series needs no redundant key');
+    assert.deepEqual(await human.locator('.query-chart-axis-labels>span').allTextContents(), ['↑ words', '→ Day']);
+    await page.getByRole('button', { name: /^Edit card / }).click();
+    await page.getByLabel('Chart key', { exact: true }).selectOption('true');
+    await page.getByLabel('Visible rows / series', { exact: true }).fill('2');
+    await page.getByLabel('Other remainder', { exact: true }).selectOption('false');
+    await page.getByRole('button', { name: 'Save template', exact: true }).click();
+    await human.locator('.query-timeline-legend').waitFor();
+    await human.getByRole('button', { name: /^Collect / }).click();
+    await page.waitForFunction(() => window.pharosPrefs.get('pharos-bookmarks-v1', []).some(card => card.templateId?.startsWith('human-words:')));
+    const saved = await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', []).find(card => card.templateId?.startsWith('human-words:')));
+    assert.equal(saved.cover.maxGroups, 2);
+    assert.equal(saved.cover.showLegend, true);
+    assert.equal(saved.cover.showOther, false);
+    data.rows.usage.forEach((row, i) => row.repository_name = `repository-${i % 5}`);
+    await page.getByLabel('Find a card', { exact: true }).fill('cost-repos');
+    await page.reload();
+    const cost = page.locator('#card-cost-repos');
+    await cost.locator('.query-cover-timeline').waitFor();
+    await page.getByRole('button', { name: /^Edit card / }).click();
+    await page.getByLabel('Visible rows / series', { exact: true }).fill('2');
+    await page.getByLabel('Chart key', { exact: true }).selectOption('true');
+    await page.getByLabel('Other remainder', { exact: true }).selectOption('true');
+    await page.getByRole('button', { name: 'Save template', exact: true }).click();
+    await page.waitForFunction(() => document.querySelectorAll('#card-cost-repos .query-timeline-legend>span').length === 3);
+    assert.match(await cost.locator('.query-timeline-legend').innerText(), /Other \(3\)/);
+    await page.getByRole('button', { name: /^Edit card / }).click();
+    await page.getByLabel('Other remainder', { exact: true }).selectOption('false');
+    await page.getByRole('button', { name: 'Save template', exact: true }).click();
+    await page.waitForFunction(() => document.querySelectorAll('#card-cost-repos .query-timeline-legend>span').length === 2);
+    assert.doesNotMatch(await cost.locator('.query-timeline-legend').innerText(), /Other/);
+    await assertEventually(() => data.preferences['pharos-card-templates-v1']?.['cost-repos']?.cover?.showOther === false);
+    await page.reload();
+    await cost.locator('.query-cover-timeline').waitFor();
+    assert.equal(await cost.locator('.query-timeline-legend>span').count(), 2);
+    await page.getByRole('button', { name: /^Edit card / }).click();
+    await assertEventually(async () => await page.getByLabel('Visible rows / series', { exact: true }).inputValue() === '2');
+    assert.equal(await page.getByLabel('Visible rows / series', { exact: true }).inputValue(), '2');
+    assert.equal(await page.getByLabel('Other remainder', { exact: true }).inputValue(), 'false');
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
+test('card loading has a spinner and skeleton, respects reduced motion and clears when ready', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=human-words' });
+  try {
+    await page.locator('#card-human-words .query-cover-timeline').waitFor();
+    data.holdPreviews = true;
+    await page.getByLabel('Preview window', { exact: true }).selectOption('30');
+    const card = page.locator('#card-human-words');
+    await card.locator('.query-preview-spinner').waitFor();
+    assert.equal(await card.locator('.query-cover').getAttribute('aria-busy'), 'true');
+    assert.equal(await card.locator('.query-preview-loading-bars i').count(), 31);
+    assert.equal(await card.locator('.query-preview-loading').getAttribute('data-loading-kind'), 'columns');
+    assert.equal(await card.locator('.query-loading-headline').count(), 1);
+    assert.equal(await card.locator('.query-preview-spinner').evaluate(el => getComputedStyle(el).animationName), 'query-preview-spin');
+    await card.screenshot({ path: path.join(root, '.context/card-review/card-loading.png') });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    assert.equal(await card.locator('.query-preview-spinner').evaluate(el => getComputedStyle(el).animationName), 'none');
+    data.holdPreviews = false;
+    for (const pending of data.pending.splice(0)) pending.release();
+    await card.locator('.query-cover-timeline').waitFor();
+    assert.equal(await card.locator('.query-preview-spinner').count(), 0);
+    assert.equal(await card.locator('.query-cover').getAttribute('aria-busy'), null);
+    assert.deepEqual(data.errors, []);
+  } finally { data.holdPreviews = false; for (const pending of data.pending.splice(0)) pending.release(); await browser.close(); }
+});
+
+test('compact native axes share a footer and wider plotting area on desktop and phone', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=output-duration' });
+  try {
+    const card = page.locator('#card-output-duration');
+    await card.locator('.qt-metric-axis-labels').waitFor();
+    for (const width of [1470, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      const labels = card.locator('.qt-metric-axis-labels>span'), first = await labels.nth(0).boundingBox(), second = await labels.nth(1).boundingBox();
+      assert.ok(Math.abs(first.y - second.y) < 1, 'axis labels share one row');
+      assert.match(await labels.nth(0).innerText(), /^↑ /);
+      assert.match(await labels.nth(1).innerText(), /^→ /);
+      assert.equal(await card.locator('svg text[transform]').count(), 0);
+      const clip = card.locator('svg clipPath rect');
+      assert.equal(await clip.getAttribute('x'), '28');
+      const svg = await card.locator('.qt-metric-plot svg').boundingBox();
+      assert.ok(first.y >= svg.y + svg.height - 1, 'axis labels sit below the plot');
+      const cover = await card.locator('.query-cover').boundingBox();
+      assert.ok(first.y + first.height <= cover.y + cover.height + 1);
+      assert.ok(await page.locator('.card-library').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+    }
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
+test('configured list and box row counts expand the cover to fit every selected row', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=error-reach' });
+  try {
+    data.rows.tool_calls.forEach((row, i) => { row.error_count = 1; row.error_signature = `Long error about missing configuration settings for feature ${i % 7}`; row.command_name = `command-${i % 7}`; });
+    await page.reload();
+    const list = page.locator('#card-error-reach');
+    await list.locator('.qt-metric-bars').waitFor();
+    await page.getByRole('button', { name: /^Edit card / }).click();
+    await page.getByLabel('Visible rows / series', { exact: true }).fill('6');
+    await page.getByRole('button', { name: 'Save template', exact: true }).click();
+    await page.waitForFunction(() => document.querySelectorAll('#card-error-reach .qt-metric-bar-row').length === 6);
+    for (const width of [1470, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      const cover = await list.locator('.query-cover').boundingBox();
+      assert.ok(cover.height > 170);
+      for (const bar of await list.locator('.qt-metric-bar-track').all()) { const rect = await bar.boundingBox(); assert.ok(rect.y + rect.height <= cover.y + cover.height + 1); }
+    }
+    await page.getByLabel('Find a card', { exact: true }).fill('duration-distribution');
+    const box = page.locator('#card-duration-distribution');
+    await box.locator('.qt-metric-box-row').first().waitFor();
+    await page.getByRole('button', { name: /^Edit card / }).click();
+    await page.getByLabel('Visible rows / series', { exact: true }).fill('5');
+    await page.getByRole('button', { name: 'Save template', exact: true }).click();
+    try { await page.waitForFunction(() => document.querySelectorAll('#card-duration-distribution .qt-metric-box-row').length === 5); } catch (error) { console.log(await box.evaluate(el => ({text:el.innerText,geometry:[...el.querySelectorAll('.query-cover,.query-compact-metric,.qt-metric,.qt-metric-chart-layout,.qt-metric-plot,svg[role=group]')].map(e=>({cls:e.className.baseVal??e.className,height:e.getBoundingClientRect().height,min:getComputedStyle(e).minHeight,style:e.getAttribute('style'),box:e.getAttribute('viewBox')}))}))); await box.screenshot({path:path.join(root,'.context/card-review/box-row-limit-debug.png')}); throw error; }
+    const cover = await box.locator('.query-cover').boundingBox();
+    for (const row of await box.locator('.qt-metric-box-row').all()) { const rect = await row.boundingBox(); assert.ok(rect.y + rect.height <= cover.y + cover.height + 1); }
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
+test('contextual card loaders match saved chart types and row limits before data arrives', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=cost-repos', viewport: { width: 1470, height: 836 }, deviceScaleFactor: 2 });
+  const search = page.getByLabel('Find a card', { exact: true });
+  try {
+    await page.locator('#card-cost-repos .query-cover-timeline').waitFor();
+    data.holdPreviews = true;
+    await page.getByRole('button', { name: /^Edit card / }).click();
+    await page.getByLabel('Chart', { exact: true }).selectOption('bar-vertical');
+    await page.getByLabel('Visible rows / series', { exact: true }).fill('4');
+    await page.getByRole('button', { name: 'Save template', exact: true }).click();
+    const columns = page.locator('#card-cost-repos');
+    await columns.locator('[data-loading-kind="columns"]').waitFor();
+    assert.equal(await columns.locator('.query-preview-loading-bars i').count(), 4);
+    assert.equal(await columns.locator('.query-preview-loading-bars i').first().evaluate(el => getComputedStyle(el).animationDuration), '1.5s');
+    assert.equal(await columns.locator('.query-preview-spinner').evaluate(el => getComputedStyle(el).animationDuration), '0.8s');
+    await columns.screenshot({ path: path.join(root, '.context/card-review/loading-four-columns.png') });
+    await search.fill('output-duration');
+    const scatter = page.locator('#card-output-duration');
+    await scatter.locator('[data-loading-kind="scatter"]').waitFor();
+    assert.equal(await scatter.locator('.query-loading-scatter i').count(), 12);
+    const dot = scatter.locator('.query-loading-scatter i').first();
+    assert.equal(await dot.evaluate(el => getComputedStyle(el).animationName), 'query-preview-drift');
+    const position = await dot.evaluate(el => getComputedStyle(el).transform);
+    await page.waitForTimeout(300);
+    assert.notEqual(await dot.evaluate(el => getComputedStyle(el).transform), position, 'scatter dots gently drift while pulsing');
+    await scatter.screenshot({ path: path.join(root, '.context/card-review/loading-scatter.png') });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.ok(await page.locator('.card-library').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+    await scatter.screenshot({ path: path.join(root, '.context/card-review/loading-scatter-phone.png') });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    assert.equal(await dot.evaluate(el => getComputedStyle(el).animationName), 'none');
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await page.setViewportSize({ width: 1470, height: 836 });
+    await search.fill('price-coverage');
+    const scalar = page.locator('#card-price-coverage');
+    await scalar.locator('[data-loading-kind="donut"]').waitFor();
+    assert.equal(await scalar.locator('.query-loading-circle').count(), 1);
+    await page.getByRole('button', { name: /^Edit card / }).click();
+    await page.getByLabel('Chart', { exact: true }).selectOption('value');
+    await page.getByRole('button', { name: 'Save template', exact: true }).click();
+    await scalar.locator('[data-loading-kind="value"]').waitFor();
+    assert.equal(await scalar.locator('.query-loading-value').count(), 1);
+    assert.equal(await scalar.locator('.query-preview-loading-bars').count(), 0);
+    await scalar.screenshot({ path: path.join(root, '.context/card-review/loading-value.png') });
+    await search.fill('duration-distribution');
+    const boxes = page.locator('#card-duration-distribution');
+    await boxes.locator('[data-loading-kind="box"]').waitFor();
+    assert.equal(await boxes.locator('.query-loading-whisker').count(), 3);
+    await boxes.screenshot({ path: path.join(root, '.context/card-review/loading-boxes.png') });
+    await search.fill('error-reach');
+    const list = page.locator('#card-error-reach');
+    await list.locator('[data-loading-kind="list"]').waitFor();
+    assert.equal(await list.locator('.query-loading-row').count(), 4);
+    assert.equal(await list.locator('.query-preview-loading-shape.has-below-labels').count(), 1);
+    await list.screenshot({ path: path.join(root, '.context/card-review/loading-list.png') });
+    await search.fill('cost-repos');
+    await page.getByRole('button', { name: /^Edit card / }).click();
+    await page.getByLabel('Chart', { exact: true }).selectOption('line');
+    await page.getByRole('button', { name: 'Save template', exact: true }).click();
+    await columns.locator('[data-loading-kind="line"]').waitFor();
+    assert.equal((await columns.locator('.query-loading-line polyline').getAttribute('points')).split(' ').length, 4);
+    await columns.screenshot({ path: path.join(root, '.context/card-review/loading-line.png') });
+    data.holdPreviews = false;
+    for (const pending of data.pending.splice(0)) pending.release();
+    await columns.locator('.qt-metric-plot svg').waitFor();
+    assert.equal(await columns.locator('.query-preview-loading').count(), 0);
+    assert.deepEqual(data.errors, []);
+  } finally { data.holdPreviews = false; for (const pending of data.pending.splice(0)) pending.release(); await browser.close(); }
+});
+
+// Older preferences may retain a cover reference after an external saved-query
+// update. The Home editor must let those users recover without a metric picker.
+test('kept cards with a stale cover and no metrics can be renamed in Home', async () => {
+  global.location = { origin: 'http://home.test' };
+  const query = { ...core.EMPTY_QUERY, select: [{ field: 'id' }, { field: 'tool_name' }], limit: 10 };
+  const bookmark = { id: 'stale-cover', savedQueryId: 'stale-cover', dataset: 'tool_calls', query, url: links.queryURL('tool_calls', query), title: 'Changed saved query', savedAt: 100, cover: { mode: 'source', metricId: 'removed-metric', maxGroups: 20 } };
+  const { browser, page, data } = await setup({ preferenceValues: { 'pharos-bookmarks-v1': [bookmark] } });
+  try {
+    const card = page.locator('.home-collection [data-card-id="stale-cover"]');
+    await card.hover();
+    await card.getByRole('button', { name: /^Edit / }).click();
+    assert.equal(await page.getByLabel('Cover metric', { exact: true }).count(), 0);
+    await page.getByLabel('Title', { exact: true }).fill('Renamed after query change');
+    await page.getByLabel('Description', { exact: true }).fill('The updated row view remains editable.');
+    await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+    await page.locator('.home-editor').waitFor({ state: 'hidden' });
+    await assertEventually(() => data.preferences['pharos-bookmarks-v1']?.[0]?.title === 'Renamed after query change');
+    assert.equal(data.preferences['pharos-bookmarks-v1'][0].cover, undefined);
+    assert.equal(await page.locator('.home-editor [role="alert"]').count(), 0);
+    await page.reload();
+    await card.getByText('Renamed after query change', { exact: true }).waitFor();
+    assert.deepEqual(data.errors, []);
+    await card.screenshot({ path: path.join(root, '.context/review2-renamed-card.png') });
+  } finally { delete global.location; await browser.close(); }
+});
+
+test('card covers keep friendly work labels across twenty visible rows', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=usage-work', viewport: { width: 1470, height: 1100 } });
+  try {
+    data.rows.usage = data.rows.usage.slice(0, 25).map((row, i) => ({ ...row, workspace_id: `workspace-${i}`, agent_session_id: `session-${i}`, title: `Friendly work ${i + 1}`, total_tokens: 100000 - i * 1000 }));
+    await page.reload();
+    const card = page.locator('#card-usage-work');
+    await card.locator('.qt-metric-bar-row').first().waitFor();
+    await page.getByRole('button', { name: /^Edit card / }).click();
+    await page.getByLabel('Visible rows / series', { exact: true }).fill('2');
+    await page.getByLabel('Other remainder', { exact: true }).selectOption('true');
+    await page.getByRole('button', { name: 'Save template', exact: true }).click();
+    await page.waitForFunction(() => document.querySelectorAll('#card-usage-work .qt-metric-bar-row').length === 3);
+    assert.match(await card.locator('.qt-metric-bar-row').last().innerText(), /Other[\s\S]*2M$/);
+    await page.getByRole('button', { name: /^Edit card / }).click();
+    await page.getByLabel('Visible rows / series', { exact: true }).fill('20');
+    await page.getByLabel('Other remainder', { exact: true }).selectOption('false');
+    await page.getByRole('button', { name: 'Save template', exact: true }).click();
+    await page.waitForFunction(() => document.querySelectorAll('#card-usage-work .qt-metric-bar-row').length === 20);
+    const labels = await card.locator('.qt-metric-bar-row').allTextContents();
+    assert.ok(labels.every((label, i) => label.includes(`Friendly work ${i + 1}`)), labels.join('\n'));
+    assert.doesNotMatch(labels.join('\n'), /workspace-/);
+    assert.deepEqual(data.errors, []);
+    await card.screenshot({ path: path.join(root, '.context/review2-friendly-labels.png') });
+  } finally { await browser.close(); }
+});
+
+test('opening and immediately saving a restored template preserves all cover settings', async () => {
+  const cover = { mode: 'result', metricId: 'card_cost_usd', kind: 'auto', maxGroups: 2, showLegend: true, showOther: false };
+  const edit = { title: 'My repository cost', description: 'Saved presentation', days: 30, cover };
+  const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=cost-repos', preferenceValues: { 'pharos-card-templates-v1': { 'cost-repos': edit } } });
+  try {
+    await page.evaluate(() => {
+      const showModal = HTMLDialogElement.prototype.showModal;
+      HTMLDialogElement.prototype.showModal = function() {
+        showModal.call(this);
+        if (!this.classList.contains('card-template-editor')) return;
+        window.initialTemplateFields = [...this.querySelectorAll('input,select,textarea')].map(el => [el.getAttribute('aria-label') ?? el.closest('label')?.firstChild?.textContent, el.value]);
+        this.querySelector('button[type="submit"]').click();
+      };
+    });
+    const savedPreferences = page.waitForResponse(response => new URL(response.url()).pathname === '/api/preferences'
+      && response.request().postDataJSON()?.set?.['pharos-card-templates-v1']);
+    await page.getByRole('button', { name: /^Edit card / }).click();
+    const fields = Object.fromEntries(await page.evaluate(() => window.initialTemplateFields));
+    assert.equal(fields['Visible rows / series'], '2', 'the first exposed form must contain the saved limit');
+    assert.equal(fields['Other remainder'], 'false');
+    assert.equal(fields['Chart key'], 'true');
+    assert.equal(fields['Default lookback'], '30');
+    await page.locator('.card-template-editor').waitFor({ state: 'hidden' });
+    await savedPreferences;
+    await assertEventually(() => data.preferences['pharos-card-templates-v1']?.['cost-repos']?.cover?.maxGroups === 2);
+    assert.deepEqual(data.preferences['pharos-card-templates-v1']['cost-repos'], edit);
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
 });

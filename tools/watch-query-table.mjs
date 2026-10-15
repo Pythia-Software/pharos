@@ -21,9 +21,10 @@ function start(args, cwd) {
 if (existsSync(`${root}/.context/query-table`)) {
   const source = realpathSync(`${root}/.context/query-table`);
   // Keep dist available while sibling packages and Pharos watch its imports.
-  // The link script performs the initial clean build.
+  // The link script performs the initial clean build. Watch source files
+  // rather than limiting JavaScript rebuilds to the initial bundle dependencies.
   for (const name of ['core', 'react', 'ui', 'codegen'])
-    start(['run', 'build', '--workspace', `@pythia-software/query-table-${name}`, '--', '--watch', '--no-clean'], source);
+    start(['run', 'build', '--workspace', `@pythia-software/query-table-${name}`, '--', '--watch', 'src', '--no-clean'], source);
 }
 start(['run', 'watch'], `${root}/web`);
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => stop());

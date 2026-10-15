@@ -126,6 +126,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   UNIQUE(provider, account, native_id)
 );
 CREATE INDEX IF NOT EXISTS conversations_workspace_idx ON conversations(workspace_id);
+CREATE INDEX IF NOT EXISTS conversations_parent_idx ON conversations(parent_id);
 CREATE INDEX IF NOT EXISTS conversations_native_alias_idx ON conversations(account,native_id);
 
 CREATE TABLE IF NOT EXISTS mcp_calls (

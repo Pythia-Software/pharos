@@ -58,6 +58,17 @@ test('Tools opens individual calls and aggregates their volume on demand', async
     assert.equal(await page.locator('#tools .qt-row').count(), 2);
     await page.getByRole('group', { name: 'Tool view' }).getByRole('button', { name: 'Summary' }).click();
     assert.equal(new URL(page.url()).searchParams.get('tools_view'), 'summary');
+    // Hiding a mounted table pauses it without discarding its query history.
+    await page.getByRole('group', { name: 'Tool view' }).getByRole('button', { name: 'Calls' }).click();
+    await page.locator('#tools .qt-row', { hasText: 'First work' }).waitFor();
+    await page.locator('#tools').getByText('Columns, metrics & saved queries', { exact: true }).click();
+    const undo = page.locator('#tools').getByRole('button', { name: 'Undo', exact: true });
+    assert.equal(await undo.isEnabled(), true, 'Reactivating Calls retains its undo history');
+    await undo.click();
+    await page.locator('#tools').getByRole('button', { name: 'Add metric', exact: true }).waitFor();
+    await page.locator('#tools').getByRole('button', { name: 'Redo', exact: true }).click();
+    await page.locator('#tools').getByRole('button', { name: 'Edit metrics', exact: true }).waitFor();
+    await page.getByRole('group', { name: 'Tool view' }).getByRole('button', { name: 'Summary' }).click();
     await page.getByRole('group', { name: 'Tool view' }).getByRole('button', { name: 'Skills' }).click();
     assert.equal(new URL(page.url()).searchParams.get('tools_view'), 'skills');
     await page.locator('#tools .qt-row', { hasText: 'dataviz' }).waitFor();

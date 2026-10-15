@@ -30,6 +30,9 @@ type sqlDataset struct {
 	// buckets maps day, week, and month fields to the timestamp they are
 	// taken from, so a filter on one can walk an index on the timestamp.
 	buckets map[string]string
+	// timestamps admits raw ISO timestamp columns for conservative indexed
+	// candidates; the typed executor still applies the exact datetime predicate.
+	timestamps map[string]string
 	// lookups are fields with an index that finds their few rows directly,
 	// such as IDs; filters on other fields are marked likely() (see where).
 	lookups           map[string]bool

@@ -647,3 +647,75 @@ func TestQueryV2TempStorageLease(t *testing.T) {
 		t.Fatal("cancelled connection leaked", mode, original, err)
 	}
 }
+
+func TestQueryIndexedDatetimeCandidatesPreserveTypedResults(t *testing.T) {
+	db, dataset := queryV2Fixture(t, 0)
+	clock := time.Date(2026, 11, 2, 8, 30, 0, 123000000, time.UTC)
+	for i, at := range []string{
+		"2024-01-01T00:00:00Z", "2026-10-26T08:30:00.122Z", "2026-10-26T08:30:00.123Z",
+		"2026-10-26T08:30:00.124Z", "2026-11-01T01:30:00-06:00", "2026-11-01T01:30:00-07:00",
+		"2026-11-02T08:30:00.123Z", "2026-11-03T00:00:00+14:00", "2028-01-01T00:00:00Z",
+	} {
+		if _, err := db.Exec("INSERT INTO samples(id,at,category) VALUES(?,?,?)", fmt.Sprint(i), at, "same"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// RFC3339 sources can retain explicit offsets; narrowing must remain safe.
+	field := dataset.Schema.Fields["at"]
+	field.SQLiteDatetimeFormat = "rfc3339"
+	dataset.Schema.Fields["at"] = field
+	columns := map[string]string{}
+	for _, name := range []string{"id", "category", "other", "x", "y", "at", "tags", "flag"} {
+		columns[name] = "s." + name
+	}
+	table := sqlDataset{from: "FROM samples s", columns: columns, timestamps: map[string]string{"at": "s.at"}}
+	for _, where := range [][]qt.WhereTerm{
+		{{Field: "at", Op: ">=", Value: "-7d"}, {Field: "at", Op: "<", Value: "+0s"}},
+		{{Field: "at", Op: "=", Value: "-7d"}},
+		{{Field: "at", Op: "<=", Value: "2026-11-01T01:30:00-07:00"}},
+		{{Field: "at", Op: ">", Value: "2026-11-01T01:30:00-06:00"}},
+		{{Any: []qt.WhereClause{{Field: "at", Op: ">=", Value: "-7d"}, {Field: "category", Op: "=", Value: "same"}}}},
+		{{Field: "at", Op: ">=", Value: "-7d", Negated: true}},
+	} {
+		request := metricRequest(qt.AggSpec{ID: "count", Expression: "COUNT()"})
+		request.Where = where
+		plain := dataset
+		plain.SourceSQL = table.v2Source(dataset.Schema)
+		want, err := plain.ExecuteV2(context.Background(), db, nil, &request, qt.PlanOptions{Now: clock})
+		if err != nil {
+			t.Fatal(err)
+		}
+		indexed := dataset
+		indexed.SourceSQL, indexed.SourceArgs = table.v2WindowedSource(dataset.Schema, where, clock)
+		got, err := indexed.ExecuteV2(context.Background(), db, nil, &request, qt.PlanOptions{Now: clock})
+		if err != nil || !same(got, want) {
+			t.Fatalf("candidate changes typed results for %v: %v", where, err)
+		}
+	}
+	source, args := table.v2WindowedSource(dataset.Schema, []qt.WhereTerm{{Field: "at", Op: ">=", Value: "-7d"}, {Field: "at", Op: "<", Value: "+0s"}}, clock)
+	plan, err := queryMapsContext(context.Background(), db, "EXPLAIN QUERY PLAN SELECT count(*) FROM ("+source+")", args...)
+	if err != nil || !strings.Contains(fmt.Sprint(plan), "samples_at") {
+		t.Fatalf("timestamp index not used: %v %v", plan, err)
+	}
+}
+
+func TestQueryMetadataQueueLeavesForegroundQueriesAvailable(t *testing.T) {
+	catalog, config := testCatalog(t)
+	seedToolCalls(t, catalog, 10)
+	server := NewServer(config, catalog)
+	server.queryMetadata <- struct{}{}
+	defer func() { <-server.queryMetadata }()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	request := httptest.NewRequest(http.MethodGet, "/api/query/tool_calls/distinct?field=tool_name", nil).WithContext(ctx)
+	request.Header.Set("Authorization", "Bearer "+config.APIToken)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusRequestTimeout {
+		t.Fatalf("metadata wait ignored cancellation: %d", response.Code)
+	}
+	foreground := queryV2ReviewCall(t, server, config.APIToken, http.MethodPost, "/api/query/tool_calls/metrics", metricRequest(qt.AggSpec{ID: "calls", Expression: "COUNT()"}))
+	if foreground.Code != http.StatusOK {
+		t.Fatal(foreground.Code, foreground.Body.String())
+	}
+}

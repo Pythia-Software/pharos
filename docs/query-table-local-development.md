@@ -1,133 +1,86 @@
-# Trying the next Query Table release in Pharos
+# Query Table release builds and local development
 
-This branch integrates the Query Table source at `43b0182` (row-producing
-grouping and shared query editors), ahead of the next published release. The
-frontend installs four checked-in npm archives under `web/vendor`, with commit
-and SHA-256 provenance recorded beside them. Clean builds work without a Query
-Table checkout. The package manifests inside those archives still identify as
-0.6.0; they contain the unreleased source at the commit above. Replace the archive
-pins with the published version after the next release.
+Pharos uses published Query Table **0.7.0** npm packages (core, React, UI and
+codegen) and the **v0.7.0** Go module. Production builds no longer depend on a
+Query Table worktree, source archives or a vendored adapter. See
+[the integration guide](query-table-integration.md) for feature coverage,
+contracts and execution limits.
 
-## Worktrees and builds
-
-From Pharos:
+## Release builds
 
 ```sh
-node tools/link-query-table.mjs /Users/gbw/conductor/workspaces/query-table-v1/miami
-```
-
-The script builds core, React, UI and codegen, installs their external runtime
-dependencies without changing the lockfile, and links those four npm packages.
-`.context/query-table` points to Miami. A gitignored `go.work` overrides the
-existing Go replacement with that checkout's `backends/go`. No branch is renamed
-and no packages are published. Changes to Query Table belong in Miami.
-
-The frontend uses esbuild's `--preserve-symlinks`: linked packages resolve React
-through Pharos's dependencies, avoiding multiple bundled React runtimes.
-
-```sh
-# Rebuild both libraries and Pharos when TypeScript/CSS changes:
-cd web
-npm run watch:local
-
-# Full Pharos backend and frontend against the existing isolated dev workflow:
-# (refreshes /Volumes/euclid/pharos-dev from production, as before)
-cd ..
-tools/dev.sh
-```
-
-Both `tools/dev.sh` and `tools/dev-ui.sh` use the combined watcher now. `dev-ui`
-uses an already-running backend; use `dev.sh` to exercise the new backend APIs.
-Restart the backend after editing Go, including Miami's Go adapter. Schema edits
-still need `npm run generate-schemas` in `web`. Rerunning `npm ci` removes the npm
-links; rerun the link script afterward. To restore release dependencies, remove
-`go.work`, `go.work.sum`, and `.context/query-table`, then run `npm ci` in `web`.
-That restores the checked-in source snapshot packages. Local linking remains
-optional for working on both repositories at once.
-
-The checked-in `third_party/query-table-go` production sources also track this
-upstream commit, plus the snapshot quota hook. They keep standalone Go builds
-working with `GOWORK=off`. The earlier Pharos adapter patches have landed
-upstream; the old handoff describes their history, not another patch to apply.
-
-## New Pharos host behavior
-
-- `GET/PUT /api/query-snapshots?dataset=pharos_{dataset}&code=...`: immutable
-  query/view snapshots in the library's SQLite catalog. Codes are dataset-scoped
-  identifiers and require Pharos authentication. Saves and Share, named-query
-  updates, Home collection actions and the native bookmark controls promote
-  state. Normal edits only write a bounded browser cache. A fresh browser/Mac
-  can open a permanent link without that cache.
-- `GET /api/query/{dataset}/item?id=...`: complete base fields and host enrichment
-  for an item, independent of the table projection/search. Missing items return
-  `{ "row": null }`. Detail cards use this loader and save independent property
-  layouts/defaults in library preferences. Group projections hide source item
-  actions and conversation renderers.
-- `POST /api/query-object-references`: bounded batches resolving workspace and
-  conversation identities to labels and existing Pharos routes. Only registered
-  object types/keys are accepted; missing targets remain unresolved. Schema
-  relationships make these available in item properties.
-- `POST /api/query/{dataset}/population`, body `{ "where": [...] }`: a complete
-  filtered source for browser execution. It retains Library/message search and
-  host enrichment, rejects incomplete text-search populations, and returns no
-  rows when the source exceeds 10,000 rows or 16 MiB of serialized response.
-  Unknown fields, malformed/trailing bodies and paging parameters are rejected.
-  Execution uses the existing SQLite population budgets and 30-second deadline.
-
-In a table, choose **Explore groups and calendar metrics**, then use the standard
-Query Table grouping/metric editors. Groups support multiple keys, summary
-formulas, representative rows, HAVING, result sorting and paging. Metrics on
-those results operate on the group population. Rolling windows edit the source stage without changing HAVING. Source-filter
-changes and Refresh reload the complete population with cancellation; mismatched/stale populations
-cannot execute. Large datasets continue using server tables and SQL metrics.
-Saved grouped/calendar views automatically enter exploration mode on restore;
-Home previews use the same bounded source and core execution path.
-
-MCP argument JSON now uses the searchable JSON inspector. Other existing renderers
-remain available alongside the library's configurable cell formats.
-
-Snapshots preserve query/view state, not historical data or computed-definition
-revisions. They are never overwritten/deleted by named-query updates. The catalog
-allows 10,000 snapshots and 64 MiB of token storage across all datasets. Quota
-checks and writes share a transaction; an idempotent save still works at the
-quota. New saves return HTTP 507 when full. No automatic expiry invalidates old
-links. The exported `ErrQuerySnapshotQuota` handling was added and tested in Miami.
-
-## Remaining upstream boundaries to assess before the major release
-
-Row-producing grouping and timezone-aware calendar metric buckets still have no
-Go row/metric transport protocol. Pharos provides complete local sources rather
-than treating a server page as a population. Large-ledger grouping requires a
-future backend protocol; source computed predicates and regex grouping formulas
-retain the upstream restrictions. Calendar metrics in exploration operate on
-that dataset's actual rows (Usage rows remain daily facts).
-
-Query Table currently takes its URL parameter from `itemDetails.queryParameter`.
-A standalone query-URL parameter option would help hosts that manage several
-mounted tables without item cards. Pharos bridges its router events to the
-upstream `popstate` resolver and leaves strict decoding/reference restoration to
-the library. Its old manual base64 decoder was incompatible with the new codec.
-
-## Validation
-
-```sh
+npm --prefix web ci --no-audit --no-fund
+npm --prefix web run generate-schemas
 npm --prefix web run typecheck
 npm --prefix web run check-schemas
 (cd web && node --test tests/*.test.mjs)
 npm --prefix web run build
 npm --prefix web run check-bundle
-go test ./...
-go vet ./...
-(cd third_party/query-table-go && GOWORK=off go test ./... && GOWORK=off go vet ./...)
+GOWORK=off go test ./...
+GOWORK=off go vet ./...
 ```
 
-Host HTTP coverage includes all ten datasets, complete sources, item identities,
-auth/CSRF, invalid requests, immutable conflicts, quota/idempotency and relationship
-batches. Browser smoke checks use isolated synthetic tool calls and test property
-cards, grouping, HAVING/summary columns and permanent-link restoration in a new
-browser context. Screenshots are in this workspace's `.context` directory.
+`web/package-lock.json` pins registry archives and external dependency
+integrities. `go.mod`/`go.sum` pin the released Go adapter without a replacement.
+The JS/CSS assets in `internal/archive/assets` are built from these installed
+packages. Codegen regenerates the Go schemas from the canonical JSON in
+`schemas/`, and copies those same documents into the frontend assets.
 
-The full Go suite has an existing failure in
-`TestFindingSnoozeUntilWorseStaysWoken`, also reproduced from an untouched archive
-of this branch's starting commit. The targeted integration/race suites and vet pass, and the complete Go suite
-passes when that one baseline failure is skipped. It is outside this integration.
+## Optional worktree links
+
+To change both repositories together, explicitly select the Query Table checkout:
+
+```sh
+node tools/link-query-table.mjs /path/to/query-table
+npm --prefix web run watch:local
+```
+
+The link script builds all four packages, installs their external runtime
+dependencies without changing the lockfile, and symlinks them into Pharos's
+`web/node_modules`. `.context/query-table` points at the selected checkout. A
+local gitignored `go.work` selects its `backends/go` instead of the published
+module. Changes to Query Table belong in that checkout.
+
+The combined watcher keeps package output available with `--watch --no-clean`
+and rebuilds Pharos. esbuild uses `--preserve-symlinks` so linked packages resolve
+React through Pharos's dependencies. Schema edits still require
+`npm --prefix web run generate-schemas`. Restart the backend after changing Go.
+
+Both `tools/dev.sh` and `tools/dev-ui.sh` use the combined watcher. `dev.sh`
+refreshes an isolated development library from production by default. Retain the
+same destination/ports and use `--reuse-library` to reuse that isolated snapshot.
+`GET /api/ready?projections=1` reports projection readiness and pending counts.
+
+To return to published dependencies:
+
+```sh
+rm -f go.work go.work.sum .context/query-table
+npm --prefix web ci --no-audit --no-fund
+npm --prefix web run generate-schemas
+npm --prefix web run build
+npm --prefix web run check-bundle
+```
+
+Local links do not change release pins or shipped assets automatically. Before
+shipping, restore published dependencies and run the release checks above. For
+future upgrades, pin all four frontend packages and the Go module together, read
+the upstream release/migration guide, regenerate schemas and rebuild/test.
+
+## Browser validation
+
+The browser fixtures use Playwright from a gitignored local installation and an
+installed Chrome when available:
+
+```sh
+npm install --prefix .context/browser-tests playwright --no-audit --no-fund
+node --test tests/usage-presets-ui.test.cjs tests/tools-ui.test.cjs tests/home-ui.test.cjs
+```
+
+These exercise grouped reloads, route restoration, undo/redo after table pausing,
+compact covers, saved display limits and Other remainders. Fixtures stub their
+HTTP data and do not read or modify the production library.
+
+The older `library-query-ui.test.cjs` and `mcp-ui.test.cjs` fixtures currently
+have four failures that also reproduce on the pre-upgrade branch: a Library
+layout expectation, two outdated search/filter interactions, and an incomplete
+MCP API stub. Their failures are independent of the 0.7.0 dependency upgrade.

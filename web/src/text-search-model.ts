@@ -15,16 +15,16 @@ export const emptyScope = (): TextScope => ({ surface: "prose", roles: [], kinds
 export const emptyTextSearch = (): TextSearchDraft => ({ editor: "visual", match: "rules", root: newGroup(), text: "", mode: "advanced", scope: emptyScope(), fuzzy: false, caseSensitive: false, separators: false });
 export const ruleLabels: Record<RuleKind, string> = { words: "All of these words", anyWords: "Any of these words", phrase: "This phrase", prefix: "A word beginning with", near: "Two phrases near each other", pre: "Two phrases in this order" };
 export const scopes = [
-  { id: "prose", label: "Conversation messages", description: "Messages from people, agent replies, and any saved agent reasoning.", surface: "prose" },
-  { id: "user", label: "Messages from people", description: "What people sent to agents, including pasted or attached text retained in those messages.", surface: "user" },
-  { id: "assistant", label: "Agent replies", description: "The responses agents sent back to people.", surface: "assistant" },
+  { id: "prose", label: "Conversation messages", description: "User messages, agent replies, and any saved agent reasoning.", surface: "prose" },
+  { id: "user", label: "User messages", description: "What users sent to agents, including pasted or attached text retained in those messages.", surface: "user" },
+  { id: "assistant", label: "Agent replies", description: "The responses agents sent back to users.", surface: "assistant" },
   { id: "reasoning", label: "Saved agent reasoning", description: "Reasoning explicitly saved by the source. Some sources do not retain it.", surface: "reasoning" },
   { id: "system", label: "System instructions", description: "Setup and rules supplied in system messages, when retained by the source.", surface: "all", role: "system" },
   { id: "developer", label: "Developer instructions", description: "Instructions supplied by the application in developer messages, when retained.", surface: "all", role: "developer" },
   { id: "tools", label: "Tool calls and output", description: "Commands, tool requests, and the output returned to an agent.", surface: "tools" },
   { id: "all", label: "All stored text", description: "Every stored message type, including instructions and tool activity.", surface: "all" },
-  { id: "typed", label: "Words typed by people", description: "Only spans classified as typed. Unclassified or stale spans may be missing.", surface: "typed" },
-  { id: "pasted", label: "Pasted text", description: "Only spans classified as pasted into a person's message.", surface: "pasted" },
+  { id: "typed", label: "Words typed by users", description: "Only spans classified as typed. Unclassified or stale spans may be missing.", surface: "typed" },
+  { id: "pasted", label: "Pasted text", description: "Only spans classified as pasted into a user's message.", surface: "pasted" },
   { id: "quoted", label: "Quoted text", description: "Only spans classified as quotations.", surface: "quoted" },
   { id: "resent", label: "Resent text", description: "Only spans classified as repeated from an earlier message.", surface: "resent" },
   { id: "template", label: "Template text", description: "Only spans classified as template content.", surface: "template" },

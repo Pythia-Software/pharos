@@ -1,11 +1,17 @@
 """Safety checks for refreshing a large, writable development catalog."""
 
+import contextlib
+import io
+import json
 from pathlib import Path
 import sqlite3
 import sys
 import tempfile
 import tomllib
 import unittest
+from unittest import mock
+
+import dev
 
 from dev import refresh, snapshot_database, source_configuration, validate_destination
 
@@ -95,6 +101,77 @@ class DevSnapshotTests(unittest.TestCase):
             link.symlink_to(destination, target_is_directory=True)
             with self.assertRaises(RuntimeError):
                 validate_destination(source, link)
+
+
+class DevRestartTests(unittest.TestCase):
+    def test_reuse_keeps_config_and_catalog(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            source, destination, binary = root / "production", root / "dev", root / "pharos"
+            destination.mkdir()
+            (destination / dev.MARKER).write_text(str(source))
+            (destination / "catalog").mkdir()
+            catalog = destination / "catalog/catalog.sqlite3"
+            catalog.write_bytes(b"unchanged catalog")
+            config = destination / "library.toml"
+            original = f'library = true\nport = 55070\nhost = "127.0.0.1"\nexecutable = "{binary}"\napi_token = "test"\n'
+            config.write_text(original)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(dev.reuse_library(source, destination, 55070, binary), "test")
+            self.assertEqual(config.read_text(), original)
+            self.assertEqual(catalog.read_bytes(), b"unchanged catalog")
+            with self.assertRaisesRegex(RuntimeError, "different production source"):
+                dev.reuse_library(root / "another", destination, 55070, binary)
+            config.write_text(original + f'catalog_path = "{source}/catalog.sqlite3"\n')
+            with self.assertRaisesRegex(RuntimeError, "outside its isolated directory"):
+                dev.reuse_library(source, destination, 55070, binary)
+
+    def test_projection_wait_does_not_open_ui_early(self):
+        server = mock.Mock()
+        server.poll.return_value = None
+        statuses = [
+            {"projections_ready": False, "library_pending": 10, "metrics_pending": 10, "text_search_ready": False},
+            {"projections_ready": False, "library_pending": 0, "metrics_pending": 0, "text_search_ready": False},
+            {"projections_ready": True},
+        ]
+        responses = [io.BytesIO(json.dumps(status).encode()) for status in statuses]
+        with mock.patch.object(dev.urllib.request, "urlopen", side_effect=responses) as request, \
+                mock.patch.object(dev.time, "sleep") as sleep, \
+                contextlib.redirect_stdout(io.StringIO()):
+            dev.wait_for_projections(server, 55070, "test")
+        self.assertEqual(request.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+        self.assertEqual(request.call_args.args[0].full_url, "http://127.0.0.1:55070/api/ready?projections=1")
+
+    def test_projection_wait_retries_server_errors(self):
+        server = mock.Mock()
+        server.poll.return_value = None
+        failure = dev.urllib.error.HTTPError("http://localhost", 500, "Rebuilding", {}, None)
+        ready = io.BytesIO(json.dumps({"projections_ready": True}).encode())
+        with mock.patch.object(dev.urllib.request, "urlopen", side_effect=[failure, ready]) as request, \
+                mock.patch.object(dev.time, "sleep") as sleep, \
+                contextlib.redirect_stdout(io.StringIO()):
+            dev.wait_for_projections(server, 55070, "test")
+        self.assertEqual(request.call_count, 2)
+        sleep.assert_called_once_with(1)
+
+    def test_projection_wait_rejects_client_errors(self):
+        server = mock.Mock()
+        server.poll.return_value = None
+        failure = dev.urllib.error.HTTPError("http://localhost", 401, "Unauthorized", {}, None)
+        with mock.patch.object(dev.urllib.request, "urlopen", side_effect=failure), \
+                mock.patch.object(dev.time, "sleep") as sleep, \
+                self.assertRaises(dev.urllib.error.HTTPError):
+            dev.wait_for_projections(server, 55070, "test")
+        sleep.assert_not_called()
+
+    def test_projection_wait_reports_backend_exit(self):
+        server = mock.Mock()
+        server.poll.return_value = 2
+        server.returncode = 2
+        with contextlib.redirect_stdout(io.StringIO()), \
+                self.assertRaisesRegex(RuntimeError, "Backend exited with status 2"):
+            dev.wait_for_projections(server, 55070, "test")
 
 
 if __name__ == "__main__":

@@ -66,10 +66,12 @@ type Server struct {
 	tasks      backgroundTasks
 	timingMu   sync.Mutex
 	auto       automaticSync
+	// Leave catalog connections available for rows/previews while metadata scans run.
+	queryMetadata chan struct{}
 }
 
 func NewServer(config Config, catalog *Catalog) *Server {
-	server := &Server{Catalog: catalog, config: config, runs: []*SyncRun{}}
+	server := &Server{Catalog: catalog, config: config, runs: []*SyncRun{}, queryMetadata: make(chan struct{}, 1)}
 	server.life.init()
 	if catalog != nil {
 		catalog.background = server.spawn
@@ -354,7 +356,12 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/ready":
 		// The macOS wrapper polls this until the service listens; it must stay
 		// cheap, since each timed-out probe would otherwise leave work running.
-		writeJSON(w, map[string]any{"ok": true}, 200)
+		if r.URL.Query().Get("projections") == "1" {
+			value, err := s.Catalog.projectionReadiness(r.Context())
+			writeResult(w, value, err)
+		} else {
+			writeJSON(w, map[string]any{"ok": true}, 200)
+		}
 	case path == "/api/diagnostics/profile":
 		seconds, _ := strconv.Atoi(r.URL.Query().Get("seconds"))
 		if seconds < 1 || seconds > 60 {

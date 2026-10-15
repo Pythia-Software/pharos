@@ -883,7 +883,7 @@ func (c *Catalog) runFindingsPassWithFeatures(ctx context.Context, full, feature
 	if err != nil {
 		return err
 	}
-	existing, err := loadFindingRows(ctx, snapshot, "")
+	existing, err := loadFindingRowsAt(ctx, snapshot, c.clock(), "")
 	if err != nil {
 		return err
 	}
@@ -1093,6 +1093,10 @@ type findingRow struct {
 }
 
 func loadFindingRows(ctx context.Context, q queryer, where string, args ...any) (map[string]*findingRow, error) {
+	return loadFindingRowsAt(ctx, q, time.Now(), where, args...)
+}
+
+func loadFindingRowsAt(ctx context.Context, q queryer, clock time.Time, where string, args ...any) (map[string]*findingRow, error) {
 	rows, err := queryMapsContext(ctx, q, `SELECT id,detector,scope,lever,repository_id,pattern,spec_json,card_json,metric_json,baseline_json,impact_json,gate_json,
 		providers_json,facts_json,evidence_json,target,active,first_seen_at,gate_passed_at,updated_at FROM findings `+where, args...)
 	if err != nil {
@@ -1116,7 +1120,7 @@ func loadFindingRows(ctx context.Context, q queryer, where string, args ...any) 
 		output[item.ID] = item
 	}
 	recent, err := queryMapsContext(ctx, q, `SELECT finding_id,SUM(events) events,SUM(exposure) exposure FROM finding_daily WHERE day>=? GROUP BY 1`,
-		time.Now().AddDate(0, 0, -(findingRecentDays-1)).Format("2006-01-02"))
+		clock.AddDate(0, 0, -(findingRecentDays-1)).Format("2006-01-02"))
 	if err != nil {
 		return nil, err
 	}

@@ -115,6 +115,14 @@ func (d sqlDataset) v2Source(schema qt.Schema) string {
 // Candidate restrictions preserve the full shared predicate as the final test.
 // An OR can be narrowed only when every branch has a safe indexed candidate.
 func (d sqlDataset) v2IndexedSource(schema qt.Schema, terms []qt.WhereTerm, exact ...map[string][2]string) (string, []any) {
+	return d.v2CandidateSource(schema, terms, nil, exact...)
+}
+
+func (d sqlDataset) v2WindowedSource(schema qt.Schema, terms []qt.WhereTerm, clock time.Time, exact ...map[string][2]string) (string, []any) {
+	return d.v2CandidateSource(schema, terms, &clock, exact...)
+}
+
+func (d sqlDataset) v2CandidateSource(schema qt.Schema, terms []qt.WhereTerm, clock *time.Time, exact ...map[string][2]string) (string, []any) {
 	source := d.v2Source(schema)
 	args := []any{}
 	conditions := []string{}
@@ -124,6 +132,21 @@ func (d sqlDataset) v2IndexedSource(schema qt.Schema, terms []qt.WhereTerm, exac
 		saved := len(args)
 		for _, clause := range term.Predicates() {
 			predicate := ""
+			if clock != nil && !clause.Negated && d.timestamps[clause.Field] != "" && schema.Fields[clause.Field].Kind == qt.FieldDatetime {
+				if from, to, ok := indexedDatetimeBounds(clause, *clock); ok {
+					column := d.timestamps[clause.Field]
+					if from != "" {
+						predicate = column + ">=" + bind(from)
+					}
+					if to != "" {
+						if predicate != "" {
+							predicate += " AND "
+						}
+						predicate += column + "<" + bind(to)
+					}
+					predicate = "(" + predicate + ")"
+				}
+			}
 			if !clause.Negated && d.toolSearchIndexed {
 				if search := toolSearchTerm(clause.Field, clause.Op, clause.Value); search != "" {
 					predicate = "t.rowid IN (SELECT rowid FROM tool_command_fts WHERE tool_command_fts MATCH " + bind(search) + ")"
@@ -158,6 +181,38 @@ func (d sqlDataset) v2IndexedSource(schema qt.Schema, terms []qt.WhereTerm, exac
 		source += conjunction + strings.Join(conditions, " AND ")
 	}
 	return source, args
+}
+
+// Raw ISO text bounds cover whole UTC days, with an extra day on either
+// side for valid offset timestamps and mixed fractional precision. They are
+// candidates only: the compiler's typed, millisecond-precise predicate remains
+// authoritative. Never narrow a negated or partially indexable OR predicate.
+func indexedDatetimeBounds(clause qt.WhereClause, clock time.Time) (string, string, bool) {
+	if clause.Negated || !slices.Contains([]string{">", ">=", "<", "<=", "="}, clause.Op) {
+		return "", "", false
+	}
+	value, err := qt.ResolveRelativeDatetime(clause.Value, clock)
+	if err != nil {
+		return "", "", false
+	}
+	instant, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		instant, err = time.Parse("2006-01-02", value)
+	}
+	if err != nil || instant.Year() < 2 || instant.Year() > 9997 {
+		return "", "", false
+	}
+	utc := instant.UTC()
+	day := time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
+	from, to := day.AddDate(0, 0, -1).Format("2006-01-02"), day.AddDate(0, 0, 2).Format("2006-01-02")
+	switch clause.Op {
+	case ">", ">=":
+		return from, "", true
+	case "<", "<=":
+		return "", to, true
+	default:
+		return from, to, true
+	}
 }
 
 // Ask SQLite itself for the local-calendar UTC boundaries, so DST and its
@@ -210,8 +265,12 @@ func sqlIdentifier(name string) string { return `"` + strings.ReplaceAll(name, `
 // is shared by the entire batch. Rollback removes it before the pooled connection
 // returns, including on cancellation; nothing is written to the archive.
 func stageQueryRows(ctx context.Context, tx *sql.Tx, name string, rows []map[string]any, schema qt.Schema, required ...[]string) (string, error) {
-	if len(rows) > queryTablePopulation {
-		return "", fmt.Errorf("source population exceeds %d rows", queryTablePopulation)
+	return stageQueryRowsWithBudget(ctx, tx, name, rows, schema, queryTablePopulation, required...)
+}
+
+func stageQueryRowsWithBudget(ctx context.Context, tx *sql.Tx, name string, rows []map[string]any, schema qt.Schema, population int, required ...[]string) (string, error) {
+	if len(rows) > population {
+		return "", fmt.Errorf("source population exceeds %d rows", population)
 	}
 	names := make([]string, 0, len(schema.Fields))
 	for field := range schema.Fields {
@@ -303,37 +362,46 @@ func (s *Server) getQueryCapabilities(w http.ResponseWriter, r *http.Request, da
 		writeError(w, err, 500)
 		return
 	}
-	// Canonical local definitions may be used as group keys; result budgets apply.
-	d.ComputedGroupable = map[string]bool{}
-	for _, id := range ids {
-		d.ComputedGroupable[id] = true
+	v3 := queryV3Dataset(schema)
+	// Capability validation uses the same schema-only source as V2's description.
+	// Actual execution replaces it with the authorized dataset source.
+	v3.SourceSQL = d.SourceSQL
+	if err = authorizeQueryV3Computed(ctx, tx, &v3); err != nil {
+		writeError(w, err, 500)
+		return
 	}
-	execution, unavailable, err := describeQueryComputed(ctx, tx, d, ids)
+	execution, unavailable, err := describeQueryComputed(ctx, tx, v3, ids)
 	if err != nil {
 		writeError(w, err, 500)
 		return
 	}
-	writeJSON(w, map[string]any{"metricCapabilities": d.Capabilities(), "computedExecution": execution, "computedDiagnostics": unavailable}, 200)
+	writeJSON(w, map[string]any{"metricCapabilities": d.Capabilities(), "queryCapabilities": v3.Capabilities(), "computedExecution": execution, "computedDiagnostics": unavailable}, 200)
+}
+
+type queryComputedDescriber interface {
+	DescribeComputedPartialIn(context.Context, *sql.Tx, []string, qt.PlanOptions) (qt.ComputedDescription, error)
 }
 
 // Schema changes can invalidate persisted formulas. Keep the complete store
 // catalogue repairable, advertising only definitions whose whole graph compiles.
 // Database and context failures still fail the request rather than hiding data.
-func describeQueryComputed(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2Dataset, ids []string) (qt.SQLiteComputedExecution, map[string]*qt.PlanDiagnostic, error) {
+func describeQueryComputed(ctx context.Context, tx *sql.Tx, d queryComputedDescriber, ids []string) (qt.SQLiteComputedExecution, map[string]*qt.PlanDiagnostic, error) {
 	execution := qt.SQLiteComputedExecution{Profile: qt.SQLiteExpressionProfile, ResolvedRevisions: map[string]string{}, Fields: map[string]qt.SQLiteComputedFieldCapability{}}
 	unavailable := map[string]*qt.PlanDiagnostic{}
-	for _, id := range ids {
-		current, err := d.DescribeComputedIn(ctx, tx, []string{id}, qt.PlanOptions{Identity: d.Scope + ":" + d.Dataset})
+	// The adapter bounds each description to 64 definitions. A saved catalogue
+	// can be larger even though one execution references at most 64 definitions.
+	batches := slices.Collect(slices.Chunk(ids, 64))
+	if len(batches) == 0 {
+		batches = [][]string{nil}
+	}
+	for _, batch := range batches {
+		current, err := d.DescribeComputedPartialIn(ctx, tx, batch, qt.PlanOptions{})
 		if err != nil {
-			var diagnostic *qt.PlanDiagnostic
-			if !errors.As(err, &diagnostic) {
-				return execution, unavailable, err
-			}
-			unavailable[id] = diagnostic
-			continue
+			return execution, unavailable, err
 		}
-		maps.Copy(execution.ResolvedRevisions, current.ResolvedRevisions)
-		maps.Copy(execution.Fields, current.Fields)
+		maps.Copy(execution.ResolvedRevisions, current.Execution.ResolvedRevisions)
+		maps.Copy(execution.Fields, current.Execution.Fields)
+		maps.Copy(unavailable, current.Diagnostics)
 	}
 	return execution, unavailable, nil
 }
@@ -472,6 +540,16 @@ func (s *Server) postQueryV2(w http.ResponseWriter, r *http.Request, dataset, op
 // setting on the leased connection only; restore it before returning the pool
 // connection or performing host enrichment.
 func beginQueryV2(ctx context.Context, db *sql.DB) (*sql.Tx, func() error, error) {
+	return beginQueryWithTempStore(ctx, db, 2)
+}
+
+// V3 can stage much larger complete populations, so its temporary relations
+// must be able to spill to disk. The mode is leased and restored just like V2.
+func beginQueryV3(ctx context.Context, db *sql.DB) (*sql.Tx, func() error, error) {
+	return beginQueryWithTempStore(ctx, db, 1)
+}
+
+func beginQueryWithTempStore(ctx context.Context, db *sql.DB, mode int) (*sql.Tx, func() error, error) {
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -481,8 +559,8 @@ func beginQueryV2(ctx context.Context, db *sql.DB) (*sql.Tx, func() error, error
 		conn.Close()
 		return nil, nil, err
 	}
-	if original != 2 {
-		if _, err = conn.ExecContext(ctx, "PRAGMA temp_store=MEMORY"); err != nil {
+	if original != mode {
+		if _, err = conn.ExecContext(ctx, fmt.Sprintf("PRAGMA temp_store=%d", mode)); err != nil {
 			conn.Close()
 			return nil, nil, err
 		}
@@ -503,7 +581,7 @@ func beginQueryV2(ctx context.Context, db *sql.DB) (*sql.Tx, func() error, error
 		}
 		cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		if original != 2 {
+		if original != mode {
 			if _, resetError := conn.ExecContext(cleanup, fmt.Sprintf("PRAGMA temp_store=%d", original)); resetError != nil {
 				// A cancelled transaction may have closed its physical connection already.
 				// Otherwise discard a connection whose original settings cannot be restored.
@@ -618,7 +696,7 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 		if e != nil {
 			return queryV2ExecutionResult{}, e
 		}
-		d.SourceSQL, d.SourceArgs = table.v2IndexedSource(schema, where, bounds)
+		d.SourceSQL, d.SourceArgs = table.v2WindowedSource(schema, where, clock, bounds)
 	} else {
 		var err error
 		names := make([]string, 0, len(schema.Fields))
@@ -779,7 +857,15 @@ func (s *Server) executeUsageMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQL
 	o.ComputedGroupable = d.ComputedGroupable
 	o.ExpectedRevisions = q.ExpectedRevisions
 	o.Resolver = qt.SQLiteComputedDefinitionResolver{Tx: tx, Scope: d.Scope, Dataset: d.Dataset}
-	plans, err := qt.CompileSQLiteMetrics(ctx, q, d.Schema, o)
+	// Granularity comes from the metric's inputs, not the daily row WHERE or
+	// page ordering. An hour predicate selects days for daily summaries.
+	inputs := q
+	inputs.Where, inputs.OrderBy = nil, nil
+	inputs.Metrics = slices.Clone(q.Metrics)
+	for i := range inputs.Metrics {
+		inputs.Metrics[i].Scope = "allMatching"
+	}
+	plans, err := qt.CompileSQLiteMetrics(ctx, inputs, d.Schema, o)
 	if err != nil {
 		return qt.SQLiteV2ExecutionResult{}, err
 	}
