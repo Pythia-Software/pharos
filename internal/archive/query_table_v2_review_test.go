@@ -69,6 +69,12 @@ func TestQueryV2ComputedCatalogueRecovery(t *testing.T) {
 	if len(execution.Fields) != 2 || len(execution.ResolvedRevisions) != 2 || len(unavailable) != 3 {
 		t.Fatalf("partial handshake: %+v, %+v", execution, unavailable)
 	}
+	for _, id := range []string{"good", "good_child"} {
+		field := execution.Fields["@computed/"+id]
+		if !field.Select || !field.Group || !field.Filter {
+			t.Fatalf("healthy canonical field lost V3 permissions: %s, %+v", id, field)
+		}
+	}
 	for _, id := range []string{"broken", "broken_child", "other"} {
 		if unavailable[id] == nil || execution.ResolvedRevisions[id] != "" {
 			t.Fatalf("invalid graph advertised: %s", id)
@@ -124,6 +130,25 @@ func TestQueryV2ComputedCatalogueRecovery(t *testing.T) {
 	_, unavailable = capabilities()
 	if len(unavailable) != 0 {
 		t.Fatal("repaired definitions still unavailable", unavailable)
+	}
+}
+
+func TestQueryComputedCapabilitiesLargeCatalogue(t *testing.T) {
+	catalog, config := testCatalog(t)
+	store := qt.SQLiteComputedColumnStore{DB: catalog.DB}
+	for i := range 70 {
+		id := fmt.Sprintf("field_%02d", i)
+		_, err := store.Save(context.Background(), queryTableScope, "pharos_tool_calls", qt.SaveComputedColumnRequest{Column: qt.ComputedColumn{ID: id, Label: id, Expression: qt.ComputedExpression{Language: "qt-expr", Version: 1, Source: "[duration_ms]/1000"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := queryV2ReviewCall(t, NewServer(config, catalog), config.APIToken, http.MethodGet, "/api/query/tool_calls/capabilities", nil)
+	var response struct {
+		Execution qt.SQLiteComputedExecution `json:"computedExecution"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &response) != nil || len(response.Execution.Fields) != 70 || len(response.Execution.ResolvedRevisions) != 70 {
+		t.Fatal("catalogue description truncated or rejected", w.Code, w.Body.String())
 	}
 }
 

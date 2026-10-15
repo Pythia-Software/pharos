@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { build } from 'esbuild';
-const built=await build({stdin:{contents:`export * from './src/storage'; export * from './src/bookmarks'; export * from './src/query-links'; export { encodeQuery, normalizeQueryState, createQueryLinkService, httpQuerySnapshotStore } from '@pythia-software/query-table-core';`,resolveDir:process.cwd()},bundle:true,write:false,platform:'node',format:'esm'});
+const built=await build({stdin:{contents:`export * from './src/storage'; export * from './src/bookmarks'; export * from './src/query-links'; export { encodeQuery, normalizeQueryState, createQueryLinkService, httpQuerySnapshotStore, QuerySnapshotHttpError } from '@pythia-software/query-table-core';`,resolveDir:process.cwd()},bundle:true,write:false,platform:'node',format:'esm'});
 const m=await import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString('base64')}`);
 const prefs=new Map(),cache=new Map(),snapshots=new Map();
 let fail=false,writes=0;
@@ -12,7 +12,7 @@ globalThis.fetch=async (input,options)=>{
  const url=new URL(input,location.origin),key=url.searchParams.get('dataset')+':'+url.searchParams.get('code');
  if(options?.method==='PUT'){
   writes++;
-  if(fail)return new Response('unavailable',{status:507});
+  if(fail)return new Response('query snapshot storage quota exceeded',{status:507,headers:{'Content-Type':'text/plain'}});
   const snapshot=JSON.parse(options.body);snapshots.set(key,snapshot);
   return Response.json(snapshot);
  }
@@ -41,8 +41,15 @@ test('named saves create durable links, resolve on another Mac and keep defaults
 test('failed snapshot saves leave the named query and collection unchanged',async()=>{
  const storage=m.libraryStorageAdapter(),before=JSON.stringify(m.readBookmarks());
  fail=true;
- await assert.rejects(storage.updateNamed('pharos_tool_calls',m.readBookmarks()[0].savedQueryId,{...query,limit:75},30),/507/);
- await assert.rejects(storage.saveNamed('pharos_tool_calls','Another',query,30),/507/);
+ const quotaError=error=>{
+  assert.ok(error instanceof m.QuerySnapshotHttpError);
+  assert.equal(error.status,507);assert.equal(error.code,'quota');
+  assert.equal(error.detail,'query snapshot storage quota exceeded');
+  assert.match(error.message,/Existing links still work/);
+  return true;
+ };
+ await assert.rejects(storage.updateNamed('pharos_tool_calls',m.readBookmarks()[0].savedQueryId,{...query,limit:75},30),quotaError);
+ await assert.rejects(storage.saveNamed('pharos_tool_calls','Another',query,30),quotaError);
  fail=false;
  assert.equal(JSON.stringify(m.readBookmarks()),before);
 });

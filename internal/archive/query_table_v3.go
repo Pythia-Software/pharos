@@ -21,24 +21,6 @@ func queryV3Dataset(schema qt.Schema) qt.QueryDatasetV3 {
 		MaxRows: querytable.MaxLimit, MaxGroups: 10_000, MaxPopulation: 10_000_000, MaxStagingBytes: 512 << 20}
 }
 
-// V2's metadata type predates source computed predicates. The V3 executor
-// authorizes them against the same canonical store, so advertise that additional
-// capability on healthy definitions without changing the older row protocol.
-func queryV3ComputedHandshake(execution qt.SQLiteComputedExecution) any {
-	type field struct {
-		qt.SQLiteComputedFieldCapability
-		Filter bool `json:"filter"`
-	}
-	fields := map[string]field{}
-	for name, capability := range execution.Fields {
-		fields[name] = field{SQLiteComputedFieldCapability: capability, Filter: capability.Select}
-	}
-	return struct {
-		qt.SQLiteComputedExecution
-		Fields map[string]field `json:"fields"`
-	}{execution, fields}
-}
-
 func authorizeQueryV3Computed(ctx context.Context, tx *sql.Tx, d *qt.QueryDatasetV3) error {
 	ids, err := queryComputedIDs(ctx, tx, d.Dataset)
 	if err != nil {

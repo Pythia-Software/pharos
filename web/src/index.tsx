@@ -456,8 +456,10 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
   const api = useQueryTable<Row>({ schema, transport,
     computedColumnStore, computedExecution: capabilities?.computedExecution,
     clientRows: shared?.datasets[dataset], active: Boolean(visible),
-    storage, debounceMs: 100, syncUrl: Boolean(visible), canonicalizeQuery,
-    itemDetails: { queryParameter: queryParameter(dataset), storage: propertyStorage, relationships: shared ? undefined : relationships,
+    // Keep URL configuration stable; active pauses execution/synchronization
+    // without resetting restoration or undo history when a table is hidden.
+    storage, debounceMs: 100, syncUrl: true, queryParameter: queryParameter(dataset), canonicalizeQuery,
+    itemDetails: { storage: propertyStorage, relationships: shared ? undefined : relationships,
       loadRow: shared ? undefined : async (id, signal) => {
         const row = await transport!.fetchRow!(id, signal);
         return row ? { row, loadedFields: Object.keys(row) } : null;
