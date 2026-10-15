@@ -170,7 +170,7 @@ export function QueryConveyor({ items, previews, loading, hasErrors, active, sus
         style={{ left: (layout.width - CARD_WIDTH) / 2 + (positions[0] ?? 0) * STRIDE, "--belt-start": first, "--belt-end": last, "--belt-shift": movement ? -movement.offset : 0 } as React.CSSProperties}
         onTransitionEnd={event => { if (event.target === row.current && event.propertyName === "--belt-shift") finishMovement(); }}>
         {slots.map(({ position, item, lean, cycle, onscreen }) => <div className={`home-belt-slot${entering.includes(item.instanceId) ? " arriving" : ""}`} key={`${item.instanceId}:${cycle}`} data-belt-position={position} style={{ "--belt-index": position } as React.CSSProperties}>
-          <QueryCard discovery xray={position < first || position > last} id={item.instanceId} title={item.title} description={item.description} url={item.url} windowLabel={`Last ${item.window.days}d`} category={item.category} lean={lean}
+          <QueryCard discovery xray={position < first || position > last} id={item.instanceId} title={item.title} description={item.description} actionLabel={item.action} url={item.url} windowLabel={`Last ${item.window.days}d`} category={item.category} lean={lean}
             loadingSpec={cardLoadingPresentation(item.query, { recipe: item, cover: item.cover, days: item.window.days })} preview={previews[item.instanceId]} onReveal={onscreen && !movement ? () => move(position, true) : undefined} onOpen={() => onOpen(item.url)} onKeep={() => onKeep(item)} onDragStart={event => onDragStart(event, item)} onDragEnd={onDragEnd} />
         </div>)}
       </div>

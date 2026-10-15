@@ -8,6 +8,10 @@ export type CardLoadingSpec = { kind: CardLoadingKind; count: number; headline?:
 // Read the same cover definition as the preview, before any requests finish.
 // Placeholder marks describe the display, never estimated data values.
 export function cardLoadingPresentation(query: QueryState, options: { recipe?: QueryRecipe; cover?: CardCover; metricId?: string; days?: number } = {}): CardLoadingSpec {
+  const study = options.recipe?.humanStudy;
+  if (study && (!query.grouping || study === "conversation-lengths") && (!options.metricId || options.metricId === options.recipe?.cover?.metricId) && (!options.cover || options.cover.metricId === options.recipe?.cover?.metricId)) {
+    return study === "conversation-lengths" ? { kind: "list", count: 6, height: 240 } : study === "hours" ? { kind: "columns", count: 24, height: 205 } : ["contribution-patterns", "examples"].includes(study) ? { kind: "list", count: study === "examples" ? 3 : 4, height: 210 } : { kind: "line", count: 31, headline: true, height: 260 };
+  }
   let projected = query, metricId = options.metricId;
   if (options.recipe && (query.grouping || options.cover)) {
     const cover = options.cover ?? (metricId ? { mode: query.grouping && !query.aggregations?.length ? "result" as const : "source" as const, metricId } : undefined);
@@ -30,8 +34,8 @@ export function cardLoadingPresentation(query: QueryState, options: { recipe?: Q
     || Boolean(options.recipe?.exploration?.labelFields?.length) || metric.groupBy.some(field => /title|signature|path|url/.test(field))));
   const headline = timeline;
   const height = limit && (kind === "list" || kind === "table" || kind === "box")
-    ? Math.max(170, (kind === "box" ? 105 : 41) + count * (kind === "box" ? 52 : belowLabels ? 8 + 12 * (metric.display?.list?.maxLabelLines ?? 2) : 24))
-    : kind === "box" ? 272 : headline ? 208 : undefined;
+    ? Math.max(170, (kind === "box" ? 105 : 41) + count * (kind === "box" ? 52 : belowLabels ? 8 + 12 * (metric.display?.list?.maxLabelLines ?? 2) : count >= 7 ? 20 : 24))
+    : kind === "box" ? 272 : ["pie", "donut"].includes(kind) ? 300 : headline ? 208 : undefined;
   return { kind, count: Math.max(1, Math.min(100, count)), headline, belowLabels, height };
 }
 

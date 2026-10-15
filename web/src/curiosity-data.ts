@@ -5,6 +5,8 @@ import { richerQueryRecipes } from "./query-recipes-v2";
 import { enrichCardRecipe, newCardRecipes, type CardExploration } from "./card-recipes";
 import { wishlistCardRecipes } from "./wishlist-card-recipes";
 import type { CardCover } from "./card-cover";
+import { humanWordRecipes, refineHumanRecipe, applyHumanCardCopy } from "./human-word-recipes";
+import type { HumanStudy } from "./human-study";
 export { clearPreviewCache, loadQueryPreview, loadQueryPreviews, formatPreviewValue } from "./query-previews";
 export type { QueryPreview } from "./query-previews";
 
@@ -16,6 +18,9 @@ export type QueryRecipe = {
   exploration?: CardExploration;
   cover?: CardCover;
   calendarTimezone?: "local";
+  humanStudy?: HumanStudy;
+  retired?: boolean;
+  action?: string;
 };
 export type QuerySuggestion = QueryRecipe & { query: QueryState; window: RollingWindow; url: string; instanceId: string };
 const agg = (op: AggregationClause["op"], field: string, groupBy: string[], label: string): AggregationClause => ({ id: `${op}:${field}:${groupBy.join(",")}`, op, ...(field ? { field } : {}), groupBy, label });
@@ -55,8 +60,9 @@ const baseRecipes: QueryRecipe[] = [
   ...richerQueryRecipes,
   ...newCardRecipes,
   ...wishlistCardRecipes,
+  ...humanWordRecipes,
 ];
-export const queryRecipes = baseRecipes.map(enrichCardRecipe);
+export const queryRecipes = baseRecipes.map(enrichCardRecipe).map(refineHumanRecipe).map(applyHumanCardCopy).map(recipe => recipe.humanStudy ? { ...recipe, days: [7] } : recipe);
 
 export function instantiateRecipe(recipe: QueryRecipe, days: number, clock = new Date()): QuerySuggestion {
   const window: RollingWindow = { days, field: recipe.field, mode: "relative" };
@@ -72,7 +78,8 @@ export function instantiateRecipe(recipe: QueryRecipe, days: number, clock = new
     where: view.having ?? [], orderBy: [{ field: view.valueField, dir: "desc", nulls: "last" }, ...(view.tieBreakField ? [{ field: view.tieBreakField, dir: "desc" as const }] : []), ...keys.map(field => ({ field, dir: "asc" as const }))],
     aggregations: view.coverMetric && !coverMetric ? [view.coverMetric] : [],
   } : source, window, clock);
-  return { ...recipe, measures, window, query, url: queryURL(recipe.dataset, query, window), instanceId: `${recipe.id}:${days}` };
+  const describe = (text: string) => text.replaceAll("{days}", String(days)).replaceAll("{period}", days === 7 ? "Weekly" : days === 1 ? "Daily" : `${days}-day`).replaceAll("{lastDays}", days === 7 ? "Last seven days" : days === 1 ? "Last 24 hours" : `Last ${days} days`);
+  return { ...recipe, title: describe(recipe.title), description: describe(recipe.description), measures, window, query, url: queryURL(recipe.dataset, query, window), instanceId: `${recipe.id}:${days}` };
 }
 
 export function shuffled<T>(items: T[]): T[] {
@@ -84,5 +91,5 @@ export function shuffled<T>(items: T[]): T[] {
 export function suggestionPool(clock = new Date(), recipes = queryRecipes): QuerySuggestion[] {
   // One explicit window per question per visit. Keep the mix broad, without
   // filling the belt with three nearly identical windows of the same card.
-  return shuffled(recipes).map((recipe, index) => instantiateRecipe(recipe, (recipe.days ?? [7, 30, 90])[index % (recipe.days?.length ?? 3)], clock));
+  return shuffled(recipes.filter(recipe => !recipe.retired)).map((recipe, index) => instantiateRecipe(recipe, (recipe.days ?? [7, 30, 90])[index % (recipe.days?.length ?? 3)], clock));
 }

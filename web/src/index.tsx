@@ -1104,7 +1104,7 @@ function TokenUsage() {
     ["tokens", "cost", "percent", "percent_cost"].includes(view.metric) && tokenSplits.some(([value]) => value === view.split) && Object.hasOwn(chartPeriods, view.period) && validPeriodCount(view.hours) && validPeriodCount(view.days) && validRollingPeriods(view.rollingPeriods) && validChartScale(view.scale)));
   const update = (next: Partial<TokenChartView>) => setChart(previous => { const merged = { ...previous, ...next }; store(tokenChartKey, merged); return merged; });
   return <QuerySurface dataset="usage" header={api => {
-    const where = toAggregationQuery(api.query, schemas.usage).where;
+    const where = toAggregationQuery({ ...api.query, aggregations: [] }, schemas.usage).where;
     return <>
       <TokenSummary where={where} />
       <TokenChart where={where} onFilter={filterChange(api)} view={chart} onChange={update} />
@@ -1369,14 +1369,14 @@ function WritingUsage({ onStatus }: { onStatus: (status: AuthorshipStatus | null
   </div>;
   if (rows === "messages") return <UserMessageSurface key="messages" messageView={view} header={(api, searching) => <>
     {toggle}
-    {!searching ? <MessageMix where={toAggregationQuery(api.query, schemas.writing_messages).where} reload={reload} onFilter={filterChange(api)} /> : null}
+    {!searching ? <MessageMix where={toAggregationQuery({ ...api.query, aggregations: [] }, schemas.writing_messages).where} reload={reload} onFilter={filterChange(api)} /> : null}
     <div className="usage-preset-rows">
       <PresetRow label="Sort" presets={messagePresets} query={api.query} onApply={preset => apply("writing_messages", preset)} />
       <PresetRow label="Metrics" presets={messageMetricPresets} query={api.query} onApply={preset => apply("writing_messages", preset)} clear />
     </div>
   </>} />;
   return <QuerySurface key="conversations" dataset="writing" trailing={row => <button type="button" className="mcp-detail-button" title="List this conversation's messages, highlighted by where their text came from" onClick={() => drill(row)}>Messages</button>} header={api => <>
-    <WritingPanel where={toAggregationQuery(api.query, schemas.writing).where} onFilter={filterChange(api)} status={status} reload={reload} />
+    <WritingPanel where={toAggregationQuery({ ...api.query, aggregations: [] }, schemas.writing).where} onFilter={filterChange(api)} status={status} reload={reload} />
     {toggle}
     <div className="usage-preset-rows">
       <PresetRow label="Sort" presets={writingPresets} query={api.query} onApply={preset => apply("writing", preset)} />

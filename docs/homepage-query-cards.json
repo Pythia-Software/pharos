@@ -1,6 +1,6 @@
 {
   "title": "Homepage query card implementation tracker",
-  "updated": "2026-10-14",
+  "updated": "2026-10-15",
   "query_table_version": "local Miami v3",
   "cards": [
     {
@@ -1208,9 +1208,18 @@
       "implementation_status": "Partial implementation",
       "implemented_recipes": [
         "human-words",
-        "human-word-mix"
+        "human-word-mix",
+        "human-word-total",
+        "human-words-per-message",
+        "human-words-per-conversation",
+        "human-words-per-work",
+        "human-repo-conversation-depth",
+        "human-conversation-messages",
+        "human-message-lengths",
+        "human-contribution-patterns",
+        "human-specific-feedback"
       ],
-      "current_preview": "How much am I writing? Words classified as typed or dictated, day by day.; How much of my message text am I writing? Typed or dictated words as a share of retained message words, by repository.",
+      "current_preview": "Last seven days of writing Human-written words sent during the last 7 days, grouped by the day they were sent.; Authorship by repository Human-written share of retained user-message text over the last 7 days, across eight repositories.; Weekly writing volume over time Human-written words over each trailing 7-day period, with 30 days of history for comparison.; Words per message Average human-written words per message over each trailing 7-day period; excludes messages without human writing.; Words per conversation Average human-written words per conversation over each trailing 7-day period, including conversations started earlier.; Words per workspace directory Average human-written words per workspace directory over trailing 7 days, combining conversations sharing that directory.; Conversation words by repo Average human-written words per conversation in the last 7 days, compared across repositories with sample counts.; Conversation size profile Conversations grouped by human-written word totals over the last 7 days; each bar shows a size band.; Feedback with concrete detail Share of assessed human-written messages with concrete feedback cues over each trailing 7-day period.",
       "blocked_on_query_table": [
         "H08",
         "H12",
@@ -1242,7 +1251,7 @@
         "explaining-repos",
         "work-writing"
       ],
-      "current_preview": "Where do I explain the most? Your typed words across repositories in this window.; Which work needs the most of my writing? Your words and messages in this window, grouped by canonical work identity.",
+      "current_preview": "Words written per repository Human-written words over the last 7 days, ranked by repository; the seven largest are shown.",
       "blocked_on_query_table": [
         "H07"
       ],
@@ -1301,7 +1310,7 @@
       "implemented_recipes": [
         "human-example-phrases"
       ],
-      "current_preview": "Where am I supplying examples? Your messages with explicit example-introduction phrases, with conversation and repository reach.",
+      "current_preview": "Supplied examples and context Human contributions containing images, pasted text, or file references during the last 7 days; categories overlap.",
       "blocked_on_query_table": [
         "H11",
         "H07",
@@ -1362,7 +1371,7 @@
       "implemented_recipes": [
         "human-action-phrases"
       ],
-      "current_preview": "Where do I report taking action? Your messages matching phrases such as \u2018I fixed\u2019 or \u2018I ran\u2019, grouped by conversation.",
+      "current_preview": "Where do I report taking action? Your messages matching phrases such as ‘I fixed’ or ‘I ran’, grouped by conversation.",
       "blocked_on_query_table": [
         "H07",
         "M02",
@@ -2024,7 +2033,7 @@
       "implemented_recipes": [
         "price-comparison"
       ],
-      "current_preview": "What would today\u2019s prices change? Historical API equivalent versus today's rates for the same recorded usage.",
+      "current_preview": "What would today’s prices change? Historical API equivalent versus today's rates for the same recorded usage.",
       "blocked_on_query_table": [
         "M06",
         "L04"
@@ -2410,7 +2419,7 @@
       "implemented_recipes": [
         "writing-hours"
       ],
-      "current_preview": "When am I writing to agents? Your words by local hourly interval, using this device\u2019s timezone.",
+      "current_preview": "When you work Human-written words by local clock hour over the last 7 days; includes all dates combined.",
       "blocked_on_query_table": [
         "H04",
         "H12"
@@ -3885,8 +3894,8 @@
       "id": "human-words",
       "category": "human",
       "idea": "human-01",
-      "title": "How much am I writing?",
-      "description": "Words classified as typed or dictated, day by day.",
+      "title": "{lastDays} of writing",
+      "description": "Human-written words sent during the last {days} days, grouped by the day they were sent.",
       "dataset": "writing_messages",
       "field": "sent_at",
       "unit": "words",
@@ -3927,7 +3936,7 @@
         ],
         "valueField": "card_typed_words",
         "subjects": "daily groups",
-        "action": "Explore daily comparison",
+        "action": "Explore daily word counts",
         "unit": "words",
         "coverMetric": {
           "id": "sum:typed_words:day",
@@ -3938,14 +3947,15 @@
           ],
           "label": "Your words per day"
         }
-      }
+      },
+      "action": "Explore daily word counts"
     },
     {
       "id": "explaining-repos",
       "category": "human",
       "idea": "human-02",
-      "title": "Where do I explain the most?",
-      "description": "Your typed words across repositories in this window.",
+      "title": "Words written per repository",
+      "description": "Human-written words over the last {days} days: seven largest repositories, with the rest combined.",
       "dataset": "writing_messages",
       "field": "sent_at",
       "unit": "words",
@@ -3993,7 +4003,7 @@
         ],
         "valueField": "card_typed_words",
         "subjects": "repositories",
-        "action": "Compare your writing",
+        "action": "See breakdown by repo",
         "unit": "words",
         "context": [
           {
@@ -4001,6 +4011,16 @@
             "label": "messages"
           }
         ]
+      },
+      "action": "See breakdown by repo",
+      "note": "Pie shares use the full human-word total; Other combines every repository beyond the seven named.",
+      "cover": {
+        "mode": "result",
+        "metricId": "card_typed_words",
+        "kind": "pie",
+        "maxGroups": 7,
+        "showOther": true,
+        "showLegend": true
       }
     },
     {
@@ -5190,7 +5210,7 @@
       "id": "price-comparison",
       "idea": "cost-04",
       "category": "cost",
-      "title": "What would today\u2019s prices change?",
+      "title": "What would today’s prices change?",
       "description": "Historical API equivalent versus today's rates for the same recorded usage.",
       "dataset": "usage",
       "field": "first_usage_at",
@@ -5602,8 +5622,8 @@
       "id": "human-word-mix",
       "idea": "human-01",
       "category": "human",
-      "title": "How much of my message text am I writing?",
-      "description": "Typed or dictated words as a share of retained message words, by repository.",
+      "title": "Authorship by repository",
+      "description": "Human-written share of retained user-message text over the last {days} days, across eight repositories.",
       "dataset": "writing_messages",
       "field": "sent_at",
       "unit": "words",
@@ -5680,7 +5700,7 @@
         ],
         "valueField": "card_rate",
         "subjects": "repositories",
-        "action": "Compare word authorship",
+        "action": "Explore authorship by repo",
         "unit": "percent",
         "having": [
           {
@@ -5695,7 +5715,15 @@
             "label": "your words"
           }
         ]
-      }
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "card_rate",
+        "kind": "bar-horizontal",
+        "maxGroups": 8,
+        "showOther": false
+      },
+      "action": "Explore authorship by repo"
     },
     {
       "id": "usage-work",
@@ -6440,7 +6468,8 @@
         "metricId": "card_count",
         "kind": "histogram"
       },
-      "note": "Counts messages with typed or dictated words, not agent exchanges or complete tasks. Conversations can be unfinished or cross the window boundary."
+      "note": "Counts messages with typed or dictated words, not agent exchanges or complete tasks. Conversations can be unfinished or cross the window boundary.",
+      "retired": true
     },
     {
       "dataset": "writing_messages",
@@ -6577,7 +6606,7 @@
       "idea": "human-06",
       "category": "human",
       "title": "Where do I report taking action?",
-      "description": "Your messages matching phrases such as \u2018I fixed\u2019 or \u2018I ran\u2019, grouped by conversation.",
+      "description": "Your messages matching phrases such as ‘I fixed’ or ‘I ran’, grouped by conversation.",
       "unit": "messages",
       "where": [
         {
@@ -6696,7 +6725,8 @@
           "card_title"
         ]
       },
-      "note": "Literal phrases in messages classified entirely as your words. Negations and quoted wording can still match; does not verify the action, connect a preceding obstacle or establish who finished the task."
+      "note": "Literal phrases in messages classified entirely as your words. Negations and quoted wording can still match; does not verify the action, connect a preceding obstacle or establish who finished the task.",
+      "retired": true
     },
     {
       "dataset": "writing_messages",
@@ -6704,104 +6734,37 @@
       "id": "human-example-phrases",
       "idea": "human-04",
       "category": "human",
-      "title": "Where am I supplying examples?",
-      "description": "Your messages with explicit example-introduction phrases, with conversation and repository reach.",
+      "title": "Supplied examples and context",
+      "description": "Human contributions containing images, pasted text, or file references during the last {days} days; categories overlap.",
       "unit": "messages",
       "where": [
         {
-          "field": "typed_words",
-          "op": ">",
-          "value": "0"
-        },
-        {
-          "field": "other_words",
-          "op": "=",
-          "value": "0"
-        },
-        {
-          "field": "conversation_id",
-          "op": "is_not_null",
-          "value": ""
-        },
-        {
           "any": [
             {
-              "field": "text",
-              "op": "contains",
-              "value": "for example"
+              "field": "typed_words",
+              "op": ">",
+              "value": "0"
             },
             {
-              "field": "text",
-              "op": "contains",
-              "value": "for instance"
+              "field": "pasted_words",
+              "op": ">",
+              "value": "0"
             },
             {
-              "field": "text",
-              "op": "contains",
-              "value": "here's an example"
-            },
-            {
-              "field": "text",
-              "op": "contains",
-              "value": "here is an example"
+              "field": "attachment_words",
+              "op": ">",
+              "value": "0"
             }
           ]
         }
       ],
-      "measures": [
-        {
-          "id": "human-example-matches",
-          "op": "count",
-          "groupBy": [
-            "repository_name"
-          ],
-          "label": "Example phrase matches"
-        }
-      ],
-      "exploration": {
-        "keys": [
-          "repository_name"
-        ],
-        "summaries": [
-          {
-            "id": "card_count",
-            "op": "count",
-            "label": "Matching messages"
-          },
-          {
-            "id": "card_conversation_id",
-            "op": "count_distinct",
-            "field": "conversation_id",
-            "label": "Conversations"
-          },
-          {
-            "id": "card_text",
-            "op": "row",
-            "field": "text",
-            "label": "Latest match"
-          }
-        ],
-        "valueField": "card_count",
-        "subjects": "repositories",
-        "action": "Read example phrase matches",
-        "unit": "messages",
-        "representative": {
-          "orderBy": [
-            {
-              "field": "sent_at",
-              "dir": "desc",
-              "nulls": "last"
-            }
-          ]
-        },
-        "context": [
-          {
-            "field": "card_conversation_id",
-            "label": "conversations"
-          }
-        ]
-      },
-      "note": "Literal phrases in messages classified entirely as your words. Opens candidates for inspection; does not extract examples, snippets, acceptance criteria or recurring example families."
+      "measures": [],
+      "note": "Counts observed supply formats, not literal example phrases. Categories overlap. Percentages use human messages/contributions, including context-only messages; no link to resulting code changes or quality is inferred.",
+      "humanStudy": "examples",
+      "action": "Inspect human contributions",
+      "days": [
+        7
+      ]
     },
     {
       "dataset": "skill_usages",
@@ -7700,7 +7663,8 @@
           }
         ]
       },
-      "note": "Period filters apply to the messages themselves. Work titles come from the latest matching message; words are classified typed/dictated words, not measured time or repeat corrections."
+      "note": "Period filters apply to the messages themselves. Work titles come from the latest matching message; words are classified typed/dictated words, not measured time or repeat corrections.",
+      "retired": true
     },
     {
       "dataset": "writing_messages",
@@ -7708,11 +7672,10 @@
       "id": "writing-hours",
       "idea": "rhythm-01",
       "category": "human",
-      "title": "When am I writing to agents?",
-      "description": "Your words by local hourly interval, using this device\u2019s timezone.",
+      "title": "When you work",
+      "description": "Human-written words by local clock hour over the last {days} days; includes all dates combined.",
       "unit": "words",
       "days": [
-        1,
         7
       ],
       "calendarTimezone": "local",
@@ -7758,7 +7721,581 @@
           }
         }
       ],
-      "note": "Timezone is captured from this device when opening or collecting the card. Uses typed/dictated words; automated-only messages are excluded. Open the view for the full timeline; activity is not measured productivity."
+      "note": "Uses the device’s timezone. All dates are combined into 24 clock-hour buckets. Inspect source messages for the full window.",
+      "humanStudy": "hours",
+      "action": "Explore writing times"
+    },
+    {
+      "dataset": "writing_messages",
+      "field": "sent_at",
+      "category": "human",
+      "idea": "human-01",
+      "unit": "words",
+      "where": [
+        {
+          "field": "typed_words",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "id": "human-word-total",
+      "title": "{period} writing volume over time",
+      "description": "Human-written words over each trailing {days}-day period, with 30 days of history for comparison.",
+      "measures": [
+        {
+          "id": "human_words",
+          "op": "sum",
+          "field": "typed_words",
+          "groupBy": [],
+          "label": "Your words",
+          "display": {
+            "kind": "value",
+            "format": {
+              "kind": "number",
+              "decimals": 0
+            }
+          }
+        },
+        {
+          "id": "human_messages",
+          "op": "count",
+          "groupBy": [],
+          "label": "Messages with your words",
+          "display": {
+            "kind": "value",
+            "format": {
+              "kind": "number",
+              "decimals": 0
+            }
+          }
+        },
+        {
+          "id": "human_conversations",
+          "op": "count_distinct",
+          "field": "conversation_id",
+          "groupBy": [],
+          "label": "Conversations with your words",
+          "display": {
+            "kind": "value",
+            "format": {
+              "kind": "number",
+              "decimals": 0
+            }
+          }
+        },
+        {
+          "id": "human_daily_words",
+          "op": "sum",
+          "field": "typed_words",
+          "groupBy": [
+            "day"
+          ],
+          "label": "Daily human-written words",
+          "display": {
+            "kind": "bar-vertical",
+            "xLabel": "Day sent",
+            "yLabel": "Human-written words"
+          }
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "human_words",
+        "kind": "value"
+      },
+      "note": "Sum of your words sent during this window. Only messages containing words classified as typed or dictated contribute. Pasted and automated words are excluded. Counts describe writing, not time or quality.",
+      "humanStudy": "volume",
+      "action": "Explore daily writing trends",
+      "days": [
+        7
+      ]
+    },
+    {
+      "dataset": "writing_messages",
+      "field": "sent_at",
+      "category": "human",
+      "idea": "human-01",
+      "unit": "words",
+      "where": [
+        {
+          "field": "typed_words",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "id": "human-words-per-message",
+      "title": "Words per message",
+      "description": "Average human-written words per message over each trailing {days}-day period; excludes messages without human writing.",
+      "measures": [
+        {
+          "id": "words_per_message",
+          "op": "count",
+          "expression": "SUM([typed_words])/NULLIF(COUNT(),0)",
+          "groupBy": [],
+          "label": "Words per message",
+          "display": {
+            "kind": "value",
+            "format": {
+              "kind": "number",
+              "decimals": 1
+            }
+          }
+        },
+        {
+          "id": "human_words",
+          "op": "sum",
+          "field": "typed_words",
+          "groupBy": [],
+          "label": "Your words",
+          "display": {
+            "kind": "value",
+            "format": {
+              "kind": "number",
+              "decimals": 0
+            }
+          }
+        },
+        {
+          "id": "human_messages",
+          "op": "count",
+          "groupBy": [],
+          "label": "Messages with your words",
+          "display": {
+            "kind": "value",
+            "format": {
+              "kind": "number",
+              "decimals": 0
+            }
+          }
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "words_per_message",
+        "kind": "value"
+      },
+      "note": "Denominator: messages containing at least one of your words; automated-only messages do not dilute the average. Only messages containing words classified as typed or dictated contribute. Pasted and automated words are excluded. Counts describe writing, not time or quality.",
+      "humanStudy": "message-average",
+      "action": "Inspect message lengths",
+      "days": [
+        7
+      ]
+    },
+    {
+      "dataset": "writing_messages",
+      "field": "sent_at",
+      "category": "human",
+      "idea": "human-01",
+      "unit": "words",
+      "where": [
+        {
+          "field": "typed_words",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "id": "human-words-per-conversation",
+      "title": "Words per conversation",
+      "description": "Average human-written words per conversation over each trailing {days}-day period, including conversations started earlier.",
+      "measures": [
+        {
+          "id": "words_per_conversation",
+          "op": "count",
+          "expression": "SUM([typed_words])/NULLIF(COUNT_DISTINCT([conversation_id]),0)",
+          "groupBy": [],
+          "label": "Words per conversation",
+          "display": {
+            "kind": "value",
+            "format": {
+              "kind": "number",
+              "decimals": 1
+            }
+          }
+        },
+        {
+          "id": "human_words",
+          "op": "sum",
+          "field": "typed_words",
+          "groupBy": [],
+          "label": "Your words",
+          "display": {
+            "kind": "value",
+            "format": {
+              "kind": "number",
+              "decimals": 0
+            }
+          }
+        },
+        {
+          "id": "human_conversations",
+          "op": "count_distinct",
+          "field": "conversation_id",
+          "groupBy": [],
+          "label": "Conversations with your words",
+          "display": {
+            "kind": "value",
+            "format": {
+              "kind": "number",
+              "decimals": 0
+            }
+          }
+        },
+        {
+          "id": "human_messages",
+          "op": "count",
+          "groupBy": [],
+          "label": "Messages with your words",
+          "display": {
+            "kind": "value",
+            "format": {
+              "kind": "number",
+              "decimals": 0
+            }
+          }
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "words_per_conversation",
+        "kind": "value"
+      },
+      "note": "Denominator: distinct conversations with your writing in this window, including conversations started earlier. This is not a lifetime conversation total. Only messages containing words classified as typed or dictated contribute. Pasted and automated words are excluded. Counts describe writing, not time or quality.",
+      "humanStudy": "conversation-average",
+      "action": "Explore conversation writing",
+      "days": [
+        7
+      ]
+    },
+    {
+      "dataset": "writing_messages",
+      "field": "sent_at",
+      "category": "human",
+      "idea": "human-01",
+      "unit": "words",
+      "where": [
+        {
+          "field": "typed_words",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "id": "human-words-per-work",
+      "title": "Words per workspace directory",
+      "description": "Average human-written words per workspace directory over trailing {days} days, combining conversations sharing that directory.",
+      "measures": [],
+      "humanStudy": "workspace-average",
+      "note": "Directory identity comes from the Library location joined through the message’s work ID. All conversations in the same repository and exact directory are combined. Missing mappings are excluded and disclosed. A work ID alone is not a workspace directory.",
+      "action": "Inspect contributing messages",
+      "days": [
+        7
+      ]
+    },
+    {
+      "dataset": "writing_messages",
+      "field": "sent_at",
+      "category": "human",
+      "idea": "human-01",
+      "unit": "words",
+      "where": [
+        {
+          "field": "typed_words",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "id": "human-repo-conversation-depth",
+      "title": "Conversation words by repo",
+      "description": "Average human-written words per conversation in the last {days} days, compared across repositories with sample counts.",
+      "measures": [],
+      "exploration": {
+        "keys": [
+          "repository_name"
+        ],
+        "summaries": [
+          {
+            "id": "words_per_conversation",
+            "op": "formula",
+            "expression": "SUM([typed_words])/NULLIF(COUNT_DISTINCT([conversation_id]),0)",
+            "label": "Words per conversation"
+          },
+          {
+            "id": "human_words",
+            "op": "sum",
+            "field": "typed_words",
+            "label": "Your words"
+          },
+          {
+            "id": "human_conversations",
+            "op": "count_distinct",
+            "field": "conversation_id",
+            "label": "Conversations with your words"
+          },
+          {
+            "id": "human_messages",
+            "op": "count",
+            "label": "Messages with your words"
+          }
+        ],
+        "valueField": "words_per_conversation",
+        "unit": "words",
+        "subjects": "repositories",
+        "action": "Compare repository averages",
+        "context": [
+          {
+            "field": "human_conversations",
+            "label": "conversations"
+          }
+        ]
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "words_per_conversation",
+        "kind": "bar-horizontal",
+        "maxGroups": 5,
+        "showOther": false
+      },
+      "note": "Divide each repository's word total by its distinct conversations with your writing. This is a weighted ratio, not a mean of message averages. Small samples remain visible in the table. Only messages containing words classified as typed or dictated contribute. Pasted and automated words are excluded. Counts describe writing, not time or quality.",
+      "action": "Compare repository averages"
+    },
+    {
+      "dataset": "writing_messages",
+      "field": "sent_at",
+      "category": "human",
+      "idea": "human-01",
+      "unit": "messages",
+      "where": [
+        {
+          "field": "typed_words",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "id": "human-conversation-messages",
+      "title": "Which conversations need more of my input?",
+      "description": "Conversations ranked by messages you wrote, alongside words and average message length.",
+      "measures": [],
+      "exploration": {
+        "keys": [
+          "conversation_id"
+        ],
+        "summaries": [
+          {
+            "id": "human_messages",
+            "op": "count",
+            "label": "Messages with your words"
+          },
+          {
+            "id": "human_words",
+            "op": "sum",
+            "field": "typed_words",
+            "label": "Your words"
+          },
+          {
+            "id": "words_per_message",
+            "op": "formula",
+            "expression": "SUM([typed_words])/NULLIF(COUNT(),0)",
+            "label": "Words per message"
+          },
+          {
+            "id": "human_title",
+            "op": "row",
+            "field": "title",
+            "label": "Work"
+          },
+          {
+            "id": "human_repository",
+            "op": "row",
+            "field": "repository_name",
+            "label": "Repository"
+          }
+        ],
+        "representative": {
+          "orderBy": [
+            {
+              "field": "sent_at",
+              "dir": "desc",
+              "nulls": "last"
+            }
+          ]
+        },
+        "valueField": "human_messages",
+        "unit": "messages",
+        "subjects": "conversations",
+        "action": "Read the conversations",
+        "labelFields": [
+          "human_title",
+          "human_repository"
+        ],
+        "context": [
+          {
+            "field": "human_words",
+            "label": "words"
+          }
+        ]
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "human_messages",
+        "kind": "bar-horizontal",
+        "maxGroups": 5
+      },
+      "note": "Count your messages per conversation during this window. Several conversations can share a work title; they remain separate. More messages can mean collaboration or iteration, not necessarily corrections. Only messages containing words classified as typed or dictated contribute. Pasted and automated words are excluded. Counts describe writing, not time or quality.",
+      "retired": true
+    },
+    {
+      "dataset": "writing_messages",
+      "field": "sent_at",
+      "category": "human",
+      "idea": "human-01",
+      "unit": "words",
+      "where": [
+        {
+          "field": "typed_words",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "id": "human-message-lengths",
+      "title": "Conversation size profile",
+      "description": "Conversations grouped by human-written word totals over the last {days} days; each bar shows a size band.",
+      "measures": [
+        {
+          "id": "conversation_words",
+          "op": "sum",
+          "field": "typed_words",
+          "groupBy": [
+            "conversation_id"
+          ],
+          "label": "Your words per conversation"
+        }
+      ],
+      "exploration": {
+        "keys": [
+          "conversation_id"
+        ],
+        "summaries": [
+          {
+            "id": "human_words",
+            "op": "sum",
+            "field": "typed_words",
+            "label": "Your words"
+          },
+          {
+            "id": "human_messages",
+            "op": "count",
+            "label": "Messages with your words"
+          },
+          {
+            "id": "human_title",
+            "op": "row",
+            "field": "title",
+            "label": "Work"
+          }
+        ],
+        "valueField": "human_words",
+        "subjects": "conversations",
+        "action": "Compare conversation totals",
+        "unit": "words",
+        "representative": {
+          "orderBy": [
+            {
+              "field": "sent_at",
+              "dir": "desc",
+              "nulls": "last"
+            }
+          ]
+        },
+        "coverMetric": {
+          "id": "conversation_word_distribution",
+          "op": "sum",
+          "field": "human_words",
+          "groupBy": [],
+          "label": "Words per conversation",
+          "distribution": {
+            "kind": "histogram",
+            "input": "[human_words]",
+            "bins": 10
+          },
+          "display": {
+            "kind": "histogram",
+            "xLabel": "Your words in a conversation",
+            "yLabel": "Conversations"
+          }
+        }
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "human_words",
+        "kind": "histogram"
+      },
+      "note": "Each sample is a conversation's total typed/dictated words during the window. Conversations started earlier are included; this is not a lifetime conversation length. Only messages containing words classified as typed or dictated contribute. Pasted and automated words are excluded. Counts describe writing, not time or quality.",
+      "action": "Compare conversation totals",
+      "humanStudy": "conversation-lengths",
+      "days": [
+        7
+      ]
+    },
+    {
+      "dataset": "writing_messages",
+      "field": "sent_at",
+      "category": "human",
+      "idea": "human-01",
+      "unit": "percent",
+      "where": [
+        {
+          "any": [
+            {
+              "field": "typed_words",
+              "op": ">",
+              "value": "0"
+            },
+            {
+              "field": "pasted_words",
+              "op": ">",
+              "value": "0"
+            },
+            {
+              "field": "attachment_words",
+              "op": ">",
+              "value": "0"
+            }
+          ]
+        }
+      ],
+      "id": "human-contribution-patterns",
+      "title": "Human contribution patterns",
+      "description": "Brief continuations, concrete feedback cues, supplied context, and other writing.",
+      "measures": [],
+      "humanStudy": "contribution-patterns",
+      "note": "Mutually exclusive message categories based on visible human-authored evidence. A brief or unclassified message is not necessarily low value. No quality score is inferred.",
+      "retired": true,
+      "days": [
+        7
+      ]
+    },
+    {
+      "dataset": "writing_messages",
+      "field": "sent_at",
+      "category": "human",
+      "idea": "human-01",
+      "unit": "percent",
+      "where": [
+        {
+          "field": "typed_words",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "id": "human-specific-feedback",
+      "title": "Feedback with concrete detail",
+      "description": "Share of assessed human-written messages with concrete feedback cues over each trailing {days}-day period.",
+      "measures": [],
+      "humanStudy": "specific-feedback",
+      "note": "Share of fully visible authored messages matching explicit feedback and detail cues. Inspect the linked excerpts to judge whether the rule captures useful feedback.",
+      "action": "Read source messages",
+      "days": [
+        7
+      ]
     }
   ],
   "query_table_requests": [
@@ -7809,7 +8346,7 @@
       "confidence": "high",
       "title": "Reduce grouped results in a second explicit stage",
       "gap": "A bounded source grouping creates typed rows, then result metrics reduce them. Conversation-writing charts histogram windowed conversation counts.",
-      "proposal": "Support a bounded group \u2192 typed result relation \u2192 project/filter \u2192 second reduction pipeline. Example: sum usage per conversation, then histogram those totals by repository. A host-supplied derived dataset remains an alternative.",
+      "proposal": "Support a bounded group → typed result relation → project/filter → second reduction pipeline. Example: sum usage per conversation, then histogram those totals by repository. A host-supplied derived dataset remains an alternative.",
       "examples": [
         "Cost per task distributions",
         "Conversation exchange distributions",
@@ -8003,7 +8540,7 @@
       "confidence": "high",
       "title": "Grouped time series and heatmap presentation",
       "gap": "Line charts are one chronological series; two-key output has a pivot/table route, but no explicit heatmap or shared stacked-series chart contract.",
-      "proposal": "Support time \u00d7 category series with explicit missing/zero semantics, stacked or grouped marks, stable colors and an exact remainder; add a bounded two-key heatmap. Share full and compact renderers.",
+      "proposal": "Support time × category series with explicit missing/zero semantics, stacked or grouped marks, stable colors and an exact remainder; add a bounded two-key heatmap. Share full and compact renderers.",
       "examples": [
         "Usage by repository/model over time",
         "Writing by local hour",
@@ -8296,5 +8833,26 @@
       "observed_variant_shipped": 41
     },
     "scope": "All existing schema fields, SQL bindings, aggregate capabilities and retained data adapters reviewed. Narrow observed variants keep the original intended concept and its remaining evidence requirements."
+  },
+  "human_word_review": {
+    "version": 3,
+    "path": "/home?cards=human-review",
+    "active_cards": 12,
+    "retired": [
+      "conversation-writing",
+      "human-action-phrases",
+      "work-writing",
+      "human-conversation-messages",
+      "human-contribution-patterns"
+    ],
+    "description": "Concise metric names, explicit-window human-writing descriptions, destination-specific CTAs, labelled trend extrema, fixed conversation size bands, and a concrete-feedback percentage trend.",
+    "theses": [
+      "Writing volume in context",
+      "Explanation depth and its trend",
+      "Distribution, authorship, and timing",
+      "Evidence of substantive contribution"
+    ],
+    "denominators": "Example/context percentages use assessed human contributions, including context-only messages. Workspace comparisons use contributions in each mapped repository/directory; no attribution to code changes is inferred.",
+    "draft_storage_key": "pharos-human-word-review-v3"
   }
 }

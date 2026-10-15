@@ -246,8 +246,8 @@ test("conversation histogram reduces windowed message counts, not individual wor
   assert.deepEqual(availableChartKinds(recipe), ["histogram"]);
 });
 
-test("positive-feedback and action/example candidates exclude nonhuman and mixed text", () => {
-  for (const [id, text] of [["positive-feedback", "Great job, that worked"], ["human-action-phrases", "I fixed the parser"], ["human-example-phrases", "For example, use a small fixture"]]) {
+test("legacy positive-feedback and reported-action candidates exclude nonhuman and mixed text", () => {
+  for (const [id, text] of [["positive-feedback", "Great job, that worked"], ["human-action-phrases", "I fixed the parser"]]) {
     const base = { ...recentMessage, text, conversation_id: "a" };
     const { result } = executeCard(id, [
       { ...base, id: "human" },

@@ -12,7 +12,7 @@ function overrides(): Record<string, CardTemplateEdit> {
 }
 export function cardTemplates(): QueryRecipe[] {
   const saved = overrides();
-  return queryRecipes.map(recipe => {
+  return queryRecipes.filter(recipe => !recipe.retired).map(recipe => {
     const edit = saved[recipe.id];
     return edit && typeof edit.title === "string" && typeof edit.description === "string" && [1, 7, 30, 90].includes(edit.days)
       ? { ...recipe, title: edit.title, description: edit.description, days: [edit.days], cover: edit.cover } : recipe;

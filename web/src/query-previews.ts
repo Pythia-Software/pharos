@@ -2,10 +2,11 @@ import { formatMetricOutput } from "@pythia-software/query-table-ui";
 import { parseRelativeDuration, createGroupingModel, sourceExecutionSchema, toQueryRequestV3, validateQueryResultV3, validateComputedColumn, toMetricQuery, toServerQueryV2, type QueryCapabilitiesV3, type QueryResultV3, type ComputedColumn, type AggregationClause, type AggregationResult, type AggregationResultEntry, type ComputedExecution, type FieldSchema, type MetricCapabilities, type MetricQuery, type QueryState } from "@pythia-software/query-table-core";
 import { categoryForQuery, queryCategories } from "./query-categories";
 import { foldSeries, type ChartBucket, type ChartSeries } from "./chart-series";
-import { resolveRollingQuery, type QueryDataset, type RollingWindow } from "./query-links";
+import { resolveRollingQuery, rollingQueryMatches, type QueryDataset, type RollingWindow } from "./query-links";
 import type { QueryRecipe } from "./curiosity-data";
 import { readTextSearch, textFindParameters } from "./text-search-model";
 import { cardCoverQuery, type CardCover } from "./card-cover";
+import { createHumanStudyLoader, clearHumanStudyCache, type HumanStudyPreview } from "./human-study";
 
 export type PreviewMetric = { clause: AggregationClause; result: AggregationResultEntry };
 export type QueryPreview = {
@@ -18,6 +19,7 @@ export type QueryPreview = {
   metrics?: PreviewMetric[]; fields?: FieldSchema["fields"]; coverMetricId?: string;
   ranking?: { label: string; value: number; color: string }[];
   buckets?: ChartBucket[]; series?: ChartSeries[]; excerpt?: string;
+  study?: HumanStudyPreview;
 };
 type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean };
 export type PreviewJob = { id: string; dataset: QueryDataset; query: QueryState; schema: FieldSchema; options?: PreviewOptions };
@@ -25,7 +27,7 @@ type Context = { schema: FieldSchema; execution: ComputedExecution; capabilities
 type Payload = { now?: number; metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number; sourceTotal?: number; find?: { search?: { complete: boolean } } };
 type Cached = { at: number; payload: Payload; schema: FieldSchema };
 const cache = new Map<string, Cached>();
-export function clearPreviewCache() { cache.clear(); }
+export function clearPreviewCache() { cache.clear(); clearHumanStudyCache(); }
 
 export function formatPreviewValue(value: number, unit: string): string {
   if (unit === "bytes") return value >= 1048576 ? `${(value / 1048576).toFixed(1)} MiB` : value >= 1024 ? `${(value / 1024).toFixed(1)} KiB` : `${value} B`;
@@ -96,7 +98,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     }));
     return { state: total > 0 ? "ready" : "empty", total,
       summary: `${formatPreviewValue(total, "")} ${total === 1 ? "group" : cover?.subjects ?? "groups"}`,
-      headline: column?.label ?? "Grouped results", action: cover?.action ?? "Explore grouped results", insights,
+      headline: column?.label ?? "Grouped results", action: recipe?.action ?? cover?.action ?? "Explore grouped results", insights,
       note: [recipe?.note, searchNote].filter(Boolean).join(" · ") || undefined,
     };
   }
@@ -184,7 +186,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   if (ready && additive && !limited && !preview.groupSummary && numeric.length === values.length && !result.buckets.some(bucket => bucket.error || bucket.yError) && Number.isFinite(total)) {
     preview.headlineMetric = { value: clause.display?.format ? formatMetricOutput(total, clause.display.format).text : formatPreviewValue(total, unit), unit: unit && !["USD", "ms"].includes(unit) ? unit : "", ...(unit === "USD" ? { label: "API equivalent" } : {}) };
   }
-  preview.action = recipe?.exploration?.action;
+  preview.action = recipe?.action ?? recipe?.exploration?.action;
   return preview;
 }
 
@@ -213,8 +215,21 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     return pending;
   }
   const clock = new Date();
+  const studyJobs = jobs.filter(job => job.dataset === "writing_messages" && (!job.query.grouping || job.options?.recipe?.humanStudy === "conversation-lengths" && JSON.stringify(job.query.grouping.keys) === '["conversation_id"]' && JSON.stringify(job.query.grouping.summaries) === JSON.stringify(job.options.recipe.exploration?.summaries) && !job.query.where.length) && job.options?.recipe?.humanStudy && job.options.window?.mode === "relative" && rollingQueryMatches(job.query, job.options.window) && !searchContext(job)
+    && (!job.options.coverMetricId || job.options.coverMetricId === job.options.recipe.cover?.metricId)
+    && (!job.options.cover || job.options.cover.metricId === job.options.recipe.cover?.metricId));
+  const studies = new Set(studyJobs);
+  const studyLoader = studyJobs.length ? createHumanStudyLoader(clock.getTime(), studyJobs[0].schema, signal) : undefined;
+  const studyWork = Promise.all(studyJobs.map(async job => {
+    try {
+      const study = await studyLoader!(job.options!.recipe!.humanStudy!, job.query, job.options!.window!.days);
+      const ready = study.value !== undefined || study.rows?.some(row => row.count ? row.count > 0 : row.value > 0);
+      if (!signal?.aborted) publish(job.id, { state: ready ? "ready" : "empty", total: study.value ?? 0, summary: study.sampleLabel, note: [job.options!.recipe!.note, study.detail].filter(Boolean).join(" · "), action: job.options!.recipe!.action ?? "Inspect source messages", study });
+    } catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
+  }));
   const resolved: { job: PreviewJob; query: QueryState; search: string }[] = [];
   for (const original of jobs) {
+    if (studies.has(original)) continue;
     let job = original;
     try {
       if (original.options?.recipe && (original.query.grouping || original.options.cover)) {
@@ -306,7 +321,7 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
   }
   let cursor = 0;
   async function work() { while (cursor < tasks.length && !signal?.aborted) await run(tasks[cursor++]); }
-  await Promise.all([work(), work(), work()]);
+  await Promise.all([work(), work(), work(), studyWork]);
 }
 
 export async function loadQueryPreview(dataset: QueryDataset, query: QueryState, schema: FieldSchema, options: PreviewOptions = {}, signal?: AbortSignal): Promise<QueryPreview> {
