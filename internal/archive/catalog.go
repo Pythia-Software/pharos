@@ -29,6 +29,7 @@ type Catalog struct {
 	find               libraryFindCache
 	transcripts        transcriptFindCache
 	derived            derivedCache
+	queryCounts        queryCountCache
 	// quietVersion and warmVersion are the catalog versions warmCaches last
 	// saw and warmed; only the Library maintenance loop uses them.
 	quietVersion, warmVersion int64
@@ -289,6 +290,15 @@ func (c *Catalog) Initialize() error {
 			return err
 		}
 	}
+	// Columns such as effort are added above when opening a legacy catalog.
+	if _, err := c.DB.Exec(`CREATE INDEX IF NOT EXISTS tool_calls_analytics_time_idx
+ ON tool_calls(started_at DESC,workspace_id,provider,tool_name,tool_category,model,effort,duration_ms,
+ result_tokens,carried_tokens,output_tokens,parallel_count,carried_requests,status,error_type,id);
+ CREATE INDEX IF NOT EXISTS tool_calls_analytics_idx
+ ON tool_calls(workspace_id,provider,tool_name,tool_category,model,effort,duration_ms,
+ result_tokens,carried_tokens,output_tokens,parallel_count,carried_requests,status,error_type,id,started_at)`); err != nil {
+		return err
+	}
 	// Holds every column the Library's rows read (libraryWorkspaceFields), so
 	// building them reads this, not the workspace rows, whose purpose and
 	// outcome text spills onto overflow pages ahead of the later columns.
@@ -438,6 +448,9 @@ func (c *Catalog) Initialize() error {
 	}
 	if err := c.ensureQueryCacheGeneration(); err != nil {
 		return fmt.Errorf("initialize query cache invalidation: %w", err)
+	}
+	if err := c.ensureQueryPlannerStatistics(context.Background()); err != nil {
+		return fmt.Errorf("initialize query planner statistics: %w", err)
 	}
 	// Last, so a query open skips Initialize only after all of it succeeded.
 	return c.recordInitializedBuild()

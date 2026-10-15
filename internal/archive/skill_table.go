@@ -27,6 +27,14 @@ var skillUsageDataset = sqlDataset{
 		LEFT JOIN tool_calls t ON t.id=s.tool_call_id LEFT JOIN agent_sessions a ON a.id=s.agent_session_id`,
 	base:    "s.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)",
 	lookups: map[string]bool{"id": true, "conversation_id": true, "workspace_id": true, "tool_call_id": true},
+	optionalJoins: map[string]string{
+		"r": " LEFT JOIN repositories r ON r.id=w.repository_id",
+		"m": "LEFT JOIN messages m ON m.id=s.evidence_message_id",
+		"t": "LEFT JOIN tool_calls t ON t.id=s.tool_call_id",
+		"a": " LEFT JOIN agent_sessions a ON a.id=s.agent_session_id",
+	},
+	pageFrom:    "FROM skill_usages s",
+	pageIndexes: map[string]string{"created_at": "skill_usages_page_idx"},
 	columns: map[string]string{
 		"id": "s.id", "workspace_id": "s.workspace_id", "conversation_id": "s.conversation_id", "tool_call_id": "s.tool_call_id",
 		"evidence_message_id": "s.evidence_message_id", "body_message_id": "s.body_message_id",
