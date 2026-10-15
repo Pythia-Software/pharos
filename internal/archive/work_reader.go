@@ -2,6 +2,7 @@ package archive
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -42,10 +43,6 @@ func (c *Catalog) WorkOverview(id string) (map[string]any, error) {
 	result, err := c.workDetail(id, false)
 	if err != nil || result == nil {
 		return result, err
-	}
-	// The page does not show these; metric_ledger alone can be megabytes.
-	for _, key := range []string{"agent_sessions", "metric_ledger", "sightings"} {
-		delete(result, key)
 	}
 	for _, conversation := range result["conversations"].([]map[string]any) {
 		delete(conversation, "message_access")
@@ -139,27 +136,48 @@ func (c *Catalog) workConversation(workspaceID, conversationID string, clip bool
 		return nil, err
 	}
 	conversation := rows[0]
-	messages, err := queryMaps(c.DB, "SELECT "+readerMessageColumns+" FROM messages WHERE conversation_id=? ORDER BY source_order IS NULL,source_order,created_at,id", conversationID)
-	if err != nil {
-		return nil, err
-	}
-	// Authorship spans index into the original text, and token accounting
-	// reads whole records, so both run before any body is shortened.
-	if err := c.attachAuthorship(conversationID, messages); err != nil {
-		return nil, err
-	}
-	records := make([]MessageRecord, 0, len(messages))
-	for _, m := range messages {
-		records = append(records, MessageRecord{
-			NativeID: firstString(m["native_id"]), Role: firstString(m["role"]), Kind: firstString(m["kind"]),
-			Text: firstString(m["text"]), RawText: firstString(m["raw_text"]), CreatedAt: firstString(m["created_at"]),
-			ParentNativeID: firstString(m["parent_native_id"]), CallID: firstString(m["call_id"]),
-		})
-	}
-	conversation["token_usage"] = conversationTokenCounts(records)
 	sessions, err := queryMaps(c.DB, `SELECT * FROM agent_sessions WHERE workspace_id=? AND conversation_id=? AND usage_status<>'in-child-conversation'`, workspaceID, conversationID)
 	if err != nil {
 		return nil, err
+	}
+	attach, err := c.messageAuthorshipAttacher(conversationID)
+	if err != nil {
+		return nil, err
+	}
+	// With ledger usage, whole bodies are only needed while attaching authorship
+	// and clipping a row. Do that before retaining it, rather than keeping every
+	// original output alive until the entire conversation has been read.
+	previewRows := clip && len(sessions) > 0
+	prepare := func(message map[string]any) {
+		attach(message)
+		if previewRows {
+			clipReaderMessage(message)
+		}
+	}
+	messages, err := queryMapsTransformContext(context.Background(), c.DB, "SELECT "+readerMessageColumns+",source_order FROM messages WHERE conversation_id=?", prepare, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	// Sort row references here. SQLite's ORDER BY otherwise copies every body
+	// into a temporary B-tree, spilling hundreds of MB for long conversations.
+	sort.Slice(messages, func(i, j int) bool {
+		a, b := messages[i], messages[j]
+		if (a["source_order"] == nil) != (b["source_order"] == nil) {
+			return a["source_order"] != nil
+		}
+		if orderA, orderB := integer(a["source_order"]), integer(b["source_order"]); orderA != orderB {
+			return orderA < orderB
+		}
+		if (a["created_at"] == nil) != (b["created_at"] == nil) {
+			return a["created_at"] == nil
+		}
+		if at, bt := asString(a["created_at"]), asString(b["created_at"]); at != bt {
+			return at < bt
+		}
+		return asString(a["id"]) < asString(b["id"])
+	})
+	for _, message := range messages {
+		delete(message, "source_order")
 	}
 	if len(sessions) > 0 {
 		usage := tokenCounts{}
@@ -169,8 +187,20 @@ func (c *Catalog) workConversation(workspaceID, conversationID string, clip bool
 			}
 		}
 		conversation["token_usage"] = usage
+	} else {
+		// The ledger is authoritative when present. Reparsing hundreds of MB
+		// of transcript JSON only to overwrite its totals delays the reader.
+		records := make([]MessageRecord, 0, len(messages))
+		for _, m := range messages {
+			records = append(records, MessageRecord{
+				NativeID: firstString(m["native_id"]), Role: firstString(m["role"]), Kind: firstString(m["kind"]),
+				Text: firstString(m["text"]), RawText: firstString(m["raw_text"]), CreatedAt: firstString(m["created_at"]),
+				ParentNativeID: firstString(m["parent_native_id"]), CallID: firstString(m["call_id"]),
+			})
+		}
+		conversation["token_usage"] = conversationTokenCounts(records)
 	}
-	if clip {
+	if clip && !previewRows {
 		for _, message := range messages {
 			clipReaderMessage(message)
 		}
@@ -192,9 +222,12 @@ func (c *Catalog) MessageOriginal(id string) (map[string]any, error) {
 func clipReaderMessage(message map[string]any) {
 	text, raw := firstString(message["text"]), firstString(message["raw_text"])
 	textClipped := false
-	if kind := firstString(message["kind"]); readerClippedKinds[kind] && !readerReinterprets(kind, text) {
-		if clipped, ok := clipReaderText(text); ok {
-			message["text"], message["text_bytes"], textClipped = clipped, len(text), true
+	if kind := firstString(message["kind"]); readerClippedKinds[kind] && len(text) > readerBodyBytes {
+		// Decode once for both classification and clipping. A single tool
+		// result can contain hundreds of MB of JSON string content.
+		value := readerJSONBody(text)
+		if !readerReinterprets(kind, value) {
+			message["text"], message["text_bytes"], textClipped = clipReaderBody(text, value), len(text), true
 		}
 	}
 	switch {
@@ -219,18 +252,7 @@ func clipReaderMessage(message map[string]any) {
 // normalizeMessages in ui.py: provider envelopes with text/tool blocks (split
 // for every kind but results and errors), and Codex function calls,
 // messages, and todo lists.
-func readerReinterprets(kind, text string) bool {
-	if len(text) <= readerBodyBytes {
-		return false
-	}
-	trimmed := strings.TrimSpace(text)
-	if !strings.HasPrefix(trimmed, "{") && !strings.HasPrefix(trimmed, "[") {
-		return false
-	}
-	var value any
-	if json.Unmarshal([]byte(trimmed), &value) != nil {
-		return false
-	}
+func readerReinterprets(kind string, value any) bool {
 	if object, ok := value.(map[string]any); ok {
 		if payload, ok := object["payload"].(map[string]any); ok {
 			value = payload
@@ -270,24 +292,37 @@ func clipReaderText(text string) (string, bool) {
 	if len(text) <= readerBodyBytes {
 		return text, false
 	}
+	return clipReaderBody(text, readerJSONBody(text)), true
+}
+
+// readerJSONBody returns one complete JSON object/array, keeping numbers exact.
+// Invalid JSON and plain text use the reader's ordinary text clipping instead.
+func readerJSONBody(text string) any {
 	trimmed := strings.TrimSpace(text)
 	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
 		decoder := json.NewDecoder(strings.NewReader(trimmed))
 		decoder.UseNumber()
 		var value any
 		if decoder.Decode(&value) == nil && errors.Is(decoder.Decode(new(any)), io.EOF) {
-			var encoded []byte
-			for _, limit := range []int{readerLeafRunes, readerTightLeafRunes} {
-				value = clipJSONStrings(value, "", limit)
-				encoded = marshalReaderJSON(value)
-				if len(encoded) <= 4*readerBodyBytes {
-					break
-				}
-			}
-			return string(encoded), true
+			return value
 		}
 	}
-	return clipRunes(text, readerBodyBytes) + "…", true
+	return nil
+}
+
+func clipReaderBody(text string, value any) string {
+	if value != nil {
+		var encoded []byte
+		for _, limit := range []int{readerLeafRunes, readerTightLeafRunes} {
+			value = clipJSONStrings(value, "", limit)
+			encoded = marshalReaderJSON(value)
+			if len(encoded) <= 4*readerBodyBytes {
+				break
+			}
+		}
+		return string(encoded)
+	}
+	return clipRunes(text, readerBodyBytes) + "…"
 }
 
 func clipJSONStrings(value any, key string, limit int) any {
@@ -296,7 +331,9 @@ func clipJSONStrings(value any, key string, limit int) any {
 		if key == "diff" || key == "patch" {
 			limit = readerDiffRunes
 		}
-		if utf8.RuneCountInString(typed) > limit {
+		// A string longer than four bytes per allowed rune cannot fit.
+		// Avoid scanning multi-megabyte output just to discard its tail.
+		if len(typed) > limit*utf8.UTFMax || len(typed) > limit && utf8.RuneCountInString(typed) > limit {
 			return clipRunes(typed, limit) + "…"
 		}
 		return typed

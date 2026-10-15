@@ -709,6 +709,18 @@ async function search(){const f=new FormData($('#search')),p=new URLSearchParams
 if($('#search'))$('#search').onsubmit=e=>{e.preventDefault();search()};
 function timeLabel(value){if(!value)return'Time unavailable';const date=new Date(value);return Number.isNaN(date.getTime())?value:date.toLocaleString([], {dateStyle:'medium',timeStyle:'short'})}
 function parsedJSON(text){if(typeof text!=='string')return null;const trimmed=text.trim();if(!trimmed||(!trimmed.startsWith('{')&&!trimmed.startsWith('[')))return null;try{return JSON.parse(trimmed)}catch{return null}}
+// Keep parsed bodies with their message, rather than repeatedly decoding them
+// for normalization, tokens, roots, filters and tool summaries. Comparing the
+// source string also invalidates the cache when loadOriginal replaces a preview.
+const messageJSONCache=new WeakMap();
+function messageJSON(message,raw=false){
+  if(!message)return null;
+  let cache=messageJSONCache.get(message);if(!cache){cache={};messageJSONCache.set(message,cache)}
+  const text=raw?message.raw_text||message.text:message.text,key=raw?'raw':'body',other=raw?'body':'raw';
+  if(cache[key]&&cache[key].text===text)return cache[key].value;
+  const value=cache[other]&&cache[other].text===text?cache[other].value:parsedJSON(text);
+  cache[key]={text,value};return value;
+}
 function jsonShape(value){if(Array.isArray(value))return`Array · ${value.length} item${value.length===1?'':'s'}`;if(value&&typeof value==='object')return`Object · ${Object.keys(value).length} field${Object.keys(value).length===1?'':'s'}`;return typeof value}
 function structuredSummary(value,label){if(!value||typeof value!=='object'||Array.isArray(value))return`${label?label+' · ':''}${jsonShape(value)}`;const blocks=Array.isArray(value.message?.content)?value.message.content:Array.isArray(value.content)?value.content:[],block=blocks[0];if(block?.type==='tool_use')return`Tool call · ${block.name||'Unknown tool'}`;if(block?.type==='tool_result')return`Tool result${block.is_error?' · error':''}`;if(block?.type==='text')return`${value.message?.role==='user'?'User':'Agent'} message`;if(value.type==='result')return`Run result${value.subtype?' · '+value.subtype:''}`;if(value.type==='error')return'Run error';if(value.type==='system')return`System event${value.subtype?' · '+value.subtype:''}`;if(value.tool||value.name)return`Tool call · ${value.tool||value.name}`;return`${label?label+' · ':''}${jsonShape(value)}`}
 function structuredPresentation(value){if(!value||typeof value!=='object'||Array.isArray(value))return null;const blocks=Array.isArray(value.message?.content)?value.message.content:Array.isArray(value.content)?value.content:[],block=blocks[0];if(block?.type==='tool_use')return{summary:`Tool call · ${block.name||'Unknown tool'}`,body:block.input||{}};if(block?.type==='tool_result')return{summary:`Tool result${block.is_error?' · error':''}`,body:{content:block.content,is_error:Boolean(block.is_error),...(value.tool_use_result!==undefined?{details:value.tool_use_result}:{})}};if(value.tool||value.name)return{summary:`Tool call · ${value.tool||value.name}`,body:value.input??value.arguments??value};return null}
@@ -716,10 +728,10 @@ function jsonTree(value,label,summaryOverride=''){if(value===null||typeof value!
 function commonEventText(value){if(!value||typeof value!=='object'||Array.isArray(value))return'';const message=value.message,blocks=Array.isArray(message?.content)?message.content:Array.isArray(value.content)?value.content:[],texts=blocks.filter(block=>block&&['text','input_text','output_text'].includes(block.type)&&typeof block.text==='string').map(block=>block.text);if(texts.length)return texts.join('\n\n');if(typeof message==='string')return message;if(typeof message?.content==='string')return message.content;if(typeof value.text==='string')return value.text;if(typeof value.output_text==='string')return value.output_text;if(['agent_message','user_message','message'].includes(value.type)&&typeof value.content==='string')return value.content;return''}
 function contentView(text){const structured=parsedJSON(text);if(structured!==null){const readable=commonEventText(structured);if(readable){const group=node('div','unwrapped-event');group.append(node('div','json-value',readable));const raw=node('details','raw-event'),summary=node('summary','','Raw event');raw.append(summary,jsonTree(structured,'JSON'));group.append(raw);return group}const presentation=structuredPresentation(structured);return presentation?jsonTree(presentation.body,'',presentation.summary):jsonTree(structured,'JSON')}const chunks=typeof text==='string'?text.split(/\n\n+/):[];if(chunks.length>1&&chunks.every(chunk=>parsedJSON(chunk)!==null)){const group=node('div','json-tree');chunks.forEach((chunk,index)=>group.append(jsonTree(parsedJSON(chunk),`JSON ${index+1}`)));return group}return node('div','json-value',text)}
 function messageSearch(message){return`${message.role} ${message.kind} ${message.text}`.toLowerCase()}
-function toolIdentity(message){const value=parsedJSON(message.text);return value&&typeof value==='object'&&!Array.isArray(value)?String(value.tool||value.name||''):''}
+function toolIdentity(message){const value=messageJSON(message);return value&&typeof value==='object'&&!Array.isArray(value)?String(value.tool||value.name||''):''}
 function shortText(value,limit=150){const text=String(value??'').replace(/\s+/g,' ').trim();return text.length>limit?text.slice(0,limit-1)+'…':text}
 function humanize(value){return String(value||'').replace(/^mcp__[^_]+__/,'').replace(/[_-]+/g,' ').replace(/\b\w/g,letter=>letter.toUpperCase())}
-function displayText(message){const value=parsedJSON(message?.text);return commonEventText(value)||(value?eventDescription(value):String(message?.text??''))}
+function displayText(message){const value=messageJSON(message);return commonEventText(value)||(value?eventDescription(value):String(message?.text??''))}
 function eventDescription(value){if(Array.isArray(value))return `${value.length} recorded items`;if(!value||typeof value!=='object')return String(value??'');return shortText([value.type||value.kind||'Recorded event',value.subtype,value.description||value.summary||value.status].filter(Boolean).join(' · '),180)}
 // Cached input is part of Codex input; Claude reports it separately. Reasoning is
 // part of output. Never add either subset a second time to a reported total.
@@ -739,7 +751,7 @@ function tokenBreakdown(usage){
   return {input,output,cacheRead,cacheWrite,reasoning,total:explicit??((input||0)+(output||0)+(separateCache?(cacheRead||0)+(cacheWrite||0):0)),partial:explicit===undefined&&(input===undefined||output===undefined)};
 }
 function tokenEnvelope(message){
-  const raw=parsedJSON(message.raw_text||message.text)||{},wrappers=[raw];let value=raw;
+  const raw=messageJSON(message,true)||{},wrappers=[raw];let value=raw;
   for(let depth=0;depth<5;depth++){const next=value.payload||value.event||value.msg||value.data;if(!next||typeof next!=='object'||Array.isArray(next))break;value=next;wrappers.push(value)}
   const record=value.latest_token_usage_record;
   return {raw,value,record,wrappers,type:value.type||raw.type,stream:String(value.agent_id||raw.parent_tool_use_id||message.parent_native_id||'main')};
@@ -873,10 +885,10 @@ function attachTokenBadge(target,messages,column=false){
 function normalizeMessages(messages){
   const output=[],reports=contextTokenReports(messages,conversationTokenReports(messages));
   messages.forEach((message,index)=>{
-    const original=message.raw_text||message.text,parsed=parsedJSON(message.text),value=parsed?.payload&&typeof parsed.payload==='object'?parsed.payload:parsed;
+    const original=message.raw_text||message.text,parsed=messageJSON(message),value=parsed?.payload&&typeof parsed.payload==='object'?parsed.payload:parsed;
     const base={...message,native_id:message.native_id||`event-${index}`,raw_text:original};
     let emitted=false;
-    const emit=(fields,suffix='')=>{output.push({...base,...fields,tokenReport:emitted?null:reports[index],native_id:base.native_id+suffix});emitted=true};
+    const emit=(fields,suffix='')=>{const normalized={...base,...fields,tokenReport:emitted?null:reports[index],native_id:base.native_id+suffix};messageJSONCache.set(normalized,{...messageJSONCache.get(message)});output.push(normalized);emitted=true};
     const blocks=Array.isArray(value?.message?.content)?value.message.content:Array.isArray(value?.content)?value.content:Array.isArray(value)?value:null;
     if(!['tool_result','delegation_result','error'].includes(message.kind)&&blocks&&blocks.some(block=>['text','input_text','output_text','tool_use','tool_result','thinking'].includes(block?.type))){
       blocks.forEach((block,i)=>{
@@ -898,7 +910,7 @@ function normalizeMessages(messages){
 }
 function trimTrailingConversationNoise(messages){
   if(messages.length<2)return messages;
-  const valueOf=message=>{const parsed=parsedJSON(message.raw_text||message.text);return parsed?.payload&&typeof parsed.payload==='object'?parsed.payload:parsed},last=valueOf(messages.at(-1)),previous=valueOf(messages.at(-2));
+  const valueOf=message=>{const parsed=messageJSON(message,true);return parsed?.payload&&typeof parsed.payload==='object'?parsed.payload:parsed},last=valueOf(messages.at(-1)),previous=valueOf(messages.at(-2));
   const aborted=messages.at(-1).kind==='error'&&last?.type==='error'&&typeof last.content==='string'&&last.content.trim().toLowerCase()==='aborted by user';
   const succeeded=previous?.type==='result'&&String(previous.subtype||previous.status||'').toLowerCase()==='success';
   return aborted&&succeeded?messages.slice(0,-1):messages;
@@ -923,15 +935,15 @@ function loadOriginal(message){
     message.raw_text=original.raw_text||original.text;message.text_clipped=message.raw_clipped=false;delete message.searchText;delete message.findableText;return message});
 }
 function clippedBytes(messages){return messages.filter(message=>message?.text_clipped).reduce((total,message)=>total+(Number(message.text_bytes)||0),0)}
-function rawDisclosure(message,label='Raw event'){const details=node('details','raw-event'),pre=node('pre','raw-json');details.append(node('summary','',label),pre);let shown=false;const fill=()=>{pre.textContent=JSON.stringify(parsedJSON(message.raw_text||message.text)??message.raw_text??message.text,null,2)};const show=()=>{if(shown)return;shown=true;fill();if(message.raw_clipped||message.text_clipped)loadOriginal(message).then(fill,()=>{})};details.show=show;details.firstChild.addEventListener('click',show);details.addEventListener('toggle',()=>{if(details.open)show()});return details}
+function rawDisclosure(message,label='Raw event'){const details=node('details','raw-event'),pre=node('pre','raw-json');details.append(node('summary','',label),pre);let shown=false;const fill=()=>{pre.textContent=JSON.stringify(messageJSON(message,true)??message.raw_text??message.text,null,2)};const show=()=>{if(shown)return;shown=true;fill();if(message.raw_clipped||message.text_clipped)loadOriginal(message).then(fill,()=>{})};details.show=show;details.firstChild.addEventListener('click',show);details.addEventListener('toggle',()=>{if(details.open)show()});return details}
 function readableValue(value){if(typeof value==='string'){const parsed=parsedJSON(value);return parsed?readableValue(parsed):value}if(Array.isArray(value))return value.map(readableValue).filter(Boolean).join('\n');if(value&&typeof value==='object')return commonEventText(value)||value.text||value.content&&readableValue(value.content)||value.output&&readableValue(value.output)||JSON.stringify(value,null,2);return String(value??'')}
-function toolPayload(message){const parsed=parsedJSON(message?.text);if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))return{raw:parsed,input:{value:message?.text??''},name:'',content:message?.text??''};let source=parsed.input??parsed.arguments??parsed;source=parsedJSON(source)||source;const input=conventionalInput(source&&typeof source==='object'&&!Array.isArray(source)?source:{value:source});return{raw:parsed,input,name:String(parsed.tool||parsed.name||''),content:parsed.content??parsed.output??parsed.result??''}}
+function toolPayload(message){const parsed=messageJSON(message);if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))return{raw:parsed,input:{value:message?.text??''},name:'',content:message?.text??''};let source=parsed.input??parsed.arguments??parsed;source=parsedJSON(source)||source;const input=conventionalInput(source&&typeof source==='object'&&!Array.isArray(source)?source:{value:source});return{raw:parsed,input,name:String(parsed.tool||parsed.name||''),content:parsed.content??parsed.output??parsed.result??''}}
 // Antigravity names tool arguments in PascalCase; the reader looks for the conventional names.
 const INPUT_ALIASES={CommandLine:'command',AbsolutePath:'file_path',TargetFile:'file_path',DirectoryPath:'path',SearchPath:'path',Url:'url',Query:'query',Prompt:'prompt'};
 function conventionalInput(input){if(!Object.keys(INPUT_ALIASES).some(key=>key in input))return input;const result={};for(const [key,value] of Object.entries(input)){const alias=INPUT_ALIASES[key];result[alias&&!(alias in input)&&!(alias in result)?alias:key]=value}return result}
 function toolCategory(message){const payload=toolPayload(message),name=payload.name.toLowerCase(),input=payload.input;if(message.kind==='error'||payload.raw?.is_error)return'error';if(message.kind==='reasoning')return'reasoning';if(message.kind==='metadata'||message.kind==='result')return'run';if(message.kind==='context'||message.kind==='attachment')return'context';if(message.kind.includes('delegation')||/^(task|agent)$|spawn_agent/.test(name))return'agent';if(/todo|task(create|update|delete|list|get)|update_plan/.test(name))return'todo';if(/patch|edit|write|replace/.test(name))return'edit';if(/exec|command|shell|terminal|bash/.test(name)||input.cmd||input.command)return'command';if(/grep|search|find|glob|query/.test(name))return'search';if(/browser|web|navigate|click/.test(name)||input.url)return'web';if(/read|open|view|list/.test(name))return'read';return'tool'}
-function toolPreview(message){const {input,content}=toolPayload(message);if(toolCategory(message)==='todo'){const items=todoItems(message);return shortText(items.map(item=>item.content||item.subject||item.step||item.description||('Task '+(item.taskId||item.id||''))).join(' · '),180)}if(['metadata','result','context'].includes(message.kind))return displayText(message);if(message.kind==='attachment'){const value=parsedJSON(message.text)||{};return `${value.count||1} image${value.count===1?'':'s'} attached`}if(toolCategory(message)==='search')return [input.pattern||input.query||input.glob,input.path||input.cwd].filter(Boolean).join(' · ')||eventDescription(parsedJSON(message.text));const candidate=input.file_path||input.path||input.filename||input.cmd||input.command||input.query||input.pattern||input.url||input.description||input.prompt||input.value||content;if(candidate&&typeof candidate!=='object')return String(candidate);const pairs=Object.entries(input).filter(([key,value])=>!['tool','name'].includes(key)&&typeof value!=='object');return pairs.map(([key,value])=>`${key}: ${value}`).join(' · ')||eventDescription(parsedJSON(message.text))}
-function contextLabel(message){const source=String(parsedJSON(message.text)?.source||'context').replace(/^.*\./,'').replace(/_/g,' ');return source.charAt(0).toUpperCase()+source.slice(1)}
+function toolPreview(message){const {input,content}=toolPayload(message);if(toolCategory(message)==='todo'){const items=todoItems(message);return shortText(items.map(item=>item.content||item.subject||item.step||item.description||('Task '+(item.taskId||item.id||''))).join(' · '),180)}if(['metadata','result','context'].includes(message.kind))return displayText(message);if(message.kind==='attachment'){const value=messageJSON(message)||{};return `${value.count||1} image${value.count===1?'':'s'} attached`}if(toolCategory(message)==='search')return [input.pattern||input.query||input.glob,input.path||input.cwd].filter(Boolean).join(' · ')||eventDescription(messageJSON(message));const candidate=input.file_path||input.path||input.filename||input.cmd||input.command||input.query||input.pattern||input.url||input.description||input.prompt||input.value||content;if(candidate&&typeof candidate!=='object')return String(candidate);const pairs=Object.entries(input).filter(([key,value])=>!['tool','name'].includes(key)&&typeof value!=='object');return pairs.map(([key,value])=>`${key}: ${value}`).join(' · ')||eventDescription(messageJSON(message))}
+function contextLabel(message){const source=String(messageJSON(message)?.source||'context').replace(/^.*\./,'').replace(/_/g,' ');return source.charAt(0).toUpperCase()+source.slice(1)}
 function toolLabel(message){const payload=toolPayload(message),category=toolCategory(message),labels={todo:/create/i.test(payload.name)?'Create todo':/delete/i.test(payload.name)||payload.input.status==='deleted'?'Delete todo':/get|list/i.test(payload.name)?'Todos':'Update todos',edit:/write/i.test(payload.name)?'Write':'Edit',command:'Run',search:'Search',read:/list/i.test(payload.name)?'List':'Read',web:'Browse',agent:'Delegate',error:'Error',run:'Event',context:message.kind==='attachment'?'Attachment':contextLabel(message),reasoning:'Reasoning',tool:'Tool'};if(message.kind==='tool_result')return'Unpaired output';if(message.kind==='delegation_result')return'Agent output';return labels[category]==='Tool'?(payload.name||'Tool'):labels[category]}
 function categoryIcon(category){return{git:'git',python:'code',typecheck:'typecheck',test:'check',lint:'lint',todo:'todo',edit:'edit',command:'command',search:'search',read:'read',web:'web',agent:'agent',human:'human',error:'error',run:'event',context:'context',tool:'tool'}[category]||'tool'}
 function relativeTime(value,start){const time=new Date(value).getTime(),origin=new Date(start).getTime();if(!Number.isFinite(time)||!Number.isFinite(origin))return'—';const seconds=Math.max(0,Math.round((time-origin)/1000));if(seconds<60)return`+${seconds}s`;const minutes=Math.floor(seconds/60),rest=seconds%60;return`+${minutes}m${rest?String(rest).padStart(2,'0')+'s':''}`}
@@ -976,7 +988,7 @@ function conversationRoots(conversation,workspaceRoots){
   const roots=[...(Array.isArray(workspaceRoots)?workspaceRoots:[workspaceRoots]),conversation.repo_root,conversation.cwd,conversation.worktree_path,...(conversation.repository_roots||[])];
   const metadata=parsedJSON(conversation.metadata_json)||{};
   roots.push(metadata.cwd,metadata.repo_root,metadata.worktree_path);
-  for(const message of conversation.messages||[]){const value=parsedJSON(message.raw_text||message.text);roots.push(value?.cwd,value?.worktree_path,value?.repo_root,value?.payload?.cwd)}
+  for(const message of conversation.messages||[]){const value=messageJSON(message,true);roots.push(value?.cwd,value?.worktree_path,value?.repo_root,value?.payload?.cwd)}
   return [...new Set(roots.filter(value=>typeof value==='string'&&value.startsWith('/')&&value!=='/').map(value=>value.replace(/\/+$/,'')))].sort((a,b)=>b.length-a.length);
 }
 function describeTodoChanges(messages,context){
@@ -1059,7 +1071,7 @@ function copyValues(...buttons){const group=node('span','copy-values');group.app
 // A message's prose, with XML chips, Markdown for agents, and a Show more
 // toggle for long text. Library conversation cards render messages with it too.
 function messageCard(message){const text=displayText(message),card=node('div','message-card'),prose=node('div','message-prose'),visible=xmlSegments(text).map(segment=>segment.tag?segment.tag:segment.text).join('\n');if(message.role!=='user')prose.classList.add('rendered-markdown');prose.append(messageBody(text,message.role!=='user'));card.append(prose);const authorship=message.role==='user'?authorshipNote(message.authorship):null;if(authorship){card.classList.add('writing');card.append(authorship)}if(visible.length>600||visible.split('\n').length>8){prose.classList.add('prose-truncated');const toggle=node('button','message-toggle','Show more');toggle.type='button';toggle.setAttribute('aria-expanded','false');toggle.onclick=()=>{const expanded=toggle.getAttribute('aria-expanded')!=='true';toggle.setAttribute('aria-expanded',String(expanded));toggle.textContent=expanded?'Show less':'Show more';prose.classList.toggle('prose-truncated',!expanded)};prose.addEventListener('toggle',event=>{if(event.target.open&&prose.classList.contains('prose-truncated'))toggle.click()},true);card.append(toggle)}return card}
-function narrativeEvent(message,turnStart){const row=node('article',`speaker-row ${message.role==='user'?'human':'agent'} conversation-event`),card=messageCard(message);row.setAttribute('aria-label',message.role==='user'?'User message':message.role==='agent'?'Parent agent message':'Assistant message');const mark=kindIcon(message.role==='user'?'human':'agent');mark.classList.add('message-kind');card.prepend(mark);if(message.id){const name=shortText(messageSummary(message),120);card.append(copyValues(name?copyValueButton('Name',name,'message name'):null,copyValueButton('ID',message.id,'message ID')))}if(parsedJSON(message.raw_text||message.text)){const raw=rawDisclosure(message),button=node('button','message-raw-button',icon('code'));raw.hidden=true;button.type='button';button.setAttribute('aria-label','Raw event');button.setAttribute('aria-expanded','false');button.onclick=()=>{raw.hidden=!raw.hidden;if(!raw.hidden)raw.show();raw.open=!raw.hidden;button.setAttribute('aria-expanded',String(!raw.hidden))};card.append(button,raw)}row.dataset.searchEntry=messageSearch(message);row.append(card);return timelineEntry(row,message,turnStart,message.role==='user'?'human-entry':'agent-entry')}
+function narrativeEvent(message,turnStart){const row=node('article',`speaker-row ${message.role==='user'?'human':'agent'} conversation-event`),card=messageCard(message);row.setAttribute('aria-label',message.role==='user'?'User message':message.role==='agent'?'Parent agent message':'Assistant message');const mark=kindIcon(message.role==='user'?'human':'agent');mark.classList.add('message-kind');card.prepend(mark);if(message.id){const name=shortText(messageSummary(message),120);card.append(copyValues(name?copyValueButton('Name',name,'message name'):null,copyValueButton('ID',message.id,'message ID')))}if(messageJSON(message,true)){const raw=rawDisclosure(message),button=node('button','message-raw-button',icon('code'));raw.hidden=true;button.type='button';button.setAttribute('aria-label','Raw event');button.setAttribute('aria-expanded','false');button.onclick=()=>{raw.hidden=!raw.hidden;if(!raw.hidden)raw.show();raw.open=!raw.hidden;button.setAttribute('aria-expanded',String(!raw.hidden))};card.append(button,raw)}row.dataset.searchEntry=messageSearch(message);row.append(card);return timelineEntry(row,message,turnStart,message.role==='user'?'human-entry':'agent-entry')}
 function diffStats(text){let added=0,removed=0;for(const line of String(text||'').split('\n')){if(line.startsWith('+')&&!line.startsWith('+++'))added++;else if(line.startsWith('-')&&!line.startsWith('---'))removed++}return{added,removed}}
 function fileChanges(message,result){
   if(toolCategory(message)!=='edit')return null;
@@ -1154,7 +1166,7 @@ function transcriptShown(state){return new Set(state.level==='custom'?state.cust
 function transcriptCategory(message,context){
   if(message.kind==='delegation')return'agents';if(message.kind==='reasoning')return'thinking';
   if(message.kind==='message')return['user','agent'].includes(message.role)?'prompts':context.finalReplies?.has(message)?'response':'replies';
-  const value=parsedJSON(message.text);if((value?.payload||value)?.type==='token_usage')return'usage';
+  const value=messageJSON(message);if((value?.payload||value)?.type==='token_usage')return'usage';
   return{edit:'edits',command:'commands',read:'reads',search:'reads',error:'events',run:'events',context:'events'}[toolCategory(message)]||'tools'
 }
 // True when the filter hides the element or an event that contains it.
@@ -1178,7 +1190,7 @@ function transcriptStructure(messages){
 // The text Find matches in an event: a message's prose, or the string values a
 // tool call, result, or event carries (object keys in sorted order).
 function jsonStrings(value,out=[]){if(typeof value==='string')out.push(value);else if(Array.isArray(value))value.forEach(item=>jsonStrings(item,out));else if(value&&typeof value==='object')Object.keys(value).sort().forEach(key=>jsonStrings(value[key],out));return out}
-function findableText(message){return message.findableText??=message.kind==='message'?displayText(message):jsonStrings(parsedJSON(message.text)??String(message.text??'')).join('\n')}
+function findableText(message){return message.findableText??=message.kind==='message'?displayText(message):jsonStrings(messageJSON(message)??String(message.text??'')).join('\n')}
 // Counts the events whose findable text matches pattern (a RegExp without the
 // g flag): shown ones, and hidden ones with the kinds hiding them. Results
 // count only when output is searched.
@@ -1222,7 +1234,7 @@ function transcriptFilterControl(panel,paths){
 const SEQUENCE_PAGE=150;
 function renderSequence(messages,context){
   const fragment=document.createDocumentFragment(),visible=messages.filter(message=>!context.consumed.has(message.native_id)&&!context.ancestors?.has(message.native_id));
-  let index=0;
+  let index=0,stop=visible.length;
   const renderNext=target=>{
     const message=visible[index];let entry;
     if(message.kind==='delegation'){
@@ -1237,23 +1249,55 @@ function renderSequence(messages,context){
       summary.addEventListener('click',()=>{if(!run.open)run.materialize()});run.addEventListener('toggle',()=>{if(run.open)run.materialize()});
       run.append(summary,body);entry=timelineEntry(run,message,context.turnStart,'subagent-entry');
     }else if(message.kind==='message'){entry=narrativeEvent(message,context.turnStart)}
-    else{const group=[message],category=toolCategory(message);if(message.kind==='tool_call'&&['read','search','edit'].includes(category)){while(index+1<visible.length&&visible[index+1].kind==='tool_call'&&toolCategory(visible[index+1])===category&&toolLabel(visible[index+1])===toolLabel(message)){group.push(visible[++index])}}entry=timelineEntry(actionRow(group,context),message,context.turnStart,'tool-entry')}
+    else{const group=[message],category=toolCategory(message);if(message.kind==='tool_call'&&['read','search','edit'].includes(category)){while(index+1<stop&&visible[index+1].kind==='tool_call'&&toolCategory(visible[index+1])===category&&toolLabel(visible[index+1])===toolLabel(message)){group.push(visible[++index])}}entry=timelineEntry(actionRow(group,context),message,context.turnStart,'tool-entry')}
     entry.dataset.show=transcriptCategory(message,context);target.append(entry);index++;
   };
-  const page=target=>{const stop=index+SEQUENCE_PAGE;while(index<visible.length&&index<stop)renderNext(target)};
-  page(fragment);
-  if(index<visible.length){
-    const more=node('button','sequence-more'),label=()=>{const left=visible.length-index;more.textContent=`Show ${Math.min(SEQUENCE_PAGE,left).toLocaleString()} more · ${left.toLocaleString()} events not shown`};
-    // An observer reports only changes, so after a page is added the control is
-    // measured again: while it stays near the viewport, more pages follow.
-    const near=()=>{if(!more.isConnected)return false;const rect=more.getBoundingClientRect();return rect.height>0&&rect.top<innerHeight+600&&rect.bottom>-600};
-    const follow=()=>{pager.expand();requestAnimationFrame(()=>{if(near())follow()})};
-    const observer=new IntersectionObserver(entries=>{if(entries.some(entry=>entry.isIntersecting))follow()},{rootMargin:'600px'});
-    const pager={
-      expand(){if(index>=visible.length)return;const parent=more.parentElement,next=document.createDocumentFragment();page(next);more.before(next);if(index>=visible.length){observer.disconnect();more.remove();context.pagers?.delete(pager)}else label();parent?.dispatchEvent(new Event('transcript-materialized',{bubbles:true}))},
-      reveal(predicate){let last=-1;for(let i=visible.length-1;i>=index&&last<0;i--)if(ownedMessages([visible[i]],context).some(predicate))last=i;while(index<=last)pager.expand()}
+  const page=(target,start,end)=>{index=start;stop=end;while(index<stop)renderNext(target)};
+  page(fragment,0,Math.min(SEQUENCE_PAGE,visible.length));
+  const firstEnd=index;
+  if(firstEnd<visible.length){
+    const gaps=new Set();
+    const near=gap=>{if(!gaps.has(gap)||!gap.button.isConnected)return false;const rect=gap.button.getBoundingClientRect();return rect.height>0&&rect.top<innerHeight+600&&rect.bottom>-600};
+    const follow=gap=>{if(!gaps.has(gap))return;const next=pager.expand(gap);requestAnimationFrame(()=>{if(next&&near(next))follow(next)})};
+    const observer=new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting)follow(entry.target.sequenceGap)},{rootMargin:'600px'});
+    conversationMapCleanups.push(()=>observer.disconnect());
+    const label=gap=>{const left=gap.end-gap.start;gap.button.textContent=`Show ${Math.min(SEQUENCE_PAGE,left).toLocaleString()} ${gap.earlier?'earlier':'more'} · ${left.toLocaleString()} events not shown`};
+    const gapControl=(start,end,earlier=false)=>{
+      const button=node('button','sequence-more'),gap={start,end,earlier,button};
+      button.type='button';label(gap);
+      button.sequenceGap=gap;button.onclick=()=>pager.expand(gap);gaps.add(gap);
+      // Earlier gaps are explicit controls: automatically filling them after a
+      // jump would render the history we just skipped and move the target.
+      if(!earlier)observer.observe(button);
+      return gap;
     };
-    more.type='button';label();more.onclick=()=>pager.expand();observer.observe(more);context.pagers?.add(pager);fragment.append(more);
+    const materialize=(gap,ranges)=>{
+      if(!gaps.has(gap))return null;
+      const parent=gap.button.parentElement,next=document.createDocumentFragment();let cursor=gap.start,following=null;
+      if(ranges.length===1&&ranges[0][0]===gap.start&&ranges[0][1]<gap.end){
+        page(next,...ranges[0]);gap.start=index;gap.button.before(next);label(gap);
+        parent?.dispatchEvent(new Event('transcript-materialized',{bubbles:true}));return gap;
+      }
+      for(const [start,end]of ranges){if(cursor<start)next.append(gapControl(cursor,start,true).button);page(next,start,end);cursor=index}
+      if(cursor<gap.end){following=gapControl(cursor,gap.end,gap.earlier);next.append(following.button)}
+      observer.unobserve(gap.button);gaps.delete(gap);gap.button.replaceWith(next);
+      if(!gaps.size){observer.disconnect();context.pagers?.delete(pager)}
+      parent?.dispatchEvent(new Event('transcript-materialized',{bubbles:true}));return following;
+    };
+    const pager={
+      expand(gap){return gap.earlier?materialize(gap,[[Math.max(gap.start,gap.end-SEQUENCE_PAGE),gap.end]]):materialize(gap,[[gap.start,Math.min(gap.end,gap.start+SEQUENCE_PAGE)]])},
+      reveal(predicate){
+        for(const gap of [...gaps]){
+          const ranges=[];
+          for(let i=gap.start;i<gap.end;i++)if(ownedMessages([visible[i]],context).some(predicate)){
+            const start=Math.max(gap.start,Math.floor(i/SEQUENCE_PAGE)*SEQUENCE_PAGE),end=Math.min(gap.end,start+SEQUENCE_PAGE),previous=ranges.at(-1);
+            if(previous&&start<=previous[1])previous[1]=Math.max(previous[1],end);else ranges.push([start,end]);
+          }
+          if(ranges.length)materialize(gap,ranges);
+        }
+      }
+    };
+    context.pagers?.add(pager);fragment.append(gapControl(firstEnd,visible.length).button);
   }
   return fragment;
 }

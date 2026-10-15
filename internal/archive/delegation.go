@@ -157,6 +157,38 @@ func (c *Catalog) delegationSnapshot(ctx context.Context, workspace string) (*de
 		return c.readDelegationSnapshot(ctx, workspace)
 	})
 }
+
+// Materialize compact result references once per conversation. Joining messages
+// directly by conversation_id and call_id scans the whole transcript for every
+// launch: the conversation index does not cover call_id. Keep bodies outside the
+// temporary table and fetch only the matching results, bounded to 8192 characters.
+const delegationResultEvidenceSQL = `WITH launches AS MATERIALIZED (
+ SELECT a.id,d.conversation_id,d.call_id FROM agent_sessions a
+ JOIN messages d ON d.id=a.delegation_message_id
+ WHERE a.workspace_id=? AND a.child_conversation_id IS NULL AND a.native_id<>'main'
+), results AS MATERIALIZED (
+ SELECT m.id,m.conversation_id,m.call_id FROM messages m
+ WHERE m.conversation_id IN (SELECT conversation_id FROM launches)
+ AND +m.kind IN ('delegation_result','tool_result')
+)
+SELECT l.id,substr(m.text,1,8192) text FROM launches l
+ JOIN results r ON r.conversation_id=l.conversation_id AND r.call_id=l.call_id
+ JOIN messages m ON m.id=r.id`
+
+// Copy only the small accounting fields before joining session membership.
+// Looking up every message by its hashed ID makes long transcripts perform
+// thousands of random reads of the wide message table on external libraries.
+const delegationMessageCountsSQL = `WITH message_facts AS MATERIALIZED (
+ SELECT m.id,m.role,m.kind,m.created_at FROM conversations c
+ JOIN messages m ON m.conversation_id=c.id WHERE c.workspace_id=?
+)
+SELECT am.agent_session_id,COUNT(*) messages,
+ SUM(CASE WHEN m.role='user' AND m.kind='message' THEN 1 ELSE 0 END) turns,
+ MIN(m.created_at) start,MAX(m.created_at) end
+ FROM agent_sessions a JOIN agent_session_messages am ON am.agent_session_id=a.id
+ JOIN message_facts m ON m.id=am.message_id WHERE a.workspace_id=?
+ GROUP BY am.agent_session_id`
+
 func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) (*delegationSnapshot, error) {
 	tx, err := c.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -228,7 +260,7 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 			aliasesChild[firstString(row["id"])] = roots[child]
 		}
 	}
-	evidence, err := queryMapsContext(ctx, tx, `SELECT a.id,substr(m.text,1,8192) text FROM agent_sessions a JOIN messages d ON d.id=a.delegation_message_id JOIN messages m ON m.conversation_id=d.conversation_id AND m.call_id=d.call_id AND +m.kind IN ('delegation_result','tool_result') WHERE a.workspace_id=? AND a.child_conversation_id IS NULL AND a.native_id<>'main'`, workspace)
+	evidence, err := queryMapsContext(ctx, tx, delegationResultEvidenceSQL, workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -571,7 +603,7 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 	if err != nil {
 		return nil, err
 	}
-	counts, err := queryMapsContext(ctx, tx, `SELECT am.agent_session_id,COUNT(*) messages,SUM(CASE WHEN m.role='user' AND m.kind='message' THEN 1 ELSE 0 END) turns,MIN(m.created_at) start,MAX(m.created_at) end FROM agent_sessions a JOIN agent_session_messages am ON am.agent_session_id=a.id JOIN messages m ON m.id=am.message_id WHERE a.workspace_id=? GROUP BY am.agent_session_id`, workspace)
+	counts, err := queryMapsContext(ctx, tx, delegationMessageCountsSQL, workspace, workspace)
 	if err != nil {
 		return nil, err
 	}

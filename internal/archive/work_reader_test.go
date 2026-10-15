@@ -116,6 +116,126 @@ func TestWorkConversationShortensOutputsButKeepsWhatTheReaderInterprets(t *testi
 	}
 }
 
+func TestWorkConversationUsesReconciledSessionUsage(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	seedReaderWorkspace(t, catalog)
+	for _, session := range []struct {
+		id, status string
+		tokens     int
+	}{
+		{"root", "reported-reconciled", 12000},
+		{"embedded", "reported-reconciled", 350},
+		{"alias", "in-child-conversation", 9000},
+	} {
+		if _, err := catalog.DB.Exec(`INSERT INTO agent_sessions
+			(id,workspace_id,conversation_id,native_id,kind,provider,usage_status,total_tokens)
+			VALUES(?,'work','main',?,'main','claude',?,?)`, session.id, session.id, session.status, session.tokens); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Authorship offsets refer to the full source body, even when a streamed
+	// preview drops that part of a long output.
+	original, err := catalog.MessageOriginal("m3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := firstString(original["text"])
+	spans := jsonText([]authorSpan{{Start: len(text) - 100, End: len(text) - 2, Category: spanPasted}})
+	if _, err := catalog.DB.Exec(`INSERT INTO message_authorship(message_id,conversation_id,workspace_id,sent_at,day,total_chars,typed_words,pasted_words,spans_json)
+	 VALUES('m3','main','work','2026-09-28','2026-09-28',?,0,20,?)`, len(text), spans); err != nil {
+		t.Fatal(err)
+	}
+	for _, clip := range []bool{true, false} {
+		conversation, err := catalog.workConversation("work", "main", clip)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if usage := conversation["token_usage"].(tokenCounts); usage["total_tokens"] != 12350 {
+			t.Fatalf("clip=%v: use reconciled usage and exclude child aliases: %v", clip, usage)
+		}
+		for _, message := range conversation["messages"].([]map[string]any) {
+			if message["id"] != "m3" {
+				continue
+			}
+			authorship := message["authorship"].(map[string]any)
+			parts := authorship["spans"].([]map[string]any)
+			if len(parts) != 1 || parts[0]["excerpt"] != excerpt(text[len(text)-100:len(text)-2], 120) {
+				t.Fatalf("clip=%v: authorship must use the original text: %v", clip, parts)
+			}
+			if (message["text_clipped"] == true) != clip {
+				t.Fatalf("clip=%v: preview markers: %v", clip, message["text_clipped"])
+			}
+			if !clip && message["text"] != text {
+				t.Fatal("exports keep whole output")
+			}
+		}
+	}
+}
+
+func TestWorkConversationPreservesSourceOrderAndNullTiebreakers(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	seedReaderWorkspace(t, catalog)
+	if _, err := catalog.DB.Exec(`UPDATE messages SET source_order=NULL,created_at=NULL;
+		UPDATE messages SET source_order=2,created_at='2026-01-02' WHERE id='m1';
+		UPDATE messages SET source_order=2 WHERE id='m2';
+		UPDATE messages SET created_at='2026-01-01' WHERE id='m3';
+		UPDATE messages SET source_order=-1 WHERE id='m5';
+		INSERT INTO messages(id,conversation_id,native_id,role,kind,text,source_order,created_at,content_hash) VALUES
+		('tie','main','tie','assistant','message','Tie',2,NULL,'tie'),
+		('empty-date','main','empty-date','assistant','message','Empty date',NULL,'','empty-date')`); err != nil {
+		t.Fatal(err)
+	}
+	want, err := queryMaps(catalog.DB, `SELECT id FROM messages WHERE conversation_id='main'
+		ORDER BY source_order IS NULL,source_order,created_at,id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := catalog.WorkConversation("work", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := conversation["messages"].([]map[string]any)
+	if len(got) != len(want) {
+		t.Fatalf("got %d events, want %d", len(got), len(want))
+	}
+	for i, message := range got {
+		if message["id"] != want[i]["id"] {
+			t.Fatalf("event %d: got %v, want %v", i, message["id"], want[i]["id"])
+		}
+		if _, exists := message["source_order"]; exists {
+			t.Fatal("sorting must preserve the reader response fields")
+		}
+	}
+}
+
+func TestClipReaderMessagePreservesProviderEnvelopes(t *testing.T) {
+	long := strings.Repeat("text ", 1000)
+	for _, tc := range []struct {
+		name, kind, text string
+		clipped          bool
+	}{
+		{"codex call in result", "tool_result", jsonText(map[string]any{"payload": map[string]any{"type": "function_call", "arguments": long}}), false},
+		{"provider prose", "metadata", jsonText(map[string]any{"message": map[string]any{"content": []any{map[string]any{"type": "text", "text": long}}}}), false},
+		{"thinking blocks", "metadata", jsonText([]any{map[string]any{"type": "thinking", "thinking": long}}), false},
+		{"tool output blocks", "tool_result", jsonText(map[string]any{"content": []any{map[string]any{"type": "text", "text": long}}}), true},
+		{"invalid JSON", "metadata", `{"content":"` + long, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			message := map[string]any{"kind": tc.kind, "text": tc.text, "raw_text": tc.text}
+			clipReaderMessage(message)
+			if clipped := message["text_clipped"] == true; clipped != tc.clipped {
+				t.Fatalf("clipped=%v, want %v", clipped, tc.clipped)
+			}
+			if !tc.clipped && message["text"] != tc.text {
+				t.Fatal("reader-interpreted content must arrive whole")
+			}
+			if tc.clipped && (message["raw_clipped"] != true || message["text_bytes"] != len(strings.TrimSpace(tc.text))) {
+				t.Fatal("clipped text must retain lazy-original markers")
+			}
+		})
+	}
+}
+
 func TestWorkReaderRoutes(t *testing.T) {
 	catalog, config := testCatalog(t)
 	seedReaderWorkspace(t, catalog)
