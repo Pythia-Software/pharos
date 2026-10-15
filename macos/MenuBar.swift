@@ -28,7 +28,7 @@ final class MenuBarDot: NSView {
     var color = NSColor.systemYellow { didSet { needsDisplay = true } }
     override func draw(_ dirtyRect: NSRect) {
         color.setFill()
-        NSBezierPath(ovalIn: bounds.insetBy(dx: 1, dy: 1)).fill()
+        NSBezierPath(ovalIn: bounds.insetBy(dx: 1.5, dy: 1.5)).fill()
     }
 }
 
@@ -36,28 +36,64 @@ enum MenuBarLighthouse {
     static func image() -> NSImage {
         let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
             NSColor.black.setFill()
+
+            // AppIcon.svg's stepped Alexandrian tower, simplified for 18 pt.
             let tower = NSBezierPath()
-            tower.move(to: NSPoint(x: 4, y: 1))
-            tower.line(to: NSPoint(x: 14, y: 1))
-            tower.line(to: NSPoint(x: 12, y: 10))
-            tower.line(to: NSPoint(x: 6, y: 10))
+            tower.move(to: NSPoint(x: 5.5, y: 1))
+            tower.line(to: NSPoint(x: 12.5, y: 1))
+            tower.line(to: NSPoint(x: 12, y: 7.5))
+            tower.line(to: NSPoint(x: 6, y: 7.5))
             tower.close()
             tower.fill()
-            NSBezierPath(roundedRect: NSRect(x: 2, y: 0, width: 14, height: 1.5), xRadius: 0.5, yRadius: 0.5).fill()
-            NSBezierPath(roundedRect: NSRect(x: 3, y: 9.5, width: 12, height: 1.5), xRadius: 0.5, yRadius: 0.5).fill()
-            let roof = NSBezierPath()
-            roof.move(to: NSPoint(x: 4, y: 15))
-            roof.line(to: NSPoint(x: 9, y: 18))
-            roof.line(to: NSPoint(x: 14, y: 15))
-            roof.close()
-            roof.fill()
-            NSBezierPath(rect: NSRect(x: 5, y: 11, width: 8, height: 4)).fill()
-            // Clear lantern panes and doorway, keeping a single ink color.
+            NSBezierPath(roundedRect: NSRect(x: 4.5, y: 0.5, width: 9, height: 1), xRadius: 0.3, yRadius: 0.3).fill()
+            NSBezierPath(roundedRect: NSRect(x: 5.5, y: 7.5, width: 7, height: 1), xRadius: 0.3, yRadius: 0.3).fill()
+
+            let middle = NSBezierPath()
+            middle.move(to: NSPoint(x: 6.5, y: 8.5))
+            middle.line(to: NSPoint(x: 11.5, y: 8.5))
+            middle.line(to: NSPoint(x: 11, y: 11.5))
+            middle.line(to: NSPoint(x: 7, y: 11.5))
+            middle.close()
+            middle.fill()
+            NSBezierPath(roundedRect: NSRect(x: 6.5, y: 11, width: 5, height: 1), xRadius: 0.3, yRadius: 0.3).fill()
+            NSBezierPath(rect: NSRect(x: 7.5, y: 12, width: 3, height: 1.5)).fill()
+            NSBezierPath(roundedRect: NSRect(x: 7, y: 13, width: 4, height: 1), xRadius: 0.3, yRadius: 0.3).fill()
+            NSBezierPath(rect: NSRect(x: 7.5, y: 14, width: 3, height: 1.5)).fill()
+
+            // Rounded dome and finial echo the app icon's lantern crown.
+            let dome = NSBezierPath()
+            dome.move(to: NSPoint(x: 7, y: 15.5))
+            dome.curve(to: NSPoint(x: 9, y: 17), controlPoint1: NSPoint(x: 7.1, y: 16.4), controlPoint2: NSPoint(x: 8, y: 17))
+            dome.curve(to: NSPoint(x: 11, y: 15.5), controlPoint1: NSPoint(x: 10, y: 17), controlPoint2: NSPoint(x: 10.9, y: 16.4))
+            dome.close()
+            dome.fill()
+            NSBezierPath(roundedRect: NSRect(x: 8.5, y: 16.5, width: 1, height: 1.5), xRadius: 0.5, yRadius: 0.5).fill()
+
+            // Leave air around the lantern so the beams remain distinct.
+            let beams = NSBezierPath()
+            beams.move(to: NSPoint(x: 5.5, y: 14.5))
+            beams.line(to: NSPoint(x: 1, y: 15.5))
+            beams.line(to: NSPoint(x: 1, y: 13))
+            beams.line(to: NSPoint(x: 5.5, y: 13.5))
+            beams.close()
+            beams.move(to: NSPoint(x: 12.5, y: 14.5))
+            beams.line(to: NSPoint(x: 17, y: 16))
+            beams.line(to: NSPoint(x: 17, y: 12.5))
+            beams.line(to: NSPoint(x: 12.5, y: 13.5))
+            beams.close()
+            beams.fill()
+
+            // Transparent openings preserve native template tinting.
             NSGraphicsContext.saveGraphicsState()
             NSGraphicsContext.current?.compositingOperation = .clear
-            NSBezierPath(rect: NSRect(x: 6.5, y: 12, width: 2, height: 2)).fill()
-            NSBezierPath(rect: NSRect(x: 9.5, y: 12, width: 2, height: 2)).fill()
-            NSBezierPath(roundedRect: NSRect(x: 8, y: 1, width: 2, height: 3.5), xRadius: 1, yRadius: 1).fill()
+            NSBezierPath(rect: NSRect(x: 8.5, y: 14, width: 1, height: 1.5)).fill()
+            NSBezierPath(roundedRect: NSRect(x: 8.5, y: 9, width: 1, height: 1.5), xRadius: 0.5, yRadius: 0.5).fill()
+            let doorway = NSBezierPath()
+            doorway.move(to: NSPoint(x: 8.25, y: 0))
+            doorway.line(to: NSPoint(x: 9.75, y: 0))
+            doorway.appendArc(withCenter: NSPoint(x: 9, y: 2.25), radius: 0.75, startAngle: 0, endAngle: 180, clockwise: false)
+            doorway.close()
+            doorway.fill()
             NSGraphicsContext.restoreGraphicsState()
             return true
         }
