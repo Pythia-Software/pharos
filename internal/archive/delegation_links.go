@@ -131,7 +131,7 @@ func loadDelegationLinks(ctx context.Context, tx *sql.Tx, workspace string, conv
 			}
 		}
 	}
-	evidence, err := queryMapsContext(ctx, tx, `SELECT a.id,substr(m.text,1,8192) text FROM agent_sessions a JOIN messages d ON d.id=a.delegation_message_id JOIN messages m ON m.conversation_id=d.conversation_id AND m.call_id=d.call_id AND +m.kind IN ('delegation_result','tool_result') WHERE a.workspace_id=? AND a.child_conversation_id IS NULL AND a.native_id<>'main'`, workspace)
+	evidence, err := queryMapsContext(ctx, tx, delegationResultEvidenceSQL, workspace)
 	if err != nil {
 		return nil, err
 	}

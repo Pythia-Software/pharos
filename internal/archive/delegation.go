@@ -157,6 +157,38 @@ func (c *Catalog) delegationSnapshot(ctx context.Context, workspace string) (*de
 		return c.readDelegationSnapshot(ctx, workspace)
 	})
 }
+
+// Materialize compact result references once per conversation. Joining messages
+// directly by conversation_id and call_id scans the whole transcript for every
+// launch: the conversation index does not cover call_id. Keep bodies outside the
+// temporary table and fetch only the matching results, bounded to 8192 characters.
+const delegationResultEvidenceSQL = `WITH launches AS MATERIALIZED (
+ SELECT a.id,d.conversation_id,d.call_id FROM agent_sessions a
+ JOIN messages d ON d.id=a.delegation_message_id
+ WHERE a.workspace_id=? AND a.child_conversation_id IS NULL AND a.native_id<>'main'
+), results AS MATERIALIZED (
+ SELECT m.id,m.conversation_id,m.call_id FROM messages m
+ WHERE m.conversation_id IN (SELECT conversation_id FROM launches)
+ AND +m.kind IN ('delegation_result','tool_result')
+)
+SELECT l.id,substr(m.text,1,8192) text FROM launches l
+ JOIN results r ON r.conversation_id=l.conversation_id AND r.call_id=l.call_id
+ JOIN messages m ON m.id=r.id`
+
+// Copy only the small accounting fields before joining session membership.
+// Looking up every message by its hashed ID makes long transcripts perform
+// thousands of random reads of the wide message table on external libraries.
+const delegationMessageCountsSQL = `WITH message_facts AS MATERIALIZED (
+ SELECT m.id,m.role,m.kind,m.created_at FROM conversations c
+ JOIN messages m ON m.conversation_id=c.id WHERE c.workspace_id=?
+)
+SELECT am.agent_session_id,COUNT(*) messages,
+ SUM(CASE WHEN m.role='user' AND m.kind='message' THEN 1 ELSE 0 END) turns,
+ MIN(m.created_at) start,MAX(m.created_at) end
+ FROM agent_sessions a JOIN agent_session_messages am ON am.agent_session_id=a.id
+ JOIN message_facts m ON m.id=am.message_id WHERE a.workspace_id=?
+ GROUP BY am.agent_session_id`
+
 func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) (*delegationSnapshot, error) {
 	tx, err := c.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -176,7 +208,19 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 	if err != nil {
 		return nil, err
 	}
-	sessions, err := queryMapsContext(ctx, tx, `SELECT a.*,substr(CASE WHEN json_valid(m.text) THEN COALESCE(json_extract(m.text,'$.input.description'),json_extract(m.text,'$.input.prompt'),json_extract(m.text,'$.input.task'),json_extract(m.text,'$.input.task_name'),m.text) ELSE m.text END,1,180) assignment FROM agent_sessions a LEFT JOIN messages m ON m.id=a.delegation_message_id WHERE a.workspace_id=? ORDER BY a.started_at,a.id LIMIT 10001`, workspace)
+	// Providers normalize launch arguments into input, but use different task
+	// fields. Codex can retain a readable task_name beside an encrypted message.
+	// Extract before clipping: the name may follow a very large message. Unknown
+	// structured payloads and opaque messages must not become display labels.
+	sessions, err := queryMapsContext(ctx, tx, `SELECT a.*,substr(CASE WHEN json_valid(m.text) THEN
+ (SELECT value FROM json_each(m.text,'$.input')
+  WHERE type='text' AND key IN ('task_name','description','prompt','Prompt','task','message')
+   AND trim(value,char(9)||char(10)||char(13)||' ')<>'' AND value NOT GLOB 'gAAAA*'
+  ORDER BY CASE key WHEN 'task_name' THEN 0 WHEN 'description' THEN 1 WHEN 'prompt' THEN 2 WHEN 'Prompt' THEN 3 WHEN 'task' THEN 4 ELSE 5 END
+  LIMIT 1)
+ ELSE m.text END,1,180) assignment
+ FROM agent_sessions a LEFT JOIN messages m ON m.id=a.delegation_message_id
+ WHERE a.workspace_id=? ORDER BY a.started_at,a.id LIMIT 10001`, workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +305,10 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 		}
 		cid := firstString(row["conversation_id"])
 		cv := conv[cid]
-		label := firstString(cv["agent_nickname"], row["assignment"], cv["prompt"])
+		label := firstString(row["assignment"])
+		if row["native_id"] == "main" {
+			label = firstString(cv["agent_nickname"], label, cv["prompt"])
+		}
 		if label == "" {
 			label = firstString(row["native_id"], cv["native_id"])
 			if row["native_id"] == "main" {
@@ -536,7 +583,7 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 	if err != nil {
 		return nil, err
 	}
-	counts, err := queryMapsContext(ctx, tx, `SELECT am.agent_session_id,COUNT(*) messages,SUM(CASE WHEN m.role='user' AND m.kind='message' THEN 1 ELSE 0 END) turns,MIN(m.created_at) start,MAX(m.created_at) end FROM agent_sessions a JOIN agent_session_messages am ON am.agent_session_id=a.id JOIN messages m ON m.id=am.message_id WHERE a.workspace_id=? GROUP BY am.agent_session_id`, workspace)
+	counts, err := queryMapsContext(ctx, tx, delegationMessageCountsSQL, workspace, workspace)
 	if err != nil {
 		return nil, err
 	}

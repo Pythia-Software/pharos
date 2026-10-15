@@ -24,6 +24,14 @@ Sessions opens a modal navigator sheet with a backdrop, focus trap, and Escape
 to dismiss. Selecting a session dismisses the sheet. Reduced-motion settings
 disable layout animations. Standalone Share exports keep their original reader.
 
+Assignment labels use the launch's `task_name`, then `description`, `prompt`,
+Antigravity's `Prompt`, `task`, or plaintext `message`. Only nonempty text fields
+are eligible; opaque encrypted messages and unrecognized JSON payloads are omitted. Extraction happens
+before the 180-character display bound, so a task name following a long message
+is still available. Embedded sessions without an assignment use their execution
+ID instead of borrowing the parent conversation's nickname or request. Labels
+resolve from retained launch messages without reindexing.
+
 A **Workspace Sessions** toolbar selects the transcript, replacing the
 conversation dropdown. A single button beside the sliding
 Hierarchy & usage / Parallel activity switch shows or hides the session content.

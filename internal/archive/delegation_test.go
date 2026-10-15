@@ -92,6 +92,69 @@ func TestDelegationCanonicalHierarchyAndAccounting(t *testing.T) {
 	}
 }
 
+func TestDelegationResultEvidenceKeepsConversationAndResultScope(t *testing.T) {
+	c, _ := testCatalog(t)
+	seedDelegation(t, c)
+	// A call ID can be reused in another conversation. Only result messages
+	// in the launch's own conversation can supply its exact child handle.
+	for _, message := range []struct{ id, conversation, kind, text string }{
+		{"root-result", "root", "tool_result", strings.Repeat("r", 9000)},
+		{"not-a-result", "child", "message", "must not match"},
+	} {
+		if _, err := c.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,call_id,content_hash)
+			VALUES(?,?,?,'tool',?,?,'nested-call',?)`, message.id, message.conversation, message.id, message.kind, message.text, message.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := c.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,call_id,content_hash)
+		VALUES('root-launch','root','root-launch','assistant','delegation','{}','nested-call','root-launch');
+		INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,delegation_message_id,kind,provider,usage_status)
+		VALUES('root-launch-session','delegation-work','root','reused-call','root-launch','subagent','codex','unavailable')`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := queryMaps(c.DB, delegationResultEvidenceSQL, "delegation-work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]string{}
+	for _, row := range rows {
+		byID[firstString(row["id"])] = firstString(row["text"])
+	}
+	if len(rows) != 2 || byID["nested-alias"] != `{"details":{"agentId":"exact-child"}}` || byID["root-launch-session"] != strings.Repeat("r", 8192) {
+		t.Fatalf("match result kind, conversation and bounded body: %v", byID)
+	}
+}
+
+func TestDelegationMessageCountsRetainMembershipAndUnknownTimes(t *testing.T) {
+	c, _ := testCatalog(t)
+	seedDelegation(t, c)
+	if _, err := c.DB.Exec(`UPDATE messages SET created_at='2026-01-01T00:00:03Z' WHERE id='user';
+		INSERT INTO agent_session_messages(agent_session_id,message_id,source_order) VALUES
+		('root-session','user',0),('embedded','user',0),('child-session','nested-launch',0),('child-session','nested-result',1)`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := queryMaps(c.DB, delegationMessageCountsSQL, "delegation-work", "delegation-work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]map[string]any{}
+	for _, row := range rows {
+		byID[firstString(row["agent_session_id"])] = row
+	}
+	if len(rows) != 3 {
+		t.Fatalf("count only recorded membership: %v", rows)
+	}
+	for _, id := range []string{"root-session", "embedded"} {
+		row := byID[id]
+		if integer(row["messages"]) != 1 || integer(row["turns"]) != 1 || row["start"] != "2026-01-01T00:00:03Z" || row["end"] != row["start"] {
+			t.Fatalf("each session retains its own membership: %v", row)
+		}
+	}
+	if row := byID["child-session"]; integer(row["messages"]) != 2 || integer(row["turns"]) != 0 || row["start"] != nil || row["end"] != nil {
+		t.Fatalf("events with unknown timestamps still count: %v", row)
+	}
+}
+
 func TestDelegationTopLevelConversationLabels(t *testing.T) {
 	for _, tc := range []struct {
 		name, secondPrompt             string
@@ -148,6 +211,55 @@ func TestDelegationTopLevelConversationLabels(t *testing.T) {
 			}
 			if got := s.ByID["child-session"].Label; got != "Review with Codex" {
 				t.Fatalf("child assignment label changed: %q", got)
+			}
+		})
+	}
+}
+
+func TestDelegationAssignmentLabels(t *testing.T) {
+	for _, tc := range []struct{ name, text, want string }{
+		{"codex task name after opaque message", `{"tool":"spawn_agent","input":{"fork_turns":"all","message":"gAAAA` + strings.Repeat("x", 12000) + `","task_name":"tooling_independent_review"}}`, "tooling_independent_review"},
+		{"task name before longer description", `{"input":{"task_name":"review","description":"Review all of the implementation"}}`, "review"},
+		{"claude description", `{"tool":"Task","input":{"description":"Check network","prompt":"Longer instructions"}}`, "Check network"},
+		{"prompt", `{"input":{"prompt":"Review the implementation"}}`, "Review the implementation"},
+		{"antigravity prompt", `{"tool":"invoke_subagent","input":{"Prompt":"check tests"}}`, "check tests"},
+		{"antigravity prompt before task", `{"input":{"Prompt":"Check the tests","task":"Longer task instructions"}}`, "Check the tests"},
+		{"task", `{"input":{"task":"Check the build"}}`, "Check the build"},
+		{"plaintext codex message", `{"input":{"message":"Inspect the renderer"}}`, "Inspect the renderer"},
+		{"blank names use prompt", `{"input":{"task_name":"\t\n ","description":"","prompt":"Check the CLI"}}`, "Check the CLI"},
+		{"structured fields use prose", `{"input":{"task_name":{},"description":["bad"],"prompt":false,"task":12,"message":"Check the API"}}`, "Check the API"},
+		{"legacy prose", "Review the release", "Review the release"},
+		{"bounded prose", `{"input":{"message":"` + strings.Repeat("é", 200) + `"}}`, strings.Repeat("é", 180)},
+		{"unknown payload", `{"tool":"spawn_agent","input":{"fork_turns":"all"}}`, ""},
+		{"opaque message only", `{"input":{"message":"gAAAA` + strings.Repeat("x", 300) + `"}}`, ""},
+		{"structured task only", `{"input":{"task":{"instructions":"Check the build"}}}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := testCatalog(t)
+			seedDelegation(t, c)
+			for _, update := range []struct {
+				query string
+				args  []any
+			}{
+				{`UPDATE messages SET text=? WHERE id='launch'`, []any{tc.text}},
+				{`UPDATE agent_sessions SET delegation_message_id='launch' WHERE id='embedded'`, nil},
+				{`UPDATE conversations SET agent_nickname='Parent nickname' WHERE id='root'`, nil},
+				{`UPDATE conversations SET agent_nickname='Child nickname' WHERE id='child'`, nil},
+				{`INSERT INTO conversation_documents(conversation_id,initiation,vector_json,model,indexed_at) VALUES('root','Parent request','[]','test','2026-01-01')`, nil},
+			} {
+				if _, err := c.DB.Exec(update.query, update.args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s, err := c.delegationSnapshot(context.Background(), "delegation-work")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, node := range []struct{ id, fallback string }{{"child-session", "Child nickname"}, {"embedded", "other-execution"}} {
+				want := firstString(tc.want, node.fallback)
+				if got := s.ByID[node.id].Label; got != want {
+					t.Fatalf("%s label = %q, want %q", node.id, got, want)
+				}
 			}
 		})
 	}
