@@ -1,5 +1,5 @@
 > Historical prerelease integration record. Pharos now uses the published
-> [0.7.0 packages](query-table-integration.md); source archives, the Go vendor,
+> [release packages](query-table-integration.md); source archives, the Go vendor,
 > the patch and the snapshot-packaging script described below have been retired.
 
 # Query Table SQLite/Go upstream handoff

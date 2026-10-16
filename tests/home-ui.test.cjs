@@ -1396,7 +1396,7 @@ test('compact native axes share a footer and wider plotting area on desktop and 
       assert.match(await labels.nth(1).innerText(), /^→ /);
       assert.equal(await card.locator('svg text[transform]').count(), 0);
       const clip = card.locator('svg clipPath rect');
-      assert.equal(await clip.getAttribute('x'), '28');
+      assert.equal(await clip.getAttribute('x'), '44');
       const svg = await card.locator('.qt-metric-plot svg').boundingBox();
       assert.ok(first.y >= svg.y + svg.height - 1, 'axis labels sit below the plot');
       const cover = await card.locator('.query-cover').boundingBox();

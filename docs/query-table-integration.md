@@ -1,17 +1,20 @@
-# Query Table 0.7.0 in Pharos
+# Query Table 0.7.1 in Pharos
 
-Pharos pins core, React, UI and codegen to the published npm **0.7.0** packages,
-and the Go adapter to **v0.7.0**. The npm lockfile records registry URLs and
+Pharos pins core, React, UI and codegen to the published npm **0.7.1** packages,
+and the Go adapter to **v0.7.1**. The npm lockfile records registry URLs and
 integrities; `go.sum` records the released Go module. The prerelease npm archives,
 Go replacement, vendored adapter and historical patch have been removed. Clean
 builds use these releases without another Query Table checkout.
 
-The [upstream migration guide](https://github.com/Pythia-Software/query-table/blob/v0.7.0/docs/host-integration-next-release.md)
-and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.7.0/CHANGELOG.md)
+The [upstream migration guide](https://github.com/Pythia-Software/query-table/blob/v0.7.1/docs/host-integration-next-release.md)
+and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.7.1/CHANGELOG.md)
 define the release contract. Optional worktree linking is described in
 [local development](query-table-local-development.md). The earlier
 [upstream handoff](query-table-upstream-handoff.md) and
 [next-release handoff](query-table-next-release-handoff.md) are historical records.
+
+The 0.7.1 patch improves compact box charts, chart tooltip rendering, and
+compact pie/ring legends. Query definitions and backend protocols are unchanged.
 
 ## Release feature coverage
 
