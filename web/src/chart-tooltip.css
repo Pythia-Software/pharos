@@ -1,0 +1,7 @@
+.chart-tooltip-host { display:contents; }
+.chart-tooltip { position:fixed; z-index:10000; pointer-events:none; display:flex; flex-direction:column; gap:4px; width:max-content; max-width:min(320px,calc(100vw - 16px)); padding:10px 12px; border:1px solid var(--line); border-radius:6px; box-shadow:0 5px 20px #0005; background:var(--panel); color:var(--ink); font-size:11px; line-height:1.4; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+.chart-tooltip strong { font-weight:600; }
+.chart-tooltip>span { white-space:pre-wrap; }
+
+.chart-tooltip-row { display:flex; align-items:baseline; gap:6px; }
+.chart-tooltip-swatch { display:inline-block; flex:none; width:8px; height:8px; border-radius:2px; }

@@ -57,12 +57,12 @@ test("ranked covers show their rows without a population caption or headline tot
   assert.equal(output.headlineMetric, undefined);
   assert.equal(output.ranked, true);
 });
-test("card plots use linear scales without changing saved bounds or logarithmic exploration settings", () => {
+test("scatter covers respect logarithmic scales and bounds without changing the raw metric", () => {
   const input = preview(), { clause } = input.metrics[0];
   clause.expressionY = "AVG([result_tokens])";
   clause.display = { kind: "scatter", xScale: { mode: "log", min: 1, max: 1000 }, yScale: { mode: "log" } };
   const before = structuredClone(input);
-  assert.deepEqual(compactMetricPresentation(input).axisScales, { xScale: { mode: "linear", min: 1, max: 1000 }, yScale: { mode: "linear" } });
+  assert.deepEqual(compactMetricPresentation(input).axisScales, { xScale: { mode: "log", min: 1, max: 1000 }, yScale: { mode: "log" } });
   assert.deepEqual(input, before);
 });
 
@@ -123,4 +123,43 @@ test("explicit cover group limits override the default presentation budget witho
   assert.equal(output.budget, 2);
   assert.equal(output.shown, 2);
   assert.deepEqual(input, before);
+});
+
+
+test("model lists opt into group colors and compound pies/scatters retain display labels", () => {
+  const input = preview();
+  input.metrics[0].clause.groupBy = ["provider", "model_family"];
+  input.metrics[0].result.buckets = [{ keys: ["one", "alpha"], value: 10, count: 1 }, { keys: ["two", "beta"], value: 20, count: 1 }];
+  input.metrics[0].result.groupCount = 2;
+  for (const kind of ["bar-horizontal", "pie", "scatter"]) {
+    input.metrics[0].clause.display = { kind };
+    const presentation = compactMetricPresentation(input);
+    assert.equal(presentation.friendlyKeys, true, kind);
+    if (kind === "bar-horizontal") assert.equal(presentation.listOptions.useGroupColors, true);
+  }
+  input.metrics[0].clause.display = { kind: "bar-horizontal", list: { useGroupColors: false } };
+  assert.equal(compactMetricPresentation(input).listOptions.useGroupColors, false);
+});
+
+
+test("log scatter disclosure counts nonpositive pairs once and leaves missing data and source values intact", () => {
+  const input = preview(), { clause, result } = input.metrics[0];
+  clause.expressionY = "SUM([cost_usd])";
+  clause.display = { kind: "scatter", xScale: { mode: "log" }, yScale: { mode: "log" } };
+  result.groupCount = 6;
+  result.buckets = [
+    { keys: ["positive"], value: 10, y: 1, count: 1 },
+    { keys: ["zero-x"], value: 0, y: 1, count: 1 },
+    { keys: ["zero-y"], value: 10, y: 0, count: 1 },
+    { keys: ["negative-both"], value: -1, y: -2, count: 1 },
+    { keys: ["missing"], value: 10, y: null, count: 1 },
+    { keys: ["error"], value: 0, y: 0, error: "Unavailable", count: 1 },
+  ];
+  const before = structuredClone(input), output = compactMetricPresentation(input);
+  assert.equal(output.omittedLogPoints, 3);
+  assert.match(output.summary, /3 zero\/negative points omitted/);
+  assert.deepEqual(input, before);
+  clause.display = { kind: "scatter" };
+  assert.deepEqual(compactMetricPresentation(input).axisScales, { xScale: { mode: "linear" }, yScale: { mode: "linear" } });
+  assert.equal(compactMetricPresentation(input).omittedLogPoints, 0);
 });

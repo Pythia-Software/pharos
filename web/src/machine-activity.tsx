@@ -18,10 +18,14 @@ const views: Array<[MachineView, string, string]> = [
 
 function readLocation() {
   const params = new URLSearchParams(location.search);
-  const requested = params.get("machine_view") ?? preferences().get("pharos-machine-view", "tokens");
+  // A bookmarked token query carries its own population. Saved Machine Time
+  // filters must not silently narrow a card’s destination. Explicit URL scopes
+  // still win when the user deliberately included them.
+  const tokenQuery = params.has("q_usage");
+  const requested = params.get("machine_view") ?? (tokenQuery ? "tokens" : preferences().get("pharos-machine-view", "tokens"));
   const view: MachineView = requested === "time" || requested === "parallelism" ? requested : "tokens";
   const example = params.get("machine_demo") === "1";
-  const saved = preferences().get<MachineScope>(scopeKey, { days: 0, repository: "", provider: "", model: "" });
+  const saved = tokenQuery ? { days: 0, repository: "", provider: "", model: "" } : preferences().get<MachineScope>(scopeKey, { days: 0, repository: "", provider: "", model: "" });
   const days = Number(params.get("activity_days") ?? (example ? 14 : saved.days));
   return { view, example, scope: {
     days: example && !days ? 14 : [0, 7, 14, 30, 90].includes(days) ? days : 0,

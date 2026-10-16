@@ -53,6 +53,7 @@ function generatedColor(key: string, provider?: Provider): string {
 }
 
 export function chartSeriesStyle(scope: string, name: string): SeriesStyle {
+  if (scope.startsWith("root_")) scope = scope.slice(5);
   if (scope === "model_effort") {
     const separator = name.lastIndexOf(" · ");
     const model = separator < 0 ? name : name.slice(0, separator);
@@ -61,10 +62,10 @@ export function chartSeriesStyle(scope: string, name: string): SeriesStyle {
     return { color: generatedColor(`${scope}:${name}`, modelProvider(modelColorKey(model))), group: modelStyle.group, order: `${modelStyle.order}:${effortStyle.order}` };
   }
   if (scope === "effort") {
-    const levels = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
-    const colors = ["#85909b", "#b4c6ad", "#8eaf96", "#608e86", "#48718b", "#635788", "#854a75"];
+    const levels = ["none", "minimal", "low", "medium", "high", "xhigh", "ultra", "max"];
+    const colors = ["#eee7fa", "#dac9f2", "#c3a7e7", "#a982d8", "#8d60c3", "#7443a9", "#5c2e8c", "#45206d"];
     const index = levels.indexOf(name.toLowerCase());
-    return { color: index < 0 ? generatedColor(`${scope}:${name}`) : colors[index], order: `${index < 0 ? 99 : index}:${name}` };
+    return { color: index < 0 ? otherSeriesColor : colors[index], order: `${index < 0 ? 99 : index}:${name}` };
   }
   if (scope === "model_family") {
     const key = modelColorKey(name), model = Object.hasOwn(models, key) ? models[key] : undefined, provider = model?.provider ?? modelProvider(key);
@@ -85,4 +86,11 @@ export function chartSeriesStyle(scope: string, name: string): SeriesStyle {
     };
   }
   return { color: generatedColor(`${scope}:${name}`) };
+}
+
+// Compound metric groups retain their model palette even when their first key
+// is provider, repository, or a display label flattened for the native renderer.
+export function metricSeriesColor(fields: string[], keys: unknown[]): string {
+  const field = ["root_model_family", "model_family", "root_effort", "effort", "root_provider", "provider", "repository_name"].find(field => fields.includes(field)) ?? fields[0];
+  return chartSeriesStyle(field ?? "generic", String(keys[fields.indexOf(field)] ?? "Unspecified")).color;
 }

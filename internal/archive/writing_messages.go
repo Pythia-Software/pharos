@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -29,7 +30,9 @@ var writingMessageDataset = func() sqlDataset {
 		"other_words":   "(ma.words-ma.typed_words)",
 		"typed_share":   "CASE WHEN ma.words>0 THEN round(ma.typed_words*100.0/ma.words,1) END",
 		"main_category": "ma.main_category", "categories": "ma.categories", "rules": "ma.rules",
-		"has_source": "EXISTS(SELECT 1 FROM message_authorship_spans s WHERE s.message_id=ma.message_id AND s.source_conversation_id IS NOT NULL)",
+		"correction_cue": authoredCueSQL(correctionCuePhrases),
+		"positive_cue":   authoredCueSQL(positiveCuePhrases),
+		"has_source":     "EXISTS(SELECT 1 FROM message_authorship_spans s WHERE s.message_id=ma.message_id AND s.source_conversation_id IS NOT NULL)",
 	}
 	for _, category := range authorshipCategories {
 		columns[category+"_words"] = "ma." + category + "_words"
@@ -127,7 +130,9 @@ func (c *Catalog) attachAuthoredText(ctx context.Context, rows []map[string]any)
 		}
 		plain(at, limit)
 		row["text"], row["segments"], row["text_truncated"] = text[:limit], segments, limit < len(text)
-		row["subagent"], row["typed_message"], row["has_source"] = integer(row["subagent"]) != 0, integer(row["typed_message"]) != 0, integer(row["has_source"]) != 0
+		for _, field := range []string{"subagent", "typed_message", "has_source", "correction_cue", "positive_cue"} {
+			row[field] = integer(row[field]) != 0
+		}
 		for _, field := range []string{"categories", "rules"} {
 			var values []string
 			_ = json.Unmarshal([]byte(firstString(row[field])), &values)
@@ -135,4 +140,19 @@ func (c *Catalog) attachAuthoredText(ctx context.Context, rows []map[string]any)
 		}
 	}
 	return nil
+}
+
+// Cues describe retained wording, not sentiment or task outcomes. Match each
+// typed span separately so copied context cannot supply or bridge a cue.
+var correctionCuePhrases = []string{"you misunderstand", "you misunderstood", "that's not what", "that’s not what", "that is not what", "i meant", "not what i asked", "you missed", "that's incorrect", "that’s incorrect", "that is incorrect"}
+var positiveCuePhrases = []string{"great job", "great work", "good job", "well done", "thank you", "thanks for", "looks good", "that worked", "this works"}
+
+func authoredCueSQL(phrases []string) string {
+	matches := make([]string, 0, len(phrases))
+	for _, phrase := range phrases {
+		// Stored span offsets are UTF-8 bytes; SQLite text substr uses characters.
+		span := "lower(CAST(substr(CAST(m.text AS BLOB),s.start_byte+1,s.end_byte-s.start_byte) AS TEXT))"
+		matches = append(matches, "instr("+span+",'"+strings.ReplaceAll(phrase, "'", "''")+"')>0")
+	}
+	return "(ma.typed_words>0 AND EXISTS(SELECT 1 FROM message_authorship_spans s WHERE s.message_id=ma.message_id AND s.category='typed' AND (" + strings.Join(matches, " OR ") + ")))"
 }

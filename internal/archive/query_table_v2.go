@@ -67,6 +67,8 @@ func sqliteQuerySchema(dataset string) (qt.Schema, error) {
 		return PharosActivitySchema(), nil
 	case "usage":
 		return PharosUsageSchema(), nil
+	case "conversation_activity":
+		return PharosConversationActivitySchema(), nil
 	case "writing":
 		return PharosWritingSchema(), nil
 	case "writing_messages":

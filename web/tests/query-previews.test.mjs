@@ -6,7 +6,7 @@ import * as core from "@pythia-software/query-table-core";
 
 const compiled = await build({ entryPoints: ["src/curiosity-data.ts"], bundle: true, write: false, platform: "node", format: "esm" });
 const { queryRecipes, instantiateRecipe, loadQueryPreviews, loadQueryPreview, clearPreviewCache } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString("base64")}`);
-const schemas = Object.fromEntries(["tool_calls", "skill_usages", "writing_messages", "usage", "library", "tl1_attempts", "mcp_calls"].map(dataset => [dataset, core.loadSchema(JSON.parse(readFileSync(`../schemas/${dataset}.schema.json`, "utf8")))]));
+const schemas = Object.fromEntries(["tool_calls", "skill_usages", "writing_messages", "usage", "conversation_activity", "library", "tl1_attempts", "mcp_calls"].map(dataset => [dataset, core.loadSchema(JSON.parse(readFileSync(`../schemas/${dataset}.schema.json`, "utf8")))]));
 const execution = { profile: "qt-sqlite-v1", planToken: "", fields: {}, resolvedRevisions: {} };
 const rows = Array.from({ length: 10 }, (_, i) => ({ id: String(i), call_count: 1, error_count: i < 2 ? 1 : 0, tool_name: "Bash", command_name: "go test", duration_ms: (i + 1) * 100, result_tokens: i * 10, result_tokens_source: i % 2 ? "estimated" : "measured", repository_name: i % 2 ? "one" : "two", conversation_id: String(i), started_at: Date.now() }));
 function query(aggregations, extra = {}) { return { ...core.EMPTY_QUERY, aggregations, ...extra }; }
@@ -92,7 +92,7 @@ test("cover changes reuse full results and preserve distributions and paired axe
   assert.equal(requests.filter(request => request.path.endsWith("metrics")).length, 1);
 });
 
-test("distribution recipes include recorded zeros and keep output provenance in every summary", async t => {
+test("duration boxes select positive timing while nonempty output sizes preserve provenance", async t => {
   fixture(t, (path, request) => {
     if (!path.endsWith("metrics")) return;
     const observations = [...rows, { ...rows[0], id: "zero", duration_ms: 0, result_tokens: 0 }];
@@ -100,13 +100,13 @@ test("distribution recipes include recorded zeros and keep output provenance in 
   });
   const duration = queryRecipes.find(recipe => recipe.id === "duration-distribution");
   const preview = await loadQueryPreview(duration.dataset, query(duration.measures, { where: duration.where }), schemas.tool_calls);
-  assert.equal(preview.metrics[0].result.buckets[0].distribution.summary.n, 11);
-  assert.equal(preview.metrics[0].result.buckets[0].distribution.summary.median, 500);
+  assert.equal(preview.metrics[0].result.buckets[0].distribution.summary.n, 10);
+  assert.equal(preview.metrics[0].result.buckets[0].distribution.summary.median, 550);
   const output = queryRecipes.find(recipe => recipe.id === "output-distribution");
   const distribution = await loadQueryPreview(output.dataset, query(output.measures, { where: output.where }), schemas.tool_calls);
-  assert.deepEqual(distribution.metrics[1].clause.groupBy, ["tool_name", "result_tokens_source"]);
-  assert.deepEqual(distribution.metrics[1].result.buckets.map(bucket => bucket.keys.at(-1)).sort(), ["estimated", "measured"]);
-  assert.equal(distribution.metrics[1].result.buckets.reduce((n, bucket) => n + bucket.distribution.summary.n, 0), 11);
+  assert.deepEqual(distribution.metrics[0].clause.groupBy, ["tool_name", "result_tokens_source"]);
+  assert.deepEqual(distribution.metrics[0].result.buckets.map(bucket => bucket.keys.at(-1)).sort(), ["estimated", "measured"]);
+  assert.equal(distribution.metrics[0].result.buckets.reduce((n, bucket) => n + bucket.distribution.summary.n, 0), 9);
 });
 
 test("changing the cover to evidence counts uses the selected metric's unit", async t => {
@@ -114,6 +114,33 @@ test("changing the cover to evidence counts uses the selected metric's unit", as
   const recipe = queryRecipes.find(recipe => recipe.id === "skill-reach");
   const preview = await loadQueryPreview(recipe.dataset, query(recipe.measures), schemas.skill_usages, { recipe, coverMetricId: "skill-evidence-types" });
   assert.equal(preview.summary, "10 records");
+});
+
+test("sparse tool-size cohorts explain their cutoff in calls rather than conversations", async t => {
+  fixture(t, (path, request) => path.endsWith("metrics") ? response(core.evaluateMetrics(rows.slice(1, 3), query(request.metrics), schemas.tool_calls)) : undefined);
+  const recipe = queryRecipes.find(recipe => recipe.id === "output-distribution");
+  const preview = await loadQueryPreview(recipe.dataset, query(recipe.measures, { where: recipe.where }), schemas.tool_calls, { recipe });
+  assert.equal(preview.state, "empty");
+  assert.equal(preview.emptyLabel, "No cohorts with at least 3 calls");
+});
+
+test("sparse skill boxes name their actual sample population", async t => {
+  fixture(t, (path, request) => path.endsWith("metrics") ? response({ metrics: request.metrics.map(metric => ({ id: metric.id, buckets: [{ keys: ["example", "explicit_invocation"], value: 200, count: 2, distribution: { kind: "box", summary: { n: 2, min: 100, q1: 125, median: 150, q3: 175, max: 200, mean: 150 } } }], processedRows: 2 })) }) : undefined);
+  const recipe = queryRecipes.find(recipe => recipe.id === "skill-body-sizes");
+  const state = query(recipe.measures, { where: recipe.where });
+  const preview = await loadQueryPreview(recipe.dataset, state, schemas.skill_usages, { recipe });
+  assert.equal(preview.state, "empty");
+  assert.equal(preview.emptyLabel, "No cohorts with at least 3 body records");
+  const overridden = await loadQueryPreview(recipe.dataset, state, schemas.skill_usages, { recipe, cover: { ...recipe.cover, sampleUnit: "conversation/path groups" } });
+  assert.equal(overridden.emptyLabel, "No cohorts with at least 3 conversation/path groups");
+});
+
+test("empty diagnostic covers explain the exact missing population", async t => {
+  fixture(t);
+  const recipe = queryRecipes.find(recipe => recipe.id === "edit-failures"), item = instantiateRecipe(recipe, 7);
+  const preview = await loadQueryPreview(recipe.dataset, item.query, schemas.tool_calls, { recipe, window: item.window });
+  assert.equal(preview.state, "empty");
+  assert.equal(preview.emptyLabel, "No recorded edit errors with mapped paths");
 });
 
 test("canonical computed fields carry current revisions, labels and typed results", async t => {
@@ -300,6 +327,10 @@ test("headline numbers represent complete additive measures with their units", a
   const metric = { id: "calls", op: "count", groupBy: [], label: "Calls" };
   const complete = await loadQueryPreview("tool_calls", query([metric]), schemas.tool_calls);
   assert.deepEqual(complete.headlineMetric, { value: "10", unit: "calls" });
+  const hidden = await loadQueryPreview("tool_calls", query([metric]), schemas.tool_calls, { cover: { mode: "source", metricId: metric.id, showHeadline: false, legendColumns: 2 } });
+  assert.equal(hidden.headlineMetric, undefined);
+  assert.equal(hidden.legendColumns, 2);
+  assert.equal(hidden.metrics[0].result.buckets[0].value, complete.metrics[0].result.buckets[0].value);
   const formatted = await loadQueryPreview("tool_calls", query([{ ...metric, id: "formatted", display: { kind: "value", format: { kind: "number", decimals: 2 } } }]), schemas.tool_calls);
   assert.deepEqual(formatted.headlineMetric, { value: "10.00", unit: "" });
   const zero = await loadQueryPreview("tool_calls", query([{ id: "zero", op: "sum", field: "error_count", groupBy: [] }], { where: [{ field: "error_count", op: "=", value: "0" }] }), schemas.tool_calls);
@@ -328,7 +359,7 @@ test("truncated and errored measures never produce a headline total", async t =>
 
 
 test("labelled covers fetch friendly titles beyond twelve visible groups", async t => {
- const population=Array.from({length:25},(_,i)=>({id:`u-${i}`,workspace_id:`w-${i}`,agent_session_id:`s-${i}`,title:`Friendly work ${i}`,first_usage_at:Date.now()-1000,last_usage_at:new Date().toISOString(),total_tokens:1000-i,cost_usd:100-i}));
+ const population=Array.from({length:25},(_,i)=>({id:`u-${i}`,workspace_id:`w-${i}`,root_conversation_id:`root-${i}`,root_repository_name:'repo',root_title:`Friendly work ${i}`,agent_session_id:`s-${i}`,title:`Friendly work ${i}`,first_usage_at:Date.now()-1000,last_usage_at:new Date().toISOString(),total_tokens:1000-i,cost_usd:100-i}));
  const requests=fixture(t,(path,request)=>{
   if(!path.includes("/usage/query-v3"))return;
   const state={...core.EMPTY_QUERY,...request.result,select:request.result.select.map(field=>({field})),aggregations:request.metrics,grouping:{...request.grouping,source:{...core.EMPTY_QUERY,...request.source,select:request.source.select.map(field=>({field}))}}};
@@ -340,5 +371,42 @@ test("labelled covers fetch friendly titles beyond twelve visible groups", async
  const preview=await loadQueryPreview("usage",item.query,schemas.usage,{recipe,cover});
  assert.equal(requests.find(({path})=>path.includes("/usage/query-v3")).request.result.limit,20);
  assert.equal(Object.keys(preview.groupLabels).length,20);
- assert.equal(preview.groupLabels[JSON.stringify(["w-19"])],"Friendly work 19");
+ assert.equal(preview.groupLabels[JSON.stringify(["repo","root-19"])],"Friendly work 19 · repo");
+});
+
+test("cost history shares identical loads, preserves mixed windows, and refetches truncated timestamp ranges", async t => {
+ const now=Date.now(),d=86400000,population=[{id:'recent',first_usage_at:new Date(now-d).toISOString(),total_tokens:1,price_status:'priced',cost_usd:70},{id:'older',first_usage_at:new Date(now-20*d).toISOString(),total_tokens:1,price_status:'priced',cost_usd:140}];
+ let truncated=false;
+ const requests=fixture(t,(path,request)=>{
+  if(!path.endsWith('/usage/metrics'))return;
+  assert.deepEqual(request.metrics[0].groupBy,['first_usage_at']);
+  const body=core.evaluateMetrics(population,{...core.EMPTY_QUERY,...request,aggregations:request.metrics},schemas.usage);
+  if(!truncated){truncated=true;body.metrics[0].groupCount=10001;body.metrics[0].buckets=body.metrics[0].buckets.slice(0,1);}
+  return response(body);
+ });
+ const recipe=queryRecipes.find(r=>r.id==='api-cost-total');
+ const jobs=[7,7,30].map((days,i)=>{const item=instantiateRecipe(recipe,days);return{id:String(i),dataset:'usage',query:item.query,schema:schemas.usage,options:{recipe:item,window:item.window,cover:item.cover}};});
+ const result=new Map();await loadQueryPreviews(jobs,(id,preview,error)=>{assert.equal(error,undefined);result.set(id,preview);});
+ assert.equal(result.get('0').study.value,70);assert.equal(result.get('1').study.value,70);assert.equal(result.get('2').study.value,210);assert.equal(result.get('0').study.lookbackDays,7);assert.equal(result.get('2').study.lookbackDays,7);assert.equal(result.get('0').study.points.at(-1),10);
+ assert.equal(requests.filter(r=>r.path.endsWith('/usage/metrics')).length,4,'two periods plus the two replacement ranges; the duplicate seven-day card shares its load');
+ assert.equal(requests.filter(r=>r.path.includes('/rows')||r.path.includes('/query-v3')).length,0,'only reduced timestamp totals are downloaded');
+});
+
+test("partial cost history is rejected instead of manufacturing a total", async t => {
+ fixture(t,(path,request)=>path.endsWith('/usage/metrics')?response({metrics:[{id:request.metrics[0].id,coverage:'partial',buckets:[],processedRows:0}]}):undefined);
+ const recipe=queryRecipes.find(r=>r.id==='api-cost-total'),item=instantiateRecipe(recipe,7);
+ await assert.rejects(loadQueryPreview('usage',item.query,schemas.usage,{recipe:item,window:item.window,cover:item.cover}),/Complete API cost history/);
+});
+
+test("model tail previews apply task-count support before the visible point budget and keep sparse tasks in destinations", async t => {
+ const now=Date.now();let population=[{id:'sparse',root_conversation_id:'sparse',root_provider:'codex',root_model_family:'A sparse',first_usage_at:now-1000,total_tokens:100000},...Array.from({length:3},(_,i)=>({id:`root-${i}`,root_conversation_id:`root-${i}`,root_provider:'codex',root_model_family:'B supported',first_usage_at:now-1000,total_tokens:(i+1)*100}))];
+ fixture(t,(path,request)=>{
+  if(!path.includes('/usage/query-v3'))return;
+  const state={...core.EMPTY_QUERY,...request.result,select:request.result.select.map(field=>({field})),aggregations:request.metrics,grouping:{...request.grouping,source:{...core.EMPTY_QUERY,...request.source,select:request.source.select.map(field=>({field}))}}};
+  const prepared=core.prepareGrouping(population,schemas.usage,state.grouping,{now:request.now}),page=core.applyQuery(population,state,schemas.usage,{now:request.now});
+  return response({version:3,now:request.now,sourceTotal:population.length,...page,metrics:core.evaluateMetrics(population,state,schemas.usage,{now:request.now,shownRows:page.rows}).metrics,execution,schema:{name:prepared.schema.name,idField:prepared.schema.idField,fields:prepared.schema.fields.map(({name,type})=>({name,type}))}});
+ });
+ const recipe=queryRecipes.find(r=>r.id==='model-task-token-spread'),item=instantiateRecipe(recipe,7),cover={...recipe.cover,maxGroups:1};
+ const preview=await loadQueryPreview('usage',item.query,schemas.usage,{recipe,cover,window:item.window});assert.equal(preview.state,'ready');assert.equal(preview.groupSummary,undefined,'scatter support and omission summaries are not hidden as ranked-list captions');assert.equal(preview.metrics[0].result.buckets.length,1);assert.deepEqual(preview.metrics[0].result.buckets[0].keys,['codex','B supported']);assert.equal(preview.metrics[0].result.buckets[0].count,3);assert.equal(preview.metrics[0].clause.display.maxGroups,1);assert.equal(core.applyQuery(population,item.query,schemas.usage,{now}).total,4);
+ population=population.slice(0,1);clearPreviewCache();const empty=await loadQueryPreview('usage',item.query,schemas.usage,{recipe,cover,window:item.window});assert.equal(empty.state,'empty');assert.match(empty.emptyLabel,/at least 3 root tasks/);
 });

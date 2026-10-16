@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,16 @@ func (c *Catalog) mcpQueryRows(ctx context.Context) ([]map[string]any, error) {
 		return nil, err
 	}
 	for _, row := range rows {
+		// This is the caller's explicit archive-source filter, not the caller
+		// identity or inferred provenance of the response. Older/unscoped
+		// requests remain unknown rather than being labeled "all sources".
+		row["query_source"] = nil
+		var arguments map[string]any
+		if json.Unmarshal([]byte(firstString(row["arguments_json"])), &arguments) == nil {
+			if source, ok := arguments["source"].(string); ok && strings.TrimSpace(source) != "" {
+				row["query_source"] = strings.TrimSpace(source)
+			}
+		}
 		at, ok := parseTime(firstString(row["called_at"]))
 		if ok {
 			at = at.In(time.Local)

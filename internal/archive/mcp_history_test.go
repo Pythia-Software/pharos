@@ -1,12 +1,60 @@
 package archive
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestMCPRequestedArchiveSourceProjection(t *testing.T) {
+	catalog, config := testCatalog(t)
+	for name, args := range map[string]map[string]any{
+		"claude": {"source": " claude ", "secret": "must not be logged"},
+		"codex":  {"source": "codex"}, "blank": {"source": " "},
+		"missing": {}, "number": {"source": 123}, "malformed": {},
+	} {
+		if err := catalog.RecordMCPCall(name, args, "ok", "", time.Millisecond, 10, nil, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := catalog.DB.Exec(`UPDATE mcp_calls SET arguments_json='invalid' WHERE tool_name='malformed'`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := catalog.mcpQueryRows(context.Background())
+	if err != nil || len(rows) != 6 {
+		t.Fatalf("projected rows: %d, %v", len(rows), err)
+	}
+	for _, row := range rows {
+		name := firstString(row["tool_name"])
+		if name == "claude" || name == "codex" {
+			if row["query_source"] != name {
+				t.Fatalf("explicit source %s: %#v", name, row["query_source"])
+			}
+		} else if row["query_source"] != nil {
+			t.Fatalf("unscoped/invalid source %s became %#v", name, row["query_source"])
+		}
+		if strings.Contains(firstString(row["arguments_json"]), "must not be logged") {
+			t.Fatal("source projection bypassed argument sanitization")
+		}
+	}
+	server := NewServer(config, catalog)
+	request := httptest.NewRequest(http.MethodPost, "/api/query/mcp_calls", strings.NewReader(`{"select":["tool_name","query_source"],"where":[{"field":"query_source","op":"=","value":"claude"}],"limit":10}`))
+	request.Header.Set("Authorization", "Bearer test-token")
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	var result struct {
+		Total int              `json:"total"`
+		Rows  []map[string]any `json:"rows"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || response.Code != http.StatusOK || result.Total != 1 || len(result.Rows) != 1 || result.Rows[0]["tool_name"] != "claude" {
+		t.Fatalf("requested source filter: %d %s (%v)", response.Code, response.Body.String(), err)
+	}
+}
 
 func TestMCPControlAndCallHistory(t *testing.T) {
 	if !mcpResultTruncated(map[string]any{"items": []map[string]any{{"next_text_offset": 120}}}) {

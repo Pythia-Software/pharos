@@ -16,6 +16,7 @@ func PharosMcpCallsSchema() querytable.Schema {
 			"tool_name":               {Name: "tool_name", Kind: querytable.FieldText, Expr: "r.\"tool_name\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"tool_name\""},
 			"status":                  {Name: "status", Kind: querytable.FieldEnum, Expr: "r.\"status\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"status\""},
 			"arguments_json":          {Name: "arguments_json", Kind: querytable.FieldText, Expr: "r.\"arguments_json\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"arguments_json\""},
+			"query_source":            {Name: "query_source", Kind: querytable.FieldText, Expr: "r.\"query_source\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"query_source\""},
 			"error_text":              {Name: "error_text", Kind: querytable.FieldText, Expr: "r.\"error_text\"", Synthetic: false, ServerFilter: true, Sortable: true, SortExpr: "r.\"error_text\""},
 			"duration_ms":             {Name: "duration_ms", Kind: querytable.FieldNumber, Expr: "r.\"duration_ms\"", Synthetic: false, ExpressionNumeric: true, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"duration_ms\""},
 			"response_bytes":          {Name: "response_bytes", Kind: querytable.FieldNumber, Expr: "r.\"response_bytes\"", Synthetic: false, ExpressionNumeric: true, Groupable: func() *bool { v := true; return &v }(), ServerFilter: true, Sortable: true, SortExpr: "r.\"response_bytes\""},
