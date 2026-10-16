@@ -45,10 +45,10 @@ function fixtures() {
     const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
     const repository_name = ['pharos', 'query-table', 'workbench'][i % 3];
     calls.push({ id: `call-${i}`, day, started_at: date.toISOString(), tool_name: ['Edit', 'Bash', 'Read'][i % 3], tool_category: ['edit', 'command', 'read'][i % 3], status: i % 2 ? 'ok' : 'error', error_count: i % 2 ? 0 : 1, call_count: 1, error_signature: 'file_not_read', duration_ms: (i + 1) * 5000, command_name: 'go test', repo_path: `src/module-${i % 3}.go`, test_failure: i % 2 === 0, carried_tokens: (i + 1) * 1200, result_tokens: 300 + i * 40, truncated: i % 4 === 0, search_query: 'SQLite indexing', host: 'go.dev', mcp_method: 'search_work', repository_name, title: 'Archive indexing' });
-    usage.push({ id: `usage-${i}`, day, first_usage_at: date.toISOString(), last_usage_at: date.toISOString(), repository_name, total_tokens: 50000 + i * 7000, model_family: ['sonnet-4-6', 'gpt-5.4'][i % 2], cost_usd: i / 2 + 1, cache_read_input_tokens: i * 400, session_kind: i % 3 ? 'root' : 'subagent' });
+    usage.push({ id: `usage-${i}`, day, first_usage_at: date.toISOString(), last_usage_at: date.toISOString(), repository_name, total_tokens: 50000 + i * 7000, model_family: ['sonnet-4-6', 'gpt-5.4'][i % 2], cost_usd: i / 2 + 1, price_status: 'priced', workspace_id: `work-${i}`, cache_read_input_tokens: i * 400, session_kind: i % 3 ? 'root' : 'subagent' });
     writing.push({ id: `writing-${i}`, day, sent_at: date.toISOString(), text: i % 2 ? 'Please inspect how indexes affect the query plan.' : 'I meant the timestamp index, not the title index.', typed_message: true, typed_words: i + 20, words: i + 40, repository_name, title: 'Archive indexing' });
     skills.push({ id: `skill-${i}`, day, created_at: date.toISOString(), skill_name: ['review', 'debug', 'visualize'][i % 3], status: i % 3 ? 'ok' : 'error', repository_name: ['pharos', 'query-table', 'workbench'][Math.floor(i / 3) % 3], conversation_id: `conversation-${i}`, evidence_type: i % 2 ? 'invocation' : 'body-load' });
-    library.push({ id: `work-${i}`, title: `Archive work ${i + 1}`, activity_at: date.toISOString(), repository_name, cost_usd: i + 1 });
+    library.push({ id: `work-${i}`, title: `Archive work ${i + 1}`, activity_at: date.toISOString(), repository_name, cost_usd: i + 1, token_count: 1000, price_status: 'priced' });
     attempts.push({ id: `attempt-${i}`, started_at: date.toISOString(), project: 'pharos', flavor: 'fix', execution_class: 'llm', shape_version: 'v1', configuration: ['fast', 'careful'][i % 2], attempt_count: 1, advanced_count: i % 3 ? 1 : 0, escalated_count: i % 3 ? 0 : 1 });
     calls.at(-1).conversation_id = `conversation-${i}`;
     calls.at(-1).result_tokens_source = i % 2 ? 'estimated' : 'measured';
@@ -121,7 +121,7 @@ async function setup({ saved = false, reducedMotion = false, clock = false, view
   await page.goto(`http://home.test${url}`);
   if (clock) await page.clock.runFor(5000);
   if (url.includes('cards=library')) await page.locator('.card-library-entry').first().waitFor();
-  else if (url.includes('cards=human-review') || url.includes('cards=model-review')) await page.locator('.human-review-entry').first().waitFor();
+  else if (url.includes('cards=human-review') || url.includes('cards=model-review') || url.includes('cards=context-review') || url.includes('cards=error-review') || url.includes('cards=tool-review') || url.includes('cards=skills-review') || url.includes('cards=research-review') || url.includes('cards=cost-review') || url.includes('cards=token-review') || url.includes('cards=delegation-review')) await page.locator('.human-review-entry').first().waitFor();
   else if (waitForHome) await page.waitForFunction(() => document.querySelector('.home-conveyor')?.getAttribute('aria-busy') === 'false' && document.querySelector('.home-belt-row .query-card'));
   else await page.waitForFunction(() => document.querySelector('.view.active .qt-qb'));
   return { browser, page, data };
@@ -806,7 +806,7 @@ test('homepage fits text search, centers wrapping collection rows, and contains 
 test('wide cards inset translucent collection actions and keep metric covers linear', async () => {
   const { browser, page, data } = await setup({ url: '/home?cards=library', viewport: { width: 1470, height: 836 }, deviceScaleFactor: 2 });
   try {
-    data.rows.usage = data.rows.usage.slice(0, 2).map((row, i) => ({ ...row, cache_read_input_tokens: i ? 100 : 10, model_family: 'test-model', price_status: 'priced' }));
+    data.rows.usage = data.rows.usage.slice(0, 2).map((row, i) => ({ ...row, cache_read_input_tokens: i ? 100 : 10, total_tokens: i ? 100 : 10, model_family: 'test-model', price_status: 'priced' }));
     await page.reload();
     await page.waitForFunction(() => !document.querySelector('.card-library-count').textContent.includes('Loading charts'));
     const card = page.locator('#card-price-coverage .query-card');
@@ -827,7 +827,7 @@ test('wide cards inset translucent collection actions and keep metric covers lin
     assert.ok(layout.centerX <= -24 && layout.centerY <= -24, 'FAB is inset inside the card corner');
     assert.equal(layout.leftPadding, layout.rightPadding, 'collection action reserves no caption width');
     assert.equal(await card.locator('.query-card-open .query-keep').count(), 0, 'collection is independent from opening the query');
-    const heights = await page.locator('#card-cache-reads .query-cover-columns i').evaluateAll(marks => marks.map(mark => parseFloat(mark.style.height)).sort((a, b) => a - b));
+    const heights = await page.locator('#card-usage-models .query-cover-columns i').evaluateAll(marks => marks.map(mark => parseFloat(mark.style.height)).sort((a, b) => a - b));
     assert.deepEqual(heights, [10, 100], 'a tenfold difference retains its linear proportion');
     assert.equal(await page.locator('.query-timeline-scale,.query-cover-columns.broken').count(), 0);
     for (const width of [600, 390, 320]) {
@@ -839,9 +839,9 @@ test('wide cards inset translucent collection actions and keep metric covers lin
         assert.ok((await card.boundingBox()).width >= 240);
       }
     }
-    await card.getByRole('button', { name: 'Collect How much usage has a confirmed price?', exact: true }).focus();
+    await card.getByRole('button', { name: 'Collect Token pricing coverage', exact: true }).focus();
     await page.keyboard.press('Enter');
-    await page.getByText('Collected “How much usage has a confirmed price?”.', { exact: true }).waitFor();
+    await page.getByText('Collected “Token pricing coverage”.', { exact: true }).waitFor();
     assert.equal(new URL(page.url()).pathname, '/home');
     assert.equal(await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', []).length), 1);
     assert.deepEqual(data.errors, []);
@@ -852,7 +852,7 @@ test('annotated covers show scalar values, clean rankings and legible chart labe
   const { browser, page, data } = await setup({ url: '/home?cards=library', viewport: { width: 1470, height: 836 }, deviceScaleFactor: 2 });
   global.location = { origin: 'http://home.test' };
   try {
-    data.rows.usage.forEach((row, i) => { row.price_status = 'priced'; row.repository_name = `repository-${i % 6}`; });
+    data.rows.usage.forEach((row, i) => { row.price_status = 'priced'; row.repository_name = `repository-${i % 6}`; row.input_tokens = 1000 + i * 100; row.root_conversation_id = `root-${i}`; row.root_repository_name = row.repository_name; row.root_title = row.title; row.root_provider = 'codex'; row.root_model_family = 'gpt-5.4'; });
     data.rows.tool_calls.forEach((row, i) => { row.result_tokens = (i + 1) * 400.12345; });
     await page.reload();
     await page.waitForFunction(() => !document.querySelector('.card-library-count').textContent.includes('Loading charts'));
@@ -864,17 +864,17 @@ test('annotated covers show scalar values, clean rankings and legible chart labe
     const original = await price.locator('.query-card-open').getAttribute('href');
     assert.deepEqual(links.queryFromURL(original).query.grouping.keys, ['price_status']);
 
-    const work = page.locator('#card-expensive-work .query-cover');
+    const work = page.locator('#card-window-work-cost .query-cover');
     assert.equal(await work.locator('.query-result-summary,.query-result-evidence').count(), 0);
     assert.doesNotMatch(await work.getAttribute('aria-label'), /\b28\b|groups returned|Top:/);
     assert.equal(await work.locator('.query-compact-limit').count(), 0);
     assert.match(await work.locator('.qt-metric-bar-value').first().innerText(), /\$/, 'ranked costs retain currency units');
 
-    const scatter = page.locator('#card-output-duration');
+    const scatter = page.locator('#card-work-volume-cost');
     assert.equal(await scatter.locator('svg text[transform*="rotate"]').count(), 0);
-    assert.equal(await scatter.locator('.qt-metric-axis-labels > span').first().innerText(), '↑ Average output tokens');
+    assert.equal(await scatter.locator('.qt-metric-axis-labels > span').first().innerText(), "↑ API equivalent (USD)");
     await page.waitForFunction(() => {
-      const card = document.querySelector('#card-output-duration'), svg = card.querySelector('.qt-metric-plot svg');
+      const card = document.querySelector('#card-work-volume-cost'), svg = card.querySelector('.qt-metric-plot svg');
       const plot = svg.getBoundingClientRect(), title = card.querySelector('.qt-metric-axis-labels').getBoundingClientRect();
       return title.top >= plot.bottom - 1 && [...svg.querySelectorAll('text[text-anchor="end"]')].every(tick => {
         const box = tick.getBoundingClientRect();
@@ -884,13 +884,13 @@ test('annotated covers show scalar values, clean rankings and legible chart labe
 
     const timeline = page.locator('#card-cost-repos');
     assert.equal(await timeline.locator('.query-timeline-dates > span').count(), 3);
-    assert.equal(await timeline.locator('.query-timeline-legend > span').count(), 5);
-    assert.match(await timeline.locator('.query-timeline-legend').innerText(), /Other \(2\)/);
+    assert.equal(await timeline.locator('.query-timeline-legend > span').count(), 6);
+    assert.match(await timeline.locator('.query-timeline-legend').innerText(), /Other \(1\)/);
     assert.match(await timeline.locator('.query-timeline-ticks').innerText(), /\$/);
     assert.match(await timeline.locator('.query-headline-value').innerText(), /\$/);
     assert.equal(await timeline.locator('.query-headline-label').innerText(), 'API equivalent');
     assert.ok(await timeline.locator('.query-headline-value').evaluate(el => parseFloat(getComputedStyle(el).fontSize) >= 28));
-    const plot = await timeline.locator('.query-timeline-plot').boundingBox();
+    const plot = await page.locator('#card-usage-models .query-timeline-plot').boundingBox();
     assert.ok(plot.height > 40, 'timeline fills the remaining cover area');
     for (const label of await timeline.locator('.query-timeline-dates, .query-timeline-legend').all()) {
       const box = await label.boundingBox(), cover = await timeline.locator('.query-cover').boundingBox();
@@ -918,13 +918,19 @@ test('native covers retain distributions, paired axes and complete dashboards wh
   try {
     await page.waitForFunction(() => document.querySelectorAll('.home-collection .query-compact-metric').length === 8);
     assert.equal(await page.locator('.home-collection .qt-metrics-error,.home-collection .qt-metric-message').count(), 0);
-    assert.equal(await page.locator('.home-collection .query-compact-metric[inert]').count(), 8);
+    assert.equal(await page.locator('.home-collection .query-compact-metric[inert]').count(), 0, 'charts remain hoverable inside saved card links');
     assert.ok((await page.locator('.home-collection .query-window').allTextContents()).every(label => label === "Last 7d"));
-    for (const id of ['duration-distribution', 'output-distribution', 'output-duration', 'price-comparison']) {
+    for (const id of ['output-duration', 'price-comparison']) {
       const cover = page.locator(`.home-collection [data-card-id="${id}"]`);
       assert.ok(await cover.locator('svg .qt-metric-mark').count() > 0, `${id} should contain native marks`);
       const size = await cover.locator('.query-compact-metric').boundingBox();
-      assert.ok(id === "duration-distribution" ? size.height > 150 && size.height < 240 : size.height > 40 && size.height < 120);
+      const bounds = await cover.locator('.query-cover').boundingBox();
+      assert.ok(size.height > 40 && size.y + size.height <= bounds.y + bounds.height + 1, `${id} fits inside its saved cover`);
+    }
+    for (const id of ['duration-distribution', 'output-distribution']) {
+      const box = page.locator(`.home-collection [data-card-id="${id}"]`);
+      assert.ok(await box.locator('.query-box-marks').count() > 0, `${id} retains its shared box plot`);
+      assert.equal(await box.locator('.query-box-axis').count(), 1);
     }
     const costCover = page.locator('.home-collection [data-card-id="expensive-work"] .query-compact-metric');
     const costSize = await costCover.boundingBox();
@@ -997,21 +1003,22 @@ test('grouped cards keep row values, allow cover selection, and drill into the o
   } finally { await browser.close(); }
 });
 
-test('card library shows empty cards, filters and sorts every definition, and persists template edits', async () => {
+test('card library shows empty cards, filters and sorts active definitions, and persists template edits', async () => {
   const { browser, page, data } = await setup({ url: '/home?cards=library' });
   try {
-    assert.equal(await page.locator('.card-library-entry').count(), queryRecipes.length);
+    const activeRecipes = queryRecipes.filter(recipe => !recipe.retired);
+    assert.equal(await page.locator('.card-library-entry').count(), activeRecipes.length);
     assert.deepEqual(data.metadataRequests, [], 'hidden table controls must not scan distinct values on Home');
     assert.ok(data.requests.every(({ path }) => !path.endsWith('/aggregations')), 'hidden table header charts must not compete with card previews');
     const identities = await page.locator('.card-library-entry').evaluateAll(entries => entries.map(entry => [entry.id, entry.dataset.cardDefinition, entry.querySelector('.card-library-id').textContent]));
-    assert.equal(new Set(identities.map(([id]) => id)).size, queryRecipes.length);
+    assert.equal(new Set(identities.map(([id]) => id)).size, activeRecipes.length);
     for (const [id, definition, label] of identities) { assert.equal(id, `card-${definition}`); assert.equal(label, `ID: ${definition}`); }
     await page.getByLabel('Data source', { exact: true }).selectOption('usage');
-    assert.equal(await page.locator('.card-library-entry').count(), queryRecipes.filter(r => r.dataset === 'usage').length);
+    assert.equal(await page.locator('.card-library-entry').count(), activeRecipes.filter(r => r.dataset === 'usage').length);
     await page.getByLabel('Sort by', { exact: true }).selectOption('title');
     const titles = await page.locator('.card-library-entry .query-title').allTextContents();
     assert.deepEqual(titles, [...titles].sort((a, b) => a.localeCompare(b)));
-    await page.getByLabel('Find a card', { exact: true }).fill('effort-cost');
+    await page.getByLabel('Find a card', { exact: true }).fill(queryRecipes.find(recipe => recipe.id === 'effort-cost').description);
     await page.waitForFunction(() => document.querySelectorAll('.card-library-entry').length === 1);
     await page.getByRole('button', { name: /^Edit card / }).click();
     await page.getByLabel('Question', { exact: true }).fill('Effort, at a glance');
@@ -1031,18 +1038,18 @@ test('card library shows empty cards, filters and sorts every definition, and pe
     await page.getByText('Collected “Effort, at a glance”.', { exact: true }).waitFor();
     const collected = await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', [])[0]);
     assert.equal(collected.cover.kind, 'bar-vertical');
-    assert.deepEqual(collected.query.grouping.keys, ['provider', 'model_family', 'effort']);
+    assert.deepEqual(collected.query.grouping.keys, queryRecipes.find(recipe => recipe.id === 'effort-cost').exploration.keys);
     assert.deepEqual(collected.query.grouping.source.where.filter(term => term.field === 'first_usage_at').map(term => term.value), ['-7d', '+0s']);
     await page.getByRole('button', { name: /^Edit card / }).click();
     await page.getByRole('button', { name: 'Reset template', exact: true }).click();
-    await page.getByText('Where does reasoning effort go?', { exact: true }).waitFor();
+    await page.getByText(queryRecipes.find(recipe => recipe.id === 'effort-cost').title, { exact: true }).waitFor();
     await page.getByLabel('Find a card', { exact: true }).fill('');
     await page.getByLabel('Data source', { exact: true }).selectOption('');
-    assert.equal(await page.locator('.card-library-entry').count(), queryRecipes.length);
+    assert.equal(await page.locator('.card-library-entry').count(), activeRecipes.length);
     data.empty = true;
     await page.reload();
     await page.waitForFunction(() => !document.querySelector('.card-library-count').textContent.includes('Loading charts'));
-    assert.equal(await page.locator('.card-library-entry').count(), queryRecipes.length);
+    assert.equal(await page.locator('.card-library-entry').count(), activeRecipes.length);
     await page.setViewportSize({ width: 390, height: 844 });
     assert.ok(await page.locator('.card-library').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
     assert.deepEqual(data.errors, []);
@@ -1098,37 +1105,38 @@ test('compact cover ticks and box rows stay readable with Last time badges', asy
     });
     await page.reload();
     const box = page.locator('#card-duration-distribution');
-    await page.waitForFunction(() => document.querySelectorAll('#card-duration-distribution .qt-metric-box-row').length === 3);
+    await page.waitForFunction(() => document.querySelectorAll('#card-duration-distribution .query-box-row').length === 4);
     assert.equal(await box.locator('.query-window').innerText(), 'Last 7d');
     assert.equal(await box.locator('.query-compact-limit').count(), 0);
-    assert.equal(await box.locator('svg circle').count(), 0, 'outliers cannot squash the cover boxes');
-    assert.match(await box.locator('.qt-metric-compact-guide').innerText(), /Per-row scales · outliers omitted/);
-    for (const row of await box.locator('.qt-metric-box-row').all()) {
-      const title = await row.locator('.qt-metric-box-label').boundingBox();
-      const glyph = await row.locator('.qt-metric-mark').boundingBox();
+    assert.equal(await box.locator('.query-box-axis').count(), 1);
+    assert.match(await box.locator('.query-box-scale-label').textContent(), /Shared log Recorded call duration axis/);
+    assert.ok(await box.locator('.query-box-outlier').count() >= 4, 'actual extremes remain visible');
+    const bounds = await box.locator('.query-cover').boundingBox();
+    for (const row of await box.locator('.query-box-row').all()) {
+      const title = await row.locator('.query-box-row-label').boundingBox();
+      const glyph = await row.locator('.query-box-marks').boundingBox();
       assert.ok(title.y + title.height <= glyph.y, 'command label clears the glyph');
-      const ticks = row.locator('text:not(.qt-metric-box-label)');
-      assert.match(await ticks.first().textContent(), /^med /);
-      for (const tick of await ticks.all()) {
-        const bounds = await tick.boundingBox(), cover = await box.locator('.query-cover').boundingBox();
-        assert.ok(bounds.x >= cover.x && bounds.x + bounds.width <= cover.x + cover.width + 1);
-        assert.ok(bounds.y >= cover.y && bounds.y + bounds.height <= cover.y + cover.height);
-      }
+      assert.match(await row.locator('.query-box-row-label strong').textContent(), /^Median /);
+      assert.ok(glyph.x >= bounds.x && glyph.x + glyph.width <= bounds.x + bounds.width + 1);
+    }
+    for (const tick of await box.locator('.query-box-axis span').all()) {
+      const label = await tick.boundingBox();
+      assert.ok(label.x >= bounds.x && label.x + label.width <= bounds.x + bounds.width + 1);
+      assert.ok(label.y >= bounds.y && label.y + label.height <= bounds.y + bounds.height);
     }
     await page.setViewportSize({ width: 390, height: 844 });
     assert.ok(await page.locator('.card-library').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
-    assert.equal(await box.locator('.qt-metric-box-row').count(), 3);
+    assert.equal(await box.locator('.query-box-row').count(), 4);
     await page.setViewportSize({ width: 1470, height: 836 });
     await page.goto('http://home.test/home?cards=library&card_search=writing-hours');
     const hours = page.locator('#card-writing-hours');
-    await hours.locator('.qt-metric-plot svg').waitFor();
+    await hours.locator('.human-study-hour-bars').waitFor();
     assert.equal(await hours.locator('.query-window').innerText(), 'Last 7d');
-    const ticks = await hours.locator('svg text[text-anchor="end"]').allTextContents();
-    assert.ok(ticks.length > 0 && ticks.length <= 3);
-    assert.ok(ticks.every(tick => /^-?\d+(?:\.\d+)?[KMB]?$/.test(tick) && tick.length <= 5));
-    const dates = (await hours.locator('svg text[text-anchor="middle"]').allTextContents()).filter(text => text !== 'Local hour');
-    assert.ok(dates.length > 0 && dates.length <= 3);
-    assert.ok(dates.every(label => /h$/.test(label) && !label.includes(':')));
+    assert.equal(await hours.locator('.human-study-hour-bars>span').count(), 24);
+    assert.deepEqual(await hours.locator('.human-study-axis>span').allTextContents(), ['00:00','12:00','23:00']);
+    assert.ok(await hours.locator('.human-study-hour-bars>span').evaluateAll(bars => bars.some(bar => bar.querySelector('i').style.height !== '0%')));
+    await hours.locator('.human-study-hour-bars>span').first().hover();
+    assert.match(await page.getByRole('tooltip').innerText(), /human-written words/);
     assert.deepEqual(data.errors, []);
   } finally { await browser.close(); }
 });
@@ -1152,7 +1160,7 @@ test('long card labels wrap over underline bars on desktop and phone', async () 
         assert.ok(bar.y >= label.y + label.height - 1 && bar.y >= value.y + value.height - 1);
         assert.ok(bar.width > cover.width * .8);
         assert.ok(bar.y + bar.height <= cover.y + cover.height, 'all four underline bars fit');
-        assert.match(await row.locator('.qt-metric-bar-label').getAttribute('title'), /long|Repeated/);
+        assert.match(await row.locator('.qt-metric-bar-label').getAttribute('data-chart-title'), /long|Repeated/);
       }
       assert.ok(await page.locator('.card-library').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
     }
@@ -1217,7 +1225,7 @@ test('card keys, visible series and Other are configurable and survive collectio
     await human.locator('.query-cover-timeline').waitFor();
     assert.equal(await human.locator('.query-timeline-legend').count(), 0, 'a single series needs no redundant key');
     assert.deepEqual(await human.locator('.query-chart-axis-labels>span').allTextContents(), ['↑ words', '→ Day']);
-    await page.getByRole('button', { name: /^Edit card / }).click();
+    await human.getByRole('button', { name: /^Edit card / }).click();
     await page.getByLabel('Chart key', { exact: true }).selectOption('true');
     await page.getByLabel('Visible rows / series', { exact: true }).fill('2');
     await page.getByLabel('Other remainder', { exact: true }).selectOption('false');
@@ -1234,14 +1242,14 @@ test('card keys, visible series and Other are configurable and survive collectio
     await page.reload();
     const cost = page.locator('#card-cost-repos');
     await cost.locator('.query-cover-timeline').waitFor();
-    await page.getByRole('button', { name: /^Edit card / }).click();
+    await cost.getByRole('button', { name: /^Edit card / }).click();
     await page.getByLabel('Visible rows / series', { exact: true }).fill('2');
     await page.getByLabel('Chart key', { exact: true }).selectOption('true');
     await page.getByLabel('Other remainder', { exact: true }).selectOption('true');
     await page.getByRole('button', { name: 'Save template', exact: true }).click();
     await page.waitForFunction(() => document.querySelectorAll('#card-cost-repos .query-timeline-legend>span').length === 3);
     assert.match(await cost.locator('.query-timeline-legend').innerText(), /Other \(3\)/);
-    await page.getByRole('button', { name: /^Edit card / }).click();
+    await cost.getByRole('button', { name: /^Edit card / }).click();
     await page.getByLabel('Other remainder', { exact: true }).selectOption('false');
     await page.getByRole('button', { name: 'Save template', exact: true }).click();
     await page.waitForFunction(() => document.querySelectorAll('#card-cost-repos .query-timeline-legend>span').length === 2);
@@ -1250,7 +1258,7 @@ test('card keys, visible series and Other are configurable and survive collectio
     await page.reload();
     await cost.locator('.query-cover-timeline').waitFor();
     assert.equal(await cost.locator('.query-timeline-legend>span').count(), 2);
-    await page.getByRole('button', { name: /^Edit card / }).click();
+    await cost.getByRole('button', { name: /^Edit card / }).click();
     await assertEventually(async () => await page.getByLabel('Visible rows / series', { exact: true }).inputValue() === '2');
     assert.equal(await page.getByLabel('Visible rows / series', { exact: true }).inputValue(), '2');
     assert.equal(await page.getByLabel('Other remainder', { exact: true }).inputValue(), 'false');
@@ -1377,9 +1385,9 @@ test('card loading has a spinner and skeleton, respects reduced motion and clear
 });
 
 test('compact native axes share a footer and wider plotting area on desktop and phone', async () => {
-  const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=output-duration' });
+  const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=price-comparison' });
   try {
-    const card = page.locator('#card-output-duration');
+    const card = page.locator('#card-price-comparison');
     await card.locator('.qt-metric-axis-labels').waitFor();
     for (const width of [1470, 390]) {
       await page.setViewportSize({ width, height: 844 });
@@ -1446,10 +1454,10 @@ test('contextual card loaders match saved chart types and row limits before data
     assert.equal(await columns.locator('.query-preview-loading-bars i').first().evaluate(el => getComputedStyle(el).animationDuration), '1.5s');
     assert.equal(await columns.locator('.query-preview-spinner').evaluate(el => getComputedStyle(el).animationDuration), '0.8s');
     await columns.screenshot({ path: path.join(root, '.context/card-review/loading-four-columns.png') });
-    await search.fill('output-duration');
-    const scatter = page.locator('#card-output-duration');
+    await search.fill('session-input-output');
+    const scatter = page.locator('#card-session-input-output');
     await scatter.locator('[data-loading-kind="scatter"]').waitFor();
-    assert.equal(await scatter.locator('.query-loading-scatter i').count(), 12);
+    assert.equal(await scatter.locator('.query-loading-scatter i').count(), 100);
     const dot = scatter.locator('.query-loading-scatter i').first();
     assert.equal(await dot.evaluate(el => getComputedStyle(el).animationName), 'query-preview-drift');
     const position = await dot.evaluate(el => getComputedStyle(el).transform);
@@ -1477,12 +1485,12 @@ test('contextual card loaders match saved chart types and row limits before data
     await search.fill('duration-distribution');
     const boxes = page.locator('#card-duration-distribution');
     await boxes.locator('[data-loading-kind="box"]').waitFor();
-    assert.equal(await boxes.locator('.query-loading-whisker').count(), 3);
+    assert.equal(await boxes.locator('.query-loading-whisker').count(), 6);
     await boxes.screenshot({ path: path.join(root, '.context/card-review/loading-boxes.png') });
     await search.fill('error-reach');
     const list = page.locator('#card-error-reach');
     await list.locator('[data-loading-kind="list"]').waitFor();
-    assert.equal(await list.locator('.query-loading-row').count(), 4);
+    assert.equal(await list.locator('.query-loading-row').count(), 6);
     assert.equal(await list.locator('.query-preview-loading-shape.has-below-labels').count(), 1);
     await list.screenshot({ path: path.join(root, '.context/card-review/loading-list.png') });
     await search.fill('cost-repos');
@@ -1529,7 +1537,7 @@ test('kept cards with a stale cover and no metrics can be renamed in Home', asyn
 test('card covers keep friendly work labels across twenty visible rows', async () => {
   const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=usage-work', viewport: { width: 1470, height: 1100 } });
   try {
-    data.rows.usage = data.rows.usage.slice(0, 25).map((row, i) => ({ ...row, workspace_id: `workspace-${i}`, agent_session_id: `session-${i}`, title: `Friendly work ${i + 1}`, total_tokens: 100000 - i * 1000 }));
+    data.rows.usage = data.rows.usage.slice(0, 25).map((row, i) => ({ ...row, workspace_id: `workspace-${i}`, root_conversation_id: `root-${i}`, root_repository_name: "repo", root_title: `Friendly work ${i + 1}`, agent_session_id: `session-${i}`, title: `Friendly work ${i + 1}`, total_tokens: 100000 - i * 1000 }));
     await page.reload();
     const card = page.locator('#card-usage-work');
     await card.locator('.qt-metric-bar-row').first().waitFor();
@@ -1624,6 +1632,363 @@ test('review feedback typing leaves dense charts idle and flushes the latest dra
     await page.reload();
     assert.equal(await page.getByRole('textbox', { name: 'Feedback on Session tokens and cost', exact: true }).inputValue(), 'Latest edit before leaving.');
     assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
+test('error review keeps nine cards, preserves earlier feedback, and links to affected conversations', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=error-review', viewport: { width: 1440, height: 1080 }, localValues: { 'pharos-error-pattern-review-v1': { cards: { 'repeated-failed-commands': { verdict: 'drop', note: 'Earlier review' } } } } });
+  try {
+    const seed = data.rows.tool_calls[0], skill = data.rows.skill_usages[0];
+    data.rows.tool_calls = Array.from({length: 72}, (_, i) => ({...seed, id:`call-${i}`, tool_name:['Bash','Edit','Read'][i % 3], tool_category:i % 3 === 1 ? 'edit' : 'command', command:'npm test', command_name:'npm test', command_category:i % 3 === 1 ? 'build' : 'test', repository_name:Math.floor(i / 6) % 2 ? 'two' : 'one', conversation_id:`conversation-${Math.floor(i / 6)}`, error_count:i % 6 < 4 ? 1 : 0, status:i % 6 < 4 ? 'error' : 'ok', error_type:i % 6 === 0 ? 'file_not_found' : 'nonzero_exit', error_signature:i % 2 ? 'command failed' : 'file missing', test_failure:i % 6 === 2, repo_path:'src/main.ts'}));
+    data.rows.skill_usages = Array.from({length: 6}, (_, i) => ({...skill,id:`evidence-${i}`,status:'error',provider:'codex',skill_name:'review',tool_call_id:`call-${Math.floor(i / 2)}`,conversation_id:'conversation-0'}));
+    await page.reload();
+    await page.waitForFunction(() => document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
+    assert.equal(await page.locator('.human-review-entry').count(), 9);
+    for (const id of ['repeated-failed-commands','environment-failures','skill-load-failures']) assert.equal(await page.locator(`[data-card-id="${id}"]`).count(), 0);
+    assert.equal(await page.locator('.human-review-error,.query-preview-unavailable,.qt-metric-message,.query-pie-empty,.query-empty').count(), 0);
+    assert.equal(await page.locator('[data-card-id="tool-failures"] .qt-metric-mark').count(), 3);
+    const boxes = page.locator('[data-card-id="conversation-error-counts"]');
+    assert.equal(await boxes.locator('.query-box-row').count(), 3);
+    assert.equal(await boxes.locator('.query-box-axis').count(), 1);
+    await boxes.locator('.query-box-row').first().hover();
+    assert.match(await page.getByRole('tooltip').innerText(), /12 observations/);
+    assert.match(await page.getByRole('tooltip').innerText(), /Errors \/ affected conversation/);
+    const requests = data.requests.length;
+    await page.evaluate(() => {
+      window.errorTypingFormats = 0;
+      const format = Number.prototype.toLocaleString;
+      Number.prototype.toLocaleString = function(...args) { window.errorTypingFormats++; return format.apply(this,args); };
+    });
+    await page.getByRole('textbox',{name:'Feedback on Failures per conversation',exact:true}).pressSequentially('Keep the conditional population visible.',{delay:0});
+    await page.getByRole('textbox',{name:'Feedback on Conversations, edits, and tests',exact:true}).fill('Keep conversation ranges alongside edit and test evidence.');
+    await page.getByRole('textbox',{name:'Overall feedback',exact:true}).fill('Keep counts beside rates.');
+    assert.equal(await page.evaluate(() => window.errorTypingFormats),0);
+    assert.equal(data.requests.length,requests);
+    await page.getByRole('button',{name:'View report',exact:true}).click();
+    const report = await page.getByRole('textbox',{name:'Feedback report',exact:true}).inputValue();
+    for(const text of ['Error patterns cards — review 2','Keep the conditional population visible.','Keep conversation ranges alongside edit and test evidence.','Keep counts beside rates.']) assert.ok(report.includes(text));
+    await page.getByRole('button',{name:'Close',exact:true}).click();
+    await page.reload();
+    assert.equal(await page.getByRole('textbox',{name:'Overall feedback',exact:true}).inputValue(),'Keep counts beside rates.');
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('pharos-error-pattern-review-v1')).cards['repeated-failed-commands'].note), 'Earlier review');
+    const still = page.locator('[data-card-id="tool-failures"]');
+    await still.scrollIntoViewIfNeeded();
+    const before = await still.boundingBox(); await still.hover(); const after = await still.boundingBox();
+    assert.deepEqual([after.x,after.y],[before.x,before.y]);
+    for(const width of [390,320]) {
+      await page.setViewportSize({width,height:844});
+      assert.ok(await page.locator('.human-review').evaluate(el=>el.scrollWidth<=el.clientWidth+1));
+      assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    }
+    await page.locator('[data-card-id="conversation-error-counts"] .query-card-open').click();
+    await waitForQuery(page,'tool_calls',query=>query.grouping?.keys.includes('conversation_id'));
+    const query = await readQuery(page,'tool_calls');
+    assert.deepEqual(query.grouping.keys,['tool_name','conversation_id']);
+    assert.ok(query.grouping.source.where.some(term=>term.field==='error_count'&&term.value==='0'));
+    assert.deepEqual(data.errors,[]);
+  } finally { await browser.close(); }
+});
+
+test('context review renders reuse and tool populations, preserves idle typing, and opens exact destinations', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=context-review', viewport: { width: 1440, height: 1080 }, localValues: { 'pharos-context-caching-review-v1': { cards: { 'cache-workload': { verdict: 'drop', note: 'Earlier review' } } } } });
+  try {
+    const seed = data.rows.usage[0];
+    data.rows.usage = Array.from({length: 180}, (_, i) => ({ ...seed, id: `u-${i}`, input_tokens: 10000 + i * 100, uncached_input_tokens: 1000, cache_creation_input_tokens: 500, cache_read_input_tokens: i % 3 ? 8500 + i * 100 : 0, root_conversation_id: `root-${i}`, root_provider: 'codex', root_model_family: 'gpt-5.4', provider: 'codex', model_family: 'gpt-5.4' }));
+    data.rows.tool_calls = Array.from({length: 36}, (_, i) => ({ ...data.rows.tool_calls[0], id: `c-${i}`, tool_name: ['Read','Bash','Edit'][i % 3], tool_category: i % 3 === 0 ? 'read' : 'command', result_tokens_source: i % 2 ? 'measured' : 'estimated', repo_path: 'src/main.ts', conversation_id: `c-${i % 2}`, result_tokens: 100 + i * 100, truncated: i % 4 === 0 }));
+    await page.reload();
+    await page.waitForFunction(() => document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
+    assert.equal(await page.locator('.human-review-entry').count(), 7);
+    assert.equal(await page.locator('.human-review-error,.query-preview-unavailable,.qt-metric-message,.query-empty').count(), 0);
+    for (const id of ['cache-reads','cache-workload','context-carried','tool-result-reuse']) assert.equal(await page.locator(`[data-card-id="${id}"]`).count(), 0, `${id} is retired`);
+    const boxes = page.locator('[data-card-id="output-distribution"]');
+    assert.equal(await boxes.locator('.query-box-row').count(), 6);
+    assert.equal(await boxes.locator('.query-box-axis').count(), 1);
+    await boxes.locator('.query-box-row').first().hover();
+    const tooltip = await page.getByRole('tooltip').innerText();
+    assert.match(tooltip, /Result tokens/);
+    assert.match(tooltip, /6 observations/);
+    assert.ok(!tooltip.includes('$'));
+    const requests = data.requests.length;
+    await page.evaluate(() => {
+      window.contextTypingFormats = 0;
+      const format = Number.prototype.toLocaleString;
+      Number.prototype.toLocaleString = function(...args) { window.contextTypingFormats++; return format.apply(this, args); };
+    });
+    await page.getByRole('textbox', { name: 'Feedback on Tool result sizes', exact: true }).pressSequentially('Keep typical sizes and outliers together.', { delay: 0 });
+    await page.getByRole('textbox', { name: 'Feedback on Input reuse in context', exact: true }).fill('Compare model and repository shares.');
+    await page.getByRole('textbox', { name: 'Overall feedback', exact: true }).fill('Explore context next.');
+    assert.equal(await page.evaluate(() => window.contextTypingFormats), 0);
+    assert.equal(data.requests.length, requests);
+    await page.getByRole('button', { name: 'View report', exact: true }).click();
+    const report = await page.getByRole('textbox', {name: 'Feedback report', exact: true}).inputValue();
+    for (const text of ['Context and caching cards — review 2', 'Keep typical sizes and outliers together.', 'Compare model and repository shares.', 'Explore context next.']) assert.ok(report.includes(text));
+    await page.getByRole('button', {name: 'Close', exact: true}).click();
+    await page.reload();
+    assert.equal(await page.getByRole('textbox', { name: 'Overall feedback', exact: true }).inputValue(), 'Explore context next.');
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('pharos-context-caching-review-v1')).cards['cache-workload'].note), 'Earlier review');
+    for (const width of [390, 320]) {
+      await page.setViewportSize({width, height: 844});
+      assert.ok(await page.locator('.human-review').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    }
+    await page.locator('[data-card-id="repeated-reads"] .query-card-open').click();
+    await waitForQuery(page, 'tool_calls', query => query.grouping?.keys.includes('conversation_id'));
+    const query = await readQuery(page, 'tool_calls');
+    assert.deepEqual(query.grouping.keys, ['repository_name', 'repo_path', 'conversation_id']);
+    assert.ok(query.where.some(term => term.field === 'cc_calls' && term.value === '2'));
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
+test('token usage review exposes whole-task workloads with idle feedback, matching windows and inspectable source records', async () => {
+ const {browser,page,data}=await setup({url:'/home?cards=token-review',viewport:{width:1440,height:1080},localValues:{'pharos-token-usage-review-v1':{overall:'First token draft'},'pharos-token-usage-review-v2':{overall:'Second token draft'},'pharos-api-cost-review-v2':{overall:'Cost draft'}}});
+ try {
+  const seed=data.rows.usage[0];
+  data.rows.usage=Array.from({length:108},(_,i)=>({...seed,id:`token-${i}`,workspace_id:`child-${i}`,agent_session_id:`run-${i}`,repository_name:`repo-${i%9}`,root_repository_name:['one','two','three'][Math.floor(i/3)%3],root_conversation_id:`root-${Math.floor(i/3)}`,effort:Math.floor(i/3)%4<2?'high':'low',run_role:Math.floor(i/3)%5===0?'standalone':i%3?'delegated':'parent',root_title:`Whole task ${Math.floor(i/3)}`,root_provider:'codex',root_model_family:Math.floor(i/3)%2?'gpt-6-astra':'gpt-6-sol',root_effort:Math.floor(i/3)%4<2?'high':'low',delegated_session_id:Math.floor(i/3)%5&&i%3?`delegate-${Math.floor(i/3)}`:null,title:'Child context',total_tokens:1000*(i+1),input_tokens:(Math.floor(i/3)%12?900:1000)*(i+1),output_tokens:Math.floor(i/3)%12?100*(i+1):0,price_status:['unpriced','assumed','partial','priced'][i%4],attribution:['request','session-start',null][i%3]}));
+  await page.reload();await page.waitForFunction(()=>document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
+  assert.equal(await page.locator('.human-review-entry').count(),10);assert.equal(await page.locator('.human-review-thesis').count(),3);assert.equal(await page.locator('.human-review-error,.query-preview-unavailable,.query-empty,.qt-metric-message').count(),0);
+  assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('pharos-api-cost-review-v2')).overall),'Cost draft');
+  assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('pharos-token-usage-review-v1')).overall),'First token draft');
+  for(const id of ['repository-input-output','token-time-placement','model-task-token-spread','task-token-delegation-count','task-token-delegation-share'])assert.equal(await page.locator(`[data-card-id="${id}"]`).count(),0);
+  const daily=page.locator('[data-card-id="usage-repos"]');assert.equal(await daily.locator('.query-cover-columns>span').count(),8);assert.equal(await daily.locator('.query-timeline-legend>span').count(),6);assert.match(await daily.locator('.query-headline-unit').innerText(),/tokens/);
+  const pie=page.locator('[data-card-id="repository-token-share"]');assert.equal(await pie.locator('.query-chart-legend>span').count(),6);
+  const work=page.locator('[data-card-id="usage-work"]');assert.match(await work.innerText(),/Whole task/);assert.doesNotMatch(await work.innerText(),/Child context/);
+  for(const id of ['task-token-ranges','task-output-ranges']){const box=page.locator(`[data-card-id="${id}"]`);assert.equal(await box.locator('.query-box-row').count(),3);assert.equal(await box.locator('.query-box-axis').count(),1);await box.locator('.query-box-row').first().hover();assert.match(await page.getByRole('tooltip').innerText(),/12 observations/);}
+  for(const [id,rows] of [['task-effort-token-ranges',2],['task-model-token-ranges',2],['task-model-effort-token-ranges',4]]){const box=page.locator(`[data-card-id="${id}"]`);assert.equal(await box.locator('.query-box-row').count(),rows);assert.equal(await box.locator('.query-box-axis').count(),1);}
+  const runs=page.locator('[data-card-id="run-effort-token-ranges"]');assert.equal(await runs.locator('.query-box-row').count(),6);assert.equal(await runs.locator('.query-box-axis').count(),1);for(const role of ['Standalone','Parent','Delegated'])assert.ok((await runs.innerText()).includes(role));
+  assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('pharos-token-usage-review-v2')).overall),'Second token draft');
+
+  await page.mouse.move(0,0);await page.getByRole('textbox',{name:'Feedback on Task output ranges',exact:true}).focus();await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  const requests=data.requests.length;await page.evaluate(()=>{window.tokenTypingFormats=0;const format=Number.prototype.toLocaleString;Number.prototype.toLocaleString=function(...args){window.tokenTypingFormats++;return format.apply(this,args);};});
+  await page.getByRole('textbox',{name:'Feedback on Task output ranges',exact:true}).pressSequentially('Keep output separate.',{delay:0});await page.getByRole('textbox',{name:'Feedback on Effort and model workloads',exact:true}).fill('Whole tasks are useful.');await page.getByRole('textbox',{name:'Overall feedback',exact:true}).fill('Include unpriced volume.');assert.equal(await page.evaluate(()=>window.tokenTypingFormats),0);assert.equal(data.requests.length,requests);
+  await page.getByRole('button',{name:'View report',exact:true}).click();const report=await page.getByRole('textbox',{name:'Feedback report',exact:true}).inputValue();for(const text of ['Token usage cards — review 3','Keep output separate.','Whole tasks are useful.','Include unpriced volume.'])assert.ok(report.includes(text),text);await page.getByRole('button',{name:'Close',exact:true}).click();
+  await page.reload();assert.equal(await page.getByRole('textbox',{name:'Overall feedback',exact:true}).inputValue(),'Include unpriced volume.');await work.scrollIntoViewIfNeeded();const before=await work.boundingBox();await work.hover();const after=await work.boundingBox();assert.deepEqual([before.x,before.y],[after.x,after.y]);
+  for(const width of [390,320]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));for(const axis of await page.locator('[data-card-id="task-token-ranges"] .query-box-axis,[data-card-id="task-output-ranges"] .query-box-axis').all()){const ticks=await axis.locator('span').evaluateAll(items=>items.map(e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right};}));assert.ok(ticks.every((tick,i)=>!i||tick.left>=ticks[i-1].right),'token axis labels remain separated on narrow cards');}}
+  await page.getByLabel('Review preview window',{exact:true}).selectOption('30');await page.locator('[data-card-id="task-token-ranges"] .query-card-open').click();await waitForQuery(page,'usage',q=>q.grouping?.summaries.some(s=>s.id==='tu_tokens'));const q=await readQuery(page,'usage');assert.deepEqual(q.grouping.keys,['root_repository_name','root_conversation_id']);assert.ok(q.grouping.source.where.some(t=>t.field==='first_usage_at'&&t.value==='-30d'));assert.ok(q.grouping.source.where.some(t=>t.field==='root_conversation_id'&&t.op==='is_not_null'));assert.ok(!q.grouping.source.where.some(t=>t.field==='price_status'));await page.goto('http://home.test/home?cards=token-review');await page.locator('[data-card-id="run-effort-token-ranges"] .query-card-open').click();await waitForQuery(page,'usage',q=>q.grouping?.keys.includes('run_role'));const runQuery=await readQuery(page,'usage');assert.deepEqual(runQuery.grouping.keys,['effort','run_role','root_conversation_id','delegated_session_id']);await page.goto('http://home.test/home?cards=token-review');await page.locator('[data-card-id="task-model-effort-token-ranges"] .query-card-open').click();await waitForQuery(page,'usage',q=>q.grouping?.keys.includes('root_effort'));const cohort=await readQuery(page,'usage');assert.deepEqual(cohort.grouping.keys,['root_provider','root_model_family','root_effort','root_conversation_id']);assert.ok(!cohort.grouping.source.where.some(t=>t.field==='price_status'));assert.deepEqual(data.errors,[]);
+ }finally{await browser.close();}
+});
+
+test('API cost review presents seven scoped estimates with idle feedback and root-task costs and trailing daily averages', async () => {
+ const {browser,page,data}=await setup({url:'/home?cards=cost-review',viewport:{width:1440,height:1080},localValues:{'pharos-api-cost-review-v1':{overall:'Earlier cost draft'}}});
+ try {
+  const seed=data.rows.usage[0];
+  data.rows.usage=Array.from({length:108},(_,i)=>({...seed,id:`cost-${i}`,workspace_id:`work-${Math.floor(i/2)}`,repository_name:['one','two','three'][Math.floor(i/6)%3],title:`Cost work ${Math.floor(i/2)}`,root_conversation_id:`root-${Math.floor(i/4)}`,root_repository_name:['one','two','three'][Math.floor(i/4)%3],root_title:`Root task ${Math.floor(i/4)}`,price_status:'priced',cost_usd:i<2?0:i%7+1,cost_today_usd:i<2?0:(i%7+1)/2,total_tokens:1000*(i+1)}));
+  data.rows.usage.push({...seed,id:'unpriced',workspace_id:'unpriced',price_status:'unpriced',cost_usd:null,cost_today_usd:null,total_tokens:1000000});
+  data.rows.library=Array.from({length:12},(_,i)=>({id:`lifetime-${i}`,title:`Lifetime work ${i}`,repository_name:'one',activity_at:seed.first_usage_at,token_count:1000,cost_usd:100+i,price_status:'priced'}));
+  await page.reload();await page.waitForFunction(()=>document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
+  assert.equal(await page.locator('.human-review-entry').count(),7);assert.equal(await page.locator('.human-review-thesis').count(),3);assert.equal(await page.locator('.human-review-error,.query-preview-unavailable,.qt-metric-message,.query-pie-empty,.query-empty').count(),0);
+  assert.match(await page.locator('[data-card-id="api-cost-total"] .human-study-headline strong').innerText(),/\$/);
+  assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('pharos-api-cost-review-v1')).overall),'Earlier cost draft');
+  for(const id of ['price-comparison','expensive-work'])assert.equal(await page.locator(`[data-card-id="${id}"]`).count(),0);
+  const trend=page.locator('[data-card-id="api-cost-total"]');assert.equal(await trend.locator('.human-study-point').count(),31);
+  await trend.locator('.human-study-point').last().hover();assert.match(await page.getByRole('tooltip').innerText(),/API equivalent \/ day/);assert.match(await page.getByRole('tooltip').innerText(),/Trailing 7 days/);
+  const boxes=page.locator('[data-card-id="work-cost-distribution"]');assert.equal(await boxes.locator('.query-box-row').count(),3);assert.equal(await boxes.locator('.query-box-axis').count(),1);
+  await boxes.locator('.query-box-row').first().hover();const tooltip=await page.getByRole('tooltip').innerText();assert.match(tooltip,/9 observations/);assert.match(tooltip,/\$/);
+  assert.equal(await page.locator('[data-card-id="repository-cost-share"] .query-pie-chart').count(),1);assert.equal(await page.locator('[data-card-id="price-coverage"] .query-pie-chart').count(),1);
+  const timeline=page.locator('[data-card-id="cost-repos"]');assert.equal(await timeline.locator('.query-cover-columns>span').count(),8);await timeline.locator('.query-cover-columns>span').last().hover();assert.match(await page.getByRole('tooltip').innerText(),/\$/);
+  assert.equal(await page.locator('[data-card-id="work-volume-cost"] .is-log-scatter').count(),1);
+  const inline=await timeline.locator('.query-headline-metric').evaluate(e=>{const n=e.querySelector('.query-headline-value').getBoundingClientRect(),l=e.querySelector('.query-headline-label').getBoundingClientRect();return l.left>=n.right&&l.top<n.bottom;});assert.equal(inline,true);
+  const requests=data.requests.length;await page.evaluate(()=>{window.costTypingFormats=0;const format=Number.prototype.toLocaleString;Number.prototype.toLocaleString=function(...args){window.costTypingFormats++;return format.apply(this,args);};});
+  await page.getByRole('textbox',{name:'Feedback on Work cost ranges',exact:true}).pressSequentially('Keep ordinary costs and outliers.',{delay:0});await page.getByRole('textbox',{name:'Feedback on Pricing coverage',exact:true}).fill('Keep coverage visible.');await page.getByRole('textbox',{name:'Overall feedback',exact:true}).fill('Show pricing coverage.');assert.equal(await page.evaluate(()=>window.costTypingFormats),0);assert.equal(data.requests.length,requests);
+  await page.getByRole('button',{name:'View report',exact:true}).click();const report=await page.getByRole('textbox',{name:'Feedback report',exact:true}).inputValue();for(const text of ['API cost cards — review 2','Keep ordinary costs and outliers.','Keep coverage visible.','Show pricing coverage.'])assert.ok(report.includes(text),text);await page.getByRole('button',{name:'Close',exact:true}).click();
+  await page.reload();assert.equal(await page.getByRole('textbox',{name:'Overall feedback',exact:true}).inputValue(),'Show pricing coverage.');const still=page.locator('[data-card-id="window-work-cost"]');await still.scrollIntoViewIfNeeded();const before=await still.boundingBox();await still.hover();const after=await still.boundingBox();assert.deepEqual([before.x,before.y],[after.x,after.y]);
+  for(const width of [390,320]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));}
+  await page.getByLabel('Review preview window',{exact:true}).selectOption('30');await page.locator('[data-card-id="window-work-cost"] .query-card-open').click();await waitForQuery(page,'usage',q=>q.grouping?.summaries.some(s=>s.id==='ac_cost'));let query=await readQuery(page,'usage');assert.deepEqual(query.grouping.keys,['root_repository_name','root_conversation_id']);assert.ok(query.grouping.source.where.some(t=>t.field==='price_status'&&t.value==='priced'));assert.ok(query.grouping.source.where.some(t=>t.field==='first_usage_at'&&t.value==='-30d'));
+  assert.deepEqual(data.errors,[]);
+ }finally{await browser.close();}
+});
+
+test('research review keeps four selections and twelve primary sites with idle feedback, exact archive windows and inspectable queries', async () => {
+ const {browser,page,data}=await setup({url:'/home?cards=research-review',viewport:{width:1440,height:1080},localValues:{'pharos-research-review-v1':{overall:'Review one draft'}}});
+ try {
+  const seed=data.rows.tool_calls[0];
+  data.rows.tool_calls=Array.from({length:180},(_,i)=>({...seed,id:`search-${i}`,tool_name:'WebSearch',tool_category:'web',search_query:`Exact query ${i%7}`,conversation_id:`conversation-${Math.floor(i/6)}`,repository_name:['one','two','three'][Math.floor(i/6)%3],title:'Research fixture',host:`docs${i%16}.example`,url:`https://docs${i%16}.example/shared`,status:i%5?'ok':'error'}));
+  data.rows.tool_calls.push({...seed,id:'sql',tool_category:'meta',search_query:'This is SQL, not a web search',host:null,url:null});
+  data.rows.mcp_calls=Array.from({length:60},(_,i)=>({id:i,called_at:seed.started_at,tool_name:i%2?'search_work':'search_text',status:'ok',result_count:i%3?5:0,duration_ms:1000,call_count:1,error_count:0}));
+  await page.reload();
+  await page.waitForFunction(()=>document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
+  assert.equal(await page.locator('.human-review-entry').count(),4);
+  assert.equal(await page.locator('.human-review-thesis').count(),3);
+  for(const id of ['research-repositories','research-queries','research-query-reach','empty-mcp-searches']) assert.equal(await page.locator(`[data-card-id="${id}"]`).count(),0);
+  assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('pharos-research-review-v1')).overall),'Review one draft');
+  assert.equal(await page.getByRole('textbox',{name:'Overall feedback',exact:true}).inputValue(),'');
+  assert.equal(await page.locator('.human-review-error,.query-preview-unavailable,.qt-metric-message,.query-pie-empty,.query-empty').count(),0);
+  assert.equal(await page.getByLabel('Review preview window',{exact:true}).inputValue(),'7');
+  assert.equal(await page.getByLabel('Archive search window',{exact:true}).inputValue(),'30');
+  assert.equal(await page.locator('[data-card-id="research-conversation-searches"] .query-window').innerText(),'Last 7d');
+  assert.equal(await page.locator('[data-card-id="archive-empty-search-rate"] .query-window').innerText(),'Last 30d');
+  const boxes=page.locator('[data-card-id="research-conversation-searches"]');
+  assert.equal(await boxes.locator('.query-box-row').count(),3);
+  assert.equal(await boxes.locator('.query-box-axis').count(),1);
+  await boxes.locator('.query-box-row').first().hover();
+  const tooltip=await page.getByRole('tooltip').innerText();assert.match(tooltip,/10 observations/);assert.match(tooltip,/Median/);
+  const sites=page.locator('[data-card-id="primary-domains"]');
+  assert.equal(await sites.locator('.query-pie-chart').count(),0);
+  assert.equal(await sites.locator('.qt-metric-bar-row').count(),12);
+  await sites.locator('.qt-metric-bar-row').first().hover();
+  assert.match(await page.getByRole('tooltip').innerText(),/docs/);
+  const requests=data.requests.length;
+  await page.evaluate(()=>{window.researchTypingFormats=0;const format=Number.prototype.toLocaleString;Number.prototype.toLocaleString=function(...args){window.researchTypingFormats++;return format.apply(this,args);};});
+  await page.getByRole('textbox',{name:'Feedback on Primary web sites',exact:true}).pressSequentially('Keep the longer site list.',{delay:0});
+  await page.getByRole('textbox',{name:'Feedback on Searching your archive',exact:true}).fill('Inspect the denominator.');
+  await page.getByRole('textbox',{name:'Overall feedback',exact:true}).fill('Separate web and archive searches.');
+  assert.equal(await page.evaluate(()=>window.researchTypingFormats),0);assert.equal(data.requests.length,requests);
+  await page.getByRole('button',{name:'View report',exact:true}).click();
+  const report=await page.getByRole('textbox',{name:'Feedback report',exact:true}).inputValue();
+  for(const text of ['Research cards — review 2','Keep the longer site list.','Inspect the denominator.','Separate web and archive searches.','Pharos empty-search rates (archive-empty-search-rate): past 30 days']) assert.ok(report.includes(text),text);
+  await page.getByRole('button',{name:'Close',exact:true}).click();
+  await page.reload();
+  assert.equal(await page.getByRole('textbox',{name:'Overall feedback',exact:true}).inputValue(),'Separate web and archive searches.');
+  const still=page.locator('[data-card-id="primary-domains"]');await still.scrollIntoViewIfNeeded();const before=await still.boundingBox();await still.hover();const after=await still.boundingBox();assert.deepEqual([before.x,before.y],[after.x,after.y]);
+  for(const width of [390,320]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));}
+  await page.getByLabel('Archive search window',{exact:true}).selectOption('90');
+  await page.locator('[data-card-id="archive-empty-search-rate"] .query-card-open').click();
+  await waitForQuery(page,'mcp_calls',q=>q.grouping?.summaries.some(s=>s.id==='rs_empty_rate'));
+  let query=await readQuery(page,'mcp_calls');assert.deepEqual(query.grouping.keys,['tool_name']);assert.ok(query.grouping.source.where.some(t=>t.field==='called_at'&&t.value==='-90d'));assert.ok(query.grouping.source.where.some(t=>t.field==='result_count'&&t.op==='>='&&t.value==='0'));assert.ok(query.where.some(t=>t.field==='rs_calls'&&t.value==='10'));
+  await page.goto('http://home.test/home?cards=research-review');
+  await page.locator('[data-card-id="primary-domains"] .query-card-open').click();
+  await waitForQuery(page,'tool_calls',q=>q.grouping?.keys.includes('host'));
+  query=await readQuery(page,'tool_calls');assert.deepEqual(query.grouping.keys,['host']);assert.ok(query.grouping.source.where.some(t=>t.field==='tool_category'&&t.value==='web'));assert.equal(query.where.length,0);
+  assert.deepEqual(data.errors,[]);
+ }finally{await browser.close();}
+});
+
+test('skills review retains four selected cards with idle feedback and exact body windows', async () => {
+ const {browser,page,data}=await setup({url:'/home?cards=skills-review',viewport:{width:1440,height:1080},localValues:{'pharos-skills-instructions-review-v1':{overall:'Review one draft',cards:{'skill-evidence-mix':{verdict:'drop',note:'Earlier review'}}}}});
+ try {
+  const seed=data.rows.skill_usages[0];
+  data.rows.skill_usages=Array.from({length:108},(_,i)=>({...seed,id:`skill-file-${i}`,skill_name:['review','debug','design'][i%3],skill_path:`/skills/${i%3}/SKILL.md`,evidence_type:'file_load',status:'ok',tool_call_id:`parent-${i}`,conversation_id:`conversation-${Math.floor(i/6)}`,repository_name:i%2?'one':'two',content_bytes:null,title:'Fixture project'}));
+  data.rows.skill_usages.push(...Array.from({length:45},(_,i)=>({...seed,id:`skill-body-${i}`,skill_name:['review','debug','design'][i%3],skill_path:`/skills/${i%3}/SKILL.md`,evidence_type:'explicit_invocation',status:'ok',tool_call_id:`body-call-${i}`,conversation_id:`body-conversation-${i}`,repository_name:i%2?'one':'two',content_bytes:1024*(i+1),title:'Fixture bodies'})));
+  data.rows.skill_usages.push({...seed,id:'harness',skill_name:'review',skill_path:'/skills/0/SKILL.md',evidence_type:'harness_load',status:'ok',content_bytes:6455,conversation_id:'harness',tool_call_id:null});
+  data.rows.skill_usages.push(...Array.from({length:17},(_,i)=>({...seed,id:`rare-${i}`,skill_name:'rare',skill_path:'/skills/rare/SKILL.md',evidence_type:'file_load',status:'ok',tool_call_id:`rare-call-${i}`,conversation_id:'rare-conversation',content_bytes:null,title:'Rare fixture'})));
+  await page.reload();
+  await page.waitForFunction(()=>document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
+  assert.equal(await page.locator('.human-review-entry').count(),4);
+  assert.equal(await page.locator('.human-review-thesis').count(),2);
+  for(const id of ['skill-evidence-mix','instruction-bytes','skill-size-coverage','skill-reloads','largest-skill-load-count']) assert.equal(await page.locator(`[data-card-id="${id}"]`).count(),0);
+  assert.equal(await page.getByRole('textbox',{name:'Overall feedback',exact:true}).inputValue(),'');
+  assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('pharos-skills-instructions-review-v1')).overall),'Review one draft');
+  assert.equal(await page.locator('.human-review-error,.query-preview-unavailable,.qt-metric-message,.query-pie-empty,.query-empty').count(),0);
+  assert.equal(await page.getByLabel('Review preview window',{exact:true}).inputValue(),'7');
+  assert.equal(await page.getByLabel('Skill body window',{exact:true}).inputValue(),'30');
+  assert.equal(await page.locator('[data-card-id="skill-body-sizes"] .query-window').innerText(),'Last 30d');
+  assert.equal(await page.locator('[data-card-id="skill-load-distribution"] .query-window').innerText(),'Last 7d');
+  const bodies=page.locator('[data-card-id="skill-body-sizes"]');
+  assert.equal(await bodies.locator('.query-box-row').count(),3);
+  assert.equal(await bodies.locator('.query-box-axis').count(),1);
+  await bodies.locator('.query-box-row').first().hover();
+  const tooltip=await page.getByRole('tooltip').innerText();
+  assert.match(tooltip,/15 observations/);assert.match(tooltip,/KiB.*bytes/);assert.ok(!tooltip.includes('$'));
+  assert.equal(await page.locator('[data-card-id="skill-load-distribution"] .query-box-row').count(),3);
+  const requests=data.requests.length;
+  await page.evaluate(()=>{window.skillTypingFormats=0;const format=Number.prototype.toLocaleString;Number.prototype.toLocaleString=function(...args){window.skillTypingFormats++;return format.apply(this,args);};});
+  await page.getByRole('textbox',{name:'Feedback on Skill body sizes',exact:true}).pressSequentially('Compare recorded sizes.',{delay:0});
+  await page.getByRole('textbox',{name:'Feedback on Sizes and loading patterns',exact:true}).fill('Keep the two distributions.');
+  await page.getByRole('textbox',{name:'Overall feedback',exact:true}).fill('Reach and repetition are complementary.');
+  assert.equal(await page.evaluate(()=>window.skillTypingFormats),0);
+  assert.equal(data.requests.length,requests);
+  await page.getByRole('button',{name:'View report',exact:true}).click();
+  const report=await page.getByRole('textbox',{name:'Feedback report',exact:true}).inputValue();
+  for(const text of ['Skills and instructions cards — review 2','Compare recorded sizes.','Keep the two distributions.','Reach and repetition are complementary.','Skill body sizes (skill-body-sizes): past 30 days']) assert.ok(report.includes(text),text);
+  assert.ok(!report.includes('instruction-bytes')&&!report.includes('skill-evidence-mix'));
+  await page.getByRole('button',{name:'Close',exact:true}).click();
+  await page.reload();
+  assert.equal(await page.getByRole('textbox',{name:'Overall feedback',exact:true}).inputValue(),'Reach and repetition are complementary.');
+  const still=page.locator('[data-card-id="skill-evidence"]');await still.scrollIntoViewIfNeeded();const before=await still.boundingBox();await still.hover();const after=await still.boundingBox();assert.deepEqual([before.x,before.y],[after.x,after.y]);
+  for(const width of [390,320]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));}
+  await page.getByLabel('Skill body window',{exact:true}).selectOption('90');
+  await bodies.locator('.query-card-open').click();
+  await waitForQuery(page,'skill_usages',q=>q.grouping?.summaries.some(s=>s.id==='si_body_median'));
+  const query=await readQuery(page,'skill_usages');assert.deepEqual(query.grouping.keys,['skill_name','evidence_type']);assert.ok(query.grouping.source.where.some(t=>t.field==='created_at'&&t.value==='-90d'));assert.ok(query.grouping.source.where.some(t=>t.field==='content_bytes'&&t.op==='>'&&t.value==='0'));
+  assert.deepEqual(data.errors,[]);
+ }finally{await browser.close();}
+});
+
+test('tool review keeps duration units, complete evidence, idle typing and compact mobile charts', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=tool-review', viewport: { width: 1440, height: 1080 }, localValues: { 'pharos-tool-flow-review-v1': { cards: { 'longest-tool-call': { verdict: 'drop', note: 'Review one draft' } } } } });
+  try {
+    const seed = data.rows.tool_calls[0], usage = data.rows.usage[0];
+    data.rows.tool_calls = Array.from({length: 120}, (_, i) => ({...seed, id:`flow-${i}`, tool_name:['Bash','Edit','Read'][i % 3], tool_category:['command','edit','read'][i % 3], provider:i % 2 ? 'codex' : 'claude', command_name:['npm test','go test'][i % 2], duration_ms:i % 10 === 0 ? null : i % 10 === 1 ? 0 : (i % 10) * 1500, duration_source:i % 2 ? 'reported' : 'timestamps', repository_name:Math.floor(i / 6) % 2 ? 'two' : 'one', conversation_id:`conversation-${Math.floor(i / 6)}`, repo_path:'src/main.ts', source_kind:i % 2 ? 'conductor' : 'claude', mcp_server:i % 3 ? 'pharos' : 'search', mcp_method:'search'}));
+    data.rows.usage = Array.from({length: 12}, (_, i) => ({...usage, id:`flow-usage-${i}`, agent_session_id:`session-${Math.floor(i / 2)}`, harness:i % 2 ? 'codex' : 'claude', harness_version_first:'1.0', harness_version_last:'1.1'}));
+    data.rows.mcp_calls = Array.from({length: 12}, (_, i) => ({id:i, called_at:seed.started_at, tool_name:i % 2 ? 'search_work' : 'read_work', response_bytes:1000 + i * 200, duration_ms:i % 3 === 0 ? 0 : (i % 5 + 1) * 1500, query_source:i % 2 ? "claude" : null, call_count:1, error_count:0, truncated_count:0}));
+    await page.reload();
+    await page.waitForFunction(() => document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
+    assert.equal(await page.locator('.human-review-entry').count(), 8);
+    assert.equal(await page.locator('.human-review-error,.query-preview-unavailable,.qt-metric-message,.query-pie-empty,.query-empty').count(), 0);
+    for (const id of ['file-edit-activity','slow-commands','distribution-cohorts','tool-timing-coverage','longest-tool-call','harness-versions']) assert.equal(await page.locator(`[data-card-id="${id}"]`).count(), 0);
+    assert.equal(await page.getByLabel('Review preview window', {exact:true}).inputValue(), '7');
+    assert.equal(await page.getByLabel('Pharos MCP window', {exact:true}).inputValue(), '30');
+    assert.equal(await page.locator('[data-card-id="tool-call-share"] .query-window').innerText(), 'Last 7d');
+    assert.equal(await page.locator('[data-card-id="mcp-response-size"] .query-window').innerText(), 'Last 30d');
+    const boxes = page.locator('[data-card-id="duration-distribution"]');
+    assert.equal(await boxes.locator('.query-box-row').count(), 2);
+    assert.equal(await boxes.locator('.query-box-axis').count(), 1);
+    assert.match(await boxes.locator('.query-box-axis').innerText(), /s/);
+    await boxes.locator('.query-box-row').first().hover();
+    const tooltip = await page.getByRole('tooltip').innerText();
+    assert.match(tooltip, /Recorded call duration|ms/);
+    assert.match(tooltip, /48 observations/);
+    assert.match(tooltip, /\([\d,]+ ms\)/);
+    assert.ok(!tooltip.includes('$'));
+    const mcpBoxes = page.locator('[data-card-id="pharos-mcp-durations"]');
+    assert.equal(await mcpBoxes.locator('.query-box-row').count(), 2);
+    assert.equal(await mcpBoxes.locator('.query-box-axis').count(), 1);
+    await mcpBoxes.locator('.query-box-row').first().hover();
+    assert.match(await page.getByRole('tooltip').innerText(), /4 observations/);
+    assert.match(await page.getByRole('tooltip').innerText(), /ms/);
+    const payloadBoxes = page.locator('[data-card-id="mcp-response-size"]');
+    assert.equal(await payloadBoxes.locator('.query-box-row').count(), 2);
+    assert.equal(await payloadBoxes.locator('.query-box-axis').count(), 1);
+    assert.match(await payloadBoxes.locator('.query-box-axis').innerText(), /KiB/);
+    await payloadBoxes.locator('.query-box-row').first().hover();
+    const payloadTooltip = await page.getByRole('tooltip').innerText();
+    assert.match(payloadTooltip, /6 observations/);
+    assert.match(payloadTooltip, /KiB \([\d,]+ bytes\)/);
+    assert.ok(!payloadTooltip.includes('$') && !payloadTooltip.includes('ms'));
+    assert.match(await page.locator('[data-card-id="pharos-mcp-sources"] .query-cover').innerText(), /conductor|claude/);
+    assert.match(await page.locator('[data-card-id="pharos-mcp-query-sources"] .query-cover').innerText(), /Unspecified/);
+    assert.match(await page.locator('[data-card-id="pharos-mcp-query-sources"] .query-cover').innerText(), /claude/);
+    assert.equal(await page.locator('[data-card-id="tool-calls-per-conversation"] .query-box-row').count(), 2);
+    const requests = data.requests.length;
+    await page.evaluate(() => {
+      window.toolTypingFormats = 0;
+      const format = Number.prototype.toLocaleString;
+      Number.prototype.toLocaleString = function(...args) { window.toolTypingFormats++; return format.apply(this,args); };
+    });
+    await page.getByRole('textbox',{name:'Feedback on Command duration spread',exact:true}).pressSequentially('Compare typical calls with the tail.',{delay:0});
+    await page.getByRole('textbox',{name:'Feedback on Call duration ranges',exact:true}).fill('Keep server durations alongside commands.');
+    await page.getByRole('textbox',{name:'Overall feedback',exact:true}).fill('Busy tools and slow calls are complementary.');
+    assert.equal(await page.evaluate(() => window.toolTypingFormats), 0);
+    assert.equal(data.requests.length, requests);
+    await page.getByRole('button',{name:'View report',exact:true}).click();
+    const report = await page.getByRole('textbox',{name:'Feedback report',exact:true}).inputValue();
+    for(const text of ['Tool flow cards — review 2','Compare typical calls with the tail.','Keep server durations alongside commands.','Busy tools and slow calls are complementary.','Additional card windows:','Pharos MCP tool durations (pharos-mcp-durations): past 30 days']) assert.ok(report.includes(text));
+    await page.getByRole('button',{name:'Close',exact:true}).click();
+    await page.reload();
+    assert.equal(await page.getByRole('textbox',{name:'Overall feedback',exact:true}).inputValue(),'Busy tools and slow calls are complementary.');
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('pharos-tool-flow-review-v1')).cards['longest-tool-call'].note), 'Review one draft');
+    const still = page.locator('[data-card-id="tool-call-share"]');
+    await still.scrollIntoViewIfNeeded();
+    const before = await still.boundingBox(); await still.hover(); const after = await still.boundingBox();
+    assert.deepEqual([after.x,after.y],[before.x,before.y]);
+    for(const width of [390,320]) {
+      await page.setViewportSize({width,height:844});
+      assert.ok(await page.locator('.human-review').evaluate(el=>el.scrollWidth<=el.clientWidth+1));
+      assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    }
+    await boxes.locator('.query-card-open').click();
+    await waitForQuery(page,'tool_calls',query=>query.grouping?.keys.includes('duration_source'));
+    const query = await readQuery(page,'tool_calls');
+    assert.deepEqual(query.grouping.keys,['command_name','duration_source']);
+    assert.ok(query.grouping.source.where.some(term=>term.field==='duration_ms'&&term.op==='>'&&term.value==='0'));
+    await page.goto('http://home.test/home?cards=tool-review');
+    await page.locator('[data-card-id="mcp-response-size"] .query-card-open').click();
+    await waitForQuery(page,'mcp_calls',query=>query.grouping?.summaries.some(summary=>summary.id==='card_payload_median'));
+    const payloadQuery = await readQuery(page,'mcp_calls');
+    assert.deepEqual(payloadQuery.grouping.keys,['tool_name']);
+    assert.ok(payloadQuery.grouping.source.where.some(term=>term.field==='response_bytes'&&term.op==='>='&&term.value==='0'));
+    assert.ok(payloadQuery.grouping.source.where.some(term=>term.field==='called_at'&&term.value==='-30d'));
+    assert.deepEqual(data.errors,[]);
   } finally { await browser.close(); }
 });
 
@@ -1794,4 +2159,52 @@ test('model role bars conserve distinct session shares, both pies show five plus
     }
     assert.deepEqual(data.errors,[]);
   } finally {await browser.close();}
+});
+
+test('delegation review retains approved cards with idle feedback and matching drilldown windows', async () => {
+ const {browser,page,data}=await setup({url:'/home?cards=delegation-review',viewport:{width:1440,height:1080},localValues:{'pharos-token-usage-review-v3':{overall:'Approved token collection'},'pharos-delegation-review-v1':{overall:'Original delegation review'}}});
+ try {
+  const seed=data.rows.usage[0];
+  data.rows.usage=Array.from({length:120},(_,i)=>{const root=Math.floor(i/4),child=root%5!==0&&i%4!==0;return {...seed,id:`delegation-${i}`,agent_session_id:`session-${i}`,workspace_id:`workspace-${i}`,repository_name:'child repository',root_repository_name:['one','two','three'][root%3],root_conversation_id:`root-${root}`,root_title:`Delegation task ${root}`,delegated_session_id:child?`delegate-${root}-${i%4===3?'nested':'child'}`:null,delegated_run_depth:child?(i%4===3?2+root%3:1):0,total_tokens:1000*(i+1),session_kind:'root',price_status:['unpriced','assumed','partial','priced'][i%4]};});
+  data.rows.tool_calls=data.rows.tool_calls.map((r,i)=>({...r,parallel_count:i%3?3:1}));
+  data.rows.tl1_attempts=data.rows.tl1_attempts.map((r,i)=>({...r,revisit:i%2===0,task_id:`task-${i%3}`}));
+  await page.reload();await page.waitForFunction(()=>document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
+  assert.equal(await page.getByRole('heading',{name:'How agents divide the work',exact:true}).count(),1);
+  assert.equal(await page.locator('.human-review-entry').count(),4);assert.equal(await page.locator('.human-review-thesis').count(),2);
+  assert.equal(await page.locator('.human-review-error,.query-preview-unavailable,.query-empty,.qt-metric-message').count(),0);
+  for(const id of ['delegated-run-token-ranges']){const card=page.locator(`[data-card-id="${id}"]`);assert.equal(await card.locator('.query-box-row').count(),3);assert.equal(await card.locator('.query-box-axis').count(),1);await card.locator('.query-box-row').first().hover();assert.match(await page.getByRole('tooltip').innerText(),/observations/);}
+  for(const id of ['subagent-usage','task-delegate-count-ranges','delegation-tree-shape','batched-tools'])assert.equal(await page.locator(`[data-card-id="${id}"]`).count(),0,`${id} is retired`);
+  await page.mouse.move(0,0);const note=page.getByRole('textbox',{name:'Feedback on Delegated run sizes',exact:true});await note.focus();await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  const requests=data.requests.length;await page.evaluate(()=>{window.delegationFormats=0;const format=Number.prototype.toLocaleString;Number.prototype.toLocaleString=function(...args){window.delegationFormats++;return format.apply(this,args);};});
+  await note.pressSequentially('Separate own child tokens.',{delay:0});await page.getByRole('textbox',{name:'Feedback on Depth and workload spread',exact:true}).fill('Shared axes matter.');await page.getByRole('textbox',{name:'Overall feedback',exact:true}).fill('Explore branching.');assert.equal(await page.evaluate(()=>window.delegationFormats),0);assert.equal(data.requests.length,requests);
+  await page.getByRole('button',{name:'View report',exact:true}).click();const report=await page.getByRole('textbox',{name:'Feedback report',exact:true}).inputValue();for(const text of ['Delegation cards — review 2','Separate own child tokens.','Shared axes matter.','Explore branching.'])assert.ok(report.includes(text));await page.getByRole('button',{name:'Close',exact:true}).click();await page.reload();assert.equal(await page.getByRole('textbox',{name:'Overall feedback',exact:true}).inputValue(),'Explore branching.');
+  assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('pharos-token-usage-review-v3')).overall),'Approved token collection');
+  assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('pharos-delegation-review-v1')).overall),'Original delegation review');
+  const card=page.locator('[data-card-id="delegated-run-token-ranges"]');await card.scrollIntoViewIfNeeded();const before=await card.boundingBox();await card.hover();const after=await card.boundingBox();assert.deepEqual([before.x,before.y],[after.x,after.y]);
+  for(const width of [390,320]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));}
+  await page.getByLabel('Review preview window',{exact:true}).selectOption('30');await card.locator('.query-card-open').click();await waitForQuery(page,'usage',q=>q.grouping?.keys.includes('delegated_session_id'));const q=await readQuery(page,'usage');assert.deepEqual(q.grouping.keys,['root_repository_name','root_conversation_id','delegated_session_id']);assert.ok(q.grouping.source.where.some(t=>t.field==='first_usage_at'&&t.value==='-30d'));assert.ok(q.grouping.source.where.some(t=>t.field==='delegated_run_depth'&&t.op==='>'&&t.value==='0'));assert.ok(!q.grouping.source.where.some(t=>t.field==='price_status'));assert.deepEqual(data.errors,[]);
+ }finally{await browser.close();}
+});
+
+test('retired Steering category stays out of discovery and preserves old saved cards and feedback', async () => {
+ const draft={overall:'Drop this category.',cards:{'positive-feedback':{verdict:'drop',note:'Retired.'}}};
+ const {browser,page,data}=await setup({url:'/home?cards=library&card_topic=steering',localValues:{'pharos-steering-review-v1':draft}});
+ try {
+  await page.waitForFunction(()=>!document.querySelector('.card-library-count').textContent.includes('Loading charts'));
+  assert.equal(await page.getByRole('combobox',{name:'Topic',exact:true}).locator('option[value="steering"]').count(),0);
+  assert.equal(await page.getByRole('combobox',{name:'Topic',exact:true}).inputValue(),'');
+  assert.equal(new URL(page.url()).searchParams.get('card_topic'),null);
+  assert.equal(await page.locator('a[href*="cards=steering-review"]').count(),0);
+  for(const id of ['correction-phrases','correction-conversation-share','positive-feedback','positive-conversation-share','repeated-messages','within-conversation-repeats'])assert.equal(await page.locator(`[data-card-id="${id}"]`).count(),0);
+  await page.goto('http://home.test/home?cards=steering-review');
+  await page.waitForFunction(()=>document.querySelector('.home-conveyor')?.getAttribute('aria-busy')==='false');
+  assert.equal(await page.locator('.human-review-entry,a[href*="cards=steering-review"]').count(),0);
+  assert.equal(await page.locator('.home-belt-row .query-category').filter({hasText:'Steering'}).count(),0);
+  assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('pharos-steering-review-v1'))),draft);
+  const item=instantiateRecipe(queryRecipes.find(r=>r.id==='correction-phrases'),90);
+  const saved={id:item.id,title:item.title,description:item.description,url:item.url,dataset:item.dataset,savedQueryId:item.id,templateId:item.instanceId};
+  await page.evaluate(item=>{window.pharosPrefs.set('pharos-bookmarks-v1',[item]);window.dispatchEvent(new Event('pharos:bookmarks'));},saved);
+  const card=page.locator('.home-collection [data-card-id="correction-phrases"]');await card.waitFor();assert.equal(await card.locator('.query-category').innerText(),'Steering');
+  await card.locator('.query-card-open').click();await waitForQuery(page,'writing_messages',q=>q.grouping?.source.where.some(t=>t.field==='correction_cue'&&t.value==='true'));assert.deepEqual(data.errors,[]);
+ }finally{await browser.close();}
 });

@@ -82,20 +82,20 @@ test("failure-rate cover and destination agree, include successful calls and exp
 
 test("repeated-path HAVING excludes singleton reads and keeps repositories separate", () => {
   const recipe = queryRecipes.find(r => r.id === "repeated-reads"), { query } = instantiateRecipe(recipe, 7, clock);
-  const rows = ["one", "one", "two"].map((repository_name, i) => ({ id: String(i), repository_name, repo_path: "src/main.go", tool_category: "read", started_at: clock.getTime() - 1000 }));
+  const rows = ["one", "one", "two"].map((repository_name, i) => ({ id: String(i), repository_name, conversation_id: "conversation", repo_path: "src/main.go", tool_category: "read", started_at: clock.getTime() - 1000 }));
   const result = core.applyQuery(rows, query, schemas.tool_calls, { now: clock.getTime() });
   assert.equal(result.total, 1);
   assert.equal(result.rows[0].repository_name, "one");
-  assert.equal(result.rows[0].card_count, 2);
+  assert.equal(result.rows[0].cc_calls, 2);
 });
 
 test("group drilldown preserves source predicates and metrics, handles null keys and drops HAVING", () => {
   const recipe = queryRecipes.find(r => r.id === "repeated-reads"), { query } = instantiateRecipe(recipe, 7, clock);
-  const records = groupSourceQuery(query, { repository_name: null, repo_path: "src/main.go" }, schemas.tool_calls);
+  const records = groupSourceQuery(query, { repository_name: null, repo_path: "src/main.go", conversation_id: "conversation" }, schemas.tool_calls);
   assert.equal(records.grouping, undefined);
   assert.equal(records.offset, 0);
   assert.deepEqual(records.aggregations, recipe.measures);
-  assert.deepEqual(records.where, [...query.grouping.source.where, { field: "repository_name", op: "is_null", value: "" }, { field: "repo_path", op: "=", value: "src/main.go" }]);
+  assert.deepEqual(records.where, [...query.grouping.source.where, { field: "repository_name", op: "is_null", value: "" }, { field: "repo_path", op: "=", value: "src/main.go" }, { field: "conversation_id", op: "=", value: "conversation" }]);
   assert.throws(() => groupSourceQuery(query, { repo_path: "x" }, schemas.tool_calls), /Missing group key/);
 });
 
@@ -103,22 +103,22 @@ test("cache efficiency is weighted by input tokens and preserves provider cohort
   const { query } = instantiateRecipe(queryRecipes.find(r => r.id === "cache-efficiency"), 7, clock);
   const row = { first_usage_at: clock.getTime() - 1000, provider: "one", model_family: "model" };
   const result = core.applyQuery([
-    { ...row, id: "a", cache_read_input_tokens: 90, uncached_input_tokens: 10, agent_session_id: "same" },
-    { ...row, id: "b", cache_read_input_tokens: 0, uncached_input_tokens: 900, agent_session_id: "same" },
-    { ...row, id: "c", provider: "two", cache_read_input_tokens: 100, uncached_input_tokens: 0, agent_session_id: "other" },
+    { ...row, id: "a", input_tokens: 120, cache_creation_input_tokens: 20, cache_read_input_tokens: 90, uncached_input_tokens: 10, agent_session_id: "same" },
+    { ...row, id: "b", input_tokens: 900, cache_read_input_tokens: 0, uncached_input_tokens: 900, agent_session_id: "same" },
+    { ...row, id: "c", provider: "two", input_tokens: 100, cache_read_input_tokens: 100, uncached_input_tokens: 0, agent_session_id: "other" },
   ], query, schemas.usage, { now: clock.getTime() });
   assert.equal(result.total, 2);
-  assert.equal(result.rows.find(r => r.provider === "one").card_rate, 0.09);
-  assert.equal(result.rows.find(r => r.provider === "one").card_agent_session_id, 1);
+  assert.equal(result.rows.find(r => r.provider === "one").cc_share, 90 / 1020);
+  assert.equal(result.rows.find(r => r.provider === "one").cc_input, 1020);
 });
 
 test("work comparisons preserve workspace identity and take titles from the latest usage row", () => {
   const { query } = instantiateRecipe(queryRecipes.find(r => r.id === "usage-work"), 7, clock);
-  const row = { first_usage_at: clock.getTime() - 1000, cost_usd: 1, total_tokens: 100, workspace_id: "one", agent_session_id: "agent" };
+  const row = { first_usage_at: clock.getTime() - 1000, cost_usd: 1, total_tokens: 100, workspace_id: "one", root_repository_name: "repo", root_conversation_id: "one", root_title: "Current title", agent_session_id: "agent" };
   const result = core.applyQuery([
     { ...row, id: "old", title: "Old title", last_usage_at: new Date(clock.getTime() - 100).toISOString() },
     { ...row, id: "new", title: "Current title", last_usage_at: clock.toISOString() },
-    { ...row, id: "other", workspace_id: "two", title: "Current title", last_usage_at: clock.toISOString() },
+    { ...row, id: "other", workspace_id: "two", root_conversation_id: "two", title: "Current title", last_usage_at: clock.toISOString() },
   ], query, schemas.usage, { now: clock.getTime() });
   assert.equal(result.total, 2);
   assert.equal(result.rows[0].card_work_title, "Current title");
@@ -288,13 +288,13 @@ test("conversation histogram reduces windowed message counts, not individual wor
   assert.deepEqual(availableChartKinds(recipe), ["histogram"]);
 });
 
-test("legacy positive-feedback and reported-action candidates exclude nonhuman and mixed text", () => {
+test("positive-feedback uses authored cue evidence while legacy reported-action excludes mixed text", () => {
   for (const [id, text] of [["positive-feedback", "Great job, that worked"], ["human-action-phrases", "I fixed the parser"]]) {
-    const base = { ...recentMessage, text, conversation_id: "a" };
+    const base = { ...recentMessage, text, conversation_id: "a", positive_cue: true };
     const { result } = executeCard(id, [
       { ...base, id: "human" },
       { ...base, id: "automated", typed_words: 0 },
-      { ...base, id: "mixed", other_words: 10 },
+      { ...base, id: "mixed", other_words: 10, positive_cue: false },
     ]);
     assert.equal(result.total, 1, id);
     assert.equal(result.rows[0].card_count, 1, id);
@@ -302,7 +302,7 @@ test("legacy positive-feedback and reported-action candidates exclude nonhuman a
 });
 
 test("skill reloads count distinct successful file calls, excluding harness snapshots", () => {
-  const base = { created_at: clock.getTime() - 1000, repository_name: "one", conversation_id: "a", skill_path: "skills/check/SKILL.md", status: "ok", evidence_type: "file_load", content_bytes: 100 };
+  const base = { created_at: clock.getTime() - 1000, repository_name: "one", conversation_id: "a", skill_name: "check", skill_path: "skills/check/SKILL.md", status: "ok", evidence_type: "file_load", content_bytes: 100 };
   const { result } = executeCard("skill-reloads", [
     { ...base, id: "one", tool_call_id: "one" },
     { ...base, id: "two", tool_call_id: "two" },

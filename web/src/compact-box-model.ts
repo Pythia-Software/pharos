@@ -42,9 +42,24 @@ export function boxCost(value: number): string {
 export function boxNumber(value: number): string {
   return value.toLocaleString(undefined, { maximumFractionDigits: value !== 0 && Math.abs(value) < .01 ? Math.min(6, 1 - Math.floor(Math.log10(Math.abs(value)))) : 2 });
 }
+export function boxAxisNumber(value: number): string {
+  return Math.abs(value) >= 1000 ? value.toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 }) : boxNumber(value);
+}
+export function boxDuration(value: number): string {
+  return value >= 3600000 ? `${boxNumber(value / 3600000)}h` : value >= 60000 ? `${boxNumber(value / 60000)}min` : value >= 1000 ? `${boxNumber(value / 1000)}s` : `${boxNumber(value)}ms`;
+}
+export function boxBytes(value: number): string {
+  return value >= 1073741824 ? `${boxNumber(value / 1073741824)} GiB` : value >= 1048576 ? `${boxNumber(value / 1048576)} MiB` : value >= 1024 ? `${boxNumber(value / 1024)} KiB` : `${boxNumber(value)} B`;
+}
+// Linear-interpolated quartiles can fall beyond the last observed Tukey
+// inlier in a small, skewed sample. A whisker must extend out from its box,
+// never terminate inside it. Keep the observed endpoints in the tooltip.
+export function boxWhiskerExtent(summary: MetricBoxSummary) {
+  return { low: Math.min(summary.low, summary.q1), high: Math.max(summary.high, summary.q3) };
+}
 export function boxDetails(label: string, summary: MetricBoxSummary, unit = "USD"): string {
-  const format = unit === "USD" ? boxCost : boxNumber;
-  return [label, ...(unit && unit !== "USD" ? [unit] : []), `Median: ${format(summary.median)} · Mean: ${format(summary.mean)}`, `Q1: ${format(summary.q1)} · Q3: ${format(summary.q3)}`, `Min: ${format(summary.min)} · Max: ${format(summary.max)}`, `${summary.n.toLocaleString()} observations · ${summary.outlierCount.toLocaleString()} outliers (${boxOutliers(summary).length.toLocaleString()} retained markers)`].join("\n");
+  const format = unit === "USD" ? boxCost : unit === "bytes" ? (value: number) => value >= 1024 ? `${boxBytes(value)} (${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} bytes)` : `${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} bytes` : unit === "ms" ? (value: number) => value >= 1000 ? `${boxDuration(value)} (${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} ms)` : `${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} ms` : boxNumber;
+  return [label, ...(unit && unit !== "USD" ? [unit] : []), `Median: ${format(summary.median)} · Mean: ${format(summary.mean)}`, `Q1: ${format(summary.q1)} · Q3: ${format(summary.q3)}`, `Observed whisker range: ${format(summary.low)} – ${format(summary.high)}`, `Min: ${format(summary.min)} · Max: ${format(summary.max)}`, ...(summary.low > summary.q1 || summary.high < summary.q3 ? ["Interpolated quartile extends beyond observed inliers; whisker meets the box edge."] : []), `${summary.n.toLocaleString()} observations · ${summary.outlierCount.toLocaleString()} outliers (${boxOutliers(summary).length.toLocaleString()} retained markers)`].join("\n");
 }
 
 export function boxAxisCost(value: number): string {

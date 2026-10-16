@@ -37,7 +37,7 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
   const ranked = presentation?.ranked || Boolean(!presentation && (preview?.insights || preview?.ranking || preview?.groupSummary));
   const summary = ranked || preview?.study ? undefined : preview && (presentation ? presentation.summary : preview.summary);
   const headlineMetric = preview && (presentation ? presentation.headlineMetric : ranked ? undefined : preview.headlineMetric);
-  const coverLabel = preview?.study ? `${preview.study.value === undefined ? "" : preview.study.value.toLocaleString(undefined, { ...(preview.study.format === "percent" || preview.study.kind === "composition" ? { style: "percent" as const } : {}), maximumFractionDigits: 1 })} ${preview.study.valueLabel}. ${preview.study.sampleLabel}` : headlineMetric ? [headlineMetric.value, headlineMetric.unit, headlineMetric.label].filter(Boolean).join(" ") : summary ?? (presentation?.scalar ? [presentation.metric.clause.label, presentation.metric.result.buckets[0].value, presentation.groupLabel].filter(value => value !== undefined).join(": ") : presentation?.metric.clause.label ?? preview?.headline ?? title);
+  const coverLabel = preview?.study ? `${preview.study.value === undefined ? "" : preview.study.value.toLocaleString(undefined, { ...(preview.study.format === "USD" ? { style: "currency" as const, currency: "USD" } : {}), ...(preview.study.format === "percent" || preview.study.kind === "composition" ? { style: "percent" as const } : {}), maximumFractionDigits: 1 })} ${preview.study.valueLabel}. ${preview.study.sampleLabel}` : headlineMetric ? [headlineMetric.value, headlineMetric.unit, headlineMetric.label].filter(Boolean).join(" ") : summary ?? (presentation?.scalar ? [presentation.metric.clause.label, presentation.metric.result.buckets[0].value, presentation.groupLabel].filter(value => value !== undefined).join(": ") : presentation?.metric.clause.label ?? preview?.headline ?? title);
   const linkProps: React.AnchorHTMLAttributes<HTMLAnchorElement> = {
     href: url, "aria-hidden": xray || undefined, tabIndex: xray ? -1 : undefined, draggable: false,
     onClick: event => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && event.button === 0) { event.preventDefault(); if (!xray) onOpen(); } },
@@ -57,8 +57,8 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
           }}><Icon name="refresh" />Reload preview</button> : null}
         </span> : preview?.state === "ready" ? <>
           {headlineMetric ? <span className="query-headline-metric">
-            <span className="query-result-summary is-headline query-stat-line"><strong className="query-headline-value">{headlineMetric.value}</strong>{headlineMetric.unit ? <> <span className="query-headline-unit">{headlineMetric.unit}</span></> : null}</span>
-            {headlineMetric.label ? <span className="query-headline-label">{headlineMetric.label}</span> : null}
+            <span className="query-result-summary is-headline query-stat-line"><strong className="query-headline-value">{headlineMetric.value}</strong>{headlineMetric.unit ? <> <span className="query-headline-unit">{headlineMetric.unit}</span></> : null}
+            {headlineMetric.label ? <span className="query-headline-label">{headlineMetric.label}</span> : null}</span>
           </span> : null}
           {preview.study ? <HumanStudyCover study={preview.study} /> : preview.buckets && preview.series ? <CompactColumns buckets={preview.buckets} series={preview.series} showLegend={coverMetric?.display?.legendPosition ? coverMetric.display.legendPosition !== "none" : undefined} xLabel={coverMetric?.display?.xLabel ?? "Day"} yLabel={coverMetric?.display?.yLabel} unit={coverMetric?.field?.includes("cost") ? "USD" : coverMetric?.field?.includes("words") ? "words" : "tokens"} />
             : preview.metrics ? <CompactMetric preview={preview} />

@@ -7,6 +7,15 @@ import { wishlistCardRecipes } from "./wishlist-card-recipes";
 import type { CardCover } from "./card-cover";
 import { humanWordRecipes, refineHumanRecipe, applyHumanCardCopy } from "./human-word-recipes";
 import { modelChoiceRecipes, refineModelChoiceRecipe } from "./model-choice-recipes";
+import { contextCachingRecipes, refineContextCachingRecipe } from "./context-caching-recipes";
+import { errorPatternRecipes, refineErrorPatternRecipe } from "./error-pattern-recipes";
+import { toolFlowRecipes, refineToolFlowRecipe } from "./tool-flow-recipes";
+import { skillsInstructionsRecipes, refineSkillsInstructionsRecipe } from "./skills-instructions-recipes";
+import { researchRecipes, refineResearchRecipe } from "./research-recipes";
+import { tokenUsageRecipes, refineTokenUsageRecipe } from "./token-usage-recipes";
+import { delegationRecipes, refineDelegationRecipe } from "./delegation-recipes";
+import { steeringRecipes, refineSteeringRecipe } from "./steering-recipes";
+import { apiCostRecipes, refineApiCostRecipe } from "./api-cost-recipes";
 import type { HumanStudy } from "./human-study";
 export { clearPreviewCache, loadQueryPreview, loadQueryPreviews, formatPreviewValue } from "./query-previews";
 export type { QueryPreview } from "./query-previews";
@@ -14,7 +23,7 @@ export type { QueryPreview } from "./query-previews";
 export type QueryRecipe = {
   id: string; idea: string; title: string; description: string; dataset: QueryDataset;
   field: string; days?: number[]; where?: WhereTerm[]; measures: AggregationClause[];
-  unit: string; category: QueryCategory; scope?: string; note?: string;
+  unit: string; category: QueryCategory; scope?: string; note?: string; emptyLabel?: string;
   eligibility?: { metricId: string; minValue: number };
   exploration?: CardExploration;
   cover?: CardCover;
@@ -63,8 +72,17 @@ const baseRecipes: QueryRecipe[] = [
   ...wishlistCardRecipes,
   ...humanWordRecipes,
   ...modelChoiceRecipes,
+  ...contextCachingRecipes,
+  ...errorPatternRecipes,
+  ...toolFlowRecipes,
+  ...skillsInstructionsRecipes,
+  ...researchRecipes,
+  ...apiCostRecipes,
+  ...tokenUsageRecipes,
+  ...delegationRecipes,
+  ...steeringRecipes,
 ];
-export const queryRecipes = baseRecipes.map(enrichCardRecipe).map(refineHumanRecipe).map(applyHumanCardCopy).map(refineModelChoiceRecipe).map(recipe => recipe.humanStudy ? { ...recipe, days: [7] } : recipe);
+export const queryRecipes = baseRecipes.map(enrichCardRecipe).map(refineHumanRecipe).map(applyHumanCardCopy).map(refineModelChoiceRecipe).map(refineContextCachingRecipe).map(refineErrorPatternRecipe).map(refineToolFlowRecipe).map(refineSkillsInstructionsRecipe).map(refineResearchRecipe).map(refineApiCostRecipe).map(refineTokenUsageRecipe).map(refineDelegationRecipe).map(refineSteeringRecipe).map(recipe => recipe.humanStudy ? { ...recipe, days: [7] } : recipe);
 
 export function instantiateRecipe(recipe: QueryRecipe, days: number, clock = new Date()): QuerySuggestion {
   const window: RollingWindow = { days, field: recipe.field, mode: "relative" };

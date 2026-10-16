@@ -78,11 +78,22 @@ func (c *Catalog) usageRowsByPeriod(location *time.Location, hourly bool) ([]map
 			if root := lineage.roots[firstString(entry["conversation_id"])]; root != nil {
 				row["root_conversation_id"] = root["id"]
 				row["root_provider"] = root["provider"]
+				row["root_title"] = root["root_title"]
+				row["root_repository_name"] = root["root_repository_name"]
 				row["root_model_family"] = modelFamily(firstString(root["model"]))
 				row["root_effort"] = nilIfEmpty(firstString(root["effort"]))
 				row["delegated_session_id"] = nilIfEmpty(lineage.delegatedRuns[firstString(entry["agent_session_id"])])
 				if depth, known := lineage.delegatedDepth[firstString(entry["agent_session_id"])]; known {
 					row["delegated_run_depth"] = depth
+					// Canonical execution role, independent of whether a linked
+					// child transcript recorded its main session as a root.
+					if depth > 0 {
+						row["run_role"] = "delegated"
+					} else if role := firstString(row["session_role"]); role == "parent" {
+						row["run_role"] = "parent"
+					} else if role == "singleton" {
+						row["run_role"] = "standalone"
+					}
 				}
 			}
 			grouped[key] = row

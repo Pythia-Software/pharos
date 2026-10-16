@@ -380,6 +380,44 @@
       }
     },
     {
+      "name": "correction_cue",
+      "label": "Authored correction cue",
+      "description": "English correction substrings inside individual typed/dictated spans only, including I meant, you misunderstood, and you missed. Negation and hypothetical wording can match; not a mistake classification.",
+      "type": "bool",
+      "group": "Steering",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "correction_cue",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"correction_cue\""
+        }
+      }
+    },
+    {
+      "name": "positive_cue",
+      "label": "Authored positive cue",
+      "description": "English praise/thanks substrings inside individual typed/dictated spans only, including great work, looks good, and thank you. Negation and politeness can match; not measured satisfaction or completion.",
+      "type": "bool",
+      "group": "Steering",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "positive_cue",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"positive_cue\""
+        }
+      }
+    },
+    {
       "name": "typed_words",
       "label": "Typed words",
       "type": "number",
@@ -939,7 +977,13 @@
       }
     },
     {
-      "name": "conversation_id", "relationship": {"objectType": "pharos_conversations", "key": {"id": "conversation_id"}},
+      "name": "conversation_id",
+      "relationship": {
+        "objectType": "pharos_conversations",
+        "key": {
+          "id": "conversation_id"
+        }
+      },
       "label": "Conversation ID",
       "type": "text",
       "group": "Context",
@@ -957,7 +1001,13 @@
       }
     },
     {
-      "name": "workspace_id", "relationship": {"objectType": "pharos_library", "key": {"id": "workspace_id"}},
+      "name": "workspace_id",
+      "relationship": {
+        "objectType": "pharos_library",
+        "key": {
+          "id": "workspace_id"
+        }
+      },
       "label": "Conversation's work ID",
       "type": "text",
       "group": "Context",

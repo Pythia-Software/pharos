@@ -1,7 +1,7 @@
 import { type AggregationClause, type MetricDisplay, type QueryState } from "@pythia-software/query-table-core";
 import type { QueryRecipe } from "./curiosity-data";
 
-export type CardCover = { mode: "source" | "result"; metricId: string; kind?: MetricDisplay["kind"]; maxGroups?: number; showOther?: boolean; showLegend?: boolean; height?: number; showHeadline?: boolean; legendColumns?: 1 | 2; minSamples?: number; density?: "compact"; stackBy?: string };
+export type CardCover = { mode: "source" | "result"; metricId: string; kind?: MetricDisplay["kind"]; maxGroups?: number; showOther?: boolean; showLegend?: boolean; height?: number; showHeadline?: boolean; legendColumns?: 1 | 2; minSamples?: number; sampleUnit?: string; density?: "compact"; stackBy?: string };
 
 function coverDisplay(cover: CardCover): Partial<MetricDisplay> {
   return { ...(cover.maxGroups !== undefined ? { maxGroups: cover.maxGroups } : {}),

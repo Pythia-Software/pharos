@@ -19,7 +19,7 @@ export function HumanStudyCover({ study }: { study: HumanStudyPreview }) {
     return () => observer.disconnect();
   }, [study.kind]);
   const points = study.points ?? [], valid = points.filter((n): n is number => n !== null), low = valid.length ? Math.min(...valid) : 0, high = valid.length ? Math.max(...valid) : 0;
-  const isPercent = study.format === "percent" || study.kind === "composition", format = isPercent ? percent : number;
+  const isPercent = study.format === "percent" || study.kind === "composition", format = isPercent ? percent : study.format === "USD" ? (value: number) => value.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 }) : number;
   const pad = (high - low || Math.max(.1, Math.abs(high) * .1)) * .025, min = Math.max(0, low - pad), max = Math.max(min + .001, Math.min(isPercent ? 1 : Infinity, high + pad));
   const left = 4, right = size.width - 4, top = 5, bottom = size.height - 5;
   const x = (index: number) => left + index / Math.max(1, points.length - 1) * (right - left), y = (value: number) => bottom - (value - min) / (max - min) * (bottom - top);
@@ -39,7 +39,7 @@ export function HumanStudyCover({ study }: { study: HumanStudyPreview }) {
     const time = study.pointTimes?.[index];
     return [
       time === undefined ? `Daily endpoint ${index + 1}` : endpointDate(time),
-      value === null ? "No eligible messages in this window" : `${format(value)} ${study.valueLabel}`,
+      value === null ? "No eligible messages in this window" : `${format(value)} ${study.pointValueLabel ?? study.valueLabel}`,
       `Trailing ${study.lookbackDays} days${time === undefined ? "" : ` · ending ${new Date(time).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZoneName: "short" })}`}`,
     ].join("\n");
   };
@@ -69,7 +69,7 @@ export function HumanStudyCover({ study }: { study: HumanStudyPreview }) {
             </g>)}
           </svg>
         </span>
-        <span className="human-study-axis human-study-trend-axis"><span>30 days ago</span><span>Trailing {study.lookbackDays}d · now</span></span>
+        <span className="human-study-axis human-study-trend-axis"><span>30 days ago</span><span>{study.trendLabel ?? `Trailing ${study.lookbackDays}d`} · now</span></span>
       </span>
     </> : study.kind === "hours" ? <><span className="human-study-hour-bars">{study.rows?.map((row, index) => <span key={row.label} data-chart-tooltip={`${row.label}–${String((index + 1) % 24).padStart(2, "0")}:00\n${number(row.value)} human-written words\n${study.timeZone ?? "Local time"}`} title=""><i style={{ height: `${row.value / rowMax * 100}%` }} /></span>)}</span><span className="human-study-axis"><span>00:00</span><span>12:00</span><span>23:00</span></span></>
       : <span className="human-study-rows">{study.rows?.map(row => <span className="human-study-row" key={row.label} data-chart-tooltip={`${row.label}\n${row.count === undefined ? "" : `${number(row.count)} ${study.kind === "profile" ? row.count === 1 ? "conversation" : "conversations" : row.count === 1 ? "contribution" : "contributions"} · `}${percent(row.value)}${study.kind === "profile" ? "" : `\n${study.sampleLabel}`}`} title=""><span>{row.label}</span><strong>{percent(row.value)}{row.count !== undefined ? <small> · {row.count}</small> : null}</strong><i><span style={{ width: `${row.value * 100}%` }} /></i></span>)}</span>}

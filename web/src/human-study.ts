@@ -5,7 +5,7 @@ export type HumanStudy = "volume" | "message-average" | "conversation-average" |
 export type StudyMessage = { id: string; sent_at: string; typed_words: number; pasted_words: number; attachment_words: number; conversation_id: string; work_id?: string; workspace_id?: string; repository_name?: string; text?: string; text_truncated?: boolean; segments?: { text: string; category?: string }[]; [key: string]: unknown };
 export type StudyWorkspace = { id: string; location?: string; repository_name?: string };
 export type HumanStudyPreview = {
-  kind: "trend" | "composition" | "hours" | "profile"; value?: number; valueLabel: string; sampleLabel: string; format?: "percent"; timeZone?: string;
+  kind: "trend" | "composition" | "hours" | "profile"; value?: number; valueLabel: string; sampleLabel: string; format?: "percent" | "USD"; pointValueLabel?: string; trendLabel?: string; timeZone?: string;
   baseline?: number; points?: (number | null)[]; pointTimes?: number[]; lookbackDays?: number;
   rows?: { label: string; value: number; count?: number }[];
   evidence?: { id: string; text: string; url: string; label: string }[]; detail?: string;

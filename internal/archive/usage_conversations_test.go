@@ -16,6 +16,9 @@ func TestUsageWholeConversationOwnership(t *testing.T) {
 	for _, workspace := range []struct{ id, source string }{{"native", "codex"}, {"mirror", "conductor"}, {"outside", "claude"}} {
 		run(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES(?,?,'local',?,?, '2026-10-15')`, workspace.id, workspace.source, workspace.id, workspace.id)
 	}
+	run(`INSERT INTO repositories(id,display_name,created_at,updated_at) VALUES('root-repo','Root repository','2026-10-15','2026-10-15'),('child-repo','Child repository','2026-10-15','2026-10-15')`)
+	run(`UPDATE workspaces SET repository_id='root-repo' WHERE id='native'`)
+	run(`UPDATE workspaces SET repository_id='child-repo' WHERE id='outside'`)
 	for _, cv := range []struct {
 		id, workspace, model, effort, parent string
 		depth                                int
@@ -88,6 +91,7 @@ func TestUsageWholeConversationOwnership(t *testing.T) {
 		"s-nested":       "conversation:nested", "s-handle-child": "conversation:handle-child", "s-launched": "conversation:launched",
 	}
 	expectedRoles := map[string]string{"s-root": "parent", "s-continuation": "parent", "s-child": "parent", "s-child-continuation": "parent", "s-independent": "singleton", "s-nested": "singleton", "s-handle-child": "singleton", "s-launched": "singleton", "embedded": "subagent", "embedded-child": "subagent"}
+	expectedRunRoles := map[string]string{"s-root": "parent", "s-continuation": "parent", "s-independent": "standalone", "s-child": "delegated", "s-child-continuation": "delegated", "s-nested": "delegated", "s-handle-child": "delegated", "s-launched": "delegated", "embedded": "delegated", "embedded-child": "delegated"}
 	expectedDepths := map[string]int64{"embedded": 1, "embedded-child": 2, "s-child": 1, "s-child-continuation": 1, "s-nested": 3, "s-handle-child": 2, "s-launched": 1}
 	for _, hourly := range []bool{false, true} {
 		rows, err := catalog.usageRowsByPeriod(time.UTC, hourly)
@@ -110,8 +114,17 @@ func TestUsageWholeConversationOwnership(t *testing.T) {
 			if got, want := firstString(row["session_role"]), expectedRoles[firstString(row["agent_session_id"])]; got != want {
 				t.Fatalf("wrong session role: got %q want %q for %#v", got, want, row)
 			}
+			if got, want := firstString(row["run_role"]), expectedRunRoles[firstString(row["agent_session_id"])]; got != want {
+				t.Fatalf("wrong canonical run role: got %q want %q for %#v", got, want, row)
+			}
 			if root != "" && integer(row["delegated_run_depth"]) != expectedDepths[firstString(row["agent_session_id"])] {
 				t.Fatalf("wrong resolved execution depth: %#v", row)
+			}
+			if root != "" && (row["root_repository_name"] != "Root repository" || row["root_title"] != "native") {
+				t.Fatalf("children must retain their root title/repository, including across workspaces (hourly=%v): %#v", hourly, row)
+			}
+			if root == "" && (row["root_repository_name"] != nil || row["root_title"] != nil) {
+				t.Fatalf("unresolved ancestry must not invent task metadata: %#v", row)
 			}
 			if root == "root" && (row["root_model_family"] != "gpt-6-sol" || row["root_effort"] != "high" || row["root_provider"] != "codex") {
 				t.Fatalf("delegated/changed model must keep root cohort: %#v", row)

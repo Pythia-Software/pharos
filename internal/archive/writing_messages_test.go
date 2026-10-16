@@ -177,3 +177,54 @@ func TestSpanRulesMatchTheSchema(t *testing.T) {
 		}
 	}
 }
+
+func TestSteeringCuesOnlyMatchAuthoredSpans(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	type span struct {
+		category   string
+		start, end int
+	}
+	cases := []struct {
+		name, text           string
+		spans                []span
+		typed                int
+		correction, positive bool
+	}{
+		{"several cues count once", "YOU MISUNDERSTOOD; I meant the other path. Great work, thank you!", []span{{"typed", 0, 62}}, 12, true, true},
+		{"negation remains literal", "I never said great work; that's not what I asked.", []span{{"typed", 0, 48}}, 10, true, true},
+		{"copied cues cannot qualify", "Please read: I meant the index. Great work.", []span{{"typed", 0, 12}, {"pasted", 12, 41}}, 2, false, false},
+		{"machine cues cannot qualify", "I meant the index. Great work.", []span{{"automated", 0, 29}}, 0, false, false},
+		{"own cue in mixed message", "I meant the index.\n```great work```", []span{{"typed", 0, 17}, {"pasted", 17, 33}}, 4, true, false},
+		{"utf8 prefix offsets are bytes", "🧭 café — YOU MISSED the index. Great work.", []span{{"pasted", 0, len("🧭 café — ")}, {"typed", len("🧭 café — "), len("🧭 café — YOU MISSED the index. Great work.")}}, 7, true, true},
+		{"separate typed spans do not bridge", "I meant", []span{{"typed", 0, 2}, {"typed", 2, 7}}, 2, false, false},
+		{"missing spans are unknown evidence", "I meant the index.", nil, 4, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Use byte-aligned test endpoints, with the last span covering remaining text.
+			for i := range tc.spans {
+				if i == len(tc.spans)-1 {
+					tc.spans[i].end = len(tc.text)
+				}
+			}
+			rows := []string{}
+			args := []any{}
+			for _, s := range tc.spans {
+				rows = append(rows, "SELECT 'message' message_id, ? category, ? start_byte, ? end_byte")
+				args = append(args, s.category, s.start, s.end)
+			}
+			if len(rows) == 0 {
+				rows = append(rows, "SELECT 'message' message_id, '' category, 0 start_byte, 0 end_byte WHERE 0")
+			}
+			sql := "WITH message_authorship_spans AS (" + strings.Join(rows, " UNION ALL ") + "), ma AS (SELECT 'message' message_id, ? typed_words), m AS (SELECT ? text) SELECT " + writingMessageDataset.columns["correction_cue"] + "," + writingMessageDataset.columns["positive_cue"] + " FROM ma,m"
+			args = append(args, tc.typed, tc.text)
+			var correction, positive bool
+			if err := catalog.DB.QueryRow(sql, args...).Scan(&correction, &positive); err != nil {
+				t.Fatal(err)
+			}
+			if correction != tc.correction || positive != tc.positive {
+				t.Fatalf("cues = (%v,%v), want (%v,%v)", correction, positive, tc.correction, tc.positive)
+			}
+		})
+	}
+}

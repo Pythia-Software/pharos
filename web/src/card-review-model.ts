@@ -22,8 +22,10 @@ export function createCardReviewModel(theses: ReviewThesis[], reportTitle: strin
   function reviewedCardCount(feedback: ReviewFeedback): number {
     return theses.flatMap(thesis => thesis.cards).filter(card => feedback.cards[card.id]?.verdict || feedback.cards[card.id]?.note.trim()).length;
   }
-  function exportFeedback(feedback: ReviewFeedback, days: number, titles: Record<string, string> = {}): string {
+  function exportFeedback(feedback: ReviewFeedback, days: number, titles: Record<string, string> = {}, cardWindows: Record<string, number> = {}): string {
     const lines = [`# ${reportTitle}`, "", `Preview window at export: past ${days} days (rolling).`, scope, ""];
+    const overrides = Object.entries(cardWindows).filter(([, window]) => window !== days);
+    if (overrides.length) lines.push("Additional card windows:", ...overrides.map(([id, window]) => `- ${titles[id] ?? id} (${id}): past ${window} days (rolling).`), "");
     if (feedback.overall.trim()) lines.push("## Feedback on the set", "", feedback.overall.trim(), "");
     for (const thesis of theses) {
       const reviewed = thesis.cards.filter(card => feedback.cards[card.id]?.verdict || feedback.cards[card.id]?.note.trim());
@@ -34,6 +36,7 @@ export function createCardReviewModel(theses: ReviewThesis[], reportTitle: strin
       for (const card of reviewed) {
         const item = feedback.cards[card.id];
         lines.push(`### ${titles[card.id] ?? card.id} (${card.id})`, "");
+        if (cardWindows[card.id] !== undefined && cardWindows[card.id] !== days) lines.push(`Preview window: past ${cardWindows[card.id]} days (rolling).`, "");
         if (item.verdict) lines.push(`Verdict: ${item.verdict}`, "");
         if (item.note.trim()) lines.push(item.note.trim(), "");
       }
@@ -46,5 +49,6 @@ export function createCardReviewModel(theses: ReviewThesis[], reportTitle: strin
 export type CardReviewStudy = {
   label: string; cardLabel?: string; eyebrow: string; title: string; intro: string; scopeTitle: string; scope: string;
   storageKey: string; category: QueryCategory; theses: ReviewThesis[];
+  secondaryWindow?: { param: string; label: string; cardIds: string[]; defaultDays: 1 | 7 | 30 | 90 };
   feedback: ReturnType<typeof createCardReviewModel>;
 };

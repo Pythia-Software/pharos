@@ -36,6 +36,7 @@ const ReviewCardPreview = memo(function ReviewCardPreview({ item, days, preview,
 
 export function CategoryCardReview({ study, schemas, onOpen, onKeep, collected, message }: { study: CardReviewStudy; schemas: Record<QueryDataset, FieldSchema>; onOpen: (url: string) => void; onKeep: (item: QuerySuggestion) => void; collected: Set<string | undefined>; message: string }) {
   const [days, setDays] = useState(() => { const value = Number(new URLSearchParams(location.search).get("review_days")); return [1, 7, 30, 90].includes(value) ? value : 7; });
+  const [secondaryDays, setSecondaryDays] = useState(() => { const value = Number(new URLSearchParams(location.search).get(study.secondaryWindow?.param ?? "")); return [1, 7, 30, 90].includes(value) ? value : study.secondaryWindow?.defaultDays ?? 7; });
   const [recipes, setRecipes] = useState(cardTemplates);
   const [feedback, setFeedback] = useState<ReviewFeedback>(() => initialFeedback(study)), [saveError, setSaveError] = useState("");
   const [previews, setPreviews] = useState<Record<string, QueryPreview>>({}), [errors, setErrors] = useState<Record<string, string>>({});
@@ -51,7 +52,7 @@ export function CategoryCardReview({ study, schemas, onOpen, onKeep, collected, 
       setSaveError("");
     } catch { setSaveError("Draft storage is unavailable. Copy your feedback before leaving this page."); }
   }, [study.storageKey]);
-  const cards = useMemo(() => study.theses.flatMap(thesis => thesis.cards).map(card => instantiateRecipe(recipes.find(recipe => recipe.id === card.id) ?? queryRecipes.find(recipe => recipe.id === card.id)!, days)), [recipes, days, study]);
+  const cards = useMemo(() => study.theses.flatMap(thesis => thesis.cards).map(card => instantiateRecipe(recipes.find(recipe => recipe.id === card.id) ?? queryRecipes.find(recipe => recipe.id === card.id)!, study.secondaryWindow?.cardIds.includes(card.id) ? secondaryDays : days)), [recipes, days, secondaryDays, study]);
   const reloadPreview = usePreviewReload(setPreviews, setErrors, [cards, schemas, generation]);
   useEffect(() => {
     const refresh = () => { setRecipes(cardTemplates()); setGeneration(value => value + 1); };
@@ -74,8 +75,8 @@ export function CategoryCardReview({ study, schemas, onOpen, onKeep, collected, 
     };
   }, [saveFeedback]);
   useEffect(() => {
-    const url = new URL(location.href); url.searchParams.set("review_days", String(days)); history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`); setCopyStatus("");
-  }, [days]);
+    const url = new URL(location.href); url.searchParams.set("review_days", String(days)); if (study.secondaryWindow) url.searchParams.set(study.secondaryWindow.param, String(secondaryDays)); history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`); setCopyStatus("");
+  }, [days, secondaryDays, study]);
   useEffect(() => {
     const controller = new AbortController(); setPreviews({}); setErrors({});
     void loadQueryPreviews(cards.map(item => ({ id: item.id, dataset: item.dataset, query: item.query, schema: schemas[item.dataset], options: { recipe: item, cover: item.cover, window: item.window, url: item.url } })), (id, preview, error) => {
@@ -88,7 +89,7 @@ export function CategoryCardReview({ study, schemas, onOpen, onKeep, collected, 
   function updateCard(id: string, patch: { verdict?: CardVerdict; note?: string }) {
     setFeedback(current => ({ ...current, cards: { ...current.cards, [id]: { ...(current.cards[id] ?? { note: "" }), ...patch } } }));
   }
-  const report = () => study.feedback.exportFeedback(feedback, days, Object.fromEntries(cards.map(card => [card.id, card.title])));
+  const report = () => study.feedback.exportFeedback(feedback, days, Object.fromEntries(cards.map(card => [card.id, card.title])), Object.fromEntries(cards.map(card => [card.id, card.window.days])));
   async function copy() {
     const text = report();
     try { await navigator.clipboard.writeText(text); setCopyStatus("Copied. Paste your feedback into the chat."); }
@@ -99,7 +100,7 @@ export function CategoryCardReview({ study, schemas, onOpen, onKeep, collected, 
     <div className="human-review-heading"><div><span className="human-review-eyebrow">{study.eyebrow}</span><h1>{study.title}</h1><p>{study.intro}</p></div><a href="/home?cards=library" onClick={event => { if (!event.metaKey && !event.ctrlKey) { event.preventDefault(); onOpen("/home?cards=library"); } }}>Card library <Icon name="arrow-right" /></a></div>
     <div className="human-review-scope"><strong>{study.scopeTitle}</strong><p>{study.scope}</p></div>
     <nav className="human-review-thesis-nav" aria-label="Review sections">{study.theses.map((thesis, index) => <a key={thesis.id} href={`#review-${thesis.id}`}><span>0{index + 1}</span>{thesis.title}</a>)}</nav>
-    <div className="human-review-toolbar"><label>Preview window<select aria-label="Review preview window" value={days} onChange={event => setDays(Number(event.target.value))}>{[1, 7, 30, 90].map(days => <option key={days} value={days}>{days === 1 ? "Past 24 hours" : `Past ${days} days`}</option>)}</select></label><span role="status">{completed < cards.length ? `Loading ${completed}/${cards.length} previews…` : "Live library previews"}<small>{study.feedback.reviewedCardCount(feedback)} of {cards.length} cards reviewed</small></span><button type="button" onClick={() => { setExportText(report()); exportDialog.current?.showModal(); }}>View report</button><button type="button" className="human-review-copy" onClick={() => void copy()}><Icon name="copy" />Copy feedback</button></div>
+    <div className="human-review-toolbar"><label>Preview window<select aria-label="Review preview window" value={days} onChange={event => setDays(Number(event.target.value))}>{[1, 7, 30, 90].map(days => <option key={days} value={days}>{days === 1 ? "Past 24 hours" : `Past ${days} days`}</option>)}</select></label>{study.secondaryWindow ? <label>{study.secondaryWindow.label}<select aria-label={study.secondaryWindow.label} value={secondaryDays} onChange={event => setSecondaryDays(Number(event.target.value))}>{[1, 7, 30, 90].map(window => <option key={window} value={window}>{window === 1 ? "Past 24 hours" : `Past ${window} days`}</option>)}</select></label> : null}<span role="status">{completed < cards.length ? `Loading ${completed}/${cards.length} previews…` : "Live library previews"}<small>{study.feedback.reviewedCardCount(feedback)} of {cards.length} cards reviewed</small></span><button type="button" onClick={() => { setExportText(report()); exportDialog.current?.showModal(); }}>View report</button><button type="button" className="human-review-copy" onClick={() => void copy()}><Icon name="copy" />Copy feedback</button></div>
     <p className="human-review-status" role="status">{copyStatus || message || saveError || "Feedback saves in this browser as you type. Copy the report when you’re ready to discuss it."}</p>
     {study.theses.map((thesis, index) => <section className="human-review-thesis" id={`review-${thesis.id}`} key={thesis.id} aria-labelledby={`thesis-${thesis.id}`}>
       <div className="human-review-thesis-heading"><span>0{index + 1}</span><div><h2 id={`thesis-${thesis.id}`}>{thesis.title}</h2><p>{thesis.thesis}</p></div></div>
@@ -109,7 +110,7 @@ export function CategoryCardReview({ study, schemas, onOpen, onKeep, collected, 
         const error = errors[item.id] && (/group population exceeds host budget/.test(errors[item.id]) ? "This window contains too many groups to preview. Choose a shorter preview window." : errors[item.id]);
         return <article className="human-review-entry" key={item.id} id={`review-card-${item.id}`} data-card-definition={item.id}>
           <div className="human-review-card-label"><span>{String(cards.indexOf(item) + 1).padStart(2, "0")}</span><span>{study.cardLabel ?? "Revised"}</span>{collected.has(item.id) ? <span>Collected</span> : null}</div>
-          <ReviewCardPreview item={item} days={days} preview={previews[item.id]} error={error} schema={schemas[item.dataset]} onOpen={onOpen} onKeep={onKeep} onReload={reloadPreview} />
+          <ReviewCardPreview item={item} days={item.window.days} preview={previews[item.id]} error={error} schema={schemas[item.dataset]} onOpen={onOpen} onKeep={onKeep} onReload={reloadPreview} />
           <p className="human-review-sample">{sampleSize(previews[item.id])}</p>
           {previews[item.id]?.study?.workspaceRows?.length ? <div className="human-review-workspaces"><strong>Within each workspace directory</strong><small>Five most active · context contributions / assessed contributions</small>{previews[item.id].study!.workspaceRows!.map(row => <a href={row.url} key={row.location} title={row.location} onClick={event => { if (!event.metaKey && !event.ctrlKey) { event.preventDefault(); onOpen(row.url); } }}><span>{row.label}</span><strong>{(row.value * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}% <small>{row.count}/{row.total}</small></strong></a>)}</div> : null}
           <p className="human-review-rationale">{definition.rationale}</p>
