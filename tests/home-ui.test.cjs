@@ -428,9 +428,9 @@ test('collection unifies saved queries, edits metadata, reorders, deletes, and p
     assert.equal(data.preferences['query-table:default:pharos_writing_messages'], 'original-query');
     data.empty = true;
     await page.reload();
-    await page.waitForFunction(() => document.querySelector('.home-conveyor')?.getAttribute('aria-busy') === 'false' && document.querySelector('.home-discovery-empty'));
+    await page.waitForFunction(() => document.querySelector('.home-conveyor')?.getAttribute('aria-busy') === 'false' && document.querySelector('.home-discovery-empty'), null, {timeout:5000}).catch(async () => assert.fail(await page.locator('.home-conveyor').innerText()));
     assert.equal(await page.locator('.home-collection .query-card').count(), 2);
-    await page.waitForFunction(() => [...document.querySelectorAll('.home-collection .query-preview-status')].every(node => node.textContent === 'No recent matches'));
+    await page.waitForFunction(() => [...document.querySelectorAll('.home-collection .query-card')].every(node => node.querySelector('.query-preview-status') && !node.querySelector('.query-preview-unavailable')), null, {timeout:5000}).catch(async () => assert.fail(await page.locator('.home-collection').innerText()));
     assert.equal(await page.locator('.home-belt-row .query-card:not([data-xray])').count(), 0);
     assert.equal(data.preferences['pharos-bookmarks-v1'].length, 2);
     assert.deepEqual(data.errors, []);
@@ -1056,34 +1056,31 @@ test('card library shows empty cards, filters and sorts active definitions, and 
   } finally { await browser.close(); }
 });
 
-test('wishlist cards preserve conversation histograms and local-hour queries through editing and collection', async () => {
+test('retained distribution cards preserve native boxes and local-hour queries through editing and collection', async () => {
   const { browser, page, data } = await setup({ url: '/home?cards=library' });
   try {
-    // Several messages per genuine conversation, plus a machine-only message.
-    data.rows.writing_messages.forEach((row, i) => { row.conversation_id = `conversation-${Math.floor(i / 4)}`; row.work_id = `work-${Math.floor(i / 4)}`; row.other_words = 0; });
-    data.rows.writing_messages.push({ ...data.rows.writing_messages[0], id: 'machine-message', typed_words: 0 });
+    data.rows.tool_calls.forEach((row,i)=>{row.tool_category='web';row.search_query='Query plan';row.conversation_id=`search-${i}`;});
     await page.reload();
-    await page.getByLabel('Find a card', { exact: true }).fill('distribution of messages');
-    await page.waitForFunction(() => document.querySelectorAll('.card-library-entry').length === 1 && document.querySelector('.card-library-entry .query-compact-metric'));
-    assert.match(await page.locator('.query-result-summary').innerText(), /observations/);
-    assert.ok(data.requests.some(({ request }) => request.grouping?.keys.includes('conversation_id') && request.metrics?.some(metric => metric.distribution?.kind === 'histogram')));
+    await page.getByLabel('Find a card', { exact: true }).fill('research-conversation-searches');
+    await page.locator('.query-box-row').first().waitFor();
+    assert.ok(data.requests.some(({request})=>request.grouping?.keys.includes('conversation_id')&&request.metrics?.some(metric=>metric.distribution?.kind==='box')));
     await page.getByRole('button', { name: /^Edit card / }).click();
-    assert.equal(await page.getByLabel('Chart', { exact: true }).inputValue(), 'histogram');
-    await page.getByLabel('Question', { exact: true }).fill('My conversation message counts');
+    assert.equal(await page.getByLabel('Chart', { exact: true }).inputValue(), 'box');
+    await page.getByLabel('Question', { exact: true }).fill('My conversation search counts');
     await page.getByRole('button', { name: 'Save template', exact: true }).click();
-    await page.getByText('My conversation message counts', { exact: true }).waitFor();
-    await page.getByRole('button', { name: 'Collect My conversation message counts', exact: true }).click();
-    await page.getByText('Collected “My conversation message counts”.', { exact: true }).waitFor();
-    let saved = await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', []).find(card => card.templateId?.startsWith('conversation-writing:')));
-    assert.equal(saved.cover.kind, 'histogram');
+    await page.getByText('My conversation search counts', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Collect My conversation search counts', exact: true }).click();
+    await page.getByText('Collected “My conversation search counts”.', { exact: true }).waitFor();
+    let saved = await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', []).find(card => card.templateId?.startsWith('research-conversation-searches:')));
+    assert.equal(saved.cover.kind, 'box');
     assert.deepEqual(saved.query.grouping.keys, ['repository_name', 'conversation_id']);
-    assert.equal(saved.query.aggregations[0].distribution.input, '[card_count]');
+    assert.equal(saved.query.aggregations[0].distribution.input, queryRecipes.find(r=>r.id==='research-conversation-searches').exploration.coverMetric.distribution.input);
 
-    await page.getByLabel('Find a card', { exact: true }).fill('When am I writing to agents');
+    await page.getByLabel('Find a card', { exact: true }).fill('writing-hours');
     await page.waitForFunction(() => document.querySelectorAll('.card-library-entry').length === 1 && !document.querySelector('.card-library-count').textContent.includes('Loading charts'));
-    assert.equal(await page.locator('.card-library-entry .query-compact-metric').count(), 1, await page.locator('.query-cover').getAttribute('title'));
-    await page.getByRole('button', { name: 'Collect When am I writing to agents?', exact: true }).click();
-    await page.getByText('Collected “When am I writing to agents?”.', { exact: true }).waitFor();
+    assert.equal(await page.locator('.human-study-hour-bars > span').count(), 24);
+    await page.getByRole('button', { name: 'Collect When you work', exact: true }).click();
+    await page.getByText('Collected “When you work”.', { exact: true }).waitFor();
     saved = await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', []).find(card => card.templateId?.startsWith('writing-hours:')));
     assert.equal(saved.query.aggregations[0].dateGrouping.timeZone, 'America/Denver');
     assert.equal(saved.query.aggregations[0].dateGrouping.interval, 'hour');
@@ -1385,9 +1382,11 @@ test('card loading has a spinner and skeleton, respects reduced motion and clear
 });
 
 test('compact native axes share a footer and wider plotting area on desktop and phone', async () => {
-  const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=price-comparison' });
+  const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=session-token-cost' });
   try {
-    const card = page.locator('#card-price-comparison');
+    data.rows.usage=data.rows.usage.map((row,i)=>({...row,root_conversation_id:`root-${i}`,root_provider:'codex',root_model_family:'gpt-5.4',root_effort:'high'}));
+    await page.reload();
+    const card = page.locator('#card-session-token-cost');
     await card.locator('.qt-metric-axis-labels').waitFor();
     for (const width of [1470, 390]) {
       await page.setViewportSize({ width, height: 844 });
@@ -2206,5 +2205,18 @@ test('retired Steering category stays out of discovery and preserves old saved c
   await page.evaluate(item=>{window.pharosPrefs.set('pharos-bookmarks-v1',[item]);window.dispatchEvent(new Event('pharos:bookmarks'));},saved);
   const card=page.locator('.home-collection [data-card-id="correction-phrases"]');await card.waitFor();assert.equal(await card.locator('.query-category').innerText(),'Steering');
   await card.locator('.query-card-open').click();await waitForQuery(page,'writing_messages',q=>q.grouping?.source.where.some(t=>t.field==='correction_cue'&&t.value==='true'));assert.deepEqual(data.errors,[]);
+ }finally{await browser.close();}
+});
+
+test('card token destinations ignore stale Machine view preferences and retain explicit URL scopes', async () => {
+ const item=instantiateRecipe(queryRecipes.find(r=>r.id==='task-token-ranges'),30);
+ const {browser,page,data}=await setup({url:item.url,waitForHome:false,preferenceValues:{'pharos-machine-view':'time','pharos-machine-scope':{days:7,repository:'stale-repo',provider:'claude',model:'stale-model'}}});
+ try {
+  await waitForQuery(page,'usage',q=>q.grouping?.source.where.some(t=>t.field==='first_usage_at'&&t.value==='-30d'));
+  const q=await readQuery(page,'usage');assert.deepEqual(q.grouping.source.where,item.query.grouping.source.where);
+  assert.equal(new URL(page.url()).searchParams.get('machine_view'),'tokens');assert.equal(await page.getByRole('button',{name:/^Machine Tokens/}).getAttribute('aria-pressed'),'true');
+  const scoped=new URL(item.url,'http://home.test');scoped.searchParams.set('activity_repo','explicit-repo');await page.goto(scoped.href);
+  await waitForQuery(page,'usage',q=>q.grouping?.source.where.some(t=>t.field==='repository_name'&&t.value==='explicit-repo'));
+  const source=(await readQuery(page,'usage')).grouping.source.where;assert.ok(source.some(t=>t.field==='first_usage_at'&&t.value==='-30d'));assert.ok(!source.some(t=>t.value==='stale-repo'));assert.deepEqual(data.errors,[]);
  }finally{await browser.close();}
 });

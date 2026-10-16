@@ -82,9 +82,12 @@ export function buildHumanStudy(kind: HumanStudy, allRows: StudyMessage[], works
     // today's endpoint. Empty volume windows are zero; undefined means stay gaps.
     const points = pointTimes.map(end => measure(window(end)));
     const historical = points.slice(0, -1).filter((value): value is number => value !== null);
+    // A quiet current window can still have history; entirely absent writing
+    // evidence should keep this card out of recommendations.
+    const hasVolumeHistory = kind !== "volume" || points.some(point => point !== null && point > 0);
     const selected = kind === "workspace-average" ? writing.filter(row => identity(row)) : writing;
     const denominator = kind === "workspace-average" ? `${unique(selected.map(identity))} workspace directories · ${unique(selected.map(row => row.conversation_id))} conversations` : kind === "conversation-average" ? `${unique(writing.map(row => row.conversation_id))} conversations · ${writing.length} messages` : `${writing.length} written messages`;
-    return { kind: "trend", value: points.at(-1) ?? undefined, valueLabel: kind === "volume" ? `words / trailing ${days}d` : kind === "message-average" ? "words / message" : kind === "conversation-average" ? "words / conversation" : "words / workspace directory", sampleLabel: denominator,
+    return { kind: "trend", value: hasVolumeHistory ? points.at(-1) ?? undefined : undefined, valueLabel: kind === "volume" ? `words / trailing ${days}d` : kind === "message-average" ? "words / message" : kind === "conversation-average" ? "words / conversation" : "words / workspace directory", sampleLabel: denominator,
       points, pointTimes, lookbackDays: days, baseline: historical.length ? historical.reduce((a, b) => a + b, 0) / historical.length : undefined,
       detail: kind === "workspace-average" ? `${writing.length - selected.length} written messages lack a mapped directory and are excluded. Workspaces sharing a repository and exact directory are combined, regardless of conversation or work ID.` : `Each point is a trailing ${days}-day ${kind === "volume" ? "word total" : "ratio of window totals"}. The norm is the mean of the prior 30 daily endpoints${kind === "volume" ? ", including zero-writing windows" : "; empty denominators remain gaps"}.` };
   }

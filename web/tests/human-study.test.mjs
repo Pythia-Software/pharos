@@ -22,6 +22,14 @@ test("volume baseline averages thirty comparable trailing totals including zero 
   assert.equal(study.points.at(-1), study.value);
 });
 
+test("volume without any historical writing is empty while a quiet current window retains its zero", () => {
+  const empty = buildHumanStudy("volume", [], [], 7, now, "UTC");
+  assert.equal(empty.value, undefined);
+  const historical = buildHumanStudy("volume", [row("earlier", "Written", {sent_at: new Date(now - 9 * day).toISOString()})], [], 7, now, "UTC");
+  assert.equal(historical.value, 0);
+  assert.ok(historical.points.some(value => value > 0));
+});
+
 test("rolling averages divide totals at each endpoint and leave empty denominators as gaps", () => {
   const rows = [row("a", "A", { typed_words: 10, conversation_id: "one" }), row("b", "B", { typed_words: 90, conversation_id: "one" }), row("c", "C", { typed_words: 200, conversation_id: "two" })];
   const messages = buildHumanStudy("message-average", rows, [], 7, now, "UTC"), conversations = buildHumanStudy("conversation-average", rows, [], 7, now, "UTC");

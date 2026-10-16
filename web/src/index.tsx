@@ -1447,6 +1447,9 @@ function UsagePage() {
     pushMachineLocation(url);
   }
   const statusText = !status ? "" : status.error ? `Last update failed: ${status.error}` : status.running ? "Updating…" : status.built_at ? `Updated ${new Date(status.built_at).toLocaleString()}` : "Waiting to build";
+  // Machine controls fetch scope choices and canonicalize their route on mount.
+  // Keep them unmounted while another page (including Home) is active.
+  if (!shared && location.pathname !== "/usage") return null;
   return <UsageChartColorsProvider><div className="pharos-query-page usage-page">
     <div className="view-heading library-heading usage-heading">
       <div><h1>Usage</h1><p className="muted">{view === "tokens"
