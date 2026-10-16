@@ -152,7 +152,9 @@ increase memory usage; the row caps are not a byte-level memory guarantee.
 V2 limits fail explicitly rather than returning approximate populations:
 
 - 20 metrics per batch; 10,000 shown rows; 2,000 result groups before top-N.
-- 250,000 matching SQL rows, or 250,000 total map-source rows before staging.
+- 250,000 matching rows by default; covered raw tool metrics allow 2 million.
+  Indexed SQL row windows allow 10 million matches while validating selected
+  values/computed inputs on the bounded page. Map staging retains 250,000.
 - A 30-second request deadline; row/metric bodies capped at 1 MB.
 - Adapter sample budgets: exact median and box populations are bounded; see the
   upstream guide and diagnostics for per-group limits.
@@ -198,3 +200,9 @@ formulas, and twenty mixed metrics. Measurements and remaining optimization
 requests are in the upstream handoff. These are local stress measurements,
 not production latency guarantees. The earlier upgrade measurements are retained in the historical handoff;
 release validation uses the published packages and the checked-in browser fixtures.
+
+The production-data pass and its remaining 500 ms misses are documented in
+[query-performance.md](query-performance.md). `tools/query-bench.py` retains
+request fixtures, HTTP timings, diagnostics and result digests for repeatable
+comparisons. Small V3 summary/map populations use leased memory scratch storage;
+raw payload populations retain disk spill and the existing byte budget.

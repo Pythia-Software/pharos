@@ -134,6 +134,10 @@ func (d sqlDataset) v2CandidateSource(schema qt.Schema, terms []qt.WhereTerm, cl
 		saved := len(args)
 		for _, clause := range term.Predicates() {
 			predicate := ""
+			if !clause.Negated && clause.Op == "=" && clause.Value != "" && d.lookups[clause.Field] && d.columns[clause.Field] != "" &&
+				(schema.Fields[clause.Field].Kind == qt.FieldText || schema.Fields[clause.Field].Kind == qt.FieldEnum) {
+				predicate = d.columns[clause.Field] + "=" + bind(clause.Value)
+			}
 			if clock != nil && !clause.Negated && d.timestamps[clause.Field] != "" && schema.Fields[clause.Field].Kind == qt.FieldDatetime {
 				if from, to, ok := indexedDatetimeBounds(clause, *clock); ok {
 					column := d.timestamps[clause.Field]
@@ -292,30 +296,41 @@ func stageQueryRowsWithBudget(ctx context.Context, tx *sql.Tx, name string, rows
 	if _, err := tx.ExecContext(ctx, "CREATE TEMP TABLE "+table+" ("+strings.Join(columns, ",")+")"); err != nil {
 		return "", err
 	}
-	stmt, err := tx.PrepareContext(ctx, "INSERT INTO "+table+" VALUES ("+strings.Join(placeholders, ",")+")")
+	// Batch narrow rows so loading a map population does not make one driver
+	// round trip per record. Stay below SQLite's conservative parameter limit.
+	batchSize := max(1, min(128, 999/max(1, len(names))))
+	rowSQL := "(" + strings.Join(placeholders, ",") + ")"
+	stmt, err := tx.PrepareContext(ctx, "INSERT INTO "+table+" VALUES "+strings.TrimSuffix(strings.Repeat(rowSQL+",", batchSize), ","))
 	if err != nil {
 		return "", err
 	}
 	defer stmt.Close()
-	for _, row := range rows {
-		values := make([]any, len(names))
-		for i, field := range names {
-			value := row[field]
-			if schema.Fields[field].Kind == qt.FieldTextArray && value != nil {
-				if _, ok := value.(string); !ok {
-					data, e := json.Marshal(value)
-					if e != nil {
-						return "", e
+	for batch := range slices.Chunk(rows, batchSize) {
+		values := make([]any, 0, len(batch)*len(names))
+		for _, row := range batch {
+			for _, field := range names {
+				value := row[field]
+				if schema.Fields[field].Kind == qt.FieldTextArray && value != nil {
+					if _, ok := value.(string); !ok {
+						data, e := json.Marshal(value)
+						if e != nil {
+							return "", e
+						}
+						value = string(data)
 					}
-					value = string(data)
 				}
+				if schema.Fields[field].Kind == qt.FieldDatetime && value == "" {
+					value = nil
+				}
+				values = append(values, value)
 			}
-			if schema.Fields[field].Kind == qt.FieldDatetime && value == "" {
-				value = nil
-			}
-			values[i] = value
 		}
-		if _, err = stmt.ExecContext(ctx, values...); err != nil {
+		if len(batch) == batchSize {
+			_, err = stmt.ExecContext(ctx, values...)
+		} else {
+			_, err = tx.ExecContext(ctx, "INSERT INTO "+table+" VALUES "+strings.TrimSuffix(strings.Repeat(rowSQL+",", len(batch)), ","), values...)
+		}
+		if err != nil {
 			return "", err
 		}
 	}
@@ -561,11 +576,24 @@ func beginQueryWithTempStore(ctx context.Context, db *sql.DB, mode int) (*sql.Tx
 		conn.Close()
 		return nil, nil, err
 	}
+	var originalCache int
+	if err = conn.QueryRowContext(ctx, "PRAGMA temp.cache_size").Scan(&originalCache); err != nil {
+		conn.Close()
+		return nil, nil, err
+	}
 	if original != mode {
 		if _, err = conn.ExecContext(ctx, fmt.Sprintf("PRAGMA temp_store=%d", mode)); err != nil {
 			conn.Close()
 			return nil, nil, err
 		}
+	}
+	// FILE temp storage defaults to a zero-page cache. Grouping then writes
+	// scratch pages to the SSD repeatedly even for small, bounded populations.
+	// Give this leased connection 64 MiB of scratch cache while retaining spill.
+	if _, err = conn.ExecContext(ctx, "PRAGMA temp.cache_size=-65536"); err != nil {
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		conn.Close()
+		return nil, nil, err
 	}
 	tx, err := conn.BeginTx(ctx, nil)
 	released := false
@@ -590,6 +618,11 @@ func beginQueryWithTempStore(ctx context.Context, db *sql.DB, mode int) (*sql.Tx
 				_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 			}
 		}
+		if _, err := conn.ExecContext(cleanup, fmt.Sprintf("PRAGMA temp.cache_size=%d", originalCache)); err != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			conn.Close()
+			return errors.Join(rollbackError, err)
+		}
 		closeError := conn.Close()
 		if rollbackError != nil {
 			return rollbackError
@@ -604,10 +637,9 @@ func beginQueryWithTempStore(ctx context.Context, db *sql.DB, mode int) (*sql.Tx
 }
 
 // Compile without reading a population to discover exact base-field inputs,
-// including canonical transitive formulas and hidden/default ordering. Release
-// this snapshot before Library reads; execution revalidates the revision envelope
-// in its own transaction before consuming the selectively staged values.
-func queryV2LibraryFields(ctx context.Context, db *sql.DB, schema qt.Schema, rows *qt.ServerQueryV2, metrics *qt.MetricQuery, clock time.Time) ([]string, error) {
+// including canonical transitive formulas and hidden/default ordering. Execution
+// revalidates revisions in its own transaction before consuming the projection.
+func queryV2SourceFields(ctx context.Context, db *sql.DB, schema qt.Schema, rows *qt.ServerQueryV2, metrics *qt.MetricQuery, clock time.Time) ([]string, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -666,9 +698,10 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 	}
 	table, sqlBacked := sqlDatasetFor(dataset)
 	var sourceRows, usageHours []map[string]any
-	var libraryNames []string
+	var sourceNames []string
 	var find *libraryFindSet
 	var evidence map[string]*searchEvidence
+	var bounds map[string][2]string
 	if sqlBacked {
 		if err := s.Catalog.prepareSQLDataset(ctx, dataset); err != nil {
 			return queryV2ExecutionResult{}, err
@@ -694,49 +727,65 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 		if metrics != nil {
 			where = metrics.Where
 		}
-		bounds, e := queryBucketBounds(ctx, s.Catalog.DB, where)
+		var e error
+		bounds, e = queryBucketBounds(ctx, s.Catalog.DB, where)
 		if e != nil {
 			return queryV2ExecutionResult{}, e
 		}
-		d.SourceSQL, d.SourceArgs = table.v2WindowedSource(schema, where, clock, bounds)
+		names, e := queryV2SourceFields(ctx, s.Catalog.DB, schema, rowRequest, metrics, clock)
+		if e != nil {
+			return queryV2ExecutionResult{}, e
+		}
+		projected := table.project(names)
+		if metrics != nil {
+			var covered bool
+			projected, covered = projected.preferCoveringScan(where)
+			if covered {
+				// Narrow covered scalar populations can read the full live ledger
+				// without copying command/result payloads. Exact sample/group limits
+				// and the request deadline remain enforced by the adapter.
+				d.MaxPopulation = 2_000_000
+				if len(populationLimit) > 0 {
+					d.MaxPopulation = min(d.MaxPopulation, populationLimit[0])
+				}
+			}
+		}
+		d.SourceSQL, d.SourceArgs = projected.v2WindowedSource(schema, where, clock, bounds)
 	} else {
 		var err error
-		names := make([]string, 0, len(schema.Fields))
-		for field := range schema.Fields {
-			names = append(names, field)
+		sourceNames, err = queryV2SourceFields(ctx, s.Catalog.DB, schema, rowRequest, metrics, clock)
+		if err != nil {
+			return queryV2ExecutionResult{}, err
 		}
 		if dataset == "library" {
-			libraryNames, err = queryV2LibraryFields(ctx, s.Catalog.DB, schema, rowRequest, metrics, clock)
-			if err == nil {
-				var where []querytable.WhereTerm
-				if rowRequest != nil {
-					where = rowRequest.Where
-				}
-				if metrics != nil {
-					where = metrics.Where
-				}
-				// Computed predicates remain in the v2 engine. Only complete
-				// AND terms over stored fields can safely narrow candidates.
-				localSchema, e := s.queryTableSchema("library")
-				if e != nil {
-					return queryV2ExecutionResult{}, e
-				}
-				early := []querytable.WhereTerm{}
-				for _, term := range where {
-					safe := true
-					for _, p := range term.Predicates() {
-						if _, ok := localSchema.Fields[p.Field]; !ok {
-							safe = false
-						}
-					}
-					if safe {
-						early = append(early, term)
-					}
-				}
-				sourceRows, find, err = s.libraryRows(ctx, params, libraryFieldsFor(libraryNames...), &evidence, early)
+			var where []querytable.WhereTerm
+			if rowRequest != nil {
+				where = rowRequest.Where
 			}
+			if metrics != nil {
+				where = metrics.Where
+			}
+			// Computed predicates remain in the v2 engine. Only complete
+			// AND terms over stored fields can safely narrow candidates.
+			localSchema, e := s.queryTableSchema("library")
+			if e != nil {
+				return queryV2ExecutionResult{}, e
+			}
+			early := []querytable.WhereTerm{}
+			for _, term := range where {
+				safe := true
+				for _, p := range term.Predicates() {
+					if _, ok := localSchema.Fields[p.Field]; !ok {
+						safe = false
+					}
+				}
+				if safe {
+					early = append(early, term)
+				}
+			}
+			sourceRows, find, err = s.libraryRows(ctx, params, libraryFieldsFor(sourceNames...), &evidence, early)
 		} else {
-			sourceRows, err = s.queryTableRows(ctx, dataset, params, libraryFieldsFor(names...))
+			sourceRows, err = s.queryTableRows(ctx, dataset, params, libraryFieldsFor(sourceNames...))
 		}
 		if err != nil {
 			return queryV2ExecutionResult{}, err
@@ -757,9 +806,11 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 			return queryV2ExecutionResult{}, e
 		}
 		metrics = &copy
-		usageHours, e = s.Catalog.hourlyUsageForAggregation(ctx, metrics.Where, localSchema)
-		if e != nil {
-			return queryV2ExecutionResult{}, e
+		if slices.Contains(sourceNames, "hour") {
+			usageHours, e = s.Catalog.hourlyUsageForAggregation(ctx, metrics.Where, localSchema)
+			if e != nil {
+				return queryV2ExecutionResult{}, e
+			}
 		}
 	}
 	if dataset == "usage" && rowRequest != nil && slices.Contains(whereFields(rowRequest.Where), "hour") {
@@ -804,19 +855,28 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 		d.ComputedGroupable[id] = true
 	}
 	if !sqlBacked {
-		if dataset == "library" {
-			d.SourceSQL, err = stageQueryRows(ctx, tx, "pharos_query_rows", sourceRows, schema, libraryNames)
-		} else {
-			d.SourceSQL, err = stageQueryRows(ctx, tx, "pharos_query_rows", sourceRows, schema)
-		}
+		d.SourceSQL, err = stageQueryRows(ctx, tx, "pharos_query_rows", sourceRows, schema, sourceNames)
 		if err != nil {
 			return queryV2ExecutionResult{}, err
 		}
 	}
 	options := qt.PlanOptions{Identity: queryTableScope + ":" + schema.Name, Now: clock}
 	var result queryV2ExecutionResult
-	if dataset == "usage" && metrics != nil && rowRequest == nil {
-		result.SQLiteV2ExecutionResult, err = s.executeUsageMetricsV2(ctx, tx, d, *metrics, sourceRows, usageHours, options)
+	indexed := false
+	if sqlBacked && rowRequest != nil && metrics == nil {
+		population := 10_000_000
+		if len(populationLimit) > 0 {
+			population = min(population, populationLimit[0])
+		}
+		result.SQLiteV2ExecutionResult, indexed, err = s.indexedQueryRowsV2(ctx, tx, table, d, *rowRequest, options, bounds, population)
+	}
+	if sqlBacked && metrics != nil && rowRequest == nil {
+		result.SQLiteV2ExecutionResult, indexed, err = s.countOnlyMetricsV2(ctx, tx, table, d, *metrics, options)
+	}
+	if indexed {
+		// The indexed window has already executed in this same transaction.
+	} else if dataset == "usage" && metrics != nil && rowRequest == nil {
+		result.SQLiteV2ExecutionResult, err = s.executeUsageMetricsV2(ctx, tx, d, *metrics, sourceRows, usageHours, options, sourceNames)
 	} else {
 		result.SQLiteV2ExecutionResult, err = d.ExecuteV2In(ctx, tx, rowRequest, metrics, options)
 	}
@@ -854,7 +914,7 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 
 // Usage keeps daily row filters and selects hourly populations per metric,
 // including formulas that reach hour through canonical computed definitions.
-func (s *Server) executeUsageMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2Dataset, q qt.MetricQuery, daily, hours []map[string]any, o qt.PlanOptions) (qt.SQLiteV2ExecutionResult, error) {
+func (s *Server) executeUsageMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2Dataset, q qt.MetricQuery, daily, hours []map[string]any, o qt.PlanOptions, required ...[]string) (qt.SQLiteV2ExecutionResult, error) {
 	o.SourceSQL = d.SourceSQL
 	o.ComputedGroupable = d.ComputedGroupable
 	o.ExpectedRevisions = q.ExpectedRevisions
@@ -881,7 +941,7 @@ func (s *Server) executeUsageMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQL
 	if !needsHours && !hasHourFilter {
 		return d.ExecuteV2In(ctx, tx, nil, &q, o)
 	}
-	hourSource, err := stageQueryRows(ctx, tx, "pharos_query_hours", hours, d.Schema)
+	hourSource, err := stageQueryRows(ctx, tx, "pharos_query_hours", hours, d.Schema, required...)
 	if err != nil {
 		return qt.SQLiteV2ExecutionResult{}, err
 	}
@@ -897,7 +957,7 @@ func (s *Server) executeUsageMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQL
 				kept = append(kept, row)
 			}
 		}
-		d.SourceSQL, err = stageQueryRows(ctx, tx, "pharos_query_selected_days", kept, d.Schema)
+		d.SourceSQL, err = stageQueryRows(ctx, tx, "pharos_query_selected_days", kept, d.Schema, required...)
 		if err != nil {
 			return qt.SQLiteV2ExecutionResult{}, err
 		}
@@ -939,7 +999,7 @@ func (s *Server) executeUsageMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQL
 				selected = append(selected, row)
 			}
 		}
-		shownHourSource, err = stageQueryRows(ctx, tx, "pharos_query_shown_hours", selected, d.Schema)
+		shownHourSource, err = stageQueryRows(ctx, tx, "pharos_query_shown_hours", selected, d.Schema, required...)
 		if err != nil {
 			return qt.SQLiteV2ExecutionResult{}, err
 		}

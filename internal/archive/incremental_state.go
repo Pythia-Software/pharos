@@ -24,6 +24,7 @@ type ingestMode struct {
 	force      bool
 	discovered func([]sourcePart, bool)
 	written    func(string)
+	processed  func([]sourcePart)
 }
 
 type ingestModeKey struct{}

@@ -41,7 +41,8 @@ func catalogDSN(path string) string {
 		fullfsync = 1
 	}
 	return (&url.URL{Scheme: "file", Path: path}).String() + fmt.Sprintf("?_pragma=busy_timeout(%d)&_pragma=foreign_keys(1)"+
-		"&_pragma=synchronous(FULL)&_pragma=fullfsync(%d)&_pragma=checkpoint_fullfsync(1)&_pragma=journal_size_limit(%d)",
+		"&_pragma=synchronous(FULL)&_pragma=fullfsync(%d)&_pragma=checkpoint_fullfsync(1)&_pragma=journal_size_limit(%d)"+
+		"&_pragma=cache_size(-32768)&_pragma=mmap_size(268435456)",
 		busyTimeoutMS, fullfsync, walSizeLimit)
 }
 

@@ -98,9 +98,13 @@ func (d *devUI) withLocalCarbonFactors(response *http.Response) error {
 // ServeHTTP applies the service's own authorization and same-origin rules,
 // since requests forwarded from here carry its token.
 func (d *devUI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/" && r.URL.Query().Get("token") != "" && secureEqual(r.URL.Query().Get("token"), d.token) {
+	if r.Method == http.MethodGet && isUIPage(r.URL.Path) && r.URL.Query().Get("token") != "" && secureEqual(r.URL.Query().Get("token"), d.token) {
 		http.SetCookie(w, &http.Cookie{Name: d.cookie, Value: url.QueryEscape(d.token), Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		query := r.URL.Query()
+		query.Del("token")
+		target := &url.URL{Path: r.URL.Path, RawQuery: query.Encode()}
+		w.Header().Set("Cache-Control", "no-store")
+		http.Redirect(w, r, target.String(), http.StatusSeeOther)
 		return
 	}
 	cookie, err := r.Cookie(d.cookie)
@@ -151,9 +155,14 @@ func runDevUICLI(config Config, args []string) error {
 	port := flags.Int("port", 8799, "")
 	assets := flags.String("assets", filepath.Join("internal", "archive", "assets"), "")
 	noOpen := flags.Bool("no-open", false, "")
+	openPath := flags.String("open-path", "/", "Local UI page to open after signing in, including query filters")
 	concurrencyData := flags.String("concurrency-data", "", "Read-only concurrency prototype JSON produced by tools/concurrency-prototype.py")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	page, err := url.Parse(*openPath)
+	if err != nil || page.IsAbs() || page.Host != "" || page.User != nil || !isUIPage(page.Path) {
+		return fmt.Errorf("--open-path must be a local UI page, such as /usage?machine_view=time")
 	}
 	if _, err := os.Stat(filepath.Join(*assets, "ui.py")); err != nil {
 		return fmt.Errorf("no ui.py in %s; run from the repository root or pass --assets DIR", *assets)
@@ -170,7 +179,12 @@ func runDevUICLI(config Config, args []string) error {
 		return err
 	}
 	defer listener.Close()
-	target := fmt.Sprintf("http://127.0.0.1:%d/?token=%s", *port, url.QueryEscape(config.APIToken))
+	page.Scheme = "http"
+	page.Host = net.JoinHostPort("127.0.0.1", strconv.Itoa(*port))
+	query := page.Query()
+	query.Set("token", config.APIToken)
+	page.RawQuery = query.Encode()
+	target := page.String()
 	fmt.Printf("Serving the UI in %s against %s\n%s\n", *assets, service, target)
 	handler := newDevUI(*assets, service, config.APIToken, *port)
 	if *concurrencyData != "" {

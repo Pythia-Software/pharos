@@ -37,6 +37,8 @@ type SyncRun struct {
 	TotalConversations int                  `json:"total_conversations"`
 	DoneConversations  int                  `json:"done_conversations"`
 	Progress           *float64             `json:"progress"`
+	Work               *activityWork        `json:"work,omitempty"`
+	InputsChecked      int                  `json:"inputs_checked,omitempty"`
 	Workspaces         int                  `json:"workspaces"`
 	Conversations      int                  `json:"conversations"`
 	Messages           int                  `json:"messages"`
@@ -65,6 +67,7 @@ type Server struct {
 	backups    backupRuns
 	tasks      backgroundTasks
 	timingMu   sync.Mutex
+	estimator  activityEstimator
 	auto       automaticSync
 	// Leave catalog connections available for rows/previews while metadata scans run.
 	queryMetadata chan struct{}
@@ -815,7 +818,7 @@ func (s *Server) syncSources(w http.ResponseWriter, sources []SourceConfig) {
 			continue
 		}
 		baseW, baseC, baseM := totals(results)
-		result := s.Catalog.IngestContext(ctx, adapter, func(phase string, w, c, m, skipped, _ int) {
+		result := s.Catalog.IngestContext(ctx, adapter, func(phase string, w, c, m, skipped, processed int) {
 			s.updateRun(run.ID, func(run *SyncRun) {
 				run.CurrentSource = source.Name
 				run.Phase = phase
@@ -823,6 +826,7 @@ func (s *Server) syncSources(w http.ResponseWriter, sources []SourceConfig) {
 				run.Conversations = baseC + c
 				run.Messages = baseM + m
 				run.SkippedCurrent = skippedTotals(results) + skipped
+				run.setWork(phase, source.Name, "conversation group", float64(processed), 0)
 			})
 		})
 		results = append(results, result)
@@ -843,6 +847,7 @@ func (s *Server) syncSources(w http.ResponseWriter, sources []SourceConfig) {
 	// A stop from the user leaves the service up, so what the sync did write
 	// is still linked; only a release (before an eject) skips this.
 	links, linkErr := 0, error(nil)
+	s.updateRun(run.ID, func(run *SyncRun) { run.Phase, run.CurrentSource = "linking identities", nil })
 	if s.life.ctx.Err() == nil {
 		links, linkErr = s.Catalog.ReconcileIdentities()
 	} else {
@@ -934,6 +939,9 @@ func (s *Server) updateRun(id string, update func(*SyncRun)) {
 		if run.ID == id {
 			previousState := run.State
 			update(run)
+			if run.Work != nil && (run.Work.Phase != run.Phase || run.Work.Source != firstString(run.CurrentSource)) {
+				run.Work = nil
+			}
 			run.UpdatedAt = now()
 			if previousState == "running" && run.State == "complete" && !run.StopRequested {
 				s.recordActivityDuration(activityTimingKind(run.Kind), run.StartedAt, firstString(run.CompletedAt))

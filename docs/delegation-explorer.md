@@ -24,6 +24,14 @@ Sessions opens a modal navigator sheet with a backdrop, focus trap, and Escape
 to dismiss. Selecting a session dismisses the sheet. Reduced-motion settings
 disable layout animations. Standalone Share exports keep their original reader.
 
+Assignment labels use the launch's `task_name`, then `description`, `prompt`,
+Antigravity's `Prompt`, `task`, or plaintext `message`. Only nonempty text fields
+are eligible; opaque encrypted messages and unrecognized JSON payloads are omitted. Extraction happens
+before the 180-character display bound, so a task name following a long message
+is still available. Embedded sessions without an assignment use their execution
+ID instead of borrowing the parent conversation's nickname or request. Labels
+resolve from retained launch messages without reindexing.
+
 A **Workspace Sessions** toolbar selects the transcript, replacing the
 conversation dropdown. A single button beside the sliding
 Hierarchy & usage / Parallel activity switch shows or hides the session content.
@@ -107,13 +115,23 @@ ownership evidence, launch-message reference, Self and inclusive metrics,
 outline, coverage, and self/subtree evidence envelopes. An alias map reconciles
 zero-usage delegation handles with their child's main stream. Exact retained
 async agent handles can recover a nested relationship when the conversation
-catalog flattened it. Ambiguous handles are left unmerged. Cyclic ownership is
-excluded with a visible warning.
+catalog flattened it. Codex acknowledgements can identify a child by native
+agent/thread ID or by a task path scoped to its recorded parent, provider, and
+account. Ambiguous handles are left unmerged. Failed spawn acknowledgements
+without independent execution evidence remain in the transcript and tool ledger,
+but do not create execution rows. Unresolved launches do not acquire an Open
+child transcript button. Cyclic ownership is excluded with a visible warning.
 
 Incoming parents and linked child transcripts in another workspace retain
-navigation references. Workspace totals stay scoped to that workspace; unqueried
-outside-child usage remains unknown. Mirrored workspaces are not merged by this
-workspace-local view. Extra causal edges do not create a second ownership total.
+navigation references. The hierarchy follows recorded subagent parent edges
+recursively across workspace boundaries: Codex stores each rollout as a separate
+workspace, which must not sever the execution family. Launch placeholders link
+to those references; children without an acknowledgement still appear beneath
+their recorded parent. External references retain the child's conversation and
+workspace identity, show an outgoing arrow, and open its actual transcript.
+Workspace totals stay scoped to that workspace; unqueried outside-child usage
+and event metrics remain unknown, making inclusive totals partial. Mirrored
+workspaces are not merged by this workspace-local view. Extra causal edges do not create a second ownership total.
 Effort uses the execution's recorded value. A main stream can fall back to its
 conversation's effort; embedded children never inherit their parent's value.
 Provider, model, and effort share one dot-separated metadata line, with missing
@@ -145,7 +163,8 @@ snapshots after five idle minutes during requests or cache maintenance. Catalog
 changes drop outdated snapshots; delegation snapshots rebuild only on demand
 and are excluded from background cache warming. Concurrent requests share
 in-flight work, which may temporarily exceed the completed-snapshot limit. Analysis currently
-limits a workspace to 10,000 sessions/conversations and 500,000 tool/request
+limits a workspace to 10,000 sessions/conversations (including its linked
+conversation family) and 500,000 tool/request
 observations; pages, ancestor context, and lane requests are capped at 100;
 omitted context is reported. A lane reports mark
 truncation above 2,400 marks and requests a narrower window. Conversation

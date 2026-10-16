@@ -155,7 +155,7 @@ func TestLibraryStatusListsEverythingHoldingTheLibrary(t *testing.T) {
 	server.updateRun(index.ID, func(run *SyncRun) { run.CurrentSource, run.CompletedSources, run.Conversations = "host-b/codex", 1, 3 })
 	status = expect("index", "sync")
 	activity = status["activities"].([]any)[0].(map[string]any)
-	if activity["label"] != "Indexing captures" || activity["detail"] != "host-b/codex · 1 of 2 sources · 3 conversations written" || activity["progress"] != 0.5 {
+	if activity["label"] != "Indexing captures" || activity["detail"] != "host-b/codex · 1 of 2 sources · 3 conversations written" || activity["progress"] != nil {
 		t.Fatalf("index activity: %#v", activity)
 	}
 	if activity := status["activities"].([]any)[1].(map[string]any); activity["progress"] != nil {
@@ -165,10 +165,11 @@ func TestLibraryStatusListsEverythingHoldingTheLibrary(t *testing.T) {
 	server.updateRun(index.ID, func(run *SyncRun) {
 		quarter := 0.25
 		run.TotalConversations, run.DoneConversations, run.Progress = 40, 10, &quarter
+		run.Phase = "indexing"
 	})
 	status = expect("index", "sync")
 	activity = status["activities"].([]any)[0].(map[string]any)
-	if activity["detail"] != "host-b/codex · 10 of 40 conversations · 1 of 2 sources" || activity["progress"] != 0.25 {
+	if activity["detail"] != "host-b/codex · indexing · 1 of 2 sources finished" || activity["progress"] != 0.25 {
 		t.Fatalf("index activity with a count: %#v", activity)
 	}
 	server.updateRun(index.ID, func(run *SyncRun) { run.Phase = "counting" })

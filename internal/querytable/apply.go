@@ -597,6 +597,9 @@ func FieldStats(rows []map[string]any, names []string, schema Schema) (map[strin
 type AggregationRequest struct {
 	Where        []WhereTerm   `json:"where"`
 	Aggregations []Aggregation `json:"aggregations"`
+	// Consumers computing ratios or complete timelines must not silently use
+	// the SQL API's ordinary largest-group preview.
+	RequireComplete bool `json:"requireComplete,omitempty"`
 }
 
 type Bucket struct {
@@ -614,7 +617,15 @@ func (r *AggregationRequest) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &request); err != nil {
 		return err
 	}
+	// The shared request decoder does not carry this Pharos-specific option.
+	var options struct {
+		RequireComplete bool `json:"requireComplete"`
+	}
+	if err := json.Unmarshal(data, &options); err != nil {
+		return err
+	}
 	r.Where, r.Aggregations = request.Where, request.Aggregations
+	r.RequireComplete = options.RequireComplete
 	return nil
 }
 

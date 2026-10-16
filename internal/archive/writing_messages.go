@@ -44,6 +44,12 @@ var writingMessageDataset = func() sqlDataset {
 		lookups:    map[string]bool{"id": true, "conversation_id": true, "workspace_id": true, "work_id": true, "day": true},
 		columns:    columns,
 		timestamps: map[string]string{"sent_at": "ma.sent_at"},
+		optionalJoins: map[string]string{
+			"w": "LEFT JOIN workspaces w ON w.id=COALESCE(ma.work_id,ma.workspace_id)",
+			"r": " LEFT JOIN repositories r ON r.id=w.repository_id",
+		},
+		pageFrom:    "FROM message_authorship ma",
+		pageIndexes: map[string]string{"sent_at": "message_authorship_page_idx"},
 	}
 }()
 

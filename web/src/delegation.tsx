@@ -687,7 +687,9 @@ export function DelegationExplorer({
     const added: HTMLElement[] = [];
     function decorate() {
       for (const n of childSessions) {
-        if (!n.message_id) continue;
+        const hasTranscript = n.external_child || n.conversation_id !== conversation ||
+          n.self.messages?.value || n.self.requests?.value || n.self.calls?.value;
+        if (!n.message_id || !hasTranscript) continue;
         const target = panel!.querySelector<HTMLElement>(
           `[data-message-id="${CSS.escape(n.message_id)}"]`,
         );
@@ -705,7 +707,9 @@ export function DelegationExplorer({
         link.type = "button";
         link.className = "delegation-transcript-link";
         link.dataset.delegationSession = n.id;
-        link.textContent = `${n.provider} · ${formatted(n.self.clock?.value, "ms")} · Open child`;
+        link.textContent = n.external_child
+          ? `${n.external_child.provider} · Open child ↗`
+          : `${n.provider} · ${formatted(n.self.clock?.value, "ms")} · Open child`;
         link.onclick = (event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -782,6 +786,7 @@ export function DelegationExplorer({
                   <button key={n.id} onClick={() => openNode(n)}>
                     <strong>{n.label}</strong>
                     <small>
+                      {n.external_child ? "Another workspace · " : ""}
                       {n.provider} · {formatted(n.self.tokens.value)} tokens ·{" "}
                       {formatted(n.self.clock.value, "ms")} evidence span
                     </small>
@@ -795,16 +800,6 @@ export function DelegationExplorer({
               </div>
             </details>
           )}
-          {current
-            .filter((n) => n.external_child)
-            .map((n) => (
-              <button
-                key={n.id}
-                onClick={() => openExternal(n.external_child!)}
-              >
-                Open child · {n.external_child!.provider} · another workspace ↗
-              </button>
-            ))}
         </div>
       </>,
       contextHost,
@@ -1124,7 +1119,7 @@ export function DelegationExplorer({
                                         }
                                         onClick={() => openNode(n)}
                                       >
-                                        {n.label}
+                                        {n.label}{n.external_child ? " ↗" : ""}
                                       </button>
                                       <small
                                         className="delegation-session-meta"
@@ -1329,7 +1324,7 @@ function InboxSessions({ rows, data, metrics, shown, mode, metric, scope, direct
         <FrameEdges frame={frame} edge="right" />
         <button className="delegation-chevron" aria-label={`${collapsed.has(n.id) ? "Expand" : "Collapse"} ${n.label}`} aria-expanded={!collapsed.has(n.id)} disabled={!n.child_count || ranked} onClick={() => toggle(n)}>{n.child_count && !ranked ? <Icon name={collapsed.has(n.id) ? "chevron-right" : "chevron-down"} /> : "·"}</button>
         <button className="delegation-name" onClick={() => openNode(n)} title={`${n.outline} · ${n.label}\n${n.provider} · ${n.model} · ${n.effort || "unknown"}`} aria-current={n.id === shown ? "true" : undefined}>
-          <span><b>{n.outline}</b> {n.label}</span>
+          <span><b>{n.outline}</b> {n.label}{n.external_child ? " ↗" : ""}</span>
           <small>{n.provider} · {n.model || "unknown model"} · {n.effort || "unknown"}</small>
         </button>
         <button className="delegation-inbox-metric" onClick={() => openNode(n)} title={value ? cellTitle(value, spec) : "No retained evidence"} style={strength ? { background: `color-mix(in srgb, var(--delegation-tint) ${strength * 45}%, transparent)` } : undefined}>{formatted(value?.value, spec.unit)}{value?.quality === "partial" ? "+" : ""}</button>

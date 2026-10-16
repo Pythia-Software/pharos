@@ -543,7 +543,7 @@ test('Carbon filters, dates, and chart controls stay distinct from assumptions a
     await page.locator('.usage-chart-legend', { hasText: 'Codex' }).waitFor();
     // Other usage views retain their own chart preferences and filters.
     const views = page.getByRole('group', { name: 'Usage view' });
-    await views.getByRole('button', { name: 'Machine Tokens' }).click();
+    await views.getByRole('button', { name: 'Machine Activity' }).click();
     assert.equal(await interval.inputValue(), 'week');
     assert.equal(await page.getByRole('combobox', { name: 'Scale', exact: true }).inputValue(), 'half');
     await views.getByRole('button', { name: 'Carbon Impact' }).click();

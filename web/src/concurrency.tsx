@@ -1,8 +1,11 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { clipIntervals, concurrencyMetrics, concurrencySpans, concurrencyUnit, conversationTimings, formatConcurrencyDuration as duration, mergeIntervals, minute, ribbonPath, stackSegments, workSessions, type ConcurrencyCounting, type ConcurrencyData, type ConcurrencyMetrics, type ConcurrencyMode, type ConcurrencyThread, type Interval, type Segment } from "./concurrency-data";
-import { concurrencyRangePresets, readConcurrencySettings, resolveConcurrencyRange, saveConcurrencySettings, shiftCalendarDay, type ConcurrencyRange, type ConcurrencySettings } from "./concurrency-settings";
+import { clipIntervals, concurrencyMetrics, concurrencySpans, concurrencyUnit, conversationTimings, formatConcurrencyDuration as duration, mergeIntervals, minute, ribbonPath, stackSegments, workSessions, zonedDayBounds, type ConcurrencyCounting, type ConcurrencyData, type ConcurrencyMetrics, type ConcurrencyMode, type ConcurrencyThread, type Interval, type Segment } from "./concurrency-data";
+import { concurrencyRangePresets, readConcurrencySettings, readMachineConcurrencySettings, normalizeConcurrencySettings, resolveConcurrencyRange, saveConcurrencySettings, shiftCalendarDay, type ConcurrencyRange, type ConcurrencySettings } from "./concurrency-settings";
 import { closeConcurrencyModal, loadConcurrencyData } from "./concurrency-store";
+import { pushMachineLocation } from "./machine-location";
+import { useDrilldownHistory, ZoomNavigation } from "./machine-navigation";
 import { Icon } from "./icons";
+import { exampleConcurrency, type MachineScope, type MachineWindow } from "./machine-activity-data";
 import "./concurrency.css";
 
 export const concurrencyPrototypeEnabled = document.documentElement.hasAttribute("data-concurrency-prototype");
@@ -156,32 +159,57 @@ function ConcurrencyInfoDialog({ data, onClose }: { data: ConcurrencyData; onClo
   </dialog>;
 }
 
-function ConcurrencyPanel() {
+export function ConcurrencyPanel({ scope, activityWindow, example = false }: { scope?: MachineScope; activityWindow?: MachineWindow; example?: boolean } = {}) {
   const [data, setData] = useState<ConcurrencyData | null>(null), [error, setError] = useState("");
-  const [settings, setSettings] = useState<ConcurrencySettings>(readConcurrencySettings);
+  const [settings, setSettings] = useState<ConcurrencySettings>(() => scope ? readMachineConcurrencySettings() : readConcurrencySettings());
   const [hover, setHover] = useState<Hover | null>(null);
+  const [routeRevision, setRouteRevision] = useState(0);
   const [showInfo, setShowInfo] = useState(false);
   const update = (next: Partial<ConcurrencySettings>) => {
-    const merged = { ...readConcurrencySettings(), ...next };
+    const merged = normalizeConcurrencySettings({ ...settings, ...next });
+    if (scope) {
+      const url = new URL(location.href);
+      url.searchParams.set("q_machine_parallelism", JSON.stringify(merged));
+      pushMachineLocation(url);
+    }
     saveConcurrencySettings(merged); setHover(null);
   };
   useEffect(() => {
-    const restore = () => setSettings(readConcurrencySettings());
+    if (scope && !new URLSearchParams(location.search).has("q_machine_parallelism")) {
+      const url = new URL(location.href);
+      url.searchParams.set("q_machine_parallelism", JSON.stringify(readMachineConcurrencySettings()));
+      history.replaceState(history.state, "", url);
+    }
+    const restore = () => { setSettings(scope ? readMachineConcurrencySettings() : readConcurrencySettings()); setHover(null); };
     window.addEventListener("pharos:concurrency-settings", restore);
-    return () => window.removeEventListener("pharos:concurrency-settings", restore);
+    const restoreRoute = () => { restore(); setRouteRevision(value => value + 1); };
+    if (scope) window.addEventListener("pharos:route", restoreRoute);
+    return () => { window.removeEventListener("pharos:concurrency-settings", restore); window.removeEventListener("pharos:route", restoreRoute); };
   }, []);
   useEffect(() => {
     let active = true;
+    setError(""); setData(null);
+    if (example && activityWindow) { setData(exampleConcurrency(activityWindow, scope?.days || 14)); return; }
+    if (!concurrencyPrototypeEnabled) return;
     loadConcurrencyData().then(next => { if (active) setData(next); }).catch(reason => { if (active) setError(String(reason.message ?? reason)); });
     return () => { active = false; };
-  }, []);
+  }, [example, activityWindow, scope?.days]);
+  const scopeKey = JSON.stringify(scope);
+  useEffect(() => { if (scope) { setSettings(readMachineConcurrencySettings()); setHover(null); } }, [scopeKey]);
   const repositories = useMemo(() => Array.from(new Set(data?.threads.map(thread => thread.repository))).sort(), [data]);
-  const repository = repositories.includes(settings.repository) ? settings.repository : "";
-  const range = useMemo(() => data ? resolveConcurrencyRange(data, settings) : { startDay: "", endDay: "", bounds: [0, 1] as Interval }, [data, settings.range, settings.day, settings.startDay, settings.endDay]);
+  const repository = scope ? scope.repository : repositories.includes(settings.repository) ? settings.repository : "";
+  const range = useMemo(() => {
+    if (!data) return { startDay: "", endDay: "", bounds: [0, 1] as Interval };
+    if (!scope) return resolveConcurrencyRange(data, settings);
+    const captured = resolveConcurrencyRange(data, { ...settings, range: "all" });
+    if (!scope.days || !activityWindow) return captured;
+    const start = Math.max(captured.bounds[0], Date.parse(activityWindow.start)), end = Math.min(captured.bounds[1], Date.parse(activityWindow.end));
+    return { startDay: new Date(start).toISOString().slice(0, 10), endDay: new Date(end - 1).toISOString().slice(0, 10), bounds: [start, Math.max(start + 1, end)] as Interval };
+  }, [data, settings.range, settings.day, settings.startDay, settings.endDay, scope?.days, activityWindow]);
   const rangeBounds = range.bounds;
   const singleDay = range.startDay === range.endDay;
   const { mode, gap, counting } = settings;
-  const threads = useMemo(() => (data?.threads ?? []).filter(thread => !repository || thread.repository === repository), [data, repository]);
+  const threads = useMemo(() => (data?.threads ?? []).filter(thread => (!repository || thread.repository === repository) && (!scope?.provider || thread.provider === scope.provider) && (!scope?.model || thread.model === scope.model)), [data, repository, scope?.provider, scope?.model]);
   const sessions = useMemo(() => workSessions(threads), [threads]);
   const rangeThreads = useMemo(() => threads.map(thread => ({ ...thread, turns: clipIntervals(thread.turns, rangeBounds), model_spans: clipIntervals(thread.model_spans, rangeBounds), continuous_spans: clipIntervals(mergeIntervals(thread.turns, gap * minute), rangeBounds) })).filter(thread => thread.turns.length || thread.model_spans.length || thread.continuous_spans.length), [threads, rangeBounds, gap]);
   const rangeSessions = useMemo(() => clipIntervals(sessions, rangeBounds), [sessions, rangeBounds]);
@@ -195,6 +223,7 @@ function ConcurrencyPanel() {
   const order = useMemo(() => Array.from(unitInfo.keys()), [unitInfo]);
   const selectedId = counting === "agent" ? settings.agent : settings.workspace;
   const selected = unitInfo.has(selectedId) ? selectedId : null;
+  const navigation = useDrilldownHistory({ zoom, workspace: settings.workspace, agent: settings.agent }, JSON.stringify([scopeKey, rangeBounds, repository, counting, example, routeRevision]));
   const colors = useMemo(() => new Map(Array.from(unitInfo, ([id, thread]) => [id, palette[Math.max(0, repositories.indexOf(thread.repository)) % palette.length]])), [unitInfo, repositories]);
   const highlighted = selected ?? hover?.unit ?? null;
   const focusedThreads = rangeThreads.filter(thread => concurrencyUnit(thread, counting) === highlighted && thread.agent_depth === 0).sort((a, b) => Number(b.id === hover?.conversation) - Number(a.id === hover?.conversation));
@@ -208,29 +237,35 @@ function ConcurrencyPanel() {
   }, [zoom, rangeBounds, rangeSessions, modelRange, userRange]);
   const activeAt = (at: number) => Array.from(mode === "user" ? userRange : modelRange).filter(([, spans]) => spans.some(([a, b]) => a <= at && at < b)).length;
   const chooseUnit = (unit: string) => update(counting === "agent" ? { agent: selected === unit ? "" : unit, showConversations: true } : { workspace: selected === unit ? "" : unit, showConversations: true });
+  if (!example && !concurrencyPrototypeEnabled) return <div className="machine-empty"><h3>Machine Parallelism</h3><p>This view needs a captured timing snapshot. Choose Example data to explore concurrent sessions, model activity, and repository drill-downs.</p></div>;
   if (error) return <p role="alert">{error}</p>;
   if (!data) return <p className="muted" aria-busy="true">Reading captured timing…</p>;
+  if (scope?.days && activityWindow && (Date.parse(activityWindow.start) >= zonedDayBounds(data.period_end, data.timezone)[1] || Date.parse(activityWindow.end) <= zonedDayBounds(data.period_start, data.timezone)[0])) return <p className="machine-empty">No captured timing overlaps this period. Snapshot coverage: {data.period_start} – {data.period_end}. Choose another period or Example data.</p>;
   const chooseRange = (value: string) => update(/^\d{4}-\d{2}-\d{2}$/.test(value) ? { range: "day", day: value, workspace: "", agent: "", zoom: null } : { range: value as ConcurrencyRange, startDay: range.startDay, endDay: range.endDay, workspace: "", agent: "", zoom: null });
   const clock = new Intl.DateTimeFormat(undefined, { timeZone: data.timezone, ...(!singleDay ? { month: "short", day: "numeric" } as const : {}), hour: "numeric", minute: "2-digit" });
   return <section className="concurrency-panel" aria-label="Parallelism chart">
+    {scope ? <p className="machine-parallelism-note">{example ? "Synthetic example" : "Captured timing"}: {data.period_start} – {data.period_end} · {data.timezone}. {scope.days ? "Showing the captured portion of the selected period; averages use only this portion. " : ""}Model activity is estimated from response timing; tool waits are excluded.</p> : null}
     <div className="concurrency-controls">
       <div className="concurrency-control"><div className="concurrency-control-label"><label htmlFor="parallelism-view">View</label><button type="button" className="concurrency-info-button" aria-label="About parallelism views" aria-haspopup="dialog" aria-controls="parallelism-calculation" title="How parallelism is calculated" onClick={() => setShowInfo(true)}><Icon name="info" /></button></div><select id="parallelism-view" aria-label="View" value={mode} onChange={event => update({ mode: event.target.value as ConcurrencyMode })}><option value="user">Threaded</option><option value="model">Model activity</option></select></div>
       <label>Count by<select aria-label="Count by" value={counting} onChange={event => update({ counting: event.target.value as ConcurrencyCounting, workspace: "", agent: "" })}><option value="workspace">Workspaces</option><option value="agent">Sessions</option></select></label>
-      <label>Range<select aria-label="Range" value={settings.range === "day" ? range.startDay : settings.range} title={`Presets end at the latest captured day, ${data.period_end}`} onChange={event => chooseRange(event.target.value)}>
+      {!scope ? <label>Range<select aria-label="Range" value={settings.range === "day" ? range.startDay : settings.range} title={`Presets end at the latest captured day, ${data.period_end}`} onChange={event => chooseRange(event.target.value)}>
         <option value="all">All captured time</option>
         {concurrencyRangePresets.map(([key, days, label]) => <option key={key} value={key} disabled={shiftCalendarDay(data.period_end, 1 - days) < data.period_start}>{label}</option>)}
         <option value="custom">Custom range…</option>
         <optgroup label="Individual days">{data.days.slice().reverse().map(date => <option key={date}>{date}</option>)}</optgroup>
-      </select></label>
+      </select></label> : null}
       <label>Turn gap<select aria-label="Turn gap" value={gap} disabled={mode === "model"} onChange={event => update({ gap: Number(event.target.value) })}>{[0, 15, 30, 60].map(value => <option key={value} value={value}>{value === 0 ? "No bridging" : `${value} minutes`}</option>)}</select></label>
-      <label>Repository<select aria-label="Repository" value={repository} onChange={event => update({ repository: event.target.value, workspace: "", agent: "", zoom: null })}><option value="">All repositories</option>{repositories.map(repo => <option key={repo}>{repo}</option>)}</select></label>
+      {!scope ? <label>Repository<select aria-label="Repository" value={repository} onChange={event => update({ repository: event.target.value, workspace: "", agent: "", zoom: null })}><option value="">All repositories</option>{repositories.map(repo => <option key={repo}>{repo}</option>)}</select></label> : null}
     </div>
-    {settings.range === "custom" ? <div className="concurrency-custom-range">
+    {!scope && settings.range === "custom" ? <div className="concurrency-custom-range">
       <label>From<input type="date" min={data.period_start} max={range.endDay} value={range.startDay} onChange={event => { if (event.target.value && event.currentTarget.validity.valid) update({ startDay: event.target.value, workspace: "", agent: "", zoom: null }); }} /></label>
       <label>Through<input type="date" min={range.startDay} max={data.period_end} value={range.endDay} onChange={event => { if (event.target.value && event.currentTarget.validity.valid) update({ endDay: event.target.value, workspace: "", agent: "", zoom: null }); }} /></label>
       <span className="muted">Both dates included · {data.timezone}</span>
     </div> : null}
-    <div className="concurrency-plot-summary"><Metrics value={visibleMetrics[mode]} daily={singleDay && !zoom} counting={counting} /><div className="concurrency-working-summary muted"><span>{duration(visibleMetrics[mode].working)} working time</span><span className="concurrency-view-note">{mode === "user" ? "Pale = gap between turns" : "Estimated timing; tool waits excluded"}</span>{zoom ? <button type="button" onClick={() => update({ zoom: null })}>Reset zoom</button> : null}</div></div>
+    <ZoomNavigation canBack={navigation.canBack} zoomed={Boolean(zoom || selected)} onBack={() => navigation.back(snapshot => update(snapshot))} onReset={() => update({ zoom: null, workspace: "", agent: "" })}>
+      <span className="machine-zoom-status" aria-live="polite">{zoom ? `${clock.format(bounds[0])} – ${clock.format(bounds[1])}` : "Full time range"}{selected ? " · Selected conversations" : ""}</span>
+    </ZoomNavigation>
+    <div className="concurrency-plot-summary"><Metrics value={visibleMetrics[mode]} daily={singleDay && !zoom} counting={counting} /><div className="concurrency-working-summary muted"><span>{duration(visibleMetrics[mode].working)} working time</span><span className="concurrency-view-note">{mode === "user" ? "Pale = gap between turns" : "Estimated timing; tool waits excluded"}</span></div></div>
     <ConcurrencyChart key={counting} mode={mode} counting={counting} threads={rangeThreads} gap={gap} order={order} bounds={bounds} ceiling={Math.max(2, visibleMetrics[mode].peak)} colors={colors} selected={highlighted} hover={hover} onHover={setHover} onSelect={chooseUnit} onZoom={value => update({ zoom: value })} timezone={data.timezone}/>
     <div className="concurrency-hover-detail" aria-live="polite">{hover ? <><strong>{clock.format(hover.time)}</strong> · {activeAt(hover.time)} concurrent {counting === "agent" ? "sessions" : "workspaces"}{focusedThreads[0] ? <span> · {focusedThreads[0].repository} / {focusedThreads[0].workspace_name} · {focusedThreads[0].title}</span> : null}</> : selected && focusedThreads[0] ? <>{focusedThreads[0].repository} / {focusedThreads[0].workspace_name} · {focusedThreads.length} conversation{focusedThreads.length === 1 ? "" : "s"}</> : "Select a ribbon to follow its conversations. Drag across the chart to zoom."}</div>
     <div className="concurrency-chart-footer"><div className="concurrency-repositories">{repositories.filter(repo => rangeThreads.some(thread => thread.repository === repo)).map(repo => <span key={repo}><i style={{ background: palette[repositories.indexOf(repo) % palette.length] }}/>{repo}</span>)}</div></div>
@@ -240,7 +275,7 @@ function ConcurrencyPanel() {
         <td><span className="concurrency-conversation-repo" title={thread.repository}><i style={{ background: colors.get(concurrencyUnit(thread, counting)) }} /><span>{thread.repository}</span></span></td>
         <td><button type="button" className="concurrency-thread-button" title={thread.title} onClick={() => chooseUnit(concurrencyUnit(thread, counting))}><span>{thread.title}</span></button></td>
         <td>{duration(rowTimings.get(thread.id)!.model)}</td><td>{duration(rowTimings.get(thread.id)!.threaded)}</td>
-        <td className="concurrency-open-cell"><a href={`/work/${encodeURIComponent(thread.work_id)}?conversation=${encodeURIComponent(thread.conversation_id)}`} target="_blank" rel="noreferrer" aria-label={`Open conversation: ${thread.title}`} title="Open conversation"><span className="concurrency-open-text">Open conversation </span>↗</a></td>
+        <td className="concurrency-open-cell">{example ? <span className="muted">Example</span> : <a href={`/work/${encodeURIComponent(thread.work_id)}?conversation=${encodeURIComponent(thread.conversation_id)}`} target="_blank" rel="noreferrer" aria-label={`Open conversation: ${thread.title}`} title="Open conversation"><span className="concurrency-open-text">Open conversation </span>↗</a>}</td>
       </tr>)}</tbody></table> : <p className="muted">No observed conversations in this selection.</p>}
     </details>
     {showInfo ? <ConcurrencyInfoDialog data={data} onClose={() => setShowInfo(false)} /> : null}

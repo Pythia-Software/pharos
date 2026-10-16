@@ -64,6 +64,15 @@ export function readConcurrencySettings(): ConcurrencySettings {
   return normalizeConcurrencySettings(preferences().get(concurrencySettingsKey, defaultConcurrencySettings));
 }
 
+export function readMachineConcurrencySettings(): ConcurrencySettings {
+  const captured = new URLSearchParams(location.search).get("q_machine_parallelism");
+  if (captured !== null) {
+    try { return normalizeConcurrencySettings(JSON.parse(captured)); }
+    catch { return normalizeConcurrencySettings(null); }
+  }
+  return { ...readConcurrencySettings(), zoom: null, workspace: "", agent: "" };
+}
+
 export function saveConcurrencySettings(next: ConcurrencySettings): void {
   preferences().set(concurrencySettingsKey, normalizeConcurrencySettings(next));
   window.dispatchEvent(new Event("pharos:concurrency-settings"));

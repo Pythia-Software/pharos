@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,6 +40,80 @@ type sqlDataset struct {
 	toolSearchIndexed bool // the command trigram index is complete
 	// cube, when set, answers what it can in place of the rows (see sqlCube).
 	cube *sqlCube
+	// Joins to unique primary keys can be omitted when no consumed expression
+	// references them. Explicit pruning lets SQLite choose a covering count
+	// index before its later unused-LEFT-JOIN elimination pass.
+	optionalJoins      map[string]string
+	pageFrom           string
+	pageIndexes        map[string]string
+	coveringIndex      string
+	rangeCoveringIndex string
+	coveredFields      map[string]bool
+	timeCoveringFields map[string]bool
+}
+
+func (d sqlDataset) preferCoveringScan(terms []querytable.WhereTerm) (sqlDataset, bool) {
+	if d.coveringIndex == "" {
+		return d, false
+	}
+	for field := range d.columns {
+		if !d.coveredFields[field] {
+			return d, false
+		}
+	}
+	for _, term := range terms {
+		for _, clause := range term.Predicates() {
+			if d.lookups[clause.Field] && clause.Op == "=" && clause.Value != "" {
+				return d, false
+			}
+		}
+	}
+	index := d.coveringIndex
+	for _, term := range terms {
+		if !term.IsGroup() && !term.Negated && slices.Contains([]string{"started_at", "day", "week", "month"}, term.Field) {
+			index = d.rangeCoveringIndex
+			covered := true
+			for field := range d.columns {
+				covered = covered && d.timeCoveringFields[field]
+			}
+			if covered {
+				index = d.pageIndexes["started_at"]
+			}
+		}
+	}
+	d.from = strings.Replace(d.from, d.pageFrom, d.pageFrom+" INDEXED BY "+sqlIdentifier(index), 1)
+	return d, true
+}
+
+func (d sqlDataset) project(fields []string) sqlDataset {
+	columns := make(map[string]string, len(fields))
+	for _, field := range fields {
+		if expression, ok := d.columns[field]; ok {
+			columns[field] = expression
+		}
+	}
+	d.columns = columns
+	for changed := true; changed; {
+		changed = false
+		for alias, join := range d.optionalJoins {
+			remaining := strings.Replace(d.from, join, "", 1)
+			if remaining == d.from {
+				continue
+			}
+			uses := func(sql string) bool {
+				return slices.ContainsFunc(sqlQualifier.FindAllStringSubmatch(sql, -1), func(match []string) bool { return match[1] == alias })
+			}
+			used := uses(remaining + " " + d.base)
+			for _, expression := range columns {
+				used = used || uses(expression)
+			}
+			if !used {
+				d.from = remaining
+				changed = true
+			}
+		}
+	}
+	return d
 }
 
 // sqlCube is a table of a dataset's rows grouped by fields with few values,
@@ -201,6 +276,11 @@ func bucketRange(field, value string) (from, to string, ok bool) {
 
 // maxSQLBuckets bounds a metric's groups; the UI shows the largest first.
 const maxSQLBuckets = 2000
+
+// Complete analytical reads either return every group or an explicit error.
+// The larger bound permits repository × operation × day timelines without
+// changing the ordinary query table's largest-group previews.
+const maxCompleteSQLBuckets = 50000
 
 var registerRegexp sync.Once
 
@@ -578,6 +658,10 @@ func (d sqlDataset) Distinct(ctx context.Context, q queryer, fieldName, search s
 }
 
 func (d sqlDataset) Aggregate(ctx context.Context, q queryer, request querytable.AggregationRequest, schema querytable.Schema) (querytable.AggregationResult, error) {
+	bucketLimit := maxSQLBuckets
+	if request.RequireComplete {
+		bucketLimit = maxCompleteSQLBuckets + 1
+	}
 	if err := schema.ValidateQuery(querytable.Query{Where: request.Where, Limit: 1}); err != nil {
 		return querytable.AggregationResult{}, err
 	}
@@ -657,7 +741,7 @@ func (d sqlDataset) Aggregate(ctx context.Context, q queryer, request querytable
 			}
 			groupBy = " GROUP BY " + strings.Join(positions, ",")
 		}
-		statement, statementArgs := fmt.Sprintf("SELECT %s%s AS value,COUNT(*) AS n %s%s%s ORDER BY value DESC LIMIT %d", selectKeys, measure, d.from, where, groupBy, maxSQLBuckets), args
+		statement, statementArgs := fmt.Sprintf("SELECT %s%s AS value,COUNT(*) AS n %s%s%s ORDER BY value DESC LIMIT %d", selectKeys, measure, d.from, where, groupBy, bucketLimit), args
 		if routed {
 			if cubeMeasure, ok := d.cube.measure(aggregation, schema); ok {
 				cubeKeys := ""
@@ -665,12 +749,15 @@ func (d sqlDataset) Aggregate(ctx context.Context, q queryer, request querytable
 					cubeKeys += fmt.Sprintf("%s AS k%d,", d.cube.dimensions[field], index)
 				}
 				statement, statementArgs = fmt.Sprintf("SELECT %s%s AS value,COALESCE(SUM(%s),0) AS n %s%s%s ORDER BY value DESC LIMIT %d",
-					cubeKeys, cubeMeasure, d.cube.count, d.cube.from, cubeWhere, groupBy, maxSQLBuckets), cubeArgs
+					cubeKeys, cubeMeasure, d.cube.count, d.cube.from, cubeWhere, groupBy, bucketLimit), cubeArgs
 			}
 		}
 		rows, err := queryMapsContext(ctx, q, statement, statementArgs...)
 		if err != nil {
 			return result, err
+		}
+		if request.RequireComplete && len(rows) > maxCompleteSQLBuckets {
+			return querytable.AggregationResult{}, fmt.Errorf("complete aggregation exceeds %d groups; choose a shorter period or a single repository", maxCompleteSQLBuckets)
 		}
 		buckets := make([]querytable.Bucket, 0, len(rows))
 		for _, row := range rows {

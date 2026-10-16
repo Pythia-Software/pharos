@@ -157,6 +157,38 @@ func (c *Catalog) delegationSnapshot(ctx context.Context, workspace string) (*de
 		return c.readDelegationSnapshot(ctx, workspace)
 	})
 }
+
+// Materialize compact result references once per conversation. Joining messages
+// directly by conversation_id and call_id scans the whole transcript for every
+// launch: the conversation index does not cover call_id. Keep bodies outside the
+// temporary table and fetch only the matching results, bounded to 8192 characters.
+const delegationResultEvidenceSQL = `WITH launches AS MATERIALIZED (
+ SELECT a.id,d.conversation_id,d.call_id FROM agent_sessions a
+ JOIN messages d ON d.id=a.delegation_message_id
+ WHERE a.workspace_id=? AND a.child_conversation_id IS NULL AND a.native_id<>'main'
+), results AS MATERIALIZED (
+ SELECT m.id,m.conversation_id,m.call_id FROM messages m
+ WHERE m.conversation_id IN (SELECT conversation_id FROM launches)
+ AND +m.kind IN ('delegation_result','tool_result')
+)
+SELECT l.id,substr(m.text,1,8192) text FROM launches l
+ JOIN results r ON r.conversation_id=l.conversation_id AND r.call_id=l.call_id
+ JOIN messages m ON m.id=r.id`
+
+// Copy only the small accounting fields before joining session membership.
+// Looking up every message by its hashed ID makes long transcripts perform
+// thousands of random reads of the wide message table on external libraries.
+const delegationMessageCountsSQL = `WITH message_facts AS MATERIALIZED (
+ SELECT m.id,m.role,m.kind,m.created_at FROM conversations c
+ JOIN messages m ON m.conversation_id=c.id WHERE c.workspace_id=?
+)
+SELECT am.agent_session_id,COUNT(*) messages,
+ SUM(CASE WHEN m.role='user' AND m.kind='message' THEN 1 ELSE 0 END) turns,
+ MIN(m.created_at) start,MAX(m.created_at) end
+ FROM agent_sessions a JOIN agent_session_messages am ON am.agent_session_id=a.id
+ JOIN message_facts m ON m.id=am.message_id WHERE a.workspace_id=?
+ GROUP BY am.agent_session_id`
+
 func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) (*delegationSnapshot, error) {
 	tx, err := c.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -170,13 +202,25 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 	if err != nil {
 		return nil, err
 	}
-	conversations, err := queryMapsContext(ctx, tx, `SELECT id,provider,model,effort,native_id,parent_id,agent_nickname,coverage,started_at,ended_at,
+	conversations, err := queryMapsContext(ctx, tx, `SELECT id,provider,account,model,effort,native_id,parent_id,agent_path,agent_nickname,coverage,started_at,ended_at,
  (SELECT substr(d.initiation,1,180) FROM conversation_documents d WHERE d.conversation_id=c.id) prompt
  FROM conversations c WHERE workspace_id=? ORDER BY started_at,id LIMIT 10001`, workspace)
 	if err != nil {
 		return nil, err
 	}
-	sessions, err := queryMapsContext(ctx, tx, `SELECT a.*,substr(CASE WHEN json_valid(m.text) THEN COALESCE(json_extract(m.text,'$.input.description'),json_extract(m.text,'$.input.prompt'),json_extract(m.text,'$.input.task'),m.text) ELSE m.text END,1,180) assignment FROM agent_sessions a LEFT JOIN messages m ON m.id=a.delegation_message_id WHERE a.workspace_id=? ORDER BY a.started_at,a.id LIMIT 10001`, workspace)
+	// Providers normalize launch arguments into input, but use different task
+	// fields. Codex can retain a readable task_name beside an encrypted message.
+	// Extract before clipping: the name may follow a very large message. Unknown
+	// structured payloads and opaque messages must not become display labels.
+	sessions, err := queryMapsContext(ctx, tx, `SELECT a.*,substr(CASE WHEN json_valid(m.text) THEN
+ (SELECT value FROM json_each(m.text,'$.input')
+  WHERE type='text' AND key IN ('task_name','description','prompt','Prompt','task','message')
+   AND trim(value,char(9)||char(10)||char(13)||' ')<>'' AND value NOT GLOB 'gAAAA*'
+  ORDER BY CASE key WHEN 'task_name' THEN 0 WHEN 'description' THEN 1 WHEN 'prompt' THEN 2 WHEN 'Prompt' THEN 3 WHEN 'task' THEN 4 ELSE 5 END
+  LIMIT 1)
+ ELSE m.text END,1,180) assignment
+ FROM agent_sessions a LEFT JOIN messages m ON m.id=a.delegation_message_id
+ WHERE a.workspace_id=? ORDER BY a.started_at,a.id LIMIT 10001`, workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -208,50 +252,17 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 			sessions = append(sessions, row)
 		}
 	}
-	// Bounded reads of launch results recover exact async handles, including
-	// nested children whose catalog parent was flattened to the root.
-	aliasesChild := map[string]string{}
-	for _, row := range sessions {
-		if child := firstString(row["child_conversation_id"]); roots[child] != "" {
-			aliasesChild[firstString(row["id"])] = roots[child]
-		}
-	}
-	evidence, err := queryMapsContext(ctx, tx, `SELECT a.id,substr(m.text,1,8192) text FROM agent_sessions a JOIN messages d ON d.id=a.delegation_message_id JOIN messages m ON m.conversation_id=d.conversation_id AND m.call_id=d.call_id AND +m.kind IN ('delegation_result','tool_result') WHERE a.workspace_id=? AND a.child_conversation_id IS NULL AND a.native_id<>'main'`, workspace)
+	links, err := loadDelegationLinks(ctx, tx, workspace, conversations, sessions, roots)
 	if err != nil {
 		return nil, err
 	}
-	for _, row := range evidence {
-		var p map[string]any
-		if json.Unmarshal([]byte(firstString(row["text"])), &p) != nil {
-			continue
-		}
-		agent := firstString(mapValueDefault(p["details"])["agentId"])
-		if agent == "" {
-			parts, _ := sliceValue(p["content"])
-			for _, part := range parts {
-				text := firstString(mapValueDefault(part)["text"])
-				if _, after, ok := strings.Cut(text, "agentId:"); ok {
-					fields := strings.Fields(after)
-					if len(fields) > 0 {
-						agent = fields[0]
-					}
-				}
-			}
-		}
-		if agent == "" {
-			continue
-		}
-		child := ""
-		matches := 0
-		for _, cv := range conversations {
-			if strings.HasSuffix(firstString(cv["native_id"]), "agent-"+agent) {
-				child = roots[firstString(cv["id"])]
-				matches++
-			}
-		}
-		if matches == 1 && child != "" {
-			aliasesChild[firstString(row["id"])] = child
-		}
+	aliasesChild := links.aliases
+	for _, row := range links.extra {
+		sessions = append(sessions, row)
+		raw[firstString(row["id"])] = row
+	}
+	if len(sessions) > 10000 {
+		return nil, fmt.Errorf("workspace exceeds the 10,000-session analysis limit")
 	}
 	external := map[string]*delegationReference{}
 	reference := func(id string) (*delegationReference, error) {
@@ -285,13 +296,19 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 	tokenFields := map[string]string{"tokens": "total_tokens", "input": "input_tokens", "uncached": "uncached_input_tokens", "cacheRead": "cache_read_input_tokens", "cacheWrite": "cache_creation_input_tokens", "output": "output_tokens", "reasoning": "reasoning_output_tokens"}
 	for _, row := range sessions {
 		id := firstString(row["id"])
+		if links.failed[id] {
+			continue
+		}
 		if child := aliasesChild[id]; child != "" && (firstString(row["usage_status"]) == "in-child-conversation" || integer(row["total_tokens"]) == 0) {
 			s.Aliases[id] = child
 			continue
 		}
 		cid := firstString(row["conversation_id"])
 		cv := conv[cid]
-		label := firstString(cv["agent_nickname"], row["assignment"], cv["prompt"])
+		label := firstString(row["assignment"])
+		if row["native_id"] == "main" {
+			label = firstString(cv["agent_nickname"], label, cv["prompt"])
+		}
 		if label == "" {
 			label = firstString(row["native_id"], cv["native_id"])
 			if row["native_id"] == "main" {
@@ -307,6 +324,16 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 		if ref := external[firstString(row["child_conversation_id"])]; ref != nil {
 			copy := *ref
 			n.ExternalChild = &copy
+		}
+		if ref := links.external[id]; ref != nil {
+			n.ExternalChild = ref
+			n.Label = firstString(row["assignment"], ref.Label)
+			if integer(row["total_tokens"]) == 0 {
+				n.ConversationID, n.WorkspaceID = ref.ConversationID, ref.WorkspaceID
+				n.Provider = ref.Provider
+				n.Model, n.Effort = firstString(row["child_model"]), firstString(row["child_effort"])
+				n.Coverage = firstString(row["child_coverage"])
+			}
 		}
 		if n.Usage == "in-child-conversation" {
 			n.Usage = "unavailable"
@@ -351,7 +378,7 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 		if parent == "" && n.ExternalParent == nil {
 			proof = ""
 		}
-		n.ParentID, n.ParentEvidence = parent, proof
+		n.ParentID, n.ParentEvidence = parent, firstString(row["parent_evidence"], proof)
 		n.MessageID = firstString(row["delegation_message_id"])
 	}
 	for _, row := range sessions {
@@ -556,7 +583,7 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 	if err != nil {
 		return nil, err
 	}
-	counts, err := queryMapsContext(ctx, tx, `SELECT am.agent_session_id,COUNT(*) messages,SUM(CASE WHEN m.role='user' AND m.kind='message' THEN 1 ELSE 0 END) turns,MIN(m.created_at) start,MAX(m.created_at) end FROM agent_sessions a JOIN agent_session_messages am ON am.agent_session_id=a.id JOIN messages m ON m.id=am.message_id WHERE a.workspace_id=? GROUP BY am.agent_session_id`, workspace)
+	counts, err := queryMapsContext(ctx, tx, delegationMessageCountsSQL, workspace, workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -676,6 +703,11 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 			n.Self["files"] = delegationMetric{Quality: "unknown", Total: n.fileCalls}
 		}
 		n.Self["episodes"] = delegationNumber(float64(len(n.episodes)), "inferred", len(n.episodes), len(n.episodes))
+		if n.ExternalChild != nil && n.Self["tokens"].Value == nil && len(n.tools) == 0 && *n.Self["messages"].Value == 0 && *n.Self["requests"].Value == 0 {
+			for _, spec := range delegationMetrics {
+				n.Self[spec.ID] = delegationUnknown()
+			}
+		}
 		n.ChildCount = len(n.children)
 		n.Self["children"] = delegationNumber(float64(n.ChildCount), "observed", 1, 1)
 		leaf := 0.0

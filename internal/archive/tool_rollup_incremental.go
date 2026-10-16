@@ -221,7 +221,7 @@ func (c *Catalog) publishToolPartitions(ctx context.Context, conn *sql.Conn, bui
 	statements := []string{"DELETE FROM tool_mirror_workspaces", "INSERT INTO tool_mirror_workspaces SELECT * FROM temp.tool_mirror_build"}
 	if build.full {
 		statements = append(statements, "DROP TABLE IF EXISTS main.tool_call_cube", "CREATE TABLE main.tool_call_cube AS SELECT * FROM temp.tool_cube_build",
-			"CREATE INDEX tool_call_cube_workspace_idx ON tool_call_cube(workspace_id)", "CREATE INDEX tool_call_cube_day_idx ON tool_call_cube(day)", "DELETE FROM tool_usage_daily")
+			"CREATE INDEX tool_call_cube_workspace_idx ON tool_call_cube(workspace_id)", "CREATE INDEX tool_call_cube_day_idx ON tool_call_cube(day)", "CREATE INDEX tool_call_cube_count_idx ON tool_call_cube(call_count)", "DELETE FROM tool_usage_daily")
 	} else {
 		statements = append(statements, "DELETE FROM tool_call_cube WHERE workspace_id IN (SELECT workspace_id FROM temp.tool_dirty_build)",
 			"INSERT INTO tool_call_cube SELECT * FROM temp.tool_cube_build", `DELETE FROM tool_usage_daily WHERE day IN (SELECT day FROM temp.tool_day_build)

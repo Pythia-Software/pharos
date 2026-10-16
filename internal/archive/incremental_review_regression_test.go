@@ -371,8 +371,8 @@ func TestIncrementalActivityEstimatesKeepRunKindsSeparate(t *testing.T) {
 		active := server.startRunNamed(kind, []string{"codex"})
 		server.updateRun(active.ID, func(run *SyncRun) { run.StartedAt = formatTime(started) })
 		activities = server.libraryStatus()["activities"].([]libraryActivity)
-		if estimate, want := activities[0].EstimatedCompletionAt, formatTime(started.Add(2*time.Minute)); estimate != want {
-			t.Fatalf("%s estimate=%s, want %s", kind, estimate, want)
+		if estimate := activities[0].EstimatedCompletionAt; estimate != "" {
+			t.Fatalf("%s used whole-run history without a measured workload: %s", kind, estimate)
 		}
 		server.updateRun(active.ID, func(run *SyncRun) { run.State = "stopped" })
 	}

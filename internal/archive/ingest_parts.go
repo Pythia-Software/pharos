@@ -18,6 +18,9 @@ import (
 type sourcePart struct {
 	item string // original path, or sqlite:<original path>:sessions:<id>
 	size int64  // bytes, or a session's message count
+	// Measurement metadata only; empty means bytes. SQLite dependencies can
+	// be files or session aggregates, so their paths cannot identify the unit.
+	sizeUnit string
 	// version grows with each new version: the file's mtime_ns, or a
 	// session's highest message rowid.
 	version int64

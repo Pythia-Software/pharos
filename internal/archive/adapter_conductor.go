@@ -312,6 +312,7 @@ func conductorSignals(tx *sql.Tx, sessionTable, messageTable, sidColumn, fkColum
 	for _, session := range sessions {
 		sid := firstString(session[sidColumn])
 		part := stats[sid]
+		part.sizeUnit = "message"
 		var workspace, repository map[string]any
 		if scols["workspace_id"] && sessionTable != "workspaces" {
 			workspace = workspaces[firstString(session["workspace_id"])]

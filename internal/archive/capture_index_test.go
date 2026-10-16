@@ -555,6 +555,10 @@ func TestIndexWorkCountsWhatRemainsWithoutParsing(t *testing.T) {
 	if needed, ok := catalog.captureIndexWork(context.Background(), targets[0]); !ok || needed != 5 || parses.Load() != 0 {
 		t.Fatalf("before any index: %d needed, ok %v, %d parses", needed, ok, parses.Load())
 	}
+	_, model, size, sized := catalog.captureIndexWorkMeasured(context.Background(), targets[0])
+	if !sized || size == nil || size.Total <= 0 || size.Unit != "byte" || !strings.Contains(model, "codex") || parses.Load() != 0 {
+		t.Fatalf("planning must collect workload size without parsing transcripts: %s %+v (%v), %d parses", model, size, sized, parses.Load())
+	}
 	// Two of five, as after an interrupted index.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -572,6 +576,20 @@ func TestIndexWorkCountsWhatRemainsWithoutParsing(t *testing.T) {
 	}
 	if needed, ok := catalog.captureIndexWork(context.Background(), targets[0]); !ok || needed != 0 {
 		t.Fatalf("after the index: %d needed, ok %v", needed, ok)
+	}
+	// Full recovery advances the generation before planning. Previously
+	// indexed inputs count again, while ETA history survives later rebuilds.
+	rebuild := withIngestMode(t.Context(), ingestMode{force: true})
+	rebuildModel := ""
+	for range 2 {
+		if err := catalog.advanceSyncGeneration(t.Context(), targets[0].Host.ID, targets[0].Source); err != nil {
+			t.Fatal(err)
+		}
+		needed, currentModel, currentSize, ok := catalog.captureIndexWorkMeasured(rebuild, targets[0])
+		if !ok || needed != 5 || currentSize == nil || currentSize.Total != size.Total || currentModel == model || (rebuildModel != "" && currentModel != rebuildModel) {
+			t.Fatalf("rebuild workload/history: needed=%d model=%q size=%+v ok=%v", needed, currentModel, currentSize, ok)
+		}
+		rebuildModel = currentModel
 	}
 	// A cancelled count is not a count.
 	cancelled, stop := context.WithCancel(context.Background())

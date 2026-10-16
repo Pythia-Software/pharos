@@ -43,7 +43,10 @@
 .pharos-activity-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
 .pharos-activity-row>.pharos-button{flex:none}
 .pharos-activity-info{flex:1;min-width:0}
-.pharos-activity-timing{flex:none;text-align:right;font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums}
+.pharos-activity-timing{flex:0 1 155px;min-width:100px;text-align:right;font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums}
+.pharos-stage{margin-top:4px;font-weight:550;text-transform:capitalize}
+.pharos-progress-caption,.pharos-activity-basis,.pharos-next{font-size:12px;line-height:1.5}
+@media(max-width:450px){.pharos-activity-row{flex-wrap:wrap}.pharos-activity-info{flex-basis:100%}.pharos-activity-timing{flex-basis:100%;text-align:left}}
 .pharos-activity-head{display:flex;align-items:center;gap:8px;font-weight:650}
 .pharos-activity-head .pharos-button{margin-left:auto;font-weight:400}
 .pharos-activity .pharos-sub{margin-top:2px}
@@ -51,7 +54,7 @@
 .pharos-last-index h3{margin-top:4px}
 .pharos-last-index .pharos-sub{margin-top:3px}
 .pharos-bar{height:6px;margin:7px 0 4px;overflow:hidden;border-radius:6px;background:var(--line,#ccc)}
-.pharos-bar>span{display:block;height:100%;min-width:6px;background:var(--accent,#315845);transition:width .25s}
+.pharos-bar>span{display:block;height:100%;background:var(--accent,#315845);transition:width .25s}
 .pharos-bar.indeterminate>span{width:35%;animation:pharos-slide 1.6s ease-in-out infinite}
 @keyframes pharos-slide{from{margin-left:-35%}to{margin-left:100%}}
 @media(prefers-reduced-motion:reduce){.pharos-bar.indeterminate>span{animation:none;width:100%;opacity:.5}}
@@ -143,29 +146,81 @@
     if (value) span.append(` · ${new Date(value).toLocaleString()}`);
     return span;
   };
-  const progressBar = value => {
-    const bar = node('div', 'pharos-bar' + (value == null ? ' indeterminate' : '')), fill = node('span');
-    if (value != null) fill.style.width = `${Math.round(value * 100)}%`;
+  const progressBar = (value, label = 'Current stage') => {
+    const known = Number.isFinite(value);
+    const percent = known ? Math.max(0, Math.min(100, Math.floor(value * 100))) : null;
+    const bar = node('div', 'pharos-bar' + (known ? '' : ' indeterminate')), fill = node('span');
+    bar.setAttribute('role', 'progressbar');
+    bar.setAttribute('aria-label', label);
+    if (known) {
+      fill.style.width = `${percent}%`;
+      bar.setAttribute('aria-valuemin', '0');
+      bar.setAttribute('aria-valuemax', '100');
+      bar.setAttribute('aria-valuenow', String(percent));
+    } else bar.setAttribute('aria-valuetext', 'Work in progress; total not yet known');
     bar.append(fill);
     return bar;
   };
-  const completionEstimate = (activities, currentStep = false) => {
+  const duration = seconds => {
+    if (seconds < 60) return `${Math.max(5, Math.ceil(seconds / 5) * 5)} sec`;
+    if (seconds < 3600) return `${Math.ceil(seconds / 60)} min`;
+    return `${(Math.ceil(seconds / 360) / 10).toFixed(1)} hr`;
+  };
+  const completionEstimate = activity => {
     const timing = node('div', 'pharos-sub pharos-activity-timing');
-    const starts = activities.map(activity => new Date(activity.started_at).getTime()).filter(Number.isFinite);
-    const elapsed = starts.length ? Math.max(0, Math.floor((Date.now() - Math.min(...starts)) / 60_000)) : null;
-    timing.append(node('div', '', elapsed == null ? 'Started unknown' : `Started ${elapsed}m ago`));
-    const estimates = activities.map(activity => new Date(activity.estimated_completion_at).getTime());
-    if (!estimates.length || estimates.some(value => !Number.isFinite(value))) {
-      timing.append(node('div', '', 'Estimated complete unknown'));
-      timing.title = 'Completion estimate unavailable — not enough past data.';
-      return timing;
+    const started = Date.parse(activity.started_at);
+    if (Number.isFinite(started)) {
+      const seconds = Math.max(0, Math.floor((Date.now() - started) / 1000));
+      timing.append(node('div', '', `${seconds < 60 ? `${seconds} sec` : `${Math.floor(seconds / 60)} min`} elapsed`));
     }
-    const completion = Math.max(...estimates), remaining = completion - Date.now();
-    timing.append(node('div', '', remaining <= 0 ? 'Estimated complete overdue' : `Estimated complete in ${Math.ceil(remaining / 60_000)}m`));
-    timing.title = remaining <= 0 ? 'Taking longer than past runs — still running.'
-      : `${currentStep ? 'Current step estimate. ' : ''}Based on the median duration of the last 10 successful runs on this Mac.`;
+    const estimate = statusError ? {state: 'unknown', basis: 'Status unavailable; reconnecting before updating the estimate'} : activity.estimate;
+    let text = {learning: 'Measuring pace…', unknown: 'Time remaining not known', stalled: 'Waiting for progress…', finishing: 'Finishing this stage…', stopping: 'Stopping safely…'}[estimate?.state] || 'Time remaining not known';
+    if (estimate?.state === 'estimating' && estimate.low_seconds > 0 && estimate.high_seconds >= estimate.low_seconds) {
+      const low = duration(estimate.low_seconds), high = duration(estimate.high_seconds);
+      const sameUnit = low.split(' ').at(-1) === high.split(' ').at(-1);
+      const range = low === high ? high : sameUnit ? `${low.split(' ')[0]}–${high}` : `${low}–${high}`;
+      text = `This stage: ~${range} left`;
+    }
+    timing.append(node('div', '', text));
+    timing.title = estimate?.basis || 'This stage does not report a measurable total.';
     return timing;
   };
+  const workCount = work => {
+    if (!work?.unit) return '';
+    const done = work.unit === 'byte' ? size(work.done) : Number(work.done || 0).toLocaleString();
+    const total = work.unit === 'byte' ? size(work.total) : plural(work.total, work.unit);
+    return work.total > 0 ? `${done} of ${total}${work.unit === 'byte' ? ' copied' : ' processed'}`
+      : work.unit === 'byte' ? `${done} copied` : `${plural(work.done, work.unit)} processed`;
+  };
+  function activityLine(activity) {
+    const item = node('div', 'pharos-activity'), row = node('div', 'pharos-activity-row'), info = node('div', 'pharos-activity-info'), head = node('div', 'pharos-activity-head');
+    head.append(node('span', '', activity.label));
+    if (activity.stoppable) head.append(stopButton(activity.stopping, activity.stop_path));
+    info.append(head);
+    if (activity.work?.phase) info.append(node('div', 'pharos-stage', activity.work.phase));
+    if (activity.detail) info.append(node('div', 'pharos-sub', activity.detail));
+    row.append(info, completionEstimate(activity));
+    item.append(row);
+    const work = activity.work, measure = work?.size?.total > 0 ? work.size : work, measured = measure?.total > 0;
+    const progress = measured ? measure.done / measure.total : work ? null : activity.progress;
+    item.append(progressBar(progress, `${activity.label}: ${work?.phase || 'current stage'}`));
+    if (work?.unit) {
+      const percent = measured ? `${Math.min(100, Math.floor(progress * 100))}% of ${work.size?.total > 0 ? 'input data' : 'this stage'}` : '';
+      const volume = work.size?.total > 0 ? (work.size.unit === 'byte' ? `${size(work.size.done)} of ${size(work.size.total)} processed` : `${Number(work.size.done).toLocaleString()} of ${plural(work.size.total, 'message')} processed`) : '';
+      item.append(node('div', 'pharos-sub pharos-progress-caption', [workCount(work), volume, percent].filter(Boolean).join(' · ')));
+    }
+    const estimate = activity.estimate;
+    if (estimate && !statusError) {
+      const unit = estimate.unit || work?.unit;
+      const rate = estimate.units_per_second > 0 && unit
+        ? unit === 'byte' ? `${size(estimate.units_per_second)}/sec`
+          : `${(estimate.units_per_second * 60).toLocaleString(undefined, {maximumFractionDigits: 1})} ${unit}s/min`
+        : '';
+      item.append(node('div', 'pharos-sub pharos-activity-basis', [rate, estimate.basis].filter(Boolean).join(' · ')));
+    }
+    if (work?.next) item.append(node('div', 'pharos-sub pharos-next', `After this: ${work.next}`));
+    return item;
+  }
   const copy = async text => {
     try {
       if (typeof window.pharosCopyText === 'function') await window.pharosCopyText(text);
@@ -338,7 +393,6 @@
     if (index) index.disabled = busy || !(hostsData?.index.hosts || []).some(host => (host.sources || []).some(source => source.needs_index));
   }
 
-  let updateProgressFloor = 0;
   function libraryUpdate(activities) {
     const recent = recentIndex?.state === 'complete' && Date.now() - new Date(recentIndex.completed_at).getTime() < 300_000;
     const indexFollowUp = recent && activities.find(activity => activity.kind === 'git'
@@ -348,46 +402,29 @@
       || activity.label === 'Upgrading the library'
       || (upgradeStatus?.running && upgradeStatus.step === 'tools' && activity.label === 'Building the Tools ledger')
       || (indexFollowUp && (activity === indexFollowUp || activity.label === 'Updating findings')));
-    if (!updating.length) {
-      updateProgressFloor = 0;
-      return null;
-    }
+    if (!updating.length) return null;
     const capturing = updating.find(activity => activity.kind === 'capture');
     const indexing = updating.find(activity => activity.kind === 'sync' || activity.kind === 'index');
     const upgrade = upgradeStatus?.running;
     const step = upgradeStatus?.steps?.find(item => item.id === upgradeStatus.step);
-    let progress = null;
-    if (capturing?.progress != null) progress = capturing.progress * 0.15;
-    else if (indexing?.progress != null) progress = 0.15 + indexing.progress * (upgradeStatus?.needed || upgrade ? 0.55 : 0.7);
-    else if (upgrade && upgradeStatus.overall_progress != null) progress = recent
-      ? 0.75 + upgradeStatus.overall_progress * 0.24 : upgradeStatus.overall_progress;
-    else if (!indexing && recent) progress = upgradeStatus?.needed ? 0.7 : 0.85;
-    if (progress != null) {
-      updateProgressFloor = Math.max(updateProgressFloor, progress);
-      progress = updateProgressFloor;
-    }
+    const primary = capturing || indexing || updating[0];
+    const measure = primary.work?.size?.total > 0 ? primary.work.size : primary.work;
+    const progress = measure ? (measure.total > 0 ? measure.done / measure.total : null) : primary.progress;
     // Index changes says which step it is on ("Indexing changes: checking for changes").
     const changesStep = indexing?.automatic && indexing.label?.replace(/^Indexing changes: (.)/, (_, first) => first.toUpperCase());
-    const label = capturing ? 'Capturing sources' : indexing ? changesStep || 'Indexing conversations' : upgrade ? (step?.label || 'Upgrading the library') : 'Finishing capture & index';
+    const label = primary.work?.phase ? primary.work.phase.replace(/^./, letter => letter.toUpperCase()) : capturing ? 'Capturing sources' : indexing ? changesStep || 'Indexing conversations' : upgrade ? (step?.label || 'Upgrading the library') : 'Finishing capture & index';
     return {updating, indexing, capturing, label, progress};
   }
 
   function activitySummary(activity) {
     const verb = {sync: 'Indexing', index: 'Indexing', capture: 'Capturing', 'capture-other': 'Capturing', backup: 'Backing up'}[activity.kind] || activity.label;
-    return activity.progress ? `${verb} ${Math.round(activity.progress * 100)}%` : verb;
+    return activity.progress != null ? `${verb} · current stage ${Math.floor(activity.progress * 100)}%` : verb;
   }
 
   function libraryUpdateLine(update) {
-    const item = node('div', 'pharos-activity'), row = node('div', 'pharos-activity-row'), info = node('div', 'pharos-activity-info'), head = node('div', 'pharos-activity-head');
-    // Index changes is incremental; Capture & index the full run; otherwise
-    // the library upgrade is running on its own.
-    const automatic = update.indexing?.automatic && !update.capturing;
-    head.append(node('span', '', automatic ? 'Indexing changes' : update.capturing || update.indexing ? 'Capture & index' : 'Upgrading the library'));
-    if (update.indexing?.stoppable) head.append(stopButton(update.indexing.stopping, update.indexing.stop_path));
-    info.append(head, node('div', 'pharos-sub', update.label));
-    row.append(info, completionEstimate(update.updating, true));
-    item.append(row, progressBar(update.progress));
-    return item;
+    const group = node('div', 'pharos-update');
+    for (const activity of update.updating) group.append(activityLine(activity));
+    return group;
   }
 
   // The chip is just the drive's name and a dot: green when nothing is
@@ -442,7 +479,7 @@
         dot.style.animationDelay = `-${Date.now() % DRIVE_PULSE_MS}ms`;
       }
       const update = libraryUpdate(activities);
-      state = activities.length ? [update && `${update.label}${update.progress == null ? '' : ` ${Math.round(update.progress * 100)}%`}`,
+      state = activities.length ? [update && `${update.label}${update.progress == null ? '' : ` · current stage ${Math.min(100, Math.floor(update.progress * 100))}%`}`,
         ...activities.filter(activity => !update?.updating.includes(activity)).map(activitySummary)].filter(Boolean).join(', ')
         : headerCaptureIndexRunning && upgradeStatus?.needed ? 'Preparing library upgrade'
           : upgradeStatus?.needed ? 'Library upgrade available' : 'Nothing running';
@@ -506,6 +543,7 @@
       placePanel();
       return;
     }
+    if (statusError) panel.append(node('p', 'pharos-error', 'Status unavailable. Showing the last reported counts; reconnecting…'));
     const drive = status.drive || {};
     if (panelMode === 'activity') {
       panel.append(node('h2', '', 'Running activity'));
@@ -559,20 +597,7 @@
     if (update) {
       panel.append(libraryUpdateLine(update));
     }
-    activities.filter(activity => !update?.updating.includes(activity)).forEach(activity => {
-      const item = node('div', 'pharos-activity'), row = node('div', 'pharos-activity-row'), info = node('div', 'pharos-activity-info'), head = node('div', 'pharos-activity-head');
-      head.append(node('span', 'pharos-dot busy'), node('span', '', activity.label));
-      // The Library view indexing's Stop sits past its timing, like Resume once stopped.
-      const stop = activity.stoppable && stopButton(activity.stopping, activity.stop_path);
-      if (stop && activity.stop_path !== LIBRARY_REFRESH_STOP) head.append(stop);
-      info.append(head);
-      if (activity.detail) info.append(node('div', 'pharos-sub', activity.detail));
-      row.append(info, completionEstimate([activity]));
-      if (stop && activity.stop_path === LIBRARY_REFRESH_STOP) row.append(stop);
-      item.append(row);
-      if (activity.kind !== 'capture-other' && (activity.kind !== 'maintenance' || activity.progress != null)) item.append(progressBar(activity.progress));
-      panel.append(item);
-    });
+    activities.filter(activity => !update?.updating.includes(activity)).forEach(activity => panel.append(activityLine(activity)));
     if (status.library_refresh?.stopped) {
       const item = node('div', 'pharos-activity pharos-library-refresh-stopped'), head = node('div', 'pharos-activity-head');
       head.append(node('span', 'pharos-dot idle'), node('span', '', 'Library view indexing stopped'), button('Resume', '', resumeLibraryRefresh));
@@ -757,14 +782,11 @@
     if (index.error && !index.hosts?.length) activity?.append(node('p', 'pharos-sub', `No captures yet (${index.error}).`));
   }
 
-  // Runs report progress by source; a lone source shows as work in progress.
-  const runProgress = run => (run.total_sources > 1 ? run.completed_sources / run.total_sources : null);
-  // An index counts the conversations it has to parse before it starts, and is
-  // measured against them (a source it cannot count is one step); sources are
-  // only its fallback.
-  const indexProgress = run => (run.phase === 'counting' ? null : run.progress ?? runProgress(run));
+  // Only a known workload defines a bar; source counts are context, not time.
+  const indexProgress = run => { const work = run.work?.size?.total > 0 ? run.work.size : run.work; return work?.total > 0 ? work.done / work.total : null; };
   const indexDetail = run => {
-    const current = run.current_source || 'starting';
+    if (run.work) return [run.work.source, run.work.phase, workCount(run.work), `${run.completed_sources} of ${run.total_sources} sources finished`].filter(Boolean).join(' · ');
+    const current = run.current_source || run.phase || 'starting';
     if (run.phase === 'counting') return `${current} · counting the conversations to index`;
     if (run.total_conversations > 0) return `${current} · ${Number(run.done_conversations).toLocaleString()} of ${plural(run.total_conversations, 'conversation')} · ${run.completed_sources} of ${run.total_sources} sources`;
     return `${current} · ${run.completed_sources} of ${run.total_sources} sources · ${plural(run.conversations, 'conversation')} written`;
@@ -792,9 +814,11 @@
       return box;
     }
     if (capture.active && captureRun) {
+      const current = captureRun.results?.find(result => result.state === 'running');
+      const progress = current?.phase === 'copying files' && current.bytes_planned > 0 ? current.bytes_copied / current.bytes_planned : null;
       box.append(node('strong', '', `Capturing ${capture.host?.label || 'this Mac'}`),
-        node('div', 'pharos-sub', `${captureRun.current_source || 'starting'} · ${captureRun.completed_sources} of ${captureRun.total_sources} sources · ${size(captureRun.bytes_copied)} copied`),
-        progressBar(runProgress(captureRun)));
+        node('div', 'pharos-sub', `${captureRun.current_source || 'starting'} · ${current?.phase || 'discovering files'} · ${captureRun.completed_sources} of ${captureRun.total_sources} sources · ${size(captureRun.bytes_copied)} copied`),
+        progressBar(progress, 'Copying files for the current source'));
       return box;
     }
     if (indexRun?.state === 'running') {
