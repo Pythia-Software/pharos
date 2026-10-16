@@ -4,7 +4,7 @@ import { defaultCardCover, type CardCover } from "./card-cover";
 import { preferences } from "./preferences";
 
 export const CARD_TEMPLATES_KEY = "pharos-card-templates-v1";
-export const cardDatasets: Record<string, string> = { usage: "Token usage", library: "Workspaces", tool_calls: "Tool calls", skill_usages: "Skills", writing_messages: "Human messages", tl1_attempts: "TL1 attempts", mcp_calls: "MCP responses" };
+export const cardDatasets: Record<string, string> = { conversation_activity: "Conversation input/output", usage: "Token usage", library: "Workspaces", tool_calls: "Tool calls", skill_usages: "Skills", writing_messages: "Human messages", tl1_attempts: "TL1 attempts", mcp_calls: "MCP responses" };
 export type CardTemplateEdit = { title: string; description: string; days: number; cover?: CardCover };
 function overrides(): Record<string, CardTemplateEdit> {
   const value = preferences().get<unknown>(CARD_TEMPLATES_KEY, {});
@@ -36,7 +36,7 @@ export function availableChartKinds(recipe: QueryRecipe, cover = defaultCardCove
   if (metric?.distribution) return [metric.distribution.kind];
   if (metric?.expressionY) return ["scatter"];
   const column = cover?.mode === "result" ? recipe.exploration?.summaries.find(column => column.id === cover.metricId) : undefined;
-  const additive = column ? ["sum", "count"].includes(column.op) : metric && !metric.expression && ["sum", "count"].includes(metric.op);
+  const additive = metric && !metric.expression && ["sum", "count"].includes(metric.op) ? true : column ? ["sum", "count"].includes(column.op) : metric && !metric.expression && ["sum", "count"].includes(metric.op);
   return ["auto", "bar-horizontal", "bar-vertical", "line", ...(additive ? ["pie", "donut"] as const : []), "value", "list", "table"];
 }
 export function saveCardTemplate(id: string, edit?: CardTemplateEdit) {
@@ -46,8 +46,13 @@ export function saveCardTemplate(id: string, edit?: CardTemplateEdit) {
   if (edit) {
     if (!edit.title.trim() || edit.title.length > 200 || edit.description.length > 500 || ![1, 7, 30, 90].includes(edit.days)) throw new Error("Choose a title, description and supported lookback.");
     if (edit.cover && (!coverChoices(recipe).some(choice => choice.value === `${edit.cover!.mode}:${edit.cover!.metricId}`) || !availableChartKinds(recipe, edit.cover).includes(edit.cover.kind ?? "auto"))) throw new Error("Choose a compatible metric and chart.");
+    if (edit.cover?.density !== undefined && edit.cover.density !== "compact") throw new Error("Choose a valid row density.");
+    if (edit.cover?.stackBy !== undefined && !(["session_kind", "session_role"].includes(edit.cover.stackBy))) throw new Error("Choose a supported stack dimension.");
+    if (edit.cover?.height !== undefined && (!Number.isInteger(edit.cover.height) || edit.cover.height < 170 || edit.cover.height > 600)) throw new Error("Choose a chart height between 170 and 600 pixels.");
     if (edit.cover?.maxGroups !== undefined && (!Number.isInteger(edit.cover.maxGroups) || edit.cover.maxGroups < 1 || edit.cover.maxGroups > 100)) throw new Error("Choose between 1 and 100 visible rows or series.");
-    if (edit.cover && [edit.cover.showOther, edit.cover.showLegend].some(value => value !== undefined && typeof value !== "boolean")) throw new Error("Choose valid key and remainder settings.");
+    if (edit.cover?.legendColumns !== undefined && ![1, 2].includes(edit.cover.legendColumns)) throw new Error("Choose one or two legend columns.");
+    if (edit.cover?.minSamples !== undefined && (!Number.isInteger(edit.cover.minSamples) || edit.cover.minSamples < 1 || edit.cover.minSamples > 10000)) throw new Error("Choose a valid minimum sample size.");
+    if (edit.cover && [edit.cover.showOther, edit.cover.showLegend, edit.cover.showHeadline].some(value => value !== undefined && typeof value !== "boolean")) throw new Error("Choose valid key and remainder settings.");
     next[id] = { ...edit, title: edit.title.trim(), description: edit.description.trim() };
   } else delete next[id];
   preferences().set(CARD_TEMPLATES_KEY, next);

@@ -35,6 +35,7 @@ import { UsageChartColorsProvider, useUsageChartPalette, useUsageTableRenderers 
 import libraryDocument from "../../schemas/library.schema.json";
 import usageDocument from "../../schemas/usage.schema.json";
 import writingDocument from "../../schemas/writing.schema.json";
+import conversationActivityDocument from "../../schemas/conversation_activity.schema.json";
 import writingMessagesDocument from "../../schemas/writing_messages.schema.json";
 import mcpCallsDocument from "../../schemas/mcp_calls.schema.json";
 import toolsDocument from "../../schemas/tools.schema.json";
@@ -54,7 +55,7 @@ const relationships: RelationshipAdapter = {
     return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
   },
 };
-type Dataset = "library" | "usage" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts";
+type Dataset = "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts";
 type LibraryView = "table" | "conversation";
 type MessageView = "table" | "text";
 type TranscriptMessage = { role: string; text: unknown; raw_text?: unknown };
@@ -129,6 +130,7 @@ function datasetIsVisible(dataset: Dataset) {
   const params = new URLSearchParams(location.search), path = location.pathname;
   if (dataset === "library") return path === "/library";
   const usageView = params.get("usage") ?? preferences().get("pharos-usage-view", "tokens");
+  if (dataset === "conversation_activity") return path === "/usage" && usageView === "conversations";
   if (dataset === "usage") return path === "/usage" && usageView === "tokens";
   if (dataset === "writing" || dataset === "writing_messages") return path === "/usage" && usageView === "writing" && (params.get("writing") === "messages") === (dataset === "writing_messages");
   if (["tools", "tool_calls", "skill_usages"].includes(dataset)) return path === "/tools" && (params.get("tools_view") ?? "calls") === (dataset === "tools" ? "summary" : dataset === "skill_usages" ? "skills" : "calls");
@@ -175,6 +177,7 @@ declare global {
 }
 
 const schemas: Record<Dataset, FieldSchema<Row>> = {
+  conversation_activity: loadSchema<Row>(conversationActivityDocument),
   library: loadSchema<Row>(libraryDocument),
   // The reused prototype snapshot runs a schema-12 backend, before effort
   // tracking. Leave that optional column out of its default token table.
@@ -365,6 +368,7 @@ const failedMessage = "No results: the query failed (see the error above).";
 const emptyMessages: Record<Dataset, string> = {
   library: "No work matches this query.",
   usage: "No token usage matches this query.",
+  conversation_activity: "No recorded conversation activity matches this query.",
   writing: "No conversations with user messages match this query.",
   writing_messages: "No classified user messages match this query.",
   mcp_calls: "No MCP calls match this query.",
@@ -1385,7 +1389,7 @@ function WritingUsage({ onStatus }: { onStatus: (status: AuthorshipStatus | null
   </>} />;
 }
 
-type UsageView = "tokens" | "writing" | "carbon";
+type UsageView = "tokens" | "writing" | "carbon" | "conversations";
 const usageViewKey = "pharos-usage-view";
 
 // ?usage= picks the view; otherwise the last choice is kept.
@@ -1393,9 +1397,9 @@ function initialUsageView(): UsageView {
   // Human Words and Carbon Impact read the live library.
   if (shared) return "tokens";
   const requested = new URLSearchParams(location.search).get("usage");
-  if (requested === "tokens" || requested === "writing" || requested === "carbon") { store(usageViewKey, requested); return requested; }
+  if (requested === "tokens" || requested === "writing" || requested === "carbon" || requested === "conversations") { store(usageViewKey, requested); return requested; }
   const saved = preferences().get<unknown>(usageViewKey, "tokens");
-  return saved === "writing" || saved === "carbon" ? saved : "tokens";
+  return saved === "writing" || saved === "carbon" || saved === "conversations" ? saved : "tokens";
 }
 
 function UsagePage() {
@@ -1417,7 +1421,7 @@ function UsagePage() {
         ? "Explore reconciled usage as individual rows or group by repository, model, effort, agent, work, or time. Grouped tables compare cost, tokens, distinct sessions, and cache reuse across the current source filters. Cost is the API list-price equivalent on the day of use, at standard rates. It ignores long-context premiums and subscriptions, so treat it as a lower bound. ≈ marks costs priced by assumption."
         : view === "writing"
           ? <>Text you typed or dictated into agent chats, per conversation or per message. Harness instructions, one-click prompts, attachments, pastes, and copied agent output are counted separately; filter the table and the chart and breakdown follow. {statusText ? <span className="meta">{statusText}</span> : null}</>
-          : "Estimated inference electricity and CO₂e for the tokens in this library, using published research and explicit assumptions."}</p></div>
+          : view === "conversations" ? "Compare human-supplied text estimates and recorded output across whole conversations, including delegated work. Human text is estimated once per classified message, excluding harness and automated spans; output retains the usage ledger’s time placement." : "Estimated inference electricity and CO₂e for the tokens in this library, using published research and explicit assumptions."}</p></div>
       <div className="usage-heading-actions">
         {shared ? null : <div className="library-view-toggle" role="group" aria-label="Usage view">
           <button type="button" className={view === "writing" ? "active" : ""} aria-pressed={view === "writing"} onClick={() => choose("writing")}>Human Words</button>
@@ -1427,7 +1431,7 @@ function UsagePage() {
         {view === "tokens" && !shared ? <div className="usage-heading-tools"><RefreshPricesButton />{concurrencyPrototypeEnabled ? <button type="button" className="concurrency-open-button" onClick={openConcurrencyModal}>Parallelism…</button> : null}</div> : null}
       </div>
     </div>
-    {view === "tokens" ? <TokenUsage /> : view === "writing" ? <WritingUsage onStatus={setStatus} /> : <CarbonImpact />}
+    {view === "conversations" ? <QuerySurface dataset="conversation_activity" /> : view === "tokens" ? <TokenUsage /> : view === "writing" ? <WritingUsage onStatus={setStatus} /> : <CarbonImpact />}
   </div></UsageChartColorsProvider>;
 }
 

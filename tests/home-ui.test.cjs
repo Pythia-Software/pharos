@@ -62,7 +62,7 @@ async function setup({ saved = false, reducedMotion = false, clock = false, view
   if (clock) await page.clock.install();
   if (now) await page.clock.setFixedTime(now);
   await page.addInitScript(values => { for (const [key, value] of Object.entries(values)) localStorage.setItem(key, JSON.stringify(value)); }, localValues);
-  const data = { rows: fixtures(), empty: false, requests: [], metadataRequests: [], snapshots: {}, errors: [], pending: [], holdPreviews: false, preferences: { 'pharos-theme': 'dark', ...preferenceValues } };
+  const data = { rows: fixtures(), empty: false, requests: [], metadataRequests: [], snapshots: {}, errors: [], pending: [], holdPreviews: false, previewFailures: new Set(), preferences: { 'pharos-theme': 'dark', ...preferenceValues } };
   if (saved) {
     const recipe = instantiateRecipe(queryRecipes.find(item => item.id === 'human-words'), 7);
     data.preferences['query-table:saved:pharos_writing_messages'] = [{ id: 'original-query', name: 'My words', savedAt: 100, query: recipe.query }];
@@ -88,11 +88,12 @@ async function setup({ saved = false, reducedMotion = false, clock = false, view
     if (url.pathname.endsWith('/capabilities')) return json({ queryCapabilities: { version: 3, profile: 'qt-sqlite-v1', groupedRows: true, calendarGrouping: true, computedSourceFilters: true, maxRows: 10000, maxGroups: 10000, maxPopulation: 250000 }, metricCapabilities: { version: 2, expressions: true, shownRows: true, computedFields: true, distributions: true, profile: 'qt-sqlite-v1' }, computedExecution: { profile: 'qt-sqlite-v1', planToken: '', fields: {}, resolvedRevisions: {} } });
     if (url.pathname.startsWith('/api/query/') && route.request().method() === 'POST') {
       const dataset = url.pathname.split('/')[3], request = route.request().postDataJSON(); data.requests.push({ dataset, request, path: url.pathname });
+      if (data.previewFailures.has(dataset)) return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Preview service temporarily unavailable.' }) });
       // Calendar execution receives the server's ISO datetime shape. The local
       // interpreter also accepts epochs for ordinary row predicates.
       const calendar = request.metrics?.some(metric => metric.dateGrouping);
       const rows = (data.empty ? [] : data.rows[dataset] ?? []).map(row => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, !calendar && schemas[dataset].fields.find(field => field.name === key)?.type === 'datetime' ? Date.parse(value) : value])));
-      if (data.holdPreviews) await new Promise(resolve => data.pending.push({ release: resolve }));
+      if (data.holdPreviews) await new Promise(resolve => data.pending.push({ release: resolve, dataset, request }));
       if (url.pathname.endsWith('/query-v3')) {
         const state = { ...core.EMPTY_QUERY, ...request.result, select: request.result.select.map(field => ({ field })), aggregations: request.metrics,
           ...(request.grouping ? { grouping: { ...request.grouping, source: { ...core.EMPTY_QUERY, ...request.source, select: request.source.select.map(field => ({ field })) } } } : {}) };
@@ -104,7 +105,11 @@ async function setup({ saved = false, reducedMotion = false, clock = false, view
       }
       if (url.pathname.endsWith('/aggregations')) return json(core.applyAggregations(rows, { ...core.EMPTY_QUERY, ...request }, schemas[dataset]));
       if (url.pathname.endsWith('/metrics')) return json({ version: 2, execution: { profile: 'qt-sqlite-v1', planToken: '', fields: {}, resolvedRevisions: {} }, ...core.evaluateMetrics(rows, { ...core.EMPTY_QUERY, ...request, aggregations: request.metrics.map(metric => ({ ...metric, ...(metric.distribution ? { display: { kind: metric.distribution.kind } } : {}) })) }, schemas[dataset]) });
-      return json({ version: 2, ...core.applyQuery(rows, { ...core.EMPTY_QUERY, ...request }, schemas[dataset]), computed: [], execution: { profile: 'qt-sqlite-v1', planToken: '', fields: {}, resolvedRevisions: {} } });
+      const result = core.applyQuery(rows, { ...core.EMPTY_QUERY, ...request }, schemas[dataset]);
+      // Match the server's ISO datetime serialization after local evaluation.
+      const dates = new Set(schemas[dataset].fields.filter(field => field.type === 'datetime').map(field => field.name));
+      result.rows = result.rows.map(row => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, dates.has(key) && typeof value === 'number' ? new Date(value).toISOString() : value])));
+      return json({ version: 2, ...result, computed: [], execution: { profile: 'qt-sqlite-v1', planToken: '', fields: {}, resolvedRevisions: {} } });
     }
     if (url.pathname.endsWith('/distinct')) { data.metadataRequests.push({ dataset: url.pathname.split('/')[3], field: url.searchParams.get('field') }); return json({ values: [], hasMore: false }); }
     if (url.pathname.endsWith('/field-stats')) return json({});
@@ -116,6 +121,7 @@ async function setup({ saved = false, reducedMotion = false, clock = false, view
   await page.goto(`http://home.test${url}`);
   if (clock) await page.clock.runFor(5000);
   if (url.includes('cards=library')) await page.locator('.card-library-entry').first().waitFor();
+  else if (url.includes('cards=human-review') || url.includes('cards=model-review')) await page.locator('.human-review-entry').first().waitFor();
   else if (waitForHome) await page.waitForFunction(() => document.querySelector('.home-conveyor')?.getAttribute('aria-busy') === 'false' && document.querySelector('.home-belt-row .query-card'));
   else await page.waitForFunction(() => document.querySelector('.view.active .qt-qb'));
   return { browser, page, data };
@@ -443,7 +449,7 @@ test('the card editor updates its rolling timescale, preview, saved query and na
     await card.hover(); await card.getByRole('button', { name: 'Edit My words' }).click();
     const windowSelect = page.getByRole('combobox', { name: 'Time window' });
     assert.equal(await windowSelect.inputValue(), '');
-    assert.deepEqual(await windowSelect.locator('option').evaluateAll(options => options.map(option => option.value)), ['', '1', '7', '30', '90']);
+    assert.deepEqual(await windowSelect.locator('option').evaluateAll(options => options.map(option => option.value)), ['', '1', '7', '30', '90', '180', '365', 'all']);
     await windowSelect.selectOption('1');
     assert.equal(await windowSelect.evaluate(element => getComputedStyle(element).backgroundRepeat), 'no-repeat');
     await page.screenshot({ path: path.join(root, '.context/homepage-design/home-editor-timescale.png') });
@@ -482,6 +488,41 @@ test('the card editor updates its rolling timescale, preview, saved query and na
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
     assert.deepEqual(data.errors, []);
   } finally { delete global.location; await browser.close(); }
+});
+
+test('the card editor saves extended and all-time windows with matching previews and navigation', async () => {
+  const { browser, page, data } = await setup({ saved: true });
+  try {
+    for (const [days, words] of [[200, 1000], [400, 2000]]) {
+      const date = new Date(Date.now() - days * 86400000);
+      data.rows.writing_messages.push({ ...data.rows.writing_messages[0], id: `old-${days}`, sent_at: date.toISOString(), day: date.toISOString().slice(0, 10), typed_words: words });
+    }
+    const card = page.locator('.home-collection .query-card').first();
+    const windowSelect = page.getByRole('combobox', { name: 'Time window' });
+    for (const [value, label, summary] of [['180', 'Last 180d', '938 words'], ['365', 'Last year', '1,938 words'], ['all', 'All time', '3,938 words']]) {
+      await card.hover(); await card.getByRole('button', { name: 'Edit My words' }).click();
+      await windowSelect.selectOption({ label });
+      await page.getByRole('button', { name: 'Save changes' }).click();
+      await page.waitForFunction(expected => document.querySelector('.home-collection .query-result-summary')?.textContent === expected, summary);
+      assert.equal(await card.locator('.query-window').innerText(), label);
+      const url = new URL(await card.locator('a').getAttribute('href'), 'http://home.test');
+      assert.equal(url.searchParams.get('window_days'), value === 'all' ? null : value);
+      await card.hover(); await card.getByRole('button', { name: 'Edit My words' }).click();
+      assert.equal(await windowSelect.inputValue(), value);
+      await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    }
+    await page.screenshot({ path: path.join(root, '.context/time-window-all-time.png') });
+    await page.reload();
+    await page.waitForFunction(() => document.querySelector('.home-collection .query-result-summary')?.textContent === '3,938 words');
+    await card.hover(); await card.getByRole('button', { name: 'Edit My words' }).click();
+    assert.equal(await windowSelect.inputValue(), 'all', 'all time survives a reload');
+    await page.screenshot({ path: path.join(root, '.context/time-window-editor.png') });
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await card.locator('a').click();
+    await waitForQuery(page, 'writing_messages', query => !(query.grouping?.source ?? query).where.some(term => term.field === 'sent_at'));
+    assert.equal(new URL(page.url()).searchParams.has('window_days'), false);
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
 });
 
 test('carousel advances three every thirty seconds and pauses during interaction or reduced motion', async () => {
@@ -1217,6 +1258,99 @@ test('card keys, visible series and Other are configurable and survive collectio
   } finally { await browser.close(); }
 });
 
+test('unavailable saved previews show geometric artwork and reload independently without navigation', async () => {
+  const healthy = instantiateRecipe(queryRecipes.find(item => item.id === 'tool-failures'), 7);
+  const { browser, page, data } = await setup({ saved: true, preferenceValues: { 'pharos-bookmarks-v1': [{ ...healthy, id: 'healthy', templateId: healthy.instanceId }] } });
+  try {
+    await page.getByRole('button', { name: 'Pause suggestions' }).click();
+    const card = page.locator('.home-collection [data-card-id="query:writing_messages:original-query"]');
+    await card.locator('.query-cover-timeline').waitFor();
+    const height = (await card.locator('.query-cover').boundingBox()).height;
+    data.previewFailures.add('writing_messages');
+    await page.evaluate(() => window.dispatchEvent(new Event('pharos:data-refresh')));
+    await card.locator('.query-preview-unavailable').waitFor();
+    await page.waitForFunction(() => document.querySelector('.home-conveyor').getAttribute('aria-busy') === 'false');
+    assert.equal(await card.locator('a button').count(), 0, 'reload is independent from opening the view');
+    assert.equal(await card.locator('.query-unavailable-symbol').getAttribute('aria-hidden'), 'true');
+    assert.ok(await card.locator('.query-unavailable-symbol rect').count() > 10);
+    assert.ok(Math.abs((await card.locator('.query-cover').boundingBox()).height - height) < 1, 'failure keeps the loading cover dimensions');
+    await card.screenshot({ path: path.join(root, '.context/preview-unavailable-dark.png') });
+    await page.evaluate(() => document.documentElement.dataset.theme = 'light');
+    await card.screenshot({ path: path.join(root, '.context/preview-unavailable-light.png') });
+    await page.evaluate(() => document.documentElement.dataset.theme = 'dark');
+    const url = page.url(), reload = card.getByRole('button', { name: 'Reload preview for My words' });
+    await reload.click();
+    await card.locator('.query-preview-unavailable').waitFor();
+    assert.equal(page.url(), url, 'a failed retry stays on Home and remains retryable');
+    await page.evaluate(() => { window.healthyPreview = document.querySelector('[data-card-id="healthy"] .query-compact-metric'); });
+    data.previewFailures.clear(); data.holdPreviews = true; data.requests.length = 0;
+    await reload.focus(); await page.keyboard.press('Enter');
+    await card.locator('.query-preview-loading').waitFor();
+    assert.equal(await card.locator('.query-cover').getAttribute('aria-busy'), 'true');
+    assert.equal(await card.locator('.query-preview-unavailable').count(), 0);
+    assert.ok(Math.abs((await card.locator('.query-cover').boundingBox()).height - height) < 1);
+    await assertEventually(() => data.pending.length === 1);
+    assert.deepEqual(data.requests.map(request => request.dataset), ['writing_messages'], 'only the failed card fetches again');
+    assert.equal(await page.evaluate(() => window.healthyPreview === document.querySelector('[data-card-id="healthy"] .query-compact-metric')), true);
+    data.holdPreviews = false; for (const pending of data.pending.splice(0)) pending.release();
+    await card.locator('.query-cover-timeline').waitFor();
+    assert.equal(await card.getByRole('button', { name: /^Reload preview/ }).count(), 0);
+    assert.equal(page.url(), url);
+    await card.locator('.query-card-open').click();
+    await waitForQuery(page, 'writing_messages', query => Boolean(query.grouping));
+    assert.deepEqual(data.errors, []);
+  } finally { data.holdPreviews = false; for (const pending of data.pending.splice(0)) pending.release(); await browser.close(); }
+});
+
+test('unavailable library previews reload and cancel retries when the time window changes', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=cost-repos' });
+  try {
+    const card = page.locator('#card-cost-repos');
+    await card.locator('.query-cover-timeline').waitFor();
+    data.previewFailures.add('usage');
+    await page.getByLabel('Preview window', { exact: true }).selectOption('30');
+    await card.locator('.query-preview-unavailable').waitFor();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await card.screenshot({ path: path.join(root, '.context/preview-unavailable-mobile.png') });
+    const bounds = await card.getByRole('button', { name: /^Reload preview/ }).boundingBox();
+    assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 390);
+    data.previewFailures.clear(); data.holdPreviews = true;
+    await card.getByRole('button', { name: /^Reload preview/ }).click();
+    await assertEventually(() => data.pending.length === 1);
+    const stale = data.pending.shift();
+    await page.getByLabel('Preview window', { exact: true }).selectOption('90');
+    await assertEventually(() => data.pending.length === 1);
+    data.holdPreviews = false; for (const pending of data.pending.splice(0)) pending.release();
+    await card.locator('.query-cover-timeline').waitFor();
+    const current = await card.locator('.query-cover').innerText();
+    stale.release();
+    await page.waitForTimeout(100);
+    assert.equal(await card.locator('.query-cover').innerText(), current, 'the older retry cannot replace the new window');
+    assert.equal(await card.locator('.query-window').innerText(), 'Last 90d');
+    assert.equal(await card.locator('.query-preview-unavailable').count(), 0);
+    assert.deepEqual(data.errors, []);
+  } finally { data.holdPreviews = false; for (const pending of data.pending.splice(0)) pending.release(); await browser.close(); }
+});
+
+test('unavailable contribution study previews reload from their card', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=human-review' });
+  try {
+    const card = page.locator('.human-review-entry .query-card').first();
+    await card.locator('.human-study-cover, .query-preview-unavailable, .query-preview-status').first().waitFor();
+    assert.equal(await card.locator('.query-preview-unavailable').count(), 0, await card.locator('.query-cover').getAttribute('title'));
+    await card.locator('.human-study-cover').waitFor();
+    data.previewFailures.add('writing_messages');
+    await page.evaluate(() => window.dispatchEvent(new Event('pharos:data-refresh')));
+    await page.waitForFunction(() => document.querySelectorAll('.human-review-entry .query-preview-unavailable').length === document.querySelectorAll('.human-review-entry').length);
+    data.previewFailures.clear(); data.requests.length = 0;
+    await card.getByRole('button', { name: /^Reload preview/ }).click();
+    await card.locator('.human-study-cover').waitFor();
+    assert.equal(await page.locator('.human-review-entry .query-preview-unavailable').count(), await page.locator('.human-review-entry').count() - 1);
+    assert.equal(data.requests.length, 1, 'only the selected contribution study reloads');
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
 test('card loading has a spinner and skeleton, respects reduced motion and clears when ready', async () => {
   const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=human-words' });
   try {
@@ -1446,4 +1580,218 @@ test('opening and immediately saving a restored template preserves all cover set
     assert.deepEqual(data.preferences['pharos-card-templates-v1']['cost-repos'], edit);
     assert.deepEqual(data.errors, []);
   } finally { await browser.close(); }
+});
+
+test('review feedback typing leaves dense charts idle and flushes the latest draft', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=model-review' });
+  const draftKey = 'pharos-model-choice-review-v6';
+  try {
+    const seed = data.rows.usage[0];
+    data.rows.usage = Array.from({ length: 1200 }, (_, i) => ({ ...seed, id: `usage-${i}`, agent_session_id: `session-${i}`, conversation_id: `conversation-${i}`, root_conversation_id: `conversation-${i}`, root_provider: i % 2 ? 'claude' : 'codex', root_model_family: i % 2 ? 'opus-5-5' : 'gpt-6.1-sol', root_effort: 'high', provider: i % 2 ? 'claude' : 'codex', model_family: i % 2 ? 'opus-5-5' : 'gpt-6.1-sol', price_status: 'priced', total_tokens: 10000 + i * 100, input_tokens: 9000 + i * 90, output_tokens: 1000 + i * 10, cost_usd: 1 + i / 100, effort: 'high' }));
+    await page.reload();
+    await page.waitForFunction(() => document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
+    assert.equal(await page.locator('[data-card-id="session-token-cost"] .qt-metric-mark').count(), 1200);
+    const requests = data.requests.length, metadataRequests = data.metadataRequests.length;
+    await page.evaluate(() => {
+      window.reviewTypingProbe = { formats: 0, writes: 0 };
+      const format = Number.prototype.toLocaleString, write = Storage.prototype.setItem;
+      Number.prototype.toLocaleString = function(...args) { window.reviewTypingProbe.formats++; return format.apply(this, args); };
+      Storage.prototype.setItem = function(key, value) { if (key === 'pharos-model-choice-review-v6') window.reviewTypingProbe.writes++; return write.call(this, key, value); };
+    });
+    const card = page.getByRole('textbox', { name: 'Feedback on Session tokens and cost', exact: true });
+    await card.pressSequentially('Compare session outliers.', { delay: 0 });
+    await page.getByRole('textbox', { name: 'Feedback on Session relationships', exact: true }).pressSequentially('Useful group.', { delay: 0 });
+    await page.getByRole('textbox', { name: 'Overall feedback', exact: true }).pressSequentially('Keep these comparisons.', { delay: 0 });
+    await page.getByRole('group', { name: 'Verdict for Session tokens and cost', exact: true }).getByRole('button', { name: 'Keep', exact: true }).click();
+    const probe = await page.evaluate(() => window.reviewTypingProbe);
+    assert.equal(probe.formats, 0, 'feedback must not recompute chart numbers');
+    assert.ok(probe.writes < 8, `draft saves should batch typing, saw ${probe.writes} writes`);
+    assert.equal(data.requests.length, requests, 'feedback must not reload metric data');
+    assert.equal(data.metadataRequests.length, metadataRequests, 'feedback must not reload metadata');
+    await page.getByRole('button', { name: 'View report', exact: true }).click();
+    const report = await page.getByRole('textbox', { name: 'Feedback report', exact: true }).inputValue();
+    for (const text of ['Compare session outliers.', 'Useful group.', 'Keep these comparisons.', 'Verdict: keep']) assert.ok(report.includes(text), text);
+    await page.getByRole('button', { name: 'Close', exact: true }).click();
+    await card.fill('Saved while the field stays focused.');
+    await page.waitForFunction(key => JSON.parse(localStorage.getItem(key))?.cards['session-token-cost']?.note === 'Saved while the field stays focused.', draftKey);
+    await card.fill('Latest edit before leaving.');
+    await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
+    const saved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)), draftKey);
+    assert.equal(saved.cards['session-token-cost'].note, 'Latest edit before leaving.');
+    assert.equal(saved.cards['session-token-cost'].verdict, 'keep');
+    assert.equal(saved.theses.relationships, 'Useful group.');
+    assert.equal(saved.overall, 'Keep these comparisons.');
+    await page.reload();
+    assert.equal(await page.getByRole('textbox', { name: 'Feedback on Session tokens and cost', exact: true }).inputValue(), 'Latest edit before leaving.');
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
+test('model review uses one box axis, removes the pairing headline and compacts the cost legend', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=model-review', viewport: { width: 1440, height: 1080 } });
+  try {
+    const seed = data.rows.usage[0], values = [[1, 3, 5, 7, 9], [2, 4, 5, 6, 98]];
+    data.rows.usage = values.flatMap((costs, model) => costs.map((cost, i) => ({ ...seed, id: `usage-${model}-${i}`, agent_session_id: `session-${model}-${i}`, conversation_id: `conversation-${model}-${i}`, root_conversation_id: `conversation-${model}-${i}`, root_provider: 'codex', root_model_family: model ? 'gpt-6-astra' : 'gpt-6.1-sol', root_effort: ['low', 'high', 'xhigh', 'ultra'][i], provider: 'codex', model_family: model ? 'gpt-6-astra' : 'gpt-6.1-sol', price_status: 'priced', session_kind: i % 2 ? 'root' : 'subagent', total_tokens: 10000, input_tokens: 9000, output_tokens: 1000, cost_usd: cost, effort: ['low', 'high', 'xhigh', 'ultra'][i] })));
+    await page.reload();
+    await page.waitForFunction(() => document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
+    assert.equal(await page.locator('[data-card-id="model-conversation-reach"] .query-headline-metric').count(), 0);
+    assert.equal(await page.locator('[data-card-id="model-token-cost"]').count(), 0);
+    const card = page.locator('[data-card-id="model-session-costs"]');
+    assert.ok((await card.locator('.query-cover').boundingBox()).height<=220);
+    assert.equal(await card.locator('.query-box-row').count(), 2);
+    const medians = await card.locator('.query-box-median').evaluateAll(marks => marks.map(mark => mark.getBoundingClientRect().x));
+    assert.ok(Math.abs(medians[0] - medians[1]) < .5, 'equal dollar medians must occupy the same X position across models');
+    const bounds = await card.locator('.query-box-marks').evaluateAll(rows => rows.map(row => [row.dataset.axisMin, row.dataset.axisMax]));
+    assert.deepEqual(bounds, [['1', '100'], ['1', '100']]);
+    assert.equal(await card.locator('.query-box-axis').count(), 1);
+    await card.locator('.query-box-row').filter({ hasText: 'gpt-6-astra' }).hover();
+    assert.match(await page.getByRole('tooltip').innerText(), /Median: \$5\.00 · Mean: \$23\.00/);
+    assert.match(await page.getByRole('tooltip').innerText(), /Max: \$98\.00/);
+    const legend = page.locator('[data-card-id="model-cost-share"] .query-chart-legend');
+    assert.equal(await legend.evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').length), 2);
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 844 });
+      assert.ok(await page.locator('.human-review').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+      assert.equal(await legend.evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').length), width === 390 ? 2 : 1);
+    }
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
+test('delegation boxes exclude zero conversations and compact supported cohorts on a shared axis', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=model-review', viewport: { width: 1440, height: 1080 } });
+  try {
+    const seed = data.rows.usage[0];
+    data.rows.usage = ['high', 'low'].flatMap(effort => [0, 0, 1, 1, 2, 2, 9, 9, 1, 1].flatMap((count, i) => {
+      const root = `${effort}-${i}`, delegated = effort === 'high' ? count : 0;
+      const common = { ...seed, provider: 'codex', model_family: 'gpt-6.1-sol', root_provider: 'codex', root_model_family: 'gpt-6.1-sol', root_effort: effort, root_conversation_id: root, price_status: 'priced', total_tokens: 10000, input_tokens: 9000, output_tokens: 1000, cost_usd: 1, effort };
+      return [
+        { ...common, id: root, agent_session_id: root, conversation_id: root, delegated_session_id: null },
+        ...Array.from({ length: delegated }, (_, j) => ({ ...common, id: `${root}-child-${j}`, conversation_id: `${root}-child-${j}`, agent_session_id: `${root}-child-${j}`, delegated_session_id: `${root}-child-${j}`, model_family: 'gpt-6-astra', effort: 'low' })),
+      ];
+    }));
+    await page.reload();
+    await page.waitForFunction(() => document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
+    const card = page.locator('[data-card-id="session-delegation-count"]');
+    assert.equal(await card.locator('.query-box-row').count(), 1);
+    assert.deepEqual(await card.locator('.query-box-marks').evaluateAll(rows => rows.map(row => [row.dataset.axisMin, row.dataset.axisMax])), [['0', '10']]);
+    assert.equal(await card.locator(".query-shared-box.is-dense").count(),1);
+    assert.ok(!(await card.locator('.query-box-axis').innerText()).includes('$'));
+    await card.locator('.query-box-row').filter({ hasText: 'high' }).hover();
+    const tooltip = await page.getByRole('tooltip').innerText();
+    assert.match(tooltip, /Median: 1\.5 · Mean: 3\.25/);
+    assert.match(tooltip, /Min: 1 · Max: 9/);
+    assert.match(tooltip, /8 observations/);
+    assert.ok(!tooltip.includes('$'));
+    assert.equal(await card.locator('.query-box-row').filter({ hasText: 'low' }).count(), 0);
+    assert.ok((await card.locator('.query-cover').boundingBox()).height < 250);
+    for (let i = 0; i < 11; i++) for (let j = 0; j < 8; j++) data.rows.usage.push({ ...data.rows.usage[0], id: `extra-${i}-${j}`, root_conversation_id: `extra-${i}-${j}`, agent_session_id: `extra-${i}-${j}`, root_effort: `effort-${i}`, delegated_session_id: `child-extra-${i}-${j}` });
+    await page.reload();
+    await page.waitForFunction(() => document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
+    assert.equal(await card.locator('.query-box-row').count(), 12);
+    const clearAxis = async () => card.evaluate(el => el.querySelector('.query-box-row:last-child .query-box-marks').getBoundingClientRect().bottom < el.querySelector('.query-box-axis').getBoundingClientRect().top - 2);
+    assert.ok(await clearAxis(), 'twelve box rows must finish above their shared axis');
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.ok(await clearAxis(), 'dense box rows must also clear the axis on mobile');
+    assert.ok(await page.locator('.human-review').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
+test('review 5 shares pie and bar keys, preserves a circle, and surfaces rare tree outliers', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=model-review', viewport: { width: 1440, height: 1080 } });
+  try {
+    const seed=data.rows.usage[0];
+    data.rows.usage=Array.from({length:8},(_,i)=>({...seed,id:`root-${i}`,provider:'codex',model_family:i%2?'gpt-6-astra':'gpt-6.1-sol',root_provider:'codex',root_model_family:'gpt-6.1-sol',root_effort:'high',root_conversation_id:`root-${i}`,agent_session_id:`root-${i}`,conversation_id:`root-${i}`,delegated_run_depth:0,price_status:'priced'}));
+    data.rows.usage.push(...Array.from({length:9},(_,i)=>({...seed,id:`rare-${i}`,provider:'claude',model_family:'opus-5-5',root_provider:'claude',root_model_family:'opus-5-5',root_effort:'xhigh',root_conversation_id:'rare',agent_session_id:`rare-${i}`,conversation_id:'rare',delegated_session_id:`rare-${i}`,delegated_run_depth:i+1,price_status:'priced'})));
+    await page.reload();
+    await page.waitForFunction(()=>document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
+    const pie=page.locator('[data-card-id="model-token-share"]');
+    const geometry=await pie.locator('.query-pie-plot svg').evaluate(el=>{const m=el.getScreenCTM();return {preserve:el.getAttribute('preserveAspectRatio'),x:m.a,y:m.d}});
+    assert.equal(geometry.preserve,'xMidYMid meet');
+    assert.ok(Math.abs(geometry.x-geometry.y)<1e-6,'the pie must use uniform scale in both directions');
+    const bar=page.locator('[data-card-id="usage-models"] .query-chart-legend');
+    const key=pie.locator('.query-chart-legend');
+    const style=async locator=>locator.evaluate(el=>({font:getComputedStyle(el).fontSize,line:getComputedStyle(el).lineHeight,columns:getComputedStyle(el).gridTemplateColumns.split(' ').length,swatch:getComputedStyle(el.querySelector('i')).width}));
+    assert.deepEqual(await style(key),await style(bar));
+    assert.equal(await page.locator('[data-card-id="session-delegation-count"] .query-box-row').count(),0,'a one-conversation class must be hidden by the three-observation cutoff');
+    assert.equal(await page.locator('[data-card-id="model-session-costs"] .query-box-row').count(),1,'a one-conversation model must be hidden by the five-conversation cutoff');
+    assert.equal(await page.locator('[data-card-id="largest-subagent-depth"]').count(),0);
+    assert.equal(await page.locator('[data-card-id="largest-subagent-weight"] .query-scalar-value').innerText(),'9');
+    await page.locator('[data-card-id="largest-subagent-weight"] .query-card-open').click();
+    await waitForQuery(page,'usage',q=>q.grouping?.keys.includes('root_conversation_id'));
+    const query=await readQuery(page,'usage');
+    assert.equal(query.orderBy[0].field,'mc_delegates');
+    assert.equal(query.orderBy[0].dir,'desc');
+    assert.deepEqual(data.errors,[]);
+  } finally { await browser.close(); }
+});
+
+test('human-input scatter opens its event-based comparison with exact coordinates and estimated labels', async () => {
+  const {browser,page,data}=await setup({url:'/home?cards=model-review'});
+  try {
+    const common={root_provider:'codex',root_model_family:'gpt-6.1-sol',root_conversation_id:'conversation',event_at:new Date().toISOString()};
+    data.rows.conversation_activity=[{...common,id:'human',human_input_tokens_estimate:8,human_messages:1,output_tokens:0},{...common,id:'root-output',human_input_tokens_estimate:0,output_tokens:30},{...common,id:'child-output',human_input_tokens_estimate:0,output_tokens:20}];
+    await page.reload();
+    await page.waitForFunction(()=>document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
+    const card=page.locator('[data-card-id="session-human-output"]');
+    assert.equal(await card.locator('.qt-metric-mark').count(),1);
+    await card.locator('.qt-metric-mark').hover();
+    const tooltip=await page.getByRole('tooltip').innerText();
+    assert.match(tooltip,/Est\. human text tokens.*8/);
+    assert.match(tooltip,/Recorded output tokens.*50/);
+    await card.locator('.query-card-open').click();
+    await waitForQuery(page,'conversation_activity',q=>q.grouping?.keys.includes('root_conversation_id'));
+    assert.equal(new URL(page.url()).searchParams.get('usage'),'conversations');
+    await page.locator('.usage-page .qt-table-wrap').first().waitFor();
+    assert.equal(await page.locator('.usage-page .query-table-error').count(),0);
+    await assertEventually(()=>data.requests.some(item=>item.dataset==='conversation_activity' && item.request.rows===true));
+    assert.deepEqual(data.errors,[]);
+  } finally { await browser.close(); }
+});
+
+
+test('model role bars conserve distinct session shares, both pies show five plus Other, and cards stay still on hover', async () => {
+  const {browser,page,data}=await setup({url:'/home?cards=model-review',viewport:{width:1440,height:1080},reducedMotion:true});
+  try {
+    const seed=data.rows.usage[0];
+    data.rows.usage=Array.from({length:7},(_,model)=>Array.from({length:7-model},(_,session)=>({...seed,id:`role-${model}-${session}`,provider:'codex',model_family:`model-${model}`,agent_session_id:`session-${model}-${session}`,conversation_id:`conversation-${model}-${session}`,session_kind:session<2?'root':'subagent',session_role:session===0?'singleton':session===1?'parent':'subagent'}))).flat();
+    data.rows.usage.push({...data.rows.usage[1],id:'repeated-usage'});
+    await page.reload();
+    await page.waitForFunction(()=>document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
+    for(const id of ['model-token-share','model-conversation-reach']) {
+      const pie=page.locator(`[data-card-id="${id}"]`);
+      assert.equal(await pie.locator('.query-chart-legend>span').count(),6);
+      assert.equal(await pie.locator('.query-chart-legend>span').last().innerText(),'Other');
+    }
+    const roles=page.locator('[data-card-id="model-agent-roles"]');
+    assert.equal(await roles.locator('.query-role-row').count(),6);
+    const first=roles.locator('.query-role-row').first();
+    assert.equal(await first.getAttribute('data-total'),'7');
+    const shares=await first.locator('.query-role-track>i').evaluateAll(es=>es.map(e=>Number(e.dataset.share)));
+    assert.ok(Math.abs(shares[0]-1/7)<1e-12);
+    assert.ok(Math.abs(shares[1]-1/7)<1e-12);
+    assert.equal(shares.length,3);
+    assert.equal(await roles.locator(".query-role-axis").count(),0);
+    assert.ok(Math.abs(shares.reduce((n,v)=>n+v,0)-1)<1e-12);
+    await first.locator('[data-role="subagent"]').hover();
+    assert.match(await page.getByRole('tooltip').innerText(),/5 of 7 active sessions/);
+    for(const url of ['/home?cards=model-review','/home?cards=library','/home']) {
+      await page.goto(`http://home.test${url}`);
+      if(url==='/home') await page.waitForFunction(()=>document.querySelector('.home-conveyor')?.getAttribute('aria-busy')==='false');
+      const card=page.locator(url==='/home'?'.home-belt-row .query-card:not([data-xray])':'.query-card').first();
+      await card.scrollIntoViewIfNeeded(); await page.mouse.move(0,0);
+      const before=await card.boundingBox();
+      await card.hover(); await page.waitForTimeout(200);
+      const after=await card.boundingBox();
+      assert.ok(Math.abs(before.y-after.y)<.1 && Math.abs(before.x-after.x)<.1,`${url} card moved on hover`);
+    }
+    await page.goto('http://home.test/home?cards=model-review');
+    await page.waitForFunction(()=>document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
+    for(const width of [390,320]) {
+      await page.setViewportSize({width,height:844});
+      assert.ok(await page.locator('.human-review').evaluate(el=>el.scrollWidth<=el.clientWidth+1));
+    }
+    assert.deepEqual(data.errors,[]);
+  } finally {await browser.close();}
 });

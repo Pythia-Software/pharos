@@ -1,14 +1,19 @@
 import { decodeQueryStrict, localQuerySnapshotCache, encodeQuery, type QueryState } from "@pythia-software/query-table-core";
 
-export const queryDatasets = ["library", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts"] as const;
+export const queryDatasets = ["library", "usage", "conversation_activity", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts"] as const;
 export type QueryDataset = typeof queryDatasets[number];
 export type RollingWindow = { days: number; field: string; mode?: "relative" | "calendar" };
 const timeFields: Partial<Record<QueryDataset, string[]>> = {
-  mcp_calls: ["called_at"], library: ["activity_at"], usage: ["first_usage_at"], tool_calls: ["started_at"],
+  conversation_activity: ["event_at"], mcp_calls: ["called_at"], library: ["activity_at"], usage: ["first_usage_at"], tool_calls: ["started_at"],
   skill_usages: ["created_at"], writing_messages: ["sent_at"], tl1_attempts: ["started_at"],
 };
-export const rollingWindowDays = [1, 7, 30, 90] as const;
+export const rollingWindowDays = [1, 7, 30, 90, 180, 365] as const;
 export function rollingWindowField(dataset: QueryDataset): string | undefined { return timeFields[dataset]?.[0]; }
+
+export function queryHasTimeFilter(query: QueryState, field: string): boolean {
+  const source = query.grouping?.source ?? query;
+  return source.where.some(term => "any" in term ? term.any.some(clause => clause.field === field) : term.field === field);
+}
 
 // New cards use native elapsed offsets in their saved query and URL. Legacy
 // calendar-window links keep their original interpretation until edited.
@@ -25,19 +30,25 @@ export function readRollingWindow(params: URLSearchParams, dataset: QueryDataset
   return { days, field, mode: params.get("window_mode") === "relative" ? "relative" : "calendar" };
 }
 
-export function updateQueryWindowURL(url: string, days: number, fallback?: QueryState): string {
+// null selects all time; undefined at the bookmark layer preserves a saved range.
+export function updateQueryWindowURL(url: string, days: number | null, fallback?: QueryState): string {
   const spec = queryFromURL(url, fallback), field = spec && (spec.window?.field ?? rollingWindowField(spec.dataset));
-  if (!spec || !field || !rollingWindowDays.some(value => value === days)) throw new Error("This view does not support that time window.");
-  const window: RollingWindow = { days, field, mode: "relative" };
+  if (!spec || !field || (days !== null && !rollingWindowDays.some(value => value === days))) throw new Error("This view does not support that time window.");
+  const window: RollingWindow | undefined = days === null ? undefined : { days, field, mode: "relative" };
   // Replace direct date selections, including older fixed ranges. Leave other
   // predicates (and compound date expressions) intact rather than rewriting
   // the user's logical query. Relative bounds are renewed on every evaluation.
   const source = spec.query.grouping?.source ?? spec.query;
   const adjusted = { ...source, where: source.where.filter(term => !("field" in term && term.field === field && !term.negated && ["=", ">", ">=", "<", "<="].includes(term.op))) };
-  const query = resolveRollingQuery(spec.query.grouping ? { ...spec.query, grouping: { ...spec.query.grouping, source: adjusted } } : adjusted, window);
+  if (days === null && adjusted.where.length === source.where.length && !spec.window) return url;
+  const query = resolveRollingQuery(spec.query.grouping ? { ...spec.query, offset: 0, grouping: { ...spec.query.grouping, source: { ...adjusted, offset: 0 } } } : { ...adjusted, offset: 0 }, window);
   const parsed = new URL(url, location.origin);
   parsed.searchParams.set(`q_${spec.dataset}`, encodeQuery(query));
-  parsed.searchParams.set("window_mode", "relative"); parsed.searchParams.set("window_days", String(days)); parsed.searchParams.set("window_field", field); parsed.searchParams.set("window_dataset", spec.dataset);
+  if (window) {
+    parsed.searchParams.set("window_mode", "relative"); parsed.searchParams.set("window_days", String(days)); parsed.searchParams.set("window_field", field); parsed.searchParams.set("window_dataset", spec.dataset);
+  } else {
+    for (const key of ["window_mode", "window_days", "window_field", "window_dataset"]) parsed.searchParams.delete(key);
+  }
   // Search text, chart options and all other URL context stay with the view.
   return `${parsed.pathname}${parsed.search}${parsed.hash}`;
 }
@@ -75,9 +86,9 @@ export function queryURL(dataset: QueryDataset, query: QueryState, window?: Roll
   if (["tools", "tool_calls", "skill_usages"].includes(dataset)) {
     path = "/tools";
     if (dataset !== "tool_calls") params.set("tools_view", dataset === "tools" ? "summary" : "skills");
-  } else if (["usage", "writing", "writing_messages"].includes(dataset)) {
+  } else if (["usage", "conversation_activity", "writing", "writing_messages"].includes(dataset)) {
     path = "/usage";
-    params.set("usage", dataset === "usage" ? "tokens" : "writing");
+    params.set("usage", dataset === "usage" ? "tokens" : dataset === "conversation_activity" ? "conversations" : "writing");
     if (dataset === "writing_messages") params.set("writing", "messages");
   } else if (dataset === "mcp_calls") path = "/mcp";
   else if (dataset === "tl1_attempts") path = "/tl1/runs";
@@ -96,7 +107,7 @@ export function queryFromURL(url: string, fallback?: QueryState): { dataset: Que
     // Older URLs can carry offscreen tables' state as well. The route and
     // selected tab decide the dataset, rather than the first q_* parameter.
     const dataset: QueryDataset | undefined = path === "/library" || path === "/" ? "library"
-      : path === "/usage" ? params.get("usage") === "writing" ? params.get("writing") === "messages" ? "writing_messages" : "writing" : "usage"
+      : path === "/usage" ? params.get("usage") === "conversations" ? "conversation_activity" : params.get("usage") === "writing" ? params.get("writing") === "messages" ? "writing_messages" : "writing" : "usage"
       : path === "/tools" ? params.get("tools_view") === "summary" ? "tools" : params.get("tools_view") === "skills" ? "skill_usages" : "tool_calls"
       : path === "/mcp" ? "mcp_calls" : path.startsWith("/tl1") ? "tl1_attempts" : undefined;
     if (dataset) {

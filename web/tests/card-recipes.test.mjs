@@ -10,7 +10,7 @@ async function moduleOf(entry) {
 }
 const { queryRecipes, instantiateRecipe, loadQueryPreview, clearPreviewCache } = await moduleOf("src/curiosity-data.ts");
 const { groupSourceQuery } = await moduleOf("src/group-drilldown.ts");
-const { queryFromURL, resolveRollingQuery } = await moduleOf("src/query-links.ts");
+const { queryFromURL, queryHasTimeFilter, resolveRollingQuery } = await moduleOf("src/query-links.ts");
 const { queryURL } = await moduleOf("src/query-links.ts");
 const { migrateSavedQueries, updateBookmark, replaceSavedQuery } = await moduleOf("src/bookmarks.ts");
 const { cardCoverQuery, defaultCardCover } = await moduleOf("src/card-cover.ts");
@@ -175,6 +175,48 @@ function bookmarkFixture(t, bookmarks) {
   t.after(() => { global.window = originalWindow; global.location = originalLocation; });
   return values;
 }
+
+test("extended bookmark windows round trip and all time clears rolling and fixed date bounds", t => {
+  const recipe = queryRecipes.find(recipe => recipe.id === "tool-failures"), item = instantiateRecipe(recipe, 7);
+  const values = bookmarkFixture(t, [{ id: "saved", savedQueryId: "original", title: item.title, url: `${item.url}&search=broken#tools`, query: item.query, templateId: item.instanceId }]);
+  for (const days of [180, 365]) {
+    const updated = updateBookmark("saved", item.title, "", days), spec = queryFromURL(updated.url, updated.query);
+    assert.equal(spec.window.days, days);
+    assert.equal(spec.window.mode, "relative");
+    assert.deepEqual(spec.query.grouping.source.where.filter(term => term.field === recipe.field).map(term => term.value), [`-${days}d`, "+0s"]);
+    assert.equal(updated.templateId, `${recipe.id}:${days}`);
+  }
+  const updated = updateBookmark("saved", item.title, "", null), spec = queryFromURL(updated.url, updated.query);
+  assert.equal(spec.window, undefined);
+  assert.equal(queryHasTimeFilter(spec.query, recipe.field), false);
+  assert.deepEqual(spec.query.grouping.source.where, recipe.where);
+  assert.deepEqual(spec.query.grouping.summaries, item.query.grouping.summaries);
+  const url = new URL(updated.url, "http://home.test");
+  for (const key of ["window_mode", "window_days", "window_field", "window_dataset"]) assert.equal(url.searchParams.has(key), false);
+  assert.equal(url.searchParams.get("search"), "broken");
+  assert.equal(url.hash, "#tools");
+  assert.equal(updated.savedQueryId, "original");
+  assert.equal(updated.templateId, `${recipe.id}:all`);
+  assert.deepEqual(values.get("pharos-bookmarks-v1"), [updated]);
+
+  const fixed = { ...core.EMPTY_QUERY, offset: 50, where: [
+    { field: "started_at", op: ">=", value: "2026-01-01" },
+    { field: "started_at", op: "<", value: "2026-02-01" },
+    { field: "error_count", op: ">", value: "0" },
+    { any: [{ field: "started_at", op: "<", value: "2026-01-15" }, { field: "tool_name", op: "=", value: "Bash" }] },
+  ] };
+  values.set("pharos-bookmarks-v1", [{ id: "fixed", title: "Fixed range", url: queryURL("tool_calls", fixed) }]);
+  const cleared = queryFromURL(updateBookmark("fixed", "Fixed range", "", null).url);
+  assert.deepEqual(cleared.query.where, fixed.where.slice(2), "compound logic and non-date predicates survive");
+  assert.equal(cleared.query.offset, 0);
+  assert.equal(queryHasTimeFilter(cleared.query, "started_at"), true, "compound date logic still counts as a saved range");
+
+  const opaqueURL = "/tools?q_tool_calls=@existing-snapshot", unbounded = { ...core.EMPTY_QUERY, where: recipe.where };
+  values.set("pharos-bookmarks-v1", [{ id: "opaque", title: "All history", url: opaqueURL, query: unbounded }]);
+  const renamed = updateBookmark("opaque", "Renamed history", "", null);
+  assert.equal(renamed.url, opaqueURL, "metadata edits keep an existing all-time snapshot link");
+  assert.deepEqual(renamed.query, unbounded, "the snapshot's fallback query remains available");
+});
 
 test("rolling bookmark migration preserves IDs and fixed ranges while replacing hard endpoints", t => {
   const values = bookmarkFixture(t, []);

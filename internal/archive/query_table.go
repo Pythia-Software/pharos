@@ -16,7 +16,7 @@ import (
 )
 
 func (s *Server) queryTableSchema(dataset string) (querytable.Schema, error) {
-	if _, ok := sqlDatasetFor(dataset); !ok && dataset != "library" && dataset != "activity" && dataset != "usage" && dataset != "writing" && dataset != "mcp_calls" && dataset != "tl1_attempts" {
+	if _, ok := sqlDatasetFor(dataset); !ok && dataset != "library" && dataset != "activity" && dataset != "usage" && dataset != "conversation_activity" && dataset != "writing" && dataset != "mcp_calls" && dataset != "tl1_attempts" {
 		return querytable.Schema{}, fmt.Errorf("unknown query-table dataset %q", dataset)
 	}
 	document, err := querySchemaDocument(dataset)
@@ -57,6 +57,8 @@ func (s *Server) queryTableRows(ctx context.Context, dataset string, values url.
 		return runs, nil
 	case "usage":
 		return s.Catalog.localUsageRows(ctx)
+	case "conversation_activity":
+		return s.Catalog.conversationActivityRows(ctx)
 	case "writing":
 		rows, _, err := s.Catalog.writingData(ctx)
 		return rows, err

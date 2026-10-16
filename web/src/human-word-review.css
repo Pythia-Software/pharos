@@ -30,7 +30,6 @@
 .human-review-card-label>span:first-child { color:var(--gold); font-variant-numeric:tabular-nums; }
 .human-review-card-label>span:last-child:not(:nth-child(2)) { margin-left:auto; color:var(--gold); }
 .human-review-entry .query-card { width:100%; transform:none; box-shadow:0 3px 9px #0002; cursor:default; }
-.human-review-entry .query-card:hover { transform:translateY(-2px); }
 .human-review-entry .query-cover { height:180px; }
 .human-review-entry .query-description { display:block; -webkit-line-clamp:unset; }
 .human-review-entry .query-drag-tip { display:none; }
@@ -81,3 +80,9 @@
 .human-review-workspaces>a>strong { flex:none; color:var(--ink); font-weight:500; font-variant-numeric:tabular-nums; }
 
 .human-review-evidence-kind { display:block; margin-bottom:4px; color:var(--gold); font-size:9px; }
+
+/* Long model names and large token totals need the full legend width. */
+.human-review [data-category="models"] .is-composition .qt-metric-legend { grid-template-columns:minmax(0,1fr); }
+
+/* The model/effort comparison now has four cards, including a wide box plot. */
+@media(min-width:581px) { .human-review[data-review-category="models"] #review-placement .human-review-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }

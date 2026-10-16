@@ -6,14 +6,16 @@ import { resolveRollingQuery, rollingQueryMatches, type QueryDataset, type Rolli
 import type { QueryRecipe } from "./curiosity-data";
 import { readTextSearch, textFindParameters } from "./text-search-model";
 import { cardCoverQuery, type CardCover } from "./card-cover";
+import { filterBoxSamples } from "./compact-box-model";
 import { createHumanStudyLoader, clearHumanStudyCache, type HumanStudyPreview } from "./human-study";
 
 export type PreviewMetric = { clause: AggregationClause; result: AggregationResultEntry };
 export type QueryPreview = {
-  state: "ready" | "empty"; total: number; summary: string; note?: string;
+  state: "ready" | "empty"; emptyLabel?: string; density?: "compact"; stackBy?: string; coverHeight?: number; legendColumns?: 1 | 2; total: number; summary: string; note?: string;
   headline?: string; action?: string; evidence?: string;
   headlineMetric?: { value: string; unit: string; label?: string };
   groupLabels?: Record<string, string>;
+  groupEvidence?: Record<string, string>;
   groupSummary?: { count: number; subject: string };
   insights?: { label: string; value: string; context: string }[];
   metrics?: PreviewMetric[]; fields?: FieldSchema["fields"]; coverMetricId?: string;
@@ -109,7 +111,8 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   const metrics = query.aggregations.map(clause => {
     const result = payload.metrics?.find(item => item.id === clause.id);
     if (!result) throw new Error(`No result returned for ${clause.label ?? clause.id}.`);
-    return { clause, result };
+    const minimum = (options.cover ?? recipe?.cover)?.minSamples;
+    return { clause, result: clause.distribution?.kind === "box" ? filterBoxSamples(result, minimum) : result };
   });
   const selected = metrics.find(item => item.clause.id === options.coverMetricId) ?? metrics[0];
   const { clause, result } = selected;
@@ -125,7 +128,8 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   const unit = clause.display?.format ? "" : clause.op === "count" ? countUnit : clause.field?.includes("cost") ? "USD" : clause.field?.includes("tokens") ? "tokens" : clause.field?.includes("words") ? "words" : clause.field === "duration_ms" ? "ms" : clause.field?.endsWith("_count") ? countUnit : recipe?.unit ?? "";
   const scalar = !clause.groupBy.length && values.length === 1 && !clause.distribution;
   const limited = result.coverage === "partial" || result.groupCount !== undefined && result.groupCount > result.buckets.length;
-  const summary = additive ? `${limited ? "Shown: " : ""}${formatPreviewValue(total, unit)}${unit && !["USD", "ms"].includes(unit) ? ` ${unit}` : ""}`
+  const pairCount = values.filter(bucket => typeof bucket.value === "number" && Number.isFinite(bucket.value) && typeof bucket.y === "number" && Number.isFinite(bucket.y) && !bucket.error && !bucket.yError).length;
+  const summary = clause.expressionY ? `${pairCount.toLocaleString()} ${clause.label ?? "paired points"}${limited ? ` shown of ${result.groupCount?.toLocaleString() ?? "more"}` : ""}` : additive ? `${limited ? "Shown: " : ""}${formatPreviewValue(total, unit)}${unit && !["USD", "ms"].includes(unit) ? ` ${unit}` : ""}`
     : scalar ? formatMetricOutput(values[0].value, clause.display?.format).text
     : `${formatPreviewValue(result.processedRows ?? total, "")} observations · ${clause.label ?? clause.op}`;
   const notes = [recipe?.note, searchNote, options.sourceCover ? "Chart covers source observations before grouped filters" : undefined, result.scope === "shownRows" ? "Covers the saved table page" : undefined, result.coverage === "partial" ? "Partial results" : undefined,
@@ -136,12 +140,17 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     const evidence = metrics.find(item => item.clause.id === recipe.eligibility!.metricId)?.result;
     ready &&= Boolean(evidence && !evidence.error && evidence.buckets.some(bucket => !bucket.error && typeof bucket.value === "number" && bucket.value >= recipe.eligibility!.minValue));
   }
-  const preview: QueryPreview = { state: ready ? "ready" : "empty", total, summary, note: notes.filter(Boolean).join(" · ") || undefined, metrics, fields: schema.fields, coverMetricId: clause.id };
+  const preview: QueryPreview = { density: (options.cover ?? recipe?.cover)?.density, stackBy: (options.cover ?? recipe?.cover)?.stackBy, coverHeight: (options.cover ?? recipe?.cover)?.height, legendColumns: (options.cover ?? recipe?.cover)?.legendColumns, state: ready ? "ready" : "empty", total, summary, note: notes.filter(Boolean).join(" · ") || undefined, metrics, fields: schema.fields, coverMetricId: clause.id };
+  const minimum = (options.cover ?? recipe?.cover)?.minSamples;
+  if (!ready && minimum && clause.distribution?.kind === "box") preview.emptyLabel = `No cohorts with at least ${minimum} conversations`;
+  if (query.grouping && recipe?.exploration?.context && payload.rows?.length) {
+    preview.groupEvidence = Object.fromEntries(payload.rows.map(row => [JSON.stringify(query.grouping!.keys.map(key => row[key] ?? null)), recipe.exploration!.context!.map(item => typeof row[item.field] === "number" ? `${formatPreviewValue(row[item.field] as number, item.unit ?? "")} ${item.label}` : "").filter(Boolean).join(" · ")]));
+  }
   if (query.grouping && recipe?.exploration?.context && values[0]) {
     preview.evidence = recipe.exploration.context.map(item => {
       const value = metrics.find(metric => metric.clause.id === item.field)?.result.buckets.find(bucket => JSON.stringify(bucket.keys) === JSON.stringify(values[0].keys))?.value;
       return typeof value === "number" ? `${formatPreviewValue(value, item.unit ?? "")} ${item.label}` : "";
-    }).filter(Boolean).join(" · ");
+    }).filter(Boolean).join(" · ") || preview.groupEvidence?.[JSON.stringify(values[0].keys)];
   }
   if (query.grouping && recipe?.exploration?.labelFields && payload.rows?.length) {
     preview.groupLabels = Object.fromEntries(payload.rows.map(row => [JSON.stringify(query.grouping!.keys.map(key => row[key] ?? null)), recipe.exploration!.labelFields!.map(field => String(row[field] ?? "Unspecified")).join(" · ")]));
@@ -183,7 +192,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   }
   // A headline is a real complete additive measure, never a sum of rates,
   // distributions, errors, or the returned subset of a ranked population.
-  if (ready && additive && !limited && !preview.groupSummary && numeric.length === values.length && !result.buckets.some(bucket => bucket.error || bucket.yError) && Number.isFinite(total)) {
+  if ((options.cover ?? recipe?.cover)?.showHeadline !== false && ready && additive && !limited && !preview.groupSummary && numeric.length === values.length && !result.buckets.some(bucket => bucket.error || bucket.yError) && Number.isFinite(total)) {
     preview.headlineMetric = { value: clause.display?.format ? formatMetricOutput(total, clause.display.format).text : formatPreviewValue(total, unit), unit: unit && !["USD", "ms"].includes(unit) ? unit : "", ...(unit === "USD" ? { label: "API equivalent" } : {}) };
   }
   preview.action = recipe?.action ?? recipe?.exploration?.action;

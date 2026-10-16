@@ -33,6 +33,10 @@ func (c *Catalog) usageRowsByPeriod(location *time.Location, hourly bool) ([]map
 	if err != nil {
 		return nil, err
 	}
+	lineage, err := c.usageConversationRoots(ledger)
+	if err != nil {
+		return nil, err
+	}
 	book, err := c.loadPriceBook()
 	if err != nil {
 		return nil, err
@@ -69,6 +73,17 @@ func (c *Catalog) usageRowsByPeriod(location *time.Location, hourly bool) ([]map
 			}
 			for _, field := range usageTokenFields {
 				row[field] = int64(0)
+			}
+			row["session_role"] = nilIfEmpty(lineage.sessionRoles[firstString(entry["agent_session_id"])])
+			if root := lineage.roots[firstString(entry["conversation_id"])]; root != nil {
+				row["root_conversation_id"] = root["id"]
+				row["root_provider"] = root["provider"]
+				row["root_model_family"] = modelFamily(firstString(root["model"]))
+				row["root_effort"] = nilIfEmpty(firstString(root["effort"]))
+				row["delegated_session_id"] = nilIfEmpty(lineage.delegatedRuns[firstString(entry["agent_session_id"])])
+				if depth, known := lineage.delegatedDepth[firstString(entry["agent_session_id"])]; known {
+					row["delegated_run_depth"] = depth
+				}
 			}
 			grouped[key] = row
 			order = append(order, key)

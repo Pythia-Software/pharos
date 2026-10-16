@@ -2,7 +2,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import "./chart-tooltip.css";
 
-type Tip = { text: string; x: number; y: number };
+type Tip = { text: string; colors: (string | null)[]; x: number; y: number };
 
 // One hover boundary for both our marks and the native metric renderer. Keep the
 // bubble outside the cover's clipped link, without intercepting navigation.
@@ -41,10 +41,12 @@ export function ChartTooltip({ children }: { children: React.ReactNode }) {
       target.querySelector(".qt-metric-bar-label")?.getAttribute("data-chart-title") ?? target.querySelector(".qt-metric-bar-label")?.textContent,
       target.querySelector(".qt-metric-bar-value")?.textContent,
     ].filter(Boolean).join("\n");
-    setTip(text ? { text, x: event.clientX, y: event.clientY } : null);
+    let colors: (string | null)[] = [];
+    try { const raw = JSON.parse(target.getAttribute("data-chart-colors") ?? "[]"); if (Array.isArray(raw)) colors = raw.map(value => typeof value === "string" && /^(#[a-f0-9]{3,8}|rgba?\([\d.,% ]+\))$/i.test(value) ? value : null); } catch { /* Plain text tooltips remain valid. */ }
+    setTip(text ? { text, colors, x: event.clientX, y: event.clientY } : null);
   };
   return <span className="chart-tooltip-host" ref={host} onPointerMove={move} onPointerLeave={() => setTip(null)} onPointerDown={() => setTip(null)}>
     {children}
-    {tip && createPortal(<div ref={bubble} role="tooltip" className="chart-tooltip" style={position}>{tip.text.split("\n").map((line, index) => index === 0 ? <strong key={index}>{line}</strong> : <span key={index}>{line}</span>)}</div>, host.current?.closest("dialog") ?? document.body)}
+    {tip && createPortal(<div ref={bubble} role="tooltip" className="chart-tooltip" style={position}>{tip.text.split("\n").map((line, index) => <span className="chart-tooltip-row" key={index}>{tip.colors[index] ? <i className="chart-tooltip-swatch" style={{ backgroundColor: tip.colors[index]! }} /> : null}{index === 0 ? <strong>{line}</strong> : line}</span>)}</div>, host.current?.closest("dialog") ?? document.body)}
   </span>;
 }

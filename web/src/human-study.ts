@@ -39,6 +39,21 @@ export function workspaceIdentity(workspace?: StudyWorkspace): string | undefine
 }
 const unique = (values: (string | undefined)[]) => new Set(values.filter((value): value is string => Boolean(value))).size;
 const sum = (rows: StudyMessage[]) => rows.reduce((n, row) => n + row.typed_words, 0);
+function directoryMessageFilters(rows: StudyMessage[]): WhereTerm[] {
+  const workIds = new Set<string>(), workspaceIds = new Set<string>();
+  for (const row of rows) {
+    if (row.work_id != null) workIds.add(row.work_id);
+    else if (row.workspace_id != null) workspaceIds.add(row.workspace_id);
+  }
+  const work = [...workIds].map(id => ({ field: "work_id", op: "=" as const, value: id }));
+  if (!workspaceIds.size) return [{ any: work }];
+  // Match the same work_id ?? workspace_id precedence as directory grouping.
+  // CNF expresses work-match OR (missing work_id AND workspace-match).
+  return [
+    { any: [...work, { field: "work_id", op: "is_null", value: "" }] },
+    { any: [...work, ...[...workspaceIds].map(id => ({ field: "workspace_id", op: "=" as const, value: id }))] },
+  ];
+}
 export function buildHumanStudy(kind: HumanStudy, allRows: StudyMessage[], workspaces: StudyWorkspace[], days: number, now: number, timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone): HumanStudyPreview {
   const byId = new Map(workspaces.map(workspace => [workspace.id, workspace]));
   const identity = (row: StudyMessage) => workspaceIdentity(byId.get(row.work_id ?? row.workspace_id ?? ""));
@@ -116,7 +131,7 @@ export function buildHumanStudy(kind: HumanStudy, allRows: StudyMessage[], works
     }
     const workspaceRows = [...groups.values()].sort((a, b) => b.rows.length - a.rows.length || (a.workspace.location ?? "").localeCompare(b.workspace.location ?? "")).slice(0, 5).map(group => ({
       label: `${group.workspace.repository_name ?? "Unspecified"} / ${group.workspace.location?.replace(/\/+$/, "").split("/").at(-1)}`, location: group.workspace.location ?? "", count: group.count, total: group.rows.length, value: group.count / group.rows.length,
-      url: queryURL("writing_messages", { ...EMPTY_QUERY, where: [{ any: [...new Set(group.rows.map(row => row.work_id ?? row.workspace_id).filter(Boolean))].map(id => ({ field: "work_id", op: "=" as const, value: id! })) }, { any: ["typed_words", "pasted_words", "attachment_words"].map(field => ({ field, op: ">" as const, value: "0" })) }, { field: "sent_at", op: ">=", value: `-${days}d` }, { field: "sent_at", op: "<", value: "+0s" }] }, { days, field: "sent_at", mode: "relative" }),
+      url: queryURL("writing_messages", { ...EMPTY_QUERY, where: [...directoryMessageFilters(group.rows), { any: ["typed_words", "pasted_words", "attachment_words"].map(field => ({ field, op: ">" as const, value: "0" })) }, { field: "sent_at", op: ">=", value: `-${days}d` }, { field: "sent_at", op: "<", value: "+0s" }] }, { days, field: "sent_at", mode: "relative" }),
     }));
     return { kind: "composition", value: assessed.length ? ratio(examples.length) : undefined, valueLabel: "with supplied context", sampleLabel: samples, evidence, workspaceRows,
     rows: [{ label: "Images / screenshots", value: ratio(signals.filter(s => s.image).length), count: signals.filter(s => s.image).length }, { label: "Pasted text / code", value: ratio(signals.filter(s => s.paste).length), count: signals.filter(s => s.paste).length }, { label: "File references / links", value: ratio(signals.filter(s => s.file).length), count: signals.filter(s => s.file).length }],
@@ -145,7 +160,8 @@ async function postRows<T>(dataset: string, request: unknown, signal?: AbortSign
 }
 export function createHumanStudyLoader(now: number, schema: FieldSchema, signal?: AbortSignal) {
   const batches = new Map<number, Promise<EvidenceBatch>>();
-  let directories: Promise<StudyWorkspace[]> | undefined;
+  // Directory IDs must come from the same window's evidence batch.
+  const directories = new Map<number, Promise<StudyWorkspace[]>>();
   function load(days: number) {
     const lookback = days + 30;
     let pending = batches.get(lookback);
@@ -186,27 +202,31 @@ export function createHumanStudyLoader(now: number, schema: FieldSchema, signal?
     const filtered = applyQuery(allRows, { ...EMPTY_QUERY, where, limit: 20000 }, schema, { now: batch.now }).rows as StudyMessage[];
     let workspaces: StudyWorkspace[] = [];
     if (kind === "workspace-average" || kind === "examples") {
-      if (!directories) directories = (async () => {
-        const ids = [...new Set(allRows.map(row => row.work_id ?? row.workspace_id).filter(Boolean))].sort();
-        const key = JSON.stringify([typeof location === "undefined" ? "local" : location.origin, ids]);
-        const cached = directoryCache.get(key);
-        if (cached && Date.now() - cached.at < 60000) return cached.rows;
-        const rows: StudyWorkspace[] = [], offsets = Array.from({ length: Math.ceil(ids.length / 50) }, (_, index) => index * 50);
-        let cursor = 0;
-        await Promise.all(Array.from({ length: 3 }, async () => { while (cursor < offsets.length) {
-          const index = offsets[cursor++];
-          const where: WhereTerm[] = [{ any: ids.slice(index, index + 50).map(id => ({ field: "id", op: "=" as const, value: id! })) }];
-          const page = await postRows<StudyWorkspace>("library", { select: ["id", "location", "repository_name"], where, orderBy: [{ field: "id", dir: "asc" }], limit: 100, offset: 0 }, signal);
-          if (page.total > page.rows.length) throw new Error("Workspace directory lookup was incomplete. No partial average is shown.");
-          rows.push(...page.rows);
-        } }));
-        if (!signal?.aborted) {
-          if (directoryCache.size >= 2) directoryCache.delete(directoryCache.keys().next().value!);
-          directoryCache.set(key, { at: Date.now(), rows });
-        }
-        return rows;
-      })();
-      workspaces = await directories;
+      let pending = directories.get(days);
+      if (!pending) {
+        pending = (async () => {
+          const ids = [...new Set(allRows.map(row => row.work_id ?? row.workspace_id).filter(Boolean))].sort();
+          const key = JSON.stringify([typeof location === "undefined" ? "local" : location.origin, ids]);
+          const cached = directoryCache.get(key);
+          if (cached && Date.now() - cached.at < 60000) return cached.rows;
+          const rows: StudyWorkspace[] = [], offsets = Array.from({ length: Math.ceil(ids.length / 50) }, (_, index) => index * 50);
+          let cursor = 0;
+          await Promise.all(Array.from({ length: 3 }, async () => { while (cursor < offsets.length) {
+            const index = offsets[cursor++];
+            const where: WhereTerm[] = [{ any: ids.slice(index, index + 50).map(id => ({ field: "id", op: "=" as const, value: id! })) }];
+            const page = await postRows<StudyWorkspace>("library", { select: ["id", "location", "repository_name"], where, orderBy: [{ field: "id", dir: "asc" }], limit: 100, offset: 0 }, signal);
+            if (page.total > page.rows.length) throw new Error("Workspace directory lookup was incomplete. No partial average is shown.");
+            rows.push(...page.rows);
+          } }));
+          if (!signal?.aborted) {
+            if (directoryCache.size >= 2) directoryCache.delete(directoryCache.keys().next().value!);
+            directoryCache.set(key, { at: Date.now(), rows });
+          }
+          return rows;
+        })();
+        directories.set(days, pending);
+      }
+      workspaces = await pending;
     }
     return buildHumanStudy(kind, filtered, workspaces, days, batch.now);
   };

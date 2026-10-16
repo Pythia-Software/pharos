@@ -6,6 +6,7 @@ import { enrichCardRecipe, newCardRecipes, type CardExploration } from "./card-r
 import { wishlistCardRecipes } from "./wishlist-card-recipes";
 import type { CardCover } from "./card-cover";
 import { humanWordRecipes, refineHumanRecipe, applyHumanCardCopy } from "./human-word-recipes";
+import { modelChoiceRecipes, refineModelChoiceRecipe } from "./model-choice-recipes";
 import type { HumanStudy } from "./human-study";
 export { clearPreviewCache, loadQueryPreview, loadQueryPreviews, formatPreviewValue } from "./query-previews";
 export type { QueryPreview } from "./query-previews";
@@ -61,8 +62,9 @@ const baseRecipes: QueryRecipe[] = [
   ...newCardRecipes,
   ...wishlistCardRecipes,
   ...humanWordRecipes,
+  ...modelChoiceRecipes,
 ];
-export const queryRecipes = baseRecipes.map(enrichCardRecipe).map(refineHumanRecipe).map(applyHumanCardCopy).map(recipe => recipe.humanStudy ? { ...recipe, days: [7] } : recipe);
+export const queryRecipes = baseRecipes.map(enrichCardRecipe).map(refineHumanRecipe).map(applyHumanCardCopy).map(refineModelChoiceRecipe).map(recipe => recipe.humanStudy ? { ...recipe, days: [7] } : recipe);
 
 export function instantiateRecipe(recipe: QueryRecipe, days: number, clock = new Date()): QuerySuggestion {
   const window: RollingWindow = { days, field: recipe.field, mode: "relative" };

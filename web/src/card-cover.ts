@@ -1,7 +1,7 @@
 import { type AggregationClause, type MetricDisplay, type QueryState } from "@pythia-software/query-table-core";
 import type { QueryRecipe } from "./curiosity-data";
 
-export type CardCover = { mode: "source" | "result"; metricId: string; kind?: MetricDisplay["kind"]; maxGroups?: number; showOther?: boolean; showLegend?: boolean };
+export type CardCover = { mode: "source" | "result"; metricId: string; kind?: MetricDisplay["kind"]; maxGroups?: number; showOther?: boolean; showLegend?: boolean; height?: number; showHeadline?: boolean; legendColumns?: 1 | 2; minSamples?: number; density?: "compact"; stackBy?: string };
 
 function coverDisplay(cover: CardCover): Partial<MetricDisplay> {
   return { ...(cover.maxGroups !== undefined ? { maxGroups: cover.maxGroups } : {}),
@@ -35,6 +35,9 @@ export function cardCoverQuery(query: QueryState, recipe: QueryRecipe, requested
       display: { kind: cover.kind ?? "bar-horizontal", ...(unit === "percent" ? { format: { kind: "percent", decimals: 1 } } : unit === "ms" ? { format: { kind: "duration", sourceUnit: "milliseconds" } } : {}) },
     };
     metric.display = { ...metric.display, ...coverDisplay(cover), kind: metric.display?.kind ?? "auto" };
+    // Fetch complete cohorts before applying the cover's sample threshold;
+    // otherwise small early groups could crowd out eligible later ones.
+    if (metric.distribution?.kind === "box" && cover.minSamples) metric.groupLimit = 10000;
     if (!daily) metric.groupLimit = Math.max(12, cover.maxGroups ?? 12);
     const companions: AggregationClause[] = (view?.context ?? []).filter(item => item.field !== column.id).map(item => ({ id: item.field, op: "max", field: item.field, groupBy: query.grouping!.keys, label: item.label, groupLimit: Math.max(12, cover.maxGroups ?? 12) }));
     return { query: { ...query, aggregations: [metric, ...companions] }, metricId: column.id };

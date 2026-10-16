@@ -1,5 +1,6 @@
 import type { AggregationClause, QueryState } from "@pythia-software/query-table-core";
 import { cardCoverQuery, type CardCover } from "./card-cover";
+import { boxCoverHeight } from "./compact-box-model";
 import type { QueryRecipe } from "./curiosity-data";
 
 export type CardLoadingKind = "value" | "columns" | "list" | "scatter" | "line" | "box" | "pie" | "donut" | "table" | "text";
@@ -33,10 +34,11 @@ export function cardLoadingPresentation(query: QueryState, options: { recipe?: Q
   const belowLabels = kind === "list" && (placement === "below" || !placement && (metric.groupBy.length > 1
     || Boolean(options.recipe?.exploration?.labelFields?.length) || metric.groupBy.some(field => /title|signature|path|url/.test(field))));
   const headline = timeline;
+  const compact = (options.cover ?? options.recipe?.cover)?.density === "compact";
   const height = limit && (kind === "list" || kind === "table" || kind === "box")
-    ? Math.max(170, (kind === "box" ? 105 : 41) + count * (kind === "box" ? 52 : belowLabels ? 8 + 12 * (metric.display?.list?.maxLabelLines ?? 2) : count >= 7 ? 20 : 24))
-    : kind === "box" ? 272 : ["pie", "donut"].includes(kind) ? 300 : headline ? 208 : undefined;
-  return { kind, count: Math.max(1, Math.min(100, count)), headline, belowLabels, height };
+    ? kind === "box" ? boxCoverHeight(count, compact) : Math.max(170, 41 + count * (belowLabels ? 8 + 12 * (metric.display?.list?.maxLabelLines ?? 2) : count >= 7 ? 20 : 24))
+    : kind === "box" ? 272 : ["pie", "donut"].includes(kind) ? 300 : kind === "scatter" ? 240 : headline ? 208 : undefined;
+  return { kind, count: Math.max(1, Math.min(100, count)), headline, belowLabels, height: (options.cover ?? options.recipe?.cover)?.height ?? height };
 }
 
 function loadingKind(metric: AggregationClause, display: string, timeline: boolean): CardLoadingKind {

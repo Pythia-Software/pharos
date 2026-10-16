@@ -38,6 +38,7 @@ export function categoryForQuery(dataset?: QueryDataset, query?: QueryState): Qu
     return predicates.some(term => term.field === "text" && /you misunderstand|you misunderstood|that's not what|that is not what|i meant/i.test(term.value)) ? "steering" : "human";
   }
   if (has("search_query", "host")) return "research";
+  if (dataset === "conversation_activity") return "models";
   if (dataset === "skill_usages" || has("skill_name")) return "skills";
   if (has("token_count", "total_tokens") || dataset === "usage") return "usage";
   if (dataset === "tool_calls" || dataset === "tools" || dataset === "mcp_calls") return "tools";

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { build } from "esbuild";
-import { EMPTY_QUERY, loadSchema } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, applyQuery, decodeQuery, loadSchema } from "@pythia-software/query-table-core";
 
 const bundle = await build({ entryPoints: ["src/human-study.ts"], bundle: true, write: false, platform: "node", format: "esm" });
 const { buildHumanStudy, contributionSignals, createHumanStudyLoader, clearHumanStudyCache } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
@@ -112,6 +112,75 @@ test("example percentages use each shared workspace directory's contribution den
   const study = buildHumanStudy("examples", rows, [{ id: "a", location: "/repo/tree", repository_name: "repo" }, { id: "b", location: "/repo/tree", repository_name: "repo" }, { id: "c", location: "/repo/other", repository_name: "repo" }], 7, now, "UTC");
   assert.deepEqual(study.workspaceRows.map(row => [row.location, row.count, row.total, row.value]), [["/repo/tree", 1, 2, .5], ["/repo/other", 0, 1, 0]]);
   assert.ok(study.workspaceRows[0].url.includes("q_writing_messages="));
+});
+
+for (const ids of ["work", "workspace", "mixed"]) test(`directory drill-down matches its contribution totals with ${ids} IDs`, () => {
+  const rows = [
+    row("work", "Writing", { work_id: "work-tree" }),
+    row("workspace", "Context", { work_id: null, workspace_id: "workspace-tree", pasted_words: 20 }),
+    row("both", "More context", { work_id: "work-tree", workspace_id: "other-tree", pasted_words: 5 }),
+    row("fallback", "More writing", { work_id: undefined, workspace_id: "workspace-tree" }),
+  ].filter(message => ids === "mixed" || (ids === "work" ? message.work_id != null : message.work_id == null));
+  const excluded = [
+    row("conflict", "Other directory", { work_id: "other-tree", workspace_id: "workspace-tree" }),
+    row("old", "Old context", { work_id: null, workspace_id: "workspace-tree", sent_at: new Date(now - 8 * day).toISOString() }),
+    row("automated", "", { typed_words: 0, work_id: "work-tree", workspace_id: "workspace-tree" }),
+  ];
+  const workspaces = [
+    { id: "work-tree", location: "/repo/tree", repository_name: "repo" },
+    { id: "workspace-tree", location: "/repo/tree", repository_name: "repo" },
+    { id: "other-tree", location: "/repo/other", repository_name: "repo" },
+  ];
+  const study = buildHumanStudy("examples", [...rows, ...excluded], workspaces, 7, now, "UTC");
+  const directory = study.workspaceRows.find(group => group.location === "/repo/tree");
+  const query = decodeQuery(new URL(directory.url, "http://study.test").searchParams.get("q_writing_messages"));
+  const actual = applyQuery([...rows, ...excluded], query, schema, { now }).rows;
+  assert.deepEqual(actual.map(message => message.id).sort(), rows.map(message => message.id).sort());
+  assert.equal(actual.length, directory.total);
+  assert.equal(buildHumanStudy("examples", actual, workspaces, 7, now, "UTC").value, directory.value);
+});
+
+for (const firstDays of [7, 30]) test(`mixed-window directory loads stay complete when the ${firstDays}-day evidence finishes first`, async t => {
+  const prior = global.fetch, calls = [];
+  let release;
+  const blocked = new Promise(resolve => { release = resolve; });
+  t.after(() => { release(); global.fetch = prior; });
+  const rows = [
+    row("recent", "Context", { typed_words: 100, pasted_words: 20 }),
+    row("older", "Earlier writing", { typed_words: 900, sent_at: new Date(now - 45 * day).toISOString() }),
+  ];
+  const workspaces = rows.map(message => ({ id: message.work_id, location: `/repo/${message.work_id}`, repository_name: "repo" }));
+  global.fetch = async (url, init) => {
+    const request = JSON.parse(init.body);
+    calls.push({ url, request });
+    if (url.includes("writing_messages")) {
+      const from = Date.parse(request.where[0].value), days = (now - from) / day - 30;
+      if (days !== firstDays) await blocked;
+      const selected = rows.filter(message => Date.parse(message.sent_at) >= from);
+      return Response.json({ total: selected.length, rows: selected });
+    }
+    assert.ok(url.includes("library"));
+    const ids = request.where[0].any.map(term => term.value);
+    const selected = workspaces.filter(workspace => ids.includes(workspace.id));
+    return Response.json({ total: selected.length, rows: selected });
+  };
+  const load = createHumanStudyLoader(now, schema);
+  const first = load(firstDays === 7 ? "examples" : "workspace-average", EMPTY_QUERY, firstDays);
+  const second = load(firstDays === 7 ? "workspace-average" : "examples", EMPTY_QUERY, firstDays === 7 ? 30 : 7);
+  const sameWindow = load("workspace-average", EMPTY_QUERY, firstDays);
+  const initial = await first;
+  await sameWindow;
+  release();
+  const following = await second;
+  const wide = firstDays === 30 ? initial : following;
+  const expected = buildHumanStudy("workspace-average", rows, workspaces, 30, now, "UTC");
+  assert.equal(wide.points[0], 900, "older directories remain mapped in the historical windows");
+  assert.deepEqual(wide.points, expected.points);
+  assert.equal(wide.baseline, expected.baseline);
+  assert.equal(calls.filter(call => call.url.includes("library")).length, 2);
+  const cached = await load("workspace-average", EMPTY_QUERY, 30);
+  assert.deepEqual(cached.points, expected.points);
+  assert.equal(calls.length, 4, "cards using the same window still share evidence and directory lookups");
 });
 
 test("the loader shares bounded paged evidence and honors additional source filters", async t => {

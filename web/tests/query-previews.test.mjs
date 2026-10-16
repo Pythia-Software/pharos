@@ -6,7 +6,7 @@ import * as core from "@pythia-software/query-table-core";
 
 const compiled = await build({ entryPoints: ["src/curiosity-data.ts"], bundle: true, write: false, platform: "node", format: "esm" });
 const { queryRecipes, instantiateRecipe, loadQueryPreviews, loadQueryPreview, clearPreviewCache } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString("base64")}`);
-const schemas = Object.fromEntries(["tool_calls", "skill_usages", "writing_messages", "usage", "library", "tl1_attempts", "mcp_calls"].map(dataset => [dataset, core.loadSchema(JSON.parse(readFileSync(`../schemas/${dataset}.schema.json`, "utf8")))]));
+const schemas = Object.fromEntries(["tool_calls", "skill_usages", "writing_messages", "usage", "conversation_activity", "library", "tl1_attempts", "mcp_calls"].map(dataset => [dataset, core.loadSchema(JSON.parse(readFileSync(`../schemas/${dataset}.schema.json`, "utf8")))]));
 const execution = { profile: "qt-sqlite-v1", planToken: "", fields: {}, resolvedRevisions: {} };
 const rows = Array.from({ length: 10 }, (_, i) => ({ id: String(i), call_count: 1, error_count: i < 2 ? 1 : 0, tool_name: "Bash", command_name: "go test", duration_ms: (i + 1) * 100, result_tokens: i * 10, result_tokens_source: i % 2 ? "estimated" : "measured", repository_name: i % 2 ? "one" : "two", conversation_id: String(i), started_at: Date.now() }));
 function query(aggregations, extra = {}) { return { ...core.EMPTY_QUERY, aggregations, ...extra }; }
@@ -300,6 +300,10 @@ test("headline numbers represent complete additive measures with their units", a
   const metric = { id: "calls", op: "count", groupBy: [], label: "Calls" };
   const complete = await loadQueryPreview("tool_calls", query([metric]), schemas.tool_calls);
   assert.deepEqual(complete.headlineMetric, { value: "10", unit: "calls" });
+  const hidden = await loadQueryPreview("tool_calls", query([metric]), schemas.tool_calls, { cover: { mode: "source", metricId: metric.id, showHeadline: false, legendColumns: 2 } });
+  assert.equal(hidden.headlineMetric, undefined);
+  assert.equal(hidden.legendColumns, 2);
+  assert.equal(hidden.metrics[0].result.buckets[0].value, complete.metrics[0].result.buckets[0].value);
   const formatted = await loadQueryPreview("tool_calls", query([{ ...metric, id: "formatted", display: { kind: "value", format: { kind: "number", decimals: 2 } } }]), schemas.tool_calls);
   assert.deepEqual(formatted.headlineMetric, { value: "10.00", unit: "" });
   const zero = await loadQueryPreview("tool_calls", query([{ id: "zero", op: "sum", field: "error_count", groupBy: [] }], { where: [{ field: "error_count", op: "=", value: "0" }] }), schemas.tool_calls);

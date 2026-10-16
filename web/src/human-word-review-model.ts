@@ -1,4 +1,4 @@
-type ReviewThesis = { id: string; title: string; thesis: string; question: string; cards: { id: string; rationale: string; calculation: string }[] };
+import { createCardReviewModel, type ReviewThesis } from "./card-review-model";
 export const humanWordTheses: ReviewThesis[] = [
   { id: "allocation", title: "Writing volume in context", thesis: "Compare current writing with your own recent norm, then see how it is distributed across days and repositories.", question: "Does the historical norm make the current total easier to interpret?", cards: [
     { id: "human-word-total", rationale: "Compare your current writing volume with your recent habits.", calculation: "Current trailing-window word total. The norm averages the same trailing-window total at each of the prior 30 daily endpoints, including zero-writing windows." },
@@ -22,44 +22,7 @@ export const humanWordTheses: ReviewThesis[] = [
   ] },
 ];
 
-export type CardVerdict = "keep" | "change" | "drop";
-export type ReviewFeedback = { overall: string; theses: Record<string, string>; cards: Record<string, { verdict?: CardVerdict; note: string }> };
-export const emptyReviewFeedback = (): ReviewFeedback => ({ overall: "", theses: {}, cards: {} });
+export type { CardVerdict, ReviewFeedback } from "./card-review-model";
+export { emptyReviewFeedback } from "./card-review-model";
 export const humanWordReviewKey = "pharos-human-word-review-v3";
-export function readReviewFeedback(value: string | null): ReviewFeedback {
-  try {
-    const parsed = JSON.parse(value ?? "null"), next = emptyReviewFeedback();
-    if (!parsed || typeof parsed !== "object") return next;
-    if (typeof parsed.overall === "string") next.overall = parsed.overall;
-    for (const thesis of humanWordTheses) {
-      if (typeof parsed.theses?.[thesis.id] === "string") next.theses[thesis.id] = parsed.theses[thesis.id];
-      for (const card of thesis.cards) {
-        const item = parsed.cards?.[card.id];
-        if (item && typeof item === "object") next.cards[card.id] = { note: typeof item.note === "string" ? item.note : "", ...(["keep", "change", "drop"].includes(item.verdict) ? { verdict: item.verdict } : {}) };
-      }
-    }
-    return next;
-  } catch { return emptyReviewFeedback(); }
-}
-export function reviewedCardCount(feedback: ReviewFeedback): number {
-  return humanWordTheses.flatMap(thesis => thesis.cards).filter(card => feedback.cards[card.id]?.verdict || feedback.cards[card.id]?.note.trim()).length;
-}
-export function exportHumanWordFeedback(feedback: ReviewFeedback, days: number, titles: Record<string, string> = {}): string {
-  const lines = ["# Human word cards — review 3", "", `Preview window at export: past ${days} days (rolling).`, "Scope: classified human writing, supplied context, and inspectable contribution cues; these are not measured time or quality scores.", ""];
-  if (feedback.overall.trim()) lines.push("## Feedback on the set", "", feedback.overall.trim(), "");
-  for (const thesis of humanWordTheses) {
-    const reviewed = thesis.cards.filter(card => feedback.cards[card.id]?.verdict || feedback.cards[card.id]?.note.trim());
-    const note = feedback.theses[thesis.id]?.trim();
-    if (!note && !reviewed.length) continue;
-    lines.push(`## ${thesis.title}`, "", `Thesis: ${thesis.thesis}`, "");
-    if (note) lines.push(note, "");
-    for (const card of reviewed) {
-      const item = feedback.cards[card.id];
-      lines.push(`### ${titles[card.id] ?? card.id} (${card.id})`, "");
-      if (item.verdict) lines.push(`Verdict: ${item.verdict}`, "");
-      if (item.note.trim()) lines.push(item.note.trim(), "");
-    }
-  }
-  if (!feedback.overall.trim() && !Object.values(feedback.theses).some(note => note.trim()) && !reviewedCardCount(feedback)) lines.push("No feedback entered yet.", "");
-  return lines.join("\n");
-}
+export const { readReviewFeedback, reviewedCardCount, exportFeedback: exportHumanWordFeedback } = createCardReviewModel(humanWordTheses, "Human word cards — review 3", "Scope: classified human writing, supplied context, and inspectable contribution cues; these are not measured time or quality scores.");
