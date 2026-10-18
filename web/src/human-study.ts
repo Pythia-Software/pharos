@@ -6,6 +6,8 @@ export type StudyMessage = { id: string; sent_at: string; typed_words: number; p
 export type StudyWorkspace = { id: string; location?: string; repository_name?: string };
 export type HumanStudyPreview = {
   kind: "trend" | "composition" | "hours" | "profile"; value?: number; valueLabel: string; sampleLabel: string; format?: "percent" | "USD"; pointValueLabel?: string; trendLabel?: string; timeZone?: string;
+  // Daily endpoints before the latest (default 30); shorter for bounded snapshots.
+  historyDays?: number;
   baseline?: number; points?: (number | null)[]; pointTimes?: number[]; lookbackDays?: number;
   rows?: { label: string; value: number; count?: number }[];
   evidence?: { id: string; text: string; url: string; label: string }[]; detail?: string;
