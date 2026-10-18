@@ -24,6 +24,14 @@ Sessions opens a modal navigator sheet with a backdrop, focus trap, and Escape
 to dismiss. Selecting a session dismisses the sheet. Reduced-motion settings
 disable layout animations. Standalone Share exports keep their original reader.
 
+A workspace with one conversation that has no parent conversation skips that
+split: `/work/{workspace}` opens its conversation directly, with the workspace
+heading, totals, controls, and Archive details leading the transcript in a single
+scrolling pane. There is no sidebar, sessions table, or overview to return to.
+Sessions load afterwards; if they form a hierarchy after all (more than one
+session, or a parent or child in another workspace), the page reverts to the
+sidebar beside the already-open conversation.
+
 Assignment labels use the launch's `task_name`, then `description`, `prompt`,
 Antigravity's `Prompt`, `task`, or plaintext `message`. Only nonempty text fields
 are eligible; opaque encrypted messages and unrecognized JSON payloads are omitted. Extraction happens

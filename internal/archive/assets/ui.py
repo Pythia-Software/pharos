@@ -1605,12 +1605,16 @@ const matchingLibraryConversation=async query=>{const term=query.trim(),words=te
 const findState={key:'',search:null,hits:[]};
 const updateConversationURL=(index,mode='push',message='',session='')=>{const params=new URLSearchParams(location.search);params.set('conversation',conversations[index].id);if(message)params.set('message',message);else params.delete('message');if(session)params.set('delegation_session',session);else params.delete('delegation_session');const path=SHARE?location.pathname:`/work/${encodeURIComponent(id)}/conversation/${encodeURIComponent(conversations[index].id)}`,url=path+'?'+params;if(mode==='push'&&url!==location.pathname+location.search)history.pushState(null,'',url);else history.replaceState(null,'',url);syncNavigator()};
 let selector;
+// A merged workspace's overview leads the reader; it stays as conversations load.
+// Only this workspace's inbox reads into this host.
+const showReader=content=>host.replaceChildren(...workspaceInbox?.reader===host&&workspaceInbox.merged?[workspaceInbox.lead]:[],content);
 const mount=async index=>{
 const ticket=++mounting;activeIndex=index;conversationMapCleanups.splice(0).forEach(cleanup=>cleanup());
-const c=conversations[index];if(!c.messages)host.replaceChildren(node('section','panel conversation-panel conversation-loading',`Loading conversation${c.message_count?` · ${Number(c.message_count).toLocaleString()} events`:''}…`));
-try{await loadConversation(index)}catch(error){if(ticket===mounting)host.replaceChildren(node('section','panel conversation-panel badtext',`Conversation unavailable: ${error.message||error}`));return}
-if(ticket!==mounting)return;
-c.title||=w.title;host.replaceChildren(renderConversation(c,roots));
+const c=conversations[index];if(!c.messages)showReader(node('section','panel conversation-panel conversation-loading',`Loading conversation${c.message_count?` · ${Number(c.message_count).toLocaleString()} events`:''}…`));
+// A load that outlives its workspace page must not touch the one now shown.
+try{await loadConversation(index)}catch(error){if(ticket===mounting&&host.isConnected)showReader(node('section','panel conversation-panel badtext',`Conversation unavailable: ${error.message||error}`));return}
+if(ticket!==mounting||!host.isConnected)return;
+c.title||=w.title;showReader(renderConversation(c,roots));
 const panel=host.querySelector('.conversation-panel');
 if(delegationExplorer){const context=node('div');panel.querySelector('.conversation-head').prepend(context);delegationExplorer.conversation(c.id,context)}
 if(conversations.length>1&&(SHARE||!window.pharosDelegation)){const choice=node('div','conversation-choice'),label=node('label','',`Showing conversation #${index+1} from this workspace`);selector=node('select','conversation-selector');selector.id='workspaceConversation';selector.setAttribute('aria-label','Choose conversation from this workspace');label.htmlFor=selector.id;conversations.forEach((other,i)=>{const option=node('option','',conversationLabel(i));option.value=String(i);selector.append(option)});selector.value=String(index);selector.onchange=()=>selectConversation(Number(selector.value));choice.append(label,selector);panel.querySelector('.conversation-head').prepend(choice)}
@@ -1654,17 +1658,21 @@ if(SHARE||delegationExplorer||!explorer.isConnected||!window.pharosDelegation||!
 host.querySelector('.conversation-choice')?.remove();
 const openOverview=()=>{rememberReader();const params=new URLSearchParams(location.search);params.delete('conversation');params.delete('message');history.pushState(null,'',`/work/${encodeURIComponent(id)}${params.size?'?'+params:''}`);workspaceInbox.setViewer(false);syncNavigator()};
 workspaceInbox=window.pharosInbox.mount({root,workspace:id,title:w.title,overview:[...root.children].filter(el=>el!==host),reader:host,onOverview:openOverview,onCompact:compact=>delegationExplorer?.layout(compact)});
-delegationExplorer=window.pharosDelegation.mount(explorer,{workspace:id,conversation:conversations[activeIndex]?.id||'',contextHost:null,headingHost:workspaceInbox.heading,statsHost:workspaceStats,openConversation:async(conversation,message,session)=>selectConversation(conversations.findIndex(c=>c.id===conversation),{message,session})});
+// One conversation with no parent reads as one page. Its sessions arrive
+// later; if they nest after all, the reader keeps the conversation open
+// beside the workspace sessions.
+const inbox=workspaceInbox;inbox.setMerged(conversations.length===1&&!conversations[0].parent_id);
+delegationExplorer=window.pharosDelegation.mount(explorer,{workspace:id,conversation:conversations[activeIndex]?.id||'',contextHost:null,headingHost:workspaceInbox.heading,statsHost:workspaceStats,openConversation:async(conversation,message,session)=>selectConversation(conversations.findIndex(c=>c.id===conversation),{message,session}),onHierarchy:hierarchical=>{if(hierarchical&&inbox===workspaceInbox&&inbox.merged){inbox.setMerged(false)}}});
 // The bundle can arrive after an initial deep-linked reader. Rebuild that
 // reader inside the new scroll container so its rails and search use the pane.
 if(activeIndex>=0&&routeConversation()){
 workspaceInbox.setViewer(true);
 const index=activeIndex,params=new URLSearchParams(location.search);
 if(host.querySelector('.conversation-panel:not(.conversation-loading)'))void mount(index).then(()=>{if(index===activeIndex&&routeConversation()===conversations[index].id)void selectConversation(index,{message:params.get('message')||'',session:params.get('delegation_session')||'',historyMode:'replace'})});
-}
+}else if(workspaceInbox.merged&&!routeConversation()&&matchedIndex<0)void selectConversation(0,{historyMode:'replace'});
 };
 mountExplorer();if(!SHARE&&!window.pharosDelegation)addEventListener('pharos:delegation-ready',mountExplorer,{once:true});
-workspaceLocation=async()=>{window.dispatchEvent(new Event('pharos:workspace-history'));const index=conversations.findIndex(c=>c.id===routeConversation());if(index>=0)await selectConversation(index,{message:new URLSearchParams(location.search).get('message')||'',session:new URLSearchParams(location.search).get('delegation_session')||'',historyMode:'replace'});else{rememberReader();workspaceInbox?.setViewer(false)}};
+workspaceLocation=async()=>{window.dispatchEvent(new Event('pharos:workspace-history'));const routed=conversations.findIndex(c=>c.id===routeConversation()),index=routed<0&&workspaceInbox?.merged?0:routed;if(index>=0)await selectConversation(index,{message:new URLSearchParams(location.search).get('message')||'',session:new URLSearchParams(location.search).get('delegation_session')||'',historyMode:'replace'});else{rememberReader();workspaceInbox?.setViewer(false)}};
 if(conversations.length){if(SHARE)await selectConversation(initialIndex,{historyMode:'replace'});else if(focusIndex>=0||matchedIndex>=0)await selectConversation(initialIndex,{message:focus.get('message')||'',session:focus.get('delegation_session')||'',historyMode:'replace'})}else{const notice=empty('No conversation was retained for this workspace.');if(SHARE)host.append(notice);else archive.before(notice)};
 if(!conversations.length&&w.summary){const summary=node('section','panel');summary.append(node('h2','','Retained account · transcript unavailable'));for(const key of ['initiation','outcome','failures'])if(w.summary[key]){summary.append(node('div','meta',key),contentView(w.summary[key]))}archiveBody.prepend(summary)}
 }

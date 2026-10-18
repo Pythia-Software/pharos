@@ -222,11 +222,14 @@ async function fixture(t, options = {}) {
   t.after(() => page.close());
   const errors = [];
   const transcriptRequests = [];
-  const fixtureNodes = options.nodes || nodes;
   page.on("pageerror", (e) => errors.push(e.message));
   await page.route("http://delegation.test/**", (route) => {
     const url = new URL(route.request().url());
-    const pathname = url.pathname;
+    // options.workspaces serves further workspaces at /api/work/{id}.
+    const other = options.workspaces?.[url.pathname.split("/")[3]];
+    const fixtureNodes = other?.nodes || options.nodes || nodes;
+    const fixtureWork = other?.work || options.work || work;
+    const pathname = other ? url.pathname.replace(`/api/work/${other.work.id}`, "/api/work/work") : url.pathname;
     if (pathname.startsWith("/work/") || pathname === "/")
       return route.fulfill({ body: html, contentType: "text/html" });
     if (pathname.startsWith("/assets/")) {
@@ -258,12 +261,12 @@ async function fixture(t, options = {}) {
       wins: [],
       checkpoints: [],
     };
-    if (pathname === "/api/work/work") body = work;
+    if (pathname === "/api/work/work") body = fixtureWork;
     if (pathname.startsWith("/api/work/work/conversations/")) {
       const conv = pathname.split("/").at(-1);
       transcriptRequests.push(conv);
       body = {
-        ...work.conversations.find((c) => c.id === conv),
+        ...fixtureWork.conversations.find((c) => c.id === conv),
         messages: options.messages ? options.messages(conv) : messages(conv),
       };
     }
@@ -380,7 +383,8 @@ async function fixture(t, options = {}) {
     });
   });
   await page.goto("http://delegation.test" + (options.url || "/work/work?explorer=table"));
-  if (options.url?.includes("conversation")) await page.locator(".delegation-session-heading").waitFor();
+  if (options.ready) await page.locator(options.ready).waitFor();
+  else if (options.url?.includes("conversation")) await page.locator(".delegation-session-heading").waitFor();
   else await page.locator(".delegation-table tbody tr").first().waitFor();
   return { page, errors, transcriptRequests };
 }
@@ -1320,5 +1324,66 @@ test("Back restores timeline bounds and branch collapse from the overview route"
   assert.equal(new URL(page.url()).searchParams.get("delegation_end"), bounds.get("delegation_end"));
   assert.equal(await page.locator('.delegation-lane[data-session="s-nested"]').count(), 0);
   assert.equal(await page.getByRole("tab", { name: "Parallel activity", exact: true }).getAttribute("aria-selected"), "true");
+  assert.deepEqual(errors, []);
+});
+
+const soloWork = { ...work, conversations: work.conversations.slice(0, 1) };
+const soloRoot = { ...nodes[0], child_count: 0, all: nodes[0].self };
+test("a lone conversation without delegation merges the overview into the reader", async (t) => {
+  const { page, errors } = await fixture(t, { work: soloWork, nodes: [soloRoot], url: "/work/work", ready: ".workspace-inbox.merged .conversation-panel:not(.conversation-loading)" });
+  assert.equal(new URL(page.url()).pathname, "/work/work/conversation/root");
+  for (const hidden of [".workspace-overview", ".workspace-reader-bar", ".delegation-panel"])
+    assert.equal(await page.locator(hidden).isVisible(), false, hidden);
+  const reader = page.locator(".workspace-reader-content");
+  assert.deepEqual(await reader.evaluate(el => [...el.children].map(child => child.className.split(" ")[0])), ["workspace-overview-content", "panel"]);
+  assert.equal(await reader.locator(".work-heading h1").textContent(), "Delegated feature");
+  assert.ok(await reader.locator("#back").isVisible());
+  assert.ok(await reader.locator(".delegation-totals").isVisible());
+  // The lead scrolls away with the transcript in the one reader pane.
+  await page.locator(".workspace-inbox").evaluate(el => el.style.height = "400px");
+  await reader.evaluate(el => el.scrollTop = 200);
+  assert.ok(await reader.evaluate(el => el.scrollTop) > 0);
+  // History back to the bare workspace route has no overview to return to.
+  await page.evaluate(() => { history.pushState(null, "", "/work/work"); dispatchEvent(new PopStateEvent("popstate")); });
+  await page.waitForURL("**/work/work/conversation/root**");
+  assert.ok(await reader.locator(".conversation-panel").isVisible());
+  assert.equal(await page.locator(".workspace-reader").isVisible(), true);
+  assert.deepEqual(errors, []);
+});
+
+test("a lone conversation whose sessions nest keeps the workspace sessions beside it", async (t) => {
+  const inner = { ...nodes[1], id: "s-inner", conversation_id: "root", parent_id: "s-root", child_count: 0 };
+  const { page, errors } = await fixture(t, { work: soloWork, nodes: [{ ...nodes[0] }, inner], url: "/work/work", ready: ".workspace-inbox:not(.merged) .workspace-reader .conversation-panel:not(.conversation-loading)" });
+  assert.ok(await page.locator(".workspace-overview").isVisible());
+  assert.ok(await page.locator(".workspace-reader-bar").isVisible());
+  assert.ok(await page.locator(".workspace-overview .work-heading h1").isVisible());
+  assert.equal(await page.locator(".workspace-reader-content > .workspace-overview-content").count(), 0);
+  assert.deepEqual(errors, []);
+});
+
+test("a slow transcript from the previous workspace leaves the next merged page intact", async (t) => {
+  const solo = { ...soloWork, id: "solo", title: "Solo work" };
+  const { page, errors } = await fixture(t, { workspaces: { solo: { work: solo, nodes: [soloRoot] } } });
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  let requested;
+  const requestStarted = new Promise(resolve => { requested = resolve; });
+  await page.route("http://delegation.test/api/work/work/conversations/child", async route => {
+    requested();
+    await held;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ...work.conversations[1], messages: messages("child") }) });
+  });
+  await page.locator('tr[data-session="s-child"] .delegation-name').click();
+  await requestStarted;
+  await page.evaluate(() => window.pharosNavigate("/work/solo"));
+  const lead = page.locator(".workspace-reader-content > .workspace-overview-content");
+  await page.locator(".workspace-inbox.merged .conversation-panel:not(.conversation-loading)").waitFor();
+  const response = page.waitForResponse(response => response.url().endsWith("/conversations/child"));
+  release();
+  await response;
+  await page.waitForTimeout(100);
+  assert.equal(await lead.locator(".work-heading h1").textContent(), "Solo work");
+  assert.ok(await lead.locator("#back").isVisible());
+  assert.equal(await page.locator(".workspace-reader-content .conversation-head .delegation-context").count(), 1);
   assert.deepEqual(errors, []);
 });
