@@ -10,12 +10,14 @@ import { Icon } from "./icons";
 import "./home.css";
 import { HomeSearch } from "./search-composer";
 import { CardLibrary } from "./card-library";
+import { DraftCardReview } from "./draft-card-review";
 import { cardTemplates } from "./card-library-model";
 import { defaultCardCover } from "./card-cover";
 import { cardLoadingPresentation } from "./card-loading-model";
 import { usePreviewReload } from "./use-preview-reload";
 
 const welcomes = ["What will you discover in your work?", "How will you be more efficient today?", "What could your past work teach you?", "Which pattern is worth a closer look?", "Where will curiosity take you today?"];
+const isDraftReview = () => new URLSearchParams(location.search).get("cards") === "coverage-review";
 const isHome = () => ["/", "/home"].includes(location.pathname);
 function navigate(url: string) { window.pharosNavigate?.(url); }
 function timeWindowValue(spec: ReturnType<typeof queryFromURL>): string {
@@ -29,6 +31,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   const [collection, setCollection] = useState<Bookmark[]>(readBookmarks);
   const [pool, setPool] = useState<QuerySuggestion[]>(() => suggestionPool(new Date(), cardTemplates()));
   const [library, setLibrary] = useState(() => new URLSearchParams(location.search).get("cards") === "library");
+  const [draftReview, setDraftReview] = useState(isDraftReview);
   const [previews, setPreviews] = useState<Record<string, QueryPreview>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true), [generation, setGeneration] = useState(0);
@@ -46,7 +49,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   useEffect(() => {
     migrateSavedQueries(); setCollection(readBookmarks());
     const bookmarks = () => setCollection(readBookmarks());
-    const route = () => { setActive(isHome()); setLibrary(new URLSearchParams(location.search).get("cards") === "library"); };
+    const route = () => { setActive(isHome()); setLibrary(new URLSearchParams(location.search).get("cards") === "library"); setDraftReview(isDraftReview()); };
     const templates = () => { setPool(suggestionPool(new Date(), cardTemplates())); setGeneration(value => value + 1); };
     window.addEventListener("pharos:card-templates", templates);
     const visibility = () => setHidden(document.hidden);
@@ -59,7 +62,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   useEffect(() => { if (active) { setGeneration(value => value + 1); } }, [active]);
 
   useEffect(() => {
-    if (!active || library) return;
+    if (!active || library || draftReview) return;
     const controller = new AbortController();
     setLoading(true);
     const saved = new Set(collection.map(item => item.templateId).filter(Boolean));
@@ -73,7 +76,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
       else { setErrors(current => ({ ...current, [id]: String(error) })); setPreviews(current => { const next = { ...current }; delete next[id]; return next; }); }
     }, controller.signal).then(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [active, library, collection, pool, generation, schemas]);
+  }, [active, library, draftReview, collection, pool, generation, schemas]);
 
   const collectedTemplates = new Set(collection.map(item => item.templateId?.split(":")[0]));
   const poolById = new Map(pool.map(item => [item.instanceId, item]));
@@ -119,7 +122,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   const coverChoices = editingSpec?.query.grouping
     ? [...editingSpec.query.grouping.summaries.filter(column => column.op !== "row").map(column => ({ id: column.id, label: `${column.label ?? column.id} · grouped rows` })), ...(editingSpec.query.grouping.source.aggregations ?? []).map(metric => ({ id: metric.id, label: `${metric.label ?? metric.id} · observations` }))]
     : editingSpec?.query.aggregations?.map(metric => ({ id: metric.id, label: metric.label ?? metric.id })) ?? [];
-  return library && active ? <CardLibrary schemas={schemas} onOpen={navigate} onKeep={item => void keep(item)} collected={collectedTemplates} message={message} /> : <div className="curiosity-home" data-feedback-label="Home dashboard">
+  return draftReview && active ? <DraftCardReview onOpen={navigate} /> : library && active ? <CardLibrary schemas={schemas} onOpen={navigate} onKeep={item => void keep(item)} collected={collectedTemplates} message={message} /> : <div className="curiosity-home" data-feedback-label="Home dashboard">
     <div className="home-intro"><h1>{welcome}</h1><HomeSearch schema={schemas.library} /></div>
     <div className={`home-collection${drag ? " accepting" : ""}`} role="region" aria-label="Your collection" onDragOver={event => { if (drag) { event.preventDefault(); const target = (event.target as Element).closest("[data-card-id]"); setInsertBefore(target?.getAttribute("data-card-id") ?? undefined); } }} onDrop={event => drop(event)}>
       {collection.map(item => {

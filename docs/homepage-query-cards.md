@@ -196,6 +196,21 @@ Saved card definitions, exact-window destinations, source metric IDs, calculatio
 
 This concludes the active category reviews. Work Views has no active definitions; the next work is the comprehensive Pharos PR.
 
+## Uncovered areas draft study — review 4 (October 18, 2026)
+
+`/home?cards=coverage-review` (linked from the card library) reviews 19 draft cards for areas with no Home card: **machine time**, **parallel agents**, **carbon impact**, **optimization findings** and **pricing**. These calculations are not Query Table fields, so each draft reads the same API as the page it opens through a small loader in `web/src/draft-cards.ts` and renders a `preview.draft` cover (`draft-cover.tsx`: trend, rows, pie, columns, hours, stats, value) inside the shared `QueryCard`. Drafts are not collectible until a typed card adapter exists. Feedback (Keep / Change / Discard, reasoning per card and group, and an overall note) uses `pharos-coverage-review-v4`; earlier drafts remain under `-v1` to `-v3`. Card labels mark each draft Kept, Revised or New.
+
+Review 1 discarded the parallelism summary, carbon in everyday terms, carbon by token type, the usage-at-a-glance, capture-freshness and archive cards, and both TL1 cards; their loaders were removed. It changed the machine-time key to three columns, put 3+ agents on the baseline of the daily parallelism stack with a one-row key, limited open findings to the top three, and reduced findings results to net savings. It added carbon by model, provider and effort, and likely savings by kind of fix.
+
+Review 2 kept all 16. It asked for six named machine-time activities, three-column keys on the model-size and provider pies, and savings by kind of fix without step wording such as “A line in AGENTS.md”. The Findings API now returns each card's `lever`, and the pie groups by it (repository instructions, global instructions, repository tools and skills, harness settings, automation prompts). The effort card was correct but empty on the dev library; its empty state now explains that effort is read during indexing and fills in when older sources are reparsed.
+
+Review 3 kept all 16 and added three seven-day trends using the shared sparkline cover: tool calls per day and mean recorded time per timed call (31 endpoints over trailing seven complete days, sharing one `tool_calls` request, pooled rather than averaged daily), and agents at once while active (agent-hours ÷ active hours over trailing seven captured days; the 14-day snapshot yields eight endpoints, so the cover's `historyDays` labels a shorter norm and axis). When agents overlap lost its headline, and the model-size pie is shorter.
+
+- **Machine time** sums recorded tool durations from `tool_calls` aggregations (`requireComplete`), so overlapping calls add up. Incomplete operation groups are an error, not a partial total.
+- **Parallel agents** reuse `concurrency-data.ts` and the saved Parallelism counting/gap settings. The production service has no timing endpoint; the cards read the dev `--concurrency-data` snapshot and use its latest captured days, otherwise they explain the missing snapshot.
+- **Carbon** applies the Carbon page's calculator (`window.pharosCarbon.estimate`) and the user's settings over one local-calendar period (today and the N − 1 days before), so the trend endpoint equals the period total. The Carbon endpoint splits only by provider, repository and tier; model, provider and effort cards sum token categories from Usage aggregations by model family and place each family in a tier with `carbonTier`, which mirrors `carbonDocument.tier`. On the dev library the model breakdown sums to the same total as the trend. The dev library predates effort tracking, so the effort card is empty there.
+- **Findings and pricing** show current state from `/api/findings` and `/api/health/pricing`. Savings by kind of fix groups open findings by `change_label`.
+
 ## Cards from recent Pharos additions
 
 - **Reasoning effort:** priced API equivalent per whole conversation by top-level provider/model/effort, plus a separate total-cost-by-effort pie; missing effort remains a cohort.

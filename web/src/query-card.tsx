@@ -11,6 +11,8 @@ import { CardLoading } from "./card-loading";
 import type { CardLoadingSpec } from "./card-loading-model";
 import { ChartTooltip } from "./chart-tooltip";
 import { HumanStudyCover } from "./human-study-cover";
+import { DraftCover } from "./draft-cover";
+import "./draft-cover.css";
 
 export function QueryChip({ title, description, active, onClick }: { title: string; description: string; active?: boolean; onClick: () => void }) {
   return <button type="button" className="query-chip" title={description} aria-pressed={active} onClick={onClick}><Icon name="compass" /><span>{title}</span><Icon name="arrow-right" /></button>;
@@ -60,7 +62,7 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
             <span className="query-result-summary is-headline query-stat-line"><strong className="query-headline-value">{headlineMetric.value}</strong>{headlineMetric.unit ? <> <span className="query-headline-unit">{headlineMetric.unit}</span></> : null}
             {headlineMetric.label ? <span className="query-headline-label">{headlineMetric.label}</span> : null}</span>
           </span> : null}
-          {preview.study ? <HumanStudyCover study={preview.study} /> : preview.buckets && preview.series ? <CompactColumns buckets={preview.buckets} series={preview.series} showLegend={coverMetric?.display?.legendPosition ? coverMetric.display.legendPosition !== "none" : undefined} xLabel={coverMetric?.display?.xLabel ?? "Day"} yLabel={coverMetric?.display?.yLabel} unit={coverMetric?.field?.includes("cost") ? "USD" : coverMetric?.field?.includes("words") ? "words" : "tokens"} />
+          {preview.draft ? <DraftCover cover={preview.draft} /> : preview.study ? <HumanStudyCover study={preview.study} /> : preview.buckets && preview.series ? <CompactColumns buckets={preview.buckets} series={preview.series} showLegend={coverMetric?.display?.legendPosition ? coverMetric.display.legendPosition !== "none" : undefined} xLabel={coverMetric?.display?.xLabel ?? "Day"} yLabel={coverMetric?.display?.yLabel} unit={coverMetric?.field?.includes("cost") ? "USD" : coverMetric?.field?.includes("words") ? "words" : "tokens"} />
             : preview.metrics ? <CompactMetric preview={preview} />
             : preview.insights ? <span className="query-findings">
             <span className="query-finding-heading">{preview.headline}</span>
@@ -84,7 +86,7 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
     {error ? <div className="query-card-unavailable">{cover}<a className="query-card-open" {...linkProps}>{caption}</a></div>
       : <a className="query-card-open" {...linkProps}>{cover}{caption}</a>}
     {xray ? onReveal ? <button type="button" className="query-xray-open" aria-label={`Bring ${title} into view`} title="Bring into view" onClick={onReveal} /> : null
-      : discovery ? <button className="query-keep" type="button" aria-label={`Collect ${title}`} title="Add to your collection" onClick={onKeep}><Icon name="plus" /></button>
+      : discovery ? onKeep ? <button className="query-keep" type="button" aria-label={`Collect ${title}`} title="Add to your collection" onClick={onKeep}><Icon name="plus" /></button> : null
       : <span className="query-card-tools"><button type="button" aria-label={`Edit ${title}`} title="Edit saved view" onClick={onEdit}><Icon name="edit" /></button><button type="button" aria-label={`Remove ${title}`} title="Remove from collection" onClick={onRemove}><Icon name="close" /></button></span>}
   </article>;
 }

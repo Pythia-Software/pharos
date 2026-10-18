@@ -25,7 +25,7 @@ export function ColumnMarks({ bucket, series, scale, percent = false }: {
     style={{ height: `${stacked ? height : Math.max(1.5, height)}%`, background: item.color }} />)}</>;
 }
 
-export function CompactColumns({ buckets, series, unit = "", showLegend = series.length > 1, xLabel = "Day", yLabel = unit || "Value" }: { buckets: ChartBucket[]; series: ChartSeries[]; unit?: string; showLegend?: boolean; xLabel?: string; yLabel?: string }) {
+export function CompactColumns({ buckets, series, unit = "", showLegend = series.length > 1, legendColumns, xLabel = "Day", yLabel = unit || "Value" }: { buckets: ChartBucket[]; series: ChartSeries[]; unit?: string; showLegend?: boolean; legendColumns?: 1 | 2 | 3; xLabel?: string; yLabel?: string }) {
   const { y, ticks } = columnScale(buckets.map(bucket => series.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0)), "linear");
   const axis: number[] = [0];
   for (const tick of ticks) if (y(tick) - y(axis.at(-1)!) >= 20) axis.push(tick);
@@ -39,6 +39,6 @@ export function CompactColumns({ buckets, series, unit = "", showLegend = series
     </span>
     <span className="query-timeline-dates">{dates.map(index => <span key={index}>{buckets[index].date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>)}</span>
     <span className="query-chart-axis-labels"><span title={yLabel}>↑ {yLabel}</span><span title={xLabel}>→ {xLabel}</span></span>
-    {showLegend ? <ChartLegend items={series} /> : null}
+    {showLegend ? <ChartLegend items={series} columns={legendColumns} /> : null}
   </span>;
 }
