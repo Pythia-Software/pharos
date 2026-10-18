@@ -31,7 +31,7 @@ export function SearchDialog({ schema }: { schema: FieldSchema }) {
         }
       }
       setOpen(true); dialog.showModal();
-      requestAnimationFrame(() => dialog.querySelector<HTMLInputElement>('input:not([type="checkbox"])')?.focus());
+      requestAnimationFrame(() => dialog.querySelector<HTMLElement>('textarea, input:not([type="checkbox"])')?.focus());
     };
     const close = () => { resolution.abort(); setOpen(false); invoker?.focus(); };
     const backdrop = (event: MouseEvent) => { if (event.target === dialog) { const r = dialog.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) dialog.close(); } };

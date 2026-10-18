@@ -72,16 +72,28 @@ export function compileRules(root: TextGroup): { where?: TextQuery; issues: Sear
   if (where && JSON.stringify(where).length > 16000) issues.push({ id: root.id, message: "Shorten the search or use fewer rules." });
   return { where: issues.length ? undefined : where, issues };
 }
+// Which matching options can change a search. Phrase punctuation matters
+// wherever phrases can occur (quoted terms become phrases in every syntax
+// format except exact text and regex); word variations only expand plain
+// words. The Options menu, its count, the request, and the reading all use this.
+export function optionScope(d: Pick<TextSearchDraft, "editor" | "match" | "mode">) {
+  const rules = d.editor === "visual" && d.match === "rules";
+  return { separators: d.editor === "visual" ? rules : !["literal", "regex"].includes(d.mode), fuzzy: d.editor === "visual" ? rules : ["advanced", "terms"].includes(d.mode) };
+}
+export function optionsInEffect(d: TextSearchDraft) {
+  const scope = optionScope(d);
+  return { caseSensitive: d.caseSensitive, separators: d.separators && scope.separators, fuzzy: d.fuzzy && scope.fuzzy };
+}
 export function searchRequest(draft: TextSearchDraft): { request?: Record<string, unknown>; issues: SearchIssue[] } {
   let where: TextQuery | undefined;
   let issues: SearchIssue[] = [];
   if (draft.editor === "visual" && draft.match === "rules") { ({ where, issues } = compileRules(draft.root)); }
-  else if (!draft.text) issues.push({ id: "text", message: "Enter the text to find." });
+  else if (!draft.text.trim()) issues.push({ id: "text", message: "Enter the text to find." });
   else if (draft.editor === "visual") where = { op: draft.match === "literal" ? "literal" : "regex", text: draft.text };
   if (/^\d{4}-\d{2}-\d{2}$/.test(draft.scope.from) && /^\d{4}-\d{2}-\d{2}$/.test(draft.scope.to) && draft.scope.from > draft.scope.to) issues.push({ id: "dates", message: "The end date must be on or after the start date." });
   if (issues.length) return { issues };
   const { roles, kinds, ...filters } = draft.scope;
-  return { request: { ...(where ? { where } : { query: draft.text, mode: draft.mode }), ...filters, ...(roles.length ? { roles } : {}), ...(kinds.length ? { kinds } : {}), fuzzy: draft.fuzzy, case_sensitive: draft.caseSensitive, separators: draft.separators }, issues };
+  return { request: { ...(where ? { where } : { query: draft.text, mode: draft.mode }), ...filters, ...(roles.length ? { roles } : {}), ...(kinds.length ? { kinds } : {}), ...(({ fuzzy, caseSensitive, separators }) => ({ fuzzy, case_sensitive: caseSensitive, separators }))(optionsInEffect(draft)) }, issues };
 }
 export function textFindParameters(draft: TextSearchDraft, cursor = ""): string {
   const { request } = searchRequest(draft);
@@ -106,6 +118,64 @@ export function conditionSummary(c: TextCondition): string {
   return `${ruleLabels[c.kind].toLowerCase()} ${quote(c.text)}`;
 }
 export const textSearchSummary = (d: TextSearchDraft) => `${scopeChoice(d.scope)?.label ?? "Custom message scope"} · ${d.editor === "syntax" ? d.text : d.match === "rules" ? conditionSummary(d.root) : `${d.match === "literal" ? "exact text" : "pattern"} “${d.text}”`}`;
+// A plain-English reading of a search, shown while it is composed. Values are
+// marked so the reading can set them apart from its connecting words.
+export type SentencePart = string | { value: string };
+export type SentenceContext = { kind?: "text" | "file" | "url"; file?: string; fileCase?: boolean; workspace?: (string | SentencePart[])[]; workspaceLead?: string; fixedContext?: boolean };
+export const sentenceText = (parts: SentencePart[]) => parts.map(part => typeof part === "string" ? part : part.value).join("");
+const quote = (text: string) => ({ value: `“${text.trim()}”` });
+function listParts(items: SentencePart[][], word: "and" | "or"): SentencePart[] {
+  return items.flatMap((item, i) => [...(i ? [items.length > 2 ? i === items.length - 1 ? `, ${word} ` : ", " : ` ${word} `] : []), ...item]);
+}
+function ruleParts(rule: TextRule, excluded: boolean): SentencePart[] | null {
+  const text = rule.text.trim(), other = rule.other.trim();
+  if (!text) return null;
+  const words = /\s/u.test(text) ? "words" : "word";
+  if (rule.kind === "words") return [words === "word" || excluded ? `the ${words} ` : "all of the words ", quote(text)];
+  if (rule.kind === "anyWords") return [words === "word" ? "the word " : "any of the words ", quote(text)];
+  if (rule.kind === "phrase") return ["the phrase ", quote(text)];
+  if (rule.kind === "prefix") return ["a word starting with ", quote(text)];
+  if (!other) return [quote(text), rule.kind === "pre" ? " followed by another phrase" : " near another phrase"];
+  return [quote(text), rule.kind === "pre" ? ` followed within ${rule.distance} words by ` : ` within ${rule.distance} words of `, quote(other)];
+}
+function conditionParts(condition: TextCondition, nested: boolean): SentencePart[] | null {
+  if (condition.kind !== "group") return ruleParts(condition, condition.exclude);
+  const positive = condition.children.filter(c => !c.exclude).map(c => conditionParts(c, true)).filter((p): p is SentencePart[] => !!p);
+  const negative = condition.children.filter(c => c.exclude).map(c => conditionParts(c, true)).filter((p): p is SentencePart[] => !!p);
+  if (!positive.length && !negative.length) return null;
+  const parts = [...listParts(positive, condition.join === "all" ? "and" : "or"), ...(negative.length ? [positive.length ? ", but not " : "not ", ...listParts(negative, "or")] : [])];
+  return nested && positive.length + negative.length > 1 ? ["(", ...parts, ")"] : parts;
+}
+export const lowerLabel = (label: string) => label.replace(/^\p{Lu}(?=\p{Ll})/u, letter => letter.toLowerCase());
+const day = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }) : value;
+export function searchSentence(d: TextSearchDraft, context: SentenceContext = {}): { parts: SentencePart[]; empty: boolean } {
+  const kind = context.kind ?? "text";
+  const subject = kind === "file" ? "modified files" : kind === "url" ? "tool URLs" : scopeChoice(d.scope)?.label.toLowerCase() ?? "messages in a saved scope";
+  const s = d.scope, filters: SentencePart[][] = [];
+  if (kind === "text") {
+    if (s.provider) filters.push(["from ", { value: sourceLabel(s.provider) }]);
+    if (s.source) filters.push(["recorded by ", { value: sourceLabel(s.source) }]);
+    if (s.repository) filters.push(["in repositories matching ", quote(s.repository)]);
+    if (s.from && s.to) filters.push(["between ", { value: day(s.from) }, " and ", { value: day(s.to) }]);
+    else if (s.from) filters.push(["on or after ", { value: day(s.from) }]);
+    else if (s.to) filters.push(["on or before ", { value: day(s.to) }]);
+    if (!context.fixedContext && s.conversation_id) filters.push(["in conversation ", { value: s.conversation_id }]);
+    if (!context.fixedContext && s.workspace_id) filters.push(["in workspace ", { value: s.workspace_id }]);
+    if (!scopeChoice(s) && s.roles.length) filters.push(["with role ", ...listParts(s.roles.map(role => [{ value: role }]), "or")]);
+    if (!scopeChoice(s) && s.kinds.length) filters.push(["of type ", ...listParts(s.kinds.map(type => [{ value: type }]), "or")]);
+  }
+  if (context.workspace?.length) filters.push([context.workspaceLead ?? "in workspaces where ", ...listParts(context.workspace.map(label => typeof label === "string" ? [{ value: lowerLabel(label) }] : label), "and")]);
+  let match: SentencePart[] | null = null;
+  if (kind !== "text") match = context.file?.trim() ? [kind === "file" ? " with paths containing " : " containing ", quote(context.file)] : null;
+  else if (d.editor === "syntax") match = d.text.trim() ? [" matching ", { value: d.text.trim() }] : null;
+  else if (d.match === "literal") match = d.text.trim() ? [" containing the exact text ", { value: `“${d.text}”` }] : null;
+  else if (d.match === "regex") match = d.text.trim() ? [" matching the pattern ", { value: d.text }] : null;
+  else { const rules = conditionParts(d.root, false); match = rules ? [" with ", ...rules] : null; }
+  const effect = optionsInEffect(d);
+  const options = kind === "text" ? [effect.caseSensitive && "matching letter case", effect.fuzzy && "including word variations", effect.separators && "keeping phrase punctuation"].filter((o): o is string => !!o) : context.fileCase ? ["matching letter case"] : [];
+  const parts: SentencePart[] = ["Find ", subject, ...filters.flatMap((filter, i) => [i ? ", " : " ", ...filter]), ...(match ? [filters.length ? "," : "", ...match] : []), ...(options.length ? [", ", options.join(", ")] : [])];
+  return { parts, empty: !match && !filters.length };
+}
 const quoted = (text: string) => `"${text.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 export function querySyntax(q: TextQuery, separators = false): string {
   if (q.op === "literal" || q.op === "regex") return q.text ?? "";

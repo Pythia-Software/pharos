@@ -1121,7 +1121,8 @@ test("conversation search stays scoped to the inbox reader and reveals retained 
   });
   await page.getByRole("button", { name: "Find", exact: true }).click();
   const search = page.locator(".workspace-reader-content .conversation-search-composer");
-  await search.getByRole("combobox", { name: "Match using", exact: true }).selectOption("literal");
+  await search.getByRole("button", { name: /^Match options/ }).click();
+  await page.getByRole("combobox", { name: "Match using", exact: true }).selectOption("literal");
   await search.getByRole("textbox", { name: "Text to find exactly", exact: true }).fill("Reviewed");
   await search.getByRole("button", { name: "Search messages", exact: true }).click();
   await search.getByRole("button", { name: "Reviewed the change.", exact: true }).click();
