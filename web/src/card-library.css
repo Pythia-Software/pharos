@@ -2,8 +2,8 @@
 .card-library-heading { display:flex; align-items:center; justify-content:space-between; gap:18px; margin-bottom:24px; }
 .card-library h1 { font:400 34px/1.15 Charter,Georgia,serif; margin:0 0 9px; }
 .card-library-heading p { margin:0; color:var(--muted); font-size:13px; }
-.card-library-heading button,.home-card-library-link { display:inline-flex; align-items:center; gap:7px; color:var(--gold); background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:8px 12px; font-size:12px; text-decoration:none; }
-.card-library-heading svg,.home-card-library-link svg { width:14px; height:14px; }
+.card-library-heading button { display:inline-flex; align-items:center; gap:7px; color:var(--gold); background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:8px 12px; font-size:12px; text-decoration:none; }
+.card-library-heading svg { width:14px; height:14px; }
 .card-library-controls { display:flex; flex-wrap:wrap; gap:12px; align-items:end; padding:16px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
 .card-library-controls label { display:flex; flex-direction:column; gap:6px; color:var(--muted); font-size:11px; flex:1 1 130px; }
 .card-library-controls .card-library-search { flex:2 1 210px; }
@@ -23,7 +23,6 @@
 .card-template-editor>form>p { font-size:12px; color:var(--muted); }
 .card-template-destination { background:var(--bg); padding:12px; border-radius:6px; font-size:12px; }
 .card-template-destination p { margin:6px 0; color:var(--muted); }
-.home-card-library-nav { display:flex; justify-content:center; margin:16px 0 22px; }
 @media(max-width:600px) { .card-library { padding:20px 0; } .card-library-heading { align-items:start; } .card-library-grid { gap:18px 12px; } .card-library-count>span { display:none; } .card-library-heading p { max-width:230px; } .card-library-heading button { flex:none; font-size:10px; padding:7px; } }
 
 .card-template-query { display:flex; align-items:center; gap:6px; padding:8px 0 0; border:0; background:none; color:var(--gold); font-size:11px; text-align:left; }

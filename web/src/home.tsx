@@ -13,20 +13,9 @@ import { CardLibrary } from "./card-library";
 import { cardTemplates } from "./card-library-model";
 import { defaultCardCover } from "./card-cover";
 import { cardLoadingPresentation } from "./card-loading-model";
-import { HumanWordReview } from "./human-word-review";
-import { ModelChoiceReview } from "./model-choice-review";
-import { ContextCachingReview } from "./context-caching-review";
-import { ErrorPatternReview } from "./error-pattern-review";
-import { ToolFlowReview } from "./tool-flow-review";
-import { SkillsInstructionsReview } from "./skills-instructions-review";
-import { ResearchReview } from "./research-review";
-import { TokenUsageReview } from "./token-usage-review";
-import { DelegationReview } from "./delegation-review";
-import { ApiCostReview } from "./api-cost-review";
 import { usePreviewReload } from "./use-preview-reload";
 
 const welcomes = ["What will you discover in your work?", "How will you be more efficient today?", "What could your past work teach you?", "Which pattern is worth a closer look?", "Where will curiosity take you today?"];
-const reviewMode = () => { const value = new URLSearchParams(location.search).get("cards"); return value === "human-review" || value === "model-review" || value === "context-review" || value === "error-review" || value === "tool-review" || value === "skills-review" || value === "research-review" || value === "cost-review" || value === "token-review" || value === "delegation-review" ? value : ""; };
 const isHome = () => ["/", "/home"].includes(location.pathname);
 function navigate(url: string) { window.pharosNavigate?.(url); }
 function timeWindowValue(spec: ReturnType<typeof queryFromURL>): string {
@@ -40,7 +29,6 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   const [collection, setCollection] = useState<Bookmark[]>(readBookmarks);
   const [pool, setPool] = useState<QuerySuggestion[]>(() => suggestionPool(new Date(), cardTemplates()));
   const [library, setLibrary] = useState(() => new URLSearchParams(location.search).get("cards") === "library");
-  const [review, setReview] = useState(reviewMode);
   const [previews, setPreviews] = useState<Record<string, QueryPreview>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true), [generation, setGeneration] = useState(0);
@@ -53,12 +41,12 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   const [message, setMessage] = useState(""), [undo, setUndo] = useState<{ item: Bookmark; index: number } | null>(null);
   const [drag, setDrag] = useState<{ saved?: string; suggestion?: QuerySuggestion } | null>(null), [insertBefore, setInsertBefore] = useState<string | undefined>();
   const [hidden, setHidden] = useState(document.hidden);
-  const reloadPreview = usePreviewReload(setPreviews, setErrors, [active, library, review, collection, pool, generation, schemas]);
+  const reloadPreview = usePreviewReload(setPreviews, setErrors, [active, library, collection, pool, generation, schemas]);
 
   useEffect(() => {
     migrateSavedQueries(); setCollection(readBookmarks());
     const bookmarks = () => setCollection(readBookmarks());
-    const route = () => { setActive(isHome()); setLibrary(new URLSearchParams(location.search).get("cards") === "library"); setReview(reviewMode()); };
+    const route = () => { setActive(isHome()); setLibrary(new URLSearchParams(location.search).get("cards") === "library"); };
     const templates = () => { setPool(suggestionPool(new Date(), cardTemplates())); setGeneration(value => value + 1); };
     window.addEventListener("pharos:card-templates", templates);
     const visibility = () => setHidden(document.hidden);
@@ -71,7 +59,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   useEffect(() => { if (active) { setGeneration(value => value + 1); } }, [active]);
 
   useEffect(() => {
-    if (!active || library || review) return;
+    if (!active || library) return;
     const controller = new AbortController();
     setLoading(true);
     const saved = new Set(collection.map(item => item.templateId).filter(Boolean));
@@ -85,7 +73,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
       else { setErrors(current => ({ ...current, [id]: String(error) })); setPreviews(current => { const next = { ...current }; delete next[id]; return next; }); }
     }, controller.signal).then(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [active, library, review, collection, pool, generation, schemas]);
+  }, [active, library, collection, pool, generation, schemas]);
 
   const collectedTemplates = new Set(collection.map(item => item.templateId?.split(":")[0]));
   const poolById = new Map(pool.map(item => [item.instanceId, item]));
@@ -131,10 +119,8 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   const coverChoices = editingSpec?.query.grouping
     ? [...editingSpec.query.grouping.summaries.filter(column => column.op !== "row").map(column => ({ id: column.id, label: `${column.label ?? column.id} · grouped rows` })), ...(editingSpec.query.grouping.source.aggregations ?? []).map(metric => ({ id: metric.id, label: `${metric.label ?? metric.id} · observations` }))]
     : editingSpec?.query.aggregations?.map(metric => ({ id: metric.id, label: metric.label ?? metric.id })) ?? [];
-  const Review = review === "delegation-review" ? DelegationReview : review === "token-review" ? TokenUsageReview : review === "cost-review" ? ApiCostReview : review === "research-review" ? ResearchReview : review === "skills-review" ? SkillsInstructionsReview : review === "tool-review" ? ToolFlowReview : review === "error-review" ? ErrorPatternReview : review === "context-review" ? ContextCachingReview : review === "model-review" ? ModelChoiceReview : HumanWordReview;
-  return review && active ? <Review schemas={schemas} onOpen={navigate} onKeep={item => void keep(item)} collected={collectedTemplates} message={message} /> : library && active ? <CardLibrary schemas={schemas} onOpen={navigate} onKeep={item => void keep(item)} collected={collectedTemplates} message={message} /> : <div className="curiosity-home" data-feedback-label="Home dashboard">
+  return library && active ? <CardLibrary schemas={schemas} onOpen={navigate} onKeep={item => void keep(item)} collected={collectedTemplates} message={message} /> : <div className="curiosity-home" data-feedback-label="Home dashboard">
     <div className="home-intro"><h1>{welcome}</h1><HomeSearch schema={schemas.library} /></div>
-    <div className="home-card-library-nav"><a href="/home?cards=library" className="home-card-library-link" onClick={event => { if (!event.metaKey && !event.ctrlKey) { event.preventDefault(); navigate("/home?cards=library"); } }}><Icon name="compass" /> Browse the card library</a><a className="home-card-library-link" href="/home?cards=human-review" onClick={event => { if (!event.metaKey && !event.ctrlKey) { event.preventDefault(); navigate("/home?cards=human-review"); } }}>Human word card study <Icon name="arrow-right" /></a><a className="home-card-library-link" href="/home?cards=model-review" onClick={event => { if (!event.metaKey && !event.ctrlKey) { event.preventDefault(); navigate("/home?cards=model-review"); } }}>Model choice card study <Icon name="arrow-right" /></a><a className="home-card-library-link" href="/home?cards=context-review" onClick={event => { if (!event.metaKey && !event.ctrlKey) { event.preventDefault(); navigate("/home?cards=context-review"); } }}>Context and caching study <Icon name="arrow-right" /></a><a className="home-card-library-link" href="/home?cards=error-review" onClick={event => { if (!event.metaKey && !event.ctrlKey) { event.preventDefault(); navigate("/home?cards=error-review"); } }}>Error patterns study <Icon name="arrow-right" /></a><a className="home-card-library-link" href="/home?cards=tool-review" onClick={event => { if (!event.metaKey && !event.ctrlKey) { event.preventDefault(); navigate("/home?cards=tool-review"); } }}>Tool flow study <Icon name="arrow-right" /></a><a className="home-card-library-link" href="/home?cards=skills-review" onClick={event => { if (!event.metaKey && !event.ctrlKey) { event.preventDefault(); navigate("/home?cards=skills-review"); } }}>Skills and instructions study <Icon name="arrow-right" /></a><a className="home-card-library-link" href="/home?cards=research-review" onClick={event => { if (!event.metaKey && !event.ctrlKey) { event.preventDefault(); navigate("/home?cards=research-review"); } }}>Research study <Icon name="arrow-right" /></a><a className="home-card-library-link" href="/home?cards=cost-review" onClick={event => { if (!event.metaKey && !event.ctrlKey) { event.preventDefault(); navigate("/home?cards=cost-review"); } }}>API cost study <Icon name="arrow-right" /></a><a className="home-card-library-link" href="/home?cards=token-review" onClick={event => { if (!event.metaKey && !event.ctrlKey) { event.preventDefault(); navigate("/home?cards=token-review"); } }}>Token usage study <Icon name="arrow-right" /></a><a className="home-card-library-link" href="/home?cards=delegation-review" onClick={event => { if (!event.metaKey && !event.ctrlKey) { event.preventDefault(); navigate("/home?cards=delegation-review"); } }}>Delegation study <Icon name="arrow-right" /></a></div>
     <div className={`home-collection${drag ? " accepting" : ""}`} role="region" aria-label="Your collection" onDragOver={event => { if (drag) { event.preventDefault(); const target = (event.target as Element).closest("[data-card-id]"); setInsertBefore(target?.getAttribute("data-card-id") ?? undefined); } }} onDrop={event => drop(event)}>
       {collection.map(item => {
         const spec = queryFromURL(item.url, item.query), recipe = queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]);
@@ -145,7 +131,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
           onReload={spec ? () => reloadPreview({ id: item.id, dataset: spec.dataset, query: spec.query, schema: schemas[spec.dataset], options: { recipe, url: item.url, coverMetricId: item.coverMetricId, cover: item.cover, window: spec.window } }) : undefined}
           onDragStart={event => dragStart(event, { saved: item.id }, item.url)} onDragEnd={finishDrag} onDrop={event => drop(event, item.id)} />;
       })}
-      {!collection.length ? <div className="home-empty"><Icon name="bookmark" /><span>Make this space yours.<small>Collect a different angle below. Your saved searches live here, too.</small></span></div> : null}
+      {!collection.length ? <div className="home-empty"><Icon name="bookmark" /><span>Make this space yours.<small>Collect cards that help you see your work from different angles</small></span></div> : null}
       {drag ? <span className="home-drop-label"><Icon name="arrow-up" />{drag.saved ? "Drop to reorder your collection" : "Drop to add to your collection"}</span> : null}
     </div>
     <div className="home-feedback" role="status">{message}{undo ? <button type="button" onClick={() => { const items = readBookmarks(); items.splice(Math.min(undo.index, items.length), 0, undo.item); writeBookmarks(items); setUndo(null); setMessage("Restored to your collection."); }}>Undo</button> : null}</div>

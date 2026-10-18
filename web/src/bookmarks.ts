@@ -74,6 +74,9 @@ export function savedRollingWindow(dataset: QueryDataset, query: QueryState): Ro
 export function collectQuery(dataset: QueryDataset, query: QueryState, title: string, options: { description?: string; templateId?: string; window?: RollingWindow; savedAt?: number; dedupe?: boolean; url?: string; cover?: CardCover } = {}): Bookmark {
   const items = readBookmarks(), url = options.url ?? queryURL(dataset, query, options.window);
   const existing = items.find(item => {
+    // A template can select a specialized study even when its source query
+    // and cover match another card. Preserve that identity when collecting.
+    if (item.templateId !== options.templateId) return false;
     if (JSON.stringify(item.cover) !== JSON.stringify(options.cover)) return false;
     if (item.url === url) return true;
     const spec = options.templateId && item.templateId === options.templateId ? queryFromURL(item.url, item.query) : undefined;

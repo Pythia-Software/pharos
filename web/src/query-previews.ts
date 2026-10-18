@@ -6,7 +6,7 @@ import { foldSeries, type ChartBucket, type ChartSeries } from "./chart-series";
 import { resolveRollingQuery, rollingQueryMatches, type QueryDataset, type RollingWindow } from "./query-links";
 import type { QueryRecipe } from "./curiosity-data";
 import { readTextSearch, textFindParameters } from "./text-search-model";
-import { cardCoverQuery, type CardCover } from "./card-cover";
+import { cardCoverQuery, humanStudyCoverMatches, type CardCover } from "./card-cover";
 import { filterBoxSamples } from "./compact-box-model";
 import { createHumanStudyLoader, clearHumanStudyCache, type HumanStudyPreview } from "./human-study";
 
@@ -181,7 +181,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   }
   // Existing daily covers keep the Usage palette, calendar gaps and exact Other.
   if (!clause.expression && !clause.distribution && (!clause.display || clause.display.kind === "auto") && clause.groupBy[0] === "day" && clause.op === "sum" && numeric.length) {
-    const entries = numeric.map(bucket => [String(bucket.keys[0]), bucket.keys.length > 1 ? bucket.keys.slice(1).map(key => String(key ?? "Unspecified")).join(" · ") : recipe?.title ?? "Total", Number(bucket.value)] as [string, string, number]);
+    const entries = numeric.map(bucket => [String(bucket.keys[0]), bucket.keys.length > 1 ? bucket.keys.slice(1).map(key => String(key ?? "Unspecified")).join(" · ") : clause.label ?? "Total", Number(bucket.value)] as [string, string, number]);
     const observed = [...new Set(entries.map(([key]) => key))].sort();
     const days = options.window?.days ?? Math.min(90, observed.length);
     const bound = options.window && (query.grouping?.source.where ?? query.where).find(term => "field" in term && term.field === options.window!.field && term.op === ">=");
@@ -237,15 +237,14 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
   }
   const clock = new Date();
   const studyJobs = jobs.filter(job => job.dataset === "writing_messages" && (!job.query.grouping || job.options?.recipe?.humanStudy === "conversation-lengths" && JSON.stringify(job.query.grouping.keys) === '["conversation_id"]' && JSON.stringify(job.query.grouping.summaries) === JSON.stringify(job.options.recipe.exploration?.summaries) && !job.query.where.length) && job.options?.recipe?.humanStudy && job.options.window?.mode === "relative" && rollingQueryMatches(job.query, job.options.window) && !searchContext(job)
-    && (!job.options.coverMetricId || job.options.coverMetricId === job.options.recipe.cover?.metricId)
-    && (!job.options.cover || job.options.cover.metricId === job.options.recipe.cover?.metricId));
+    && humanStudyCoverMatches(job.options.recipe, job.options.cover, job.options.coverMetricId));
   const studies = new Set(studyJobs);
   const studyLoader = studyJobs.length ? createHumanStudyLoader(clock.getTime(), studyJobs[0].schema, signal) : undefined;
   const studyWork = Promise.all(studyJobs.map(async job => {
     try {
       const study = await studyLoader!(job.options!.recipe!.humanStudy!, job.query, job.options!.window!.days);
       const ready = study.value !== undefined || study.rows?.some(row => row.count ? row.count > 0 : row.value > 0);
-      if (!signal?.aborted) publish(job.id, { state: ready ? "ready" : "empty", total: study.value ?? 0, summary: study.sampleLabel, note: [job.options!.recipe!.note, study.detail].filter(Boolean).join(" · "), action: job.options!.recipe!.action ?? "Inspect source messages", study });
+      if (!signal?.aborted) publish(job.id, { coverHeight: (job.options!.cover ?? job.options!.recipe!.cover)?.height, state: ready ? "ready" : "empty", total: study.value ?? 0, summary: study.sampleLabel, note: [job.options!.recipe!.note, study.detail].filter(Boolean).join(" · "), action: job.options!.recipe!.action ?? "Inspect source messages", study });
     } catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
   }));
   const costJobs = jobs.filter(job => usesApiCostTrend(job) && !searchContext(job));

@@ -150,14 +150,14 @@ export function QueryConveyor({ items, previews, loading, hasErrors, active, sus
   });
   const canNavigate = published.length > count && !movement;
   const held = paused || interacting || suspended || Boolean(movement) || populating || !canNavigate;
-  return <section ref={section} className="home-conveyor" aria-label="Different angles on your work" aria-busy={populating} tabIndex={-1}
+  return <section ref={section} className="home-conveyor" aria-label="Dashboard Catalog" aria-busy={populating} tabIndex={-1}
     style={{ "--belt-viewport-width": `${layout.width}px`, "--conveyor-edge": `${layout.edge}px`, "--query-card-stride": `${STRIDE}px` } as React.CSSProperties}
     onKeyDown={event => {
       if (!event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
         event.preventDefault(); if (canNavigate) { section.current?.focus({ preventScroll: true }); move(event.key === "ArrowLeft" ? -3 : 3); }
       }
     }}>
-    <div ref={heading} className="home-conveyor-head"><h2><Icon name="compass" />Different angles on your work</h2><div className="home-conveyor-actions">
+    <div ref={heading} className="home-conveyor-head"><h2><Icon name="compass" />Dashboard Catalog</h2><div className="home-conveyor-actions">
       <CarouselCountdown held={held} paused={paused} reset={clockReset} advance={() => move(3)} /><div className="home-conveyor-controls">
       <button type="button" className="home-play" aria-label={paused ? "Play suggestions" : "Pause suggestions"} onClick={() => setPaused(value => !value)}>{paused ? "▶ Play" : "Ⅱ Pause"}</button>
       <button type="button" aria-label="Previous three suggestions" disabled={!canNavigate} onClick={() => move(-3)}><Icon name="chevron-left" /></button>
