@@ -361,7 +361,7 @@ func (view *findingView) card(row *findingRow, state string) map[string]any {
 	user := view.states[row.ID]
 	step, attempt := findingStepFor(row, user)
 	card := map[string]any{"id": row.ID, "state": state, "title": row.Card.Title, "detector": row.Detector, "detector_label": findingDetectorLabels[row.Detector], "explanation": row.Card.Explanation, "impact": row.Impact,
-		"impact_note": row.Card.ImpactNote, "rate": row.Card.Rate, "change": step.Change, "change_label": step.Label, "attempt": attempt,
+		"impact_note": row.Card.ImpactNote, "rate": row.Card.Rate, "change": step.Change, "change_label": step.Label, "lever": step.Lever, "attempt": attempt,
 		"target": row.Target, "target_label": view.cart.label(row.Target), "scope_label": view.scopeLabel(row), "repository_id": nilIfEmpty(row.RepositoryID),
 		"first_seen_at": row.FirstSeenAt, "last_seen": nilIfEmpty(row.Stats.LastSeen), "active": row.Active}
 	estimate := estimateFinding(row, step, view.takes)
@@ -391,7 +391,7 @@ func (view *findingView) card(row *findingRow, state string) map[string]any {
 	}
 	if latest.Status == interventionWatching || latest.Status == interventionImproved && latest.RegressedAt == "" {
 		// The change being measured, not the next one.
-		card["change"], card["change_label"], card["attempt"] = defaultString(latest.Plan.Change, latest.Change), latest.Change, latest.Attempt
+		card["change"], card["change_label"], card["lever"], card["attempt"] = defaultString(latest.Plan.Change, latest.Change), latest.Change, latest.Lever, latest.Attempt
 	}
 	switch {
 	case latest.Status == interventionWatching:

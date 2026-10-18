@@ -78,6 +78,7 @@ export function CardLibrary({ schemas, onOpen, onKeep, collected, message }: { s
   const destinationKeys = chosenCover?.mode === "source" ? editing?.measures.find(metric => metric.id === chosenCover.metricId)?.groupBy ?? editing?.exploration?.keys : editing?.exploration?.keys;
   return <section className="card-library" aria-label="Card library">
     <div className="card-library-heading"><div><h1>Card library</h1><p>Every question, chart and comparison. Find an angle to make your own.</p></div><button type="button" onClick={() => onOpen("/")}><Icon name="arrow-left" /> Your Home</button></div>
+    <p><a className="home-card-library-link" href="/home?cards=coverage-review" onClick={event => { if (!event.metaKey && !event.ctrlKey) { event.preventDefault(); onOpen("/home?cards=coverage-review"); } }}>Review draft cards for machine time, parallelism, carbon, findings and pricing <Icon name="arrow-right" /></a></p>
     <div className="card-library-controls">
       <label className="card-library-search">Find a card<input type="search" aria-label="Find a card" placeholder="Search questions, subjects…" value={search} onChange={event => setSearch(event.target.value)} /></label>
       <label>Data source<select aria-label="Data source" value={dataset} onChange={event => setDataset(event.target.value)}><option value="">All data</option>{Object.entries(cardDatasets).filter(([key]) => recipes.some(recipe => recipe.dataset === key)).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>

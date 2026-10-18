@@ -71,6 +71,9 @@ func TestFindingUnchangedMovesToTheNextChange(t *testing.T) {
 	if detail["change"] != steps[1].Change {
 		t.Fatalf("the next attempt proposes the stronger change: %q", detail["change"])
 	}
+	if detail["lever"] != steps[1].Lever || steps[1].Lever == "" {
+		t.Fatalf("the card names the kind of change it proposes: %q, want %q", detail["lever"], steps[1].Lever)
+	}
 	if !strings.Contains(firstString(detail["prompt"]), "This is attempt 2") {
 		t.Fatalf("the prompt says an earlier change didn't help:\n%s", detail["prompt"])
 	}

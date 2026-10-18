@@ -25,7 +25,8 @@ export function HumanStudyCover({ study }: { study: HumanStudyPreview }) {
   const x = (index: number) => left + index / Math.max(1, points.length - 1) * (right - left), y = (value: number) => bottom - (value - min) / (max - min) * (bottom - top);
   const segments: string[] = [];
   points.forEach((value, index) => { if (value !== null) segments.push(`${index === 0 || points[index - 1] === null ? "M" : "L"}${x(index)},${y(value)}`); });
-  const normDetail = `30-day norm\n${study.baseline === undefined ? "No eligible historical windows" : format(study.baseline)}\nMean of the prior 30 daily endpoints; each uses a trailing ${study.lookbackDays}-day window.`;
+  const history = study.historyDays ?? 30;
+  const normDetail = `${history}-day norm\n${study.baseline === undefined ? "No eligible historical windows" : format(study.baseline)}\nMean of the prior ${history} daily endpoints; each uses a trailing ${study.lookbackDays}-day window.`;
   // The dashed reference has a numeric axis tick just like the range limits.
   // Spread nearby labels without changing the values or the reference lines.
   const ticks = (valid.length ? [...new Set([high, low, ...(study.baseline === undefined ? [] : [study.baseline])])].map(value => ({ value, at: y(value), labelAt: y(value) })) : []).sort((a, b) => a.at - b.at);
@@ -47,7 +48,7 @@ export function HumanStudyCover({ study }: { study: HumanStudyPreview }) {
     {study.value !== undefined ? <span className="human-study-headline query-stat-line"><strong>{format(study.value)}</strong><span>{study.valueLabel}</span></span> : <span className="human-study-label">{study.valueLabel}</span>}
     {study.kind === "trend" ? <>
       <span className="human-study-trend">
-        <span className="human-study-range" aria-label={valid.length ? `Observed range: ${format(low)} to ${format(high)}${study.baseline === undefined ? "" : `. 30-day norm: ${format(study.baseline)}`}` : "No observed values"}>
+        <span className="human-study-range" aria-label={valid.length ? `Observed range: ${format(low)} to ${format(high)}${study.baseline === undefined ? "" : `. ${history}-day norm: ${format(study.baseline)}`}` : "No observed values"}>
           <span className="human-study-range-measure" aria-hidden="true">{ticks.length ? ticks.map(tick => format(tick.value)).sort((a, b) => b.length - a.length)[0] : "No values"}</span>
           {!valid.length ? <span className="human-study-tick" style={{ top: "50%" }}>No values</span> : ticks.map(tick => <span key={tick.value} className={`human-study-tick${tick.value === study.baseline ? " is-norm" : ""}`} style={{ top: tick.labelAt }} data-chart-tooltip={tick.value === study.baseline ? normDetail : undefined} title="">{format(tick.value)}</span>)}
         </span>
@@ -69,7 +70,7 @@ export function HumanStudyCover({ study }: { study: HumanStudyPreview }) {
             </g>)}
           </svg>
         </span>
-        <span className="human-study-axis human-study-trend-axis"><span>30 days ago</span><span>{study.trendLabel ?? `Trailing ${study.lookbackDays}d`} · now</span></span>
+        <span className="human-study-axis human-study-trend-axis"><span>{history} days ago</span><span>{study.trendLabel ?? `Trailing ${study.lookbackDays}d`} · now</span></span>
       </span>
     </> : study.kind === "hours" ? <><span className="human-study-hour-bars">{study.rows?.map((row, index) => <span key={row.label} data-chart-tooltip={`${row.label}–${String((index + 1) % 24).padStart(2, "0")}:00\n${number(row.value)} human-written words\n${study.timeZone ?? "Local time"}`} title=""><i style={{ height: `${row.value / rowMax * 100}%` }} /></span>)}</span><span className="human-study-axis"><span>00:00</span><span>12:00</span><span>23:00</span></span></>
       : <span className="human-study-rows">{study.rows?.map(row => <span className="human-study-row" key={row.label} data-chart-tooltip={`${row.label}\n${row.count === undefined ? "" : `${number(row.count)} ${study.kind === "profile" ? row.count === 1 ? "conversation" : "conversations" : row.count === 1 ? "contribution" : "contributions"} · `}${percent(row.value)}${study.kind === "profile" ? "" : `\n${study.sampleLabel}`}`} title=""><span>{row.label}</span><strong>{percent(row.value)}{row.count !== undefined ? <small> · {row.count}</small> : null}</strong><i><span style={{ width: `${row.value * 100}%` }} /></i></span>)}</span>}

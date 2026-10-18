@@ -9,6 +9,7 @@ import { readTextSearch, textFindParameters } from "./text-search-model";
 import { cardCoverQuery, humanStudyCoverMatches, type CardCover } from "./card-cover";
 import { filterBoxSamples } from "./compact-box-model";
 import { createHumanStudyLoader, clearHumanStudyCache, type HumanStudyPreview } from "./human-study";
+import type { DraftCoverData } from "./draft-cover";
 
 export type PreviewMetric = { clause: AggregationClause; result: AggregationResultEntry };
 export type QueryPreview = {
@@ -23,6 +24,7 @@ export type QueryPreview = {
   ranking?: { label: string; value: number; color: string }[];
   buckets?: ChartBucket[]; series?: ChartSeries[]; excerpt?: string;
   study?: HumanStudyPreview;
+  draft?: DraftCoverData;
 };
 type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean };
 export type PreviewJob = { id: string; dataset: QueryDataset; query: QueryState; schema: FieldSchema; options?: PreviewOptions };
