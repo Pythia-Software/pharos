@@ -41,7 +41,7 @@ func (c *Catalog) textSearchEditorOptions(ctx context.Context) (map[string]any, 
 		{"providers", `SELECT DISTINCT provider FROM conversations WHERE provider<>'' ORDER BY provider`},
 		{"sources", `SELECT DISTINCT source_kind FROM workspaces WHERE source_kind<>'' ORDER BY source_kind`},
 	} {
-		rows, err := c.DB.QueryContext(ctx, item.query)
+		rows, err := c.reader().QueryContext(ctx, item.query)
 		if err != nil {
 			return nil, err
 		}

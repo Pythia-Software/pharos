@@ -143,7 +143,7 @@ func (s *Server) refreshGitInBackground(backfill bool) {
 // to recompute, up to limit.
 func (c *Catalog) libraryPending(limit int) (int, error) {
 	var count int
-	err := c.DB.QueryRow("SELECT COUNT(*) FROM (SELECT 1 FROM workspace_library_dirty LIMIT ?)", limit).Scan(&count)
+	err := c.reader().QueryRow("SELECT COUNT(*) FROM (SELECT 1 FROM workspace_library_dirty LIMIT ?)", limit).Scan(&count)
 	return count, err
 }
 

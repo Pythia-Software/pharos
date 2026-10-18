@@ -190,7 +190,7 @@ SELECT am.agent_session_id,COUNT(*) messages,
  GROUP BY am.agent_session_id`
 
 func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) (*delegationSnapshot, error) {
-	tx, err := c.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := c.reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
 	}

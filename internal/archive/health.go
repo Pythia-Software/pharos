@@ -22,7 +22,7 @@ func (c *Catalog) HealthCounts(ctx context.Context) (map[string]any, error) {
 			"human_messages": "SELECT COUNT(*) FROM messages WHERE role='user' AND kind='message'",
 		} {
 			var value int64
-			if err := c.DB.QueryRowContext(ctx, count).Scan(&value); err != nil {
+			if err := c.reader().QueryRowContext(ctx, count).Scan(&value); err != nil {
 				return nil, err
 			}
 			result[table] = value
@@ -68,7 +68,7 @@ func (c *Catalog) PricingHealth(ctx context.Context) (map[string]any, error) {
 // UsageAttributionHealth compares root sessions with the retained request
 // ledger. Sources with only aggregate counters are reported separately.
 func (c *Catalog) UsageAttributionHealth(ctx context.Context) ([]map[string]any, error) {
-	return queryMapsContext(ctx, c.DB, `WITH roots AS (
+	return queryMapsContext(ctx, c.reader(), `WITH roots AS (
 		SELECT c.id,w.source_kind,c.provider,
 			(SELECT COALESCE(SUM(total_tokens),0) FROM agent_sessions s WHERE s.conversation_id=c.id AND s.depth=0) session_tokens,
 			(SELECT COALESCE(SUM(total_tokens),0) FROM model_requests m WHERE m.conversation_id=c.id) request_tokens
@@ -106,7 +106,7 @@ func (c *Catalog) Health() map[string]any {
 }
 
 func (c *Catalog) tokenUsageByModel() []map[string]any {
-	rows, err := queryMaps(c.DB, `WITH metric_totals AS (
+	rows, err := queryMaps(c.reader(), `WITH metric_totals AS (
 		SELECT workspace_id,conversation_id,
 			COALESCE(
 				MAX(CASE WHEN name='total_tokens' THEN value END),

@@ -27,7 +27,7 @@ const maxPreferenceBytes = 512 << 10
 // UIPreferences returns every stored preference, keyed by name.
 func (c *Catalog) UIPreferences(ctx context.Context) (map[string]json.RawMessage, error) {
 	values := map[string]json.RawMessage{}
-	rows, err := c.DB.QueryContext(ctx, "SELECT key,value FROM ui_preferences")
+	rows, err := c.reader().QueryContext(ctx, "SELECT key,value FROM ui_preferences")
 	if err != nil {
 		return nil, err
 	}

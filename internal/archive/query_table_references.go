@@ -53,7 +53,7 @@ func (s *Server) queryObjectReferences(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), queryTableDeadline)
 	defer cancel()
-	tx, err := s.Catalog.DB.BeginTx(ctx, nil)
+	tx, err := s.Catalog.reader().BeginTx(ctx, nil)
 	if err != nil {
 		writeError(w, err, 500)
 		return

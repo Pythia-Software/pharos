@@ -515,3 +515,32 @@ func TestAuthorshipManualRefreshHonorsRunCancellation(t *testing.T) {
 		})
 	}
 }
+
+func TestAuthorshipInputsSeeMirrorLinksCachedBeforeARun(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	for _, id := range []string{"native", "wrapper"} {
+		if _, err := catalog.DB.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES(?,?,?,?,?,?)`, id, "codex", "local", id, id, "2026-10-18"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := catalog.DB.Exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES(?,?,?,?,?)`, "c-"+id, id, "codex", "local", id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := catalog.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES(?,?,?,?,?,?,?,?)`, "m-"+id, "c-"+id, "m-"+id, "user", "message", "Fix the parser", "hash-"+id, "2026-10-18T12:00:00Z"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A page caches the links, then a run reconciles a mirror within the hold.
+	catalog.suppressMirrors(nil)
+	catalog.ingestRuns.Add(1)
+	defer catalog.ingestRuns.Add(-1)
+	if _, err := catalog.DB.Exec(`INSERT INTO conversation_identity_links(left_id,right_id,relationship,confidence,evidence_json) VALUES('c-native','c-wrapper','mirror',1,'{}')`); err != nil {
+		t.Fatal(err)
+	}
+	inputs, _, err := catalog.authorshipInputs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs) != 1 {
+		t.Fatalf("authorship classified a mirror the run just linked: %+v", inputs)
+	}
+}

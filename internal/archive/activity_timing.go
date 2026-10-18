@@ -23,7 +23,7 @@ func activityTimingKind(runKind string) string {
 
 func (s *Server) activityDurations(kind string) []float64 {
 	var value string
-	if s.Catalog == nil || s.Catalog.DB.QueryRow("SELECT value FROM meta WHERE key=?", activityTimingKey(kind)).Scan(&value) != nil {
+	if s.Catalog == nil || s.Catalog.reader().QueryRow("SELECT value FROM meta WHERE key=?", activityTimingKey(kind)).Scan(&value) != nil {
 		return nil
 	}
 	var durations []float64

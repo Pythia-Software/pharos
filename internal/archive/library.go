@@ -625,7 +625,7 @@ func (c *Catalog) libraryRows(ctx context.Context, predicate string, args []any,
 	live := libraryRowSelect(func(column libraryColumn) string { return "(" + column.expr + ")" }, fields) +
 		" WHERE (w.id IN (SELECT workspace_id FROM workspace_library_dirty)" +
 		" OR w.id NOT IN (SELECT workspace_id FROM workspace_library))" + predicate
-	tx, err := c.DB.BeginTx(ctx, nil)
+	tx, err := c.reader().BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -701,7 +701,7 @@ func (c *Catalog) attachLibraryPreviews(ctx context.Context, page []map[string]a
 		ids[index] = firstString(row["id"])
 	}
 	listed := placeholders(len(ids))
-	previews, err := queryMapsContext(ctx, c.DB, `SELECT workspace_id,first_input_id,last_response_id FROM workspace_previews
+	previews, err := queryMapsContext(ctx, c.reader(), `SELECT workspace_id,first_input_id,last_response_id FROM workspace_previews
 		WHERE workspace_id IN (`+listed+`) UNION ALL `+libraryPreviewSelect(`w.id IN (`+listed+`)
 		AND w.id NOT IN (SELECT workspace_id FROM workspace_previews)`), append(ids, ids...)...)
 	if err != nil {
@@ -718,7 +718,7 @@ func (c *Catalog) attachLibraryPreviews(ctx context.Context, page []map[string]a
 	}
 	texts := map[string]any{}
 	if len(messageIDs) > 0 {
-		messages, err := queryMapsContext(ctx, c.DB, "SELECT id,text FROM messages WHERE id IN ("+placeholders(len(messageIDs))+")", messageIDs...)
+		messages, err := queryMapsContext(ctx, c.reader(), "SELECT id,text FROM messages WHERE id IN ("+placeholders(len(messageIDs))+")", messageIDs...)
 		if err != nil {
 			return err
 		}

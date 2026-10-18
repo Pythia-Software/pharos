@@ -337,17 +337,17 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 			limit = 1000
 		}
 		offset := max(queryInt(r, "offset", 0), 0)
-		rows, err := queryMaps(s.Catalog.DB, "SELECT * FROM messages WHERE conversation_id=? ORDER BY source_order IS NULL,source_order,created_at,id LIMIT ? OFFSET ?", id, limit, offset)
+		rows, err := queryMaps(s.Catalog.reader(), "SELECT * FROM messages WHERE conversation_id=? ORDER BY source_order IS NULL,source_order,created_at,id LIMIT ? OFFSET ?", id, limit, offset)
 		writeResult(w, map[string]any{"items": rows, "limit": limit, "offset": offset}, err)
 	case strings.HasPrefix(path, "/api/change/"):
 		id := strings.TrimPrefix(path, "/api/change/")
-		change, err := queryMaps(s.Catalog.DB, "SELECT * FROM change_sets WHERE id=?", id)
+		change, err := queryMaps(s.Catalog.reader(), "SELECT * FROM change_sets WHERE id=?", id)
 		if err != nil {
 			writeError(w, err, 500)
 		} else if len(change) == 0 {
 			writeJSON(w, map[string]any{"error": "not found"}, 404)
 		} else {
-			files, e := queryMaps(s.Catalog.DB, "SELECT * FROM change_files WHERE change_set_id=?", id)
+			files, e := queryMaps(s.Catalog.reader(), "SELECT * FROM change_files WHERE change_set_id=?", id)
 			writeResult(w, map[string]any{"change": change[0], "files": files}, e)
 		}
 	case path == "/api/tl1" || strings.HasPrefix(path, "/api/tl1/"):
@@ -457,7 +457,7 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeResult(w, value, err)
 	case strings.HasPrefix(path, "/api/receipt/"):
 		id := strings.TrimPrefix(path, "/api/receipt/")
-		rows, err := queryMaps(s.Catalog.DB, "SELECT * FROM receipts WHERE id=? OR operation_id=?", id, id)
+		rows, err := queryMaps(s.Catalog.reader(), "SELECT * FROM receipts WHERE id=? OR operation_id=?", id, id)
 		if err != nil {
 			writeError(w, err, 500)
 		} else if len(rows) == 0 {
@@ -736,7 +736,7 @@ func (s *Server) setSourceEnabled(name string, enabled bool) error {
 
 func (s *Server) sourceInventory() (map[string]any, error) {
 	var ingestedDocuments, totalConversations int
-	if err := s.Catalog.DB.QueryRow(`SELECT
+	if err := s.Catalog.reader().QueryRow(`SELECT
 		(SELECT COUNT(*) FROM conversation_documents),
 		(SELECT COUNT(*) FROM conversations)`).Scan(&ingestedDocuments, &totalConversations); err != nil {
 		return nil, err

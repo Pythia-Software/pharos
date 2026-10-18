@@ -217,7 +217,7 @@ type priceBook struct {
 }
 
 func (c *Catalog) loadPriceBook() (priceBook, error) {
-	return c.loadPriceBookFrom(context.Background(), c.DB)
+	return c.loadPriceBookFrom(context.Background(), c.reader())
 }
 
 func (c *Catalog) loadPriceBookFrom(ctx context.Context, db queryer) (priceBook, error) {
@@ -401,7 +401,7 @@ func (c *Catalog) pricingHealth() map[string]any {
 		"unpriced_models": []map[string]any{}, "assumed_models": []map[string]any{}}
 	for _, status := range []string{"confirmed", "proposed"} {
 		var changes int64
-		_ = c.DB.QueryRow("SELECT COUNT(*) FROM cost_changes WHERE status=?", status).Scan(&changes)
+		_ = c.reader().QueryRow("SELECT COUNT(*) FROM cost_changes WHERE status=?", status).Scan(&changes)
 		health[status+"_changes"] = changes
 	}
 	rows, err := c.localUsageRows(context.Background())

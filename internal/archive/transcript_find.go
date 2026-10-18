@@ -715,7 +715,7 @@ func (c *Catalog) workspaceTranscripts(ctx context.Context, workspaceID string) 
 // fields (a failing one is an event, a Bash one a command).
 func (c *Catalog) readWorkspaceTranscripts(ctx context.Context, workspaceID string) (*workspaceTranscripts, error) {
 	workspace := &workspaceTranscripts{id: workspaceID, conversations: map[string]*conversationTranscript{}}
-	rows, err := c.DB.QueryContext(ctx, `SELECT c.id,COALESCE(m.id,''),COALESCE(m.native_id,''),COALESCE(m.role,''),COALESCE(m.kind,''),COALESCE(m.parent_native_id,''),COALESCE(m.call_id,''),
+	rows, err := c.reader().QueryContext(ctx, `SELECT c.id,COALESCE(m.id,''),COALESCE(m.native_id,''),COALESCE(m.role,''),COALESCE(m.kind,''),COALESCE(m.parent_native_id,''),COALESCE(m.call_id,''),
 		CASE WHEN m.kind IN ('tool_result','delegation_result') THEN NULL ELSE COALESCE(m.text,'') END
 		FROM conversations c LEFT JOIN messages m ON m.conversation_id=c.id WHERE c.workspace_id=?
 		ORDER BY c.started_at,c.id,m.source_order IS NULL,m.source_order,m.created_at,m.id`, workspaceID)
@@ -768,7 +768,7 @@ func (c *Catalog) readWorkspaceTranscripts(ctx context.Context, workspaceID stri
 	rows.Close()
 	for _, conversation := range pending {
 		for _, row := range conversation.rows {
-			if err := c.DB.QueryRowContext(ctx, "SELECT COALESCE(text,'') FROM messages WHERE id=?", conversation.ids[row]).Scan(&conversation.records[row].Text); err != nil {
+			if err := c.reader().QueryRowContext(ctx, "SELECT COALESCE(text,'') FROM messages WHERE id=?", conversation.ids[row]).Scan(&conversation.records[row].Text); err != nil {
 				return nil, err
 			}
 		}
@@ -842,7 +842,7 @@ func (c *Catalog) WorkConversationMatches(ctx context.Context, workspaceID strin
 			narrow = " AND (" + narrow + ")"
 		}
 	}
-	rows, err := c.DB.QueryContext(ctx, `SELECT m.conversation_id,m.id,COALESCE(m.native_id,''),COALESCE(m.role,''),COALESCE(m.kind,''),COALESCE(m.parent_native_id,''),COALESCE(m.call_id,''),COALESCE(m.text,'')
+	rows, err := c.reader().QueryContext(ctx, `SELECT m.conversation_id,m.id,COALESCE(m.native_id,''),COALESCE(m.role,''),COALESCE(m.kind,''),COALESCE(m.parent_native_id,''),COALESCE(m.call_id,''),COALESCE(m.text,'')
 		FROM conversations c JOIN messages m ON m.conversation_id=c.id WHERE c.workspace_id=?`+narrow, args...)
 	if err != nil {
 		return nil, err

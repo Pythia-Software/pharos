@@ -166,7 +166,7 @@ func (s *Server) getQueryTable(w http.ResponseWriter, r *http.Request, dataset, 
 				return
 			}
 		}
-		result, err := table.Distinct(r.Context(), s.Catalog.DB, field, r.URL.Query().Get("q"), limit, schema)
+		result, err := table.Distinct(r.Context(), s.Catalog.reader(), field, r.URL.Query().Get("q"), limit, schema)
 		if err != nil {
 			writeError(w, err, http.StatusBadRequest)
 			return
@@ -220,7 +220,7 @@ func (s *Server) getFieldStats(w http.ResponseWriter, r *http.Request, dataset s
 				return
 			}
 		}
-		result, err = table.FieldStats(r.Context(), s.Catalog.DB, fields, schema)
+		result, err = table.FieldStats(r.Context(), s.Catalog.reader(), fields, schema)
 	} else {
 		var rows []map[string]any
 		values := r.URL.Query()
@@ -432,7 +432,7 @@ func (s *Server) postSQLQueryTable(w http.ResponseWriter, r *http.Request, datas
 		if query.Limit == 0 {
 			query.Limit = 100
 		}
-		result, err := table.Rows(r.Context(), s.Catalog.DB, query, schema)
+		result, err := table.Rows(r.Context(), s.Catalog.reader(), query, schema)
 		if err != nil {
 			writeError(w, err, http.StatusBadRequest)
 			return
@@ -454,7 +454,7 @@ func (s *Server) postSQLQueryTable(w http.ResponseWriter, r *http.Request, datas
 			writeError(w, fmt.Errorf("aggregation json: %w", err), http.StatusBadRequest)
 			return
 		}
-		result, err := table.Aggregate(r.Context(), s.Catalog.DB, request, schema)
+		result, err := table.Aggregate(r.Context(), s.Catalog.reader(), request, schema)
 		if err != nil {
 			writeError(w, err, http.StatusBadRequest)
 			return

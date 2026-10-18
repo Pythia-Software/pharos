@@ -50,7 +50,7 @@ func (c *Catalog) WorkOverview(id string) (map[string]any, error) {
 		// The prompt labels the conversation picker; a sub-agent's is its
 		// assignment. The unary + keeps SQLite on the conversation index
 		// instead of scanning every prompt in the catalog.
-		if err := c.DB.QueryRow(`SELECT text FROM messages WHERE conversation_id=? AND +role IN ('user','agent') AND +kind='message'
+		if err := c.reader().QueryRow(`SELECT text FROM messages WHERE conversation_id=? AND +role IN ('user','agent') AND +kind='message'
 			ORDER BY source_order IS NULL,source_order,created_at,id LIMIT 1`, conversation["id"]).Scan(&prompt); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
@@ -72,7 +72,7 @@ var githubPullPattern = regexp.MustCompile(`(?i)https?://github\.com/[^/\s"'\\]+
 // discoveredPullRequests finds GitHub pull request links mentioned anywhere in
 // the workspace's messages, in first-mention order.
 func (c *Catalog) discoveredPullRequests(workspaceID string) ([]map[string]any, error) {
-	rows, err := c.DB.Query(`SELECT m.text,COALESCE(m.raw_text,'') FROM messages m JOIN conversations c ON c.id=m.conversation_id
+	rows, err := c.reader().Query(`SELECT m.text,COALESCE(m.raw_text,'') FROM messages m JOIN conversations c ON c.id=m.conversation_id
 		WHERE c.workspace_id=? AND (instr(m.text,'/pull/')>0 OR instr(m.raw_text,'/pull/')>0)
 		ORDER BY c.started_at,c.id,m.source_order IS NULL,m.source_order,m.created_at,m.id`, workspaceID)
 	if err != nil {
@@ -102,7 +102,7 @@ func (c *Catalog) discoveredPullRequests(workspaceID string) ([]map[string]any, 
 // workFileTargets lists files the workspace's tool calls acted on, each with
 // the first conversation that did, so the page's file index can open it.
 func (c *Catalog) workFileTargets(workspaceID string) ([]map[string]any, error) {
-	rows, err := queryMaps(c.DB, `SELECT t.file_path path,t.conversation_id FROM tool_calls t
+	rows, err := queryMaps(c.reader(), `SELECT t.file_path path,t.conversation_id FROM tool_calls t
 		JOIN conversations c ON c.id=t.conversation_id
 		WHERE t.workspace_id=? AND t.file_path IS NOT NULL AND t.file_path<>''
 		ORDER BY c.started_at,t.conversation_id,t.sequence`, workspaceID)
@@ -131,12 +131,12 @@ func (c *Catalog) WorkConversation(workspaceID, conversationID string) (map[stri
 // workConversation is WorkConversation, optionally leaving every body whole
 // (a shared export carries the full text, so its reader never asks for more).
 func (c *Catalog) workConversation(workspaceID, conversationID string, clip bool) (map[string]any, error) {
-	rows, err := queryMaps(c.DB, "SELECT * FROM conversations WHERE id=? AND workspace_id=?", conversationID, workspaceID)
+	rows, err := queryMaps(c.reader(), "SELECT * FROM conversations WHERE id=? AND workspace_id=?", conversationID, workspaceID)
 	if err != nil || len(rows) == 0 {
 		return nil, err
 	}
 	conversation := rows[0]
-	sessions, err := queryMaps(c.DB, `SELECT * FROM agent_sessions WHERE workspace_id=? AND conversation_id=? AND usage_status<>'in-child-conversation'`, workspaceID, conversationID)
+	sessions, err := queryMaps(c.reader(), `SELECT * FROM agent_sessions WHERE workspace_id=? AND conversation_id=? AND usage_status<>'in-child-conversation'`, workspaceID, conversationID)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +154,7 @@ func (c *Catalog) workConversation(workspaceID, conversationID string, clip bool
 			clipReaderMessage(message)
 		}
 	}
-	messages, err := queryMapsTransformContext(context.Background(), c.DB, "SELECT "+readerMessageColumns+",source_order FROM messages WHERE conversation_id=?", prepare, conversationID)
+	messages, err := queryMapsTransformContext(context.Background(), c.reader(), "SELECT "+readerMessageColumns+",source_order FROM messages WHERE conversation_id=?", prepare, conversationID)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +211,7 @@ func (c *Catalog) workConversation(workspaceID, conversationID string, clip bool
 
 // MessageOriginal returns a message's complete text and raw source record.
 func (c *Catalog) MessageOriginal(id string) (map[string]any, error) {
-	rows, err := queryMaps(c.DB, "SELECT id,text,raw_text FROM messages WHERE id=?", id)
+	rows, err := queryMaps(c.reader(), "SELECT id,text,raw_text FROM messages WHERE id=?", id)
 	if err != nil || len(rows) == 0 {
 		return nil, err
 	}

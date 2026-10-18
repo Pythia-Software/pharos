@@ -76,7 +76,7 @@ func (c *Catalog) upgradeRunning() bool {
 func (c *Catalog) UpgradeSteps(ctx context.Context) ([]upgradeStep, error) {
 	count := func(query string, args ...any) (int64, error) {
 		var value int64
-		err := c.DB.QueryRowContext(ctx, query, args...).Scan(&value)
+		err := c.reader().QueryRowContext(ctx, query, args...).Scan(&value)
 		return value, err
 	}
 	merged, err := c.metaValue(ctx, "repository_merge_version")
@@ -150,7 +150,7 @@ func (c *Catalog) UpgradeStatus(ctx context.Context) (map[string]any, error) {
 	for _, step := range steps {
 		pending += step.Pending
 	}
-	renames, err := repositoryRenames(c.DB)
+	renames, err := repositoryRenames(c.reader())
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +213,7 @@ func (c *Catalog) rememberGitHubStatus(status string) {
 // resolved through the gh tool first; without it the plan still runs on remotes,
 // root commits, and checkouts, and renamed repositories may stay separate.
 func (c *Catalog) repositoryMergeGroups(ctx context.Context) ([]repositoryIdentity, []repositoryMergeGroup, error) {
-	items, err := loadRepositoryIdentities(c.DB)
+	items, err := loadRepositoryIdentities(c.reader())
 	if err != nil {
 		return nil, nil, err
 	}

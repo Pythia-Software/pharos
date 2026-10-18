@@ -105,7 +105,7 @@ var textSearchEpoch = fmt.Sprint(time.Now().UnixNano())
 
 func (c *Catalog) textSearchGeneration(ctx context.Context, o TextSearchOptions) (string, error) {
 	var generation string
-	err := c.DB.QueryRowContext(ctx, `SELECT
+	err := c.reader().QueryRowContext(ctx, `SELECT
  CASE WHEN EXISTS(SELECT 1 FROM meta WHERE key='text_search_cursor_version' AND value='2') THEN
  '2:' || value || ':' || CASE WHEN ? THEN COALESCE((SELECT value FROM meta WHERE key='text_search_span_generation'),'0') ELSE '-' END ||
  ':' || CASE WHEN ? THEN COALESCE((SELECT value FROM meta WHERE key='text_search_append_generation'),'0') ELSE '-' END
@@ -370,7 +370,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	}
 	if o.Surface == "reasoning" && ready {
 		var n int
-		e = c.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM text_search_documents WHERE surface='reasoning')`).Scan(&n)
+		e = c.reader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM text_search_documents WHERE surface='reasoning')`).Scan(&n)
 		if e != nil {
 			return result, e
 		}
@@ -540,7 +540,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 		if ready && small {
 			boundsSQL = `SELECT MIN(fr.fts_rowid),MAX(fr.fts_rowid),count(*),count(fr.fts_rowid) FROM text_search_documents m LEFT JOIN message_fts_rows fr ON fr.message_id=m.message_id WHERE m.byte_length>0 AND ` + scope
 		}
-		e = c.DB.QueryRowContext(ctx, boundsSQL, args...).Scan(&low, &high, &total, &mapped)
+		e = c.reader().QueryRowContext(ctx, boundsSQL, args...).Scan(&low, &high, &total, &mapped)
 		if e != nil {
 			return result, fmt.Errorf("scope planning exceeded its budget; narrow the workspace selection: %w", e)
 		}
@@ -566,7 +566,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 		}
 		defer verifier.db.Close()
 	}
-	rows, e := c.DB.QueryContext(ctx, selectSQL, arguments...)
+	rows, e := c.reader().QueryContext(ctx, selectSQL, arguments...)
 	if e != nil {
 		if ctx.Err() != nil && parent.Err() == nil {
 			result.StopReason = "time_budget"
@@ -632,7 +632,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 			// Defer strict/NOT verification until the selected span: an excluded word
 			// elsewhere in the message must not exclude a matching typed span.
 			ok = false
-			spans, e := queryMapsContext(ctx, c.DB, `SELECT start_byte,end_byte FROM message_authorship_spans WHERE message_id=? AND category=? ORDER BY position`, item.MessageID, o.Surface)
+			spans, e := queryMapsContext(ctx, c.reader(), `SELECT start_byte,end_byte FROM message_authorship_spans WHERE message_id=? AND category=? ORDER BY position`, item.MessageID, o.Surface)
 			if e != nil {
 				if ctx.Err() != nil {
 					result.StopReason = "time_budget"

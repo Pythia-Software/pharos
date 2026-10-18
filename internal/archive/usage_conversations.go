@@ -15,7 +15,7 @@ type usageConversationAttribution struct {
 // even across workspaces. Filename forks are continuations of the same work.
 // Missing parents and cycles remain unresolved rather than inventing a root.
 func (c *Catalog) usageConversationRoots(ledger []map[string]any) (*usageConversationAttribution, error) {
-	conversations, err := queryMaps(c.DB, `SELECT c.id,c.workspace_id,c.parent_id,c.agent_depth,c.provider,
+	conversations, err := queryMaps(c.reader(), `SELECT c.id,c.workspace_id,c.parent_id,c.agent_depth,c.provider,
 		COALESCE(NULLIF(c.model,''),a.model) model,COALESCE(NULLIF(c.effort,''),a.effort) effort,
 		w.title root_title,r.display_name root_repository_name
 		FROM conversations c LEFT JOIN agent_sessions a ON a.conversation_id=c.id AND a.native_id='main'
@@ -23,15 +23,15 @@ func (c *Catalog) usageConversationRoots(ledger []map[string]any) (*usageConvers
 	if err != nil {
 		return nil, err
 	}
-	sessions, err := queryMaps(c.DB, `SELECT id,native_id,kind,conversation_id,parent_id,child_conversation_id FROM agent_sessions ORDER BY id`)
+	sessions, err := queryMaps(c.reader(), `SELECT id,native_id,kind,conversation_id,parent_id,child_conversation_id FROM agent_sessions ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
-	links, err := queryMaps(c.DB, `SELECT left_id,right_id FROM conversation_identity_links ORDER BY left_id,right_id`)
+	links, err := queryMaps(c.reader(), `SELECT left_id,right_id FROM conversation_identity_links ORDER BY left_id,right_id`)
 	if err != nil {
 		return nil, err
 	}
-	launches, err := queryMaps(c.DB, `SELECT child_id,parent_id FROM conversation_launches ORDER BY child_id,parent_id`)
+	launches, err := queryMaps(c.reader(), `SELECT child_id,parent_id FROM conversation_launches ORDER BY child_id,parent_id`)
 	if err != nil {
 		return nil, err
 	}

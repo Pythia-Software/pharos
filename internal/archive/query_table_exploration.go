@@ -89,7 +89,7 @@ const querySnapshotCount = 10_000
 type pharosQuerySnapshotStore struct{ Catalog *Catalog }
 
 func (s pharosQuerySnapshotStore) Resolve(ctx context.Context, scope, dataset, code string) (qt.QuerySnapshot, error) {
-	return (qt.SQLQuerySnapshotStore{DB: s.Catalog.DB}).Resolve(ctx, scope, dataset, code)
+	return (qt.SQLQuerySnapshotStore{DB: s.Catalog.reader()}).Resolve(ctx, scope, dataset, code)
 }
 func (s pharosQuerySnapshotStore) Save(ctx context.Context, scope, dataset string, snapshot qt.QuerySnapshot) (qt.QuerySnapshot, error) {
 	if err := qt.ValidateQuerySnapshot(snapshot); err != nil {

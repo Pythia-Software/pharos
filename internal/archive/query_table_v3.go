@@ -70,7 +70,7 @@ func (s *Server) postQueryV3(w http.ResponseWriter, r *http.Request, dataset str
 // Map-backed datasets stage only these inputs; unrelated message/tool payloads
 // never have to be copied to SQLite just to count or group their records.
 func (s *Server) queryV3SourceFields(ctx context.Context, schema qt.Schema, q qt.QueryRequestV3) ([]string, error) {
-	tx, err := s.Catalog.DB.BeginTx(ctx, nil)
+	tx, err := s.Catalog.reader().BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +111,7 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 		}
 		if err == nil {
 			var bounds map[string][2]string
-			bounds, err = queryBucketBounds(ctx, s.Catalog.DB, where)
+			bounds, err = queryBucketBounds(ctx, s.Catalog.reader(), where)
 			if err == nil {
 				projected, _ := table.project(required).preferCoveringScan(where)
 				d.SourceSQL, d.SourceArgs = projected.v2WindowedSource(schema, where, time.UnixMilli(q.Now), bounds)
@@ -194,7 +194,7 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 	if memoryScratch {
 		mode = 2
 	}
-	tx, release, err := beginQueryWithTempStore(ctx, s.Catalog.DB, mode)
+	tx, release, err := beginQueryWithTempStore(ctx, s.Catalog.reader(), mode)
 	if err != nil {
 		return qt.QueryResultV3{}, nil, err
 	}

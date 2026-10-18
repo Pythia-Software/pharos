@@ -102,6 +102,9 @@ func OpenCatalogForQuery(path string) (*Catalog, error) {
 	if err == nil && !current {
 		err = catalog.initializeLocked(false)
 	}
+	if err == nil {
+		err = catalog.openReader()
+	}
 	if err != nil {
 		db.Close()
 		return nil, err
@@ -156,6 +159,9 @@ func (c *Catalog) initializeLocked(wait bool) error {
 // checkpointed. SQLite still checkpoints when the last connection of any
 // process closes, which leaves nothing to replay if the drive is then pulled.
 func (c *Catalog) closeQuery() error {
+	if c.reads != nil {
+		_ = c.reads.Close()
+	}
 	c.boundWAL(walSizeLimit)
 	c.library.mu.Lock()
 	c.library.close()

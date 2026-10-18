@@ -116,7 +116,7 @@ func (attempt *tl1Attempt) agentError() bool {
 // tl1Installations lists every indexed installation, most recently active
 // first, with the Mac it runs on.
 func (c *Catalog) tl1Installations() ([]map[string]any, error) {
-	return queryMaps(c.DB, `SELECT i.installation_id,i.project,i.repository,i.config_path,i.database_path,i.transcripts_dir,i.synced_at,i.host_id,h.label host_label,
+	return queryMaps(c.reader(), `SELECT i.installation_id,i.project,i.repository,i.config_path,i.database_path,i.transcripts_dir,i.synced_at,i.host_id,h.label host_label,
 		(SELECT COUNT(*) FROM tl1_tasks t WHERE t.installation_id=i.installation_id) tasks,
 		(SELECT COUNT(*) FROM tl1_attempts a WHERE a.installation_id=i.installation_id) attempts,
 		(SELECT MAX(t.created_at) FROM tl1_tasks t WHERE t.installation_id=i.installation_id) last_task_at
@@ -200,7 +200,7 @@ func (c *Catalog) loadTL1(installations []map[string]any, window tl1Window) (*tl
 	flavorNames := map[string]map[string]string{}
 	for _, installation := range installations {
 		installationID := firstString(installation["installation_id"])
-		flavors, err := queryMaps(c.DB, "SELECT * FROM tl1_flavors WHERE installation_id=?", installationID)
+		flavors, err := queryMaps(c.reader(), "SELECT * FROM tl1_flavors WHERE installation_id=?", installationID)
 		if err != nil {
 			return nil, err
 		}
@@ -215,7 +215,7 @@ func (c *Catalog) loadTL1(installations []map[string]any, window tl1Window) (*tl
 				data.Flavors[flavor.Name] = flavor
 			}
 		}
-		tasks, err := queryMaps(c.DB, "SELECT * FROM tl1_tasks WHERE installation_id=? ORDER BY created_at,task_id", installationID)
+		tasks, err := queryMaps(c.reader(), "SELECT * FROM tl1_tasks WHERE installation_id=? ORDER BY created_at,task_id", installationID)
 		if err != nil {
 			return nil, err
 		}
@@ -290,7 +290,7 @@ func (c *Catalog) loadTL1(installations []map[string]any, window tl1Window) (*tl
 			}
 			return nil
 		}
-		attempts, err := queryMaps(c.DB, "SELECT * FROM tl1_attempts WHERE installation_id=? ORDER BY task_id,attempt_number", installationID)
+		attempts, err := queryMaps(c.reader(), "SELECT * FROM tl1_attempts WHERE installation_id=? ORDER BY task_id,attempt_number", installationID)
 		if err != nil {
 			return nil, err
 		}
@@ -343,7 +343,7 @@ func (c *Catalog) loadTL1(installations []map[string]any, window tl1Window) (*tl
 			task.Attempts = append(task.Attempts, attempt)
 			data.Attempts = append(data.Attempts, attempt)
 		}
-		candidates, err := queryMaps(c.DB, "SELECT * FROM tl1_candidates WHERE installation_id=?", installationID)
+		candidates, err := queryMaps(c.reader(), "SELECT * FROM tl1_candidates WHERE installation_id=?", installationID)
 		if err != nil {
 			return nil, err
 		}
@@ -373,7 +373,7 @@ func (c *Catalog) loadTL1(installations []map[string]any, window tl1Window) (*tl
 			{"SELECT * FROM tl1_review_findings WHERE installation_id=? ORDER BY created_at", &data.Findings},
 			{"SELECT * FROM tl1_human_touches WHERE installation_id=? ORDER BY created_at", &data.Touches},
 		} {
-			rows, err := queryMaps(c.DB, target.query, installationID)
+			rows, err := queryMaps(c.reader(), target.query, installationID)
 			if err != nil {
 				return nil, err
 			}
@@ -381,7 +381,7 @@ func (c *Catalog) loadTL1(installations []map[string]any, window tl1Window) (*tl
 		}
 		// Health is each Mac's own TL1 judging a configuration; flavor IDs are
 		// its own too.
-		health, err := queryMaps(c.DB, "SELECT * FROM tl1_configuration_health WHERE installation_id=?", installationID)
+		health, err := queryMaps(c.reader(), "SELECT * FROM tl1_configuration_health WHERE installation_id=?", installationID)
 		if err != nil {
 			return nil, err
 		}
@@ -426,7 +426,7 @@ func (c *Catalog) tl1AttemptUsage(installationID string) (map[string]*tl1Usage, 
 		sums[index] = "u." + field
 	}
 	prefix := installationID + ":"
-	rows, err := queryMaps(c.DB, `SELECT c.native_id,u.usage_hour,u.model usage_model,s.model session_model,`+strings.Join(sums, ",")+`
+	rows, err := queryMaps(c.reader(), `SELECT c.native_id,u.usage_hour,u.model usage_model,s.model session_model,`+strings.Join(sums, ",")+`
 		FROM conversations c JOIN workspaces w ON w.id=c.workspace_id JOIN agent_sessions s ON s.conversation_id=c.id JOIN agent_session_usage u ON u.agent_session_id=s.id
 		WHERE w.source_kind='tl1' AND c.native_id>=? AND c.native_id<? AND u.total_tokens>0`, prefix, prefix+"￿")
 	if err != nil {

@@ -182,7 +182,7 @@ func (c *Catalog) sharedDatasets(ctx context.Context, ids []string) (map[string]
 		return nil, nil, err
 	}
 	usage = slices.DeleteFunc(slices.Clone(usage), func(row map[string]any) bool { return !slices.Contains(ids, firstString(row["workspace_id"])) })
-	toolCalls, err := toolCallDataset.scopedRows(ctx, c.DB, "t.workspace_id IN ("+scope+")", args, "id")
+	toolCalls, err := toolCallDataset.scopedRows(ctx, c.reader(), "t.workspace_id IN ("+scope+")", args, "id")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -197,7 +197,7 @@ func (c *Catalog) sharedDatasets(ctx context.Context, ids []string) (map[string]
 	if err != nil {
 		return nil, nil, err
 	}
-	skills, err := skillUsageDataset.scopedRows(ctx, c.DB, "s.workspace_id IN ("+scope+")", args, "id")
+	skills, err := skillUsageDataset.scopedRows(ctx, c.reader(), "s.workspace_id IN ("+scope+")", args, "id")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -280,7 +280,7 @@ func (c *Catalog) sharedToolRollup(ctx context.Context, ids []string) ([]map[str
 	if err != nil {
 		return nil, err
 	}
-	conn, err := c.DB.Conn(ctx)
+	conn, err := c.reader().Conn(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -325,7 +325,7 @@ func (c *Catalog) sharedToolRollup(ctx context.Context, ids []string) ([]map[str
 // its table row: clipped input and result text, its shell commands, and the
 // URLs it reached.
 func (c *Catalog) sharedToolCallDetails(ctx context.Context, scope string, args []any) (map[string]map[string]any, error) {
-	calls, err := queryMapsContext(ctx, c.DB, `SELECT t.id,cm.text call_text,rm.text result_text FROM tool_calls t
+	calls, err := queryMapsContext(ctx, c.reader(), `SELECT t.id,cm.text call_text,rm.text result_text FROM tool_calls t
 		LEFT JOIN messages cm ON cm.id=t.call_message_id LEFT JOIN messages rm ON rm.id=t.result_message_id
 		WHERE t.workspace_id IN (`+scope+`)`, args...)
 	if err != nil {
@@ -342,7 +342,7 @@ func (c *Catalog) sharedToolCallDetails(ctx context.Context, scope string, args 
 		"urls":     "SELECT u.tool_call_id,u.position,u.url,u.host,u.source FROM tool_urls u JOIN tool_calls t ON t.id=u.tool_call_id",
 	} {
 		orderColumn := map[string]string{"commands": "c", "urls": "u"}[key]
-		rows, err := queryMapsContext(ctx, c.DB, query+" WHERE t.workspace_id IN ("+scope+") ORDER BY "+orderColumn+".tool_call_id,"+orderColumn+".position", args...)
+		rows, err := queryMapsContext(ctx, c.reader(), query+" WHERE t.workspace_id IN ("+scope+") ORDER BY "+orderColumn+".tool_call_id,"+orderColumn+".position", args...)
 		if err != nil {
 			return nil, err
 		}

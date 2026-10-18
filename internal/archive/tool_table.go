@@ -177,7 +177,7 @@ func toolCallText(call map[string]any, callText, resultText string, limit int) {
 // toolCallDetail returns one call with its input, a bounded excerpt of its
 // result, its shell commands, and the requests around it.
 func (c *Catalog) toolCallDetail(ctx context.Context, id string) (map[string]any, error) {
-	result, err := toolCallDataset.Rows(ctx, c.DB, querytable.Query{Where: []querytable.WhereTerm{{Field: "id", Op: "=", Value: id}}, Limit: 1},
+	result, err := toolCallDataset.Rows(ctx, c.reader(), querytable.Query{Where: []querytable.WhereTerm{{Field: "id", Op: "=", Value: id}}, Limit: 1},
 		querytable.Schema{IDField: "id", Fields: map[string]querytable.Field{"id": {Name: "id", Kind: querytable.Text, Filterable: true, Sortable: true}}})
 	if err != nil {
 		return nil, err
@@ -189,7 +189,7 @@ func (c *Catalog) toolCallDetail(ctx context.Context, id string) (map[string]any
 	if err := c.priceToolCalls(result.Rows); err != nil {
 		return nil, err
 	}
-	links, err := queryMapsContext(ctx, c.DB, `SELECT t.call_message_id,t.result_message_id,t.request_id,t.next_request_id FROM tool_calls t WHERE t.id=?`, id)
+	links, err := queryMapsContext(ctx, c.reader(), `SELECT t.call_message_id,t.result_message_id,t.request_id,t.next_request_id FROM tool_calls t WHERE t.id=?`, id)
 	if err != nil || len(links) == 0 {
 		return call, err
 	}
@@ -197,19 +197,19 @@ func (c *Catalog) toolCallDetail(ctx context.Context, id string) (map[string]any
 	messageText := func(messageID any) string {
 		var text string
 		if messageID != nil {
-			_ = c.DB.QueryRowContext(ctx, "SELECT text FROM messages WHERE id=?", messageID).Scan(&text)
+			_ = c.reader().QueryRowContext(ctx, "SELECT text FROM messages WHERE id=?", messageID).Scan(&text)
 		}
 		return text
 	}
 	// Show the tool input and result content rather than the stored envelopes.
 	toolCallText(call, messageText(link["call_message_id"]), messageText(link["result_message_id"]), 20000)
-	commands, err := queryMapsContext(ctx, c.DB, `SELECT position,operator,command,program,subcommand,category,exit_code,duration_ms
+	commands, err := queryMapsContext(ctx, c.reader(), `SELECT position,operator,command,program,subcommand,category,exit_code,duration_ms
 		FROM tool_commands WHERE tool_call_id=? ORDER BY position`, id)
 	if err != nil {
 		return nil, err
 	}
 	call["commands"] = commands
-	urls, err := queryMapsContext(ctx, c.DB, `SELECT position,url,host,source FROM tool_urls WHERE tool_call_id=? ORDER BY position`, id)
+	urls, err := queryMapsContext(ctx, c.reader(), `SELECT position,url,host,source FROM tool_urls WHERE tool_call_id=? ORDER BY position`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +218,7 @@ func (c *Catalog) toolCallDetail(ctx context.Context, id string) (map[string]any
 		if requestID == nil {
 			continue
 		}
-		requests, err := queryMapsContext(ctx, c.DB, `SELECT id,native_id,requested_at,model,effort,input_tokens,cache_read_input_tokens,
+		requests, err := queryMapsContext(ctx, c.reader(), `SELECT id,native_id,requested_at,model,effort,input_tokens,cache_read_input_tokens,
 			cache_creation_input_tokens,output_tokens,context_growth_tokens,compacted_before,tool_call_count FROM model_requests WHERE id=?`, requestID)
 		if err != nil {
 			return nil, err

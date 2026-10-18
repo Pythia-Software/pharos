@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/url"
@@ -44,6 +45,43 @@ func catalogDSN(path string) string {
 		"&_pragma=synchronous(FULL)&_pragma=fullfsync(%d)&_pragma=checkpoint_fullfsync(1)&_pragma=journal_size_limit(%d)"+
 		"&_pragma=cache_size(-32768)&_pragma=mmap_size(268435456)",
 		busyTimeoutMS, fullfsync, walSizeLimit)
+}
+
+// Request reads use a separate read-only pool (see Catalog.reader), so the
+// connections background work keeps checked out during a sync (the tool
+// rollup, the authorship scan, the findings snapshot) cannot leave a page
+// waiting for one. In WAL a reader never waits on the writer; it reads the last
+// commit. The page cache is per connection, so it is smaller than the writer
+// pool's; the shared mmap does most of the caching.
+const readerConns = 8
+
+func readerDSN(path string) string {
+	return (&url.URL{Scheme: "file", Path: path}).String() + fmt.Sprintf("?mode=ro&_pragma=busy_timeout(%d)"+
+		"&_pragma=cache_size(-16384)&_pragma=mmap_size(268435456)", busyTimeoutMS)
+}
+
+// openReader opens c's read pool. It is lazy: no connection opens until a
+// read, by which time the writer pool has put the catalog in WAL mode.
+func (c *Catalog) openReader() error {
+	db, err := sql.Open("sqlite", readerDSN(c.Path))
+	if err != nil {
+		return err
+	}
+	db.SetMaxOpenConns(readerConns)
+	db.SetMaxIdleConns(readerConns)
+	c.reads = db
+	return nil
+}
+
+// reader is the pool for reads that serve requests. A catalog opened without
+// one (a findings run, an audit's reference copy) reads through DB. Writes
+// through it fail, and so would a read that needs this connection's own
+// uncommitted writes; TEMP tables still work.
+func (c *Catalog) reader() *sql.DB {
+	if c.reads != nil {
+		return c.reads
+	}
+	return c.DB
 }
 
 var errCheckpointBusy = errors.New("catalog checkpoint incomplete: the WAL is still in use")

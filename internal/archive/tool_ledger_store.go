@@ -384,7 +384,7 @@ func (c *Catalog) toolLedgerProgress() toolLedgerBuild {
 // ToolLedgerStatus reports ledger coverage and any in-process backfill.
 func (c *Catalog) ToolLedgerStatus(ctx context.Context) (map[string]any, error) {
 	var conversations, current, calls int64
-	if err := c.DB.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM conversations),
+	if err := c.reader().QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM conversations),
 		(SELECT COUNT(*) FROM tool_ledger_state WHERE version=?),
 		(SELECT COALESCE(SUM(tool_calls),0) FROM tool_ledger_state WHERE version=?)`, toolLedgerVersion, toolLedgerVersion).Scan(&conversations, &current, &calls); err != nil {
 		return nil, err
@@ -401,7 +401,7 @@ func (c *Catalog) ToolLedgerStatus(ctx context.Context) (map[string]any, error) 
 
 func (c *Catalog) metaValue(ctx context.Context, key string) (string, error) {
 	var value string
-	err := c.DB.QueryRowContext(ctx, "SELECT value FROM meta WHERE key=?", key).Scan(&value)
+	err := c.reader().QueryRowContext(ctx, "SELECT value FROM meta WHERE key=?", key).Scan(&value)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
@@ -426,7 +426,7 @@ func (c *Catalog) toolRollupStale(ctx context.Context) (generation, built, day s
 		return generation, built, day, false, err
 	}
 	var dirty bool
-	err = c.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tool_rollup_dirty) OR
+	err = c.reader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tool_rollup_dirty) OR
  COALESCE((SELECT value FROM meta WHERE key='tool_rollup_full_revision'),'')<>COALESCE((SELECT value FROM meta WHERE key='tool_rollup_built_full_revision'),'') OR
  COALESCE((SELECT value FROM meta WHERE key='tool_rollup_timezone'),'')<>?`, toolRollupTimezone()).Scan(&dirty)
 	return generation, built, day, generation != built || day != builtDay || dirty, err
@@ -445,7 +445,7 @@ func (c *Catalog) currentToolRollup(ctx context.Context) error {
 		return c.ensureToolRollup(ctx)
 	}
 	var deferred bool
-	if err := c.DB.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sync_deferred WHERE name='tools' AND generation>completed_generation)").Scan(&deferred); err != nil {
+	if err := c.reader().QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sync_deferred WHERE name='tools' AND generation>completed_generation)").Scan(&deferred); err != nil {
 		return err
 	}
 	if deferred {

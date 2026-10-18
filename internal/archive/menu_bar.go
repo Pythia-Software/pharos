@@ -37,7 +37,7 @@ func (s *Server) menuBarStatus(ctx context.Context) (map[string]any, error) {
 	status["library"] = s.libraryStatus()
 	var indexed string
 	hostID := currentHost().ID
-	err = s.Catalog.DB.QueryRowContext(ctx, `SELECT COALESCE(MAX(at),'') FROM (
+	err = s.Catalog.reader().QueryRowContext(ctx, `SELECT COALESCE(MAX(at),'') FROM (
 		SELECT last_success_at at FROM source_states WHERE host_id=?
 		UNION ALL SELECT indexed_at at FROM automatic_source_states WHERE host_id=?)`, hostID, hostID).Scan(&indexed)
 	if err != nil {
@@ -46,7 +46,7 @@ func (s *Server) menuBarStatus(ctx context.Context) (map[string]any, error) {
 	status["indexed_at"] = indexed
 	// Prefer the most recent attempt for each source: a later successful
 	// manual index clears an earlier automatic failure, and vice versa.
-	issues, err := queryMapsContext(ctx, s.Catalog.DB, `WITH attempts AS (
+	issues, err := queryMapsContext(ctx, s.Catalog.reader(), `WITH attempts AS (
 		SELECT source_name,last_attempt_at at,error FROM source_states WHERE host_id=?
 		UNION ALL SELECT source_name,attempted_at at,error FROM automatic_source_states WHERE host_id=?
 	), latest AS (SELECT *,ROW_NUMBER() OVER (PARTITION BY source_name ORDER BY at DESC) n FROM attempts)
@@ -88,7 +88,7 @@ func (s *Server) menuBarStatus(ctx context.Context) (map[string]any, error) {
 		}
 	}
 	var openIssues int
-	if err := s.Catalog.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM sync_integrity_issues WHERE state='open'").Scan(&openIssues); err != nil {
+	if err := s.Catalog.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM sync_integrity_issues WHERE state='open'").Scan(&openIssues); err != nil {
 		return nil, err
 	}
 	if problem == "" && openIssues > 0 {

@@ -20,6 +20,7 @@ import (
 type Catalog struct {
 	Path               string
 	DB                 *sql.DB
+	reads              *sql.DB
 	RepositoryAliases  map[string]string
 	RepositorySeparate []string
 	captureRootMu      sync.RWMutex
@@ -47,6 +48,8 @@ type Catalog struct {
 	// work and waits for it before closing the catalog; nil runs a goroutine.
 	background        func(work func(context.Context)) bool
 	projectionBatches atomic.Int32
+	// ingestRuns counts this process's running ingests (see cacheVersion).
+	ingestRuns atomic.Int32
 }
 
 // runBackground starts work with background, or in a goroutine when it is
@@ -76,6 +79,10 @@ func OpenCatalog(path string) (*Catalog, error) {
 	db.SetMaxIdleConns(4)
 	catalog := &Catalog{Path: path, DB: db, captureRoot: filepath.Join(filepath.Dir(path), "captures")}
 	if err := catalog.initializeLocked(true); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := catalog.openReader(); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -112,6 +119,10 @@ func (c *Catalog) Close() error {
 	c.derived.mu.Lock()
 	c.derived.close()
 	c.derived.mu.Unlock()
+	// Readers' snapshots would keep the checkpoint below from truncating.
+	if c.reads != nil {
+		_ = c.reads.Close()
+	}
 	// The last connection to close deletes the WAL, but only when no other
 	// process (an MCP server, the app) has the catalog open. Empty it either
 	// way so the next opener, possibly on another Mac, has no log to replay.
@@ -747,7 +758,7 @@ type queryer interface {
 // library is attached to them.
 func (c *Catalog) Freshness() map[string]any {
 	host := currentHost()
-	rows, err := queryMaps(c.DB, `SELECT s.*,COALESCE(h.label,s.host_id) host_label FROM source_states s
+	rows, err := queryMaps(c.reader(), `SELECT s.*,COALESCE(h.label,s.host_id) host_label FROM source_states s
 		LEFT JOIN hosts h ON h.id=s.host_id ORDER BY s.source_name,s.host_id`)
 	if err != nil {
 		return map[string]any{"sources": []any{}, "stale_sources": 0, "status": "stale", "error": err.Error(), "host": host}
@@ -998,27 +1009,27 @@ func (c *Catalog) WorkDetail(id string) (map[string]any, error) {
 }
 
 func (c *Catalog) workDetail(id string, includeMessages bool) (map[string]any, error) {
-	rows, err := queryMaps(c.DB, `SELECT w.*,r.display_name repository_name,r.canonical_remote,r.local_locations_json repository_locations_json FROM workspaces w
+	rows, err := queryMaps(c.reader(), `SELECT w.*,r.display_name repository_name,r.canonical_remote,r.local_locations_json repository_locations_json FROM workspaces w
 		LEFT JOIN repositories r ON r.id=w.repository_id WHERE w.id=?`, id)
 	if err != nil || len(rows) == 0 {
 		return nil, err
 	}
 	result := rows[0]
-	conversations, err := queryMaps(c.DB, "SELECT * FROM conversations WHERE workspace_id=? ORDER BY started_at", id)
+	conversations, err := queryMaps(c.reader(), "SELECT * FROM conversations WHERE workspace_id=? ORDER BY started_at", id)
 	if err != nil {
 		return nil, err
 	}
 	for _, conversation := range conversations {
 		if !includeMessages {
 			var count int
-			if err := c.DB.QueryRow("SELECT COUNT(*) FROM messages WHERE conversation_id=?", conversation["id"]).Scan(&count); err != nil {
+			if err := c.reader().QueryRow("SELECT COUNT(*) FROM messages WHERE conversation_id=?", conversation["id"]).Scan(&count); err != nil {
 				return nil, err
 			}
 			conversation["message_count"] = count
 			conversation["message_access"] = map[string]any{"tool": "get_conversation_messages", "conversation_id": conversation["id"]}
 			continue
 		}
-		messages, e := queryMaps(c.DB, "SELECT * FROM messages WHERE conversation_id=? ORDER BY source_order IS NULL,source_order,created_at,id", conversation["id"])
+		messages, e := queryMaps(c.reader(), "SELECT * FROM messages WHERE conversation_id=? ORDER BY source_order IS NULL,source_order,created_at,id", conversation["id"])
 		if e != nil {
 			return nil, e
 		}
@@ -1055,7 +1066,7 @@ func (c *Catalog) workDetail(id string, includeMessages bool) (map[string]any, e
 		if !includeMessages && (query.key == "agent_sessions" || query.key == "metric_ledger" || query.key == "sightings") {
 			continue
 		}
-		values, e := queryMaps(c.DB, query.sql, id)
+		values, e := queryMaps(c.reader(), query.sql, id)
 		if e != nil {
 			return nil, e
 		}
@@ -1078,19 +1089,19 @@ func (c *Catalog) workDetail(id string, includeMessages bool) (map[string]any, e
 			}
 		}
 	}
-	summary, _ := queryMaps(c.DB, "SELECT * FROM summaries WHERE workspace_id=?", id)
+	summary, _ := queryMaps(c.reader(), "SELECT * FROM summaries WHERE workspace_id=?", id)
 	if len(summary) > 0 {
 		result["summary"] = summary[0]
 	} else {
 		result["summary"] = nil
 	}
-	receipt, _ := queryMaps(c.DB, "SELECT * FROM receipts WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1", id)
+	receipt, _ := queryMaps(c.reader(), "SELECT * FROM receipts WHERE workspace_id=? ORDER BY created_at DESC LIMIT 1", id)
 	if len(receipt) > 0 {
 		result["receipt"] = receipt[0]
 	} else {
 		result["receipt"] = nil
 	}
-	links, _ := queryMaps(c.DB, `SELECT l.relationship,l.confidence,l.evidence_json,
+	links, _ := queryMaps(c.reader(), `SELECT l.relationship,l.confidence,l.evidence_json,
 		CASE WHEN a.workspace_id=? THEN b.workspace_id ELSE a.workspace_id END related_workspace_id,
 		CASE WHEN a.workspace_id=? THEN b.provider ELSE a.provider END related_provider
 		FROM conversation_identity_links l JOIN conversations a ON a.id=l.left_id JOIN conversations b ON b.id=l.right_id
@@ -1099,10 +1110,13 @@ func (c *Catalog) workDetail(id string, includeMessages bool) (map[string]any, e
 	return result, nil
 }
 
+// identityLinkWorkspacesSQL pairs the workspaces of linked conversations.
+const identityLinkWorkspacesSQL = `SELECT a.workspace_id left_workspace,b.workspace_id right_workspace FROM conversation_identity_links l
+	JOIN conversations a ON a.id=l.left_id JOIN conversations b ON b.id=l.right_id`
+
 func (c *Catalog) suppressMirrors(rows []map[string]any) []map[string]any {
 	links, _ := cachedValue(context.Background(), c, "identity-links", func(context.Context) ([]map[string]any, error) {
-		return queryMaps(c.DB, `SELECT a.workspace_id left_workspace,b.workspace_id right_workspace FROM conversation_identity_links l
-			JOIN conversations a ON a.id=l.left_id JOIN conversations b ON b.id=l.right_id`)
+		return queryMaps(c.reader(), identityLinkWorkspacesSQL)
 	})
 	return suppressMirrorRows(rows, links)
 }

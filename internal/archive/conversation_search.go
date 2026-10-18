@@ -183,7 +183,7 @@ func (c *Catalog) fuzzyTermsWith(ctx context.Context, word string, prefixLength,
 	if edits > 0 {
 		maxDistance = edits
 	}
-	rows, err := c.DB.QueryContext(ctx, `SELECT term FROM messages_vocab WHERE term>=? AND term<? AND length(term) BETWEEN ? AND ?`,
+	rows, err := c.reader().QueryContext(ctx, `SELECT term FROM messages_vocab WHERE term>=? AND term<? AND length(term) BETWEEN ? AND ?`,
 		prefix, prefix+"\uffff", len([]rune(word))-maxDistance, len([]rune(word))+maxDistance)
 	if err != nil {
 		return nil, err
@@ -284,7 +284,7 @@ func (c *Catalog) findFiles(ctx context.Context, o LibraryFindOptions) ([]librar
 		scope = " AND cs.workspace_id IN (SELECT value FROM json_each(?))"
 		args = append(args, jsonText(o.Search.WorkspaceIDs))
 	}
-	rows, err := queryMapsContext(ctx, c.DB, `WITH matching_changes AS (
+	rows, err := queryMapsContext(ctx, c.reader(), `WITH matching_changes AS (
 		SELECT cf.path,cf.old_path,cs.id change_set_id,cs.workspace_id,cs.created_at,cs.attempt_id
 		FROM change_files cf JOIN change_sets cs ON cs.id=cf.change_set_id
 		WHERE (`+comparison+`)`+scope+`
@@ -315,7 +315,7 @@ func (c *Catalog) findFiles(ctx context.Context, o LibraryFindOptions) ([]librar
 		}
 		if len(chosen) == 0 && firstString(row["attempt_id"]) != "" {
 			var workItem string
-			_ = c.DB.QueryRowContext(ctx, `SELECT work_item_id FROM task_attempts WHERE id=?`, row["attempt_id"]).Scan(&workItem)
+			_ = c.reader().QueryRowContext(ctx, `SELECT work_item_id FROM task_attempts WHERE id=?`, row["attempt_id"]).Scan(&workItem)
 			for _, candidate := range group {
 				if workItem != "" && firstString(candidate["work_item_id"]) == workItem {
 					chosen = append(chosen, candidate)
@@ -387,7 +387,7 @@ func (c *Catalog) findURLs(ctx context.Context, o LibraryFindOptions) ([]library
 		scope = " AND t.workspace_id IN (SELECT value FROM json_each(?))"
 		args = append(args, jsonText(o.Search.WorkspaceIDs))
 	}
-	rows, err := queryMapsContext(ctx, c.DB, `SELECT u.url,u.source,t.id tool_call_id,t.tool_name,t.call_message_id,t.conversation_id,
+	rows, err := queryMapsContext(ctx, c.reader(), `SELECT u.url,u.source,t.id tool_call_id,t.tool_name,t.call_message_id,t.conversation_id,
 		t.workspace_id,w.title,c.provider,c.started_at FROM tool_urls u JOIN tool_calls t ON t.id=u.tool_call_id
 		JOIN conversations c ON c.id=t.conversation_id JOIN workspaces w ON w.id=t.workspace_id
 		WHERE u.source<>'search_result' AND (`+comparison+`)`+scope+` ORDER BY t.started_at DESC LIMIT 5001`, args...)

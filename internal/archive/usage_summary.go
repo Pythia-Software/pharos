@@ -45,7 +45,7 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 	}
 
 	c.ensureAuthorship()
-	rows, err := c.DB.QueryContext(ctx, usageSummaryAuthorshipSQL)
+	rows, err := c.reader().QueryContext(ctx, usageSummaryAuthorshipSQL)
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +72,7 @@ func (c *Catalog) UsageSummary(ctx context.Context) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	book, err := c.loadPriceBookFrom(ctx, c.DB)
+	book, err := c.loadPriceBookFrom(ctx, c.reader())
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +146,7 @@ const usageSummaryLedgerSQL = `SELECT a.workspace_id,w.source_kind,u.usage_hour,
 	WHERE u.total_tokens>0`
 
 func (c *Catalog) usageSummaryLedger(ctx context.Context) ([]usageSummaryEntry, error) {
-	rows, err := c.DB.QueryContext(ctx, usageSummaryLedgerSQL)
+	rows, err := c.reader().QueryContext(ctx, usageSummaryLedgerSQL)
 	if err != nil {
 		return nil, err
 	}
