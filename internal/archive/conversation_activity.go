@@ -20,7 +20,7 @@ func (c *Catalog) conversationActivityRows(ctx context.Context) ([]map[string]an
 		if err != nil {
 			return nil, err
 		}
-		messages, err := queryMapsContext(ctx, c.DB, `SELECT message_id,conversation_id,sent_at,
+		messages, err := queryMapsContext(ctx, c.reader(), `SELECT message_id,conversation_id,sent_at,
 			MAX(total_chars-harness_chars-automated_chars,0) human_chars
 			FROM message_authorship WHERE total_chars>harness_chars+automated_chars ORDER BY sent_at,message_id`)
 		if err != nil {

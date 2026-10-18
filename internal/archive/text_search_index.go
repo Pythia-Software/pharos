@@ -10,7 +10,7 @@ import (
 
 func (c *Catalog) textSearchReady(ctx context.Context) (bool, error) {
 	var version string
-	err := c.DB.QueryRowContext(ctx, `SELECT value FROM meta WHERE key='text_search_documents_version'`).Scan(&version)
+	err := c.reader().QueryRowContext(ctx, `SELECT value FROM meta WHERE key='text_search_documents_version'`).Scan(&version)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}

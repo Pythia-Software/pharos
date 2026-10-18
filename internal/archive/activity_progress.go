@@ -111,7 +111,7 @@ func (s *Server) recordWorkTiming(kind string, work activityWork, completed time
 func (s *Server) workTimings(key string) []workTiming {
 	var value string
 	var history []workTiming
-	if s.Catalog != nil && s.Catalog.DB.QueryRow("SELECT value FROM meta WHERE key=?", key).Scan(&value) == nil {
+	if s.Catalog != nil && s.Catalog.reader().QueryRow("SELECT value FROM meta WHERE key=?", key).Scan(&value) == nil {
 		if json.Unmarshal([]byte(value), &history) != nil {
 			return nil
 		}

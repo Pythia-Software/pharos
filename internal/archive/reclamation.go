@@ -103,7 +103,7 @@ func (c *Catalog) RefreshUpcoming(config Config) ([]map[string]any, error) {
 	return output, nil
 }
 func (c *Catalog) Upcoming() (map[string]any, error) {
-	items, err := queryMaps(c.DB, `SELECT r.*,w.title,w.source_id,w.activity_at,w.activity_source,w.location,EXISTS(SELECT 1 FROM protections p WHERE p.scope_type='workspace' AND p.scope_id=w.id) protected FROM reclamation r JOIN workspaces w ON w.id=r.workspace_id WHERE r.state IN ('upcoming','protected','blocked','preparing','verified','reclaiming') ORDER BY r.scheduled_at`)
+	items, err := queryMaps(c.reader(), `SELECT r.*,w.title,w.source_id,w.activity_at,w.activity_source,w.location,EXISTS(SELECT 1 FROM protections p WHERE p.scope_type='workspace' AND p.scope_id=w.id) protected FROM reclamation r JOIN workspaces w ON w.id=r.workspace_id WHERE r.state IN ('upcoming','protected','blocked','preparing','verified','reclaiming') ORDER BY r.scheduled_at`)
 	return map[string]any{"items": items}, err
 }
 
@@ -112,7 +112,7 @@ func (c *Catalog) Upcoming() (map[string]any, error) {
 // Health cards).
 func (c *Catalog) reclamationHealth() map[string]any {
 	reclamation := map[string]any{"total": int64(0), "blocked_bytes": int64(0), "eligible_bytes": int64(0), "reclaimed_bytes": int64(0)}
-	rows, err := queryMaps(c.DB, `SELECT COUNT(*) total,
+	rows, err := queryMaps(c.reader(), `SELECT COUNT(*) total,
 		COALESCE(SUM(CASE WHEN state='blocked' THEN estimated_reclaimable_bytes ELSE 0 END),0) blocked_bytes,
 		COALESCE(SUM(CASE WHEN state IN ('upcoming','verified') THEN estimated_reclaimable_bytes ELSE 0 END),0) eligible_bytes,
 		COALESCE(SUM(CASE WHEN state='reclaimed' THEN MAX(before_bytes-after_bytes,0) ELSE 0 END),0) reclaimed_bytes

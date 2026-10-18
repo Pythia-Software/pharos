@@ -365,7 +365,7 @@ func (s *Server) getQueryCapabilities(w http.ResponseWriter, r *http.Request, da
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), queryTableDeadline)
 	defer cancel()
-	tx, err := s.Catalog.DB.BeginTx(ctx, nil)
+	tx, err := s.Catalog.reader().BeginTx(ctx, nil)
 	if err != nil {
 		writeError(w, err, 500)
 		return
@@ -728,11 +728,11 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 			where = metrics.Where
 		}
 		var e error
-		bounds, e = queryBucketBounds(ctx, s.Catalog.DB, where)
+		bounds, e = queryBucketBounds(ctx, s.Catalog.reader(), where)
 		if e != nil {
 			return queryV2ExecutionResult{}, e
 		}
-		names, e := queryV2SourceFields(ctx, s.Catalog.DB, schema, rowRequest, metrics, clock)
+		names, e := queryV2SourceFields(ctx, s.Catalog.reader(), schema, rowRequest, metrics, clock)
 		if e != nil {
 			return queryV2ExecutionResult{}, e
 		}
@@ -753,7 +753,7 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 		d.SourceSQL, d.SourceArgs = projected.v2WindowedSource(schema, where, clock, bounds)
 	} else {
 		var err error
-		sourceNames, err = queryV2SourceFields(ctx, s.Catalog.DB, schema, rowRequest, metrics, clock)
+		sourceNames, err = queryV2SourceFields(ctx, s.Catalog.reader(), schema, rowRequest, metrics, clock)
 		if err != nil {
 			return queryV2ExecutionResult{}, err
 		}
@@ -841,7 +841,7 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 		copy.Where = nil
 		rowRequest = &copy
 	}
-	tx, release, err := beginQueryV2(ctx, s.Catalog.DB)
+	tx, release, err := beginQueryV2(ctx, s.Catalog.reader())
 	if err != nil {
 		return queryV2ExecutionResult{}, err
 	}

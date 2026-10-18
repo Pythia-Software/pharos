@@ -460,7 +460,7 @@ const pendingInstructionsQuery = `FROM conversations c JOIN workspaces w ON w.id
 
 func (c *Catalog) pendingInstructions(ctx context.Context) (int64, error) {
 	var count int64
-	err := c.DB.QueryRowContext(ctx, "SELECT COUNT(*) "+pendingInstructionsQuery, instructionsVersion).Scan(&count)
+	err := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) "+pendingInstructionsQuery, instructionsVersion).Scan(&count)
 	return count, err
 }
 

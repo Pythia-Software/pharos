@@ -60,3 +60,51 @@ func TestDerivedValuesAreComputedOncePerCommit(t *testing.T) {
 		t.Fatalf("a commit did not recompute: %d computations", calls.Load())
 	}
 }
+
+func TestCachesOutliveCommitsDuringARun(t *testing.T) {
+	catalog, _ := libraryFixture(t)
+	other := otherProcess(t, catalog)
+	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.Local)
+	catalog.now = func() time.Time { return now }
+	var calls atomic.Int32
+	compute := func(context.Context) (int32, error) { return calls.Add(1), nil }
+	commit := func() {
+		t.Helper()
+		if _, err := other.DB.Exec(`UPDATE workspaces SET title=title||'.' WHERE id='c'`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	value := func() int32 {
+		t.Helper()
+		value, err := cachedValue(context.Background(), catalog, "answer", compute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	if value() != 1 {
+		t.Fatal("first value")
+	}
+	catalog.ingestRuns.Add(1)
+	commit()
+	now = now.Add(runCacheHold - time.Second)
+	if got := value(); got != 1 {
+		t.Fatalf("a commit during a run recomputed within the hold: %d", got)
+	}
+	now = now.Add(2 * time.Second)
+	if got := value(); got != 2 {
+		t.Fatalf("a value outlived the hold: %d", got)
+	}
+	commit()
+	if got := value(); got != 2 {
+		t.Fatalf("a commit right after the hold renewed recomputed: %d", got)
+	}
+	catalog.ingestRuns.Add(-1)
+	if got := value(); got != 3 {
+		t.Fatalf("the run ended without the next read seeing its commits: %d", got)
+	}
+	commit()
+	if got := value(); got != 4 {
+		t.Fatalf("a commit outside a run did not recompute: %d", got)
+	}
+}

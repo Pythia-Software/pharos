@@ -45,7 +45,7 @@ func pricingRepository() string {
 
 func (c *Catalog) pricingRefreshPrompt(health map[string]any) string {
 	today := time.Now().Format("2006-01-02")
-	latest, _ := queryMaps(c.DB, `SELECT provider,MAX(effective_from) effective_from,MAX(retrieved_at) retrieved_at,COUNT(*) rows
+	latest, _ := queryMaps(c.reader(), `SELECT provider,MAX(effective_from) effective_from,MAX(retrieved_at) retrieved_at,COUNT(*) rows
 		FROM cost_changes WHERE status<>'rejected' GROUP BY provider ORDER BY provider`)
 	repository := pricingRepository()
 	location := "the Pharos repository (https://github.com/gbdubs/pharos)"

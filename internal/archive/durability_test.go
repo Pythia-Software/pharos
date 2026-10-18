@@ -255,3 +255,27 @@ func TestBeginWriteHoldsTheWriteLockFromItsFirstStatement(t *testing.T) {
 		t.Fatalf("write lock not released on commit: %v", err)
 	}
 }
+
+func TestRequestReadsDoNotWaitForWriterConnections(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	ctx := context.Background()
+	// Background work can keep every writer connection checked out at once.
+	for range 4 {
+		conn, err := catalog.DB.Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+	}
+	read, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if _, err := catalog.UIPreferences(read); err != nil {
+		t.Fatalf("a request read waited for a writer connection: %v", err)
+	}
+	if _, err := catalog.reader().ExecContext(read, "INSERT INTO meta(key,value) VALUES('reader-write','1')"); err == nil {
+		t.Fatal("the read pool accepted a write")
+	}
+	if _, err := catalog.reader().ExecContext(read, "CREATE TEMP TABLE scratch(x)"); err != nil {
+		t.Fatalf("the read pool cannot stage TEMP tables: %v", err)
+	}
+}

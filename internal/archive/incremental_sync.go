@@ -76,7 +76,7 @@ func (c *Catalog) syncSettings(ctx context.Context) (syncSettings, error) {
 	settings := syncSettings{Interval: 300, Sources: []string{}}
 	var enabled int
 	var sources string
-	err := c.DB.QueryRowContext(ctx, "SELECT enabled,interval_seconds,sources_json,COALESCE(next_at,'') FROM sync_settings WHERE host_id=?", currentHost().ID).
+	err := c.reader().QueryRowContext(ctx, "SELECT enabled,interval_seconds,sources_json,COALESCE(next_at,'') FROM sync_settings WHERE host_id=?", currentHost().ID).
 		Scan(&enabled, &settings.Interval, &sources, &settings.NextAt)
 	if err == sql.ErrNoRows {
 		return settings, nil
@@ -458,7 +458,7 @@ func (s *Server) getIncrementalSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == "/api/sync/issues" {
-		rows, err := queryMapsContext(r.Context(), s.Catalog.DB, "SELECT * FROM sync_integrity_issues ORDER BY last_at DESC LIMIT 100")
+		rows, err := queryMapsContext(r.Context(), s.Catalog.reader(), "SELECT * FROM sync_integrity_issues ORDER BY last_at DESC LIMIT 100")
 		writeResult(w, map[string]any{"issues": rows}, err)
 		return
 	}
@@ -468,11 +468,11 @@ func (s *Server) getIncrementalSync(w http.ResponseWriter, r *http.Request) {
 			writeResult(w, value, err)
 			return
 		}
-		rows, err := queryMapsContext(r.Context(), s.Catalog.DB, "SELECT * FROM sync_recovery_jobs ORDER BY created_at DESC LIMIT 30")
+		rows, err := queryMapsContext(r.Context(), s.Catalog.reader(), "SELECT * FROM sync_recovery_jobs ORDER BY created_at DESC LIMIT 30")
 		writeResult(w, map[string]any{"jobs": rows}, err)
 		return
 	}
-	history, err := queryMapsContext(r.Context(), s.Catalog.DB, "SELECT finished_at,sample_json FROM sync_history WHERE host_id=? ORDER BY id DESC LIMIT 200", currentHost().ID)
+	history, err := queryMapsContext(r.Context(), s.Catalog.reader(), "SELECT finished_at,sample_json FROM sync_history WHERE host_id=? ORDER BY id DESC LIMIT 200", currentHost().ID)
 	if err != nil {
 		writeError(w, err, 500)
 		return
@@ -489,7 +489,7 @@ func (s *Server) getIncrementalSync(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"samples": samples, "statistics": syncStatistics(samples, settings.Interval)}, 200)
 		return
 	}
-	states, err := queryMapsContext(r.Context(), s.Catalog.DB, `SELECT a.*,s.last_success_at AS intentional_index_at FROM automatic_source_states a LEFT JOIN source_states s ON s.host_id=a.host_id AND s.source_name=a.source_name WHERE a.host_id=?`, currentHost().ID)
+	states, err := queryMapsContext(r.Context(), s.Catalog.reader(), `SELECT a.*,s.last_success_at AS intentional_index_at FROM automatic_source_states a LEFT JOIN source_states s ON s.host_id=a.host_id AND s.source_name=a.source_name WHERE a.host_id=?`, currentHost().ID)
 	if err != nil {
 		writeError(w, err, 500)
 		return
@@ -501,10 +501,10 @@ func (s *Server) getIncrementalSync(w http.ResponseWriter, r *http.Request) {
 		captured, _ := parseTime(lastCapture)
 		row["pending_preservation"] = !indexed.IsZero() && indexed.After(captured)
 	}
-	deferred, _ := queryMaps(s.Catalog.DB, "SELECT * FROM sync_deferred WHERE generation>completed_generation")
-	coverage, _ := queryMaps(s.Catalog.DB, "SELECT source_name,outcome,COUNT(*) units,MAX(checked_at) last_verification FROM sync_verifications WHERE host_id=? GROUP BY source_name,outcome", currentHost().ID)
-	issues, _ := queryMaps(s.Catalog.DB, "SELECT id,source_name,unit,last_at FROM sync_integrity_issues WHERE state='open' ORDER BY last_at DESC LIMIT 100")
-	jobs, _ := queryMapsContext(r.Context(), s.Catalog.DB, "SELECT * FROM sync_recovery_jobs WHERE state!='complete' ORDER BY updated_at DESC LIMIT 30")
+	deferred, _ := queryMaps(s.Catalog.reader(), "SELECT * FROM sync_deferred WHERE generation>completed_generation")
+	coverage, _ := queryMaps(s.Catalog.reader(), "SELECT source_name,outcome,COUNT(*) units,MAX(checked_at) last_verification FROM sync_verifications WHERE host_id=? GROUP BY source_name,outcome", currentHost().ID)
+	issues, _ := queryMaps(s.Catalog.reader(), "SELECT id,source_name,unit,last_at FROM sync_integrity_issues WHERE state='open' ORDER BY last_at DESC LIMIT 100")
+	jobs, _ := queryMapsContext(r.Context(), s.Catalog.reader(), "SELECT * FROM sync_recovery_jobs WHERE state!='complete' ORDER BY updated_at DESC LIMIT 30")
 	pause := ""
 	if !settings.Enabled {
 		pause = "Off"

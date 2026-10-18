@@ -62,14 +62,14 @@ type substringProgress struct {
 
 func (c *Catalog) substringIndexProgress(ctx context.Context) (substringProgress, error) {
 	var version string
-	err := c.DB.QueryRowContext(ctx, "SELECT value FROM meta WHERE key='message_trigram_version'").Scan(&version)
+	err := c.reader().QueryRowContext(ctx, "SELECT value FROM meta WHERE key='message_trigram_version'").Scan(&version)
 	if err == nil {
 		return substringProgress{Ready: true}, nil
 	} else if err != sql.ErrNoRows {
 		return substringProgress{}, err
 	}
 	var progress substringProgress
-	err = c.DB.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM conversations WHERE rowid<=COALESCE((SELECT CAST(value AS INTEGER) FROM meta WHERE key='message_trigram_cursor'),0)),
+	err = c.reader().QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM conversations WHERE rowid<=COALESCE((SELECT CAST(value AS INTEGER) FROM meta WHERE key='message_trigram_cursor'),0)),
 		(SELECT COUNT(*) FROM conversations)`).Scan(&progress.Done, &progress.Total)
 	return progress, err
 }

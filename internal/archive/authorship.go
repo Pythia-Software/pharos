@@ -1173,8 +1173,15 @@ func (c *Catalog) authorshipInputs(ctx context.Context) ([]authorInput, []conver
 	if err != nil {
 		return nil, nil, err
 	}
+	// Not suppressMirrors: its cached links can predate a running ingest's
+	// identity reconciliation (see cacheVersion), and these results are stored
+	// as current for this generation.
+	links, err := queryMapsContext(ctx, c.DB, identityLinkWorkspacesSQL)
+	if err != nil {
+		return nil, nil, err
+	}
 	representative := map[string]string{}
-	for _, row := range c.suppressMirrors(workspaces) {
+	for _, row := range suppressMirrorRows(workspaces, links) {
 		if mirrors, ok := row["mirrored_workspace_ids"].([]string); ok {
 			for _, id := range mirrors {
 				representative[id] = firstString(row["id"])

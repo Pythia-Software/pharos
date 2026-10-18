@@ -151,7 +151,7 @@ func (c *Catalog) registerHost(host Host, seen string) error {
 }
 
 func (c *Catalog) Hosts() ([]map[string]any, error) {
-	rows, err := queryMaps(c.DB, "SELECT id,label,user_name,first_seen_at,last_seen_at FROM hosts ORDER BY last_seen_at DESC,id")
+	rows, err := queryMaps(c.reader(), "SELECT id,label,user_name,first_seen_at,last_seen_at FROM hosts ORDER BY last_seen_at DESC,id")
 	for _, row := range rows {
 		row["current"] = firstString(row["id"]) == currentHost().ID
 	}

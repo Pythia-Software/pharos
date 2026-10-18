@@ -69,7 +69,7 @@ func (c *Catalog) attachAuthoredText(ctx context.Context, rows []map[string]any)
 	for _, row := range rows {
 		ids = append(ids, row["id"])
 	}
-	spans, err := queryMapsContext(ctx, c.DB, `SELECT message_id,category,rule,reason,start_byte,end_byte,words,source_conversation_id,source_message_id
+	spans, err := queryMapsContext(ctx, c.reader(), `SELECT message_id,category,rule,reason,start_byte,end_byte,words,source_conversation_id,source_message_id
 		FROM message_authorship_spans WHERE message_id IN (`+placeholders(len(ids))+`) ORDER BY message_id,position`, ids...)
 	if err != nil {
 		return err
@@ -89,7 +89,7 @@ func (c *Catalog) attachAuthoredText(ctx context.Context, rows []map[string]any)
 		for id := range sources {
 			list = append(list, id)
 		}
-		found, err := queryMapsContext(ctx, c.DB, `SELECT c.id,c.workspace_id,w.title FROM conversations c JOIN workspaces w ON w.id=c.workspace_id
+		found, err := queryMapsContext(ctx, c.reader(), `SELECT c.id,c.workspace_id,w.title FROM conversations c JOIN workspaces w ON w.id=c.workspace_id
 			WHERE c.id IN (`+placeholders(len(list))+`)`, list...)
 		if err != nil {
 			return err

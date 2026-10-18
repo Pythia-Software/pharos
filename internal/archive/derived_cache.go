@@ -115,7 +115,7 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 			return nil, err
 		}
 		cache.mu.Lock()
-		version, err := cache.versions.read(ctx, c.Path)
+		version, err := c.cacheVersion(ctx, &cache.versions)
 		if err != nil {
 			cache.entries = nil
 			cache.generation++
@@ -188,7 +188,7 @@ func (c *Catalog) catalogVersion(ctx context.Context) (int64, error) {
 	cache := &c.derived
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
-	version, err := cache.versions.read(ctx, c.Path)
+	version, err := c.cacheVersion(ctx, &cache.versions)
 	if err != nil {
 		cache.entries = nil
 		cache.generation++

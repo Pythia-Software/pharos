@@ -62,7 +62,7 @@ func (c *Catalog) cachedLibraryRows(ctx context.Context, fields libraryFields) (
 	defer cache.mu.Unlock()
 	// Read the version before building: source changes during the build leave the
 	// rows tagged older than they are, which only costs an extra rebuild.
-	version, versionErr := cache.dataVersion(ctx, c.Path)
+	version, versionErr := cache.dataVersion(ctx, c)
 	day := c.clock().Format("2006-01-02")
 	current := versionErr == nil && cache.rows != nil && version == cache.version && day == cache.day
 	if current && cache.fields.covers(fields) {
@@ -87,8 +87,8 @@ func (c *Catalog) cachedLibraryRows(ctx context.Context, fields libraryFields) (
 	return slices.Clone(rows), nil
 }
 
-func (cache *libraryCache) dataVersion(ctx context.Context, path string) (int64, error) {
-	version, err := cache.versions.read(ctx, path)
+func (cache *libraryCache) dataVersion(ctx context.Context, c *Catalog) (int64, error) {
+	version, err := c.cacheVersion(ctx, &cache.versions)
 	if err != nil {
 		// A new monitor connection's versions cannot be compared with these rows'.
 		cache.rows = nil
@@ -108,6 +108,36 @@ func (cache *libraryCache) close() {
 type dataVersionMonitor struct {
 	monitor *sql.DB
 	conn    *sql.Conn
+	// version and readAt are the last read, which cacheVersion repeats during
+	// a run.
+	version int64
+	readAt  time.Time
+}
+
+// runCacheHold is how long a cached value may outlive a change while an
+// index, sync, or capture runs. Such a run commits record by record, and each
+// commit would otherwise send every page back to rebuilding from scratch while
+// the run competes for the drive.
+const runCacheHold = 60 * time.Second
+
+// cacheVersion is the catalog version caches compare against. While this
+// process runs an ingest it repeats the version read up to runCacheHold ago,
+// so caches serve what they hold, at most that stale, rather than recompute
+// after every commit. A value computed meanwhile is tagged with the repeated
+// version, older than its data, which costs only an extra rebuild. Once the run
+// ends the next read is current. Only what pages show may come from these
+// caches: work that stores results (the authorship rebuild) reads the catalog
+// itself. Callers serialize access to m.
+func (c *Catalog) cacheVersion(ctx context.Context, m *dataVersionMonitor) (int64, error) {
+	now := c.clock()
+	if c.ingestRuns.Load() > 0 && m.conn != nil && now.Sub(m.readAt) < runCacheHold {
+		return m.version, nil
+	}
+	version, err := m.read(ctx, c.Path)
+	if err == nil {
+		m.version, m.readAt = version, now
+	}
+	return version, err
 }
 
 func (m *dataVersionMonitor) read(ctx context.Context, path string) (int64, error) {
@@ -144,4 +174,5 @@ func (m *dataVersionMonitor) close() {
 		m.monitor.Close()
 	}
 	m.monitor, m.conn = nil, nil
+	m.version, m.readAt = 0, time.Time{}
 }

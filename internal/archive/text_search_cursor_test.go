@@ -57,15 +57,17 @@ var searchHookID atomic.Uint64
 
 func hookTextSearch(t *testing.T, c *Catalog, query, next func(context.Context) error) {
 	t.Helper()
-	original := c.DB
+	original := c.reader()
 	name := fmt.Sprintf("search-hook-%d", searchHookID.Add(1))
 	sql.Register(name, &searchHookDriver{Driver: original.Driver(), query: query, next: next})
 	db, err := sql.Open(name, c.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.DB = db
-	t.Cleanup(func() { db.Close(); c.DB = original })
+	// Searches read through the read pool; writes stay on the writer pool.
+	reads := c.reads
+	c.reads = db
+	t.Cleanup(func() { db.Close(); c.reads = reads })
 }
 
 func TestTextSearchTimeoutRequiresProgress(t *testing.T) {

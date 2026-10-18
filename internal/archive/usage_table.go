@@ -276,7 +276,7 @@ func (c *Catalog) usageLedger(workspaceIDs []string) ([]map[string]any, error) {
 			args = append(args, id)
 		}
 	}
-	return queryMaps(c.DB, `SELECT u.agent_session_id,u.usage_hour,u.model usage_model,u.effort,u.attribution,`+strings.Join(sums, ",")+`,
+	return queryMaps(c.reader(), `SELECT u.agent_session_id,u.usage_hour,u.model usage_model,u.effort,u.attribution,`+strings.Join(sums, ",")+`,
 			a.kind session_kind,a.depth,a.provider,a.model session_model,a.conversation_id,
             CASE WHEN `+currentGroupConversation("c")+` THEN 1 ELSE 0 END current_group_member,
             c.harness,c.harness_version_first,c.harness_version_last,c.harness_version_source,

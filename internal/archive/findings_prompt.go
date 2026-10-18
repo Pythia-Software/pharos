@@ -61,7 +61,7 @@ type repositoryHabit struct {
 // the share that ended in a pull request Pharos recorded.
 func (c *Catalog) repositoryPRHabits(ctx context.Context) (map[string]repositoryHabit, error) {
 	since := formatTime(c.clock().AddDate(0, 0, -60))
-	rows, err := queryMapsContext(ctx, c.DB, `SELECT w.repository_id,COUNT(*) work,SUM(EXISTS(SELECT 1 FROM work_pr_links l WHERE l.workspace_id=w.id)) with_pr
+	rows, err := queryMapsContext(ctx, c.reader(), `SELECT w.repository_id,COUNT(*) work,SUM(EXISTS(SELECT 1 FROM work_pr_links l WHERE l.workspace_id=w.id)) with_pr
 		FROM workspaces w WHERE w.activity_at>=? AND w.repository_id IS NOT NULL AND w.source_kind<>'tl1'
 		AND w.id IN (SELECT workspace_id FROM message_authorship WHERE day>=? AND typed_words>0)
 		AND (EXISTS(SELECT 1 FROM change_sets s WHERE s.workspace_id=w.id) OR EXISTS(SELECT 1 FROM tool_calls t WHERE t.workspace_id=w.id AND t.tool_category='edit'))
@@ -197,11 +197,11 @@ type cartContext struct {
 }
 
 func (c *Catalog) loadCartContext(ctx context.Context) (*cartContext, error) {
-	rows, err := loadFindingRowsAt(ctx, c.DB, c.clock(), "")
+	rows, err := loadFindingRowsAt(ctx, c.reader(), c.clock(), "")
 	if err != nil {
 		return nil, err
 	}
-	states, err := c.findingUserStates(ctx, c.DB)
+	states, err := c.findingUserStates(ctx, c.reader())
 	if err != nil {
 		return nil, err
 	}
@@ -214,18 +214,18 @@ func (c *Catalog) loadCartContext(ctx context.Context) (*cartContext, error) {
 		return nil, err
 	}
 	cart := &cartContext{rows: rows, states: states, settings: settings, habits: habits, repos: map[string]string{}, locations: map[string][]string{}, hosts: map[string]string{}}
-	aliases, err := findingAliasMap(ctx, c.DB)
+	aliases, err := findingAliasMap(ctx, c.reader())
 	if err != nil {
 		return nil, err
 	}
-	cloneRows, err := queryMapsContext(ctx, c.DB, "SELECT id,finding_id,target,ticked,added_at FROM finding_cart_clones ORDER BY added_at")
+	cloneRows, err := queryMapsContext(ctx, c.reader(), "SELECT id,finding_id,target,ticked,added_at FROM finding_cart_clones ORDER BY added_at")
 	if err != nil {
 		return nil, err
 	}
 	for _, row := range cloneRows {
 		cart.clones = append(cart.clones, &findingCartEntry{ID: firstString(row["id"]), FindingID: resolveFindingID(aliases, firstString(row["finding_id"])), Target: firstString(row["target"]), Ticked: integer(row["ticked"]) != 0, AddedAt: firstString(row["added_at"])})
 	}
-	repositories, err := queryMapsContext(ctx, c.DB, "SELECT id,display_name,local_locations_json FROM repositories")
+	repositories, err := queryMapsContext(ctx, c.reader(), "SELECT id,display_name,local_locations_json FROM repositories")
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +233,7 @@ func (c *Catalog) loadCartContext(ctx context.Context) (*cartContext, error) {
 		cart.repos[firstString(row["id"])] = firstString(row["display_name"])
 		cart.locations[firstString(row["id"])] = repositoryStrings(firstString(row["local_locations_json"]))
 	}
-	hosts, err := queryMapsContext(ctx, c.DB, "SELECT id,label FROM hosts")
+	hosts, err := queryMapsContext(ctx, c.reader(), "SELECT id,label FROM hosts")
 	if err != nil {
 		return nil, err
 	}

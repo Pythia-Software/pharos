@@ -598,7 +598,7 @@ func (c *Catalog) FindingDetail(ctx context.Context, id string) (map[string]any,
 	if err != nil {
 		return nil, err
 	}
-	aliases, err := findingAliasMap(ctx, c.DB)
+	aliases, err := findingAliasMap(ctx, c.reader())
 	if err != nil {
 		return nil, err
 	}
@@ -609,7 +609,7 @@ func (c *Catalog) FindingDetail(ctx context.Context, id string) (map[string]any,
 	}
 	state := view.state(row)
 	card := view.card(row, state)
-	daily, err := findingDailyRows(ctx, c.DB, id)
+	daily, err := findingDailyRows(ctx, c.reader(), id)
 	if err != nil {
 		return nil, err
 	}

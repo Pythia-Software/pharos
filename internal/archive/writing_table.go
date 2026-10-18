@@ -74,7 +74,7 @@ func (c *Catalog) computeWritingData(ctx context.Context) (writingTable, error) 
 }
 
 func (c *Catalog) computeWritingDataByPeriod(ctx context.Context, hourly bool) (writingTable, error) {
-	parents, launched, err := foldedParents(ctx, c.DB)
+	parents, launched, err := foldedParents(ctx, c.reader())
 	if err != nil {
 		return writingTable{}, err
 	}
@@ -86,7 +86,7 @@ func (c *Catalog) computeWritingDataByPeriod(ctx context.Context, hourly bool) (
 	for _, column := range authorshipColumns() {
 		sums = append(sums, "SUM("+column+") "+column)
 	}
-	result, err := c.DB.QueryContext(ctx, "SELECT "+strings.Join(sums, ",")+" FROM message_authorship GROUP BY workspace_id,"+period)
+	result, err := c.reader().QueryContext(ctx, "SELECT "+strings.Join(sums, ",")+" FROM message_authorship GROUP BY workspace_id,"+period)
 	if err != nil {
 		return writingTable{}, err
 	}
@@ -123,7 +123,7 @@ func (c *Catalog) computeWritingDataByPeriod(ctx context.Context, hourly bool) (
 	if err := result.Err(); err != nil {
 		return writingTable{}, err
 	}
-	works, err := queryMapsContext(ctx, c.DB, `SELECT w.id,w.title,w.source_kind,r.display_name repository_name,
+	works, err := queryMapsContext(ctx, c.reader(), `SELECT w.id,w.title,w.source_kind,r.display_name repository_name,
 			(SELECT GROUP_CONCAT(DISTINCT cx.provider) FROM conversations cx WHERE cx.workspace_id=w.id) providers
 		FROM workspaces w LEFT JOIN repositories r ON r.id=w.repository_id`)
 	if err != nil {

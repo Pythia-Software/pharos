@@ -89,7 +89,7 @@ func (c *Catalog) searchEvidence(ctx context.Context, options SearchOptions) (ma
 		return evidence[id]
 	}
 	collect := func(query string, args []any, pick func(*searchEvidence) *searchMatches) error {
-		rows, err := queryMapsContext(ctx, c.DB, query, args...)
+		rows, err := queryMapsContext(ctx, c.reader(), query, args...)
 		if err != nil {
 			return err
 		}
@@ -309,7 +309,7 @@ func (c *Catalog) matchSnippets(ctx context.Context, ids []any, terms []string, 
 		holders[index] = "?" + strconv.Itoa(len(terms)+index+1)
 	}
 	args = append(args, ids...)
-	rows, err := queryMapsContext(ctx, c.DB, `SELECT m.id,m.conversation_id,m.role,m.kind,length(m.text) length,
+	rows, err := queryMapsContext(ctx, c.reader(), `SELECT m.id,m.conversation_id,m.role,m.kind,length(m.text) length,
 		substr(m.text,1,`+strconv.Itoa(snippetBefore+snippetAfter)+`) top,`+strings.Join(columns, ",")+`
 		FROM messages m WHERE m.id IN (`+strings.Join(holders, ",")+`)`, args...)
 	if err != nil {
@@ -432,7 +432,7 @@ func (c *Catalog) embeddedDocuments(ctx context.Context, ids []string) (map[stri
 	for index, id := range ids {
 		args[index] = id
 	}
-	rows, err := queryMapsContext(ctx, c.DB, `SELECT w.id,w.title,w.purpose,w.outcome,s.initiation,s.outcome summary_outcome,s.failures,d.vector_json
+	rows, err := queryMapsContext(ctx, c.reader(), `SELECT w.id,w.title,w.purpose,w.outcome,s.initiation,s.outcome summary_outcome,s.failures,d.vector_json
 		FROM workspaces w LEFT JOIN summaries s ON s.workspace_id=w.id LEFT JOIN semantic_documents d ON d.workspace_id=w.id
 		WHERE w.id IN (`+placeholders(len(ids))+`)`, args...)
 	if err != nil {
@@ -444,7 +444,7 @@ func (c *Catalog) embeddedDocuments(ctx context.Context, ids []string) (map[stri
 		lastReply := firstString(row["summary_outcome"])
 		if outcome := firstString(row["outcome"]); outcome != "" {
 			fields = append(fields, semanticField{"Outcome", outcome})
-			replies, err := queryMapsContext(ctx, c.DB, `SELECT CAST(substr(CAST(m.text AS BLOB),1,2000) AS TEXT) text
+			replies, err := queryMapsContext(ctx, c.reader(), `SELECT CAST(substr(CAST(m.text AS BLOB),1,2000) AS TEXT) text
 				FROM conversations mc JOIN messages m ON m.conversation_id=mc.id WHERE mc.workspace_id=? AND +m.role='assistant'
 				AND m.kind='message' AND m.text<>'' ORDER BY m.created_at DESC,m.id DESC LIMIT 1`, id)
 			if err != nil {

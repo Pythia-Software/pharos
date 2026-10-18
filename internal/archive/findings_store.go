@@ -174,7 +174,7 @@ var findingRanks = map[string]bool{"usd": true, "tokens": true, "minutes": true,
 
 func (c *Catalog) findingSettings(ctx context.Context) (findingSettings, error) {
 	settings := findingSettings{Rank: "usd", Handoff: "auto", RepositoryHandoff: map[string]string{}, DisabledDetectors: []string{}}
-	rows, err := c.DB.QueryContext(ctx, "SELECT key,value FROM finding_settings")
+	rows, err := c.reader().QueryContext(ctx, "SELECT key,value FROM finding_settings")
 	if err != nil {
 		return settings, err
 	}
@@ -747,7 +747,7 @@ func validFindingTarget(target string) bool {
 func (c *Catalog) findingRecentRate(ctx context.Context, id string, days int) (float64, error) {
 	since := c.clock().AddDate(0, 0, -days).Format("2006-01-02")
 	var events, exposure float64
-	err := c.DB.QueryRowContext(ctx, "SELECT COALESCE(SUM(events),0),COALESCE(SUM(exposure),0) FROM finding_daily WHERE finding_id=? AND day>?", id, since).Scan(&events, &exposure)
+	err := c.reader().QueryRowContext(ctx, "SELECT COALESCE(SUM(events),0),COALESCE(SUM(exposure),0) FROM finding_daily WHERE finding_id=? AND day>?", id, since).Scan(&events, &exposure)
 	if err != nil || exposure == 0 {
 		return 0, err
 	}

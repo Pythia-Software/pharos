@@ -154,7 +154,7 @@ type semanticMatch struct {
 // from its vector_json.
 func (c *Catalog) vectorScores(ctx context.Context, store vectorStore, query string, minimum float64) ([]semanticMatch, error) {
 	queryVector := semanticEmbed(query)
-	rows, err := c.DB.QueryContext(ctx, "SELECT "+store.key+",vector,NULL FROM "+store.vectors+
+	rows, err := c.reader().QueryContext(ctx, "SELECT "+store.key+",vector,NULL FROM "+store.vectors+
 		" UNION ALL SELECT "+store.key+",NULL,vector_json FROM "+store.documents+" WHERE "+store.key+" IN ("+store.missing()+")")
 	if err != nil {
 		return nil, err

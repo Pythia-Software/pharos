@@ -16,7 +16,7 @@ const toolSearchBatch = 500
 
 func (c *Catalog) toolSearchReady(ctx context.Context) (bool, error) {
 	var version string
-	err := c.DB.QueryRowContext(ctx, "SELECT value FROM meta WHERE key='tool_command_fts_version'").Scan(&version)
+	err := c.reader().QueryRowContext(ctx, "SELECT value FROM meta WHERE key='tool_command_fts_version'").Scan(&version)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
