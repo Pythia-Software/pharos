@@ -78,3 +78,52 @@ test("syntax import preserves nested exclusion and quoted prefix export", () => 
   assert.throws(() => m.querySyntax(term("(cache)"), true), /preserve its meaning/);
   assert.throws(() => m.visualFromQuery({ op: "near", distance: 2, children: [{ op: "prefix", text: "foo" }, term("bar")] }), /preserve its meaning/);
 });
+
+test("the English reading names every condition, filter, and option in plain words", () => {
+  const read = (draft, context) => m.sentenceText(m.searchSentence(draft, context).parts);
+  const d = m.emptyTextSearch();
+  assert.equal(read(d), "Find conversation messages"); assert.equal(m.searchSentence(d).empty, true);
+  d.root.children[0].text = "parser migration";
+  d.root.children.push({ ...m.newRule("race condition"), kind: "phrase" }, { ...m.newRule("flaky test"), exclude: true });
+  assert.equal(read(d), "Find conversation messages with all of the words “parser migration” and the phrase “race condition”, but not the words “flaky test”");
+  d.scope.provider = "claude"; d.scope.from = "2026-10-01"; d.caseSensitive = true;
+  assert.equal(read(d, { workspace: ["Repository contains pharos"] }), "Find conversation messages from Claude, on or after Oct 1, 2026, in workspaces where repository contains pharos, with all of the words “parser migration” and the phrase “race condition”, but not the words “flaky test”, matching letter case");
+  const any = m.emptyTextSearch(); any.root.join = "any"; any.root.children[0].text = "cache";
+  any.root.children.push(m.newRule("buffer"), { ...m.newGroup(), children: [{ ...m.newRule("deadlock"), kind: "near", other: "mutex", distance: "5" }, m.newRule("lock")] });
+  assert.equal(read(any), "Find conversation messages with the word “cache”, the word “buffer”, or (“deadlock” within 5 words of “mutex” and the word “lock”)");
+  const syntax = m.emptyTextSearch(); syntax.editor = "syntax"; syntax.text = "cache OR buffer";
+  assert.equal(read(syntax), "Find conversation messages matching cache OR buffer");
+  assert.equal(read(m.emptyTextSearch(), { kind: "file", file: "parser.go", fileCase: true }), "Find modified files with paths containing “parser.go”, matching letter case");
+  const fixed = m.emptyTextSearch(); fixed.scope.conversation_id = "c1"; fixed.root.children[0].text = "x";
+  assert.equal(read(fixed, { fixedContext: true }), "Find conversation messages with the word “x”");
+});
+
+test("exact text and patterns read exactly as typed, and blank text is not a search", () => {
+  const read = draft => m.searchSentence(draft);
+  const literal = { ...m.emptyTextSearch(), match: "literal", text: " foo::bar " };
+  assert.equal(m.sentenceText(read(literal).parts), "Find conversation messages containing the exact text “ foo::bar ”");
+  assert.equal(m.searchRequest(literal).request.where.text, " foo::bar ");
+  const pattern = { ...m.emptyTextSearch(), match: "regex", text: " error[0-9]+" };
+  assert.equal(m.sentenceText(read(pattern).parts), "Find conversation messages matching the pattern  error[0-9]+");
+  for (const blank of [{ match: "literal", text: "   " }, { match: "regex", text: " " }, { editor: "syntax", text: "  " }]) {
+    const draft = { ...m.emptyTextSearch(), ...blank };
+    assert.equal(read(draft).empty, true, JSON.stringify(blank));
+    assert.equal(m.searchRequest(draft).request, undefined); assert.equal(m.searchRequest(draft).issues[0].id, "text");
+  }
+});
+
+test("matching options are read, counted, and sent only where they change the search", () => {
+  const options = draft => m.sentenceText(m.searchSentence(draft).parts).split(", ").slice(1);
+  const on = { separators: true, fuzzy: true, caseSensitive: true, text: '"race condition" cache' };
+  for (const [editor, mode, separators, fuzzy] of [["syntax", "advanced", true, true], ["syntax", "terms", true, true], ["syntax", "phrase", true, false], ["syntax", "literal", false, false], ["syntax", "regex", false, false]]) {
+    const draft = { ...m.emptyTextSearch(), ...on, editor, mode };
+    assert.deepEqual(m.optionScope(draft), { separators, fuzzy }, mode);
+    const request = m.searchRequest(draft).request;
+    assert.deepEqual([request.separators, request.fuzzy, request.case_sensitive], [separators, fuzzy, true], mode);
+    assert.equal(options(draft).includes("keeping phrase punctuation"), separators, mode);
+    assert.equal(options(draft).includes("including word variations"), fuzzy, mode);
+  }
+  const literal = { ...m.emptyTextSearch(), ...on, match: "literal" };
+  assert.deepEqual(m.optionsInEffect(literal), { caseSensitive: true, separators: false, fuzzy: false });
+  assert.deepEqual(options(literal), ["matching letter case"]);
+});

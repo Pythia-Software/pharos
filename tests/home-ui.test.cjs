@@ -241,7 +241,7 @@ test('old root Library URLs and history links retain queries, searches and their
     assert.equal(new URL(page.url()).searchParams.has('search'), false);
     await page.locator('.tabs [data-view="library"]').click();
     await page.waitForFunction(() => new URL(location.href).searchParams.get('search') === 'indexing');
-    assert.equal(await page.locator('#library').getByRole('searchbox', { name: 'Search library', exact: true }).inputValue(), 'indexing');
+    assert.equal(await page.locator('#library').getByRole('textbox', { name: 'Search library', exact: true }).inputValue(), 'indexing');
     assert.equal(new URL(page.url()).searchParams.get('kind'), 'file');
     assert.equal(new URL(page.url()).searchParams.get('case'), '1');
     // Exercise a controlled Library → Home history transition; the earlier
@@ -401,9 +401,10 @@ test('homepage search exposes the full search options and opens a clean Library 
     await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Text for rule 1.1');
     const target = page.getByRole('combobox', { name: 'Search target', exact: true });
     await target.selectOption('file');
-    await page.getByRole('searchbox', { name: 'Search library', exact: true }).fill('parser.go');
+    await page.getByRole('textbox', { name: 'Search library', exact: true }).fill('parser.go');
     await target.selectOption('prose');
     await page.getByRole('textbox', { name: 'Text for rule 1.1', exact: true }).fill('query plan');
+    await page.getByRole('button', { name: /^Match options/ }).click();
     await page.getByRole('checkbox', { name: 'Include word variations', exact: true }).uncheck();
     await page.getByRole('checkbox', { name: 'Match letter case', exact: true }).check();
     await page.getByRole('checkbox', { name: 'Keep phrase punctuation and spacing', exact: true }).check();

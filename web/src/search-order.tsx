@@ -19,7 +19,7 @@ export function SearchOrderControl({ catalogue, order, onChange, batched = false
     return type === "datetime" ? ["Oldest first", "Newest first"] : type === "number" ? ["Low to high", "High to low"] : type === "text" ? ["A → Z", "Z → A"] : ["Ascending", "Descending"];
   };
   return <div className="text-search-order" aria-label="Result ordering">
-    <span className="text-order-label">Order by</span>
+    <span className="text-order-label">Sort by</span>
     {order.map((term, index) => <React.Fragment key={index}>
       {index ? <span className="text-order-then">then</span> : null}
       <div className="text-sort-clause">
@@ -33,8 +33,8 @@ export function SearchOrderControl({ catalogue, order, onChange, batched = false
         {order.length > 1 ? <button type="button" className="text-remove" aria-label={`Remove sort ${index + 1}`} title="Remove sort" onClick={() => onChange(order.filter((_, i) => i !== index))}><Icon name="close" /></button> : null}
       </div>
     </React.Fragment>)}
-    {available.length && order.length < MAX_ORDER_BY_TERMS ? <SearchSelect className="text-add-sort" aria-label="Add sort field" value="" onChange={event => { if (event.target.value) onChange([...order, { field: event.target.value, dir: "asc" }]); }}><option value="">{order.length ? "+ Then by" : "Choose field"}</option>{available.map(([name, field]) => <option key={name} value={name}>{field.label ?? name}</option>)}</SearchSelect> : null}
+    {available.length && order.length < MAX_ORDER_BY_TERMS ? <SearchSelect className="text-add-sort" aria-label="Add sort field" value="" onChange={event => { if (event.target.value) onChange([...order, { field: event.target.value, dir: "asc" }]); }}><option value="">{order.length ? "+ then by" : "Choose field"}</option>{available.map(([name, field]) => <option key={name} value={name}>{field.label ?? name}</option>)}</SearchSelect> : null}
     {batched ? <span className="text-sort-detail">This batch</span> : null}
-    <SearchHelp label="Result ordering">Sort matching {subject}, using later fields to break ties. Ordering travels with the search and stays in sync with table headers and saved searches.{batched ? " Only results in the current search batch are ordered; this does not change which messages the next batch checks." : ""} Advanced extraction and empty-value ordering remain available in the table layout controls.</SearchHelp>
+    {batched || order.some(term => term.extract || term.nulls === "first") ? <SearchHelp label="Result ordering">{batched ? `Sorting orders the matching ${subject} in the current search batch only; it does not change which messages the next batch checks. ` : ""}{order.some(term => term.extract || term.nulls === "first") ? "Regex extraction and empty-value ordering are edited in the table layout controls." : ""}</SearchHelp> : null}
   </div>;
 }

@@ -1,175 +1,215 @@
-/* Shared visual language for the editor and its portaled menus. */
+/* One quiet visual language for the composer and its portaled menus. Grammar
+   words and choices read as text, values sit in fields, and only the submit
+   button is filled. */
 .text-search-editor, .text-condition-popup, .search-help-bubble {
-  --query-control: color-mix(in srgb, var(--ink) 3%, var(--panel));
-  --query-hover: color-mix(in srgb, var(--accent) 10%, var(--panel));
-  --query-border: color-mix(in srgb, var(--muted) 22%, var(--line));
-  --query-value: color-mix(in srgb, var(--bg) 88%, var(--panel));
-  --query-value-ink: var(--ink);
-  --query-value-border: color-mix(in srgb, var(--muted) 32%, var(--line));
+  --query-field: color-mix(in srgb, var(--bg) 24%, var(--panel));
+  --query-hover: color-mix(in srgb, var(--ink) 6%, transparent);
+  --query-border: color-mix(in srgb, var(--muted) 26%, var(--line));
+  --query-focus: color-mix(in srgb, var(--accent) 16%, transparent);
   --query-font-size: var(--fs-md);
   --query-line-height: 20px;
-  --query-space: 12px;
   --query-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --query-radius: 5px;
-  --query-control-height: 32px;
+  --query-radius: 8px;
+  --query-row: 38px;
+  --query-control-height: 30px;
+  --query-gutter: 44px;
+  --query-space: 16px;
+  --query-select-pad: 4px 22px 4px 8px;
 }
-.text-search-editor { margin: 0 0 14px; padding: var(--query-space); border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); font: var(--query-font-size)/var(--query-line-height) var(--sans); box-shadow: 0 4px 18px #34230d0b; }
+.text-search-editor { container: composer / inline-size; margin: 0 0 14px; padding: var(--query-space); border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--ink); font: var(--query-font-size)/var(--query-line-height) var(--sans); box-shadow: 0 4px 18px #34230d0b; }
 .text-search-editor p { line-height: 1.5; }
-:where(.text-search-editor > form, .text-editor-toolbar, .text-workspace-editor-heading) :is(input:not([type=checkbox]), select, textarea) { box-sizing: border-box; min-width: 0; max-width: 100%; min-height: var(--query-control-height); border: 1px solid var(--query-border); border-radius: var(--query-radius); background-color: var(--query-control); color: var(--ink); font: inherit; line-height: var(--query-line-height); padding: 5px 8px; }
-:where(.text-search-editor > form, .text-editor-toolbar, .text-workspace-editor-heading) button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: var(--query-control-height); border: 1px solid var(--line); border-radius: var(--query-radius); color: var(--ink); background: transparent; padding: 5px 8px; font: inherit; line-height: var(--query-line-height); cursor: pointer; }
-.text-select { position: relative; display: inline-grid; grid-template-columns: minmax(0,1fr); align-items: center; width: max-content; min-width: 0; max-width: 100%; }
-.text-select > select { position: absolute; inset: 0; height: 100%; margin: 0; }
-.text-select-measure { grid-area: 1 / 1; }
-.text-select-measure { visibility: hidden; pointer-events: none; white-space: pre; overflow: hidden; min-width: 0; padding: 5px 28px 5px 8px; border: 1px solid transparent; line-height: var(--query-line-height); }
-/* Specificity also overrides the shell's theme-specific data-URL arrows. */
-:root :is(.text-search-editor, .text-condition-popup) .text-select > select:not([multiple]) { appearance: none; background-image: none; padding-right: 28px; width: 100%; cursor: pointer; }
-:is(.text-search-editor, .text-condition-popup) .text-select > .app-icon { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); width: 13px; height: 13px; pointer-events: none; color: var(--muted); }
-.text-search-editor .text-filter-clause .text-select > .app-icon { color: var(--muted); }
-.text-search-editor :is(input, select, textarea, button, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.text-search-editor button:hover:not(:disabled) { background-color: var(--query-hover); }
+:where(.text-search-editor > form, .text-workspace-editor-heading) :is(input:not([type=checkbox]), select, textarea) { box-sizing: border-box; min-width: 0; max-width: 100%; min-height: var(--query-control-height); border: 1px solid var(--query-border); border-radius: 6px; background-color: var(--query-field); color: var(--ink); font: inherit; line-height: var(--query-line-height); padding: 4px 8px; }
+/* Buttons outrank the shell's global button rules; specific variants below still win. */
+:is(.text-search-editor > form, .text-workspace-editor-heading) button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: var(--query-control-height); border: 0; border-radius: 6px; color: var(--muted); background: transparent; padding: 4px 8px; font: inherit; font-weight: 500; line-height: var(--query-line-height); cursor: pointer; }
+.text-search-editor :is(input, select, textarea, button, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.text-search-editor button:hover:not(:disabled) { background-color: var(--query-hover); color: var(--ink); }
 .text-search-editor button:disabled { opacity: .45; cursor: default; }
 .text-search-editor .app-icon { width: 14px; height: 14px; flex-shrink: 0; }
-
-/* Inset, monospace values stay distinct from the surrounding query grammar. */
-.text-search-editor > form :is(input:not([type=checkbox]), textarea),
-.text-search-editor .text-filter-clause select { background-color: var(--query-value); color: var(--query-value-ink); border-color: var(--query-value-border); font-family: var(--query-mono); font-size: var(--query-font-size); caret-color: var(--query-value-ink); color-scheme: inherit; box-shadow: inset 0 1px 2px #0000000a; }
-.text-search-editor > form input::placeholder, .text-search-editor textarea::placeholder { color: var(--muted); opacity: .8; }
+.text-search-editor > form :is(input, textarea)::placeholder { color: var(--muted); opacity: .75; }
 .text-search-editor > form :is(input, textarea)[aria-invalid=true] { border-color: var(--bad); box-shadow: 0 0 0 1px var(--bad); }
+.text-search-editor .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* Native selects keep keyboard behavior. Inside the composer they read as a
+   word with a caret; the width follows the selected label. */
+.text-select { position: relative; display: inline-grid; grid-template-columns: minmax(0,1fr); align-items: center; width: max-content; min-width: 0; max-width: 100%; }
+.text-select > select { position: absolute; inset: 0; height: 100%; margin: 0; }
+.text-select-measure { grid-area: 1 / 1; visibility: hidden; pointer-events: none; white-space: pre; overflow: hidden; min-width: 0; padding: var(--query-select-pad); border: 1px solid transparent; line-height: var(--query-line-height); }
+/* Specificity also overrides the shell's theme-specific data-URL arrows. */
+:root :is(.text-search-editor, .text-condition-popup) .text-select > select:not([multiple]) { appearance: none; background-image: none; padding: var(--query-select-pad); width: 100%; cursor: pointer; }
+:is(.text-search-editor, .text-condition-popup) .text-select > .app-icon { position: absolute; right: 7px; top: 50%; transform: translateY(-50%); width: 12px; height: 12px; pointer-events: none; color: var(--muted); }
+.text-search-editor .text-select { font-weight: 500; }
+.text-search-editor .text-select > select { border-color: transparent; background-color: transparent; font-weight: inherit; }
+.text-search-editor .text-select > select:hover { background-color: var(--query-hover); }
 
 /* Intrinsic sizing grows with typing without per-keystroke layout measurements. */
-.text-growing-input { display: inline-grid; grid-template-columns: minmax(0,1fr); width: max-content; min-width: 0; max-width: 100%; vertical-align: middle; font: var(--query-font-size)/var(--query-line-height) var(--query-mono); }
-.text-growing-input > .text-input-measure, .text-search-editor .text-growing-input > input { grid-area: 1 / 1; box-sizing: border-box; padding: 5px 8px; border-width: 1px; border-style: solid; font: inherit; letter-spacing: normal; }
+.text-growing-input { display: inline-grid; grid-template-columns: minmax(0,1fr); width: max-content; min-width: 0; max-width: 100%; vertical-align: middle; font: inherit; }
+.text-growing-input > .text-input-measure, .text-search-editor .text-growing-input > input { grid-area: 1 / 1; box-sizing: border-box; padding: 4px 8px; border-width: 1px; border-style: solid; font: inherit; letter-spacing: normal; }
 .text-input-measure { visibility: hidden; pointer-events: none; white-space: pre; overflow: hidden; min-width: 0; border-color: transparent; height: var(--query-control-height); }
 .text-search-editor .text-growing-input > input { width: 100%; min-width: 0; height: var(--query-control-height); }
 .text-growing-input:has(input[type=search]) > .text-input-measure { padding-right: 28px; }
+/* Text boxes wrap long values onto more lines; the hidden copy sets the height. */
+.text-wrapping-input { display: grid; grid-template-columns: minmax(0,1fr); min-width: 0; }
+.text-wrapping-input > .text-input-measure, .text-search-editor .text-wrapping-input > textarea { grid-area: 1 / 1; box-sizing: border-box; min-height: var(--query-control-height); padding: 4px 8px; border: 1px solid transparent; font: inherit; line-height: var(--query-line-height); letter-spacing: normal; white-space: pre-wrap; overflow-wrap: anywhere; }
+.text-wrapping-input > .text-input-measure { height: auto; overflow: visible; }
+.text-search-editor .text-wrapping-input > textarea { width: 100%; height: 100%; resize: none; overflow: hidden; }
 
+/* The search read back in English heads the composer and updates as it is
+   edited. Values carry the weight; connecting words stay quiet. */
+.search-sentence { color: var(--muted); overflow-wrap: anywhere; }
+.search-sentence b { color: var(--ink); font-weight: 600; white-space: pre-wrap; }
+.text-editor-sentence { display: flex; align-items: flex-start; gap: 10px; margin: calc(-1 * var(--query-space)) calc(-1 * var(--query-space)) var(--query-space); padding: 13px var(--query-space); border-bottom: 1px solid var(--line); font-size: var(--fs-base); line-height: 22px; }
+.text-editor-sentence > .app-icon { width: 16px; height: 16px; margin-top: 3px; color: var(--muted); }
+.text-editor-messages:empty { display: none; }
 
-.text-editor-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: calc(-1 * var(--query-space)) calc(-1 * var(--query-space)) var(--query-space); padding: 10px var(--query-space); border-bottom: 1px solid var(--line); border-radius: 8px 8px 0 0; background: color-mix(in srgb, var(--bg) 30%, var(--panel)); }
-.text-editor-caption { color: var(--muted); font-size: var(--fs-xs); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; margin-right: 4px; }
-.text-editor-tabs { display: inline-flex; gap: 2px; padding: 1px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); flex-shrink: 0; }
-.text-editor-tabs button { min-height: 28px; padding: 4px 10px; line-height: 20px; border: 0; color: var(--muted); font-size: var(--query-font-size); }
-.text-editor-tabs button[aria-pressed=true] { background: var(--query-hover); color: var(--ink); box-shadow: 0 1px 3px #00000012; font-weight: 600; }
-.text-match-style { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; color: var(--muted); min-width: 0; font-size: var(--query-font-size); }
-.text-match-style > .text-select { color: var(--ink); max-width: 310px; }
+/* Wide composers keep the conditions at a comfortable measure and give the
+   rest of the width to the reading, beside them rather than above. */
+@container composer (min-width: 980px) {
+  .text-search-editor > form:has(> .text-editor-sentence) { display: grid; grid-template-columns: minmax(0, 1fr) clamp(280px, 34%, 400px); grid-template-areas: "frame reading" "messages reading" "footer footer"; }
+  .text-search-editor > form:has(> .text-editor-sentence) > .text-query-frame { grid-area: frame; padding-bottom: var(--query-space); }
+  .text-search-editor > form:has(> .text-editor-sentence) > .text-editor-messages { grid-area: messages; margin-bottom: var(--query-space); }
+  .text-search-editor > form:has(> .text-editor-sentence) > .text-editor-footer { grid-area: footer; margin-top: 0; }
+  .text-search-editor > form > .text-editor-sentence { grid-area: reading; flex-direction: column; gap: 10px; margin: calc(-1 * var(--query-space)) calc(-1 * var(--query-space)) 0 calc(var(--query-space) + 8px); padding: 20px 22px; border-bottom: 0; border-left: 1px solid var(--line); border-top-right-radius: 9px; background: color-mix(in srgb, var(--bg) 16%, var(--panel)); font-size: 15px; line-height: 24px; }
+  .text-search-editor > form > .text-editor-sentence > .app-icon { display: none; }
+}
 
-/* Group boundaries carry the logic. Individual rules use a quieter shared shell. */
-.text-query-frame { border: 1px solid var(--query-border); border-radius: 6px; padding: 10px; background: color-mix(in srgb, var(--bg) 35%, var(--panel)); min-width: 0; }
-.text-query-conditions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
-.text-rule-group { border: 1px solid var(--query-border); border-radius: 6px; padding: 10px; margin: 0; min-width: 0; max-width: 100%; }
-.text-group-heading { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; min-width: 0; max-width: 100%; }
-.text-query-conditions > .text-group-heading { flex-basis: 100%; margin-bottom: 2px; }
-.text-query-conditions > .text-editor-error { flex-basis: 100%; }
-.text-group-heading > strong { font-size: var(--query-font-size); font-weight: 600; }
-.text-group-heading > label { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); min-width: 0; font-size: var(--query-font-size); }
-.text-group-heading .text-select { font-weight: 500; }
-.text-query-subject { display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%; }
-.text-query-subject > .text-select { max-width: 100%; }
-.text-search-editor .text-group-heading > .text-add-condition { margin-left: auto; }
-.text-search-editor :is(.text-add-condition, .text-add-filter, .text-add-sort) { border: 1px dashed var(--query-border); color: var(--muted); background-color: transparent; font-size: var(--query-font-size); }
-.text-search-editor :is(.text-add-condition, .text-add-filter):hover { color: var(--ink); border-color: var(--muted); }
-.text-group-children { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-/* Keep semantic groups in the DOM without making extra layout boxes. */
-.text-root-matches:not(.text-bracketed-matches), .text-root-matches:not(.text-bracketed-matches) > .text-group-children { display: contents; }
-.text-condition { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
-.text-condition-group { flex: 0 1 auto; }
-.text-join { display: inline-flex; align-items: center; justify-content: center; padding: 3px 5px; border-radius: 4px; background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--muted); font-size: var(--fs-xs); font-weight: 700; letter-spacing: .045em; line-height: 1.4; white-space: nowrap; flex-shrink: 0; }
-.text-nested-group { background: var(--panel); border-left: 2px solid var(--sea); }
-.text-rule { padding: 3px; min-width: 0; max-width: 100%; border: 1px solid var(--line); border-radius: 6px; background: var(--query-control); }
-.text-rule-controls { display: grid; grid-template-columns: auto minmax(0,1fr) var(--query-control-height); align-items: center; gap: 4px; }
-.text-rule-controls > .text-growing-input { max-width: 100%; }
-.text-search-editor .text-rule-controls select { background-color: transparent; border-color: transparent; font-size: var(--query-font-size); }
-.text-search-editor button.text-condition-options, .text-search-editor button.text-remove { min-height: var(--query-control-height); height: var(--query-control-height); width: var(--query-control-height); border: 0; padding: 6px; color: var(--muted); flex-shrink: 0; }
-.text-search-editor button.text-remove:hover { color: var(--bad); }
-.text-bracketed-matches, .text-negative-group { border: 1px solid var(--line); border-radius: 6px; padding: 8px; min-width: 0; max-width: 100%; }
-.text-bracketed-matches { width: fit-content; }
-.text-negative-clause { display: flex; align-items: center; gap: 8px; margin-top: 8px; min-width: 0; }
-.text-query-conditions > .text-negative-clause { margin-top: 0; max-width: 100%; }
-.text-negative-group { border-left: 2px solid var(--bad); background: var(--panel); }
-.text-negative-single-group { padding: 0; border: 0; background: transparent; }
-.text-negative-single-group > .text-group-children > .text-condition-group > .text-rule-group { border-left-color: var(--bad); }
-.text-not { background: color-mix(in srgb, var(--bad) 10%, transparent); color: var(--bad); }
-.text-proximity { display: flex; align-items: center; gap: 8px; margin: 6px 2px 2px; flex-wrap: wrap; }
-.text-proximity > .text-growing-input { flex: 0 1 auto; }
-.text-proximity > span, .text-proximity label { color: var(--muted); font-size: var(--query-font-size); }
-.text-proximity label { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* The query is a single column of rows. A narrow left column carries the
+   grammar (Find, with, and, or, not); rows hold the values. */
+.text-query-frame { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.text-query-conditions, .text-group-children { display: flex; flex-direction: column; align-items: stretch; gap: 8px; min-width: 0; }
+.text-root-matches:not(.text-bracketed-matches), .text-root-matches:not(.text-bracketed-matches) > .text-group-children, .text-query-filters { display: contents; }
+.text-condition, .text-filter-condition, .text-negative-clause { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+:is(.text-condition, .text-filter-condition, .text-negative-clause) > :not(.text-join) { flex: 1 1 auto; min-width: 0; }
+.text-join { flex: 0 0 var(--query-gutter); min-width: 0; box-sizing: border-box; display: flex; align-items: center; min-height: var(--query-row); color: var(--muted); white-space: nowrap; }
+.text-join .text-select { --query-select-pad: 4px 18px 4px 6px; flex-shrink: 0; max-width: none; margin-left: -6px; font-weight: 400; }
+.text-join .text-select > .app-icon { right: 4px; }
+.text-join .text-select > select { color: inherit; }
+.text-not { color: var(--bad); }
+.text-group-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
+.text-query-heading > .text-join { min-height: var(--query-control-height); }
+.text-query-subject { display: inline-flex; min-width: 0; max-width: 100%; margin-left: -8px; }
+.text-query-subject .text-select { font-weight: 600; }
+.text-query-heading > .text-editor-tabs { margin-left: auto; }
+.text-target-note { flex-basis: 100%; margin: 0 0 2px calc(var(--query-gutter) + 8px); color: var(--muted); font-size: var(--fs-sm); }
+.text-query-conditions > .text-editor-error { margin: 0 0 0 calc(var(--query-gutter) + 8px); }
+
+/* Rules and filters share one field shape: choices on the left, the value
+   filling the row, row actions on the right. */
+.text-rule, .text-filter-clause { box-sizing: border-box; border: 1px solid var(--query-border); border-radius: var(--query-radius); background: var(--query-field); transition: border-color 120ms ease, box-shadow 120ms ease; }
+.text-rule:focus-within, .text-filter-clause:focus-within { border-color: color-mix(in srgb, var(--accent) 70%, var(--line)); box-shadow: 0 0 0 3px var(--query-focus); }
+.text-rule:has(:is(input, textarea)[aria-invalid=true]) { border-color: var(--bad); }
+.text-rule-controls { display: grid; grid-template-columns: auto minmax(0,1fr) auto auto; align-items: start; padding: 1px 3px; }
+.text-rule-controls > :not(.text-wrapping-input) { margin-top: 3px; }
+.text-rule-controls > .text-select { border-right: 1px solid var(--line); padding-right: 3px; }
+.text-rule-controls > .text-wrapping-input { font-size: var(--fs-base); }
+.text-search-editor .text-rule-controls .text-wrapping-input > * { padding: 7px 8px 5px; }
+.text-search-editor > form :is(.text-rule, .text-filter-clause, .text-proximity) :is(input:not([type=checkbox]), textarea) { border-color: transparent; background-color: transparent; box-shadow: none; }
+.text-search-editor > form :is(.text-rule-controls, .text-filter-clause) :is(input, textarea):focus-visible { outline: none; }
+.text-search-editor button:is(.text-condition-options, .text-remove) { width: var(--query-control-height); height: var(--query-control-height); min-height: 0; padding: 0; flex-shrink: 0; }
+.text-search-editor button.text-remove:hover:not(:disabled) { color: var(--bad); }
+.text-proximity { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; padding: 4px 10px 6px; border-top: 1px dashed var(--line); color: var(--muted); }
+.text-proximity label { display: inline-flex; align-items: center; gap: 4px; }
+.text-search-editor > form .text-proximity input:not([type=checkbox]) { background-color: var(--panel); border-color: var(--query-border); }
 .text-proximity input[type=number] { width: 58px; }
-.text-pattern-input { display: flex; gap: 8px; align-items: end; flex: 1 1 100%; min-width: 0; }
-.text-pattern-input label { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; color: var(--muted); font-size: var(--query-font-size); }
-.text-pattern-input textarea { width: 100%; resize: vertical; line-height: 1.6; }
-.text-syntax-input { flex-wrap: wrap; }
-.text-file-input { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: 0 1 auto; min-width: 0; max-width: 100%; }
+.text-rule > .text-editor-error { margin: 0; padding: 0 11px 8px; }
 
-/* Global AND filters share the same operator and value treatment as text rules. */
-.text-query-filters { display: contents; }
-.text-query-filters:empty { display: none; }
-.text-filter-condition { display: inline-flex; align-items: center; flex-wrap: nowrap; gap: 8px; max-width: 100%; min-width: 0; }
-.text-filter-clause { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 3px 3px 3px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--query-control); min-width: 0; max-width: 100%; font-size: var(--query-font-size); }
-.text-filter-subject { font-weight: 600; }
-.text-filter-operator { color: var(--muted); }
-.text-filter-clause .text-growing-input { flex: 0 1 auto; }
-.text-filter-clause .text-select { max-width: 220px; font-family: var(--query-mono); }
-.text-saved-filter-value { display: inline-flex; gap: 4px; align-items: center; background: var(--query-value); color: var(--query-value-ink); border: 1px solid var(--query-value-border); border-radius: var(--query-radius); padding-left: 6px; font: var(--query-font-size)/var(--query-line-height) var(--query-mono); }
-.text-search-editor .text-saved-filter-value .text-remove { color: var(--query-value-ink); }
-.text-workspace-expression { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-.text-workspace-expression > span:not(.text-join) { display: inline-flex; align-items: center; min-height: var(--query-control-height); box-sizing: border-box; background: var(--query-value); color: var(--query-value-ink); border: 1px solid var(--query-value-border); border-radius: var(--query-radius); padding: 5px 8px; font: var(--query-font-size)/var(--query-line-height) var(--query-mono); overflow-wrap: anywhere; }
-.text-search-editor .text-workspace-filter { justify-content: start; padding: 3px 8px; background-color: var(--query-control); font-size: var(--query-font-size); text-align: left; }
+.text-filter-clause { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 0 4px; min-height: var(--query-row); padding: 3px 3px 3px 12px; color: var(--ink); }
+.text-filter-clause:has(> .text-select:first-child) { padding-left: 3px; }
+.text-filter-clause > :is(label, span:not(.text-select, .text-wrapping-input)) { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 0 4px; min-height: var(--query-control-height); }
+.text-filter-clause > label { white-space: nowrap; }
+.text-filter-subject, .text-filter-operator, .text-filter-note { color: var(--muted); font-weight: 400; }
+.text-filter-note { font-size: var(--fs-xs); letter-spacing: .04em; padding: 0 4px; cursor: help; }
+.text-filter-clause > :is(.text-wrapping-input, .text-growing-input, input:not([type=date])) { flex: 1 1 140px; }
+.text-filter-clause .text-select { max-width: 260px; }
+.text-search-editor .text-filter-clause > .text-select:has(> select[aria-label^="Filter operator"]) { color: var(--muted); font-weight: 400; }
+.text-filter-clause > .text-select > select[aria-label^="Filter operator"] { color: inherit; }
+.text-filter-clause > :is(.text-condition-options, .text-remove) { margin-left: auto; }
+.text-filter-clause > .text-condition-options + .text-remove { margin-left: 0; }
+.text-filter-clause > .text-saved-filter-value { gap: 2px; padding-left: 8px; border-radius: 6px; background: var(--query-hover); }
+.text-search-editor button.text-workspace-filter { width: 100%; min-height: var(--query-row); justify-content: flex-start; gap: 6px; padding: 3px 3px 3px 12px; border: 1px solid var(--query-border); border-radius: var(--query-radius); background: var(--query-field); color: var(--ink); font-weight: 400; text-align: left; }
+.text-search-editor button.text-workspace-filter:hover:not(:disabled) { background: var(--query-field); border-color: var(--muted); }
+.text-workspace-filter > .app-icon:last-child { margin: 0 6px 0 auto; color: var(--muted); }
+.text-workspace-expression { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; }
+.text-workspace-expression > span:not(.text-filter-operator) { padding: 1px 8px; border-radius: 6px; background: var(--query-hover); overflow-wrap: anywhere; }
 
-/* Conditions, filters, and ordering share one frame and one compact action row. */
-.text-query-tools { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; margin-top: var(--query-space); padding-top: var(--query-space); border-top: 1px solid var(--line); }
-.text-query-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-.text-search-order { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; margin-left: auto; font-size: var(--query-font-size); }
-.text-order-label { color: var(--muted); margin-right: 2px; }
-.text-order-then { color: var(--muted); font-size: var(--query-font-size); }
-.text-sort-clause { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; flex-wrap: wrap; }
+/* Rails mark implicit brackets: OR alternatives and AND NOT exclusions. Only
+   explicit nested groups get a box, because they have their own actions. */
+:is(.text-bracketed-matches, .text-negative-group:not(.text-negative-single), .search-filter-alternatives) { --query-gutter: 32px; display: flex; flex-direction: column; gap: 8px; padding-left: 10px; border-left: 2px solid var(--query-border); }
+.text-negative-group:not(.text-negative-single) { border-left-color: color-mix(in srgb, var(--bad) 45%, var(--line)); }
+.text-nested-group { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin: 0; padding: 6px 8px 10px 12px; border: 1px solid var(--query-border); border-radius: 10px; background: color-mix(in srgb, var(--bg) 10%, var(--panel)); }
+.text-nested-group > .text-group-heading > strong { color: var(--muted); font-size: var(--fs-sm); font-weight: 600; }
+.text-nested-group > .text-group-heading > .text-add-condition { margin-left: auto; }
+
+.text-pattern-input { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.text-search-editor > form .text-pattern-input textarea { width: 100%; min-height: var(--query-row); resize: vertical; padding: 8px 10px; border-radius: var(--query-radius); font-family: var(--query-mono); line-height: 1.5; }
+.text-pattern-caption { color: var(--muted); font-size: var(--fs-sm); }
+.text-file-input .text-wrapping-input { font-size: var(--fs-base); }
+.text-search-editor .text-file-input .text-wrapping-input > * { min-height: var(--query-row); padding: 8px 10px; border-radius: var(--query-radius); }
+.text-search-editor .text-file-input .text-wrapping-input > textarea { border-color: var(--query-border); background-color: var(--query-field); }
+.text-search-editor > form :is(.text-pattern-input, .text-file-input) textarea:focus-visible { outline: none; border-color: color-mix(in srgb, var(--accent) 70%, var(--line)); box-shadow: 0 0 0 3px var(--query-focus); }
+
+/* Adding rules and filters continues the column; reading aids sit opposite. */
+.text-query-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; padding-left: var(--query-gutter); }
+.text-search-editor .text-add-condition:hover:not(:disabled) { color: var(--accent); }
+.text-search-editor button.text-layout-link { min-height: 24px; margin-left: auto; padding: 3px 0; color: var(--muted); font-size: var(--fs-sm); font-weight: 400; }
+.text-search-editor button.text-layout-link:hover:not(:disabled) { background: transparent; }
+
+/* The footer holds what shapes results rather than what matches: order,
+   matching options, and the action. */
+.text-editor-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: var(--query-space) calc(-1 * var(--query-space)) calc(-1 * var(--query-space)); padding: 10px var(--query-space); border-top: 1px solid var(--line); border-radius: 0 0 10px 10px; background: color-mix(in srgb, var(--bg) 30%, var(--panel)); }
+.text-search-editor:has(> .text-workspace-controls:not([hidden])) .text-editor-footer { margin-bottom: 0; border-radius: 0; }
+.text-search-order { display: flex; align-items: center; flex-wrap: wrap; gap: 0 2px; min-width: 0; color: var(--muted); }
+.text-order-label { margin-right: 2px; }
+.text-order-then { margin: 0 2px; }
+.text-sort-clause { display: inline-flex; align-items: center; flex-wrap: wrap; max-width: 100%; }
 .text-sort-clause > .text-select:first-child { max-width: 210px; }
-.text-search-editor .text-add-sort-wrap { max-width: 130px; }
+.text-search-order .text-add-sort-wrap { max-width: 130px; }
+.text-search-editor .text-search-order .text-add-sort-wrap { font-weight: 400; }
+.text-search-order .text-add-sort-wrap > select { color: var(--muted); }
 .text-sort-detail { color: var(--muted); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 .text-sort-detail code { color: var(--ink); }
-.text-editor-footer { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: var(--query-space); }
-.text-editor-toggles { display: flex; gap: 6px; flex-wrap: wrap; }
-.text-option-chip { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: var(--query-radius); min-height: var(--query-control-height); gap: 0; font-size: var(--query-font-size); }
-.text-option-chip label { display: flex; align-items: center; gap: 6px; padding: 5px 2px 5px 8px; cursor: pointer; }
-.text-option-chip input { width: 12px; height: 12px; accent-color: var(--accent); margin: 0; }
-.text-option-chip:has(input:disabled) { color: var(--muted); }
-.text-option-chip.is-active { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); background: var(--query-hover); }
-.text-submit-actions { display: flex; gap: 8px; margin-left: auto; }
-.text-search-editor button.text-search-submit { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; padding: 5px 12px; }
-.text-search-editor button.text-search-submit:hover:not(:disabled) { background: var(--accent-deep); border-color: var(--accent-deep); }
-.text-editor-meta { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; font-size: var(--fs-xs); color: var(--muted); }
-.text-editor-readback { min-width: 0; }
-.text-editor-readback summary { cursor: pointer; width: fit-content; padding: 3px 0; }
-.text-editor-readback summary:hover { color: var(--ink); }
-.text-editor-readback[open] { flex-basis: 100%; }
-.text-editor-readback p { overflow-wrap: anywhere; margin: 6px 0; }
-.text-search-editor button.text-layout-link { min-height: 24px; padding: 3px 0; border: 0; font-size: inherit; color: var(--muted); }
-.text-search-editor button.text-layout-link:hover { background: transparent; color: var(--ink); }
-.text-search-editor .text-draft-status { color: var(--warn); margin: 0 0 0 auto; font-size: var(--fs-xs); }
-.text-search-editor .text-editor-error { color: var(--bad); margin: 8px 0; font-size: var(--query-font-size); }
-.text-editor-alert { border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--line)); border-radius: 6px; padding: 9px 11px; background: color-mix(in srgb, var(--bad) 5%, var(--panel)); }
+.text-options-count { display: inline-grid; place-items: center; box-sizing: border-box; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: var(--panel); font-size: var(--fs-2xs); font-weight: 700; line-height: 1; }
+.text-submit-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.text-search-editor button.text-search-submit { min-height: 34px; padding: 6px 14px; border-radius: var(--query-radius); background: var(--accent); color: var(--panel); font-weight: 600; }
+.text-search-editor button.text-search-submit:hover:not(:disabled) { background: var(--accent-deep); color: var(--panel); }
+.text-search-editor .text-draft-status { margin: 0 6px 0 0; color: var(--warn); font-size: var(--fs-xs); }
+.text-search-editor .text-editor-error { color: var(--bad); margin: 8px 0 0; font-size: var(--query-font-size); }
+.text-editor-alert { border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--line)); border-radius: var(--query-radius); padding: 9px 11px; background: color-mix(in srgb, var(--bad) 5%, var(--panel)); }
 .text-editor-scope-note { border-left: 2px solid var(--accent); padding: 5px 9px; color: var(--muted); font-size: var(--query-font-size); }
-.text-search-editor .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.text-workspace-controls { margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; }
+
+/* Rules and Syntax: a small switch beside the target, not a toolbar. */
+.text-editor-tabs { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--query-radius); background: var(--query-hover); flex-shrink: 0; }
+.text-search-editor .text-editor-tabs button { min-height: 24px; padding: 2px 10px; font-size: var(--fs-sm); }
+.text-search-editor .text-editor-tabs button[aria-pressed=true] { background: var(--panel); color: var(--ink); box-shadow: 0 1px 2px #0000001f; }
+
+.text-workspace-controls { margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: var(--query-radius); }
 .text-workspace-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .text-workspace-controls > p { color: var(--muted); font-size: var(--query-font-size); margin: 6px 0 12px; }
 
 /* Help and menus use the same surfaces, control sizing, and focus treatment. */
-.text-search-editor button.search-help { display: inline-flex; align-items: center; justify-content: center; border: 0; padding: 4px; width: 24px; height: var(--query-control-height); min-height: var(--query-control-height); flex-shrink: 0; background: transparent; color: var(--muted); border-radius: 4px; }
-.text-search-editor button.search-help:hover { color: var(--ink); }
+.text-search-editor button.search-help { width: 24px; height: var(--query-control-height); min-height: 0; padding: 4px; border-radius: 4px; }
 .text-search-editor button.search-help .app-icon { width: 13px; height: 13px; }
-.text-search-editor .text-option-chip button.search-help { height: 30px; min-height: 30px; }
-.text-condition-popup { position: fixed; z-index: 1200; width: 280px; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow-y: auto; padding: 12px; border: 1px solid var(--query-border); border-radius: 7px; background: var(--panel); color: var(--ink); font: var(--fs-md)/1.5 var(--sans); box-shadow: 0 8px 24px #0003; }
+.text-condition-popup { position: fixed; z-index: 1200; width: 280px; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow-y: auto; box-sizing: border-box; padding: 12px; border: 1px solid var(--query-border); border-radius: 10px; background: var(--panel); color: var(--ink); font: var(--fs-md)/1.5 var(--sans); box-shadow: 0 10px 30px #0000002e; }
 .text-condition-popup p { margin: 0 0 10px; color: var(--muted); }
 .text-condition-popup label { display: flex; flex-direction: column; gap: 6px; font-size: var(--query-font-size); }
-.text-condition-popup select { box-sizing: border-box; width: 100%; min-width: 0; min-height: var(--query-control-height); border: 1px solid var(--query-border); border-radius: var(--query-radius); padding: 5px 27px 5px 9px; background: var(--query-control); color: var(--ink); font: inherit; appearance: none; }
-.text-condition-popup button { display: inline-flex; align-items: center; gap: 6px; min-height: var(--query-control-height); margin-top: 10px; padding: 5px 0; color: var(--bad); font: inherit; }
+.text-condition-popup .text-select { width: 100%; }
+.text-condition-popup select { box-sizing: border-box; width: 100%; min-width: 0; min-height: var(--query-control-height); border: 1px solid var(--query-border); border-radius: 6px; background: var(--query-field); color: var(--ink); font: inherit; }
+.text-condition-popup button { display: inline-flex; align-items: center; gap: 6px; min-height: var(--query-control-height); margin-top: 10px; padding: 5px 0; border: 0; background: transparent; color: var(--bad); font: inherit; cursor: pointer; }
 .text-condition-popup .app-icon { width: 14px; height: 14px; }
-.text-condition-popup :is(select,button):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.text-condition-popup :is(select, button, input):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .text-add-popup { width: 220px; padding: 6px; }
-.text-add-popup button { width: 100%; margin: 0; padding: 7px 9px; border-radius: var(--query-radius); text-align: left; color: var(--ink); }
-.text-add-popup button:hover { background: var(--query-hover); }
+.text-add-popup button { width: 100%; margin: 0; padding: 7px 9px; border-radius: 6px; text-align: left; color: var(--ink); }
+.text-add-popup hr { margin: 6px 4px; border: 0; border-top: 1px solid var(--line); }
+.text-add-popup button:hover, .text-condition-popup .text-option:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
 .text-filter-popup .text-popup-caption { color: var(--muted); font-size: var(--fs-2xs); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; margin: 5px 9px; }
 .text-filter-popup .text-popup-caption:not(:first-child) { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 6px; }
-.search-help-bubble { position: fixed; z-index: 1200; width: max-content; max-width: min(310px,calc(100vw - 16px)); padding: 10px 12px; border: 1px solid var(--query-border); border-radius: 7px; background: var(--panel); color: var(--ink); font: var(--query-font-size)/1.5 var(--sans); box-shadow: 0 8px 24px #0003; overflow-wrap: anywhere; }
+.text-options-popup { width: 330px; padding: 6px; }
+.text-condition-popup .text-option-mode { padding: 8px 10px 12px; margin-bottom: 4px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: var(--fs-sm); }
+.text-condition-popup label.text-option { display: grid; grid-template-columns: 16px minmax(0,1fr); gap: 2px 10px; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
+.text-option input { grid-row: 1 / span 2; width: 14px; height: 14px; margin: 3px 0 0; accent-color: var(--accent); }
+.text-option > span { font-weight: 500; }
+.text-option > small { grid-column: 2; color: var(--muted); font-size: var(--fs-sm); line-height: 1.45; }
+.text-condition-popup .text-option:has(input:disabled) { opacity: .5; cursor: default; background: transparent; }
+.search-help-bubble { position: fixed; z-index: 1200; width: max-content; max-width: min(310px,calc(100vw - 16px)); padding: 10px 12px; border: 1px solid var(--query-border); border-radius: 8px; background: var(--panel); color: var(--ink); font: var(--query-font-size)/1.5 var(--sans); box-shadow: 0 8px 24px #0003; overflow-wrap: anywhere; }
 .library-search-summary { overflow-wrap: anywhere; font-size: var(--fs-xs); margin: 6px 0; }
 .library-find-status { margin-bottom: 12px; font-size: var(--fs-sm); }
 .library-find-status > p { margin: 6px 0; }
@@ -178,86 +218,64 @@
 .library-find-status button { margin-right: 8px; }
 
 @media (max-width: 600px) {
-  .text-search-editor { --query-space: 10px; }
-  .text-editor-toolbar { padding-block: 8px; }
-  .text-query-subject { flex-basis: 100%; }
-  .text-query-subject > .text-select { flex: 1; }
-  .text-match-style { margin-left: 0; flex-basis: 100%; }
-  .text-match-style > .text-select { flex: 1; max-width: 100%; }
-  .text-condition { width: 100%; align-items: start; }
-  .text-join { align-self: center; }
-  .text-rule { flex: 1; }
-  .text-rule-group { padding: 8px; }
-  .text-query-frame { padding: 8px; }
-  .text-condition-group > .text-rule-group { width: 100%; padding: 7px; }
-  .text-rule-controls { grid-template-columns: minmax(0,1fr) var(--query-control-height); gap: 4px; }
-  .text-rule-controls > .text-select { width: 100% !important; }
-  .text-rule-controls > .text-growing-input { grid-row: 2; grid-column: 1 / -1; width: 100%; }
-  .text-proximity { margin: 6px 0 2px; }
-  .text-proximity > .text-growing-input { max-width: 100%; }
-  .text-group-heading { gap: 4px; }
-  .text-group-heading > label { flex-wrap: wrap; }
-  .text-negative-clause { flex-wrap: wrap; gap: 5px; }
-  .text-negative-group { flex: 1 1 100%; }
-  .text-bracketed-matches { width: auto; }
-  .text-filter-condition { width: 100%; }
-  .text-filter-clause { flex: 1; }
-  .text-filter-clause .text-growing-input { flex: 1 1 100%; width: 100%; }
-  .text-filter-clause:has(> label) { display: grid; grid-template-columns: minmax(0,1fr) var(--query-control-height); gap: 4px; }
-  .text-filter-clause > label { grid-column: 1; grid-row: 1; }
-  .text-filter-clause > :is(.text-select, input, .text-growing-input) { grid-column: 1; grid-row: 2; width: 100% !important; max-width: 100%; }
-  .text-filter-clause > .text-remove { grid-column: 2; grid-row: 2; }
-  .text-filter-clause > .search-help { grid-column: 2; grid-row: 1; }
-  .text-workspace-condition { flex-wrap: wrap; }
-  .text-sort-clause > .text-select:first-child { max-width: 180px; }
-  .text-search-order { gap: 6px; margin-left: 0; }
-  .text-editor-footer { gap: 10px; }
-  .text-editor-toggles { gap: 5px; }
-  .text-submit-actions { width: 100%; justify-content: end; }
-  .text-file-input { width: 100%; }
-  .text-file-input > .text-growing-input { width: 100%; }
-  .text-search-editor .text-draft-status { flex-basis: 100%; margin-left: 0; }
+  .text-search-editor { --query-space: 12px; --query-gutter: 38px; }
+  .text-query-heading > .text-editor-tabs { margin-left: 0; }
+  .text-filter-clause { padding-left: 10px; }
+  .text-filter-clause > label { white-space: normal; }
+  /* Narrow rows give the text its own full-width line under the row's choices. */
+  .text-rule-controls > .text-wrapping-input { grid-row: 2; grid-column: 1 / -1; }
+  .text-rule-controls > .text-select { grid-column: 1; border-right: 0; }
+  .text-rule-controls > .text-condition-options { grid-column: 3; }
+  .text-rule-controls > .text-remove { grid-column: 4; }
+  .text-filter-clause > .text-wrapping-input { order: 1; flex-basis: 100%; margin-left: -9px; }
+  .text-filter-clause:has(> .text-select:first-child) > .text-wrapping-input { margin-left: -1px; }
+  .text-editor-sentence { font-size: var(--fs-md); line-height: 20px; }
+  /* Two footer lines: how results are ordered, then options and the action. */
+  .text-search-order { flex-basis: 100%; }
+  .text-submit-actions { display: contents; }
+  .text-search-editor .text-draft-status { order: 1; flex-basis: 100%; margin: 0; }
+  .text-editor-footer > .text-options-trigger { order: 2; }
+  .text-submit-actions > button { order: 3; }
+  .text-editor-footer > details { order: 4; }
+  .text-submit-actions > button:first-of-type { margin-left: auto; }
 }
 
 /* The same composer sits on Home, in the menu dialog, and next to results. */
-.home-intro:has(.shared-search-composer) { max-width: 1080px; }
+/* Home's search keeps a hero measure: wide enough for long conditions, narrow
+   enough that short ones don't stretch across the page. */
+.home-intro:has(.shared-search-composer) { max-width: 800px; }
 .shared-search-composer { text-align: left; min-width: 0; }
 .home-search-disclosure { margin-bottom: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); box-shadow: 0 4px 18px #34230d0b; text-align: left; transition: border-color 240ms ease, box-shadow 240ms ease; }
-.home-search-disclosure:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
-.home-search-trigger { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 54px; padding: 14px 16px; border: 0; border-radius: 10px; background: transparent; color: var(--ink); font: var(--fs-md)/1.5 var(--sans); text-align: left; cursor: text; }
+.home-search-disclosure:not(.is-expanded):focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
+.home-search-disclosure.is-expanded { box-shadow: 0 10px 30px #34230d14; }
+.home-search-trigger { display: flex; align-items: flex-start; gap: 12px; width: 100%; height: auto; min-height: 54px; padding: 15px 16px; border: 0; border-radius: 10px; background: transparent; color: var(--ink); font: var(--fs-base)/22px var(--sans); text-align: left; cursor: text; }
 .home-search-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-.home-search-trigger > .app-icon { width: 18px; height: 18px; flex-shrink: 0; color: var(--muted); }
-.home-search-trigger > .app-icon:last-child { width: 14px; height: 14px; margin-left: auto; transition: transform 260ms ease; }
-.home-search-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-search-trigger > .app-icon { width: 18px; height: 18px; flex-shrink: 0; margin-top: 2px; color: var(--muted); }
+.home-search-trigger > .app-icon:last-child { width: 14px; height: 14px; margin: 4px 0 0 auto; transition: transform 260ms ease; }
+.home-search-trigger > span { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .home-search-placeholder { color: var(--muted); }
 .home-search-disclosure.is-expanded > .home-search-trigger { cursor: pointer; }
 .home-search-disclosure.is-expanded > .home-search-trigger > .app-icon:last-child { transform: rotate(180deg); }
 .home-search-expansion { display: grid; grid-template-rows: 0fr; opacity: 0; visibility: hidden; transition: grid-template-rows 280ms cubic-bezier(.2,.7,.2,1), opacity 200ms ease, visibility 0s 280ms; }
 .home-search-disclosure.is-expanded > .home-search-expansion { grid-template-rows: 1fr; opacity: 1; visibility: visible; transition-delay: 0s; }
 .home-search-content { min-height: 0; overflow: hidden; }
-.home-search-content .text-search-editor { border: 0; border-top: 1px solid var(--line); border-radius: 0 0 10px 10px; box-shadow: none; margin-bottom: 0; padding-bottom: 0; }
-.home-search-content .text-editor-toolbar { border-radius: 0; }
-.home-search-content .text-query-frame { border: 0; border-radius: 0; padding: 0; background: transparent; }
-.home-search-content .text-editor-meta:empty { display: none; }
+.home-search-content .text-search-editor { margin-bottom: 0; border: 0; border-top: 1px solid var(--line); border-radius: 0 0 10px 10px; box-shadow: none; }
 @media (prefers-reduced-motion: reduce) {
   .home-search-disclosure, .home-search-expansion, .home-search-trigger > .app-icon:last-child { transition: none; }
 }
-#searchDialog.search-dialog { width: min(1060px, calc(100vw - 24px)); max-width: calc(100vw - 24px); max-height: calc(100dvh - 32px); padding: 18px; overflow: auto; box-sizing: border-box; }
+#searchDialog.search-dialog { width: min(1060px, calc(100vw - 24px)); max-width: calc(100vw - 24px); max-height: 92dvh; margin: 4vh auto; padding: 18px; overflow: auto; box-sizing: border-box; }
 #searchDialog .search-dialog-heading { margin: 0 0 16px; }
-#searchDialog .text-search-editor { margin-bottom: 0; }
-.search-filter-alternatives { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; border: 1px solid var(--line); border-left: 2px solid var(--sea); padding: 6px; border-radius: 6px; min-width: 0; max-width: 100%; }
-/* Field names and operators use sans; selected values retain monospace. */
-.text-search-editor .text-filter-clause .text-select:has(select[aria-label^="Filter "]:not(.text-value-select)) { font-family: var(--sans); }
-.text-search-editor .text-filter-clause select[aria-label^="Filter "]:not(.text-value-select) { background-color: var(--query-control); color: var(--ink); font-family: inherit; border-color: var(--line); color-scheme: inherit; }
-.text-search-editor .text-filter-clause .text-select:has(select[aria-label^="Filter "]:not(.text-value-select)) > .app-icon { color: var(--muted); }
-.record-search-editor .text-editor-footer { align-items: flex-start; }
-.record-search-editor .text-editor-footer > details { flex: 1 1 100%; order: 2; }
-.record-search-editor .text-submit-actions { margin-left: auto; }
-.record-search-editor .text-query-conditions > .text-filter-condition:first-of-type > .text-join { display: none; }
+#searchDialog .text-search-editor { --query-space: 18px; margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+#searchDialog .text-search-editor > form { padding: 0; }
+#searchDialog .text-search-editor > form > .text-editor-sentence { margin: 0 0 var(--query-space); border: 1px solid var(--line); border-radius: 10px; }
+@container composer (min-width: 980px) { #searchDialog .text-search-editor > form > .text-editor-sentence { margin: 0 0 var(--query-space) var(--query-space); } }
+.record-search-target { font-weight: 600; }
+.record-search-empty { display: flex; align-items: center; min-height: var(--query-row); margin: 0; color: var(--muted); }
+.record-search-editor .text-editor-footer > details { flex: 1 1 100%; }
 .record-search-editor summary { cursor: pointer; color: var(--muted); font-size: var(--query-font-size); }
 .search-context { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px; font-size: var(--fs-sm); color: var(--muted); }
 .search-context strong { color: var(--ink); }
-@media(max-width:600px) { #searchDialog.search-dialog { padding: 12px; } .home-intro:has(.shared-search-composer) { margin-bottom: 24px; } }
+@media(max-width:600px) { #searchDialog.search-dialog { padding: 12px; } #searchDialog .text-search-editor { --query-space: 12px; } .home-intro:has(.shared-search-composer) { margin-bottom: 24px; } }
 .conversation-search-host:empty { display: none; }
 .conversation-search-composer { margin: 16px 0; border-bottom: 1px solid var(--line); padding-bottom: 14px; }
 .conversation-search-composer > .search-context > button { margin-left: auto; }
@@ -267,9 +285,3 @@
 .conversation-search-hits { display: grid; gap: 4px; max-height: 180px; overflow: auto; margin-top: 8px; }
 .conversation-search-hits > button { text-align: left; white-space: normal; font-size: var(--fs-sm); }
 .conversation-search-hits > button[aria-current=true] { border-color: var(--gold); }
-#searchDialog .text-search-editor > form { display: block; padding: 0; }
-#searchDialog.search-dialog { margin: 4vh auto; max-height: 92dvh; }
-@media (max-width: 600px) {
-  .search-filter-alternatives > .text-filter-clause { flex: 1 0 100%; width: 100%; box-sizing: border-box; }
-  .search-filter-alternatives > .text-join { flex-basis: 100%; }
-}
