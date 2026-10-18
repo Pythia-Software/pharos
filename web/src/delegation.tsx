@@ -91,6 +91,9 @@ type Props = {
   statsHost?: HTMLElement | null;
   compact?: boolean;
   openConversation: (id: string, message?: string, session?: string) => Promise<void>;
+  // Reports whether the workspace's sessions form a hierarchy: more than one
+  // session, or one linked to a parent or child elsewhere.
+  onHierarchy?: (hierarchical: boolean) => void;
 };
 type Tint = "all" | "off" | "sort";
 type Range = [number, number];
@@ -415,6 +418,7 @@ export function DelegationExplorer({
   statsHost,
   compact = false,
   openConversation,
+  onHierarchy,
 }: Props) {
   const contentID = useId();
   const endpoint = `/api/work/${encodeURIComponent(workspace)}`;
@@ -575,6 +579,10 @@ export function DelegationExplorer({
       window.dispatchEvent(new Event("pharos:uri-changed"));
     }
   }, [data, mode, sort, scope, direction, collapsed, selected, range]);
+  useEffect(() => {
+    if (data && onHierarchy)
+      onHierarchy(data.session_count > 1 || data.rows.some((n) => n.parent_id || n.external_parent || n.external_child));
+  }, [data]);
   function resetPage() {
     setCursor("");
     setPages([]);

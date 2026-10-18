@@ -16,8 +16,14 @@ export type WorkspaceInbox = {
   overview: HTMLElement;
   reader: HTMLElement;
   heading: HTMLElement;
+  // The overview's content, which leads the reader while merged.
+  lead: HTMLElement;
   viewing: boolean;
+  // A workspace with one conversation and no delegation hierarchy has nothing
+  // to navigate: its overview and conversation read as one page.
+  merged: boolean;
   setViewer: (viewing: boolean) => void;
+  setMerged: (merged: boolean) => void;
   showSessions: () => void;
   destroy: () => void;
 };
@@ -92,17 +98,19 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
   }
   function update() {
     if (disposed) return;
-    const split = api.viewing;
+    const viewing = api.viewing;
+    const split = viewing && !api.merged;
     const visible = split && (mobile.matches ? sheet : !hidden);
-    element.classList.toggle("viewing", split);
+    element.classList.toggle("viewing", viewing);
+    element.classList.toggle("merged", api.merged);
     element.classList.toggle("navigator-hidden", split && !mobile.matches && hidden);
     element.classList.toggle("sessions-open", split && mobile.matches && sheet);
     element.style.setProperty("--workspace-nav-width", `${clamped(width)}px`);
     const compact = split && (mobile.matches || (!hidden && clamped(width) < 720));
     element.classList.toggle("compact", compact);
-    viewer.hidden = !split;
+    viewer.hidden = !viewing;
     divider.hidden = !split || mobile.matches || hidden;
-    overview.inert = split && mobile.matches && !sheet || split && !mobile.matches && hidden;
+    overview.inert = api.merged || split && mobile.matches && !sheet || split && !mobile.matches && hidden;
     viewer.inert = split && mobile.matches && sheet;
     if (split && mobile.matches && sheet) {
       overview.setAttribute("role", "dialog");
@@ -119,14 +127,15 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
     divider.setAttribute("aria-valuemin", "300");
     divider.setAttribute("aria-valuemax", String(Math.round(clamped(element.clientWidth))));
     divider.setAttribute("aria-valuenow", String(Math.round(clamped(width))));
-    document.body.classList.toggle("workspace-inbox-overview", !split);
-    document.body.classList.toggle("workspace-inbox-viewing", split);
+    document.body.classList.toggle("workspace-inbox-overview", !viewing);
+    document.body.classList.toggle("workspace-inbox-viewing", viewing);
     document.body.classList.toggle("workspace-session-sheet-open", split && mobile.matches && sheet);
-    const narrow = split && viewer.clientWidth < 700;
+    const narrow = viewing && viewer.clientWidth < 700;
     element.classList.toggle("reader-narrow", narrow);
     document.body.classList.toggle("workspace-reader-narrow", narrow);
-    if (split) {
-      document.documentElement.style.setProperty("--conversation-rail-top", `${Math.ceil(bar.getBoundingClientRect().bottom + 5)}px`);
+    if (viewing) {
+      const top = api.merged ? viewer.getBoundingClientRect().top : bar.getBoundingClientRect().bottom;
+      document.documentElement.style.setProperty("--conversation-rail-top", `${Math.ceil(top + 5)}px`);
       document.documentElement.style.setProperty("--workspace-reader-width", `${viewer.clientWidth}px`);
     }
     if (compact !== lastCompact) {
@@ -146,7 +155,9 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
     overview,
     reader,
     heading,
+    lead: overviewContent,
     viewing: false,
+    merged: false,
     setViewer(viewing) {
       if (viewing !== api.viewing) {
         if (viewing) overviewScroll = overview.scrollTop;
@@ -164,8 +175,15 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
         update();
       }
     },
+    setMerged(merged) {
+      if (merged === api.merged) return;
+      api.merged = merged;
+      if (merged) reader.prepend(overviewContent);
+      else overview.append(overviewContent);
+      update();
+    },
     showSessions() {
-      if (!api.viewing) return;
+      if (!api.viewing || api.merged) return;
       hidden = false;
       sheet = mobile.matches;
       update();
