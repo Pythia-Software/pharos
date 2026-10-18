@@ -4,17 +4,17 @@ import type { QueryDataset } from "./query-links";
 // One palette for a card's subject, regardless of whether it is collected or
 // suggested. Named model/repository series retain the shared Usage palette.
 export const queryCategories = {
-  human: { label: "Human Words", tone: "var(--gold)" },
+  human: { label: "Human Words", tone: "var(--sea)" },
   steering: { label: "Steering", tone: "var(--warn)" },
   errors: { label: "Error Patterns", tone: "var(--bad)" },
-  context: { label: "Context", tone: "var(--heat-2)" },
-  models: { label: "Model Choice", tone: "var(--heat-1)" },
-  usage: { label: "Token Usage", tone: "var(--heat-0)" },
-  cost: { label: "API Cost", tone: "color-mix(in srgb,var(--gold) 65%,var(--warn))" },
+  context: { label: "Context", tone: "var(--gold)" },
+  models: { label: "Model Choice", tone: "color-mix(in srgb,var(--warn) 65%,var(--gold))" },
+  usage: { label: "Token Usage", tone: "var(--heat-1)" },
+  cost: { label: "API Cost", tone: "color-mix(in srgb,var(--heat-0) 70%,var(--sea))" },
   research: { label: "Research", tone: "color-mix(in srgb,var(--heat-0) 70%,var(--sea))" },
-  skills: { label: "Skills", tone: "var(--sea)" },
-  tools: { label: "Tool Flow", tone: "color-mix(in srgb,var(--warn) 65%,var(--gold))" },
-  delegation: { label: "Delegation", tone: "color-mix(in srgb,var(--heat-1) 70%,var(--sea))" },
+  skills: { label: "Skills", tone: "var(--gold)" },
+  tools: { label: "Tool Flow", tone: "color-mix(in srgb,var(--gold) 65%,var(--warn))" },
+  delegation: { label: "Delegation", tone: "var(--heat-2)" },
   views: { label: "Work Views", tone: "var(--muted)" },
 } as const;
 export type QueryCategory = keyof typeof queryCategories;

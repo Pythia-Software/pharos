@@ -116,6 +116,38 @@ test("changing the cover to evidence counts uses the selected metric's unit", as
   assert.equal(preview.summary, "10 records");
 });
 
+test("saved local-hour cards keep the catalog's 24 combined clock-hour buckets", async t => {
+  const previousTZ = process.env.TZ;
+  process.env.TZ = "America/Denver";
+  t.after(() => { if (previousTZ === undefined) delete process.env.TZ; else process.env.TZ = previousTZ; });
+  const message = (id, daysAgo, hour, typed_words) => {
+    const sent = new Date();
+    sent.setDate(sent.getDate() - daysAgo);
+    sent.setHours(hour, 15, 0, 0);
+    return { id, sent_at: sent.toISOString(), typed_words };
+  };
+  const population = [message("first", 1, 9, 100), message("second", 3, 9, 50), message("evening", 2, 17, 25), message("outside", 40, 9, 1000)];
+  const requests = fixture(t, (path, request) => {
+    if (path.includes("/writing_messages/rows-v2")) return response(core.applyQuery(population, request, schemas.writing_messages));
+  });
+  const recipe = queryRecipes.find(recipe => recipe.id === "writing-hours");
+  assert.equal(recipe.cover, undefined, "this recipe relies on an inferred default cover");
+  for (const days of [7, 30]) {
+    const item = instantiateRecipe(recipe, days);
+    const cover = { mode: "source", metricId: recipe.measures[0].id, kind: "bar-vertical" };
+    const catalog = await loadQueryPreview(item.dataset, item.query, schemas.writing_messages, { recipe: item, window: item.window });
+    for (const selection of [{ cover }, { coverMetricId: cover.metricId }, { cover, coverMetricId: cover.metricId }]) {
+      const saved = await loadQueryPreview(item.dataset, item.query, schemas.writing_messages, { recipe, window: item.window, ...selection });
+      assert.equal(saved.study?.kind, "hours");
+      assert.deepEqual(saved.study, catalog.study);
+      assert.equal(saved.study.rows.length, 24);
+      assert.deepEqual(saved.study.rows.filter(row => row.value), [{ label: "09:00", value: 150 }, { label: "17:00", value: 25 }]);
+      assert.equal(saved.study.timeZone, "America/Denver");
+    }
+  }
+  assert.ok(requests.every(({ path }) => path.endsWith("/rows-v2")), "saved cards must use the clock-hour study instead of dated hourly metrics");
+});
+
 test("sparse tool-size cohorts explain their cutoff in calls rather than conversations", async t => {
   fixture(t, (path, request) => path.endsWith("metrics") ? response(core.evaluateMetrics(rows.slice(1, 3), query(request.metrics), schemas.tool_calls)) : undefined);
   const recipe = queryRecipes.find(recipe => recipe.id === "output-distribution");

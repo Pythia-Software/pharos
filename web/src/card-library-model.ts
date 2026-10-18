@@ -39,6 +39,9 @@ export function availableChartKinds(recipe: QueryRecipe, cover = defaultCardCove
   const additive = metric && !metric.expression && ["sum", "count"].includes(metric.op) ? true : column ? ["sum", "count"].includes(column.op) : metric && !metric.expression && ["sum", "count"].includes(metric.op);
   return ["auto", "bar-horizontal", "bar-vertical", "line", ...(additive ? ["pie", "donut"] as const : []), "value", "list", "table"];
 }
+export function cardCoverGroupLimit(recipe: QueryRecipe): number {
+  return Math.max(100, defaultCardCover(recipe)?.maxGroups ?? 0);
+}
 export function saveCardTemplate(id: string, edit?: CardTemplateEdit) {
   const recipe = queryRecipes.find(recipe => recipe.id === id);
   if (!recipe) throw new Error("This card is no longer available.");
@@ -49,7 +52,7 @@ export function saveCardTemplate(id: string, edit?: CardTemplateEdit) {
     if (edit.cover?.density !== undefined && edit.cover.density !== "compact") throw new Error("Choose a valid row density.");
     if (edit.cover?.stackBy !== undefined && !(["session_kind", "session_role"].includes(edit.cover.stackBy))) throw new Error("Choose a supported stack dimension.");
     if (edit.cover?.height !== undefined && (!Number.isInteger(edit.cover.height) || edit.cover.height < 170 || edit.cover.height > 600)) throw new Error("Choose a chart height between 170 and 600 pixels.");
-    if (edit.cover?.maxGroups !== undefined && (!Number.isInteger(edit.cover.maxGroups) || edit.cover.maxGroups < 1 || edit.cover.maxGroups > 100)) throw new Error("Choose between 1 and 100 visible rows or series.");
+    if (edit.cover?.maxGroups !== undefined && (!Number.isInteger(edit.cover.maxGroups) || edit.cover.maxGroups < 1 || edit.cover.maxGroups > cardCoverGroupLimit(recipe))) throw new Error(`Choose between 1 and ${cardCoverGroupLimit(recipe)} visible rows or series.`);
     if (edit.cover?.legendColumns !== undefined && ![1, 2].includes(edit.cover.legendColumns)) throw new Error("Choose one or two legend columns.");
     if (edit.cover?.minSamples !== undefined && (!Number.isInteger(edit.cover.minSamples) || edit.cover.minSamples < 1 || edit.cover.minSamples > 10000)) throw new Error("Choose a valid minimum sample size.");
     if (edit.cover && [edit.cover.showOther, edit.cover.showLegend, edit.cover.showHeadline].some(value => value !== undefined && typeof value !== "boolean")) throw new Error("Choose valid key and remainder settings.");

@@ -20,6 +20,15 @@ export function defaultCardCover(recipe: QueryRecipe): CardCover | undefined {
   return { mode: "source", metricId: metric.id, kind: metric.display?.kind ?? "bar-horizontal" };
 }
 
+// Study identity comes from its source measure or grouped value, rather than
+// an editable cover. Both catalog templates and saved cards can select another
+// metric, which must use native execution instead of the original study.
+export function humanStudyCoverMatches(recipe: QueryRecipe, cover = recipe.cover, metricId?: string): boolean {
+  const studyMetricId = recipe.exploration?.valueField ?? recipe.measures[0]?.id;
+  const mode = recipe.exploration ? "result" : "source";
+  return (!metricId || metricId === studyMetricId) && (!cover || cover.mode === mode && cover.metricId === studyMetricId);
+}
+
 export function cardCoverQuery(query: QueryState, recipe: QueryRecipe, requested?: CardCover): { query: QueryState; metricId?: string } {
   const cover = requested ?? defaultCardCover(recipe);
   if (!cover) return { query };

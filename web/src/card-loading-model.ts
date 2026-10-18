@@ -1,5 +1,5 @@
 import type { AggregationClause, QueryState } from "@pythia-software/query-table-core";
-import { cardCoverQuery, type CardCover } from "./card-cover";
+import { cardCoverQuery, humanStudyCoverMatches, type CardCover } from "./card-cover";
 import { boxCoverHeight } from "./compact-box-model";
 import type { QueryRecipe } from "./curiosity-data";
 
@@ -10,8 +10,9 @@ export type CardLoadingSpec = { kind: CardLoadingKind; count: number; headline?:
 // Placeholder marks describe the display, never estimated data values.
 export function cardLoadingPresentation(query: QueryState, options: { recipe?: QueryRecipe; cover?: CardCover; metricId?: string; days?: number } = {}): CardLoadingSpec {
   const study = options.recipe?.humanStudy;
-  if (study && (!query.grouping || study === "conversation-lengths") && (!options.metricId || options.metricId === options.recipe?.cover?.metricId) && (!options.cover || options.cover.metricId === options.recipe?.cover?.metricId)) {
-    return study === "conversation-lengths" ? { kind: "list", count: 6, height: 240 } : study === "hours" ? { kind: "columns", count: 24, height: 205 } : ["contribution-patterns", "examples"].includes(study) ? { kind: "list", count: study === "examples" ? 3 : 4, height: 210 } : { kind: "line", count: 31, headline: true, height: 260 };
+  if (study && (!query.grouping || study === "conversation-lengths") && humanStudyCoverMatches(options.recipe!, options.cover, options.metricId)) {
+    const spec: CardLoadingSpec = study === "conversation-lengths" ? { kind: "list", count: 6, height: 240 } : study === "hours" ? { kind: "columns", count: 24, height: 205 } : ["contribution-patterns", "examples"].includes(study) ? { kind: "list", count: study === "examples" ? 3 : 4, height: 210 } : { kind: "line", count: 31, headline: true, height: 260 };
+    return { ...spec, height: (options.cover ?? options.recipe?.cover)?.height ?? spec.height };
   }
   let projected = query, metricId = options.metricId;
   if (options.recipe && (query.grouping || options.cover)) {

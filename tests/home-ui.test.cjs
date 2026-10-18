@@ -121,7 +121,6 @@ async function setup({ saved = false, reducedMotion = false, clock = false, view
   await page.goto(`http://home.test${url}`);
   if (clock) await page.clock.runFor(5000);
   if (url.includes('cards=library')) await page.locator('.card-library-entry').first().waitFor();
-  else if (url.includes('cards=human-review') || url.includes('cards=model-review') || url.includes('cards=context-review') || url.includes('cards=error-review') || url.includes('cards=tool-review') || url.includes('cards=skills-review') || url.includes('cards=research-review') || url.includes('cards=cost-review') || url.includes('cards=token-review') || url.includes('cards=delegation-review')) await page.locator('.human-review-entry').first().waitFor();
   else if (waitForHome) await page.waitForFunction(() => document.querySelector('.home-conveyor')?.getAttribute('aria-busy') === 'false' && document.querySelector('.home-belt-row .query-card'));
   else await page.waitForFunction(() => document.querySelector('.view.active .qt-qb'));
   return { browser, page, data };
@@ -161,6 +160,27 @@ test('rolling windows recognize whole local calendar spans across midnight and d
       assert.equal(links.rollingQueryMatches(partial, window), false, 'manual partial-day bounds stop being rolling');
     }
   } finally { if (previousTZ === undefined) delete process.env.TZ; else process.env.TZ = previousTZ; }
+});
+
+test('Home shows the Dashboard Catalog and retired study URLs open Home', async () => {
+  const { browser, page, data } = await setup({ viewport: { width: 1470, height: 797 }, deviceScaleFactor: 2, reducedMotion: true });
+  try {
+    assert.equal(await page.locator('.home-empty small').innerText(), 'Collect cards that help you see your work from different angles');
+    assert.equal(await page.getByRole('heading', { name: 'Dashboard Catalog', exact: true }).count(), 1);
+    assert.equal(await page.getByRole('region', { name: 'Dashboard Catalog', exact: true }).count(), 1);
+    assert.equal(await page.locator('.home-card-library-nav,a[href*="-review"]').count(), 0);
+    await page.screenshot({ path: path.join(root, '.context/home-feedback-desktop.png') });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.ok(await page.locator('.home-empty small').evaluate(el => el.getBoundingClientRect().right <= innerWidth));
+    assert.ok(await page.locator('.home-conveyor-head').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+    await page.screenshot({ path: path.join(root, '.context/home-feedback-mobile.png') });
+    for (const category of ['human', 'model', 'context', 'error', 'tool', 'skills', 'research', 'cost', 'token', 'delegation']) {
+      await page.goto(`http://home.test/home?cards=${category}-review`);
+      await page.getByRole('heading', { name: 'Dashboard Catalog', exact: true }).waitFor();
+      assert.equal(await page.locator('.human-review,.human-review-entry').count(), 0, category);
+    }
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
 });
 
 test('Home nav and logo activate previews and leaving Home suspends scans and autoplay', async () => {
@@ -1007,6 +1027,7 @@ test('card library shows empty cards, filters and sorts active definitions, and 
   const { browser, page, data } = await setup({ url: '/home?cards=library' });
   try {
     const activeRecipes = queryRecipes.filter(recipe => !recipe.retired);
+    assert.equal(await page.locator('a[href*="-review"]').count(), 0);
     assert.equal(await page.locator('.card-library-entry').count(), activeRecipes.length);
     assert.deepEqual(data.metadataRequests, [], 'hidden table controls must not scan distinct values on Home');
     assert.ok(data.requests.every(({ path }) => !path.endsWith('/aggregations')), 'hidden table header charts must not compete with card previews');
@@ -1056,6 +1077,54 @@ test('card library shows empty cards, filters and sorts active definitions, and 
   } finally { await browser.close(); }
 });
 
+test('every active catalog card preserves its displayed data after collection and dashboard reload', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=library', now: new Date('2026-10-16T18:00:00Z') });
+  try {
+    await page.waitForFunction(() => !document.querySelector('.card-library-count').textContent.includes('Loading charts'));
+    const active = queryRecipes.filter(recipe => !recipe.retired);
+    const signature = card => card.locator('.query-cover').evaluate(cover => ({
+      label: cover.getAttribute('aria-label'),
+      text: cover.textContent,
+      study: cover.querySelector('.human-study-cover')?.className ?? null,
+      tips: [...cover.querySelectorAll('[data-chart-tooltip]')].map(element => element.getAttribute('data-chart-tooltip')),
+    }));
+    const expected = new Map();
+    for (const recipe of active) {
+      const card = page.locator(`#card-${recipe.id}`);
+      expected.set(recipe.id, await signature(card));
+      await card.getByRole('button', { name: /^Collect / }).click();
+      await assertEventually(async () => await page.evaluate(id => window.pharosPrefs.get('pharos-bookmarks-v1', []).some(card => card.templateId === `${id}:7`), recipe.id)).catch(async error => assert.fail(`${recipe.id}: ${await page.locator('.card-library-feedback').innerText()} (${error.message})`));
+    }
+    await assertEventually(async () => data.preferences['pharos-bookmarks-v1']?.length === active.length);
+    await page.goto('http://home.test/home');
+    await page.waitForFunction(count => document.querySelectorAll('.home-collection .query-card').length === count
+      && !document.querySelector('.home-collection [aria-busy="true"]'), active.length);
+    for (const saved of data.preferences['pharos-bookmarks-v1']) {
+      const id = saved.templateId.split(':')[0];
+      assert.deepEqual(await signature(page.locator(`.home-collection [data-card-id="${saved.id}"]`)), expected.get(id), id);
+    }
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
+test('template edits preserve distribution layout, sample labels, and existing scatter limits', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=skill-body-sizes' });
+  try {
+    for (const id of ['skill-body-sizes', 'work-volume-cost']) {
+      await page.getByLabel('Find a card', { exact: true }).fill(id);
+      await page.getByRole('button', { name: /^Edit card / }).click();
+      const title = await page.getByLabel('Question', { exact: true }).inputValue();
+      await page.getByLabel('Question', { exact: true }).fill(`${title} customized`);
+      await page.getByRole('button', { name: 'Save template', exact: true }).click();
+      await page.locator('.card-template-editor').waitFor({ state: 'hidden', timeout: 5000 });
+      const saved = await page.evaluate(id => window.pharosPrefs.get('pharos-card-templates-v1', {})[id], id);
+      const original = queryRecipes.find(recipe => recipe.id === id).cover;
+      assert.deepEqual(saved.cover, original, `${id}: title changes must retain the full cover`);
+    }
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
 test('retained distribution cards preserve native boxes and local-hour queries through editing and collection', async () => {
   const { browser, page, data } = await setup({ url: '/home?cards=library' });
   try {
@@ -1088,6 +1157,48 @@ test('retained distribution cards preserve native boxes and local-hour queries t
     await page.reload();
     await page.waitForFunction(() => !document.querySelector('.card-library-count').textContent.includes('Loading charts'));
     assert.equal(await page.locator('.query-preview-status').filter({ hasText: 'Preview unavailable' }).count(), 0);
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
+test('collected writing-hours cards combine multiple days by local hour after reload and window edits', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=writing-hours' });
+  try {
+    data.rows.writing_messages = [
+      { id: 'morning-one', sent_at: '2026-10-14T15:15:00Z', typed_words: 100 },
+      { id: 'morning-two', sent_at: '2026-10-15T15:45:00Z', typed_words: 50 },
+      { id: 'evening', sent_at: '2026-10-14T23:15:00Z', typed_words: 25 },
+      { id: 'older-morning', sent_at: '2026-10-01T15:15:00Z', typed_words: 200 },
+    ];
+    await page.clock.setFixedTime(new Date('2026-10-16T18:00:00Z'));
+    await page.reload();
+    const catalog = page.locator('#card-writing-hours');
+    await catalog.locator('.human-study-hour-bars').waitFor();
+    const hourDetails = card => card.locator('.human-study-hour-bars > span').evaluateAll(bars => bars.map(bar => bar.getAttribute('data-chart-tooltip')));
+    const expected = await hourDetails(catalog);
+    assert.equal(expected.length, 24);
+    assert.match(expected[9], /150 human-written words/);
+    assert.match(expected[17], /25 human-written words/);
+    await page.getByRole('button', { name: 'Collect When you work', exact: true }).click();
+    await page.getByText('Collected “When you work”.', { exact: true }).waitFor();
+    const saved = await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', []).find(card => card.templateId === 'writing-hours:7'));
+    assert.equal(saved.cover.metricId, 'hourly-human-words');
+    await assertEventually(async () => data.preferences['pharos-bookmarks-v1']?.some(card => card.id === saved.id));
+    await page.goto('http://home.test/home');
+    const card = page.locator(`.home-collection [data-card-id="${saved.id}"]`);
+    await card.locator('.human-study-hour-bars').waitFor();
+    assert.deepEqual(await hourDetails(card), expected, 'collecting preserves the catalog aggregation');
+    await page.reload();
+    await card.locator('.human-study-hour-bars').waitFor();
+    assert.deepEqual(await hourDetails(card), expected, 'existing saved cards recover the same clock-hour cover');
+    await card.screenshot({ path: path.join(root, '.context/writing-hours-collected.png') });
+    await card.hover();
+    await card.getByRole('button', { name: 'Edit When you work', exact: true }).click();
+    await page.getByLabel(/^Time window/).selectOption('30');
+    await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+    await assertEventually(async () => (await hourDetails(card))[9]?.includes('350 human-written words'));
+    assert.equal((await hourDetails(card)).length, 24);
+    assert.deepEqual(await card.locator('.human-study-axis > span').allTextContents(), ['00:00', '12:00', '23:00']);
     assert.deepEqual(data.errors, []);
   } finally { await browser.close(); }
 });
@@ -1337,25 +1448,6 @@ test('unavailable library previews reload and cancel retries when the time windo
   } finally { data.holdPreviews = false; for (const pending of data.pending.splice(0)) pending.release(); await browser.close(); }
 });
 
-test('unavailable contribution study previews reload from their card', async () => {
-  const { browser, page, data } = await setup({ url: '/home?cards=human-review' });
-  try {
-    const card = page.locator('.human-review-entry .query-card').first();
-    await card.locator('.human-study-cover, .query-preview-unavailable, .query-preview-status').first().waitFor();
-    assert.equal(await card.locator('.query-preview-unavailable').count(), 0, await card.locator('.query-cover').getAttribute('title'));
-    await card.locator('.human-study-cover').waitFor();
-    data.previewFailures.add('writing_messages');
-    await page.evaluate(() => window.dispatchEvent(new Event('pharos:data-refresh')));
-    await page.waitForFunction(() => document.querySelectorAll('.human-review-entry .query-preview-unavailable').length === document.querySelectorAll('.human-review-entry').length);
-    data.previewFailures.clear(); data.requests.length = 0;
-    await card.getByRole('button', { name: /^Reload preview/ }).click();
-    await card.locator('.human-study-cover').waitFor();
-    assert.equal(await page.locator('.human-review-entry .query-preview-unavailable').count(), await page.locator('.human-review-entry').count() - 1);
-    assert.equal(data.requests.length, 1, 'only the selected contribution study reloads');
-    assert.deepEqual(data.errors, []);
-  } finally { await browser.close(); }
-});
-
 test('card loading has a spinner and skeleton, respects reduced motion and clears when ready', async () => {
   const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=human-words' });
   try {
@@ -1381,10 +1473,10 @@ test('card loading has a spinner and skeleton, respects reduced motion and clear
   } finally { data.holdPreviews = false; for (const pending of data.pending.splice(0)) pending.release(); await browser.close(); }
 });
 
-test('compact native axes share a footer and wider plotting area on desktop and phone', async () => {
+test('compact log axes use round ticks and a measured gutter on desktop and phone', async () => {
   const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=session-token-cost' });
   try {
-    data.rows.usage=data.rows.usage.map((row,i)=>({...row,root_conversation_id:`root-${i}`,root_provider:'codex',root_model_family:'gpt-5.4',root_effort:'high'}));
+    data.rows.usage=data.rows.usage.map((row,i)=>({...row, total_tokens: 14400 * (1785000000 / 14400) ** (i / 27), cost_usd: .000451 * (1424.5 / .000451) ** (i / 27), root_conversation_id:`root-${i}`,root_provider:'codex',root_model_family:'gpt-5.4',root_effort:'high'}));
     await page.reload();
     const card = page.locator('#card-session-token-cost');
     await card.locator('.qt-metric-axis-labels').waitFor();
@@ -1396,12 +1488,28 @@ test('compact native axes share a footer and wider plotting area on desktop and 
       assert.match(await labels.nth(1).innerText(), /^→ /);
       assert.equal(await card.locator('svg text[transform]').count(), 0);
       const clip = card.locator('svg clipPath rect');
-      assert.equal(await clip.getAttribute('x'), '44');
+      const gutter = Number(await clip.getAttribute('x'));
+      assert.ok(gutter < 35, `the gutter fits the short labels (${gutter}px)`);
       const svg = await card.locator('.qt-metric-plot svg').boundingBox();
+      assert.ok(Number(await clip.getAttribute('width')) >= svg.width * .8, 'at least 80% of the width is available for points');
+      assert.deepEqual(await card.locator('.query-scatter-x-ticks text').allTextContents(), ['100K', '10M', '1B']);
+      assert.deepEqual(await card.locator('.query-scatter-y-ticks text').allTextContents(), ['0.001', '0.1', '10', '1K']);
+      for (const tick of await card.locator('svg text').all()) {
+        const bounds = await tick.boundingBox();
+        assert.ok(bounds.x >= svg.x && bounds.x + bounds.width <= svg.x + svg.width + 1, 'ticks fit inside the card');
+      }
+      assert.equal(await card.locator('.qt-metric-mark').count(), 28, 'all original pairs remain drawn');
       assert.ok(first.y >= svg.y + svg.height - 1, 'axis labels sit below the plot');
       const cover = await card.locator('.query-cover').boundingBox();
       assert.ok(first.y + first.height <= cover.y + cover.height + 1);
       assert.ok(await page.locator('.card-library').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+      await card.locator('.query-card').screenshot({ path: path.join(root, `.context/scatter-axis-${width}.png`) });
+      await card.locator('.qt-metric-mark').last().hover();
+      const tooltip = await page.getByRole('tooltip').innerText();
+      assert.match(tooltip, /Recorded tokens.*14,400/);
+      assert.match(tooltip, /API equivalent.*0\.000451/, 'hover preserves values below a cent');
+      assert.equal(await page.getByRole('tooltip').locator('.chart-tooltip-swatch').count(), 1, 'model color survives in hover details');
+      await page.keyboard.press('Escape');
     }
     assert.deepEqual(data.errors, []);
   } finally { await browser.close(); }
@@ -1587,602 +1695,6 @@ test('opening and immediately saving a restored template preserves all cover set
     assert.deepEqual(data.preferences['pharos-card-templates-v1']['cost-repos'], edit);
     assert.deepEqual(data.errors, []);
   } finally { await browser.close(); }
-});
-
-test('review feedback typing leaves dense charts idle and flushes the latest draft', async () => {
-  const { browser, page, data } = await setup({ url: '/home?cards=model-review' });
-  const draftKey = 'pharos-model-choice-review-v6';
-  try {
-    const seed = data.rows.usage[0];
-    data.rows.usage = Array.from({ length: 1200 }, (_, i) => ({ ...seed, id: `usage-${i}`, agent_session_id: `session-${i}`, conversation_id: `conversation-${i}`, root_conversation_id: `conversation-${i}`, root_provider: i % 2 ? 'claude' : 'codex', root_model_family: i % 2 ? 'opus-5-5' : 'gpt-6.1-sol', root_effort: 'high', provider: i % 2 ? 'claude' : 'codex', model_family: i % 2 ? 'opus-5-5' : 'gpt-6.1-sol', price_status: 'priced', total_tokens: 10000 + i * 100, input_tokens: 9000 + i * 90, output_tokens: 1000 + i * 10, cost_usd: 1 + i / 100, effort: 'high' }));
-    await page.reload();
-    await page.waitForFunction(() => document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
-    assert.equal(await page.locator('[data-card-id="session-token-cost"] .qt-metric-mark').count(), 1200);
-    const requests = data.requests.length, metadataRequests = data.metadataRequests.length;
-    await page.evaluate(() => {
-      window.reviewTypingProbe = { formats: 0, writes: 0 };
-      const format = Number.prototype.toLocaleString, write = Storage.prototype.setItem;
-      Number.prototype.toLocaleString = function(...args) { window.reviewTypingProbe.formats++; return format.apply(this, args); };
-      Storage.prototype.setItem = function(key, value) { if (key === 'pharos-model-choice-review-v6') window.reviewTypingProbe.writes++; return write.call(this, key, value); };
-    });
-    const card = page.getByRole('textbox', { name: 'Feedback on Session tokens and cost', exact: true });
-    await card.pressSequentially('Compare session outliers.', { delay: 0 });
-    await page.getByRole('textbox', { name: 'Feedback on Session relationships', exact: true }).pressSequentially('Useful group.', { delay: 0 });
-    await page.getByRole('textbox', { name: 'Overall feedback', exact: true }).pressSequentially('Keep these comparisons.', { delay: 0 });
-    await page.getByRole('group', { name: 'Verdict for Session tokens and cost', exact: true }).getByRole('button', { name: 'Keep', exact: true }).click();
-    const probe = await page.evaluate(() => window.reviewTypingProbe);
-    assert.equal(probe.formats, 0, 'feedback must not recompute chart numbers');
-    assert.ok(probe.writes < 8, `draft saves should batch typing, saw ${probe.writes} writes`);
-    assert.equal(data.requests.length, requests, 'feedback must not reload metric data');
-    assert.equal(data.metadataRequests.length, metadataRequests, 'feedback must not reload metadata');
-    await page.getByRole('button', { name: 'View report', exact: true }).click();
-    const report = await page.getByRole('textbox', { name: 'Feedback report', exact: true }).inputValue();
-    for (const text of ['Compare session outliers.', 'Useful group.', 'Keep these comparisons.', 'Verdict: keep']) assert.ok(report.includes(text), text);
-    await page.getByRole('button', { name: 'Close', exact: true }).click();
-    await card.fill('Saved while the field stays focused.');
-    await page.waitForFunction(key => JSON.parse(localStorage.getItem(key))?.cards['session-token-cost']?.note === 'Saved while the field stays focused.', draftKey);
-    await card.fill('Latest edit before leaving.');
-    await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
-    const saved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)), draftKey);
-    assert.equal(saved.cards['session-token-cost'].note, 'Latest edit before leaving.');
-    assert.equal(saved.cards['session-token-cost'].verdict, 'keep');
-    assert.equal(saved.theses.relationships, 'Useful group.');
-    assert.equal(saved.overall, 'Keep these comparisons.');
-    await page.reload();
-    assert.equal(await page.getByRole('textbox', { name: 'Feedback on Session tokens and cost', exact: true }).inputValue(), 'Latest edit before leaving.');
-    assert.deepEqual(data.errors, []);
-  } finally { await browser.close(); }
-});
-
-test('error review keeps nine cards, preserves earlier feedback, and links to affected conversations', async () => {
-  const { browser, page, data } = await setup({ url: '/home?cards=error-review', viewport: { width: 1440, height: 1080 }, localValues: { 'pharos-error-pattern-review-v1': { cards: { 'repeated-failed-commands': { verdict: 'drop', note: 'Earlier review' } } } } });
-  try {
-    const seed = data.rows.tool_calls[0], skill = data.rows.skill_usages[0];
-    data.rows.tool_calls = Array.from({length: 72}, (_, i) => ({...seed, id:`call-${i}`, tool_name:['Bash','Edit','Read'][i % 3], tool_category:i % 3 === 1 ? 'edit' : 'command', command:'npm test', command_name:'npm test', command_category:i % 3 === 1 ? 'build' : 'test', repository_name:Math.floor(i / 6) % 2 ? 'two' : 'one', conversation_id:`conversation-${Math.floor(i / 6)}`, error_count:i % 6 < 4 ? 1 : 0, status:i % 6 < 4 ? 'error' : 'ok', error_type:i % 6 === 0 ? 'file_not_found' : 'nonzero_exit', error_signature:i % 2 ? 'command failed' : 'file missing', test_failure:i % 6 === 2, repo_path:'src/main.ts'}));
-    data.rows.skill_usages = Array.from({length: 6}, (_, i) => ({...skill,id:`evidence-${i}`,status:'error',provider:'codex',skill_name:'review',tool_call_id:`call-${Math.floor(i / 2)}`,conversation_id:'conversation-0'}));
-    await page.reload();
-    await page.waitForFunction(() => document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
-    assert.equal(await page.locator('.human-review-entry').count(), 9);
-    for (const id of ['repeated-failed-commands','environment-failures','skill-load-failures']) assert.equal(await page.locator(`[data-card-id="${id}"]`).count(), 0);
-    assert.equal(await page.locator('.human-review-error,.query-preview-unavailable,.qt-metric-message,.query-pie-empty,.query-empty').count(), 0);
-    assert.equal(await page.locator('[data-card-id="tool-failures"] .qt-metric-mark').count(), 3);
-    const boxes = page.locator('[data-card-id="conversation-error-counts"]');
-    assert.equal(await boxes.locator('.query-box-row').count(), 3);
-    assert.equal(await boxes.locator('.query-box-axis').count(), 1);
-    await boxes.locator('.query-box-row').first().hover();
-    assert.match(await page.getByRole('tooltip').innerText(), /12 observations/);
-    assert.match(await page.getByRole('tooltip').innerText(), /Errors \/ affected conversation/);
-    const requests = data.requests.length;
-    await page.evaluate(() => {
-      window.errorTypingFormats = 0;
-      const format = Number.prototype.toLocaleString;
-      Number.prototype.toLocaleString = function(...args) { window.errorTypingFormats++; return format.apply(this,args); };
-    });
-    await page.getByRole('textbox',{name:'Feedback on Failures per conversation',exact:true}).pressSequentially('Keep the conditional population visible.',{delay:0});
-    await page.getByRole('textbox',{name:'Feedback on Conversations, edits, and tests',exact:true}).fill('Keep conversation ranges alongside edit and test evidence.');
-    await page.getByRole('textbox',{name:'Overall feedback',exact:true}).fill('Keep counts beside rates.');
-    assert.equal(await page.evaluate(() => window.errorTypingFormats),0);
-    assert.equal(data.requests.length,requests);
-    await page.getByRole('button',{name:'View report',exact:true}).click();
-    const report = await page.getByRole('textbox',{name:'Feedback report',exact:true}).inputValue();
-    for(const text of ['Error patterns cards — review 2','Keep the conditional population visible.','Keep conversation ranges alongside edit and test evidence.','Keep counts beside rates.']) assert.ok(report.includes(text));
-    await page.getByRole('button',{name:'Close',exact:true}).click();
-    await page.reload();
-    assert.equal(await page.getByRole('textbox',{name:'Overall feedback',exact:true}).inputValue(),'Keep counts beside rates.');
-    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('pharos-error-pattern-review-v1')).cards['repeated-failed-commands'].note), 'Earlier review');
-    const still = page.locator('[data-card-id="tool-failures"]');
-    await still.scrollIntoViewIfNeeded();
-    const before = await still.boundingBox(); await still.hover(); const after = await still.boundingBox();
-    assert.deepEqual([after.x,after.y],[before.x,before.y]);
-    for(const width of [390,320]) {
-      await page.setViewportSize({width,height:844});
-      assert.ok(await page.locator('.human-review').evaluate(el=>el.scrollWidth<=el.clientWidth+1));
-      assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-    }
-    await page.locator('[data-card-id="conversation-error-counts"] .query-card-open').click();
-    await waitForQuery(page,'tool_calls',query=>query.grouping?.keys.includes('conversation_id'));
-    const query = await readQuery(page,'tool_calls');
-    assert.deepEqual(query.grouping.keys,['tool_name','conversation_id']);
-    assert.ok(query.grouping.source.where.some(term=>term.field==='error_count'&&term.value==='0'));
-    assert.deepEqual(data.errors,[]);
-  } finally { await browser.close(); }
-});
-
-test('context review renders reuse and tool populations, preserves idle typing, and opens exact destinations', async () => {
-  const { browser, page, data } = await setup({ url: '/home?cards=context-review', viewport: { width: 1440, height: 1080 }, localValues: { 'pharos-context-caching-review-v1': { cards: { 'cache-workload': { verdict: 'drop', note: 'Earlier review' } } } } });
-  try {
-    const seed = data.rows.usage[0];
-    data.rows.usage = Array.from({length: 180}, (_, i) => ({ ...seed, id: `u-${i}`, input_tokens: 10000 + i * 100, uncached_input_tokens: 1000, cache_creation_input_tokens: 500, cache_read_input_tokens: i % 3 ? 8500 + i * 100 : 0, root_conversation_id: `root-${i}`, root_provider: 'codex', root_model_family: 'gpt-5.4', provider: 'codex', model_family: 'gpt-5.4' }));
-    data.rows.tool_calls = Array.from({length: 36}, (_, i) => ({ ...data.rows.tool_calls[0], id: `c-${i}`, tool_name: ['Read','Bash','Edit'][i % 3], tool_category: i % 3 === 0 ? 'read' : 'command', result_tokens_source: i % 2 ? 'measured' : 'estimated', repo_path: 'src/main.ts', conversation_id: `c-${i % 2}`, result_tokens: 100 + i * 100, truncated: i % 4 === 0 }));
-    await page.reload();
-    await page.waitForFunction(() => document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
-    assert.equal(await page.locator('.human-review-entry').count(), 7);
-    assert.equal(await page.locator('.human-review-error,.query-preview-unavailable,.qt-metric-message,.query-empty').count(), 0);
-    for (const id of ['cache-reads','cache-workload','context-carried','tool-result-reuse']) assert.equal(await page.locator(`[data-card-id="${id}"]`).count(), 0, `${id} is retired`);
-    const boxes = page.locator('[data-card-id="output-distribution"]');
-    assert.equal(await boxes.locator('.query-box-row').count(), 6);
-    assert.equal(await boxes.locator('.query-box-axis').count(), 1);
-    await boxes.locator('.query-box-row').first().hover();
-    const tooltip = await page.getByRole('tooltip').innerText();
-    assert.match(tooltip, /Result tokens/);
-    assert.match(tooltip, /6 observations/);
-    assert.ok(!tooltip.includes('$'));
-    const requests = data.requests.length;
-    await page.evaluate(() => {
-      window.contextTypingFormats = 0;
-      const format = Number.prototype.toLocaleString;
-      Number.prototype.toLocaleString = function(...args) { window.contextTypingFormats++; return format.apply(this, args); };
-    });
-    await page.getByRole('textbox', { name: 'Feedback on Tool result sizes', exact: true }).pressSequentially('Keep typical sizes and outliers together.', { delay: 0 });
-    await page.getByRole('textbox', { name: 'Feedback on Input reuse in context', exact: true }).fill('Compare model and repository shares.');
-    await page.getByRole('textbox', { name: 'Overall feedback', exact: true }).fill('Explore context next.');
-    assert.equal(await page.evaluate(() => window.contextTypingFormats), 0);
-    assert.equal(data.requests.length, requests);
-    await page.getByRole('button', { name: 'View report', exact: true }).click();
-    const report = await page.getByRole('textbox', {name: 'Feedback report', exact: true}).inputValue();
-    for (const text of ['Context and caching cards — review 2', 'Keep typical sizes and outliers together.', 'Compare model and repository shares.', 'Explore context next.']) assert.ok(report.includes(text));
-    await page.getByRole('button', {name: 'Close', exact: true}).click();
-    await page.reload();
-    assert.equal(await page.getByRole('textbox', { name: 'Overall feedback', exact: true }).inputValue(), 'Explore context next.');
-    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('pharos-context-caching-review-v1')).cards['cache-workload'].note), 'Earlier review');
-    for (const width of [390, 320]) {
-      await page.setViewportSize({width, height: 844});
-      assert.ok(await page.locator('.human-review').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
-      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-    }
-    await page.locator('[data-card-id="repeated-reads"] .query-card-open').click();
-    await waitForQuery(page, 'tool_calls', query => query.grouping?.keys.includes('conversation_id'));
-    const query = await readQuery(page, 'tool_calls');
-    assert.deepEqual(query.grouping.keys, ['repository_name', 'repo_path', 'conversation_id']);
-    assert.ok(query.where.some(term => term.field === 'cc_calls' && term.value === '2'));
-    assert.deepEqual(data.errors, []);
-  } finally { await browser.close(); }
-});
-
-test('token usage review exposes whole-task workloads with idle feedback, matching windows and inspectable source records', async () => {
- const {browser,page,data}=await setup({url:'/home?cards=token-review',viewport:{width:1440,height:1080},localValues:{'pharos-token-usage-review-v1':{overall:'First token draft'},'pharos-token-usage-review-v2':{overall:'Second token draft'},'pharos-api-cost-review-v2':{overall:'Cost draft'}}});
- try {
-  const seed=data.rows.usage[0];
-  data.rows.usage=Array.from({length:108},(_,i)=>({...seed,id:`token-${i}`,workspace_id:`child-${i}`,agent_session_id:`run-${i}`,repository_name:`repo-${i%9}`,root_repository_name:['one','two','three'][Math.floor(i/3)%3],root_conversation_id:`root-${Math.floor(i/3)}`,effort:Math.floor(i/3)%4<2?'high':'low',run_role:Math.floor(i/3)%5===0?'standalone':i%3?'delegated':'parent',root_title:`Whole task ${Math.floor(i/3)}`,root_provider:'codex',root_model_family:Math.floor(i/3)%2?'gpt-6-astra':'gpt-6-sol',root_effort:Math.floor(i/3)%4<2?'high':'low',delegated_session_id:Math.floor(i/3)%5&&i%3?`delegate-${Math.floor(i/3)}`:null,title:'Child context',total_tokens:1000*(i+1),input_tokens:(Math.floor(i/3)%12?900:1000)*(i+1),output_tokens:Math.floor(i/3)%12?100*(i+1):0,price_status:['unpriced','assumed','partial','priced'][i%4],attribution:['request','session-start',null][i%3]}));
-  await page.reload();await page.waitForFunction(()=>document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
-  assert.equal(await page.locator('.human-review-entry').count(),10);assert.equal(await page.locator('.human-review-thesis').count(),3);assert.equal(await page.locator('.human-review-error,.query-preview-unavailable,.query-empty,.qt-metric-message').count(),0);
-  assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('pharos-api-cost-review-v2')).overall),'Cost draft');
-  assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('pharos-token-usage-review-v1')).overall),'First token draft');
-  for(const id of ['repository-input-output','token-time-placement','model-task-token-spread','task-token-delegation-count','task-token-delegation-share'])assert.equal(await page.locator(`[data-card-id="${id}"]`).count(),0);
-  const daily=page.locator('[data-card-id="usage-repos"]');assert.equal(await daily.locator('.query-cover-columns>span').count(),8);assert.equal(await daily.locator('.query-timeline-legend>span').count(),6);assert.match(await daily.locator('.query-headline-unit').innerText(),/tokens/);
-  const pie=page.locator('[data-card-id="repository-token-share"]');assert.equal(await pie.locator('.query-chart-legend>span').count(),6);
-  const work=page.locator('[data-card-id="usage-work"]');assert.match(await work.innerText(),/Whole task/);assert.doesNotMatch(await work.innerText(),/Child context/);
-  for(const id of ['task-token-ranges','task-output-ranges']){const box=page.locator(`[data-card-id="${id}"]`);assert.equal(await box.locator('.query-box-row').count(),3);assert.equal(await box.locator('.query-box-axis').count(),1);await box.locator('.query-box-row').first().hover();assert.match(await page.getByRole('tooltip').innerText(),/12 observations/);}
-  for(const [id,rows] of [['task-effort-token-ranges',2],['task-model-token-ranges',2],['task-model-effort-token-ranges',4]]){const box=page.locator(`[data-card-id="${id}"]`);assert.equal(await box.locator('.query-box-row').count(),rows);assert.equal(await box.locator('.query-box-axis').count(),1);}
-  const runs=page.locator('[data-card-id="run-effort-token-ranges"]');assert.equal(await runs.locator('.query-box-row').count(),6);assert.equal(await runs.locator('.query-box-axis').count(),1);for(const role of ['Standalone','Parent','Delegated'])assert.ok((await runs.innerText()).includes(role));
-  assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('pharos-token-usage-review-v2')).overall),'Second token draft');
-
-  await page.mouse.move(0,0);await page.getByRole('textbox',{name:'Feedback on Task output ranges',exact:true}).focus();await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
-  const requests=data.requests.length;await page.evaluate(()=>{window.tokenTypingFormats=0;const format=Number.prototype.toLocaleString;Number.prototype.toLocaleString=function(...args){window.tokenTypingFormats++;return format.apply(this,args);};});
-  await page.getByRole('textbox',{name:'Feedback on Task output ranges',exact:true}).pressSequentially('Keep output separate.',{delay:0});await page.getByRole('textbox',{name:'Feedback on Effort and model workloads',exact:true}).fill('Whole tasks are useful.');await page.getByRole('textbox',{name:'Overall feedback',exact:true}).fill('Include unpriced volume.');assert.equal(await page.evaluate(()=>window.tokenTypingFormats),0);assert.equal(data.requests.length,requests);
-  await page.getByRole('button',{name:'View report',exact:true}).click();const report=await page.getByRole('textbox',{name:'Feedback report',exact:true}).inputValue();for(const text of ['Token usage cards — review 3','Keep output separate.','Whole tasks are useful.','Include unpriced volume.'])assert.ok(report.includes(text),text);await page.getByRole('button',{name:'Close',exact:true}).click();
-  await page.reload();assert.equal(await page.getByRole('textbox',{name:'Overall feedback',exact:true}).inputValue(),'Include unpriced volume.');await work.scrollIntoViewIfNeeded();const before=await work.boundingBox();await work.hover();const after=await work.boundingBox();assert.deepEqual([before.x,before.y],[after.x,after.y]);
-  for(const width of [390,320]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));for(const axis of await page.locator('[data-card-id="task-token-ranges"] .query-box-axis,[data-card-id="task-output-ranges"] .query-box-axis').all()){const ticks=await axis.locator('span').evaluateAll(items=>items.map(e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right};}));assert.ok(ticks.every((tick,i)=>!i||tick.left>=ticks[i-1].right),'token axis labels remain separated on narrow cards');}}
-  await page.getByLabel('Review preview window',{exact:true}).selectOption('30');await page.locator('[data-card-id="task-token-ranges"] .query-card-open').click();await waitForQuery(page,'usage',q=>q.grouping?.summaries.some(s=>s.id==='tu_tokens'));const q=await readQuery(page,'usage');assert.deepEqual(q.grouping.keys,['root_repository_name','root_conversation_id']);assert.ok(q.grouping.source.where.some(t=>t.field==='first_usage_at'&&t.value==='-30d'));assert.ok(q.grouping.source.where.some(t=>t.field==='root_conversation_id'&&t.op==='is_not_null'));assert.ok(!q.grouping.source.where.some(t=>t.field==='price_status'));await page.goto('http://home.test/home?cards=token-review');await page.locator('[data-card-id="run-effort-token-ranges"] .query-card-open').click();await waitForQuery(page,'usage',q=>q.grouping?.keys.includes('run_role'));const runQuery=await readQuery(page,'usage');assert.deepEqual(runQuery.grouping.keys,['effort','run_role','root_conversation_id','delegated_session_id']);await page.goto('http://home.test/home?cards=token-review');await page.locator('[data-card-id="task-model-effort-token-ranges"] .query-card-open').click();await waitForQuery(page,'usage',q=>q.grouping?.keys.includes('root_effort'));const cohort=await readQuery(page,'usage');assert.deepEqual(cohort.grouping.keys,['root_provider','root_model_family','root_effort','root_conversation_id']);assert.ok(!cohort.grouping.source.where.some(t=>t.field==='price_status'));assert.deepEqual(data.errors,[]);
- }finally{await browser.close();}
-});
-
-test('API cost review presents seven scoped estimates with idle feedback and root-task costs and trailing daily averages', async () => {
- const {browser,page,data}=await setup({url:'/home?cards=cost-review',viewport:{width:1440,height:1080},localValues:{'pharos-api-cost-review-v1':{overall:'Earlier cost draft'}}});
- try {
-  const seed=data.rows.usage[0];
-  data.rows.usage=Array.from({length:108},(_,i)=>({...seed,id:`cost-${i}`,workspace_id:`work-${Math.floor(i/2)}`,repository_name:['one','two','three'][Math.floor(i/6)%3],title:`Cost work ${Math.floor(i/2)}`,root_conversation_id:`root-${Math.floor(i/4)}`,root_repository_name:['one','two','three'][Math.floor(i/4)%3],root_title:`Root task ${Math.floor(i/4)}`,price_status:'priced',cost_usd:i<2?0:i%7+1,cost_today_usd:i<2?0:(i%7+1)/2,total_tokens:1000*(i+1)}));
-  data.rows.usage.push({...seed,id:'unpriced',workspace_id:'unpriced',price_status:'unpriced',cost_usd:null,cost_today_usd:null,total_tokens:1000000});
-  data.rows.library=Array.from({length:12},(_,i)=>({id:`lifetime-${i}`,title:`Lifetime work ${i}`,repository_name:'one',activity_at:seed.first_usage_at,token_count:1000,cost_usd:100+i,price_status:'priced'}));
-  await page.reload();await page.waitForFunction(()=>document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
-  assert.equal(await page.locator('.human-review-entry').count(),7);assert.equal(await page.locator('.human-review-thesis').count(),3);assert.equal(await page.locator('.human-review-error,.query-preview-unavailable,.qt-metric-message,.query-pie-empty,.query-empty').count(),0);
-  assert.match(await page.locator('[data-card-id="api-cost-total"] .human-study-headline strong').innerText(),/\$/);
-  assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('pharos-api-cost-review-v1')).overall),'Earlier cost draft');
-  for(const id of ['price-comparison','expensive-work'])assert.equal(await page.locator(`[data-card-id="${id}"]`).count(),0);
-  const trend=page.locator('[data-card-id="api-cost-total"]');assert.equal(await trend.locator('.human-study-point').count(),31);
-  await trend.locator('.human-study-point').last().hover();assert.match(await page.getByRole('tooltip').innerText(),/API equivalent \/ day/);assert.match(await page.getByRole('tooltip').innerText(),/Trailing 7 days/);
-  const boxes=page.locator('[data-card-id="work-cost-distribution"]');assert.equal(await boxes.locator('.query-box-row').count(),3);assert.equal(await boxes.locator('.query-box-axis').count(),1);
-  await boxes.locator('.query-box-row').first().hover();const tooltip=await page.getByRole('tooltip').innerText();assert.match(tooltip,/9 observations/);assert.match(tooltip,/\$/);
-  assert.equal(await page.locator('[data-card-id="repository-cost-share"] .query-pie-chart').count(),1);assert.equal(await page.locator('[data-card-id="price-coverage"] .query-pie-chart').count(),1);
-  const timeline=page.locator('[data-card-id="cost-repos"]');assert.equal(await timeline.locator('.query-cover-columns>span').count(),8);await timeline.locator('.query-cover-columns>span').last().hover();assert.match(await page.getByRole('tooltip').innerText(),/\$/);
-  assert.equal(await page.locator('[data-card-id="work-volume-cost"] .is-log-scatter').count(),1);
-  const inline=await timeline.locator('.query-headline-metric').evaluate(e=>{const n=e.querySelector('.query-headline-value').getBoundingClientRect(),l=e.querySelector('.query-headline-label').getBoundingClientRect();return l.left>=n.right&&l.top<n.bottom;});assert.equal(inline,true);
-  const requests=data.requests.length;await page.evaluate(()=>{window.costTypingFormats=0;const format=Number.prototype.toLocaleString;Number.prototype.toLocaleString=function(...args){window.costTypingFormats++;return format.apply(this,args);};});
-  await page.getByRole('textbox',{name:'Feedback on Work cost ranges',exact:true}).pressSequentially('Keep ordinary costs and outliers.',{delay:0});await page.getByRole('textbox',{name:'Feedback on Pricing coverage',exact:true}).fill('Keep coverage visible.');await page.getByRole('textbox',{name:'Overall feedback',exact:true}).fill('Show pricing coverage.');assert.equal(await page.evaluate(()=>window.costTypingFormats),0);assert.equal(data.requests.length,requests);
-  await page.getByRole('button',{name:'View report',exact:true}).click();const report=await page.getByRole('textbox',{name:'Feedback report',exact:true}).inputValue();for(const text of ['API cost cards — review 2','Keep ordinary costs and outliers.','Keep coverage visible.','Show pricing coverage.'])assert.ok(report.includes(text),text);await page.getByRole('button',{name:'Close',exact:true}).click();
-  await page.reload();assert.equal(await page.getByRole('textbox',{name:'Overall feedback',exact:true}).inputValue(),'Show pricing coverage.');const still=page.locator('[data-card-id="window-work-cost"]');await still.scrollIntoViewIfNeeded();const before=await still.boundingBox();await still.hover();const after=await still.boundingBox();assert.deepEqual([before.x,before.y],[after.x,after.y]);
-  for(const width of [390,320]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));}
-  await page.getByLabel('Review preview window',{exact:true}).selectOption('30');await page.locator('[data-card-id="window-work-cost"] .query-card-open').click();await waitForQuery(page,'usage',q=>q.grouping?.summaries.some(s=>s.id==='ac_cost'));let query=await readQuery(page,'usage');assert.deepEqual(query.grouping.keys,['root_repository_name','root_conversation_id']);assert.ok(query.grouping.source.where.some(t=>t.field==='price_status'&&t.value==='priced'));assert.ok(query.grouping.source.where.some(t=>t.field==='first_usage_at'&&t.value==='-30d'));
-  assert.deepEqual(data.errors,[]);
- }finally{await browser.close();}
-});
-
-test('research review keeps four selections and twelve primary sites with idle feedback, exact archive windows and inspectable queries', async () => {
- const {browser,page,data}=await setup({url:'/home?cards=research-review',viewport:{width:1440,height:1080},localValues:{'pharos-research-review-v1':{overall:'Review one draft'}}});
- try {
-  const seed=data.rows.tool_calls[0];
-  data.rows.tool_calls=Array.from({length:180},(_,i)=>({...seed,id:`search-${i}`,tool_name:'WebSearch',tool_category:'web',search_query:`Exact query ${i%7}`,conversation_id:`conversation-${Math.floor(i/6)}`,repository_name:['one','two','three'][Math.floor(i/6)%3],title:'Research fixture',host:`docs${i%16}.example`,url:`https://docs${i%16}.example/shared`,status:i%5?'ok':'error'}));
-  data.rows.tool_calls.push({...seed,id:'sql',tool_category:'meta',search_query:'This is SQL, not a web search',host:null,url:null});
-  data.rows.mcp_calls=Array.from({length:60},(_,i)=>({id:i,called_at:seed.started_at,tool_name:i%2?'search_work':'search_text',status:'ok',result_count:i%3?5:0,duration_ms:1000,call_count:1,error_count:0}));
-  await page.reload();
-  await page.waitForFunction(()=>document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
-  assert.equal(await page.locator('.human-review-entry').count(),4);
-  assert.equal(await page.locator('.human-review-thesis').count(),3);
-  for(const id of ['research-repositories','research-queries','research-query-reach','empty-mcp-searches']) assert.equal(await page.locator(`[data-card-id="${id}"]`).count(),0);
-  assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('pharos-research-review-v1')).overall),'Review one draft');
-  assert.equal(await page.getByRole('textbox',{name:'Overall feedback',exact:true}).inputValue(),'');
-  assert.equal(await page.locator('.human-review-error,.query-preview-unavailable,.qt-metric-message,.query-pie-empty,.query-empty').count(),0);
-  assert.equal(await page.getByLabel('Review preview window',{exact:true}).inputValue(),'7');
-  assert.equal(await page.getByLabel('Archive search window',{exact:true}).inputValue(),'30');
-  assert.equal(await page.locator('[data-card-id="research-conversation-searches"] .query-window').innerText(),'Last 7d');
-  assert.equal(await page.locator('[data-card-id="archive-empty-search-rate"] .query-window').innerText(),'Last 30d');
-  const boxes=page.locator('[data-card-id="research-conversation-searches"]');
-  assert.equal(await boxes.locator('.query-box-row').count(),3);
-  assert.equal(await boxes.locator('.query-box-axis').count(),1);
-  await boxes.locator('.query-box-row').first().hover();
-  const tooltip=await page.getByRole('tooltip').innerText();assert.match(tooltip,/10 observations/);assert.match(tooltip,/Median/);
-  const sites=page.locator('[data-card-id="primary-domains"]');
-  assert.equal(await sites.locator('.query-pie-chart').count(),0);
-  assert.equal(await sites.locator('.qt-metric-bar-row').count(),12);
-  await sites.locator('.qt-metric-bar-row').first().hover();
-  assert.match(await page.getByRole('tooltip').innerText(),/docs/);
-  const requests=data.requests.length;
-  await page.evaluate(()=>{window.researchTypingFormats=0;const format=Number.prototype.toLocaleString;Number.prototype.toLocaleString=function(...args){window.researchTypingFormats++;return format.apply(this,args);};});
-  await page.getByRole('textbox',{name:'Feedback on Primary web sites',exact:true}).pressSequentially('Keep the longer site list.',{delay:0});
-  await page.getByRole('textbox',{name:'Feedback on Searching your archive',exact:true}).fill('Inspect the denominator.');
-  await page.getByRole('textbox',{name:'Overall feedback',exact:true}).fill('Separate web and archive searches.');
-  assert.equal(await page.evaluate(()=>window.researchTypingFormats),0);assert.equal(data.requests.length,requests);
-  await page.getByRole('button',{name:'View report',exact:true}).click();
-  const report=await page.getByRole('textbox',{name:'Feedback report',exact:true}).inputValue();
-  for(const text of ['Research cards — review 2','Keep the longer site list.','Inspect the denominator.','Separate web and archive searches.','Pharos empty-search rates (archive-empty-search-rate): past 30 days']) assert.ok(report.includes(text),text);
-  await page.getByRole('button',{name:'Close',exact:true}).click();
-  await page.reload();
-  assert.equal(await page.getByRole('textbox',{name:'Overall feedback',exact:true}).inputValue(),'Separate web and archive searches.');
-  const still=page.locator('[data-card-id="primary-domains"]');await still.scrollIntoViewIfNeeded();const before=await still.boundingBox();await still.hover();const after=await still.boundingBox();assert.deepEqual([before.x,before.y],[after.x,after.y]);
-  for(const width of [390,320]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));}
-  await page.getByLabel('Archive search window',{exact:true}).selectOption('90');
-  await page.locator('[data-card-id="archive-empty-search-rate"] .query-card-open').click();
-  await waitForQuery(page,'mcp_calls',q=>q.grouping?.summaries.some(s=>s.id==='rs_empty_rate'));
-  let query=await readQuery(page,'mcp_calls');assert.deepEqual(query.grouping.keys,['tool_name']);assert.ok(query.grouping.source.where.some(t=>t.field==='called_at'&&t.value==='-90d'));assert.ok(query.grouping.source.where.some(t=>t.field==='result_count'&&t.op==='>='&&t.value==='0'));assert.ok(query.where.some(t=>t.field==='rs_calls'&&t.value==='10'));
-  await page.goto('http://home.test/home?cards=research-review');
-  await page.locator('[data-card-id="primary-domains"] .query-card-open').click();
-  await waitForQuery(page,'tool_calls',q=>q.grouping?.keys.includes('host'));
-  query=await readQuery(page,'tool_calls');assert.deepEqual(query.grouping.keys,['host']);assert.ok(query.grouping.source.where.some(t=>t.field==='tool_category'&&t.value==='web'));assert.equal(query.where.length,0);
-  assert.deepEqual(data.errors,[]);
- }finally{await browser.close();}
-});
-
-test('skills review retains four selected cards with idle feedback and exact body windows', async () => {
- const {browser,page,data}=await setup({url:'/home?cards=skills-review',viewport:{width:1440,height:1080},localValues:{'pharos-skills-instructions-review-v1':{overall:'Review one draft',cards:{'skill-evidence-mix':{verdict:'drop',note:'Earlier review'}}}}});
- try {
-  const seed=data.rows.skill_usages[0];
-  data.rows.skill_usages=Array.from({length:108},(_,i)=>({...seed,id:`skill-file-${i}`,skill_name:['review','debug','design'][i%3],skill_path:`/skills/${i%3}/SKILL.md`,evidence_type:'file_load',status:'ok',tool_call_id:`parent-${i}`,conversation_id:`conversation-${Math.floor(i/6)}`,repository_name:i%2?'one':'two',content_bytes:null,title:'Fixture project'}));
-  data.rows.skill_usages.push(...Array.from({length:45},(_,i)=>({...seed,id:`skill-body-${i}`,skill_name:['review','debug','design'][i%3],skill_path:`/skills/${i%3}/SKILL.md`,evidence_type:'explicit_invocation',status:'ok',tool_call_id:`body-call-${i}`,conversation_id:`body-conversation-${i}`,repository_name:i%2?'one':'two',content_bytes:1024*(i+1),title:'Fixture bodies'})));
-  data.rows.skill_usages.push({...seed,id:'harness',skill_name:'review',skill_path:'/skills/0/SKILL.md',evidence_type:'harness_load',status:'ok',content_bytes:6455,conversation_id:'harness',tool_call_id:null});
-  data.rows.skill_usages.push(...Array.from({length:17},(_,i)=>({...seed,id:`rare-${i}`,skill_name:'rare',skill_path:'/skills/rare/SKILL.md',evidence_type:'file_load',status:'ok',tool_call_id:`rare-call-${i}`,conversation_id:'rare-conversation',content_bytes:null,title:'Rare fixture'})));
-  await page.reload();
-  await page.waitForFunction(()=>document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
-  assert.equal(await page.locator('.human-review-entry').count(),4);
-  assert.equal(await page.locator('.human-review-thesis').count(),2);
-  for(const id of ['skill-evidence-mix','instruction-bytes','skill-size-coverage','skill-reloads','largest-skill-load-count']) assert.equal(await page.locator(`[data-card-id="${id}"]`).count(),0);
-  assert.equal(await page.getByRole('textbox',{name:'Overall feedback',exact:true}).inputValue(),'');
-  assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('pharos-skills-instructions-review-v1')).overall),'Review one draft');
-  assert.equal(await page.locator('.human-review-error,.query-preview-unavailable,.qt-metric-message,.query-pie-empty,.query-empty').count(),0);
-  assert.equal(await page.getByLabel('Review preview window',{exact:true}).inputValue(),'7');
-  assert.equal(await page.getByLabel('Skill body window',{exact:true}).inputValue(),'30');
-  assert.equal(await page.locator('[data-card-id="skill-body-sizes"] .query-window').innerText(),'Last 30d');
-  assert.equal(await page.locator('[data-card-id="skill-load-distribution"] .query-window').innerText(),'Last 7d');
-  const bodies=page.locator('[data-card-id="skill-body-sizes"]');
-  assert.equal(await bodies.locator('.query-box-row').count(),3);
-  assert.equal(await bodies.locator('.query-box-axis').count(),1);
-  await bodies.locator('.query-box-row').first().hover();
-  const tooltip=await page.getByRole('tooltip').innerText();
-  assert.match(tooltip,/15 observations/);assert.match(tooltip,/KiB.*bytes/);assert.ok(!tooltip.includes('$'));
-  assert.equal(await page.locator('[data-card-id="skill-load-distribution"] .query-box-row').count(),3);
-  const requests=data.requests.length;
-  await page.evaluate(()=>{window.skillTypingFormats=0;const format=Number.prototype.toLocaleString;Number.prototype.toLocaleString=function(...args){window.skillTypingFormats++;return format.apply(this,args);};});
-  await page.getByRole('textbox',{name:'Feedback on Skill body sizes',exact:true}).pressSequentially('Compare recorded sizes.',{delay:0});
-  await page.getByRole('textbox',{name:'Feedback on Sizes and loading patterns',exact:true}).fill('Keep the two distributions.');
-  await page.getByRole('textbox',{name:'Overall feedback',exact:true}).fill('Reach and repetition are complementary.');
-  assert.equal(await page.evaluate(()=>window.skillTypingFormats),0);
-  assert.equal(data.requests.length,requests);
-  await page.getByRole('button',{name:'View report',exact:true}).click();
-  const report=await page.getByRole('textbox',{name:'Feedback report',exact:true}).inputValue();
-  for(const text of ['Skills and instructions cards — review 2','Compare recorded sizes.','Keep the two distributions.','Reach and repetition are complementary.','Skill body sizes (skill-body-sizes): past 30 days']) assert.ok(report.includes(text),text);
-  assert.ok(!report.includes('instruction-bytes')&&!report.includes('skill-evidence-mix'));
-  await page.getByRole('button',{name:'Close',exact:true}).click();
-  await page.reload();
-  assert.equal(await page.getByRole('textbox',{name:'Overall feedback',exact:true}).inputValue(),'Reach and repetition are complementary.');
-  const still=page.locator('[data-card-id="skill-evidence"]');await still.scrollIntoViewIfNeeded();const before=await still.boundingBox();await still.hover();const after=await still.boundingBox();assert.deepEqual([before.x,before.y],[after.x,after.y]);
-  for(const width of [390,320]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));}
-  await page.getByLabel('Skill body window',{exact:true}).selectOption('90');
-  await bodies.locator('.query-card-open').click();
-  await waitForQuery(page,'skill_usages',q=>q.grouping?.summaries.some(s=>s.id==='si_body_median'));
-  const query=await readQuery(page,'skill_usages');assert.deepEqual(query.grouping.keys,['skill_name','evidence_type']);assert.ok(query.grouping.source.where.some(t=>t.field==='created_at'&&t.value==='-90d'));assert.ok(query.grouping.source.where.some(t=>t.field==='content_bytes'&&t.op==='>'&&t.value==='0'));
-  assert.deepEqual(data.errors,[]);
- }finally{await browser.close();}
-});
-
-test('tool review keeps duration units, complete evidence, idle typing and compact mobile charts', async () => {
-  const { browser, page, data } = await setup({ url: '/home?cards=tool-review', viewport: { width: 1440, height: 1080 }, localValues: { 'pharos-tool-flow-review-v1': { cards: { 'longest-tool-call': { verdict: 'drop', note: 'Review one draft' } } } } });
-  try {
-    const seed = data.rows.tool_calls[0], usage = data.rows.usage[0];
-    data.rows.tool_calls = Array.from({length: 120}, (_, i) => ({...seed, id:`flow-${i}`, tool_name:['Bash','Edit','Read'][i % 3], tool_category:['command','edit','read'][i % 3], provider:i % 2 ? 'codex' : 'claude', command_name:['npm test','go test'][i % 2], duration_ms:i % 10 === 0 ? null : i % 10 === 1 ? 0 : (i % 10) * 1500, duration_source:i % 2 ? 'reported' : 'timestamps', repository_name:Math.floor(i / 6) % 2 ? 'two' : 'one', conversation_id:`conversation-${Math.floor(i / 6)}`, repo_path:'src/main.ts', source_kind:i % 2 ? 'conductor' : 'claude', mcp_server:i % 3 ? 'pharos' : 'search', mcp_method:'search'}));
-    data.rows.usage = Array.from({length: 12}, (_, i) => ({...usage, id:`flow-usage-${i}`, agent_session_id:`session-${Math.floor(i / 2)}`, harness:i % 2 ? 'codex' : 'claude', harness_version_first:'1.0', harness_version_last:'1.1'}));
-    data.rows.mcp_calls = Array.from({length: 12}, (_, i) => ({id:i, called_at:seed.started_at, tool_name:i % 2 ? 'search_work' : 'read_work', response_bytes:1000 + i * 200, duration_ms:i % 3 === 0 ? 0 : (i % 5 + 1) * 1500, query_source:i % 2 ? "claude" : null, call_count:1, error_count:0, truncated_count:0}));
-    await page.reload();
-    await page.waitForFunction(() => document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
-    assert.equal(await page.locator('.human-review-entry').count(), 8);
-    assert.equal(await page.locator('.human-review-error,.query-preview-unavailable,.qt-metric-message,.query-pie-empty,.query-empty').count(), 0);
-    for (const id of ['file-edit-activity','slow-commands','distribution-cohorts','tool-timing-coverage','longest-tool-call','harness-versions']) assert.equal(await page.locator(`[data-card-id="${id}"]`).count(), 0);
-    assert.equal(await page.getByLabel('Review preview window', {exact:true}).inputValue(), '7');
-    assert.equal(await page.getByLabel('Pharos MCP window', {exact:true}).inputValue(), '30');
-    assert.equal(await page.locator('[data-card-id="tool-call-share"] .query-window').innerText(), 'Last 7d');
-    assert.equal(await page.locator('[data-card-id="mcp-response-size"] .query-window').innerText(), 'Last 30d');
-    const boxes = page.locator('[data-card-id="duration-distribution"]');
-    assert.equal(await boxes.locator('.query-box-row').count(), 2);
-    assert.equal(await boxes.locator('.query-box-axis').count(), 1);
-    assert.match(await boxes.locator('.query-box-axis').innerText(), /s/);
-    await boxes.locator('.query-box-row').first().hover();
-    const tooltip = await page.getByRole('tooltip').innerText();
-    assert.match(tooltip, /Recorded call duration|ms/);
-    assert.match(tooltip, /48 observations/);
-    assert.match(tooltip, /\([\d,]+ ms\)/);
-    assert.ok(!tooltip.includes('$'));
-    const mcpBoxes = page.locator('[data-card-id="pharos-mcp-durations"]');
-    assert.equal(await mcpBoxes.locator('.query-box-row').count(), 2);
-    assert.equal(await mcpBoxes.locator('.query-box-axis').count(), 1);
-    await mcpBoxes.locator('.query-box-row').first().hover();
-    assert.match(await page.getByRole('tooltip').innerText(), /4 observations/);
-    assert.match(await page.getByRole('tooltip').innerText(), /ms/);
-    const payloadBoxes = page.locator('[data-card-id="mcp-response-size"]');
-    assert.equal(await payloadBoxes.locator('.query-box-row').count(), 2);
-    assert.equal(await payloadBoxes.locator('.query-box-axis').count(), 1);
-    assert.match(await payloadBoxes.locator('.query-box-axis').innerText(), /KiB/);
-    await payloadBoxes.locator('.query-box-row').first().hover();
-    const payloadTooltip = await page.getByRole('tooltip').innerText();
-    assert.match(payloadTooltip, /6 observations/);
-    assert.match(payloadTooltip, /KiB \([\d,]+ bytes\)/);
-    assert.ok(!payloadTooltip.includes('$') && !payloadTooltip.includes('ms'));
-    assert.match(await page.locator('[data-card-id="pharos-mcp-sources"] .query-cover').innerText(), /conductor|claude/);
-    assert.match(await page.locator('[data-card-id="pharos-mcp-query-sources"] .query-cover').innerText(), /Unspecified/);
-    assert.match(await page.locator('[data-card-id="pharos-mcp-query-sources"] .query-cover').innerText(), /claude/);
-    assert.equal(await page.locator('[data-card-id="tool-calls-per-conversation"] .query-box-row').count(), 2);
-    const requests = data.requests.length;
-    await page.evaluate(() => {
-      window.toolTypingFormats = 0;
-      const format = Number.prototype.toLocaleString;
-      Number.prototype.toLocaleString = function(...args) { window.toolTypingFormats++; return format.apply(this,args); };
-    });
-    await page.getByRole('textbox',{name:'Feedback on Command duration spread',exact:true}).pressSequentially('Compare typical calls with the tail.',{delay:0});
-    await page.getByRole('textbox',{name:'Feedback on Call duration ranges',exact:true}).fill('Keep server durations alongside commands.');
-    await page.getByRole('textbox',{name:'Overall feedback',exact:true}).fill('Busy tools and slow calls are complementary.');
-    assert.equal(await page.evaluate(() => window.toolTypingFormats), 0);
-    assert.equal(data.requests.length, requests);
-    await page.getByRole('button',{name:'View report',exact:true}).click();
-    const report = await page.getByRole('textbox',{name:'Feedback report',exact:true}).inputValue();
-    for(const text of ['Tool flow cards — review 2','Compare typical calls with the tail.','Keep server durations alongside commands.','Busy tools and slow calls are complementary.','Additional card windows:','Pharos MCP tool durations (pharos-mcp-durations): past 30 days']) assert.ok(report.includes(text));
-    await page.getByRole('button',{name:'Close',exact:true}).click();
-    await page.reload();
-    assert.equal(await page.getByRole('textbox',{name:'Overall feedback',exact:true}).inputValue(),'Busy tools and slow calls are complementary.');
-    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('pharos-tool-flow-review-v1')).cards['longest-tool-call'].note), 'Review one draft');
-    const still = page.locator('[data-card-id="tool-call-share"]');
-    await still.scrollIntoViewIfNeeded();
-    const before = await still.boundingBox(); await still.hover(); const after = await still.boundingBox();
-    assert.deepEqual([after.x,after.y],[before.x,before.y]);
-    for(const width of [390,320]) {
-      await page.setViewportSize({width,height:844});
-      assert.ok(await page.locator('.human-review').evaluate(el=>el.scrollWidth<=el.clientWidth+1));
-      assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-    }
-    await boxes.locator('.query-card-open').click();
-    await waitForQuery(page,'tool_calls',query=>query.grouping?.keys.includes('duration_source'));
-    const query = await readQuery(page,'tool_calls');
-    assert.deepEqual(query.grouping.keys,['command_name','duration_source']);
-    assert.ok(query.grouping.source.where.some(term=>term.field==='duration_ms'&&term.op==='>'&&term.value==='0'));
-    await page.goto('http://home.test/home?cards=tool-review');
-    await page.locator('[data-card-id="mcp-response-size"] .query-card-open').click();
-    await waitForQuery(page,'mcp_calls',query=>query.grouping?.summaries.some(summary=>summary.id==='card_payload_median'));
-    const payloadQuery = await readQuery(page,'mcp_calls');
-    assert.deepEqual(payloadQuery.grouping.keys,['tool_name']);
-    assert.ok(payloadQuery.grouping.source.where.some(term=>term.field==='response_bytes'&&term.op==='>='&&term.value==='0'));
-    assert.ok(payloadQuery.grouping.source.where.some(term=>term.field==='called_at'&&term.value==='-30d'));
-    assert.deepEqual(data.errors,[]);
-  } finally { await browser.close(); }
-});
-
-test('model review uses one box axis, removes the pairing headline and compacts the cost legend', async () => {
-  const { browser, page, data } = await setup({ url: '/home?cards=model-review', viewport: { width: 1440, height: 1080 } });
-  try {
-    const seed = data.rows.usage[0], values = [[1, 3, 5, 7, 9], [2, 4, 5, 6, 98]];
-    data.rows.usage = values.flatMap((costs, model) => costs.map((cost, i) => ({ ...seed, id: `usage-${model}-${i}`, agent_session_id: `session-${model}-${i}`, conversation_id: `conversation-${model}-${i}`, root_conversation_id: `conversation-${model}-${i}`, root_provider: 'codex', root_model_family: model ? 'gpt-6-astra' : 'gpt-6.1-sol', root_effort: ['low', 'high', 'xhigh', 'ultra'][i], provider: 'codex', model_family: model ? 'gpt-6-astra' : 'gpt-6.1-sol', price_status: 'priced', session_kind: i % 2 ? 'root' : 'subagent', total_tokens: 10000, input_tokens: 9000, output_tokens: 1000, cost_usd: cost, effort: ['low', 'high', 'xhigh', 'ultra'][i] })));
-    await page.reload();
-    await page.waitForFunction(() => document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
-    assert.equal(await page.locator('[data-card-id="model-conversation-reach"] .query-headline-metric').count(), 0);
-    assert.equal(await page.locator('[data-card-id="model-token-cost"]').count(), 0);
-    const card = page.locator('[data-card-id="model-session-costs"]');
-    assert.ok((await card.locator('.query-cover').boundingBox()).height<=220);
-    assert.equal(await card.locator('.query-box-row').count(), 2);
-    const medians = await card.locator('.query-box-median').evaluateAll(marks => marks.map(mark => mark.getBoundingClientRect().x));
-    assert.ok(Math.abs(medians[0] - medians[1]) < .5, 'equal dollar medians must occupy the same X position across models');
-    const bounds = await card.locator('.query-box-marks').evaluateAll(rows => rows.map(row => [row.dataset.axisMin, row.dataset.axisMax]));
-    assert.deepEqual(bounds, [['1', '100'], ['1', '100']]);
-    assert.equal(await card.locator('.query-box-axis').count(), 1);
-    await card.locator('.query-box-row').filter({ hasText: 'gpt-6-astra' }).hover();
-    assert.match(await page.getByRole('tooltip').innerText(), /Median: \$5\.00 · Mean: \$23\.00/);
-    assert.match(await page.getByRole('tooltip').innerText(), /Max: \$98\.00/);
-    const legend = page.locator('[data-card-id="model-cost-share"] .query-chart-legend');
-    assert.equal(await legend.evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').length), 2);
-    for (const width of [390, 320]) {
-      await page.setViewportSize({ width, height: 844 });
-      assert.ok(await page.locator('.human-review').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
-      assert.equal(await legend.evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').length), width === 390 ? 2 : 1);
-    }
-    assert.deepEqual(data.errors, []);
-  } finally { await browser.close(); }
-});
-
-test('delegation boxes exclude zero conversations and compact supported cohorts on a shared axis', async () => {
-  const { browser, page, data } = await setup({ url: '/home?cards=model-review', viewport: { width: 1440, height: 1080 } });
-  try {
-    const seed = data.rows.usage[0];
-    data.rows.usage = ['high', 'low'].flatMap(effort => [0, 0, 1, 1, 2, 2, 9, 9, 1, 1].flatMap((count, i) => {
-      const root = `${effort}-${i}`, delegated = effort === 'high' ? count : 0;
-      const common = { ...seed, provider: 'codex', model_family: 'gpt-6.1-sol', root_provider: 'codex', root_model_family: 'gpt-6.1-sol', root_effort: effort, root_conversation_id: root, price_status: 'priced', total_tokens: 10000, input_tokens: 9000, output_tokens: 1000, cost_usd: 1, effort };
-      return [
-        { ...common, id: root, agent_session_id: root, conversation_id: root, delegated_session_id: null },
-        ...Array.from({ length: delegated }, (_, j) => ({ ...common, id: `${root}-child-${j}`, conversation_id: `${root}-child-${j}`, agent_session_id: `${root}-child-${j}`, delegated_session_id: `${root}-child-${j}`, model_family: 'gpt-6-astra', effort: 'low' })),
-      ];
-    }));
-    await page.reload();
-    await page.waitForFunction(() => document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
-    const card = page.locator('[data-card-id="session-delegation-count"]');
-    assert.equal(await card.locator('.query-box-row').count(), 1);
-    assert.deepEqual(await card.locator('.query-box-marks').evaluateAll(rows => rows.map(row => [row.dataset.axisMin, row.dataset.axisMax])), [['0', '10']]);
-    assert.equal(await card.locator(".query-shared-box.is-dense").count(),1);
-    assert.ok(!(await card.locator('.query-box-axis').innerText()).includes('$'));
-    await card.locator('.query-box-row').filter({ hasText: 'high' }).hover();
-    const tooltip = await page.getByRole('tooltip').innerText();
-    assert.match(tooltip, /Median: 1\.5 · Mean: 3\.25/);
-    assert.match(tooltip, /Min: 1 · Max: 9/);
-    assert.match(tooltip, /8 observations/);
-    assert.ok(!tooltip.includes('$'));
-    assert.equal(await card.locator('.query-box-row').filter({ hasText: 'low' }).count(), 0);
-    assert.ok((await card.locator('.query-cover').boundingBox()).height < 250);
-    for (let i = 0; i < 11; i++) for (let j = 0; j < 8; j++) data.rows.usage.push({ ...data.rows.usage[0], id: `extra-${i}-${j}`, root_conversation_id: `extra-${i}-${j}`, agent_session_id: `extra-${i}-${j}`, root_effort: `effort-${i}`, delegated_session_id: `child-extra-${i}-${j}` });
-    await page.reload();
-    await page.waitForFunction(() => document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
-    assert.equal(await card.locator('.query-box-row').count(), 12);
-    const clearAxis = async () => card.evaluate(el => el.querySelector('.query-box-row:last-child .query-box-marks').getBoundingClientRect().bottom < el.querySelector('.query-box-axis').getBoundingClientRect().top - 2);
-    assert.ok(await clearAxis(), 'twelve box rows must finish above their shared axis');
-    await page.setViewportSize({ width: 390, height: 844 });
-    assert.ok(await clearAxis(), 'dense box rows must also clear the axis on mobile');
-    assert.ok(await page.locator('.human-review').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
-    assert.deepEqual(data.errors, []);
-  } finally { await browser.close(); }
-});
-
-test('review 5 shares pie and bar keys, preserves a circle, and surfaces rare tree outliers', async () => {
-  const { browser, page, data } = await setup({ url: '/home?cards=model-review', viewport: { width: 1440, height: 1080 } });
-  try {
-    const seed=data.rows.usage[0];
-    data.rows.usage=Array.from({length:8},(_,i)=>({...seed,id:`root-${i}`,provider:'codex',model_family:i%2?'gpt-6-astra':'gpt-6.1-sol',root_provider:'codex',root_model_family:'gpt-6.1-sol',root_effort:'high',root_conversation_id:`root-${i}`,agent_session_id:`root-${i}`,conversation_id:`root-${i}`,delegated_run_depth:0,price_status:'priced'}));
-    data.rows.usage.push(...Array.from({length:9},(_,i)=>({...seed,id:`rare-${i}`,provider:'claude',model_family:'opus-5-5',root_provider:'claude',root_model_family:'opus-5-5',root_effort:'xhigh',root_conversation_id:'rare',agent_session_id:`rare-${i}`,conversation_id:'rare',delegated_session_id:`rare-${i}`,delegated_run_depth:i+1,price_status:'priced'})));
-    await page.reload();
-    await page.waitForFunction(()=>document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
-    const pie=page.locator('[data-card-id="model-token-share"]');
-    const geometry=await pie.locator('.query-pie-plot svg').evaluate(el=>{const m=el.getScreenCTM();return {preserve:el.getAttribute('preserveAspectRatio'),x:m.a,y:m.d}});
-    assert.equal(geometry.preserve,'xMidYMid meet');
-    assert.ok(Math.abs(geometry.x-geometry.y)<1e-6,'the pie must use uniform scale in both directions');
-    const bar=page.locator('[data-card-id="usage-models"] .query-chart-legend');
-    const key=pie.locator('.query-chart-legend');
-    const style=async locator=>locator.evaluate(el=>({font:getComputedStyle(el).fontSize,line:getComputedStyle(el).lineHeight,columns:getComputedStyle(el).gridTemplateColumns.split(' ').length,swatch:getComputedStyle(el.querySelector('i')).width}));
-    assert.deepEqual(await style(key),await style(bar));
-    assert.equal(await page.locator('[data-card-id="session-delegation-count"] .query-box-row').count(),0,'a one-conversation class must be hidden by the three-observation cutoff');
-    assert.equal(await page.locator('[data-card-id="model-session-costs"] .query-box-row').count(),1,'a one-conversation model must be hidden by the five-conversation cutoff');
-    assert.equal(await page.locator('[data-card-id="largest-subagent-depth"]').count(),0);
-    assert.equal(await page.locator('[data-card-id="largest-subagent-weight"] .query-scalar-value').innerText(),'9');
-    await page.locator('[data-card-id="largest-subagent-weight"] .query-card-open').click();
-    await waitForQuery(page,'usage',q=>q.grouping?.keys.includes('root_conversation_id'));
-    const query=await readQuery(page,'usage');
-    assert.equal(query.orderBy[0].field,'mc_delegates');
-    assert.equal(query.orderBy[0].dir,'desc');
-    assert.deepEqual(data.errors,[]);
-  } finally { await browser.close(); }
-});
-
-test('human-input scatter opens its event-based comparison with exact coordinates and estimated labels', async () => {
-  const {browser,page,data}=await setup({url:'/home?cards=model-review'});
-  try {
-    const common={root_provider:'codex',root_model_family:'gpt-6.1-sol',root_conversation_id:'conversation',event_at:new Date().toISOString()};
-    data.rows.conversation_activity=[{...common,id:'human',human_input_tokens_estimate:8,human_messages:1,output_tokens:0},{...common,id:'root-output',human_input_tokens_estimate:0,output_tokens:30},{...common,id:'child-output',human_input_tokens_estimate:0,output_tokens:20}];
-    await page.reload();
-    await page.waitForFunction(()=>document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
-    const card=page.locator('[data-card-id="session-human-output"]');
-    assert.equal(await card.locator('.qt-metric-mark').count(),1);
-    await card.locator('.qt-metric-mark').hover();
-    const tooltip=await page.getByRole('tooltip').innerText();
-    assert.match(tooltip,/Est\. human text tokens.*8/);
-    assert.match(tooltip,/Recorded output tokens.*50/);
-    await card.locator('.query-card-open').click();
-    await waitForQuery(page,'conversation_activity',q=>q.grouping?.keys.includes('root_conversation_id'));
-    assert.equal(new URL(page.url()).searchParams.get('usage'),'conversations');
-    await page.locator('.usage-page .qt-table-wrap').first().waitFor();
-    assert.equal(await page.locator('.usage-page .query-table-error').count(),0);
-    await assertEventually(()=>data.requests.some(item=>item.dataset==='conversation_activity' && item.request.rows===true));
-    assert.deepEqual(data.errors,[]);
-  } finally { await browser.close(); }
-});
-
-
-test('model role bars conserve distinct session shares, both pies show five plus Other, and cards stay still on hover', async () => {
-  const {browser,page,data}=await setup({url:'/home?cards=model-review',viewport:{width:1440,height:1080},reducedMotion:true});
-  try {
-    const seed=data.rows.usage[0];
-    data.rows.usage=Array.from({length:7},(_,model)=>Array.from({length:7-model},(_,session)=>({...seed,id:`role-${model}-${session}`,provider:'codex',model_family:`model-${model}`,agent_session_id:`session-${model}-${session}`,conversation_id:`conversation-${model}-${session}`,session_kind:session<2?'root':'subagent',session_role:session===0?'singleton':session===1?'parent':'subagent'}))).flat();
-    data.rows.usage.push({...data.rows.usage[1],id:'repeated-usage'});
-    await page.reload();
-    await page.waitForFunction(()=>document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
-    for(const id of ['model-token-share','model-conversation-reach']) {
-      const pie=page.locator(`[data-card-id="${id}"]`);
-      assert.equal(await pie.locator('.query-chart-legend>span').count(),6);
-      assert.equal(await pie.locator('.query-chart-legend>span').last().innerText(),'Other');
-    }
-    const roles=page.locator('[data-card-id="model-agent-roles"]');
-    assert.equal(await roles.locator('.query-role-row').count(),6);
-    const first=roles.locator('.query-role-row').first();
-    assert.equal(await first.getAttribute('data-total'),'7');
-    const shares=await first.locator('.query-role-track>i').evaluateAll(es=>es.map(e=>Number(e.dataset.share)));
-    assert.ok(Math.abs(shares[0]-1/7)<1e-12);
-    assert.ok(Math.abs(shares[1]-1/7)<1e-12);
-    assert.equal(shares.length,3);
-    assert.equal(await roles.locator(".query-role-axis").count(),0);
-    assert.ok(Math.abs(shares.reduce((n,v)=>n+v,0)-1)<1e-12);
-    await first.locator('[data-role="subagent"]').hover();
-    assert.match(await page.getByRole('tooltip').innerText(),/5 of 7 active sessions/);
-    for(const url of ['/home?cards=model-review','/home?cards=library','/home']) {
-      await page.goto(`http://home.test${url}`);
-      if(url==='/home') await page.waitForFunction(()=>document.querySelector('.home-conveyor')?.getAttribute('aria-busy')==='false');
-      const card=page.locator(url==='/home'?'.home-belt-row .query-card:not([data-xray])':'.query-card').first();
-      await card.scrollIntoViewIfNeeded(); await page.mouse.move(0,0);
-      const before=await card.boundingBox();
-      await card.hover(); await page.waitForTimeout(200);
-      const after=await card.boundingBox();
-      assert.ok(Math.abs(before.y-after.y)<.1 && Math.abs(before.x-after.x)<.1,`${url} card moved on hover`);
-    }
-    await page.goto('http://home.test/home?cards=model-review');
-    await page.waitForFunction(()=>document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
-    for(const width of [390,320]) {
-      await page.setViewportSize({width,height:844});
-      assert.ok(await page.locator('.human-review').evaluate(el=>el.scrollWidth<=el.clientWidth+1));
-    }
-    assert.deepEqual(data.errors,[]);
-  } finally {await browser.close();}
-});
-
-test('delegation review retains approved cards with idle feedback and matching drilldown windows', async () => {
- const {browser,page,data}=await setup({url:'/home?cards=delegation-review',viewport:{width:1440,height:1080},localValues:{'pharos-token-usage-review-v3':{overall:'Approved token collection'},'pharos-delegation-review-v1':{overall:'Original delegation review'}}});
- try {
-  const seed=data.rows.usage[0];
-  data.rows.usage=Array.from({length:120},(_,i)=>{const root=Math.floor(i/4),child=root%5!==0&&i%4!==0;return {...seed,id:`delegation-${i}`,agent_session_id:`session-${i}`,workspace_id:`workspace-${i}`,repository_name:'child repository',root_repository_name:['one','two','three'][root%3],root_conversation_id:`root-${root}`,root_title:`Delegation task ${root}`,delegated_session_id:child?`delegate-${root}-${i%4===3?'nested':'child'}`:null,delegated_run_depth:child?(i%4===3?2+root%3:1):0,total_tokens:1000*(i+1),session_kind:'root',price_status:['unpriced','assumed','partial','priced'][i%4]};});
-  data.rows.tool_calls=data.rows.tool_calls.map((r,i)=>({...r,parallel_count:i%3?3:1}));
-  data.rows.tl1_attempts=data.rows.tl1_attempts.map((r,i)=>({...r,revisit:i%2===0,task_id:`task-${i%3}`}));
-  await page.reload();await page.waitForFunction(()=>document.querySelector('.human-review-toolbar')?.textContent.includes('Live library previews'));
-  assert.equal(await page.getByRole('heading',{name:'How agents divide the work',exact:true}).count(),1);
-  assert.equal(await page.locator('.human-review-entry').count(),4);assert.equal(await page.locator('.human-review-thesis').count(),2);
-  assert.equal(await page.locator('.human-review-error,.query-preview-unavailable,.query-empty,.qt-metric-message').count(),0);
-  for(const id of ['delegated-run-token-ranges']){const card=page.locator(`[data-card-id="${id}"]`);assert.equal(await card.locator('.query-box-row').count(),3);assert.equal(await card.locator('.query-box-axis').count(),1);await card.locator('.query-box-row').first().hover();assert.match(await page.getByRole('tooltip').innerText(),/observations/);}
-  for(const id of ['subagent-usage','task-delegate-count-ranges','delegation-tree-shape','batched-tools'])assert.equal(await page.locator(`[data-card-id="${id}"]`).count(),0,`${id} is retired`);
-  await page.mouse.move(0,0);const note=page.getByRole('textbox',{name:'Feedback on Delegated run sizes',exact:true});await note.focus();await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
-  const requests=data.requests.length;await page.evaluate(()=>{window.delegationFormats=0;const format=Number.prototype.toLocaleString;Number.prototype.toLocaleString=function(...args){window.delegationFormats++;return format.apply(this,args);};});
-  await note.pressSequentially('Separate own child tokens.',{delay:0});await page.getByRole('textbox',{name:'Feedback on Depth and workload spread',exact:true}).fill('Shared axes matter.');await page.getByRole('textbox',{name:'Overall feedback',exact:true}).fill('Explore branching.');assert.equal(await page.evaluate(()=>window.delegationFormats),0);assert.equal(data.requests.length,requests);
-  await page.getByRole('button',{name:'View report',exact:true}).click();const report=await page.getByRole('textbox',{name:'Feedback report',exact:true}).inputValue();for(const text of ['Delegation cards — review 2','Separate own child tokens.','Shared axes matter.','Explore branching.'])assert.ok(report.includes(text));await page.getByRole('button',{name:'Close',exact:true}).click();await page.reload();assert.equal(await page.getByRole('textbox',{name:'Overall feedback',exact:true}).inputValue(),'Explore branching.');
-  assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('pharos-token-usage-review-v3')).overall),'Approved token collection');
-  assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('pharos-delegation-review-v1')).overall),'Original delegation review');
-  const card=page.locator('[data-card-id="delegated-run-token-ranges"]');await card.scrollIntoViewIfNeeded();const before=await card.boundingBox();await card.hover();const after=await card.boundingBox();assert.deepEqual([before.x,before.y],[after.x,after.y]);
-  for(const width of [390,320]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));}
-  await page.getByLabel('Review preview window',{exact:true}).selectOption('30');await card.locator('.query-card-open').click();await waitForQuery(page,'usage',q=>q.grouping?.keys.includes('delegated_session_id'));const q=await readQuery(page,'usage');assert.deepEqual(q.grouping.keys,['root_repository_name','root_conversation_id','delegated_session_id']);assert.ok(q.grouping.source.where.some(t=>t.field==='first_usage_at'&&t.value==='-30d'));assert.ok(q.grouping.source.where.some(t=>t.field==='delegated_run_depth'&&t.op==='>'&&t.value==='0'));assert.ok(!q.grouping.source.where.some(t=>t.field==='price_status'));assert.deepEqual(data.errors,[]);
- }finally{await browser.close();}
 });
 
 test('retired Steering category stays out of discovery and preserves old saved cards and feedback', async () => {
