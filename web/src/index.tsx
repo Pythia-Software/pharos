@@ -32,6 +32,7 @@ import { HomePage } from "./home";
 import { linkTargets, navigateLink } from "./query-link-targets";
 import { QueryChip } from "./query-card";
 import { readRollingWindow, resolveRollingQuery, rollingQueryMatches } from "./query-links";
+import { mainIntegration, pullRequestLabel, pullRequestURL, pullRequests } from "./pull-requests";
 import { preferences } from "./preferences";
 import { foldSeries, validRollingPeriods, type ChartSeries } from "./chart-series";
 import { isSliceTerm, readSlice, updateSlice, withSlice, type LegendAction, type SliceSelection } from "./chart-selection";
@@ -67,7 +68,6 @@ type MessageView = "table" | "text";
 type TranscriptMessage = { role: string; text: unknown; raw_text?: unknown };
 type TurnSummary = { human: TranscriptMessage | null; response: TranscriptMessage | null };
 type ConversationTurn = { provider: string; conversation: number; turn: number; input: TranscriptMessage | null; response: TranscriptMessage | null };
-type PullRequest = { number: number; title?: string | null; url?: string | null; host?: string | null };
 // Messages render with the conversation view's own renderer (ui.py), so XML
 // chips, Markdown, and Show more behave the same in both places.
 function ResultMessage({ label, message, kind }: { label: string; message: TranscriptMessage; kind: "human" | "assistant" }) {
@@ -83,30 +83,11 @@ function ResultMessage({ label, message, kind }: { label: string; message: Trans
   </div>;
 }
 
-function githubPullURL(remote: unknown, number: number): string {
-  const match = String(remote ?? "").match(/github\.com(?::|\/)([^/\s]+\/[^/\s]+?)(?:\.git)?$/i);
-  return match ? `https://github.com/${match[1]}/pull/${number}` : "";
-}
-
-function pullRequests(row: Row): PullRequest[] {
-  try {
-    const details = typeof row.pr_details === "string" ? JSON.parse(row.pr_details) : row.pr_details;
-    return Array.isArray(details) ? details.filter(pr => Number.isInteger(pr?.number) && pr.number > 0) : [];
-  } catch { return []; }
-}
-
-function pullRequestURL(pr: PullRequest, remote: unknown): string {
-  const url = pr.url || (pr.host === "github.com" ? githubPullURL(remote, pr.number) : "");
-  return /^https?:\/\//i.test(url ?? "") ? String(url) : "";
-}
-
-function mainIntegration(row: Row): React.ReactNode {
-  if (!row.main_merge_commit) return "";
-  const prefix = row.main_merge_method === "merge" ? "Merged" : "On main";
-  const label = `${prefix}: ${row.main_merge_title || String(row.main_merge_commit).slice(0, 12)}`;
-  const url = /^https:\/\/github\.com\//i.test(String(row.main_merge_url ?? "")) ? String(row.main_merge_url) : "";
-  return url ? <a className="qt-pr-link" href={url} target="_blank" rel="noopener noreferrer" title={String(row.main_merge_commit)} onClick={event => event.stopPropagation()}>{label}</a>
-    : <span title={String(row.main_merge_commit)}>{label}</span>;
+function mainIntegrationLink(row: Row): React.ReactNode {
+  const merge = mainIntegration(row);
+  if (!merge) return "";
+  return merge.url ? <a className="qt-pr-link" href={merge.url} target="_blank" rel="noopener noreferrer" title={merge.commit} onClick={event => event.stopPropagation()}>{merge.label}</a>
+    : <span title={merge.commit}>{merge.label}</span>;
 }
 
 function formatUSD(amount: number): string {
@@ -321,7 +302,7 @@ const renderers: RenderRegistry<Row> = {
     const prs = pullRequests(row);
     if (!prs.length) return String(value ?? "");
     return <span className="qt-pr-list">{prs.map((pr, index) => {
-      const label = pr.title?.trim() ? `${pr.title.trim()} · #${pr.number}` : `PR #${pr.number}`;
+      const label = pullRequestLabel(pr);
       const url = pullRequestURL(pr, row.canonical_remote);
       return url ? <a key={`${pr.host}:${pr.number}:${index}`} className="qt-pr-link" href={url} target="_blank" rel="noopener noreferrer" title={label} onClick={event => event.stopPropagation()}>{label}</a>
         : <span key={`${pr.host}:${pr.number}:${index}`} title={label}>{label}</span>;
@@ -337,7 +318,7 @@ const renderers: RenderRegistry<Row> = {
       void openConversation(id);
     }}>{id}</a>;
   },
-  main_integration({ row }: CellContext<Row>) { return mainIntegration(row); },
+  main_integration({ row }: CellContext<Row>) { return mainIntegrationLink(row); },
   run_state({ value }: CellContext<Row>) {
     const state = String(value ?? "unknown");
     return <span className={`qt-state-pill ${state}`}>{state}</span>;
@@ -708,11 +689,11 @@ function ConversationResultCard({ row }: { row: Row }) {
           <span className="conversation-result-count conversation-result-cost" title="API list-price equivalent cost">{usdCost(row.cost_usd, row)} API cost</span>
           {prs.map((pr, index) => {
             const url = pullRequestURL(pr, row.canonical_remote);
-            const label = pr.title?.trim() ? `${pr.title.trim()} · #${pr.number}` : `PR #${pr.number}`;
+            const label = pullRequestLabel(pr);
             return url ? <a key={`${pr.host}:${pr.number}:${index}`} className="conversation-result-count conversation-result-pr" href={url} target="_blank" rel="noopener noreferrer" title={pr.title || label}>{label}</a>
               : <span key={`${pr.host}:${pr.number}:${index}`} className="conversation-result-count" title={pr.title || label}>{label}</span>;
           })}
-          {row.main_merge_commit ? <span className="conversation-result-count conversation-result-pr">{mainIntegration(row)}</span> : null}
+          {row.main_merge_commit ? <span className="conversation-result-count conversation-result-pr">{mainIntegrationLink(row)}</span> : null}
         </div>
       </div>
       <div className="conversation-result-actions">
