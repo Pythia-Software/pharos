@@ -16253,14 +16253,30 @@
             "label": "per timed call",
             "unit": "ms"
           }
-        ]
+        ],
+        "coverMetric": {
+          "id": "mt_time",
+          "op": "sum",
+          "field": "mt_time",
+          "groupBy": [
+            "activity"
+          ],
+          "groupLimit": 10000,
+          "label": "Recorded machine time by activity",
+          "display": {
+            "kind": "pie"
+          }
+        }
       },
       "cover": {
         "mode": "result",
         "metricId": "mt_time",
-        "kind": "bar-horizontal",
-        "maxGroups": 6,
-        "showOther": true
+        "kind": "pie",
+        "maxGroups": 5,
+        "showOther": true,
+        "showLegend": true,
+        "legendColumns": 2,
+        "height": 300
       }
     },
     {

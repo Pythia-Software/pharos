@@ -28,6 +28,8 @@ type Session = {
   message_id?: string;
   external_parent?: Reference;
   external_child?: Reference;
+  navigation?: Reference;
+  context_only?: boolean;
   label: string;
   provider: string;
   model: string;
@@ -581,7 +583,7 @@ export function DelegationExplorer({
   }, [data, mode, sort, scope, direction, collapsed, selected, range]);
   useEffect(() => {
     if (data && onHierarchy)
-      onHierarchy(data.session_count > 1 || data.rows.some((n) => n.parent_id || n.external_parent || n.external_child));
+      onHierarchy(data.session_count > 1 || data.rows.some((n) => n.context_only || n.parent_id || n.external_parent || n.external_child));
   }, [data]);
   function resetPage() {
     setCursor("");
@@ -672,6 +674,10 @@ export function DelegationExplorer({
     else location.assign(target);
   }
   const openNode = (n: Session, message?: string) => {
+    if (n.navigation) {
+      openExternal(n.navigation);
+      return;
+    }
     if (n.external_child && !message) {
       openExternal(n.external_child);
       return;
@@ -1043,6 +1049,7 @@ export function DelegationExplorer({
                         <tbody>
                           {rows.map((n) => {
                             const ancestor =
+                              n.context_only ||
                               !data.rows.some((row) => row.id === n.id) ||
                               !data.matched[n.id];
                             const parent = byID.get(n.parent_id || "");
@@ -1127,7 +1134,7 @@ export function DelegationExplorer({
                                         }
                                         onClick={() => openNode(n)}
                                       >
-                                        {n.label}{n.external_child ? " ↗" : ""}
+                                        {n.label}{n.external_child || n.navigation ? " ↗" : ""}
                                       </button>
                                       <small
                                         className="delegation-session-meta"
@@ -1136,6 +1143,7 @@ export function DelegationExplorer({
                                         {n.provider} ·{" "}
                                         {n.model || "model unknown"} ·{" "}
                                         {n.effort || "unknown"}
+                                        {n.context_only ? " · Parent context" : ""}
                                       </small>
                                     </div>
                                   </div>
@@ -1327,13 +1335,13 @@ function InboxSessions({ rows, data, metrics, shown, mode, metric, scope, direct
       const maximum = data.maxima[family]?.[spec.id] || 0;
       const strength = tint !== "off" && (tint !== "sort" || ranked) && value?.value != null ? tintStrength(value.value, maximum) : 0;
       const frame = frames.get(n.id);
-      return <div key={n.id} data-session={n.id} className={`delegation-inbox-row ${n.id === shown ? "current" : ""}`} onClick={event => { if (!(event.target as HTMLElement).closest("button")) openNode(n); }} style={{ paddingLeft: (ranked ? 0 : Math.min(n.depth, 8)) * 10 + 10, paddingTop: frame?.start != null ? 5 : undefined, paddingBottom: frame?.ends.length ? frame.ends.length * 6 + 3 : undefined }}>
+      return <div key={n.id} data-session={n.id} data-depth={n.depth} className={`delegation-inbox-row ${n.context_only ? "delegation-ancestor" : ""} ${n.id === shown ? "current" : ""}`} onClick={event => { if (!(event.target as HTMLElement).closest("button")) openNode(n); }} style={{ paddingLeft: (ranked ? 0 : Math.min(n.depth, 8)) * 10 + 10, paddingTop: frame?.start != null ? 5 : undefined, paddingBottom: frame?.ends.length ? frame.ends.length * 6 + 3 : undefined }}>
         <FrameEdges frame={frame} edge="left" />
         <FrameEdges frame={frame} edge="right" />
         <button className="delegation-chevron" aria-label={`${collapsed.has(n.id) ? "Expand" : "Collapse"} ${n.label}`} aria-expanded={!collapsed.has(n.id)} disabled={!n.child_count || ranked} onClick={() => toggle(n)}>{n.child_count && !ranked ? <Icon name={collapsed.has(n.id) ? "chevron-right" : "chevron-down"} /> : "·"}</button>
         <button className="delegation-name" onClick={() => openNode(n)} title={`${n.outline} · ${n.label}\n${n.provider} · ${n.model} · ${n.effort || "unknown"}`} aria-current={n.id === shown ? "true" : undefined}>
-          <span><b>{n.outline}</b> {n.label}{n.external_child ? " ↗" : ""}</span>
-          <small>{n.provider} · {n.model || "unknown model"} · {n.effort || "unknown"}</small>
+          <span><b>{n.outline}</b> {n.label}{n.external_child || n.navigation ? " ↗" : ""}</span>
+          <small>{n.provider} · {n.model || "unknown model"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}</small>
         </button>
         <button className="delegation-inbox-metric" onClick={() => openNode(n)} title={value ? cellTitle(value, spec) : "No retained evidence"} style={strength ? { background: `color-mix(in srgb, var(--delegation-tint) ${strength * 45}%, transparent)` } : undefined}>{formatted(value?.value, spec.unit)}{value?.quality === "partial" ? "+" : ""}</button>
       </div>;

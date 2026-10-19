@@ -33,7 +33,6 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # were renamed. Keep the bundle free of obsolete executables.
 rm -f "$APP/Contents/MacOS/alexandria" "$APP/Contents/MacOS/AIWorkArchive"
 mkdir -p "$ROOT/internal/archive/assets"
-mkdir -p "$ROOT/internal/archive/assets/query-schemas"
 # The embedded schema and UI are the source of truth.
 for name in schema.sql ui.py; do
     if [ ! -f "$ROOT/internal/archive/assets/$name" ]; then
@@ -41,11 +40,6 @@ for name in schema.sql ui.py; do
         exit 1
     fi
 done
-cp "$ROOT/schemas/"*.schema.json "$ROOT/internal/archive/assets/query-schemas/"
-mkdir -p "$ROOT/internal/archive/assets/pricing"
-cp "$ROOT/pricing/cost_changes.json" "$ROOT/internal/archive/assets/pricing/cost_changes.json"
-mkdir -p "$ROOT/internal/archive/assets/carbon"
-cp "$ROOT/carbon/co2_factors.json" "$ROOT/internal/archive/assets/carbon/co2_factors.json"
 if command -v npm >/dev/null 2>&1; then
     # Always reinstall from the lockfile: an existing node_modules may have
     # drifted from package-lock.json or been modified, and `npm ci` checks
