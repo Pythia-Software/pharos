@@ -119,14 +119,15 @@ export function timeAggregationWhere(where: WhereTerm[]): WhereTerm[] {
     if (days.length >= 30) return where;
     days.push({ field: "day", op: "=", value: day });
   }
-  return [...where.filter(term => !bounds.includes(term as Exclude<WhereTerm, { any: unknown }>)), { any: days }];
+  // A one-day group is a plain predicate: metric requests refuse a one-clause OR.
+  return [...where.filter(term => !bounds.includes(term as Exclude<WhereTerm, { any: unknown }>)), days.length === 1 ? days[0] : { any: days }];
 }
 export function timeFacts(metrics: Metric[]): TimeFact[] {
   const times = metrics.find(metric => metric.id === "time")?.buckets ?? [];
   const measured = metrics.find(metric => metric.id === "timed")?.buckets ?? [];
   const population = metrics.find(metric => metric.id === "population")?.buckets[0]?.value;
-  // The legacy aggregation API bounds each metric independently. Never turn
-  // differently truncated sums and counts into a seemingly exact average.
+  // Every call in the population belongs to one group of each metric. Never
+  // turn sums and counts that disagree into a seemingly exact average.
   if (population === undefined || times.reduce((sum, bucket) => sum + (bucket.count ?? 0), 0) !== Number(population) || measured.reduce((sum, bucket) => sum + (bucket.count ?? 0), 0) !== Number(population))
     throw new Error("Operation groups are incomplete. Choose a shorter period or a single repository to inspect the full selection.");
   const timed = new Map(measured.map(bucket => [JSON.stringify(bucket.keys), Number(bucket.value) || 0]));

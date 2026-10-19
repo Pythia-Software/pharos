@@ -39,7 +39,6 @@ test("failure rate includes successful calls and preserves all dashboard results
   assert.equal(preview.metrics[2].result.buckets[0].value, 10);
   assert.match(preview.summary, /10 observations/);
   assert.equal(requests.filter(request => request.path.endsWith("metrics")).length, 1);
-  assert.ok(requests.every(request => !request.path.endsWith("aggregations")));
 });
 
 test("compatible dashboards batch despite duplicate metric IDs and split at twenty", async t => {

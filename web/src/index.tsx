@@ -17,6 +17,8 @@ import { applyUsageAggregations } from "./usage-aggregations";
 import { applyUsageTablePreset, usageGroupPresets, usageComparisonPresets, usageTablePresetMatches, type UsageTablePreset } from "./usage-queries";
 import { applyUsagePreset, messageMetricPresets, messagePresets, presetMatches, usageChartPresets, writingMetricPresets, writingPresets, type TokenChartView, type TokenSplit, type UsagePreset } from "./usage-presets";
 import { withComputedCapabilityRefresh } from "./computed-column-store";
+import { postMetrics, type MetricResult } from "./metric-request";
+import { costMetric, tokenChartMetrics, tokenChartSplit, tokenSummaryMetrics, tokenTypes } from "./token-chart-request";
 import { chartPeriods, earliestKey, isHourly, localDay, parseDay, periodBuckets, periodKey, periodLabel, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { defaultChartScale, validChartScale } from "./chart-scale";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -35,7 +37,7 @@ import { readRollingWindow, resolveRollingQuery, rollingQueryMatches } from "./q
 import { mainIntegration, pullRequestLabel, pullRequestURL, pullRequests } from "./pull-requests";
 import { optionLabels } from "./option-labels";
 import { preferences } from "./preferences";
-import { foldSeries, validRollingPeriods, type ChartSeries } from "./chart-series";
+import { foldSeries, validRollingPeriods } from "./chart-series";
 import { isSliceTerm, readSlice, updateSlice, withSlice, type LegendAction, type SliceSelection } from "./chart-selection";
 import { UsageChartColorsProvider, useUsageChartPalette, useUsageTableRenderers } from "./usage-chart-colors";
 import libraryDocument from "../../schemas/library.schema.json";
@@ -266,16 +268,11 @@ function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary
     async fetchFieldStats(fields, signal) {
       return responseJSON(await fetch(endpoint("/field-stats", new URLSearchParams({ fields: fields.join(",") })), { signal }));
     },
-    async fetchAggregations(query, signal) {
-      return responseJSON(await fetch(endpoint("/aggregations"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(query),
-        signal,
-      }));
-    },
   };
 }
+
+type Capabilities = { metricCapabilities: MetricCapabilities; queryCapabilities?: QueryCapabilitiesV3; computedExecution: ComputedExecution };
+const fetchCapabilities = async (dataset: Dataset, signal?: AbortSignal) => responseJSON<Capabilities>(await fetch(`/api/query/${dataset}/capabilities`, { signal }));
 
 const renderers: RenderRegistry<Row> = {
   ...defaultRenderers,
@@ -432,7 +429,20 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
   const tableRenderers = useUsageTableRenderers(renderers);
   const onFindRef = useRef(onFind);
   onFindRef.current = onFind;
-  const [capabilities, setCapabilities] = useState<{ metricCapabilities: MetricCapabilities; queryCapabilities?: QueryCapabilitiesV3; computedExecution: ComputedExecution }>();
+  const [capabilities, setCapabilities] = useState<Capabilities>();
+  const [capabilityError, setCapabilityError] = useState<Error>();
+  const remote = !shared && !localRows;
+  // A server table runs only once it knows the server's capabilities: rows
+  // and metrics both go through V2/V3, and nothing reads the legacy routes
+  // first. A failed handshake shows its error instead.
+  useEffect(() => {
+    if (!remote || !visible || capabilities) return;
+    const controller = new AbortController();
+    fetchCapabilities(dataset, controller.signal).then(setCapabilities, failure => {
+      if (!controller.signal.aborted) setCapabilityError(failure instanceof Error ? failure : new Error(String(failure)));
+    });
+    return () => controller.abort();
+  }, [dataset, remote, Boolean(visible), Boolean(capabilities)]);
   const computedColumnStore = useMemo(() => {
     if (shared || localRows || !visible) return undefined;
     const backendStore = httpComputedColumnStore("/api/query-computed-columns");
@@ -444,8 +454,8 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
       save: (_dataset, column, expectedRevision) => backendStore.save(schemas[dataset].name, column, expectedRevision),
     };
     return withComputedCapabilityRefresh(store, async (signal) => {
-      const next = await responseJSON<{ metricCapabilities: MetricCapabilities; queryCapabilities?: QueryCapabilitiesV3; computedExecution: ComputedExecution }>(await fetch(`/api/query/${dataset}/capabilities`, { signal }));
-      setCapabilities(next);
+      setCapabilities(await fetchCapabilities(dataset, signal));
+      setCapabilityError(undefined);
     });
   }, [dataset, Boolean(localRows), Boolean(visible)]);
   const transport = useMemo(() => shared || localRows ? undefined : makeTransport(dataset, find, value => onFindRef.current?.(value), capabilities?.metricCapabilities, capabilities?.queryCapabilities), [dataset, find, capabilities?.metricCapabilities, capabilities?.queryCapabilities, Boolean(localRows)]);
@@ -472,7 +482,7 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
   }, [dataset, locationRevision, scopeSignature, scopeRemovals]);
   const api = useQueryTable<Row>({ schema, transport,
     computedColumnStore, computedExecution: capabilities?.computedExecution,
-    clientRows: localRows ?? shared?.datasets[dataset], active: Boolean(visible),
+    clientRows: localRows ?? shared?.datasets[dataset], active: Boolean(visible) && (!remote || Boolean(capabilities || capabilityError)),
     // Keep URL configuration stable; active pauses execution/synchronization
     // without resetting restoration or undo history when a table is hidden.
     storage, debounceMs: 100, syncUrl: true, queryParameter: `q_${registryKey}`, canonicalizeQuery,
@@ -547,6 +557,7 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
     {api.query.grouping ? <QueryBuilder api={stableApi} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <QueryBuilder defaultCollapsed={Boolean(namespace)} api={stableApi} fields={(api.query.grouping ? api.schema!.fields : api.computed.catalogue)} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={stableApi} dataset={dataset} layout={<QueryBuilder api={stableApi} fields={(api.query.grouping ? api.schema!.fields : api.computed.catalogue)} total={api.total} running={api.loading} />} /> : <QueryBuilder api={stableApi} fields={(api.query.grouping ? api.schema!.fields : api.computed.catalogue)} total={api.total} running={api.loading} />}
     <MetricsPanel api={stableApi} aggregations={api.aggregations} fields={metricFields(api.query.grouping ? usageGroupFields(api.schema!.fields, api.query) : api.computed.catalogue)} renderers={metricRenderers}
       onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(records); }} />
+    {capabilityError && !capabilities ? <div className="query-table-error">Could not read this table's query capabilities: {capabilityError.message}</div> : null}
     {api.error ? <div className="query-table-error">{api.error?.message}</div> : null}
     {selectable && !api.query.grouping ? <SelectionToolbar selection={api.selection} actions={ids => <ShareSelection ids={ids} api={api} transport={transport} />} /> : null}
     {dataset === "library" && libraryView === "conversation" && !api.query.grouping ? <ConversationResults api={api} searching={Boolean(find)} />
@@ -963,14 +974,12 @@ function Segmented<T extends string>({ label, value, options, onChange }: { labe
   </div>;
 }
 
-type AggregationMetric = { id: string; buckets: Array<{ keys: unknown[]; value: unknown }> };
-
-// Fetches aggregations for the given filters, refetching when either changes
-// or Usage is refreshed. Results are tagged so a stale response never renders
-// under new chart settings.
-function useAggregations(dataset: Dataset, where: WhereTerm[], aggregations: AggregationClause[]) {
-  const key = JSON.stringify({ where, aggregations });
-  const [state, setState] = useState<{ key: string; metrics: AggregationMetric[]; error: string; loading: boolean }>({ key: "", metrics: [], error: "", loading: true });
+// Fetches metrics for the given filters from /metrics, or from a shared file's
+// rows, refetching when either changes or Usage is refreshed. Results are
+// tagged so a stale response never renders under new chart settings.
+function useMetrics(dataset: Dataset, where: WhereTerm[], clauses: AggregationClause[]) {
+  const key = JSON.stringify({ where, clauses });
+  const [state, setState] = useState<{ key: string; metrics: MetricResult[]; error: string; loading: boolean }>({ key: "", metrics: [], error: "", loading: true });
   const [refresh, setRefresh] = useState(0);
   useEffect(() => {
     const bump = () => setRefresh(value => value + 1);
@@ -978,41 +987,25 @@ function useAggregations(dataset: Dataset, where: WhereTerm[], aggregations: Agg
     return () => window.removeEventListener("pharos:usage-refresh", bump);
   }, []);
   useEffect(() => {
+    const request = JSON.parse(key) as { where: WhereTerm[]; clauses: AggregationClause[] };
     if (shared) {
-      const request = JSON.parse(key) as { where: WhereTerm[]; aggregations: AggregationClause[] };
       const rows = shared.datasets[dataset];
       const result = dataset === "usage"
-        ? applyUsageAggregations(rows, shared.datasets.usage_hourly ?? [], request, schemas.usage)
-        : applyAggregations(rows, { ...EMPTY_QUERY, where: request.where, aggregations: request.aggregations }, schemas[dataset]);
-      // The service returns time buckets newest first; so does a shared file.
-      const timePosition = (aggregation: AggregationClause) => aggregation.groupBy.findIndex(field => field === "hour" || field === "day" || field === "week" || field === "month");
-      request.aggregations.forEach((aggregation, index) => {
-        const position = timePosition(aggregation);
-        if (dataset === "usage" && position >= 0) result.metrics[index]?.buckets.sort((left, right) => String(right.keys[position] ?? "").localeCompare(String(left.keys[position] ?? "")));
-      });
-      setState({ key, metrics: result.metrics as AggregationMetric[], error: "", loading: false });
+        ? applyUsageAggregations(rows, shared.datasets.usage_hourly ?? [], { where: request.where, aggregations: request.clauses }, schemas.usage)
+        : applyAggregations(rows, { ...EMPTY_QUERY, where: request.where, aggregations: request.clauses }, schemas[dataset]);
+      setState({ key, metrics: result.metrics as MetricResult[], error: "", loading: false });
       return;
     }
     const controller = new AbortController();
     setState(previous => ({ ...previous, loading: true }));
-    fetch(`/api/query/${dataset}/aggregations`, { method: "POST", headers: { "Content-Type": "application/json" }, body: key, signal: controller.signal })
-      .then(responseJSON<{ metrics: AggregationMetric[] }>)
-      .then(result => setState({ key, metrics: result.metrics ?? [], error: "", loading: false }))
+    postMetrics(dataset, schemas[dataset], request.where, request.clauses, controller.signal)
+      .then(metrics => setState({ key, metrics, error: "", loading: false }))
       .catch(failure => { if (!controller.signal.aborted) setState({ key, metrics: [], error: failure instanceof Error ? failure.message : String(failure), loading: false }); });
     return () => controller.abort();
   }, [dataset, key, refresh]);
   return { ...state, metrics: state.key === key ? state.metrics : [] };
 }
 
-// Token types stack from the bottom in this order; adjacent colors pass the
-// palette validator's normal-vision and color-blindness checks in both themes.
-const tokenTypes: ChartSeries[] = [
-  { key: "uncached_input_tokens", label: "Uncached input", color: "var(--heat-3)" },
-  { key: "cache_read_input_tokens", label: "Cache reads", color: "var(--heat-1)" },
-  { key: "cache_creation_input_tokens", label: "Cache writes", color: "var(--gold)" },
-  { key: "output_tokens", label: "Output", color: "var(--heat-2)" },
-  { key: "unclassified_tokens", label: "Unclassified", color: "var(--muted)" },
-];
 const tokenSplits: Array<[TokenSplit, string]> = [["type", "Token type"], ["provider", "Provider"], ["model_family", "Model"], ["model_effort", "Model + effort"], ["effort", "Effort"], ["repository_name", "Repository"], ["session_kind", "Agent"]];
 // Providers and agent kinds keep one color each whatever the filters; models
 // and repositories show the fifteen largest in view and fold the rest into Other.
@@ -1035,12 +1028,10 @@ function splitLabel(split: TokenSplit, value: unknown): string {
 // the key to pick from. Token types are not rows, so clicking one only
 // narrows the chart.
 function TokenChart({ where, onFilter, onTimeFilter = onFilter, view, onChange }: { where: WhereTerm[]; onFilter: FilterChange; onTimeFilter?: FilterChange; view: TokenChartView; onChange: (next: Partial<TokenChartView>) => void }) {
-  const cost = view.metric === "cost" || view.metric === "percent_cost";
+  const cost = costMetric(view);
   const percent = view.metric === "percent" || view.metric === "percent_cost";
-  const split: TokenSplit = cost && view.split === "type" ? "provider" : view.split;
+  const split = tokenChartSplit(view);
   const periodCount = chartPeriodCount(view);
-  const sourcePeriod = isHourly(view.period) ? "hour" : view.period === "days" ? "day" : view.period;
-  const measure = cost ? "cost_usd" : "total_tokens";
   const [types, setTypes] = useState<SliceSelection<string>>({ values: [], excluded: false });
   const [seriesLimit, setSeriesLimit] = useState(15);
   useEffect(() => setSeriesLimit(15), [split]);
@@ -1048,10 +1039,8 @@ function TokenChart({ where, onFilter, onTimeFilter = onFilter, view, onChange }
   const selection = sliced ? readSlice(where, split) : types;
   const chosen = selection.values.map(value => value ?? "");
   const chartWhere = sliced ? where.filter(term => !isSliceTerm(term, split)) : where;
-  const aggregations = useMemo(() => split === "type"
-    ? tokenTypes.map(type => sum(type.key, [sourcePeriod], type.label))
-    : [sum(measure, [sourcePeriod, split], "chart")], [split, measure, sourcePeriod]);
-  const result = useAggregations("usage", chartWhere, aggregations);
+  const clauses = useMemo(() => tokenChartMetrics(view), [view.metric, view.split, view.period]);
+  const result = useMetrics("usage", chartWhere, clauses);
   const bounds = timeBounds(where, usageTime);
   const { series, buckets } = useMemo(() => {
     const earliest = earliestKey(result.metrics.flatMap(metric => metric.buckets.map(bucket => bucket.keys[0])));
@@ -1146,17 +1135,8 @@ function UsageTableQueries({ api, onTimeRangeChange }: { api: QueryTableApi<Row>
   </section>;
 }
 
-const tokenSummaryAggregations: AggregationClause[] = [
-  sum("total_tokens", [], "Total tokens"),
-  sum("cost_usd", [], "API cost"),
-  sum("uncached_input_tokens", [], "Uncached input"),
-  sum("cache_read_input_tokens", [], "Cache reads"),
-  sum("output_tokens", [], "Output tokens"),
-  { id: "agent_sessions", op: "count_distinct", field: "agent_session_id", groupBy: [], label: "Agent sessions" },
-];
-
 function TokenSummary({ where }: { where: WhereTerm[] }) {
-  const result = useAggregations("usage", where, tokenSummaryAggregations);
+  const result = useMetrics("usage", where, tokenSummaryMetrics);
   const values = new Map(result.metrics.map(metric => [metric.id, Number(metric.buckets[0]?.value) || 0]));
   const value = (field: string) => values.get(`${field}:`) ?? 0;
   const tokens = value("total_tokens"), cost = value("cost_usd"), uncached = value("uncached_input_tokens");
