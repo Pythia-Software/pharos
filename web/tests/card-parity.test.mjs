@@ -19,7 +19,7 @@ new Function("module", "exports", "require", bundled.outputFiles[0].text)(loaded
 const { queryRecipes, instantiateRecipe, defaultCardCover, coverChoices, decodeCover, availableChartKinds,
   cardLoadingPresentation, collectQuery, queryFromURL, loadQueryPreview, clearPreviewCache, updateBookmark, saveCardTemplate, cardTemplates } = loaded.exports;
 const active = queryRecipes.filter(recipe => !recipe.retired);
-const schemas = Object.fromEntries([...new Set(queryRecipes.map(recipe => recipe.dataset)), "library"].map(dataset => [dataset, core.loadSchema(JSON.parse(readFileSync(`../schemas/${dataset}.schema.json`, "utf8")))]));
+const schemas = Object.fromEntries([...new Set([...queryRecipes.flatMap(recipe => [recipe.dataset, ...(recipe.trend?.dataset ? [recipe.trend.dataset] : [])]), "library"])].map(dataset => [dataset, core.loadSchema(JSON.parse(readFileSync(`../schemas/${dataset}.schema.json`, "utf8")))]));
 const execution = { profile: "qt-sqlite-v1", planToken: "", fields: {}, resolvedRevisions: {} };
 const queryCapabilities = { version: 3, profile: execution.profile, groupedRows: true, calendarGrouping: true, computedSourceFilters: true, regex: false, maxRows: 10000, maxGroups: 10000, maxPopulation: 250000 };
 const now = Date.parse("2026-10-16T18:00:00Z"), day = 86400000;

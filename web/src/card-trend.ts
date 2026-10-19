@@ -1,4 +1,5 @@
-import { EMPTY_QUERY, type AggregationClause, type AggregationResultEntry, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, loadSchema, type AggregationClause, type AggregationResultEntry, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
+import toolsDocument from "../../schemas/tools.schema.json";
 import type { CardCover } from "./card-cover";
 import type { HumanStudyPreview } from "./human-study";
 import type { PreviewJob } from "./query-previews";
@@ -10,14 +11,20 @@ import { rollingQueryMatches } from "./query-links";
 type TrendMeasure = { op: "sum" | "count"; field?: string };
 export type CardTrend = {
   value: TrendMeasure; per?: TrendMeasure; perDay?: boolean; scale?: number;
+  // What the sample label counts; rows of the population when omitted.
+  count?: TrendMeasure;
   // Trailing days per point; the card's own lookback when omitted.
   lookback?: number;
   // End on yesterday when today's partial day would understate the window.
   completeDays?: boolean;
   format?: "percent" | "USD";
+  // A daily rollup of the same population answers in a fraction of the time;
+  // the card still opens its own dataset. The rollup must share the filters.
+  dataset?: "tools";
   valueLabel: string; pointValueLabel: string; trendLabel?: string; sample: string; detail: string;
 };
 const endpoints = 31, chunk = 30;
+export const trendSchemas: Record<NonNullable<CardTrend["dataset"]>, FieldSchema> = { tools: loadSchema(toolsDocument as never) };
 // The sparkline replaces only the shipped cover. Any edited or alternative
 // cover, in the library or a collection, renders its destination natively.
 export const trendCover = (metricId: string): CardCover => ({ mode: "source", metricId, kind: "auto", height: 260 });
@@ -47,7 +54,7 @@ export function cardTrendDays(lookback: number, completeDays: boolean, now: numb
 
 export function cardTrendQueries(where: WhereTerm[], trend: CardTrend, all: string[]): QueryState[] {
   const metric = (id: string, measure: TrendMeasure): AggregationClause => ({ id, op: measure.op, ...(measure.field ? { field: measure.field } : {}), groupBy: ["day"], groupLimit: 100 });
-  const metrics = [metric("trend-value", trend.value), ...(trend.per ? [metric("trend-per", trend.per)] : []), metric("trend-rows", { op: "count" })];
+  const metrics = [metric("trend-value", trend.value), ...(trend.per ? [metric("trend-per", trend.per)] : []), metric("trend-rows", trend.count ?? { op: "count" })];
   // Whole local days through the day field; a timestamp range would split them.
   // Balanced chunks, since an OR group needs at least two branches.
   const count = Math.ceil(all.length / chunk), size = Math.ceil(all.length / count);

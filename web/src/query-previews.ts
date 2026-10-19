@@ -10,7 +10,7 @@ import { cardCoverQuery, humanStudyCoverMatches, type CardCover } from "./card-c
 import { filterBoxSamples } from "./compact-box-model";
 import { createHumanStudyLoader, clearHumanStudyCache, type HumanStudyPreview } from "./human-study";
 import { activityPresentation } from "./machine-activity-data";
-import { buildCardTrend, cardTrendDays, cardTrendQueries, usesCardTrend } from "./card-trend";
+import { buildCardTrend, cardTrendDays, cardTrendQueries, trendSchemas, usesCardTrend } from "./card-trend";
 
 export type PreviewMetric = { clause: AggregationClause; result: AggregationResultEntry };
 export type QueryPreview = {
@@ -178,7 +178,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     }).filter(Boolean).join(" · ") || preview.groupEvidence?.[JSON.stringify(values[0].keys)];
   }
   if (query.grouping && recipe?.exploration?.labelFields && payload.rows?.length) {
-    preview.groupLabels = Object.fromEntries(payload.rows.map(row => [JSON.stringify(query.grouping!.keys.map(key => row[key] ?? null)), recipe.exploration!.labelFields!.map(field => String(row[field] ?? "Unspecified")).join(" · ")]));
+    preview.groupLabels = Object.fromEntries(payload.rows.map(row => [JSON.stringify(query.grouping!.keys.map(key => row[key] ?? null)), recipe.exploration!.labelFields!.map(field => keyLabel(schema, field)?.(row[field]) ?? String(row[field] ?? "Unspecified")).join(" · ")]));
   }
   // A ranked cover needs values and evidence as well as bars. Match companion
   // metrics by their actual group keys, never by bucket position.
@@ -226,7 +226,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   // A headline is a real complete additive measure, never a sum of rates,
   // distributions, errors, or the returned subset of a ranked population.
   if ((options.cover ?? recipe?.cover)?.showHeadline !== false && ready && additive && !limited && !preview.groupSummary && numeric.length === values.length && !result.buckets.some(bucket => bucket.error || bucket.yError) && Number.isFinite(total)) {
-    preview.headlineMetric = { value: clause.display?.format ? formatMetricOutput(total, clause.display.format).text : formatPreviewValue(total, unit), unit: unit && !["USD", "ms"].includes(unit) ? unit : "", ...(unit === "USD" ? { label: "API equivalent" } : {}) };
+    preview.headlineMetric = { value: clause.display?.format ? formatMetricOutput(total, clause.display.format).text : formatPreviewValue(total, unit), unit: unit && !["USD", "ms"].includes(unit) ? unit : "", ...(unit === "USD" ? { label: job.dataset === "findings" ? "likely a month" : "API equivalent" } : {}) };
   }
   preview.action = recipe?.action ?? recipe?.exploration?.action;
   return preview;
@@ -302,11 +302,12 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
   const trends = new Set(trendJobs);
   const trendWork = Promise.all(trendJobs.map(async job => {
     try {
-      const ctx = await context(job), recipe = job.options!.recipe!, trend = recipe.trend!, lookback = trend.lookback ?? job.options!.window!.days;
+      const recipe = job.options!.recipe!, trend = recipe.trend!, lookback = trend.lookback ?? job.options!.window!.days;
+      const source = trend.dataset ? { ...job, dataset: trend.dataset, schema: trendSchemas[trend.dataset] } : job, ctx = await context(source);
       const results = await Promise.all(cardTrendQueries(recipe.where ?? [], trend, cardTrendDays(lookback, Boolean(trend.completeDays), clock.getTime()).days).map(async query => {
         const request = toMetricQuery(query, ctx.schema, ctx.execution);
         if (request.diagnostics.length) throw new Error(request.diagnostics.map(d => d.message).join(" · "));
-        return (await fetchPreview<AggregationResult>(`/api/query/${job.dataset}/metrics`, signal, request)).metrics;
+        return (await fetchPreview<AggregationResult>(`/api/query/${source.dataset}/metrics`, signal, request)).metrics;
       }));
       const study = buildCardTrend(trend, lookback, results, clock.getTime()), ready = study.points?.some(point => point !== null && point > 0);
       if (!signal?.aborted) publish(job.id, { coverHeight: (job.options!.cover ?? recipe.cover)?.height, state: ready ? "ready" : "empty", emptyLabel: ready ? undefined : recipe.emptyLabel, total: study.value ?? 0, summary: study.sampleLabel, note: [recipe.note, study.detail].filter(Boolean).join(" · "), action: recipe.action, study });

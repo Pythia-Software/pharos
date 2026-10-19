@@ -16369,8 +16369,14 @@
         "height": 260
       },
       "trend": {
+        "dataset": "tools",
         "value": {
-          "op": "count"
+          "op": "sum",
+          "field": "call_count"
+        },
+        "count": {
+          "op": "sum",
+          "field": "call_count"
         },
         "perDay": true,
         "lookback": 7,
@@ -16415,13 +16421,18 @@
         "height": 260
       },
       "trend": {
+        "dataset": "tools",
         "value": {
           "op": "sum",
-          "field": "duration_ms"
+          "field": "total_duration_ms"
         },
         "per": {
-          "op": "count",
-          "field": "duration_ms"
+          "op": "sum",
+          "field": "timed_count"
+        },
+        "count": {
+          "op": "sum",
+          "field": "timed_count"
         },
         "scale": 0.001,
         "lookback": 7,
@@ -16429,7 +16440,7 @@
         "valueLabel": "seconds per call · 7-day mean",
         "pointValueLabel": "seconds per timed call",
         "trendLabel": "7d mean",
-        "sample": "calls",
+        "sample": "timed calls",
         "detail": "Each point: recorded duration ÷ timed calls over its trailing seven complete local days. The norm is the mean of the prior 30 endpoints."
       }
     },

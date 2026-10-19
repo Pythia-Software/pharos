@@ -40,12 +40,12 @@ const machineRecipes: QueryRecipe[] = [
   machine({ id: "machine-call-trend", title: "Tool calls per day", description: "Daily tool calls averaged over each trailing seven complete days, across the last 30 days.", days: [30], unit: "calls", action: "Explore daily tool calls",
     note: "Counts every recorded tool call, including errors and calls without a duration, by its local start day. Each point divides seven days' calls by seven, including idle days; today is excluded until it is complete.",
     measures: [daily("mt_daily_calls", "count", "", "Tool calls per day")], cover: trendCover("mt_daily_calls"),
-    trend: { value: { op: "count" }, perDay: true, lookback: 7, completeDays: true, valueLabel: "calls a day · 7-day average", pointValueLabel: "calls a day", trendLabel: "7d avg", sample: "calls",
+    trend: { dataset: "tools", value: { op: "sum", field: "call_count" }, count: { op: "sum", field: "call_count" }, perDay: true, lookback: 7, completeDays: true, valueLabel: "calls a day · 7-day average", pointValueLabel: "calls a day", trendLabel: "7d avg", sample: "calls",
       detail: "Each point: tool calls in its trailing seven complete local days ÷ 7. The norm is the mean of the prior 30 endpoints." } }),
   machine({ id: "machine-latency-trend", title: "Average tool call time", description: "Mean recorded duration per tool call over each trailing seven complete days, across the last 30 days.", days: [30], action: "Inspect daily call times",
     note: "Total recorded duration ÷ calls with a recorded duration, pooled over each seven-day window (not an average of daily averages). Long-running calls such as waits and watches pull the mean up; Longest-running operations names them. Windows without timed calls are gaps.",
     measures: [daily("mt_daily_mean", "avg", "duration_ms", "Mean recorded call time by day")], cover: trendCover("mt_daily_mean"),
-    trend: { value: { op: "sum", field: "duration_ms" }, per: { op: "count", field: "duration_ms" }, scale: 1 / 1000, lookback: 7, completeDays: true, valueLabel: "seconds per call · 7-day mean", pointValueLabel: "seconds per timed call", trendLabel: "7d mean", sample: "calls",
+    trend: { dataset: "tools", value: { op: "sum", field: "total_duration_ms" }, per: { op: "sum", field: "timed_count" }, count: { op: "sum", field: "timed_count" }, scale: 1 / 1000, lookback: 7, completeDays: true, valueLabel: "seconds per call · 7-day mean", pointValueLabel: "seconds per timed call", trendLabel: "7d mean", sample: "timed calls",
       detail: "Each point: recorded duration ÷ timed calls over its trailing seven complete local days. The norm is the mean of the prior 30 endpoints." } }),
 ];
 
