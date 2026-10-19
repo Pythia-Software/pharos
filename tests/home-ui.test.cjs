@@ -546,13 +546,14 @@ test('the card editor saves extended and all-time windows with matching previews
   } finally { await browser.close(); }
 });
 
-test('carousel advances three every thirty seconds and pauses during interaction or reduced motion', async () => {
+test('carousel advances a page every thirty seconds and pauses during interaction or reduced motion', async () => {
   const { browser, page, data } = await setup({ clock: true });
   try {
     const initial = await page.locator('.home-belt-row .query-card:not([data-xray])').first().getAttribute('data-card-id');
     assert.match(await page.locator('.home-countdown').innerText(), /More in \d+s/);
     await page.clock.fastForward(30_250);
     await page.locator('.home-belt-row.sliding').waitFor();
+    assert.equal(await page.locator('.home-belt-row.sliding').evaluate(row => getComputedStyle(row).transitionDuration), '2.04s');
     await page.clock.runFor(2200);
     assert.notEqual(await page.locator('.home-belt-row .query-card:not([data-xray])').first().getAttribute('data-card-id'), initial);
     await page.getByRole('button', { name: 'Pause suggestions' }).click();
@@ -599,7 +600,7 @@ test('the loading belt retains its fixed middle while ready batches grow in pair
       assert.equal(await seedCard.evaluate(card => card.style.getPropertyValue('--query-lean')), lean);
       await releaseOne();
     }
-    assert.equal(await real.count(), 3);
+    assert.equal(await real.count(), 5, 'a wide screen reads five cards');
     assert.ok(await page.locator('.home-belt-row .query-xray-open').count() >= 2);
     await page.screenshot({ path: path.join(root, '.context/homepage-design/home-belt-loading.png') });
     data.holdPreviews = false;
@@ -648,30 +649,31 @@ test('conveyor slides in both directions and wraps while side cards show only ev
     await page.getByRole('button', { name: 'Pause suggestions' }).click();
     const cards = page.locator('.home-belt-row .query-card:not([data-xray])');
     const initial = await cards.evaluateAll(elements => elements.map(element => element.dataset.cardId));
-    const arriving = page.locator('.home-belt-slot[data-belt-position="2"] .query-card');
+    assert.equal(initial.length, 5, 'a wide screen reads five cards');
+    const arriving = page.locator('.home-belt-slot[data-belt-position="3"] .query-card');
     const next = await arriving.getAttribute('data-card-id');
     const before = await arriving.boundingBox();
-    await page.getByRole('button', { name: 'Next three suggestions' }).click();
+    await page.getByRole('button', { name: 'Next five suggestions' }).click();
     await page.locator('.home-belt-row.sliding').waitFor();
-    await page.waitForTimeout(180);
+    await page.waitForTimeout(90);
     const during = await arriving.boundingBox();
-    assert.ok(during.x < before.x - 10 && during.x > before.x - 3 * (before.width + 18), 'the same card should travel continuously into the reading area');
+    assert.ok(during.x < before.x - 10 && during.x > before.x - 5 * (before.width + 18), 'the same card should travel continuously into the reading area');
     await page.waitForFunction(() => !document.querySelector('.home-belt-row.sliding'));
     assert.equal(await cards.first().getAttribute('data-card-id'), next);
     await page.locator('.home-conveyor').focus(); await page.keyboard.press('ArrowLeft');
     await page.locator('.home-belt-row.sliding').waitFor();
     await page.waitForFunction(() => !document.querySelector('.home-belt-row.sliding'));
     assert.equal(await cards.first().getAttribute('data-card-id'), initial[0]);
-    await page.getByRole('button', { name: 'Previous three suggestions' }).click();
+    await page.getByRole('button', { name: 'Previous five suggestions' }).click();
     await page.waitForFunction(() => !document.querySelector('.home-belt-row.sliding'));
-    await page.getByRole('button', { name: 'Next three suggestions' }).click();
+    await page.getByRole('button', { name: 'Next five suggestions' }).click();
     await page.waitForFunction(() => !document.querySelector('.home-belt-row.sliding'));
     assert.equal(await cards.first().getAttribute('data-card-id'), initial[0], 'wrapping back and forward should restore the original cards');
     const belt = await page.locator('.home-belt-viewport').boundingBox();
     assert.ok(belt.x < 1 && Math.abs(belt.width - 2133) < 2, 'the conveyor must span the screen');
     const ghosts = await page.locator('.home-belt-row .query-card[data-xray]').evaluateAll(elements => elements.map(element => ({
       x: element.getBoundingClientRect().x, opacity: getComputedStyle(element.querySelector('.query-title')).opacity,
-      hidden: element.getAttribute('aria-hidden'), focusable: element.querySelector('a').tabIndex, hasMarks: Boolean(element.querySelector('i,.qt-metric-mark,.qt-metric-bar-fill,.qt-metric-bar-track,.query-scalar-value,td')), revealable: Boolean(element.querySelector('.query-xray-open')),
+      hidden: element.getAttribute('aria-hidden'), focusable: element.querySelector('a').tabIndex, hasMarks: Boolean(element.querySelector('i,.qt-metric-mark,.qt-metric-bar-fill,.qt-metric-bar-track,.query-scalar-value,.query-headline-value,.human-study-headline>strong,.human-study-sparkline path,td')), revealable: Boolean(element.querySelector('.query-xray-open')),
     })));
     assert.ok(ghosts.some(card => card.x > 0 && card.x < 468 && card.hasMarks));
     assert.ok(ghosts.some(card => card.x > 1648 && card.x < 2133 && card.hasMarks));
@@ -686,6 +688,118 @@ test('conveyor slides in both directions and wraps while side cards show only ev
     assert.equal(await cards.count(), 1, 'narrow screens retain one fully readable card between the side previews');
     assert.equal(await page.evaluate(() => document.querySelector('main').scrollWidth <= document.querySelector('main').clientWidth), true);
     await page.screenshot({ path: path.join(root, '.context/homepage-design/home-feedback-narrow.png'), fullPage: true });
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
+test('the sliding belt stays usable: arriving cards open, moves retarget, and asked-for moves run at twice the timed pace', async () => {
+  const { browser, page, data } = await setup();
+  const sliding = page.locator('.home-belt-row.sliding');
+  const middle = () => page.locator('.home-belt-slot[data-belt-position="0"] .query-card').getAttribute('data-card-id');
+  const settled = () => page.waitForFunction(() => !document.querySelector('.home-belt-row.sliding'));
+  try {
+    await page.getByRole('button', { name: 'Pause suggestions' }).click();
+    assert.equal(await page.locator('.home-belt-row .query-card:not([data-xray])').count(), 3);
+    const initial = await middle();
+    await page.getByRole('button', { name: 'Next three suggestions' }).click();
+    await sliding.waitFor();
+    assert.equal(await sliding.evaluate(row => getComputedStyle(row).transitionDuration), '1.02s');
+    // The first card to cross into the reading area opens before the belt stops.
+    const arriving = page.locator('.home-belt-slot[data-belt-position="2"] .query-card:not([data-xray])');
+    await arriving.waitFor({ timeout: 900 });
+    assert.equal(await sliding.count(), 1, 'the card should join the reading area while the belt still moves');
+    const hit = await arriving.evaluate(card => { const box = card.getBoundingClientRect(), target = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2); return { card: card.contains(target), link: Boolean(target?.closest('a.query-card-open')), pointer: getComputedStyle(card).pointerEvents }; });
+    // Hit-testing the moving card, as hover and clicks do, reaches its link.
+    assert.deepEqual(hit, { card: true, link: true, pointer: 'auto' });
+    // Asking to go back mid-slide reverses from wherever the belt has reached.
+    await page.getByRole('button', { name: 'Previous three suggestions' }).click();
+    await settled();
+    assert.equal(await middle(), initial);
+    // Asking again mid-slide carries the belt on past the first destination.
+    await page.getByRole('button', { name: 'Next three suggestions' }).click();
+    await sliding.waitFor();
+    await page.getByRole('button', { name: 'Next three suggestions' }).click();
+    const destination = await page.locator('.home-belt-slot[data-belt-position="6"] .query-card').getAttribute('data-card-id');
+    await settled();
+    assert.equal(await middle(), destination);
+    // An x-ray clicked mid-slide, once it comes onscreen, becomes the new destination.
+    await page.getByRole('button', { name: 'Next three suggestions' }).click();
+    const ghost = page.locator('.home-belt-slot[data-belt-position="5"]'), revealed = await ghost.locator('.query-card').getAttribute('data-card-id');
+    await ghost.locator('.query-xray-open').waitFor({ timeout: 900 });
+    assert.equal(await sliding.count(), 1);
+    await ghost.locator('.query-xray-open').evaluate(button => button.click());
+    await settled();
+    assert.equal(await middle(), revealed);
+    // Five cards need room for a glimpse of their neighbors as well.
+    for (const [width, count] of [[1440, 5], [1380, 3], [2133, 5], [1180, 3]]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.waitForFunction(count => document.querySelectorAll('.home-belt-row .query-card:not([data-xray])').length === count, count);
+    }
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
+test('reversing or repeating moves mid-slide keeps the reading area filled and the belt bounded', async () => {
+  const { browser, page, data } = await setup();
+  const settled = () => page.waitForFunction(() => !document.querySelector('.home-belt-row.sliding'), null, { timeout: 15000 });
+  // Samples the reading area every frame while the belt slides: each card spot
+  // must have a card under it, and the belt must not mount runaway slots.
+  const watch = () => page.evaluate(() => { window.__belt = { blank: 0, frames: 0, slots: 0 }; const row = document.querySelector('.home-belt-row'); const view = document.querySelector('.home-belt-viewport').getBoundingClientRect();
+    (function sample() {
+      const card = row.querySelector('.query-card:not([data-xray])')?.getBoundingClientRect(), stride = parseFloat(getComputedStyle(document.querySelector('.home-conveyor')).getPropertyValue('--query-card-stride'));
+      // A spot is blank when no mounted card covers it; gaps between moving cards are not.
+      const slots = [...row.querySelectorAll('.home-belt-slot')].map(slot => slot.getBoundingClientRect());
+      if (card) for (const dx of [-stride, 0, stride]) { const x = view.x + view.width / 2 + dx; window.__belt.blank += slots.some(slot => slot.left - 20 <= x && x <= slot.right + 20) ? 0 : 1; }
+      window.__belt.frames++; window.__belt.slots = Math.max(window.__belt.slots, row.querySelectorAll('.home-belt-slot').length);
+      if (row.classList.contains('sliding')) window.__belt.started = true;
+      if (window.__belt.frames < 900 && (row.classList.contains('sliding') || !window.__belt.started)) requestAnimationFrame(sample);
+    })(); });
+  try {
+    await page.getByRole('button', { name: 'Pause suggestions' }).click();
+    await page.mouse.move(5, 5);
+    const resting = await page.locator('.home-belt-slot').count();
+    // Out three pages, then back two before the belt arrives.
+    await watch();
+    const next = page.getByRole('button', { name: 'Next three suggestions' }), previous = page.getByRole('button', { name: 'Previous three suggestions' });
+    for (const button of [next, next, next]) await button.click();
+    await page.waitForTimeout(450);
+    for (const button of [previous, previous]) await button.click();
+    await settled();
+    let belt = await page.evaluate(() => window.__belt);
+    assert.ok(belt.started && belt.frames > 30);
+    assert.equal(belt.blank, 0, `cards vanished from the reading area mid-slide: ${JSON.stringify(belt)}`);
+    // Held arrow key: repeats queue at most a short lead over the belt.
+    await page.locator('.home-conveyor').focus();
+    await watch();
+    for (let press = 0; press < 60; press++) { await page.keyboard.press('ArrowRight'); await page.waitForTimeout(25); }
+    await settled();
+    belt = await page.evaluate(() => window.__belt);
+    assert.equal(belt.blank, 0, JSON.stringify(belt));
+    assert.ok(belt.slots <= resting + 20, `a held key mounted ${belt.slots} slots (resting belt: ${resting})`);
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
+test('a number in an x-ray leaves a block in its card tone', async () => {
+  const { browser, page, data } = await setup({ viewport: { width: 2133, height: 1075 } });
+  try {
+    await page.getByRole('button', { name: 'Pause suggestions' }).click();
+    const blocks = async () => page.locator('.home-belt-row :is(.query-headline-value,.query-scalar-value,.human-study-headline>strong)').evaluateAll(values => values.map(value => {
+      const block = getComputedStyle(value, '::after'), card = value.closest('.query-card'), cover = value.getBoundingClientRect();
+      return { xray: card.hasAttribute('data-xray'), opacity: Number(block.opacity), color: block.backgroundColor, tone: getComputedStyle(card).getPropertyValue('--query-tone'), width: cover.width };
+    }));
+    let found = await blocks();
+    for (let attempt = 0; !found.some(item => item.xray) && attempt < 12; attempt++) {
+      await page.getByRole('button', { name: 'Next five suggestions' }).click();
+      await page.waitForFunction(() => !document.querySelector('.home-belt-row.sliding'));
+      found = await blocks();
+    }
+    assert.ok(found.some(item => item.xray), 'the fixture belt should show a number in an x-ray');
+    // Cards whose groups collapse to a bare number are kept apart like any other kind.
+    const numbers = await page.locator('.home-belt-slot').evaluateAll(slots => slots.map(slot => Boolean(slot.querySelector('.query-compact-metric.is-scalar'))));
+    assert.ok(numbers.filter(Boolean).length >= 2);
+    assert.ok(numbers.every((number, index) => !number || !numbers[index + 1]), numbers.map(Number).join(''));
+    for (const item of found) assert.ok(item.xray ? item.opacity > .4 && item.width > 10 : item.opacity === 0, JSON.stringify(item));
     assert.deepEqual(data.errors, []);
   } finally { await browser.close(); }
 });
@@ -804,7 +918,7 @@ test('homepage fits text search, centers wrapping collection rows, and contains 
     await page.waitForTimeout(200);
     centered(await geometry(), [4, 4]);
     await page.evaluate(() => document.querySelector('main').scrollTop = 0);
-    await page.getByRole('button', { name: 'Next three suggestions' }).click();
+    await page.getByRole('button', { name: 'Next five suggestions' }).click();
     await page.locator('.home-belt-row.sliding').waitFor();
     centered(await geometry(), [4, 4]);
     await page.waitForFunction(() => !document.querySelector('.home-belt-row.sliding'));
