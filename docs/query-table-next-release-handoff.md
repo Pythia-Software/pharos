@@ -47,7 +47,7 @@ Evidence is in the current Query Table source/docs and the Pharos changes:
   compressed/reference links and source-stage rolling windows.
 - `web/src/storage.ts`, `bookmarks.ts`, `query-previews.ts`: permanent saves,
   updates, synchronous bookmark metadata and grouped/calendar previews.
-- `web/tests/query-host-integration.test.mjs`, `query-previews.test.mjs`,
+- `web/tests/unit/query/query-host-integration.test.mjs`, `query-previews.test.mjs`,
   `internal/archive/query_table_exploration_test.go`: behavioral regressions.
 
 Browser checks exercised item cards, COUNT/SUM/MEDIAN/representative group

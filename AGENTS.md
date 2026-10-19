@@ -10,19 +10,29 @@ the checked-in `internal/archive/assets/query-tables.{js,css}`. See
 ## Running tests
 
 Run the narrowest tests that cover your change while you work, and the fast
-Go tier on every change. Before opening a PR, run the whole Go suite and the
-JS unit tests.
+Go tier on every change. Before opening a PR, run `go test ./...`,
+`npm --prefix web run check` and `npm --prefix web run test:full`.
 
 | What | Command |
 |---|---|
 | Go, one test while iterating | `go test -vet=off -run 'TestName' ./internal/archive` (`-vet=off` skips vetting the whole package on every run) |
 | Go, fast tier | `go test -short ./...` (skips the slowest tests, which call `slowTest(t)`) |
 | Go, everything | `go test ./...` |
-| JS unit tests in `web/tests` | `(cd web && node --test)` (they must run from `web/`) |
-| JS unit tests in `tests/` | `node --test $(ls tests/*.test.cjs \| grep -v -- '-ui\.test')` |
-| One browser file | `node --test --test-timeout=120000 tests/<page>-ui.test.cjs` |
+| JS unit tests (`web/tests/unit`, node only, seconds) | `npm --prefix web test` from any directory |
+| One JS unit file or test | `npm --prefix web test -- card-recipes --test-name-pattern=wishlist` (arguments are file-path filters, plus `--test-*` flags) |
+| JS unit tests, full matrix | `npm --prefix web run test:full` (every window, chart kind and edit in `card-parity`/`cover-parity`) |
+| One browser file | `npm --prefix web run test:browser -- <page>-ui` (runs `tests/<page>-ui.test.cjs`) |
+| JS checks before a PR | `npm --prefix web run check` (typecheck, schemas, recipe snapshot, bundle, unit tests) |
 | Python tools | `python3 -m unittest discover -s tools` |
 | Frontend bundle | `(cd web && npm run build && npm run check-bundle)` after any `web/src` or `pricing/*.json` change |
+| Recipe snapshot | `npm --prefix web run generate-recipes` after changing card recipes; it rewrites `implemented_recipes` in `docs/homepage-query-cards.json`, which Go's `TestHomeQueryRecipesV2` executes |
+
+- **JS unit tests** live in `web/tests/unit/**` and import `web/src` and
+  schema JSON directly. `web/tests/run.mjs` bundles them once with esbuild
+  into a gitignored `web/.test-build/` and runs them with `node --test`;
+  invoke tests through it, since the source files cannot be run by
+  `node --test` directly. Cross-language fixtures that Go also reads live in
+  `testdata/`.
 
 - **Browser tests:** they need Playwright installed once per workspace:
   `npm install --prefix .context/browser-tests playwright --no-audit --no-fund`.

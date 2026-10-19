@@ -351,9 +351,12 @@ Test commands, test tiers and the rules for writing tests are in
 ```sh
 go test ./...        # go test -short ./... is the fast tier
 go vet ./...
-(cd web && npm ci && npx tsc --noEmit && npm run build)
-(cd web && npm run check-bundle)
+(cd web && npm ci && npm run build)
+(cd web && npm run check)
 ```
+
+`npm run check` runs the typecheck, the schema and recipe-snapshot checks,
+`check-bundle` and the JS unit tests.
 
 `./launch.sh --no-open` builds and installs the app for a per-user setup; it
 is not a test.

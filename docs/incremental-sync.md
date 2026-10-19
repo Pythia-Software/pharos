@@ -205,7 +205,7 @@ PHAROS_BENCH_ROOT=/Volumes/YOUR_LIBRARY_SSD/scratch \
   go test ./internal/archive -run '^$' -bench '^BenchmarkIncremental' \
   -benchtime=3x -benchmem -count=1
 go tool pprof -top /tmp/pharos-benchmark.test /tmp/pharos-cpu.pprof
-node --test tests/incremental-sync-ui.test.cjs tests/combo-button-ui.test.cjs
+npm --prefix web run test:browser -- incremental-sync-ui combo-button-ui
 ```
 
 `PHAROS_BENCH_ROOT` must already exist. Only temporary benchmark children are
