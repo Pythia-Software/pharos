@@ -83,6 +83,8 @@ func sqliteQuerySchema(dataset string) (qt.Schema, error) {
 		return PharosSkillUsagesSchema(), nil
 	case "tl1_attempts":
 		return PharosTl1AttemptsSchema(), nil
+	case "findings":
+		return PharosFindingsSchema(), nil
 	}
 	return qt.Schema{}, fmt.Errorf("unknown query-table dataset %q", dataset)
 }

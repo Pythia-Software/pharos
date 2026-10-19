@@ -30,7 +30,7 @@ func TestQueryExplorationHTTP(t *testing.T) {
 	call := func(method, path, body string) *httptest.ResponseRecorder {
 		return queryExplorationCall(server, config.APIToken, method, path, body)
 	}
-	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts"} {
+	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings"} {
 		t.Run(dataset, func(t *testing.T) {
 			w := call("POST", "/api/query/"+dataset+"/rows-v2", `{"version":2,"profile":"qt-sqlite-v1","select":["id"],"limit":1}`)
 			if w.Code != 200 {
@@ -70,7 +70,7 @@ func TestQueryExplorationHTTP(t *testing.T) {
 func TestQueryPopulationDownloadsDisabled(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := NewServer(config, catalog)
-	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts"} {
+	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings"} {
 		for _, body := range []string{`{"where":[]}`, `{"where":[{"field":"tool_name","op":"=","value":"shell_command"}]}`} {
 			w := queryExplorationCall(server, config.APIToken, "POST", "/api/query/"+dataset+"/population", body)
 			if w.Code != http.StatusGone || strings.Contains(w.Body.String(), `"rows"`) || !strings.Contains(w.Body.String(), "server query execution") {

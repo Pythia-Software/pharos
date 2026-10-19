@@ -269,28 +269,15 @@ func (c *Catalog) FindingsOverview(ctx context.Context, filter string) (map[stri
 		if state == findingOpen {
 			atStake += floatOr(row.Impact["usd"])
 			likely += floatOr(mapValueDefault(card["expected"])["usd"])
-			// New since the last visit: when it first passed the gate, or was
-			// first seen when a lower threshold made it visible.
-			if firstString(row.GatePassedAt, row.FirstSeenAt) > view.cart.settings.SeenAt {
+			if view.isNew(row) {
 				newCount++
 				card["new"] = true
 			}
 		}
 		if user := view.states[row.ID]; user != nil {
-			for _, item := range user.Interventions {
-				if item.Status == interventionImproved {
-					saved.USD += item.Savings.USD
-					saved.Tokens += item.Savings.Tokens
-					saved.Minutes += item.Savings.Minutes
-					saved.Failures += item.Savings.Failures
-					saved.AddedUSD += item.Savings.AddedUSD
-					saved.AddedTokens += item.Savings.AddedTokens
-					saved.Weeks = max(saved.Weeks, item.Savings.Weeks)
-					if item.RegressedAt != "" {
-						regressed++
-					}
-				}
-			}
+			won, _, back := user.improved()
+			saved.add(won)
+			regressed += back
 		}
 		if filter == "" || filter == state {
 			cards = append(cards, card)
@@ -349,6 +336,39 @@ func (c *Catalog) FindingsOverview(ctx context.Context, filter string) (map[stri
 		"summary": summary, "cart_count": cartCount, "findings": cards, "cart": view.carts(), "targets": view.targets(), "repositories": view.repositories(), "near": view.nearMisses(),
 		"wins": view.wins(), "detectors": detectors,
 	}, nil
+}
+
+// isNew reports a finding new since the last visit: when it first passed the
+// gate, or was first seen when a lower threshold made it visible. Only open
+// findings show it.
+func (view *findingView) isNew(row *findingRow) bool {
+	return firstString(row.GatePassedAt, row.FirstSeenAt) > view.cart.settings.SeenAt
+}
+
+// improved sums a finding's verified results: every improved intervention,
+// regressed ones included, with the longest measured run of weeks.
+func (state *findingUserState) improved() (saved findingSavings, wins, regressed int) {
+	for _, item := range state.Interventions {
+		if item.Status != interventionImproved {
+			continue
+		}
+		saved.add(item.Savings)
+		wins++
+		if item.RegressedAt != "" {
+			regressed++
+		}
+	}
+	return saved, wins, regressed
+}
+
+func (total *findingSavings) add(item findingSavings) {
+	total.USD += item.USD
+	total.Tokens += item.Tokens
+	total.Minutes += item.Minutes
+	total.Failures += item.Failures
+	total.AddedUSD += item.AddedUSD
+	total.AddedTokens += item.AddedTokens
+	total.Weeks = max(total.Weeks, item.Weeks)
 }
 
 func floatOr(value any) float64 {
