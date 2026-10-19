@@ -6,10 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/gbdubs/pharos/pricing"
 )
 
 // Pricing turns reconciled token categories into API-equivalent list-price
@@ -60,23 +61,6 @@ func (p priceChange) id() string {
 
 func (a modelAlias) id() string {
 	return a.Provider + "/" + modelFamily(a.Alias) + "/" + a.EffectiveFrom + "/" + a.Status
-}
-
-func pricingDocumentBytes() ([]byte, error) {
-	if value, err := assets.ReadFile("assets/pricing/cost_changes.json"); err == nil {
-		return value, nil
-	}
-	// `macos/build-app.sh` copies the canonical file into embedded assets; these
-	// fallbacks keep `go test` and `go run` working from the source tree.
-	for _, candidate := range []string{
-		filepath.Join("pricing", "cost_changes.json"),
-		filepath.Join("..", "..", "pricing", "cost_changes.json"),
-	} {
-		if value, err := os.ReadFile(candidate); err == nil {
-			return value, nil
-		}
-	}
-	return nil, fmt.Errorf("pricing file not found: pricing/cost_changes.json")
 }
 
 func parsePricing(data []byte) (pricingDocument, []string) {
@@ -150,10 +134,7 @@ func validatePricing(doc pricingDocument) []string {
 // syncPricing replaces the catalog's price tables with the embedded pricing
 // file whenever the file changes. An invalid file leaves the previous prices.
 func (c *Catalog) syncPricing() error {
-	data, err := pricingDocumentBytes()
-	if err != nil {
-		return nil
-	}
+	data := pricing.CostChanges
 	digest := hashBytes(data)
 	var current string
 	if err := c.DB.QueryRow("SELECT value FROM meta WHERE key='pricing_digest'").Scan(&current); err == nil && current == digest {

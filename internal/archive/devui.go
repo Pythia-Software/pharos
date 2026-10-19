@@ -71,7 +71,9 @@ func (d *devUI) withLocalCarbonFactors(response *http.Response) error {
 	if field == "" || response.StatusCode != http.StatusOK {
 		return nil
 	}
-	factors, err := os.ReadFile(filepath.Join(d.assets, "carbon", "co2_factors.json"))
+	// assets is the checkout's internal/archive/assets; the factors live at
+	// the checkout root.
+	factors, err := os.ReadFile(filepath.Join(d.assets, "..", "..", "carbon", "co2_factors.json"))
 	if err != nil {
 		return fmt.Errorf("read local carbon factors: %w", err)
 	}

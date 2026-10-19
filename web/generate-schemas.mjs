@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readdirSync, readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { resolve, join } from 'node:path';
@@ -13,9 +13,6 @@ try {
     const output = check ? resolve(temp, name + '.go') : destination;
     execFileSync(process.execPath, [resolve(root, 'web/node_modules/@pythia-software/query-table-codegen/dist/cli.js'), source, '--go', output, '--go-package', 'archive', '--dialect', 'sqlite']);
     execFileSync('gofmt', ['-w', output]);
-    const asset = resolve(root, 'internal/archive/assets/query-schemas', name);
-    if (check) {
-      if (!readFileSync(output).equals(readFileSync(destination)) || !readFileSync(source).equals(readFileSync(asset))) throw Error(`Generated schema differs: ${name}`);
-    } else writeFileSync(asset, readFileSync(source));
+    if (check && !readFileSync(output).equals(readFileSync(destination))) throw Error(`Generated schema differs: ${name}`);
   }
 } finally { rmSync(temp, { recursive: true, force: true }); }
