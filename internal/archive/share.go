@@ -235,6 +235,8 @@ var sharedRowExtras = map[string][]string{
 }
 
 // sharedRowExcluded are schema fields whose values stay out of shared files.
+// Usage energy and CO₂e estimates are kept: they are the exporter's, under
+// the Carbon Impact settings saved when the file was made.
 var sharedRowExcluded = map[string]bool{"location": true, "owner": true}
 
 // sharedFieldNames are the fields a shared file keeps for a dataset's rows:

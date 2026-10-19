@@ -842,7 +842,9 @@
 
   function updatePreferences(change) {
     Object.assign(prefs, change); save(); render();
-    window.dispatchEvent(new Event('pharos:carbon-settings'));
+    // Usage rows carry estimates under the saved settings, so listeners that
+    // refetch must wait for the save rather than the debounced write.
+    Promise.resolve(window.pharosPrefs.flush?.()).then(() => window.dispatchEvent(new Event('pharos:carbon-settings')));
   }
 
   function restoreFocus(focused, ...roots) {
