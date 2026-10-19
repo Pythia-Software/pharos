@@ -33,6 +33,7 @@ import { linkTargets, navigateLink } from "./query-link-targets";
 import { QueryChip } from "./query-card";
 import { readRollingWindow, resolveRollingQuery, rollingQueryMatches } from "./query-links";
 import { mainIntegration, pullRequestLabel, pullRequestURL, pullRequests } from "./pull-requests";
+import { optionLabels } from "./option-labels";
 import { preferences } from "./preferences";
 import { foldSeries, validRollingPeriods, type ChartSeries } from "./chart-series";
 import { isSliceTerm, readSlice, updateSlice, withSlice, type LegendAction, type SliceSelection } from "./chart-selection";
@@ -342,18 +343,6 @@ const renderers: RenderRegistry<Row> = {
 // Filter chips, pickers, and cell quick filters show each value's schema label
 // and, for status fields, the badge its cells use. Queries and URLs keep the
 // raw value.
-function optionLabels(fields: FieldSchema<Row>["fields"]): Map<string, Map<string, string>> {
-  const labels = new Map<string, Map<string, string>>();
-  for (const field of fields) {
-    const values = field.filter?.values;
-    if (values?.source !== "static") continue;
-    const options = new Map<string, string>();
-    for (const option of values.options) if (typeof option !== "string") options.set(option.value, option.label);
-    if (options.size) labels.set(field.name, options);
-  }
-  return labels;
-}
-
 const statusBadges: Record<string, (value: string, label: string) => React.ReactNode> = {
   run_state: (value, label) => <span className={`qt-state-pill ${value}`}>{label}</span>,
   mcp_status: (value, label) => <span className={`mcp-call-state ${value}`}>{label}</span>,
