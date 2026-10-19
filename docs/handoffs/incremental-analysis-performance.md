@@ -141,7 +141,7 @@ with SQLite's backup mechanism or an existing verified backup. Budget disk
 space before materializing a 64 GiB replica.
 
 Reuse/extend `incremental_bench_test.go`, `incremental_writer_test.go`, tool
-ledger/cube tests, `incremental_recovery_regression_test.go`, and findings tests.
+ledger/cube tests (`tool_cube_test.go`), and findings tests.
 The existing publication-retry regression checks that a busy writer does not
 force the temporary cube to be built again. Add meaningful parity and bounded
 work tests for the scenarios above, then run the Go suite and scoped race tests.

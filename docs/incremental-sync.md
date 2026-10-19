@@ -196,7 +196,7 @@ Reproduce workloads with scratch catalogs only:
 ```sh
 go test ./...
 go test ./internal/archive -run '^TestIncrementalWriterRowBudget$' -count=1
-PHAROS_INCREMENTAL_RESOURCE_GATES=1 go test ./internal/archive \
+PHAROS_INCREMENTAL_RESOURCE_GATES=1 go test -tags probe ./internal/archive \
   -run '^TestIncrementalScheduledResourceBudgets$' -count=1 -v
 go test ./internal/archive -run '^$' -bench '^BenchmarkIncremental' \
   -benchtime=3x -benchmem -count=1 -cpuprofile=/tmp/pharos-cpu.pprof \

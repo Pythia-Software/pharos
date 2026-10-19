@@ -120,7 +120,7 @@ Observed problems changed the implementation:
 ```sh
 go test ./internal/archive -run '^TestTextSearch|^TestLibraryFind|TestLibraryQueryTableCombinesKeywordSearchWithFilters' -count=1
 go test -race ./internal/archive -run '^TestTextSearch|^TestLibraryFind|TestLibraryQueryTableCombinesKeywordSearchWithFilters' -count=1
-go test -c ./internal/archive -o .context/search-performance/archive.test
+go test -c -tags probe ./internal/archive -o .context/search-performance/archive.test
 PHAROS_SEARCH_REPLICA=/path/to/scratch/catalog.sqlite3 \
   .context/search-performance/archive.test -test.run '^TestTextSearchReplica$' -test.v
 ```
@@ -129,7 +129,7 @@ The replica harness opens SQLite read-only, refuses the known production path, a
 
 Tests cover mixed phrases, operators and precedence, flat versus nested Boolean queries, prefix/proximity/ordered semantics, Unicode normalization and trigram candidate supersets, NOT within authored spans, exact-case exclusions, dates/roles/scopes, cursor continuation/staleness, MCP output-budget continuation, byte/candidate/regex-work limits, cancellation, trigger updates/deletes/replacements, regex captures and zero-width ranges, HTTP/MCP/Library parity, and the 5,100-unrelated-message early-filter regression. Focused tests, race checks, and `go vet ./...` pass. TypeScript, bundle/schema checks, existing frontend tests, and desktop/mobile browser checks exercise the UI. Browser checks verified successful Boolean search and visible parse errors with no uncaught page errors.
 
-Visual editor validation adds model tests (`cd web && npm run test:text-search`), bookmark-preview regression tests, validation-only HTTP tests with a nil catalog, and structured-only Library requests on both API versions. Browser checks cover root/nested AND NOT, new negative groups, global metadata AND semantics alongside text OR, UTC date validation, workspace filtering, provider/source fallback entry, saved custom role/type restrictions, the unified filter menu, saved-state restoration, invalid syntax/regex retaining results, unsupported conversion errors, mobile width, and quick-search replacement. The opt-in `TestTextSearchPreview` serves synthetic fixtures for browser checks without reading the user's library.
+Visual editor validation adds model tests (`cd web && npm run test:text-search`), bookmark-preview regression tests, validation-only HTTP tests with a nil catalog, and structured-only Library requests on both API versions. Browser checks cover root/nested AND NOT, new negative groups, global metadata AND semantics alongside text OR, UTC date validation, workspace filtering, provider/source fallback entry, saved custom role/type restrictions, the unified filter menu, saved-state restoration, invalid syntax/regex retaining results, unsupported conversion errors, mobile width, and quick-search replacement. The opt-in `TestTextSearchPreview` (a probe, built with `-tags probe`) serves synthetic fixtures for browser checks without reading the user's library.
 
 `go test ./...` encountered `TestFindingSnoozeUntilWorseStaysWoken` (“a doubled rate should wake the snooze”). The unchanged baseline reproduced that failure in all three isolated runs. Search changes do not alter that test or findings behavior. The final full run, `go test ./... -skip '^TestFindingSnoozeUntilWorseStaysWoken$'`, passed (archive package: 175.14 seconds).
 
