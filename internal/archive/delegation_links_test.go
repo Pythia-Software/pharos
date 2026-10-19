@@ -2,8 +2,100 @@ package archive
 
 import (
 	"context"
+	"fmt"
 	"testing"
 )
+
+func TestDelegationIncomingAncestorsRemainContext(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		depth    int
+		inferred bool
+		fallback bool
+	}{
+		{name: "separate child workspace", depth: 1},
+		{name: "nested child without derived session", depth: 2, fallback: true},
+		{name: "inferred command parent", depth: 2, inferred: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, config := testCatalog(t)
+			run := func(q string, args ...any) {
+				t.Helper()
+				if _, err := c.DB.Exec(q, args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for i := 0; i <= tc.depth; i++ {
+				id := fmt.Sprintf("level-%d", i)
+				run(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES(?,'codex','local',?,?,'2026-01-01')`, id, id, id)
+				parent := ""
+				if i > 0 && !(tc.inferred && i == tc.depth) {
+					parent = fmt.Sprintf("level-%d", i-1)
+				}
+				run(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth,model,effort) VALUES(?,?,'codex','local',?,?,?,'own-model','medium')`, id, id, id, nilIfEmpty(parent), i)
+				if !tc.fallback || i < tc.depth {
+					run(`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider,usage_status,total_tokens,started_at,ended_at) VALUES(?,?,?,'main','subagent','codex','reported-reconciled',100,'2026-01-01T00:00:00Z','2026-01-01T00:01:00Z')`, id+"-session", id, id)
+				}
+			}
+			childID := fmt.Sprintf("level-%d", tc.depth)
+			if tc.inferred {
+				run(`INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,status) VALUES('launch','level-1','level-1',0,'codex','tool_call','exec_command','shell','success')`)
+				run(`INSERT INTO conversation_launches(child_id,parent_id,tool_call_id,program) VALUES(?,'level-1','launch','codex')`, childID)
+			}
+			// A sibling is not part of the selected workspace's ancestor context.
+			run(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth) VALUES('sibling','level-0','codex','local','sibling','level-0',1)`)
+			s, err := c.delegationSnapshot(context.Background(), childID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(s.Nodes) != tc.depth+1 || len(s.Roots) != 1 {
+				t.Fatalf("expected only child and its ancestor chain: %+v", s.Nodes)
+			}
+			outline := "1"
+			for i, n := range s.Nodes {
+				if i > 0 {
+					outline += ".1"
+					if n.ParentID != s.Nodes[i-1].ID {
+						t.Fatalf("level %d lost its parent: %+v", i, n)
+					}
+				}
+				if n.Depth != i || n.Outline != outline || n.ConversationID != fmt.Sprintf("level-%d", i) {
+					t.Fatalf("incorrect nested identity at level %d: %+v", i, n)
+				}
+				if i < tc.depth {
+					if !n.ContextOnly || n.Navigation == nil || n.Navigation.WorkspaceID != n.ConversationID || n.Model != "own-model" || n.ChildCount != 1 {
+						t.Fatalf("ancestor lost navigation or hierarchy: %+v", n)
+					}
+					for _, key := range []string{"tokens", "calls", "clock", "messages", "requests", "files"} {
+						if n.Self[key].Value != nil {
+							t.Fatalf("unqueried ancestor %s must remain unknown: %+v", key, n.Self[key])
+						}
+					}
+				} else if n.ContextOnly || n.Navigation != nil {
+					t.Fatalf("local child became navigation-only: %+v", n)
+				}
+			}
+			if !tc.fallback {
+				if m := s.Totals["tokens"]; m.Value == nil || *m.Value != 100 || m.Quality != "reported" || m.Known != 1 || m.Total != 1 {
+					t.Fatalf("ancestor context changed workspace usage: %+v", m)
+				}
+				if *s.Totals["clock"].Value != 60000 || *s.Totals["children"].Value != 0 {
+					t.Fatal("ancestor context changed workspace clock or child count", s.Totals)
+				}
+			}
+			status, body := delegationGET(t, NewServer(config, c), "/api/work/"+childID+"/delegation?conversation="+childID+"&only_matching=1")
+			if status != 200 || len(body["focus"].([]any)) != 2 || body["session_count"] != float64(1) {
+				t.Fatal("direct links must include selected child and parent context", status, body)
+			}
+			if !tc.fallback {
+				m := body["totals"].(map[string]any)["tokens"].(map[string]any)
+				if m["value"] != float64(100) || m["quality"] != "reported" {
+					t.Fatal("matching-only totals included ancestor context", m)
+				}
+			}
+		})
+	}
+}
 
 func TestDelegationCodexChildrenAcrossWorkspaces(t *testing.T) {
 	c, config := testCatalog(t)

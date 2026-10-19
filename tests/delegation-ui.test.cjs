@@ -307,7 +307,7 @@ async function fixture(t, options = {}) {
         focus: fixtureNodes,
         matched: Object.fromEntries(rows.map((n) => [n.id, true])),
         total: rows.length,
-        session_count: fixtureNodes.length,
+        session_count: fixtureNodes.filter(n => !n.context_only).length,
         offset: 0,
         next_cursor: "",
         metrics: specs,
@@ -1034,6 +1034,45 @@ test("cross-workspace children keep nesting and open the actual child transcript
   await page.locator(".delegation-child-menu").evaluate(el => { el.closest("details").open = true; });
   assert.equal(await page.locator(".delegation-child-menu button").count(), 1);
   assert.equal(await page.locator(".delegation-context").getByRole("button", { name: /Open child/ }).count(), 0);
+  assert.deepEqual(errors, []);
+});
+
+test("a direct child workspace link shows its incoming parent and nested session number", async (t) => {
+  const parent = {
+    ...nodes[0],
+    workspace_id: "parent-work",
+    context_only: true,
+    navigation: { conversation_id: "root", workspace_id: "parent-work", provider: "claude", label: nodes[0].label },
+    self: Object.fromEntries(keys.map(k => [k, metric(null, "unknown")])),
+  };
+  const child = {
+    ...nodes[1],
+    child_count: 0,
+    external_parent: parent.navigation,
+  };
+  const { page, errors, transcriptRequests } = await fixture(t, {
+    nodes: [parent, child],
+    work: { ...work, conversations: [{ ...work.conversations[1], parent_id: "root" }] },
+    url: "/work/work/conversation/child?conversation=child&delegation_mode=hierarchy",
+  });
+  await waitForReader(page, "s-child");
+  assert.match(await page.locator(".delegation-session-heading").innerText(), /Session 1\.1/);
+  const parentRow = page.locator('.delegation-inbox-row[data-session="s-root"]');
+  const childRow = page.locator('.delegation-inbox-row[data-session="s-child"]');
+  assert.equal(await parentRow.getAttribute("data-depth"), "0");
+  assert.equal(await childRow.getAttribute("data-depth"), "1");
+  assert.match(await parentRow.innerText(), /Parent context/);
+  assert.equal(await childRow.getAttribute("class").then(c => c.includes("current")), true);
+  assert.deepEqual(transcriptRequests, ["child"]);
+  assert.match(await page.locator(".delegation-context").innerText(), /Parent · claude/);
+  await page.evaluate(() => { window.pharosNavigate = target => { window.__externalTarget = target; }; });
+  await parentRow.locator(".delegation-name").click();
+  assert.equal(await page.evaluate(() => window.__externalTarget), "/work/parent-work?conversation=root");
+  // The overview uses the same navigable ancestor context in its full table.
+  await page.locator(".workspace-reader-workspace").click();
+  const fullParent = page.locator('tr[data-session="s-root"]');
+  await fullParent.waitFor();
+  assert.match(await fullParent.innerText(), /Parent context/);
   assert.deepEqual(errors, []);
 });
 

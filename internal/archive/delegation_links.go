@@ -205,3 +205,81 @@ func loadDelegationLinks(ctx context.Context, tx *sql.Tx, workspace string, conv
 	}
 	return links, nil
 }
+
+// A separately archived subagent is a workspace root for accounting, but is
+// still nested in its execution family. Include its incoming chain as bounded
+// navigation context without reading or attributing the ancestors' usage.
+func loadDelegationAncestors(ctx context.Context, tx *sql.Tx, s *delegationSnapshot, roots map[string]string) error {
+	parents := []string{}
+	for _, n := range s.Nodes {
+		if n.ParentID == "" && n.ExternalParent != nil {
+			parents = append(parents, n.ExternalParent.ConversationID)
+		}
+	}
+	if len(parents) == 0 {
+		return nil
+	}
+	encoded, err := json.Marshal(parents)
+	if err != nil {
+		return err
+	}
+	ancestors, err := queryMapsContext(ctx, tx, `WITH RECURSIVE ancestors(id) AS (
+ SELECT value FROM json_each(?)
+ UNION SELECT c.parent_id FROM ancestors a JOIN conversations c ON c.id=a.id WHERE c.parent_id IS NOT NULL LIMIT 10001)
+ SELECT c.id,c.workspace_id,c.parent_id,c.provider,c.model,c.effort,c.coverage,
+ substr(COALESCE(NULLIF(c.agent_nickname,''),NULLIF(w.title,''),NULLIF(d.initiation,''),c.native_id),1,180) label
+ FROM ancestors a JOIN conversations c ON c.id=a.id
+ JOIN workspaces w ON w.id=c.workspace_id
+ LEFT JOIN conversation_documents d ON d.conversation_id=c.id`, string(encoded))
+	if err != nil {
+		return err
+	}
+	if len(ancestors) > 10000 {
+		return fmt.Errorf("workspace exceeds the 10,000-conversation family analysis limit")
+	}
+	representatives := map[string]string{}
+	for cid, id := range roots {
+		representatives[cid] = id
+	}
+	for _, n := range s.Nodes {
+		if n.ExternalChild != nil && representatives[n.ExternalChild.ConversationID] == "" {
+			representatives[n.ExternalChild.ConversationID] = n.ID
+		}
+	}
+	for _, cv := range ancestors {
+		cid := firstString(cv["id"])
+		if s.ByID[representatives[cid]] != nil {
+			continue
+		}
+		id := "ancestor-conversation:" + cid
+		n := &delegationNode{ID: id, ConversationID: cid, WorkspaceID: firstString(cv["workspace_id"]),
+			Provider: firstString(cv["provider"]), Model: firstString(cv["model"]), Effort: firstString(cv["effort"]),
+			Label: firstString(cv["label"]), Coverage: firstString(cv["coverage"]), Usage: "unavailable",
+			ContextOnly: true, Self: map[string]delegationMetric{}, All: map[string]delegationMetric{}}
+		n.Navigation = &delegationReference{ConversationID: cid, WorkspaceID: n.WorkspaceID, Provider: n.Provider, Label: n.Label}
+		for _, spec := range delegationMetrics {
+			n.Self[spec.ID] = delegationUnknown()
+		}
+		representatives[cid] = id
+		s.Nodes = append(s.Nodes, n)
+		s.ByID[id] = n
+	}
+	if len(s.Nodes) > 10000 {
+		return fmt.Errorf("workspace exceeds the 10,000-session analysis limit")
+	}
+	for _, cv := range ancestors {
+		n := s.ByID[representatives[firstString(cv["id"])]]
+		if n != nil && n.ContextOnly {
+			n.ParentID = representatives[firstString(cv["parent_id"])]
+			if n.ParentID != "" {
+				n.ParentEvidence = "conversation-parent"
+			}
+		}
+	}
+	for _, n := range s.Nodes {
+		if n.ParentID == "" && n.ExternalParent != nil {
+			n.ParentID = representatives[n.ExternalParent.ConversationID]
+		}
+	}
+	return nil
+}

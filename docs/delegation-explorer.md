@@ -131,7 +131,13 @@ but do not create execution rows. Unresolved launches do not acquire an Open
 child transcript button. Cyclic ownership is excluded with a visible warning.
 
 Incoming parents and linked child transcripts in another workspace retain
-navigation references. The hierarchy follows recorded subagent parent edges
+navigation references. Opening a subagent's own workspace includes its incoming
+ancestor chain in the hierarchy, so its session outline and reader heading remain
+nested. Ancestor rows are marked **Parent context**, open their own transcripts,
+and show unknown self usage. They do not contribute to workspace totals, coverage,
+or activity bounds; their inclusive values cover only the retained subtree in
+this view. Siblings in other workspaces are not loaded by this incoming context.
+The hierarchy follows recorded subagent parent edges
 recursively across workspace boundaries: Codex stores each rollout as a separate
 workspace, which must not sever the execution family. Launch placeholders link
 to those references; children without an acknowledgement still appear beneath
@@ -157,6 +163,8 @@ model-processing, or background-process time.
 `collapsed`, `only_matching`, `conversation`, `limit`, and an opaque `cursor`.
 It returns a bounded page, separate ancestor context, conversation navigation
 context, metric definitions, workspace totals/maxima, and full-range density.
+Incoming ancestor rows carry `context_only` and a `navigation` reference.
+`session_count` excludes them; `total` counts the displayed hierarchy rows.
 Cursor continuations are bound to both the content snapshot and query; changes
 return HTTP 409 rather than silently reordering a later page.
 
