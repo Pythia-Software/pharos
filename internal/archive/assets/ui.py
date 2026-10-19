@@ -707,7 +707,9 @@ function node(tag,cls,text){const n=document.createElement(tag);if(cls)n.classNa
 function empty(text){return node('div','empty',text)}
 async function search(){const f=new FormData($('#search')),p=new URLSearchParams();for(const [k,v]of f)if(v)p.set(k,v);const data=await api('/api/search?'+p),root=$('#results');root.replaceChildren();if(!data.items.length){root.append(empty('No matching work. Coverage and source limitations are visible in Health.'));return}data.items.forEach(w=>{const c=node('article','card');c.onclick=()=>detail(w.id);c.append(node('h2','',w.title),node('div','meta',`${(w.source_aliases||[w.source_kind]).join(' + ')} · ${w.repository_name||'Repository not identified in source'} · ${w.activity_at?new Date(w.activity_at).toLocaleDateString():'Unknown date'}`));if(w.purpose)c.append(node('p','',w.purpose));if(w.outcome)c.append(node('p','muted',`Outcome: ${w.outcome}`));const chips=node('div','chips');chips.append(node('span','chip',`${w.conversation_count} conversation${w.conversation_count===1?'':'s'}`),node('span','chip',`${w.changed_file_count} changed file${w.changed_file_count===1?'':'s'}`),node('span','chip',w.preservation_completeness));for(const pr of workPullRequests(w)){const label=pr.title?`${pr.title} · #${pr.number}`:`PR #${pr.number}`;const link=node(pr.url?'a':'span','chip',label);if(pr.url){link.href=pr.url;link.target='_blank';link.rel='noopener noreferrer';link.onclick=event=>event.stopPropagation()}chips.append(link)}if(w.main_merge_commit){const link=mainIntegrationLink(w);link.onclick=event=>event.stopPropagation();chips.append(link)}c.append(chips);root.append(c)})}
 if($('#search'))$('#search').onsubmit=e=>{e.preventDefault();search()};
-function timeLabel(value){if(!value)return'Time unavailable';const date=new Date(value);return Number.isNaN(date.getTime())?value:date.toLocaleString([], {dateStyle:'medium',timeStyle:'short'})}
+// toLocaleString builds a formatter per call; transcripts label thousands of events.
+let timeFormat=null;
+function timeLabel(value){if(!value)return'Time unavailable';const date=new Date(value);return Number.isNaN(date.getTime())?value:(timeFormat??=new Intl.DateTimeFormat([], {dateStyle:'medium',timeStyle:'short'})).format(date)}
 function parsedJSON(text){if(typeof text!=='string')return null;const trimmed=text.trim();if(!trimmed||(!trimmed.startsWith('{')&&!trimmed.startsWith('[')))return null;try{return JSON.parse(trimmed)}catch{return null}}
 // Keep parsed bodies with their message, rather than repeatedly decoding them
 // for normalization, tokens, roots, filters and tool summaries. Comparing the
@@ -1123,9 +1125,12 @@ function fileChip(path,repoRoot,onOpen,file=null){
   const copy=node('button','file-copy',icon('copy'));copy.type='button';copy.setAttribute('aria-label','Copy path '+path);copy.title='Copy full path';copy.onclick=async event=>{event.stopPropagation();event.preventDefault();try{await navigator.clipboard.writeText(path);copy.replaceChildren(icon('check'));copy.title='Copied'}catch{copy.replaceChildren(icon('error'));copy.title='Copy unavailable; expand the path to select it'}};chip.append(copy);return chip;
 }
 function actionRow(messages,context){
-  const first=messages[0],category=toolCategory(first),row=node('div','action-row'),details=node('details','tool-event conversation-event'),summary=node('summary',''),chips=node('span','action-chips'),body=node('div','event-body'),preview=node('section','chip-preview'),previewBody=node('div',''),close=node('button','preview-close','Close');
-  preview.hidden=true;close.type='button';let selected=null;close.onclick=()=>{preview.hidden=true;if(selected){selected.setAttribute('aria-expanded','false');selected.focus()}selected=null};preview.append(close,previewBody);
-  const showPreview=(button,content)=>{if(selected===button&&!preview.hidden){close.onclick();return}if(selected)selected.setAttribute('aria-expanded','false');selected=button;button.setAttribute('aria-expanded','true');previewBody.replaceChildren(content);preview.hidden=false};
+  const first=messages[0],category=toolCategory(first),row=node('div','action-row'),details=node('details','tool-event conversation-event'),summary=node('summary',''),chips=node('span','action-chips');
+  // Long transcripts have thousands of rows and few are ever opened, so the
+  // chip preview and the details body are built on first use.
+  let preview=null,previewBody=null,selected=null,body=null;
+  const closePreview=()=>{preview.hidden=true;if(selected){selected.setAttribute('aria-expanded','false');selected.focus()}selected=null};
+  const showPreview=(button,content)=>{if(!preview){preview=node('section','chip-preview');previewBody=node('div','');const close=node('button','preview-close','Close');close.type='button';close.onclick=closePreview;preview.append(close,previewBody);row.append(preview)}else if(selected===button&&!preview.hidden){closePreview();return}if(selected)selected.setAttribute('aria-expanded','false');selected=button;button.setAttribute('aria-expanded','true');previewBody.replaceChildren(content);preview.hidden=false};
   row.dataset.searchKind=first.kind==='reasoning'?'thinking':['tool_result','delegation_result','error'].includes(first.kind)?'response':'tool';
   const icon=kindIcon(commandKind(first));icon.title=commandKind(first);icon.dataset.kind=commandKind(first);summary.append(icon,node('span','activity-title',toolLabel(first)),chips);
   let failures=0,missing=0;const search=[];
@@ -1144,13 +1149,12 @@ function actionRow(messages,context){
   const more=node('span','line-details-hint','Details');more.title='Full action details';summary.append(more);
   attachTokenBadge(summary,search,true);details.dataset.searchEntry=search.map(searchText).join(' ');
   // Details are built on first open; long outputs then load in full.
-  const build=()=>{body.replaceChildren();messages.forEach(message=>{const results=context.toolResultsByCall.get(message.call_id)||[];if(messages.length>1)body.append(node('div','tool-detail-label',relativeTime(message.created_at,context.turnStart)+' · '+toolPreview(message)));body.append(toolEvent(message,results,context.turnStart).querySelector('.event-body'))})};
+  const build=()=>{if(!body){body=node('div','event-body');body.addEventListener('originals-loaded',build);details.append(body)}body.replaceChildren();messages.forEach(message=>{const results=context.toolResultsByCall.get(message.call_id)||[];if(messages.length>1)body.append(node('div','tool-detail-label',relativeTime(message.created_at,context.turnStart)+' · '+toolPreview(message)));body.append(toolEvent(message,results,context.turnStart).querySelector('.event-body'))})};
   let built=false;details.materialize=()=>{if(!built){built=true;build()}};
   summary.addEventListener('click',()=>{if(!details.open)details.materialize()});
   // Rebuilding would drop search highlights; those rows keep their Load control.
   details.addEventListener('toggle',()=>{if(!details.open)return;details.materialize();if(search.some(item=>item.text_clipped)&&!body.querySelector('.conversation-find-match'))Promise.all(search.map(loadOriginal)).then(build,()=>{})});
-  body.addEventListener('originals-loaded',build);
-  details.append(summary,body);row.append(details,preview);return row;
+  details.append(summary);row.append(details);return row;
 }
 
 // Which kinds of events a transcript shows. Every rendered entry carries its
@@ -1315,22 +1319,26 @@ function setupConversationMap(panel,list){
   map.setAttribute('aria-label','Conversation position');windowOverlay.setAttribute('aria-hidden','true');windowTrack.append(viewport);windowOverlay.append(windowTrack);
   turns.forEach((turn,index)=>{const marker=node('button',`conversation-map-turn ${turn.dataset.human==='true'?'human':''}`);marker.type='button';marker.title=turn.dataset.prompt||`Turn ${index+1}`;marker.onclick=event=>{event.stopPropagation();turn.scrollIntoView({behavior:'smooth',block:'start'})};track.append(marker)});
   map.append(track,node('span','conversation-map-label','Turns'));document.body.append(map,windowOverlay);let disposed=false;
+  // Turn spans are offsets within the list and change only when it resizes
+  // (stale); scrolling moves just the viewport and the current turn.
+  let stale=true,spans=[];
   const update=()=>{
     if(disposed||!panel.isConnected)return;
-    const panelRect=panel.getBoundingClientRect(),active=document.querySelector('#detail.active')&&panelRect.top<innerHeight/2&&panelRect.bottom>innerHeight/2,metrics=conversationRailMetrics(list);
+    const panelRect=panel.getBoundingClientRect(),active=document.querySelector('#detail.active')&&panelRect.top<innerHeight/2&&panelRect.bottom>innerHeight/2,metrics=conversationRailMetrics(list),scrollerTop=scroller.getBoundingClientRect().top,relaid=stale;
+    if(stale){stale=false;spans=turns.map(turn=>{const rect=turn.getBoundingClientRect();return{top:rect.top-metrics.rect.top,bottom:rect.bottom-metrics.rect.top}})}
     map.classList.toggle('visible',Boolean(active&&metrics.total>innerHeight*.75));windowOverlay.classList.toggle('visible',map.classList.contains('visible'));
     windowOverlay.style.width=document.querySelector('.conversation-find-rail.visible')?'108px':panel.querySelector('.token-map.visible')?'84px':'30px';
     const windowHeight=Math.max(.06,Math.min(1,scroller.clientHeight/metrics.total));
-    viewport.style.top=`${Math.max(0,Math.min(1-windowHeight,(scroller.getBoundingClientRect().top-metrics.rect.top)/metrics.total))*100}%`;
+    viewport.style.top=`${Math.max(0,Math.min(1-windowHeight,(scrollerTop-metrics.rect.top)/metrics.total))*100}%`;
     viewport.style.height=`${windowHeight*100}%`;
-    const positions=turns.map(turn=>{const rect=turn.getBoundingClientRect();return{top:Math.max(0,Math.min(1,(rect.top+scroller.scrollTop-metrics.top)/metrics.total)),height:Math.max(.018,rect.height/metrics.total),current:rect.top<=innerHeight/2&&rect.bottom>=innerHeight/2}});
-    positions.forEach(({top,height,current},index)=>{const marker=track.children[index];marker.style.top=`${top*100}%`;marker.style.height=`${height*100}%`;marker.classList.toggle('current',current)});
+    const middle=innerHeight/2-metrics.rect.top;
+    spans.forEach(({top,bottom},index)=>{const marker=track.children[index];if(relaid){marker.style.top=`${Math.max(0,Math.min(1,top/metrics.total))*100}%`;marker.style.height=`${Math.max(.018,(bottom-top)/metrics.total)*100}%`}marker.classList.toggle('current',top<=middle&&bottom>=middle)});
   };
-  let scheduled=false;const schedule=()=>{if(!scheduled){scheduled=true;requestAnimationFrame(()=>{scheduled=false;update()})}};
+  let scheduled=false;const schedule=()=>{if(!scheduled){scheduled=true;requestAnimationFrame(()=>{scheduled=false;update()})}},relayout=()=>{stale=true;schedule()};
   track.onclick=event=>{if(event.target!==track)return;const ratio=Math.max(0,Math.min(1,(event.clientY-track.getBoundingClientRect().top)/track.clientHeight));scroller.scrollBy({top:list.getBoundingClientRect().top+ratio*list.scrollHeight-scroller.getBoundingClientRect().top-scroller.clientHeight/2,behavior:'smooth'})};
-  scroller.addEventListener('scroll',schedule,{passive:true});addEventListener('resize',schedule);const observer=new ResizeObserver(schedule),railObserver=new MutationObserver(update);observer.observe(list);
+  scroller.addEventListener('scroll',schedule,{passive:true});addEventListener('resize',relayout);const observer=new ResizeObserver(relayout),railObserver=new MutationObserver(update);observer.observe(list);
   for(const rail of [panel.querySelector('.token-map'),document.querySelector('.conversation-find-rail')])if(rail)railObserver.observe(rail,{attributes:true,attributeFilter:['class']});
-  schedule();conversationMapCleanups.push(()=>{disposed=true;scroller.removeEventListener('scroll',schedule);removeEventListener('resize',schedule);observer.disconnect();railObserver.disconnect();map.remove();windowOverlay.remove()});
+  schedule();conversationMapCleanups.push(()=>{disposed=true;scroller.removeEventListener('scroll',schedule);removeEventListener('resize',relayout);observer.disconnect();railObserver.disconnect();map.remove();windowOverlay.remove()});
 }
 function githubPullURL(remote,number){const match=String(remote||'').match(/github\.com(?::|\/)([^/\s]+\/[^/\s]+?)(?:\.git)?$/i);return match?`https:${'//'}github.com/${match[1].replace(/\.git$/i,'')}/pull/${number}`:''}
 function workPullRequests(work){
@@ -1529,37 +1537,46 @@ function setupTokenOverview(panel,conversation={}){
     marker.title=`${entry.label} · ${sample.stream==='main'?'Main context':'Subagent '+sample.stream} · ${sample.compact?compactionLabel(sample.trigger):sample.size.toLocaleString()+' input tokens'+(sample.estimated?' (estimated)':'')+(windows.get(sample.stream)?` · ${Math.round(sample.size/windows.get(sample.stream)*100)}% of ${short(windows.get(sample.stream))} window`:'')}`;
     marker.setAttribute('aria-label',marker.title);marker.onclick=()=>jump(entry);track.append(marker);entry.marker=marker;
   }
-  let scheduled=false,disposed=false;
+  // Marker positions are offsets within the transcript, so scrolling changes
+  // only which groups are in view. Placing markers measures every target, so
+  // it waits for a change in content, size, or filters (stale).
+  let scheduled=false,stale=true,disposed=false,ordered=[];
   const update=()=>{
     scheduled=false;if(disposed||!panel.isConnected)return;
     // Measure everything before writing: a measurement after a style write
     // forces a layout, and one per marker froze long conversations.
-    const rect=panel.getBoundingClientRect(),metrics=conversationRailMetrics(panel.querySelector('.turn-list')),trackHeight=track.clientHeight,groups=new Map();
-    for(const entry of entries){
-      if(entry.turn.hidden)continue;
-      let target=entry.target,collapsed=false;
-      for(let ancestor=target;ancestor&&ancestor!==panel;ancestor=ancestor.parentElement)if(ancestor.tagName==='DETAILS'&&!ancestor.open){target=ancestor;collapsed=true}else if(ancestor.dataset.show&&transcriptHidden(panel,ancestor)){target=ancestor.parentElement;collapsed=true}
-      if(!groups.has(target)){const bounds=target.getBoundingClientRect();groups.set(target,{target,collapsed,entries:[],pixel:Math.max(0,Math.min(1,(bounds.top+scroller.scrollTop-metrics.top)/metrics.total))*trackHeight,inView:bounds.bottom>0&&bounds.top<innerHeight})}
-      groups.get(target).entries.push(entry);
+    const rect=panel.getBoundingClientRect(),list=panel.querySelector('.turn-list'),metrics=conversationRailMetrics(list);
+    if(stale){
+      stale=false;const trackHeight=track.clientHeight,groups=new Map();
+      for(const entry of entries){
+        if(entry.turn.hidden)continue;
+        let target=entry.target,collapsed=false;
+        for(let ancestor=target;ancestor&&ancestor!==panel;ancestor=ancestor.parentElement)if(ancestor.tagName==='DETAILS'&&!ancestor.open){target=ancestor;collapsed=true}else if(ancestor.dataset.show&&transcriptHidden(panel,ancestor)){target=ancestor.parentElement;collapsed=true}
+        if(!groups.has(target)){const bounds=target.getBoundingClientRect();groups.set(target,{target,collapsed,entries:[],pixel:Math.max(0,Math.min(1,(bounds.top+scroller.scrollTop-metrics.top)/metrics.total))*trackHeight,top:bounds.top-metrics.rect.top,bottom:bounds.bottom-metrics.rect.top,inView:null})}
+        groups.get(target).entries.push(entry);
+      }
+      for(const entry of entries)entry.marker.hidden=true;
+      ordered=[...groups.values()].sort((a,b)=>a.pixel-b.pixel);
+      ordered.forEach((group,index)=>{
+        const end=ordered[index+1]?.pixel??trackHeight,height=Math.max(2,end-group.pixel);
+        // Preserve all samples, even in a collapsed group, as a compressed profile.
+        group.entries.forEach((entry,i)=>{
+          const {sample,marker}=entry,h=Math.max(.5,height/group.entries.length),width=sample.compact?100:Math.min(100,sample.size/scale(sample)*100),from=sample.compact?100:Math.min(100,sample.before/scale(sample)*100);
+          marker.hidden=false;marker.style.top=`${group.pixel+i*height/group.entries.length}px`;marker.style.height=`${sample.compact?2:h}px`;marker.style.width='100%';marker.style.setProperty('--context-profile',sample.compact?'none':`polygon(0 0,${from}% 0,${width}% 100%,0 100%)`);
+          marker.classList.toggle('collapsed-context',group.collapsed);marker.classList.toggle('agent-context',sample.stream!=='main');
+        });
+      });
     }
     rail.classList.toggle('visible',rect.top<innerHeight&&rect.bottom>0);
-    for(const entry of entries)entry.marker.hidden=true;
-    const ordered=[...groups.values()].sort((a,b)=>a.pixel-b.pixel);
-    ordered.forEach((group,index)=>{
-      const end=ordered[index+1]?.pixel??trackHeight,height=Math.max(2,end-group.pixel);
-      // Preserve all samples, even in a collapsed group, as a compressed profile.
-      group.entries.forEach((entry,i)=>{
-        const {sample,marker}=entry,h=Math.max(.5,height/group.entries.length),width=sample.compact?100:Math.min(100,sample.size/scale(sample)*100),from=sample.compact?100:Math.min(100,sample.before/scale(sample)*100);
-        marker.hidden=false;marker.style.top=`${group.pixel+i*height/group.entries.length}px`;marker.style.height=`${sample.compact?2:h}px`;marker.style.width='100%';marker.style.setProperty('--context-profile',sample.compact?'none':`polygon(0 0,${from}% 0,${width}% 100%,0 100%)`);
-        marker.classList.toggle('collapsed-context',group.collapsed);marker.classList.toggle('agent-context',sample.stream!=='main');
-        marker.classList.toggle('in-view',group.inView);
-      });
-    });
+    for(const group of ordered){
+      const inView=metrics.rect.top+group.bottom>0&&metrics.rect.top+group.top<innerHeight;
+      if(inView!==group.inView){group.inView=inView;for(const entry of group.entries)entry.marker.classList.toggle('in-view',inView)}
+    }
   };
-  const schedule=()=>{if(!scheduled){scheduled=true;requestAnimationFrame(update)}};
-  const observer=new ResizeObserver(schedule);observer.observe(panel);
-  scroller.addEventListener('scroll',schedule,{passive:true});addEventListener('resize',schedule);panel.addEventListener('toggle',schedule,true);panel.addEventListener('input',schedule);panel.addEventListener('transcript-filter',schedule);requestAnimationFrame(update);
-  conversationMapCleanups.push(()=>{disposed=true;observer.disconnect();scroller.removeEventListener('scroll',schedule);removeEventListener('resize',schedule);panel.removeEventListener('toggle',schedule,true);panel.removeEventListener('input',schedule);panel.removeEventListener('transcript-filter',schedule);rail.remove()});
+  const schedule=()=>{if(!scheduled){scheduled=true;requestAnimationFrame(update)}},relayout=()=>{stale=true;schedule()};
+  const observer=new ResizeObserver(relayout);observer.observe(panel);
+  scroller.addEventListener('scroll',schedule,{passive:true});addEventListener('resize',relayout);panel.addEventListener('toggle',relayout,true);panel.addEventListener('input',relayout);panel.addEventListener('transcript-filter',relayout);requestAnimationFrame(update);
+  conversationMapCleanups.push(()=>{disposed=true;observer.disconnect();scroller.removeEventListener('scroll',schedule);removeEventListener('resize',relayout);panel.removeEventListener('toggle',relayout,true);panel.removeEventListener('input',relayout);panel.removeEventListener('transcript-filter',relayout);rail.remove()});
 }
 
 function detail(id,fromLocation=false){if(!SHARE&&fromLocation&&workspaceInbox?.workspace===id&&document.querySelector('#detail.active'))return workspaceLocation?.();return pageLoad(()=>renderDetail(id,fromLocation))}
