@@ -1230,3 +1230,48 @@ CREATE TRIGGER IF NOT EXISTS text_search_fts_insert_v2 AFTER INSERT ON message_f
 WHEN new.fts_rowid<(SELECT MAX(fts_rowid) FROM message_fts_rows) BEGIN
  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='text_search_generation';
 END;
+
+-- Parallelism (parallelism.go): each conversation's estimated turn and model
+-- spans, derived from its message timestamps. A change to a message that
+-- timing reads, or to which messages an embedded sub-agent owns, marks the
+-- conversation dirty with a fresh token; a build clears only the token it
+-- read, so a change made during the build is derived again.
+CREATE TABLE IF NOT EXISTS parallelism_activity (
+  conversation_id TEXT PRIMARY KEY,
+  turns BLOB NOT NULL,
+  model_spans BLOB NOT NULL,
+  unexplained INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS parallelism_dirty (
+  conversation_id TEXT PRIMARY KEY,
+  revision TEXT NOT NULL) WITHOUT ROWID;
+CREATE TRIGGER IF NOT EXISTS parallelism_messages_insert AFTER INSERT ON messages
+WHEN new.role IN ('user','assistant') OR new.kind IN ('tool_result','delegation_result') BEGIN
+ INSERT INTO parallelism_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS parallelism_messages_delete AFTER DELETE ON messages
+WHEN old.role IN ('user','assistant') OR old.kind IN ('tool_result','delegation_result') BEGIN
+ INSERT INTO parallelism_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS parallelism_messages_update AFTER UPDATE OF conversation_id,role,kind,created_at ON messages
+WHEN (old.conversation_id,old.role,old.kind,old.created_at) IS NOT (new.conversation_id,new.role,new.kind,new.created_at) BEGIN
+ INSERT INTO parallelism_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+ INSERT INTO parallelism_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+-- Messages owned by an embedded sub-agent (not the 'main' session) are not
+-- the conversation's own timing. A cascaded delete finds its session gone.
+CREATE TRIGGER IF NOT EXISTS parallelism_session_messages_insert AFTER INSERT ON agent_session_messages
+WHEN NOT EXISTS(SELECT 1 FROM agent_sessions WHERE id=new.agent_session_id AND native_id='main') BEGIN
+ INSERT INTO parallelism_dirty SELECT conversation_id,hex(randomblob(8)) FROM messages WHERE id=new.message_id
+ ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS parallelism_session_messages_delete AFTER DELETE ON agent_session_messages
+WHEN NOT EXISTS(SELECT 1 FROM agent_sessions WHERE id=old.agent_session_id AND native_id='main') BEGIN
+ INSERT INTO parallelism_dirty SELECT conversation_id,hex(randomblob(8)) FROM messages WHERE id=old.message_id
+ ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;
+CREATE TRIGGER IF NOT EXISTS parallelism_sessions_update AFTER UPDATE OF native_id,conversation_id ON agent_sessions
+WHEN (old.native_id,old.conversation_id) IS NOT (new.native_id,new.conversation_id) BEGIN
+ INSERT INTO parallelism_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+ INSERT INTO parallelism_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
+END;

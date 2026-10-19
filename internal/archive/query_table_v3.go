@@ -147,7 +147,7 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 				}
 			}
 		} else if err == nil {
-			rows, err = s.queryTableRows(ctx, dataset, params, queryFieldsFor(dataset, required...))
+			rows, err = s.queryTableRows(ctx, dataset, params, queryFieldsFor(dataset, required...), s.mapRowsWhere(dataset, where, time.UnixMilli(q.Now))...)
 		}
 	}
 	if err != nil {

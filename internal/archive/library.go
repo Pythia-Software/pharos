@@ -464,8 +464,15 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 				if err != nil && pass.Err() == nil {
 					fmt.Fprintf(os.Stderr, "Library previews: %v\n", err)
 				}
-				wait = 2 * time.Second
-				c.warmCaches(ctx)
+				// Then store changed conversations' parallelism timing, so a
+				// page computes only what changed since (all, after an upgrade).
+				if derived, err := c.refreshParallelism(pass, parallelismBatch, false); err != nil || derived == 0 {
+					if err != nil && pass.Err() == nil {
+						fmt.Fprintf(os.Stderr, "Parallelism activity: %v\n", err)
+					}
+					wait = 2 * time.Second
+					c.warmCaches(ctx)
+				}
 			}
 		}
 		done()

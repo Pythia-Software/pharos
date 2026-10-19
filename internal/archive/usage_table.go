@@ -22,7 +22,7 @@ var usageTokenFields = []string{
 var usageTimeFields = map[string]bool{"hour": true, "day": true, "week": true, "month": true}
 
 func queryFieldsFor(dataset string, names ...string) libraryFields {
-	if dataset != "usage" {
+	if dataset != "usage" && dataset != "parallelism" {
 		return libraryFieldsFor(names...)
 	}
 	return fieldSet(names...)
