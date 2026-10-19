@@ -447,7 +447,20 @@ func TestMCPArchiveStatusDoesNotCallPartialIndexSuccessful(t *testing.T) {
 	}
 }
 
-func TestMCPArchiveStatusSuccessfulNoOpSyncRefreshesLag(t *testing.T) {
+// TestMCPFreshness: get_archive_status and the search tools' freshness agree,
+// for each mix of manual and automatic source states. All rows share one
+// catalog; each replaces the source states.
+func TestMCPFreshness(t *testing.T) {
+	catalog := auditFixture(t)
+	reset := func(t *testing.T) {
+		t.Helper()
+		execTx(t, catalog.DB, "DELETE FROM source_states", "DELETE FROM automatic_source_states")
+	}
+	t.Run("a successful no-op sync refreshes lag", func(t *testing.T) { testMCPNoOpSyncRefreshesLag(t, catalog, reset) })
+	t.Run("search tools agree with archive status", func(t *testing.T) { testMCPFreshnessAgreesAcrossTools(t, catalog, reset) })
+}
+
+func testMCPNoOpSyncRefreshesLag(t *testing.T, catalog *Catalog, reset func(*testing.T)) {
 	for _, test := range []struct {
 		name, coverage, indexError, syncError, reason string
 		pending                                       int
@@ -464,7 +477,7 @@ func TestMCPArchiveStatusSuccessfulNoOpSyncRefreshesLag(t *testing.T) {
 		{name: "recent success does not hide later sync failure", coverage: "complete", recentSync: true, syncError: "capture failed", reason: "sync_error"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			catalog := auditFixture(t)
+			reset(t)
 			host := currentHost().ID
 			recent := now()
 			old := formatTime(time.Now().Add(-48 * time.Hour))
@@ -510,7 +523,7 @@ func TestMCPArchiveStatusSuccessfulNoOpSyncRefreshesLag(t *testing.T) {
 	}
 }
 
-func TestMCPAuditFreshnessAgreesAcrossTools(t *testing.T) {
+func testMCPFreshnessAgreesAcrossTools(t *testing.T, catalog *Catalog, reset func(*testing.T)) {
 	for _, test := range []struct {
 		name, syncError, syncHost, status string
 		manual, oldIndex, automatic       bool
@@ -524,7 +537,7 @@ func TestMCPAuditFreshnessAgreesAcrossTools(t *testing.T) {
 		{name: "no known sources", status: "stale"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			catalog := auditFixture(t)
+			reset(t)
 			host := currentHost()
 			recent := now()
 			if test.manual {
