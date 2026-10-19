@@ -164,8 +164,11 @@ export async function open(t, { url = "/", viewport = { width: 1440, height: 900
     done(request);
   });
 
-  // Resolves once no request is in flight across two animation frames.
-  async function settled(timeout = 5000) {
+  // Resolves once no request is in flight across two animation frames. The
+  // Dashboard Catalog previews every card through the fake server, which takes
+  // several seconds on a busy machine; the limit only bounds a page that never
+  // settles.
+  async function settled(timeout = 20000) {
     const end = Date.now() + timeout;
     for (;;) {
       while (inflight.size) {
