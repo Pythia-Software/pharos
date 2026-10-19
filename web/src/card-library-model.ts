@@ -5,7 +5,7 @@ import { preferences } from "./preferences";
 import { validRollingPeriods } from "./chart-series";
 
 export const CARD_TEMPLATES_KEY = "pharos-card-templates-v1";
-export const cardDatasets: Record<string, string> = { conversation_activity: "Conversation input/output", usage: "Token usage", library: "Workspaces", tool_calls: "Tool calls", skill_usages: "Skills", writing_messages: "Human messages", tl1_attempts: "TL1 attempts", mcp_calls: "MCP responses" };
+export const cardDatasets: Record<string, string> = { conversation_activity: "Conversation input/output", usage: "Token usage", library: "Workspaces", tool_calls: "Tool calls", skill_usages: "Skills", writing_messages: "Human messages", tl1_attempts: "TL1 attempts", mcp_calls: "MCP responses", parallelism: "Parallel agents", findings: "Findings" };
 export type CardTemplateEdit = { title: string; description: string; days: number; cover?: CardCover };
 function overrides(): Record<string, CardTemplateEdit> {
   const value = preferences().get<unknown>(CARD_TEMPLATES_KEY, {});

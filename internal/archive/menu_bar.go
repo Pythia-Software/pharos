@@ -165,12 +165,10 @@ func (s *Server) menuBarUsage(ctx context.Context) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	values, err := s.Catalog.UIPreferences(ctx)
+	prefs, err := s.Catalog.carbonPreferences(ctx)
 	if err != nil {
 		return nil, err
 	}
-	var prefs map[string]any
-	_ = json.Unmarshal(values["pharos-carbon-v1"], &prefs)
 	for _, window := range summary["windows"].([]*usageSummaryWindow) {
 		if window.Key == "24h" {
 			return map[string]any{"generated_at": summary["generated_at"], "human_words": window.HumanWords,
@@ -184,45 +182,12 @@ func (s *Server) menuBarUsage(ctx context.Context) (map[string]any, error) {
 // Matches the Usage page, including custom grid, independent PUE scenario,
 // and the Watershed input sensitivity. No new carbon assumptions.
 func menuBarCarbon(doc carbonDocument, tokens map[string]map[string]float64, prefs map[string]any) float64 {
-	scenario := func(key string) string {
-		value := firstString(prefs[key])
-		if value == "low" || value == "high" {
-			return value
-		}
-		return "central"
-	}
-	gridKey := defaultString(prefs["grid"], doc.DefaultGrid)
-	grid := 0.0
-	found := false
-	for _, candidate := range doc.Grids {
-		if candidate.Key == gridKey {
-			grid, found = candidate.GramsPerKWh, true
-		}
-	}
-	if gridKey == "custom" {
-		custom, _ := number(prefs["customGrid"])
-		grid, found = max(0, custom), true
-	}
-	if !found {
-		for _, candidate := range doc.Grids {
-			if candidate.Key == doc.DefaultGrid {
-				grid = candidate.GramsPerKWh
-			}
-		}
-	}
-	scale := 1.0
-	if strings.EqualFold(firstString(prefs["inputSensitivity"]), "third") {
-		scale = 5.0 / 3
-	}
+	a := doc.assumptions(prefs)
 	wh := 0.0
 	for _, tier := range doc.Tiers {
 		for _, category := range carbonCategories {
-			ratio := 1.0
-			if category != "output" {
-				ratio = doc.CategoryRatios[category].get(scenario("scenario")) * scale
-			}
-			wh += tokens[tier.Key][category] / 1e6 * tier.OutputWhPerMTok.get(scenario("scenario")) * ratio
+			wh += a.wh(tier.Key, category, tokens[tier.Key][category])
 		}
 	}
-	return wh * doc.PUE.get(scenario("pueScenario")) * grid / 1000
+	return a.grams(wh)
 }

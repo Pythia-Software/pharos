@@ -42,7 +42,7 @@ type Detail = Card & {
 };
 type Week = { start: string; events: number; exposure: number; rate?: number | null; hollow: boolean; after: boolean; cost_usd: number };
 type List = "open" | "watching" | "wins" | "dismissed";
-type Route = { finding: string; tab: "overview" | "evidence" | "prompt"; view: "" | "settings"; list: List; repo: string };
+type Route = { finding: string; tab: "overview" | "evidence" | "prompt"; view: "" | "settings" | "table"; list: List; repo: string };
 type Copy = (text: string) => Promise<void>;
 type Act = (id: string, body: Row, done?: string) => Promise<boolean>;
 
@@ -111,7 +111,7 @@ function readRoute(): Route {
   return {
     finding: params.get("finding") ?? "",
     tab: tab === "evidence" || tab === "prompt" ? tab : "overview",
-    view: params.get("view") === "settings" ? "settings" : "",
+    view: params.get("view") === "settings" ? "settings" : params.get("view") === "table" ? "table" : "",
     list: list === "watching" || list === "wins" || list === "dismissed" ? list : "open",
     repo: params.get("repo") ?? "",
   };
@@ -1041,7 +1041,8 @@ function FindingsList({ overview, route, act, rank, setRank, onReview, newIds }:
         <p className="muted">Recurring patterns in your agents' work that a change to a repository, its instructions, or a harness setting can fix. Each is measured before and after you hand it to an agent.</p>
         {built ? <p className="findings-updated">{status.running ? <>Updating{status.phase ? ` · ${status.phase}` : ""}… </> : null}Updated {whenText(status.built_at)} from {counted(Math.round(num(status.conversations_28d)), "conversation")}.</p> : null}
       </div>
-      <button type="button" className="findings-button" onClick={() => navigate("/settings/optimization")}><Icon name="settings" />Settings</button>
+      <span className="findings-heading-actions"><button type="button" className="findings-button" onClick={() => navigate("/findings?view=table")}>Table</button>
+      <button type="button" className="findings-button" onClick={() => navigate("/settings/optimization")}><Icon name="settings" />Settings</button></span>
     </div>
     {status.error ? <p className="findings-error" role="alert">The last refresh failed: {status.error}</p> : null}
     {!built ? <Building status={status} /> : !findings.length && !overview.wins?.length && !overview.cart?.length ? <EmptyOpen overview={overview} /> : <>
@@ -1082,7 +1083,7 @@ function FindingsList({ overview, route, act, rank, setRank, onReview, newIds }:
 
 // ---------------------------------------------------------------- page
 
-export function FindingsPage({ copy }: { copy: Copy }) {
+export function FindingsPage({ copy, table }: { copy: Copy; table?: React.ReactNode }) {
   const [route, setRoute] = useState<Route>(readRoute);
   const [overview, setOverview] = useState<Overview | null>(latest);
   const [error, setError] = useState("");
@@ -1158,12 +1159,19 @@ export function FindingsPage({ copy }: { copy: Copy }) {
 
   let body: React.ReactNode;
   if (route.view === "settings") body = <FindingsSettings overview={overview} reload={reload} />;
+  else if (route.view === "table") body = null;
   else if (route.finding) body = <FindingDetail id={route.finding} tab={route.tab} overview={overview} act={act} rank={rank} onReview={next => setReview(next.target)} newIds={newIds} />;
   else if (!overview) body = <div className="findings-page">{error ? <p className="findings-error" role="alert">{error}</p> : <p className="findings-muted">Loading findings…</p>}</div>;
   else body = <FindingsList overview={overview} route={route} act={act} rank={rank} setRank={setRank} onReview={next => setReview(next.target)} newIds={newIds} />;
 
+  // The table stays mounted so its query survives visits to a finding.
   return <>
     {body}
+    {table ? <div className="findings-page findings-table" hidden={route.view !== "table"}>
+      <div className="view-heading findings-heading"><div><h1>Findings table</h1><p className="muted">Every finding as a row, with its state, kind of fix, likely monthly saving and verified results. Group, filter and chart them like any table.</p></div>
+        <button type="button" className="findings-button" onClick={() => navigate("/findings")}><Icon name="arrow-left" />Findings</button></div>
+      {table}
+    </div> : null}
     {group ? <ReviewDialog group={group} copy={copy} onClose={() => setReview("")} onCopied={() => { setReview(""); void reload(); say("Copied. Measuring has started."); }} /> : null}
     <div className={`findings-toast ${toast ? "shown" : ""}`} role="status" aria-live="polite">{toast}</div>
   </>;

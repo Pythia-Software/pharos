@@ -9,7 +9,8 @@ import { readTextSearch, textFindParameters } from "./text-search-model";
 import { cardCoverQuery, humanStudyCoverMatches, type CardCover } from "./card-cover";
 import { filterBoxSamples } from "./compact-box-model";
 import { createHumanStudyLoader, clearHumanStudyCache, type HumanStudyPreview } from "./human-study";
-import type { DraftCoverData } from "./draft-cover";
+import { activityPresentation } from "./machine-activity-data";
+import { buildCardTrend, cardTrendDays, cardTrendQueries, trendSchemas, usesCardTrend } from "./card-trend";
 
 export type PreviewMetric = { clause: AggregationClause; result: AggregationResultEntry };
 export type QueryPreview = {
@@ -25,7 +26,6 @@ export type QueryPreview = {
   buckets?: ChartBucket[]; series?: ChartSeries[]; excerpt?: string;
   timeline?: CardCover["timeline"];
   study?: HumanStudyPreview;
-  draft?: DraftCoverData;
 };
 type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean };
 export type PreviewJob = { id: string; dataset: QueryDataset; query: QueryState; schema: FieldSchema; options?: PreviewOptions };
@@ -93,6 +93,14 @@ function filterScatterSamples(result: AggregationResultEntry, minimum?: number):
     processedRows: buckets.reduce((n, bucket) => n + bucket.count, 0) };
 }
 
+const colorScopes = new Set(["provider", "effort", "model_family", "model_effort"]);
+function keyLabel(schema: FieldSchema, field: string): ((key: unknown) => string) | undefined {
+  if (field === "activity") return key => activityPresentation(String(key ?? "")).label;
+  const values = schema.fields.find(item => item.name === field)?.filter?.values;
+  if (colorScopes.has(field) || values?.source !== "static" || !values.options.some(option => typeof option === "object" && option.label !== option.value)) return;
+  return key => { const option = values.options.find(option => typeof option === "object" && option.value === key); return typeof option === "object" ? option.label : String(key ?? "Unspecified"); };
+}
+
 function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema: FieldSchema): QueryPreview {
   const options = job.options ?? {}, recipe = options.recipe;
   const searchNote = payload.find?.search ? payload.find.search.complete ? "This search batch" : "Partial search batch; open the search to continue" : undefined;
@@ -138,7 +146,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   // distribution medians or paired axes to manufacture a grand total.
   const additive = !clause.expression && !clause.expressionY && !clause.distribution && ["sum", "count"].includes(clause.op);
   const total = additive ? numeric.reduce((sum, bucket) => sum + Number(bucket.value), 0) : result.processedRows ?? values.reduce((sum, bucket) => sum + bucket.count, 0);
-  const countUnit = ({ tool_calls: "calls", writing_messages: "messages", skill_usages: "records", tl1_attempts: "attempts" } as Partial<Record<QueryDataset, string>>)[job.dataset] ?? "rows";
+  const countUnit = ({ tool_calls: "calls", writing_messages: "messages", skill_usages: "records", tl1_attempts: "attempts", findings: "findings" } as Partial<Record<QueryDataset, string>>)[job.dataset] ?? "rows";
   const unit = clause.display?.format ? "" : clause.op === "count" ? countUnit : clause.field?.includes("cost") ? "USD" : clause.field?.includes("tokens") ? "tokens" : clause.field?.includes("words") ? "words" : clause.field === "duration_ms" ? "ms" : clause.field?.endsWith("_count") ? countUnit : recipe?.unit ?? "";
   const scalar = !clause.groupBy.length && values.length === 1 && !clause.distribution;
   // Groups hidden by minCount are outside groupCount and Other, so the shown buckets are not the whole population.
@@ -171,7 +179,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     }).filter(Boolean).join(" · ") || preview.groupEvidence?.[JSON.stringify(values[0].keys)];
   }
   if (query.grouping && recipe?.exploration?.labelFields && payload.rows?.length) {
-    preview.groupLabels = Object.fromEntries(payload.rows.map(row => [JSON.stringify(query.grouping!.keys.map(key => row[key] ?? null)), recipe.exploration!.labelFields!.map(field => String(row[field] ?? "Unspecified")).join(" · ")]));
+    preview.groupLabels = Object.fromEntries(payload.rows.map(row => [JSON.stringify(query.grouping!.keys.map(key => row[key] ?? null)), recipe.exploration!.labelFields!.map(field => keyLabel(schema, field)?.(row[field]) ?? String(row[field] ?? "Unspecified")).join(" · ")]));
   }
   // A ranked cover needs values and evidence as well as bars. Match companion
   // metrics by their actual group keys, never by bucket position.
@@ -185,11 +193,19 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
         context: evidence && typeof evidence.value === "number" ? `${formatPreviewValue(evidence.value, "")} ${companion!.clause.label ?? "records"}` : `${bucket.count.toLocaleString()} ${countUnit}` };
     });
   }
+  // Covers name grouped keys the way their pages do: machine activities, and
+  // labelled enum options whose values are identifiers rather than words.
+  const keyLabels = clause.groupBy.map(field => keyLabel(schema, field));
+  if (!preview.groupLabels && clause.groupBy[0] !== "day" && keyLabels.some(Boolean)) {
+    preview.groupLabels = Object.fromEntries(values.map(bucket => [JSON.stringify(bucket.keys), bucket.keys.map((key, i) => keyLabels[i]?.(key) ?? String(key ?? "Unspecified")).join(" · ")]));
+  }
   // Existing daily covers keep the Usage palette, calendar gaps and exact Other.
   if (!clause.expression && !clause.distribution && (!clause.display || clause.display.kind === "auto") && clause.groupBy[0] === "day" && clause.op === "sum" && numeric.length) {
     preview.timeline = (options.cover ?? recipe?.cover)?.timeline;
     if (preview.timeline?.percent && (limited || result.buckets.some(bucket => bucket.error || bucket.yError))) throw new Error("Complete daily totals are required for percentage shares.");
-    const entries = numeric.map(bucket => [String(bucket.keys[0]), bucket.keys.length > 1 ? bucket.keys.slice(1).map(key => String(key ?? "Unspecified")).join(" · ") : clause.label ?? "Total", Number(bucket.value)] as [string, string, number]);
+    // Recorded durations chart as hours; milliseconds make unreadable axes.
+    const scale = clause.field === "duration_ms" ? 36e5 : 1;
+    const entries = numeric.map(bucket => [String(bucket.keys[0]), bucket.keys.length > 1 ? bucket.keys.slice(1).map((key, i) => keyLabels[i + 1]?.(key) ?? String(key ?? "Unspecified")).join(" · ") : clause.label ?? "Total", Number(bucket.value) / scale] as [string, string, number]);
     const observed = [...new Set(entries.map(([key]) => key))].sort();
     const days = options.window?.days ?? Math.min(90, observed.length);
     const bound = options.window && (query.grouping?.source.where ?? query.where).find(term => "field" in term && term.field === options.window!.field && term.op === ">=");
@@ -213,7 +229,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   // A headline is a real complete additive measure, never a sum of rates,
   // distributions, errors, or the returned subset of a ranked population.
   if ((options.cover ?? recipe?.cover)?.showHeadline !== false && ready && additive && !limited && !preview.groupSummary && numeric.length === values.length && !result.buckets.some(bucket => bucket.error || bucket.yError) && Number.isFinite(total)) {
-    preview.headlineMetric = { value: clause.display?.format ? formatMetricOutput(total, clause.display.format).text : formatPreviewValue(total, unit), unit: unit && !["USD", "ms"].includes(unit) ? unit : "", ...(unit === "USD" ? { label: "API equivalent" } : {}) };
+    preview.headlineMetric = { value: clause.display?.format ? formatMetricOutput(total, clause.display.format).text : formatPreviewValue(total, unit), unit: unit && !["USD", "ms"].includes(unit) ? unit : "", ...(unit === "USD" ? { label: job.dataset === "findings" ? "likely a month" : "API equivalent" } : {}) };
   }
   preview.action = recipe?.action ?? recipe?.exploration?.action;
   return preview;
@@ -285,9 +301,24 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
       if (!signal?.aborted) publish(job.id, { coverHeight: (job.options!.cover ?? job.options!.recipe!.cover)?.height, state: study.value === undefined ? "empty" : "ready", total: study.value ?? 0, summary: study.sampleLabel, note: [job.options!.recipe!.note, study.detail].filter(Boolean).join(" · "), action: job.options!.recipe!.action, study });
     } catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
   }));
+  const trendJobs = jobs.filter(job => !costStudies.has(job) && usesCardTrend(job) && !searchContext(job));
+  const trends = new Set(trendJobs);
+  const trendWork = Promise.all(trendJobs.map(async job => {
+    try {
+      const recipe = job.options!.recipe!, trend = recipe.trend!, lookback = trend.lookback ?? job.options!.window!.days;
+      const source = trend.dataset ? { ...job, dataset: trend.dataset, schema: trendSchemas[trend.dataset] } : job, ctx = await context(source);
+      const results = await Promise.all(cardTrendQueries(recipe.where ?? [], trend, cardTrendDays(lookback, Boolean(trend.completeDays), clock.getTime()).days).map(async query => {
+        const request = toMetricQuery(query, ctx.schema, ctx.execution);
+        if (request.diagnostics.length) throw new Error(request.diagnostics.map(d => d.message).join(" · "));
+        return (await fetchPreview<AggregationResult>(`/api/query/${source.dataset}/metrics`, signal, request)).metrics;
+      }));
+      const { study, observations } = buildCardTrend(trend, lookback, results, clock.getTime()), ready = observations > 0 && Boolean(study.points?.some(point => point !== null));
+      if (!signal?.aborted) publish(job.id, { coverHeight: (job.options!.cover ?? recipe.cover)?.height, state: ready ? "ready" : "empty", emptyLabel: ready ? undefined : recipe.emptyLabel, total: study.value ?? 0, summary: study.sampleLabel, note: [recipe.note, study.detail].filter(Boolean).join(" · "), action: recipe.action, study });
+    } catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
+  }));
   const resolved: { job: PreviewJob; query: QueryState; search: string }[] = [];
   for (const original of jobs) {
-    if (studies.has(original) || costStudies.has(original)) continue;
+    if (studies.has(original) || costStudies.has(original) || trends.has(original)) continue;
     let job = original;
     try {
       if (original.options?.recipe && (original.query.grouping || original.options.cover)) {
@@ -384,7 +415,7 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
   }
   let cursor = 0;
   async function work() { while (cursor < tasks.length && !signal?.aborted) await run(tasks[cursor++]); }
-  await Promise.all([work(), work(), work(), studyWork, costWork]);
+  await Promise.all([work(), work(), work(), studyWork, costWork, trendWork]);
 }
 
 export async function loadQueryPreview(dataset: QueryDataset, query: QueryState, schema: FieldSchema, options: PreviewOptions = {}, signal?: AbortSignal): Promise<QueryPreview> {

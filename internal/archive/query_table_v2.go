@@ -83,6 +83,10 @@ func sqliteQuerySchema(dataset string) (qt.Schema, error) {
 		return PharosSkillUsagesSchema(), nil
 	case "tl1_attempts":
 		return PharosTl1AttemptsSchema(), nil
+	case "findings":
+		return PharosFindingsSchema(), nil
+	case "parallelism":
+		return PharosParallelismSchema(), nil
 	}
 	return qt.Schema{}, fmt.Errorf("unknown query-table dataset %q", dataset)
 }
@@ -809,7 +813,13 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 			}
 			sourceRows, find, err = s.libraryRows(ctx, params, libraryFieldsFor(sourceNames...), &evidence, early)
 		} else {
-			sourceRows, err = s.queryTableRows(ctx, dataset, params, queryFieldsFor(dataset, sourceNames...))
+			var where []querytable.WhereTerm
+			if rowRequest != nil && metrics == nil {
+				where = rowRequest.Where
+			} else if metrics != nil && rowRequest == nil {
+				where = metrics.Where
+			}
+			sourceRows, err = s.queryTableRows(ctx, dataset, params, queryFieldsFor(dataset, sourceNames...), s.mapRowsWhere(dataset, where, clock)...)
 		}
 		if err != nil {
 			return queryV2ExecutionResult{}, err

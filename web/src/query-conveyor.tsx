@@ -1,5 +1,5 @@
 import React, { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { QueryPreview, QuerySuggestion } from "./curiosity-data";
+import { suggestionWindowLabel, type QueryPreview, type QuerySuggestion } from "./curiosity-data";
 import { QueryCard } from "./query-card";
 import { cardLoadingPresentation } from "./card-loading-model";
 import { Icon } from "./icons";
@@ -41,8 +41,8 @@ type BeltActions = { open: (url: string) => void; keep: (item: QuerySuggestion) 
 const BeltCard = memo(function BeltCard({ item, preview, xray, lean, index, revealable, actions }: {
   item: QuerySuggestion; preview?: QueryPreview; xray: boolean; lean: number; index: number; revealable: boolean; actions: React.MutableRefObject<BeltActions | null>;
 }) {
-  return <QueryCard discovery xray={xray} id={item.instanceId} title={item.title} description={item.description} actionLabel={item.action} url={item.url} windowLabel={`Last ${item.window.days}d`} category={item.category} lean={lean}
-    loadingSpec={cardLoadingPresentation(item.query, { recipe: item, cover: item.cover, days: item.window.days })} preview={preview} onReveal={revealable ? () => actions.current!.reveal(index) : undefined}
+  return <QueryCard discovery xray={xray} id={item.instanceId} title={item.title} description={item.description} actionLabel={item.action} url={item.url} windowLabel={suggestionWindowLabel(item)} category={item.category} lean={lean}
+    loadingSpec={cardLoadingPresentation(item.query, { recipe: item, cover: item.cover, days: item.window?.days })} preview={preview} onReveal={revealable ? () => actions.current!.reveal(index) : undefined}
     onOpen={() => actions.current!.open(item.url)} onKeep={() => actions.current!.keep(item)} onDragStart={event => actions.current!.dragStart(event, item)} onDragEnd={() => actions.current!.dragEnd()} />;
 });
 

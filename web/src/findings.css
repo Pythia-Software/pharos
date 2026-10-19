@@ -7,7 +7,8 @@
 .findings-page .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .findings-heading { align-items: flex-start; }
 .findings-heading > div { max-width: 780px; }
-.findings-heading > .findings-button { flex: none; margin-top: 6px; }
+.findings-heading > .findings-button, .findings-heading-actions { flex: none; margin-top: 6px; }
+.findings-heading-actions { display: flex; gap: 8px; }
 .findings-updated { margin: 6px 0 0; color: var(--muted); font-size: var(--fs-sm); }
 .findings-page .num, .findings-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 

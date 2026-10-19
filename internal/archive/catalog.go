@@ -36,6 +36,7 @@ type Catalog struct {
 	quietVersion, warmVersion int64
 	tools                     toolLedgerState
 	gitMainMu                 sync.Mutex
+	parallelismMu             sync.Mutex // serializes storing parallelism activity
 	// authorship tracks the human-authorship rebuild.
 	authorship authorshipState
 	// findings tracks the findings pass (see findings.go).
@@ -194,6 +195,9 @@ func (c *Catalog) Initialize() error {
 	}
 	if err := c.ensureAnalysisPartitions(); err != nil {
 		return fmt.Errorf("initialize analysis partitions: %w", err)
+	}
+	if err := c.ensureParallelismActivity(); err != nil {
+		return fmt.Errorf("initialize parallelism activity: %w", err)
 	}
 	if err := c.ensureTL1Schema(); err != nil {
 		return fmt.Errorf("initialize TL1 tables: %w", err)

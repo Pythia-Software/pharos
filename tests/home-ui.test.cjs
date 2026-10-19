@@ -1290,7 +1290,7 @@ test('every active catalog card preserves its displayed data after collection an
       const card = page.locator(`#card-${recipe.id}`);
       expected.set(recipe.id, await signature(card));
       await card.getByRole('button', { name: /^Collect / }).click();
-      const days = recipe.days?.length === 1 ? recipe.days[0] : 7;
+      const days = recipe.period ?? (recipe.days?.length === 1 ? recipe.days[0] : 7);
       await assertEventually(async () => await page.evaluate(({ id, days }) => window.pharosPrefs.get('pharos-bookmarks-v1', []).some(card => card.templateId === `${id}:${days}`), { id: recipe.id, days })).catch(async error => assert.fail(`${recipe.id}: ${await page.locator('.card-library-feedback').innerText()} (${error.message})`));
     }
     await assertEventually(async () => data.preferences['pharos-bookmarks-v1']?.length === active.length);

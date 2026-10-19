@@ -80,7 +80,8 @@ export function enrichCardRecipe(recipe: QueryRecipe): QueryRecipe {
   // Daily covers keep their timeline; the destination adds comparable columns
   // at the same day/subject grain, rather than opening thousands of raw facts.
   const metric = recipe.measures[0];
-  if (!exploration && metric?.op === "sum" && metric.field && metric.groupBy[0] === "day") {
+  // A formula reads source fields, so it cannot cover the grouped daily rows.
+  if (!exploration && metric?.op === "sum" && metric.field && !metric.expression && metric.groupBy[0] === "day") {
     const primary = sum(metric.field, metric.label ?? "Total");
     const summaries = [primary, count("card_count", recipe.dataset === "writing_messages" ? "Messages" : "Usage records")];
     if (recipe.dataset === "usage") {

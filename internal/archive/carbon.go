@@ -2,10 +2,15 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"hash/fnv"
+	"math"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -233,6 +238,113 @@ func carbonTokens(row map[string]any) map[string]int64 {
 		"cache_read":     integer(row["cache_read_input_tokens"]),
 		"output":         integer(row["output_tokens"]),
 	}
+}
+
+// carbonAssumptions are the factors the Carbon page's settings() selects for
+// the reader's saved choices (the pharos-carbon-v1 preference). Usage rows
+// and the menu bar apply them with calculate()'s arithmetic, so their totals
+// match the page.
+type carbonAssumptions struct {
+	perMillion map[string]float64 // IT Wh per million output tokens, by tier
+	ratio      map[string]float64 // energy relative to output, by category
+	pue, grid  float64
+}
+
+func (doc carbonDocument) assumptions(prefs map[string]any) carbonAssumptions {
+	scenario := func(key string) string {
+		value := firstString(prefs[key])
+		if value == "low" || value == "high" {
+			return value
+		}
+		return "central"
+	}
+	gridKey := defaultString(prefs["grid"], doc.DefaultGrid)
+	grid := 0.0
+	found := false
+	for _, candidate := range doc.Grids {
+		if candidate.Key == gridKey {
+			grid, found = candidate.GramsPerKWh, true
+		}
+	}
+	if gridKey == "custom" {
+		custom, _ := number(prefs["customGrid"])
+		if math.IsNaN(custom) {
+			custom = 0
+		}
+		grid, found = max(0, custom), true
+	}
+	if !found {
+		for _, candidate := range doc.Grids {
+			if candidate.Key == doc.DefaultGrid {
+				grid = candidate.GramsPerKWh
+			}
+		}
+	}
+	scale := 1.0
+	if strings.EqualFold(firstString(prefs["inputSensitivity"]), "third") {
+		scale = 5.0 / 3
+	}
+	a := carbonAssumptions{perMillion: map[string]float64{}, ratio: map[string]float64{"output": 1},
+		pue: doc.PUE.get(scenario("pueScenario")), grid: grid}
+	for _, tier := range doc.Tiers {
+		a.perMillion[tier.Key] = tier.OutputWhPerMTok.get(scenario("scenario"))
+	}
+	for _, category := range carbonCategories[:len(carbonCategories)-1] {
+		a.ratio[category] = doc.CategoryRatios[category].get(scenario("scenario")) * scale
+	}
+	return a
+}
+
+// wh is IT energy before PUE, in calculate()'s operation order.
+func (a carbonAssumptions) wh(tier, category string, tokens float64) float64 {
+	return tokens / 1e6 * a.perMillion[tier] * a.ratio[category]
+}
+
+func (a carbonAssumptions) grams(wh float64) float64 { return wh * a.pue * a.grid / 1000 }
+
+// key identifies the resolved factors, so values derived from them can be
+// cached until the reader's settings or the factors file change.
+func (a carbonAssumptions) key() string {
+	hash := fnv.New64a()
+	fmt.Fprint(hash, a.perMillion, a.ratio, a.pue, a.grid)
+	return strconv.FormatUint(hash.Sum64(), 36)
+}
+
+// carbonPreferences reads the Carbon page's saved assumptions.
+func (c *Catalog) carbonPreferences(ctx context.Context) (map[string]any, error) {
+	var value string
+	err := c.reader().QueryRowContext(ctx, "SELECT value FROM ui_preferences WHERE key='pharos-carbon-v1'").Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	var prefs map[string]any
+	_ = json.Unmarshal([]byte(value), &prefs)
+	return prefs, err
+}
+
+func (c *Catalog) carbonAssumptions(ctx context.Context) (carbonAssumptions, error) {
+	doc, err := loadCarbonDocument()
+	if err != nil {
+		return carbonAssumptions{}, err
+	}
+	prefs, err := c.carbonPreferences(ctx)
+	return doc.assumptions(prefs), err
+}
+
+// withCarbon copies usage rows with their estimated facility energy and
+// emissions under the given assumptions. Rows carry carbon_tier already.
+// withCarbon fills the estimate columns in place; callers pass rows they just
+// built, so no shared cache copy is modified.
+func withCarbon(rows []map[string]any, a carbonAssumptions) []map[string]any {
+	for _, row := range rows {
+		tier, tokens, wh := firstString(row["carbon_tier"]), carbonTokens(row), 0.0
+		for _, category := range carbonCategories {
+			wh += a.wh(tier, category, float64(tokens[category]))
+		}
+		row["energy_wh"], row["co2e_g"] = wh*a.pue, a.grams(wh)
+		row["energy_kwh"], row["co2e_kg"] = wh*a.pue/1000, a.grams(wh)/1000
+	}
+	return rows
 }
 
 type carbonWindow struct {

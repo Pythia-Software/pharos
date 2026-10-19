@@ -1,11 +1,11 @@
 import { decodeQueryStrict, localQuerySnapshotCache, encodeQuery, type QueryState } from "@pythia-software/query-table-core";
 
-export const queryDatasets = ["library", "usage", "conversation_activity", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts"] as const;
+export const queryDatasets = ["library", "usage", "conversation_activity", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "parallelism", "findings"] as const;
 export type QueryDataset = typeof queryDatasets[number];
 export type RollingWindow = { days: number; field: string; mode?: "relative" | "calendar" };
 const timeFields: Partial<Record<QueryDataset, string[]>> = {
   conversation_activity: ["event_at"], mcp_calls: ["called_at"], library: ["activity_at"], usage: ["first_usage_at"], tool_calls: ["started_at"],
-  skill_usages: ["created_at"], writing_messages: ["sent_at"], tl1_attempts: ["started_at"],
+  skill_usages: ["created_at"], writing_messages: ["sent_at"], tl1_attempts: ["started_at"], parallelism: ["started_at"], findings: ["first_seen_at"],
 };
 export const rollingWindowDays = [1, 7, 30, 90, 180, 365] as const;
 export function rollingWindowField(dataset: QueryDataset): string | undefined { return timeFields[dataset]?.[0]; }
@@ -90,6 +90,11 @@ export function queryURL(dataset: QueryDataset, query: QueryState, window?: Roll
     path = "/usage";
     params.set("usage", dataset === "usage" ? "tokens" : dataset === "conversation_activity" ? "conversations" : "writing");
     if (dataset === "writing_messages") params.set("writing", "messages");
+  } else if (dataset === "parallelism") {
+    path = "/usage";
+    params.set("usage", "tokens"); params.set("machine_view", "parallelism");
+  } else if (dataset === "findings") {
+    path = "/findings"; params.set("view", "table");
   } else if (dataset === "mcp_calls") path = "/mcp";
   else if (dataset === "tl1_attempts") path = "/tl1/runs";
   if (window) {
@@ -107,6 +112,8 @@ export function queryFromURL(url: string, fallback?: QueryState): { dataset: Que
     // Older URLs can carry offscreen tables' state as well. The route and
     // selected tab decide the dataset, rather than the first q_* parameter.
     const dataset: QueryDataset | undefined = path === "/library" || path === "/" ? "library"
+      : path === "/usage" && params.get("machine_view") === "parallelism" && params.has("q_parallelism") ? "parallelism"
+      : path === "/findings" ? params.get("view") === "table" ? "findings" : undefined
       : path === "/usage" ? params.get("usage") === "conversations" ? "conversation_activity" : params.get("usage") === "writing" ? params.get("writing") === "messages" ? "writing_messages" : "writing" : "usage"
       : path === "/tools" ? params.get("tools_view") === "summary" ? "tools" : params.get("tools_view") === "skills" ? "skill_usages" : "tool_calls"
       : path === "/mcp" ? "mcp_calls" : path.startsWith("/tl1") ? "tl1_attempts" : undefined;

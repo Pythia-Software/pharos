@@ -19,7 +19,7 @@ define the release contract. Optional worktree linking is described in
 | --- | --- |
 | Group link columns (`op: "link"`), `linkTargets`, `onNavigate` | Every table's `DataTable` registers each dataset as a link target (`web/src/query-link-targets.ts`, built on `queryURL`), so template and query links, including those in saved or shared queries, open the right page. Plain clicks route through `pharosNavigate` without reloading; modified clicks keep native behavior. The Usage **Work** preset links each title to `/work/{workspace_id}`. |
 | Query patches (`applyPatch`, `matchPatch`, `removePatch`) | Usage **Group by** and **Compare** presets are patches that own grouping, columns and order. Highlighting matches a preset's grouping while ignoring HAVING, sorting, paging and layout edits. Link destinations can also carry patches. |
-| Per-metric `where` and `minCount`, `hiddenGroups` | The Go adapter advertises and executes both on v2 metrics and v3 queries for all ten datasets. Pharos's host paths honor them: the tool-call count fast path steps aside for filtered metrics, map-backed staging includes metric filter fields, and Usage metrics filtered on `hour` read hourly populations. Home cards check the advertised flags, note hidden groups, and never present a total when groups are hidden. |
+| Per-metric `where` and `minCount`, `hiddenGroups` | The Go adapter advertises and executes both on v2 metrics and v3 queries for every dataset. Pharos's host paths honor them: the tool-call count fast path steps aside for filtered metrics, map-backed staging includes metric filter fields, and Usage metrics filtered on `hour` read hourly populations. Home cards check the advertised flags, note hidden groups, and never present a total when groups are hidden. |
 | Per-metric errors | One failing metric no longer fails its batch. Pharos discovers each metric's inputs separately, so an invalid metric cannot fail its siblings' staging or the Usage hourly split. |
 | Metric drilldown (`onInspect`, `inspectBucketQuery`, `groupSourceQuery`) | Clicking a metric bar, list row, value, box cohort or histogram bin filters the table to those records, including the metric's own filter. A grouped row's **Records** action uses `groupSourceQuery` with computed fields, and is disabled when a key cannot be matched exactly. |
 | `withGroupingKeys` and `exitGrouping` | The Usage **Rows** chip uses `exitGrouping`; presets enter and re-key grouping through `applyPatch`. |
@@ -33,7 +33,7 @@ define the release contract. Optional worktree linking is described in
 
 | Release feature | Pharos integration |
 | --- | --- |
-| Server grouping, HAVING, summaries, MEDIAN and representative rows | All ten backend datasets negotiate V3; Usage presets and Home comparison tables use it. Source actions remain available through Records. |
+| Server grouping, HAVING, summaries, MEDIAN and representative rows | Every backend dataset negotiates V3; Usage presets and Home comparison tables use it. Source actions remain available through Records. |
 | Calendar intervals, IANA timezones, empty buckets and explicit ranges | Standard metric workbench and Home previews execute on the server, with dependency, population and scratch budgets. Daily Usage facts retain their daily granularity. |
 | Canonical computed source predicates, grouping and partial capabilities | Capability discovery uses `DescribeComputedPartialIn` on the V3 dataset; invalid graphs stay editable with per-definition diagnostics. V2 save validation uses the same partial API in a host transaction. Catalogues over 64 definitions are described in bounded batches. |
 | Independent collection URL parameters and explicit router lifecycle | Every table supplies top-level `queryParameter`; `pharos:route` calls `restoreLocation`. `restoration.ready` gates host query work and `active` pauses hidden tables. |
@@ -52,7 +52,7 @@ existing SQLite catalog and library-backed saved-query UI; the standard
 
 ## Schemas and build
 
-All ten datasets use the canonical JSON documents in `schemas/`. Explicit
+Every dataset uses its canonical JSON document in `schemas/`. The map-backed `parallelism` (estimated agent concurrency by local hour) and `findings` (one row per finding, from the Findings view) datasets back the Home cards for those areas; Usage rows also carry Carbon Impact estimates computed with the saved settings. Explicit
 `bindings.sqlite` bind to stable `r` column aliases owned by Pharos. Numeric
 formula fields opt into `expressionNumeric`; numeric/datetime grouping is
 explicit. Tool-call cost fields remain unbound because pricing requires host
@@ -209,7 +209,7 @@ go test ./internal/archive -run '^$' \
 
 The upstream `backends/sqlite-tests` real-SQLite suite was also run with the
 race detector and vet against the patched module. Integration coverage includes
-typed rows and every bound numeric SUM across all ten schemas, aggregate/formula
+typed rows and every bound numeric SUM across the dataset schemas, aggregate/formula
 matrices, paired values, distribution sidecars/shared histogram edges, computed
 graphs/revisions, scope/window/order parity, storage guards, population/group
 budgets, cancellation, indexed candidates, auth/CSRF, and temporary cleanup.

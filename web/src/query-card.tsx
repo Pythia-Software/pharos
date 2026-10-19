@@ -11,13 +11,13 @@ import { CardLoading } from "./card-loading";
 import type { CardLoadingSpec } from "./card-loading-model";
 import { ChartTooltip } from "./chart-tooltip";
 import { HumanStudyCover } from "./human-study-cover";
-import { DraftCover } from "./draft-cover";
-import "./draft-cover.css";
 
 export function QueryChip({ title, description, active, onClick }: { title: string; description: string; active?: boolean; onClick: () => void }) {
   return <button type="button" className="query-chip" title={description} aria-pressed={active} onClick={onClick}><Icon name="compass" /><span>{title}</span><Icon name="arrow-right" /></button>;
 }
 
+// Daily covers chart durations in hours (see previewOf) and carbon in kilograms.
+const columnUnit = (field = "") => field.includes("cost") ? "USD" : field.includes("words") ? "words" : field === "duration_ms" || field.endsWith("_hours") ? "h" : field === "co2e_kg" ? "kg" : "tokens";
 export function QueryCard({ id, title, description, actionLabel, url, windowLabel, category, preview, loadingSpec, error, discovery, xray, lean = 0, onOpen, onReveal, onKeep, onEdit, onRemove, onMove, onReload, onDragStart, onDragEnd, onDrop, before }: {
   id: string; title: string; description: string; actionLabel?: string; url: string; windowLabel: string; category: QueryCategory;
   preview?: QueryPreview; error?: string; discovery?: boolean; xray?: boolean; lean?: number; before?: boolean;
@@ -62,7 +62,7 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
             <span className="query-result-summary is-headline query-stat-line"><strong className="query-headline-value">{headlineMetric.value}</strong>{headlineMetric.unit ? <> <span className="query-headline-unit">{headlineMetric.unit}</span></> : null}
             {headlineMetric.label ? <span className="query-headline-label">{headlineMetric.label}</span> : null}</span>
           </span> : null}
-          {preview.draft ? <DraftCover cover={preview.draft} /> : preview.study ? <HumanStudyCover study={preview.study} /> : preview.buckets && preview.series ? <CompactColumns buckets={preview.buckets} series={preview.series} {...preview.timeline} showLegend={coverMetric?.display?.legendPosition ? coverMetric.display.legendPosition !== "none" : undefined} xLabel={coverMetric?.display?.xLabel ?? "Day"} yLabel={coverMetric?.display?.yLabel} unit={coverMetric?.field?.includes("cost") ? "USD" : coverMetric?.field?.includes("words") ? "words" : "tokens"} />
+          {preview.study ? <HumanStudyCover study={preview.study} /> : preview.buckets && preview.series ? <CompactColumns buckets={preview.buckets} series={preview.series} {...preview.timeline} showLegend={coverMetric?.display?.legendPosition ? coverMetric.display.legendPosition !== "none" : undefined} xLabel={coverMetric?.display?.xLabel ?? "Day"} yLabel={coverMetric?.display?.yLabel} unit={columnUnit(coverMetric?.field)} />
             : preview.metrics ? <CompactMetric preview={preview} />
             : preview.insights ? <span className="query-findings">
             <span className="query-finding-heading">{preview.headline}</span>

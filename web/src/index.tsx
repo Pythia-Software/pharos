@@ -45,6 +45,8 @@ import toolsDocument from "../../schemas/tools.schema.json";
 import toolCallsDocument from "../../schemas/tool_calls.schema.json";
 import skillUsagesDocument from "../../schemas/skill_usages.schema.json";
 import tl1AttemptsDocument from "../../schemas/tl1_attempts.schema.json";
+import parallelismDocument from "../../schemas/parallelism.schema.json";
+import findingsDocument from "../../schemas/findings.schema.json";
 import { TL1Page } from "./tl1";
 import { FindingsPage, OptimizationSettingsPage, startFindingsChrome } from "./findings";
 import { Icon } from "./icons";
@@ -58,7 +60,7 @@ const relationships: RelationshipAdapter = {
     return responseJSON(await fetch("/api/query-object-references", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ references }), signal }));
   },
 };
-type Dataset = "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts";
+type Dataset = "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "findings";
 type LibraryView = "table" | "conversation";
 type MessageView = "table" | "text";
 type TranscriptMessage = { role: string; text: unknown; raw_text?: unknown };
@@ -133,6 +135,8 @@ function datasetIsVisible(dataset: Dataset | "machine_calls") {
   const params = new URLSearchParams(location.search), path = location.pathname;
   if (dataset === "machine_calls") return path === "/usage" && (params.get("usage") ?? "tokens") === "tokens" && (params.get("machine_view") ?? preferences().get("pharos-machine-view", "tokens")) === "time";
   if (dataset === "library") return path === "/library";
+  if (dataset === "findings") return path === "/findings" && params.get("view") === "table";
+  if (dataset === "parallelism") return path === "/usage" && (params.get("usage") ?? "tokens") === "tokens" && (params.get("machine_view") ?? preferences().get("pharos-machine-view", "tokens")) === "parallelism";
   const usageView = params.get("usage") ?? preferences().get("pharos-usage-view", "tokens");
   if (dataset === "conversation_activity") return path === "/usage" && usageView === "conversations";
   if (dataset === "usage") return path === "/usage" && usageView === "tokens";
@@ -193,6 +197,8 @@ const schemas: Record<Dataset, FieldSchema<Row>> = {
   tool_calls: loadSchema<Row>(toolCallsDocument),
   skill_usages: loadSchema<Row>(skillUsagesDocument),
   tl1_attempts: loadSchema<Row>(tl1AttemptsDocument),
+  parallelism: loadSchema<Row>(parallelismDocument),
+  findings: loadSchema<Row>(findingsDocument),
 };
 
 const tableApis = new Map<Dataset | "machine_calls", QueryTableApi<Row>>();
@@ -399,6 +405,8 @@ const emptyMessages: Record<Dataset, string> = {
   tool_calls: "No tool calls match this query.",
   skill_usages: "No skill usage evidence matches this query.",
   tl1_attempts: "No TL1 runs match this query.",
+  parallelism: "No agent activity matches this query.",
+  findings: "No findings match this query.",
 };
 
 // query-table-ui 0.3.0 formats metric values with a field's renderer only for
@@ -1519,7 +1527,8 @@ function UsagePage() {
     </div>
     {view === "conversations" ? <QuerySurface dataset="conversation_activity" /> : view === "tokens" ? shared ? <TokenUsage /> : <MachineActivity tokens={(where, applied, onTimeRangeChange) => <TokenUsage scopeWhere={where} appliedScope={applied} onTimeRangeChange={onTimeRangeChange} />} calls={props => <div className="machine-call-surface"><QuerySurface key={props.localRows ? "example" : "library"} dataset="tool_calls" namespace="machine_calls" {...props}
       controls={(api, builder) => <div id="machineRawCalls" className="machine-raw-calls"><div className="machine-panel-heading"><div><h3>Raw calls backing this selection</h3><p className="muted">{api.total?.toLocaleString() ?? "…"} matching calls · Full invocations, timings, statuses, and source conversations. Filters here also update the charts and analytics.</p></div></div>{builder}</div>}
-      trailing={row => <span className="machine-inline-actions"><button type="button" className="mcp-detail-button" onClick={() => setSelectedCall({ id: String(row.id), example: props.localRows ? { ...row, started_at: new Date(row.started_at).toISOString(), workspace_id: undefined } : undefined })}>Details</button>{!props.localRows && row.workspace_id ? <a href={`/work/${encodeURIComponent(row.workspace_id)}?conversation=${encodeURIComponent(row.conversation_id ?? "")}`}>Conversation ↗</a> : null}</span>} /></div>} /> : view === "writing" ? <WritingUsage onStatus={setStatus} /> : <CarbonImpact />}
+      trailing={row => <span className="machine-inline-actions"><button type="button" className="mcp-detail-button" onClick={() => setSelectedCall({ id: String(row.id), example: props.localRows ? { ...row, started_at: new Date(row.started_at).toISOString(), workspace_id: undefined } : undefined })}>Details</button>{!props.localRows && row.workspace_id ? <a href={`/work/${encodeURIComponent(row.workspace_id)}?conversation=${encodeURIComponent(row.conversation_id ?? "")}`}>Conversation ↗</a> : null}</span>} /></div>}
+      parallelism={() => <div className="machine-call-surface"><QuerySurface dataset="parallelism" controls={(api, builder) => <div className="machine-raw-calls"><div className="machine-panel-heading"><div><h3>Parallel activity records</h3><p className="muted">{api.total?.toLocaleString() ?? "…"} hour-by-agent records · Estimated from transcript timestamps with your Parallelism counting and gap settings. Group, filter and chart them like any table.</p></div></div>{builder}</div>} /></div>} /> : view === "writing" ? <WritingUsage onStatus={setStatus} /> : <CarbonImpact />}
     {selectedCall ? <ToolCallDialog id={selectedCall.id} exampleCall={selectedCall.example} onClose={() => setSelectedCall(null)} /> : null}
   </div></UsageChartColorsProvider>;
 }
@@ -1873,7 +1882,7 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["queryTableUsage", <UsagePage />],
   ["toolsPage", <ToolsPage />],
   ["mcpPage", <MCPPage />],
-  ["findingsPage", <FindingsPage copy={copyText} />],
+  ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" />} />],
   ["optimizationSettingsPage", <OptimizationSettingsPage />],
   ["tl1Page", <TL1Page attempts={<QuerySurface dataset="tl1_attempts" />} filterAttempts={(where) => tableApis.get("tl1_attempts")?.setQuery(previous => ({ ...previous, where: where as WhereTerm[], offset: 0 }))} copy={copyText} />],
 ];
@@ -1901,6 +1910,14 @@ if (!shared && concurrencyPrototypeEnabled) {
   createRoot(modalHost).render(<ConcurrencyModal />);
   startConcurrencySummary();
 }
+// Carbon and Parallelism settings shape Usage and parallelism values on the
+// server. Refresh their tables and cards once the saved settings have landed.
+const settingDatasets: Record<string, Dataset> = { "pharos-carbon-v1": "usage", "pharos-concurrency-v1": "parallelism" };
+window.addEventListener("pharos:preferences-saved", event => {
+  const saved = (event as CustomEvent<{ set?: Record<string, unknown>; delete?: string[] }>).detail;
+  const keys = [...Object.keys(saved?.set ?? {}), ...(saved?.delete ?? [])];
+  for (const dataset of new Set(keys.flatMap(key => settingDatasets[key] ? [settingDatasets[key]] : []))) window.pharosQueryTables?.refresh(dataset);
+});
 window.pharosQueryTables = {
   async createLink() {
     const entry = [...tableApis.entries()].find(([dataset]) => datasetIsVisible(dataset));

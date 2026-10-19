@@ -1,4 +1,5 @@
 import catalog from "../../pricing/model_colors.json";
+import { activities, activityPresentation } from "./machine-activity-data";
 
 type Provider = keyof typeof catalog.providers;
 type ModelStyle = { provider: Provider; class: string; color: string };
@@ -54,6 +55,10 @@ function generatedColor(key: string, provider?: Provider): string {
 
 export function chartSeriesStyle(scope: string, name: string): SeriesStyle {
   if (scope.startsWith("root_")) scope = scope.slice(5);
+  // Daily covers key series by their displayed label; Machine Time's palette applies to either.
+  // Hours of the day are one measure across a clock, not categories.
+  if (scope === "hour_of_day") return { color: "var(--query-tone)", order: name };
+  if (scope === "activity") return { color: (activities.find(item => item.label === name) ?? activityPresentation(name)).color, order: name };
   if (scope === "model_effort") {
     const separator = name.lastIndexOf(" · ");
     const model = separator < 0 ? name : name.slice(0, separator);

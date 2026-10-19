@@ -22,7 +22,7 @@ var usageTokenFields = []string{
 var usageTimeFields = map[string]bool{"hour": true, "day": true, "week": true, "month": true}
 
 func queryFieldsFor(dataset string, names ...string) libraryFields {
-	if dataset != "usage" {
+	if dataset != "usage" && dataset != "parallelism" {
 		return libraryFieldsFor(names...)
 	}
 	return fieldSet(names...)
@@ -54,11 +54,23 @@ func (c *Catalog) usageRowsByPeriod(location *time.Location, hourly bool) ([]map
 	if err != nil {
 		return nil, err
 	}
-	return c.attachUsageLineage(rows, ledger)
+	carbon, err := c.carbonAssumptions(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	roots, err := c.usageConversationRoots(ledger)
+	if err != nil {
+		return nil, err
+	}
+	return attachUsageLineage(withCarbon(rows, carbon), roots), nil
 }
 
 func (c *Catalog) usageRowsFromLedger(location *time.Location, hourly bool, ledger []map[string]any) ([]map[string]any, error) {
 	book, err := c.loadPriceBook()
+	if err != nil {
+		return nil, err
+	}
+	carbon, err := loadCarbonDocument()
 	if err != nil {
 		return nil, err
 	}
@@ -92,6 +104,7 @@ func (c *Catalog) usageRowsFromLedger(location *time.Location, hourly bool, ledg
 				"hour": hourKey, "day": day, "week": week, "month": month, "first_usage_at": at, "last_usage_at": at,
 				"cost_usd": nil, "cost_today_usd": nil, "price_status": "", "priced_model": nil,
 			}
+			row["carbon_tier"], _ = carbon.tier(model)
 			for _, field := range usageTokenFields {
 				row[field] = int64(0)
 			}
@@ -140,11 +153,7 @@ func (c *Catalog) usageRowsFromLedger(location *time.Location, hourly bool, ledg
 // Most Usage controls need only the priced facts. Resolve the complete graph
 // only for queries that actually consume root/delegation fields. Clone maps:
 // base rows are shared with charts, metadata, and Carbon requests.
-func (c *Catalog) attachUsageLineage(base, ledger []map[string]any) ([]map[string]any, error) {
-	lineage, err := c.usageConversationRoots(ledger)
-	if err != nil {
-		return nil, err
-	}
+func attachUsageLineage(base []map[string]any, lineage *usageConversationAttribution) []map[string]any {
 	rows := make([]map[string]any, len(base))
 	for i, source := range base {
 		row := maps.Clone(source)
@@ -169,7 +178,7 @@ func (c *Catalog) attachUsageLineage(base, ledger []map[string]any) ([]map[strin
 			}
 		}
 	}
-	return rows, nil
+	return rows
 }
 
 func usageNeedsLineage(fields libraryFields) bool {
@@ -188,17 +197,38 @@ func (c *Catalog) localUsageLedger(ctx context.Context) ([]map[string]any, error
 	return cachedValue(ctx, c, "usage-ledger", func(context.Context) ([]map[string]any, error) { return c.representativeLedger() })
 }
 
+// usageCarbonSuffix ends usage cache keys with the reader's carbon
+// assumptions. Saving preferences does not advance the cache generation, so
+// rows estimated under other settings must not be served (see derivedValue).
+// Computations use the assumptions named by their key, even when rewarmed.
+func usageCarbonSuffix(carbon carbonAssumptions) string { return "#carbon=" + carbon.key() }
+
+// localUsageBaseRows are the priced rows with carbon estimates, without lineage.
 func (c *Catalog) localUsageBaseRows(ctx context.Context, hourly bool) ([]map[string]any, error) {
-	key := "usage-base:" + time.Local.String() + ":" + c.clock().Format("2006-01-02")
+	carbon, err := c.carbonAssumptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.usageBaseRows(ctx, hourly, carbon)
+}
+
+func (c *Catalog) usageBaseRows(ctx context.Context, hourly bool, carbon carbonAssumptions) ([]map[string]any, error) {
+	key := time.Local.String() + ":" + c.clock().Format("2006-01-02")
 	if hourly {
 		key += ":hourly"
 	}
-	return cachedValue(ctx, c, key, func(ctx context.Context) ([]map[string]any, error) {
+	// New settings rebuild from the cached ledger rather than keeping a
+	// settings-free copy of every row alongside the estimated one.
+	return cachedValue(ctx, c, "usage-base:"+key+usageCarbonSuffix(carbon), func(ctx context.Context) ([]map[string]any, error) {
 		ledger, err := c.localUsageLedger(ctx)
 		if err != nil {
 			return nil, err
 		}
-		return c.usageRowsFromLedger(time.Local, hourly, ledger)
+		rows, err := c.usageRowsFromLedger(time.Local, hourly, ledger)
+		if err != nil {
+			return nil, err
+		}
+		return withCarbon(rows, carbon), nil
 	})
 }
 
@@ -216,16 +246,31 @@ func (c *Catalog) localUsageHourlyRows(ctx context.Context) ([]map[string]any, e
 }
 
 func (c *Catalog) cachedUsageLineage(ctx context.Context, key string, hourly bool) ([]map[string]any, error) {
-	return cachedValue(ctx, c, key, func(ctx context.Context) ([]map[string]any, error) {
-		base, err := c.localUsageBaseRows(ctx, hourly)
+	carbon, err := c.carbonAssumptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return cachedValue(ctx, c, key+usageCarbonSuffix(carbon), func(ctx context.Context) ([]map[string]any, error) {
+		base, err := c.usageBaseRows(ctx, hourly, carbon)
 		if err != nil {
 			return nil, err
 		}
+		roots, err := c.localUsageRoots(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return attachUsageLineage(base, roots), nil
+	})
+}
+
+// The lineage graph depends on neither carbon settings nor the local day.
+func (c *Catalog) localUsageRoots(ctx context.Context) (*usageConversationAttribution, error) {
+	return cachedValue(ctx, c, "usage-roots", func(ctx context.Context) (*usageConversationAttribution, error) {
 		ledger, err := c.localUsageLedger(ctx)
 		if err != nil {
 			return nil, err
 		}
-		return c.attachUsageLineage(base, ledger)
+		return c.usageConversationRoots(ledger)
 	})
 }
 

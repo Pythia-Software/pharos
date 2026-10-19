@@ -16,7 +16,6 @@ export const queryCategories = {
   tools: { label: "Tool Flow", tone: "color-mix(in srgb,var(--gold) 65%,var(--warn))" },
   delegation: { label: "Delegation", tone: "var(--heat-2)" },
   views: { label: "Work Views", tone: "var(--muted)" },
-  // Draft card areas without Query Table fields (see draft-cards.ts).
   machines: { label: "Machine Time", tone: "var(--heat-1)" },
   carbon: { label: "Carbon", tone: "var(--sea)" },
   findings: { label: "Findings", tone: "var(--gold)" },
@@ -35,6 +34,9 @@ export function categoryForQuery(dataset?: QueryDataset, query?: QueryState): Qu
     ...[metric.expression, metric.expressionY, metric.distribution?.input].flatMap(expression => [...(expression ?? "").matchAll(/\[([^\]]+)\]/g)].map(match => match[1])),
   ])]);
   const has = (...names: string[]) => names.some(name => fields.has(name));
+  if (dataset === "findings") return "findings";
+  if (dataset === "parallelism") return "machines";
+  if (has("co2e_g", "co2e_kg", "energy_wh", "energy_kwh", "carbon_tier")) return "carbon";
   if (has("cost_usd", "cost_today_usd")) return "cost";
   if (has("error_count", "error_signature", "tool_error_count", "error_types", "test_failure") || predicates.some(term => term.field === "status" && term.op === "=" && term.value === "error")) return "errors";
   if (has("carried_tokens", "result_tokens", "truncated", "compaction_count", "cache_read_input_tokens") || predicates.some(term => term.field === "tool_category" && term.op === "=" && term.value === "read")) return "context";

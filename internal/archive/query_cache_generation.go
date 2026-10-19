@@ -7,10 +7,10 @@ import (
 )
 
 // These tables supply the cached Library, Usage, Writing, health, delegation,
-// transcript and TL1 views. Maintenance outputs (workspace_library/previews,
-// MCP projections and binary vector copies), audit records, preferences and
-// progress metadata do not change those values. Keep this list alongside new
-// cached data dependencies.
+// transcript, TL1 and Parallelism views. Maintenance outputs (workspace_library/
+// previews, MCP projections, binary vector copies and parallelism_activity),
+// audit records, preferences and progress metadata do not change those values.
+// Keep this list alongside new cached data dependencies.
 // Text-search documents do affect search coverage while their index catches up.
 var queryCacheTables = []string{
 	"hosts",

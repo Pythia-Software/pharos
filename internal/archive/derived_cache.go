@@ -142,6 +142,20 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 				}
 			}
 		}
+		// Usage keys end with their carbon assumptions (usageCarbonSuffix), which
+		// change without a new generation. Keep only the current settings' copy.
+		if family, _, ok := strings.Cut(key, "#carbon="); ok {
+			for previous, value := range cache.entries {
+				if previous == key || !strings.HasPrefix(previous, family+"#carbon=") {
+					continue
+				}
+				select {
+				case <-value.ready:
+					delete(cache.entries, previous)
+				default:
+				}
+			}
+		}
 		entry := cache.entries[key]
 		if entry != nil && entry.version != version {
 			select {

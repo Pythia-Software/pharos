@@ -19,7 +19,7 @@ new Function("module", "exports", "require", bundled.outputFiles[0].text)(loaded
 const { queryRecipes, instantiateRecipe, defaultCardCover, coverChoices, decodeCover, availableChartKinds,
   cardLoadingPresentation, collectQuery, queryFromURL, loadQueryPreview, clearPreviewCache, updateBookmark, saveCardTemplate, cardTemplates } = loaded.exports;
 const active = queryRecipes.filter(recipe => !recipe.retired);
-const schemas = Object.fromEntries([...new Set(queryRecipes.map(recipe => recipe.dataset)), "library"].map(dataset => [dataset, core.loadSchema(JSON.parse(readFileSync(`../schemas/${dataset}.schema.json`, "utf8")))]));
+const schemas = Object.fromEntries([...new Set([...queryRecipes.flatMap(recipe => [recipe.dataset, ...(recipe.trend?.dataset ? [recipe.trend.dataset] : [])]), "library"])].map(dataset => [dataset, core.loadSchema(JSON.parse(readFileSync(`../schemas/${dataset}.schema.json`, "utf8")))]));
 const execution = { profile: "qt-sqlite-v1", planToken: "", fields: {}, resolvedRevisions: {} };
 const queryCapabilities = { version: 3, profile: execution.profile, groupedRows: true, calendarGrouping: true, computedSourceFilters: true, regex: false, maxRows: 10000, maxGroups: 10000, maxPopulation: 250000 };
 const now = Date.parse("2026-10-16T18:00:00Z"), day = 86400000;
@@ -82,7 +82,8 @@ async function compare(recipe, days, values, { edit = false } = {}) {
   values.clear();
   const item = instantiateRecipe(recipe, days), canonical = queryRecipes.find(candidate => candidate.id === recipe.id);
   const saved = collectQuery(item.dataset, item.query, item.title, { description: item.description, templateId: item.instanceId, window: item.window, cover: item.cover ?? defaultCardCover(item) });
-  const bookmark = edit ? updateBookmark(saved.id, saved.title, saved.description, days, saved.cover?.metricId ?? "") : saved;
+  // Windowless (current-state and all-time) cards offer no lookback to edit.
+  const bookmark = edit ? updateBookmark(saved.id, saved.title, saved.description, item.window ? days : undefined, saved.cover?.metricId ?? "") : saved;
   const spec = queryFromURL(bookmark.url, json(bookmark.query));
   assert.ok(spec, recipe.id);
   assert.deepEqual(core.normalizeQueryState(spec.query), core.normalizeQueryState(item.query), `${recipe.id}: saved query`);

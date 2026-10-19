@@ -296,7 +296,8 @@ APP_HTML = r'''<!doctype html>
     const parse=raw=>{try{return JSON.parse(raw)}catch{return raw}};
     const send=body=>{const text=JSON.stringify(body);return fetch('/api/preferences',{method:'POST',headers:{'Content-Type':'application/json'},body:text,keepalive:text.length<60000}).then(response=>{if(!response.ok)throw new Error('HTTP '+response.status);dispatchEvent(new CustomEvent('pharos:preferences-saved',{detail:body}))})};
     let pending={set:{},delete:new Set()},timer=0;
-    function flush(){clearTimeout(timer);timer=0;const body={set:pending.set,delete:[...pending.delete]};if(!Object.keys(body.set).length&&!body.delete.length)return;pending={set:{},delete:new Set()};send(body).catch(error=>console.warn('Could not save preferences',error))}
+    // flush resolves once queued changes are saved (or failed), for callers that refetch server values derived from them.
+    function flush(){clearTimeout(timer);timer=0;const body={set:pending.set,delete:[...pending.delete]};if(!Object.keys(body.set).length&&!body.delete.length)return Promise.resolve();pending={set:{},delete:new Set()};return send(body).catch(error=>console.warn('Could not save preferences',error))}
     const queue=()=>{if(!timer)timer=setTimeout(flush,250)};
     if(values){
       addEventListener('pagehide',flush);

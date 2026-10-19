@@ -7,6 +7,9 @@ type usageConversationAttribution struct {
 	delegatedRuns  map[string]string
 	delegatedDepth map[string]int64
 	sessionRoles   map[string]string
+	// canonical names the conversation each mirror alias stands for, and runs
+	// its execution identity: "" for a root's own (or continued) execution.
+	canonical, runs map[string]string
 }
 
 // usageConversationRoots assigns every run to one recorded top-level
@@ -128,9 +131,10 @@ func (c *Catalog) usageConversationRoots(ledger []map[string]any) (*usageConvers
 			resolved[at], done[at] = root, true
 		}
 	}
-	result := &usageConversationAttribution{roots: map[string]map[string]any{}, delegatedRuns: map[string]string{}, delegatedDepth: map[string]int64{}, sessionRoles: map[string]string{}}
+	result := &usageConversationAttribution{roots: map[string]map[string]any{}, canonical: map[string]string{}, runs: map[string]string{},
+		delegatedRuns: map[string]string{}, delegatedDepth: map[string]int64{}, sessionRoles: map[string]string{}}
 	for id := range byID {
-		result.roots[id] = resolved[canonical(id)]
+		result.roots[id], result.canonical[id] = resolved[canonical(id)], canonical(id)
 	}
 	// A continuation is the same execution, not another delegation. Exact
 	// handles and their child transcripts name that same execution as well.
@@ -258,6 +262,9 @@ func (c *Catalog) usageConversationRoots(ledger []map[string]any) (*usageConvers
 		if _, resolvedDepth := result.delegatedDepth[id]; root != nil && run != "" && known && resolvedDepth && run != parent {
 			hasChildren[firstString(root["id"])+"|"+parent] = true
 		}
+	}
+	for id := range byID {
+		result.runs[id] = conversationRun(canonical(id))
 	}
 	for _, session := range sessions {
 		id := firstString(session["id"])
