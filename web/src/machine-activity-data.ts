@@ -152,7 +152,12 @@ export function totalTime(facts: TimeTotal[]): TimeTotal {
 }
 export function groupTime<T extends TimeTotal>(facts: T[], key: (fact: T) => string): Array<TimeTotal & { key: string; facts: T[] }> {
   const groups = new Map<string, T[]>();
-  for (const fact of facts) { const name = key(fact); groups.set(name, [...groups.get(name) ?? [], fact]); }
+  for (const fact of facts) {
+    const name = key(fact);
+    let group = groups.get(name);
+    if (!group) { group = []; groups.set(name, group); }
+    group.push(fact);
+  }
   return [...groups].map(([key, facts]) => ({ key, facts, ...totalTime(facts) })).sort((a, b) => b.duration - a.duration || a.key.localeCompare(b.key));
 }
 export function timeValue(total: TimeTotal, metric: TimeMetric): number | null {

@@ -6,11 +6,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
+	"github.com/gbdubs/pharos/internal/querytable"
 )
 
 type queryCountKey struct {
@@ -72,7 +74,7 @@ func (c *Catalog) queryCount(ctx context.Context, tx *sql.Tx, statement string, 
 // The cube was built from the same trusted joins and mirror exclusion as the
 // raw ledger. Use its indexed counts only when every freshness guard matches
 // inside this read transaction; pending analyses always fall back to raw rows.
-func (c *Catalog) freshToolCubeCount(ctx context.Context, tx *sql.Tx) (int64, bool, error) {
+func (c *Catalog) toolCubeFresh(ctx context.Context, tx *sql.Tx) (bool, error) {
 	var fresh bool
 	err := tx.QueryRowContext(ctx, `SELECT
  COALESCE((SELECT value FROM meta WHERE key='tool_rollup_generation'),'')=
@@ -82,12 +84,67 @@ func (c *Catalog) freshToolCubeCount(ctx context.Context, tx *sql.Tx) (int64, bo
  COALESCE((SELECT value FROM meta WHERE key='tool_rollup_full_revision'),'')=
  COALESCE((SELECT value FROM meta WHERE key='tool_rollup_built_full_revision'),'') AND
  COALESCE((SELECT value FROM meta WHERE key='tool_rollup_timezone'),'')=?`, "/"+toolRollupVersion, c.clock().Format("2006-01-02"), toolRollupTimezone()).Scan(&fresh)
+	return fresh, err
+}
+
+func (c *Catalog) freshToolCubeCount(ctx context.Context, tx *sql.Tx) (int64, bool, error) {
+	fresh, err := c.toolCubeFresh(ctx, tx)
 	if err != nil || !fresh {
 		return 0, false, err
 	}
 	var total int64
 	err = tx.QueryRowContext(ctx, "SELECT COALESCE(SUM(call_count),0) FROM tool_call_cube").Scan(&total)
 	return total, err == nil, err
+}
+
+// Timestamp-only page counts can use the same exact whole-day cube population
+// as Machine Time, provided every freshness guard holds in this transaction.
+func (c *Catalog) freshToolCubeRangeCount(ctx context.Context, tx *sql.Tx, terms []querytable.WhereTerm) (int64, bool, error) {
+	lower, upper, rest, valid := machineTimeDayRange(terms)
+	if !valid || lower == "" || len(rest) != 0 {
+		return 0, false, nil
+	}
+	fresh, err := c.toolCubeFresh(ctx, tx)
+	if err != nil || !fresh {
+		return 0, false, err
+	}
+	var total int64
+	err = tx.QueryRowContext(ctx, "SELECT COALESCE(SUM(call_count),0) FROM tool_call_cube WHERE day>=? AND day<?", lower, upper).Scan(&total)
+	return total, err == nil, err
+}
+
+// Broad activity drilldowns can match most of the raw ledger. The compact
+// projection supplies the same exact count without joining every source call.
+func (c *Catalog) freshMachineCubeCount(ctx context.Context, tx *sql.Tx, terms []querytable.WhereTerm, schema querytable.Schema) (int64, bool, error) {
+	lower, upper, where, valid := machineTimeDayRange(terms)
+	if !valid {
+		return 0, false, nil
+	}
+	for _, field := range whereFields(where) {
+		if !machineTimeDimensions.has(field) {
+			return 0, false, nil
+		}
+	}
+	fresh, err := c.toolCubeFresh(ctx, tx)
+	if err != nil || !fresh {
+		return 0, false, err
+	}
+	rows, err := c.machineTimeRowsIn(ctx, tx)
+	if err != nil {
+		return 0, false, err
+	}
+	rows, err = querytable.Filter(rows, where, schema)
+	if err != nil {
+		return 0, false, err
+	}
+	var total int64
+	for _, row := range rows {
+		day := firstString(row["day"])
+		if lower == "" || day >= lower && day < upper {
+			total += integer(row["machine_calls"])
+		}
+	}
+	return total, true, nil
 }
 
 func (s *Server) countOnlyMetricsV2(ctx context.Context, tx *sql.Tx, table sqlDataset, d qt.SQLiteV2Dataset, q qt.MetricQuery, o qt.PlanOptions) (qt.SQLiteV2ExecutionResult, bool, error) {
@@ -184,7 +241,8 @@ func (s *Server) indexedQueryRowsV2(ctx context.Context, tx *sql.Tx, table sqlDa
 		return qt.SQLiteV2ExecutionResult{}, true, err
 	}
 	countFields := append(whereFields(q.Where), d.Schema.IDField)
-	countSource, countArgs := table.project(countFields).v2WindowedSource(d.Schema, q.Where, o.Now, bounds)
+	countTable, _ := table.project(countFields).preferCoveringScan(q.Where)
+	countSource, countArgs := countTable.v2WindowedSource(d.Schema, q.Where, o.Now, bounds)
 	countPredicate := ""
 	if filter.SQL != "" {
 		countPredicate = " WHERE " + numberQueryParameters(filter.SQL, len(countArgs))
@@ -192,8 +250,21 @@ func (s *Server) indexedQueryRowsV2(ctx context.Context, tx *sql.Tx, table sqlDa
 	countArgs = append(countArgs, filter.Args...)
 	countSQL := "SELECT COUNT(*) FROM (SELECT 1 FROM (" + countSource + ") AS r" + countPredicate + fmt.Sprintf(" LIMIT %d)", population+1)
 	var fast []func(context.Context, *sql.Tx) (int64, bool, error)
-	if d.Dataset == "pharos_tool_calls" && len(q.Where) == 0 && len(countArgs) == 0 {
-		fast = append(fast, s.Catalog.freshToolCubeCount)
+	if d.Dataset == "pharos_tool_calls" {
+		if len(q.Where) == 0 && len(countArgs) == 0 {
+			fast = append(fast, s.Catalog.freshToolCubeCount)
+		} else {
+			fast = append(fast, func(ctx context.Context, tx *sql.Tx) (int64, bool, error) {
+				return s.Catalog.freshToolCubeRangeCount(ctx, tx, q.Where)
+			})
+			schema, err := s.queryTableSchema("tool_calls")
+			if err != nil {
+				return qt.SQLiteV2ExecutionResult{}, true, err
+			}
+			fast = append(fast, func(ctx context.Context, tx *sql.Tx) (int64, bool, error) {
+				return s.Catalog.freshMachineCubeCount(ctx, tx, q.Where, schema)
+			})
+		}
 	}
 	total, err := s.Catalog.queryCount(ctx, tx, countSQL, countArgs, fast...)
 	if err != nil {
@@ -216,13 +287,60 @@ func (s *Server) indexedQueryRowsV2(ctx context.Context, tx *sql.Tx, table sqlDa
 			lookup = true
 		}
 	}
+	fullSource := d.SourceSQL
 	if !lookup && len(order) > 0 {
-		if index := table.pageIndexes[order[0].Field]; index != "" {
+		index := table.pageIndexes[order[0].Field]
+		if index != "" {
 			d.SourceSQL = strings.Replace(d.SourceSQL, table.pageFrom, table.pageFrom+" INDEXED BY "+sqlIdentifier(index), 1)
 		}
 	}
 	d.SourceSQL = "SELECT * FROM (" + d.SourceSQL + ") AS r" + predicate + " ORDER BY " + strings.Join(terms, ",") + fmt.Sprintf(" LIMIT ?%d OFFSET ?%d", len(args)+1, len(args)+2)
+	if d.Dataset == "pharos_writing_messages" {
+		// Sort and page narrow identities before fetching message bodies. SQLite
+		// otherwise puts every selected long message into its numeric-sort B-tree.
+		earlyFields := append(whereFields(q.Where), d.Schema.IDField)
+		for _, term := range order {
+			earlyFields = append(earlyFields, term.Field)
+		}
+		early, earlyArgs := table.project(earlyFields).v2WindowedSource(d.Schema, q.Where, o.Now, bounds)
+		if slices.EqualFunc(earlyArgs, d.SourceArgs, reflect.DeepEqual) {
+			if !lookup && len(order) > 0 {
+				if index := table.pageIndexes[order[0].Field]; index != "" {
+					early = strings.Replace(early, table.pageFrom, table.pageFrom+" INDEXED BY "+sqlIdentifier(index), 1)
+				}
+			}
+			page := "SELECT r." + sqlIdentifier(d.Schema.IDField) + " FROM (" + early + ") AS r" + predicate + " ORDER BY " + strings.Join(terms, ",") + fmt.Sprintf(" LIMIT ?%d OFFSET ?%d", len(args)+1, len(args)+2)
+			d.SourceSQL = "SELECT * FROM (" + fullSource + ") AS r WHERE r." + sqlIdentifier(d.Schema.IDField) + " IN (" + page + ")"
+		}
+	}
 	d.SourceArgs = append(args, q.Limit, q.Offset)
+	if d.Dataset == "pharos_writing_messages" && slices.Contains(q.Select, "text") {
+		computed := false
+		for _, name := range q.Select {
+			computed = computed || strings.HasPrefix(name, "@computed/")
+		}
+		if !computed {
+			// The authorship reader bounds displayed text after execution.
+			// Full text still participates in the source WHERE above, while a
+			// long selected message cannot fail the expression text-size budget.
+			names := make([]string, 0, len(d.Schema.Fields))
+			for name := range d.Schema.Fields {
+				names = append(names, name)
+			}
+			slices.Sort(names)
+			projections := make([]string, 0, len(names))
+			for _, name := range names {
+				value := "r." + sqlIdentifier(name)
+				if name == "text" {
+					// One extra rune preserves the reader's truncation indicator;
+					// even four-byte runes remain below the expression text limit.
+					value = fmt.Sprintf("substr(%s,1,%d)", value, authoredTextLimit+1)
+				}
+				projections = append(projections, value+" AS "+sqlIdentifier(name))
+			}
+			d.SourceSQL = "SELECT " + strings.Join(projections, ",") + " FROM (" + d.SourceSQL + ") AS r"
+		}
+	}
 	copy := q
 	copy.Where, copy.Offset = nil, 0
 	result, err := d.ExecuteV2In(ctx, tx, &copy, nil, qt.PlanOptions{Identity: o.Identity, Now: o.Now})

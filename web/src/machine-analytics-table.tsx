@@ -45,7 +45,10 @@ export function MachineAnalyticsTable({ current, previous, grouping, compared, f
       const fact = group.facts[0], prior = baseline.get(group.key) ?? totalTime([]);
       const average = group.timed ? group.duration / group.timed : null;
       const previousAverage = compared && prior.timed ? prior.duration / prior.timed : null;
-      return { ...group, id: group.key, name: grouping === "operation" ? fact.name : grouping === "tool" ? [fact.server, fact.tool || "(Unidentified tool)"].filter(Boolean).join(" / ") : activityPresentation(group.key).label,
+      // The table needs totals and one drilldown identity. Retaining every
+      // source fact makes client query snapshots copy the full timeline again.
+      const { facts, ...totals } = group;
+      return { ...totals, id: group.key, name: grouping === "operation" ? fact.name : grouping === "tool" ? [fact.server, fact.tool || "(Unidentified tool)"].filter(Boolean).join(" / ") : activityPresentation(group.key).label,
         activity: grouping === "tool" && new Set(group.facts.map(fact => fact.activity)).size > 1 ? "Multiple activities" : fact.activity,
         average, previous_average: previousAverage,
         per_run_change: average === null || previousAverage === null || previousAverage === 0 ? null : (average / previousAverage - 1) * 100,

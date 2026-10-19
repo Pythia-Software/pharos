@@ -53,7 +53,7 @@ var toolCallDataset = sqlDataset{
 	buckets:    map[string]string{"day": "t.started_at", "week": "t.started_at", "month": "t.started_at"},
 	timestamps: map[string]string{"started_at": "t.started_at"},
 	cube:       toolCallCube,
-	lookups:    map[string]bool{"id": true, "conversation_id": true, "workspace_id": true},
+	lookups:    map[string]bool{"id": true, "conversation_id": true, "workspace_id": true, "operation_key": true, "activity": true},
 	optionalJoins: map[string]string{
 		"r": " LEFT JOIN repositories r ON r.id=w.repository_id",
 		"a": "LEFT JOIN agent_sessions a ON a.id=t.agent_session_id",

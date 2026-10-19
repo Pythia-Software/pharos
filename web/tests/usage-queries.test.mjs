@@ -64,6 +64,8 @@ test("work identity and unknown effort remain separate", () => {
   assert.equal(run("Work").total, 2, "Identical titles must not merge workspaces");
   assert.equal(run("Model + effort").total, 2);
   assert.ok(run("Model + effort").rows.some(row => row.effort === null));
+  assert.equal(run("Work").rows[0].usage_work_title,"Same title");
+  assert.equal(preset("Work").grouping.representative,null,"A workspace title is constant across its facts; no representative scan is needed");
 });
 
 test("price differences use matched price pairs and preserve unpriced usage", () => {

@@ -46,7 +46,9 @@ export function concurrencySpans(threads: ConcurrencyThread[], mode: Concurrency
     if (mode === "user" && thread.agent_depth > 0) continue;
     const spans = mode === "model" ? thread.model_spans : thread.continuous_spans ?? mergeIntervals(thread.turns, gap * minute);
     const unit = concurrencyUnit(thread, counting);
-    units.set(unit, [...units.get(unit) ?? [], ...spans]);
+    let collected = units.get(unit);
+    if (!collected) { collected = []; units.set(unit, collected); }
+    for (const span of spans) collected.push(span);
   }
   // Gap bridging happens within a conversation before counting-unit union: a
   // different conversation cannot manufacture a continuous work thread.
@@ -93,7 +95,7 @@ export function concurrencyMetrics(units: Map<string, Interval[]>, sessions: Int
   return { average: elapsed > 0 ? area / elapsed : 0, parallel: working ? parallel / working : 0, peak, working };
 }
 
-export function stackSegments(threads: ConcurrencyThread[], mode: ConcurrencyMode, gap: number, order: string[], bounds: Interval, counting: ConcurrencyCounting = "workspace"): Segment[] {
+export function stackSegments(threads: ConcurrencyThread[], mode: ConcurrencyMode, gap: number, order: string[], bounds: Interval, counting: ConcurrencyCounting = "workspace", compact = false): Segment[] {
   type Event = { at: number; unit: string; conversation: string; delta: number; running: boolean };
   const events: Event[] = [];
   const add = (thread: ConcurrencyThread, spans: Interval[], running: boolean) => {
@@ -125,6 +127,7 @@ export function stackSegments(threads: ConcurrencyThread[], mode: ConcurrencyMod
   }
   // Group simultaneous arrivals by repo; retain caller order within a repo.
   const layoutOrder = order.slice().sort((a, b) => repositoryOrder.get(repositories.get(a)!)! - repositoryOrder.get(repositories.get(b)!)!);
+  const rank = new Map(layoutOrder.map((unit, index) => [unit, index]));
   let previousRows = new Map<string, number>();
   const lastRows = new Map<string, number>(), rowRepositories = new Map<number, string>();
   const packRows = (units: string[]) => {
@@ -162,24 +165,45 @@ export function stackSegments(threads: ConcurrencyThread[], mode: ConcurrencyMod
   };
   const active = new Map<string, Set<string>>(), running = new Map<string, Set<string>>(), chosen = new Map<string, string>();
   const segments: Segment[] = [];
+  const open = new Map<string, Segment>();
+  let rows = new Map<string, number>(), units: string[] = [];
   for (let i = 0; i < events.length;) {
     const at = events[i].at;
+    let layoutChanged = false;
     while (i < events.length && events[i].at === at) {
       const event = events[i++], map = event.running ? running : active;
-      if (!map.has(event.unit)) map.set(event.unit, new Set());
+      if (!map.has(event.unit)) { map.set(event.unit, new Set()); if (!event.running) layoutChanged = true; }
       if (event.delta > 0) map.get(event.unit)!.add(event.conversation);
       else map.get(event.unit)!.delete(event.conversation);
+      if (!map.get(event.unit)!.size) {
+        map.delete(event.unit);
+        if (!event.running) layoutChanged = true;
+      }
     }
+    for (const [unit, segment] of open) if (!active.has(unit)) { segment.end = Math.max(segment.start, at); open.delete(unit); }
     const end = events[i]?.at;
     if (end === undefined || end <= at) continue;
-    const rows = packRows(layoutOrder.filter(unit => active.get(unit)?.size));
-    for (const unit of layoutOrder) {
-      const conversations = active.get(unit);
-      if (!conversations?.size) { chosen.delete(unit); continue; }
+    for (const unit of chosen.keys()) if (!active.has(unit)) chosen.delete(unit);
+    // Only concurrent units participate in this event. Scanning the entire
+    // catalog at every boundary made a multi-day snapshot quadratic.
+    if (layoutChanged) {
+      units = Array.from(active.keys()).filter(unit => rank.has(unit)).sort((a, b) => rank.get(a)! - rank.get(b)!);
+      rows = packRows(units);
+    }
+    for (const unit of units) {
+      const conversations = active.get(unit)!;
       const previous = chosen.get(unit);
       const conversation = previous && conversations.has(previous) ? previous : conversations.values().next().value!;
       chosen.set(unit, conversation);
-      if (end > bounds[0]) segments.push({ start: Math.max(at, bounds[0]), end, unit, workspace: byId.get(conversation)!.workspace_id, conversation, bottom: rows.get(unit)!, running: mode === "model" || !!running.get(unit)?.size });
+      if (end > bounds[0]) {
+        const bottom = rows.get(unit)!, isRunning = mode === "model" || !!running.get(unit)?.size;
+        const previous = open.get(unit);
+        if (compact && previous && previous.bottom === bottom && previous.conversation === conversation && previous.running === isRunning) continue;
+        if (previous) previous.end = Math.max(previous.start, at);
+        const segment = { start: Math.max(at, bounds[0]), end: compact ? bounds[1] : end, unit, workspace: byId.get(conversation)!.workspace_id, conversation, bottom, running: isRunning };
+        segments.push(segment);
+        if (compact) open.set(unit, segment);
+      }
     }
   }
   return segments;
@@ -208,7 +232,13 @@ export function ribbonPath(segments: Segment[], x: (time: number) => number, y: 
   const groups: Segment[][] = [];
   for (const segment of segments) {
     const last = groups.at(-1);
-    if (last && last.at(-1)!.end === segment.start) last.push(segment);
+    if (last && last.at(-1)!.end === segment.start) {
+      const previous = last.at(-1)!;
+      // Other units' events do not add corners to this ribbon. Keep exact
+      // hit-test segments, but omit collinear vertices from the SVG geometry.
+      if (previous.bottom === segment.bottom) last[last.length - 1] = { ...previous, end: segment.end };
+      else last.push(segment);
+    }
     else groups.push([segment]);
   }
   return groups.map(group => {

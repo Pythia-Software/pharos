@@ -785,7 +785,7 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 			}
 			sourceRows, find, err = s.libraryRows(ctx, params, libraryFieldsFor(sourceNames...), &evidence, early)
 		} else {
-			sourceRows, err = s.queryTableRows(ctx, dataset, params, libraryFieldsFor(sourceNames...))
+			sourceRows, err = s.queryTableRows(ctx, dataset, params, queryFieldsFor(dataset, sourceNames...))
 		}
 		if err != nil {
 			return queryV2ExecutionResult{}, err
@@ -807,7 +807,7 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 		}
 		metrics = &copy
 		if slices.Contains(sourceNames, "hour") {
-			usageHours, e = s.Catalog.hourlyUsageForAggregation(ctx, metrics.Where, localSchema)
+			usageHours, e = s.Catalog.hourlyUsageForAggregation(ctx, metrics.Where, localSchema, sourceNames)
 			if e != nil {
 				return queryV2ExecutionResult{}, e
 			}
@@ -823,7 +823,7 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 		if e != nil {
 			return queryV2ExecutionResult{}, e
 		}
-		hours, e := s.Catalog.hourlyUsageForAggregation(ctx, copy.Where, localSchema)
+		hours, e := s.Catalog.hourlyUsageForAggregation(ctx, copy.Where, localSchema, sourceNames)
 		if e != nil {
 			return queryV2ExecutionResult{}, e
 		}

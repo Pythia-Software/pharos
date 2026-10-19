@@ -127,6 +127,21 @@ func (c *Catalog) derivedValue(ctx context.Context, key string, compute func(con
 		}
 		cache.version = version
 		cache.pruneDelegationEntries(version, time.Now())
+		// A published tool cube changes independently of the input generation.
+		// Retain only its current completed Machine Time projection; in-flight
+		// readers continue to own their immutable snapshots after eviction.
+		if strings.HasPrefix(key, "machine-time:") {
+			for previous, value := range cache.entries {
+				if previous == key || !strings.HasPrefix(previous, "machine-time:") {
+					continue
+				}
+				select {
+				case <-value.ready:
+					delete(cache.entries, previous)
+				default:
+				}
+			}
+		}
 		entry := cache.entries[key]
 		if entry != nil && entry.version != version {
 			select {
@@ -240,7 +255,7 @@ func (c *Catalog) warmCaches(ctx context.Context) {
 	cache.mu.Lock()
 	stale := map[string]func(context.Context) (any, error){}
 	for key, entry := range cache.entries {
-		if strings.HasPrefix(key, "delegation:") {
+		if strings.HasPrefix(key, "delegation:") || strings.HasPrefix(key, "machine-time:") {
 			continue
 		}
 		if entry.version != version && time.Since(entry.usedAt) < recentUse {

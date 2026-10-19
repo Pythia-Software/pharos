@@ -296,6 +296,8 @@ func (c *Catalog) Initialize() error {
 		// spans_json in each authorship record. Keep zero-word rows out too.
 		"CREATE INDEX IF NOT EXISTS message_authorship_summary_idx ON message_authorship(sent_at,typed_words) WHERE typed_words>0",
 		"CREATE INDEX IF NOT EXISTS agent_sessions_summary_idx ON agent_sessions(id,workspace_id,model)",
+		"CREATE INDEX IF NOT EXISTS agent_sessions_usage_idx ON agent_sessions(id,workspace_id,conversation_id,kind,depth,provider,model)",
+		"CREATE INDEX IF NOT EXISTS conversations_usage_idx ON conversations(id,harness,harness_version_first,harness_version_last,harness_version_source)",
 	} {
 		if _, err := c.DB.Exec(index); err != nil {
 			return err

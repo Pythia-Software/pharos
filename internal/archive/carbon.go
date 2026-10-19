@@ -308,7 +308,7 @@ func (c *Catalog) carbonHealth() (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := c.localUsageRows(context.Background())
+	rows, err := c.localUsageBaseRows(context.Background(), false)
 	if err != nil {
 		return nil, err
 	}
@@ -453,7 +453,7 @@ func (c *Catalog) carbonSeries(ctx context.Context, request carbonSeriesRequest,
 	})
 	// Choices come from the full retained usage, so one filter cannot hide
 	// the other filter's options or strand a selection with no matching rows.
-	all, err := c.localUsageRows(ctx)
+	all, err := c.localUsageBaseRows(ctx, false)
 	if err != nil {
 		return nil, err
 	}

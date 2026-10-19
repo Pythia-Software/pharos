@@ -4,6 +4,8 @@ go 1.26.0
 
 toolchain go1.26.8
 
+replace github.com/Pythia-Software/query-table/backends/go => ./third_party/query-table-go
+
 require (
 	github.com/Pythia-Software/query-table/backends/go v0.7.1
 	golang.org/x/crypto v0.57.0

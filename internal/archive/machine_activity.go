@@ -8,6 +8,14 @@ import (
 	"modernc.org/sqlite"
 )
 
+// These deterministic identity functions are versioned with their indexes.
+// Bump the index version if classification semantics change, so recorded keys
+// are rebuilt rather than silently retaining an earlier function's results.
+var machineCallIndexes = []string{
+	`CREATE INDEX IF NOT EXISTS tool_calls_operation_v1_page_idx ON tool_calls(machine_operation_key(tool_name,mcp_server,program,subcommand),started_at DESC,id DESC)`,
+	`CREATE INDEX IF NOT EXISTS tool_calls_activity_v1_page_idx ON tool_calls(machine_activity(tool_category,command_category,tool_name,mcp_server,program),started_at DESC,id DESC)`,
+}
+
 // Families use the shell parser's program and named subcommand, not a regex
 // over arbitrary invocation text. Flags, targets, and compound commands remain
 // on the source calls; a family is not a claim that its workloads are identical.
