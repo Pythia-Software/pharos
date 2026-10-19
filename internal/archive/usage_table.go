@@ -217,15 +217,14 @@ func (c *Catalog) usageBaseRows(ctx context.Context, hourly bool, carbon carbonA
 	if hourly {
 		key += ":hourly"
 	}
-	// New settings change only the estimate columns: copy the priced rows.
+	// New settings rebuild from the cached ledger rather than keeping a
+	// settings-free copy of every row alongside the estimated one.
 	return cachedValue(ctx, c, "usage-base:"+key+usageCarbonSuffix(carbon), func(ctx context.Context) ([]map[string]any, error) {
-		rows, err := cachedValue(ctx, c, "usage-priced:"+key, func(ctx context.Context) ([]map[string]any, error) {
-			ledger, err := c.localUsageLedger(ctx)
-			if err != nil {
-				return nil, err
-			}
-			return c.usageRowsFromLedger(time.Local, hourly, ledger)
-		})
+		ledger, err := c.localUsageLedger(ctx)
+		if err != nil {
+			return nil, err
+		}
+		rows, err := c.usageRowsFromLedger(time.Local, hourly, ledger)
 		if err != nil {
 			return nil, err
 		}

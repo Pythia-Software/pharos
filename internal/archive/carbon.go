@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
-	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -356,19 +355,18 @@ func (c *Catalog) carbonAssumptions(ctx context.Context) (carbonAssumptions, err
 
 // withCarbon copies usage rows with their estimated facility energy and
 // emissions under the given assumptions. Rows carry carbon_tier already.
+// withCarbon fills the estimate columns in place; callers pass rows they just
+// built, so no shared cache copy is modified.
 func withCarbon(rows []map[string]any, a carbonAssumptions) []map[string]any {
-	out := make([]map[string]any, len(rows))
-	for i, source := range rows {
-		row := maps.Clone(source)
+	for _, row := range rows {
 		tier, tokens, wh := firstString(row["carbon_tier"]), carbonTokens(row), 0.0
 		for _, category := range carbonCategories {
 			wh += a.wh(tier, category, float64(tokens[category]))
 		}
 		row["energy_wh"], row["co2e_g"] = wh*a.pue, a.grams(wh)
 		row["energy_kwh"], row["co2e_kg"] = wh*a.pue/1000, a.grams(wh)/1000
-		out[i] = row
 	}
-	return out
+	return rows
 }
 
 type carbonWindow struct {
