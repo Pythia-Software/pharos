@@ -31,6 +31,8 @@ type SQLiteMetricCapabilities struct {
 	ShownRows      bool   `json:"shownRows"`
 	Distributions  bool   `json:"distributions"`
 	ComputedFields bool   `json:"computedFields"`
+	Filters        bool   `json:"filters"`
+	MinCount       bool   `json:"minCount"`
 	MaxGroups      int    `json:"maxGroups"`
 	Profile        string `json:"profile"`
 }
@@ -40,7 +42,7 @@ func (d SQLiteV2Dataset) Capabilities() SQLiteMetricCapabilities {
 	if groups == 0 {
 		groups = 2000
 	}
-	return SQLiteMetricCapabilities{2, true, true, true, true, groups, SQLiteExpressionProfile}
+	return SQLiteMetricCapabilities{Version: 2, Expressions: true, ShownRows: true, Distributions: true, ComputedFields: true, Filters: true, MinCount: true, MaxGroups: groups, Profile: SQLiteExpressionProfile}
 }
 
 type SQLiteValueError struct {
@@ -97,7 +99,12 @@ type SQLiteMetricV2 struct {
 	Scope         string                 `json:"scope"`
 	ProcessedRows int64                  `json:"processedRows"`
 	GroupCount    int64                  `json:"groupCount"`
-	Coverage      string                 `json:"coverage"`
+	Coverage      string                 `json:"coverage,omitempty"`
+	// Error reports a metric that could not be computed. Sibling metrics and
+	// rows in the same request are unaffected.
+	Error string `json:"error,omitempty"`
+	// HiddenGroups counts groups removed by AggSpec.MinCount; nil when unset.
+	HiddenGroups *int64 `json:"hiddenGroups,omitempty"`
 }
 type SQLiteMetricsV2Result struct {
 	Metrics []SQLiteMetricV2 `json:"metrics"`
@@ -182,6 +189,7 @@ func (d SQLiteV2Dataset) ExecuteV2In(ctx context.Context, tx *sql.Tx, rows *Serv
 	o = d.options(tx, o)
 	var rowPlan SQLPlan
 	var batch MetricBatchPlan
+	var failures []error
 	var where []WhereTerm
 	if rows != nil {
 		copy := *rows
@@ -206,7 +214,7 @@ func (d SQLiteV2Dataset) ExecuteV2In(ctx context.Context, tx *sql.Tx, rows *Serv
 		if metrics.Limit > maxRows {
 			return out, diagnostic("resource_limit", "metric row window exceeds host budget")
 		}
-		batch, e = CompileSQLiteMetrics(ctx, *metrics, d.Schema, o)
+		batch, failures, e = compileMetricsPartial(ctx, *metrics, d.Schema, o, true)
 		if e != nil {
 			return out, e
 		}
@@ -295,7 +303,15 @@ func (d SQLiteV2Dataset) ExecuteV2In(ctx context.Context, tx *sql.Tx, rows *Serv
 				err = errors.Join(err, cleanupErr)
 			}
 		}()
-		for i, p := range batch.Metrics {
+		next := 0
+		for i, spec := range metrics.Metrics {
+			if failures[i] != nil {
+				message, _ := metricClauseError(ctx, failures[i])
+				r.Metrics = append(r.Metrics, failedMetric(spec.ID, spec.Scope, message))
+				continue
+			}
+			p := batch.Metrics[next]
+			next++
 			key := p.Fingerprint + "\x00" + p.Scope
 			if previous, ok := memo[key]; ok {
 				previous = cloneSQLiteMetric(previous)
@@ -303,15 +319,23 @@ func (d SQLiteV2Dataset) ExecuteV2In(ctx context.Context, tx *sql.Tx, rows *Serv
 				r.Metrics = append(r.Metrics, previous)
 				continue
 			}
-			p, err := reductions.plan(ctx, tx, p)
+			created := reductions.mark()
+			m, err := isolateMetric(ctx, tx, p.ID, p.Scope, func() (SQLiteMetricV2, error) {
+				p, err := reductions.plan(ctx, tx, p)
+				if err != nil {
+					return SQLiteMetricV2{}, err
+				}
+				return d.readV2Metric(ctx, tx, p, spec, total, *metrics, maxGroups)
+			})
 			if err != nil {
 				return SQLiteV2ExecutionResult{}, err
 			}
-			m, err := d.readV2Metric(ctx, tx, p, metrics.Metrics[i], total, *metrics, maxGroups)
-			if err != nil {
-				return SQLiteV2ExecutionResult{}, err
+			if m.Error != "" {
+				// The savepoint rollback dropped reductions created for this metric.
+				reductions.forget(created)
+			} else {
+				memo[key] = m
 			}
-			memo[key] = m
 			r.Metrics = append(r.Metrics, m)
 		}
 		out.Metrics = &r
@@ -425,12 +449,28 @@ func (d SQLiteV2Dataset) readV2Metric(ctx context.Context, tx *sql.Tx, p MetricS
 		for i, k := range cols {
 			v[k] = values[i]
 		}
+		hidden := int64(0)
+		if spec.MinCount > 0 {
+			var ok bool
+			if hidden, ok = v["hidden_groups"].(int64); !ok {
+				return out, fmt.Errorf("missing hidden group count")
+			}
+			out.HiddenGroups = &hidden
+			if hidden > int64(maxGroups) {
+				return out, diagnostic("resource_limit", "group population exceeds host budget")
+			}
+			// Only hidden groups (or none): the row carries no bucket.
+			if v["count"] == nil {
+				continue
+			}
+		}
 		groups, ok := v["group_count"].(int64)
 		if !ok {
 			return out, fmt.Errorf("missing group count")
 		}
 		out.GroupCount = groups
-		if groups > int64(maxGroups) {
+		// Group budgets apply to every reduced group, including hidden ones.
+		if groups+hidden > int64(maxGroups) {
 			return out, diagnostic("resource_limit", "group population exceeds host budget")
 		}
 		for _, c := range p.Columns {
@@ -443,12 +483,22 @@ func (d SQLiteV2Dataset) readV2Metric(ctx context.Context, tx *sql.Tx, p MetricS
 		}
 		if spec.Distribution != nil {
 			nulls := v["null_count"].(int64)
-			inputErrors := v["input_error_count"].(int64)
+			inputErrors, ok := v["input_error_count"].(int64)
+			if !ok {
+				// PostgreSQL plans expose valid samples instead; invalid samples
+				// are neither samples nor excluded NULLs.
+				samples, _ := v["samples"].(int64)
+				inputErrors = b.Count - samples - nulls
+			}
 			b.NullCount = &nulls
 			b.InputErrorCount = &inputErrors
 			if raw := v["distribution"]; raw != nil {
 				var header struct{ Kind string }
+				// SQLite returns JSON text; PostgreSQL drivers return jsonb bytes.
 				data, ok := raw.(string)
+				if bytes, isBytes := raw.([]byte); isBytes {
+					data, ok = string(bytes), true
+				}
 				if !ok {
 					return out, fmt.Errorf("distribution must be JSON text")
 				}
@@ -634,6 +684,10 @@ func (d SQLiteV2Dataset) capabilityForPlan(name string, p SQLPlan) SQLiteCompute
 // Reuse identical plans only within the transaction after validating every plan.
 // Return independent results so callers cannot mutate a sibling metric.
 func cloneSQLiteMetric(m SQLiteMetricV2) SQLiteMetricV2 {
+	if m.HiddenGroups != nil {
+		hidden := *m.HiddenGroups
+		m.HiddenGroups = &hidden
+	}
 	m.Buckets = append([]SQLiteMetricV2Bucket{}, m.Buckets...)
 	for i := range m.Buckets {
 		b := &m.Buckets[i]

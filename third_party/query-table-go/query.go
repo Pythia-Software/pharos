@@ -31,6 +31,7 @@ const (
 	MaxOrderByTerms     = 20
 	MaxAggregations     = 20
 	MaxGroupByFields    = 20
+	MaxMetricMinCount   = 1_000_000
 	maxFieldNameLength  = 256
 	maxFilterValueBytes = 10_000
 	maxRegexBytes       = 10_000
@@ -112,6 +113,12 @@ type AggSpec struct {
 	Op           string              `json:"op"`
 	Field        string              `json:"field,omitempty"`
 	GroupBy      []string            `json:"groupBy,omitempty"`
+	// Where is this metric's own predicate, ANDed with the table WHERE before
+	// grouping (inside the page for shownRows). It never changes table rows.
+	Where []WhereTerm `json:"where,omitempty"`
+	// MinCount drops groups with fewer rows (after Where) before ordering,
+	// GroupLimit and Other; removed groups are reported as hidden_groups.
+	MinCount int `json:"minCount,omitempty"`
 }
 
 // WireQuery is the server-bound subset of QueryState (the TS ServerQuery / the
@@ -240,6 +247,27 @@ func (q WireQuery) Validate() error {
 		}
 		if len(aggregation.GroupBy) > MaxGroupByFields {
 			return fmt.Errorf("aggregation %q has %d group fields; maximum is %d", aggregation.ID, len(aggregation.GroupBy), MaxGroupByFields)
+		}
+		if aggregation.MinCount < 0 || aggregation.MinCount > MaxMetricMinCount {
+			return fmt.Errorf("aggregation %q minCount must be between 1 and %d", aggregation.ID, MaxMetricMinCount)
+		}
+		metricLiterals := 0
+		for _, term := range aggregation.Where {
+			if term.IsGroup() && len(term.Any) == 0 {
+				return fmt.Errorf("aggregation %q has an empty filter group", aggregation.ID)
+			}
+			for _, clause := range term.Predicates() {
+				if clause.Field == "" || len(clause.Field) > maxFieldNameLength {
+					return fmt.Errorf("invalid metric filter field name")
+				}
+				if len(clause.Value) > maxFilterValueBytes {
+					return fmt.Errorf("metric filter value for %q exceeds %d bytes", clause.Field, maxFilterValueBytes)
+				}
+				metricLiterals++
+			}
+		}
+		if metricLiterals > MaxWhereClauses {
+			return fmt.Errorf("aggregation %q filter has %d clauses; maximum is %d", aggregation.ID, metricLiterals, MaxWhereClauses)
 		}
 	}
 	return nil

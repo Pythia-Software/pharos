@@ -12,7 +12,7 @@ import (
 
 // CombinedMetricPlan is an optional PostgreSQL single-statement batch. Each
 // output row contains metric_index, buckets (a JSONB array of the original SQL
-// bucket rows), and group_count. Indexes refer to Metrics in request order;
+// bucket rows), group_count, and hidden_groups (groups removed by minCount). Indexes refer to Metrics in request order;
 // empty grouped populations still return an envelope with [] and group_count=0.
 // Original plans retain their fingerprints and metadata. Hosts still enforce
 // population, group, memory, response, and execution budgets in their snapshot.
@@ -207,7 +207,13 @@ func combinePostgresMetrics(ctx context.Context, batch MetricBatchPlan, q Metric
 			return CombinedMetricPlan{}, err
 		}
 		order = strings.TrimPrefix(order, " ORDER BY ")
-		envelopes = append(envelopes, fmt.Sprintf("SELECT %d AS metric_index,COALESCE(jsonb_agg(to_jsonb(r) ORDER BY %s),'[]'::jsonb) AS buckets,COALESCE(MAX(group_count),0)::bigint AS group_count FROM (%s) AS r", i, order, final))
+		// A minCount result may carry one bucketless row with hidden_groups.
+		buckets, hidden := fmt.Sprintf("jsonb_agg(to_jsonb(r) ORDER BY %s)", order), "0::bigint"
+		if spec.MinCount > 0 {
+			buckets += " FILTER (WHERE r.count IS NOT NULL)"
+			hidden = "COALESCE(MAX(hidden_groups),0)::bigint"
+		}
+		envelopes = append(envelopes, fmt.Sprintf("SELECT %d AS metric_index,COALESCE(%s,'[]'::jsonb) AS buckets,COALESCE(MAX(group_count),0)::bigint AS group_count,%s AS hidden_groups FROM (%s) AS r", i, buckets, hidden, final))
 	}
 	out.SQL = sqlStageCTEs(out.Stages) + "\n" + strings.Join(envelopes, "\nUNION ALL\n") + "\nORDER BY metric_index"
 	for dependency := range dependencies {

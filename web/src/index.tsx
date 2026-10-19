@@ -20,7 +20,7 @@ import { chartPeriods, earliestKey, isHourly, localDay, parseDay, periodBuckets,
 import { defaultChartScale, validChartScale, type ChartScale } from "./chart-scale";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { EMPTY_QUERY, httpComputedColumnStore, applyAggregations, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, toServerQuery, type ComputedColumnStore, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, exitGrouping, groupSourceQuery, httpComputedColumnStore, inspectBucketQuery, applyAggregations, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, toServerQuery, type ComputedColumnStore, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
 import { useQueryTable, type QueryTableApi } from "@pythia-software/query-table-react";
 import { DataTable, FilterValueProvider, MetricsPanel, QueryBuilder, SelectionToolbar, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
 import "@pythia-software/query-table-ui/theme.css";
@@ -28,7 +28,7 @@ import "./pharos.css";
 import { savedRollingWindow } from "./bookmarks";
 import { libraryStorageAdapter } from "./storage";
 import { HomePage } from "./home";
-import { groupSourceQuery } from "./group-drilldown";
+import { linkTargets, navigateLink } from "./query-link-targets";
 import { QueryChip } from "./query-card";
 import { readRollingWindow, resolveRollingQuery, rollingQueryMatches } from "./query-links";
 import { preferences } from "./preferences";
@@ -296,6 +296,7 @@ const renderers: RenderRegistry<Row> = {
   },
   number(context: CellContext<Row>) {
     if (context.value != null && ["card_rate", "card_escalation"].includes(context.field.name)) return `${(Number(context.value) * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
+    // Links saved before the percent display carry a 0–100 cache rate.
     if (context.value != null && context.field.name === "usage_cache_hit_percent") return `${Number(context.value).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
     if (context.value != null && context.field.name === "usage_price_delta") return formatUSD(Number(context.value));
     const value = Number(context.value);
@@ -318,6 +319,16 @@ const renderers: RenderRegistry<Row> = {
       return url ? <a key={`${pr.host}:${pr.number}:${index}`} className="qt-pr-link" href={url} target="_blank" rel="noopener noreferrer" title={label} onClick={event => event.stopPropagation()}>{label}</a>
         : <span key={`${pr.host}:${pr.number}:${index}`} title={label}>{label}</span>;
     })}</span>;
+  },
+  conversation_link(context: CellContext<Row>) {
+    const id = String(context.value ?? "");
+    if (!id || shared) return defaultRenderers.text(context);
+    return <a className="qt-conversation-link" href={`/conversation/${encodeURIComponent(id)}`} title={`Open conversation ${id}`} onClick={event => {
+      event.stopPropagation();
+      if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      void openConversation(id);
+    }}>{id}</a>;
   },
   main_integration({ row }: CellContext<Row>) { return mainIntegration(row); },
   run_state({ value }: CellContext<Row>) {
@@ -424,8 +435,9 @@ function usageGroupFields(fields: FieldSchema<Row>["fields"], query: QueryState)
   const summaries = new Map(query.grouping?.summaries.map(column => [column.id, column]));
   return fields.map(field => {
     const column = summaries.get(field.name);
+    // A summary's own display (Query Table 0.8) replaces these render fallbacks.
     return column ? { ...field, ...(column.label ? { label: column.label } : {}),
-      ...(!field.render && field.type === "number" ? { render: column.expression === "MEDIAN([duration_ms])" ? "duration_ms" : column.id === "card_price_delta" ? "usd" : "number" } : {}) } : field;
+      ...(!field.render && !column.display && field.type === "number" ? { render: column.expression === "MEDIAN([duration_ms])" ? "duration_ms" : column.id === "card_price_delta" ? "usd" : "number" } : {}) } : field;
   });
 }
 
@@ -543,6 +555,8 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
     }
   }, [dataset, api.query, visible, api.restoration.ready, api.error]);
 
+  // Drilldowns filter source records, including canonical computed fields.
+  const sourceSchema = useMemo(() => ({ ...schema, fields: api.computed.catalogue }), [schema, api.computed.catalogue]);
   // Inactive controllers retain their query state, but their controls must not
   // mount: filter nullability/autocomplete and header charts issue metadata
   // requests independently of useQueryTable's active row-fetch flag.
@@ -552,7 +566,8 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
     {!api.query.grouping || namespace ? header?.(api) : null}
     {presets?.(api)}
     {api.query.grouping ? <QueryBuilder api={stableApi} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <QueryBuilder defaultCollapsed={Boolean(namespace)} api={stableApi} fields={(api.query.grouping ? api.schema!.fields : api.computed.catalogue)} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={stableApi} dataset={dataset} layout={<QueryBuilder api={stableApi} fields={(api.query.grouping ? api.schema!.fields : api.computed.catalogue)} total={api.total} running={api.loading} />} /> : <QueryBuilder api={stableApi} fields={(api.query.grouping ? api.schema!.fields : api.computed.catalogue)} total={api.total} running={api.loading} />}
-    <MetricsPanel api={stableApi} aggregations={api.aggregations} fields={metricFields(api.query.grouping ? usageGroupFields(api.schema!.fields, api.query) : api.computed.catalogue)} renderers={metricRenderers} />
+    <MetricsPanel api={stableApi} aggregations={api.aggregations} fields={metricFields(api.query.grouping ? usageGroupFields(api.schema!.fields, api.query) : api.computed.catalogue)} renderers={metricRenderers}
+      onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(records); }} />
     {api.error ? <div className="query-table-error">{api.error?.message}</div> : null}
     {selectable && !api.query.grouping ? <SelectionToolbar selection={api.selection} actions={ids => <ShareSelection ids={ids} api={api} transport={transport} />} /> : null}
     {dataset === "library" && libraryView === "conversation" && !api.query.grouping ? <ConversationResults api={api} searching={Boolean(find)} />
@@ -567,12 +582,15 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
       rowId={api.rowId}
       columnDrag={api.columnDrag}
       itemDetails={api.itemDetails ?? undefined}
+      linkTargets={linkTargets}
+      onNavigate={navigateLink}
       total={api.total}
       loading={api.loading}
       emptyMessage={api.error ? failedMessage : find ? "No work matches this search and these filters." : emptyMessages[dataset]}
       {...(api.query.grouping ? { trailing: (row: Row) => {
         const complete = api.query.grouping!.keys.every(key => Object.hasOwn(row, key));
-        return <button type="button" className="mcp-detail-button" disabled={!complete} title={complete ? "Open the source records for this group, keeping source filters" : "Include all group key columns to inspect the source records"} onClick={() => api.setQuery(groupSourceQuery(api.query, row, schema))}>Records</button>;
+        const records = complete ? groupSourceQuery(api.query, row, sourceSchema) : null;
+        return <button type="button" className="mcp-detail-button" disabled={!records} title={records ? "Open the source records for this group, keeping source filters" : complete ? "These group keys cannot be matched exactly in the source records" : "Include all group key columns to inspect the source records"} onClick={() => { if (records) api.setQuery(records); }}>Records</button>;
       }, trailingLabel: "Inspect" }
         : trailing ? { trailing: (row: Row) => trailing(row, api), trailingLabel: dataset === "mcp_calls" || dataset === "tool_calls" ? "View" : dataset === "tools" || dataset === "writing" ? "Drill in" : dataset === "library" ? "Match" : "Actions" } : {})}
     />}
@@ -721,6 +739,19 @@ function openFindHit(hit: FindHit) {
   if (hit.message_id) params.set("message", hit.message_id);
   history.pushState(null, "", `/work/${encodeURIComponent(hit.workspace_id)}${params.size ? `?${params}` : ""}`);
   (window as unknown as { routeFromLocation?: () => void }).routeFromLocation?.();
+}
+
+// Conversation ID cells link to /conversation/{id}, which the service
+// redirects to the conversation within its work; a plain click resolves the
+// same route in place.
+async function openConversation(id: string) {
+  const fallback = `/conversation/${encodeURIComponent(id)}`;
+  try {
+    const [resolved] = await relationships.resolve([{ objectType: "pharos_conversations", key: { id } }]);
+    if (!resolved?.href) { location.assign(fallback); return; }
+    history.pushState(null, "", resolved.href);
+    (window as unknown as { routeFromLocation?: () => void }).routeFromLocation?.();
+  } catch { location.assign(fallback); }
 }
 
 function findHitLabel(hit: FindHit): string {
@@ -1167,7 +1198,7 @@ function UsageTableQueries({ api }: { api: QueryTableApi<Row> }) {
   const row = (label: string, presets: UsageTablePreset[]) => <div className="usage-presets" role="group" aria-label={`${label} presets`}>
     <span className="usage-preset-label">{label}</span>
     {label === "Group by" ? <QueryChip title="Rows" description="Restore the original usage rows, filters, columns and metrics" active={!grouped} onClick={() => {
-      api.setQuery(previous => previous.grouping?.source ?? previous);
+      api.setQuery(exitGrouping);
     }} /> : null}
     {presets.map(preset => <QueryChip key={preset.label} title={preset.label} description={preset.title} active={usageTablePresetMatches(api.query, preset)} onClick={() => apply(preset)} />)}
   </div>;

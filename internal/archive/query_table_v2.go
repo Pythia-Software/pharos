@@ -678,16 +678,40 @@ func queryV2SourceFields(ctx context.Context, db *sql.DB, schema qt.Schema, rows
 		add(whereFields(rows.Where))
 	}
 	if metrics != nil {
-		plans, err := qt.CompileSQLiteMetrics(ctx, *metrics, schema, options)
+		dependencies, err := metricDependencies(ctx, *metrics, schema, options)
 		if err != nil {
 			return nil, err
 		}
-		for _, plan := range plans.Metrics {
-			add(plan.Dependencies)
+		for _, names := range dependencies {
+			add(names)
 		}
 		add(whereFields(metrics.Where))
 	}
 	return slices.Sorted(maps.Keys(fields)), nil
+}
+
+// metricDependencies compiles each metric on its own, so one invalid metric
+// cannot fail discovery for its siblings: the adapter reports that metric's
+// error in its own result. Entries for metrics that fail to compile are nil.
+// Request-level problems fail every metric here and fail execution later.
+// Dependencies include the fields of the metric's own WHERE.
+func metricDependencies(ctx context.Context, q qt.MetricQuery, schema qt.Schema, options qt.PlanOptions) ([][]string, error) {
+	out := make([][]string, len(q.Metrics))
+	for i, spec := range q.Metrics {
+		one := q
+		one.Metrics = []qt.AggSpec{spec}
+		plans, err := qt.CompileSQLiteMetrics(ctx, one, schema, options)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if err != nil {
+			continue
+		}
+		for _, plan := range plans.Metrics {
+			out[i] = append(out[i], plan.Dependencies...)
+		}
+	}
+	return out, nil
 }
 
 func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.Values, schema qt.Schema, rowRequest *qt.ServerQueryV2, metrics *qt.MetricQuery, populationLimit ...int) (queryV2ExecutionResult, error) {
@@ -927,14 +951,14 @@ func (s *Server) executeUsageMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQL
 	for i := range inputs.Metrics {
 		inputs.Metrics[i].Scope = "allMatching"
 	}
-	plans, err := qt.CompileSQLiteMetrics(ctx, inputs, d.Schema, o)
+	dependencies, err := metricDependencies(ctx, inputs, d.Schema, o)
 	if err != nil {
 		return qt.SQLiteV2ExecutionResult{}, err
 	}
 	usesHour := make([]bool, len(q.Metrics))
 	needsHours := false
-	for i, p := range plans.Metrics {
-		usesHour[i] = slices.Contains(p.Dependencies, "hour")
+	for i, names := range dependencies {
+		usesHour[i] = slices.Contains(names, "hour")
 		needsHours = needsHours || usesHour[i]
 	}
 	hasHourFilter := slices.Contains(whereFields(q.Where), "hour")

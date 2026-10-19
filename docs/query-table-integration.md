@@ -1,22 +1,35 @@
-# Query Table 0.7.1 in Pharos
+# Query Table 0.8.0 in Pharos
 
-Pharos pins core, React, UI and codegen to the published npm **0.7.1** packages,
-and the Go adapter to **v0.7.1**. The npm lockfile records registry URLs and
-integrities; `go.sum` records the released Go module. The prerelease npm archives,
-Go replacement, vendored adapter and historical patch have been removed. Clean
-builds use these releases without another Query Table checkout.
+Pharos pins core, React, UI and codegen to the published npm **0.8.0** packages,
+and the Go adapter to **v0.8.0**. The npm lockfile records registry URLs and
+integrities; `go.sum` records the released Go module. A root Go replacement uses
+the matching backend copy with the [Usage performance patches](../third_party/query-table-go/README.pharos.md).
+Clean builds use these pinned sources without another Query Table checkout.
 
-The [upstream migration guide](https://github.com/Pythia-Software/query-table/blob/v0.7.1/docs/host-integration-next-release.md)
-and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.7.1/CHANGELOG.md)
+The [upstream migration guide](https://github.com/Pythia-Software/query-table/blob/v0.8.0/docs/host-integration-next-release.md)
+and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.8.0/CHANGELOG.md)
 define the release contract. Optional worktree linking is described in
 [local development](query-table-local-development.md). The earlier
 [upstream handoff](query-table-upstream-handoff.md) and
 [next-release handoff](query-table-next-release-handoff.md) are historical records.
 
-The 0.7.1 patch improves compact box charts, chart tooltip rendering, and
-compact pie/ring legends. Query definitions and backend protocols are unchanged.
+## 0.8.0 feature coverage
 
-## Release feature coverage
+| Release feature | Pharos integration |
+| --- | --- |
+| Group link columns (`op: "link"`), `linkTargets`, `onNavigate` | Every table's `DataTable` registers each dataset as a link target (`web/src/query-link-targets.ts`, built on `queryURL`), so template and query links, including those in saved or shared queries, open the right page. Plain clicks route through `pharosNavigate` without reloading; modified clicks keep native behavior. The Usage **Work** preset links each title to `/work/{workspace_id}`. |
+| Query patches (`applyPatch`, `matchPatch`, `removePatch`) | Usage **Group by** and **Compare** presets are patches that own grouping, columns and order. Highlighting matches a preset's grouping while ignoring HAVING, sorting, paging and layout edits. Link destinations can also carry patches. |
+| Per-metric `where` and `minCount`, `hiddenGroups` | The Go adapter advertises and executes both on v2 metrics and v3 queries for all ten datasets. Pharos's host paths honor them: the tool-call count fast path steps aside for filtered metrics, map-backed staging includes metric filter fields, and Usage metrics filtered on `hour` read hourly populations. Home cards check the advertised flags, note hidden groups, and never present a total when groups are hidden. |
+| Per-metric errors | One failing metric no longer fails its batch. Pharos discovers each metric's inputs separately, so an invalid metric cannot fail its siblings' staging or the Usage hourly split. |
+| Metric drilldown (`onInspect`, `inspectBucketQuery`, `groupSourceQuery`) | Clicking a metric bar, list row, value, box cohort or histogram bin filters the table to those records, including the metric's own filter. A grouped row's **Records** action uses `groupSourceQuery` with computed fields, and is disabled when a key cannot be matched exactly. |
+| `withGroupingKeys` and `exitGrouping` | The Usage **Rows** chip uses `exitGrouping`; presets enter and re-key grouping through `applyPatch`. |
+| Summary column `display`, metric formats from cell displays | The Usage cache rate is a fraction with a percent display. Pharos's render fallbacks for grouped summaries only apply when a summary has no display. Links saved before this change keep their 0–100 rendering. |
+| `SelectColumn.display` and `{ kind: "text", lines }` | Available from the standard column editor; Pharos never rewrites `select`, so overrides round-trip through links, saved queries and bookmarks. Schemas keep their existing defaults. |
+| Scalar set filters on `enum` fields | Every enum field with static options opts in to `filter.editor: "set"` (ANY / NONE, keeping empty rows). The Go loader ignores the editor hint; predicates are unchanged. |
+| `useQueryFilters` | Not needed: Pharos's record search editors edit a draft and apply it on submit. |
+| `URL_ENCODE`, clearer formula errors, large-text and calendar fixes | Supplied by the packages. The Go SQLite profile rejects `URL_ENCODE`, like other text functions, so it is browser-only. |
+
+## Earlier release features
 
 | Release feature | Pharos integration |
 | --- | --- |
@@ -78,6 +91,11 @@ V2 adds:
 | `POST /api/query/{dataset}/rows-v2` | Typed rows, computed projections and sorts, revision checks |
 | `POST /api/query/{dataset}/metrics` | Scalar formulas, paired X/Y, multi-key groups, top-N, MEDIAN, boxes/histograms |
 | `GET/PUT /api/query-computed-columns?dataset=pharos_{dataset}` | Canonical computed definitions with optimistic revisions |
+
+Metric batches return per-metric errors: a metric that exceeds a budget or
+fails to compile gets its own `error` with empty buckets while its siblings and
+the rows still return. Request-level problems (malformed bodies, stale
+revisions, cancellation) still fail the request.
 
 V3 adds `POST /api/query/{dataset}/query-v3` for grouped rows and calendar
 metrics across every supported dataset. `/capabilities` negotiates its profile

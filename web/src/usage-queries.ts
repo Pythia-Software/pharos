@@ -1,4 +1,4 @@
-import { EMPTY_QUERY, encodeQuery, type GroupingDefinition, type QueryState, type SummaryColumn } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, applyPatch, matchPatch, type GroupingDefinition, type QueryPatch, type QueryState, type SummaryColumn } from "@pythia-software/query-table-core";
 
 export type UsageTablePreset = {
   label: string;
@@ -9,7 +9,7 @@ export type UsageTablePreset = {
 };
 
 const sum = (field: string, label: string): SummaryColumn => ({ id: `usage_${field}`, op: "sum", field, label });
-const cacheRate: SummaryColumn = { id: "usage_cache_hit_percent", op: "formula", expression: "100*SUM([cache_read_input_tokens])/NULLIF(SUM([cache_read_input_tokens])+SUM([uncached_input_tokens]),0)", label: "Cache hit %" };
+const cacheRate: SummaryColumn = { id: "usage_cache_hit_percent", op: "formula", expression: "SUM([cache_read_input_tokens])/NULLIF(SUM([cache_read_input_tokens])+SUM([uncached_input_tokens]),0)", label: "Cache hit %", display: { kind: "percent", decimals: 1 } };
 const totals: SummaryColumn[] = [
   sum("cost_usd", "API cost"), sum("total_tokens", "Total tokens"), sum("output_tokens", "Output tokens"),
   { id: "usage_sessions", op: "count_distinct", field: "agent_session_id", label: "Agent sessions" }, cacheRate,
@@ -21,7 +21,8 @@ const grouped = (label: string, title: string, keys: string[], summaries = total
 const calendar = (label: string, key: string) => ({ ...grouped(label, `Cost, tokens, distinct sessions and cache hit rate per ${label.toLowerCase()}`, [key]), orderBy: [{ field: key, dir: "desc" as const }] });
 // Usage titles come from the same workspace row for every fact. MAX retains
 // that one title without sorting and validating a representative per workspace.
-const work = grouped("Work", "Rank work by cost across days and models; each workspace retains its own identity", ["workspace_id"], [{ id: "usage_work_title", op: "max", field: "title", label: "Work" }, ...totals]);
+const workLink: SummaryColumn = { id: "usage_work", op: "link", label: "Work", link: { label: { column: "usage_work_title" }, to: { kind: "template", template: "/work/{field:workspace_id}" } } };
+const work = grouped("Work", "Rank work by cost across days and models; each workspace retains its own identity", ["workspace_id"], [{ id: "usage_work_title", op: "max", field: "title", label: "Title" }, workLink, ...totals]);
 
 export const usageGroupPresets: UsageTablePreset[] = [
   grouped("Repositories", "Compare repository cost, tokens, sessions and cache reuse", ["repository_name"]),
@@ -30,7 +31,7 @@ export const usageGroupPresets: UsageTablePreset[] = [
   grouped("Providers", "Compare provider cost, tokens, sessions and cache reuse", ["provider"]),
   grouped("Agents", "Compare root agents and subagents within each provider", ["provider", "session_kind"]),
   { ...work,
-    columns: ["usage_work_title", "workspace_id", ...totals.map(column => column.id)] },
+    columns: [workLink.id, "workspace_id", ...totals.map(column => column.id)] },
   calendar("Day", "day"), calendar("Week", "week"), calendar("Month", "month"),
 ];
 
@@ -47,22 +48,23 @@ export const usageComparisonPresets: UsageTablePreset[] = [
   grouped("Price coverage", "Keep priced, assumed, partial and unpriced usage visible alongside cost and tokens", ["price_status"]),
 ];
 
-export function applyUsageTablePreset(query: QueryState, preset: UsageTablePreset): QueryState {
-  const source = query.grouping?.source ?? query;
-  return {
-    ...EMPTY_QUERY, limit: query.limit,
-    grouping: { ...preset.grouping, source },
+// A preset owns the grouping and the result layout. Applying it keeps the
+// source stage (filters, columns, metrics) and the page size.
+export function usageTablePresetPatch(preset: UsageTablePreset): QueryPatch {
+  return { id: `usage:${preset.label}`, owns: ["grouping", "columns", "order"], query: {
+    grouping: { ...preset.grouping, source: EMPTY_QUERY },
     select: (preset.columns ?? [...preset.grouping.keys, ...preset.grouping.summaries.map(column => column.id)]).map(field => ({ field })),
     orderBy: preset.orderBy,
-  };
+  } };
+}
+
+export function applyUsageTablePreset(query: QueryState, preset: UsageTablePreset): QueryState {
+  return applyPatch(query, usageTablePresetPatch(preset));
 }
 
 // Match calculations and keys, while allowing sorting, HAVING, paging and column layout edits.
 export function usageTablePresetMatches(query: QueryState, preset: UsageTablePreset): boolean {
   if (!query.grouping) return false;
-  const token = (grouping: GroupingDefinition) => encodeQuery({ ...EMPTY_QUERY, grouping: {
-    keys: grouping.keys, summaries: grouping.summaries.map(({ label, ...column }) => column),
-    representative: grouping.representative, source: EMPTY_QUERY,
-  } });
-  return token(query.grouping) === token(preset.grouping);
+  const patch = usageTablePresetPatch(preset);
+  return matchPatch({ ...query, where: [] }, { ...patch, owns: ["grouping"] }).status === "active";
 }

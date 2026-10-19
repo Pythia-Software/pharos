@@ -442,3 +442,39 @@ test("model tail previews apply task-count support before the visible point budg
  const preview=await loadQueryPreview('usage',item.query,schemas.usage,{recipe,cover,window:item.window});assert.equal(preview.state,'ready');assert.equal(preview.groupSummary,undefined,'scatter support and omission summaries are not hidden as ranked-list captions');assert.equal(preview.metrics[0].result.buckets.length,1);assert.deepEqual(preview.metrics[0].result.buckets[0].keys,['codex','B supported']);assert.equal(preview.metrics[0].result.buckets[0].count,3);assert.equal(preview.metrics[0].clause.display.maxGroups,1);assert.equal(core.applyQuery(population,item.query,schemas.usage,{now}).total,4);
  population=population.slice(0,1);clearPreviewCache();const empty=await loadQueryPreview('usage',item.query,schemas.usage,{recipe,cover,window:item.window});assert.equal(empty.state,'empty');assert.match(empty.emptyLabel,/at least 3 root tasks/);
 });
+
+test("metric filters and minimum group sizes run only where advertised and disclose hidden groups", async t => {
+  const errors = [{ field: "error_count", op: ">", value: "0" }];
+  const measures = [{ id: "calls", op: "sum", field: "call_count", groupBy: ["repository_name"], minCount: 4, where: [{ field: "duration_ms", op: ">=", value: "400" }] }];
+  // Without the handshake flags the card fails on its own instead of dropping the controls.
+  fixture(t);
+  await assert.rejects(loadQueryPreview("tool_calls", query(measures), schemas.tool_calls), /filter|minimum|minCount/i);
+  await assert.rejects(loadQueryPreview("tool_calls", query([{ id: "errors", op: "count", groupBy: [], where: errors }]), schemas.tool_calls), /filter/i);
+  clearPreviewCache();
+  fixture(t, path => path.endsWith("capabilities") ? response({ metricCapabilities: { version: 2, expressions: true, distributions: true, filters: true, minCount: true }, computedExecution: execution, queryCapabilities }) : undefined);
+  const errorsOnly = await loadQueryPreview("tool_calls", query([{ id: "errors", op: "count", groupBy: [], where: errors }]), schemas.tool_calls);
+  assert.equal(errorsOnly.total, 2);
+  // From 400 ms, "one" keeps four calls and "two" three: minCount 4 hides "two",
+  // so the shown sum is not presented as a complete total.
+  const preview = await loadQueryPreview("tool_calls", query(measures), schemas.tool_calls);
+  assert.equal(preview.metrics[0].result.hiddenGroups, 1);
+  assert.deepEqual(preview.metrics[0].result.buckets.map(bucket => [bucket.keys[0], bucket.value]), [["one", 4]]);
+  assert.match(preview.note, /1 group hidden \(fewer than 4 rows\)/);
+  assert.equal(preview.headlineMetric, undefined);
+  assert.match(preview.summary, /^Shown: /);
+});
+
+test("grouped cards with link columns execute without sending the links", async t => {
+  const requests = fixture(t);
+  const source = { ...core.EMPTY_QUERY };
+  const grouped = { ...core.withGroupingKeys(source, ["repository_name"]), select: [{ field: "open" }, { field: "calls" }] };
+  grouped.grouping = { ...grouped.grouping, summaries: [{ id: "calls", op: "sum", field: "call_count" },
+    { id: "open", op: "link", label: "Repository", link: { label: { column: "repository_name" }, to: { kind: "query", target: "tool_calls" } } }] };
+  const preview = await loadQueryPreview("tool_calls", grouped, schemas.tool_calls);
+  assert.equal(preview.state, "ready");
+  const request = requests.find(item => item.path.includes("query-v3")).request;
+  assert.deepEqual(request.grouping.summaries.map(column => column.id), ["calls"]);
+  // Metric cards over the same grouping also run.
+  const measured = await loadQueryPreview("tool_calls", { ...grouped, aggregations: [{ id: "total", op: "sum", field: "calls", groupBy: [] }] }, schemas.tool_calls);
+  assert.equal(measured.total, 10);
+});

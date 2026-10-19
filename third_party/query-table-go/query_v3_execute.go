@@ -255,7 +255,9 @@ func (d QueryDatasetV3) ExecuteIn(ctx context.Context, tx *sql.Tx, q QueryReques
 			return out, diagnostic("duplicate_metric", "duplicate metric ID")
 		}
 		ids[spec.ID] = true
-		metric, e := d.executeMetric(ctx, tx, spec, metricQuery, result, stageOptions, out.Total, maxGroups, &tables)
+		metric, e := isolateMetric(ctx, tx, spec.ID, spec.Scope, func() (SQLiteMetricV2, error) {
+			return d.executeMetric(ctx, tx, spec, metricQuery, result, stageOptions, out.Total, maxGroups, &tables)
+		})
 		if e != nil {
 			return out, e
 		}
@@ -404,7 +406,7 @@ func (d QueryDatasetV3) stageGroups(ctx context.Context, tx *sql.Tx, table strin
 				return result, err
 			}
 			if excessive > 0 {
-				return result, diagnostic("resource_limit", "exact summary sample budget exceeded")
+				return result, diagnostic("resource_limit", "Summary "+summary.ID+": "+sampleBudgetMessage(summarySpec(summary, g.Keys), limit))
 			}
 			break
 		}
@@ -556,7 +558,7 @@ func representativePlan(ctx context.Context, g *GroupingDefinition, s Schema, o 
 	}
 	for i, summary := range g.Summaries {
 		if summary.Op == "row" {
-			v, e := b.field(summary.Field)
+			v, e := b.sourceValue(summary.Field)
 			if e != nil {
 				return SQLPlan{}, e
 			}

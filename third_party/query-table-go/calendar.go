@@ -387,6 +387,9 @@ func (d QueryDatasetV3) executeMetric(ctx context.Context, tx *sql.Tx, spec AggS
 	modified.Scope = "allMatching"
 	modified.Sort = nil
 	modified.GroupLimit = 0
+	// MinCount is applied below, after empty buckets are filled; the metric
+	// filter runs over the staged rows (the page for shown-row scope).
+	modified.MinCount = 0
 	modified.GroupBy = append([]string{}, spec.GroupBy...)
 	modified.GroupBy[0] = bucketName
 	options := o
@@ -420,6 +423,21 @@ func (d QueryDatasetV3) executeMetric(ctx context.Context, tx *sql.Tx, spec AggS
 		if err = fillCalendarBuckets(ctx, &result, config, spec, q, o.Now, loc, maxGroups); err != nil {
 			return result, err
 		}
+	}
+	if spec.MinCount > 0 {
+		// Filled buckets (count 0) are never hidden. A hidden observed bucket
+		// leaves a gap: it is not replaced by an empty bucket.
+		kept := result.Buckets[:0]
+		hidden := int64(0)
+		for _, bucket := range result.Buckets {
+			if bucket.Count > 0 && bucket.Count < int64(spec.MinCount) {
+				hidden++
+			} else {
+				kept = append(kept, bucket)
+			}
+		}
+		result.Buckets = kept
+		result.HiddenGroups = &hidden
 	}
 	sortCalendarBuckets(result.Buckets, spec)
 	result.GroupCount = int64(len(result.Buckets))
@@ -506,7 +524,7 @@ func (d QueryDatasetV3) checkMetricSamples(ctx context.Context, tx *sql.Tx, spec
 	if spec.Distribution == nil && !sampledExpression(MetricExpression(spec)) && !sampledExpression(spec.ExpressionY) {
 		return nil
 	}
-	probe := AggSpec{ID: "__qt_samples__", Op: "count", GroupBy: spec.GroupBy, Scope: spec.Scope}
+	probe := AggSpec{ID: "__qt_samples__", Op: "count", GroupBy: spec.GroupBy, Scope: spec.Scope, Where: spec.Where}
 	p, err := compileMetricDialect(ctx, q, probe, s, o, d.Dialect == "sqlite")
 	if err != nil {
 		return err
@@ -521,7 +539,7 @@ func (d QueryDatasetV3) checkMetricSamples(ctx context.Context, tx *sql.Tx, spec
 	}
 	for _, bucket := range metric.Buckets {
 		if bucket.Count > int64(limit) {
-			return diagnostic("resource_limit", "exact metric sample budget exceeded")
+			return diagnostic("resource_limit", sampleBudgetMessage(spec, limit))
 		}
 	}
 	return nil

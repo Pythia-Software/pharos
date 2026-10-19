@@ -60,6 +60,17 @@ func TestExpressionSecurityAndBudgets(t *testing.T) {
 	}
 }
 
+// Text functions such as LENGTH and URL_ENCODE run in the client and DuckDB
+// profiles only; this server profile reports them instead of guessing SQL.
+func TestTextFunctionsAreOutsideServerProfile(t *testing.T) {
+	for _, source := range []string{"LENGTH([g])", "URL_ENCODE([g])"} {
+		_, e := CompileRowExpression(context.Background(), source, metricSchema(), metricOptions())
+		var d *PlanDiagnostic
+		if !errors.As(e, &d) {
+			t.Fatalf("%s: want a plan diagnostic, got %v", source, e)
+		}
+	}
+}
 func TestFormulaParserDistinguishesLiteralAndFieldTokenKinds(t *testing.T) {
 	for _, source := range []string{`SUM([x]) "+" 2`, `COUNT(")"`, `SUM([x]) [AND] 2`, `SUM([x]) "OR" 2`} {
 		if _, err := parseExpression(source); err == nil {

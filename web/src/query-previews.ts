@@ -1,6 +1,6 @@
 import { apiCostTrendQuery, apiCostTrendFacts, buildApiCostTrend, usesApiCostTrend, type CostTimeBucket } from "./api-cost-trend";
 import { formatMetricOutput } from "@pythia-software/query-table-ui";
-import { parseRelativeDuration, createGroupingModel, sourceExecutionSchema, toQueryRequestV3, validateQueryResultV3, validateComputedColumn, toMetricQuery, toServerQueryV2, type QueryCapabilitiesV3, type QueryResultV3, type ComputedColumn, type AggregationClause, type AggregationResult, type AggregationResultEntry, type ComputedExecution, type FieldSchema, type MetricCapabilities, type MetricQuery, type QueryState } from "@pythia-software/query-table-core";
+import { metricPopulationError, parseRelativeDuration, createGroupingModel, sourceExecutionSchema, toQueryRequestV3, validateQueryResultV3, validateComputedColumn, toMetricQuery, toServerQueryV2, type QueryCapabilitiesV3, type QueryResultV3, type ComputedColumn, type AggregationClause, type AggregationResult, type AggregationResultEntry, type ComputedExecution, type FieldSchema, type MetricCapabilities, type MetricQuery, type QueryState } from "@pythia-software/query-table-core";
 import { categoryForQuery, queryCategories } from "./query-categories";
 import { foldSeries, type ChartBucket, type ChartSeries } from "./chart-series";
 import { resolveRollingQuery, rollingQueryMatches, type QueryDataset, type RollingWindow } from "./query-links";
@@ -140,13 +140,16 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   const countUnit = ({ tool_calls: "calls", writing_messages: "messages", skill_usages: "records", tl1_attempts: "attempts" } as Partial<Record<QueryDataset, string>>)[job.dataset] ?? "rows";
   const unit = clause.display?.format ? "" : clause.op === "count" ? countUnit : clause.field?.includes("cost") ? "USD" : clause.field?.includes("tokens") ? "tokens" : clause.field?.includes("words") ? "words" : clause.field === "duration_ms" ? "ms" : clause.field?.endsWith("_count") ? countUnit : recipe?.unit ?? "";
   const scalar = !clause.groupBy.length && values.length === 1 && !clause.distribution;
-  const limited = result.coverage === "partial" || result.groupCount !== undefined && result.groupCount > result.buckets.length;
+  // Groups hidden by minCount are outside groupCount and Other, so the shown buckets are not the whole population.
+  const hidden = result.hiddenGroups ?? 0;
+  const limited = result.coverage === "partial" || hidden > 0 || result.groupCount !== undefined && result.groupCount > result.buckets.length;
   const pairCount = values.filter(bucket => typeof bucket.value === "number" && Number.isFinite(bucket.value) && typeof bucket.y === "number" && Number.isFinite(bucket.y) && !bucket.error && !bucket.yError).length;
   const summary = clause.expressionY ? `${pairCount.toLocaleString()} ${clause.label ?? "paired points"}${limited ? ` shown of ${result.groupCount?.toLocaleString() ?? "more"}` : ""}` : additive ? `${limited ? "Shown: " : ""}${formatPreviewValue(total, unit)}${unit && !["USD", "ms"].includes(unit) ? ` ${unit}` : ""}`
     : scalar ? formatMetricOutput(values[0].value, clause.display?.format).text
     : `${formatPreviewValue(result.processedRows ?? total, "")} observations · ${clause.label ?? clause.op}`;
   const notes = [recipe?.note, searchNote, options.sourceCover ? "Chart covers source observations before grouped filters" : undefined, result.scope === "shownRows" ? "Covers the saved table page" : undefined, result.coverage === "partial" ? "Partial results" : undefined,
     result.groupCount !== undefined && result.groupCount > result.buckets.length ? "Open the view for all results" : undefined,
+    hidden ? `${hidden.toLocaleString()} ${hidden === 1 ? "group" : "groups"} hidden (fewer than ${clause.minCount?.toLocaleString()} rows)` : undefined,
     result.buckets.some(bucket => bucket.error || bucket.yError) ? "Some groups have calculation errors" : undefined];
   let ready = values.length > 0;
   if (options.suggested && recipe?.eligibility && !query.grouping) {
@@ -323,7 +326,12 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
       const valid: { item: Item; request: MetricQuery }[] = [];
       for (const item of items) {
         try {
-          if (item.query.grouping || item.query.aggregations?.some(metric => metric.dateGrouping)) {
+          // A metric filter or minimum group size the executor does not run fails its card, never silently dropped.
+          const grouped = Boolean(item.query.grouping || item.query.aggregations?.some(metric => metric.dateGrouping));
+          const support = grouped ? { filters: ctx.queryCapabilities?.metricFilters, minCount: ctx.queryCapabilities?.metricMinCount } : ctx.capabilities;
+          const unsupported = item.query.aggregations?.map(metric => metricPopulationError(metric, support)).find(Boolean);
+          if (unsupported) throw new Error(unsupported);
+          if (grouped) {
             if (ctx.queryCapabilities?.version !== 3) throw new Error("Server grouping is unavailable. Refresh this view after updating the backend.");
             const labels = Boolean(item.query.grouping && item.job.options?.recipe?.exploration?.labelFields);
             const labelLimit = Math.max(12, ...(item.query.aggregations ?? []).map(metric => Math.max(metric.groupLimit ?? 0, metric.display?.maxGroups ?? 0)));

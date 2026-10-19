@@ -85,6 +85,8 @@ type QueryResultV3 struct {
 type QueryCapabilitiesV3 struct {
 	RegexSourceFilters        bool   `json:"regexSourceFilters"`
 	RegexAggregateExpressions bool   `json:"regexAggregateExpressions"`
+	MetricFilters             bool   `json:"metricFilters"`
+	MetricMinCount            bool   `json:"metricMinCount"`
 	Version                   int    `json:"version"`
 	GroupedRows               bool   `json:"groupedRows"`
 	CalendarGrouping          bool   `json:"calendarGrouping"`
@@ -150,7 +152,7 @@ func (d QueryDatasetV3) Capabilities() QueryCapabilitiesV3 {
 	if d.Dialect == "sqlite" {
 		profile = SQLiteExpressionProfile
 	}
-	return QueryCapabilitiesV3{Version: 3, GroupedRows: true, CalendarGrouping: true, ComputedSourceFilters: len(d.ComputedFilterable) > 0, Regex: false, RegexSourceFilters: d.Dialect == "sqlite", MaxRows: rows, MaxGroups: groups, MaxPopulation: pop, Profile: profile}
+	return QueryCapabilitiesV3{Version: 3, GroupedRows: true, CalendarGrouping: true, ComputedSourceFilters: len(d.ComputedFilterable) > 0, Regex: false, RegexSourceFilters: d.Dialect == "sqlite", MetricFilters: true, MetricMinCount: true, MaxRows: rows, MaxGroups: groups, MaxPopulation: pop, Profile: profile}
 }
 func (d QueryDatasetV3) options(ctx context.Context, tx *sql.Tx, q QueryRequestV3, o PlanOptions) (PlanOptions, error) {
 	if err := ctx.Err(); err != nil {
@@ -408,6 +410,11 @@ func (d QueryDatasetV3) SourcePlan(ctx context.Context, q QueryRequestV3, o Plan
 			for _, n := range append(names, spec.GroupBy...) {
 				fields[n] = true
 			}
+			for _, term := range spec.Where {
+				for _, predicate := range term.Predicates() {
+					fields[predicate.Field] = true
+				}
+			}
 			if spec.ExpressionY != "" {
 				names, e = expressionFields(spec.ExpressionY)
 				if e != nil {
@@ -505,7 +512,7 @@ func compileQuerySource(ctx context.Context, q WireQuery, s Schema, o PlanOption
 	columns := []OutputColumn{}
 	selects := []string{}
 	for i, name := range q.Select {
-		value, err := b.field(name)
+		value, err := b.sourceValue(name)
 		if field, ok := s.Fields[name]; ok && field.Kind == FieldTextArray {
 			value = b.fields[name]
 			value.Type, err = "textarray", nil

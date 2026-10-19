@@ -4,6 +4,7 @@
   let busy = false;
   let timer = null;
   let activeRun = null;
+  let runningIds = new Set();
   let openIssues = [];
   let showAllRuns = false;
   const recentRunLimit = 5;
@@ -203,6 +204,19 @@
     dialog.addEventListener('close', () => dialog.remove());
     document.body.append(dialog);
     dialog.showModal();
+  }
+
+  // Home and the card pages rerun their queries when a run finishes having
+  // indexed something. Runs that found no changes leave their results as they
+  // were. Every run is followed, so one finishing beside another still counts.
+  function announceChanges(activity) {
+    const runs = activity.runs || [];
+    const finished = [...runningIds].map(id => runs.find(run => run.id === id)).filter(run => run?.state !== 'running');
+    runningIds = new Set(runs.filter(run => run.state === 'running').map(run => run.id));
+    // A run that has left the list can't say what it changed.
+    if (finished.some(run => !run || run.workspaces > 0 || run.conversations > 0)) {
+      window.dispatchEvent(new CustomEvent('pharos:data-refresh', {detail: 'sync'}));
+    }
   }
 
   function renderHeader(activity) {
@@ -469,6 +483,7 @@
     try {
       const activity = await call('/api/activity');
       renderHeader(activity);
+      announceChanges(activity);
       if (document.getElementById('settings')?.classList.contains('active') || !status) {
         status = await call('/api/sync/status');
         renderDashboard();

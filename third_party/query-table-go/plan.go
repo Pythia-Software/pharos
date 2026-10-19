@@ -107,6 +107,8 @@ type planBuilder struct {
 	rel           string
 	serial        int
 	fields        map[string]ValueSQL
+	raw           map[string]ValueSQL
+	projected     map[string]ValueSQL
 	revisions     map[string]string
 	visiting      map[string]bool
 	dependencies  map[string]bool
@@ -130,7 +132,7 @@ func newPlanDialect(ctx context.Context, s Schema, o PlanOptions, sqlite bool) (
 	if o.Now.IsZero() {
 		o.Now = time.Now()
 	}
-	b := &planBuilder{sourceFrom: "(" + o.SourceSQL + ")", sourceColumns: map[string]string{}, sourceAliases: map[string]string{}, sqlite: sqlite, emitInputs: map[int][]string{}, rowMemo: map[string]ValueSQL{}, ctx: ctx, schema: s, options: o, args: append([]any{}, o.SourceArgs...), fields: map[string]ValueSQL{}, revisions: map[string]string{}, visiting: map[string]bool{}, dependencies: map[string]bool{}, checked: map[string]bool{}, definitions: map[string]ComputedColumn{}}
+	b := &planBuilder{sourceFrom: "(" + o.SourceSQL + ")", sourceColumns: map[string]string{}, sourceAliases: map[string]string{}, sqlite: sqlite, emitInputs: map[int][]string{}, rowMemo: map[string]ValueSQL{}, ctx: ctx, schema: s, options: o, args: append([]any{}, o.SourceArgs...), fields: map[string]ValueSQL{}, raw: map[string]ValueSQL{}, projected: map[string]ValueSQL{}, revisions: map[string]string{}, visiting: map[string]bool{}, dependencies: map[string]bool{}, checked: map[string]bool{}, definitions: map[string]ComputedColumn{}}
 	// Project bindings exactly once in the source namespace. Internal aliases do
 	// not depend on request names, labels or trusted SQL identifiers.
 	names := make([]string, 0, len(s.Fields))
@@ -162,6 +164,7 @@ func newPlanDialect(ctx context.Context, s Schema, o PlanOptions, sqlite bool) (
 			value.Error = alias
 			b.fields[n] = value
 		}
+		b.raw[n] = b.fields[n]
 	}
 	if len(cols) > 512 {
 		return nil, diagnostic("schema_limit", "v2 profile supports at most 512 projected schema fields")
@@ -352,7 +355,7 @@ func (b *planBuilder) field(name string) (ValueSQL, error) {
 			b.checked[name] = true
 		}
 		if v.Type == "text" && !strings.HasPrefix(name, "@computed/") && !b.checked[name] {
-			valid := "octet_length(" + v.Value + ") <= 100000"
+			valid := "octet_length(" + v.Value + ") <= " + strconv.Itoa(maxFormulaTextBytes)
 			// Formula values use deterministic codepoint ordering. Keep the
 			// source projection's native collation for host text filters/LOWER.
 			v = b.emit("(CASE WHEN "+valid+" THEN "+v.Value+" END) COLLATE \"C\"", "COALESCE("+v.Error+",CASE WHEN NOT ("+valid+") THEN 'text_range'::text END)", "text")
@@ -401,6 +404,33 @@ func (b *planBuilder) field(name string) (ValueSQL, error) {
 		b.fields[name] = v
 	}
 	return v, err
+}
+
+// sourceValue is a plain source field for SELECT, ORDER BY and representative
+// ROW values. The 100,000-byte text bound applies to formula inputs only, so
+// projected and sorted text keeps its full value. Storage and encoding checks
+// still apply; formula operands continue to use the bounded field.
+func (b *planBuilder) sourceValue(name string) (ValueSQL, error) {
+	raw, ok := b.raw[name]
+	if !ok || raw.Type != "text" || strings.HasPrefix(name, "@computed/") {
+		return b.field(name)
+	}
+	if err := b.ctx.Err(); err != nil {
+		return ValueSQL{}, err
+	}
+	b.dependencies[name] = true
+	if v, ok := b.projected[name]; ok {
+		return v, nil
+	}
+	var v ValueSQL
+	if b.sqlite {
+		errSQL := "COALESCE(" + raw.Error + ",qt_v2_field_error(" + raw.Value + ",'source_text'))"
+		v = b.emit("CASE WHEN "+errSQL+" IS NULL THEN "+raw.Value+" END"+b.collation(), errSQL, "text")
+	} else {
+		v = b.emit("("+raw.Value+") COLLATE \"C\"", raw.Error, "text")
+	}
+	b.projected[name] = v
+	return v, nil
 }
 func mergeType(a, c string) (string, error) {
 	if a == "null" {
@@ -720,7 +750,7 @@ func (b *planBuilder) order(terms []OrderBy) (string, error) {
 				return "", diagnostic("sort", "alternate sort bindings require an explicit schema field in v2")
 			}
 		}
-		v, err := b.field(term.Field)
+		v, err := b.sourceValue(term.Field)
 		if err != nil {
 			return "", err
 		}
@@ -781,7 +811,7 @@ func compileComputedRowsDialect(ctx context.Context, q WireQuery, s Schema, o Pl
 	cols := []OutputColumn{}
 	selects := []string{}
 	for i, n := range q.Select {
-		v, e := b.field(n)
+		v, e := b.sourceValue(n)
 		if f, ok := s.Fields[n]; ok && f.Kind == FieldTextArray {
 			v = b.fields[n]
 			v.Type = "textarray"

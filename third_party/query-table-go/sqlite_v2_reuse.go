@@ -154,7 +154,13 @@ func (c *sqliteReductionCache) plan(ctx context.Context, tx *sql.Tx, p MetricSQL
 			}
 			statement := "CREATE TEMP TABLE " + table + " AS " + sqlStageCTEs(p.Stages[:p.SQLiteReductionStage]) + "\nSELECT " + strings.Join(projections, ",") + p.SQLiteReductionFrom
 			if _, err := tx.ExecContext(ctx, statement, p.Args...); err != nil {
-				return p, err
+				if ctx.Err() != nil {
+					return p, err
+				}
+				// One fused expression's statement failure must not fail its
+				// siblings. Each fused metric then runs its own reduction.
+				delete(c.fusions, fusionKey)
+				return c.plan(ctx, tx, p)
 			}
 			c.tables[tableKey] = table
 		}
@@ -193,6 +199,23 @@ func sqliteReplaceStage(p MetricSQLPlan, i int, statement string) (MetricSQLPlan
 	// the source. SQLite permits unused positional arguments to these plans.
 	p.SQL = sqlStageCTEs(p.Stages) + "\n" + final
 	return p, nil
+}
+
+// mark and forget drop cache entries for tables created inside a metric
+// savepoint that was rolled back, so later metrics recreate them.
+func (c *sqliteReductionCache) mark() map[string]bool {
+	existing := map[string]bool{}
+	for key := range c.tables {
+		existing[key] = true
+	}
+	return existing
+}
+func (c *sqliteReductionCache) forget(existing map[string]bool) {
+	for key := range c.tables {
+		if !existing[key] {
+			delete(c.tables, key)
+		}
+	}
 }
 func (c *sqliteReductionCache) close(tx *sql.Tx) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

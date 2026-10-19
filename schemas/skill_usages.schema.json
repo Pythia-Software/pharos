@@ -202,6 +202,7 @@
         }
       },
       "filter": {
+        "editor": "set",
         "values": {
           "source": "static",
           "options": [
@@ -236,6 +237,7 @@
         }
       },
       "filter": {
+        "editor": "set",
         "values": {
           "source": "static",
           "options": [
@@ -541,6 +543,7 @@
       "name": "conversation_id", "relationship": {"objectType": "pharos_conversations", "key": {"id": "conversation_id"}},
       "label": "conversation id",
       "type": "text",
+      "render": "conversation_link",
       "group": "Evidence",
       "filter": {
         "values": {

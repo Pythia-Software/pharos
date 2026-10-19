@@ -153,7 +153,8 @@ func (s *Server) countOnlyMetricsV2(ctx context.Context, tx *sql.Tx, table sqlDa
 	}
 	for _, spec := range q.Metrics {
 		count := spec.Op == "count" && spec.Field == "" && spec.Expression == "" || strings.ToUpper(strings.TrimSpace(spec.Expression)) == "COUNT()"
-		if !count || len(spec.GroupBy) > 0 || spec.ExpressionY != "" || spec.Distribution != nil || spec.DateGrouping != nil || spec.Scope != "" && spec.Scope != "allMatching" {
+		// A metric's own WHERE narrows its population below the table total.
+		if !count || len(spec.GroupBy) > 0 || len(spec.Where) > 0 || spec.MinCount > 0 || spec.ExpressionY != "" || spec.Distribution != nil || spec.DateGrouping != nil || spec.Scope != "" && spec.Scope != "allMatching" {
 			return qt.SQLiteV2ExecutionResult{}, false, nil
 		}
 	}

@@ -6,6 +6,8 @@ The benchmark copy contains about 48,000 usage ledger facts, 33,000 daily
 usage rows, 19,000 workspace groups and 1.5 million raw tool calls.
 Parallelism uses a captured 14-day timing snapshot with 2,439 conversations
 and 1,342 roots. These are local measurements, not cross-machine guarantees.
+These timings predate the Query Table v0.8.0 merge; the backend performance
+patches were carried forward, with the correctness checks rerun after merging.
 
 ## Scope and measurements
 
@@ -56,7 +58,7 @@ than claiming every first load is identical.
   conversation/delegation graph. Queries consuming lineage fields still resolve
   it. Enrichment clones maps so shared cached facts remain immutable. Covering
   indexes avoid reading wide conversation/session rows for ledger metadata.
-- The local Query Table Go backend retains v0.7.1's validation and exact
+- The local Query Table Go backend retains v0.8.0's validation and exact
   aggregates while inlining inexpensive SQL guards, reusing validated staged
   values, fusing scalar group summaries, and materializing representatives once.
   Fused outputs are used directly without rewriting every group per summary.

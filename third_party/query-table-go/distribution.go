@@ -153,10 +153,7 @@ func (b *planBuilder) distribution(spec AggSpec, groups []ValueSQL, scope string
 	if e != nil {
 		return SQLPlan{}, e
 	}
-	sql := "SELECT *,COUNT(*) OVER () AS group_count FROM " + b.rel + order
-	if spec.GroupLimit > 0 {
-		sql += " LIMIT " + b.param(spec.GroupLimit, "integer")
-	}
+	sql := b.metricResult(spec, order)
 	return b.finish(sql, scope, nil), nil
 }
 

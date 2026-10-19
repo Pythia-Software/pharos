@@ -29,6 +29,10 @@ type SQLiteAggregateDescriptor struct {
 // return resource_limit rather than an approximate or truncated result.
 const SQLiteMaxMedianSamples = 100000
 
+// maxFormulaTextBytes bounds text formula operands in both dialects. Plain
+// projected, filtered and sorted text values are not rejected by length.
+const maxFormulaTextBytes = 100000
+
 type sqliteNumericResult struct {
 	Value *float64 `json:"value"`
 	Error string   `json:"error,omitempty"`
@@ -160,8 +164,17 @@ func SQLiteV2Functions() []SQLiteScalarFunction {
 				if !ok {
 					return "storage_type", nil
 				}
-				if !utf8.ValidString(s) || len(s) > 100000 {
+				if !utf8.ValidString(s) || len(s) > maxFormulaTextBytes {
 					return "text_range", nil
+				}
+			case "source_text":
+				// Plain projections are unbounded; corrupt storage still fails.
+				s, ok := a[0].(string)
+				if !ok {
+					return "storage_type", nil
+				}
+				if !utf8.ValidString(s) {
+					return "text_encoding", nil
 				}
 			case "bool":
 				n, ok := a[0].(int64)

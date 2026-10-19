@@ -208,7 +208,11 @@ func (b *planBuilder) sqliteOrder(terms []OrderBy) (string, error) {
 			out = append(out, sql)
 			continue
 		}
-		v, e := b.field(name)
+		// Regex extraction is a bounded text function; plain keys sort the full value.
+		v, e := b.sourceValue(name)
+		if term.Extract != nil {
+			v, e = b.field(name)
+		}
 		if e != nil {
 			return "", e
 		}

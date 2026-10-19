@@ -55,37 +55,61 @@ func CompileMetrics(ctx context.Context, q MetricQuery, s Schema, o PlanOptions)
 	return compileMetricsDialect(ctx, q, s, o, false)
 }
 func compileMetricsDialect(ctx context.Context, q MetricQuery, s Schema, o PlanOptions, sqlite bool) (MetricBatchPlan, error) {
+	result, failures, err := compileMetricsPartial(ctx, q, s, o, sqlite)
+	if err != nil {
+		return MetricBatchPlan{}, err
+	}
+	for i, failure := range failures {
+		if failure != nil {
+			return MetricBatchPlan{}, fmt.Errorf("metric %s: %w", q.Metrics[i].ID, failure)
+		}
+	}
+	return result, nil
+}
+
+// compileMetricsPartial validates the request as a whole, then compiles each
+// metric. Clause-level failures are returned per index (aligned with
+// q.Metrics, whose failed entries are omitted from the batch); request-level
+// failures return err.
+func compileMetricsPartial(ctx context.Context, q MetricQuery, s Schema, o PlanOptions, sqlite bool) (MetricBatchPlan, []error, error) {
 	result := MetricBatchPlan{RequiresSharedSnapshot: true}
+	failures := make([]error, len(q.Metrics))
 	var optionErr error
 	o, optionErr = requestOptionsDialect(ctx, sqlite, q.Profile, q.PlanToken, q.Snapshot, q.ExpectedRevisions, o)
 	if optionErr != nil {
-		return result, optionErr
+		return result, nil, optionErr
 	}
 	if o.Now.IsZero() {
 		o.Now = time.Now()
 	}
 	if q.Version != 2 {
-		return result, diagnostic("version", "metric protocol version must be 2")
+		return result, nil, diagnostic("version", "metric protocol version must be 2")
 	}
 	if len(q.Diagnostics) > 0 {
-		return result, diagnostic("residual_query", "query contains unresolved client diagnostics")
+		return result, nil, diagnostic("residual_query", "query contains unresolved client diagnostics")
 	}
 	if err := (WireQuery{Where: q.Where, OrderBy: q.OrderBy, Limit: q.Limit, Offset: q.Offset, Aggregations: q.Metrics}).Validate(); err != nil {
-		return result, err
+		return result, nil, err
 	}
 	ids := map[string]bool{}
 	for _, spec := range q.Metrics {
 		if ids[spec.ID] {
-			return result, diagnostic("duplicate_metric", "duplicate metric ID")
+			return result, nil, diagnostic("duplicate_metric", "duplicate metric ID")
 		}
 		ids[spec.ID] = true
+	}
+	for i, spec := range q.Metrics {
 		p, e := compileMetricDialect(ctx, q, spec, s, o, sqlite)
 		if e != nil {
-			return MetricBatchPlan{}, fmt.Errorf("metric %s: %w", spec.ID, e)
+			if _, clause := metricClauseError(ctx, e); !clause {
+				return MetricBatchPlan{}, nil, fmt.Errorf("metric %s: %w", spec.ID, e)
+			}
+			failures[i] = e
+			continue
 		}
 		result.Metrics = append(result.Metrics, MetricSQLPlan{spec.ID, p})
 	}
-	return result, nil
+	return result, failures, nil
 }
 func MetricExpression(spec AggSpec) string {
 	if spec.Expression != "" {
@@ -115,6 +139,16 @@ func compileMetricDialect(ctx context.Context, q MetricQuery, spec AggSpec, s Sc
 	}
 	if e = b.filter(q.Where); e != nil {
 		return SQLPlan{}, e
+	}
+	for _, term := range spec.Where {
+		for _, p := range term.Predicates() {
+			if p.Op == "matches_regex" || p.Op == "not_matches_regex" {
+				return SQLPlan{}, diagnostic("unsupported_regex", "regex is unavailable in metric filters")
+			}
+		}
+	}
+	if spec.MinCount > 0 && len(spec.GroupBy) == 0 {
+		return SQLPlan{}, diagnostic("min_count_grouping", "minCount requires at least one grouping field")
 	}
 	scope := spec.Scope
 	if scope == "" {
@@ -146,6 +180,11 @@ func compileMetricDialect(ctx context.Context, q MetricQuery, spec AggSpec, s Sc
 			b.stage("SELECT * FROM " + b.rel)
 			b.lateStage = len(b.stages) - 1
 		}
+	}
+	// A metric predicate narrows the scoped rows: the whole filtered relation,
+	// or the already-selected page. It never changes which rows are shown.
+	if e = b.filter(spec.Where); e != nil {
+		return SQLPlan{}, e
 	}
 	groups := []ValueSQL{}
 	for _, name := range spec.GroupBy {
@@ -380,10 +419,7 @@ func compileMetricDialect(ctx context.Context, q MetricQuery, spec AggSpec, s Sc
 	if e != nil {
 		return SQLPlan{}, e
 	}
-	sql := "SELECT *, COUNT(*) OVER () AS group_count FROM " + b.rel + order
-	if spec.GroupLimit > 0 {
-		sql += " LIMIT " + b.param(spec.GroupLimit, "integer")
-	}
+	sql := b.metricResult(spec, order)
 	cols := []OutputColumn{}
 	{
 		for i, g := range groups {
@@ -412,6 +448,24 @@ func compileMetricDialect(ctx context.Context, q MetricQuery, spec AggSpec, s Sc
 		plan.SQLiteReductionColumns = plan.reduction.columns
 	}
 	return plan, nil
+}
+// metricResult ranks and limits reduced groups. MinCount first removes groups
+// below the threshold; group_count then counts only the kept groups. The kept
+// rows are LEFT JOINed to a one-row hidden_groups count, so a result whose
+// every group is hidden still returns that count in one row whose count is
+// NULL (no bucket). Hidden groups never reach the ranking, LIMIT or Other.
+func (b *planBuilder) metricResult(spec AggSpec, order string) string {
+	limit := ""
+	if spec.GroupLimit > 0 {
+		limit = " LIMIT " + b.param(spec.GroupLimit, "integer")
+	}
+	if spec.MinCount <= 0 {
+		return "SELECT *,COUNT(*) OVER () AS group_count FROM " + b.rel + order + limit
+	}
+	groups := b.rel
+	threshold := b.param(spec.MinCount, "bigint")
+	b.stage("SELECT *,COUNT(*) OVER () AS group_count FROM " + groups + " WHERE count>=" + threshold)
+	return "SELECT k.*,h.hidden_groups FROM (SELECT COUNT(*) AS hidden_groups FROM " + groups + " WHERE count<" + threshold + ") AS h LEFT JOIN " + b.rel + " AS k ON 1=1" + order + limit
 }
 func groupSQL(groups []ValueSQL) ([]string, string) {
 	sels := []string{}

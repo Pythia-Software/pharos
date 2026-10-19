@@ -1,7 +1,7 @@
 # Pharos Query Table backend patch
 
-This directory retains the MIT-licensed Go backend from Query Table **v0.7.1**.
-The frontend stays on v0.7.1. The root `go.mod` replacement makes these backend
+This directory retains the MIT-licensed Go backend from Query Table **v0.8.0**.
+The frontend stays on v0.8.0. The root `go.mod` replacement makes these backend
 fixes reproducible without modifying the module cache or requiring an upstream
 release.
 
@@ -31,5 +31,5 @@ GOWORK=off go test github.com/Pythia-Software/query-table/backends/go \
   -skip 'TestExampleSchemaLoads|TestRelativeDurationFixtures'
 ```
 
-Review local changes against v0.7.1 when updating this copy; remove the root
+Review local changes against v0.8.0 when updating this copy; remove the root
 replacement once an upstream release includes equivalent fixes.

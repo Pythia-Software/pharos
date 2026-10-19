@@ -187,8 +187,9 @@ func TestQueryV2ComputedAndLimits(t *testing.T) {
 	d.MaxGroups = 2
 	m.Metrics[0].GroupBy = []string{"category"}
 	m.Metrics[0].GroupLimit = 1
-	if _, err = d.ExecuteV2(context.Background(), db, nil, &m, qt.PlanOptions{}); err == nil {
-		t.Fatal("top-N hid group budget")
+	// Query Table 0.8 reports a metric's budget failure on that metric.
+	if result, err := d.ExecuteV2(context.Background(), db, nil, &m, qt.PlanOptions{}); err != nil || !strings.Contains(result.Metrics.Metrics[0].Error, "group") || len(result.Metrics.Metrics[0].Buckets) != 0 {
+		t.Fatalf("top-N hid group budget: %+v %v", result.Metrics, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -516,11 +517,17 @@ func TestQueryV2ReductionReuse(t *testing.T) {
 	if err := tx.QueryRow("SELECT count(*) FROM sqlite_temp_master WHERE name LIKE '_qt_reduction_%'").Scan(&temp); err != nil || temp != 0 {
 		t.Fatal("temporary reductions leaked", temp, err)
 	}
-	// Validation of every metric precedes reuse and population execution.
+	// An invalid metric fails alone; its siblings keep their shared results.
 	q.Metrics = append(q.Metrics, qt.AggSpec{ID: "bad", Expression: "SUM([missing])"})
-	queryV2ProbeCalls.Store(0)
-	if _, err := d.ExecuteV2In(context.Background(), tx, nil, &q, qt.PlanOptions{}); err == nil || queryV2ProbeCalls.Load() != 0 {
-		t.Fatal("invalid batch executed")
+	result, err = d.ExecuteV2In(context.Background(), tx, nil, &q, qt.PlanOptions{})
+	if err != nil || len(result.Metrics.Metrics) != len(want)+1 {
+		t.Fatal("invalid metric failed its batch", err)
+	}
+	if bad := result.Metrics.Metrics[len(want)]; bad.ID != "bad" || bad.Error == "" || len(bad.Buckets) != 0 {
+		t.Fatalf("invalid metric result: %+v", bad)
+	}
+	if !same(result.Metrics.Metrics[:len(want)], want) {
+		t.Fatalf("siblings of an invalid metric differ: %+v want %+v", result.Metrics.Metrics, want)
 	}
 }
 

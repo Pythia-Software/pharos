@@ -211,6 +211,7 @@
         "default": false
       },
       "filter": {
+        "editor": "set",
         "values": {
           "source": "static",
           "options": [
@@ -265,6 +266,7 @@
       "type": "enum",
       "group": "Model",
       "filter": {
+        "editor": "set",
         "values": {
           "source": "static",
           "options": [
@@ -408,6 +410,7 @@
         "default": false
       },
       "filter": {
+        "editor": "set",
         "values": {
           "source": "static",
           "options": [
@@ -452,6 +455,7 @@
       "type": "enum",
       "group": "Tool",
       "filter": {
+        "editor": "set",
         "values": {
           "source": "static",
           "options": [
@@ -674,6 +678,7 @@
         "default": false
       },
       "filter": {
+        "editor": "set",
         "values": {
           "source": "static",
           "options": [
@@ -803,6 +808,7 @@
         "default": false
       },
       "filter": {
+        "editor": "set",
         "values": {
           "source": "static",
           "options": [
@@ -1012,6 +1018,7 @@
         "default": false
       },
       "filter": {
+        "editor": "set",
         "values": {
           "source": "static",
           "options": [
@@ -1169,6 +1176,7 @@
       "group": "Outcome",
       "render": "tool_status",
       "filter": {
+        "editor": "set",
         "values": {
           "source": "static",
           "options": [
@@ -1203,6 +1211,7 @@
       "type": "enum",
       "group": "Outcome",
       "filter": {
+        "editor": "set",
         "values": {
           "source": "static",
           "options": [
@@ -1405,6 +1414,7 @@
         "default": false
       },
       "filter": {
+        "editor": "set",
         "values": {
           "source": "static",
           "options": [
@@ -1509,6 +1519,7 @@
         "default": false
       },
       "filter": {
+        "editor": "set",
         "values": {
           "source": "static",
           "options": [
@@ -1802,6 +1813,7 @@
       },
       "label": "Conversation ID",
       "type": "text",
+      "render": "conversation_link",
       "group": "Evidence",
       "select": {
         "default": false

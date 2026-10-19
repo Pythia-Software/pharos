@@ -18,7 +18,7 @@ main > #home { padding-bottom:28px; }
 .home-search-options { border:0; padding:0; margin:11px 0 0; display:flex; flex-wrap:wrap; justify-content:center; gap:8px 19px; color:var(--muted); font-size:11px; }
 .home-search-options label { display:flex; align-items:center; gap:5px; }
 .home-search-options input { accent-color:var(--gold); margin:0; }
-.home-collection { position:relative; display:flex; flex-wrap:wrap; justify-content:center; align-items:flex-start; gap:22px var(--query-card-gap); min-height:210px; padding:0 18px; }
+.home-collection { position:relative; display:flex; flex-wrap:wrap; justify-content:center; align-items:stretch; gap:22px var(--query-card-gap); min-height:210px; padding:0 18px; }
 .home-empty { width:100%; min-height:150px; display:flex; align-items:center; justify-content:center; gap:12px; color:var(--ink); font:20px/1.35 Charter,Georgia,serif; }
 .home-empty>svg { width:25px; height:25px; color:var(--gold); }
 .home-empty small { display:block; margin-top:7px; font:12px "Avenir Next",Avenir,sans-serif; color:var(--muted); }
