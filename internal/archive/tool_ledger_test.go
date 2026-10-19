@@ -217,16 +217,6 @@ func TestToolTablesQueryInSQL(t *testing.T) {
 			t.Fatalf("summary row: %#v", row)
 		}
 	}
-	aggregate, err := toolRollupDataset.Aggregate(ctx, catalog.DB, querytable.AggregationRequest{Aggregations: []querytable.Aggregation{
-		{ID: "errors", Op: "sum", Field: "error_count", GroupBy: []string{"tool_name"}},
-		{ID: "calls", Op: "sum", Field: "call_count"},
-	}}, tools)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(aggregate.Metrics) != 2 || len(aggregate.Metrics[0].Buckets) != 2 || aggregate.Metrics[1].Buckets[0].Value != 3.0 {
-		t.Fatalf("aggregations: %#v", aggregate)
-	}
 	failures, err := toolCallDataset.Rows(ctx, catalog.DB, querytable.Query{Where: []querytable.WhereTerm{
 		{Any: []querytable.WhereClause{{Field: "error_type", Op: "=", Value: "nonzero_exit"}, {Field: "command", Op: "contains", Value: "GIT STATUS"}}},
 		{Field: "command", Op: "matches_regex", Value: `^(go|cd) `},

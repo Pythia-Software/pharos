@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -357,53 +356,6 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 			}
 		}
 		writeJSON(w, result, http.StatusOK)
-	case operation == "aggregations":
-		var request querytable.AggregationRequest
-		if err := decoder.Decode(&request); err != nil {
-			writeError(w, fmt.Errorf("aggregation json: %w", err), http.StatusBadRequest)
-			return
-		}
-		needed := whereFields(request.Where)
-		for _, aggregation := range request.Aggregations {
-			if aggregation.Field != "" {
-				needed = append(needed, aggregation.Field)
-			}
-			needed = append(needed, aggregation.GroupBy...)
-		}
-		var rows []map[string]any
-		var find *libraryFindSet
-		var err error
-		if dataset == "library" {
-			rows, find, err = s.libraryRows(r.Context(), r.URL.Query(), libraryFieldsFor(needed...), nil, request.Where)
-		} else {
-			rows, err = s.queryTableRows(r.Context(), dataset, r.URL.Query(), queryFieldsFor(dataset, needed...), request.Where)
-		}
-		if err != nil {
-			writeError(w, err, http.StatusInternalServerError)
-			return
-		}
-		var result querytable.AggregationResult
-		if dataset == "usage" && slices.Contains(needed, "hour") {
-			result, err = s.Catalog.aggregateUsage(r.Context(), rows, request, schema)
-		} else {
-			result, err = querytable.Aggregate(rows, request, schema)
-		}
-		if err != nil {
-			writeError(w, err, http.StatusBadRequest)
-			return
-		}
-		if dataset == "usage" {
-			sortUsageTimeBuckets(request, result)
-		}
-		if find != nil {
-			encoded, _ := json.Marshal(result)
-			var payload map[string]any
-			_ = json.Unmarshal(encoded, &payload)
-			payload["find"] = find.summary()
-			writeJSON(w, payload, 200)
-		} else {
-			writeJSON(w, result, http.StatusOK)
-		}
 	default:
 		writeJSON(w, map[string]any{"error": "not found"}, http.StatusNotFound)
 	}
@@ -420,8 +372,8 @@ func (c *Catalog) prepareSQLDataset(ctx context.Context, dataset string) error {
 	return c.currentToolRollup(ctx)
 }
 
-// postSQLQueryTable answers row and aggregation requests for SQL-backed
-// datasets, which filter, sort, page, and group in SQLite.
+// postSQLQueryTable answers legacy row requests for SQL-backed datasets,
+// which filter, sort and page in SQLite.
 func (s *Server) postSQLQueryTable(w http.ResponseWriter, r *http.Request, dataset, operation string, table sqlDataset, schema querytable.Schema, decoder *json.Decoder) {
 	if err := s.Catalog.prepareSQLDataset(r.Context(), dataset); err != nil {
 		writeError(w, err, http.StatusInternalServerError)
@@ -460,29 +412,6 @@ func (s *Server) postSQLQueryTable(w http.ResponseWriter, r *http.Request, datas
 			writeError(w, err, http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, result, http.StatusOK)
-	case "aggregations":
-		var request querytable.AggregationRequest
-		if err := decoder.Decode(&request); err != nil {
-			writeError(w, fmt.Errorf("aggregation json: %w", err), http.StatusBadRequest)
-			return
-		}
-		var result querytable.AggregationResult
-		var err error
-		var handled bool
-		if dataset == "tool_calls" {
-			result, handled, err = s.Catalog.machineTimeAggregations(r.Context(), request, schema)
-		} else if dataset == "writing_messages" {
-			result, handled, err = table.writingMessageSummary(r.Context(), s.Catalog.reader(), request, schema)
-		}
-		if !handled {
-			result, err = table.Aggregate(r.Context(), s.Catalog.reader(), request, schema)
-		}
-		if err != nil {
-			writeError(w, err, http.StatusBadRequest)
-			return
-		}
-		sortUsageTimeBuckets(request, result)
 		writeJSON(w, result, http.StatusOK)
 	default:
 		writeJSON(w, map[string]any{"error": "not found"}, http.StatusNotFound)

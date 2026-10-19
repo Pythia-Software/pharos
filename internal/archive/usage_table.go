@@ -4,8 +4,6 @@ import (
 	"context"
 	"maps"
 	"regexp"
-	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -17,9 +15,6 @@ var usageTokenFields = []string{
 	"cache_creation_input_tokens", "cache_creation_5m_input_tokens", "cache_creation_1h_input_tokens",
 	"output_tokens", "reasoning_output_tokens", "unclassified_tokens",
 }
-
-// usageTimeFields are the calendar buckets derived from the ledger hour.
-var usageTimeFields = map[string]bool{"hour": true, "day": true, "week": true, "month": true}
 
 func queryFieldsFor(dataset string, names ...string) libraryFields {
 	if dataset != "usage" && dataset != "parallelism" {
@@ -337,49 +332,6 @@ func (c *Catalog) hourlyUsageForAggregation(ctx context.Context, where []queryta
 	return querytable.Filter(kept, hourWhere, schema)
 }
 
-// aggregateUsage selects granularity per metric. An hour filter selects daily
-// table rows containing a matching hour; it does not turn daily counts into hours.
-func (c *Catalog) aggregateUsage(ctx context.Context, daily []map[string]any, request querytable.AggregationRequest, schema querytable.Schema) (querytable.AggregationResult, error) {
-	needed := []string{}
-	for _, spec := range request.Aggregations {
-		needed = append(needed, spec.Field)
-		needed = append(needed, spec.GroupBy...)
-	}
-	hourly, err := c.hourlyUsageForAggregation(ctx, request.Where, schema, needed)
-	if err != nil {
-		return querytable.AggregationResult{}, err
-	}
-	dailyWhere := request.Where
-	if slices.Contains(whereFields(request.Where), "hour") {
-		ids := map[string]bool{}
-		for _, row := range hourly {
-			ids[usageDailyID(row)] = true
-		}
-		selected := make([]map[string]any, 0, len(daily))
-		for _, row := range daily {
-			if ids[firstString(row["id"])] {
-				selected = append(selected, row)
-			}
-		}
-		daily, dailyWhere = selected, nil
-	}
-	result := querytable.AggregationResult{Metrics: []querytable.Metric{}}
-	for _, aggregation := range request.Aggregations {
-		rows, where := daily, dailyWhere
-		if aggregation.Field == "hour" || slices.Contains(aggregation.GroupBy, "hour") {
-			rows, where = hourly, nil
-		}
-		metric, err := querytable.Aggregate(rows, querytable.AggregationRequest{Where: where, Aggregations: []querytable.Aggregation{aggregation}}, schema)
-		if err != nil {
-			return querytable.AggregationResult{}, err
-		}
-		result.Metrics = append(result.Metrics, metric.Metrics...)
-	}
-	return result, nil
-}
-
-// representativeLedger reads the whole ledger less linked mirrors: only each
-// mirror group's representative workspace keeps its entries.
 func (c *Catalog) representativeLedger() ([]map[string]any, error) {
 	ledger, err := c.usageLedger(nil)
 	if err != nil {
@@ -558,31 +510,6 @@ func modelFamily(model string) string {
 	return family
 }
 
-// sortUsageTimeBuckets orders metrics grouped by a calendar field newest first,
-// so breakdowns read as a timeline instead of by magnitude.
-func sortUsageTimeBuckets(request querytable.AggregationRequest, result querytable.AggregationResult) {
-	for index, aggregation := range request.Aggregations {
-		if index >= len(result.Metrics) {
-			break
-		}
-		position := -1
-		for groupIndex, field := range aggregation.GroupBy {
-			if usageTimeFields[field] {
-				position = groupIndex
-				break
-			}
-		}
-		if position < 0 {
-			continue
-		}
-		buckets := result.Metrics[index].Buckets
-		sort.SliceStable(buckets, func(i, j int) bool {
-			return firstString(buckets[i].Keys[position]) > firstString(buckets[j].Keys[position])
-		})
-	}
-}
-
-// usageDailyID is shared by both query protocols when expanding daily rows into hours.
 func usageDailyID(row map[string]any) string {
 	return firstString(row["agent_session_id"]) + "|" + firstString(row["day"]) + "|" + firstString(row["model"]) + "|" + firstString(row["effort"])
 }

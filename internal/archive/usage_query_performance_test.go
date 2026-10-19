@@ -99,52 +99,6 @@ func TestMachineTimeProjectionMatchesCubeAndInvalidatesOnPublication(t *testing.
 	if err := c.ensureToolRollup(ctx); err != nil {
 		t.Fatal(err)
 	}
-	schema, err := (&Server{Catalog: c}).queryTableSchema("tool_calls")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, groups := range [][]string{{}, {"repository_name", "activity", "day", "status", "operation_key", "operation_name", "tool_name", "mcp_server"}, {"provider", "model_family", "month"}} {
-		for _, where := range [][]querytable.WhereTerm{nil, {{Field: "provider", Op: "=", Value: "codex"}}, {{Field: "provider", Op: "=", Value: "absent"}}, {
-			{Field: "started_at", Op: ">=", Value: time.Date(2026, 1, 1, 0, 0, 0, 0, time.Local).Format(time.RFC3339)},
-			{Field: "started_at", Op: "<", Value: time.Date(2027, 1, 1, 0, 0, 0, 0, time.Local).Format(time.RFC3339)},
-		}} {
-			request := querytable.AggregationRequest{Where: where, RequireComplete: true, Aggregations: []querytable.Aggregation{
-				{ID: "time", Op: "sum", Field: "duration_ms", GroupBy: groups},
-				{ID: "timed", Op: "count", Field: "duration_ms", GroupBy: groups},
-				{ID: "calls", Op: "count", GroupBy: groups},
-			}}
-			want, err := toolCallDataset.Aggregate(ctx, c.reader(), request, schema)
-			if err != nil {
-				t.Fatal(err)
-			}
-			got, handled, err := c.machineTimeAggregations(ctx, request, schema)
-			// The legacy SQL post-sort interleaves NULL sums by key, without a
-			// stable total ordering. Compare the complete typed bucket population.
-			for _, result := range []*querytable.AggregationResult{&want, &got} {
-				for i := range result.Metrics {
-					sort.Slice(result.Metrics[i].Buckets, func(a, b int) bool {
-						left, _ := json.Marshal(result.Metrics[i].Buckets[a].Keys)
-						right, _ := json.Marshal(result.Metrics[i].Buckets[b].Keys)
-						return string(left) < string(right)
-					})
-				}
-			}
-			left, _ := json.Marshal(want)
-			right, _ := json.Marshal(got)
-			if err != nil || !handled || string(left) != string(right) {
-				t.Fatalf("projection changed %v/%v: %v", groups, where, err)
-			}
-		}
-	}
-	for _, request := range []querytable.AggregationRequest{
-		{Aggregations: []querytable.Aggregation{{ID: "ids", Op: "count", GroupBy: []string{"id"}}}},
-		{Where: []querytable.WhereTerm{{Field: "duration_ms", Op: ">", Value: "100"}}, Aggregations: []querytable.Aggregation{{ID: "time", Op: "sum", Field: "duration_ms"}}},
-		{Where: []querytable.WhereTerm{{Field: "started_at", Op: ">=", Value: time.Date(2026, 1, 1, 12, 0, 0, 0, time.Local).Format(time.RFC3339)}, {Field: "started_at", Op: "<", Value: time.Date(2027, 1, 1, 0, 0, 0, 0, time.Local).Format(time.RFC3339)}}, Aggregations: []querytable.Aggregation{{ID: "calls", Op: "count"}}},
-	} {
-		if _, handled, err := c.machineTimeAggregations(ctx, request, schema); handled || err != nil {
-			t.Fatal("raw-call query incorrectly used grouped facts", handled, err)
-		}
-	}
 	// /metrics answers the same shapes from the projection exactly as the
 	// generic executor answers them from the calls, in the same order.
 	v2Schema := PharosToolCallsSchema()
@@ -218,7 +172,7 @@ func TestMachineTimeProjectionMatchesCubeAndInvalidatesOnPublication(t *testing.
 		return rows
 	}
 	before := projection()
-	if _, err = c.DB.Exec(`UPDATE tool_call_cube SET duration_ms_sum=123456; INSERT INTO meta(key,value) VALUES('tool_rollup_publication','next-publication') ON CONFLICT(key) DO UPDATE SET value=excluded.value`); err != nil {
+	if _, err := c.DB.Exec(`UPDATE tool_call_cube SET duration_ms_sum=123456; INSERT INTO meta(key,value) VALUES('tool_rollup_publication','next-publication') ON CONFLICT(key) DO UPDATE SET value=excluded.value`); err != nil {
 		t.Fatal(err)
 	}
 	if after := projection(); reflect.DeepEqual(before, after) {

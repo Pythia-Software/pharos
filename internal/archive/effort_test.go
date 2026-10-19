@@ -12,7 +12,6 @@ import (
 	"time"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
-	"github.com/gbdubs/pharos/internal/querytable"
 )
 
 func TestEffortParsingPreservesTurnChangesAndUnknowns(t *testing.T) {
@@ -103,20 +102,6 @@ func TestEffortUsageAccountingQueriesAndExports(t *testing.T) {
 		hours, err := catalog.usageRowsByPeriod(time.Local, true)
 		if err != nil || len(hours) != 3 {
 			t.Fatalf("hourly buckets %v: %v", hours, err)
-		}
-		schema, err := testServer(t, config, catalog).queryTableSchema("usage")
-		if err != nil {
-			t.Fatal(err)
-		}
-		result, err := catalog.aggregateUsage(context.Background(), rows, querytable.AggregationRequest{
-			Where:        []querytable.WhereTerm{{Field: "effort", Op: "=", Value: high}},
-			Aggregations: []querytable.Aggregation{{ID: "effort-tokens", Op: "sum", Field: "total_tokens", GroupBy: []string{"hour", "effort"}}},
-		}, schema)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(result.Metrics) != 1 || len(result.Metrics[0].Buckets) != 1 || integer(result.Metrics[0].Buckets[0].Value) != 230 {
-			t.Fatalf("filtered hourly metrics: %#v", result)
 		}
 		v2Schema, err := sqliteQuerySchema("usage")
 		if err != nil {

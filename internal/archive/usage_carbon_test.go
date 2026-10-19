@@ -10,7 +10,6 @@ import (
 	"time"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
-	"github.com/gbdubs/pharos/internal/querytable"
 )
 
 // carbonVariant mirrors carbon.js settings() for one saved preference value.
@@ -183,23 +182,6 @@ func TestUsageCarbonSumsMatchCarbonPageAndFollowSettings(t *testing.T) {
 					return total
 				}
 
-				// v1 aggregations: daily rows, and the hourly ledger when grouped by hour.
-				response = httptest.NewRecorder()
-				body := `{"where":` + period.where + `,"aggregations":[{"id":"wh","op":"sum","field":"energy_wh","groupBy":[]},{"id":"g","op":"sum","field":"co2e_g","groupBy":[]},{"id":"hourly","op":"sum","field":"co2e_g","groupBy":["hour"]}]}`
-				server.postQueryTable(response, httptest.NewRequest(http.MethodPost, "/api/query/usage/aggregations", strings.NewReader(body)), "usage", "aggregations")
-				var v1 querytable.AggregationResult
-				if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &v1) != nil {
-					t.Fatalf("aggregations HTTP %d: %s", response.Code, response.Body.String())
-				}
-				// The hour's daily row holds only that hour, so daily sums match too.
-				check("v1 energy", v1.Metrics[0].Buckets[0].Value, energy)
-				check("v1 co2e", v1.Metrics[1].Buckets[0].Value, grams)
-				hourly := []any{}
-				for _, bucket := range v1.Metrics[2].Buckets {
-					hourly = append(hourly, bucket.Value)
-				}
-				check("v1 hourly co2e", sum(hourly...), grams)
-
 				// v2 metrics, including the hourly population.
 				var where []qt.WhereTerm
 				if err := json.Unmarshal([]byte(period.where), &where); err != nil {
@@ -222,7 +204,7 @@ func TestUsageCarbonSumsMatchCarbonPageAndFollowSettings(t *testing.T) {
 				}
 				check("v2 energy", v2.Metrics[0].Buckets[0].Value, energy)
 				check("v2 co2e", v2.Metrics[1].Buckets[0].Value, grams)
-				hourly = hourly[:0]
+				hourly := []any{}
 				for _, bucket := range v2.Metrics[2].Buckets {
 					hourly = append(hourly, bucket.Value)
 				}

@@ -118,8 +118,8 @@ func (d sqlDataset) project(fields []string) sqlDataset {
 
 // sqlCube is a table of a dataset's rows grouped by fields with few values,
 // holding each group's row count and the sums and ranges of its numbers. A
-// count, metric, filter-value, or column-stats request that reads only fields
-// the cube keeps gets the same answer from it in a fraction of the time.
+// row count, filter-value, or column-stats request that reads only fields the
+// cube keeps gets the same answer from it in a fraction of the time.
 type sqlCube struct {
 	from  string // FROM clause of the grouped table
 	count string // column holding each group's row count
@@ -188,54 +188,6 @@ func (d sqlDataset) cubeFilters(terms []querytable.WhereTerm) bool {
 	return true
 }
 
-// measure returns the expression over grouped rows equal to aggregation's
-// measure over the dataset's rows, if the cube has one.
-func (cube *sqlCube) measure(aggregation querytable.Aggregation, schema querytable.Schema) (string, bool) {
-	for _, field := range aggregation.GroupBy {
-		if _, ok := cube.dimensions[field]; !ok {
-			return "", false
-		}
-	}
-	if aggregation.Field == "" {
-		return "COALESCE(SUM(" + cube.count + "),0)", aggregation.Op == "count"
-	}
-	kind := schema.Fields[aggregation.Field].Kind
-	numeric := kind == querytable.Number || kind == querytable.Bool
-	if expression, ok := cube.dimensions[aggregation.Field]; ok {
-		weighted := "(" + expression + ")*" + cube.count
-		switch aggregation.Op {
-		case "count":
-			return "COALESCE(SUM(CASE WHEN NULLIF(" + expression + ",'') IS NOT NULL THEN " + cube.count + " ELSE 0 END),0)", true
-		case "count_distinct":
-			return "COUNT(DISTINCT NULLIF(" + expression + ",''))", true
-		case "sum":
-			return "SUM(" + weighted + ")", numeric
-		case "avg":
-			return "CAST(SUM(" + weighted + ") AS REAL)/SUM(CASE WHEN (" + expression + ") IS NOT NULL THEN " + cube.count + " END)", numeric
-		case "min", "max":
-			return strings.ToUpper(aggregation.Op) + "(NULLIF(" + expression + ",''))", true
-		}
-		return "", false
-	}
-	columns, ok := cube.measures[aggregation.Field]
-	if !ok {
-		return "", false
-	}
-	switch aggregation.Op {
-	case "count":
-		return "COALESCE(SUM(" + columns.count + "),0)", true
-	case "sum":
-		return "SUM(" + columns.sum + ")", numeric && columns.sum != ""
-	case "avg":
-		return "CAST(SUM(" + columns.sum + ") AS REAL)/SUM(" + columns.count + ")", numeric && columns.sum != ""
-	case "min":
-		return "MIN(" + columns.min + ")", true
-	case "max":
-		return "MAX(" + columns.max + ")", true
-	}
-	return "", false
-}
-
 var sqlQualifier = regexp.MustCompile(`([A-Za-z_]\w*)\.[A-Za-z_]`)
 
 // countable reports whether countFrom can count rows matching terms.
@@ -273,15 +225,6 @@ func bucketRange(field, value string) (from, to string, ok bool) {
 	}
 	return formatTime(start.Add(-24 * time.Hour)), formatTime(end.Add(24 * time.Hour)), true
 }
-
-// maxSQLBuckets bounds a metric's groups; the UI shows the largest first.
-// Tests lower it.
-var maxSQLBuckets = 2000
-
-// Complete analytical reads either return every group or an explicit error.
-// The larger bound permits repository × operation × day timelines without
-// changing the ordinary query table's largest-group previews.
-const maxCompleteSQLBuckets = 50000
 
 var registerRegexp sync.Once
 
@@ -654,145 +597,6 @@ func (d sqlDataset) Distinct(ctx context.Context, q queryer, fieldName, search s
 	nulls, err := queryMapsContext(ctx, q, fmt.Sprintf("SELECT EXISTS(SELECT 1 %s%s(%s IS NULL OR %s = '')) has_null", d.from, condition, expression, expression), args...)
 	if err == nil && len(nulls) == 1 {
 		result.HasNull = integer(nulls[0]["has_null"]) != 0
-	}
-	return result, nil
-}
-
-func (d sqlDataset) Aggregate(ctx context.Context, q queryer, request querytable.AggregationRequest, schema querytable.Schema) (querytable.AggregationResult, error) {
-	bucketLimit := maxSQLBuckets
-	if request.RequireComplete {
-		bucketLimit = maxCompleteSQLBuckets + 1
-	}
-	if err := schema.ValidateQuery(querytable.Query{Where: request.Where, Limit: 1}); err != nil {
-		return querytable.AggregationResult{}, err
-	}
-	where, args, err := d.where(request.Where, schema)
-	if err != nil {
-		return querytable.AggregationResult{}, err
-	}
-	routed := d.cubeFilters(request.Where)
-	var cubeWhere string
-	var cubeArgs []any
-	if routed {
-		if cubeWhere, cubeArgs, err = d.cube.table().where(request.Where, schema); err != nil {
-			return querytable.AggregationResult{}, err
-		}
-	}
-	result := querytable.AggregationResult{Metrics: []querytable.Metric{}}
-	for _, aggregation := range request.Aggregations {
-		if aggregation.ID == "" {
-			return result, fmt.Errorf("aggregation id is required")
-		}
-		if len(aggregation.GroupBy) > 20 {
-			return result, fmt.Errorf("aggregation %q has too many group fields", aggregation.ID)
-		}
-		measure := ""
-		if aggregation.Field != "" {
-			field, ok := schema.Fields[aggregation.Field]
-			if !ok {
-				return result, fmt.Errorf("unknown measure field %q", aggregation.Field)
-			}
-			expression, err := d.expr(aggregation.Field)
-			if err != nil {
-				return result, err
-			}
-			nonEmpty := fmt.Sprintf("NULLIF(%s,'')", expression)
-			switch aggregation.Op {
-			case "count":
-				measure = "COUNT(" + nonEmpty + ")"
-			case "count_distinct":
-				measure = "COUNT(DISTINCT " + nonEmpty + ")"
-			case "sum":
-				measure = "SUM(" + expression + ")"
-			case "avg":
-				measure = "AVG(" + expression + ")"
-			case "min":
-				measure = "MIN(" + nonEmpty + ")"
-			case "max":
-				measure = "MAX(" + nonEmpty + ")"
-			default:
-				return result, fmt.Errorf("unknown aggregate op %q", aggregation.Op)
-			}
-			if field.Kind == querytable.TextArray && aggregation.Op != "count" {
-				return result, fmt.Errorf("aggregate op %q not allowed on %s field", aggregation.Op, field.Kind)
-			}
-		} else if aggregation.Op == "count" {
-			measure = "COUNT(*)"
-		} else {
-			return result, fmt.Errorf("aggregation %q requires a field", aggregation.ID)
-		}
-		keys := []string{}
-		for index, field := range aggregation.GroupBy {
-			if _, ok := schema.Fields[field]; !ok {
-				return result, fmt.Errorf("unknown group field %q", field)
-			}
-			expression, err := d.expr(field)
-			if err != nil {
-				return result, err
-			}
-			keys = append(keys, fmt.Sprintf("%s AS k%d", expression, index))
-		}
-		selectKeys := ""
-		groupBy := ""
-		if len(keys) > 0 {
-			selectKeys = strings.Join(keys, ",") + ","
-			positions := make([]string, len(keys))
-			for index := range keys {
-				positions[index] = fmt.Sprint(index + 1)
-			}
-			groupBy = " GROUP BY " + strings.Join(positions, ",")
-		}
-		statement, statementArgs := fmt.Sprintf("SELECT %s%s AS value,COUNT(*) AS n %s%s%s ORDER BY value DESC LIMIT %d", selectKeys, measure, d.from, where, groupBy, bucketLimit), args
-		if routed {
-			if cubeMeasure, ok := d.cube.measure(aggregation, schema); ok {
-				cubeKeys := ""
-				for index, field := range aggregation.GroupBy {
-					cubeKeys += fmt.Sprintf("%s AS k%d,", d.cube.dimensions[field], index)
-				}
-				statement, statementArgs = fmt.Sprintf("SELECT %s%s AS value,COALESCE(SUM(%s),0) AS n %s%s%s ORDER BY value DESC LIMIT %d",
-					cubeKeys, cubeMeasure, d.cube.count, d.cube.from, cubeWhere, groupBy, bucketLimit), cubeArgs
-			}
-		}
-		rows, err := queryMapsContext(ctx, q, statement, statementArgs...)
-		if err != nil {
-			return result, err
-		}
-		if request.RequireComplete && len(rows) > maxCompleteSQLBuckets {
-			return querytable.AggregationResult{}, fmt.Errorf("complete aggregation exceeds %d groups; choose a shorter period or a single repository", maxCompleteSQLBuckets)
-		}
-		buckets := make([]querytable.Bucket, 0, len(rows))
-		for _, row := range rows {
-			keyValues := make([]any, len(aggregation.GroupBy))
-			for index := range keyValues {
-				keyValues[index] = row[fmt.Sprintf("k%d", index)]
-			}
-			value := row["value"]
-			if (aggregation.Op == "sum" || aggregation.Op == "avg") && value != nil {
-				if number, ok := number(value); ok {
-					value = number
-				}
-			}
-			buckets = append(buckets, querytable.Bucket{Keys: keyValues, Value: value, Count: int(integer(row["n"]))})
-		}
-		if len(aggregation.GroupBy) > 0 {
-			// Drop the empty group SQLite returns for a filter matching nothing.
-			kept := buckets[:0]
-			for _, bucket := range buckets {
-				if bucket.Count > 0 {
-					kept = append(kept, bucket)
-				}
-			}
-			buckets = kept
-		}
-		sort.SliceStable(buckets, func(i, j int) bool {
-			left, leftOK := number(buckets[i].Value)
-			right, rightOK := number(buckets[j].Value)
-			if leftOK && rightOK && left != right {
-				return left > right
-			}
-			return fmt.Sprint(buckets[i].Keys) < fmt.Sprint(buckets[j].Keys)
-		})
-		result.Metrics = append(result.Metrics, querytable.Metric{ID: aggregation.ID, Buckets: buckets})
 	}
 	return result, nil
 }

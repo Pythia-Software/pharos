@@ -92,7 +92,7 @@ func TestMachineOperationFamilies(t *testing.T) {
 // Machine Time's cubes keep every group past the generic executor's budget,
 // up to the accelerator's own; past that the metric fails, not truncates.
 func TestMachineTimeMetricsBeyondTheGenericGroupBudget(t *testing.T) {
-	override(t, &maxSQLBuckets, 5)
+	override(t, &queryV2MaxGroups, 5)
 	catalog, config := testCatalog(t)
 	seedToolCalls(t, catalog, 60)
 	server := testServer(t, config, catalog)
@@ -112,7 +112,7 @@ func TestMachineTimeMetricsBeyondTheGenericGroupBudget(t *testing.T) {
 	for _, bucket := range cube.Buckets {
 		calls += bucket.Count
 	}
-	if cube.Error != "" || len(cube.Buckets) <= maxSQLBuckets || cube.GroupCount != int64(len(cube.Buckets)) || calls != 60 || cube.ProcessedRows != 60 {
+	if cube.Error != "" || len(cube.Buckets) <= queryV2MaxGroups || cube.GroupCount != int64(len(cube.Buckets)) || calls != 60 || cube.ProcessedRows != 60 {
 		t.Fatalf("accelerated cube stopped at the generic budget: %d groups, %d calls, %q", len(cube.Buckets), calls, cube.Error)
 	}
 	// A shape the accelerator declines keeps the generic budget.
@@ -124,39 +124,5 @@ func TestMachineTimeMetricsBeyondTheGenericGroupBudget(t *testing.T) {
 	override(t, &machineTimeMaxGroups, len(cube.Buckets)-1)
 	if over := metrics(spent).Metrics[0]; !strings.Contains(over.Error, "group population exceeds the "+thousands(machineTimeMaxGroups)+"-group host budget") || len(over.Buckets) != 0 {
 		t.Fatalf("accelerated cube past its budget: %+v", over)
-	}
-}
-
-func TestMachineTimeCompleteAggregationBeyondPreviewLimit(t *testing.T) {
-	override(t, &maxSQLBuckets, 20)
-	calls := maxSQLBuckets + 100
-	catalog, config := testCatalog(t)
-	seedToolCalls(t, catalog, calls)
-	document, err := querySchemaDocument("tool_calls")
-	if err != nil {
-		t.Fatal(err)
-	}
-	schema, err := querytable.LoadSchema(document)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := querytable.AggregationRequest{Aggregations: []querytable.Aggregation{{ID: "calls", Op: "count", GroupBy: []string{"id"}}}}
-	preview, err := toolCallDataset.Aggregate(context.Background(), catalog.DB, request, schema)
-	if err != nil || len(preview.Metrics[0].Buckets) != maxSQLBuckets {
-		t.Fatalf("ordinary metric preview: %v", err)
-	}
-	request.RequireComplete = true
-	complete, err := toolCallDataset.Aggregate(context.Background(), catalog.DB, request, schema)
-	if err != nil || len(complete.Metrics[0].Buckets) != calls {
-		t.Fatalf("complete analytical read must not silently stop at preview size: %v", err)
-	}
-	payload, _ := json.Marshal(request)
-	response := queryExplorationCall(testServer(t, config, catalog), config.APIToken, "POST", "/api/query/tool_calls/aggregations", string(payload))
-	if response.Code != 200 {
-		t.Fatalf("complete aggregation HTTP response: %d %s", response.Code, response.Body.String())
-	}
-	var received querytable.AggregationResult
-	if err := json.Unmarshal(response.Body.Bytes(), &received); err != nil || len(received.Metrics[0].Buckets) != calls {
-		t.Fatalf("HTTP must preserve the complete-read request: %v", err)
 	}
 }

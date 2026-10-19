@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/gbdubs/pharos/internal/querytable"
 )
 
 func ingestUsageFixture(t *testing.T, catalog *Catalog, extra ...string) {
@@ -128,36 +126,6 @@ func TestUsageRowsSuppressMirroredWorkspaces(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0]["workspace_id"] != "native" || integer(rows[0]["total_tokens"]) != 100 {
 		t.Fatalf("mirrored usage counted more than once: %#v", rows)
-	}
-}
-
-func TestUsageMetricsReadAsTimeline(t *testing.T) {
-	catalog, config := testCatalog(t)
-	ingestUsageFixture(t, catalog)
-	server := testServer(t, config, catalog)
-	schema, err := server.queryTableSchema("usage")
-	if err != nil {
-		t.Fatal(err)
-	}
-	rows, err := catalog.usageRows(time.UTC)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := querytable.AggregationRequest{Aggregations: []querytable.Aggregation{
-		{ID: "daily", Op: "sum", Field: "total_tokens", GroupBy: []string{"day"}},
-		{ID: "models", Op: "sum", Field: "cache_read_input_tokens", GroupBy: []string{"model_family"}},
-	}}
-	result, err := querytable.Aggregate(rows, request, schema)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sortUsageTimeBuckets(request, result)
-	daily := result.Metrics[0].Buckets
-	if len(daily) != 2 || daily[0].Keys[0] != "2026-09-21" || daily[1].Keys[0] != "2026-09-20" {
-		t.Fatalf("daily buckets should be newest first, not largest first: %#v", daily)
-	}
-	if result.Metrics[1].Buckets[0].Value != float64(2300) {
-		t.Fatalf("cache reads by model: %#v", result.Metrics[1])
 	}
 }
 

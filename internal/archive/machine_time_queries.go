@@ -4,10 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"math"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -24,29 +22,6 @@ var machineTimeDimensions = fieldSet("repository_name", "provider", "model", "mo
 const machineTimeIndexSQL = `CREATE INDEX IF NOT EXISTS tool_call_cube_machine_time_idx ON tool_call_cube(
  repository_name,provider,model,effort,day,status,tool_name,mcp_server,program,subcommand,
  tool_category,command_category,duration_ms_sum,duration_ms_n,call_count)`
-
-func (c *Catalog) machineTimeRows(ctx context.Context) ([]map[string]any, error) {
-	rows, _, err := c.machineTimeQueryRows(ctx, false)
-	return rows, err
-}
-
-func (c *Catalog) machineTimeQueryRows(ctx context.Context, requireFresh bool) ([]map[string]any, bool, error) {
-	tx, release, err := beginQueryV2(ctx, c.reader())
-	if err != nil {
-		return nil, false, err
-	}
-	defer release()
-	// Check freshness and read the publication in the same snapshot as the cube.
-	// Timestamp queries previously read raw calls and must not reuse stale facts.
-	if requireFresh {
-		fresh, err := c.toolCubeFresh(ctx, tx)
-		if err != nil || !fresh {
-			return nil, false, err
-		}
-	}
-	rows, err := c.machineTimeRowsIn(ctx, tx)
-	return rows, true, err
-}
 
 func (c *Catalog) machineTimeRowsIn(ctx context.Context, tx *sql.Tx) ([]map[string]any, error) {
 	publication, err := readMeta(tx, ctx, "tool_rollup_publication")
@@ -331,127 +306,4 @@ func machineTimeGroups(rows []map[string]any, fields []string) []*machineTimeGro
 		}
 	}
 	return groups
-}
-
-func (c *Catalog) machineTimeAggregations(ctx context.Context, request querytable.AggregationRequest, schema querytable.Schema) (querytable.AggregationResult, bool, error) {
-	lower, upper, where, valid := machineTimeDayRange(request.Where)
-	if !valid {
-		return querytable.AggregationResult{}, false, nil
-	}
-	for _, field := range whereFields(where) {
-		if !machineTimeDimensions.has(field) {
-			return querytable.AggregationResult{}, false, nil
-		}
-	}
-	for _, spec := range request.Aggregations {
-		if !(spec.Op == "count" && (spec.Field == "" || spec.Field == "duration_ms") || spec.Op == "sum" && spec.Field == "duration_ms") {
-			return querytable.AggregationResult{}, false, nil
-		}
-		for _, key := range spec.GroupBy {
-			if !machineTimeDimensions.has(key) {
-				return querytable.AggregationResult{}, false, nil
-			}
-		}
-	}
-	rows, handled, err := c.machineTimeQueryRows(ctx, lower != "")
-	if err != nil {
-		return querytable.AggregationResult{}, true, err
-	}
-	if !handled {
-		return querytable.AggregationResult{}, false, nil
-	}
-	filtered, err := querytable.Filter(rows, where, schema)
-	if err != nil {
-		return querytable.AggregationResult{}, true, err
-	}
-	if lower != "" {
-		kept := make([]map[string]any, 0, len(filtered))
-		for _, row := range filtered {
-			day := firstString(row["day"])
-			if day >= lower && day < upper {
-				kept = append(kept, row)
-			}
-		}
-		filtered = kept
-	}
-	type total struct {
-		keys         []any
-		label        string
-		calls, timed int64
-		duration     float64
-		hasDuration  bool
-	}
-	groupings := map[string][]*total{}
-	out := querytable.AggregationResult{Metrics: []querytable.Metric{}}
-	for _, spec := range request.Aggregations {
-		if spec.ID == "" || len(spec.GroupBy) > 20 {
-			return querytable.AggregationResult{}, true, fmt.Errorf("invalid aggregation ID or group fields")
-		}
-		signature, _ := json.Marshal(spec.GroupBy)
-		groups, exists := groupings[string(signature)]
-		if !exists {
-			byKey := map[string]*total{}
-			for _, row := range filtered {
-				keys := make([]any, len(spec.GroupBy))
-				for i, field := range spec.GroupBy {
-					keys[i] = row[field]
-				}
-				encoded, _ := json.Marshal(keys)
-				key := string(encoded)
-				group := byKey[key]
-				if group == nil {
-					group = &total{keys: keys, label: fmt.Sprint(keys)}
-					byKey[key] = group
-					groups = append(groups, group)
-				}
-				group.calls += integer(row["machine_calls"])
-				group.timed += integer(row["machine_timed"])
-				if value, ok := number(row["duration_ms"]); ok {
-					group.duration += value
-					group.hasDuration = true
-				}
-			}
-			if len(filtered) == 0 && len(spec.GroupBy) == 0 {
-				groups = []*total{{keys: []any{}}}
-			}
-			groupings[string(signature)] = groups
-		}
-		valueFor := func(group *total) any {
-			var value any
-			if spec.Op == "count" {
-				if spec.Field == "" {
-					value = group.calls
-				} else {
-					value = group.timed
-				}
-			} else if group.hasDuration {
-				value = group.duration
-			}
-			return value
-		}
-		ordered := slices.Clone(groups)
-		sort.Slice(ordered, func(i, j int) bool {
-			left, lok := number(valueFor(ordered[i]))
-			right, rok := number(valueFor(ordered[j]))
-			if lok != rok {
-				return lok
-			}
-			if lok && rok && left != right {
-				return left > right
-			}
-			return ordered[i].label < ordered[j].label
-		})
-		metric := querytable.Metric{ID: spec.ID, Buckets: make([]querytable.Bucket, 0, len(groups))}
-		for _, group := range ordered {
-			metric.Buckets = append(metric.Buckets, querytable.Bucket{Keys: slices.Clone(group.keys), Value: valueFor(group), Count: int(group.calls)})
-		}
-		if request.RequireComplete && len(metric.Buckets) > maxCompleteSQLBuckets {
-			return querytable.AggregationResult{}, true, fmt.Errorf("complete aggregation exceeds %d groups; choose a shorter period or a single repository", maxCompleteSQLBuckets)
-		}
-		if !request.RequireComplete && len(metric.Buckets) > maxSQLBuckets {
-			metric.Buckets = metric.Buckets[:maxSQLBuckets]
-		}
-		out.Metrics = append(out.Metrics, metric)
-	}
-	return out, true, nil
 }

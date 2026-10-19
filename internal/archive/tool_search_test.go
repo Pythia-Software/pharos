@@ -47,15 +47,6 @@ func TestToolCommandSearchIndex(t *testing.T) {
 			if !same(got, want) {
 				t.Fatalf("%v: indexed total %d, direct %d", filter, got.Total, want.Total)
 			}
-			request := querytable.AggregationRequest{Where: query.Where, Aggregations: []querytable.Aggregation{{ID: "calls", Op: "count"}, {ID: "by_tool", Op: "count", GroupBy: []string{"tool_name"}}}}
-			gotMetrics, err := indexed.Aggregate(ctx, catalog.DB, request, schema)
-			if err != nil {
-				t.Fatal(err)
-			}
-			wantMetrics, err := direct.Aggregate(ctx, catalog.DB, request, schema)
-			if err != nil || !same(gotMetrics, wantMetrics) {
-				t.Fatalf("%v: indexed metrics %v, direct %v: %v", filter, gotMetrics, wantMetrics, err)
-			}
 		}
 	}
 	check() // insert triggers on a new catalog

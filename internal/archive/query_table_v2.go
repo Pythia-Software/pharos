@@ -91,13 +91,17 @@ func sqliteQuerySchema(dataset string) (qt.Schema, error) {
 	return qt.Schema{}, fmt.Errorf("unknown query-table dataset %q", dataset)
 }
 
+// queryV2MaxGroups bounds the groups of a V2 metric; past it the metric
+// fails rather than dropping groups. Tests lower it.
+var queryV2MaxGroups = 2000
+
 // queryV2UsageMaxGroups is Usage's V2 metric group budget. Its compact facts
 // chart by hour, week or month and by repository or model, which over long
 // ranges exceeds the ordinary budget; V3 allows Usage the same.
 var queryV2UsageMaxGroups = 100_000
 
 func queryV2Dataset(dataset string, schema qt.Schema) qt.SQLiteV2Dataset {
-	groups := maxSQLBuckets
+	groups := queryV2MaxGroups
 	if schema.Name == "pharos_usage" {
 		groups = queryV2UsageMaxGroups
 	}
