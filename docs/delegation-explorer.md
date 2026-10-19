@@ -133,10 +133,15 @@ child transcript button. Cyclic ownership is excluded with a visible warning.
 Incoming parents and linked child transcripts in another workspace retain
 navigation references. Opening a subagent's own workspace includes its incoming
 ancestor chain in the hierarchy, so its session outline and reader heading remain
-nested. Ancestor rows are marked **Parent context**, open their own transcripts,
+nested. Incoming ownership uses exact retained delegation handles before
+transcript parents, and follows inferred command launches when no parent was
+recorded, at every level of the chain. Ancestor rows are marked **Parent context**,
+open their own transcripts,
 and show unknown self usage. They do not contribute to workspace totals, coverage,
 or activity bounds; their inclusive values cover only the retained subtree in
 this view. Siblings in other workspaces are not loaded by this incoming context.
+If optional ancestor-workspace reconciliation exceeds its analysis limit, the
+view retains recorded ancestry instead of rejecting the child workspace.
 The hierarchy follows recorded subagent parent edges
 recursively across workspace boundaries: Codex stores each rollout as a separate
 workspace, which must not sever the execution family. Launch placeholders link
