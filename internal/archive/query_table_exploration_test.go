@@ -125,6 +125,16 @@ func TestQueryDatasetsHTTP(t *testing.T) {
 	if w := apiCall(t, server, "", http.MethodPost, "/api/query/tool_calls/population", `{}`); w.Code != 401 {
 		t.Fatal(w.Code)
 	}
+	// So is the legacy grouped route: a page from before an upgrade is told to
+	// reload, for SQL and in-memory datasets alike, before any body is read.
+	for _, dataset := range []string{"tool_calls", "writing_messages", "usage", "library"} {
+		if w := call(http.MethodPost, "/api/query/"+dataset+"/aggregations", `not json`); w.Code != http.StatusGone || !strings.Contains(w.Body.String(), "reload the page") {
+			t.Fatal(dataset, w.Code, w.Body.String())
+		}
+	}
+	if w := apiCall(t, server, "", http.MethodPost, "/api/query/usage/aggregations", `{}`); w.Code != 401 {
+		t.Fatal(w.Code)
+	}
 	for _, path := range []string{"/api/query/tool_calls/item?id=missing", "/api/query/library/item?id=missing"} {
 		if w := call(http.MethodGet, path, nil); w.Code != 200 || !strings.Contains(w.Body.String(), `"row":null`) {
 			t.Fatal(w.Code, w.Body.String())

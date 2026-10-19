@@ -251,6 +251,12 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 		writeError(w, fmt.Errorf("complete-population downloads are disabled; use server query execution"), http.StatusGone)
 		return
 	}
+	// The legacy grouped route is gone. A page loaded before an upgrade can
+	// still call it; reloading picks up /metrics.
+	if operation == "aggregations" {
+		writeError(w, fmt.Errorf("this version of Pharos no longer serves this request; reload the page"), http.StatusGone)
+		return
+	}
 	if operation == "metrics" || operation == "rows-v2" {
 		s.postQueryV2(w, r, dataset, operation)
 		return
