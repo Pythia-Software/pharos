@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { capabilities, cardCoverQuery, core, execution, instantiateRecipe, queryRecipes, schemas } from "./helpers/recipes.mjs";
 import { categoryForQuery } from "../../src/query-categories";
 import { suggestionPool } from "../../src/curiosity-data";
+import { cardTemplates } from "../../src/card-library-model";
 
 const clock = new Date(2026, 9, 13, 12), now = clock.getTime();
 // Current-state and all-time recipes (recipe.period) have no lookback to vary.
@@ -52,9 +53,15 @@ for (const recipe of queryRecipes) test(`${recipe.id}${recipe.retired ? " (retir
   if (!recipe.retired && !legacyCopy.has(recipe.id)) assert.ok(recipe.action, "active cards name their destination");
 });
 
-test("suggestions only offer active recipes", () => {
+test("suggestions and the card library only offer active recipes", t => {
+  const before = global.window;
+  global.window = { pharosPrefs: { get: (_key, fallback) => fallback } };
+  t.after(() => { global.window = before; });
   const retired = new Set(queryRecipes.filter(recipe => recipe.retired).map(recipe => recipe.id));
   const offered = suggestionPool(clock);
   assert.equal(offered.length, queryRecipes.length - retired.size);
   assert.ok(offered.every(suggestion => !retired.has(suggestion.id)));
+  const templates = cardTemplates();
+  assert.equal(templates.length, queryRecipes.length - retired.size);
+  assert.ok(templates.every(recipe => !retired.has(recipe.id)));
 });
