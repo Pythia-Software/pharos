@@ -1,7 +1,7 @@
 # Query Table release builds and local development
 
-Pharos uses published Query Table **0.7.1** npm packages (core, React, UI and
-codegen) and the **v0.7.1** Go module. Production builds no longer depend on a
+Pharos uses published Query Table **0.8.0** npm packages (core, React, UI and
+codegen) and the **v0.8.0** Go module. Production builds no longer depend on a
 Query Table worktree, source archives or a vendored adapter. See
 [the integration guide](query-table-integration.md) for feature coverage,
 contracts and execution limits.
@@ -80,7 +80,7 @@ These exercise grouped reloads, route restoration, undo/redo after table pausing
 compact covers, saved display limits and Other remainders. Fixtures stub their
 HTTP data and do not read or modify the production library.
 
-The older `library-query-ui.test.cjs` and `mcp-ui.test.cjs` fixtures currently
-have four failures that also reproduce on the pre-upgrade branch: a Library
-layout expectation, two outdated search/filter interactions, and an incomplete
-MCP API stub. Their failures are independent of the 0.7.0 dependency upgrade.
+Some older fixtures currently fail identically on the pre-upgrade branch (the
+Library, MCP, navigator, Findings, Sync, card library, pricing catalog, Usage
+badge and Human Words fixtures). Their failures are independent of the 0.8.0
+dependency upgrade.
