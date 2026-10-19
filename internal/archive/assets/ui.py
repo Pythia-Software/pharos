@@ -715,7 +715,8 @@ function timeLabel(value){if(!value)return'Time unavailable';const date=new Date
 // The conversation reader renders with the model in reader-model.js, which
 // loads before this script: parsed bodies (messageJSON), normalized events
 // (conversationMessages), token reports and context samples, tool payloads
-// and results (conversationGraph), the Show filter's categories, and Find.
+// and results (conversationGraph), the Show filter's categories, Find, harness
+// XML blocks (xmlSegments) and Markdown (markdownTree).
 function jsonShape(value){if(Array.isArray(value))return`Array · ${value.length} item${value.length===1?'':'s'}`;if(value&&typeof value==='object')return`Object · ${Object.keys(value).length} field${Object.keys(value).length===1?'':'s'}`;return typeof value}
 function structuredSummary(value,label){if(!value||typeof value!=='object'||Array.isArray(value))return`${label?label+' · ':''}${jsonShape(value)}`;const blocks=Array.isArray(value.message?.content)?value.message.content:Array.isArray(value.content)?value.content:[],block=blocks[0];if(block?.type==='tool_use')return`Tool call · ${block.name||'Unknown tool'}`;if(block?.type==='tool_result')return`Tool result${block.is_error?' · error':''}`;if(block?.type==='text')return`${value.message?.role==='user'?'User':'Agent'} message`;if(value.type==='result')return`Run result${value.subtype?' · '+value.subtype:''}`;if(value.type==='error')return'Run error';if(value.type==='system')return`System event${value.subtype?' · '+value.subtype:''}`;if(value.tool||value.name)return`Tool call · ${value.tool||value.name}`;return`${label?label+' · ':''}${jsonShape(value)}`}
 function structuredPresentation(value){if(!value||typeof value!=='object'||Array.isArray(value))return null;const blocks=Array.isArray(value.message?.content)?value.message.content:Array.isArray(value.content)?value.content:[],block=blocks[0];if(block?.type==='tool_use')return{summary:`Tool call · ${block.name||'Unknown tool'}`,body:block.input||{}};if(block?.type==='tool_result')return{summary:`Tool result${block.is_error?' · error':''}`,body:{content:block.content,is_error:Boolean(block.is_error),...(value.tool_use_result!==undefined?{details:value.tool_use_result}:{})}};if(value.tool||value.name)return{summary:`Tool call · ${value.tool||value.name}`,body:value.input??value.arguments??value};return null}
@@ -774,45 +775,6 @@ function timelineEntry(content,message,turnStart,kind=''){const wrapper=node('di
 function markdownView(text){return markdownNode(markdownTree(text))}
 function markdownNode(item){if(typeof item==='string')return document.createTextNode(item);if(item.icon)return icon(item.icon);const element=node(item.tag,item.className);for(const key of ['href','rel','target','start'])if(key in item)element[key]=item[key];if(item.language)element.dataset.language=item.language;element.append(...item.children.map(markdownNode));return element}
 
-// Harnesses inject whole XML blocks (<environment_context>, <system-reminder>, …)
-// into message text. A block qualifies only when it starts its own line, its
-// tags balance, and its root closes at the end of a line; stray `<` in text is
-// tolerated, and fenced code is never scanned. Anything else stays prose.
-const xmlTagPattern=/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\/([A-Za-z_][\w.:-]*)\s*>|<([A-Za-z_][\w.:-]*)((?:\s+[A-Za-z_][\w.:-]*\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>/g;
-function xmlBlockEnd(text,start){
-  if(!/<[A-Za-z_][\w.:-]*(?:\s[^<>]*)?>/y.test(text.slice(start,start+400)))return -1;
-  const tags=new RegExp(xmlTagPattern.source,'g'),stack=[];tags.lastIndex=start;let match;
-  while((match=tags.exec(text))){
-    if(!stack.length&&(match.index!==start||!match[2]||match[4]))return -1;
-    if(match[1]){if(stack.pop()!==match[1])return -1;if(!stack.length)return tags.lastIndex}
-    else if(match[2]&&!match[4])stack.push(match[2]);
-  }return -1;
-}
-function xmlSegments(text){
-  const source=String(text??''),segments=[],pushProse=value=>{if(value.trim())segments.push({text:value.replace(/^\s*\n|\s+$/g,'')})};
-  let prose=0,lineStart=0,fence=null;
-  while(lineStart<source.length){
-    const newline=source.indexOf('\n',lineStart),stop=newline<0?source.length:newline,line=source.slice(lineStart,stop),marker=line.match(/^\s*(\x60{3,}|~{3,})/);
-    if(fence){if(marker&&marker[1][0]===fence[0]&&marker[1].length>=fence.length)fence=null}
-    else if(marker)fence=marker[1];
-    else{const start=lineStart+line.search(/\S|$/),end=source[start]==='<'?xmlBlockEnd(source,start):-1;
-      if(end>0&&/^[ \t]*(?:\n|$)/.test(source.slice(end,end+200))){const xml=source.slice(start,end);pushProse(source.slice(prose,lineStart));segments.push({text:xml,tag:xml.match(/^<([A-Za-z_][\w.:-]*)/)[1]});const next=source.indexOf('\n',end);prose=lineStart=next<0?source.length:next+1;continue}}
-    lineStart=stop+1;
-  }
-  pushProse(source.slice(prose));return segments;
-}
-function xmlTree(xml){
-  const tags=new RegExp(xmlTagPattern.source,'g'),stack=[{children:[]}];let offset=0,match;
-  const text=value=>{if(value)stack.at(-1).children.push(value)};
-  while((match=tags.exec(xml))){
-    text(xml.slice(offset,match.index));offset=tags.lastIndex;
-    if(match[1]){const element=stack.pop();element.close=match[0];stack.at(-1).children.push(element)}
-    else if(match[2]&&!match[4])stack.push({open:match[0],close:'',children:[]});
-    else if(match[2])stack.at(-1).children.push({open:match[0],close:'',children:[]});
-    else text(match[0]);
-  }return stack[0].children.find(child=>typeof child!=='string');
-}
-function dedentText(value){const lines=String(value).replace(/^\s*\n|\s+$/g,'').split('\n'),indent=Math.min(...lines.filter(line=>line.trim()).map(line=>line.search(/\S/)));return lines.map(line=>line.slice(Number.isFinite(indent)?indent:0)).join('\n')}
 // Every element with content can fold to `<tag>…</tag>`; folding the root
 // turns the view back into its chip.
 function xmlTreeView(element,onCollapse){
@@ -824,8 +786,6 @@ function xmlTreeView(element,onCollapse){
   if(onCollapse)details.addEventListener('toggle',()=>{if(!details.open){details.open=true;onCollapse()}});
   return details;
 }
-function proseSummary(text){const segments=xmlSegments(text),prose=segments.filter(segment=>!segment.tag).map(segment=>segment.text).join(' ');return prose.trim()?prose:segments.map(segment=>`<${segment.tag}>`).join(' ')}
-function messageSummary(message){return proseSummary(displayText(message))}
 function messageBody(text,markdown){
   const segments=xmlSegments(text);if(!segments.some(segment=>segment.tag))return markdown?markdownView(text):document.createTextNode(text);
   // Consecutive chips share a row; a row followed by prose sits inline before it.

@@ -1,6 +1,7 @@
 // The conversation reader's model, without the DOM: message bodies, normalized
 // events, token accounting and context samples, tool calls and their results,
-// turns, file paths, the Show filter's categories, Find, and Markdown parsing.
+// turns, file paths, the Show filter's categories, Find, harness XML blocks,
+// message summaries, and Markdown parsing.
 // It is a classic script whose top-level declarations are globals: ui.py loads
 // it before its inline script, which renders with them, and a shared export
 // inlines it (sharedPage in share.go). Node tests load it with vm
@@ -313,6 +314,50 @@ function transcriptFind(messages,{pattern,shown,output}){
   return{shown:visible,hidden,hidden_kinds:TRANSCRIPT_CATEGORIES.map(([key])=>key).filter(key=>kinds.has(key))};
 }
 function transcriptFindPattern(term,regex,caseSensitive){return new RegExp(regex?term:term.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),caseSensitive?'u':'iu')}
+
+// Harness XML blocks
+// Harnesses inject whole XML blocks (<environment_context>, <system-reminder>, …)
+// into message text. A block qualifies only when it starts its own line, its
+// tags balance, and its root closes at the end of a line; stray `<` in text is
+// tolerated, and fenced code is never scanned. Anything else stays prose.
+const xmlTagPattern=/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\/([A-Za-z_][\w.:-]*)\s*>|<([A-Za-z_][\w.:-]*)((?:\s+[A-Za-z_][\w.:-]*\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>/g;
+function xmlBlockEnd(text,start){
+  if(!/<[A-Za-z_][\w.:-]*(?:\s[^<>]*)?>/y.test(text.slice(start,start+400)))return -1;
+  const tags=new RegExp(xmlTagPattern.source,'g'),stack=[];tags.lastIndex=start;let match;
+  while((match=tags.exec(text))){
+    if(!stack.length&&(match.index!==start||!match[2]||match[4]))return -1;
+    if(match[1]){if(stack.pop()!==match[1])return -1;if(!stack.length)return tags.lastIndex}
+    else if(match[2]&&!match[4])stack.push(match[2]);
+  }return -1;
+}
+function xmlSegments(text){
+  const source=String(text??''),segments=[],pushProse=value=>{if(value.trim())segments.push({text:value.replace(/^\s*\n|\s+$/g,'')})};
+  let prose=0,lineStart=0,fence=null;
+  while(lineStart<source.length){
+    const newline=source.indexOf('\n',lineStart),stop=newline<0?source.length:newline,line=source.slice(lineStart,stop),marker=line.match(/^\s*(\x60{3,}|~{3,})/);
+    if(fence){if(marker&&marker[1][0]===fence[0]&&marker[1].length>=fence.length)fence=null}
+    else if(marker)fence=marker[1];
+    else{const start=lineStart+line.search(/\S|$/),end=source[start]==='<'?xmlBlockEnd(source,start):-1;
+      if(end>0&&/^[ \t]*(?:\n|$)/.test(source.slice(end,end+200))){const xml=source.slice(start,end);pushProse(source.slice(prose,lineStart));segments.push({text:xml,tag:xml.match(/^<([A-Za-z_][\w.:-]*)/)[1]});const next=source.indexOf('\n',end);prose=lineStart=next<0?source.length:next+1;continue}}
+    lineStart=stop+1;
+  }
+  pushProse(source.slice(prose));return segments;
+}
+function xmlTree(xml){
+  const tags=new RegExp(xmlTagPattern.source,'g'),stack=[{children:[]}];let offset=0,match;
+  const text=value=>{if(value)stack.at(-1).children.push(value)};
+  while((match=tags.exec(xml))){
+    text(xml.slice(offset,match.index));offset=tags.lastIndex;
+    if(match[1]){const element=stack.pop();element.close=match[0];stack.at(-1).children.push(element)}
+    else if(match[2]&&!match[4])stack.push({open:match[0],close:'',children:[]});
+    else if(match[2])stack.at(-1).children.push({open:match[0],close:'',children:[]});
+    else text(match[0]);
+  }return stack[0].children.find(child=>typeof child!=='string');
+}
+function dedentText(value){const lines=String(value).replace(/^\s*\n|\s+$/g,'').split('\n'),indent=Math.min(...lines.filter(line=>line.trim()).map(line=>line.search(/\S/)));return lines.map(line=>line.slice(Number.isFinite(indent)?indent:0)).join('\n')}
+// A message's one-line summary: its prose, or the tags of its XML blocks.
+function proseSummary(text){const segments=xmlSegments(text),prose=segments.filter(segment=>!segment.tag).map(segment=>segment.text).join(' ');return prose.trim()?prose:segments.map(segment=>`<${segment.tag}>`).join(' ')}
+function messageSummary(message){return proseSummary(displayText(message))}
 
 // Markdown
 // Agent prose is Markdown, parsed into a tree the page builds with text nodes
