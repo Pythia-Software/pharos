@@ -1,5 +1,6 @@
 import type { AggregationClause, SummaryColumn, WhereClause, WhereTerm } from "@pythia-software/query-table-core";
 import type { CardExploration } from "./card-recipes";
+import { trendCover } from "./card-trend";
 import type { QueryRecipe } from "./curiosity-data";
 
 // Machine time, parallel agents, carbon, findings and pricing: the areas whose
@@ -38,12 +39,12 @@ const machineRecipes: QueryRecipe[] = [
     cover: { mode: "result", metricId: "mt_time", kind: "bar-horizontal", maxGroups: 6, showOther: false } }),
   machine({ id: "machine-call-trend", title: "Tool calls per day", description: "Daily tool calls averaged over each trailing seven complete days, across the last 30 days.", days: [30], unit: "calls", action: "Explore daily tool calls",
     note: "Counts every recorded tool call, including errors and calls without a duration, by its local start day. Each point divides seven days' calls by seven, including idle days; today is excluded until it is complete.",
-    measures: [daily("mt_daily_calls", "count", "", "Tool calls per day")], cover: { mode: "source", metricId: "mt_daily_calls", kind: "auto", height: 260 },
+    measures: [daily("mt_daily_calls", "count", "", "Tool calls per day")], cover: trendCover("mt_daily_calls"),
     trend: { value: { op: "count" }, perDay: true, lookback: 7, completeDays: true, valueLabel: "calls a day · 7-day average", pointValueLabel: "calls a day", trendLabel: "7d avg", sample: "calls",
       detail: "Each point: tool calls in its trailing seven complete local days ÷ 7. The norm is the mean of the prior 30 endpoints." } }),
   machine({ id: "machine-latency-trend", title: "Average tool call time", description: "Mean recorded duration per tool call over each trailing seven complete days, across the last 30 days.", days: [30], action: "Inspect daily call times",
     note: "Total recorded duration ÷ calls with a recorded duration, pooled over each seven-day window (not an average of daily averages). Long-running calls such as waits and watches pull the mean up; Longest-running operations names them. Windows without timed calls are gaps.",
-    measures: [daily("mt_daily_mean", "avg", "duration_ms", "Mean recorded call time by day")], cover: { mode: "source", metricId: "mt_daily_mean", kind: "auto", height: 260 },
+    measures: [daily("mt_daily_mean", "avg", "duration_ms", "Mean recorded call time by day")], cover: trendCover("mt_daily_mean"),
     trend: { value: { op: "sum", field: "duration_ms" }, per: { op: "count", field: "duration_ms" }, scale: 1 / 1000, lookback: 7, completeDays: true, valueLabel: "seconds per call · 7-day mean", pointValueLabel: "seconds per timed call", trendLabel: "7d mean", sample: "calls",
       detail: "Each point: recorded duration ÷ timed calls over its trailing seven complete local days. The norm is the mean of the prior 30 endpoints." } }),
 ];
@@ -60,7 +61,7 @@ const parallelRecipes: QueryRecipe[] = [
     cover: { mode: "source", metricId: "pl_daily", kind: "auto", maxGroups: 3, showOther: false, showLegend: true, height: 228 } }),
   parallel({ id: "parallel-trend", title: "Agents at once", description: "Average number of agents running together while any is active, over each trailing seven days.", days: [30], unit: "agents", action: "Open the parallelism view",
     note: `${parallelNote} Each point weights concurrency by time: agent-hours ÷ hours with any agent active.`,
-    measures: [daily("pl_daily_concurrency", "sum", "unit_ms", "Agents at once while active", { expression: "SUM([unit_ms])/NULLIF(SUM([elapsed_ms]),0)" })], cover: { mode: "source", metricId: "pl_daily_concurrency", kind: "auto", height: 260 },
+    measures: [daily("pl_daily_concurrency", "sum", "unit_ms", "Agents at once while active", { expression: "SUM([unit_ms])/NULLIF(SUM([elapsed_ms]),0)" })], cover: trendCover("pl_daily_concurrency"),
     trend: { value: { op: "sum", field: "unit_ms" }, per: { op: "sum", field: "elapsed_ms" }, lookback: 7, completeDays: true, valueLabel: "agents at once while active · 7-day average", pointValueLabel: "agents at once", trendLabel: "7d avg", sample: "agent-hour records",
       detail: "Each point: agent time ÷ wall time with any agent active, over its trailing seven complete local days. Windows with no activity are gaps." } }),
   parallel({ id: "parallel-hours", title: "When agents overlap", description: "Average number of agents running at each hour of the day, over the last {days} days.", days: [7, 30], unit: "agents", action: "Find your parallel hours",
@@ -89,7 +90,7 @@ const carbon = (id: string, title: string, description: string, keys: string[], 
 const carbonRecipes: QueryRecipe[] = [
   { id: "carbon-trend", title: "Estimated CO₂e", description: "Modeled emissions from recorded tokens over each trailing {days}-day period, across the last 30 days.", category: "carbon", idea: "cost-01", dataset: "usage", field: "first_usage_at", days: [7, 30], unit: "kg CO₂e",
     where: carbonWhere, action: "Explore carbon impact", note: `${carbonNote} Daily endpoints use local calendar days, so the latest point includes today so far.`,
-    measures: [daily("cb_daily", "sum", "co2e_kg", "Estimated CO₂e by day (kg)")], cover: { mode: "source", metricId: "cb_daily", kind: "auto", height: 260 },
+    measures: [daily("cb_daily", "sum", "co2e_kg", "Estimated CO₂e by day (kg)")], cover: trendCover("cb_daily"),
     trend: { value: { op: "sum", field: "co2e_kg" }, valueLabel: "kg CO₂e · past {days} days", pointValueLabel: "kg CO₂e", sample: "usage records",
       detail: "Each point: estimated CO₂e over its trailing {days} local days, including today so far. The norm is the mean of the prior 30 endpoints." } },
   carbon("carbon-tiers", "CO₂e by model size", "Share of estimated emissions from small, mid-size and large models over the last {days} days.", ["carbon_tier"], "Compare model tiers", true, { cover: { mode: "result", metricId: co2.id, kind: "pie", maxGroups: 3, showOther: false, showLegend: true, legendColumns: 2, height: 230 } }),
@@ -119,7 +120,7 @@ const findingRecipes: QueryRecipe[] = [
   finding({ id: "findings-results", title: "Net savings from findings", description: "What copied finding prompts have saved after their added context cost, across verified results.", action: "See your wins", emptyLabel: "No verified results yet",
     note: "Copying a prompt starts its measurement. Savings come from each finding's fixed before/after plan, net of the added context cost.", where: [positive("wins")],
     measures: [{ id: "fd_net", op: "sum", field: "saved_net_usd", groupBy: [], label: "Saved, net of added context (USD)" }, { id: "fd_saved", op: "sum", field: "saved_usd", groupBy: [], label: "Saved before added context (USD)" }],
-    cover: { mode: "source", metricId: "fd_net", kind: "value", height: 150 } }),
+    cover: { mode: "source", metricId: "fd_net", kind: "value", height: 170 } }),
 ];
 
 const pricingRecipes: QueryRecipe[] = [

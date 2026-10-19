@@ -82,7 +82,8 @@ async function compare(recipe, days, values, { edit = false } = {}) {
   values.clear();
   const item = instantiateRecipe(recipe, days), canonical = queryRecipes.find(candidate => candidate.id === recipe.id);
   const saved = collectQuery(item.dataset, item.query, item.title, { description: item.description, templateId: item.instanceId, window: item.window, cover: item.cover ?? defaultCardCover(item) });
-  const bookmark = edit ? updateBookmark(saved.id, saved.title, saved.description, days, saved.cover?.metricId ?? "") : saved;
+  // Windowless (current-state and all-time) cards offer no lookback to edit.
+  const bookmark = edit ? updateBookmark(saved.id, saved.title, saved.description, item.window ? days : undefined, saved.cover?.metricId ?? "") : saved;
   const spec = queryFromURL(bookmark.url, json(bookmark.query));
   assert.ok(spec, recipe.id);
   assert.deepEqual(core.normalizeQueryState(spec.query), core.normalizeQueryState(item.query), `${recipe.id}: saved query`);

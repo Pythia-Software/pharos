@@ -117,7 +117,8 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   const finishDrag = () => { setDrag(null); setInsertBefore(undefined); };
   const editingSpec = editing && queryFromURL(editing.url, editing.query);
   const editingRecipe = queryRecipes.find(recipe => recipe.id === editing?.templateId?.split(":")[0]);
-  const canEditWindow = editingSpec && Boolean(editingSpec.window?.field ?? rollingWindowField(editingSpec.dataset));
+  // Current-state cards (findings) and all-time cards keep their population.
+  const canEditWindow = editingSpec && !editingRecipe?.period && Boolean(editingSpec.window?.field ?? rollingWindowField(editingSpec.dataset));
   const coverChoices = editingSpec?.query.grouping
     ? [...editingSpec.query.grouping.summaries.filter(column => column.op !== "row").map(column => ({ id: column.id, label: `${column.label ?? column.id} · grouped rows` })), ...(editingSpec.query.grouping.source.aggregations ?? []).map(metric => ({ id: metric.id, label: `${metric.label ?? metric.id} · observations` }))]
     : editingSpec?.query.aggregations?.map(metric => ({ id: metric.id, label: metric.label ?? metric.id })) ?? [];
@@ -142,7 +143,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     <dialog ref={editor} className="home-editor" aria-labelledby="homeEditorTitle" onCancel={() => setEditing(null)} onClose={() => setEditing(null)}><form onSubmit={event => {
       event.preventDefault(); if (!editing) return;
       try {
-        const updated = updateBookmark(editing.id, editTitle, editDescription, editDays === "all" ? null : editDays ? Number(editDays) : undefined, editCover);
+        const updated = updateBookmark(editing.id, editTitle, editDescription, !canEditWindow ? undefined : editDays === "all" ? null : editDays ? Number(editDays) : undefined, editCover);
         if (updated.url !== editing.url || updated.coverMetricId !== editing.coverMetricId) {
           setPreviews(current => { const next = { ...current }; delete next[editing.id]; return next; });
           setErrors(current => { const next = { ...current }; delete next[editing.id]; return next; });

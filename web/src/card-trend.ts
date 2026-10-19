@@ -1,4 +1,5 @@
 import { EMPTY_QUERY, type AggregationClause, type AggregationResultEntry, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
+import type { CardCover } from "./card-cover";
 import type { HumanStudyPreview } from "./human-study";
 import type { PreviewJob } from "./query-previews";
 import { rollingQueryMatches } from "./query-links";
@@ -17,10 +18,13 @@ export type CardTrend = {
   valueLabel: string; pointValueLabel: string; trendLabel?: string; sample: string; detail: string;
 };
 const endpoints = 31, chunk = 30;
+// The sparkline replaces only the shipped cover. Any edited or alternative
+// cover, in the library or a collection, renders its destination natively.
+export const trendCover = (metricId: string): CardCover => ({ mode: "source", metricId, kind: "auto", height: 260 });
 
 export function usesCardTrend(job: PreviewJob): boolean {
   const options = job.options, recipe = options?.recipe, trend = recipe?.trend;
-  if (!trend || options?.coverMetricId || options?.cover && JSON.stringify(options.cover) !== JSON.stringify(recipe.cover)) return false;
+  if (!trend || options?.coverMetricId || JSON.stringify(options?.cover ?? recipe.cover) !== JSON.stringify(trendCover(recipe.measures[0]?.id ?? ""))) return false;
   const window = options?.window;
   if (recipe.period ? window : !window || window.mode !== "relative" || !rollingQueryMatches(job.query, window)) return false;
   if (!trend.lookback && !window) return false;
@@ -41,12 +45,15 @@ export function cardTrendDays(lookback: number, completeDays: boolean, now: numb
   return { days, ends };
 }
 
-export function cardTrendQueries(where: WhereTerm[], trend: CardTrend, days: string[]): QueryState[] {
+export function cardTrendQueries(where: WhereTerm[], trend: CardTrend, all: string[]): QueryState[] {
   const metric = (id: string, measure: TrendMeasure): AggregationClause => ({ id, op: measure.op, ...(measure.field ? { field: measure.field } : {}), groupBy: ["day"], groupLimit: 100 });
   const metrics = [metric("trend-value", trend.value), ...(trend.per ? [metric("trend-per", trend.per)] : []), metric("trend-rows", { op: "count" })];
   // Whole local days through the day field; a timestamp range would split them.
-  const chunks = Array.from({ length: Math.ceil(days.length / chunk) }, (_, index) => days.slice(index * chunk, (index + 1) * chunk));
-  return chunks.map(part => ({ ...EMPTY_QUERY, where: [...where, { any: part.map(value => ({ field: "day", op: "=" as const, value })) }], aggregations: metrics }));
+  // Balanced chunks, since an OR group needs at least two branches.
+  const count = Math.ceil(all.length / chunk), size = Math.ceil(all.length / count);
+  const chunks = Array.from({ length: count }, (_, index) => all.slice(index * size, (index + 1) * size));
+  const days = (part: string[]): WhereTerm => part.length === 1 ? { field: "day", op: "=", value: part[0] } : { any: part.map(value => ({ field: "day", op: "=" as const, value })) };
+  return chunks.map(part => ({ ...EMPTY_QUERY, where: [...where, days(part)], aggregations: metrics }));
 }
 
 // A truncated or partial day set must fail rather than read as zero activity.
@@ -71,7 +78,8 @@ export function buildCardTrend(trend: CardTrend, lookback: number, results: Aggr
   const pointTimes = ends.map(end => end === today ? now : new Date(`${shiftDay(end, 1)}T00:00:00`).getTime() - 1);
   const prior = points.slice(0, -1).filter((point): point is number => point !== null), latest = points.at(-1);
   const count = total(rows, ends.at(-1)!);
-  return { kind: "trend", value: latest ?? undefined, valueLabel: trend.valueLabel, pointValueLabel: trend.pointValueLabel, trendLabel: trend.trendLabel ?? `Trailing ${lookback}d`, format: trend.format,
+  const text = (value: string) => value.replaceAll("{days}", String(lookback));
+  return { kind: "trend", value: latest ?? undefined, valueLabel: text(trend.valueLabel), pointValueLabel: text(trend.pointValueLabel), trendLabel: trend.trendLabel ?? `Trailing ${lookback}d`, format: trend.format,
     sampleLabel: `${count.toLocaleString()} ${trend.sample} in the latest ${lookback === 1 ? "day" : `${lookback} days`}`, points, pointTimes, lookbackDays: lookback,
-    baseline: prior.length ? prior.reduce((sum, item) => sum + item, 0) / prior.length : undefined, detail: trend.detail };
+    baseline: prior.length ? prior.reduce((sum, item) => sum + item, 0) / prior.length : undefined, detail: text(trend.detail) };
 }

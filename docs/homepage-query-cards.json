@@ -1,6 +1,6 @@
 {
   "title": "Homepage query card implementation tracker",
-  "updated": "2026-10-16",
+  "updated": "2026-10-19",
   "query_table_version": "local Miami v3",
   "cards": [
     {
@@ -385,7 +385,12 @@
         "slow-commands",
         "duration-distribution",
         "tool-timing-coverage",
-        "longest-tool-call"
+        "longest-tool-call",
+        "machine-time",
+        "machine-activities",
+        "machine-operations",
+        "machine-call-trend",
+        "machine-latency-trend"
       ],
       "current_preview": "Command duration spread. Positive recorded call durations in the last 30 days, by command and timing source; three-call minimum.",
       "blocked_on_query_table": [
@@ -1966,7 +1971,14 @@
         "repository-token-share",
         "repository-output-share",
         "repository-input-output",
-        "token-time-placement"
+        "token-time-placement",
+        "carbon-trend",
+        "carbon-tiers",
+        "carbon-repositories",
+        "carbon-models",
+        "carbon-providers",
+        "carbon-effort",
+        "models-needing-prices"
       ],
       "current_preview": "Daily token volume. Recorded tokens by day and repository over the last 30 days; cached and unpriced usage included. Daily API equivalent. Fully priced API equivalent by recorded day and repository over the last 30 days. Token pricing coverage. Recorded token shares by pricing status over the last 30 days; assumed and missing prices stay visible. API equivalent this period. Total recorded API equivalent over the last 30 days, using fully priced positive-token usage facts only. Repository cost share. Fully priced API equivalent over the last 30 days, attributed to each usage fact’s recorded repository. Repository token share. Recorded tokens over the last 30 days, attributed to each usage fact’s repository; includes cached input. Output share by repository. Output tokens divided by all recorded tokens over the last 30 days, grouped by repository.",
       "blocked_on_query_table": [
@@ -2538,22 +2550,27 @@
       "eligibility": "Usable run timestamps and interval definitions; overlapping time is not automatically time saved.",
       "destination": "Runs contributing to each overlapping interval.",
       "exploration_value": "Shows the scale and shape of parallel work.",
-      "implementation_status": "Deferred",
-      "implemented_recipes": [],
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "parallel-days",
+        "parallel-trend",
+        "parallel-hours",
+        "parallel-repositories"
+      ],
       "current_preview": "",
       "blocked_on_query_table": [
         "M04",
         "H04",
         "M07"
       ],
-      "blocked_on_pharos": "Publish observed run intervals with missing-end coverage and event-active estimation labels.",
-      "calculation_gap": "Agent sessions/activity are retained, but reliable intervals and concurrency reductions are not Query Table metrics.",
+      "blocked_on_pharos": "Run-level intervals with missing-end coverage remain unpublished; the parallelism dataset covers estimated conversation turns.",
+      "calculation_gap": "The parallelism dataset publishes estimated turn occupancy by local hour, unit and concurrency level, so concurrency cards are plain sums; complete run intervals and missing-end labels are not modeled.",
       "performance_note": "Union/sweep interval endpoints and bucket occupancy; do not sum durations or infer time saved from overlap.",
-      "after_metric_work": "needs_derived_dataset",
+      "after_metric_work": "partially_available_with_v3",
       "capacity_audit": {
-        "date": "2026-10-14",
-        "status": "requires_new_facts_or_adapter",
-        "reason": "Agent sessions/activity are retained, but reliable intervals and concurrency reductions are not Query Table metrics."
+        "date": "2026-10-19",
+        "status": "observed_variant_shipped",
+        "reason": "Concurrency is precomputed into hourly occupancy rows (unit, level, repository level) whose sums give agent hours, wall time and time-weighted concurrency."
       }
     },
     {
@@ -2774,8 +2791,12 @@
       "eligibility": "Dated fix and compatible ongoing exposure; absence of recurrence with no exposure is not success.",
       "destination": "Fix evidence, relevant failures and observation denominators.",
       "exploration_value": "Helps users understand which interventions are holding up.",
-      "implementation_status": "Deferred",
-      "implemented_recipes": [],
+      "implementation_status": "Partial implementation",
+      "implemented_recipes": [
+        "findings-open",
+        "findings-fixes",
+        "findings-results"
+      ],
       "current_preview": "",
       "blocked_on_query_table": [
         "H04",
@@ -2784,13 +2805,13 @@
         "L02"
       ],
       "blocked_on_pharos": "Expose fix/measurement and relevant call-population facts with observation coverage.",
-      "calculation_gap": "Pharos has findings and metric evidence below the table, but dated fixes plus compatible exposure/recurrence periods are not a registered source.",
+      "calculation_gap": "The findings dataset exposes each finding's state, likely monthly saving and summed verified results; dated before/after recurrence periods are not a registered source.",
       "performance_note": "Reuse host measurement facts and period rollups; no recurrence with no exposure must not look like a successful fix.",
       "after_metric_work": "needs_derived_dataset",
       "capacity_audit": {
-        "date": "2026-10-14",
-        "status": "requires_new_facts_or_adapter",
-        "reason": "Pharos has findings and metric evidence below the table, but dated fixes plus compatible exposure/recurrence periods are not a registered source."
+        "date": "2026-10-19",
+        "status": "observed_variant_shipped",
+        "reason": "Findings rows carry likely savings and verified net savings, so open-finding and result cards are ordinary aggregations; recurrence over successive windows remains deferred."
       }
     },
     {
@@ -16089,6 +16110,1378 @@
         "showOther": false
       },
       "retired": true
+    },
+    {
+      "category": "machines",
+      "idea": "tools-05",
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "ms",
+      "note": "Sums recorded tool-call durations, so overlapping calls add up: this is machine work, not wall-clock time. Calls without a recorded duration count toward calls but not time. Activities follow the Machine Time classification of commands and tools.",
+      "id": "machine-time",
+      "title": "Recorded machine time",
+      "description": "Tool and command time over the last {days} days, by the kind of work.",
+      "days": [
+        7,
+        30
+      ],
+      "action": "Explore machine time",
+      "where": [
+        {
+          "field": "duration_ms",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [
+        {
+          "id": "mt_daily",
+          "op": "sum",
+          "field": "duration_ms",
+          "groupBy": [
+            "day",
+            "activity"
+          ],
+          "groupLimit": 10000,
+          "label": "Recorded machine time by day"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "mt_daily",
+        "kind": "auto",
+        "maxGroups": 6,
+        "showOther": true,
+        "showLegend": true,
+        "height": 240
+      },
+      "exploration": {
+        "keys": [
+          "day",
+          "activity"
+        ],
+        "summaries": [
+          {
+            "id": "card_duration_ms",
+            "op": "sum",
+            "field": "duration_ms",
+            "label": "Recorded machine time by day"
+          },
+          {
+            "id": "card_count",
+            "op": "count",
+            "label": "Usage records"
+          }
+        ],
+        "valueField": "card_duration_ms",
+        "subjects": "daily groups",
+        "action": "Explore daily comparison",
+        "unit": "ms",
+        "coverMetric": {
+          "id": "mt_daily",
+          "op": "sum",
+          "field": "card_duration_ms",
+          "groupBy": [
+            "day",
+            "activity"
+          ],
+          "groupLimit": 10000,
+          "label": "Recorded machine time by day"
+        }
+      }
+    },
+    {
+      "category": "machines",
+      "idea": "tools-05",
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "ms",
+      "note": "Sums recorded tool-call durations, so overlapping calls add up: this is machine work, not wall-clock time. Calls without a recorded duration count toward calls but not time. Activities follow the Machine Time classification of commands and tools.",
+      "id": "machine-activities",
+      "title": "Where machine time goes",
+      "description": "Share of recorded tool time by kind of work over the last {days} days.",
+      "days": [
+        7,
+        30
+      ],
+      "action": "Compare activities",
+      "where": [
+        {
+          "field": "duration_ms",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [],
+      "exploration": {
+        "keys": [
+          "activity"
+        ],
+        "summaries": [
+          {
+            "id": "mt_time",
+            "op": "sum",
+            "field": "duration_ms",
+            "label": "Recorded machine time"
+          },
+          {
+            "id": "mt_calls",
+            "op": "count",
+            "label": "Calls"
+          },
+          {
+            "id": "mt_per_call",
+            "op": "avg",
+            "field": "duration_ms",
+            "label": "Per timed call"
+          }
+        ],
+        "valueField": "mt_time",
+        "unit": "ms",
+        "subjects": "activities",
+        "action": "Compare activities",
+        "labelFields": [
+          "activity"
+        ],
+        "context": [
+          {
+            "field": "mt_calls",
+            "label": "calls"
+          },
+          {
+            "field": "mt_per_call",
+            "label": "per timed call",
+            "unit": "ms"
+          }
+        ]
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "mt_time",
+        "kind": "bar-horizontal",
+        "maxGroups": 6,
+        "showOther": true
+      }
+    },
+    {
+      "category": "machines",
+      "idea": "tools-05",
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "ms",
+      "note": "Sums recorded tool-call durations, so overlapping calls add up: this is machine work, not wall-clock time. Calls without a recorded duration count toward calls but not time. Activities follow the Machine Time classification of commands and tools. Operations group a program and subcommand (for example “go test”) or a named tool.",
+      "id": "machine-operations",
+      "title": "Longest-running operations",
+      "description": "Commands and tools with the most recorded time over the last {days} days.",
+      "days": [
+        7,
+        30
+      ],
+      "action": "Inspect slow operations",
+      "where": [
+        {
+          "field": "duration_ms",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [],
+      "exploration": {
+        "keys": [
+          "operation_name",
+          "activity"
+        ],
+        "summaries": [
+          {
+            "id": "mt_time",
+            "op": "sum",
+            "field": "duration_ms",
+            "label": "Recorded machine time"
+          },
+          {
+            "id": "mt_calls",
+            "op": "count",
+            "label": "Calls"
+          },
+          {
+            "id": "mt_per_call",
+            "op": "avg",
+            "field": "duration_ms",
+            "label": "Per timed call"
+          }
+        ],
+        "valueField": "mt_time",
+        "unit": "ms",
+        "subjects": "operations",
+        "action": "Inspect slow operations",
+        "labelFields": [
+          "operation_name"
+        ],
+        "context": [
+          {
+            "field": "mt_calls",
+            "label": "calls"
+          },
+          {
+            "field": "mt_per_call",
+            "label": "per timed call",
+            "unit": "ms"
+          }
+        ]
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "mt_time",
+        "kind": "bar-horizontal",
+        "maxGroups": 6,
+        "showOther": false
+      }
+    },
+    {
+      "category": "machines",
+      "idea": "tools-05",
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "calls",
+      "note": "Counts every recorded tool call, including errors and calls without a duration, by its local start day. Each point divides seven days' calls by seven, including idle days; today is excluded until it is complete.",
+      "id": "machine-call-trend",
+      "title": "Tool calls per day",
+      "description": "Daily tool calls averaged over each trailing seven complete days, across the last 30 days.",
+      "days": [
+        30
+      ],
+      "action": "Explore daily tool calls",
+      "measures": [
+        {
+          "id": "mt_daily_calls",
+          "op": "count",
+          "groupBy": [
+            "day"
+          ],
+          "groupLimit": 10000,
+          "label": "Tool calls per day"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "mt_daily_calls",
+        "kind": "auto",
+        "height": 260
+      },
+      "trend": {
+        "value": {
+          "op": "count"
+        },
+        "perDay": true,
+        "lookback": 7,
+        "completeDays": true,
+        "valueLabel": "calls a day · 7-day average",
+        "pointValueLabel": "calls a day",
+        "trendLabel": "7d avg",
+        "sample": "calls",
+        "detail": "Each point: tool calls in its trailing seven complete local days ÷ 7. The norm is the mean of the prior 30 endpoints."
+      }
+    },
+    {
+      "category": "machines",
+      "idea": "tools-05",
+      "dataset": "tool_calls",
+      "field": "started_at",
+      "unit": "ms",
+      "note": "Total recorded duration ÷ calls with a recorded duration, pooled over each seven-day window (not an average of daily averages). Long-running calls such as waits and watches pull the mean up; Longest-running operations names them. Windows without timed calls are gaps.",
+      "id": "machine-latency-trend",
+      "title": "Average tool call time",
+      "description": "Mean recorded duration per tool call over each trailing seven complete days, across the last 30 days.",
+      "days": [
+        30
+      ],
+      "action": "Inspect daily call times",
+      "measures": [
+        {
+          "id": "mt_daily_mean",
+          "op": "avg",
+          "field": "duration_ms",
+          "groupBy": [
+            "day"
+          ],
+          "groupLimit": 10000,
+          "label": "Mean recorded call time by day"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "mt_daily_mean",
+        "kind": "auto",
+        "height": 260
+      },
+      "trend": {
+        "value": {
+          "op": "sum",
+          "field": "duration_ms"
+        },
+        "per": {
+          "op": "count",
+          "field": "duration_ms"
+        },
+        "scale": 0.001,
+        "lookback": 7,
+        "completeDays": true,
+        "valueLabel": "seconds per call · 7-day mean",
+        "pointValueLabel": "seconds per timed call",
+        "trendLabel": "7d mean",
+        "sample": "calls",
+        "detail": "Each point: recorded duration ÷ timed calls over its trailing seven complete local days. The norm is the mean of the prior 30 endpoints."
+      }
+    },
+    {
+      "category": "machines",
+      "idea": "rhythm-03",
+      "dataset": "parallelism",
+      "field": "started_at",
+      "unit": "hours",
+      "note": "Counts workspaces or agents (your Parallelism counting setting) with an active conversation: observed prompt-to-response turns joined across gaps up to your Parallelism gap setting. Delegated agents run inside their root's workspace. Timing is estimated from transcript timestamps. Each hour of wall time is counted once, at the number of agents active then.",
+      "id": "parallel-days",
+      "title": "Parallel hours by day",
+      "description": "Hours with one, two, or three or more agents active, for each day of the last {days} days.",
+      "days": [
+        7,
+        30
+      ],
+      "action": "See each day's timeline",
+      "measures": [
+        {
+          "id": "pl_daily",
+          "op": "sum",
+          "field": "elapsed_hours",
+          "groupBy": [
+            "day",
+            "level_band"
+          ],
+          "groupLimit": 10000,
+          "label": "Active hours by agents at once"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "pl_daily",
+        "kind": "auto",
+        "maxGroups": 3,
+        "showOther": false,
+        "showLegend": true,
+        "height": 228
+      },
+      "exploration": {
+        "keys": [
+          "day",
+          "level_band"
+        ],
+        "summaries": [
+          {
+            "id": "card_elapsed_hours",
+            "op": "sum",
+            "field": "elapsed_hours",
+            "label": "Active hours by agents at once"
+          },
+          {
+            "id": "card_count",
+            "op": "count",
+            "label": "Usage records"
+          }
+        ],
+        "valueField": "card_elapsed_hours",
+        "subjects": "daily groups",
+        "action": "Explore daily comparison",
+        "unit": "hours",
+        "coverMetric": {
+          "id": "pl_daily",
+          "op": "sum",
+          "field": "card_elapsed_hours",
+          "groupBy": [
+            "day",
+            "level_band"
+          ],
+          "groupLimit": 10000,
+          "label": "Active hours by agents at once"
+        }
+      }
+    },
+    {
+      "category": "machines",
+      "idea": "rhythm-03",
+      "dataset": "parallelism",
+      "field": "started_at",
+      "unit": "agents",
+      "note": "Counts workspaces or agents (your Parallelism counting setting) with an active conversation: observed prompt-to-response turns joined across gaps up to your Parallelism gap setting. Delegated agents run inside their root's workspace. Timing is estimated from transcript timestamps. Each point weights concurrency by time: agent-hours ÷ hours with any agent active.",
+      "id": "parallel-trend",
+      "title": "Agents at once",
+      "description": "Average number of agents running together while any is active, over each trailing seven days.",
+      "days": [
+        30
+      ],
+      "action": "Open the parallelism view",
+      "measures": [
+        {
+          "id": "pl_daily_concurrency",
+          "op": "sum",
+          "field": "unit_ms",
+          "groupBy": [
+            "day"
+          ],
+          "groupLimit": 10000,
+          "label": "Agents at once while active",
+          "expression": "SUM([unit_ms])/NULLIF(SUM([elapsed_ms]),0)"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "pl_daily_concurrency",
+        "kind": "auto",
+        "height": 260
+      },
+      "trend": {
+        "value": {
+          "op": "sum",
+          "field": "unit_ms"
+        },
+        "per": {
+          "op": "sum",
+          "field": "elapsed_ms"
+        },
+        "lookback": 7,
+        "completeDays": true,
+        "valueLabel": "agents at once while active · 7-day average",
+        "pointValueLabel": "agents at once",
+        "trendLabel": "7d avg",
+        "sample": "agent-hour records",
+        "detail": "Each point: agent time ÷ wall time with any agent active, over its trailing seven complete local days. Windows with no activity are gaps."
+      }
+    },
+    {
+      "category": "machines",
+      "idea": "rhythm-03",
+      "dataset": "parallelism",
+      "field": "started_at",
+      "unit": "agents",
+      "note": "Counts workspaces or agents (your Parallelism counting setting) with an active conversation: observed prompt-to-response turns joined across gaps up to your Parallelism gap setting. Delegated agents run inside their root's workspace. Timing is estimated from transcript timestamps. Each hour averages over every day in the period, including idle days; hours with no activity at all are omitted.",
+      "id": "parallel-hours",
+      "title": "When agents overlap",
+      "description": "Average number of agents running at each hour of the day, over the last {days} days.",
+      "days": [
+        7,
+        30
+      ],
+      "action": "Find your parallel hours",
+      "measures": [
+        {
+          "id": "pl_hours",
+          "op": "sum",
+          "field": "unit_hours",
+          "expression": "SUM([unit_hours])/{days}",
+          "groupBy": [
+            "hour_of_day"
+          ],
+          "groupLimit": 24,
+          "sort": [
+            {
+              "key": "group0",
+              "dir": "asc"
+            }
+          ],
+          "label": "Average agents active by local hour",
+          "display": {
+            "kind": "bar-vertical",
+            "xLabel": "Local hour",
+            "yLabel": "Agents",
+            "format": {
+              "kind": "number",
+              "decimals": 2
+            }
+          }
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "pl_hours",
+        "kind": "bar-vertical",
+        "maxGroups": 24,
+        "height": 170
+      }
+    },
+    {
+      "category": "machines",
+      "idea": "rhythm-03",
+      "dataset": "parallelism",
+      "field": "started_at",
+      "unit": "hours",
+      "note": "Counts workspaces or agents (your Parallelism counting setting) with an active conversation: observed prompt-to-response turns joined across gaps up to your Parallelism gap setting. Delegated agents run inside their root's workspace. Timing is estimated from transcript timestamps.",
+      "id": "parallel-repositories",
+      "title": "Agent hours by repository",
+      "description": "Active agent hours per repository over the last {days} days, counting parallel agents separately.",
+      "days": [
+        7,
+        30
+      ],
+      "action": "Compare repositories",
+      "measures": [],
+      "exploration": {
+        "keys": [
+          "repository_name"
+        ],
+        "summaries": [
+          {
+            "id": "pl_agent_hours",
+            "op": "sum",
+            "field": "unit_hours",
+            "label": "Agent hours"
+          },
+          {
+            "id": "pl_elapsed",
+            "op": "sum",
+            "field": "repo_elapsed_hours",
+            "label": "Hours with any active"
+          },
+          {
+            "id": "pl_together",
+            "op": "formula",
+            "expression": "SUM([unit_hours])/NULLIF(SUM([repo_elapsed_hours]),0)",
+            "label": "At once while active"
+          },
+          {
+            "id": "pl_units",
+            "op": "count_distinct",
+            "field": "unit_id",
+            "label": "Agents"
+          }
+        ],
+        "valueField": "pl_agent_hours",
+        "unit": "hours",
+        "subjects": "repositories",
+        "action": "Compare repositories",
+        "labelFields": [
+          "repository_name"
+        ],
+        "context": [
+          {
+            "field": "pl_elapsed",
+            "label": "h with any active"
+          },
+          {
+            "field": "pl_units",
+            "label": "agents"
+          }
+        ]
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "pl_agent_hours",
+        "kind": "bar-horizontal",
+        "maxGroups": 6,
+        "showOther": true
+      }
+    },
+    {
+      "id": "carbon-trend",
+      "title": "Estimated CO₂e",
+      "description": "Modeled emissions from recorded tokens over each trailing {days}-day period, across the last 30 days.",
+      "category": "carbon",
+      "idea": "cost-01",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "days": [
+        7,
+        30
+      ],
+      "unit": "kg CO₂e",
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "action": "Explore carbon impact",
+      "note": "Uses your Carbon Impact settings (estimate range, facility overhead, grid). Token counts are reported; energy and CO₂e are modeled estimates. Models are assigned to size tiers by name; unmatched models use the default tier. Daily endpoints use local calendar days, so the latest point includes today so far.",
+      "measures": [
+        {
+          "id": "cb_daily",
+          "op": "sum",
+          "field": "co2e_kg",
+          "groupBy": [
+            "day"
+          ],
+          "groupLimit": 10000,
+          "label": "Estimated CO₂e by day (kg)"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "cb_daily",
+        "kind": "auto",
+        "height": 260
+      },
+      "trend": {
+        "value": {
+          "op": "sum",
+          "field": "co2e_kg"
+        },
+        "valueLabel": "kg CO₂e · past {days} days",
+        "pointValueLabel": "kg CO₂e",
+        "sample": "usage records",
+        "detail": "Each point: estimated CO₂e over its trailing {days} local days, including today so far. The norm is the mean of the prior 30 endpoints."
+      },
+      "exploration": {
+        "keys": [
+          "day"
+        ],
+        "summaries": [
+          {
+            "id": "card_co2e_kg",
+            "op": "sum",
+            "field": "co2e_kg",
+            "label": "Estimated CO₂e by day (kg)"
+          },
+          {
+            "id": "card_count",
+            "op": "count",
+            "label": "Usage records"
+          },
+          {
+            "id": "card_total_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Total tokens"
+          },
+          {
+            "id": "card_cost_usd",
+            "op": "sum",
+            "field": "cost_usd",
+            "label": "API equivalent"
+          },
+          {
+            "id": "card_agent_session_id",
+            "op": "count_distinct",
+            "field": "agent_session_id",
+            "label": "Agent sessions"
+          }
+        ],
+        "valueField": "card_co2e_kg",
+        "subjects": "daily groups",
+        "action": "Explore daily comparison",
+        "unit": "kg CO₂e",
+        "coverMetric": {
+          "id": "cb_daily",
+          "op": "sum",
+          "field": "card_co2e_kg",
+          "groupBy": [
+            "day"
+          ],
+          "groupLimit": 10000,
+          "label": "Estimated CO₂e by day (kg)"
+        }
+      }
+    },
+    {
+      "id": "carbon-tiers",
+      "title": "CO₂e by model size",
+      "description": "Share of estimated emissions from small, mid-size and large models over the last {days} days.",
+      "category": "carbon",
+      "idea": "cost-01",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "days": [
+        7,
+        30
+      ],
+      "unit": "kg CO₂e",
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [],
+      "action": "Compare model tiers",
+      "note": "Uses your Carbon Impact settings (estimate range, facility overhead, grid). Token counts are reported; energy and CO₂e are modeled estimates. Models are assigned to size tiers by name; unmatched models use the default tier.",
+      "exploration": {
+        "keys": [
+          "carbon_tier"
+        ],
+        "summaries": [
+          {
+            "id": "cb_co2",
+            "op": "sum",
+            "field": "co2e_kg",
+            "label": "Estimated CO₂e (kg)"
+          },
+          {
+            "id": "cb_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Recorded tokens"
+          },
+          {
+            "id": "cb_energy",
+            "op": "sum",
+            "field": "energy_kwh",
+            "label": "Estimated energy (kWh)"
+          }
+        ],
+        "valueField": "cb_co2",
+        "unit": "kg CO₂e",
+        "subjects": "groups",
+        "action": "Compare model tiers",
+        "labelFields": [
+          "carbon_tier"
+        ],
+        "context": [
+          {
+            "field": "cb_tokens",
+            "label": "tokens"
+          },
+          {
+            "field": "cb_energy",
+            "label": "kWh"
+          }
+        ],
+        "coverMetric": {
+          "id": "cb_co2",
+          "op": "sum",
+          "field": "cb_co2",
+          "groupBy": [
+            "carbon_tier"
+          ],
+          "groupLimit": 10000,
+          "label": "CO₂e by model size",
+          "display": {
+            "kind": "pie"
+          }
+        }
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "cb_co2",
+        "kind": "pie",
+        "maxGroups": 3,
+        "showOther": false,
+        "showLegend": true,
+        "legendColumns": 2,
+        "height": 230
+      }
+    },
+    {
+      "id": "carbon-repositories",
+      "title": "CO₂e by repository",
+      "description": "Repositories with the largest estimated emissions from recorded tokens over the last {days} days.",
+      "category": "carbon",
+      "idea": "cost-01",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "days": [
+        7,
+        30
+      ],
+      "unit": "kg CO₂e",
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [],
+      "action": "Compare repositories",
+      "note": "Uses your Carbon Impact settings (estimate range, facility overhead, grid). Token counts are reported; energy and CO₂e are modeled estimates. Models are assigned to size tiers by name; unmatched models use the default tier.",
+      "exploration": {
+        "keys": [
+          "repository_name"
+        ],
+        "summaries": [
+          {
+            "id": "cb_co2",
+            "op": "sum",
+            "field": "co2e_kg",
+            "label": "Estimated CO₂e (kg)"
+          },
+          {
+            "id": "cb_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Recorded tokens"
+          },
+          {
+            "id": "cb_energy",
+            "op": "sum",
+            "field": "energy_kwh",
+            "label": "Estimated energy (kWh)"
+          }
+        ],
+        "valueField": "cb_co2",
+        "unit": "kg CO₂e",
+        "subjects": "groups",
+        "action": "Compare repositories",
+        "labelFields": [
+          "repository_name"
+        ],
+        "context": [
+          {
+            "field": "cb_tokens",
+            "label": "tokens"
+          },
+          {
+            "field": "cb_energy",
+            "label": "kWh"
+          }
+        ]
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "cb_co2",
+        "kind": "bar-horizontal",
+        "maxGroups": 5,
+        "showOther": true
+      }
+    },
+    {
+      "id": "carbon-models",
+      "title": "CO₂e by model",
+      "description": "Models with the largest estimated emissions from recorded tokens over the last {days} days.",
+      "category": "carbon",
+      "idea": "cost-01",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "days": [
+        7,
+        30
+      ],
+      "unit": "kg CO₂e",
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [],
+      "action": "Compare models",
+      "note": "Uses your Carbon Impact settings (estimate range, facility overhead, grid). Token counts are reported; energy and CO₂e are modeled estimates. Models are assigned to size tiers by name; unmatched models use the default tier.",
+      "exploration": {
+        "keys": [
+          "model_family"
+        ],
+        "summaries": [
+          {
+            "id": "cb_co2",
+            "op": "sum",
+            "field": "co2e_kg",
+            "label": "Estimated CO₂e (kg)"
+          },
+          {
+            "id": "cb_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Recorded tokens"
+          },
+          {
+            "id": "cb_energy",
+            "op": "sum",
+            "field": "energy_kwh",
+            "label": "Estimated energy (kWh)"
+          }
+        ],
+        "valueField": "cb_co2",
+        "unit": "kg CO₂e",
+        "subjects": "groups",
+        "action": "Compare models",
+        "labelFields": [
+          "model_family"
+        ],
+        "context": [
+          {
+            "field": "cb_tokens",
+            "label": "tokens"
+          },
+          {
+            "field": "cb_energy",
+            "label": "kWh"
+          }
+        ]
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "cb_co2",
+        "kind": "bar-horizontal",
+        "maxGroups": 5,
+        "showOther": true
+      }
+    },
+    {
+      "id": "carbon-providers",
+      "title": "CO₂e by provider",
+      "description": "Share of estimated emissions by agent provider over the last {days} days.",
+      "category": "carbon",
+      "idea": "cost-01",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "days": [
+        7,
+        30
+      ],
+      "unit": "kg CO₂e",
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [],
+      "action": "Compare providers",
+      "note": "Uses your Carbon Impact settings (estimate range, facility overhead, grid). Token counts are reported; energy and CO₂e are modeled estimates. Models are assigned to size tiers by name; unmatched models use the default tier.",
+      "exploration": {
+        "keys": [
+          "provider"
+        ],
+        "summaries": [
+          {
+            "id": "cb_co2",
+            "op": "sum",
+            "field": "co2e_kg",
+            "label": "Estimated CO₂e (kg)"
+          },
+          {
+            "id": "cb_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Recorded tokens"
+          },
+          {
+            "id": "cb_energy",
+            "op": "sum",
+            "field": "energy_kwh",
+            "label": "Estimated energy (kWh)"
+          }
+        ],
+        "valueField": "cb_co2",
+        "unit": "kg CO₂e",
+        "subjects": "groups",
+        "action": "Compare providers",
+        "labelFields": [
+          "provider"
+        ],
+        "context": [
+          {
+            "field": "cb_tokens",
+            "label": "tokens"
+          },
+          {
+            "field": "cb_energy",
+            "label": "kWh"
+          }
+        ],
+        "coverMetric": {
+          "id": "cb_co2",
+          "op": "sum",
+          "field": "cb_co2",
+          "groupBy": [
+            "provider"
+          ],
+          "groupLimit": 10000,
+          "label": "CO₂e by provider",
+          "display": {
+            "kind": "pie"
+          }
+        }
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "cb_co2",
+        "kind": "pie",
+        "maxGroups": 5,
+        "showOther": true,
+        "showLegend": true,
+        "legendColumns": 2,
+        "height": 300
+      }
+    },
+    {
+      "id": "carbon-effort",
+      "title": "CO₂e by effort",
+      "description": "Share of estimated emissions by recorded reasoning effort over the last {days} days.",
+      "category": "carbon",
+      "idea": "cost-01",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "days": [
+        7,
+        30
+      ],
+      "unit": "kg CO₂e",
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [],
+      "action": "Compare effort levels",
+      "note": "Uses your Carbon Impact settings (estimate range, facility overhead, grid). Token counts are reported; energy and CO₂e are modeled estimates. Models are assigned to size tiers by name; unmatched models use the default tier. Effort is the level recorded on each usage fact; unspecified effort stays its own slice.",
+      "exploration": {
+        "keys": [
+          "effort"
+        ],
+        "summaries": [
+          {
+            "id": "cb_co2",
+            "op": "sum",
+            "field": "co2e_kg",
+            "label": "Estimated CO₂e (kg)"
+          },
+          {
+            "id": "cb_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Recorded tokens"
+          },
+          {
+            "id": "cb_energy",
+            "op": "sum",
+            "field": "energy_kwh",
+            "label": "Estimated energy (kWh)"
+          }
+        ],
+        "valueField": "cb_co2",
+        "unit": "kg CO₂e",
+        "subjects": "groups",
+        "action": "Compare effort levels",
+        "labelFields": [
+          "effort"
+        ],
+        "context": [
+          {
+            "field": "cb_tokens",
+            "label": "tokens"
+          },
+          {
+            "field": "cb_energy",
+            "label": "kWh"
+          }
+        ],
+        "coverMetric": {
+          "id": "cb_co2",
+          "op": "sum",
+          "field": "cb_co2",
+          "groupBy": [
+            "effort"
+          ],
+          "groupLimit": 10000,
+          "label": "CO₂e by effort",
+          "display": {
+            "kind": "pie"
+          }
+        }
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "cb_co2",
+        "kind": "pie",
+        "maxGroups": 5,
+        "showOther": true,
+        "showLegend": true,
+        "legendColumns": 2,
+        "height": 300
+      }
+    },
+    {
+      "category": "findings",
+      "idea": "learning-03",
+      "dataset": "findings",
+      "field": "first_seen_at",
+      "unit": "USD",
+      "period": "current",
+      "note": "Likely saving = what the pattern cost × the share a change can remove × how often a change takes × how often the pattern persists untreated. Monthly estimates in USD from the latest Findings analysis.",
+      "id": "findings-open",
+      "title": "Biggest open findings",
+      "description": "Optimization findings with the largest likely monthly saving, from the latest Findings analysis.",
+      "action": "Review your findings",
+      "where": [
+        {
+          "field": "state",
+          "op": "=",
+          "value": "open"
+        },
+        {
+          "field": "likely_usd",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [],
+      "exploration": {
+        "keys": [
+          "id"
+        ],
+        "summaries": [
+          {
+            "id": "fd_likely",
+            "op": "sum",
+            "field": "likely_usd",
+            "label": "Likely saving / month (USD)"
+          },
+          {
+            "id": "fd_title",
+            "op": "row",
+            "field": "title",
+            "label": "Finding"
+          },
+          {
+            "id": "fd_at_stake",
+            "op": "sum",
+            "field": "at_stake_usd",
+            "label": "At stake (USD)"
+          }
+        ],
+        "valueField": "fd_likely",
+        "unit": "USD",
+        "subjects": "open findings",
+        "action": "Review your findings",
+        "labelFields": [
+          "fd_title"
+        ],
+        "representative": {
+          "orderBy": [
+            {
+              "field": "first_seen_at",
+              "dir": "desc",
+              "nulls": "last"
+            }
+          ]
+        },
+        "context": [
+          {
+            "field": "fd_at_stake",
+            "label": "at stake",
+            "unit": "USD"
+          }
+        ]
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "fd_likely",
+        "kind": "bar-horizontal",
+        "maxGroups": 3,
+        "showOther": false
+      }
+    },
+    {
+      "category": "findings",
+      "idea": "learning-03",
+      "dataset": "findings",
+      "field": "first_seen_at",
+      "unit": "USD",
+      "period": "current",
+      "note": "Likely saving = what the pattern cost × the share a change can remove × how often a change takes × how often the pattern persists untreated. Monthly estimates in USD from the latest Findings analysis. Each open finding counts once, under the kind of change its prompt makes: repository instructions, repository tools and skills, harness settings, automation prompts or your global instructions.",
+      "id": "findings-fixes",
+      "title": "Savings by kind of fix",
+      "description": "Likely monthly savings across open findings, by where the suggested change is made.",
+      "action": "Compare kinds of fix",
+      "where": [
+        {
+          "field": "state",
+          "op": "=",
+          "value": "open"
+        },
+        {
+          "field": "likely_usd",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [],
+      "exploration": {
+        "keys": [
+          "lever_label"
+        ],
+        "summaries": [
+          {
+            "id": "fd_likely",
+            "op": "sum",
+            "field": "likely_usd",
+            "label": "Likely saving / month (USD)"
+          },
+          {
+            "id": "fd_count",
+            "op": "count",
+            "label": "Open findings"
+          }
+        ],
+        "valueField": "fd_likely",
+        "unit": "USD",
+        "subjects": "kinds of fix",
+        "action": "Compare kinds of fix",
+        "labelFields": [
+          "lever_label"
+        ],
+        "context": [
+          {
+            "field": "fd_count",
+            "label": "open findings"
+          }
+        ],
+        "coverMetric": {
+          "id": "fd_likely",
+          "op": "sum",
+          "field": "fd_likely",
+          "groupBy": [
+            "lever_label"
+          ],
+          "groupLimit": 10000,
+          "label": "Likely saving by kind of fix",
+          "display": {
+            "kind": "pie"
+          }
+        }
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "fd_likely",
+        "kind": "pie",
+        "maxGroups": 5,
+        "showOther": true,
+        "showLegend": true,
+        "height": 300
+      }
+    },
+    {
+      "category": "findings",
+      "idea": "learning-03",
+      "dataset": "findings",
+      "field": "first_seen_at",
+      "unit": "USD",
+      "period": "current",
+      "note": "Copying a prompt starts its measurement. Savings come from each finding's fixed before/after plan, net of the added context cost.",
+      "id": "findings-results",
+      "title": "Net savings from findings",
+      "description": "What copied finding prompts have saved after their added context cost, across verified results.",
+      "action": "See your wins",
+      "emptyLabel": "No verified results yet",
+      "where": [
+        {
+          "field": "wins",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [
+        {
+          "id": "fd_net",
+          "op": "sum",
+          "field": "saved_net_usd",
+          "groupBy": [],
+          "label": "Saved, net of added context (USD)"
+        },
+        {
+          "id": "fd_saved",
+          "op": "sum",
+          "field": "saved_usd",
+          "groupBy": [],
+          "label": "Saved before added context (USD)"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "fd_net",
+        "kind": "value",
+        "height": 170
+      }
+    },
+    {
+      "id": "models-needing-prices",
+      "title": "Models needing prices",
+      "description": "Models whose tokens are unpriced or priced by assumption, by all-time recorded token volume.",
+      "category": "library",
+      "idea": "cost-01",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "unit": "tokens",
+      "period": "all",
+      "action": "Review model pricing",
+      "note": "All-time token volume. Assumed models borrow a sibling model's price; unpriced models have no retained price on their usage day. Placeholder model names are excluded.",
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        },
+        {
+          "any": [
+            {
+              "field": "price_status",
+              "op": "=",
+              "value": "unpriced"
+            },
+            {
+              "field": "price_status",
+              "op": "=",
+              "value": "assumed"
+            }
+          ]
+        },
+        {
+          "field": "model",
+          "op": "!=",
+          "value": "Unknown model"
+        },
+        {
+          "field": "model",
+          "op": "starts_with",
+          "value": "<",
+          "negated": true
+        }
+      ],
+      "measures": [],
+      "exploration": {
+        "keys": [
+          "model",
+          "price_status"
+        ],
+        "summaries": [
+          {
+            "id": "pr_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Recorded tokens"
+          },
+          {
+            "id": "pr_last",
+            "op": "max",
+            "field": "day",
+            "label": "Last used"
+          },
+          {
+            "id": "pr_providers",
+            "op": "count_distinct",
+            "field": "provider",
+            "label": "Providers"
+          }
+        ],
+        "valueField": "pr_tokens",
+        "unit": "tokens",
+        "subjects": "models",
+        "action": "Review model pricing",
+        "labelFields": [
+          "model",
+          "price_status"
+        ]
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "pr_tokens",
+        "kind": "bar-horizontal",
+        "maxGroups": 5,
+        "showOther": false
+      }
     }
   ],
   "query_table_requests": [

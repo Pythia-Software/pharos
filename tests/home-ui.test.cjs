@@ -671,7 +671,7 @@ test('conveyor slides in both directions and wraps while side cards show only ev
     assert.ok(belt.x < 1 && Math.abs(belt.width - 2133) < 2, 'the conveyor must span the screen');
     const ghosts = await page.locator('.home-belt-row .query-card[data-xray]').evaluateAll(elements => elements.map(element => ({
       x: element.getBoundingClientRect().x, opacity: getComputedStyle(element.querySelector('.query-title')).opacity,
-      hidden: element.getAttribute('aria-hidden'), focusable: element.querySelector('a').tabIndex, hasMarks: Boolean(element.querySelector('i,.qt-metric-mark,.qt-metric-bar-fill,.qt-metric-bar-track,.query-scalar-value,td')), revealable: Boolean(element.querySelector('.query-xray-open')),
+      hidden: element.getAttribute('aria-hidden'), focusable: element.querySelector('a').tabIndex, hasMarks: Boolean(element.querySelector('i,.qt-metric-mark,.qt-metric-bar-fill,.qt-metric-bar-track,.query-scalar-value,td,.human-study-sparkline')), revealable: Boolean(element.querySelector('.query-xray-open')),
     })));
     assert.ok(ghosts.some(card => card.x > 0 && card.x < 468 && card.hasMarks));
     assert.ok(ghosts.some(card => card.x > 1648 && card.x < 2133 && card.hasMarks));
@@ -1094,7 +1094,7 @@ test('every active catalog card preserves its displayed data after collection an
       const card = page.locator(`#card-${recipe.id}`);
       expected.set(recipe.id, await signature(card));
       await card.getByRole('button', { name: /^Collect / }).click();
-      await assertEventually(async () => await page.evaluate(id => window.pharosPrefs.get('pharos-bookmarks-v1', []).some(card => card.templateId === `${id}:7`), recipe.id)).catch(async error => assert.fail(`${recipe.id}: ${await page.locator('.card-library-feedback').innerText()} (${error.message})`));
+      await assertEventually(async () => await page.evaluate(id => window.pharosPrefs.get('pharos-bookmarks-v1', []).some(card => card.templateId === id), `${recipe.id}:${recipe.period ?? 7}`)).catch(async error => assert.fail(`${recipe.id}: ${await page.locator('.card-library-feedback').innerText()} (${error.message})`));
     }
     await assertEventually(async () => data.preferences['pharos-bookmarks-v1']?.length === active.length);
     await page.goto('http://home.test/home');

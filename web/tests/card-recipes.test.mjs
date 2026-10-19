@@ -38,7 +38,7 @@ test("all card destinations compile and retain their source metrics and rolling 
     if (!suggestion.query.grouping) continue;
     const { grouping } = suggestion.query;
     assert.deepEqual(grouping.source.aggregations, recipe.measures, recipe.id);
-    assert.deepEqual(grouping.source.where.filter(term => term.field === recipe.field).map(term => term.value), ["-7d", "+0s"], recipe.id);
+    assert.deepEqual(grouping.source.where.filter(term => term.field === recipe.field).map(term => term.value), recipe.period ? [] : ["-7d", "+0s"], recipe.id);
     const cover = cardCoverQuery(suggestion.query, recipe);
     const coverRequest = core.toQueryRequestV3(cover.query, schemas[recipe.dataset], capabilities, execution, { now: clock.getTime(), rows: false });
     assert.deepEqual(coverRequest.diagnostics, [], `${recipe.id} cover`);

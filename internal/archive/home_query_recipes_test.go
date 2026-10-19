@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,8 @@ func TestHomeQueryRecipesV2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Formulas may scale by the card's lookback, which instantiation fills in.
+	data = bytes.ReplaceAll(data, []byte("{days}"), []byte("7"))
 	var tracker struct {
 		Recipes []struct {
 			ID       string         `json:"id"`
