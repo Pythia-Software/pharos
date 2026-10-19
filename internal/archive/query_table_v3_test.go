@@ -28,7 +28,7 @@ func TestQueryV3AllDatasetsHTTP(t *testing.T) {
 	seedToolCalls(t, catalog, 31)
 	ingestUsageFixture(t, catalog)
 	server := NewServer(config, catalog)
-	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts"} {
+	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings"} {
 		t.Run(dataset, func(t *testing.T) {
 			schema, err := sqliteQuerySchema(dataset)
 			if err != nil {
