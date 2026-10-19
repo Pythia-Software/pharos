@@ -40,12 +40,14 @@ runs upstream's `backends/go` package tests and its `backends/sqlite-tests`
 suite with this copy's sources in place of upstream's, together with the
 `schema` fixtures both suites read. Run it after changing this copy.
 
-Known result at v0.8.0 (2026-10-19): every test passes except
-`TestV2ReductionReuse` in `backends/sqlite-tests`, which passes on unpatched
-v0.8.0. When `AVG` or `MIN` is batched with `SUM` over the same field, this
-copy evaluates the source once more for each of them: 39 or 54 source rows
-visited against one scan's 24. The metric values match. Fix it here, or
-record why it is acceptable, before relying on the script as a pass/fail gate.
+Known result at v0.8.0 (2026-10-19): 171 tests pass and 23 skip, most of
+them because they need Postgres. One fails: `TestV2ReductionReuse` in
+`backends/sqlite-tests`, which passes on unpatched v0.8.0. When `AVG` or
+`MIN` is batched with `SUM` over the same field, this copy evaluates the
+source once more for each of them: 39 or 54 source rows visited against one
+scan's 24. The metric values match. Fix it here, or record why it is
+acceptable. Until then, `-skip TestV2ReductionReuse` makes the rest a
+pass/fail gate.
 
 In Pharos, `TestVendoredPatchFormulaGroupErrorIdentities` and
 `TestVendoredPatchHiddenAndDefaultSort`
