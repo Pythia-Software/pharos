@@ -869,6 +869,41 @@ test('conversation map tracks the viewport and jumps to a human turn', async t =
   await page.waitForFunction(() => Math.abs(document.querySelectorAll('.turn')[15].getBoundingClientRect().top) < 3);
 });
 
+test('scrolling moves the rails’ highlights without re-placing their markers', async t => {
+  const request = (id, input, seconds) => event(id, 'message', { message: { id, usage: { input_tokens: input, output_tokens: 10 }, content: [{ type: 'text', text: `Completed ${id}.` }] } }, seconds);
+  const messages = Array.from({ length: 40 }, (_, index) => [
+    event(`human-${index}`, 'message', `Review step ${index + 1}`, index * 20, { role: 'user' }),
+    request(`reply-${index}`, 1000 + index * 100, index * 20 + 5),
+  ]).flat();
+  const page = await fixture(t, messages);
+  await page.evaluate(() => { document.querySelector('#detail').classList.add('active'); document.querySelector('main').scrollTo(0, 500); });
+  await page.waitForFunction(() => document.querySelector('.conversation-map-turn.current') && document.querySelector('.token-marker.in-view'));
+  // Markers in view are exactly those of the turns on screen.
+  const consistent = () => page.evaluate(() => {
+    const turns = [...document.querySelectorAll('.turn')], onScreen = turns.map(turn => { const rect = turn.getBoundingClientRect(); return rect.bottom > 0 && rect.top < innerHeight; });
+    const markers = [...document.querySelectorAll('.token-map .event-marker')];
+    return markers.length === 40 && markers.every((marker, index) => marker.classList.contains('in-view') === onScreen[index]);
+  });
+  assert.equal(await consistent(), true);
+  // Each marker's target is measured when layout changes, not per scroll frame.
+  const placed = await page.evaluate(() => {
+    const measure = Element.prototype.getBoundingClientRect, reads = { count: 0 };
+    Element.prototype.getBoundingClientRect = function () { reads.count++; return measure.call(this); };
+    window.layoutReads = reads;
+    return document.querySelector('.conversation-map-turn.current').title;
+  });
+  await page.evaluate(() => document.querySelector('main').scrollTo(0, 2500));
+  await page.waitForFunction(previous => document.querySelector('.conversation-map-turn.current')?.title !== previous, placed);
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const reads = await page.evaluate(() => window.layoutReads.count);
+  assert.ok(reads < 20, `Scrolling should not re-measure each marker or turn: ${reads} layout reads`);
+  assert.equal(await consistent(), true);
+  // A layout change still re-places them.
+  const top = await page.locator('.token-map .event-marker').nth(39).evaluate(marker => marker.style.top);
+  await page.getByRole('button', { name: 'Close turns', exact: true }).click();
+  await page.waitForFunction(previous => document.querySelectorAll('.token-map .event-marker')[39].style.top !== previous, top);
+});
+
 test('all results remain paired to one call and keyboard disclosure exposes them', async t => {
   const page = await fixture(t, [human(),
     event('call', 'tool_call', { name: 'Bash', input: { command: 'make test' } }, 2, { call_id: 'c' }),
@@ -994,6 +1029,8 @@ test('file paths, copy and diff previews operate independently of full details',
   const page = await fixture(t, [human(), event('patch', 'tool_call', {name:'apply_patch', input:'*** Begin Patch\n*** Update File: /workspace/src/a.js\n-oldA\n+newA\n*** Update File: /workspace/src/b.js\n-oldB\n+newB\n*** End Patch'}, 2)]);
   const row=page.locator('.tool-event'), prefix=page.locator('.file-prefix').first();
   assert.equal(await prefix.innerText(),'…/');
+  // Rows build their preview and details only when used.
+  assert.equal(await page.locator('.chip-preview, .action-row .event-body').count(),0);
   await prefix.click();
   assert.equal(await prefix.innerText(),'src/');
   assert.equal(await row.evaluate(el=>el.open),false);
@@ -1007,6 +1044,12 @@ test('file paths, copy and diff previews operate independently of full details',
   assert.equal(await row.evaluate(el=>el.open),false);
   await preview.getByRole('button',{name:'Close',exact:true}).click();
   assert.equal(await preview.isVisible(),false);
+  await page.getByRole('button',{name:'Show diff for /workspace/src/a.js',exact:true}).click();
+  assert.equal(await preview.count(),1,'The preview is reused');
+  assert.match(await preview.innerText(),/newA/);
+  assert.equal(await page.locator('.action-row .event-body').count(),0);
+  await row.locator('summary .line-details-hint').click();
+  assert.match(await row.locator('.event-body').first().innerText(),/newB/);
 });
 
 test('saved feedback and an unfinished annotation survive a page refresh', async t => {
