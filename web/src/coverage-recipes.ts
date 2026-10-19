@@ -64,10 +64,12 @@ const parallelRecipes: QueryRecipe[] = [
     measures: [daily("pl_daily_concurrency", "sum", "unit_ms", "Agents at once while active", { expression: "SUM([unit_ms])/NULLIF(SUM([elapsed_ms]),0)" })], cover: trendCover("pl_daily_concurrency"),
     trend: { value: { op: "sum", field: "unit_ms" }, per: { op: "sum", field: "elapsed_ms" }, lookback: 7, completeDays: true, valueLabel: "agents at once while active · 7-day average", pointValueLabel: "agents at once", trendLabel: "7d avg", sample: "agent-hour records",
       detail: "Each point: agent time ÷ wall time with any agent active, over its trailing seven complete local days. Windows with no activity are gaps." } }),
-  parallel({ id: "parallel-hours", title: "When agents overlap", description: "Average number of agents running at each hour of the day, over the last {days} days.", days: [7, 30], unit: "agents", action: "Find your parallel hours",
-    note: `${parallelNote} Each hour averages over every day in the period, including idle days; hours with no activity at all are omitted.`,
-    measures: [{ id: "pl_hours", op: "sum", field: "unit_hours", expression: "SUM([unit_hours])/{days}", groupBy: ["hour_of_day"], groupLimit: 24, sort: [{ key: "group0", dir: "asc" }], label: "Average agents active by local hour",
-      display: { kind: "bar-vertical", xLabel: "Local hour", yLabel: "Agents", format: { kind: "number", decimals: 2 } } }],
+  // Agent hours, not an average: a per-day average would bake the lookback
+  // into the formula, and a collected card's window can change later.
+  parallel({ id: "parallel-hours", title: "When agents overlap", description: "Agent hours at each hour of the day over the last {days} days, counting parallel agents separately.", days: [7, 30], action: "Find your parallel hours",
+    note: `${parallelNote} Taller hours had more agents running at once, more often. Hours with no activity are omitted.`,
+    measures: [{ id: "pl_hours", op: "sum", field: "unit_hours", groupBy: ["hour_of_day"], groupLimit: 24, sort: [{ key: "group0", dir: "asc" }], label: "Agent hours by local hour",
+      display: { kind: "bar-vertical", xLabel: "Local hour", yLabel: "Agent hours", format: { kind: "number", decimals: 1 } } }],
     cover: { mode: "source", metricId: "pl_hours", kind: "bar-vertical", maxGroups: 24, height: 170 } }),
   parallel({ id: "parallel-repositories", title: "Agent hours by repository", description: "Active agent hours per repository over the last {days} days, counting parallel agents separately.", days: [7, 30], action: "Compare repositories", measures: [],
     exploration: compare(["repository_name"], [sum("pl_agent_hours", "unit_hours", "Agent hours"), sum("pl_elapsed", "repo_elapsed_hours", "Hours with any active"), { id: "pl_together", op: "formula", expression: "SUM([unit_hours])/NULLIF(SUM([repo_elapsed_hours]),0)", label: "At once while active" }, { id: "pl_units", op: "count_distinct", field: "unit_id", label: "Agents" }],

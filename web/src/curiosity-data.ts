@@ -95,9 +95,6 @@ export const queryRecipes = baseRecipes.map(enrichCardRecipe).map(refineHumanRec
 
 export function instantiateRecipe(recipe: QueryRecipe, days: number, clock = new Date()): QuerySuggestion {
   const window: RollingWindow | undefined = recipe.period ? undefined : { days, field: recipe.field, mode: "relative" };
-  // Formulas may scale by the lookback, e.g. an average per day of the window.
-  const lookback = <T,>(value: T): T => value === undefined ? value : JSON.parse(JSON.stringify(value).replaceAll("{days}", String(days)));
-  recipe = { ...recipe, measures: lookback(recipe.measures), exploration: lookback(recipe.exploration) };
   const measures = recipe.calendarTimezone === "local" ? recipe.measures.map(metric => metric.dateGrouping ? { ...metric, dateGrouping: { ...metric.dateGrouping, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC" } } : metric) : recipe.measures;
   const source = { ...EMPTY_QUERY, where: recipe.where ?? [], aggregations: measures };
   const view = recipe.exploration;

@@ -309,7 +309,7 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
         if (request.diagnostics.length) throw new Error(request.diagnostics.map(d => d.message).join(" · "));
         return (await fetchPreview<AggregationResult>(`/api/query/${source.dataset}/metrics`, signal, request)).metrics;
       }));
-      const study = buildCardTrend(trend, lookback, results, clock.getTime()), ready = study.points?.some(point => point !== null && point > 0);
+      const { study, observations } = buildCardTrend(trend, lookback, results, clock.getTime()), ready = observations > 0 && Boolean(study.points?.some(point => point !== null));
       if (!signal?.aborted) publish(job.id, { coverHeight: (job.options!.cover ?? recipe.cover)?.height, state: ready ? "ready" : "empty", emptyLabel: ready ? undefined : recipe.emptyLabel, total: study.value ?? 0, summary: study.sampleLabel, note: [recipe.note, study.detail].filter(Boolean).join(" · "), action: recipe.action, study });
     } catch (error) { if (!signal?.aborted) publish(job.id, undefined, error); }
   }));

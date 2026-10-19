@@ -36,11 +36,12 @@ test("requests stay within the day predicate budget and keep the population filt
 
 test("per-day averages include idle days and ratios pool window totals", () => {
   const last = localDay(now);
-  const averaged = buildCardTrend({ value: { op: "count" }, perDay: true, lookback: 7, valueLabel: "", pointValueLabel: "", sample: "calls", detail: "" }, 7, results({ [last]: 14, [shiftDay(last, -6)]: 7, [shiftDay(last, -7)]: 70 }), now);
+  const { study: averaged, observations } = buildCardTrend({ value: { op: "count" }, perDay: true, lookback: 7, valueLabel: "", pointValueLabel: "", sample: "calls", detail: "" }, 7, results({ [last]: 14, [shiftDay(last, -6)]: 7, [shiftDay(last, -7)]: 70 }), now);
   assert.equal(averaged.points.at(-1), 3, "(14 + 7) / 7 days, excluding the eighth day");
   assert.equal(averaged.pointTimes.at(-1), now, "today's endpoint is the calculation time");
   assert.match(averaged.sampleLabel, /^4 calls in the latest 7 days$/);
-  const pooled = buildCardTrend({ value: { op: "sum", field: "duration_ms" }, per: { op: "count", field: "duration_ms" }, scale: 1 / 1000, lookback: 2, valueLabel: "", pointValueLabel: "", sample: "calls", detail: "" }, 2,
+  assert.equal(observations, 6, "every observed day counts, inside or outside the latest window");
+  const { study: pooled } = buildCardTrend({ value: { op: "sum", field: "duration_ms" }, per: { op: "count", field: "duration_ms" }, scale: 1 / 1000, lookback: 2, valueLabel: "", pointValueLabel: "", sample: "calls", detail: "" }, 2,
     results({ [last]: 9000, [shiftDay(last, -1)]: 1000 }, { [last]: 1, [shiftDay(last, -1)]: 9 }), now);
   assert.equal(pooled.points.at(-1), 1, "10 s over 10 timed calls, not the mean of 9 s and 0.11 s");
   assert.equal(pooled.points[0], null, "windows without timed calls are gaps");

@@ -1,4 +1,4 @@
-import { EMPTY_QUERY, loadSchema, type AggregationClause, type AggregationResultEntry, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, loadSchema, normalizeQueryState, type AggregationClause, type AggregationResultEntry, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import toolsDocument from "../../schemas/tools.schema.json";
 import type { CardCover } from "./card-cover";
 import type { HumanStudyPreview } from "./human-study";
@@ -35,10 +35,15 @@ export function usesCardTrend(job: PreviewJob): boolean {
   const window = options?.window;
   if (recipe.period ? window : !window || window.mode !== "relative" || !rollingQueryMatches(job.query, window)) return false;
   if (!trend.lookback && !window) return false;
-  // Edited populations keep their native destination preview.
-  const source = job.query.grouping?.source ?? job.query;
+  // The sparkline reads the recipe's population and metric, so any edited
+  // population, measure, grouping or HAVING keeps its native preview.
+  const source = job.query.grouping?.source ?? job.query, view = recipe.exploration, grouping = job.query.grouping;
   const where = source.where.filter(term => !(window && "field" in term && term.field === window.field));
-  return JSON.stringify(where) === JSON.stringify(recipe.where ?? []);
+  if (JSON.stringify(where) !== JSON.stringify(recipe.where ?? []) || Boolean(view) !== Boolean(grouping)) return false;
+  const shape = (aggregations: AggregationClause[] = [], keys?: string[], summaries?: unknown, representative?: unknown, having: WhereTerm[] = []) =>
+    JSON.stringify(normalizeQueryState({ ...EMPTY_QUERY, aggregations, where: having, ...(keys ? { grouping: { source: { ...EMPTY_QUERY }, keys, summaries, representative: representative ?? null } } : {}) } as QueryState));
+  return shape(source.aggregations, grouping?.keys, grouping?.summaries, grouping?.representative, grouping ? job.query.where : [])
+    === shape(recipe.measures, view?.keys, view?.summaries, view?.representative, view?.having);
 }
 
 export const localDay = (time: number | Date) => { const date = new Date(time); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`; };
@@ -74,7 +79,9 @@ function daily(results: AggregationResultEntry[][], id: string): Map<string, num
   return totals;
 }
 
-export function buildCardTrend(trend: CardTrend, lookback: number, results: AggregationResultEntry[][], now: number): HumanStudyPreview {
+// Observations count the population, so an observed history of zeros (a
+// zero-carbon grid, say) stays a real trend rather than an empty card.
+export function buildCardTrend(trend: CardTrend, lookback: number, results: AggregationResultEntry[][], now: number): { study: HumanStudyPreview; observations: number } {
   const { ends } = cardTrendDays(lookback, Boolean(trend.completeDays), now), today = localDay(now);
   const value = daily(results, "trend-value"), per = trend.per ? daily(results, "trend-per") : undefined, rows = daily(results, "trend-rows");
   const total = (map: Map<string, number>, end: string) => Array.from({ length: lookback }, (_, back) => map.get(shiftDay(end, -back)) ?? 0).reduce((sum, item) => sum + item, 0);
@@ -86,7 +93,8 @@ export function buildCardTrend(trend: CardTrend, lookback: number, results: Aggr
   const prior = points.slice(0, -1).filter((point): point is number => point !== null), latest = points.at(-1);
   const count = total(rows, ends.at(-1)!);
   const text = (value: string) => value.replaceAll("{days}", String(lookback));
-  return { kind: "trend", value: latest ?? undefined, valueLabel: text(trend.valueLabel), pointValueLabel: text(trend.pointValueLabel), trendLabel: trend.trendLabel ?? `Trailing ${lookback}d`, format: trend.format,
+  const observations = [...rows.values()].reduce((sum, item) => sum + item, 0);
+  return { observations, study: { kind: "trend", value: latest ?? undefined, valueLabel: text(trend.valueLabel), pointValueLabel: text(trend.pointValueLabel), trendLabel: trend.trendLabel ?? `Trailing ${lookback}d`, format: trend.format,
     sampleLabel: `${count.toLocaleString()} ${trend.sample} in the latest ${lookback === 1 ? "day" : `${lookback} days`}`, points, pointTimes, lookbackDays: lookback,
-    baseline: prior.length ? prior.reduce((sum, item) => sum + item, 0) / prior.length : undefined, detail: text(trend.detail) };
+    baseline: prior.length ? prior.reduce((sum, item) => sum + item, 0) / prior.length : undefined, detail: text(trend.detail) } };
 }

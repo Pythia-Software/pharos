@@ -48,9 +48,7 @@ test("every recipe projects completely to its execution contract and matches the
   const tracker = JSON.parse(readFileSync("../docs/homepage-query-cards.json", "utf8"));
   assert.deepEqual(tracker.implemented_recipes, JSON.parse(JSON.stringify(queryRecipes)));
   for (const recipe of queryRecipes) {
-    // Formulas may scale by the lookback; instantiation fills it in.
-    const measures = JSON.parse(JSON.stringify(recipe.measures).replaceAll("{days}", "7"));
-    const state = query(measures, { where: recipe.where ?? [] });
+    const state = query(recipe.measures, { where: recipe.where ?? [] });
     const request = recipe.measures.some(metric => metric.dateGrouping)
       ? core.toQueryRequestV3(state, schemas[recipe.dataset], queryCapabilities, execution, { now: Date.now(), rows: false })
       : core.toMetricQuery(state, schemas[recipe.dataset], execution);

@@ -16572,11 +16572,11 @@
       "idea": "rhythm-03",
       "dataset": "parallelism",
       "field": "started_at",
-      "unit": "agents",
-      "note": "Counts workspaces or agents (your Parallelism counting setting) with an active conversation: observed prompt-to-response turns joined across gaps up to your Parallelism gap setting. Delegated agents run inside their root's workspace. Timing is estimated from transcript timestamps. Each hour averages over every day in the period, including idle days; hours with no activity at all are omitted.",
+      "unit": "hours",
+      "note": "Counts workspaces or agents (your Parallelism counting setting) with an active conversation: observed prompt-to-response turns joined across gaps up to your Parallelism gap setting. Delegated agents run inside their root's workspace. Timing is estimated from transcript timestamps. Taller hours had more agents running at once, more often. Hours with no activity are omitted.",
       "id": "parallel-hours",
       "title": "When agents overlap",
-      "description": "Average number of agents running at each hour of the day, over the last {days} days.",
+      "description": "Agent hours at each hour of the day over the last {days} days, counting parallel agents separately.",
       "days": [
         7,
         30
@@ -16587,7 +16587,6 @@
           "id": "pl_hours",
           "op": "sum",
           "field": "unit_hours",
-          "expression": "SUM([unit_hours])/{days}",
           "groupBy": [
             "hour_of_day"
           ],
@@ -16598,14 +16597,14 @@
               "dir": "asc"
             }
           ],
-          "label": "Average agents active by local hour",
+          "label": "Agent hours by local hour",
           "display": {
             "kind": "bar-vertical",
             "xLabel": "Local hour",
-            "yLabel": "Agents",
+            "yLabel": "Agent hours",
             "format": {
               "kind": "number",
-              "decimals": 2
+              "decimals": 1
             }
           }
         }
