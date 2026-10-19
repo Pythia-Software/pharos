@@ -135,7 +135,7 @@ export function duration(ms: number) {
     ? `${minutes}m ${seconds % 60}s`
     : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
-function formatted(value: number | null | undefined, unit = "count") {
+export function formatted(value: number | null | undefined, unit = "count") {
   if (value == null) return "—";
   if (unit === "ms") return duration(value);
   if (unit === "date")
@@ -175,10 +175,10 @@ const localDate = new Intl.DateTimeFormat(undefined, {
   month: "short",
   day: "numeric",
 });
-function localTime(value: number) {
+export function localTime(value: number) {
   return localDateTime.format(new Date(value));
 }
-function clampRange(range: Range, full: Range): Range {
+export function clampRange(range: Range, full: Range): Range {
   const width = Math.max(1, Math.min(full[1] - full[0], range[1] - range[0]));
   const start = Math.max(full[0], Math.min(full[1] - width, range[0]));
   return [start, start + width];
@@ -189,7 +189,7 @@ async function readJSON<T>(url: string, signal?: AbortSignal): Promise<T> {
   if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
   return body;
 }
-function cellTitle(metric: Metric, spec: Spec) {
+export function cellTitle(metric: Metric, spec: Spec) {
   const exact =
     metric.value == null
       ? ""
@@ -201,7 +201,7 @@ function cellTitle(metric: Metric, spec: Spec) {
 
 // Frame each parent's visible subtree across the entire table. At page edges,
 // leave a continuing branch open rather than implying that the subtree ended.
-function hierarchyFrames(rows: Session[], continues: boolean) {
+export function hierarchyFrames(rows: Session[], continues: boolean) {
   const frames = new Map<string, HierarchyFrame>();
   const open: Session[] = [];
   rows.forEach((n, i) => {
