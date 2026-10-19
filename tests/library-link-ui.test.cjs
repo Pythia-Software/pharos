@@ -24,7 +24,7 @@ for (const start of ['/', '/usage?usage=tokens', '/work/work-1']) {
           const url = new URL(route.request().url());
           const json = (body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
           if (!url.pathname.startsWith('/api/') && !url.pathname.startsWith('/assets/')) return route.fulfill({ contentType: 'text/html', body: html });
-          if (url.pathname.startsWith('/assets/query-tables.')) return route.fulfill({ path: path.join(root, 'internal/archive', url.pathname) });
+          if (url.pathname.startsWith('/assets/query-tables.') || url.pathname === '/assets/reader-model.js') return route.fulfill({ path: path.join(root, 'internal/archive', url.pathname) });
           if (url.pathname === '/api/work/work-1') return json({ ...row, conversations: [{ id: 'conversation-1', provider: 'codex' }] });
           if (url.pathname === '/api/work/work-1/conversations/conversation-1') return json({ id: 'conversation-1', provider: 'codex', title: 'Conversation', model: 'model-special', messages: [{ native_id: 'u1', role: 'user', kind: 'message', text: 'Review this work' }] });
           if (url.pathname.endsWith('/distinct')) return json({ values: [], hasMore: false });

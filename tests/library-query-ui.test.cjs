@@ -68,6 +68,8 @@ test('Library table scrolls with the page below the header, and conversation car
       if (url.pathname === '/' || url.pathname === '/library') return route.fulfill({ contentType: 'text/html', body: html });
       if (url.pathname === '/assets/query-tables.js') return route.fulfill({ contentType: 'application/javascript', body: fs.readFileSync(path.join(root, 'internal/archive/assets/query-tables.js')) });
       if (url.pathname === '/assets/query-tables.css') return route.fulfill({ contentType: 'text/css', body: fs.readFileSync(path.join(root, 'internal/archive/assets/query-tables.css')) });
+      // Conversation cards render messages with the reader's model.
+      if (url.pathname === '/assets/reader-model.js') return route.fulfill({ contentType: 'application/javascript', body: fs.readFileSync(path.join(root, 'internal/archive/assets/reader-model.js')) });
       if (url.pathname.endsWith('/distinct')) return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ values: [], hasMore: false }) });
       if (url.pathname.startsWith('/api/query/') && route.request().method() === 'POST') return route.fulfill({ contentType: 'application/json', body: JSON.stringify(url.pathname.endsWith('/aggregations') ? { metrics: [] } : { rows, total: rows.length }) });
       if (url.pathname === '/api/work/work-0') return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ conversations: [{ id: 'conversation-0', provider: 'codex' }, { id: 'agent-0', provider: 'codex', parent_id: 'conversation-0' }] }) });

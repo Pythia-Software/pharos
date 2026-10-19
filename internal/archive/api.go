@@ -218,6 +218,7 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/sync.js":          {"sync.js", "text/javascript; charset=utf-8"},
 	"/assets/carbon.js":        {"carbon.js", "text/javascript; charset=utf-8"},
 	"/assets/menu-bar.js":      {"menu-bar.js", "text/javascript; charset=utf-8"},
+	"/assets/reader-model.js":  {"reader-model.js", "text/javascript; charset=utf-8"},
 }
 
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {

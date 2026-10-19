@@ -11,6 +11,8 @@ const localRequire = createRequire(path.join(root, '.context/browser-tests/packa
 const { chromium } = localRequire('playwright');
 const source = fs.readFileSync(['src/pharos/ui.py', 'internal/archive/assets/ui.py'].map(name => path.join(root, name)).find(file => fs.existsSync(file)), 'utf8');
 const html = source.slice(source.indexOf("r'''") + 4, source.lastIndexOf("'''"));
+// The page renders conversations with reader-model.js; other scripts are stubbed.
+const readerModel = fs.readFileSync(path.join(root, 'internal/archive/assets/reader-model.js'), 'utf8');
 const sharedReaderSearch = html.slice(html.indexOf('function setupConversationSearch('), html.indexOf('\nfunction setupTokenOverview('));
 let browser;
 before(async () => {
@@ -39,6 +41,7 @@ test('token usage is a top-level tab instead of a Health table', async t => {
   await page.route('http://transcript.test/**', route => {
     const url = new URL(route.request().url());
     if (url.pathname === '/' || url.pathname === '/usage') return route.fulfill({ contentType: 'text/html', body: html });
+    if (url.pathname === '/assets/reader-model.js') return route.fulfill({ contentType: 'application/javascript', body: readerModel });
     const health = {
       counts: { workspaces: 2, messages: 12 },
       storage: { volume_name: 'Archive', index_bytes: 1024, internal_free_bytes: 2048, free_bytes: 4096, path: '/archive', staging_bytes: 0, staging_cap_bytes: 1024, status: 'available' },
@@ -303,6 +306,7 @@ async function fixture(t, messages, viewport = { width: 1280, height: 900 }, con
   await page.route('http://transcript.test/**', route => {
     const url = new URL(route.request().url());
     if (url.pathname === '/') return route.fulfill({ contentType: 'text/html', body: html });
+    if (url.pathname === '/assets/reader-model.js') return route.fulfill({ contentType: 'application/javascript', body: readerModel });
     if (url.pathname.startsWith('/api/')) return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ items: [] }) });
     return route.fulfill({ body: '', contentType: 'application/javascript' });
   });
