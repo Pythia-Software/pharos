@@ -4,7 +4,7 @@ import { capabilities, core, execution, schemas } from "../helpers/recipes.mjs";
 import tracker from "../../../../docs/homepage-query-cards.json";
 import { queryRecipes, instantiateRecipe, loadQueryPreview, clearPreviewCache } from "../../../src/curiosity-data";
 import { queryFromURL, queryHasTimeFilter, queryURL, resolveRollingQuery } from "../../../src/query-links";
-import { migrateSavedQueries, updateBookmark, replaceSavedQuery } from "../../../src/bookmarks";
+import { migrateSavedQueries, readBookmarks, removeBookmark, savedQueries, updateBookmark, replaceSavedQuery } from "../../../src/bookmarks";
 import { cardCoverQuery, defaultCardCover } from "../../../src/card-cover";
 import { wishlistCardRecipes } from "../../../src/wishlist-card-recipes";
 const clock = new Date(2026, 9, 13, 12);
@@ -204,6 +204,23 @@ test("rolling bookmark migration preserves IDs and fixed ranges while replacing 
   assert.equal(saved[0].id, "legacy");
   assert.deepEqual(queryFromURL(saved[0].url).query.grouping.source.where.filter(term => term.field === recipe.field).map(term => term.value), ["-7d", "+0s"]);
   assert.equal(saved[1].url, fixed.url);
+});
+
+test("bookmark migration preserves separately named saves of the same query and their default IDs", t => {
+  const values = bookmarkFixture(t, []);
+  const item = instantiateRecipe(queryRecipes.find(recipe => recipe.id === "human-words"), 7);
+  values.set("query-table:saved:pharos_writing_messages", [
+    { id: "save-a", name: "Writing practice", savedAt: 100, query: item.query },
+    { id: "save-b", name: "My daily words", savedAt: 200, query: item.query },
+  ]);
+  values.set("query-table:default:pharos_writing_messages", "save-a");
+  migrateSavedQueries();
+  assert.deepEqual(savedQueries("writing_messages").map(saved => [saved.id, saved.name]), [["save-a", "Writing practice"], ["save-b", "My daily words"]]);
+  assert.equal(values.get("query-table:default:pharos_writing_messages"), "save-a");
+  removeBookmark(readBookmarks()[0].id);
+  migrateSavedQueries();
+  assert.deepEqual(savedQueries("writing_messages").map(saved => saved.id), ["save-b"], "a removed save is not migrated again");
+  assert.equal(values.has("query-table:default:pharos_writing_messages"), false, "removing the default save clears the default");
 });
 
 test("editing a collected cover changes destination dimensions with it", t => {

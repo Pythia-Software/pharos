@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { encodeQuery, normalizeQueryState, createQueryLinkService, httpQuerySnapshotStore, QuerySnapshotHttpError } from '@pythia-software/query-table-core';
+import { EMPTY_QUERY, encodeQuery, normalizeQueryState, createQueryLinkService, httpQuerySnapshotStore, QuerySnapshotHttpError } from '@pythia-software/query-table-core';
 import * as storageModule from '../../../src/storage';
 import * as bookmarksModule from '../../../src/bookmarks';
 import * as queryLinksModule from '../../../src/query-links';
+import { categoryForQuery } from '../../../src/query-categories';
+import { instantiateRecipe, queryRecipes } from '../../../src/curiosity-data';
 const m={...storageModule,...bookmarksModule,...queryLinksModule,encodeQuery,normalizeQueryState,createQueryLinkService,httpQuerySnapshotStore,QuerySnapshotHttpError};
 const prefs=new Map(),cache=new Map(),snapshots=new Map();
 let fail=false,writes=0;
@@ -84,4 +86,49 @@ test('native bookmarks created before dataset metadata can still be updated',asy
  prefs.set(m.BOOKMARKS_KEY,[...items,{id:'old-native',title:'Legacy native bookmark',url:m.queryURL('tool_calls',query)}]);
  const updated=await m.libraryStorageAdapter().updateNamed('pharos_tool_calls','old-native',{...query,limit:75},30);
  assert.equal(updated.id,'old-native');assert.equal(updated.query.limit,75);
+});
+
+test('page parameters choose the dataset, and every card URL opens its own dataset',()=>{
+ assert.equal(m.queryFromURL('/usage?q_library=&q_usage=').dataset,'usage');
+ assert.equal(m.queryFromURL('/tools?tools_view=skills&q_library=&q_skill_usages=').dataset,'skill_usages');
+ const clock=new Date(2026,9,8,15);
+ for(const recipe of queryRecipes)assert.equal(m.queryFromURL(instantiateRecipe(recipe,7,clock).url)?.dataset,recipe.dataset,recipe.id);
+ const writing=new URL(instantiateRecipe(queryRecipes.find(item=>item.id==='human-words'),7,clock).url,location.origin);
+ assert.equal(writing.searchParams.get('usage'),'writing');
+ assert.equal(writing.searchParams.get('writing'),'messages');
+});
+
+test('rolling windows recognize whole local calendar spans across midnight and daylight saving',()=>{
+ const previousTZ=process.env.TZ;
+ process.env.TZ='America/Denver';
+ try{
+  const window={days:7,field:'started_at'};
+  for(const date of [new Date(2026,9,8,23,59),new Date(2026,2,10),new Date(2026,10,3)]){
+   const query=m.resolveRollingQuery(EMPTY_QUERY,window,date);
+   assert.equal(m.rollingQueryMatches(query,window),true,'a saved window need not end on the current day');
+   assert.equal(m.rollingQueryMatches({...query,offset:20,orderBy:[{field:'duration_ms',dir:'desc'}]},window),true);
+   assert.equal(m.rollingQueryMatches(query,{...window,days:30}),false);
+   assert.equal(m.rollingQueryMatches({...query,where:query.where.slice(1)},window),false);
+   const partial={...query,where:query.where.map(term=>term.op==='>='?{...term,value:new Date(Date.parse(term.value)+3600000).toISOString()}:term)};
+   assert.equal(m.rollingQueryMatches(partial,window),false,'manual partial-day bounds stop being rolling');
+  }
+ }finally{if(previousTZ===undefined)delete process.env.TZ;else process.env.TZ=previousTZ;}
+});
+
+test('changing a saved range preserves query structure, indexed search context, and unrelated URL controls',()=>{
+ const query={...EMPTY_QUERY,offset:100,where:[
+  {field:'activity_at',op:'>',value:'2025-01-01T00:00:00Z'},
+  {field:'activity_at',op:'<=',value:'2025-12-31T00:00:00Z'},
+  {any:[{field:'repository_name',op:'=',value:'pharos'},{field:'repository_name',op:'=',value:'query-table'}]},
+ ],aggregations:[{id:'cost',op:'sum',field:'cost_usd',groupBy:['repository_name']}]};
+ const original=`${m.queryURL('library',query)}&search=indexing&case=1&fuzzy=0&heat_grain=week#library`;
+ const result=m.updateQueryWindowURL(original,30),spec=m.queryFromURL(result),url=new URL(result,location.origin);
+ assert.deepEqual(spec.window,{days:30,field:'activity_at',mode:'relative'});
+ assert.deepEqual(spec.query.where.filter(term=>term.field==='activity_at').map(term=>[term.op,term.value]),[['>=','-30d'],['<','+0s']]);
+ assert.deepEqual(spec.query.where.find(term=>term.any),query.where[2]);
+ assert.deepEqual(spec.query.aggregations,query.aggregations);
+ assert.equal(spec.query.offset,0);
+ for(const [key,value] of [['search','indexing'],['case','1'],['fuzzy','0'],['heat_grain','week']])assert.equal(url.searchParams.get(key),value);
+ assert.equal(url.hash,'#library');
+ assert.equal(categoryForQuery(spec.dataset,spec.query),'cost');
 });
