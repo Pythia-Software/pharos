@@ -4,8 +4,8 @@ import { ChartLegend } from "./chart-legend";
 import { metricSeriesColor, otherSeriesColor } from "./chart-colors";
 import { compactPieSlices, pieWedgePath } from "./compact-pie-model";
 
-export function CompactPie({ clause, result, budget, labels, columns = 2, format }: {
-  clause: AggregationClause; result: AggregationResultEntry; budget: number; labels?: Record<string, string>; columns?: 1 | 2; format: (value: number) => string;
+export function CompactPie({ clause, result, budget, labels, columns, format }: {
+  clause: AggregationClause; result: AggregationResultEntry; budget: number; labels?: Record<string, string>; columns?: 1 | 2 | 3; format: (value: number) => string;
 }) {
   const id = useId().replace(/:/g, ""), pie = compactPieSlices(result, budget, clause.display?.showOther !== false);
   if (clause.expression || clause.distribution || !["sum", "count"].includes(clause.op)) return <span className="query-pie-empty">Pie requires additive counts or sums.</span>;
