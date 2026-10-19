@@ -349,38 +349,6 @@ func TestAntigravityLogReaderHandlesChunkBoundariesAndLongLines(t *testing.T) {
 	}
 }
 
-func TestIncrementalActivityEstimatesKeepRunKindsSeparate(t *testing.T) {
-	useHost(t, "timing-host")
-	catalog, config := testCatalog(t)
-	server := testServer(t, config, catalog)
-	started := time.Now().Add(-time.Minute)
-	server.recordActivityDuration("sync", formatTime(started), formatTime(started.Add(10*time.Minute)))
-	for _, kind := range []string{automaticRunKind, "verification", "library-update"} {
-		run := server.startRunNamed(kind, []string{"codex"})
-		server.updateRun(run.ID, func(run *SyncRun) { run.StartedAt = formatTime(started) })
-		activities := server.libraryStatus()["activities"].([]libraryActivity)
-		if estimate := activities[0].EstimatedCompletionAt; estimate != "" {
-			t.Fatalf("%s reused source-sync duration: %s", kind, estimate)
-		}
-		server.updateRun(run.ID, func(run *SyncRun) {
-			run.State, run.CompletedAt = "complete", formatTime(started.Add(2*time.Minute))
-		})
-		if duration := server.activityDuration(kind); duration != 2*time.Minute {
-			t.Fatalf("%s did not retain its own history: %s", kind, duration)
-		}
-		if durations := server.activityDurations("sync"); len(durations) != 1 {
-			t.Fatalf("%s polluted source-sync history: %v", kind, durations)
-		}
-		active := server.startRunNamed(kind, []string{"codex"})
-		server.updateRun(active.ID, func(run *SyncRun) { run.StartedAt = formatTime(started) })
-		activities = server.libraryStatus()["activities"].([]libraryActivity)
-		if estimate := activities[0].EstimatedCompletionAt; estimate != "" {
-			t.Fatalf("%s used whole-run history without a measured workload: %s", kind, estimate)
-		}
-		server.updateRun(active.ID, func(run *SyncRun) { run.State = "stopped" })
-	}
-}
-
 func TestIndependentAuditPreservesCrossRepositoryToolPathContext(t *testing.T) {
 	useHost(t, "host-a")
 	source := stableCodexSource(t, 2)

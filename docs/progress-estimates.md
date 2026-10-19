@@ -37,8 +37,8 @@ bar. They are rough bounds, not calibrated statistical confidence intervals:
 - Once live speed is measurable it gets at least 75% of the weight, with the
   historical rate bounded to half to twice that speed. History loses its
   influence over the first thirty seconds of observed progress.
-  Earlier whole-run duration samples do not supply ETAs because they
-  did not record how much work was performed.
+  Whole-run durations do not supply ETAs, and are no longer recorded,
+  because they did not record how much work was performed.
 - A new job, source, stage, measurement unit, changed total, or reset counter
   restarts live measurement. Work completed before observation or resumption
   is not credited to the new sample window.

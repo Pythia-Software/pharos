@@ -108,15 +108,12 @@ func (s *Server) refreshGitInBackground(backfill bool) {
 	s.tasks.addGit(1, reason)
 	started := s.spawn(func(ctx context.Context) {
 		defer s.tasks.addGit(-1, "")
-		startedAt := now()
-		completed := true
 		refresh, name := s.Catalog.refreshMainIntegrations, "refresh"
 		if backfill {
 			refresh, name = s.Catalog.backfillMainIntegrations, "backfill"
 		}
 		if err := refresh(ctx); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Git integration %s: %v\n", name, err)
-			completed = false
 		}
 		if backfill {
 			return
@@ -124,14 +121,11 @@ func (s *Server) refreshGitInBackground(backfill bool) {
 		// Rebuild the Tools rollup now rather than on the next page view.
 		if err := s.Catalog.ensureToolRollup(ctx); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Tool rollup: %v\n", err)
-			completed = false
 		}
 		// Then findings, from the fresh rollup: the full pass once a day,
 		// and between them only the findings being measured.
 		if err := s.Catalog.RefreshFindings(ctx, false); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Findings: %v\n", err)
-		} else if completed && ctx.Err() == nil {
-			s.recordActivityDuration("git", startedAt, now())
 		}
 	})
 	if !started {

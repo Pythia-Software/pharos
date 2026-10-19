@@ -939,15 +939,11 @@ func (s *Server) updateRun(id string, update func(*SyncRun)) {
 	defer s.runsMu.Unlock()
 	for _, run := range s.runs {
 		if run.ID == id {
-			previousState := run.State
 			update(run)
 			if run.Work != nil && (run.Work.Phase != run.Phase || run.Work.Source != firstString(run.CurrentSource)) {
 				run.Work = nil
 			}
 			run.UpdatedAt = now()
-			if previousState == "running" && run.State == "complete" && !run.StopRequested {
-				s.recordActivityDuration(activityTimingKind(run.Kind), run.StartedAt, firstString(run.CompletedAt))
-			}
 			return
 		}
 	}
