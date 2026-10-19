@@ -986,6 +986,7 @@
       },
       "label": "Conversation ID",
       "type": "text",
+      "render": "conversation_link",
       "group": "Context",
       "select": {
         "default": false

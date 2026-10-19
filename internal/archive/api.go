@@ -225,6 +225,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case isUIPage(path):
 		writeHTML(w, appHTML())
+	case strings.HasPrefix(path, "/conversation/"):
+		s.redirectConversation(w, r)
 	case uiAssets[path].name != "":
 		asset := uiAssets[path]
 		writeEmbeddedAsset(w, asset.name, asset.contentType)
