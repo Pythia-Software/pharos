@@ -27,6 +27,8 @@
     "fable-5": { "provider": "anthropic", "class": "Fable", "color": "#e2a07a" },
     "fable-5-1": { "provider": "anthropic", "class": "Fable", "color": "#c67a50" },
     "gemini-3.8-flash": { "provider": "google", "class": "Flash", "color": "#669cf6" },
+    "gemini-4-argon": { "provider": "google", "class": "Gemini", "color": "#174ea6" },
+    "gemini-nano-banana-2.1": { "provider": "google", "class": "Nano Banana", "color": "#2f6ad0" },
     "gpt-5.3-codex": { "provider": "openai", "class": "Codex", "color": "#087e62" },
     "gpt-5.3-codex-spark": { "provider": "openai", "class": "Codex", "color": "#35b397" },
     "gpt-5.5": { "provider": "openai", "class": "GPT", "color": "#72c59c" },
@@ -36,7 +38,9 @@
     "gpt-6-astra": { "provider": "openai", "class": "GPT", "color": "#209a5d" },
     "gpt-6-luna": { "provider": "openai", "class": "GPT", "color": "#15844c" },
     "gpt-6-sol": { "provider": "openai", "class": "GPT", "color": "#087743" },
-    "gpt-6.1-sol": { "provider": "openai", "class": "GPT", "color": "#066638" }
+    "gpt-6.1-sol": { "provider": "openai", "class": "GPT", "color": "#066638" },
+    "gpt-rosalind-research": { "provider": "openai", "class": "Rosalind", "color": "#5fb8a8" },
+    "gpt-rosalind-discovery": { "provider": "openai", "class": "Rosalind", "color": "#2c8f7f" }
   },
   "sources": {
     "claude": { "provider": "anthropic", "color": "#d97732" },

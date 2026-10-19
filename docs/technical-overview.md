@@ -345,17 +345,18 @@ uploaded by the archive service.
 
 For new interface icons, follow the [icon drawing and usage guide](iconography.md).
 
+Test commands, test tiers and the rules for writing tests are in
+[AGENTS.md](../AGENTS.md). Before committing:
+
 ```sh
-go test ./...
+go test -timeout 30m ./...
 go vet ./...
 (cd web && npm ci && npx tsc --noEmit && npm run build)
 (cd web && npm run check-bundle)
-./launch.sh --no-open
-
-# Compatibility/reference suite during the transition
-PYTHONPATH=src python3 -m unittest discover -s tests -v
-python3 -m compileall -q src
 ```
+
+`./launch.sh --no-open` builds and installs the app for a per-user setup; it
+is not a test.
 
 The Go tests cover stable cross-language IDs, source configuration, canonical
 ingestion, API compatibility, the query-table allowlist/filter/sort/pagination/
@@ -366,9 +367,8 @@ otherwise embeds the checked-in bundle with a warning. `npm run check-bundle`
 rebuilds into a scratch directory and fails unless the checked-in
 `internal/archive/assets/query-tables.{js,css}` match `web/src` byte for byte;
 run it before committing frontend changes.
-The Python compatibility suite continues to cover the mothballed preservation and
-reclamation reference; `go vet -tags reclamation ./...` keeps the parked Go
-queue code compiling. The TL1 hook must maintain
+`go vet -tags reclamation ./...` keeps the parked Go reclamation queue code
+compiling. The TL1 hook must maintain
 its own disposable integration tests because its repository concurrency
 protocol is owner-specific.
 
