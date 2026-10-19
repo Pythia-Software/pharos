@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { FieldSchema, MetricDisplay } from "@pythia-software/query-table-core";
-import { instantiateRecipe, loadQueryPreviews, type QueryPreview, type QueryRecipe, type QuerySuggestion } from "./curiosity-data";
+import { instantiateRecipe, loadQueryPreviews, suggestionWindowLabel, type QueryPreview, type QueryRecipe, type QuerySuggestion } from "./curiosity-data";
 import { availableChartKinds, cardCoverGroupLimit, cardDatasets, cardTemplates, coverChoices, decodeCover, saveCardTemplate } from "./card-library-model";
 import { cardKind, defaultCardCover } from "./card-cover";
 import { cardLoadingPresentation } from "./card-loading-model";
@@ -78,7 +78,6 @@ export function CardLibrary({ schemas, onOpen, onKeep, collected, message }: { s
   const destinationKeys = chosenCover?.mode === "source" ? editing?.measures.find(metric => metric.id === chosenCover.metricId)?.groupBy ?? editing?.exploration?.keys : editing?.exploration?.keys;
   return <section className="card-library" aria-label="Card library">
     <div className="card-library-heading"><div><h1>Card library</h1><p>Every question, chart and comparison. Find an angle to make your own.</p></div><button type="button" onClick={() => onOpen("/")}><Icon name="arrow-left" /> Your Home</button></div>
-    <p><a className="home-card-library-link" href="/home?cards=coverage-review" onClick={event => { if (!event.metaKey && !event.ctrlKey) { event.preventDefault(); onOpen("/home?cards=coverage-review"); } }}>Review draft cards for machine time, parallelism, carbon, findings and pricing <Icon name="arrow-right" /></a></p>
     <div className="card-library-controls">
       <label className="card-library-search">Find a card<input type="search" aria-label="Find a card" placeholder="Search questions, subjects…" value={search} onChange={event => setSearch(event.target.value)} /></label>
       <label>Data source<select aria-label="Data source" value={dataset} onChange={event => setDataset(event.target.value)}><option value="">All data</option>{Object.entries(cardDatasets).filter(([key]) => recipes.some(recipe => recipe.dataset === key)).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
@@ -90,7 +89,7 @@ export function CardLibrary({ schemas, onOpen, onKeep, collected, message }: { s
     <p className="card-library-count" role="status">{cards.length} of {recipes.length} cards{loading ? ` · Loading charts… ${completed}/${cards.length}` : ""}<span>Empty views stay visible here.</span></p>
     <p className="card-library-feedback" role="status">{message}</p>
     <div className="card-library-grid">{cards.map(item => <div className="card-library-entry" id={`card-${item.id}`} data-card-definition={item.id} data-card-idea={item.idea} key={item.id}>
-      <QueryCard id={item.id} title={item.title} description={item.description} actionLabel={item.action} url={item.url} windowLabel={`Last ${days}d`} category={item.category} loadingSpec={cardLoadingPresentation(item.query, { recipe: item, cover: item.cover, days })} preview={previews[item.id]} error={errors[item.id]} discovery onOpen={() => onOpen(item.url)} onKeep={() => onKeep(item)} onReload={() => reloadPreview({ id: item.id, dataset: item.dataset, query: item.query, schema: schemas[item.dataset], options: { recipe: item, cover: item.cover, window: item.window, url: item.url } })} />
+      <QueryCard id={item.id} title={item.title} description={item.description} actionLabel={item.action} url={item.url} windowLabel={item.period ? suggestionWindowLabel(item) : `Last ${days}d`} category={item.category} loadingSpec={cardLoadingPresentation(item.query, { recipe: item, cover: item.cover, days })} preview={previews[item.id]} error={errors[item.id]} discovery onOpen={() => onOpen(item.url)} onKeep={() => onKeep(item)} onReload={() => reloadPreview({ id: item.id, dataset: item.dataset, query: item.query, schema: schemas[item.dataset], options: { recipe: item, cover: item.cover, window: item.window, url: item.url } })} />
       <div className="card-library-meta"><code className="card-library-id" title={`Card definition: ${item.id} · Wishlist: ${item.idea}`}>ID: {item.id}</code><span>{cardDatasets[item.dataset]}</span><span>{cardKind(item)} · {item.exploration ? "Grouped table" : "Records + metrics"}</span>{collected.has(item.id) ? <span className="card-library-collected"><Icon name="check" /> Collected</span> : null}
         <button type="button" onClick={() => openEditor(item)} aria-label={`Edit card ${item.title}`}><Icon name="edit" /> Edit card</button>
       </div>
@@ -102,7 +101,7 @@ export function CardLibrary({ schemas, onOpen, onKeep, collected, message }: { s
     }}><h2 id="card-template-title">Edit card template</h2><p>Saved in this library. Used for new suggestions and collections.</p>
       <label>Question<input autoFocus required maxLength={200} value={title} onChange={event => setTitle(event.target.value)} /></label>
       <label>Description<textarea maxLength={500} value={description} onChange={event => setDescription(event.target.value)} /></label>
-      <label>Default lookback<select aria-label="Default lookback" value={editDays} onChange={event => setEditDays(Number(event.target.value))}>{[1, 7, 30, 90].map(days => <option key={days} value={days}>Last {days}d</option>)}</select></label>
+      <label>Default lookback<select aria-label="Default lookback" disabled={Boolean(editing?.period)} value={editDays} onChange={event => setEditDays(Number(event.target.value))}>{[1, 7, 30, 90].map(days => <option key={days} value={days}>Last {days}d</option>)}</select></label>
       {editing && coverChoices(editing).length ? <><label>Cover metric<select aria-label="Cover metric" value={metric} onChange={event => { const next = decodeCover(event.target.value); setMetric(event.target.value); setChart(availableChartKinds(editing, next)[0]); }}>{coverChoices(editing).map(choice => <option key={choice.value} value={choice.value}>{choice.label}</option>)}</select></label>
         <label>Chart<select aria-label="Chart" value={chart} onChange={event => setChart(event.target.value as MetricDisplay["kind"])}>{availableChartKinds(editing, decodeCover(metric)).map(kind => <option key={kind} value={kind}>{chartNames[kind] ?? kind}</option>)}</select></label>
         <label>Chart height (px)<input type="number" aria-label="Chart height (px)" min={170} max={600} step={10} placeholder="Automatic" value={height} onChange={event => setHeight(event.target.value)} /></label>

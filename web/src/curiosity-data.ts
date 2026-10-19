@@ -17,6 +17,8 @@ import { delegationRecipes, refineDelegationRecipe } from "./delegation-recipes"
 import { steeringRecipes, refineSteeringRecipe } from "./steering-recipes";
 import { apiCostRecipes, refineApiCostRecipe } from "./api-cost-recipes";
 import type { HumanStudy } from "./human-study";
+import type { CardTrend } from "./card-trend";
+import { coverageRecipes } from "./coverage-recipes";
 export { clearPreviewCache, loadQueryPreview, loadQueryPreviews, formatPreviewValue } from "./query-previews";
 export type { QueryPreview } from "./query-previews";
 
@@ -31,8 +33,14 @@ export type QueryRecipe = {
   humanStudy?: HumanStudy;
   retired?: boolean;
   action?: string;
+  // Current-state and all-time cards carry no rolling lookback.
+  period?: "current" | "all";
+  trend?: CardTrend;
 };
-export type QuerySuggestion = QueryRecipe & { query: QueryState; window: RollingWindow; url: string; instanceId: string };
+export type QuerySuggestion = QueryRecipe & { query: QueryState; window?: RollingWindow; url: string; instanceId: string };
+export function suggestionWindowLabel(item: { window?: RollingWindow; period?: QueryRecipe["period"] }): string {
+  return item.period === "current" ? "Now" : item.period === "all" || !item.window ? "All time" : item.window.days === 365 ? "Last year" : `Last ${item.window.days}d`;
+}
 const agg = (op: AggregationClause["op"], field: string, groupBy: string[], label: string): AggregationClause => ({ id: `${op}:${field}:${groupBy.join(",")}`, op, ...(field ? { field } : {}), groupBy, label });
 const count = (group: string[], label: string) => agg("count", "", group, label);
 const sum = (field: string, group: string[], label: string) => agg("sum", field, group, label);
@@ -81,11 +89,15 @@ const baseRecipes: QueryRecipe[] = [
   ...tokenUsageRecipes,
   ...delegationRecipes,
   ...steeringRecipes,
+  ...coverageRecipes,
 ];
 export const queryRecipes = baseRecipes.map(enrichCardRecipe).map(refineHumanRecipe).map(applyHumanCardCopy).map(refineModelChoiceRecipe).map(refineContextCachingRecipe).map(refineErrorPatternRecipe).map(refineToolFlowRecipe).map(refineSkillsInstructionsRecipe).map(refineResearchRecipe).map(refineApiCostRecipe).map(refineTokenUsageRecipe).map(refineDelegationRecipe).map(refineSteeringRecipe).map(recipe => recipe.humanStudy ? { ...recipe, days: [7] } : recipe);
 
 export function instantiateRecipe(recipe: QueryRecipe, days: number, clock = new Date()): QuerySuggestion {
-  const window: RollingWindow = { days, field: recipe.field, mode: "relative" };
+  const window: RollingWindow | undefined = recipe.period ? undefined : { days, field: recipe.field, mode: "relative" };
+  // Formulas may scale by the lookback, e.g. an average per day of the window.
+  const lookback = <T,>(value: T): T => value === undefined ? value : JSON.parse(JSON.stringify(value).replaceAll("{days}", String(days)));
+  recipe = { ...recipe, measures: lookback(recipe.measures), exploration: lookback(recipe.exploration), trend: lookback(recipe.trend) };
   const measures = recipe.calendarTimezone === "local" ? recipe.measures.map(metric => metric.dateGrouping ? { ...metric, dateGrouping: { ...metric.dateGrouping, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC" } } : metric) : recipe.measures;
   const source = { ...EMPTY_QUERY, where: recipe.where ?? [], aggregations: measures };
   const view = recipe.exploration;
@@ -99,7 +111,7 @@ export function instantiateRecipe(recipe: QueryRecipe, days: number, clock = new
     aggregations: view.coverMetric && !coverMetric ? [view.coverMetric] : [],
   } : source, window, clock);
   const describe = (text: string) => text.replaceAll("{days}", String(days)).replaceAll("{period}", days === 7 ? "Weekly" : days === 1 ? "Daily" : `${days}-day`).replaceAll("{lastDays}", days === 7 ? "Last seven days" : days === 1 ? "Last 24 hours" : `Last ${days} days`);
-  return { ...recipe, title: describe(recipe.title), description: describe(recipe.description), measures, window, query, url: queryURL(recipe.dataset, query, window), instanceId: `${recipe.id}:${days}` };
+  return { ...recipe, title: describe(recipe.title), description: describe(recipe.description), measures, window, query, url: queryURL(recipe.dataset, query, window), instanceId: `${recipe.id}:${recipe.period ?? days}` };
 }
 
 export function shuffled<T>(items: T[]): T[] {

@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { QueryPreview, QuerySuggestion } from "./curiosity-data";
+import { suggestionWindowLabel, type QueryPreview, type QuerySuggestion } from "./curiosity-data";
 import { QueryCard } from "./query-card";
 import { cardLoadingPresentation } from "./card-loading-model";
 import { Icon } from "./icons";
@@ -170,8 +170,8 @@ export function QueryConveyor({ items, previews, loading, hasErrors, active, sus
         style={{ left: (layout.width - CARD_WIDTH) / 2 + (positions[0] ?? 0) * STRIDE, "--belt-start": first, "--belt-end": last, "--belt-shift": movement ? -movement.offset : 0 } as React.CSSProperties}
         onTransitionEnd={event => { if (event.target === row.current && event.propertyName === "--belt-shift") finishMovement(); }}>
         {slots.map(({ position, item, lean, cycle, onscreen }) => <div className={`home-belt-slot${entering.includes(item.instanceId) ? " arriving" : ""}`} key={`${item.instanceId}:${cycle}`} data-belt-position={position} style={{ "--belt-index": position } as React.CSSProperties}>
-          <QueryCard discovery xray={position < first || position > last} id={item.instanceId} title={item.title} description={item.description} actionLabel={item.action} url={item.url} windowLabel={`Last ${item.window.days}d`} category={item.category} lean={lean}
-            loadingSpec={cardLoadingPresentation(item.query, { recipe: item, cover: item.cover, days: item.window.days })} preview={previews[item.instanceId]} onReveal={onscreen && !movement ? () => move(position, true) : undefined} onOpen={() => onOpen(item.url)} onKeep={() => onKeep(item)} onDragStart={event => onDragStart(event, item)} onDragEnd={onDragEnd} />
+          <QueryCard discovery xray={position < first || position > last} id={item.instanceId} title={item.title} description={item.description} actionLabel={item.action} url={item.url} windowLabel={suggestionWindowLabel(item)} category={item.category} lean={lean}
+            loadingSpec={cardLoadingPresentation(item.query, { recipe: item, cover: item.cover, days: item.window?.days })} preview={previews[item.instanceId]} onReveal={onscreen && !movement ? () => move(position, true) : undefined} onOpen={() => onOpen(item.url)} onKeep={() => onKeep(item)} onDragStart={event => onDragStart(event, item)} onDragEnd={onDragEnd} />
         </div>)}
       </div>
       {!items.length ? <p className="home-discovery-empty">{loading ? "Looking for interesting angles in your library…" : hasErrors ? "Some previews could not load. Refresh to try again." : "No matching angles in these recent windows yet. As your library grows, new views will appear here."}<a href="/library" onClick={event => { event.preventDefault(); onOpen("/library"); }}>Explore the library <Icon name="arrow-right" /></a></p> : null}
