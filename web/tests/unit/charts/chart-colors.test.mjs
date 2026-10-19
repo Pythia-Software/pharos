@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import catalog from '../../../../pricing/model_colors.json';
 import prices from '../../../../pricing/cost_changes.json';
-import { chartSeriesStyle, modelColorKey, otherSeriesColor } from '../../../src/chart-colors';
+import { chartSeriesStyle, metricSeriesColor, modelColorKey, otherSeriesColor } from '../../../src/chart-colors';
 import { foldSeries } from '../../../src/chart-series';
 const bucketKey = '2026-10-01';
 const fold = (names, limit = 5, selected = [], scope = 'model_family') => {
@@ -105,4 +105,21 @@ test('unrecognized models and object-property names safely get fallback colors',
     assert.match(chartSeriesStyle('model_family', name).color, /^#[0-9a-f]{6}$/);
     assert.match(chartSeriesStyle('provider', name).color, /^#[0-9a-f]{6}$/);
   }
+});
+
+test('compound model groups keep catalog model colors regardless of label or key order', () => {
+  const expected = chartSeriesStyle('model_family', 'opus-5-5').color;
+  assert.equal(metricSeriesColor(['provider', 'model_family'], ['claude', 'opus-5-5']), expected);
+  assert.equal(metricSeriesColor(['repository_name', 'model_family', 'provider', 'effort'], ['repo', 'opus-5-5', 'claude', 'high']), expected);
+  assert.equal(metricSeriesColor(['provider', 'model_family', 'agent_session_id'], ['claude', 'opus-5-5', 'session']), expected);
+  assert.equal(metricSeriesColor(['root_provider', 'root_model_family', 'root_effort'], ['claude', 'opus-5-5', 'high']), expected);
+  assert.equal(metricSeriesColor(['effort'], ['high']), chartSeriesStyle('effort', 'high').color);
+});
+
+test('effort levels use a sequential palette that darkens with effort and keeps unknown neutral', () => {
+  const levels = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ultra', 'max'];
+  const luminance = color => { const channels = color.slice(1).match(/../g).map(c => parseInt(c, 16)); return .2126 * channels[0] + .7152 * channels[1] + .0722 * channels[2]; };
+  const lightness = levels.map(level => luminance(chartSeriesStyle('effort', level).color));
+  assert.ok(lightness.every((value, i) => !i || value < lightness[i - 1]));
+  assert.equal(chartSeriesStyle('effort', 'Unspecified').color, otherSeriesColor);
 });

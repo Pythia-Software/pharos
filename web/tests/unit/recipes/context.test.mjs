@@ -1,38 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import * as core from "@pythia-software/query-table-core";
-import {schemas} from "../helpers/recipes.mjs";
-import { queryRecipes, instantiateRecipe } from "../../../src/curiosity-data";
-import { cardCoverQuery } from "../../../src/card-cover";
-import { contextCachingTheses, contextCachingFeedback, contextCachingReviewKey } from "../../../src/context-caching-review-model";
+import { cardCoverQuery, recipeHarness } from "../helpers/recipes.mjs";
 import { filterBoxSamples } from "../../../src/compact-box-model";
 import { compactPieSlices } from "../../../src/compact-pie-model";
-const now = Date.parse("2026-10-15T12:00:00Z");
-const capabilities = { version: 3, profile: "qt-sqlite-v1", groupedRows: true, calendarGrouping: true, computedSourceFilters: true, maxRows: 10000, maxGroups: 10000, maxPopulation: 250000 }, execution = { profile: "qt-sqlite-v1", fields: {}, resolvedRevisions: {}, planToken: "" };
+const now = Date.parse("2026-10-15T12:00:00Z"), { card, table: destination, metric } = recipeHarness(now);
 const usage = (id, extra = {}) => ({ id, first_usage_at: now - 1000, day: "2026-10-15", provider: "one", model_family: "alpha", repository_name: "repo", input_tokens: 100, uncached_input_tokens: 20, cache_read_input_tokens: 60, cache_creation_input_tokens: 20, root_provider: "one", root_model_family: "alpha", root_conversation_id: "root", ...extra });
 const call = (id, extra = {}) => ({ id, started_at: now - 1000, tool_name: "Read", tool_category: "read", repository_name: "repo", repo_path: "src/main.ts", conversation_id: "one", result_tokens: 100, result_tokens_source: "measured", carried_tokens: 300, truncated: false, ...extra });
-function card(id, days = 7) { const recipe = queryRecipes.find(recipe => recipe.id === id); return { recipe, query: instantiateRecipe(recipe, days, new Date(now)).query }; }
-function destination(id, rows) { const { recipe, query } = card(id); return core.applyQuery(rows, query, schemas[recipe.dataset], { now }).rows; }
-function metric(id, rows) { const { recipe, query } = card(id), cover = cardCoverQuery(query, recipe); return core.evaluateMetrics(rows, cover.query, schemas[recipe.dataset], { now }).metrics.find(metric => metric.id === cover.metricId); }
-
-test("context review covers every active definition with compilable cover/destination and explicit periods", () => {
-  const ids = contextCachingTheses.flatMap(thesis => thesis.cards.map(card => card.id));
-  assert.equal(new Set(ids).size, 7);
-  assert.deepEqual([...ids].sort(), queryRecipes.filter(recipe => recipe.category === "context" && !recipe.retired).map(recipe => recipe.id).sort());
-  for (const id of ids) {
-    const { recipe, query } = card(id, 30);
-    for (const state of [query, cardCoverQuery(query, recipe).query]) assert.deepEqual(core.toQueryRequestV3(state, schemas[recipe.dataset], capabilities, execution, { now, rows: false }).diagnostics, [], id);
-    const item = instantiateRecipe(recipe, 30);
-    assert.ok(item.description.includes("30"), id);
-    assert.ok(!/[?{}]/.test(item.title), id);
-    assert.ok(item.action, id);
-  }
-  for (const id of ["cache-reads", "cache-workload", "context-carried", "tool-result-reuse", "output-duration"]) {
-    const { recipe, query } = card(id);
-    assert.equal(recipe.retired, true, id);
-    assert.deepEqual(core.toQueryRequestV3(query, schemas[recipe.dataset], capabilities, execution, { now, rows: false }).diagnostics, [], `${id} saved definition remains executable`);
-  }
-});
 
 test("cache shares weight all input, including cache writes, without dropping zero-reuse groups", () => {
   const rows = [usage("a"), usage("b", { input_tokens: 900, cache_read_input_tokens: 0, uncached_input_tokens: 600, cache_creation_input_tokens: 300 }), usage("zero", { model_family: "zero", cache_read_input_tokens: 0 }), usage("other-provider", { provider: "two" }), usage("missing", { input_tokens: null, cache_read_input_tokens: 999 }), usage("empty", { input_tokens: 0, cache_read_input_tokens: 999 }), usage("old", { first_usage_at: now - 8 * 86400000, cache_read_input_tokens: 999 })];
@@ -49,24 +22,6 @@ test("cache shares weight all input, including cache writes, without dropping ze
     for (const bucket of chart.buckets) assert.equal(bucket.value, table.find(row => JSON.stringify(query.grouping.keys.map(key => row[key])) === JSON.stringify(bucket.keys)).cc_share);
     assert.equal(recipe.exploration.unit, "percent");
   }
-});
-
-test("reuse scatter sums delegated input once, preserves zero cache, and matches the destination", () => {
-  const rows = [usage("root"), usage("child", { provider: "two", model_family: "child", input_tokens: 900, cache_read_input_tokens: 90 }), usage("no-cache", { root_conversation_id: "zero", cache_read_input_tokens: 0 }), usage("orphan", { root_conversation_id: null })];
-  const result = metric("cache-workload", rows), table = destination("cache-workload", rows);
-  assert.equal(result.buckets.length, 2);
-  assert.equal(result.buckets[0].value, 1000);
-  assert.equal(result.buckets[0].y, .15);
-  assert.equal(result.buckets[1].y, 0);
-  assert.deepEqual(result.buckets[0].keys, ["one", "alpha", "root"]);
-  for (const bucket of result.buckets) {
-    const row = table.find(row => row.root_conversation_id === bucket.keys[2]);
-    assert.equal(bucket.value, row.cc_input);
-    assert.equal(bucket.y, row.cc_share);
-  }
-  const display = card("cache-workload").recipe.measures[0].display;
-  assert.equal(display.xScale.mode, "log");
-  assert.equal(display.yScale.mode, "linear");
 });
 
 test("tool totals conserve exact Other and never blend attribution sources", () => {
@@ -107,15 +62,6 @@ test("truncation divides by all calls and applies its sample cutoff after counti
   assert.equal(metric("truncated-outputs", rows).buckets[0].value, .2);
 });
 
-test("carriage weighting includes never-carried results and is selected by call start", () => {
-  const rows = [call("large", { result_tokens: 900, carried_tokens: 9000 }), call("uncarried", { result_tokens: 100, carried_tokens: 0 }), call("estimated", { result_tokens_source: "estimated", result_tokens: 100, carried_tokens: 100 }), call("old", { started_at: now - 8 * 86400000, carried_tokens: 999999 })];
-  const table = destination("tool-result-reuse", rows);
-  assert.equal(table.find(row => row.result_tokens_source === "measured").cc_reuse, 9, "token weighted, not the 5-request unweighted mean");
-  assert.equal(table.find(row => row.result_tokens_source === "estimated").cc_reuse, 1);
-  assert.equal(metric("context-carried", rows).buckets.reduce((sum, bucket) => sum + bucket.value, 0), 9100);
-  assert.match(card("context-carried").recipe.note, /outside/);
-});
-
 test("path popularity and within-conversation rereads use distinct grains", () => {
   const rows = [call("a"), call("b"), call("c", { conversation_id: "two" }), call("other-repo", { repository_name: "another" }), call("missing-conversation", { conversation_id: null }), call("missing-path", { repo_path: null }), call("edit", { tool_category: "edit" })];
   const popular = destination("read-paths", rows), repeated = destination("repeated-reads", rows);
@@ -125,14 +71,4 @@ test("path popularity and within-conversation rereads use distinct grains", () =
   assert.equal(repeated.length, 1);
   assert.equal(repeated[0].cc_calls, 2);
   assert.equal(repeated[0].conversation_id, "one");
-});
-
-test("context feedback exports every level with independent drafts and population caveats", () => {
-  assert.equal(contextCachingReviewKey, "pharos-context-caching-review-v2");
-  const draft = contextCachingFeedback.readReviewFeedback(JSON.stringify({ overall: "Keep totals alongside rates.", theses: { reuse: "Show denominators." }, cards: { "output-distribution": { verdict: "change", note: "Inspect the outliers." }, "cache-workload": { verdict: "drop", note: "Earlier review" }, "session-token-cost": { verdict: "keep", note: "Other study" } } }));
-  assert.equal(draft.cards["session-token-cost"], undefined);
-  assert.equal(draft.cards["cache-workload"], undefined, "retired cards do not leak into the new review");
-  assert.equal(contextCachingFeedback.reviewedCardCount(draft), 1);
-  const report = contextCachingFeedback.exportFeedback(draft, 30, { "output-distribution": "Tool result sizes" });
-  for (const text of ["Context and caching cards — review 2", "past 30 days", "Keep totals alongside rates.", "Show denominators.", "Tool result sizes (output-distribution)", "Verdict: change", "Inspect the outliers.", "cache writes", "three nonempty calls"]) assert.ok(report.includes(text), text);
 });

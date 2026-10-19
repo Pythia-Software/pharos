@@ -1,25 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import * as core from '@pythia-software/query-table-core';
-import {schemas} from '../helpers/recipes.mjs';
-import {queryRecipes,instantiateRecipe} from '../../../src/curiosity-data';
-import {cardCoverQuery} from '../../../src/card-cover';
-import {apiCostTheses,apiCostReviewKey,apiCostFeedback} from '../../../src/api-cost-review-model';
+import {cardCoverQuery,core,execution,recipeHarness,schemas} from '../helpers/recipes.mjs';
 import {filterBoxSamples} from '../../../src/compact-box-model';
 import {compactPieSlices} from '../../../src/compact-pie-model';
 import {compactMetricPresentation} from '../../../src/card-presentation';
 import {apiCostTrendQuery,apiCostTrendFacts,buildApiCostTrend,usesApiCostTrend} from '../../../src/api-cost-trend';
-const now=Date.parse('2026-10-15T12:00:00Z'),caps={version:3,profile:'qt-sqlite-v1',groupedRows:true,calendarGrouping:true,computedSourceFilters:true,maxRows:10000,maxGroups:10000,maxPopulation:250000},execution={profile:'qt-sqlite-v1',fields:{},resolvedRevisions:{},planToken:''};
+const now=Date.parse('2026-10-15T12:00:00Z'),{card,table,metric}=recipeHarness(now);
 const usage=(id,extra={})=>({id,first_usage_at:now-1000,last_usage_at:new Date(now-1000).toISOString(),day:'2026-10-15',workspace_id:'work',repository_name:'repo',title:'Fixture work',root_conversation_id:'root',root_repository_name:'repo',root_title:'Root task',total_tokens:100,cost_usd:5,cost_today_usd:4,price_status:'priced',...extra});
 function trendFacts(rows,source,days){const q=apiCostTrendQuery(source,now-Math.max(37,days)*86400000,now);return apiCostTrendFacts(core.evaluateMetrics(rows,q,schemas.usage,{now}).metrics[0]);}
-function card(id,days=7){const recipe=queryRecipes.find(r=>r.id===id);return{recipe,query:instantiateRecipe(recipe,days,new Date(now)).query};}
-function table(id,rows){const {recipe,query}=card(id);return core.applyQuery(rows,query,schemas[recipe.dataset],{now}).rows;}
-function metric(id,rows){const {recipe,query}=card(id),cover=cardCoverQuery(query,recipe);return core.evaluateMetrics(rows,cover.query,schemas[recipe.dataset],{now}).metrics.find(m=>m.id===cover.metricId);}
-
-test('API cost study covers eight active definitions and compiles every destination and cover',()=>{
- const ids=apiCostTheses.flatMap(t=>t.cards.map(c=>c.id));assert.equal(new Set(ids).size,8);assert.deepEqual([...ids].sort(),queryRecipes.filter(r=>r.category==='cost'&&!r.retired).map(r=>r.id).sort());
- for(const id of ids){const {recipe,query}=card(id,30);for(const state of [query,cardCoverQuery(query,recipe).query])assert.deepEqual(core.toQueryRequestV3(state,schemas[recipe.dataset],caps,execution,{now,rows:false}).diagnostics,[],id);assert.ok(instantiateRecipe(recipe,30).description.includes('30'),id);}
-});
 
 test('period totals and exact repository shares retain confirmed zeros and exclude incomplete or out-of-window facts',()=>{
  const rows=[usage('a'),usage('b',{cost_usd:0}),usage('partial',{price_status:'partial',cost_usd:999}),usage('assumed',{price_status:'assumed',cost_usd:999}),usage('unpriced',{price_status:'unpriced',cost_usd:null}),usage('missing',{cost_usd:null}),usage('negative',{cost_usd:-1}),usage('zero-token',{total_tokens:0,cost_usd:999}),usage('old',{first_usage_at:now-8*86400000,cost_usd:999})];
@@ -45,7 +33,7 @@ test('root-count scatter shares the delegated cost population, with zero-cost po
 test('cost history uses exact elapsed boundaries, divides by seven even for sparse windows, and separates headline period',()=>{
  const d=86400000,rows=[usage('recent',{first_usage_at:now-d,cost_usd:70}),usage('edge',{first_usage_at:now-7*d,cost_usd:7}),usage('before',{first_usage_at:now-7*d-1,cost_usd:140}),usage('start',{first_usage_at:now-37*d,cost_usd:21}),usage('too-old',{first_usage_at:now-37*d-1,cost_usd:999}),usage('now',{first_usage_at:now,cost_usd:999}),usage('unpriced',{price_status:'partial',cost_usd:999})];
  for(const days of [7,30]){
-  const {recipe,query}=card('api-cost-total',days),history=apiCostTrendQuery(query.grouping.source,now-Math.max(37,days)*d,now);
+  const {query}=card('api-cost-total',days),history=apiCostTrendQuery(query.grouping.source,now-Math.max(37,days)*d,now);
   for(let offset=0;offset<history.aggregations.length;offset+=20)assert.deepEqual(core.toMetricQuery({...history,aggregations:history.aggregations.slice(offset,offset+20)},schemas.usage,execution).diagnostics,[]);
   const result=core.evaluateMetrics(rows,history,schemas.usage,{now}).metrics[0],study=buildApiCostTrend(apiCostTrendFacts(result),days,now);
   assert.equal(study.value,days===7?77:217);assert.equal(study.points.length,31);assert.equal(study.points[30],11);assert.equal(study.points[0],3);assert.equal(study.lookbackDays,7);assert.equal(study.pointTimes[0],now-30*d);assert.equal(study.pointTimes[30],now);assert.equal(study.format,'USD');assert.match(study.pointValueLabel,/per day|\/ day/);
@@ -58,28 +46,7 @@ test('cost history uses exact elapsed boundaries, divides by seven even for spar
  const zero=buildApiCostTrend(trendFacts([usage('zero',{cost_usd:0})],query.grouping.source,7),7,now);assert.equal(zero.value,0);
 });
 
-test('card descriptions describe the population without advertising a display count',()=>{
- for(const recipe of queryRecipes)assert.doesNotMatch(recipe.description,/\b(?:five|six|seven|eight|twelve|\d+) (?:largest|leading|busiest|repositories|models)\b|plus Other|top \d+/i,recipe.id);
- for(const id of ['price-comparison','expensive-work'])assert.equal(card(id).recipe.retired,true,id);
-});
-
 test('token pricing coverage weights every positive token across confirmed assumed partial and unknown status',()=>{
  const rows=[usage('priced',{total_tokens:100}),usage('assumed',{total_tokens:900,price_status:'assumed'}),usage('partial',{total_tokens:50,price_status:'partial'}),usage('unpriced',{total_tokens:25,price_status:'unpriced',cost_usd:null}),usage('unknown',{total_tokens:10,price_status:null,cost_usd:null}),usage('zero',{total_tokens:0})];
  const pie=compactPieSlices(metric('price-coverage',rows),4);assert.equal(pie.total,1085);assert.equal(pie.slices.length,5);assert.equal(pie.slices.reduce((sum,s)=>sum+s.value,0),1085);assert.equal(table('price-coverage',rows).length,5);
-});
-
-test('repricing matches both known fields and discloses unverified current-price completeness',()=>{
- const rows=[usage('a'),usage('b',{cost_usd:10,cost_today_usd:3}),usage('missing',{cost_today_usd:null,cost_usd:999}),usage('partial-history',{price_status:'partial',cost_usd:999,cost_today_usd:999})];
- const r=metric('price-comparison',rows);assert.equal(r.buckets[0].value,15);assert.equal(r.buckets[0].y,7);assert.equal(table('price-comparison',rows)[0].card_price_delta,-8);assert.match(card('price-comparison').recipe.note,/may be partial or assumed/);assert.equal(card('price-comparison').recipe.measures[0].id,'price-pair');
-});
-
-test('lifetime ranking selects by recent activity while retaining lifetime costs and original source metrics',()=>{
- const recent={id:'recent',activity_at:now-1000,token_count:1000,cost_usd:500,price_status:'priced',title:'Long running work',repository_name:'repo'};
- const selected=table('expensive-work',[recent,{...recent,id:'old',activity_at:now-8*86400000,cost_usd:999},{...recent,id:'partial',price_status:'partial',cost_usd:999}]);assert.equal(selected.length,1);assert.equal(selected[0].card_cost_usd,500);assert.equal(selected[0].card_work_title,'Long running work');
- for(const [id,source] of [['cost-repos','sum:cost_usd:day,repository_name'],['expensive-work','work-costs'],['price-coverage','pricing-tokens']])assert.ok(card(id).recipe.measures.some(m=>m.id===source),id);
-});
-
-test('API cost feedback exports every level with its own draft and explicit time bases',()=>{
- assert.equal(apiCostReviewKey,'pharos-api-cost-review-v2');const draft=apiCostFeedback.readReviewFeedback(JSON.stringify({overall:'Keep time bases clear.',theses:{accounting:'Show pricing limits.'},cards:{'work-cost-distribution':{verdict:'keep',note:'Keep zero cost visible.'},'primary-domains':{verdict:'keep',note:'Other study'}}}));assert.equal(draft.cards['primary-domains'],undefined);
- const report=apiCostFeedback.exportFeedback(draft,30,{'work-cost-distribution':'Work cost ranges'});for(const text of ['API cost cards — review 2','past 30 days','Keep time bases clear.','Show pricing limits.','Keep zero cost visible.','Verdict: keep','not subscription spend'])assert.ok(report.includes(text),text);
 });

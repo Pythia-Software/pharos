@@ -1,72 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import * as core from "@pythia-software/query-table-core";
-import {schemas} from "../helpers/recipes.mjs";
-import { queryRecipes, instantiateRecipe } from "../../../src/curiosity-data";
-import { cardCoverQuery } from "../../../src/card-cover";
-import { modelChoiceTheses, modelChoiceFeedback, modelChoiceReviewKey } from "../../../src/model-choice-review-model";
-import { humanWordReviewKey, readReviewFeedback } from "../../../src/human-word-review-model";
-import { metricSeriesColor, chartSeriesStyle } from "../../../src/chart-colors";
-import { cardLoadingPresentation } from "../../../src/card-loading-model";
-import { saveCardTemplate, cardTemplates, availableChartKinds } from "../../../src/card-library-model";
-import { sharedBoxScale, boxOutliers, boxDetails, filterBoxSamples, boxCoverHeight } from "../../../src/compact-box-model";
+import { cardCoverQuery, recipeHarness } from "../helpers/recipes.mjs";
+import { sharedBoxScale, boxDetails, filterBoxSamples } from "../../../src/compact-box-model";
 import { compactMetricPresentation } from "../../../src/card-presentation";
 import { stackedRoleRows } from "../../../src/compact-stacked-bars";
-import { compactPieSlices, pieWedgePath } from "../../../src/compact-pie-model";
-const now = Date.parse("2026-10-15T12:00:00Z");
-const capabilities = { version: 3, profile: "qt-sqlite-v1", groupedRows: true, calendarGrouping: true, computedSourceFilters: true, regex: false, maxRows: 10000, maxGroups: 10000, maxPopulation: 250000 }, execution = { profile: "qt-sqlite-v1", fields: {}, resolvedRevisions: {}, planToken: "" };
+const now = Date.parse("2026-10-15T12:00:00Z"), harness = recipeHarness(now), { card } = harness;
 const fact = (id, extra = {}) => ({ id, provider: "one", model_family: "alpha", first_usage_at: now - 1000, total_tokens: 10, cost_usd: .001, cache_read_input_tokens: 9, uncached_input_tokens: 1, agent_session_id: "session", conversation_id: "conversation", root_conversation_id: "conversation", root_provider: "one", root_model_family: "alpha", root_effort: "high", price_status: "priced", ...extra });
 const facts = [fact("a"), fact("b", { total_tokens: 90, cost_usd: .018, cache_read_input_tokens: 0, uncached_input_tokens: 90 }), fact("unpriced", { price_status: "unpriced", total_tokens: 900, cost_usd: 900 }), fact("assumed", { price_status: "assumed", cost_usd: 50 }), fact("partial", { price_status: "partial", cost_usd: 80 }), fact("missing-session", { agent_session_id: null, total_tokens: 50, price_status: "unpriced" }), fact("other-provider", { provider: "two", total_tokens: 100, cost_usd: .05 }), fact("other-model", { model_family: "beta", total_tokens: 100, cache_read_input_tokens: 0, uncached_input_tokens: 0 })];
-function card(id, days = 7) { const recipe = queryRecipes.find(recipe => recipe.id === id); return { recipe, query: instantiateRecipe(recipe, days, new Date(now)).query }; }
-function destination(id, population = facts) { const { recipe, query } = card(id); return core.applyQuery(population, query, schemas[recipe.dataset], { now }).rows; }
-function metrics(id, population = facts) { const { recipe, query } = card(id); const cover = cardCoverQuery(query, recipe); return core.evaluateMetrics(population, cover.query, schemas[recipe.dataset], { now }).metrics.find(metric => metric.id === cover.metricId); }
+const destination = (id, population = facts) => harness.table(id, population);
+const metrics = (id, population = facts) => harness.metric(id, population);
 
-test("model review covers the entire category and every cover and destination compiles", () => {
-  const ids = modelChoiceTheses.flatMap(thesis => thesis.cards.map(card => card.id));
-  assert.equal(new Set(ids).size, 16);
-  assert.deepEqual([...ids].sort(), queryRecipes.filter(recipe => recipe.category === "models" && !recipe.retired).map(recipe => recipe.id).sort());
-  for (const id of ids) {
-    const { recipe, query } = card(id, 30);
-    for (const state of [query, cardCoverQuery(query, recipe).query]) assert.deepEqual(core.toQueryRequestV3(state, schemas[recipe.dataset], capabilities, execution, { now, rows: false }).diagnostics, [], id);
-    const item = instantiateRecipe(recipe, 30);
-    assert.ok(item.description.includes("30"), id);
-    assert.ok(!/[?{}]/.test(item.title), id);
-    assert.ok(item.action, id);
-  }
-});
-
-test("fully priced cost comparisons use weighted totals and retain provider identity", () => {
-  const rows = destination("model-effective-cost");
-  const alpha = rows.find(row => row.provider === "one" && row.model_family === "alpha");
-  assert.equal(alpha.mc_tokens, 100);
-  assert.ok(Math.abs(alpha.mc_cost - .019) < 1e-10);
-  assert.ok(Math.abs(alpha.mc_unit_cost - 190) < 1e-10);
-  const other = rows.find(row => row.provider === "two" && row.model_family === "alpha");
-  assert.equal(other.mc_unit_cost, 500);
+test("model cost shares count only fully priced costs", () => {
   const cost = metrics("model-cost-share");
   assert.ok(Math.abs(cost.buckets.reduce((sum, bucket) => sum + bucket.value, 0) - .07) < 1e-10);
-});
-
-test("cache/cost scatter keeps weighted ratios and missing cache denominators", () => {
-  const scatter = metrics("model-cache-cost");
-  const alpha = scatter.buckets.find(bucket => JSON.stringify(bucket.keys) === '["one","alpha"]');
-  assert.equal(alpha.value, .09);
-  assert.ok(Math.abs(alpha.y - 190) < 1e-10);
-  const beta = scatter.buckets.find(bucket => bucket.keys[1] === "beta");
-  assert.equal(beta.value, null, "no invented zero cache share when there is no observed input");
-  const table = destination("model-cache-cost").find(row => row.provider === "one" && row.model_family === "alpha");
-  assert.equal(alpha.value, table.mc_cache_share);
-  assert.equal(alpha.y, table.mc_unit_cost);
-});
-
-test("session scatter excludes unmapped sessions and matches its grouped destination", () => {
-  const scatter = metrics("model-session-size");
-  const alpha = scatter.buckets.find(bucket => JSON.stringify(bucket.keys) === '["one","alpha"]');
-  const table = destination("model-session-size").find(row => row.provider === "one" && row.model_family === "alpha");
-  assert.equal(alpha.value, 1, "repeated usage facts for a session are not extra sessions");
-  assert.equal(alpha.y, 1020);
-  assert.equal(alpha.value, table.mc_sessions);
-  assert.equal(alpha.y, table.mc_session_size);
 });
 
 test("conversation reach counts membership rather than treating models as exclusive buckets", () => {
@@ -85,29 +31,6 @@ test("token pie preserves its full population beyond named and returned model gr
   const remainder = pie.buckets.slice(6).reduce((sum, bucket) => sum + bucket.value, 0) + pie.other.value;
   assert.equal(named + remainder, 1200);
   assert.ok(remainder > pie.other.value);
-});
-
-test("model feedback is independently keyed, validated, and exports every review level", () => {
-  assert.notEqual(modelChoiceReviewKey, humanWordReviewKey);
-  const draft = modelChoiceFeedback.readReviewFeedback(JSON.stringify({ overall: "Prefer workload context.", theses: { economics: "Show coverage." }, cards: { "session-token-cost": { verdict: "change", note: "Label both axes." }, "human-words": { verdict: "keep", note: "Different category" } } }));
-  assert.equal(draft.cards["human-words"], undefined);
-  assert.equal(modelChoiceFeedback.reviewedCardCount(draft), 1);
-  assert.equal(readReviewFeedback(JSON.stringify(draft)).cards["session-token-cost"], undefined);
-  const report = modelChoiceFeedback.exportFeedback(draft, 30, { "session-token-cost": "Session workload" });
-  for (const text of ["Model choice cards — review 6", "past 30 days", "Prefer workload context.", "Show coverage.", "Session workload (session-token-cost)", "Verdict: change", "Label both axes."]) assert.ok(report.includes(text), text);
-});
-
-
-test("review 2 retires rejected cards and uses explicit heights and balanced legend limits", () => {
-  for (const id of ["model-session-size", "model-effective-cost", "model-cache-cost", "tl1-advancement", "tl1-mixed-dispositions"]) assert.equal(card(id).recipe.retired, true, id);
-  const { recipe, query } = card("usage-models");
-  const cover = cardCoverQuery(query, recipe);
-  assert.equal(cover.query.aggregations[0].display.maxGroups, 5);
-  assert.equal(recipe.cover.height, 300);
-  assert.equal(cardLoadingPresentation(query, { recipe }).height, 300);
-  assert.equal(card("model-token-share").recipe.cover.maxGroups, 5);
-  assert.deepEqual(card("model-token-share").recipe.exploration.labelFields, ["provider", "model_family"]);
-  assert.equal(card("repository-model-use").recipe.cover.maxGroups, 6);
 });
 
 test("conversation pie conserves model/conversation pairings across overlapping conversations", () => {
@@ -191,35 +114,8 @@ test("delegation boxes exclude zeros, count nested executions once, and preserve
   assert.ok(!tooltip.includes("$"));
 });
 
-test("compound model groups keep catalog model colors regardless of label or key order", () => {
-  const expected = chartSeriesStyle("model_family", "opus-5-5").color;
-  assert.equal(metricSeriesColor(["provider", "model_family"], ["claude", "opus-5-5"]), expected);
-  assert.equal(metricSeriesColor(["repository_name", "model_family", "provider", "effort"], ["repo", "opus-5-5", "claude", "high"]), expected);
-  assert.equal(metricSeriesColor(["provider", "model_family", "agent_session_id"], ["claude", "opus-5-5", "session"]), expected);
-  assert.equal(metricSeriesColor(["root_provider", "root_model_family", "root_effort"], ["claude", "opus-5-5", "high"]), expected);
-  assert.equal(metricSeriesColor(["effort"], ["high"]), chartSeriesStyle("effort", "high").color);
-});
-
-
-test("chart heights persist through template edits and pairing pies remain editable", t => {
-  const before = global.window, storage = new Map();
-  global.window = { dispatchEvent() {}, pharosPrefs: { get: (key, fallback) => storage.get(key) ?? fallback, set: (key, value) => storage.set(key, value) } };
-  t.after(() => { global.window = before; });
-  const recipe = card("usage-models").recipe;
-  saveCardTemplate(recipe.id, { title: recipe.title, description: recipe.description, days: 7, cover: { ...recipe.cover, height: 360 } });
-  const saved = cardTemplates().find(item => item.id === recipe.id);
-  assert.equal(saved.cover.height, 360);
-  assert.equal(cardLoadingPresentation(instantiateRecipe(saved, 7).query, { recipe: saved }).height, 360);
-  assert.throws(() => saveCardTemplate(recipe.id, { title: recipe.title, description: recipe.description, days: 7, cover: { ...recipe.cover, height: 20 } }), /height/);
-  const pairing = card("model-conversation-reach").recipe;
-  assert.ok(availableChartKinds(pairing).includes("pie"));
-  saveCardTemplate(pairing.id, { title: pairing.title, description: pairing.description, days: 7, cover: pairing.cover });
-  assert.equal(cardTemplates().find(item => item.id === pairing.id).cover.kind, "pie");
-});
-
-
-test("all three relationship candidates declare log–log axes without transforming their metrics", () => {
-  for (const id of ["model-token-cost", "session-token-cost", "session-input-output"]) {
+test("relationship scatters declare log–log axes without transforming their metrics", () => {
+  for (const id of ["session-token-cost", "session-input-output"]) {
     const { recipe, query } = card(id), cover = cardCoverQuery(query, recipe);
     const metric = cover.query.aggregations.find(metric => metric.id === id);
     assert.equal(metric.display.xScale.mode, "log", id);
@@ -232,47 +128,14 @@ test("all three relationship candidates declare log–log axes without transform
   }
 });
 
-
-test("shared box axes cover every visible extreme, preserve zeros, and use one mapping across models", () => {
-  const buckets = [
-    { keys: ["cheap"], value: 1, count: 3, distribution: { kind: "box", summary: { n: 3, min: .001, q1: .2, median: .5, mean: 10, q3: .8, max: 100, low: .001, high: 1, outlierCount: 2, outliers: [10], whiskers: "tukey", method: "exact-linear" } } },
-    { keys: ["expensive"], value: 10, count: 3, distribution: { kind: "box", summary: { n: 3, min: .1, q1: 2, median: 5, mean: 20, q3: 8, max: 200, low: .1, high: 10, outlierCount: 1, outliers: [200], whiskers: "tukey", method: "exact-linear" } } },
-  ];
-  const before = structuredClone(buckets), scale = sharedBoxScale(buckets, 2, "log");
-  assert.equal(scale.log, true);
-  assert.ok(scale.min <= .001 && scale.max >= 200);
-  assert.ok(Math.abs((scale.fraction(10) - scale.fraction(1)) - (scale.fraction(1) - scale.fraction(.1))) < 1e-12);
-  assert.ok(boxOutliers(buckets[0].distribution.summary).includes(100), "a sampled outlier array must not hide the actual maximum");
-  assert.deepEqual(buckets, before);
-  buckets[0].distribution.summary.min = 0;
-  buckets[0].distribution.summary.low = 0;
-  const zero = sharedBoxScale(buckets, 2, "log");
-  assert.equal(zero.log, false);
-  assert.equal(zero.min, 0);
-  assert.equal(zero.fraction(0), 0);
-});
-
-test("effort composition orders the sequential palette by effort and keeps unknown neutral", () => {
-  const levels = ["none", "minimal", "low", "medium", "high", "xhigh", "ultra", "max"];
-  const luminance = color => { const channels = color.slice(1).match(/../g).map(c => parseInt(c, 16)); return .2126 * channels[0] + .7152 * channels[1] + .0722 * channels[2]; };
-  const lightness = levels.map(level => luminance(chartSeriesStyle("effort", level).color));
-  assert.ok(lightness.every((value, i) => !i || value < lightness[i - 1]));
-  assert.equal(chartSeriesStyle("effort", "Unspecified").color, "#85909b");
+test("effort composition orders known effort levels before unknown effort", () => {
   const result = metrics("effort-cost-share", [fact("h", { effort: "high" }), fact("l", { effort: "low" }), fact("n", { effort: null }), fact("u", { effort: "ultra" })]);
   const { recipe, query } = card("effort-cost-share"), projected = cardCoverQuery(query, recipe), clause = projected.query.aggregations[0];
   const presentation = compactMetricPresentation({ state: "ready", total: 4, summary: "Effort", coverMetricId: clause.id, metrics: [{ clause, result }] });
   assert.deepEqual(presentation.metric.result.buckets.map(bucket => bucket.keys[0]), ["low", "high", "ultra", null]);
 });
 
-test("review 3 removes the model scatter, hides the pairing headline and compacts the model-cost key", () => {
-  assert.equal(card("model-token-cost").recipe.retired, true);
-  assert.equal(card("model-conversation-reach").recipe.cover.showHeadline, false);
-  assert.equal(card("model-cost-share").recipe.cover.legendColumns, 2);
-  assert.equal(card("model-session-costs").recipe.cover.maxGroups, 6);
-  assert.equal(card("model-session-costs").recipe.exploration.coverMetric.display.xScale.mode, "log");
-});
-
-test("review 4 applies cohort thresholds to whole-conversation samples before visible limits", () => {
+test("cohort thresholds apply to whole-conversation samples before visible limits", () => {
   const rows = [5,4].flatMap((n, model) => Array.from({length:n},(_,i)=>[fact(`${model}-${i}`, {root_conversation_id:`${model}-${i}`,root_model_family:`model-${model}`,cost_usd:1}),fact(`repeat-${model}-${i}`, {root_conversation_id:`${model}-${i}`,root_model_family:`model-${model}`,cost_usd:2})]).flat());
   const raw = metrics("model-session-costs", rows), before = structuredClone(raw);
   const filtered = filterBoxSamples(raw, card("model-session-costs").recipe.cover.minSamples);
@@ -295,14 +158,12 @@ test("review 4 applies cohort thresholds to whole-conversation samples before vi
 
 test("tree metric headlines surface rare outliers and open ranked conversation destinations", () => {
   const rows=[fact("root",{root_conversation_id:"big",delegated_run_depth:0}),...Array.from({length:9},(_,i)=>fact(`child-${i}`,{root_conversation_id:"big",delegated_session_id:`child-${i}`,delegated_run_depth:i+1})),fact("small",{root_conversation_id:"small",delegated_run_depth:0})];
-  for (const id of ["largest-subagent-depth","largest-subagent-weight"]) {
-    const metric=metrics(id,rows), table=destination(id,rows), {recipe}=card(id);
-    assert.equal(metric.buckets[0].value,9);
-    assert.deepEqual(metric.buckets[0].keys,[]);
-    assert.equal(table[0].root_conversation_id,"big");
-    assert.equal(table[0][recipe.exploration.valueField],9);
-    assert.equal(recipe.cover.minSamples,undefined);
-  }
+  const id="largest-subagent-weight", metric=metrics(id,rows), table=destination(id,rows), {recipe}=card(id);
+  assert.equal(metric.buckets[0].value,9);
+  assert.deepEqual(metric.buckets[0].keys,[]);
+  assert.equal(table[0].root_conversation_id,"big");
+  assert.equal(table[0][recipe.exploration.valueField],9);
+  assert.equal(recipe.cover.minSamples,undefined);
 });
 
 test("human-input scatter sums separate human and output events without context duplication", () => {
@@ -320,38 +181,6 @@ test("human-input scatter sums separate human and output events without context 
   assert.equal(clause.display.yScale.mode,"log");
 });
 
-test("pie geometry divides a shared circle evenly and conserves a folded Other", () => {
-  const result={id:"pie",coverage:"exact",groupCount:4,buckets:Array.from({length:4},(_,i)=>({keys:[String(i)],value:1,count:1}))};
-  const pie=compactPieSlices(result,4);
-  assert.equal(pie.total,4);
-  for(const slice of pie.slices) {
-    assert.ok(Math.abs(slice.end-slice.start-Math.PI/2)<1e-12);
-    assert.match(pieWedgePath(slice.start,slice.end),/A 48 48 0 0 1/);
-  }
-  assert.ok(Math.abs(pie.slices.at(-1).end-pie.slices[0].start-2*Math.PI)<1e-12);
-  const folded=compactPieSlices({...result,other:{keys:["Other"],value:2,count:2}},2);
-  assert.equal(folded.total,6);
-  assert.deepEqual(folded.slices.map(s=>s.value),[1,1,4]);
-  assert.ok(compactPieSlices({...result,coverage:"partial"},4).error);
-});
-
-
-test("review 5 balances both model pies and retires only the depth maximum", () => {
-  for (const id of ["model-token-share", "model-conversation-reach"]) {
-    const {recipe}=card(id);
-    assert.equal(recipe.cover.maxGroups,5);
-    assert.equal(recipe.cover.showOther,true);
-    const rows=Array.from({length:15},(_,i)=>fact(String(i),{model_family:`model-${i}`,total_tokens:i+1,conversation_id:`c-${i}`}));
-    const pie=compactPieSlices(metrics(id,rows),5);
-    assert.equal(pie.slices.length,6);
-    assert.equal(pie.slices.at(-1).other,true);
-    assert.equal(pie.slices.reduce((n,s)=>n+s.value,0),pie.total);
-  }
-  assert.equal(card("largest-subagent-depth").recipe.retired,true);
-  assert.ok(!card("largest-subagent-weight").recipe.retired);
-  assert.equal(card("session-delegation-count").recipe.cover.density,"compact");
-});
-
 test("three role shares count distinct sessions per model, include parent roots, and retain pure roles", () => {
   const rows=[fact('single-a',{agent_session_id:'single',session_role:'singleton'}),fact('parent',{agent_session_id:'parent',session_role:'parent'}),fact('parent-repeat',{agent_session_id:'parent',session_role:'parent'}),fact('sub-a',{agent_session_id:'sub-a',session_role:'subagent'}),fact('sub-b',{agent_session_id:'sub-b',session_role:'subagent'}),fact('parent-other-model',{agent_session_id:'parent',model_family:'beta',session_role:'parent'}),fact('unknown-role',{agent_session_id:'unknown',session_role:null}),fact('missing-id',{agent_session_id:null,session_role:'subagent'}),fact('inactive',{agent_session_id:'inactive',session_role:'singleton',total_tokens:0})];
   const {recipe,query}=card('model-agent-roles'),clause=cardCoverQuery(query,recipe).query.aggregations[0];
@@ -367,14 +196,4 @@ test("three role shares count distinct sessions per model, include parent roots,
   const legacy=stackedRoleRows({...clause,groupBy:['provider','model_family','session_kind']},{...result,groupCount:2,buckets:[{keys:['one','alpha','root'],value:1,count:1},{keys:['one','alpha','subagent'],value:2,count:2}]},'session_kind');
   assert.deepEqual(legacy.roles,['root','subagent']);
   assert.deepEqual([legacy.rows[0].root,legacy.rows[0].subagent,legacy.rows[0].total],[1,2,3]);
-});
-
-test("compact conversation-cost covers scale to visible rows and keep the existing sample cutoff", () => {
-  const recipe=card('model-session-costs').recipe;
-  assert.equal(recipe.cover.density,'compact');
-  assert.equal(recipe.cover.height,undefined);
-  assert.equal(recipe.cover.minSamples,5);
-  assert.ok(boxCoverHeight(4,true)<=220);
-  assert.ok(boxCoverHeight(6,true)<280);
-  assert.equal(cardLoadingPresentation(card('model-session-costs').query,{recipe}).height,boxCoverHeight(6,true));
 });

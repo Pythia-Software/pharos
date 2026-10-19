@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import * as core from "@pythia-software/query-table-core";
 import { cardLoadingPresentation } from "../../../src/card-loading-model";
 import { instantiateRecipe, queryRecipes } from "../../../src/curiosity-data";
+import { availableChartKinds, cardTemplates, saveCardTemplate } from "../../../src/card-library-model";
+import { boxCoverHeight } from "../../../src/compact-box-model";
 const query = clause => ({ ...core.EMPTY_QUERY, aggregations: [{ id: "m", op: "count", groupBy: ["tool_name"], ...clause }] });
 
 test("loading shapes use the selected display and configured group count", () => {
@@ -47,4 +49,26 @@ test("daily covers reserve their headline and calendar bars, and nonmetrics use 
   assert.equal(spec.height, 208);
   assert.equal(cardLoadingPresentation(core.EMPTY_QUERY).kind, "text");
   assert.equal(cardLoadingPresentation({ ...core.EMPTY_QUERY, grouping: { source: core.EMPTY_QUERY, keys: ["group"], summaries: [] } }).kind, "table");
+});
+
+test("compact box covers size their placeholder to the visible rows", () => {
+  const recipe = queryRecipes.find(recipe => recipe.id === "model-session-costs");
+  assert.equal(recipe.cover.density, "compact");
+  assert.equal(cardLoadingPresentation(instantiateRecipe(recipe, 7).query, { recipe }).height, boxCoverHeight(recipe.cover.maxGroups, true));
+});
+
+test("chart heights persist through template edits and pairing pies remain editable", t => {
+  const before = global.window, storage = new Map();
+  global.window = { dispatchEvent() {}, pharosPrefs: { get: (key, fallback) => storage.get(key) ?? fallback, set: (key, value) => storage.set(key, value) } };
+  t.after(() => { global.window = before; });
+  const recipe = queryRecipes.find(recipe => recipe.id === "usage-models");
+  saveCardTemplate(recipe.id, { title: recipe.title, description: recipe.description, days: 7, cover: { ...recipe.cover, height: 360 } });
+  const saved = cardTemplates().find(item => item.id === recipe.id);
+  assert.equal(saved.cover.height, 360);
+  assert.equal(cardLoadingPresentation(instantiateRecipe(saved, 7).query, { recipe: saved }).height, 360);
+  assert.throws(() => saveCardTemplate(recipe.id, { title: recipe.title, description: recipe.description, days: 7, cover: { ...recipe.cover, height: 20 } }), /height/);
+  const pairing = queryRecipes.find(recipe => recipe.id === "model-conversation-reach");
+  assert.ok(availableChartKinds(pairing).includes("pie"));
+  saveCardTemplate(pairing.id, { title: pairing.title, description: pairing.description, days: 7, cover: pairing.cover });
+  assert.equal(cardTemplates().find(item => item.id === pairing.id).cover.kind, "pie");
 });

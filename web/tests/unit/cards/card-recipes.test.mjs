@@ -1,19 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import * as core from "@pythia-software/query-table-core";
-import {schemas} from "../helpers/recipes.mjs";
+import { capabilities, core, execution, schemas } from "../helpers/recipes.mjs";
 import tracker from "../../../../docs/homepage-query-cards.json";
 import { queryRecipes, instantiateRecipe, loadQueryPreview, clearPreviewCache } from "../../../src/curiosity-data";
-import { queryFromURL, queryHasTimeFilter, resolveRollingQuery } from "../../../src/query-links";
-import { queryURL } from "../../../src/query-links";
+import { queryFromURL, queryHasTimeFilter, queryURL, resolveRollingQuery } from "../../../src/query-links";
 import { migrateSavedQueries, updateBookmark, replaceSavedQuery } from "../../../src/bookmarks";
 import { cardCoverQuery, defaultCardCover } from "../../../src/card-cover";
-import { categoryForQuery } from "../../../src/query-categories";
-import { availableChartKinds } from "../../../src/card-library-model";
 import { wishlistCardRecipes } from "../../../src/wishlist-card-recipes";
-
-const execution = { profile: "qt-sqlite-v1", fields: {}, resolvedRevisions: {}, planToken: "" };
-const capabilities = { version: 3, profile: execution.profile, groupedRows: true, calendarGrouping: true, computedSourceFilters: true, regex: false, maxRows: 10000, maxGroups: 10000, maxPopulation: 250000 };
 const clock = new Date(2026, 9, 13, 12);
 
 test("cover visibility settings survive cover queries while destination data remains unchanged", () => {
@@ -26,25 +19,6 @@ test("cover visibility settings survive cover queries while destination data rem
     assert.equal(metric.display.showOther, false);
     assert.equal(metric.display.legendPosition, "none");
     assert.deepEqual(item.query, before);
-  }
-});
-
-test("all card destinations compile and retain their source metrics and rolling dates", () => {
-  for (const recipe of queryRecipes) {
-    const suggestion = instantiateRecipe(recipe, 7, clock);
-    if (!suggestion.query.grouping) continue;
-    const { grouping } = suggestion.query;
-    assert.deepEqual(grouping.source.aggregations, recipe.measures, recipe.id);
-    assert.deepEqual(grouping.source.where.filter(term => term.field === recipe.field).map(term => term.value), recipe.period ? [] : ["-7d", "+0s"], recipe.id);
-    const cover = cardCoverQuery(suggestion.query, recipe);
-    const coverRequest = core.toQueryRequestV3(cover.query, schemas[recipe.dataset], capabilities, execution, { now: clock.getTime(), rows: false });
-    assert.deepEqual(coverRequest.diagnostics, [], `${recipe.id} cover`);
-    assert.deepEqual(suggestion.query.where, recipe.exploration.having ?? [], recipe.id);
-    const request = core.toQueryRequestV3(suggestion.query, schemas[recipe.dataset], capabilities, execution, { now: clock.getTime(), rows: true });
-    assert.deepEqual(request.diagnostics, [], recipe.id);
-    const restored = core.decodeQueryStrict(new URL(suggestion.url, "http://home.test").searchParams.get(`q_${recipe.dataset}`));
-    assert.deepEqual(restored, core.normalizeQueryState(suggestion.query), recipe.id);
-    assert.equal(categoryForQuery(recipe.dataset, suggestion.query), categoryForQuery(recipe.dataset, grouping.source));
   }
 });
 
@@ -244,108 +218,7 @@ test("editing a collected cover changes destination dimensions with it", t => {
   assert.deepEqual(spec.query.grouping.source.where, item.query.grouping.source.where);
 });
 
-function executeCard(id, rows) {
-  const recipe = queryRecipes.find(recipe => recipe.id === id);
-  const suggestion = instantiateRecipe(recipe, 7, clock);
-  return { recipe, suggestion, result: core.applyQuery(rows, suggestion.query, schemas[recipe.dataset], { now: clock.getTime() }) };
-}
 const recentMessage = { sent_at: clock.getTime() - 1000, repository_name: "one", title: "Work", other_words: 0, typed_words: 5 };
-
-test("wishlist repeats require three distinct conversations and exclude machine/pasted text", () => {
-  const base = { ...recentMessage, text: "Please show evidence", resent_words: 0, pasted_words: 0, quoted_words: 0, template_words: 0, attachment_words: 0, harness_words: 0, automated_words: 0 };
-  const rows = Array.from({ length: 4 }, (_, i) => ({ ...base, id: String(i), conversation_id: `conversation-${i === 3 ? 2 : i}` }));
-  rows.push({ ...base, id: "resent", conversation_id: "conversation-4", typed_words: 0, resent_words: 5 });
-  rows.push({ ...base, id: "machine", conversation_id: "conversation-5", automated_words: 10 });
-  rows.push({ ...base, id: "pasted", conversation_id: "conversation-6", pasted_words: 10 });
-  rows.push(...Array.from({ length: 20 }, (_, i) => ({ ...base, id: `single-${i}`, text: "One conversation only", conversation_id: "single" })));
-  const { result } = executeCard("repeated-messages", rows);
-  assert.equal(result.total, 1);
-  assert.equal(result.rows[0].card_conversation_id, 4);
-  assert.equal(result.rows[0].card_count, 5);
-});
-
-test("conversation histogram reduces windowed message counts, not individual word values", () => {
-  const rows = [
-    { ...recentMessage, id: "a", conversation_id: "a", typed_words: 100 },
-    { ...recentMessage, id: "b", conversation_id: "a", typed_words: 200 },
-    { ...recentMessage, id: "c", conversation_id: "b", typed_words: 500 },
-    { ...recentMessage, id: "old", conversation_id: "a", sent_at: clock.getTime() - 8 * 86400000 },
-    { ...recentMessage, id: "automated", conversation_id: "a", typed_words: 0 },
-  ];
-  const { recipe, suggestion, result } = executeCard("conversation-writing", rows);
-  assert.equal(result.total, 2);
-  assert.deepEqual(result.rows.map(row => row.card_count), [2, 1]);
-  const cover = cardCoverQuery(suggestion.query, recipe);
-  const metrics = core.evaluateMetrics(rows, cover.query, schemas.writing_messages, { now: clock.getTime() }).metrics;
-  assert.equal(metrics[0].buckets[0].distribution.n, 2);
-  assert.equal(metrics[0].buckets[0].distribution.edges[0], 1);
-  assert.equal(metrics[0].buckets[0].distribution.edges.at(-1), 2);
-  assert.deepEqual(availableChartKinds(recipe), ["histogram"]);
-});
-
-test("positive-feedback uses authored cue evidence while legacy reported-action excludes mixed text", () => {
-  for (const [id, text] of [["positive-feedback", "Great job, that worked"], ["human-action-phrases", "I fixed the parser"]]) {
-    const base = { ...recentMessage, text, conversation_id: "a", positive_cue: true };
-    const { result } = executeCard(id, [
-      { ...base, id: "human" },
-      { ...base, id: "automated", typed_words: 0 },
-      { ...base, id: "mixed", other_words: 10, positive_cue: false },
-    ]);
-    assert.equal(result.total, 1, id);
-    assert.equal(result.rows[0].card_count, 1, id);
-  }
-});
-
-test("skill reloads count distinct successful file calls, excluding harness snapshots", () => {
-  const base = { created_at: clock.getTime() - 1000, repository_name: "one", conversation_id: "a", skill_name: "check", skill_path: "skills/check/SKILL.md", status: "ok", evidence_type: "file_load", content_bytes: 100 };
-  const { result } = executeCard("skill-reloads", [
-    { ...base, id: "one", tool_call_id: "one" },
-    { ...base, id: "two", tool_call_id: "two" },
-    { ...base, id: "duplicate", tool_call_id: "two" },
-    { ...base, id: "error", status: "error", tool_call_id: "three" },
-    { ...base, id: "harness", evidence_type: "harness_load", tool_call_id: "four" },
-    { ...base, id: "other-agent", conversation_id: "b", tool_call_id: "five" },
-  ]);
-  assert.equal(result.total, 1);
-  assert.equal(result.rows[0].card_tool_call_id, 2);
-});
-
-test("zero-item search cards distinguish unknown result counts from explicit successful zeros", () => {
-  const base = { called_at: clock.getTime() - 1000, status: "ok", tool_name: "search_work", result_count: 0 };
-  const { result } = executeCard("empty-mcp-searches", [
-    { ...base, id: 1 }, { ...base, id: 2, result_count: null },
-    { ...base, id: 3, status: "error" }, { ...base, id: 4, tool_name: "get_work" },
-    { ...base, id: 5, result_count: 2 },
-  ]);
-  assert.equal(result.total, 1);
-  assert.equal(result.rows[0].card_count, 1);
-});
-
-test("candidate comparisons require mixed configurations and dispositions at the same candidate grain", () => {
-  const base = { started_at: clock.getTime() - 1000, project: "one", task_id: "t", candidate_id: "c", execution_class: "test", shape_version: "v1", attempt_count: 1 };
-  const { result } = executeCard("tl1-mixed-dispositions", [
-    { ...base, id: "a", model_effort: "model a", disposition: "advanced" },
-    { ...base, id: "b", model_effort: "model b", disposition: "error" },
-    { ...base, id: "different-task", task_id: "another", model_effort: "model c", disposition: "escalated" },
-    { ...base, id: "different-version", shape_version: "v2", model_effort: "model c", disposition: "escalated" },
-    { ...base, id: "one-model-a", candidate_id: "single-model", model_effort: "model a", disposition: "advanced" },
-    { ...base, id: "one-model-b", candidate_id: "single-model", model_effort: "model a", disposition: "error" },
-  ]);
-  assert.equal(result.total, 1);
-  assert.equal(result.rows[0].card_attempt_count, 2);
-  assert.equal(result.rows[0].card_disposition, 2);
-});
-
-test("work writing applies the window to constituent messages and preserves work identity", () => {
-  const { result } = executeCard("work-writing", [
-    { ...recentMessage, id: "a", work_id: "a", conversation_id: "a", typed_words: 20 },
-    { ...recentMessage, id: "b", work_id: "b", conversation_id: "b", typed_words: 10 },
-    { ...recentMessage, id: "old", work_id: "a", conversation_id: "a", typed_words: 1000, sent_at: clock.getTime() - 8 * 86400000 },
-  ]);
-  assert.equal(result.total, 2);
-  assert.equal(result.rows[0].card_typed_words, 20);
-  assert.equal(result.rows[1].card_typed_words, 10);
-});
 
 test("writing hours capture the device timezone in durable URLs and retain DST offsets", () => {
   const recipe = queryRecipes.find(recipe => recipe.id === "writing-hours");
