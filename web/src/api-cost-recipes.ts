@@ -21,6 +21,14 @@ const workKeys = ["root_repository_name", "root_conversation_id"];
 const workSummaries = [cost, tokens, title];
 
 export const apiCostRecipes: QueryRecipe[] = [
+  {
+    id: "provider-cost-share", title: "Provider cost share", description: "Provider share of total API-equivalent cost over the last {days} days, smoothed over 7 days.", category: "cost", idea: "cost-01", dataset: "usage", field: "first_usage_at", days: [90], unit: "USD", scope: "provider",
+    where: [{ field: "cost_usd", op: ">=", value: "0" }],
+    measures: [{ id: "provider-daily-cost", op: "sum", field: "cost_usd", groupBy: ["day", "provider"], groupLimit: 10000, label: "Daily provider API equivalent", display: { kind: "auto", yLabel: "Cost share (%) · 7d average" } }],
+    cover: { mode: "result", metricId: "card_cost_usd", kind: "auto", maxGroups: 15, showOther: true, showLegend: true, showHeadline: false, height: 300, timeline: { rollingPeriods: 7, percent: true } },
+    action: "Explore daily provider costs",
+    note: "Matches Machine Tokens cost share: include all known nonnegative API-equivalent costs, including assumed and partial pricing. Missing costs are excluded. Sum by recorded local day and provider, then average costs over each trailing seven calendar buckets, including zero-activity days, before dividing each provider by the same window’s total cost. The first six buckets use the available days in the selected window. A zero-cost window has no share. Provider attribution follows each usage fact, including delegated usage. Missing providers remain Unspecified; exact Other preserves the denominator. API equivalent is not subscription spend or invoices.",
+  },
   costCard("api-cost-total", "API equivalent this period", "Total recorded API equivalent over the last {days} days, using fully priced positive-token usage facts only.", ["repository_name"], [cost, tokens], "Inspect priced cost totals", {
     idea: "cost-01", exploration: { keys: ["repository_name"], summaries: [cost, tokens], valueField: cost.id, unit: "USD", subjects: "repositories", action: "Inspect priced cost totals", labelFields: ["repository_name"],
       coverMetric: { id: cost.id, op: "sum", field: cost.id, groupBy: [], label: "API equivalent (USD)" } },
