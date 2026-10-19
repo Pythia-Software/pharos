@@ -58,7 +58,7 @@ func metricRequest(specs ...qt.AggSpec) qt.MetricQuery {
 }
 
 func TestGeneratedQuerySchemas(t *testing.T) {
-	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings"} {
+	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "parallelism"} {
 		t.Run(dataset, func(t *testing.T) {
 			doc, err := querySchemaDocument(dataset)
 			if err != nil {
@@ -208,7 +208,7 @@ func TestQueryV2PharosHTTP(t *testing.T) {
 		server.ServeHTTP(w, r)
 		return w
 	}
-	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings"} {
+	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "parallelism"} {
 		t.Run(dataset, func(t *testing.T) {
 			w := call(http.MethodGet, "/api/query/"+dataset+"/capabilities", "")
 			if w.Code != 200 {
