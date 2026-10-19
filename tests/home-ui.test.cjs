@@ -1419,6 +1419,54 @@ test('unavailable saved previews show geometric artwork and reload independently
   } finally { data.holdPreviews = false; for (const pending of data.pending.splice(0)) pending.release(); await browser.close(); }
 });
 
+test('a collected card refreshes on its own, and every card refreshes when a sync finishes or a hidden tab returns', async () => {
+  const healthy = instantiateRecipe(queryRecipes.find(item => item.id === 'tool-failures'), 7);
+  const { browser, page, data } = await setup({ saved: true, preferenceValues: { 'pharos-bookmarks-v1': [{ ...healthy, id: 'healthy', templateId: healthy.instanceId }] } });
+  try {
+    await page.getByRole('button', { name: 'Pause suggestions' }).click();
+    const card = page.locator('.home-collection [data-card-id="query:writing_messages:original-query"]');
+    await card.locator('.query-cover-timeline').waitFor();
+    await page.locator('[data-card-id="healthy"] .query-compact-metric').waitFor();
+    await page.waitForFunction(() => document.querySelector('.home-conveyor').getAttribute('aria-busy') === 'false');
+    await card.hover();
+    const tools = await card.locator('.query-card-tools button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label')));
+    assert.deepEqual(tools, ['Refresh My words', 'Edit My words', 'Remove My words'], 'refresh sits beside edit and remove');
+    await page.evaluate(() => { window.healthyPreview = document.querySelector('[data-card-id="healthy"] .query-compact-metric'); });
+    const url = page.url();
+    data.holdPreviews = true; data.requests.length = 0;
+    await card.getByRole('button', { name: 'Refresh My words' }).click();
+    await card.locator('.query-preview-loading').waitFor();
+    await assertEventually(() => data.pending.length === 1);
+    assert.deepEqual(data.requests.map(request => request.dataset), ['writing_messages'], 'only the refreshed card fetches');
+    assert.equal(await page.evaluate(() => window.healthyPreview === document.querySelector('[data-card-id="healthy"] .query-compact-metric')), true);
+    data.holdPreviews = false; for (const pending of data.pending.splice(0)) pending.release();
+    await card.locator('.query-cover-timeline').waitFor();
+    assert.equal(page.url(), url, 'refreshing stays on Home');
+
+    const tally = () => data.requests.reduce((counts, { dataset }) => ({ ...counts, [dataset]: (counts[dataset] ?? 0) + 1 }), {});
+    data.requests.length = 0;
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent('pharos:data-refresh', { detail: 'sync' })));
+    await assertEventually(() => ['writing_messages', 'tool_calls'].every(dataset => data.requests.some(request => request.dataset === dataset)));
+    await page.waitForFunction(() => document.querySelector('.home-conveyor').getAttribute('aria-busy') === 'false');
+    await page.waitForTimeout(500);
+    const once = tally();
+    // A hidden tab waits until it is shown, then reruns once.
+    const setHidden = hidden => page.evaluate(hidden => { Object.defineProperty(document, 'hidden', { value: hidden, configurable: true }); document.dispatchEvent(new Event('visibilitychange')); }, hidden);
+    await setHidden(true);
+    data.requests.length = 0;
+    for (let i = 0; i < 2; i++) await page.evaluate(() => window.dispatchEvent(new CustomEvent('pharos:data-refresh', { detail: 'sync' })));
+    await page.waitForTimeout(500);
+    assert.deepEqual(data.requests, [], 'a hidden Home does not rerun its cards');
+    await setHidden(false);
+    await assertEventually(() => ['writing_messages', 'tool_calls'].every(dataset => data.requests.some(request => request.dataset === dataset)));
+    await page.waitForFunction(() => document.querySelector('.home-conveyor').getAttribute('aria-busy') === 'false');
+    await page.waitForTimeout(500);
+    assert.deepEqual(tally(), once, 'showing the tab reruns the cards once');
+    await card.locator('.query-cover-timeline').waitFor();
+    assert.deepEqual(data.errors, []);
+  } finally { data.holdPreviews = false; for (const pending of data.pending.splice(0)) pending.release(); await browser.close(); }
+});
+
 test('unavailable library previews reload and cancel retries when the time window changes', async () => {
   const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=cost-repos' });
   try {

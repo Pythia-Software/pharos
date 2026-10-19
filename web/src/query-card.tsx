@@ -87,6 +87,6 @@ export function QueryCard({ id, title, description, actionLabel, url, windowLabe
       : <a className="query-card-open" {...linkProps}>{cover}{caption}</a>}
     {xray ? onReveal ? <button type="button" className="query-xray-open" aria-label={`Bring ${title} into view`} title="Bring into view" onClick={onReveal} /> : null
       : discovery ? onKeep ? <button className="query-keep" type="button" aria-label={`Collect ${title}`} title="Add to your collection" onClick={onKeep}><Icon name="plus" /></button> : null
-      : <span className="query-card-tools"><button type="button" aria-label={`Edit ${title}`} title="Edit saved view" onClick={onEdit}><Icon name="edit" /></button><button type="button" aria-label={`Remove ${title}`} title="Remove from collection" onClick={onRemove}><Icon name="close" /></button></span>}
+      : <span className="query-card-tools">{onReload ? <button type="button" aria-label={`Refresh ${title}`} title="Refresh this card" onClick={onReload}><Icon name="refresh" /></button> : null}<button type="button" aria-label={`Edit ${title}`} title="Edit saved view" onClick={onEdit}><Icon name="edit" /></button><button type="button" aria-label={`Remove ${title}`} title="Remove from collection" onClick={onRemove}><Icon name="close" /></button></span>}
   </article>;
 }
