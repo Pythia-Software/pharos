@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gbdubs/pharos/pricing"
 )
 
 func rate(value float64) *float64 { return &value }
@@ -135,11 +137,7 @@ func TestUsageAndLibraryRowsCarryCost(t *testing.T) {
 }
 
 func TestPricingFileIsValid(t *testing.T) {
-	data, err := pricingDocumentBytes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, problems := parsePricing(data); len(problems) != 0 {
+	if _, problems := parsePricing(pricing.CostChanges); len(problems) != 0 {
 		t.Fatalf("pricing/cost_changes.json:\n%s", strings.Join(problems, "\n"))
 	}
 }

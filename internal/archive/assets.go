@@ -3,9 +3,9 @@ package archive
 import (
 	"embed"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
+
+	"github.com/gbdubs/pharos/schemas"
 )
 
 // assets contains the existing catalog contract and the existing Pharos UI.
@@ -33,22 +33,11 @@ func uiHTML(source []byte) string {
 }
 
 func querySchemaDocument(name string) ([]byte, error) {
-	path := "assets/query-schemas/" + name + ".schema.json"
-	if value, err := assets.ReadFile(path); err == nil {
-		return value, nil
+	value, err := schemas.Documents.ReadFile(name + ".schema.json")
+	if err != nil {
+		return nil, fmt.Errorf("query-table schema not found: %s", name)
 	}
-	// `macos/build-app.sh` copies the canonical documents into embedded assets.
-	// These fallbacks keep direct `go test` and `go run` useful from the source
-	// tree before that packaging step has run.
-	for _, candidate := range []string{
-		filepath.Join("schemas", name+".schema.json"),
-		filepath.Join("..", "..", "schemas", name+".schema.json"),
-	} {
-		if value, err := os.ReadFile(candidate); err == nil {
-			return value, nil
-		}
-	}
-	return nil, fmt.Errorf("query-table schema not found: %s", name)
+	return value, nil
 }
 
 func queryTableAsset(name string) ([]byte, error) {

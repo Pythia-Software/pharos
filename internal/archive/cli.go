@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gbdubs/pharos/pricing"
 )
 
 func Run(arguments []string) error {
@@ -396,12 +398,13 @@ func runPricingCLI(catalog *Catalog, args []string) error {
 	if len(args) == 0 || args[0] != "check" || len(args) > 2 {
 		return fmt.Errorf("usage: pharos pricing {check [FILE],prompt}")
 	}
-	data, err := pricingDocumentBytes()
+	data := pricing.CostChanges
 	if len(args) == 2 {
-		data, err = os.ReadFile(expandPath(args[1]))
-	}
-	if err != nil {
-		return err
+		file, err := os.ReadFile(expandPath(args[1]))
+		if err != nil {
+			return err
+		}
+		data = file
 	}
 	doc, problems := parsePricing(data)
 	statuses := map[string]int{}

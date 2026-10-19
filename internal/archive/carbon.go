@@ -4,13 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/gbdubs/pharos/carbon"
 	"github.com/gbdubs/pharos/internal/querytable"
 )
 
@@ -102,23 +101,6 @@ type carbonDocument struct {
 	Equivalents    []carbonEquivalent     `json:"equivalents"`
 	Caveats        []string               `json:"caveats"`
 	Sources        []carbonSource         `json:"sources"`
-}
-
-func carbonDocumentBytes() ([]byte, error) {
-	if value, err := assets.ReadFile("assets/carbon/co2_factors.json"); err == nil {
-		return value, nil
-	}
-	// `macos/build-app.sh` copies the canonical file into embedded assets; these
-	// fallbacks keep `go test` and `go run` working from the source tree.
-	for _, candidate := range []string{
-		filepath.Join("carbon", "co2_factors.json"),
-		filepath.Join("..", "..", "carbon", "co2_factors.json"),
-	} {
-		if value, err := os.ReadFile(candidate); err == nil {
-			return value, nil
-		}
-	}
-	return nil, fmt.Errorf("carbon factors file not found: carbon/co2_factors.json")
 }
 
 func parseCarbon(data []byte) (carbonDocument, []string) {
@@ -221,11 +203,7 @@ func validateCarbon(doc carbonDocument) []string {
 }
 
 func loadCarbonDocument() (carbonDocument, error) {
-	data, err := carbonDocumentBytes()
-	if err != nil {
-		return carbonDocument{}, err
-	}
-	doc, problems := parseCarbon(data)
+	doc, problems := parseCarbon(carbon.Factors)
 	if len(problems) > 0 {
 		return doc, fmt.Errorf("carbon/co2_factors.json: %s", strings.Join(problems, "; "))
 	}

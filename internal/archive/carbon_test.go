@@ -9,15 +9,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gbdubs/pharos/carbon"
 )
 
 // The shipped factors file must satisfy its own contract.
 func TestCarbonFactorsFileIsValid(t *testing.T) {
-	data, err := carbonDocumentBytes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	doc, problems := parseCarbon(data)
+	doc, problems := parseCarbon(carbon.Factors)
 	if len(problems) > 0 {
 		t.Fatalf("carbon/co2_factors.json:\n%s", strings.Join(problems, "\n"))
 	}
