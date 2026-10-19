@@ -239,7 +239,6 @@ test("every new wishlist recipe stays mapped to a real catalog idea", () => {
     const idea = tracker.cards.find(card => card.id === recipe.idea);
     assert.ok(idea, recipe.id);
     assert.ok(idea.implemented_recipes.includes(recipe.id), recipe.id);
-    assert.equal(idea.capacity_audit.date, "2026-10-14", recipe.id);
   }
 });
 

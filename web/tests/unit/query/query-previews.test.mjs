@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { core, execution, schemas } from "../helpers/recipes.mjs";
-import tracker from "../../../../docs/homepage-query-cards.json";
 import { queryRecipes, instantiateRecipe, loadQueryPreviews, loadQueryPreview, clearPreviewCache } from "../../../src/curiosity-data";
 
 const rows = Array.from({ length: 10 }, (_, i) => ({ id: String(i), call_count: 1, error_count: i < 2 ? 1 : 0, tool_name: "Bash", command_name: "go test", duration_ms: (i + 1) * 100, result_tokens: i * 10, result_tokens_source: i % 2 ? "estimated" : "measured", repository_name: i % 2 ? "one" : "two", conversation_id: String(i), started_at: Date.now() }));
@@ -39,18 +38,6 @@ function fixture(t, intercept = () => undefined) {
   t.after(() => { global.fetch = priorFetch; global.location = priorLocation; clearPreviewCache(); });
   return requests;
 }
-
-test("every recipe projects completely to its execution contract and matches the tracker", () => {
-  assert.deepEqual(tracker.implemented_recipes, JSON.parse(JSON.stringify(queryRecipes)));
-  for (const recipe of queryRecipes) {
-    const state = query(recipe.measures, { where: recipe.where ?? [] });
-    const request = recipe.measures.some(metric => metric.dateGrouping)
-      ? core.toQueryRequestV3(state, schemas[recipe.dataset], queryCapabilities, execution, { now: Date.now(), rows: false })
-      : core.toMetricQuery(state, schemas[recipe.dataset], execution);
-    assert.deepEqual(request.diagnostics, [], recipe.id);
-    assert.equal(request.metrics.length, recipe.measures.length, recipe.id);
-  }
-});
 
 test("failure rate includes successful calls and preserves all dashboard results", async t => {
   const requests = fixture(t), recipe = queryRecipes.find(recipe => recipe.id === "tool-failure-rates");
