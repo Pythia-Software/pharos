@@ -1,3 +1,17 @@
+//go:build probe
+
+// Usage timing probes on an isolated tools/dev.py snapshot. Probes build only
+// with the probe tag, so they stay out of go test ./...:
+//
+//	PHAROS_USAGE_PROBE=<dev library>/catalog/catalog.sqlite3 \
+//	  go test -tags probe -run 'TestUsagePerformance(Preparation|MachineTime)' -v ./internal/archive
+//
+// TestUsagePerformanceGroup also needs PHAROS_USAGE_REQUEST, a V3 request
+// file. TestUsagePerformanceServer serves the snapshot at
+// PHAROS_USAGE_SERVER (a loopback address) until it is interrupted;
+// PHAROS_USAGE_ASSETS serves a checkout's assets and PHAROS_USAGE_TIMING a
+// concurrency prototype file.
+
 package archive
 
 import (

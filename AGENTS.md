@@ -29,8 +29,11 @@ JS unit tests.
   Run only the files for the pages you changed. Several browser files fail
   on master; [docs/testing-survey.md](docs/testing-survey.md) lists them and
   the plan to replace them.
-- **Manual only:** `macos/test/*` (builds the app and mounts disk images) and
-  `tools/*bench*`. Run these only when you change the code they exercise.
+- **Manual only:** `macos/test/*` (builds the app and mounts disk images),
+  `tools/*bench*`, and `tools/test-query-table-fork.sh` (after changing
+  `third_party/query-table-go`). Run these only when you change the code they
+  exercise. Go probes, which time or inspect a real catalog, build only with
+  `-tags probe`; each file's header says how to run it.
 
 ## Writing tests
 

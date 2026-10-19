@@ -1,3 +1,16 @@
+//go:build probe
+
+// Profiles the Tools rollup and findings passes on a consistent scratch
+// replica. Probes build only with the probe tag, so they stay out of
+// go test ./...:
+//
+//	PHAROS_ANALYSIS_REPLICA=/path/to/scratch-backup.sqlite3 \
+//	  go test -tags probe -run TestAnalysisReplica -v -timeout 60m ./internal/archive
+//
+// PHAROS_ANALYSIS_INCREMENTAL=1 profiles the incremental passes instead;
+// with it, PHAROS_ANALYSIS_WARM=1 starts from warm tables and
+// PHAROS_ANALYSIS_PARITY=1 compares the result with a full rebuild.
+
 package archive
 
 import (
@@ -11,8 +24,8 @@ import (
 	"time"
 )
 
-// Opt-in, isolated-process profiling on a consistent scratch replica. Never
-// point this at an installed catalog: it publishes derived analysis tables.
+// Never point this at an installed catalog: it publishes derived analysis
+// tables.
 func TestAnalysisReplica(t *testing.T) {
 	path := os.Getenv("PHAROS_ANALYSIS_REPLICA")
 	if path == "" {

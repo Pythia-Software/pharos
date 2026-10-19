@@ -292,6 +292,21 @@ func settleServer(t testing.TB, server *Server) {
 	}
 }
 
+// toolTextOf is the text of an MCP tools/call response and whether it is an
+// error, whether the response came from handleMCP or was decoded from JSON.
+func toolTextOf(response map[string]any) (string, bool) {
+	result, _ := response["result"].(map[string]any)
+	content, _ := result["content"].([]map[string]any)
+	if len(content) == 0 {
+		if list, ok := result["content"].([]any); ok && len(list) > 0 {
+			item, _ := list[0].(map[string]any)
+			return firstString(item["text"]), result["isError"] == true
+		}
+		return "", true
+	}
+	return firstString(content[0]["text"]), result["isError"] == true
+}
+
 // waitFor runs wait and reports whether it returned within timeout.
 func waitFor(timeout time.Duration, wait func()) bool {
 	done := make(chan struct{})

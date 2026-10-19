@@ -1,3 +1,11 @@
+//go:build probe
+
+// Serves the Library text search UI on synthetic fixtures for two minutes,
+// with no capture or sync background jobs, and prints its URL. Probes build
+// only with the probe tag, so they stay out of go test ./...:
+//
+//	PHAROS_SEARCH_PREVIEW=1 go test -tags probe -run TestTextSearchPreview -v ./internal/archive
+
 package archive
 
 import (
@@ -8,7 +16,6 @@ import (
 	"time"
 )
 
-// Opt-in UI preview uses synthetic fixtures and no capture/sync background jobs.
 func TestTextSearchPreview(t *testing.T) {
 	if os.Getenv("PHAROS_SEARCH_PREVIEW") != "1" {
 		t.Skip("set PHAROS_SEARCH_PREVIEW=1 for a two-minute synthetic UI preview")

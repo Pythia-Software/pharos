@@ -1,3 +1,5 @@
+//go:build probe
+
 package archive
 
 import (
@@ -10,9 +12,12 @@ import (
 
 // TestAuthorshipEvalLiveCatalog classifies a real catalog read-only and
 // writes per-category totals and each message's spans to a JSON file, so rule
-// changes can be compared on real data. It runs only when
-// PHAROS_AUTHORSHIP_EVAL_DB names a catalog and PHAROS_AUTHORSHIP_EVAL_OUT a
-// destination.
+// changes can be compared on real data. It is a probe, built only with the
+// probe tag, and runs only when PHAROS_AUTHORSHIP_EVAL_DB names a catalog and
+// PHAROS_AUTHORSHIP_EVAL_OUT a destination:
+//
+//	PHAROS_AUTHORSHIP_EVAL_DB=… PHAROS_AUTHORSHIP_EVAL_OUT=… \
+//	  go test -tags probe -run TestAuthorshipEvalLiveCatalog -v ./internal/archive
 func TestAuthorshipEvalLiveCatalog(t *testing.T) {
 	path, out := os.Getenv("PHAROS_AUTHORSHIP_EVAL_DB"), os.Getenv("PHAROS_AUTHORSHIP_EVAL_OUT")
 	if path == "" || out == "" {

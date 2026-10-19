@@ -1,3 +1,5 @@
+//go:build probe
+
 package archive
 
 import (
@@ -16,10 +18,11 @@ import (
 
 // TestMCPLatencyReport measures MCP request latency on a synthetic catalog,
 // forwarded to a running service and opened directly per request. It is slow
-// and needs disk space, so it runs only with PHAROS_MCP_BENCH set to a
-// directory, which keeps the generated library between runs:
+// and needs disk space, so it is a probe, built only with the probe tag, and
+// runs only with PHAROS_MCP_BENCH set to a directory, which keeps the
+// generated library between runs:
 //
-//	PHAROS_MCP_BENCH=/tmp/pharos-mcp-bench go test ./internal/archive -run MCPLatency -v -timeout 60m
+//	PHAROS_MCP_BENCH=/tmp/pharos-mcp-bench go test -tags probe ./internal/archive -run MCPLatency -v -timeout 60m
 //
 // PHAROS_MCP_BENCH_WORKSPACES sizes it (default 2000 workspaces of 4
 // conversations of 60 messages).
@@ -134,19 +137,6 @@ func TestMCPLatencyReport(t *testing.T) {
 		lines = append(lines, fmt.Sprintf("| %s | %v | %v | %v |", label(request), inService.Round(time.Microsecond*100), forwarded.Round(time.Microsecond*100), direct.Round(time.Microsecond*100)))
 	}
 	t.Log("median of 9 runs; the first direct call also checks the volume\n" + strings.Join(lines, "\n"))
-}
-
-func toolTextOf(response map[string]any) (string, bool) {
-	result, _ := response["result"].(map[string]any)
-	content, _ := result["content"].([]map[string]any)
-	if len(content) == 0 {
-		if list, ok := result["content"].([]any); ok && len(list) > 0 {
-			item, _ := list[0].(map[string]any)
-			return firstString(item["text"]), result["isError"] == true
-		}
-		return "", true
-	}
-	return firstString(content[0]["text"]), result["isError"] == true
 }
 
 var benchWords = func() []string {
