@@ -70,6 +70,8 @@ type delegationNode struct {
 	ParentEvidence string                      `json:"parent_evidence,omitempty"`
 	ExternalParent *delegationReference        `json:"external_parent,omitempty"`
 	ExternalChild  *delegationReference        `json:"external_child,omitempty"`
+	Navigation     *delegationReference        `json:"navigation,omitempty"`
+	ContextOnly    bool                        `json:"context_only,omitempty"`
 	MessageID      string                      `json:"message_id,omitempty"`
 	Label          string                      `json:"label"`
 	Provider       string                      `json:"provider"`
@@ -426,6 +428,9 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 			}
 		}
 	}
+	if err := loadDelegationAncestors(ctx, tx, s, roots); err != nil {
+		return nil, err
+	}
 	for _, n := range s.Nodes {
 		seen := map[string]bool{n.ID: true}
 		for p := s.ByID[n.ParentID]; p != nil; p = s.ByID[p.ParentID] {
@@ -636,6 +641,10 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 		}
 	}
 	for _, n := range s.Nodes {
+		if n.ContextOnly {
+			n.ChildCount = len(n.children)
+			continue
+		}
 		if v := n.Self["cost"]; v.Value != nil {
 			v.Quality = "estimated"
 			if priceStatus[n.ID] == "partial" || priceStatus[n.ID] == "unpriced" {
@@ -753,8 +762,7 @@ func (c *Catalog) readDelegationSnapshot(ctx context.Context, workspace string) 
 	}
 	walk(s.Roots, 0, "")
 	s.Nodes = ordered
-	s.Totals = delegationAggregate(s.Nodes)
-	s.Totals["children"] = delegationNumber(float64(len(s.Nodes)-len(s.Roots)), "observed", len(s.Nodes), len(s.Nodes))
+	s.Totals = delegationWorkspaceTotals(s.Nodes)
 	for _, n := range s.Nodes {
 		for _, m := range delegationMetrics {
 			for scope, values := range map[string]map[string]delegationMetric{"self": n.Self, "all": n.All} {
@@ -820,6 +828,29 @@ func delegationDescendants(n *delegationNode) []*delegationNode {
 	}
 	return out
 }
+
+// Incoming ancestors explain ownership but are not executions accounted in
+// this workspace. Outside descendants retain their existing partial coverage.
+func delegationWorkspaceTotals(nodes []*delegationNode) map[string]delegationMetric {
+	included := []*delegationNode{}
+	ids := map[string]bool{}
+	for _, n := range nodes {
+		if !n.ContextOnly {
+			included = append(included, n)
+			ids[n.ID] = true
+		}
+	}
+	totals := delegationAggregate(included)
+	children := 0
+	for _, n := range included {
+		if ids[n.ParentID] {
+			children++
+		}
+	}
+	totals["children"] = delegationNumber(float64(children), "observed", len(included), len(included))
+	return totals
+}
+
 func delegationAggregate(nodes []*delegationNode) map[string]delegationMetric {
 	result := map[string]delegationMetric{}
 	for _, spec := range delegationMetrics {
@@ -1011,10 +1042,10 @@ func (s *Server) getDelegation(w http.ResponseWriter, r *http.Request, workspace
 				included = append(included, n)
 			}
 		}
-		totals = delegationAggregate(included)
+		totals = delegationWorkspaceTotals(included)
 		childCount := 0
 		for _, n := range included {
-			if snapshot.ByID[n.ParentID] != nil {
+			if parent := snapshot.ByID[n.ParentID]; !n.ContextOnly && parent != nil && !parent.ContextOnly {
 				childCount++
 			}
 		}
@@ -1130,7 +1161,11 @@ func (s *Server) getDelegation(w http.ResponseWriter, r *http.Request, workspace
 			focus = append(focus, n)
 		}
 	}
+	sessionCount := 0
 	for _, n := range snapshot.Nodes {
+		if !n.ContextOnly {
+			sessionCount++
+		}
 		if n.ConversationID == q.Get("conversation") {
 			addFocus(n)
 			addFocus(snapshot.ByID[n.ParentID])
@@ -1143,7 +1178,7 @@ func (s *Server) getDelegation(w http.ResponseWriter, r *http.Request, workspace
 	for _, n := range append(append([]*delegationNode{}, page...), ancestors...) {
 		pageMatches[n.ID] = matched[n.ID]
 	}
-	writeJSON(w, map[string]any{"focus": focus, "focus_truncated": focusTruncated, "snapshot": snapshot.ID, "rows": page, "ancestors": ancestors, "ancestors_truncated": ancestorsTruncated, "matched": pageMatches, "total": len(nodes), "session_count": len(snapshot.Nodes), "offset": offset, "next_cursor": next, "metrics": delegationMetrics, "maxima": snapshot.Maxima, "totals": totals, "start": snapshot.Start, "end": snapshot.End, "density": snapshot.Density, "warnings": snapshot.Warnings}, 200)
+	writeJSON(w, map[string]any{"focus": focus, "focus_truncated": focusTruncated, "snapshot": snapshot.ID, "rows": page, "ancestors": ancestors, "ancestors_truncated": ancestorsTruncated, "matched": pageMatches, "total": len(nodes), "session_count": sessionCount, "offset": offset, "next_cursor": next, "metrics": delegationMetrics, "maxima": snapshot.Maxima, "totals": totals, "start": snapshot.Start, "end": snapshot.End, "density": snapshot.Density, "warnings": snapshot.Warnings}, 200)
 }
 
 type delegationMark struct {
