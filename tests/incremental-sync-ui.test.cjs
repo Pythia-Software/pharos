@@ -16,7 +16,7 @@ test('The header stops spinning when work finishes after leaving Settings', asyn
     for (const kind of ['capture', 'index', 'sync']) {
       const page = await browser.newPage();
       let active = true;
-      let hostReads = 0;
+      let hostReads = 0, idleActivityReads = 0, idleStatusReads = 0;
       await page.route('http://sync.test/**', route => {
         const url = new URL(route.request().url());
         const json = body => route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) });
@@ -25,13 +25,13 @@ test('The header stops spinning when work finishes after leaving Settings', asyn
           return route.fulfill({ contentType: file.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.existsSync(file) ? fs.readFileSync(file) : '' });
         }
         if (!url.pathname.startsWith('/api/')) return route.fulfill({ contentType: 'text/html', body: html });
-        if (url.pathname === '/api/library/status') return json({ portable: true, idle: !active, drive: { name: 'Replica SSD', mounted: true, ejectable: false }, activities: active ? [{ kind, label: 'Indexing sources' }] : [] });
+        if (url.pathname === '/api/library/status') { if (!active) idleStatusReads++; return json({ portable: true, idle: !active, drive: { name: 'Replica SSD', mounted: true, ejectable: false }, activities: active ? [{ kind, label: 'Indexing sources' }] : [] }); }
         if (url.pathname === '/api/index') {
           hostReads++;
           return json({ active: active && kind === 'index', sync_active: active && kind === 'sync', hosts: [] });
         }
         if (url.pathname === '/api/capture') return json({ active: active && kind === 'capture', runs: [] });
-        if (url.pathname === '/api/activity') return json({ runs: active && kind !== 'capture' ? [{ id: 'external', kind: 'automatic-sync', state: 'running', phase: 'checking' }] : [] });
+        if (url.pathname === '/api/activity') { if (!active) idleActivityReads++; return json({ runs: active && kind !== 'capture' ? [{ id: 'external', kind: 'automatic-sync', state: 'running', phase: 'checking' }] : [] }); }
         if (url.pathname === '/api/sources') return json({ enabled: 2, configured: 2, items: [] });
         if (url.pathname === '/api/sync/status') return json({ settings: { enabled: false, interval_seconds: 300 }, busy: active, history: [], issues: [] });
         if (url.pathname === '/api/sync/issues') return json({ issues: [] });
@@ -51,10 +51,16 @@ test('The header stops spinning when work finishes after leaving Settings', asyn
       await page.evaluate(() => window.pharosLibrary.refreshSettings());
       const readsBeforeFinish = hostReads;
       active = false;
-      await page.evaluate(async () => {
-        await window.pharosSync.refresh();
-        await window.pharosLibrary.refresh();
-      });
+      // A poll already in flight may have read the running work, and both
+      // refreshes skip or reuse it. Polls run one at a time, so a second idle
+      // read means that stale poll has finished.
+      while (idleActivityReads < 2 || idleStatusReads < 2) {
+        await page.evaluate(async () => {
+          await window.pharosSync.refresh();
+          await window.pharosLibrary.refresh();
+        });
+        await page.waitForTimeout(25);
+      }
       await page.locator('#pharosDrive').click();
       await page.getByRole('dialog', { name: 'Library drive' }).getByText('Nothing is running.', { exact: true }).waitFor();
       assert.equal(await page.locator('#headerSync').getAttribute('aria-busy'), 'false', `${kind}: the spinner follows current drive activity`);
@@ -63,6 +69,48 @@ test('The header stops spinning when work finishes after leaving Settings', asyn
       assert.equal(hostReads, readsBeforeFinish, `${kind}: the cached settings snapshot was not refreshed`);
       await page.close();
     }
+  } finally { await browser.close(); }
+});
+
+test('Home cards refresh only when a finished run indexed something', async () => {
+  const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  try {
+    const page = await browser.newPage();
+    let runs = [], activityReads = 0;
+    await page.route('http://sync.test/**', route => {
+      const url = new URL(route.request().url());
+      const json = body => route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) });
+      if (url.pathname.startsWith('/assets/')) {
+        const file = path.join(root, 'internal/archive/assets', path.basename(url.pathname));
+        return route.fulfill({ contentType: file.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.existsSync(file) ? fs.readFileSync(file) : '' });
+      }
+      if (!url.pathname.startsWith('/api/')) return route.fulfill({ contentType: 'text/html', body: html });
+      if (url.pathname === '/api/activity') { activityReads++; return json({ runs }); }
+      if (url.pathname === '/api/sync/status') return json({ settings: { enabled: true, interval_seconds: 60 }, busy: false, history: [], issues: [] });
+      if (url.pathname === '/api/sync/issues') return json({ issues: [] });
+      if (url.pathname === '/api/library/status') return json({ portable: true, idle: true, drive: { name: 'Replica SSD', mounted: true, ejectable: false }, activities: [] });
+      if (url.pathname === '/api/upgrade') return json({ running: false, needed: false, steps: [], repository_renames: {} });
+      return json({ items: [], rows: [], metrics: [], counts: {}, setup: {}, usage: { running: false } });
+    });
+    await page.goto('http://sync.test/library');
+    await page.evaluate(() => { window.dataRefreshes = 0; window.addEventListener('pharos:data-refresh', () => window.dataRefreshes++); });
+    // Two polls after a change guarantee sync.js has read the new runs.
+    const poll = async next => {
+      runs = next; const start = activityReads;
+      while (activityReads < start + 2) { await page.evaluate(() => window.pharosSync.refresh()); await page.waitForTimeout(25); }
+      return page.evaluate(() => window.dataRefreshes);
+    };
+    const run = (id, state, conversations = 0, workspaces = conversations) => ({ id, kind: 'automatic-sync', state, phase: 'checking', conversations, workspaces });
+    assert.equal(await poll([run('quiet', 'running')]), 0);
+    assert.equal(await poll([run('quiet', 'complete')]), 0, 'a run with no changes leaves Home alone');
+    assert.equal(await poll([run('busy', 'running'), run('quiet', 'complete')]), 0);
+    assert.equal(await poll([run('busy', 'complete', 3)]), 1, 'a run that indexed conversations refreshes Home');
+    assert.equal(await poll([run('first', 'running'), run('second', 'running')]), 1);
+    assert.equal(await poll([run('first', 'interrupted', 2), run('second', 'running')]), 2, 'a run finishing beside another still refreshes');
+    assert.equal(await poll([run('first', 'interrupted', 2), run('second', 'complete')]), 2);
+    assert.equal(await poll([run('restarted', 'running')]), 2);
+    assert.equal(await poll([]), 3, 'a run that left the list may have changed data');
   } finally { await browser.close(); }
 });
 
@@ -133,9 +181,11 @@ test('Index changes runs the incremental run, shares busy state with a Stop in t
     const group = page.locator('body>header .header-icons > .combo-button');
     assert.deepEqual(await group.locator('> *').evaluateAll(items => items.map(item => item.id)), ['pharosDrive', 'headerSync']);
     assert.deepEqual(await page.evaluate(() => { const style = getComputedStyle(document.getElementById('headerSync')); return [style.borderTopRightRadius, style.borderBottomRightRadius]; }), ['4px', '4px']);
+    await page.evaluate(() => { window.dataRefreshes = []; window.addEventListener('pharos:data-refresh', event => window.dataRefreshes.push(event.detail)); });
     await page.locator('#pharosDrive').click();
     await page.getByRole('dialog', { name: 'Library drive' }).getByRole('button', { name: 'Stop' }).click();
     await page.waitForFunction(() => !document.getElementById('headerSync').disabled);
+    assert.deepEqual(await page.evaluate(() => window.dataRefreshes), ['sync'], 'a finished run refreshes Home cards once');
     assert.equal(await page.locator('#headerSyncStop').count(), 0);
     const drivePanel = page.getByRole('dialog', { name: 'Library drive' });
     assert.equal(await drivePanel.locator('.sync-menu').count(), 0);

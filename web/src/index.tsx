@@ -313,6 +313,16 @@ const renderers: RenderRegistry<Row> = {
         : <span key={`${pr.host}:${pr.number}:${index}`} title={label}>{label}</span>;
     })}</span>;
   },
+  conversation_link(context: CellContext<Row>) {
+    const id = String(context.value ?? "");
+    if (!id || shared) return defaultRenderers.text(context);
+    return <a className="qt-conversation-link" href={`/conversation/${encodeURIComponent(id)}`} title={`Open conversation ${id}`} onClick={event => {
+      event.stopPropagation();
+      if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      void openConversation(id);
+    }}>{id}</a>;
+  },
   main_integration({ row }: CellContext<Row>) { return mainIntegration(row); },
   run_state({ value }: CellContext<Row>) {
     const state = String(value ?? "unknown");
@@ -714,6 +724,19 @@ function openFindHit(hit: FindHit) {
   if (hit.message_id) params.set("message", hit.message_id);
   history.pushState(null, "", `/work/${encodeURIComponent(hit.workspace_id)}${params.size ? `?${params}` : ""}`);
   (window as unknown as { routeFromLocation?: () => void }).routeFromLocation?.();
+}
+
+// Conversation ID cells link to /conversation/{id}, which the service
+// redirects to the conversation within its work; a plain click resolves the
+// same route in place.
+async function openConversation(id: string) {
+  const fallback = `/conversation/${encodeURIComponent(id)}`;
+  try {
+    const [resolved] = await relationships.resolve([{ objectType: "pharos_conversations", key: { id } }]);
+    if (!resolved?.href) { location.assign(fallback); return; }
+    history.pushState(null, "", resolved.href);
+    (window as unknown as { routeFromLocation?: () => void }).routeFromLocation?.();
+  } catch { location.assign(fallback); }
 }
 
 function findHitLabel(hit: FindHit): string {
