@@ -509,6 +509,73 @@ func TestQueryTempStorageLease(t *testing.T) {
 	}
 }
 
+// Metrics answered without staging read in a plain transaction, on one pooled
+// connection; anything the adapter executes still leases memory-backed
+// temporary storage.
+func TestQueryV2LeasesTempStorageOnlyToStage(t *testing.T) {
+	catalog, config := testCatalog(t)
+	seedToolCalls(t, catalog, 30)
+	ingestUsageFixture(t, catalog)
+	if err := catalog.ensureToolRollup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	server := testServer(t, config, catalog)
+	pool := catalog.reader()
+	previous := pool.Stats().MaxOpenConnections
+	t.Cleanup(func() { pool.SetMaxOpenConns(previous) })
+	leases := 0
+	override(t, &leaseQueryV2, func(ctx context.Context, db *sql.DB) (*sql.Tx, func() error, error) {
+		leases++
+		tx, release, err := beginQueryV2(ctx, db)
+		var mode int
+		if err == nil && (tx.QueryRow("PRAGMA temp_store").Scan(&mode) != nil || mode != 2) {
+			t.Errorf("staged work without memory-backed temporary storage: temp_store=%d", mode)
+		}
+		return tx, release, err
+	})
+	machine := []string{"repository_name", "activity", "day", "status", "operation_key", "operation_name", "tool_name", "mcp_server"}
+	for _, sample := range []struct {
+		name, dataset string
+		q             qt.MetricQuery
+		staged        bool
+	}{
+		{"a bare count", "tool_calls", metricRequest(qt.AggSpec{ID: "n", Op: "count"}), false},
+		{"a Machine Time cube", "tool_calls", metricRequest(qt.AggSpec{ID: "time", Op: "sum", Field: "duration_ms", GroupBy: machine}), false},
+		{"native tool sums", "tool_calls", metricRequest(qt.AggSpec{ID: "calls", Op: "sum", Field: "call_count", GroupBy: []string{"tool_name"}}), false},
+		{"Usage in memory", "usage", metricRequest(qt.AggSpec{ID: "tokens", Op: "sum", Field: "total_tokens", GroupBy: []string{"week"}}, qt.AggSpec{ID: "sessions", Op: "count_distinct", Field: "agent_session_id"}), false},
+		{"an average", "tool_calls", metricRequest(qt.AggSpec{ID: "mean", Op: "avg", Field: "duration_ms"}), true},
+		{"filtered Usage", "usage", func() qt.MetricQuery {
+			q := metricRequest(qt.AggSpec{ID: "tokens", Op: "sum", Field: "total_tokens", GroupBy: []string{"week"}})
+			q.Where = []qt.WhereTerm{{Field: "total_tokens", Op: ">", Value: "1"}}
+			return q
+		}(), true},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			schema, _ := sqliteQuerySchema(sample.dataset)
+			for _, connections := range []int{previous, 1} {
+				// One pooled connection is enough: nothing reads beside the transaction.
+				pool.SetMaxOpenConns(connections)
+				leases = 0
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				result, err := server.executeQueryV2(ctx, sample.dataset, nil, schema, nil, &sample.q)
+				cancel()
+				if err != nil {
+					t.Fatal(connections, err)
+				}
+				for _, metric := range result.Metrics.Metrics {
+					if metric.Error != "" || len(metric.Buckets) == 0 {
+						t.Fatalf("%d connections: %+v", connections, metric)
+					}
+				}
+				if staged := leases > 0; staged != sample.staged {
+					t.Fatalf("%d connections: leased temporary storage %d times", connections, leases)
+				}
+			}
+			pool.SetMaxOpenConns(previous)
+		})
+	}
+}
+
 // TestQueryMetadataQueue: metadata scans (distinct values, field stats) wait
 // in one queue. A scan's deadline starts when it leaves the queue, a
 // cancelled request stops waiting, and foreground queries do not wait at all.

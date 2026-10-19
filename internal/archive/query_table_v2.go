@@ -566,6 +566,10 @@ func (s *Server) postQueryV2(w http.ResponseWriter, r *http.Request, dataset, op
 	}
 }
 
+// leaseQueryV2 is how executeStagedQueryV2 begins its transaction. Tests
+// wrap it to see which requests lease temporary storage.
+var leaseQueryV2 = beginQueryV2
+
 // Bounded v2 populations use memory-backed temporary relations. Keep this
 // setting on the leased connection only; restore it before returning the pool
 // connection or performing host enrichment.
@@ -963,7 +967,7 @@ func (s *Server) metricsWithoutStaging(ctx context.Context, dataset string, tabl
 // transaction leasing memory-backed temporary storage for the adapter's
 // staging, and releases it before the caller enriches the rows.
 func (s *Server) executeStagedQueryV2(ctx context.Context, dataset string, table sqlDataset, sqlBacked bool, d qt.SQLiteV2Dataset, rowRequest *qt.ServerQueryV2, metrics *qt.MetricQuery, options qt.PlanOptions, bounds map[string][2]string, sourceRows, usageHours []map[string]any, sourceNames []string, out *queryV2ExecutionResult, populationLimit ...int) error {
-	tx, release, err := beginQueryV2(ctx, s.Catalog.reader())
+	tx, release, err := leaseQueryV2(ctx, s.Catalog.reader())
 	if err != nil {
 		return err
 	}

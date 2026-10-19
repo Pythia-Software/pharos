@@ -83,7 +83,7 @@ func TestNativeMetricsMatchTheAdapter(t *testing.T) {
 				t.Fatalf("%v/%v not answered: %v", groups, where, err)
 			}
 			want, err := d.ExecuteV2(ctx, db, nil, &q, qt.PlanOptions{})
-			if err != nil || !same(got, want) {
+			if err != nil || !identical(got, want) {
 				left, _ := json.Marshal(got)
 				right, _ := json.Marshal(want)
 				t.Fatalf("%v/%v: %v\n got %s\nwant %s", groups, where, err, left, right)
@@ -97,7 +97,7 @@ func TestNativeMetricsMatchTheAdapter(t *testing.T) {
 	q := metricRequest(qt.AggSpec{ID: "kinds", Op: "count", GroupBy: []string{"kind"}}, qt.AggSpec{ID: "rows", Op: "count"})
 	got, handled, err := native(budgeted, q)
 	want, wantErr := budgeted.ExecuteV2(ctx, db, nil, &q, qt.PlanOptions{})
-	if err != nil || wantErr != nil || !handled || !same(got, want) || got.Metrics.Metrics[0].Error == "" {
+	if err != nil || wantErr != nil || !handled || !identical(got, want) || got.Metrics.Metrics[0].Error == "" {
 		t.Fatalf("group budget: %v %v %+v %+v", err, wantErr, got.Metrics, want.Metrics)
 	}
 	budgeted = d
@@ -106,6 +106,21 @@ func TestNativeMetricsMatchTheAdapter(t *testing.T) {
 		t.Fatal("population budget ignored")
 	} else if _, wantErr = budgeted.ExecuteV2(ctx, db, nil, &q, qt.PlanOptions{}); wantErr == nil || wantErr.Error() != err.Error() {
 		t.Fatalf("population budget: %v, adapter %v", err, wantErr)
+	}
+	// Requests the adapter refuses as it executes are refused alike: stale
+	// computed revisions, and a window beyond the host's row budget.
+	for name, change := range map[string]func(*qt.MetricQuery){
+		"stale revisions": func(q *qt.MetricQuery) { q.ExpectedRevisions = map[string]string{"missing": "stale"} },
+		"a wide window":   func(q *qt.MetricQuery) { q.Limit = 20_000 },
+	} {
+		q := metricRequest(qt.AggSpec{ID: "n", Op: "count", GroupBy: []string{"kind"}})
+		change(&q)
+		_, handled, err := native(d, q)
+		_, wantErr := d.ExecuteV2(ctx, db, nil, &q, qt.PlanOptions{})
+		// The compiler does not see revisions, so the native path must check them.
+		if wantErr == nil || name == "stale revisions" && !handled || handled && (err == nil || err.Error() != wantErr.Error()) {
+			t.Errorf("%s: %v, adapter %v", name, err, wantErr)
+		}
 	}
 	// Anything the native path cannot answer exactly falls through.
 	for name, spec := range map[string]qt.AggSpec{
@@ -177,22 +192,138 @@ func TestNativeMetricsMatchTheAdapter(t *testing.T) {
 				staged.SourceSQL += " WHERE 0"
 			}
 			want, wantErr := staged.ExecuteV2(ctx, db, nil, &q, qt.PlanOptions{})
-			if err != nil || wantErr != nil || !handled || !same(got, want) {
+			if err != nil || wantErr != nil || !handled || !identical(got, want) {
 				left, _ := json.Marshal(got)
 				right, _ := json.Marshal(want)
 				t.Fatalf("in memory %v over %d rows: %v %v\n got %s\nwant %s", groups, len(population), err, wantErr, left, right)
 			}
 		}
 	}
-	for name, spec := range map[string]qt.AggSpec{
-		"real values": {ID: "x", Op: "sum", Field: "share"}, "an unsafe sum": {ID: "x", Op: "sum", Field: "huge"}, "negative values": {ID: "x", Op: "sum", Field: "signed"},
-	} {
-		if _, handled, err := inMemory(metricRequest(spec), rows); handled || err != nil {
-			t.Errorf("in memory, %s: answered natively (%v)", name, err)
-		}
+	// In memory, reals and negatives are added exactly (see
+	// TestNativeSumsMatchTheAdapterExactly); an unsafe total still falls through.
+	if _, handled, err := inMemory(metricRequest(qt.AggSpec{ID: "x", Op: "sum", Field: "huge"}), rows); handled || err != nil {
+		t.Errorf("in memory, an unsafe sum: answered natively (%v)", err)
 	}
 	if _, handled, _ := inMemory(filtered, rows); handled {
 		t.Error("rows in memory cannot apply a filter")
+	}
+}
+
+// identical compares results exactly: two floats match only if they are the
+// same float64.
+func identical(left, right any) bool {
+	a, _ := json.Marshal(left)
+	b, _ := json.Marshal(right)
+	return string(a) == string(b)
+}
+
+// Usage's sums of other numbers and its distinct counts, in memory, must give
+// the adapter's values exactly: it adds the decimals the values spell and
+// rounds once, which naive float64 addition does not. Each case is compared
+// with the adapter over a staged copy of the same rows, as the Usage path
+// would stage them.
+func TestNativeSumsMatchTheAdapterExactly(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "exact.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if _, err := db.Exec(qt.SQLiteComputedColumnsDDL); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := qt.LoadSQLiteSchema([]byte(`{"name":"usage_like","idField":"id","fields":[
+ {"name":"id","label":"ID","type":"text","bindings":{"sqlite":{"expr":"r.\"id\""}}},
+ {"name":"kind","label":"Kind","type":"text","bindings":{"sqlite":{"expr":"r.\"kind\""}}},
+ {"name":"session","label":"Session","type":"text","bindings":{"sqlite":{"expr":"r.\"session\""}}},
+ {"name":"cost","label":"Cost","type":"number","bindings":{"sqlite":{"expr":"r.\"cost\"","expressionNumeric":true}}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := qt.SQLiteV2Dataset{Schema: schema, Scope: "local", Dataset: "usage_like"}
+	ctx := context.Background()
+	compare := func(name string, rows []map[string]any, specs ...qt.AggSpec) (qt.SQLiteV2ExecutionResult, bool) {
+		t.Helper()
+		tx, release, err := beginQueryV2(ctx, db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer release()
+		q := metricRequest(specs...)
+		got, handled, err := nativeRowMetricsV2(ctx, tx, d, q, qt.PlanOptions{}, rows)
+		if err != nil {
+			t.Fatal(name, err)
+		}
+		staged := d
+		if staged.SourceSQL, err = stageQueryRows(ctx, tx, "exact_rows", rows, schema, []string{"cost", "id", "kind", "session"}); err != nil {
+			t.Fatal(err)
+		}
+		want, err := staged.ExecuteV2In(ctx, tx, nil, &q, qt.PlanOptions{})
+		if err != nil {
+			t.Fatal(name, err)
+		}
+		for _, metric := range want.Metrics.Metrics {
+			for _, bucket := range metric.Buckets {
+				if handled && (metric.Error != "" || bucket.Error != "") {
+					t.Fatalf("%s: answered natively where the adapter reports %q%q", name, metric.Error, bucket.Error)
+				}
+			}
+		}
+		if handled && !identical(got, want) {
+			left, _ := json.Marshal(got)
+			right, _ := json.Marshal(want)
+			t.Fatalf("%s:\n got %s\nwant %s", name, left, right)
+		}
+		return want, handled
+	}
+	row := func(i int, kind, session, cost any) map[string]any {
+		return map[string]any{"id": fmt.Sprint("r", i), "kind": kind, "session": session, "cost": cost}
+	}
+	byKind := []qt.AggSpec{{ID: "cost", Op: "sum", Field: "cost", GroupBy: []string{"kind"}}, {ID: "costs", Op: "count", Field: "cost", GroupBy: []string{"kind"}},
+		{ID: "sessions", Op: "count_distinct", Field: "session", GroupBy: []string{"kind"}}, {ID: "total", Op: "sum", Field: "cost"}, {ID: "all sessions", Op: "count_distinct", Field: "session"}}
+	// Many small fractions, as per-request API costs are.
+	small := []map[string]any{}
+	for i := range 5000 {
+		small = append(small, row(i, []any{"a", "b", "", nil}[i%4], fmt.Sprint("s", i%37), float64(i%997)*0.000173+0.0000031*float64(i%13)))
+	}
+	if _, handled := compare("small fractions", small, byKind...); !handled {
+		t.Fatal("small fractions fell through")
+	}
+	// Ten tenths: naive float64 addition drifts to 0.9999999999999999.
+	tenths := []map[string]any{}
+	naive := 0.0
+	for i := range 10 {
+		tenths = append(tenths, row(i, "a", "s", 0.1))
+		naive += 0.1
+	}
+	want, handled := compare("ten tenths", tenths, byKind...)
+	if !handled || want.Metrics.Metrics[0].Buckets[0].Value != 1.0 || naive == 1.0 {
+		t.Fatalf("ten tenths: handled %v, adapter %v, naive %v", handled, want.Metrics.Metrics[0].Buckets[0].Value, naive)
+	}
+	// Large and small magnitudes, cancellation and NULLs.
+	mixed := []map[string]any{row(0, "a", "s", 2251799813685247.5), row(1, "a", "s", -2251799813685246.25), row(2, "a", nil, 1e-299), row(3, "b", "", 2.5e-250),
+		row(4, "b", "t", nil), row(5, "c", nil, 1e15), row(6, "c", "u", 0.3), row(7, "c", "u", -1e15), row(8, "d", nil, nil), row(9, nil, "", 1e-10), row(10, nil, "v", int64(7)), row(11, "e", "w", 123456789.123456789)}
+	if _, handled := compare("magnitudes", mixed, byKind...); !handled {
+		t.Fatal("magnitudes fell through")
+	}
+	// Distinct counts: text values and the empty string, never NULL.
+	sessions := []map[string]any{row(0, "a", "x", 1.5), row(1, "a", "x", nil), row(2, "a", "", nil), row(3, "a", nil, 0.25), row(4, "b", nil, nil), row(5, "b", "", nil), row(6, "b", "y", 2.0)}
+	if _, handled := compare("distinct sessions", sessions, byKind...); !handled {
+		t.Fatal("distinct sessions fell through")
+	}
+	if _, handled := compare("no rows", nil, byKind...); !handled {
+		t.Fatal("no rows fell through")
+	}
+	// Where the adapter reports an error, the native path leaves the answer to it.
+	for name, rows := range map[string][]map[string]any{
+		"an absolute total beyond safe integers": {row(0, "a", "s", 4503599627370495.5), row(1, "a", "s", 4503599627370495.5), row(2, "a", "s", 0.5)},
+		"a value out of range":                   {row(0, "a", "s", 1e-301)},
+		"an unsafe integer value":                {row(0, "a", "s", 9007199254740992.0)},
+		"text in a number field":                 {row(0, "a", "s", "1.5")},
+		"a number in a text field":               {row(0, "a", int64(3), 1.5)},
+	} {
+		if _, handled := compare(name, rows, byKind...); handled {
+			t.Errorf("%s: answered natively", name)
+		}
 	}
 }
 
@@ -262,7 +393,7 @@ func TestNativeMetricsMatchTheAdapterOnPharosDatasets(t *testing.T) {
 			}
 			override(t, &nativeMetrics, false)
 			want, err := server.executeQueryV2(context.Background(), sample.dataset, nil, schema, nil, &sample.q)
-			if err != nil || !same(got, want) {
+			if err != nil || !identical(got, want) {
 				left, _ := json.Marshal(got.Metrics)
 				right, _ := json.Marshal(want.Metrics)
 				t.Fatalf("%v\n got %s\nwant %s", err, left, right)

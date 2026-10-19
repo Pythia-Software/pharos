@@ -29,12 +29,14 @@ var nativeMetrics = true
 // they need no temporary-table copy. Cross-field metric fusion upstream in
 // Query Table would make it unnecessary.
 //
-// It answers only what it computes exactly as the adapter does: every counted
-// or summed value is a stored integer, each sum's absolute total stays within
-// JavaScript's safe integers (beyond which the adapter reports an error), and
-// every group key is text. Anything else, or any metric beyond a plain count
-// or sum, falls through to the adapter, as does a request the adapter's
-// compiler refuses. It validates the request with the adapter, as
+// It answers only what it computes exactly as the adapter does. In SQLite,
+// every counted or summed value is a stored integer and each sum's absolute
+// total stays within JavaScript's safe integers (beyond which the adapter
+// reports an error). In memory, sums also take other numbers, added exactly
+// as the adapter adds them (see exactSum), and text fields can be counted
+// distinctly. Every group key is text. Anything else, or any metric beyond a
+// plain count, distinct count or sum, falls through to the adapter, as does a
+// request the adapter's compiler refuses. It validates the request with the adapter, as
 // countOnlyMetricsV2 does, and keeps the dataset's population and group
 // budgets.
 
@@ -65,15 +67,18 @@ func (c *Catalog) nativeMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2
 		predicate = " WHERE " + numberQueryParameters(filter.SQL, len(d.SourceArgs))
 	}
 	args := append(append([]any{}, d.SourceArgs...), filter.Args...)
-	return nativeAnswer(ctx, tx, d, q, o, func(keys, fields []string, counted map[string]bool, population int) ([]nativeGroup, int64, bool, error) {
+	return nativeAnswer(ctx, tx, d, q, o, func(keys []string, fields nativeFields, population int) ([]nativeGroup, int64, bool, error) {
+		if len(fields.distinct) > 0 {
+			return nil, 0, false, nil
+		}
 		if table != nil {
 			count := fmt.Sprintf("SELECT COUNT(*) FROM (SELECT 1 FROM (%s) AS r%s LIMIT %d)", d.SourceSQL, predicate, population+1)
-			matched, safe, err := c.nativeTableBounds(ctx, tx, *table, d.Schema, fields, population, count, args)
+			matched, safe, err := c.nativeTableBounds(ctx, tx, *table, d.Schema, fields.names, population, count, args)
 			if err != nil || !safe || matched > int64(population) {
 				return nil, matched, err == nil && matched > int64(population), err
 			}
 		}
-		return nativeGroups(ctx, tx, d.SourceSQL, predicate, args, keys, fields, counted, table == nil)
+		return nativeGroups(ctx, tx, d.SourceSQL, predicate, args, keys, fields.names, fields.counted, table == nil)
 	})
 }
 
@@ -119,9 +124,34 @@ func nativeRowMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2Dataset, q
 		// As stageQueryRows refuses to copy them.
 		return qt.SQLiteV2ExecutionResult{}, true, fmt.Errorf("source population exceeds %d rows", queryTablePopulation)
 	}
-	return nativeAnswer(ctx, tx, d, q, o, func(keys, fields []string, _ map[string]bool, _ int) ([]nativeGroup, int64, bool, error) {
+	return nativeAnswer(ctx, tx, d, q, o, func(keys []string, fields nativeFields, _ int) ([]nativeGroup, int64, bool, error) {
 		groups, ok := nativeRowGroups(rows, keys, fields)
-		return groups, int64(len(rows)), ok, nil
+		if !ok {
+			return nil, 0, false, nil
+		}
+		// A sum of other numbers reaches the page as the adapter's does.
+		fractional := []float64{}
+		for _, group := range groups {
+			for _, value := range group.values {
+				if n, ok := value.sum.(float64); ok {
+					fractional = append(fractional, n)
+				}
+			}
+		}
+		if len(fractional) > 0 {
+			numbers, err := adapterNumbers(ctx, tx, fractional)
+			if err != nil {
+				return nil, 0, false, err
+			}
+			for i := range groups {
+				for j := range groups[i].values {
+					if _, ok := groups[i].values[j].sum.(float64); ok {
+						groups[i].values[j].sum, numbers = numbers[0], numbers[1:]
+					}
+				}
+			}
+		}
+		return groups, int64(len(rows)), true, nil
 	})
 }
 
@@ -132,23 +162,29 @@ type nativeGroup struct {
 }
 
 type nativeValue struct {
-	count int64
-	sum   any // int64, or nil when the group has no value
+	count, distinct int64
+	sum             any // int64 or float64, or nil when the group has no value
+}
+
+// nativeFields are the fields one grouping reads, and how.
+type nativeFields struct {
+	names             []string
+	counted, distinct map[string]bool // fields a metric counts, or counts distinctly
 }
 
 // nativeAnswer validates q with the adapter, reduces each of its groupings
 // with reduce, and fills each metric's result as the adapter would. reduce
 // reports the rows it matched; more than a population fails the request.
 func nativeAnswer(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2Dataset, q qt.MetricQuery, o qt.PlanOptions,
-	reduce func(keys, fields []string, counted map[string]bool, budget int) (groups []nativeGroup, matched int64, ok bool, err error)) (qt.SQLiteV2ExecutionResult, bool, error) {
+	reduce func(keys []string, fields nativeFields, budget int) (groups []nativeGroup, matched int64, ok bool, err error)) (qt.SQLiteV2ExecutionResult, bool, error) {
 	if !nativeMetrics || len(q.Metrics) == 0 {
 		return qt.SQLiteV2ExecutionResult{}, false, nil
 	}
 	// Metrics with the same grouping share one reduction.
 	type grouping struct {
-		keys, fields []string
-		counted      map[string]bool // fields a metric counts, not only sums
-		groups       []nativeGroup
+		keys   []string
+		fields nativeFields
+		groups []nativeGroup
 	}
 	groupings := map[string]*grouping{}
 	order := []string{}
@@ -161,33 +197,45 @@ func nativeAnswer(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2Dataset, q qt.Me
 		signatures[i] = string(signature)
 		g := groupings[signatures[i]]
 		if g == nil {
-			g = &grouping{keys: spec.GroupBy, counted: map[string]bool{}}
+			g = &grouping{keys: spec.GroupBy, fields: nativeFields{counted: map[string]bool{}, distinct: map[string]bool{}}}
 			groupings[signatures[i]] = g
 			order = append(order, signatures[i])
 		}
-		if spec.Field != "" && !slices.Contains(g.fields, spec.Field) {
-			g.fields = append(g.fields, spec.Field)
+		if spec.Field != "" && !slices.Contains(g.fields.names, spec.Field) {
+			g.fields.names = append(g.fields.names, spec.Field)
 		}
 		if spec.Op == "count" && spec.Field != "" {
-			g.counted[spec.Field] = true
+			g.fields.counted[spec.Field] = true
+		}
+		if spec.Op == "count_distinct" {
+			g.fields.distinct[spec.Field] = true
 		}
 	}
 	// Validate as the adapter would, but without running every metric over an
 	// empty source as countOnlyMetricsV2 does, a round trip per metric. Compile
 	// the metrics: a request or metric the compiler refuses falls through, for
-	// the adapter to report. Then run one count over an empty source with the
-	// request's filter, window and revisions.
+	// the adapter to report. The compiler checks the request, its filter and
+	// window. Expected revisions, and the window against the host's row
+	// budget, are checked when the adapter executes, so a request with
+	// revisions, or a window over 10,000 rows, runs one count over an empty
+	// source.
 	empty := (sqlDataset{}).v2Source(d.Schema) + " WHERE 0"
 	plan := o
 	plan.SourceSQL, plan.SourceArgs, plan.ComputedGroupable = empty, nil, d.ComputedGroupable
 	if _, err := qt.CompileSQLiteMetrics(ctx, q, d.Schema, plan); err != nil {
 		return qt.SQLiteV2ExecutionResult{}, ctx.Err() != nil, ctx.Err()
 	}
-	validation, probe := d, q
-	validation.SourceSQL, validation.SourceArgs = empty, nil
-	probe.Metrics = []qt.AggSpec{{ID: "rows", Op: "count"}}
-	if _, err := validation.ExecuteV2In(ctx, tx, nil, &probe, o); err != nil {
-		return qt.SQLiteV2ExecutionResult{}, true, err
+	rows := d.MaxRows
+	if rows == 0 {
+		rows = 10_000
+	}
+	if len(q.ExpectedRevisions) > 0 || len(o.ExpectedRevisions) > 0 || q.Limit > rows {
+		validation, probe := d, q
+		validation.SourceSQL, validation.SourceArgs = empty, nil
+		probe.Metrics = []qt.AggSpec{{ID: "rows", Op: "count"}}
+		if _, err := validation.ExecuteV2In(ctx, tx, nil, &probe, o); err != nil {
+			return qt.SQLiteV2ExecutionResult{}, true, err
+		}
 	}
 	result := qt.SQLiteV2ExecutionResult{Metrics: &qt.SQLiteMetricsV2Result{Metrics: make([]qt.SQLiteMetricV2, len(q.Metrics))}}
 	population, maxGroups := d.MaxPopulation, d.MaxGroups
@@ -202,7 +250,7 @@ func nativeAnswer(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2Dataset, q qt.Me
 		g := groupings[signature]
 		var ok bool
 		var err error
-		if g.groups, matched, ok, err = reduce(g.keys, g.fields, g.counted, population); err != nil || !ok {
+		if g.groups, matched, ok, err = reduce(g.keys, g.fields, population); err != nil || !ok {
 			return qt.SQLiteV2ExecutionResult{}, err != nil, err
 		}
 		if matched > int64(population) {
@@ -217,7 +265,7 @@ func nativeAnswer(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2Dataset, q qt.Me
 			metric.Error = "group population exceeds host budget"
 			continue
 		}
-		column := slices.Index(g.fields, spec.Field)
+		column := slices.Index(g.fields.names, spec.Field)
 		buckets := make([]qt.SQLiteMetricV2Bucket, 0, len(g.groups))
 		for _, group := range g.groups {
 			bucket := qt.SQLiteMetricV2Bucket{Keys: slices.Clone(group.keys), Count: group.rows, Value: float64(group.rows)}
@@ -225,10 +273,17 @@ func nativeAnswer(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2Dataset, q qt.Me
 			case spec.Field == "":
 			case spec.Op == "count":
 				bucket.Value = float64(group.values[column].count)
-			case group.values[column].sum == nil:
-				bucket.Value = nil
+			case spec.Op == "count_distinct":
+				bucket.Value = float64(group.values[column].distinct)
 			default:
-				bucket.Value = float64(group.values[column].sum.(int64))
+				switch sum := group.values[column].sum.(type) {
+				case int64:
+					bucket.Value = float64(sum)
+				case float64:
+					bucket.Value = sum
+				default:
+					bucket.Value = nil
+				}
 			}
 			buckets = append(buckets, bucket)
 		}
@@ -239,14 +294,15 @@ func nativeAnswer(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2Dataset, q qt.Me
 }
 
 // nativeMetric reports whether the native path answers spec: a count of rows,
-// or a count or sum of a number field, over all matching rows, grouped by text
-// or enum fields.
+// a count or sum of a number field, or a distinct count of a text or enum
+// field, over all matching rows, grouped by text or enum fields.
 func nativeMetric(spec qt.AggSpec, schema qt.Schema) bool {
 	if spec.Expression != "" || spec.ExpressionY != "" || spec.Distribution != nil || spec.DateGrouping != nil || len(spec.Sort) > 0 ||
 		spec.GroupLimit != 0 || spec.MinCount != 0 || len(spec.Where) > 0 || len(spec.Diagnostics) > 0 || spec.Scope != "" && spec.Scope != "allMatching" {
 		return false
 	}
-	if !(spec.Op == "count" && spec.Field == "" || (spec.Op == "count" || spec.Op == "sum") && nativeColumn(schema, spec.Field, qt.FieldNumber)) {
+	text := nativeColumn(schema, spec.Field, qt.FieldText) || nativeColumn(schema, spec.Field, qt.FieldEnum)
+	if !(spec.Op == "count" && spec.Field == "" || (spec.Op == "count" || spec.Op == "sum") && nativeColumn(schema, spec.Field, qt.FieldNumber) || spec.Op == "count_distinct" && text) {
 		return false
 	}
 	for _, key := range spec.GroupBy {
@@ -338,12 +394,25 @@ func nativeGroups(ctx context.Context, tx *sql.Tx, source, predicate string, arg
 	return groups, matched, true, nil
 }
 
-// nativeRowGroups is nativeGroups over rows in memory, with the same checks
-// on the values a copy into SQLite would store.
-func nativeRowGroups(rows []map[string]any, keys, fields []string) ([]nativeGroup, bool) {
-	groups := []nativeGroup{}
-	byKey := map[string]int{}
+// nativeRowGroups is nativeGroups over rows in memory, with the checks the
+// adapter makes on the values a copy into SQLite would store. Sums are
+// exact (see exactSum). A distinct count counts text values, the empty string
+// among them, but not NULLs, comparing them byte for byte.
+func nativeRowGroups(rows []map[string]any, keys []string, fields nativeFields) ([]nativeGroup, bool) {
+	type accumulator struct {
+		count    int64
+		sum      exactSum
+		distinct map[string]bool
+	}
+	type group struct {
+		keys   []any
+		rows   int64
+		fields []accumulator
+	}
+	groups := []*group{}
+	byKey := map[string]*group{}
 	var id strings.Builder
+	var digits []byte
 	for _, row := range rows {
 		id.Reset()
 		for _, key := range keys {
@@ -356,44 +425,57 @@ func nativeRowGroups(rows []map[string]any, keys, fields []string) ([]nativeGrou
 				return nil, false
 			}
 		}
-		at, seen := byKey[id.String()]
-		if !seen {
-			group := nativeGroup{keys: make([]any, len(keys)), values: make([]nativeValue, len(fields))}
+		g := byKey[id.String()]
+		if g == nil {
+			g = &group{keys: make([]any, len(keys)), fields: make([]accumulator, len(fields.names))}
 			for i, key := range keys {
-				if group.keys[i] = row[key]; !nativeKey(group.keys[i]) {
+				if g.keys[i] = row[key]; !nativeKey(g.keys[i]) {
 					return nil, false
 				}
 			}
-			at = len(groups)
-			byKey[id.String()] = at
-			groups = append(groups, group)
+			byKey[id.String()] = g
+			groups = append(groups, g)
 		}
-		group := &groups[at]
-		group.rows++
-		for i, field := range fields {
-			var value int64
-			switch v := row[field].(type) {
-			case nil:
+		g.rows++
+		for i, field := range fields.names {
+			value := row[field]
+			if value == nil {
 				continue
-			case int64:
-				value = v
-			case int:
-				value = int64(v)
-			default:
+			}
+			a := &g.fields[i]
+			if fields.distinct[field] {
+				text, ok := value.(string)
+				if !ok || !nativeKey(text) {
+					return nil, false
+				}
+				if a.distinct == nil {
+					a.distinct = map[string]bool{}
+				}
+				a.distinct[text] = true
+				continue
+			}
+			var ok bool
+			if digits, ok = a.sum.add(value, digits); !ok {
 				return nil, false
 			}
-			sum, _ := group.values[i].sum.(int64)
-			if value < 0 || value > 1<<53-1-sum {
-				return nil, false
-			}
-			group.values[i].count++
-			group.values[i].sum = sum + value
+			a.count++
 		}
 	}
 	if len(keys) == 0 && len(groups) == 0 {
-		groups = append(groups, nativeGroup{keys: []any{}, values: make([]nativeValue, len(fields))})
+		groups = append(groups, &group{keys: []any{}, fields: make([]accumulator, len(fields.names))})
 	}
-	return groups, true
+	out := make([]nativeGroup, len(groups))
+	for i, g := range groups {
+		out[i] = nativeGroup{keys: g.keys, rows: g.rows, values: make([]nativeValue, len(fields.names))}
+		for j := range g.fields {
+			sum, ok := g.fields[j].sum.total()
+			if !ok {
+				return nil, false
+			}
+			out[i].values[j] = nativeValue{count: g.fields[j].count, distinct: int64(len(g.fields[j].distinct)), sum: sum}
+		}
+	}
+	return out, true
 }
 
 // nativeKey reports whether a group key is one the adapter keeps as is: a

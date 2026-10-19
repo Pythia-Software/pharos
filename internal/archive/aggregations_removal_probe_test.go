@@ -9,9 +9,11 @@
 // PHAROS_PROBE_ONLY keeps the surfaces whose names contain it. It prints one
 // row per page surface: group counts; for each route its first call and the
 // medians of nine more of wall and process CPU time, the two routes taking
-// turns; the generic V2 executor without the Machine Time accelerator; and
-// whether every bucket matches. On a loaded machine CPU time is the steadier
-// comparison.
+// turns; the generic V2 executor without the Machine Time accelerator;
+// whether every bucket matches legacy (within a relative 1e-6: legacy added
+// floats naively); and whether /metrics is byte for byte the adapter's own
+// answer with the native path turned off. On a loaded machine CPU time is the
+// steadier comparison.
 //
 // TestAggregationsRemovalProbeScaling times single /metrics requests on the
 // same data with few tool calls: Human Words' message mix with 1, 2 and 9
@@ -218,7 +220,7 @@ func TestAggregationsRemovalProbe(t *testing.T) {
 		{"Token summary", "usage", []map[string]any{}, []map[string]any{sum("total_tokens"), sum("cost_usd"), sum("uncached_input_tokens"), sum("cache_read_input_tokens"), sum("output_tokens"), {"id": "agent_sessions", "op": "count_distinct", "field": "agent_session_id", "groupBy": []string{}}}},
 		{"MessageMix", "writing_messages", []map[string]any{}, mix},
 	}
-	report := []string{"| Surface | Groups | Legacy cold / warm / CPU | /metrics cold / warm / CPU | Warm ratio | CPU ratio | Generic V2 (no accelerator) | Values |", "|---|---|---|---|---|---|---|---|"}
+	report := []string{"| Surface | Groups | Legacy cold / warm / CPU | /metrics cold / warm / CPU | Warm ratio | CPU ratio | Generic V2 (no accelerator) | Matches legacy | Identical to adapter |", "|---|---|---|---|---|---|---|---|---|"}
 	for _, s := range surfaces {
 		if only := os.Getenv("PHAROS_PROBE_ONLY"); only != "" && !strings.Contains(s.name, only) {
 			continue
@@ -238,6 +240,24 @@ func TestAggregationsRemovalProbe(t *testing.T) {
 			if difference := compare(s.name, legacy, current); difference != "" {
 				verdict = "DIFFERENT: " + difference
 				t.Errorf("%s: %s", s.name, difference)
+			}
+		}
+		// The native path's answer, byte for byte, against the adapter's own.
+		exact := "n/a"
+		if previous := nativeMetrics; previous {
+			nativeMetrics = false
+			adapter, _, _ := post("/api/query/"+s.dataset+"/metrics", map[string]any{"version": 2, "where": s.where, "orderBy": []any{}, "limit": 1, "offset": 0, "metrics": s.specs})
+			nativeMetrics = previous
+			left, _ := json.Marshal(currentBody["metrics"])
+			right, _ := json.Marshal(adapter["metrics"])
+			switch {
+			case adapter["error"] != nil:
+				exact = "adapter fails"
+			case string(left) == string(right):
+				exact = "yes"
+			default:
+				exact = "NO"
+				t.Errorf("%s: /metrics differs from the adapter", s.name)
 			}
 		}
 		generic := "n/a"
@@ -265,9 +285,9 @@ func TestAggregationsRemovalProbe(t *testing.T) {
 			}
 		}
 		round := func(d time.Duration) time.Duration { return d.Round(100 * time.Microsecond) }
-		line := fmt.Sprintf("| %s | %d / %d | %v / %v / %v | %v / %v / %v | %.2f× | %.2f× | %s | %s |", s.name, groups(legacy), groups(current),
+		line := fmt.Sprintf("| %s | %d / %d | %v / %v / %v | %v / %v / %v | %.2f× | %.2f× | %s | %s | %s |", s.name, groups(legacy), groups(current),
 			round(legacyCold), round(legacyWarm), round(legacyCPU), round(currentCold), round(currentWarm), round(currentCPU),
-			float64(currentWarm)/float64(legacyWarm), float64(currentCPU)/float64(max(legacyCPU, time.Microsecond)), generic, verdict)
+			float64(currentWarm)/float64(legacyWarm), float64(currentCPU)/float64(max(legacyCPU, time.Microsecond)), generic, verdict, exact)
 		report = append(report, line)
 		t.Log(line)
 	}
@@ -300,13 +320,18 @@ func TestAggregationsRemovalProbeScaling(t *testing.T) {
 		types = append(types, map[string]any{"id": field, "op": "sum", "field": field, "groupBy": []string{"hour"}})
 	}
 	bodies["hourtypes"] = map[string]any{"version": 2, "where": []any{}, "orderBy": []any{}, "limit": 1, "offset": 0, "metrics": types}
+	summary := []map[string]any{{"id": "sessions", "op": "count_distinct", "field": "agent_session_id", "groupBy": []string{}}}
+	for _, field := range []string{"total_tokens", "cost_usd", "uncached_input_tokens", "cache_read_input_tokens", "output_tokens"} {
+		summary = append(summary, map[string]any{"id": field, "op": "sum", "field": field, "groupBy": []string{}})
+	}
+	bodies["summary"] = map[string]any{"version": 2, "where": []any{}, "orderBy": []any{}, "limit": 1, "offset": 0, "metrics": summary}
 	names := []string{"mix1", "mix2", "mix", "hourly", "weekly", "hourtypes"}
 	if only := os.Getenv("PHAROS_PROBE_ONLY"); only != "" {
 		names = strings.Split(only, ",")
 	}
 	for _, name := range names {
 		dataset := "writing_messages"
-		if name == "hourly" || name == "weekly" || name == "hourtypes" {
+		if name == "hourly" || name == "weekly" || name == "hourtypes" || name == "summary" {
 			dataset = "usage"
 		}
 		apiCall(t, server, config.APIToken, "POST", "/api/query/"+dataset+"/metrics", bodies[name])
