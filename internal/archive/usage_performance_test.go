@@ -26,7 +26,6 @@ import (
 	"time"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
-	"github.com/gbdubs/pharos/internal/querytable"
 )
 
 // Opt-in probes use a read-only development snapshot, without initialization,
@@ -97,24 +96,25 @@ func TestUsagePerformanceGroup(t *testing.T) {
 	}
 }
 
+// TestUsagePerformanceMachineTime times the all-time monthly fact cube that
+// Machine Time asks /metrics for, as the projection accelerator answers it.
 func TestUsagePerformanceMachineTime(t *testing.T) {
 	c := usagePerformanceCatalog(t)
-	schema, err := (&Server{Catalog: c}).queryTableSchema("tool_calls")
-	if err != nil {
-		t.Fatal(err)
-	}
+	ctx := context.Background()
+	groups := []string{"repository_name", "activity", "month", "status", "operation_key", "operation_name", "tool_name", "mcp_server"}
+	q := metricRequest(qt.AggSpec{ID: "time", Op: "sum", Field: "duration_ms", GroupBy: groups}, qt.AggSpec{ID: "timed", Op: "count", Field: "duration_ms", GroupBy: groups}, qt.AggSpec{ID: "population", Op: "count"})
 	for range 3 {
 		start := time.Now()
-		request := querytable.AggregationRequest{RequireComplete: true, Aggregations: []querytable.Aggregation{
-			{ID: "time", Op: "sum", Field: "duration_ms", GroupBy: []string{"repository_name", "activity", "month", "status", "operation_key", "operation_name", "tool_name", "mcp_server"}},
-			{ID: "timed", Op: "count", Field: "duration_ms", GroupBy: []string{"repository_name", "activity", "month", "status", "operation_key", "operation_name", "tool_name", "mcp_server"}},
-			{ID: "population", Op: "count"},
-		}}
-		result, handled, err := c.machineTimeAggregations(context.Background(), request, schema)
+		tx, release, err := beginQueryV2(ctx, c.reader())
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, handled, err := c.machineTimeMetricsV2(ctx, tx, queryV2Dataset("tool_calls", PharosToolCallsSchema()), q, qt.PlanOptions{Now: time.Now()})
+		release()
 		if err != nil || !handled {
 			t.Fatal(err, handled)
 		}
-		t.Log(len(result.Metrics[0].Buckets), time.Since(start))
+		t.Log(len(result.Metrics.Metrics[0].Buckets), result.Metrics.Metrics[0].Error, time.Since(start))
 	}
 }
 

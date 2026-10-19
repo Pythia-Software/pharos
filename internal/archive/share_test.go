@@ -236,9 +236,13 @@ func TestSharedExportMCPMethodPreset(t *testing.T) {
 			t.Fatalf("method missing from shared preset: %s", method.name)
 		}
 	}
-	metrics, err := querytable.Aggregate(payload.Datasets["tools"], querytable.AggregationRequest{Where: where, Aggregations: []querytable.Aggregation{{ID: "methods", Op: "sum", Field: "call_count", GroupBy: []string{"mcp_server", "mcp_method"}}}}, schema)
-	if err != nil || len(metrics.Metrics) != 1 || len(metrics.Metrics[0].Buckets) != len(methods) {
-		t.Fatalf("shared MCP method metrics = %#v, %v", metrics, err)
+	// The page groups a shared file's rows itself: one group per method.
+	groups := map[[2]string]bool{}
+	for _, row := range result.Rows {
+		groups[[2]string{firstString(row["mcp_server"]), firstString(row["mcp_method"])}] = true
+	}
+	if len(groups) != len(methods) {
+		t.Fatalf("shared MCP method groups = %v", groups)
 	}
 }
 

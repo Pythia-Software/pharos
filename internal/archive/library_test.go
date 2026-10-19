@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	qt "github.com/Pythia-Software/query-table/backends/go"
 	"github.com/gbdubs/pharos/internal/querytable"
 )
 
@@ -199,11 +200,11 @@ func TestLibraryQueryTableServesArbitrarySortsAndFilters(t *testing.T) {
 	if pending["total"] != float64(2) {
 		t.Fatalf("pending subagent count filter hid the library: %#v", pending)
 	}
-	metrics := post("/api/query/library/aggregations", `{"aggregations":[{"id":"n","op":"count","groupBy":["repository_name"]}]}`)
-	var want querytable.AggregationResult
+	metrics := post("/api/query/library/metrics", `{"version":2,"where":[],"orderBy":[],"limit":1,"offset":0,"metrics":[{"id":"n","op":"count","groupBy":["repository_name"]}]}`)
+	var want qt.SQLiteMetricsV2Result
 	encoded, _ := json.Marshal(metrics)
-	if err := json.Unmarshal(encoded, &want); err != nil {
-		t.Fatal(err)
+	if err := json.Unmarshal(encoded, &want); err != nil || want.Metrics[0].Error != "" {
+		t.Fatal(err, metrics)
 	}
 	total := 0.0
 	for _, bucket := range want.Metrics[0].Buckets {
@@ -353,17 +354,30 @@ func TestLibraryRequestsReadingFewerFieldsMatchFullRows(t *testing.T) {
 				t.Fatalf("refreshed=%v distinct %s: got %v, want %v", refreshed, field, got, want)
 			}
 		}
-		aggregations := `{"where":[{"field":"purpose","op":"is_not_null","value":""}],"aggregations":[{"id":"n","op":"count","groupBy":["repository_name"]},{"id":"tokens","op":"sum","field":"token_count","groupBy":["source_kind"]},{"id":"outcomes","op":"count_distinct","field":"outcome"},{"id":"cost","op":"max","field":"cost_usd"}]}`
-		var request querytable.AggregationRequest
-		if err := json.Unmarshal([]byte(aggregations), &request); err != nil {
-			t.Fatal(err)
-		}
-		want, err := querytable.Aggregate(fullRows(""), request, schema)
+		metrics := metricRequest(qt.AggSpec{ID: "n", Op: "count", GroupBy: []string{"repository_name"}}, qt.AggSpec{ID: "tokens", Op: "sum", Field: "token_count", GroupBy: []string{"source_kind"}},
+			qt.AggSpec{ID: "outcomes", Op: "count_distinct", Field: "outcome"}, qt.AggSpec{ID: "cost", Op: "max", Field: "cost_usd"})
+		metrics.Where = []qt.WhereTerm{{Field: "purpose", Op: "is_not_null"}}
+		ctx := context.Background()
+		tx, release, err := beginQueryV2(ctx, catalog.reader())
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := call(http.MethodPost, "/api/query/library/aggregations", aggregations); !reflect.DeepEqual(got, decodeJSON(t, mustJSON(t, want))) {
-			t.Fatalf("refreshed=%v aggregations: got %v, want %v", refreshed, got, want)
+		full := queryV2Dataset("library", PharosLibrarySchema())
+		if full.SourceSQL, err = stageQueryRows(ctx, tx, "full_library_rows", fullRows(""), full.Schema); err != nil {
+			t.Fatal(err)
+		}
+		want, err := full.ExecuteV2In(ctx, tx, nil, &metrics, qt.PlanOptions{})
+		release()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, metric := range want.Metrics.Metrics {
+			if metric.Error != "" || len(metric.Buckets) == 0 {
+				t.Fatalf("metric %s over full rows: %+v", metric.ID, metric)
+			}
+		}
+		if got := call(http.MethodPost, "/api/query/library/metrics", string(mustJSON(t, metrics))); !reflect.DeepEqual(got, decodeJSON(t, mustJSON(t, want.Metrics))) {
+			t.Fatalf("refreshed=%v metrics: got %v, want %v", refreshed, got, want.Metrics)
 		}
 	}
 }

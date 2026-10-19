@@ -204,16 +204,25 @@ func TestMachineTimeProjectionMatchesCubeAndInvalidatesOnPublication(t *testing.
 			t.Fatal("accelerator answered a raw-call shape", q, handled, err)
 		}
 	}
-	before, err := c.machineTimeRows(ctx)
-	if err != nil {
-		t.Fatal(err)
+	projection := func() []map[string]any {
+		t.Helper()
+		tx, err := c.reader().BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		rows, err := c.machineTimeRowsIn(ctx, tx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rows
 	}
+	before := projection()
 	if _, err = c.DB.Exec(`UPDATE tool_call_cube SET duration_ms_sum=123456; INSERT INTO meta(key,value) VALUES('tool_rollup_publication','next-publication') ON CONFLICT(key) DO UPDATE SET value=excluded.value`); err != nil {
 		t.Fatal(err)
 	}
-	after, err := c.machineTimeRows(ctx)
-	if err != nil || reflect.DeepEqual(before, after) {
-		t.Fatal("cached facts survived a new cube publication", err)
+	if after := projection(); reflect.DeepEqual(before, after) {
+		t.Fatal("cached facts survived a new cube publication")
 	}
 	c.derived.mu.Lock()
 	defer c.derived.mu.Unlock()
@@ -316,26 +325,39 @@ func TestUsageLongMessagePresetKeepsBoundedTextAndFullFilters(t *testing.T) {
 	if err = c.RebuildAuthorship(context.Background(), "test"); err != nil {
 		t.Fatal(err)
 	}
-	schema, err := (&Server{Catalog: c}).queryTableSchema("writing_messages")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, where := range [][]querytable.WhereTerm{nil, {{Field: "provider", Op: "=", Value: "missing"}}, {{Field: "provider", Op: "=", Value: "codex"}}} {
-		request := querytable.AggregationRequest{Where: where, Aggregations: []querytable.Aggregation{{ID: "messages", Op: "count"}, {ID: "text", Op: "count", Field: "text"}}}
+	s := testServer(t, cfg, c)
+	// Human Words' message mix: a long message is counted, and its words are
+	// all in its categories.
+	for _, sample := range []struct {
+		where    []qt.WhereTerm
+		messages float64
+	}{{nil, 1}, {[]qt.WhereTerm{{Field: "provider", Op: "=", Value: "missing"}}, 0}, {[]qt.WhereTerm{{Field: "provider", Op: "=", Value: "codex"}}, 1}} {
+		mix := metricRequest(qt.AggSpec{ID: "messages", Op: "count"}, qt.AggSpec{ID: "words", Op: "sum", Field: "words"})
 		for _, category := range authorshipCategories {
-			request.Aggregations = append(request.Aggregations, querytable.Aggregation{ID: category, Op: "sum", Field: category + "_words"})
+			mix.Metrics = append(mix.Metrics, qt.AggSpec{ID: category, Op: "sum", Field: category + "_words"})
 		}
-		want, err := writingMessageDataset.Aggregate(context.Background(), c.reader(), request, schema)
+		mix.Where = sample.where
+		result, err := s.executeQueryV2(context.Background(), "writing_messages", nil, PharosWritingMessagesSchema(), nil, &mix)
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, handled, err := writingMessageDataset.writingMessageSummary(context.Background(), c.reader(), request, schema)
-		if err != nil || !handled || !reflect.DeepEqual(want, got) {
-			t.Fatalf("summary differs for %v: %v, want=%#v got=%#v", where, err, want, got)
+		values := map[string]float64{}
+		for _, metric := range result.Metrics.Metrics {
+			value, _ := metric.Buckets[0].Value.(float64)
+			if metric.Error != "" || len(metric.Buckets) != 1 || metric.Buckets[0].Error != "" {
+				t.Fatalf("%v: %+v", sample.where, metric)
+			}
+			values[metric.ID] = value
+		}
+		categorized := 0.0
+		for _, category := range authorshipCategories {
+			categorized += values[category]
+		}
+		if values["messages"] != sample.messages || categorized != values["words"] || sample.messages > 0 && values["words"] < 30_000 {
+			t.Fatalf("message mix for %v: %v", sample.where, values)
 		}
 	}
 
-	s := testServer(t, cfg, c)
 	q := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "text", "typed_words"}, Where: []qt.WhereTerm{{Field: "text", Op: "contains", Value: "rare-tail-match"}}, OrderBy: qt.OrderBys{{Field: "typed_share", Dir: "asc"}, {Field: "words", Dir: "desc"}}, Limit: 50}}
 	got, err := s.executeQueryV2(context.Background(), "writing_messages", nil, PharosWritingMessagesSchema(), &q, nil)
 	if err != nil || len(got.Rows.Rows) != 1 {

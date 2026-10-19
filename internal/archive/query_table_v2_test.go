@@ -127,37 +127,75 @@ func BenchmarkQueryTableV2(b *testing.B) {
 	}
 }
 
+// Usage keeps daily rows, and selects each request hour for metrics that read
+// hour: a filter on hour picks the days holding those hours, and a metric
+// grouped by hour counts hours, not days.
 func TestQueryV2UsageHourly(t *testing.T) {
 	previous := time.Local
 	time.Local = time.UTC
 	t.Cleanup(func() { time.Local = previous })
 	catalog, config := testCatalog(t)
 	ingestUsageFixture(t, catalog, `{"type":"token_usage_record","timestamp":"2026-09-21T03:05:00Z","payload":{"response_id":"r3","usage":{"input_tokens":90,"output_tokens":10,"total_tokens":100},"thread_token_usage":{"total_tokens":3150}}}`)
+	rows, err := catalog.usageRows(time.UTC)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("daily table changed: %v %#v", err, rows)
+	}
+	hourly, err := catalog.usageRowsByPeriod(time.UTC, true)
+	if err != nil || len(hourly) != 3 {
+		t.Fatalf("expected three request hours: %v %#v", err, hourly)
+	}
+	var tokens int64
+	for _, row := range hourly {
+		tokens += integer(row["total_tokens"])
+	}
+	if tokens != 3150 {
+		t.Fatalf("hourly tokens = %d", tokens)
+	}
 	server := testServer(t, config, catalog)
 	schema, _ := sqliteQuerySchema("usage")
 	for _, sample := range []struct {
-		where            []qt.WhereTerm
-		days, hours, sum float64
+		name                      string
+		where                     []qt.WhereTerm
+		days, hours, average, sum float64
+		last                      string
 	}{
-		{nil, 2, 3, 3150},
-		{[]qt.WhereTerm{{Field: "total_tokens", Op: ">", Value: "1500"}}, 1, 2, 2130},
-		{[]qt.WhereTerm{{Field: "hour", Op: "=", Value: "2026-09-21T03:00:00Z"}}, 1, 1, 2130},
+		{"unfiltered", nil, 2, 3, 1575, 3150, "2026-09-21T03:00:00Z"},
+		{"daily threshold", []qt.WhereTerm{{Field: "total_tokens", Op: ">", Value: "1500"}}, 1, 2, 2130, 2130, "2026-09-21T03:00:00Z"},
+		{"timestamp", []qt.WhereTerm{{Field: "first_usage_at", Op: "<", Value: "2026-09-21T02:00:00Z"}}, 2, 2, 1575, 3150, "2026-09-21T01:00:00Z"},
+		{"hour filter", []qt.WhereTerm{{Field: "hour", Op: "=", Value: "2026-09-21T03:00:00Z"}}, 1, 1, 2130, 2130, "2026-09-21T03:00:00Z"},
+		{"mixed hour OR", []qt.WhereTerm{{Any: []qt.WhereClause{{Field: "hour", Op: "=", Value: "2026-09-21T03:00:00Z"}, {Field: "total_tokens", Op: ">", Value: "2000"}}}}, 1, 2, 2130, 2130, "2026-09-21T03:00:00Z"},
 	} {
-		q := metricRequest(qt.AggSpec{ID: "days", Expression: "COUNT()"}, qt.AggSpec{ID: "hours", Expression: "COUNT()", GroupBy: []string{"hour"}}, qt.AggSpec{ID: "sum", Expression: "SUM([total_tokens])"})
-		q.Where = sample.where
-		result, err := server.executeQueryV2(context.Background(), "usage", nil, schema, nil, &q)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for i, want := range []float64{sample.days, sample.hours, sample.sum} {
-			var got float64
-			for _, bucket := range result.Metrics.Metrics[i].Buckets {
-				got += bucket.Value.(float64)
+		t.Run(sample.name, func(t *testing.T) {
+			q := metricRequest(qt.AggSpec{ID: "days", Op: "count", GroupBy: []string{"model"}}, qt.AggSpec{ID: "hours", Expression: "COUNT()", GroupBy: []string{"hour"}},
+				qt.AggSpec{ID: "average", Op: "avg", Field: "total_tokens"}, qt.AggSpec{ID: "sum", Expression: "SUM([total_tokens])"}, qt.AggSpec{ID: "last", Op: "max", Field: "hour"},
+				qt.AggSpec{ID: "newest", Op: "sum", Field: "total_tokens", GroupBy: []string{"hour"}, Sort: []qt.MetricSort{{Key: "group0", Dir: "desc"}}})
+			q.Where = sample.where
+			result, err := server.executeQueryV2(context.Background(), "usage", nil, schema, nil, &q)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if got != want {
-				t.Fatalf("%s=%v want %v", q.Metrics[i].ID, got, want)
+			metrics := result.Metrics.Metrics
+			for i, want := range []float64{sample.days, sample.hours, sample.average, sample.sum} {
+				var got float64
+				for _, bucket := range metrics[i].Buckets {
+					got += bucket.Value.(float64)
+					// Daily metrics count days, whatever their hours.
+					if i != 1 && bucket.Count != int64(sample.days) {
+						t.Fatalf("%s counted hours: %#v", metrics[i].ID, bucket)
+					}
+				}
+				if metrics[i].Error != "" || got != want {
+					t.Fatalf("%s=%v want %v (%s)", metrics[i].ID, got, want, metrics[i].Error)
+				}
 			}
-		}
+			if len(metrics[4].Buckets) != 1 || metrics[4].Buckets[0].Value != sample.last {
+				t.Fatalf("latest hour: %#v", metrics[4])
+			}
+			newest := metrics[5].Buckets
+			if len(newest) != int(sample.hours) || newest[0].Keys[0] != sample.last {
+				t.Fatalf("hours newest first: %#v", newest)
+			}
+		})
 	}
 	// Usage has its own group budget, beyond other datasets'; past it a metric
 	// fails rather than dropping groups.

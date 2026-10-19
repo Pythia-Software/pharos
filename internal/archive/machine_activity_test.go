@@ -3,7 +3,6 @@ package archive
 import (
 	"context"
 	"encoding/json"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -11,59 +10,52 @@ import (
 	"github.com/gbdubs/pharos/internal/querytable"
 )
 
-// Exercise the exact aggregate and source-call shapes used by Machine Time.
-// In particular, a count(duration_ms) must not count missing timing, and the
+// Exercise the exact metric and source-call shapes used by Machine Time.
+// In particular, a count(duration_ms) must not count missing timing, the
+// accelerated cube must match the generic executor over raw calls, and the
 // source-call projection must contain only fields exposed by the query schema.
 func TestMachineTimeQueries(t *testing.T) {
-	catalog, _ := testCatalog(t)
+	catalog, config := testCatalog(t)
 	seedToolCalls(t, catalog, 80)
 	ctx := context.Background()
 	if err := catalog.ensureToolRollup(ctx); err != nil {
 		t.Fatal(err)
 	}
-	document, err := querySchemaDocument("tool_calls")
-	if err != nil {
-		t.Fatal(err)
-	}
-	schema, err := querytable.LoadSchema(document)
-	if err != nil {
-		t.Fatal(err)
-	}
+	server := testServer(t, config, catalog)
+	v2Schema := PharosToolCallsSchema()
+	generic := queryV2Dataset("tool_calls", v2Schema)
+	generic.SourceSQL = toolCallDataset.v2Source(v2Schema)
 	for _, groups := range [][]string{
 		{"repository_name", "activity", "day", "status", "operation_key", "operation_name", "tool_name", "mcp_server"},
 		{"repository_name", "activity", "month", "status", "operation_key", "operation_name", "tool_name", "mcp_server"},
 	} {
-		result, err := toolCallDataset.Aggregate(ctx, catalog.DB, querytable.AggregationRequest{
-			Aggregations: []querytable.Aggregation{
-				{ID: "time", Op: "sum", Field: "duration_ms", GroupBy: groups},
-				{ID: "timed", Op: "count", Field: "duration_ms", GroupBy: groups},
-			},
-		}, schema)
+		q := metricRequest(qt.AggSpec{ID: "time", Op: "sum", Field: "duration_ms", GroupBy: groups}, qt.AggSpec{ID: "timed", Op: "count", Field: "duration_ms", GroupBy: groups}, qt.AggSpec{ID: "population", Op: "count"})
+		result, err := server.executeQueryV2(ctx, "tool_calls", nil, v2Schema, nil, &q)
 		if err != nil {
 			t.Fatalf("grouping %v: %v", groups, err)
 		}
-		if len(result.Metrics) != 2 || len(result.Metrics[0].Buckets) == 0 {
-			t.Fatalf("grouping %v returned no time aggregates", groups)
+		metrics := result.Metrics.Metrics
+		if len(metrics) != 3 || len(metrics[0].Buckets) == 0 {
+			t.Fatalf("grouping %v returned no time metrics", groups)
 		}
 		var calls, timed int64
-		for _, bucket := range result.Metrics[0].Buckets {
-			calls += int64(bucket.Count)
+		for _, bucket := range metrics[0].Buckets {
+			calls += bucket.Count
 		}
-		for _, bucket := range result.Metrics[1].Buckets {
-			timed += integer(bucket.Value)
+		for _, bucket := range metrics[1].Buckets {
+			timed += int64(bucket.Value.(float64))
 		}
-		if calls != 80 || timed <= 0 || timed >= calls {
+		if calls != 80 || timed <= 0 || timed >= calls || metrics[2].Buckets[0].Value != float64(80) {
 			t.Fatalf("grouping %v: %d timed of %d calls; missing durations must remain separate", groups, timed, calls)
 		}
-		direct := toolCallDataset
-		direct.cube, direct.countFrom, direct.buckets = nil, "", nil
-		directResult, err := direct.Aggregate(ctx, catalog.DB, querytable.AggregationRequest{Aggregations: []querytable.Aggregation{
-			{ID: "time", Op: "sum", Field: "duration_ms", GroupBy: groups},
-			{ID: "timed", Op: "count", Field: "duration_ms", GroupBy: groups},
-		}}, schema)
-		if err != nil || !reflect.DeepEqual(result, directResult) {
-			t.Fatalf("operation aggregates must match raw calls for %v: %v", groups, err)
+		want, err := generic.ExecuteV2(ctx, catalog.reader(), nil, &q, qt.PlanOptions{})
+		if err != nil || !same(result.SQLiteV2ExecutionResult, want) {
+			t.Fatalf("operation metrics must match raw calls for %v: %v", groups, err)
 		}
+	}
+	schema, err := server.queryTableSchema("tool_calls")
+	if err != nil {
+		t.Fatal(err)
 	}
 	rows, err := toolCallDataset.Rows(ctx, catalog.DB, querytable.Query{
 		Select:  []string{"id", "operation_key", "operation_name", "activity", "command", "tool_name", "duration_ms", "title", "workspace_id", "conversation_id", "status"},
