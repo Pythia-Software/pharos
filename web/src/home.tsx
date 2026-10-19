@@ -9,7 +9,7 @@ import { QueryConveyor } from "./query-conveyor";
 import { Icon } from "./icons";
 import "./home.css";
 import { HomeSearch } from "./search-composer";
-import { CardLibrary } from "./card-library";
+import { CardLibrary, cardLibraryView, clearCardLibraryURL, isCardLibraryURL, saveCardLibraryView } from "./card-library";
 import { cardTemplates } from "./card-library-model";
 import { defaultCardCover } from "./card-cover";
 import { cardLoadingPresentation } from "./card-loading-model";
@@ -28,7 +28,6 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   const [active, setActive] = useState(isHome);
   const [collection, setCollection] = useState<Bookmark[]>(readBookmarks);
   const [pool, setPool] = useState<QuerySuggestion[]>(() => suggestionPool(new Date(), cardTemplates()));
-  const [library, setLibrary] = useState(() => new URLSearchParams(location.search).get("cards") === "library");
   const [previews, setPreviews] = useState<Record<string, QueryPreview>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true), [generation, setGeneration] = useState(0);
@@ -38,15 +37,23 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   const [editDays, setEditDays] = useState("");
   const [editCover, setEditCover] = useState("");
   const [editError, setEditError] = useState("");
-  const [message, setMessage] = useState(""), [undo, setUndo] = useState<{ item: Bookmark; index: number } | null>(null);
+  // Feedback appears beside the section that caused it.
+  const [feedback, setFeedback] = useState<{ text: string; from: "home" | "library" }>({ text: "", from: "home" }), [undo, setUndo] = useState<{ item: Bookmark; index: number } | null>(null);
   const [drag, setDrag] = useState<{ saved?: string; suggestion?: QuerySuggestion } | null>(null), [insertBefore, setInsertBefore] = useState<string | undefined>();
   const [hidden, setHidden] = useState(document.hidden);
-  const reloadPreview = usePreviewReload(setPreviews, setErrors, [active, library, collection, pool, generation, schemas]);
+  const [libraryShown, setLibraryShown] = useState(() => isCardLibraryURL() || cardLibraryView().shown === true);
+  // A library URL opens the section afresh from its parameters and scrolls to it.
+  const [libraryLink, setLibraryLink] = useState(0), revealLibrary = useRef<boolean | "smooth">(isCardLibraryURL());
+  const setMessage = (text: string, from: "home" | "library" = "home") => setFeedback({ text, from });
+  const reloadPreview = usePreviewReload(setPreviews, setErrors, [active, collection, pool, generation, schemas]);
 
   useEffect(() => {
     migrateSavedQueries(); setCollection(readBookmarks());
     const bookmarks = () => setCollection(readBookmarks());
-    const route = () => { setActive(isHome()); setLibrary(new URLSearchParams(location.search).get("cards") === "library"); };
+    const route = () => {
+      setActive(isHome());
+      if (isHome() && isCardLibraryURL()) { revealLibrary.current = true; setLibraryShown(true); setLibraryLink(value => value + 1); }
+    };
     const templates = () => { setPool(suggestionPool(new Date(), cardTemplates())); setGeneration(value => value + 1); };
     window.addEventListener("pharos:card-templates", templates);
     // A hidden tab notes new data and reruns its cards once it is shown.
@@ -59,9 +66,15 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     return () => { window.removeEventListener("pharos:card-templates", templates); window.removeEventListener("pharos:bookmarks", bookmarks); window.removeEventListener("pharos:route", route); window.removeEventListener("pharos:view", route); window.removeEventListener("pharos:data-refresh", refresh); document.removeEventListener("visibilitychange", visibility); };
   }, []);
   useEffect(() => { if (active) { setGeneration(value => value + 1); } }, [active]);
+  useEffect(() => {
+    if (!active || !libraryShown || !revealLibrary.current) return;
+    const smooth = revealLibrary.current === "smooth" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    revealLibrary.current = false;
+    document.getElementById("home-card-library")?.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
+  }, [active, libraryShown, libraryLink]);
 
   useEffect(() => {
-    if (!active || library) return;
+    if (!active) return;
     const controller = new AbortController();
     setLoading(true);
     const saved = new Set(collection.map(item => item.templateId).filter(Boolean));
@@ -75,7 +88,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
       else { setErrors(current => ({ ...current, [id]: String(error) })); setPreviews(current => { const next = { ...current }; delete next[id]; return next; }); }
     }, controller.signal).then(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [active, library, collection, pool, generation, schemas]);
+  }, [active, collection, pool, generation, schemas]);
 
   const collectedTemplates = new Set(collection.map(item => item.templateId?.split(":")[0]));
   const poolById = new Map(pool.map(item => [item.instanceId, item]));
@@ -89,13 +102,13 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     if (editing) { setEditTitle(editing.title); setEditDescription(editing.description ?? ""); setEditDays(timeWindowValue(queryFromURL(editing.url, editing.query))); const metricId = editing.coverMetricId ?? editing.cover?.metricId ?? ""; setEditCover(coverChoices.some(choice => choice.id === metricId) ? metricId : ""); setEditError(""); editor.current?.showModal(); }
   }, [editing]);
 
-  async function keep(item: QuerySuggestion, before?: string) {
+  async function keep(item: QuerySuggestion, before?: string, from: "home" | "library" = "home") {
     try {
       const saved = await collectDurableQuery(item.dataset, item.query, item.title, { description: item.description, templateId: item.instanceId, window: item.window, cover: item.cover ?? defaultCardCover(item) });
       if (before) moveBookmark(saved.id, before);
-      setMessage(`Collected “${item.title}”.`); setUndo(null);
+      setMessage(`Collected “${item.title}”.`, from); setUndo(null);
       setPreviews(current => ({ ...current, [saved.id]: current[item.instanceId] }));
-    } catch (error) { setMessage(String(error)); }
+    } catch (error) { setMessage(String(error), from); }
   }
   function drop(event: React.DragEvent, before?: string) {
     if (!drag) return;
@@ -122,7 +135,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   const coverChoices = editingSpec?.query.grouping
     ? [...editingSpec.query.grouping.summaries.filter(column => column.op !== "row").map(column => ({ id: column.id, label: `${column.label ?? column.id} · grouped rows` })), ...(editingSpec.query.grouping.source.aggregations ?? []).map(metric => ({ id: metric.id, label: `${metric.label ?? metric.id} · observations` }))]
     : editingSpec?.query.aggregations?.map(metric => ({ id: metric.id, label: metric.label ?? metric.id })) ?? [];
-  return library && active ? <CardLibrary schemas={schemas} onOpen={navigate} onKeep={item => void keep(item)} collected={collectedTemplates} message={message} /> : <div className="curiosity-home" data-feedback-label="Home dashboard">
+  return <div className="curiosity-home" data-feedback-label="Home dashboard">
     <div className="home-intro"><h1>{welcome}</h1><HomeSearch schema={schemas.library} /></div>
     <div className={`home-collection${drag ? " accepting" : ""}`} role="region" aria-label="Your collection" onDragOver={event => { if (drag) { event.preventDefault(); const target = (event.target as Element).closest("[data-card-id]"); setInsertBefore(target?.getAttribute("data-card-id") ?? undefined); } }} onDrop={event => drop(event)}>
       {collection.map(item => {
@@ -137,9 +150,15 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
       {!collection.length ? <div className="home-empty"><Icon name="bookmark" /><span>Make this space yours.<small>Collect cards that help you see your work from different angles</small></span></div> : null}
       {drag ? <span className="home-drop-label"><Icon name="arrow-up" />{drag.saved ? "Drop to reorder your collection" : "Drop to add to your collection"}</span> : null}
     </div>
-    <div className="home-feedback" role="status">{message}{undo ? <button type="button" onClick={() => { const items = readBookmarks(); items.splice(Math.min(undo.index, items.length), 0, undo.item); writeBookmarks(items); setUndo(null); setMessage("Restored to your collection."); }}>Undo</button> : null}</div>
+    <div className="home-feedback" role="status">{feedback.from === "home" ? feedback.text : ""}{undo ? <button type="button" onClick={() => { const items = readBookmarks(); items.splice(Math.min(undo.index, items.length), 0, undo.item); writeBookmarks(items); setUndo(null); setMessage("Restored to your collection."); }}>Undo</button> : null}</div>
     <QueryConveyor items={eligible} previews={previews} loading={loading} hasErrors={Object.keys(errors).length > 0} active={active} suspended={hidden || !active || Boolean(drag) || Boolean(editing)}
-      onRefresh={() => { clearPreviewCache(); setPreviews({}); setErrors({}); setPool(suggestionPool(new Date(), cardTemplates())); }} onOpen={navigate} onKeep={keep} onDragStart={(event, item) => dragStart(event, { suggestion: item }, item.url)} onDragEnd={finishDrag} />
+      onRefresh={() => { clearPreviewCache(); setPreviews({}); setErrors({}); setPool(suggestionPool(new Date(), cardTemplates())); }} onOpen={navigate} onKeep={keep} onDragStart={(event, item) => dragStart(event, { suggestion: item }, item.url)} onDragEnd={finishDrag}
+      libraryShown={libraryShown} onToggleLibrary={() => {
+        const shown = !libraryShown; revealLibrary.current = shown && "smooth"; setLibraryShown(shown); saveCardLibraryView({ shown });
+        if (!shown) clearCardLibraryURL();
+      }} />
+    {libraryShown ? <CardLibrary key={libraryLink} schemas={schemas} active={active} generation={generation} collected={collectedTemplates} message={feedback.from === "library" ? feedback.text : ""} onOpen={navigate}
+      onKeep={item => void keep(item, undefined, "library")} onDragStart={(event, item) => dragStart(event, { suggestion: item }, item.url)} onDragEnd={finishDrag} /> : null}
     <dialog ref={editor} className="home-editor" aria-labelledby="homeEditorTitle" onCancel={() => setEditing(null)} onClose={() => setEditing(null)}><form onSubmit={event => {
       event.preventDefault(); if (!editing) return;
       try {
