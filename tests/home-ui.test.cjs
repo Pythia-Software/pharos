@@ -29,6 +29,16 @@ async function readQuery(page, dataset) {
 async function waitForQuery(page, dataset, predicate) {
   await assertEventually(async () => { const query = await readQuery(page, dataset); return query && predicate(query); });
 }
+// The catalog shares Home and the preview cache with the card library, and
+// may already have run a library card's window; a data refresh clears it.
+async function clearPreviewCache(page) { await page.evaluate(() => window.dispatchEvent(new Event('pharos:data-refresh'))); }
+// Home re-lays out the catalog on resize too; measure covers once their bars settle.
+async function waitForBarsInCover(card) {
+  await assertEventually(() => card.evaluate(element => {
+    const cover = element.querySelector('.query-cover').getBoundingClientRect();
+    return [...element.querySelectorAll('.qt-metric-bar-track')].every(bar => bar.getBoundingClientRect().bottom <= cover.bottom + 1);
+  }));
+}
 async function assertEventually(check) {
   const end = Date.now() + 5000;
   while (Date.now() < end) { if (await check()) return; await new Promise(resolve => setTimeout(resolve, 25)); }
@@ -1138,11 +1148,92 @@ test('grouped cards keep row values, allow cover selection, and drill into the o
   } finally { await browser.close(); }
 });
 
+test('Home reveals the card library by topic and the library link opens it with filters', async () => {
+  const { browser, page, data } = await setup();
+  const active = queryRecipes.filter(recipe => !recipe.retired);
+  const toggle = page.locator('.home-library-toggle'), library = page.locator('#home-card-library');
+  const entries = () => page.locator('.card-library-entry').count();
+  try {
+    assert.equal(await library.count(), 0, 'the library is hidden by default');
+    assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+    await page.getByRole('button', { name: 'Show all cards', exact: true }).click();
+    await library.waitFor();
+    assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+    assert.equal(await page.getByRole('tab', { selected: true }).getAttribute('data-topic'), 'human');
+    assert.equal(await entries(), active.filter(recipe => recipe.category === 'human').length);
+    assert.equal(await page.locator('.card-library [role="tab"][data-topic="steering"]').count(), 0, 'retired topics have no tab');
+    assert.equal(await page.getByLabel('Find a card', { exact: true }).count(), 0, 'filters start closed');
+    assert.equal(await page.locator('.card-library-id').count(), 0, 'definitions stay out of the way until edit mode');
+    assert.equal(new URL(page.url()).search, '', 'opening the section leaves the Home URL clean');
+    await assertEventually(() => data.preferences['pharos-home-card-library-v1']?.shown === true);
+
+    await page.getByRole('tab', { name: /^Error Patterns/ }).click();
+    assert.equal(await entries(), active.filter(recipe => recipe.category === 'errors').length);
+    assert.equal(new URL(page.url()).searchParams.get('card_topic'), 'errors');
+    await page.keyboard.press('ArrowRight');
+    const next = await page.getByRole('tab', { selected: true }).getAttribute('data-topic');
+    assert.notEqual(next, 'errors');
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('role')), 'tab');
+    await assertEventually(() => data.preferences['pharos-home-card-library-v1']?.topic === next);
+
+    const first = page.locator('.card-library-entry').first(), title = await first.locator('.query-title').innerText();
+    await first.getByRole('button', { name: `Collect ${title}`, exact: true }).click();
+    await library.getByText(`Collected “${title}”.`, { exact: true }).waitFor();
+    assert.equal(await page.locator('.home-feedback').innerText(), '', 'feedback stays beside the library');
+    await first.locator('.card-library-collected').waitFor();
+
+    await page.getByRole('button', { name: 'Filters', exact: true }).click();
+    await page.getByLabel('Find a card', { exact: true }).fill('tool');
+    assert.equal(await page.getByRole('tab', { selected: true }).getAttribute('data-topic'), 'all', 'a search looks across every topic');
+    assert.ok(await entries() > 0);
+    await page.getByRole('button', { name: 'Edit cards', exact: true }).click();
+    assert.equal(await page.locator('.card-library-id').count(), await entries());
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.ok(await page.locator('.home-conveyor-head').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+    assert.ok(await page.locator('.card-library').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+    assert.equal(await page.evaluate(() => document.querySelector('main').scrollWidth <= document.querySelector('main').clientWidth), true);
+    await page.setViewportSize({ width: 1180, height: 920 });
+
+    await page.getByRole('button', { name: 'Hide all cards', exact: true }).click();
+    assert.equal(await library.count(), 0);
+    assert.equal(new URL(page.url()).search, '', 'hiding drops the library URL state');
+    await assertEventually(() => data.preferences['pharos-home-card-library-v1'].shown === false);
+    await page.reload();
+    await page.locator('.home-library-toggle').waitFor();
+    assert.equal(await library.count(), 0);
+
+    // In-app library links open the section and replace its state.
+    const selected = () => page.getByRole('tab', { selected: true }).getAttribute('data-topic');
+    await page.evaluate(() => window.pharosNavigate('/home?card_topic=errors'));
+    await library.waitFor();
+    assert.equal(await selected(), 'errors');
+    await page.evaluate(() => window.pharosNavigate('/home?card_topic=context'));
+    await assertEventually(async () => await selected() === 'context');
+    await page.getByRole('tab', { name: /^All/ }).click();
+    assert.equal(new URL(page.url()).searchParams.get('card_topic'), 'all', 'the All tab keeps a library URL');
+    await page.reload();
+    await library.waitFor();
+    assert.equal(await selected(), 'all', 'reloading reopens the library on All although it was last hidden');
+    await page.getByRole('button', { name: 'Hide all cards', exact: true }).click();
+    assert.equal(new URL(page.url()).search, '');
+
+    await page.goto('http://home.test/home?cards=library');
+    await page.locator('.card-library-entry').first().waitFor();
+    assert.equal(await page.getByRole('tab', { selected: true }).getAttribute('data-topic'), 'all');
+    assert.equal(await entries(), active.length);
+    assert.equal(await page.getByLabel('Find a card', { exact: true }).count(), 1);
+    assert.ok(await page.locator('.card-library-id').count() > 0);
+    await assertEventually(() => page.evaluate(() => Math.abs(document.getElementById('home-card-library').getBoundingClientRect().top - document.querySelector('main').getBoundingClientRect().top) < 80));
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
 test('card library shows empty cards, filters and sorts active definitions, and persists template edits', async () => {
   const { browser, page, data } = await setup({ url: '/home?cards=library' });
+  const library = page.locator('.card-library');
   try {
     const activeRecipes = queryRecipes.filter(recipe => !recipe.retired);
-    assert.equal(await page.locator('a[href*="-review"]:not([href="/home?cards=coverage-review"])').count(), 0);
+    assert.equal(await page.locator('a[href*="-review"]').count(), 0);
     assert.equal(await page.locator('.card-library-entry').count(), activeRecipes.length);
     assert.deepEqual(data.metadataRequests, [], 'hidden table controls must not scan distinct values on Home');
     assert.ok(data.requests.every(({ path }) => !path.endsWith('/aggregations')), 'hidden table header charts must not compete with card previews');
@@ -1163,14 +1254,14 @@ test('card library shows empty cards, filters and sorts active definitions, and 
     const savedTemplate = page.waitForResponse(response => response.url().endsWith('/api/preferences') && response.request().postData()?.includes('pharos-card-templates-v1'));
     await page.getByRole('button', { name: 'Save template', exact: true }).click();
     await savedTemplate;
-    await page.getByText('Effort, at a glance', { exact: true }).waitFor();
+    await library.getByText('Effort, at a glance', { exact: true }).waitFor();
     assert.equal(await page.locator('.card-library-entry').getAttribute('id'), 'card-effort-cost');
     assert.equal(data.preferences['pharos-card-templates-v1']['effort-cost'].days, 30);
     assert.equal(data.preferences['pharos-card-templates-v1']['effort-cost'].cover.kind, 'bar-vertical');
     await page.reload();
-    await page.getByText('Effort, at a glance', { exact: true }).waitFor();
+    await library.getByText('Effort, at a glance', { exact: true }).waitFor();
     assert.equal(await page.getByLabel('Data source', { exact: true }).inputValue(), 'usage');
-    await page.getByRole('button', { name: 'Collect Effort, at a glance', exact: true }).click();
+    await library.getByRole('button', { name: 'Collect Effort, at a glance', exact: true }).click();
     await page.getByText('Collected “Effort, at a glance”.', { exact: true }).waitFor();
     const collected = await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', [])[0]);
     assert.equal(collected.cover.kind, 'bar-vertical');
@@ -1178,7 +1269,7 @@ test('card library shows empty cards, filters and sorts active definitions, and 
     assert.deepEqual(collected.query.grouping.source.where.filter(term => term.field === 'first_usage_at').map(term => term.value), ['-30d', '+0s']);
     await page.getByRole('button', { name: /^Edit card / }).click();
     await page.getByRole('button', { name: 'Reset template', exact: true }).click();
-    await page.getByText(queryRecipes.find(recipe => recipe.id === 'effort-cost').title, { exact: true }).waitFor();
+    await library.getByText(queryRecipes.find(recipe => recipe.id === 'effort-cost').title, { exact: true }).waitFor();
     await page.getByLabel('Find a card', { exact: true }).fill('');
     await page.getByLabel('Data source', { exact: true }).selectOption('');
     assert.equal(await page.locator('.card-library-entry').count(), activeRecipes.length);
@@ -1335,8 +1426,9 @@ test('retained distribution cards preserve native boxes and local-hour queries t
     assert.equal(await page.getByLabel('Chart', { exact: true }).inputValue(), 'box');
     await page.getByLabel('Question', { exact: true }).fill('My conversation search counts');
     await page.getByRole('button', { name: 'Save template', exact: true }).click();
-    await page.getByText('My conversation search counts', { exact: true }).waitFor();
-    await page.getByRole('button', { name: 'Collect My conversation search counts', exact: true }).click();
+    const library = page.locator('.card-library');
+    await library.getByText('My conversation search counts', { exact: true }).waitFor();
+    await library.getByRole('button', { name: 'Collect My conversation search counts', exact: true }).click();
     await page.getByText('Collected “My conversation search counts”.', { exact: true }).waitFor();
     let saved = await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', []).find(card => card.templateId?.startsWith('research-conversation-searches:')));
     assert.equal(saved.cover.kind, 'box');
@@ -1345,8 +1437,8 @@ test('retained distribution cards preserve native boxes and local-hour queries t
 
     await page.getByLabel('Find a card', { exact: true }).fill('writing-hours');
     await page.waitForFunction(() => document.querySelectorAll('.card-library-entry').length === 1 && !document.querySelector('.card-library-count').textContent.includes('Loading charts'));
-    assert.equal(await page.locator('.human-study-hour-bars > span').count(), 24);
-    await page.getByRole('button', { name: 'Collect When you work', exact: true }).click();
+    assert.equal(await library.locator('.human-study-hour-bars > span').count(), 24);
+    await library.getByRole('button', { name: 'Collect When you work', exact: true }).click();
     await page.getByText('Collected “When you work”.', { exact: true }).waitFor();
     saved = await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', []).find(card => card.templateId?.startsWith('writing-hours:')));
     assert.equal(saved.query.aggregations[0].dateGrouping.timeZone, 'America/Denver');
@@ -1377,7 +1469,7 @@ test('collected writing-hours cards combine multiple days by local hour after re
     assert.equal(expected.length, 24);
     assert.match(expected[9], /150 human-written words/);
     assert.match(expected[17], /25 human-written words/);
-    await page.getByRole('button', { name: 'Collect When you work', exact: true }).click();
+    await catalog.getByRole('button', { name: 'Collect When you work', exact: true }).click();
     await page.getByText('Collected “When you work”.', { exact: true }).waitFor();
     const saved = await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', []).find(card => card.templateId === 'writing-hours:7'));
     assert.equal(saved.cover.metricId, 'hourly-human-words');
@@ -1456,6 +1548,7 @@ test('long card labels wrap over underline bars on desktop and phone', async () 
     await card.locator('.qt-metric-bar-row--below').first().waitFor();
     for (const width of [1470, 390]) {
       await page.setViewportSize({ width, height: 844 });
+      await waitForBarsInCover(card);
       const cover = await card.locator('.query-cover').boundingBox();
       assert.equal(await card.locator('.qt-metric-bar-row--below').count(), 4);
       for (const row of await card.locator('.qt-metric-bar-row--below').all()) {
@@ -1670,8 +1763,11 @@ test('unavailable library previews reload and cancel retries when the time windo
     const card = page.locator('#card-cost-repos');
     await card.locator('.query-cover-timeline').waitFor();
     data.previewFailures.add('usage');
+    await clearPreviewCache(page);
     await page.getByLabel('Preview window', { exact: true }).selectOption('30');
     await card.locator('.query-preview-unavailable').waitFor();
+    // Let the refreshed catalog finish so only this card's retry is held.
+    await page.waitForFunction(() => document.querySelector('.home-conveyor')?.getAttribute('aria-busy') === 'false');
     await page.setViewportSize({ width: 390, height: 844 });
     await card.screenshot({ path: path.join(root, '.context/preview-unavailable-mobile.png') });
     const bounds = await card.getByRole('button', { name: /^Reload preview/ }).boundingBox();
@@ -1699,6 +1795,7 @@ test('card loading has a spinner and skeleton, respects reduced motion and clear
   try {
     await page.locator('#card-human-words .query-cover-timeline').waitFor();
     data.holdPreviews = true;
+    await clearPreviewCache(page);
     await page.getByLabel('Preview window', { exact: true }).selectOption('30');
     const card = page.locator('#card-human-words');
     await card.locator('.query-preview-spinner').waitFor();
@@ -1774,6 +1871,7 @@ test('configured list and box row counts expand the cover to fit every selected 
     await page.waitForFunction(() => document.querySelectorAll('#card-error-reach .qt-metric-bar-row').length === 6);
     for (const width of [1470, 390]) {
       await page.setViewportSize({ width, height: 844 });
+      await waitForBarsInCover(list);
       const cover = await list.locator('.query-cover').boundingBox();
       assert.ok(cover.height > 170);
       for (const bar of await list.locator('.qt-metric-bar-track').all()) { const rect = await bar.boundingBox(); assert.ok(rect.y + rect.height <= cover.y + cover.height + 1); }
@@ -1797,6 +1895,7 @@ test('contextual card loaders match saved chart types and row limits before data
   try {
     await page.locator('#card-cost-repos .query-cover-timeline').waitFor();
     data.holdPreviews = true;
+    await clearPreviewCache(page);
     await page.getByRole('button', { name: /^Edit card / }).click();
     await page.getByLabel('Chart', { exact: true }).selectOption('bar-vertical');
     await page.getByLabel('Visible rows / series', { exact: true }).fill('4');
@@ -1948,9 +2047,9 @@ test('retired Steering category stays out of discovery and preserves old saved c
  const {browser,page,data}=await setup({url:'/home?cards=library&card_topic=steering',localValues:{'pharos-steering-review-v1':draft}});
  try {
   await page.waitForFunction(()=>!document.querySelector('.card-library-count').textContent.includes('Loading charts'));
-  assert.equal(await page.getByRole('combobox',{name:'Topic',exact:true}).locator('option[value="steering"]').count(),0);
-  assert.equal(await page.getByRole('combobox',{name:'Topic',exact:true}).inputValue(),'');
-  assert.equal(new URL(page.url()).searchParams.get('card_topic'),null);
+  assert.equal(await page.locator('.card-library [role="tab"][data-topic="steering"]').count(),0);
+  assert.equal(await page.getByRole('tab',{selected:true}).getAttribute('data-topic'),'all');
+  assert.equal(new URL(page.url()).searchParams.get('card_topic'),'all');
   assert.equal(await page.locator('a[href*="cards=steering-review"]').count(),0);
   for(const id of ['correction-phrases','correction-conversation-share','positive-feedback','positive-conversation-share','repeated-messages','within-conversation-repeats'])assert.equal(await page.locator(`[data-card-id="${id}"]`).count(),0);
   await page.goto('http://home.test/home?cards=steering-review');

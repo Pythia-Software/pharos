@@ -4,50 +4,104 @@ import { instantiateRecipe, loadQueryPreviews, suggestionWindowLabel, type Query
 import { availableChartKinds, cardCoverGroupLimit, cardDatasets, cardTemplates, coverChoices, decodeCover, saveCardTemplate } from "./card-library-model";
 import { cardKind, defaultCardCover } from "./card-cover";
 import { cardLoadingPresentation } from "./card-loading-model";
-import { queryCategories } from "./query-categories";
+import { queryCategories, type QueryCategory } from "./query-categories";
 import type { QueryDataset } from "./query-links";
 import { QueryCard } from "./query-card";
 import { Icon } from "./icons";
+import { preferences } from "./preferences";
 import { usePreviewReload } from "./use-preview-reload";
 import "./card-library.css";
 
+// The library is a Home section. /home?cards=library and the card_* URL
+// parameters open it with filters; tabs, filters and edit mode otherwise
+// follow the library like other interface preferences.
+export const CARD_LIBRARY_VIEW_KEY = "pharos-home-card-library-v1";
+export type CardLibraryView = { shown?: boolean; topic?: string; filters?: boolean; edit?: boolean };
+export const cardLibraryParams = ["card_search", "card_data", "card_topic", "card_kind", "card_sort"];
+export const isCardLibraryLink = (search = location.search) => new URLSearchParams(search).get("cards") === "library";
+export const hasCardLibraryParams = (search = location.search, keys = cardLibraryParams) => { const params = new URLSearchParams(search); return keys.some(key => params.get(key)); };
+// Any library URL state opens the section; card_topic=all marks the All tab.
+export const isCardLibraryURL = (search = location.search) => isCardLibraryLink(search) || hasCardLibraryParams(search);
+export function cardLibraryView(): CardLibraryView {
+  const value = preferences().get<unknown>(CARD_LIBRARY_VIEW_KEY, {});
+  return value && typeof value === "object" && !Array.isArray(value) ? value as CardLibraryView : {};
+}
+export function saveCardLibraryView(change: CardLibraryView) {
+  preferences().set(CARD_LIBRARY_VIEW_KEY, { ...cardLibraryView(), ...change });
+}
+// Hiding the section drops its URL state, leaving a plain Home URL.
+export function clearCardLibraryURL() {
+  const url = new URL(location.href);
+  if (isCardLibraryLink(url.search)) url.searchParams.delete("cards");
+  for (const key of cardLibraryParams) url.searchParams.delete(key);
+  history.replaceState(history.state, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+const ALL = "all";
 const chartNames: Partial<Record<MetricDisplay["kind"], string>> = { auto: "Automatic", list: "Ranked bars", table: "Table", "bar-horizontal": "Horizontal bars", "bar-vertical": "Columns", line: "Line", pie: "Pie", donut: "Donut", value: "Single value", histogram: "Histogram", box: "Box plot", scatter: "Scatter plot" };
-export function CardLibrary({ schemas, onOpen, onKeep, collected, message }: { schemas: Record<QueryDataset, FieldSchema>; onOpen: (url: string) => void; onKeep: (item: QuerySuggestion) => void; collected: Set<string | undefined>; message: string }) {
-  const initial = new URLSearchParams(location.search);
-  const [search, setSearch] = useState(initial.get("card_search") ?? ""), [dataset, setDataset] = useState(initial.get("card_data") ?? ""), [topic, setTopic] = useState(() => { const requested = initial.get("card_topic") ?? ""; return cardTemplates().some(recipe => recipe.category === requested) ? requested : ""; }), [kind, setKind] = useState(initial.get("card_kind") ?? ""), [sort, setSort] = useState(initial.get("card_sort") ?? "topic");
-  const [recipes, setRecipes] = useState(cardTemplates), [days, setDays] = useState<number>();
+// "Card defaults" honour a template that pins a single lookback.
+const cardDays = (recipe: QueryRecipe, days: number | "default") => days !== "default" ? days : recipe.days?.length === 1 ? recipe.days[0] : 7;
+
+export function CardLibrary({ schemas, active, generation, collected, message, onOpen, onKeep, onDragStart, onDragEnd }: {
+  schemas: Record<QueryDataset, FieldSchema>; active: boolean; generation: number; collected: Set<string | undefined>; message: string;
+  onOpen: (url: string) => void; onKeep: (item: QuerySuggestion) => void;
+  onDragStart: (event: React.DragEvent, item: QuerySuggestion) => void; onDragEnd: () => void;
+}) {
+  // HomePage bumps generation for template edits and data refreshes.
+  const recipes = useMemo(cardTemplates, [generation]);
+  const topics = useMemo(() => (Object.keys(queryCategories) as QueryCategory[]).filter(key => recipes.some(recipe => recipe.category === key)), [recipes]);
+  const [initial] = useState(() => {
+    const params = new URLSearchParams(location.search), linked = isCardLibraryURL(), saved = cardLibraryView();
+    // A topic link alone keeps the saved layout; filter links show their filters.
+    const filtered = isCardLibraryLink() || hasCardLibraryParams(location.search, cardLibraryParams.filter(key => key !== "card_topic"));
+    const valid = (topic?: string | null) => topic === ALL || recipes.some(recipe => recipe.category === topic) ? topic! : undefined;
+    return { params, linked, topic: valid(params.get("card_topic")) ?? (linked ? ALL : valid(saved.topic) ?? topics[0] ?? ALL), filters: filtered || saved.filters === true, edit: isCardLibraryLink() || saved.edit === true };
+  });
+  const [search, setSearch] = useState(initial.params.get("card_search") ?? ""), [dataset, setDataset] = useState(initial.params.get("card_data") ?? ""), [kind, setKind] = useState(initial.params.get("card_kind") ?? ""), [sort, setSort] = useState(initial.params.get("card_sort") ?? "topic");
+  const [chosen, setChosen] = useState(initial.topic), [days, setDays] = useState<number | "default">("default");
+  const [filtersOpen, setFiltersOpen] = useState(initial.filters), [editMode, setEditMode] = useState(initial.edit);
+  // Home's URL stays clean until the library is linked or used.
+  const [inURL, setInURL] = useState(initial.linked);
   const [previews, setPreviews] = useState<Record<string, QueryPreview>>({}), [errors, setErrors] = useState<Record<string, string>>({}), [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<QueryRecipe | null>(null), [title, setTitle] = useState(""), [description, setDescription] = useState(""), [editDays, setEditDays] = useState(7), [metric, setMetric] = useState(""), [chart, setChart] = useState<MetricDisplay["kind"]>("auto"), [error, setError] = useState("");
   const [height, setHeight] = useState(""), [maxGroups, setMaxGroups] = useState(""), [showLegend, setShowLegend] = useState("auto"), [showOther, setShowOther] = useState("auto");
-  const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const refresh = () => setRecipes(cardTemplates());
-    window.addEventListener("pharos:card-templates", refresh); window.addEventListener("pharos:data-refresh", refresh);
-    return () => { window.removeEventListener("pharos:card-templates", refresh); window.removeEventListener("pharos:data-refresh", refresh); };
-  }, []);
-  const visible = useMemo(() => recipes.filter(recipe => (!dataset || recipe.dataset === dataset) && (!topic || recipe.category === topic) && (!kind || cardKind(recipe) === kind) && `${recipe.id} ${recipe.idea} ${recipe.title} ${recipe.description} ${cardDatasets[recipe.dataset]} ${queryCategories[recipe.category].label}`.toLowerCase().includes(search.toLowerCase())).sort((a, b) => {
+  const dialog = useRef<HTMLDialogElement>(null), tabs = useRef<HTMLDivElement>(null);
+  const topic = chosen === ALL || topics.includes(chosen as QueryCategory) ? chosen : topics[0] ?? ALL;
+  const matching = useMemo(() => recipes.filter(recipe => (!dataset || recipe.dataset === dataset) && (!kind || cardKind(recipe) === kind) && `${recipe.id} ${recipe.idea} ${recipe.title} ${recipe.description} ${cardDatasets[recipe.dataset]} ${queryCategories[recipe.category].label}`.toLowerCase().includes(search.toLowerCase())), [recipes, search, dataset, kind]);
+  const visible = useMemo(() => matching.filter(recipe => topic === ALL || recipe.category === topic).sort((a, b) => {
     const key = (recipe: QueryRecipe) => sort === "data" ? cardDatasets[recipe.dataset] : sort === "kind" ? cardKind(recipe) : sort === "title" ? "" : queryCategories[recipe.category].label;
     return key(a).localeCompare(key(b)) || a.title.localeCompare(b.title);
-  }), [recipes, search, dataset, topic, kind, sort]);
-  const cards = useMemo(() => visible.map(recipe => instantiateRecipe(recipe, days ?? (recipe.days?.length === 1 ? recipe.days[0] : 7))), [visible, days]);
-  const reloadPreview = usePreviewReload(setPreviews, setErrors, [cards, schemas]);
+  }), [matching, topic, sort]);
+  const cards = useMemo(() => visible.map(recipe => instantiateRecipe(recipe, cardDays(recipe, days))), [visible, days]);
+  const reloadPreview = usePreviewReload(setPreviews, setErrors, [cards, schemas, active]);
+  const job = (item: QuerySuggestion) => ({ id: item.id, dataset: item.dataset, query: item.query, schema: schemas[item.dataset], options: { recipe: item, cover: item.cover, window: item.window, url: item.url } });
   useEffect(() => {
+    if (!inURL || !["/", "/home"].includes(location.pathname)) return;
     const url = new URL(location.href);
-    for (const [key, value] of Object.entries({ card_search: search, card_data: dataset, card_topic: topic, card_kind: kind, card_sort: sort })) { if (value) url.searchParams.set(key, value); else url.searchParams.delete(key); }
-    history.replaceState(null, "", `${url.pathname}${url.search}`);
-  }, [search, dataset, topic, kind, sort]);
+    for (const [key, value] of Object.entries({ card_search: search, card_data: dataset, card_topic: topic, card_kind: kind, card_sort: sort === "topic" ? "" : sort })) { if (value) url.searchParams.set(key, value); else url.searchParams.delete(key); }
+    history.replaceState(history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [inURL, search, dataset, topic, kind, sort]);
   useEffect(() => {
+    if (!active) return;
+    // Only the open tab runs its queries; the preview cache makes returning
+    // to an earlier tab immediate.
     const controller = new AbortController(); setLoading(true); setPreviews({}); setErrors({});
-    void loadQueryPreviews(cards.map(item => ({ id: item.id, dataset: item.dataset, query: item.query, schema: schemas[item.dataset], options: { recipe: item, cover: item.cover, window: item.window, url: item.url } })), (id, preview, error) => {
+    void loadQueryPreviews(cards.map(job), (id, preview, error) => {
       if (controller.signal.aborted) return;
       if (preview) setPreviews(current => ({ ...current, [id]: preview }));
       if (error) setErrors(current => ({ ...current, [id]: String(error) }));
     }, controller.signal).then(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [cards, schemas]);
+  }, [active, cards, schemas]);
   useEffect(() => {
     if (editing) dialog.current?.showModal();
   }, [editing]);
+  function filter<T>(set: (value: T) => void) { return (value: T) => { set(value); setInURL(true); }; }
+  function choose(key: string, focus = false) {
+    setChosen(key); setInURL(true); saveCardLibraryView({ topic: key });
+    if (focus) requestAnimationFrame(() => tabs.current?.querySelector<HTMLButtonElement>(`[data-topic="${key}"]`)?.focus());
+  }
+  function clearFilters() { setSearch(""); setDataset(""); setKind(""); setInURL(true); }
   function openEditor(item: QueryRecipe) {
     const recipe = cardTemplates().find(recipe => recipe.id === item.id) ?? item;
     const cover = defaultCardCover(recipe);
@@ -76,25 +130,51 @@ export function CardLibrary({ schemas, onOpen, onKeep, collected, message }: { s
       ...(showOther !== "auto" ? { showOther: showOther === "true" } : {}) };
   };
   const destinationKeys = chosenCover?.mode === "source" ? editing?.measures.find(metric => metric.id === chosenCover.metricId)?.groupBy ?? editing?.exploration?.keys : editing?.exploration?.keys;
-  return <section className="card-library" aria-label="Card library">
-    <div className="card-library-heading"><div><h1>Card library</h1><p>Every question, chart and comparison. Find an angle to make your own.</p></div><button type="button" onClick={() => onOpen("/")}><Icon name="arrow-left" /> Your Home</button></div>
-    <div className="card-library-controls">
-      <label className="card-library-search">Find a card<input type="search" aria-label="Find a card" placeholder="Search questions, subjects…" value={search} onChange={event => setSearch(event.target.value)} /></label>
-      <label>Data source<select aria-label="Data source" value={dataset} onChange={event => setDataset(event.target.value)}><option value="">All data</option>{Object.entries(cardDatasets).filter(([key]) => recipes.some(recipe => recipe.dataset === key)).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
-      <label>Topic<select aria-label="Topic" value={topic} onChange={event => setTopic(event.target.value)}><option value="">All topics</option>{Object.entries(queryCategories).filter(([key]) => recipes.some(recipe => recipe.category === key)).map(([key, value]) => <option key={key} value={key}>{value.label}</option>)}</select></label>
-      <label>Card kind<select aria-label="Card kind" value={kind} onChange={event => setKind(event.target.value)}><option value="">All kinds</option>{[...new Set(recipes.map(cardKind))].sort().map(kind => <option key={kind}>{kind}</option>)}</select></label>
-      <label>Sort by<select aria-label="Sort by" value={sort} onChange={event => setSort(event.target.value)}><option value="topic">Topic</option><option value="data">Data source</option><option value="kind">Card kind</option><option value="title">Title</option></select></label>
-      <label>Preview window<select aria-label="Preview window" value={days ?? "default"} onChange={event => setDays(event.target.value === "default" ? undefined : Number(event.target.value))}><option value="default">Card defaults</option>{[1, 7, 30, 90].map(days => <option key={days} value={days}>Past {days === 1 ? "24 hours" : `${days} days`}</option>)}</select></label>
-    </div>
-    <p className="card-library-count" role="status">{cards.length} of {recipes.length} cards{loading ? ` · Loading charts… ${completed}/${cards.length}` : ""}<span>Empty views stay visible here.</span></p>
-    <p className="card-library-feedback" role="status">{message}</p>
-    <div className="card-library-grid">{cards.map(item => <div className="card-library-entry" id={`card-${item.id}`} data-card-definition={item.id} data-card-idea={item.idea} key={item.id}>
-      <QueryCard id={item.id} title={item.title} description={item.description} actionLabel={item.action} url={item.url} windowLabel={suggestionWindowLabel(item)} category={item.category} loadingSpec={cardLoadingPresentation(item.query, { recipe: item, cover: item.cover, days: item.window?.days })} preview={previews[item.id]} error={errors[item.id]} discovery onOpen={() => onOpen(item.url)} onKeep={() => onKeep(item)} onReload={() => reloadPreview({ id: item.id, dataset: item.dataset, query: item.query, schema: schemas[item.dataset], options: { recipe: item, cover: item.cover, window: item.window, url: item.url } })} />
-      <div className="card-library-meta"><code className="card-library-id" title={`Card definition: ${item.id} · Wishlist: ${item.idea}`}>ID: {item.id}</code><span>{cardDatasets[item.dataset]}</span><span>{cardKind(item)} · {item.exploration ? "Grouped table" : "Records + metrics"}</span>{collected.has(item.id) ? <span className="card-library-collected"><Icon name="check" /> Collected</span> : null}
-        <button type="button" onClick={() => openEditor(item)} aria-label={`Edit card ${item.title}`}><Icon name="edit" /> Edit card</button>
+  const tabKeys = [ALL, ...topics], index = tabKeys.indexOf(topic);
+  const activeFilters = [search, dataset, kind].filter(Boolean).length;
+  return <section id="home-card-library" className="card-library" aria-labelledby="card-library-title">
+    <div className="card-library-head">
+      <h2 id="card-library-title"><Icon name="read" />Card Library</h2>
+      <div className="card-library-actions">
+        <button type="button" aria-expanded={filtersOpen} aria-controls="card-library-controls" onClick={() => { const open = !filtersOpen; setFiltersOpen(open); saveCardLibraryView({ filters: open }); }}><Icon name="search" />Filters{activeFilters ? <span className="card-library-badge">{activeFilters}</span> : null}</button>
+        <button type="button" aria-pressed={editMode} onClick={() => { const edit = !editMode; setEditMode(edit); saveCardLibraryView({ edit }); }}><Icon name="edit" />Edit cards</button>
       </div>
+    </div>
+    {filtersOpen ? <div id="card-library-controls" className="card-library-controls">
+      <label className="card-library-search">Find a card<input type="search" aria-label="Find a card" placeholder="Search questions, subjects…" value={search} onChange={event => {
+        // A new search looks across every topic; pick a tab to narrow it.
+        if (!search && event.target.value && topic !== ALL) setChosen(ALL);
+        filter(setSearch)(event.target.value);
+      }} /></label>
+      <label>Data source<select aria-label="Data source" value={dataset} onChange={event => filter(setDataset)(event.target.value)}><option value="">All data</option>{Object.entries(cardDatasets).filter(([key]) => recipes.some(recipe => recipe.dataset === key)).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+      <label>Card kind<select aria-label="Card kind" value={kind} onChange={event => filter(setKind)(event.target.value)}><option value="">All kinds</option>{[...new Set(recipes.map(cardKind))].sort().map(kind => <option key={kind}>{kind}</option>)}</select></label>
+      <label>Sort by<select aria-label="Sort by" value={sort} onChange={event => filter(setSort)(event.target.value)}><option value="topic">Topic</option><option value="data">Data source</option><option value="kind">Card kind</option><option value="title">Title</option></select></label>
+      <label>Preview window<select aria-label="Preview window" value={days} onChange={event => setDays(event.target.value === "default" ? "default" : Number(event.target.value))}><option value="default">Card defaults</option>{[1, 7, 30, 90].map(days => <option key={days} value={days}>Past {days === 1 ? "24 hours" : `${days} days`}</option>)}</select></label>
+    </div> : null}
+    <div ref={tabs} className="card-library-tabs" role="tablist" aria-label="Card topics" onKeyDown={event => {
+      const next = { ArrowLeft: index - 1, ArrowRight: index + 1, Home: 0, End: tabKeys.length - 1 }[event.key];
+      if (next === undefined) return;
+      event.preventDefault(); choose(tabKeys[(next + tabKeys.length) % tabKeys.length], true);
+    }}>
+      {tabKeys.map(key => {
+        const count = key === ALL ? matching.length : matching.filter(recipe => recipe.category === key).length;
+        return <button key={key} type="button" role="tab" id={`card-library-tab-${key}`} data-topic={key} data-empty={count ? undefined : ""} aria-selected={key === topic} aria-controls="card-library-panel" tabIndex={key === topic ? 0 : -1}
+          style={key === ALL ? undefined : { "--topic-tone": queryCategories[key as QueryCategory].tone } as React.CSSProperties} onClick={() => choose(key)}>
+          {key === ALL ? "All" : queryCategories[key as QueryCategory].label}<span className="card-library-tab-count">{count}</span>
+        </button>;
+      })}
+    </div>
+    {filtersOpen ? <p className="card-library-count" role="status">{cards.length} of {recipes.length} cards{loading ? ` · Loading charts… ${completed}/${cards.length}` : ""}<span>Empty views stay visible here.</span></p> : null}
+    {editMode ? <p className="card-library-edit-note">Edits change the template for new suggestions and collections.</p> : null}
+    <p className="card-library-feedback" role="status">{message}</p>
+    <div id="card-library-panel" className="card-library-grid" role="tabpanel" aria-labelledby={`card-library-tab-${topic}`} aria-busy={loading}>{cards.map(item => <div className="card-library-entry" id={`card-${item.id}`} data-card-definition={item.id} data-card-idea={item.idea} key={item.id}>
+      <QueryCard discovery id={item.id} title={item.title} description={item.description} actionLabel={item.action} url={item.url} windowLabel={suggestionWindowLabel(item)} category={item.category} loadingSpec={cardLoadingPresentation(item.query, { recipe: item, cover: item.cover, days: item.window?.days })} preview={previews[item.id]} error={errors[item.id]}
+        onOpen={() => onOpen(item.url)} onKeep={() => onKeep(item)} onReload={() => reloadPreview(job(item))} onDragStart={event => onDragStart(event, item)} onDragEnd={onDragEnd} />
+      {editMode ? <div className="card-library-meta"><code className="card-library-id" title={`Card definition: ${item.id} · Wishlist: ${item.idea}`}>ID: {item.id}</code><span>{cardDatasets[item.dataset]}</span><span>{cardKind(item)} · {item.exploration ? "Grouped table" : "Records + metrics"}</span>{collected.has(item.id) ? <span className="card-library-collected"><Icon name="check" /> In your collection</span> : null}
+        <button type="button" onClick={() => openEditor(item)} aria-label={`Edit card ${item.title}`}><Icon name="edit" /> Edit card</button>
+      </div> : collected.has(item.id) ? <span className="card-library-collected"><Icon name="check" /> In your collection</span> : null}
     </div>)}</div>
-    {!cards.length ? <p className="card-library-empty">No cards match these filters. <button type="button" onClick={() => { setSearch(""); setDataset(""); setTopic(""); setKind(""); }}>Clear filters</button></p> : null}
+    {!cards.length ? <p className="card-library-empty">No cards match these filters. <button type="button" onClick={clearFilters}>Clear filters</button></p> : null}
     <dialog className="home-editor card-template-editor" ref={dialog} onClose={() => setEditing(null)} onCancel={() => setEditing(null)} aria-labelledby="card-template-title"><form onSubmit={event => {
       event.preventDefault(); if (!editing) return;
       try { saveCardTemplate(editing.id, { title, description, days: editDays, cover: editedCover() }); dialog.current?.close(); } catch (error) { setError(String(error)); }
