@@ -72,19 +72,17 @@ the upstream release/migration guide, regenerate schemas and rebuild/test.
 
 ## Browser validation
 
-The browser fixtures use Playwright from a gitignored local installation and an
-installed Chrome when available:
+The browser suite uses the declared `playwright-core` with the installed Chrome
+(or `PHAROS_BROWSER=webkit` with Playwright's WebKit):
 
 ```sh
-npm install --prefix .context/browser-tests playwright --no-audit --no-fund
-npm --prefix web run test:browser -- usage-presets-ui tools-ui home-ui
+npm --prefix web run test:browser
 ```
 
-These exercise grouped reloads, route restoration, undo/redo after table pausing,
-compact covers, saved display limits and Other remainders. Fixtures stub their
-HTTP data and do not read or modify the production library.
-
-Some older fixtures currently fail identically on the pre-upgrade branch (the
-Library, MCP, navigator, Findings, Sync, card library, pricing catalog, Usage
-badge and Human Words fixtures). Their failures are independent of the 0.8.0
-dependency upgrade.
+It loads every page at desktop and phone widths against stubbed data, served
+through the production Query Table transport (`web/tests/support/query-server.mjs`
+over `@pythia-software/query-table-core`), and checks that pages render
+without errors and keep their layout: no horizontal overflow, the header in
+place, and covers and cards holding their content. It does not read or modify
+the production library. Query and card behaviour is covered by the unit tests
+in `web/tests/unit`.

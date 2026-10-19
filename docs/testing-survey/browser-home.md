@@ -1,4 +1,4 @@
-> Working notes behind [the test suite survey](../testing-survey.md), written by one of the five 2026-10-19 reviews at `bb496be`. Line numbers refer to that commit. Classifications are judgement calls; the timings here are indicative, taken from contended runs or the Pharos archive. See the survey for measured numbers.
+> Working notes behind [the test suite survey](../testing-survey.md), written by one of the five 2026-10-19 reviews at `bb496be`. Line numbers refer to that commit. Classifications are judgement calls; the timings here are indicative, taken from contended runs or the Pharos archive. See the survey for measured numbers. The `tests/*-ui.test.cjs` browser files reviewed here have since been deleted; the browser tier is now the structural suite in `web/tests/browser/`.
 
 # Browser test audit: Home / query-table cluster
 
@@ -170,7 +170,7 @@ These stay as browser tests because each is the only guard on something real.
 
 | Fragment | Copies |
 |---|---|
-| `createRequire('.context/browser-tests/package.json')('playwright')` | 22 files |
+| Loading `playwright` from a gitignored per-workspace install | 22 files |
 | Slicing the `ui.py` HTML out of `r'''…'''` | 20 files. 3 in scope still probe the deleted `src/pharos/ui.py` path first (`library-query-ui:9`, `usage-ui:10`, `combo-button-ui:9`). |
 | Hard-coded `/Applications/Google Chrome.app/…` | 23 files. `home-ui` and `search-editor-ui` have no `existsSync` fallback, so they fail on machines without system Chrome. |
 | `chromium.launch` inside each test | 39 call sites; ≈67 launches per run in scope |

@@ -1,4 +1,4 @@
-> Working notes behind [the test suite survey](../testing-survey.md), written by one of the five 2026-10-19 reviews at `bb496be`. Line numbers refer to that commit. Classifications are judgement calls; the timings here are indicative, taken from contended runs or the Pharos archive. See the survey for measured numbers.
+> Working notes behind [the test suite survey](../testing-survey.md), written by one of the five 2026-10-19 reviews at `bb496be`. Line numbers refer to that commit. Classifications are judgement calls; the timings here are indicative, taken from contended runs or the Pharos archive. See the survey for measured numbers. The `tests/*-ui.test.cjs` browser files reviewed here have since been deleted; the browser tier is now the structural suite in `web/tests/browser/`.
 
 # Browser page tests: survey (tests/*-ui.test.cjs, page-level subset)
 
@@ -187,7 +187,7 @@ listed already runs inside `page.evaluate` or depends only on DOM-free functions
 
 | Snippet | Files |
 |---|---|
-| `createRequire('.context/browser-tests/package.json')('playwright')` | 13/13 (library-drive also searches parent dirs and `PHAROS_BROWSER_TESTS`) |
+| Loading `playwright` from a gitignored per-workspace install | 13/13 (library-drive also searches parent dirs and `PHAROS_BROWSER_TESTS`) |
 | `html = source.slice(source.indexOf("r'''")+4, source.lastIndexOf("'''"))` | 12/13. transcript and navigator still probe the dead `src/pharos/ui.py` path. |
 | Hard-coded Chrome path plus `existsSync` fallback | 22 copies across 13 files. Only 3 files honor `CHROME_PATH`. delegation-ui has no fallback and fails without Chrome. |
 | `/assets/*` handler | 4 variants: all assets from disk via `readFileSync` per request (1.7 MB each time); only `query-tables.*`; `fulfill({path})`; or every JS file stubbed as `''` (transcript, feedback). |

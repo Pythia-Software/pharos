@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 // Exercise the real Usage controls against an isolated development service.
-// Uses the same optional Playwright installation as tests/*.test.cjs.
+// Uses web/'s playwright-core (run `npm --prefix web ci` once) with the
+// installed Chrome, like the browser tests.
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { createRequire } = require('node:module');
 const root = path.resolve(__dirname, '..');
 const { chromium } = process.env.PLAYWRIGHT_MODULE ? require(process.env.PLAYWRIGHT_MODULE)
-  : createRequire(path.join(root, '.context/browser-tests/package.json'))('playwright');
+  : createRequire(path.join(root, 'web/package.json'))('playwright-core');
 const args = process.argv.slice(2);
 const option = (name, fallback) => args.includes(name) ? args[args.indexOf(name) + 1] : fallback;
 const origin = option('--url', 'http://127.0.0.1:8850');

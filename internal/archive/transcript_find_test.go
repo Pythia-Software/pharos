@@ -10,8 +10,8 @@ import (
 )
 
 // transcriptFindFixture is a case in testdata/transcript-find-fixtures.json,
-// whose expectations come from the reader's JavaScript; the transcript-ui
-// tests check the same file, so workspace find and the Show filter agree.
+// whose expectations come from the reader's JavaScript; the reader's
+// JavaScript tests check the same file, so workspace find and the Show filter agree.
 type transcriptFindFixture struct {
 	Name     string
 	Messages []struct {

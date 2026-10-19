@@ -22,7 +22,8 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
 | JS unit tests (`web/tests/unit`, node only, seconds) | `npm --prefix web test` from any directory |
 | One JS unit file or test | `npm --prefix web test -- card-recipes --test-name-pattern=wishlist` (arguments are file-path filters, plus `--test-*` flags) |
 | JS unit tests, full matrix | `npm --prefix web run test:full` (every window, chart kind and edit in `card-parity`/`cover-parity`) |
-| One browser file | `npm --prefix web run test:browser -- <page>-ui` (runs `tests/<page>-ui.test.cjs`) |
+| Browser structure suite (every page at 1440, 390 and 320 px; under 90 s) | `npm --prefix web run test:browser` (`PHAROS_BROWSER=webkit` for WebKit; `-- --test-name-pattern=Findings` for one page) |
+| Library drive end to end (macOS, slow) | `npm --prefix web run test:e2e` (real build, disk image and service) |
 | JS checks before a PR | `npm --prefix web run check` (typecheck, schemas, recipe snapshot, bundle, unit tests) |
 | Python tools | `python3 -m unittest discover -s tools` |
 | Frontend bundle | `(cd web && npm run build && npm run check-bundle)` after any `web/src` or `pricing/*.json` change |
@@ -38,11 +39,17 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
   `helpers/classic-script.mjs`, so keep their logic in functions those
   scripts expose rather than in DOM code.
 
-- **Browser tests:** they need Playwright installed once per workspace:
-  `npm install --prefix .context/browser-tests playwright --no-audit --no-fund`.
-  Run only the files for the pages you changed. Several browser files fail
-  on master; [docs/testing-survey.md](docs/testing-survey.md) lists them and
-  the plan to replace them.
+- **Browser tests** live in `web/tests/browser/` and use the declared
+  `playwright-core` with the installed Google Chrome (or `CHROME_PATH`);
+  `PHAROS_BROWSER=webkit` uses Playwright's WebKit, installed once with
+  `npx playwright-core install webkit` in `web/`. Without a browser they
+  skip and say what to install. `structure.test.mjs` loads every page
+  against stubbed data (`fixtures.mjs`) and checks only what a browser can:
+  no errors or unstubbed API calls, no horizontal overflow, the header stays
+  put, and cards hold their content. A new page is one line in its `ROUTES`;
+  a new endpoint needs a default stub in `fixtures.mjs`. `focus.test.mjs`
+  checks dialogs' focus. Known layout bugs are listed in `KNOWN` and run as
+  todo. `PHAROS_UI_SCREENSHOTS=dir` saves screenshots; nothing asserts on them.
 - **Manual only:** `macos/test/*` (builds the app and mounts disk images),
   `tools/*bench*`, and `tools/test-query-table-fork.sh` (after changing
   `third_party/query-table-go`). Run these only when you change the code they
