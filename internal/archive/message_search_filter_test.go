@@ -56,8 +56,10 @@ func TestMessageSearchFiltersExactRowsAndMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(table.base, "0=1") {
-		t.Fatal("empty search broadened the dataset")
+	d.SourceSQL = table.v2Source(schema)
+	empty, err := d.ExecuteV2(context.Background(), c.DB, &rows, nil, qt.PlanOptions{})
+	if err != nil || len(empty.Rows.Rows) != 0 || empty.Rows.Total != 0 {
+		t.Fatalf("a search with no matches broadened the dataset: %+v %v", empty.Rows, err)
 	}
 }
 

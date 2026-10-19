@@ -3,7 +3,13 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -162,20 +168,179 @@ func TestSpanRulesMatchTheSchema(t *testing.T) {
 			options = append(options, option)
 		}
 	}
-	reasons := []string{"", "Launched with claude -p by a command", "Sent by a headless claude -p run", "Sent by a codex exec run", "Sent by a headless agy -p run",
-		"Sent by automation nightly", "Sent by another agent session", "Sent by TL1 orchestration", "Sub-agent conversation",
-		"Sent by a headless claude -p or SDK run Conductor did not start", "Harness context", "Repeated prompt: sent in 6 sessions on 4 days", "Slash command",
-		"Attachment reference", "Generated page feedback", "Human feedback comment", "Code block", "Quoted with >", "Matches agent output from 3h earlier", "Already sent 2d earlier",
-		"Line already sent in other conversations", "Sent 4s after the previous message, faster than typing", "Log, trace, code, or data", "Table",
-		"Formatted like agent output", "Mostly identifiers, paths, or code", "Path, URL, or ID"}
-	for _, label := range harnessLabels {
-		reasons = append(reasons, label)
+	reasons := classifierReasons(t)
+	if len(reasons) < 20 {
+		t.Fatalf("read only %d reasons from the classifier: %q", len(reasons), reasons)
 	}
-	for _, reason := range reasons {
+	// A typed span has no reason.
+	for _, reason := range append(reasons, "") {
 		if rule := spanRule(authorSpan{Category: spanTyped, Reason: reason}); !slices.Contains(options, rule) {
 			t.Errorf("rule %q (reason %q) is not a Rules option", rule, reason)
 		}
 	}
+}
+
+// classifierReasons reads every reason the authorship classifier gives a span
+// from its source: the reason argument of each labeler.claim call, following
+// variables, parameters and helper functions to the strings they hold.
+// Particulars, such as counts, durations and names, become "1". A reason it
+// cannot follow fails the test, rather than going unchecked.
+func classifierReasons(t *testing.T) []string {
+	t.Helper()
+	names, err := filepath.Glob("authorship*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	functions := map[string]*ast.FuncDecl{}
+	literals := map[string]*ast.FuncLit{}
+	tables := map[string]*ast.CompositeLit{}
+	calls := []*ast.CallExpr{}
+	for _, name := range names {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch node := node.(type) {
+			case *ast.FuncDecl:
+				if node.Recv == nil {
+					functions[node.Name.Name] = node
+				}
+			case *ast.AssignStmt:
+				for index, value := range node.Rhs {
+					if literal, ok := value.(*ast.FuncLit); ok && index < len(node.Lhs) {
+						literals[node.Lhs[index].(*ast.Ident).Name] = literal
+					}
+				}
+			case *ast.ValueSpec:
+				for index, value := range node.Values {
+					if table, ok := value.(*ast.CompositeLit); ok {
+						tables[node.Names[index].Name] = table
+					}
+				}
+			case *ast.CallExpr:
+				calls = append(calls, node)
+			}
+			return true
+		})
+	}
+	callee := func(call *ast.CallExpr) string {
+		switch function := call.Fun.(type) {
+		case *ast.Ident:
+			return function.Name
+		case *ast.SelectorExpr:
+			return function.Sel.Name
+		}
+		return ""
+	}
+	verb := regexp.MustCompile(`%[-+# 0-9.]*[a-zA-Z]`)
+	var values func(ast.Expr) []string
+	values = func(expr ast.Expr) []string {
+		switch expr := expr.(type) {
+		case *ast.BasicLit:
+			if value, err := strconv.Unquote(expr.Value); err == nil {
+				return []string{value}
+			}
+		case *ast.ParenExpr:
+			return values(expr.X)
+		case *ast.BinaryExpr:
+			if expr.Op == token.ADD {
+				joined := []string{}
+				for _, left := range values(expr.X) {
+					for _, right := range values(expr.Y) {
+						joined = append(joined, left+right)
+					}
+				}
+				return joined
+			}
+		case *ast.IndexExpr:
+			// A lookup in a table these files declare is one of its values.
+			if name, ok := expr.X.(*ast.Ident); ok && tables[name.Name] != nil {
+				found := []string{}
+				for _, element := range tables[name.Name].Elts {
+					found = append(found, values(element.(*ast.KeyValueExpr).Value)...)
+				}
+				return found
+			}
+			return []string{"1"}
+		case *ast.CallExpr:
+			switch name := callee(expr); {
+			case name == "Sprintf":
+				found := []string{}
+				for _, format := range values(expr.Args[0]) {
+					found = append(found, verb.ReplaceAllString(format, "1"))
+				}
+				return found
+			case name == "defaultString":
+				found := []string{}
+				for _, argument := range expr.Args {
+					found = append(found, values(argument)...)
+				}
+				return found
+			case functions[name] != nil:
+				found := []string{}
+				ast.Inspect(functions[name].Body, func(node ast.Node) bool {
+					if _, nested := node.(*ast.FuncLit); nested {
+						return false
+					}
+					if result, ok := node.(*ast.ReturnStmt); ok && len(result.Results) > 0 {
+						found = append(found, values(result.Results[0])...)
+					}
+					return true
+				})
+				return found
+			}
+			return []string{"1"}
+		case *ast.Ident:
+			if expr.Obj == nil {
+				break
+			}
+			switch declaration := expr.Obj.Decl.(type) {
+			case *ast.AssignStmt:
+				for index, name := range declaration.Lhs {
+					if name.(*ast.Ident).Name == expr.Name && index < len(declaration.Rhs) {
+						return values(declaration.Rhs[index])
+					}
+				}
+			case *ast.Field:
+				// A parameter of a function literal holds what its callers pass.
+				for variable, literal := range literals {
+					position := 0
+					for _, field := range literal.Type.Params.List {
+						for range field.Names {
+							if field == declaration {
+								found := []string{}
+								for _, call := range calls {
+									if callee(call) == variable && position < len(call.Args) {
+										found = append(found, values(call.Args[position])...)
+									}
+								}
+								return found
+							}
+							position++
+						}
+					}
+				}
+			}
+		}
+		t.Fatalf("cannot follow the reason at %s; teach classifierReasons this form", fset.Position(expr.Pos()))
+		return nil
+	}
+	reasons := []string{}
+	for _, call := range calls {
+		if selector, ok := call.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == "claim" && len(call.Args) == 5 {
+			for _, reason := range values(call.Args[3]) {
+				if reason != "" && !slices.Contains(reasons, reason) {
+					reasons = append(reasons, reason)
+				}
+			}
+		}
+	}
+	return reasons
 }
 
 func TestSteeringCuesOnlyMatchAuthoredSpans(t *testing.T) {

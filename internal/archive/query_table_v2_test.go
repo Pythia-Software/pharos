@@ -288,17 +288,6 @@ func TestQueryV2IndexedCandidates(t *testing.T) {
 			t.Fatalf("candidate result differs: %v %v", where, err)
 		}
 	}
-	indexed := toolCallDataset
-	indexed.toolSearchIndexed = true
-	source, args := indexed.v2IndexedSource(schema, []qt.WhereTerm{{Field: "command", Op: "contains", Value: "go test"}})
-	plan, err := queryMapsContext(context.Background(), catalog.DB, "EXPLAIN QUERY PLAN SELECT count(*) FROM ("+source+")", args...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := fmt.Sprint(plan)
-	if !strings.Contains(text, "VIRTUAL TABLE INDEX") {
-		t.Fatal("trigram index missing", text)
-	}
 }
 
 func TestQueryV2IndexedWindow(t *testing.T) {

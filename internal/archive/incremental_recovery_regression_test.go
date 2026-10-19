@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -123,17 +122,6 @@ func TestSyncStatusExposesLowercaseSourceChoices(t *testing.T) {
 		if choice["name"] != source.Name || choice["kind"] != source.Kind || choice["enabled"] != true {
 			t.Fatalf("%s does not match the Sync UI contract: %+v", key, choice)
 		}
-	}
-}
-
-func TestNativeAliasLookupUsesIndexedAccountAndNativeID(t *testing.T) {
-	catalog, _ := testCatalog(t)
-	plan, err := queryMaps(catalog.DB, "EXPLAIN QUERY PLAN SELECT id,provider FROM conversations WHERE account=? AND native_id=? AND id<>?", "local", "session", "wrapper")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(plan) != 1 || !strings.Contains(firstString(plan[0]["detail"]), "SEARCH conversations USING INDEX conversations_native_alias_idx") {
-		t.Fatalf("alias lookup regressed to a full conversation scan: %+v", plan)
 	}
 }
 

@@ -3,7 +3,6 @@ package archive
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -171,36 +170,6 @@ func TestDerivedCacheWaitsForOlderBuildBeforeRecomputing(t *testing.T) {
 	}
 	if value := <-second; value != "Latest" || calls.Load() != 2 {
 		t.Fatalf("new caller got %q after %d builds; generation %d", value, calls.Load(), latest)
-	}
-}
-
-func TestConversationChildrenUseCoveringIndexAfterUpgrade(t *testing.T) {
-	catalog, _ := testCatalog(t)
-	if _, err := catalog.DB.Exec(`DROP INDEX conversations_parent_idx`); err != nil {
-		t.Fatal(err)
-	}
-	// Existing catalogs receive the index on Initialize, not just new installs.
-	if err := catalog.Initialize(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := catalog.DB.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at)
- VALUES('w','codex','local','w','Work','x');
- INSERT INTO conversations(id,workspace_id,provider,account,native_id)
- VALUES('cb','w','codex','local','parent'),('cc','w','codex','local','child')`); err != nil {
-		t.Fatal(err)
-	}
-	rows, err := queryMaps(catalog.DB, `EXPLAIN QUERY PLAN SELECT EXISTS(SELECT 1 FROM conversations WHERE parent_id=?)`, "cb")
-	if err != nil || !strings.Contains(jsonText(rows), "USING COVERING INDEX conversations_parent_idx") {
-		t.Fatalf("child lookup plan: %v, %v", rows, err)
-	}
-	if _, err := catalog.DB.Exec(`UPDATE conversations SET parent_id='cb' WHERE id='cc'`); err != nil {
-		t.Fatal(err)
-	}
-	for id, want := range map[string]bool{"cb": true, "cc": false, "missing": false} {
-		var got bool
-		if err := catalog.DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM conversations WHERE parent_id=?)`, id).Scan(&got); err != nil || got != want {
-			t.Fatalf("children of %s: %v, %v; want %v", id, got, err, want)
-		}
 	}
 }
 

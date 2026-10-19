@@ -5,164 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 )
 
-// referenceSearchConversations is search_conversations as it was before it
-// ranked inside FTS5, read vectors from conversation_vectors, and completed
-// only the page: it read every conversation's document and message count.
-func (c *Catalog) referenceSearchConversations(args map[string]any) (map[string]any, error) {
-	query := strings.TrimSpace(firstString(args["query"]))
-	limit := clamp(int(integer(valueOr(args["limit"], 8))), 1, 20)
-	offset := max(0, int(integer(args["offset"])))
-	budget := mcpBudget(args, 1200)
-	lexical := map[string]float64{}
-	matches := map[string]map[string]any{}
-	if parsed := ftsQuery(query); parsed != "" {
-		rows, err := queryMaps(c.DB, `SELECT m.conversation_id,m.id message_id,
-			snippet(messages_fts,1,'','',' … ',18) snippet,bm25(messages_fts) rank
-			FROM messages_fts JOIN messages m ON m.id=messages_fts.message_id
-			WHERE messages_fts MATCH ? ORDER BY rank LIMIT 500`, parsed)
-		if err != nil {
-			return nil, err
-		}
-		for _, row := range rows {
-			id := firstString(row["conversation_id"])
-			if _, exists := lexical[id]; !exists {
-				lexical[id] = 1 / float64(len(lexical)+1)
-				matches[id] = row
-			}
-		}
-	}
-	clauses := []string{"1=1"}
-	values := []any{}
-	if repository := firstString(args["repository"]); repository != "" {
-		clauses = append(clauses, "(r.display_name LIKE ? OR r.canonical_remote LIKE ?)")
-		values = append(values, "%"+repository+"%", "%"+repository+"%")
-	}
-	if source := firstString(args["source"]); source != "" {
-		clauses = append(clauses, "w.source_kind=?")
-		values = append(values, source)
-	}
-	if provider := firstString(args["provider"]); provider != "" {
-		clauses = append(clauses, "c.provider=?")
-		values = append(values, provider)
-	}
-	if file := firstString(args["file"]); file != "" {
-		clauses = append(clauses, `EXISTS(SELECT 1 FROM change_sets cs JOIN change_files cf ON cf.change_set_id=cs.id WHERE cs.workspace_id=w.id AND cf.path LIKE ?)`)
-		values = append(values, "%"+file+"%")
-	}
-	if args["pr"] != nil {
-		clauses = append(clauses, `EXISTS(SELECT 1 FROM work_pr_links l JOIN pull_requests p ON p.id=l.pr_id WHERE l.workspace_id=w.id AND p.number=?)`)
-		values = append(values, integer(args["pr"]))
-	}
-	if from := firstString(args["from"]); from != "" {
-		clauses = append(clauses, "COALESCE(c.started_at,w.activity_at)>=?")
-		values = append(values, timeBound(from, false))
-	}
-	if to := firstString(args["to"]); to != "" {
-		clauses = append(clauses, "COALESCE(c.started_at,w.activity_at)<=?")
-		values = append(values, timeBound(to, true))
-	}
-	rows, err := queryMaps(c.DB, `SELECT c.id conversation_id,c.workspace_id,c.provider,c.model,c.effort,c.coverage,c.started_at,c.ended_at,
-		substr(w.title,1,101) title,w.activity_at,substr(r.display_name,1,101) repository,
-		d.initiation,d.initiation_message_id,d.outcome conversation_outcome,d.outcome_message_id,d.vector_json,d.indexed_at,
-		(SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id) message_count
-		FROM conversations c JOIN workspaces w ON w.id=c.workspace_id
-		LEFT JOIN repositories r ON r.id=w.repository_id
-		LEFT JOIN conversation_documents d ON d.conversation_id=c.id WHERE `+strings.Join(clauses, " AND "), values...)
-	if err != nil {
-		return nil, err
-	}
-	queryVector := semanticEmbed(query)
-	results := []map[string]any{}
-	for _, row := range rows {
-		id := firstString(row["conversation_id"])
-		score := lexical[id] * .55
-		reasons := []string{}
-		if lexical[id] > 0 {
-			reasons = append(reasons, "message text")
-		}
-		if query != "" {
-			if vector, decodeErr := decodeVector(row["vector_json"]); decodeErr == nil {
-				semantic := semanticCosine(queryVector, vector)
-				if semantic > .1 {
-					score += semantic * .35
-					reasons = append(reasons, "conversation context")
-				}
-			}
-			if strings.Contains(strings.ToLower(firstString(row["title"])), strings.ToLower(query)) {
-				score += .3
-				reasons = append(reasons, "title")
-			}
-			if score <= 0 {
-				continue
-			}
-		}
-		if file := firstString(args["file"]); file != "" {
-			reasons = append(reasons, "workspace changed file")
-		}
-		if args["pr"] != nil {
-			reasons = append(reasons, "workspace pull request")
-		}
-		if len(reasons) == 0 {
-			reasons = append(reasons, "structured filters or recent activity")
-		}
-		snippet := firstString(row["initiation"])
-		messageID := firstString(row["initiation_message_id"])
-		if match := matches[id]; match != nil {
-			snippet = firstString(match["snippet"])
-			messageID = firstString(match["message_id"])
-		}
-		results = append(results, map[string]any{
-			"conversation_id": id, "workspace_id": row["workspace_id"], "title": clipText(firstString(row["title"]), 100),
-			"repository": row["repository"], "provider": row["provider"], "model": row["model"], "effort": row["effort"],
-			"started_at": row["started_at"], "ended_at": row["ended_at"], "activity_at": row["activity_at"], "message_count": row["message_count"],
-			"coverage": row["coverage"], "indexed_at": row["indexed_at"],
-			"relevance_reason": strings.Join(reasons, ", "), "snippet": clipText(snippet, 180),
-			"message_id": messageID, "score": score,
-		})
-	}
-	sort.SliceStable(results, func(i, j int) bool {
-		if results[i]["score"].(float64) != results[j]["score"].(float64) {
-			return results[i]["score"].(float64) > results[j]["score"].(float64)
-		}
-		left := firstString(results[i]["started_at"], results[i]["activity_at"])
-		right := firstString(results[j]["started_at"], results[j]["activity_at"])
-		if left != right {
-			return left > right
-		}
-		return firstString(results[i]["conversation_id"]) < firstString(results[j]["conversation_id"])
-	})
-	results = c.collapseConversationMirrors(results)
-	total := len(results)
-	if offset > total {
-		offset = total
-	}
-	end := min(total, offset+limit)
-	if err := c.attachConversationProvenance(results[offset:end]); err != nil {
-		return nil, err
-	}
-	compactConversationProvenance(results[offset:end])
-	freshness, err := c.archiveSourceStatus()
-	if err != nil {
-		return nil, err
-	}
-	result := map[string]any{"items": results[offset:end], "next_offset": nil, "total": total,
-		"freshness": map[string]any{"status": freshness["status"], "stale_sources": freshness["stale_sources"]}}
-	if end < total {
-		result["next_offset"] = end
-	}
-	fitConversationCards(result, budget)
-	if len(result["items"].([]map[string]any)) < end-offset {
-		result["next_offset"] = offset + len(result["items"].([]map[string]any))
-	}
-	return result, nil
-}
-
-func TestMCPConversationSearchMatchesItsFullScan(t *testing.T) {
+func TestMCPConversationSearchRanking(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	message := func(id, role, text string) map[string]any {
 		return map[string]any{"id": id, "role": role, "text": text}
@@ -197,28 +45,70 @@ func TestMCPConversationSearchMatchesItsFullScan(t *testing.T) {
 	if result := catalog.Ingest(adapter, nil); result.Error != nil {
 		t.Fatal(result.Error)
 	}
-	decode := func(value any) any {
-		var decoded any
-		if err := json.Unmarshal([]byte(jsonText(value)), &decoded); err != nil {
+	// native names a result by its conversation and the message its snippet
+	// comes from, with why it matched.
+	native := func(item map[string]any) string {
+		var conversation, message string
+		if err := catalog.DB.QueryRow("SELECT native_id FROM conversations WHERE id=?", item["conversation_id"]).Scan(&conversation); err != nil {
 			t.Fatal(err)
 		}
-		return decoded
+		if id := firstString(item["message_id"]); id != "" {
+			if err := catalog.DB.QueryRow("SELECT native_id FROM messages WHERE id=?", id).Scan(&message); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return fmt.Sprintf("%s/%s: %v", conversation, message, item["relevance_reason"])
 	}
-	for _, args := range []map[string]any{
-		{"query": "parser"}, {"query": "tokenizer bug"}, {"query": "dashboard"}, {"query": "palette colors"},
-		{"query": "Parser maintenance"}, {"query": ""}, {"query": "", "repository": "web"}, {"query": "parser", "repository": "parser"},
-		{"query": "parser", "limit": 1, "offset": 1}, {"query": "parser", "max_output_tokens": 200},
+	// The default card budget fits three of these cards. Conversations of
+	// one workspace with no start time tie on score and recency, and fall back
+	// to conversation ID order.
+	for _, test := range []struct {
+		args  map[string]any
+		want  []string
+		total int
+		next  any
+	}{
+		{map[string]any{"query": "parser"}, []string{
+			"parser-session/p1: message text, conversation context, title",
+			"lexer-session/l2: message text, conversation context, title",
+			"chart-session/h1: message text, conversation context"}, 4, 3},
+		{map[string]any{"query": "tokenizer bug"}, []string{"parser-session/p1: message text, conversation context"}, 1, nil},
+		{map[string]any{"query": "dashboard"}, []string{
+			"css-session/c1: message text, conversation context, title",
+			"empty-session/: conversation context, title",
+			"chart-session/h1: title"}, 3, nil},
+		{map[string]any{"query": "palette colors"}, []string{"empty-session/: conversation context", "css-session/c1: conversation context"}, 2, nil},
+		// The query is the title of work-1, so its conversations rank by context.
+		{map[string]any{"query": "Parser maintenance"}, []string{
+			"lexer-session/l1: conversation context, title",
+			"parser-session/p1: conversation context, title",
+			"chart-session/h1: conversation context"}, 3, nil},
+		// Without a query, the most recent work comes first.
+		{map[string]any{"query": ""}, []string{
+			"empty-session/: structured filters or recent activity",
+			"css-session/c1: structured filters or recent activity",
+			"chart-session/h1: structured filters or recent activity"}, 5, 3},
+		{map[string]any{"query": "", "repository": "web"}, []string{
+			"empty-session/: structured filters or recent activity",
+			"css-session/c1: structured filters or recent activity",
+			"chart-session/h1: structured filters or recent activity"}, 3, nil},
+		{map[string]any{"query": "parser", "repository": "parser"}, []string{
+			"parser-session/p1: message text, conversation context, title",
+			"lexer-session/l2: message text, conversation context, title"}, 2, nil},
+		{map[string]any{"query": "parser", "limit": 1, "offset": 1}, []string{"lexer-session/l2: message text, conversation context, title"}, 4, 2},
+		// A small budget keeps the best card, without its reason.
+		{map[string]any{"query": "parser", "max_output_tokens": 200}, []string{"parser-session/p1: <nil>"}, 4, 1},
 	} {
-		got, err := catalog.searchConversations(args)
+		got, err := catalog.searchConversations(test.args)
 		if err != nil {
 			t.Fatal(err)
 		}
-		want, err := catalog.referenceSearchConversations(args)
-		if err != nil {
-			t.Fatal(err)
+		items := []string{}
+		for _, item := range got["items"].([]map[string]any) {
+			items = append(items, native(item))
 		}
-		if !same(decode(got), decode(want)) {
-			t.Fatalf("%v:\ngot  %s\nwant %s", args, jsonText(got), jsonText(want))
+		if !slices.Equal(items, test.want) || got["total"] != test.total || got["next_offset"] != test.next {
+			t.Errorf("%v: items %q, total %v, next %v; want %q, %d, %v", test.args, items, got["total"], got["next_offset"], test.want, test.total, test.next)
 		}
 	}
 	// Passages come from the chosen conversation only, best first.

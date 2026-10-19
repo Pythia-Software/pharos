@@ -939,11 +939,9 @@ func (c *Catalog) computeSearchRows(options SearchOptions, fields libraryFields)
 		args = append(args, options.Provider)
 	}
 	if model, effort := strings.TrimSpace(options.Model), normalizeEffort(options.Effort); model != "" || effort != "" {
-		conversation, conversationArgs := configurationPredicate("ce.model", "ce.effort", model, effort)
-		message, messageArgs := configurationPredicate("COALESCE(me.model,ce.model)", "me.effort", model, effort)
-		where = append(where, "w.id IN (SELECT ce.workspace_id FROM conversations ce WHERE "+conversation+" UNION SELECT ce.workspace_id FROM messages me JOIN conversations ce ON ce.id=me.conversation_id WHERE (me.model IS NOT NULL OR me.effort IS NOT NULL) AND "+message+")")
-		args = append(args, conversationArgs...)
-		args = append(args, messageArgs...)
+		filter, filterArgs := workspaceConfigurationFilter(model, effort)
+		where = append(where, filter)
+		args = append(args, filterArgs...)
 	}
 	if options.From != "" {
 		where = append(where, "w.activity_at>=?")
