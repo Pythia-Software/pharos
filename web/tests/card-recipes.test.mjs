@@ -9,7 +9,6 @@ async function moduleOf(entry) {
   return import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
 }
 const { queryRecipes, instantiateRecipe, loadQueryPreview, clearPreviewCache } = await moduleOf("src/curiosity-data.ts");
-const { groupSourceQuery } = await moduleOf("src/group-drilldown.ts");
 const { queryFromURL, queryHasTimeFilter, resolveRollingQuery } = await moduleOf("src/query-links.ts");
 const { queryURL } = await moduleOf("src/query-links.ts");
 const { migrateSavedQueries, updateBookmark, replaceSavedQuery } = await moduleOf("src/bookmarks.ts");
@@ -91,12 +90,13 @@ test("repeated-path HAVING excludes singleton reads and keeps repositories separ
 
 test("group drilldown preserves source predicates and metrics, handles null keys and drops HAVING", () => {
   const recipe = queryRecipes.find(r => r.id === "repeated-reads"), { query } = instantiateRecipe(recipe, 7, clock);
-  const records = groupSourceQuery(query, { repository_name: null, repo_path: "src/main.go", conversation_id: "conversation" }, schemas.tool_calls);
+  const records = core.groupSourceQuery(query, { repository_name: null, repo_path: "src/main.go", conversation_id: "conversation" }, schemas.tool_calls);
   assert.equal(records.grouping, undefined);
   assert.equal(records.offset, 0);
   assert.deepEqual(records.aggregations, recipe.measures);
   assert.deepEqual(records.where, [...query.grouping.source.where, { field: "repository_name", op: "is_null", value: "" }, { field: "repo_path", op: "=", value: "src/main.go" }, { field: "conversation_id", op: "=", value: "conversation" }]);
-  assert.throws(() => groupSourceQuery(query, { repo_path: "x" }, schemas.tool_calls), /Missing group key/);
+  // Keys that cannot be matched exactly (unknown fields) have no record query.
+  assert.equal(core.groupSourceQuery({ ...query, grouping: { ...query.grouping, keys: ["unknown"] } }, { unknown: "x" }, schemas.tool_calls), null);
 });
 
 test("cache efficiency is weighted by input tokens and preserves provider cohorts", () => {

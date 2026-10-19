@@ -25,7 +25,7 @@ test("repository summaries count sessions once across days and compute a weighte
   assert.equal(one.usage_sessions, 1);
   assert.equal(one.usage_total_tokens, 1110);
   assert.equal(one.usage_cost_usd, 4);
-  assert.equal(one.usage_cache_hit_percent, 100 * 910 / 1080);
+  assert.equal(one.usage_cache_hit_percent, 910 / 1080, "a fraction, presented by its percent display");
   const two = result.rows.find(row => row.repository_name === "two");
   assert.equal(two.usage_cost_usd, null);
   assert.equal(two.usage_cache_hit_percent, null);
@@ -54,10 +54,11 @@ test("switching grouped presets keeps the original source and drops old HAVING a
     aggregations: [{ id: "source-tokens", op: "sum", field: "total_tokens", groupBy: [] }] };
   const first = { ...applyUsageTablePreset(source, preset("Repositories")), where: [{ field: "usage_total_tokens", op: ">", value: 500 }] };
   const second = applyUsageTablePreset(first, preset("Models"));
-  assert.deepEqual(second.grouping.source, source);
+  // Leaving the stage later starts the source records from their first page.
+  assert.deepEqual(second.grouping.source, { ...source, offset: 0 });
   assert.deepEqual(second.where, []);
   assert.deepEqual(second.aggregations ?? [], []);
-  assert.deepEqual(first.grouping.source, source);
+  assert.deepEqual(first.grouping.source, { ...source, offset: 0 });
 });
 
 test("work identity and unknown effort remain separate", () => {
@@ -79,4 +80,14 @@ test("preset highlighting follows manual edits but ignores result presentation a
   assert.equal(usageTablePresetMatches({ ...query, select: [], orderBy: [], offset: 50, where: [{ field: "usage_sessions", op: ">", value: 1 }] }, preset("Repositories")), true);
   const edited = { ...query, grouping: { ...query.grouping, summaries: query.grouping.summaries.map(column => column.id === "usage_cost_usd" ? { ...column, op: "avg" } : column) } };
   assert.equal(usageTablePresetMatches(edited, preset("Repositories")), false);
+});
+
+test("the Work preset links each title to its work and keeps link columns out of server requests", () => {
+  const query = applyUsageTablePreset(EMPTY_QUERY, preset("Work"));
+  const link = query.grouping.summaries.find(column => column.op === "link");
+  assert.equal(query.select[0].field, link.id);
+  assert.deepEqual(link.link, { label: { column: "usage_work_title" }, to: { kind: "template", template: "/work/{field:workspace_id}" } });
+  assert.deepEqual(decodeQueryStrict(encodeQuery(query)).grouping.summaries, query.grouping.summaries);
+  assert.equal(usageTablePresetMatches(query, preset("Work")), true);
+  assert.equal(usageTablePresetMatches(query, preset("Repositories")), false);
 });

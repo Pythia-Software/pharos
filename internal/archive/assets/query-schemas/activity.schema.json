@@ -19,7 +19,7 @@
   ],
   "fields": [
     { "name": "id", "label": "Run ID", "type": "text", "select": {"default": false}, "bindings": {"postgres": {"expr": "id"}, "sqlite": {"expr": "r.\"id\""}} },
-    { "name": "state", "label": "State", "type": "enum", "group": "Run", "render": "run_state", "filter": {"values": {"source": "static", "options": ["running", "complete", "failed"]}}, "bindings": {"postgres": {"expr": "state"}, "sqlite": {"expr": "r.\"state\""}} },
+    { "name": "state", "label": "State", "type": "enum", "group": "Run", "render": "run_state", "filter": {"editor": "set", "values": {"source": "static", "options": ["running", "complete", "failed"]}}, "bindings": {"postgres": {"expr": "state"}, "sqlite": {"expr": "r.\"state\""}} },
     { "name": "sources", "label": "Sources", "type": "textarray", "group": "Run", "render": "tags_pills", "filter": {"editor": "set"}, "bindings": {"postgres": {"expr": "sources"}, "sqlite": {"expr": "r.\"sources\""}} },
     { "name": "current_source", "label": "Current source", "type": "text", "group": "Run", "bindings": {"postgres": {"expr": "current_source"}, "sqlite": {"expr": "r.\"current_source\""}} },
     { "name": "phase", "label": "Phase", "type": "enum", "group": "Run", "bindings": {"postgres": {"expr": "phase"}, "sqlite": {"expr": "r.\"phase\""}} },

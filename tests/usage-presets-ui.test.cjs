@@ -144,7 +144,7 @@ test('Usage presets follow the current query across clicks, edits, reloads and r
     assert.deepEqual(serverQueries.at(-1).source.where, []);
     const cells = await page.locator('#usage .qt-table tbody tr').first().locator('td').allTextContents();
     assert.deepEqual(cells.slice(0, 5), ['example/repo', '$3.00', '300', '30', '1']);
-    assert.equal(cells[5], '90%');
+    assert.equal(cells[5], '90.0%', 'the cache rate summary uses its own percent display');
     const grouped = decodeQuery(new URL(page.url()).searchParams.get('q_usage'));
     await page.reload();
     await waitPressed(repositories, true);
@@ -157,6 +157,9 @@ test('Usage presets follow the current query across clicks, edits, reloads and r
     await groups.getByRole('button', { name: 'Work', exact: true }).click();
     const workRow = page.locator('#usage .qt-table tbody tr', { hasText: 'Deep work' });
     await workRow.waitFor();
+    // The title is a group link column: a real href, computed in the browser and never sent to the server.
+    assert.equal(await workRow.getByRole('link', { name: 'Deep work', exact: true }).getAttribute('href'), '/work/w1');
+    assert.ok(serverQueries.at(-1).grouping.summaries.every(column => column.op !== 'link'));
     assert.equal(await workRow.getByRole('button', { name: 'Records', exact: true }).isEnabled(), true);
     await workRow.getByRole('button', { name: 'Records', exact: true }).click();
     await page.locator('#usage .qt-table th[data-qt-field="day"]').waitFor();
