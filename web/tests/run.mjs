@@ -1,26 +1,31 @@
 // Runs the JS test tiers from any directory.
 //
-//   node web/tests/run.mjs [unit|browser|all] [--full] [--test-* flags] [file filters]
+//   node web/tests/run.mjs [unit|browser|e2e|all] [--full] [--test-* flags] [file filters]
 //
 // unit (the default) bundles web/tests/unit once and runs it in node; it never
-// starts a browser. browser runs the Playwright files in tests/. --full sets
-// PHAROS_TEST_FULL=1, which widens the combinatorial unit tests. Filters keep
-// the test files whose path contains any of them. Flags go to `node --test`
-// before the file list, so `--test-name-pattern=x` works. The 10 slowest
-// tests are listed at the end, and the exit status is non-zero on failure.
+// starts a browser. browser runs the structural suite in web/tests/browser
+// against one browser started for the run (PHAROS_BROWSER=chromium|webkit,
+// see web/tests/browser/engine.mjs). e2e runs web/tests/e2e with
+// PHAROS_E2E=1: a real service on a disk image, macOS only and slow. all runs
+// unit and browser. --full sets PHAROS_TEST_FULL=1, which widens the
+// combinatorial unit tests. Filters keep the test files whose path contains
+// any of them. Flags go to `node --test` before the file list, so
+// `--test-name-pattern=x` works. The 10 slowest tests are listed at the end,
+// and the exit status is non-zero on failure.
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildRoot, buildUnitTests, unitEntries, unitSource, web } from "./build.mjs";
+import { engine, launchPlan, startBrowser } from "./browser/engine.mjs";
 
 const repo = join(web, "..");
-const browserSource = join(repo, "tests");
+const browserSource = join(web, "tests", "browser"), e2eSource = join(web, "tests", "e2e");
 const timingsReporter = fileURLToPath(new URL("./timings-reporter.mjs", import.meta.url));
 const valueFlags = new Set(["--test-name-pattern", "--test-skip-pattern", "--test-reporter", "--test-reporter-destination", "--test-concurrency", "--test-timeout", "--test-shard"]);
 
 const args = process.argv.slice(2);
-const mode = ["unit", "browser", "all"].includes(args[0]) ? args.shift() : "unit";
+const mode = ["unit", "browser", "e2e", "all"].includes(args[0]) ? args.shift() : "unit";
 const flags = [], filters = [];
 let full = process.env.PHAROS_TEST_FULL === "1";
 for (let i = 0; i < args.length; i++) {
@@ -30,12 +35,17 @@ for (let i = 0; i < args.length; i++) {
   else filters.push(arg);
 }
 
+const testFiles = dir => readdirSync(dir).filter(file => file.endsWith(".test.mjs")).sort();
 const tiers = {
   // Each run builds into its own directory so concurrent runs cannot clobber
   // each other's bundles.
   // The full matrix runs a few thousand preview comparisons in one test.
-  unit: { cwd: web, timeout: full ? 600000 : 60000, nodeFlags: ["--enable-source-maps"], testFlags: [], files: () => unitEntries().map(file => relative(unitSource, file)) },
-  browser: { cwd: repo, timeout: 120000, nodeFlags: [], testFlags: ["--test-concurrency=3"], files: () => readdirSync(browserSource).filter(file => file.endsWith("-ui.test.cjs")).sort() },
+  unit: { cwd: web, source: unitSource, timeout: full ? 600000 : 60000, nodeFlags: ["--enable-source-maps"], testFlags: [], files: () => unitEntries().map(file => relative(unitSource, file)) },
+  // On Node 20, --test-timeout bounds each test file as a whole, so for these
+  // tiers it caps a file; each test sets its own bound (harness.mjs limits).
+  browser: { cwd: web, source: browserSource, timeout: 300000, nodeFlags: [], testFlags: ["--test-concurrency=3"], browser: true, files: () => testFiles(browserSource) },
+  // One go build, a disk image and a real service, shared by its tests.
+  e2e: { cwd: web, source: e2eSource, timeout: 1800000, nodeFlags: [], testFlags: ["--test-concurrency=1"], browser: true, env: { PHAROS_E2E: "1" }, files: () => testFiles(e2eSource) },
 };
 const selected = (mode === "all" ? ["unit", "browser"] : [mode]).map(name => {
   const files = tiers[name].files();
@@ -54,7 +64,7 @@ const env = full ? { ...process.env, PHAROS_TEST_FULL: "1" } : process.env;
 mkdirSync(buildRoot, { recursive: true });
 const scratch = mkdtempSync(join(buildRoot, "run-"));
 
-function run(tier, files, timingsFile) {
+function run(tier, files, timingsFile, extraEnv = {}) {
   // Reporters pair with destinations by position; the timings reporter is last.
   const reporters = values("--test-reporter"), destinations = values("--test-reporter-destination");
   if (!reporters.length) reporters.push("spec");
@@ -68,7 +78,7 @@ function run(tier, files, timingsFile) {
     ...destinations.map(destination => `--test-reporter-destination=${destination}`), `--test-reporter-destination=${timingsFile}`,
     ...files,
   ];
-  return new Promise(resolve => spawn(process.execPath, argv, { cwd: tier.cwd, env, stdio: "inherit" }).on("exit", (code, signal) => resolve(code ?? (signal ? 1 : 0))));
+  return new Promise(resolve => spawn(process.execPath, argv, { cwd: tier.cwd, env: { ...env, ...tier.env, ...extraEnv }, stdio: "inherit" }).on("exit", (code, signal) => resolve(code ?? (signal ? 1 : 0))));
 }
 
 let failed = false, interrupted = false;
@@ -78,7 +88,7 @@ process.on("SIGINT", () => { interrupted = true; });
 try {
   for (const tier of selected) {
     if (!tier.files.length || interrupted) continue;
-    let files = tier.files.map(file => join(browserSource, file));
+    let files = tier.files.map(file => join(tier.source, file));
     if (tier.name === "unit") {
       const wanted = new Set(tier.files.map(file => join(unitSource, file)));
       // esbuild prints its own errors.
@@ -88,7 +98,18 @@ try {
     }
     if (selected.length > 1) console.log(`\n# ${tier.name} tests (${files.length} files)`);
     const timingsFile = join(scratch, `${tier.name}-timings.jsonl`);
-    failed = (await run(tier, files, timingsFile)) !== 0 || failed;
+    // One browser serves every file in the tier; each test gets its own
+    // context. Without one the tests skip and say how to install it.
+    let browser = null;
+    if (tier.browser) {
+      const skip = launchPlan().skip;
+      if (skip) console.log(`# ${tier.name} tests skip: ${skip}`);
+      else browser = await startBrowser().catch(error => { console.error(`Could not start ${engine}: ${error.message}`); });
+      if (!skip && !browser) { failed = true; break; }
+    }
+    try {
+      failed = (await run(tier, files, timingsFile, browser ? { PHAROS_BROWSER_WS: browser.wsEndpoint() } : {})) !== 0 || failed;
+    } finally { await browser?.close(); }
     try { timings.push(...readFileSync(timingsFile, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line))); } catch {}
   }
   const slowest = timings.sort((a, b) => b.duration - a.duration).slice(0, 10);
