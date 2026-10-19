@@ -17,8 +17,8 @@ function card(id,days=7){const recipe=queryRecipes.find(r=>r.id===id);return{rec
 function table(id,rows){const {recipe,query}=card(id);return core.applyQuery(rows,query,schemas[recipe.dataset],{now}).rows;}
 function metric(id,rows){const {recipe,query}=card(id),cover=cardCoverQuery(query,recipe);return core.evaluateMetrics(rows,cover.query,schemas[recipe.dataset],{now}).metrics.find(m=>m.id===cover.metricId);}
 
-test('API cost study covers seven active definitions and compiles every destination and cover',()=>{
- const ids=apiCostTheses.flatMap(t=>t.cards.map(c=>c.id));assert.equal(new Set(ids).size,7);assert.deepEqual([...ids].sort(),queryRecipes.filter(r=>r.category==='cost'&&!r.retired).map(r=>r.id).sort());
+test('API cost study covers eight active definitions and compiles every destination and cover',()=>{
+ const ids=apiCostTheses.flatMap(t=>t.cards.map(c=>c.id));assert.equal(new Set(ids).size,8);assert.deepEqual([...ids].sort(),queryRecipes.filter(r=>r.category==='cost'&&!r.retired).map(r=>r.id).sort());
  for(const id of ids){const {recipe,query}=card(id,30);for(const state of [query,cardCoverQuery(query,recipe).query])assert.deepEqual(core.toQueryRequestV3(state,schemas[recipe.dataset],caps,execution,{now,rows:false}).diagnostics,[],id);assert.ok(instantiateRecipe(recipe,30).description.includes('30'),id);}
 });
 

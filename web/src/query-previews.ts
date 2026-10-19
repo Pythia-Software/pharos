@@ -24,6 +24,7 @@ export type QueryPreview = {
   metrics?: PreviewMetric[]; fields?: FieldSchema["fields"]; coverMetricId?: string;
   ranking?: { label: string; value: number; color: string }[];
   buckets?: ChartBucket[]; series?: ChartSeries[]; excerpt?: string;
+  timeline?: CardCover["timeline"];
   study?: HumanStudyPreview;
 };
 type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean };
@@ -200,6 +201,8 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   }
   // Existing daily covers keep the Usage palette, calendar gaps and exact Other.
   if (!clause.expression && !clause.distribution && (!clause.display || clause.display.kind === "auto") && clause.groupBy[0] === "day" && clause.op === "sum" && numeric.length) {
+    preview.timeline = (options.cover ?? recipe?.cover)?.timeline;
+    if (preview.timeline?.percent && (limited || result.buckets.some(bucket => bucket.error || bucket.yError))) throw new Error("Complete daily totals are required for percentage shares.");
     // Recorded durations chart as hours; milliseconds make unreadable axes.
     const scale = clause.field === "duration_ms" ? 36e5 : 1;
     const entries = numeric.map(bucket => [String(bucket.keys[0]), bucket.keys.length > 1 ? bucket.keys.slice(1).map((key, i) => keyLabels[i + 1]?.(key) ?? String(key ?? "Unspecified")).join(" · ") : clause.label ?? "Total", Number(bucket.value) / scale] as [string, string, number]);

@@ -26,7 +26,7 @@ function metrics(id, population = facts) { const { recipe, query } = card(id); c
 
 test("model review covers the entire category and every cover and destination compiles", () => {
   const ids = modelChoiceTheses.flatMap(thesis => thesis.cards.map(card => card.id));
-  assert.equal(new Set(ids).size, 14);
+  assert.equal(new Set(ids).size, 16);
   assert.deepEqual([...ids].sort(), queryRecipes.filter(recipe => recipe.category === "models" && !recipe.retired).map(recipe => recipe.id).sort());
   for (const id of ids) {
     const { recipe, query } = card(id, 30);

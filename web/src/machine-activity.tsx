@@ -35,7 +35,7 @@ function readLocation() {
   } };
 }
 
-export function MachineActivity({ tokens, calls, parallelism }: { tokens: (where: WhereTerm[], applied: React.MutableRefObject<WhereTerm[]>) => React.ReactNode; calls: MachineCallsSurface; parallelism?: () => React.ReactNode }) {
+export function MachineActivity({ tokens, calls, parallelism }: { tokens: (where: WhereTerm[], applied: React.MutableRefObject<WhereTerm[]>, onTimeRangeChange: () => void) => React.ReactNode; calls: MachineCallsSurface; parallelism?: () => React.ReactNode }) {
   const [state, setState] = useState(readLocation);
   const { view, scope, example } = state;
   const appliedTokenScope = useRef<WhereTerm[]>([]);
@@ -96,6 +96,6 @@ export function MachineActivity({ tokens, calls, parallelism }: { tokens: (where
     </div>
     <div className="machine-scope-note"><span>{scope.days ? `${machineDay(window.start)} – ${shiftMachineDay(machineDay(window.end), -1)} · ${Intl.DateTimeFormat().resolvedOptions().timeZone}` : "All recorded time"} · Filters follow you between machine views.</span>{usingExample ? <span className="machine-example-label">Example data · synthetic activity</span> : null}</div>
     {optionsError && !usingExample ? <p className="muted">{optionsError}</p> : null}
-    {view === "tokens" ? tokens(tokenWhere, appliedTokenScope) : view === "time" ? <MachineTime scope={scope} window={window} example={example} onRepository={repository => filter({ repository })} calls={calls} /> : <div className="machine-parallelism"><ConcurrencyPanel scope={scope} activityWindow={window} example={example} />{!usingExample ? parallelism?.() : null}</div>}
+    {view === "tokens" ? tokens(tokenWhere, appliedTokenScope, () => { if (scope.days) filter({ days: 0 }); }) : view === "time" ? <MachineTime scope={scope} window={window} example={example} onRepository={repository => filter({ repository })} calls={calls} /> : <div className="machine-parallelism"><ConcurrencyPanel scope={scope} activityWindow={window} example={example} />{!usingExample ? parallelism?.() : null}</div>}
   </section>;
 }
