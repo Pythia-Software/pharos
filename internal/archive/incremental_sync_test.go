@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"os"
@@ -462,18 +463,23 @@ func TestSyncCadenceValidationAndPersistence(t *testing.T) {
 	}
 }
 
-func TestFullRecaptureBypassesReuseAndResumesVerifiedFiles(t *testing.T) {
+// TestFullRecapture: a full recapture (a recovery ID) copies every file once
+// rather than reusing the capture, and a resumed one does not copy it again.
+// Recapturing an identical file adds no history; a changed file keeps its
+// previous version.
+func TestFullRecapture(t *testing.T) {
 	useHost(t, "host-a")
 	source := stableCodexSource(t, 2)
 	config := captureTestConfig(t, source)
 	runCapture(t, config)
+	original := readCaptureManifest(t, config, source.Name).Files[0]
 	config.CaptureRecoveryID = "repair-1"
 	first := captureResult(t, runCapture(t, config), source.Name)
 	if first.FilesCopied != 1 || first.FilesUnchanged != 0 {
 		t.Fatalf("force reused capture: %+v", first)
 	}
-	if entry := readCaptureManifest(t, config, source.Name).Files[0]; entry.RecoveryID != "repair-1" || len(entry.Previous) != 0 || first.VersionsPreserved != 0 {
-		t.Fatal("force generation duplicated unchanged evidence")
+	if entry := readCaptureManifest(t, config, source.Name).Files[0]; entry.RecoveryID != "repair-1" || entry.SHA256 != original.SHA256 || len(entry.Previous) != 0 || first.VersionsPreserved != 0 {
+		t.Fatalf("identical full recapture created history: result=%+v entry=%+v", first, entry)
 	}
 	second := captureResult(t, runCapture(t, config), source.Name)
 	if second.FilesCopied != 0 || second.FilesUnchanged != 1 {
@@ -481,8 +487,24 @@ func TestFullRecaptureBypassesReuseAndResumesVerifiedFiles(t *testing.T) {
 	}
 	config.CaptureRecoveryID = "repair-2"
 	third := captureResult(t, runCapture(t, config), source.Name)
-	if third.FilesCopied != 1 || third.VersionsPreserved != 0 || len(readCaptureManifest(t, config, source.Name).Files[0].Previous) != 0 {
-		t.Fatal("new force generation reused old verification")
+	if entry := readCaptureManifest(t, config, source.Name).Files[0]; third.FilesCopied != 1 || third.VersionsPreserved != 0 || entry.SHA256 != original.SHA256 || len(entry.Previous) != 0 {
+		t.Fatalf("new force generation reused old verification or created history: result=%+v entry=%+v", third, entry)
+	}
+	writeSourceFile(t, source.Path, codexLines("incremental-test", 3))
+	config.CaptureRecoveryID = "changed"
+	result := captureResult(t, runCapture(t, config), source.Name)
+	entry := readCaptureManifest(t, config, source.Name).Files[0]
+	if result.VersionsPreserved != 1 || len(entry.Previous) != 1 || entry.Previous[0].SHA256 != original.SHA256 {
+		t.Fatalf("changed full recapture lost previous evidence: result=%+v entry=%+v", result, entry)
+	}
+	if previous := readText(t, capturedPath(config, source.Name, entry.Previous[0].Captured)); previous != codexLines("incremental-test", 2) {
+		t.Fatal("preserved evidence does not contain the original transcript")
+	}
+	config.CaptureRecoveryID = "unchanged-3"
+	result = captureResult(t, runCapture(t, config), source.Name)
+	entry = readCaptureManifest(t, config, source.Name).Files[0]
+	if result.FilesCopied != 1 || result.VersionsPreserved != 0 || len(entry.Previous) != 1 {
+		t.Fatalf("unchanged full recapture duplicated genuine history: result=%+v entry=%+v", result, entry)
 	}
 }
 
@@ -766,5 +788,41 @@ func TestConductorNativeAliasesLinkInEitherArrivalOrder(t *testing.T) {
 				t.Fatal("alias waited for global reconciliation")
 			}
 		})
+	}
+}
+
+func TestSyncStatusExposesLowercaseSourceChoices(t *testing.T) {
+	source := stableCodexSource(t, 2)
+	server := automaticTestServer(t, source)
+	response := httptest.NewRecorder()
+	server.getIncrementalSync(response, httptest.NewRequest("GET", "/api/sync/status", nil))
+	if response.Code != 200 {
+		t.Fatal(response.Body.String())
+	}
+	var status map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"sources", "available_sources"} {
+		choices, ok := status[key].([]any)
+		if !ok || len(choices) != 1 {
+			t.Fatalf("%s has no source choices: %+v", key, status[key])
+		}
+		choice := choices[0].(map[string]any)
+		if choice["name"] != source.Name || choice["kind"] != source.Kind || choice["enabled"] != true {
+			t.Fatalf("%s does not match the Sync UI contract: %+v", key, choice)
+		}
+	}
+}
+
+func TestDeferredIdentityReconciliationHonorsCancellation(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := catalog.ReconcileIdentitiesContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("identity reconciliation ignored cancellation: %v", err)
+	}
+	if err := catalog.backfillHarnessVersionsContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("harness backfill ignored cancellation: %v", err)
 	}
 }

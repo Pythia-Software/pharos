@@ -2,8 +2,11 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1056,5 +1059,98 @@ func TestStaleMetricLedgersAreIndexedAgain(t *testing.T) {
 	}
 	if files, sessions := index(); len(files) != 0 || sessions != 0 {
 		t.Fatalf("a second pass parsed %v and %d sessions", files, sessions)
+	}
+}
+
+type failingTranscriptEntry struct {
+	os.DirEntry
+	err error
+}
+
+func (entry failingTranscriptEntry) Info() (fs.FileInfo, error) { return nil, entry.err }
+
+func TestJSONLDiscoveryToleratesOnlyDisappearingEntries(t *testing.T) {
+	source := stableCodexSource(t, 2)
+	entries, err := os.ReadDir(filepath.Dir(source.Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := &jsonlAdapter{baseAdapter: baseAdapter{config: source}, provider: "codex"}
+	for _, test := range []struct {
+		name    string
+		path    string
+		entry   os.DirEntry
+		walkErr error
+		wantErr error
+	}{
+		{"missing entry", source.Path, failingTranscriptEntry{entries[0], &os.PathError{Op: "stat", Path: source.Path, Err: os.ErrNotExist}}, nil, nil},
+		{"missing subtree", filepath.Join(source.Path, "deleted"), nil, os.ErrNotExist, nil},
+		{"missing source", source.Path, nil, os.ErrNotExist, os.ErrNotExist},
+		{"unreadable entry", source.Path, failingTranscriptEntry{entries[0], os.ErrPermission}, nil, os.ErrPermission},
+		{"unreadable subtree", filepath.Join(source.Path, "private"), nil, os.ErrPermission, os.ErrPermission},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			info, err := adapter.transcriptInfo(test.path, test.entry, test.walkErr)
+			if info != nil || !errors.Is(err, test.wantErr) {
+				t.Fatalf("incorrect discovery race handling: info=%v error=%v", info, err)
+			}
+		})
+	}
+}
+
+func TestConductorObservedVersionFollowsBlockedSnapshotRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conductor.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	execSQL(t, db, "PRAGMA journal_mode=DELETE",
+		"CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT)",
+		"CREATE TABLE session_messages(id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, created_at TEXT, sent_at TEXT, cancelled_at TEXT)")
+	execSQL(t, db, addConductorSession("snapshot", 1)...)
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	execSQL(t, db, "BEGIN EXCLUSIVE", "UPDATE session_messages SET content='committed while waiting'")
+	defer db.Exec("ROLLBACK")
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	adapter := &conductorAdapter{baseAdapter: baseAdapter{config: SourceConfig{Name: "conductor", Kind: "conductor", Path: path}, ctx: ctx}}
+	type readResult struct {
+		record *WorkspaceRecord
+		err    error
+	}
+	done := make(chan readResult, 1)
+	go func() {
+		result := readResult{}
+		result.err = adapter.database(path, nil, nil, func(record *WorkspaceRecord, _ []sourcePart) error {
+			result.record = record
+			return nil
+		})
+		done <- result
+	}()
+	select {
+	case result := <-done:
+		t.Fatalf("snapshot did not wait for writer: %+v", result)
+	case <-time.After(100 * time.Millisecond):
+	}
+	fresh := time.Now().Add(-time.Second)
+	if err := os.Chtimes(path, fresh, fresh); err != nil {
+		t.Fatal(err)
+	}
+	execSQL(t, db, "COMMIT")
+	select {
+	case result := <-done:
+		if result.err != nil || result.record == nil {
+			t.Fatalf("read failed: %+v", result)
+		}
+		if result.record.Observed < fresh.UnixNano() || result.record.Conversations[0].Observed != result.record.Observed || result.record.Conversations[0].Messages[0].Text != "committed while waiting" {
+			t.Fatalf("snapshot was stamped with a pre-read version: %+v", result.record)
+		}
+	case <-ctx.Done():
+		t.Fatal("snapshot did not finish after writer committed")
 	}
 }
