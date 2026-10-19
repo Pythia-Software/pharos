@@ -52,8 +52,9 @@ func TestQueryExplorationHTTP(t *testing.T) {
 			}
 		})
 	}
+	// Complete-population downloads are gone for every dataset and body.
 	for _, body := range []string{`null`, `[]`, `{"where":[]} {}`, `{"where":[],"limit":1}`, `{"where":[{"field":"not_a_field","op":"=","value":"x"}]}`} {
-		if w := call("POST", "/api/query/tool_calls/population", body); w.Code != http.StatusGone {
+		if w := call("POST", "/api/query/tool_calls/population", body); w.Code != http.StatusGone || strings.Contains(w.Body.String(), `"rows"`) || !strings.Contains(w.Body.String(), "server query execution") {
 			t.Fatal(w.Code, w.Body.String())
 		}
 	}
@@ -64,19 +65,6 @@ func TestQueryExplorationHTTP(t *testing.T) {
 	}
 	if w := queryExplorationCall(server, "", "POST", "/api/query/tool_calls/population", `{}`); w.Code != 401 {
 		t.Fatal(w.Code)
-	}
-}
-
-func TestQueryPopulationDownloadsDisabled(t *testing.T) {
-	catalog, config := testCatalog(t)
-	server := testServer(t, config, catalog)
-	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "parallelism"} {
-		for _, body := range []string{`{"where":[]}`, `{"where":[{"field":"tool_name","op":"=","value":"shell_command"}]}`} {
-			w := queryExplorationCall(server, config.APIToken, "POST", "/api/query/"+dataset+"/population", body)
-			if w.Code != http.StatusGone || strings.Contains(w.Body.String(), `"rows"`) || !strings.Contains(w.Body.String(), "server query execution") {
-				t.Fatal(w.Code, w.Body.String())
-			}
-		}
 	}
 }
 

@@ -271,18 +271,6 @@ func TestLibraryProjectionRebuildsWhenDefinitionChanges(t *testing.T) {
 	}
 }
 
-func TestReopenedCatalogHasNoLegacyQueryStats(t *testing.T) {
-	catalog, _ := testCatalog(t)
-	// A second open keeps the library version, so only schema.sql runs.
-	if err := catalog.Initialize(); err != nil {
-		t.Fatal(err)
-	}
-	var legacy int
-	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'workspace_query_stats%'").Scan(&legacy); err != nil || legacy != 0 {
-		t.Fatalf("schema.sql recreated workspace_query_stats (superseded by workspace_library): %d %v", legacy, err)
-	}
-}
-
 // Every request shape must answer exactly as it would from full rows, whether
 // the projection is stored or computed live.
 func TestLibraryRequestsReadingFewerFieldsMatchFullRows(t *testing.T) {

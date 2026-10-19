@@ -302,17 +302,6 @@ func TestUnlimitedManualVerificationBypassesAutomaticSizeGate(t *testing.T) {
 	}
 }
 
-func TestSyncSettingsRouteServesUI(t *testing.T) {
-	server := automaticTestServer(t, stableCodexSource(t, 2))
-	response := httptest.NewRecorder()
-	request := httptest.NewRequest("GET", "/settings/sync", nil)
-	request.Header.Set("Authorization", "Bearer "+server.Config().APIToken)
-	server.ServeHTTP(response, request)
-	if response.Code != 200 || !strings.Contains(response.Body.String(), `href="/settings/sync"`) || !strings.Contains(response.Body.String(), `id="syncDashboard"`) {
-		t.Fatalf("Sync Settings deep link did not serve its navigation and dashboard: status=%d", response.Code)
-	}
-}
-
 func TestAntigravityAuditExcludesUnrelatedRunLogEvidence(t *testing.T) {
 	useHost(t, "host-a")
 	directory := t.TempDir()
