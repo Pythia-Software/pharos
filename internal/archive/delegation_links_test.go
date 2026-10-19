@@ -8,14 +8,19 @@ import (
 
 func TestDelegationIncomingAncestorsRemainContext(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		depth    int
-		inferred bool
-		fallback bool
+		name             string
+		depth            int
+		inferred         bool
+		inferredAncestor bool
+		sessionParents   bool
+		fallback         bool
 	}{
 		{name: "separate child workspace", depth: 1},
 		{name: "nested child without derived session", depth: 2, fallback: true},
 		{name: "inferred command parent", depth: 2, inferred: true},
+		{name: "command-launched ancestors", depth: 3, inferredAncestor: true},
+		{name: "recorded session parents", depth: 2, sessionParents: true},
+		{name: "entire command-launch chain", depth: 3, inferred: true, inferredAncestor: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, config := testCatalog(t)
@@ -29,7 +34,7 @@ func TestDelegationIncomingAncestorsRemainContext(t *testing.T) {
 				id := fmt.Sprintf("level-%d", i)
 				run(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES(?,'codex','local',?,?,'2026-01-01')`, id, id, id)
 				parent := ""
-				if i > 0 && !(tc.inferred && i == tc.depth) {
+				if i > 0 && !tc.sessionParents && !(tc.inferred && i == tc.depth) && !(tc.inferredAncestor && i < tc.depth) {
 					parent = fmt.Sprintf("level-%d", i-1)
 				}
 				run(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth,model,effort) VALUES(?,?,'codex','local',?,?,?,'own-model','medium')`, id, id, id, nilIfEmpty(parent), i)
@@ -38,9 +43,16 @@ func TestDelegationIncomingAncestorsRemainContext(t *testing.T) {
 				}
 			}
 			childID := fmt.Sprintf("level-%d", tc.depth)
-			if tc.inferred {
-				run(`INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,status) VALUES('launch','level-1','level-1',0,'codex','tool_call','exec_command','shell','success')`)
-				run(`INSERT INTO conversation_launches(child_id,parent_id,tool_call_id,program) VALUES(?,'level-1','launch','codex')`, childID)
+			for i := 1; i <= tc.depth; i++ {
+				if tc.sessionParents {
+					run(`UPDATE agent_sessions SET parent_id=? WHERE id=?`, fmt.Sprintf("level-%d-session", i-1), fmt.Sprintf("level-%d-session", i))
+				}
+				if !(tc.inferred && i == tc.depth) && !(tc.inferredAncestor && i < tc.depth) {
+					continue
+				}
+				parent, child := fmt.Sprintf("level-%d", i-1), fmt.Sprintf("level-%d", i)
+				run(`INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,status) VALUES(?,?,?,0,'codex','tool_call','exec_command','shell','success')`, child+"-launch", parent, parent)
+				run(`INSERT INTO conversation_launches(child_id,parent_id,tool_call_id,program) VALUES(?,?,?,'codex')`, child, parent, child+"-launch")
 			}
 			// A sibling is not part of the selected workspace's ancestor context.
 			run(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth) VALUES('sibling','level-0','codex','local','sibling','level-0',1)`)
@@ -92,6 +104,125 @@ func TestDelegationIncomingAncestorsRemainContext(t *testing.T) {
 				if m["value"] != float64(100) || m["quality"] != "reported" {
 					t.Fatal("matching-only totals included ancestor context", m)
 				}
+			}
+		})
+	}
+}
+
+func TestDelegationIncomingExactOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		declared, omitParent bool
+	}{
+		{name: "acknowledged child"},
+		{name: "declared child", declared: true},
+		{name: "declared child without transcript parent", declared: true, omitParent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, config := testCatalog(t)
+			seedDelegation(t, c)
+			run := func(q string, args ...any) {
+				t.Helper()
+				if _, err := c.DB.Exec(q, args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			run(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('outside','antigravity','local','outside','Outside','2026-01-01'),('leaf-work','codex','local','leaf','Leaf','2026-01-01')`)
+			// The transcript flattened this parent to root; the retained launch
+			// in child identifies the actual owning execution.
+			run(`UPDATE conversations SET workspace_id='outside',agent_depth=2 WHERE id='nested'`)
+			run(`UPDATE agent_sessions SET workspace_id='outside' WHERE id='nested-session'`)
+			if tc.declared {
+				run(`UPDATE agent_sessions SET child_conversation_id='nested' WHERE id='nested-alias'`)
+				run(`DELETE FROM messages WHERE id='nested-result'`)
+			}
+			if tc.omitParent {
+				run(`UPDATE conversations SET parent_id=NULL WHERE id='nested'`)
+			}
+			run(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth) VALUES('leaf','leaf-work','codex','local','leaf','nested',3)`)
+			run(`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider,usage_status,total_tokens) VALUES('leaf-session','leaf-work','leaf','main','subagent','codex','reported-reconciled',50)`)
+			for _, selected := range []struct {
+				workspace, conversation, session string
+				depth, accounted                 int
+				tokens                           float64
+			}{
+				{"outside", "nested", "nested-session", 2, 2, 300},
+				{"leaf-work", "leaf", "leaf-session", 3, 1, 50},
+			} {
+				s, err := c.delegationSnapshot(context.Background(), selected.workspace)
+				if err != nil {
+					t.Fatal(err)
+				}
+				n := s.ByID[selected.session]
+				if n.Depth != selected.depth || n.ParentID == "" {
+					t.Fatalf("lost recovered incoming chain: %+v", n)
+				}
+				parent := s.ByID[n.ParentID]
+				if selected.conversation == "leaf" {
+					parent = s.ByID[parent.ParentID]
+				}
+				if parent == nil || parent.ConversationID != "child" || !parent.ContextOnly {
+					t.Fatalf("exact launch must override flattened transcript parent: %+v", parent)
+				}
+				for _, ancestor := range s.Nodes {
+					if ancestor.ContextOnly && (ancestor.Navigation == nil || ancestor.Self["tokens"].Value != nil) {
+						t.Fatal("incoming context must remain navigable with unknown self usage", ancestor)
+					}
+					if ancestor.ConversationID == "nested" && (ancestor.ParentEvidence != "exact-delegation-handle" || ancestor.MessageID != "nested-launch") {
+						t.Fatal("incoming edge lost its exact launch evidence", ancestor)
+					}
+				}
+				if n.ExternalParent == nil || n.ExternalParent.ConversationID != s.ByID[n.ParentID].ConversationID {
+					t.Fatal("parent navigation must follow recovered ownership", n.ExternalParent)
+				}
+				if m := s.Totals["tokens"]; m.Value == nil || *m.Value != selected.tokens || m.Known != 1 || m.Total != selected.accounted {
+					// Outside also retains the unqueried leaf reference.
+					t.Fatalf("ancestor context changed workspace usage: %+v", m)
+				}
+				status, body := delegationGET(t, NewServer(config, c), "/api/work/"+selected.workspace+"/delegation?conversation="+selected.conversation)
+				if status != 200 || body["session_count"] != float64(selected.accounted) {
+					t.Fatal("incoming context changed execution count", status, body)
+				}
+				focus := body["focus"].([]any)
+				found := false
+				for _, entry := range focus {
+					row := entry.(map[string]any)
+					found = found || row["id"] == selected.session && row["outline"] == n.Outline
+				}
+				if !found {
+					t.Fatal("reader focus lost the nested session outline", focus)
+				}
+			}
+		})
+	}
+}
+
+func TestDelegationIncomingAcknowledgementsRemainUnambiguous(t *testing.T) {
+	for _, conflict := range []string{"another child", "conflicting results"} {
+		t.Run(conflict, func(t *testing.T) {
+			c, _ := testCatalog(t)
+			seedDelegation(t, c)
+			run := func(q string) {
+				t.Helper()
+				if _, err := c.DB.Exec(q); err != nil {
+					t.Fatal(err)
+				}
+			}
+			run(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('outside','antigravity','local','outside','Outside','2026-01-01')`)
+			run(`UPDATE conversations SET workspace_id='outside',agent_depth=2 WHERE id='nested'`)
+			run(`UPDATE agent_sessions SET workspace_id='outside' WHERE id='nested-session'`)
+			if conflict == "another child" {
+				run(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth) VALUES('ambiguous','outside','antigravity','local','another-root:subagent:agent-exact-child','root',1)`)
+			} else {
+				run(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,call_id,content_hash) VALUES('conflict','child','conflict','tool','delegation_result','{"details":{"agentId":"other-child"}}','nested-call','conflict')`)
+			}
+			s, err := c.delegationSnapshot(context.Background(), "outside")
+			if err != nil {
+				t.Fatal(err)
+			}
+			n := s.ByID["nested-session"]
+			if parent := s.ByID[n.ParentID]; parent == nil || parent.ConversationID != "root" || n.ParentEvidence != "conversation-parent" {
+				t.Fatalf("ambiguous acknowledgement must retain the transcript fallback: %+v", n)
 			}
 		})
 	}
@@ -267,6 +398,101 @@ func TestDelegationLaunchErrorsStaySeparateFromReportErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := readDelegationHandle(tc.result); got.failed != tc.failed {
 				t.Fatalf("launch failure = %v, want %v", got.failed, tc.failed)
+			}
+		})
+	}
+}
+
+func TestDelegationIncomingAliasedParent(t *testing.T) {
+	for _, tc := range []struct {
+		name                      string
+		acknowledged, independent bool
+		parent                    string
+	}{
+		{name: "declared alias", parent: "child"},
+		{name: "acknowledged alias", acknowledged: true, parent: "child"},
+		{name: "independent execution", independent: true, parent: "root"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, config := testCatalog(t)
+			seedDelegation(t, c)
+			run := func(q string) {
+				t.Helper()
+				if _, err := c.DB.Exec(q); err != nil {
+					t.Fatal(err)
+				}
+			}
+			run(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('outside','antigravity','local','outside','Outside','2026-01-01')`)
+			run(`UPDATE conversations SET workspace_id='outside',parent_id='child',agent_depth=2 WHERE id='nested'`)
+			run(`UPDATE agent_sessions SET workspace_id='outside' WHERE id='nested-session'`)
+			run(`UPDATE agent_sessions SET conversation_id='root',parent_id='launch-alias',child_conversation_id='nested' WHERE id='nested-alias'`)
+			if tc.acknowledged {
+				run(`UPDATE conversations SET native_id='root:subagent:agent-parent-child' WHERE id='child'`)
+				run(`UPDATE agent_sessions SET child_conversation_id=NULL WHERE id='launch-alias'`)
+				run(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,call_id,content_hash) VALUES('parent-result','root','parent-result','tool','delegation_result','{"details":{"agentId":"parent-child"}}','launch-id','parent-result')`)
+			}
+			if tc.independent {
+				run(`UPDATE agent_sessions SET total_tokens=10,usage_status='reported-reconciled' WHERE id='launch-alias'`)
+			}
+			outgoing, err := c.delegationSnapshot(context.Background(), "delegation-work")
+			if err != nil {
+				t.Fatal(err)
+			}
+			launch := outgoing.ByID["nested-alias"]
+			if launch == nil || outgoing.ByID[launch.ParentID] == nil || outgoing.ByID[launch.ParentID].ConversationID != tc.parent {
+				t.Fatal("outgoing hierarchy lost parent execution", launch)
+			}
+			incoming, err := c.delegationSnapshot(context.Background(), "outside")
+			if err != nil {
+				t.Fatal(err)
+			}
+			n := incoming.ByID["nested-session"]
+			parent := incoming.ByID[n.ParentID]
+			if parent == nil || parent.ConversationID != tc.parent || n.Depth != parent.Depth+1 || tc.parent == "child" && n.Depth != 2 {
+				t.Fatalf("incoming parent must agree with outgoing execution: parent=%+v node=%+v", parent, n)
+			}
+			if n.ExternalParent == nil || n.ExternalParent.ConversationID != tc.parent || n.ExternalParent.MessageID != "nested-launch" {
+				t.Fatal("parent navigation must use the canonical execution", n.ExternalParent)
+			}
+			status, body := delegationGET(t, NewServer(config, c), "/api/work/outside/delegation?conversation=nested")
+			if status != 200 {
+				t.Fatal(status, body)
+			}
+		})
+	}
+}
+
+func TestDelegationIncomingLargeAncestorWorkspace(t *testing.T) {
+	for _, records := range []string{"conversations", "sessions", "outside siblings"} {
+		t.Run(records, func(t *testing.T) {
+			c, config := testCatalog(t)
+			run := func(q string) {
+				t.Helper()
+				if _, err := c.DB.Exec(q); err != nil {
+					t.Fatal(err)
+				}
+			}
+			run(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('parent-work','codex','local','parent','Parent','2026-01-01'),('child-work','codex','local','child','Child','2026-01-01'),('sibling-work','codex','local','sibling','Sibling','2026-01-01')`)
+			run(`INSERT INTO conversations(id,workspace_id,native_id,provider,account) VALUES('parent','parent-work','parent','codex','local')`)
+			run(`INSERT INTO conversations(id,workspace_id,native_id,provider,account,parent_id,agent_depth) VALUES('child','child-work','child','codex','local','parent',1)`)
+			switch records {
+			case "conversations":
+				run(`WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<10000) INSERT INTO conversations(id,workspace_id,native_id,provider,account) SELECT 'unrelated-'||n,'parent-work','unrelated-'||n,'codex','local' FROM seq`)
+			case "sessions":
+				run(`WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<10001) INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider) SELECT 'unrelated-'||n,'parent-work','parent','unrelated-'||n,'subagent','codex' FROM seq`)
+			case "outside siblings":
+				run(`WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<10000) INSERT INTO conversations(id,workspace_id,native_id,provider,account,parent_id,agent_depth) SELECT 'unrelated-'||n,'sibling-work','unrelated-'||n,'codex','local','parent',1 FROM seq`)
+			}
+			s, err := c.delegationSnapshot(context.Background(), "child-work")
+			if err != nil {
+				t.Fatalf("unrelated ancestor records blocked child hierarchy: %v", err)
+			}
+			if len(s.Nodes) != 2 || s.Nodes[0].ConversationID != "parent" || s.Nodes[1].Depth != 1 {
+				t.Fatal("expected only the child and its parent context", s.Nodes)
+			}
+			status, body := delegationGET(t, NewServer(config, c), "/api/work/child-work/delegation?conversation=child")
+			if status != 200 || body["session_count"] != float64(1) {
+				t.Fatal(status, body)
 			}
 		})
 	}
