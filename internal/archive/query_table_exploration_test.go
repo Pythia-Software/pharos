@@ -193,3 +193,19 @@ func TestQueryObjectReferencesHTTP(t *testing.T) {
 		t.Fatal(w.Code)
 	}
 }
+
+func TestConversationLinkRedirectsToItsWork(t *testing.T) {
+	catalog, config := testCatalog(t)
+	seedToolCalls(t, catalog, 4)
+	server := NewServer(config, catalog)
+	w := queryExplorationCall(server, config.APIToken, "GET", "/conversation/conv-0?message=m-1", "")
+	if w.Code != 302 || w.Header().Get("Location") != "/work/ws-0/conversation/conv-0?message=m-1" {
+		t.Fatal(w.Code, w.Header().Get("Location"), w.Body.String())
+	}
+	if w = queryExplorationCall(server, config.APIToken, "GET", "/conversation/missing", ""); w.Code != 404 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if w = queryExplorationCall(server, "", "GET", "/conversation/conv-0", ""); w.Code != 401 {
+		t.Fatal(w.Code)
+	}
+}

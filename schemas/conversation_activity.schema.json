@@ -97,6 +97,7 @@
       "name": "root_conversation_id",
       "label": "Top-level conversation",
       "type": "text",
+      "render": "conversation_link",
       "bindings": {
         "postgres": {
           "expr": "root_conversation_id",

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 type queryObjectReference struct {
@@ -96,4 +97,26 @@ func (s *Server) queryObjectReferences(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, results, 200)
+}
+
+// redirectConversation sends /conversation/{id}, a link that needs only the
+// conversation's ID, to that conversation within its work.
+func (s *Server) redirectConversation(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/conversation/")
+	var workspace string
+	err := s.Catalog.reader().QueryRowContext(r.Context(), `SELECT workspace_id FROM conversations WHERE id=?`, id).Scan(&workspace)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeJSON(w, map[string]any{"error": "conversation not found"}, http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	target := "/work/" + url.PathEscape(workspace) + "/conversation/" + url.PathEscape(id)
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	http.Redirect(w, r, target, http.StatusFound)
 }
