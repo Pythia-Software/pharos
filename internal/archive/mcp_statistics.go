@@ -492,6 +492,11 @@ func metricQualityRank(v statMetricValue) int {
 	}
 }
 
+// statisticsTextLimits bound a statistics text search: it ranks at most
+// ranked of the recent most recently indexed eligible matches. Tests lower
+// them.
+var statisticsTextLimits = struct{ recent, ranked int }{25000, 500}
+
 func (c *Catalog) statisticsTextMatches(ctx context.Context, tx *sql.Tx, rows []statisticsRow, r statisticsRequest) ([]statisticsRow, error) {
 	if _, err := tx.ExecContext(ctx, "CREATE TEMP TABLE mcp_statistics_eligible(id TEXT PRIMARY KEY)"); err != nil {
 		return nil, err
@@ -520,8 +525,8 @@ func (c *Catalog) statisticsTextMatches(ctx context.Context, tx *sql.Tx, rows []
 		matches, err := queryMapsContext(ctx, tx, `WITH recent AS MATERIALIZED (
 		SELECT message_id,rank FROM messages_fts WHERE messages_fts MATCH ? AND rowid IN
 		(SELECT f.fts_rowid FROM message_fts_rows f JOIN messages m ON m.id=f.message_id JOIN temp.mcp_statistics_eligible e ON e.id=m.conversation_id)
-		ORDER BY rowid DESC LIMIT 25000)
-		SELECT m.conversation_id,c.workspace_id,recent.message_id FROM recent JOIN messages m ON m.id=recent.message_id JOIN conversations c ON c.id=m.conversation_id ORDER BY recent.rank LIMIT 500`, parsed)
+		ORDER BY rowid DESC LIMIT `+fmt.Sprint(statisticsTextLimits.recent)+`)
+		SELECT m.conversation_id,c.workspace_id,recent.message_id FROM recent JOIN messages m ON m.id=recent.message_id JOIN conversations c ON c.id=m.conversation_id ORDER BY recent.rank LIMIT `+fmt.Sprint(statisticsTextLimits.ranked), parsed)
 		if err != nil {
 			return nil, err
 		}
@@ -746,7 +751,7 @@ func statisticsEnvelope(s statisticsSnapshot, r statisticsRequest) map[string]an
 	delete(effective, "snapshot_id")
 	result := map[string]any{"metric_schema": schema, "metric_coverage": map[string]any{"cohort": "structured_context_before_metric_filters", "counts": s.Coverage}, "effective_request": effective, "freshness": s.Freshness, "population_complete": s.Complete, "total_matching": len(s.Rows)}
 	if !s.Complete {
-		result["retrieval_limits"] = map[string]any{"recent_eligible_matches": 25000, "ranked_messages": 500, "semantic_minimum": .1}
+		result["retrieval_limits"] = map[string]any{"recent_eligible_matches": statisticsTextLimits.recent, "ranked_messages": statisticsTextLimits.ranked, "semantic_minimum": .1}
 	}
 	if s.ID != "" {
 		result["snapshot_id"] = s.ID

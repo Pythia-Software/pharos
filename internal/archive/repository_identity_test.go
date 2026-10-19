@@ -207,11 +207,7 @@ func TestRepositoryRemotelessAttachChecksCheckout(t *testing.T) {
 }
 
 func TestRepositoryUpsertRemotelessJoinsGroup(t *testing.T) {
-	catalog, err := OpenCatalog(filepath.Join(t.TempDir(), "catalog.sqlite3"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer catalog.Close()
+	catalog, _ := testCatalog(t)
 	for _, query := range []string{
 		`INSERT INTO repositories(id,canonical_remote,normalized_remote,display_name,forge_id,local_locations_json,created_at,updated_at) VALUES
 			('alexandria','https://github.com/gbdubs/alexandria.git','github.com/gbdubs/alexandria','alexandria','42','["/Users/t/conductor/workspaces/alexandria/one"]','t','t'),
@@ -262,11 +258,7 @@ func TestRepositoryUpsertRemotelessJoinsGroup(t *testing.T) {
 }
 
 func TestRepositoryUpsertUnionsRemotes(t *testing.T) {
-	catalog, err := OpenCatalog(filepath.Join(t.TempDir(), "catalog.sqlite3"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer catalog.Close()
+	catalog, _ := testCatalog(t)
 	tx, err := catalog.DB.Begin()
 	if err != nil {
 		t.Fatal(err)
@@ -295,11 +287,7 @@ func TestRepositoryUpsertUnionsRemotes(t *testing.T) {
 }
 
 func TestRepositoryUpsertConfigAlias(t *testing.T) {
-	catalog, err := OpenCatalog(filepath.Join(t.TempDir(), "catalog.sqlite3"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer catalog.Close()
+	catalog, _ := testCatalog(t)
 	tx, err := catalog.DB.Begin()
 	if err != nil {
 		t.Fatal(err)
@@ -322,11 +310,7 @@ func TestRepositoryUpsertConfigAlias(t *testing.T) {
 }
 
 func TestRepositoryUpsertLocalWorktreesAndSeparateRow(t *testing.T) {
-	catalog, err := OpenCatalog(filepath.Join(t.TempDir(), "catalog.sqlite3"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer catalog.Close()
+	catalog, _ := testCatalog(t)
 	legacyID := stableID("repo", "local", nil)
 	if _, err := catalog.DB.Exec(`INSERT INTO repositories(id,display_name,local_locations_json,created_at,updated_at) VALUES(?,?,?,?,?)`, legacyID, "local", jsonText([]string{"/old/conductor/workspaces/local/one"}), now(), now()); err != nil {
 		t.Fatal(err)
@@ -385,11 +369,7 @@ func TestRepositoryUpsertLocalWorktreesAndSeparateRow(t *testing.T) {
 }
 
 func TestRepositoryMergeKeepsPRLinks(t *testing.T) {
-	catalog, err := OpenCatalog(filepath.Join(t.TempDir(), "catalog.sqlite3"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer catalog.Close()
+	catalog, _ := testCatalog(t)
 	for _, query := range []string{
 		`INSERT INTO repositories(id,canonical_remote,display_name,created_at,updated_at) VALUES('a','https://github.com/acme/old.git','old','t','t'),('b','https://github.com/acme/new.git','new','t','t')`,
 		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at,repository_id) VALUES('w','codex','local','w','work','t','a')`,
@@ -614,11 +594,7 @@ func repositoryCount(t *testing.T, db repositoryQuerier) int {
 }
 
 func TestRepositoryUpsertRemotelessWorktreesOneRow(t *testing.T) {
-	catalog, err := OpenCatalog(filepath.Join(t.TempDir(), "catalog.sqlite3"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer catalog.Close()
+	catalog, _ := testCatalog(t)
 	tx, err := catalog.DB.Begin()
 	if err != nil {
 		t.Fatal(err)
@@ -659,11 +635,7 @@ func TestRepositoryUpsertRemotelessWorktreesOneRow(t *testing.T) {
 }
 
 func TestRepositoryUpsertRemotelessReusesLegacyRow(t *testing.T) {
-	catalog, err := OpenCatalog(filepath.Join(t.TempDir(), "catalog.sqlite3"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer catalog.Close()
+	catalog, _ := testCatalog(t)
 	// Earlier versions named a remoteless row by its name alone.
 	legacyID := stableID("repo", "excel-corpus", nil)
 	if _, err := catalog.DB.Exec(`INSERT INTO repositories(id,display_name,local_locations_json,created_at,updated_at) VALUES(?,?,?,?,?)`, legacyID, "excel-corpus", jsonText([]string{"/Users/x/src/excel-corpus"}), now(), now()); err != nil {
@@ -701,11 +673,7 @@ func TestRepositoryUpsertRemotelessReusesLegacyRow(t *testing.T) {
 }
 
 func TestRepositoryUpsertJoinsMovedRemoteOfSharedCheckout(t *testing.T) {
-	catalog, err := OpenCatalog(filepath.Join(t.TempDir(), "catalog.sqlite3"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer catalog.Close()
+	catalog, _ := testCatalog(t)
 	tx, err := catalog.DB.Begin()
 	if err != nil {
 		t.Fatal(err)

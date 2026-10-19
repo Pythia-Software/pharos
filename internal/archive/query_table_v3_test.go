@@ -27,7 +27,7 @@ func TestQueryV3AllDatasetsHTTP(t *testing.T) {
 	catalog, config := testCatalog(t)
 	seedToolCalls(t, catalog, 31)
 	ingestUsageFixture(t, catalog)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "parallelism"} {
 		t.Run(dataset, func(t *testing.T) {
 			schema, err := sqliteQuerySchema(dataset)
@@ -69,9 +69,12 @@ func TestQueryV3AllDatasetsHTTP(t *testing.T) {
 }
 
 func TestQueryV3LargeSourceHavingMetricsAndPaging(t *testing.T) {
+	override(t, &queryV3MaxRows, 100)
+	// A source larger than the row budget.
+	sourceRows := queryV3MaxRows + 31
 	catalog, config := testCatalog(t)
-	seedToolCalls(t, catalog, 10_031)
-	server := NewServer(config, catalog)
+	seedToolCalls(t, catalog, sourceRows)
+	server := testServer(t, config, catalog)
 	q := groupRequest("tool_name", qt.SummaryColumn{ID: "calls", Op: "count"}, qt.SummaryColumn{ID: "time", Op: "sum", Field: "duration_ms"})
 	q.Result.Where = []qt.WhereTerm{{Field: "calls", Op: ">", Value: "1"}}
 	q.Result.OrderBy = qt.OrderBys{{Field: "calls", Dir: "desc"}}
@@ -85,7 +88,7 @@ func TestQueryV3LargeSourceHavingMetricsAndPaging(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.SourceTotal != 10_031 || len(result.Rows) != 1 || result.Total < 2 || len(result.Metrics) != 2 {
+	if result.SourceTotal != int64(sourceRows) || len(result.Rows) != 1 || result.Total < 2 || len(result.Metrics) != 2 {
 		t.Fatal(result)
 	}
 	if result.Metrics[0].Buckets[0].Value != float64(result.Total) || result.Metrics[1].Buckets[0].Value != result.Rows[0]["calls"] {
@@ -105,7 +108,7 @@ func TestQueryV3UsageFiltersSessionsAndCalendar(t *testing.T) {
 	t.Cleanup(func() { time.Local = oldLocal })
 	catalog, config := testCatalog(t)
 	ingestUsageFixture(t, catalog)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	q := groupRequest("provider", qt.SummaryColumn{ID: "tokens", Op: "sum", Field: "total_tokens"}, qt.SummaryColumn{ID: "sessions", Op: "count_distinct", Field: "agent_session_id"})
 	w := queryV2ReviewCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", q)
 	var result qt.QueryResultV3
@@ -142,7 +145,7 @@ func TestQueryV3UsageFiltersSessionsAndCalendar(t *testing.T) {
 
 func TestQueryV3AuthorizationAndValidation(t *testing.T) {
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	q := groupRequest("provider", qt.SummaryColumn{ID: "records", Op: "count"})
 	if w := queryV2ReviewCall(t, server, "", http.MethodPost, "/api/query/usage/query-v3", q); w.Code != 401 {
 		t.Fatal(w.Code)
@@ -184,7 +187,7 @@ func TestQueryV3ComputedSourceAndRepresentative(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	q := groupRequest("tool_name", qt.SummaryColumn{ID: "time", Op: "sum", Field: "@computed/double-duration"},
 		qt.SummaryColumn{ID: "example", Op: "row", Field: "id"}, qt.SummaryColumn{ID: "example_duration", Op: "row", Field: "duration_ms"})
 	q.ExpectedRevisions = map[string]string{column.ID: column.Revision}
@@ -220,7 +223,7 @@ func TestQueryV3IncompleteLibrarySearchWithFormula(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	for _, scenario := range []string{"limited", "incomplete"} {
 		t.Run(scenario, func(t *testing.T) {
 			params := url.Values{"find": {"parser"}, "find_fuzzy": {"0"}}
@@ -296,7 +299,7 @@ func TestQueryV3TempStorageLease(t *testing.T) {
 
 func TestQueryMetadataExecutionDeadlineStartsAfterQueue(t *testing.T) {
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	_, release, err := server.beginQueryMetadata(context.Background())
 	if err != nil {
 		t.Fatal(err)

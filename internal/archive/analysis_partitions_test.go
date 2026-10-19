@@ -54,8 +54,9 @@ func assertToolReference(t *testing.T, c *Catalog) {
 }
 
 func TestIncrementalToolRollupParity(t *testing.T) {
+	slowTest(t)
 	c, _ := testCatalog(t)
-	seedToolCalls(t, c, 1200)
+	seedToolCalls(t, c, 300)
 	if err := c.ensureToolRollup(t.Context()); err != nil {
 		t.Fatal(err)
 	}

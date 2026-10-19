@@ -43,16 +43,20 @@ func seedToolCalls(t testing.TB, catalog *Catalog, n int) {
 			fmt.Sprint("session-", w), fmt.Sprint("ws-", w), fmt.Sprint("conv-", w), "main", pick("root", "subagent"), "claude", w%2)
 	}
 	start := time.Date(2026, 8, 30, 20, 0, 0, 0, time.UTC)
+	insert, err := tx.Prepare(`INSERT INTO tool_calls(id,workspace_id,conversation_id,agent_session_id,sequence,provider,model,effort,kind,tool_name,tool_category,
+				mcp_server,command,program,subcommand,command_category,has_pipe,file_path,host,hosts,url,search_query,started_at,ended_at,
+				duration_ms,duration_source,status,error_type,exit_code,interrupted,truncated,input_bytes,result_bytes,result_tokens,
+				result_tokens_source,output_tokens,carried_requests,carried_tokens,lines_added,lines_removed)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer insert.Close()
 	for index := range n {
 		w := random.Intn(4)
 		started := start.Add(time.Duration(random.Intn(5*24*60)) * time.Minute)
 		program := pick("git", "go", "rg", nil, "")
-		exec(`INSERT INTO tool_calls(id,workspace_id,conversation_id,agent_session_id,sequence,provider,model,effort,kind,tool_name,tool_category,
-				mcp_server,command,program,subcommand,command_category,has_pipe,file_path,host,hosts,url,search_query,started_at,ended_at,
-				duration_ms,duration_source,status,error_type,exit_code,interrupted,truncated,input_bytes,result_bytes,result_tokens,
-				result_tokens_source,output_tokens,carried_requests,carried_tokens,lines_added,lines_removed)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			fmt.Sprint("call-", index), fmt.Sprint("ws-", w), fmt.Sprint("conv-", w), pick(fmt.Sprint("session-", w), nil), index,
+		if _, err := insert.Exec(fmt.Sprint("call-", index), fmt.Sprint("ws-", w), fmt.Sprint("conv-", w), pick(fmt.Sprint("session-", w), nil), index,
 			pick("claude", "codex"), pick("claude-opus-5-5", "opus-5-5[1m]", "gpt-5", nil, ""), pick("low", "high", "xhigh", nil), pick("tool_call", "delegation"),
 			pick("Bash", "Read", "Edit", "WebFetch"), pick("command", "read", "web"), pick(nil, "pharos"),
 			pick("git status", "go test ./...", nil, ""), program, pick("status", "test", nil), pick("vcs", "test", nil),
@@ -61,7 +65,9 @@ func seedToolCalls(t testing.TB, catalog *Catalog, n int) {
 			pick(12, 3400, 0, nil), pick("reported", "timestamps", nil), pick("ok", "ok", "error", "no_result"),
 			pick(nil, "nonzero_exit", "user_rejected", "timeout"), pick(nil, 0, 1, 127), random.Intn(2), random.Intn(2),
 			random.Intn(500), random.Intn(9000), random.Intn(3000), pick("measured", "estimated", nil), random.Float64()*400,
-			random.Intn(5), random.Intn(20000), pick(3, nil), pick(1, nil))
+			random.Intn(5), random.Intn(20000), pick(3, nil), pick(1, nil)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
@@ -135,8 +141,9 @@ func same(left, right any) bool {
 }
 
 func TestToolCallCubeAnswersLikeTheCalls(t *testing.T) {
+	slowTest(t)
 	catalog, _ := testCatalog(t)
-	seedToolCalls(t, catalog, 3000)
+	seedToolCalls(t, catalog, 1000)
 	ctx := context.Background()
 	if err := catalog.ensureToolRollup(ctx); err != nil {
 		t.Fatal(err)

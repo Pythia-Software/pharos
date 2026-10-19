@@ -33,9 +33,9 @@ func stubGitHub(t *testing.T, signedIn bool, repos map[string]string) string {
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	previous := githubCLI
-	githubCLI = path
-	t.Cleanup(func() { githubCLI = previous })
+	override(t, &githubCLI, path)
+	// A shell script, unlike gh, can take seconds to start on a busy machine.
+	override(t, &githubTimeout, time.Minute)
 	return calls
 }
 
@@ -82,7 +82,7 @@ func TestUpgradeStatusReportsWholeJobProgress(t *testing.T) {
 func TestIndexCanContinueWithPendingUpgrade(t *testing.T) {
 	stubGitHub(t, false, nil)
 	catalog := legacyUpgradeCatalog(t)
-	server := NewServer(Config{CatalogPath: catalog.Path, CaptureRoot: t.TempDir()}, catalog)
+	server := testServer(t, Config{CatalogPath: catalog.Path, CaptureRoot: t.TempDir()}, catalog)
 	response := httptest.NewRecorder()
 	server.startIndex(response, map[string]any{"all_hosts": true, "auto_upgrade": true})
 	if response.Code != http.StatusAccepted {
@@ -107,7 +107,7 @@ func TestIndexCanContinueWithPendingUpgrade(t *testing.T) {
 func TestIndexSkipsUpgradeWhenLibraryIsCurrent(t *testing.T) {
 	catalog, config := testCatalog(t)
 	config.CaptureRoot = t.TempDir()
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	response := httptest.NewRecorder()
 	server.startIndex(response, map[string]any{"all_hosts": true, "auto_upgrade": true})
 	if response.Code != http.StatusAccepted {

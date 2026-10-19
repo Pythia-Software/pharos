@@ -389,7 +389,7 @@ func TestParallelismThreadsAndRows(t *testing.T) {
 
 func TestParallelismSettingsAndHTTP(t *testing.T) {
 	c, config := parallelismTestCatalog(t)
-	server := NewServer(config, c)
+	server := testServer(t, config, c)
 	rows, err := c.parallelismQueryRows(t.Context(), nil)
 	if err != nil || len(rows) == 0 || rows[0]["counting"] != "workspace" || rows[0]["gap_minutes"] != int64(60) {
 		t.Fatal(len(rows), err)

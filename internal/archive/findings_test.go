@@ -3,7 +3,6 @@ package archive
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -135,11 +134,7 @@ type findingFixture struct {
 
 func newFindingFixture(t *testing.T, now time.Time) *findingFixture {
 	t.Helper()
-	catalog, err := OpenCatalog(filepath.Join(t.TempDir(), "catalog.sqlite3"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { catalog.Close() })
+	catalog, _ := testCatalog(t)
 	catalog.now = func() time.Time { return now }
 	if _, err := catalog.DB.Exec(`INSERT INTO repositories(id,display_name,created_at,updated_at) VALUES('repo-1','alpha',?,?)`, formatTime(now), formatTime(now)); err != nil {
 		t.Fatal(err)
@@ -153,9 +148,10 @@ func (fixture *findingFixture) conversation(day time.Time, fail bool) {
 	fixture.t.Helper()
 	fixture.next++
 	id := fmt.Sprint(fixture.next)
+	tx := seedTx(fixture.t, fixture.catalog.DB)
 	exec := func(statement string, args ...any) {
 		fixture.t.Helper()
-		if _, err := fixture.catalog.DB.Exec(statement, args...); err != nil {
+		if _, err := tx.Exec(statement, args...); err != nil {
 			fixture.t.Fatal(err)
 		}
 	}
@@ -179,6 +175,7 @@ func (fixture *findingFixture) conversation(day time.Time, fail bool) {
 			fmt.Sprintf("call-%s-%d", id, index), "ws-"+id, "conv-"+id, index, "claude", "tool_call", "Bash", "command", item.command, item.program,
 			formatTime(started.Add(time.Duration(index)*time.Minute)), item.status, nilIfEmpty(item.errorType), nilIfEmpty(item.signature), 200, 4000, 1500)
 	}
+	commitSeed(fixture.t, tx)
 }
 
 func TestFindingLifecycle(t *testing.T) {

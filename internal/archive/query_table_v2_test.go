@@ -200,7 +200,7 @@ func TestQueryV2ComputedAndLimits(t *testing.T) {
 func TestQueryV2PharosHTTP(t *testing.T) {
 	catalog, config := testCatalog(t)
 	seedToolCalls(t, catalog, 300)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	call := func(method, path, body string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, path, strings.NewReader(body))
 		r.Header.Set("Authorization", "Bearer "+config.APIToken)
@@ -338,7 +338,7 @@ func TestQueryV2UsageHourly(t *testing.T) {
 	t.Cleanup(func() { time.Local = previous })
 	catalog, config := testCatalog(t)
 	ingestUsageFixture(t, catalog, `{"type":"token_usage_record","timestamp":"2026-09-21T03:05:00Z","payload":{"response_id":"r3","usage":{"input_tokens":90,"output_tokens":10,"total_tokens":100},"thread_token_usage":{"total_tokens":3150}}}`)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	schema, _ := sqliteQuerySchema("usage")
 	for _, sample := range []struct {
 		where            []qt.WhereTerm
@@ -377,13 +377,13 @@ func TestQueryV2UsageHourly(t *testing.T) {
 
 func TestQueryV2IndexedCandidates(t *testing.T) {
 	catalog, config := testCatalog(t)
-	seedToolCalls(t, catalog, 650)
+	seedToolCalls(t, catalog, 150)
 	for i, local := range []string{"2026-03-07T23:59:00", "2026-03-08T00:00:00", "2026-03-08T23:59:00", "2026-03-09T00:00:00", "2026-10-31T23:59:00", "2026-11-01T00:00:00", "2026-11-01T23:59:00", "2026-11-02T00:00:00"} {
 		if _, err := catalog.DB.Exec(`UPDATE tool_calls SET started_at=strftime('%Y-%m-%dT%H:%M:%fZ',?,'utc') WHERE id=?`, local, fmt.Sprint("call-", i)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	schema, _ := sqliteQuerySchema("tool_calls")
 	for _, where := range [][]qt.WhereTerm{
 		{{Field: "command", Op: "contains", Value: "TEST ./"}},
@@ -537,7 +537,7 @@ func TestQueryV2UsageShownHours(t *testing.T) {
 	t.Cleanup(func() { time.Local = previous })
 	catalog, config := testCatalog(t)
 	ingestUsageFixture(t, catalog, `{"type":"token_usage_record","timestamp":"2026-09-21T03:05:00Z","payload":{"response_id":"r3","usage":{"input_tokens":90,"output_tokens":10,"total_tokens":100},"thread_token_usage":{"total_tokens":3150}}}`)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	schema, _ := sqliteQuerySchema("usage")
 	q := metricRequest(qt.AggSpec{ID: "shownHours", Expression: "COUNT()", GroupBy: []string{"hour"}, Scope: "shownRows"})
 	q.Limit = 1
@@ -572,7 +572,7 @@ func BenchmarkPharosToolLedgerV2(b *testing.B) {
 		b.Run(fmt.Sprint(n), func(b *testing.B) {
 			catalog, config := testCatalog(b)
 			seedToolCalls(b, catalog, n)
-			server := NewServer(config, catalog)
+			server := testServer(b, config, catalog)
 			schema, _ := sqliteQuerySchema("tool_calls")
 			if err := catalog.prepareSQLDataset(context.Background(), "tool_calls"); err != nil {
 				b.Fatal(err)
@@ -709,7 +709,7 @@ func TestQueryIndexedDatetimeCandidatesPreserveTypedResults(t *testing.T) {
 func TestQueryMetadataQueueLeavesForegroundQueriesAvailable(t *testing.T) {
 	catalog, config := testCatalog(t)
 	seedToolCalls(t, catalog, 10)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	server.queryMetadata <- struct{}{}
 	defer func() { <-server.queryMetadata }()
 	ctx, cancel := context.WithCancel(context.Background())

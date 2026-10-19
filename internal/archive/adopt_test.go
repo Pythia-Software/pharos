@@ -467,6 +467,7 @@ include_archived = true
 // A per-user catalog that host-aware code already opened keeps the owner it
 // recorded.
 func TestAdoptKeepsARecordedLegacyHost(t *testing.T) {
+	slowTest(t)
 	legacy := newLegacyInstall(t)
 	withAdoptTuning(t, 64<<20)
 	useHost(t, "old-mac")
@@ -489,6 +490,7 @@ func TestAdoptKeepsARecordedLegacyHost(t *testing.T) {
 // catalog open: the copy must still include them, and reading must not
 // checkpoint them into the source.
 func TestAdoptIncludesTheWALOfAStoppedServiceAndLeavesItAlone(t *testing.T) {
+	slowTest(t)
 	legacy := newLegacyInstall(t)
 	withAdoptTuning(t, 64<<20)
 	service := openService(t, legacy.catalog)
@@ -541,6 +543,7 @@ func TestAdoptIncludesTheWALOfAStoppedServiceAndLeavesItAlone(t *testing.T) {
 // Every record the service commits while the copy runs is either wholly in
 // the copy or wholly absent.
 func TestAdoptCopyIsTransactionallyConsistentUnderConcurrentCommits(t *testing.T) {
+	slowTest(t)
 	legacy := newLegacyInstall(t)
 	withAdoptTuning(t, 8<<10)
 	service := openService(t, legacy.catalog)
@@ -602,6 +605,7 @@ func TestAdoptCopyIsTransactionallyConsistentUnderConcurrentCommits(t *testing.T
 }
 
 func TestAdoptFailuresLeaveNoLibrary(t *testing.T) {
+	slowTest(t)
 	legacy := newLegacyInstall(t)
 	withAdoptTuning(t, 16<<10)
 	useHost(t, "mac-studio")
@@ -712,6 +716,7 @@ func TestInitLibraryAdoptCommandLine(t *testing.T) {
 // replayed onto the new copy, so adopting refuses it, before and at the
 // rename, and leaves it alone.
 func TestAdoptRefusesLeftoverCatalogFiles(t *testing.T) {
+	slowTest(t)
 	legacy := newLegacyInstall(t)
 	withAdoptTuning(t, 64<<20)
 	useHost(t, "mac-studio")
@@ -758,6 +763,7 @@ func TestAdoptRefusesLeftoverCatalogFiles(t *testing.T) {
 // stale WAL from another database is replayed onto it, as a leftover -wal
 // beside the final catalog would be.
 func TestAdoptFailsWhenTheCopyFailsItsCheck(t *testing.T) {
+	slowTest(t)
 	legacy := newLegacyInstall(t)
 	withAdoptTuning(t, 64<<20)
 	other := newLegacyInstall(t)
@@ -795,6 +801,7 @@ func TestAdoptFailsWhenTheCopyFailsItsCheck(t *testing.T) {
 // archive_root must neither contain the library nor lie inside it, however the
 // two paths are spelled; otherwise the copy recurses into itself.
 func TestAdoptRefusesNestedArchiveRoots(t *testing.T) {
+	slowTest(t)
 	legacy := newLegacyInstall(t)
 	withAdoptTuning(t, 64<<20)
 	useHost(t, "mac-studio")
@@ -925,6 +932,7 @@ func TestCopyPreservedRestoresHardLinksOnRetry(t *testing.T) {
 }
 
 func TestAdoptRefusesAFallbackHostID(t *testing.T) {
+	slowTest(t)
 	hardware := func() (string, error) { return "HW-UUID", nil }
 	broken := func() (string, error) { return "", errors.New("ioreg timed out") }
 	real := Host{ID: stableID("host", "HW-UUID", "gbw"), User: "gbw"}

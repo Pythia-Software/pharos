@@ -50,7 +50,7 @@ func TestActivityDurationHistory(t *testing.T) {
 func TestLibraryActivityCompletionEstimate(t *testing.T) {
 	useHost(t, "timing-host")
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	started := time.Now().Add(-time.Minute)
 	run := server.startRunNamed(indexRunKind, []string{"claude"})
 	server.updateRun(run.ID, func(run *SyncRun) {

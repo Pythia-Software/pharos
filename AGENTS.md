@@ -9,13 +9,15 @@ the checked-in `internal/archive/assets/query-tables.{js,css}`. See
 
 ## Running tests
 
-Run the narrowest tests that cover your change while you work. Before opening
-a PR, run the Go suite and the JS unit tests.
+Run the narrowest tests that cover your change while you work, and the fast
+Go tier on every change. Before opening a PR, run the whole Go suite and the
+JS unit tests.
 
 | What | Command |
 |---|---|
-| Go, one test while iterating | `go test -vet=off -run 'TestName' ./internal/archive` |
-| Go, everything | `go test -timeout 30m ./...` (the archive package does not yet fit Go's default 10-minute timeout) |
+| Go, one test while iterating | `go test -vet=off -run 'TestName' ./internal/archive` (`-vet=off` skips vetting the whole package on every run) |
+| Go, fast tier | `go test -short ./...` (skips the slowest tests, which call `slowTest(t)`) |
+| Go, everything | `go test ./...` |
 | JS unit tests in `web/tests` | `(cd web && node --test)` (they must run from `web/`) |
 | JS unit tests in `tests/` | `node --test $(ls tests/*.test.cjs \| grep -v -- '-ui\.test')` |
 | One browser file | `node --test --test-timeout=120000 tests/<page>-ui.test.cjs` |
@@ -49,9 +51,22 @@ a PR, run the Go suite and the JS unit tests.
   an algorithm kept as an oracle.
 - **Extend the existing test when fixing a review finding.** Do not add
   `*-review` or `*_regression` files.
-- **Keep fixtures small.** Insert seed rows in one transaction. When a test
-  needs to exceed a product limit, make the limit a package variable the test
-  can lower, rather than inserting thousands of rows.
+- **Keep fixtures small.** Insert seed rows in one transaction (`seedTx`,
+  `execTx`). When a test needs to exceed a product limit, make the limit a
+  package variable the test can lower with `override`, rather than inserting
+  thousands of rows.
+- **Use the Go harness** in `internal/archive/harness_test.go`:
+  - `testCatalog` copies a catalog initialized once per process. Use
+    `freshCatalog` only when what `Initialize` does to a new catalog is the
+    subject.
+  - `testServer` instead of `NewServer`, so that no background work outlives
+    the test.
+  - `slowTest(t)` for a test that takes seconds, so that `-short` skips it.
+
+  `TestMain` keeps tests off this Mac: no `ioreg`, `scutil`, `diskutil` or
+  GitHub, no user git configuration, and catalogs without drive flushes.
+  Tests of those opt back in, for example with `stubDriveTool` or
+  `useDurableCatalog`.
 - **Keep data-safety tests**, even when slow. These include adopt, backup,
   capture, durability, and cross-host merges. Make their fixtures cheaper
   instead.

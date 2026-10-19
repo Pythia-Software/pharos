@@ -156,7 +156,7 @@ func createLibraryCatalog(path string) (Config, error) {
 	if err := os.MkdirAll(config.ArchiveRoot, 0o755); err != nil {
 		return config, err
 	}
-	catalog, err := OpenCatalog(config.CatalogPath)
+	catalog, err := newCatalog(config.CatalogPath)
 	if err != nil {
 		return config, err
 	}

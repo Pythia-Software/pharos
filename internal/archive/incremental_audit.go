@@ -17,7 +17,14 @@ import (
 	"time"
 )
 
-const automaticAuditBytes = int64(16 << 20)
+// An automatic audit verifies a unit of at most automaticAuditBytes, and a
+// Conductor unit, whose size counts messages, of at most
+// automaticAuditConductorMessages. Tests lower them.
+var (
+	automaticAuditBytes             = int64(16 << 20)
+	automaticAuditConductorMessages = int64(2000)
+)
+
 const automaticAuditWall = 5 * time.Second
 
 type verificationSummary struct {
@@ -177,7 +184,7 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 			result.Detail = "verification budget or cancellation"
 		}
 	}()
-	if budget > 0 && (unit.Bytes > budget || (budget == automaticAuditBytes && (len(unit.Parts) > 64 || (unit.Source.Kind == "conductor" && unit.Bytes > 2000)))) {
+	if budget > 0 && (unit.Bytes > budget || (budget == automaticAuditBytes && (len(unit.Parts) > 64 || (unit.Source.Kind == "conductor" && unit.Bytes > automaticAuditConductorMessages)))) {
 		result.Outcome, result.Detail = "deferred", "large group queued for manual verification"
 		return
 	}
@@ -208,7 +215,7 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 		result.Detail = err.Error()
 		return
 	}
-	reference, err := OpenCatalog(filepath.Join(dir, "reference.sqlite3"))
+	reference, err := newCatalog(filepath.Join(dir, "reference.sqlite3"))
 	if err != nil {
 		result.Detail = err.Error()
 		return

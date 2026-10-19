@@ -96,8 +96,10 @@ func TestMachineOperationFamilies(t *testing.T) {
 }
 
 func TestMachineTimeCompleteAggregationBeyondPreviewLimit(t *testing.T) {
+	override(t, &maxSQLBuckets, 20)
+	calls := maxSQLBuckets + 100
 	catalog, config := testCatalog(t)
-	seedToolCalls(t, catalog, 2100)
+	seedToolCalls(t, catalog, calls)
 	document, err := querySchemaDocument("tool_calls")
 	if err != nil {
 		t.Fatal(err)
@@ -113,16 +115,16 @@ func TestMachineTimeCompleteAggregationBeyondPreviewLimit(t *testing.T) {
 	}
 	request.RequireComplete = true
 	complete, err := toolCallDataset.Aggregate(context.Background(), catalog.DB, request, schema)
-	if err != nil || len(complete.Metrics[0].Buckets) != 2100 {
+	if err != nil || len(complete.Metrics[0].Buckets) != calls {
 		t.Fatalf("complete analytical read must not silently stop at preview size: %v", err)
 	}
 	payload, _ := json.Marshal(request)
-	response := queryExplorationCall(NewServer(config, catalog), config.APIToken, "POST", "/api/query/tool_calls/aggregations", string(payload))
+	response := queryExplorationCall(testServer(t, config, catalog), config.APIToken, "POST", "/api/query/tool_calls/aggregations", string(payload))
 	if response.Code != 200 {
 		t.Fatalf("complete aggregation HTTP response: %d %s", response.Code, response.Body.String())
 	}
 	var received querytable.AggregationResult
-	if err := json.Unmarshal(response.Body.Bytes(), &received); err != nil || len(received.Metrics[0].Buckets) != 2100 {
+	if err := json.Unmarshal(response.Body.Bytes(), &received); err != nil || len(received.Metrics[0].Buckets) != calls {
 		t.Fatalf("HTTP must preserve the complete-read request: %v", err)
 	}
 }

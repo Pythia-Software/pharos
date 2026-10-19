@@ -11,8 +11,9 @@ import (
 )
 
 // Old catalogs are indexed in small transactions. Triggers index new calls
-// immediately; a batch replaces any rows they already indexed.
-const toolSearchBatch = 500
+// immediately; a batch replaces any rows they already indexed. Tests lower
+// the batch size.
+var toolSearchBatch = 500
 
 func (c *Catalog) toolSearchReady(ctx context.Context) (bool, error) {
 	var version string

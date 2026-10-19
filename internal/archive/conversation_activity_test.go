@@ -39,7 +39,7 @@ func TestConversationActivityPreservesHumanGrainAndTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schema, err := NewServer(config, catalog).queryTableSchema("conversation_activity")
+	schema, err := testServer(t, config, catalog).queryTableSchema("conversation_activity")
 	if err != nil {
 		t.Fatal(err)
 	}

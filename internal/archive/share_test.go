@@ -45,7 +45,7 @@ func seedSharedWork(t *testing.T, catalog *Catalog) string {
 func TestSharedWorkIsStandaloneAndOmitsArchiveDetails(t *testing.T) {
 	catalog, config := testCatalog(t)
 	id := seedSharedWork(t, catalog)
-	response := serveTest(NewServer(config, catalog), http.MethodGet, "/api/share/work/"+url.PathEscape(id))
+	response := serveTest(testServer(t, config, catalog), http.MethodGet, "/api/share/work/"+url.PathEscape(id))
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", response.Code, response.Body.String())
 	}
@@ -77,7 +77,7 @@ func TestSharedWorkIsStandaloneAndOmitsArchiveDetails(t *testing.T) {
 
 func TestSharedWorkRefusesWorkWithoutConversation(t *testing.T) {
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	if response := serveTest(server, http.MethodGet, "/api/share/work/missing"); response.Code != http.StatusNotFound {
 		t.Fatalf("missing work status = %d", response.Code)
 	}
@@ -259,7 +259,7 @@ func TestSharedMessagesKeepOnlyListedFields(t *testing.T) {
 
 func TestSharedCheckReportsFailureInsteadOfAFile(t *testing.T) {
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	id := seedSharedWork(t, catalog)
 	ok := serveTest(server, http.MethodGet, "/api/share?check=1&id="+url.QueryEscape(id))
 	if ok.Code != http.StatusOK || strings.HasPrefix(ok.Header().Get("Content-Disposition"), "attachment") || !strings.Contains(ok.Body.String(), `"filename"`) {

@@ -18,7 +18,7 @@ func TestLibraryQueryTableCombinesKeywordSearchWithFilters(t *testing.T) {
 	if err := catalog.refreshAllLibrary(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	request := func(method, path, body string) map[string]any {
 		t.Helper()
 		request := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -76,12 +76,13 @@ func TestLibraryQueryTableCombinesKeywordSearchWithFilters(t *testing.T) {
 }
 
 func TestLibraryFindFiltersBeforeGlobalCandidateLimit(t *testing.T) {
+	override(t, &libraryFindTextLimit, 20)
 	catalog, config := libraryFixture(t)
 	tx, e := catalog.DB.Begin()
 	if e != nil {
 		t.Fatal(e)
 	}
-	for i := 0; i < 5100; i++ {
+	for i := 0; i < libraryFindTextLimit+100; i++ {
 		id := fmt.Sprintf("unrelated-%05d", i)
 		if _, e = tx.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES(?,'cb',?,'user','message','parser common words',?)`, id, id, id); e != nil {
 			t.Fatal(e)
@@ -96,7 +97,7 @@ func TestLibraryFindFiltersBeforeGlobalCandidateLimit(t *testing.T) {
 	if e = catalog.refreshAllLibrary(t.Context()); e != nil {
 		t.Fatal(e)
 	}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	for _, endpoint := range []string{"/api/query/library", "/api/query/library/rows-v2"} {
 		body := `{"select":["title"],"where":[{"field":"title","op":"=","value":"Charlie"}],"limit":10}`
 		if strings.Contains(endpoint, "v2") {

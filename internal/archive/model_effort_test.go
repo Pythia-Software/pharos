@@ -134,7 +134,7 @@ func TestModelEffortFilterSortAndGroupingAcrossDatasets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	for _, dataset := range []string{"usage", "tools", "tool_calls", "skill_usages"} {
 		t.Run(dataset, func(t *testing.T) {
 			rows := shared[dataset]

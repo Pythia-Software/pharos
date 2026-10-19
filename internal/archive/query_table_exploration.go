@@ -84,7 +84,9 @@ func requireQueryEOF(decoder *json.Decoder) error {
 // Writes are serialized with other catalog metadata updates. Quota checking
 // and insertion share a transaction, so concurrent saves cannot overrun it.
 const querySnapshotBytes = 64 << 20
-const querySnapshotCount = 10_000
+
+// querySnapshotCount is a var so that tests can reach it with a few rows.
+var querySnapshotCount int64 = 10_000
 
 type pharosQuerySnapshotStore struct{ Catalog *Catalog }
 

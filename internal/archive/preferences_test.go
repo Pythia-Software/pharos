@@ -19,7 +19,7 @@ func preferencesCall(t *testing.T, server *Server, method, path, body string) *h
 func TestPreferencesFollowTheLibrary(t *testing.T) {
 	useHost(t, "host-a")
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 
 	if response := preferencesCall(t, server, http.MethodGet, "/assets/preferences.js", ""); response.Code != http.StatusOK || response.Body.String() != "window.pharosPreferenceValues={};" {
 		t.Fatalf("empty library: %d %q", response.Code, response.Body.String())
@@ -49,7 +49,7 @@ func TestPreferencesFollowTheLibrary(t *testing.T) {
 func TestPreferencesRefuseBadNamesAndOversizedValues(t *testing.T) {
 	useHost(t, "host-a")
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	for _, body := range []string{
 		`{"set":{"":1}}`,
 		`{"set":{"has space":1}}`,

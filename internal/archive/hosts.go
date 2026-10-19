@@ -64,7 +64,11 @@ func detectHost(support string, platform func(waits []time.Duration) (string, er
 		name = account.Username
 	}
 	hostname, _ := os.Hostname()
-	label := defaultString(os.Getenv("PHAROS_HOST_LABEL"), defaultString(commandOutput("/usr/sbin/scutil", "--get", "ComputerName"), hostname))
+	// scutil runs only when the label is not set.
+	label := firstString(os.Getenv("PHAROS_HOST_LABEL"))
+	if label == "" {
+		label = defaultString(commandOutput("/usr/sbin/scutil", "--get", "ComputerName"), hostname)
+	}
 	if id := strings.TrimSpace(os.Getenv("PHAROS_HOST_ID")); id != "" {
 		return Host{ID: id, Label: label, User: name}
 	}

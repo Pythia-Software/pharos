@@ -68,10 +68,7 @@ func testLibrary(t *testing.T, dir string) Config {
 	if config, err = LoadConfig(config.Path); err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := OpenCatalog(config.CatalogPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := reopenCatalog(t, config.CatalogPath)
 	defer catalog.Close()
 	ingestMCPFixture(t, catalog)
 	return config
@@ -223,10 +220,7 @@ func TestMCPServerOutlivesAnUnavailableLibrary(t *testing.T) {
 	}
 
 	// The library's switch still applies whenever the catalog is reachable.
-	catalog, err := OpenCatalog(config.CatalogPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := reopenCatalog(t, config.CatalogPath)
 	if err := catalog.SetMCPEnabled(false); err != nil {
 		t.Fatal(err)
 	}
@@ -276,8 +270,15 @@ func TestMCPLibraryGuardsStillApply(t *testing.T) {
 func TestMCPListsToolsWithoutWaitingForTheHost(t *testing.T) {
 	config := testLibrary(t, filepath.Join(t.TempDir(), "Pharos"))
 	previous := currentHost
-	currentHost = func() Host { time.Sleep(5 * time.Second); return previous() } // ioreg hanging
-	t.Cleanup(func() { currentHost = previous })
+	hanging := make(chan struct{})
+	currentHost = func() Host { // ioreg hanging until the test ends
+		select {
+		case <-hanging:
+		case <-time.After(30 * time.Second):
+		}
+		return previous()
+	}
+	t.Cleanup(func() { close(hanging); currentHost = previous })
 	for _, server := range []*mcpServer{newMCPServer(config.Path)} {
 		server.identity = testIdentity
 		started := time.Now()
@@ -289,7 +290,7 @@ func TestMCPListsToolsWithoutWaitingForTheHost(t *testing.T) {
 		if tools := call("tools/list", nil)["result"].(map[string]any)["tools"].([]any); len(tools) != len(mcpTools) {
 			t.Fatalf("tools/list listed %d tools", len(tools))
 		}
-		if took := time.Since(started); took > 2*time.Second {
+		if took := time.Since(started); took > 10*time.Second {
 			t.Fatalf("starting, initialize and tools/list took %v while the host was being detected", took)
 		}
 	}
@@ -469,14 +470,11 @@ func TestMCPRestartKeepsTheConnection(t *testing.T) {
 
 func TestMCPDoesNotReopenAReleasedLibrary(t *testing.T) {
 	config := testLibrary(t, filepath.Join(t.TempDir(), "Pharos"))
-	catalog, err := OpenCatalog(config.CatalogPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := reopenCatalog(t, config.CatalogPath)
 	release := httptest.NewRequest(http.MethodPost, "/api/release", nil)
 	release.Header.Set("Authorization", "Bearer "+config.APIToken)
 	released := httptest.NewRecorder()
-	if NewServer(config, catalog).ServeHTTP(released, release); released.Code != http.StatusOK {
+	if testServer(t, config, catalog).ServeHTTP(released, release); released.Code != http.StatusOK {
 		t.Fatalf("release: %d %s", released.Code, released.Body.String())
 	}
 	marker := releasedMarker(config.CatalogPath)
@@ -576,13 +574,10 @@ func TestMCPForwardingMatchesDirect(t *testing.T) {
 		t.Fatalf("direct calls recorded %d, want %d", count, calls)
 	}
 
-	catalog, err := OpenCatalog(config.CatalogPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := reopenCatalog(t, config.CatalogPath)
 	defer catalog.Close()
 	var forwarded atomic.Int32
-	service := NewServer(config, catalog)
+	service := testServer(t, config, catalog)
 	listener := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/mcp/rpc" {
 			forwarded.Add(1)
@@ -622,7 +617,7 @@ func TestMCPForwardingDeclinesOtherServices(t *testing.T) {
 	// call is answered from this library directly.
 	other, otherConfig := testCatalog(t)
 	otherConfig.APIToken = config.APIToken
-	serve(NewServer(otherConfig, other))
+	serve(testServer(t, otherConfig, other))
 	if text, isError := toolText(t, call("tools/call", search)); isError || !strings.Contains(text, "Parser maintenance") {
 		t.Fatalf("call past another catalog's service: %v %s", isError, text)
 	}
@@ -634,7 +629,7 @@ func TestMCPForwardingDeclinesOtherServices(t *testing.T) {
 	}
 
 	// A service that has released the library must not see it reopened here.
-	serve(NewServer(config, nil))
+	serve(testServer(t, config, nil))
 	if text, isError := toolText(t, call("tools/call", search)); !isError || !strings.Contains(text, "not connected") {
 		t.Fatalf("call to a released service: %v %s", isError, text)
 	}
@@ -700,7 +695,7 @@ func TestOpenCatalogForQuerySkipsInitialize(t *testing.T) {
 	if value, err := callMCP(light, "search_conversations", map[string]any{"query": "tokenizer parser"}); err != nil || len(value.(map[string]any)["items"].([]map[string]any)) != 1 {
 		t.Fatalf("query on the light path: %v %#v", err, value)
 	}
-	if opened > time.Second {
+	if opened > busyTimeoutMS*time.Millisecond/2 {
 		t.Fatalf("query open took %v while another connection held the write lock", opened)
 	}
 	if _, err := held.ExecContext(ctx, "ROLLBACK"); err != nil {
@@ -757,6 +752,7 @@ func TestOpenCatalogForQuerySkipsInitialize(t *testing.T) {
 }
 
 func TestInitializeRunsOneAtATime(t *testing.T) {
+	slowTest(t)
 	catalog, _ := testCatalog(t)
 	path := catalog.Path
 	catalog.Close()
@@ -803,7 +799,7 @@ f = open(sys.argv[1], "a"); fcntl.flock(f, fcntl.LOCK_EX); print("locked", flush
 	}
 	setBuild("another build")
 	started := time.Now()
-	if _, err := OpenCatalogForQuery(path); !errors.Is(err, errCatalogInitializing) || time.Since(started) > 5*time.Second {
+	if _, err := OpenCatalogForQuery(path); !errors.Is(err, errCatalogInitializing) || time.Since(started) > 15*time.Second {
 		t.Fatalf("query open while another process initializes: %v after %v", err, time.Since(started))
 	}
 	if build() != "another build" {
@@ -865,11 +861,9 @@ func holdsCatalog(t *testing.T, path string) bool {
 }
 
 func TestMCPHoldsNoCatalogHandleBetweenCalls(t *testing.T) {
+	slowTest(t)
 	config := testLibrary(t, filepath.Join(t.TempDir(), "Pharos"))
-	open, err := OpenCatalog(config.CatalogPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	open := reopenCatalog(t, config.CatalogPath)
 	if !holdsCatalog(t, config.CatalogPath) {
 		t.Fatal("an open catalog is not visible to the check")
 	}

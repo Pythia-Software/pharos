@@ -43,6 +43,7 @@ func TestNamingAuditSeparatesSourceAndResolvedTitles(t *testing.T) {
 }
 
 func TestNamingAuditFreezesMetadata(t *testing.T) {
+	slowTest(t)
 	for _, store := range []string{"codex-index", "codex-state", "codex-empty-state", "claude-index", "claude-single-file"} {
 		t.Run(store, func(t *testing.T) {
 			useHost(t, "host-a")

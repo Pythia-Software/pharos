@@ -91,7 +91,7 @@ func useFallbackHost(t *testing.T) {
 
 func TestNothingIsRecordedUnderAFallbackHostID(t *testing.T) {
 	useFallbackHost(t)
-	catalog, config := testCatalog(t)
+	catalog, config := freshCatalog(t)
 	meta := func(key string) string {
 		var value string
 		_ = catalog.DB.QueryRow("SELECT value FROM meta WHERE key=?", key).Scan(&value)
@@ -279,7 +279,7 @@ func TestHostsKeepSeparateSourceState(t *testing.T) {
 		t.Fatalf("freshness is not split by host: %#v", freshness)
 	}
 	config.Sources = []SourceConfig{macB.config}
-	inventory, err := NewServer(config, catalog).sourceInventory()
+	inventory, err := testServer(t, config, catalog).sourceInventory()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,7 +406,7 @@ func TestDivergedCopiesAreUnionedUntilOneHoldsEverything(t *testing.T) {
 
 func TestPreHostCatalogMigratesToLegacyHost(t *testing.T) {
 	useHost(t, "host-a")
-	catalog, _ := testCatalog(t)
+	catalog, _ := freshCatalog(t)
 	path := catalog.Path
 	// Rewind the catalog to the shape it had before hosts existed.
 	for _, statement := range []string{

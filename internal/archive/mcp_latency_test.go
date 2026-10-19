@@ -28,8 +28,7 @@ func TestMCPLatencyReport(t *testing.T) {
 	if root == "" {
 		t.Skip("set PHAROS_MCP_BENCH to a directory to run")
 	}
-	commitFullFsync = true
-	t.Cleanup(func() { commitFullFsync = false })
+	useDurableCatalog(t)
 	workspaces := 2000
 	if value := os.Getenv("PHAROS_MCP_BENCH_WORKSPACES"); value != "" {
 		fmt.Sscan(value, &workspaces)
@@ -121,7 +120,7 @@ func TestMCPLatencyReport(t *testing.T) {
 			t.Fatalf("%s: %s", request["name"], text)
 		}
 	}
-	service := httptest.NewServer(NewServer(config, catalog))
+	service := httptest.NewServer(testServer(t, config, catalog))
 	defer service.Close()
 	lines := []string{"| request | in service (handleMCP) | forwarded (MCP process → service) | direct (open, call, close) |", "| --- | --- | --- | --- |"}
 	for _, request := range requests {

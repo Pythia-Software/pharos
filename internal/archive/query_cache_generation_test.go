@@ -206,7 +206,7 @@ func TestConversationChildrenUseCoveringIndexAfterUpgrade(t *testing.T) {
 
 func TestReadySeparatesLivenessFromProjectionCatchUp(t *testing.T) {
 	catalog, config := libraryFixture(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	if status := libraryStatusCall(t, server, "/api/ready"); status["ok"] != true {
 		t.Fatalf("liveness during catch-up: %v", status)
 	}

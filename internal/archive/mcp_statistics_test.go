@@ -146,10 +146,7 @@ func TestStatisticsSnapshotsSurviveChangesAndReopen(t *testing.T) {
 	if _, err := c.DB.Exec("UPDATE agent_session_usage SET total_tokens=9999999 WHERE agent_session_id=?", stableID("agent-session", "c2", "main")); err != nil {
 		t.Fatal(err)
 	}
-	other, err := OpenCatalog(c.Path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	other := reopenCatalog(t, c.Path)
 	defer other.Close()
 	args["cursor"] = cursor
 	second := statisticsCall(t, other, "query_statistics", args)
@@ -157,21 +154,21 @@ func TestStatisticsSnapshotsSurviveChangesAndReopen(t *testing.T) {
 		t.Fatalf("snapshot changed: %#v", second)
 	}
 	args["metric_quality"] = "available"
-	if _, err = callMCP(c, "query_statistics", args); err == nil {
+	if _, err := callMCP(c, "query_statistics", args); err == nil {
 		t.Fatal("changed cursor accepted")
 	}
 	delete(args, "cursor")
 	args["snapshot_id"] = first["snapshot_id"]
 	args["metric_quality"] = "complete"
 	args["select"] = []string{"output_tokens"}
-	if _, err = callMCP(c, "query_statistics", args); err == nil {
+	if _, err := callMCP(c, "query_statistics", args); err == nil {
 		t.Fatal("uncaptured metric accepted")
 	}
-	if _, err = c.DB.Exec("UPDATE mcp_stat_snapshots SET expires_at=0 WHERE id=?", first["snapshot_id"]); err != nil {
+	if _, err := c.DB.Exec("UPDATE mcp_stat_snapshots SET expires_at=0 WHERE id=?", first["snapshot_id"]); err != nil {
 		t.Fatal(err)
 	}
 	args["select"] = []string{"total_tokens"}
-	if _, err = callMCP(c, "query_statistics", args); err == nil {
+	if _, err := callMCP(c, "query_statistics", args); err == nil {
 		t.Fatal("expired snapshot accepted")
 	}
 }
@@ -288,6 +285,7 @@ func TestStatisticsIncrementalProjectionAndPriceInvalidation(t *testing.T) {
 }
 
 func TestStatisticsSelectiveTextPrecedesBothLexicalCuts(t *testing.T) {
+	override(t, &statisticsTextLimits, struct{ recent, ranked int }{20, 10})
 	c := statisticsFixture(t)
 	tx, err := c.DB.Begin()
 	if err != nil {
@@ -300,7 +298,7 @@ func TestStatisticsSelectiveTextPrecedesBothLexicalCuts(t *testing.T) {
 	if _, err = tx.Exec("INSERT INTO message_fts_rows VALUES('m1',1)"); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 25001; i++ {
+	for i := 0; i < statisticsTextLimits.recent+1; i++ {
 		id := fmt.Sprintf("noise-%05d", i)
 		if _, err = tx.Exec("INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES(?,'c2',?,'assistant','message','needle','h')", id, id); err != nil {
 			t.Fatal(err)

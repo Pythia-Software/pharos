@@ -212,7 +212,7 @@ func TestLibraryFindMetadataIgnoresScopedCursor(t *testing.T) {
 	if err != nil || page.NextCursor == "" {
 		t.Fatalf("scoped cursor: %+v %v", page, err)
 	}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	params := url.Values{"find": {"parser"}, "find_fuzzy": {"0"}, "find_cursor": {page.NextCursor}}
 	request := func(t *testing.T, method, path, body string) string {
 		t.Helper()

@@ -558,7 +558,7 @@ func TestTL1FollowupsSeparateReviewModelsAndHumanDecisions(t *testing.T) {
 func TestTL1APIAndMCP(t *testing.T) {
 	catalog, config := testCatalog(t)
 	ingestTL1Fixture(t, catalog, 4)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	get := func(path string) map[string]any {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		request.Header.Set("Authorization", "Bearer test-token")

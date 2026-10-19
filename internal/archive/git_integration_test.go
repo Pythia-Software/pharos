@@ -11,6 +11,7 @@ import (
 )
 
 func TestMainIntegrationFindsMergeAndDirectHistory(t *testing.T) {
+	slowTest(t)
 	repo := t.TempDir()
 	git := func(args ...string) string {
 		t.Helper()
@@ -100,6 +101,7 @@ func TestMainIntegrationFindsMergeAndDirectHistory(t *testing.T) {
 }
 
 func TestMainIntegrationNegativeLookupCache(t *testing.T) {
+	slowTest(t)
 	useHost(t, "git-cache-host")
 	repo := t.TempDir()
 	git := func(args ...string) string {
@@ -149,14 +151,41 @@ func TestMainIntegrationNegativeLookupCache(t *testing.T) {
 		if err := catalog.refreshMainIntegrations(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		calls, err := os.ReadFile(trace)
+		traced, err := os.ReadFile(trace)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return strings.Split(strings.TrimSpace(string(calls)), "\n")
+		// Only the lookups in this repository: not Git that anything else in
+		// the process runs.
+		calls := []string{}
+		for _, call := range strings.Split(strings.TrimSpace(string(traced)), "\n") {
+			if strings.HasPrefix(call, "-C "+repo+" ") {
+				calls = append(calls, call)
+			}
+		}
+		return calls
 	}
-	if calls := refresh(); len(calls) < 3 {
-		t.Fatalf("first negative scan made only %d Git calls: %v", len(calls), calls)
+	cached := func() bool {
+		t.Helper()
+		var rows int
+		if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM git_main_negative_lookups WHERE workspace_id='work'").Scan(&rows); err != nil {
+			t.Fatal(err)
+		}
+		return rows == 1
+	}
+	// A Git call that times out on a busy machine leaves the scan
+	// inconclusive, and so uncached: scan again until it concludes.
+	for attempt := 1; ; attempt++ {
+		calls := refresh()
+		if cached() {
+			if len(calls) < 3 {
+				t.Fatalf("first negative scan made only %d Git calls: %v", len(calls), calls)
+			}
+			break
+		}
+		if attempt == 5 {
+			t.Fatalf("no negative lookup was cached after %d scans: %v", attempt, calls)
+		}
 	}
 	if calls := refresh(); len(calls) != 1 || !strings.Contains(calls[0], "rev-parse --verify refs/remotes/origin/main") {
 		t.Fatalf("unchanged tip should need only one ref lookup, got %v", calls)

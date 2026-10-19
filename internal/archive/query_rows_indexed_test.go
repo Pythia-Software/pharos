@@ -92,7 +92,7 @@ func TestQueryCountCubeRequiresFreshSnapshot(t *testing.T) {
 func TestQueryCountOnlyMetricRetainsEnvelope(t *testing.T) {
 	c, cfg := testCatalog(t)
 	seedToolCalls(t, c, 31)
-	s := NewServer(cfg, c)
+	s := testServer(t, cfg, c)
 	q := metricRequest(qt.AggSpec{ID: "count", Op: "count"}, qt.AggSpec{ID: "formula", Expression: "COUNT()"})
 	result, err := s.executeQueryV2(context.Background(), "tool_calls", nil, PharosToolCallsSchema(), nil, &q)
 	if err != nil {
@@ -116,7 +116,7 @@ func TestQueryCountOnlyMetricRetainsEnvelope(t *testing.T) {
 func TestQueryIndexedRowsMatchTypedExecutor(t *testing.T) {
 	c, cfg := testCatalog(t)
 	seedToolCalls(t, c, 131)
-	s := NewServer(cfg, c)
+	s := testServer(t, cfg, c)
 	ctx := context.Background()
 	schema := PharosToolCallsSchema()
 	for _, order := range []qt.OrderBy{{Field: "started_at", Dir: "desc"}, {Field: "duration_ms", Dir: "asc", Nulls: "first"}, {Field: "duration_ms", Dir: "desc", Nulls: "last"}} {

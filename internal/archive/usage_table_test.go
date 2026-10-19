@@ -137,7 +137,7 @@ func TestUsageRowsSuppressMirroredWorkspaces(t *testing.T) {
 func TestUsageMetricsReadAsTimeline(t *testing.T) {
 	catalog, config := testCatalog(t)
 	ingestUsageFixture(t, catalog)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	schema, err := server.queryTableSchema("usage")
 	if err != nil {
 		t.Fatal(err)
@@ -202,7 +202,7 @@ func TestUsageHourlyAggregationsKeepRequestHoursAndDailyRows(t *testing.T) {
 	if total != 3150 {
 		t.Fatalf("hourly tokens = %d", total)
 	}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	for _, sample := range []struct {
 		name                               string
 		where                              string

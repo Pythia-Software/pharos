@@ -43,7 +43,7 @@ func TestFindingsQueryTableMatchesTheView(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, config := testCatalog(t)
-	server := NewServer(config, fixture.catalog)
+	server := testServer(t, config, fixture.catalog)
 	call := func(method, path string, body any, into any) {
 		t.Helper()
 		w := queryV2ReviewCall(t, server, config.APIToken, method, path, body)
@@ -140,7 +140,7 @@ func TestFindingsQueryTableMatchesTheView(t *testing.T) {
 // An unbuilt catalog has no findings rows, and reading them starts no build.
 func TestFindingsQueryTableEmpty(t *testing.T) {
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	spawned := false
 	catalog.background = func(func(context.Context)) bool { spawned = true; return true }
 	w := queryV2ReviewCall(t, server, config.APIToken, http.MethodPost, "/api/query/findings/rows-v2",
