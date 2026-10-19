@@ -1142,7 +1142,7 @@ test('card library shows empty cards, filters and sorts active definitions, and 
   const { browser, page, data } = await setup({ url: '/home?cards=library' });
   try {
     const activeRecipes = queryRecipes.filter(recipe => !recipe.retired);
-    assert.equal(await page.locator('a[href*="-review"]').count(), 0);
+    assert.equal(await page.locator('a[href*="-review"]:not([href="/home?cards=coverage-review"])').count(), 0);
     assert.equal(await page.locator('.card-library-entry').count(), activeRecipes.length);
     assert.deepEqual(data.metadataRequests, [], 'hidden table controls must not scan distinct values on Home');
     assert.ok(data.requests.every(({ path }) => !path.endsWith('/aggregations')), 'hidden table header charts must not compete with card previews');
@@ -1175,7 +1175,7 @@ test('card library shows empty cards, filters and sorts active definitions, and 
     const collected = await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', [])[0]);
     assert.equal(collected.cover.kind, 'bar-vertical');
     assert.deepEqual(collected.query.grouping.keys, queryRecipes.find(recipe => recipe.id === 'effort-cost').exploration.keys);
-    assert.deepEqual(collected.query.grouping.source.where.filter(term => term.field === 'first_usage_at').map(term => term.value), ['-7d', '+0s']);
+    assert.deepEqual(collected.query.grouping.source.where.filter(term => term.field === 'first_usage_at').map(term => term.value), ['-30d', '+0s']);
     await page.getByRole('button', { name: /^Edit card / }).click();
     await page.getByRole('button', { name: 'Reset template', exact: true }).click();
     await page.getByText(queryRecipes.find(recipe => recipe.id === 'effort-cost').title, { exact: true }).waitFor();
@@ -1188,6 +1188,88 @@ test('card library shows empty cards, filters and sorts active definitions, and 
     assert.equal(await page.locator('.card-library-entry').count(), activeRecipes.length);
     await page.setViewportSize({ width: 390, height: 844 });
     assert.ok(await page.locator('.card-library').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
+test('provider cost share defaults to 90 days and keeps seven-day percentage smoothing when collected', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=provider-cost-share' });
+  try {
+    const base = data.rows.usage[0];
+    data.rows.usage = Array.from({ length: 90 }, (_, i) => {
+      const date = new Date(Date.now() - (89 - i) * 86400000 - 1000);
+      const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      const share = .65 - i / 180 + .1 * Math.sin(i / 8);
+      return ['claude', 'codex'].map((provider, j) => ({ ...base, id: `provider-${i}-${j}`, provider, day, first_usage_at: date.toISOString(), last_usage_at: date.toISOString(), cost_usd: 10 * (j ? 1 - share : share) }));
+    }).flat();
+    await page.reload();
+    const card = page.locator('#card-provider-cost-share');
+    await card.locator('.query-cover-timeline').waitFor();
+    assert.equal(await card.locator('.query-window').innerText(), 'Last 90d');
+    assert.equal(await card.locator('.query-cover-columns > span').count(), 91);
+    assert.match(await card.locator('.query-timeline-ticks').innerText(), /100%/);
+    assert.match(await card.locator('.query-cover-columns > span').last().getAttribute('data-chart-tooltip'), /7d rolling average.*claude:.*%.*codex:.*%/s);
+    assert.match(await card.locator('.query-chart-axis-labels').innerText(), /Cost share/);
+    await card.screenshot({ path: path.join(root, '.context/provider-cost-share.png') });
+    await card.getByRole('button', { name: 'Collect Provider cost share', exact: true }).click();
+    await page.getByText('Collected “Provider cost share”.', { exact: true }).waitFor();
+    const saved = await page.evaluate(() => window.pharosPrefs.get('pharos-bookmarks-v1', [])[0]);
+    assert.equal(saved.templateId, 'provider-cost-share:90');
+    assert.deepEqual(saved.cover.timeline, { rollingPeriods: 7, percent: true });
+    assert.equal(new URL(saved.url, 'http://home.test').searchParams.get('window_days'), '90');
+    await assertEventually(() => data.preferences['pharos-bookmarks-v1']?.some(item => item.id === saved.id));
+    await page.goto('http://home.test/home');
+    const collected = page.locator('.home-collection .query-card');
+    await collected.locator('.query-cover-timeline').waitFor();
+    assert.equal(await collected.locator('.query-window').innerText(), 'Last 90d');
+    assert.match(await collected.locator('.query-cover-columns > span').last().getAttribute('data-chart-tooltip'), /7d rolling average/);
+    assert.match(await collected.locator('.query-timeline-ticks').innerText(), /100%/);
+    assert.deepEqual(data.errors, []);
+  } finally { await browser.close(); }
+});
+
+test('model share timelines distinguish tokens from cost and retain 90-day smoothing when collected', async () => {
+  const { browser, page, data } = await setup({ url: '/home?cards=library&card_search=share%20over%20time' });
+  try {
+    const base = data.rows.usage[0], models = ['opus-4-6', 'gpt-5.3-codex', 'gemini-3.8-flash'];
+    data.rows.usage = Array.from({ length: 90 }, (_, i) => {
+      const date = new Date(Date.now() - (89 - i) * 86400000 - 1000);
+      const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      const share = .65 - i / 180 + .1 * Math.sin(i / 8);
+      return models.map((model_family, j) => {
+        const total_tokens = Math.round(1e6 * [share, (1 - share) * .8, (1 - share) * .2][j]);
+        return { ...base, id: `model-${i}-${j}`, provider: ['claude', 'codex', 'antigravity'][j], model_family, day, first_usage_at: date.toISOString(), last_usage_at: date.toISOString(), total_tokens, cost_usd: total_tokens / 1e6 * [4, 1, .2][j] };
+      });
+    }).flat();
+    await page.reload();
+    const tips = [];
+    for (const metric of ['token', 'cost']) {
+      const id = `model-${metric}-share-trend`, card = page.locator(`#card-${id}`);
+      await card.locator('.query-cover-timeline').waitFor();
+      assert.equal(await card.locator('.query-window').innerText(), 'Last 90d');
+      assert.equal(await card.locator('.query-cover-columns > span').count(), 91);
+      assert.match(await card.locator('.query-timeline-ticks').innerText(), /100%/);
+      const tip = await card.locator('.query-cover-columns > span').last().getAttribute('data-chart-tooltip');
+      for (const model of models) assert.ok(tip.includes(`${model}:`));
+      assert.match(tip, /7d rolling average/);
+      tips.push(tip);
+      assert.match(await card.locator('.query-chart-axis-labels').innerText(), metric === 'token' ? /Token share/ : /Cost share/);
+      await card.screenshot({ path: path.join(root, `.context/${id}.png`) });
+      await card.getByRole('button', { name: /^Collect / }).click();
+      await assertEventually(() => data.preferences['pharos-bookmarks-v1']?.some(item => item.templateId === `${id}:90`));
+      const saved = data.preferences['pharos-bookmarks-v1'].find(item => item.templateId === `${id}:90`);
+      assert.deepEqual(saved.cover.timeline, { rollingPeriods: 7, percent: true });
+      assert.deepEqual(saved.query.grouping.keys, ['day', 'model_family']);
+    }
+    assert.notEqual(tips[0], tips[1], 'different model prices give different token and cost percentages');
+    await page.goto('http://home.test/home');
+    for (const metric of ['token', 'cost']) {
+      const saved = data.preferences['pharos-bookmarks-v1'].find(item => item.templateId === `model-${metric}-share-trend:90`);
+      const card = page.locator(`.home-collection [data-card-id="${saved.id}"]`);
+      await card.locator('.query-cover-timeline').waitFor();
+      assert.equal(await card.locator('.query-window').innerText(), 'Last 90d');
+      assert.match(await card.locator('.query-cover-columns > span').last().getAttribute('data-chart-tooltip'), /7d rolling average/);
+    }
     assert.deepEqual(data.errors, []);
   } finally { await browser.close(); }
 });
@@ -1208,7 +1290,8 @@ test('every active catalog card preserves its displayed data after collection an
       const card = page.locator(`#card-${recipe.id}`);
       expected.set(recipe.id, await signature(card));
       await card.getByRole('button', { name: /^Collect / }).click();
-      await assertEventually(async () => await page.evaluate(id => window.pharosPrefs.get('pharos-bookmarks-v1', []).some(card => card.templateId === `${id}:7`), recipe.id)).catch(async error => assert.fail(`${recipe.id}: ${await page.locator('.card-library-feedback').innerText()} (${error.message})`));
+      const days = recipe.days?.length === 1 ? recipe.days[0] : 7;
+      await assertEventually(async () => await page.evaluate(({ id, days }) => window.pharosPrefs.get('pharos-bookmarks-v1', []).some(card => card.templateId === `${id}:${days}`), { id: recipe.id, days })).catch(async error => assert.fail(`${recipe.id}: ${await page.locator('.card-library-feedback').innerText()} (${error.message})`));
     }
     await assertEventually(async () => data.preferences['pharos-bookmarks-v1']?.length === active.length);
     await page.goto('http://home.test/home');
