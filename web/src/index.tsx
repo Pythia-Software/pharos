@@ -1095,7 +1095,7 @@ function splitLabel(split: TokenSplit, value: unknown): string {
 // chart leaves that filter out of its own query so the other values stay in
 // the key to pick from. Token types are not rows, so clicking one only
 // narrows the chart.
-function TokenChart({ where, onFilter, view, onChange }: { where: WhereTerm[]; onFilter: FilterChange; view: TokenChartView; onChange: (next: Partial<TokenChartView>) => void }) {
+function TokenChart({ where, onFilter, onTimeFilter = onFilter, view, onChange }: { where: WhereTerm[]; onFilter: FilterChange; onTimeFilter?: FilterChange; view: TokenChartView; onChange: (next: Partial<TokenChartView>) => void }) {
   const cost = view.metric === "cost" || view.metric === "percent_cost";
   const percent = view.metric === "percent" || view.metric === "percent_cost";
   const split: TokenSplit = cost && view.split === "type" ? "provider" : view.split;
@@ -1143,7 +1143,7 @@ function TokenChart({ where, onFilter, view, onChange }: { where: WhereTerm[]; o
     <ChartSelect label="Breakdown" value={split} options={tokenSplits.map(([value, text]) => [value, text, value === "type" && cost ? "Cost is priced per request, not per token type" : undefined])}
       title={cost ? "Token type is only available for token metrics; cost is priced per request." : "How each chart column is divided"} onChange={next => onChange({ split: next })} />
     <PeriodControl view={view} onChange={onChange} />
-    <RangeControl bounds={bounds} onChange={from => onFilter(current => withTimeRange(current, usageTime, from))} />
+    <RangeControl bounds={bounds} onChange={from => onTimeFilter(current => withTimeRange(current, usageTime, from))} />
     <ScaleControl value={view.scale} onChange={scale => onChange({ scale })} percent={percent} />
     <RollingControl value={view.rollingPeriods} period={view.period} count={periodCount} onChange={rollingPeriods => onChange({ rollingPeriods })} />
   </>;
@@ -1151,7 +1151,7 @@ function TokenChart({ where, onFilter, view, onChange }: { where: WhereTerm[]; o
     format={percent ? value => `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })}%` : cost ? formatUSD : compactNumber}
     tickFormat={percent ? value => `${value}%` : cost ? costTick : compactNumber}
     noun={view.metric === "tokens" ? "tokens" : ""} loading={result.loading} error={result.error} legend={series.length > 0} percent={percent}
-    selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => setSeriesLimit(limit => limit + 5)} onRange={pickRange(onFilter, usageTime, view.period, periodCount, period => onChange({ period }))} />;
+    selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => setSeriesLimit(limit => limit + 5)} onRange={pickRange(onTimeFilter, usageTime, view.period, periodCount, period => onChange({ period }))} />;
 }
 
 // Compare what each preset controls. Filters, paging, and unrelated settings
@@ -1175,7 +1175,7 @@ function PresetRow({ label, presets, query, chart, onApply, clear }: { label: st
   </div>;
 }
 
-function TokenUsage({ scopeWhere, appliedScope }: { scopeWhere?: WhereTerm[]; appliedScope?: React.MutableRefObject<WhereTerm[]> } = {}) {
+function TokenUsage({ scopeWhere, appliedScope, onTimeRangeChange }: { scopeWhere?: WhereTerm[]; appliedScope?: React.MutableRefObject<WhereTerm[]>; onTimeRangeChange?: () => void } = {}) {
   const [chart, setChart] = useState<TokenChartView>(() => readStored(tokenChartKey, defaultTokenChart, view =>
     ["tokens", "cost", "percent", "percent_cost"].includes(view.metric) && tokenSplits.some(([value]) => value === view.split) && Object.hasOwn(chartPeriods, view.period) && validPeriodCount(view.hours) && validPeriodCount(view.days) && validRollingPeriods(view.rollingPeriods) && validChartScale(view.scale)));
   const update = (next: Partial<TokenChartView>) => setChart(previous => { const merged = { ...previous, ...next }; store(tokenChartKey, merged); return merged; });
@@ -1184,13 +1184,18 @@ function TokenUsage({ scopeWhere, appliedScope }: { scopeWhere?: WhereTerm[]; ap
     return <>
       <p className="muted machine-token-note">Reconciled tokens by session, model, and effort. Input includes cached tokens. Cost is the API list-price equivalent at standard rates; subscriptions and long-context premiums are excluded. ≈ marks costs priced by assumption.</p>
       <TokenSummary where={where} />
-      <TokenChart where={where} onFilter={filterChange(api)} view={chart} onChange={update} />
+      <TokenChart where={where} onFilter={filterChange(api)} onTimeFilter={change => {
+        // A chart date selection replaces the page period. Release its scope
+        // before updating the query so normalization cannot restore that limit.
+        onTimeRangeChange?.();
+        filterChange(api)(change);
+      }} view={chart} onChange={update} />
       <PresetRow label="Chart" presets={usageChartPresets} query={api.query} chart={chart} onApply={preset => { if (preset?.chart) update(preset.chart); }} />
     </>;
-  }} presets={api => <UsageTableQueries api={api} />} />;
+  }} presets={api => <UsageTableQueries api={api} onTimeRangeChange={onTimeRangeChange} />} />;
 }
 
-function UsageTableQueries({ api }: { api: QueryTableApi<Row> }) {
+function UsageTableQueries({ api, onTimeRangeChange }: { api: QueryTableApi<Row>; onTimeRangeChange?: () => void }) {
   const grouped = Boolean(api.query.grouping);
   const apply = (preset: UsageTablePreset) => {
     api.setQuery(previous => applyUsageTablePreset(previous, preset));
@@ -1207,9 +1212,9 @@ function UsageTableQueries({ api }: { api: QueryTableApi<Row> }) {
     {row("Group by", usageGroupPresets)}
     {row("Compare", usageComparisonPresets)}
     {grouped ? <div className="usage-group-context">
-      <RangeControl bounds={timeBounds(source.where, usageTime)} editable shortRanges onChange={(from, to) => api.setQuery(previous => previous.grouping ? {
+      <RangeControl bounds={timeBounds(source.where, usageTime)} editable shortRanges onChange={(from, to) => { onTimeRangeChange?.(); api.setQuery(previous => previous.grouping ? {
         ...previous, offset: 0, grouping: { ...previous.grouping, source: { ...previous.grouping.source, where: withTimeRange(previous.grouping.source.where, usageTime, from, to), offset: 0 } },
-      } : previous)} />
+      } : previous); }} />
       <span className="muted">Summaries use all matching source rows. API costs can include assumed or partial prices; unpriced tokens still count.</span>
     </div> : null}
   </section>;
@@ -1512,7 +1517,7 @@ function UsagePage() {
         {view === "tokens" && !shared && (new URLSearchParams(location.search).get("machine_view") ?? preferences().get("pharos-machine-view", "tokens")) === "tokens" ? <div className="usage-heading-tools"><RefreshPricesButton /></div> : null}
       </div>
     </div>
-    {view === "conversations" ? <QuerySurface dataset="conversation_activity" /> : view === "tokens" ? shared ? <TokenUsage /> : <MachineActivity tokens={(where, applied) => <TokenUsage scopeWhere={where} appliedScope={applied} />} calls={props => <div className="machine-call-surface"><QuerySurface key={props.localRows ? "example" : "library"} dataset="tool_calls" namespace="machine_calls" {...props}
+    {view === "conversations" ? <QuerySurface dataset="conversation_activity" /> : view === "tokens" ? shared ? <TokenUsage /> : <MachineActivity tokens={(where, applied, onTimeRangeChange) => <TokenUsage scopeWhere={where} appliedScope={applied} onTimeRangeChange={onTimeRangeChange} />} calls={props => <div className="machine-call-surface"><QuerySurface key={props.localRows ? "example" : "library"} dataset="tool_calls" namespace="machine_calls" {...props}
       controls={(api, builder) => <div id="machineRawCalls" className="machine-raw-calls"><div className="machine-panel-heading"><div><h3>Raw calls backing this selection</h3><p className="muted">{api.total?.toLocaleString() ?? "…"} matching calls · Full invocations, timings, statuses, and source conversations. Filters here also update the charts and analytics.</p></div></div>{builder}</div>}
       trailing={row => <span className="machine-inline-actions"><button type="button" className="mcp-detail-button" onClick={() => setSelectedCall({ id: String(row.id), example: props.localRows ? { ...row, started_at: new Date(row.started_at).toISOString(), workspace_id: undefined } : undefined })}>Details</button>{!props.localRows && row.workspace_id ? <a href={`/work/${encodeURIComponent(row.workspace_id)}?conversation=${encodeURIComponent(row.conversation_id ?? "")}`}>Conversation ↗</a> : null}</span>} /></div>} /> : view === "writing" ? <WritingUsage onStatus={setStatus} /> : <CarbonImpact />}
     {selectedCall ? <ToolCallDialog id={selectedCall.id} exampleCall={selectedCall.example} onClose={() => setSelectedCall(null)} /> : null}
