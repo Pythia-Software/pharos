@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
+	qt "github.com/Pythia-Software/query-table/backends/go"
 	"github.com/gbdubs/pharos/internal/querytable"
 )
 
@@ -92,6 +94,44 @@ func TestMachineOperationFamilies(t *testing.T) {
 	}
 	if machineActivity("mcp", "", "search", "github", "") != "tool:github / search" || machineActivity("mcp", "", "query", "pharos", "") != "tool:pharos / query" {
 		t.Fatal("unclassified tools must remain individually named")
+	}
+}
+
+// Machine Time's cubes keep every group past the generic executor's budget,
+// up to the accelerator's own; past that the metric fails, not truncates.
+func TestMachineTimeMetricsBeyondTheGenericGroupBudget(t *testing.T) {
+	override(t, &maxSQLBuckets, 5)
+	catalog, config := testCatalog(t)
+	seedToolCalls(t, catalog, 60)
+	server := testServer(t, config, catalog)
+	groups := []string{"repository_name", "activity", "day", "status", "operation_key", "operation_name", "tool_name", "mcp_server"}
+	metrics := func(spent qt.AggSpec) qt.SQLiteMetricsV2Result {
+		t.Helper()
+		response := apiCall(t, server, config.APIToken, "POST", "/api/query/tool_calls/metrics", metricRequest(spent, qt.AggSpec{ID: "calls", Op: "count"}))
+		var result qt.SQLiteMetricsV2Result
+		if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &result) != nil || len(result.Metrics) != 2 || result.Metrics[1].Error != "" {
+			t.Fatal(response.Code, response.Body.String())
+		}
+		return result
+	}
+	spent := qt.AggSpec{ID: "time", Op: "sum", Field: "duration_ms", GroupBy: groups}
+	cube := metrics(spent).Metrics[0]
+	var calls int64
+	for _, bucket := range cube.Buckets {
+		calls += bucket.Count
+	}
+	if cube.Error != "" || len(cube.Buckets) <= maxSQLBuckets || cube.GroupCount != int64(len(cube.Buckets)) || calls != 60 || cube.ProcessedRows != 60 {
+		t.Fatalf("accelerated cube stopped at the generic budget: %d groups, %d calls, %q", len(cube.Buckets), calls, cube.Error)
+	}
+	// A shape the accelerator declines keeps the generic budget.
+	limited := spent
+	limited.GroupLimit = 1000
+	if generic := metrics(limited).Metrics[0]; !strings.Contains(generic.Error, "group population exceeds host budget") {
+		t.Fatalf("generic metric past its budget: %+v", generic)
+	}
+	override(t, &machineTimeMaxGroups, len(cube.Buckets)-1)
+	if over := metrics(spent).Metrics[0]; !strings.Contains(over.Error, "group population exceeds the "+thousands(machineTimeMaxGroups)+"-group host budget") || len(over.Buckets) != 0 {
+		t.Fatalf("accelerated cube past its budget: %+v", over)
 	}
 }
 

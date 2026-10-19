@@ -91,8 +91,17 @@ func sqliteQuerySchema(dataset string) (qt.Schema, error) {
 	return qt.Schema{}, fmt.Errorf("unknown query-table dataset %q", dataset)
 }
 
+// queryV2UsageMaxGroups is Usage's V2 metric group budget. Its compact facts
+// chart by hour, week or month and by repository or model, which over long
+// ranges exceeds the ordinary budget; V3 allows Usage the same.
+var queryV2UsageMaxGroups = 100_000
+
 func queryV2Dataset(dataset string, schema qt.Schema) qt.SQLiteV2Dataset {
-	return qt.SQLiteV2Dataset{Schema: schema, Scope: queryTableScope, Dataset: schema.Name, MaxRows: querytable.MaxLimit, MaxGroups: maxSQLBuckets, MaxPopulation: queryTablePopulation}
+	groups := maxSQLBuckets
+	if schema.Name == "pharos_usage" {
+		groups = queryV2UsageMaxGroups
+	}
+	return qt.SQLiteV2Dataset{Schema: schema, Scope: queryTableScope, Dataset: schema.Name, MaxRows: querytable.MaxLimit, MaxGroups: groups, MaxPopulation: queryTablePopulation}
 }
 
 // The outer schema binds to stable column aliases; the host owns the joins and
@@ -906,6 +915,11 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 	}
 	if sqlBacked && metrics != nil && rowRequest == nil {
 		result.SQLiteV2ExecutionResult, indexed, err = s.countOnlyMetricsV2(ctx, tx, table, d, *metrics, options)
+		// Machine Time's cubes read the tool projection. A caller's own
+		// population budget bounds raw calls, so leave its requests to them.
+		if !indexed && err == nil && dataset == "tool_calls" && len(populationLimit) == 0 {
+			result.SQLiteV2ExecutionResult, indexed, err = s.Catalog.machineTimeMetricsV2(ctx, tx, d, *metrics, options)
+		}
 	}
 	if indexed {
 		// The indexed window has already executed in this same transaction.

@@ -47,7 +47,8 @@ func TestQueryDatasetsHTTP(t *testing.T) {
 			}
 			w := call(http.MethodGet, "/api/query/"+dataset+"/capabilities", nil)
 			var handshake struct {
-				QueryCapabilities qt.QueryCapabilitiesV3 `json:"queryCapabilities"`
+				MetricCapabilities qt.SQLiteMetricCapabilities `json:"metricCapabilities"`
+				QueryCapabilities  qt.QueryCapabilitiesV3      `json:"queryCapabilities"`
 			}
 			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &handshake) != nil || !handshake.QueryCapabilities.GroupedRows || !handshake.QueryCapabilities.CalendarGrouping {
 				t.Fatal("capabilities", w.Code, w.Body.String())
@@ -59,6 +60,13 @@ func TestQueryDatasetsHTTP(t *testing.T) {
 			}
 			if limits.MaxRows != 10_000 || limits.MaxGroups != groups || limits.MaxPopulation != 10_000_000 {
 				t.Fatalf("incorrect advertised V3 budgets: %+v", limits)
+			}
+			// Usage charts its compact facts by period and split with V2 metrics.
+			if groups = 2_000; dataset == "usage" {
+				groups = 100_000
+			}
+			if handshake.MetricCapabilities.Version != 2 || handshake.MetricCapabilities.MaxGroups != groups {
+				t.Fatalf("incorrect advertised V2 budgets: %+v", handshake.MetricCapabilities)
 			}
 
 			w = call(http.MethodPost, "/api/query/"+dataset+"/rows-v2", `{"version":2,"profile":"qt-sqlite-v1","select":["id"],"limit":1}`)

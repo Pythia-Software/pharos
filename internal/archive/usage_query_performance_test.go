@@ -145,6 +145,65 @@ func TestMachineTimeProjectionMatchesCubeAndInvalidatesOnPublication(t *testing.
 			t.Fatal("raw-call query incorrectly used grouped facts", handled, err)
 		}
 	}
+	// /metrics answers the same shapes from the projection exactly as the
+	// generic executor answers them from the calls, in the same order.
+	v2Schema := PharosToolCallsSchema()
+	generic := queryV2Dataset("tool_calls", v2Schema)
+	generic.SourceSQL = toolCallDataset.v2Source(v2Schema)
+	accelerated := func(q qt.MetricQuery) (qt.SQLiteV2ExecutionResult, bool, error) {
+		tx, release, err := beginQueryV2(ctx, c.reader())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer release()
+		return c.machineTimeMetricsV2(ctx, tx, queryV2Dataset("tool_calls", v2Schema), q, qt.PlanOptions{Now: time.Now()})
+	}
+	midnight := func(year int, month time.Month, day int) string {
+		return time.Date(year, month, day, 0, 0, 0, 0, time.Local).Format(time.RFC3339)
+	}
+	for _, groups := range [][]string{{}, {"repository_name", "activity", "day", "status", "operation_key", "operation_name", "tool_name", "mcp_server"},
+		{"repository_name", "activity", "month", "status", "operation_key", "operation_name", "tool_name", "mcp_server"}, {"provider", "model_family", "month"},
+		{"model", "effort", "week"}, {"model_effort", "program", "subcommand", "tool_category", "command_category"}} {
+		for _, where := range [][]qt.WhereTerm{nil, {{Field: "provider", Op: "=", Value: "codex"}}, {{Field: "provider", Op: "=", Value: "absent"}},
+			{{Field: "started_at", Op: ">=", Value: midnight(2026, 1, 1)}, {Field: "started_at", Op: "<", Value: midnight(2027, 1, 1)}},
+			{{Field: "started_at", Op: ">=", Value: midnight(2026, 8, 31)}, {Field: "started_at", Op: "<", Value: midnight(2026, 9, 2)}, {Field: "status", Op: "=", Value: "ok"}},
+			{{Any: []qt.WhereClause{{Field: "day", Op: "=", Value: "2026-08-31"}, {Field: "day", Op: "=", Value: "2026-09-02"}}}},
+			{{Any: []qt.WhereClause{{Field: "repository_name", Op: "is_null"}, {Field: "repository_name", Op: "="}}}},
+			{{Field: "repository_name", Op: "="}}, {{Field: "repository_name", Op: "!="}}, {{Field: "mcp_server", Op: "!=", Value: "pharos"}},
+			{{Field: "tool_name", Op: "=", Value: "Bash", Negated: true}, {Field: "program", Op: "is_not_null"}},
+			{{Field: "model", Op: "is_null"}}, {{Field: "activity", Op: "=", Value: "git"}, {Field: "operation_name", Op: "!=", Value: "git status"}},
+		} {
+			q := metricRequest(qt.AggSpec{ID: "time", Op: "sum", Field: "duration_ms", GroupBy: groups}, qt.AggSpec{ID: "timed", Op: "count", Field: "duration_ms", GroupBy: groups},
+				qt.AggSpec{ID: "calls", Op: "count", GroupBy: groups}, qt.AggSpec{ID: "population", Op: "count"})
+			q.Where = where
+			got, handled, err := accelerated(q)
+			if err != nil || !handled {
+				t.Fatalf("accelerator declined %v/%v: %v", groups, where, err)
+			}
+			want, err := generic.ExecuteV2(ctx, c.reader(), nil, &q, qt.PlanOptions{})
+			if err != nil || !same(got, want) {
+				left, _ := json.Marshal(got)
+				right, _ := json.Marshal(want)
+				t.Fatalf("accelerated metrics differ for %v/%v: %v\n got %s\nwant %s", groups, where, err, left, right)
+			}
+		}
+	}
+	for _, q := range []qt.MetricQuery{
+		metricRequest(qt.AggSpec{ID: "ids", Op: "count", GroupBy: []string{"id"}}),
+		metricRequest(qt.AggSpec{ID: "tokens", Op: "sum", Field: "result_tokens"}),
+		metricRequest(qt.AggSpec{ID: "formula", Expression: "COUNT()", GroupBy: []string{"day"}}),
+		metricRequest(qt.AggSpec{ID: "top", Op: "count", GroupBy: []string{"tool_name"}, GroupLimit: 2}),
+		metricRequest(qt.AggSpec{ID: "shown", Op: "count", GroupBy: []string{"tool_name"}, Scope: "shownRows"}),
+		metricRequest(qt.AggSpec{ID: "filtered", Op: "count", GroupBy: []string{"tool_name"}, Where: []qt.WhereTerm{{Field: "status", Op: "=", Value: "ok"}}}),
+		{Version: 2, Limit: 50, Where: []qt.WhereTerm{{Field: "duration_ms", Op: ">", Value: "100"}}, Metrics: []qt.AggSpec{{ID: "time", Op: "sum", Field: "duration_ms"}}},
+		{Version: 2, Limit: 50, Where: []qt.WhereTerm{{Field: "tool_name", Op: "contains", Value: "Ba"}}, Metrics: []qt.AggSpec{{ID: "calls", Op: "count"}}},
+		{Version: 2, Limit: 50, Where: []qt.WhereTerm{{Field: "started_at", Op: ">=", Value: time.Date(2026, 1, 1, 12, 0, 0, 0, time.Local).Format(time.RFC3339)}, {Field: "started_at", Op: "<", Value: midnight(2027, 1, 1)}}, Metrics: []qt.AggSpec{{ID: "calls", Op: "count"}}},
+		{Version: 2, Limit: 50, Where: []qt.WhereTerm{{Field: "started_at", Op: ">=", Value: midnight(2026, 1, 1)}}, Metrics: []qt.AggSpec{{ID: "calls", Op: "count"}}},
+	} {
+		if _, handled, err := accelerated(q); handled || err != nil {
+			t.Fatal("accelerator answered a raw-call shape", q, handled, err)
+		}
+	}
 	before, err := c.machineTimeRows(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -184,47 +243,56 @@ func TestMachineTimeTimestampRangesRequireFreshCube(t *testing.T) {
 			if err := c.ensureToolRollup(ctx); err != nil {
 				t.Fatal(err)
 			}
-			schema, err := (&Server{Catalog: c}).queryTableSchema("tool_calls")
-			if err != nil {
-				t.Fatal(err)
-			}
-			request := querytable.AggregationRequest{Where: []querytable.WhereTerm{
+			where := []qt.WhereTerm{
 				{Field: "started_at", Op: ">=", Value: time.Date(2026, 1, 1, 0, 0, 0, 0, time.Local).Format(time.RFC3339)},
 				{Field: "started_at", Op: "<", Value: time.Date(2027, 1, 1, 0, 0, 0, 0, time.Local).Format(time.RFC3339)},
-			}, Aggregations: []querytable.Aggregation{{ID: "calls", Op: "count"}}}
+			}
+			accelerated := func(where []qt.WhereTerm) bool {
+				t.Helper()
+				tx, release, err := beginQueryV2(ctx, c.reader())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer release()
+				q := metricRequest(qt.AggSpec{ID: "calls", Op: "count", GroupBy: []string{"tool_name"}})
+				q.Where = where
+				_, handled, err := c.machineTimeMetricsV2(ctx, tx, queryV2Dataset("tool_calls", PharosToolCallsSchema()), q, qt.PlanOptions{Now: time.Now()})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return handled
+			}
+			rangeCount := func() (int64, bool) {
+				t.Helper()
+				tx, err := c.reader().BeginTx(ctx, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer tx.Rollback()
+				total, fresh, err := c.freshToolCubeRangeCount(ctx, tx, where)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return total, fresh
+			}
 			// Warm the projection before invalidation: cached facts cannot bypass guards.
-			if _, handled, err := c.machineTimeAggregations(ctx, request, schema); !handled || err != nil {
-				t.Fatal(handled, err)
+			if !accelerated(where) {
+				t.Fatal("fresh cube declined a whole-day range")
 			}
-			tx, err := c.reader().BeginTx(ctx, nil)
-			if err != nil {
-				t.Fatal(err)
+			if total, fresh := rangeCount(); !fresh || total != 4 {
+				t.Fatal("range count", total, fresh)
 			}
-			total, fresh, err := c.freshToolCubeRangeCount(ctx, tx, request.Where)
-			tx.Rollback()
-			if err != nil || !fresh || total != 4 {
-				t.Fatal("range count", total, fresh, err)
-			}
-
 			if _, err := c.DB.Exec(mutation); err != nil {
 				t.Fatal(err)
 			}
-			if _, handled, err := c.machineTimeAggregations(ctx, request, schema); handled || err != nil {
-				t.Fatal("stale cube used for raw timestamp range", handled, err)
+			if accelerated(where) {
+				t.Fatal("stale cube used for raw timestamp range")
 			}
-			tx, err = c.reader().BeginTx(ctx, nil)
-			if err != nil {
-				t.Fatal(err)
+			if _, fresh := rangeCount(); fresh {
+				t.Fatal("stale range count")
 			}
-			_, fresh, err = c.freshToolCubeRangeCount(ctx, tx, request.Where)
-			tx.Rollback()
-			if err != nil || fresh {
-				t.Fatal("stale range count", fresh, err)
-			}
-
-			request.Where = nil
-			if _, handled, err := c.machineTimeAggregations(ctx, request, schema); !handled || err != nil {
-				t.Fatal("published cube queries changed", handled, err)
+			if !accelerated(nil) {
+				t.Fatal("published cube queries changed")
 			}
 		})
 	}

@@ -159,6 +159,18 @@ func TestQueryV2UsageHourly(t *testing.T) {
 			}
 		}
 	}
+	// Usage has its own group budget, beyond other datasets'; past it a metric
+	// fails rather than dropping groups.
+	override(t, &maxSQLBuckets, 1)
+	hours := metricRequest(qt.AggSpec{ID: "hours", Expression: "COUNT()", GroupBy: []string{"hour"}})
+	result, err := server.executeQueryV2(context.Background(), "usage", nil, schema, nil, &hours)
+	if err != nil || result.Metrics.Metrics[0].Error != "" || len(result.Metrics.Metrics[0].Buckets) != 3 {
+		t.Fatal("usage group budget", err, result.Metrics)
+	}
+	override(t, &queryV2UsageMaxGroups, 2)
+	if result, err = server.executeQueryV2(context.Background(), "usage", nil, schema, nil, &hours); err != nil || !strings.Contains(result.Metrics.Metrics[0].Error, "group population exceeds host budget") {
+		t.Fatal("usage groups beyond the budget", err, result.Metrics)
+	}
 	// Temp staging, enrichment and canonical-definition reads must not consume a
 	// second connection while holding the sole connection in a transaction.
 	catalog.DB.SetMaxOpenConns(1)
