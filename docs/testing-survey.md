@@ -514,6 +514,7 @@ These go in AGENTS.md:
 2. **Remove the legacy `/aggregations` query path.** Metrics cover its uses.
    The UI callers move to metrics or Query Table v3, the server routes go,
    and the parity tests that existed for the legacy path go with them.
+   Done in PR 7.
 3. **Land the work as a stack of GitHub PRs**, each one passing:
 
    | # | PR | Contents |
@@ -524,7 +525,7 @@ These go in AGENTS.md:
    | 4 | JS test layout | One layout and runner, one build, consolidated recipe tests, dead review modules removed |
    | 5 | Page logic in node | Reader model out of `ui.py`; carbon, sync, library and delegation logic tested in node |
    | 6 | Structural browser suite | Shared harness and one structural sweep; everything else deleted; drive E2E opt-in |
-   | 7 | Remove legacy aggregations | UI callers on metrics; routes and legacy parity tests removed |
+   | 7 | Remove legacy aggregations | Done: UI callers on `/metrics`, with host fast paths for Machine Time and plain counts and sums; routes, engines and legacy parity tests removed; the route answers 410 |
 
 ## 6. Method and caveats
 

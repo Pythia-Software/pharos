@@ -78,10 +78,34 @@ every generated schema with the runtime SQLite loader.
 
 ## HTTP and computation
 
-Legacy `/api/query/{dataset}`, `/aggregations`, `/distinct`, and `/field-stats`
-retain the v1 contract and Pharos's optimized sources/rollups. V1 decoders reject
-v2-only settings; row bodies reject trailing JSON. Signed datetime operands now
-share the upstream duration grammar and one execution clock.
+Legacy `/api/query/{dataset}`, `/distinct`, and `/field-stats` retain the v1
+contract and Pharos's optimized sources/rollups. V1 decoders reject v2-only
+settings; row bodies reject trailing JSON. Signed datetime operands now share
+the upstream duration grammar and one execution clock. The legacy
+`/aggregations` route was removed: it answers 410 Gone, telling a page loaded
+before an upgrade to reload. Every metric goes through `/metrics` or
+`/query-v3`.
+
+`/metrics` answers some requests itself, in the same result shape and with
+the adapter's values, and passes everything else to the adapter:
+
+- **Bare counts** of Tool calls come from the rollup (`countOnlyMetricsV2`).
+- **Machine Time's cubes** (calls, timed calls and total duration by
+  repository, activity, day or month, status and operation) come from the
+  cached tool-cube projection (`machineTimeMetricsV2`), with a 50,000-group
+  budget, so months of calls need not be read one by one.
+- **Plain counts and sums** grouped by text fields (`nativeMetricsV2`) run in
+  one native statement over a SQL dataset's source, or, for Usage, in Go over
+  the rows already in memory, instead of one adapter pass per metric. In
+  SQLite every value must be a stored integer; in memory, sums of other
+  numbers are added exactly as the adapter adds them and rounded once, and
+  text fields can be counted distinctly. Anything else, including any value
+  the adapter would report as an error, falls through to it. Cross-field
+  metric fusion upstream in Query Table would make this path unnecessary.
+
+These run in a plain read transaction; requests the adapter executes lease
+memory-backed temporary storage. Usage's V2 metric group budget is 100,000,
+as V3's is; other datasets keep 2,000.
 
 V2 adds:
 
