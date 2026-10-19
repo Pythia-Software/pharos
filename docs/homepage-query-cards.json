@@ -1,6 +1,6 @@
 {
   "title": "Homepage query card implementation tracker",
-  "updated": "2026-10-16",
+  "updated": "2026-10-19",
   "query_table_version": "local Miami v3",
   "cards": [
     {
@@ -1966,7 +1966,8 @@
         "repository-token-share",
         "repository-output-share",
         "repository-input-output",
-        "token-time-placement"
+        "token-time-placement",
+        "provider-cost-share"
       ],
       "current_preview": "Daily token volume. Recorded tokens by day and repository over the last 30 days; cached and unpriced usage included. Daily API equivalent. Fully priced API equivalent by recorded day and repository over the last 30 days. Token pricing coverage. Recorded token shares by pricing status over the last 30 days; assumed and missing prices stay visible. API equivalent this period. Total recorded API equivalent over the last 30 days, using fully priced positive-token usage facts only. Repository cost share. Fully priced API equivalent over the last 30 days, attributed to each usage fact’s recorded repository. Repository token share. Recorded tokens over the last 30 days, attributed to each usage fact’s repository; includes cached input. Output share by repository. Output tokens divided by all recorded tokens over the last 30 days, grouped by repository.",
       "blocked_on_query_table": [
@@ -2232,7 +2233,9 @@
         "task-effort-token-ranges",
         "task-model-token-ranges",
         "task-model-effort-token-ranges",
-        "model-task-token-spread"
+        "model-task-token-spread",
+        "model-token-share-trend",
+        "model-cost-share-trend"
       ],
       "current_preview": "Model use over time. Recorded tokens during the last 30 days, grouped by day and model; cached input is included. Session cost by effort. Mean whole-conversation cost including delegation over the last 30 days, grouped by top-level model and effort. Conversation costs. Whole-conversation costs including delegation over the last 30 days; models with five or more conversations. Largest subagent tree. Most distinct delegated runs active in one conversation over the last 30 days, including nested agents. Human input and output. Estimated human-supplied text tokens versus recorded output per whole conversation over the last 30 days; log–log axes. Delegated runs per conversation. Delegated runs among delegating conversations over the last 30 days; model/effort cohorts with three or more observations. Session roles by model. Active agent session shares by model over the last 30 days: singleton roots, parent roots, and subagents. Cost by effort. API-equivalent cost over the last 30 days, split by effort; fully priced usage, including unspecified effort. Session tokens and cost. Whole-conversation tokens versus priced cost over the last 30 days, including delegated work; log–log axes. Session input and output. Whole-conversation input versus output over the last 30 days, including delegated work; log–log axes. Model token share. Recorded tokens over the last 30 days, grouped by provider and model. Model conversation share. Share of model/conversation pairings over the last 30 days; multi-model conversations count under each model. Models by repository. Recorded tokens over the last 30 days, grouped by repository and model. Model cost share. API-equivalent cost over the last 30 days, split by model and provider; fully priced usage only. Task tokens by effort. Root-task tokens including delegation over the last 30 days, grouped by top-level effort; three-task minimum. Task tokens by model. Root-task tokens including delegation over the last 30 days, grouped by top-level provider and model family. Task tokens by model–effort. Root-task tokens including delegation over the last 30 days, grouped by top-level model family and effort.",
       "blocked_on_query_table": [
@@ -9394,6 +9397,214 @@
       ]
     },
     {
+      "id": "model-token-share-trend",
+      "title": "Model token share over time",
+      "description": "Model share of total recorded tokens over the last {days} days, smoothed over 7 days.",
+      "category": "models",
+      "idea": "models-01",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "days": [
+        90
+      ],
+      "unit": "tokens",
+      "scope": "model_family",
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">=",
+          "value": "0"
+        }
+      ],
+      "measures": [
+        {
+          "id": "model-daily-token",
+          "op": "sum",
+          "field": "total_tokens",
+          "groupBy": [
+            "day",
+            "model_family"
+          ],
+          "groupLimit": 10000,
+          "label": "Daily model tokens",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Token share (%) · 7d average"
+          }
+        }
+      ],
+      "cover": {
+        "mode": "result",
+        "metricId": "card_total_tokens",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": true,
+        "showLegend": true,
+        "showHeadline": false,
+        "height": 300,
+        "timeline": {
+          "rollingPeriods": 7,
+          "percent": true
+        }
+      },
+      "action": "Explore daily model tokens",
+      "note": "Matches Machine Tokens token share. Include all known nonnegative recorded tokens, including cached input and assumed, partial, and unpriced usage. Repeated cached input contributes on each recorded request; tokens measure processing volume. Sum by recorded local day and model family, then average amounts over each trailing seven calendar buckets, including zero-activity days, before dividing each model by the same window’s total. The first six buckets use available days in the selected window. A zero-total window has no share. Models use the existing model-family normalization and colors; providers using the same family are combined, as in Machine Tokens. Delegated usage stays with its recorded model. Missing models remain Unspecified; exact Other preserves the denominator.",
+      "exploration": {
+        "keys": [
+          "day",
+          "model_family"
+        ],
+        "summaries": [
+          {
+            "id": "card_total_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Daily model tokens"
+          },
+          {
+            "id": "card_count",
+            "op": "count",
+            "label": "Usage records"
+          },
+          {
+            "id": "card_cost_usd",
+            "op": "sum",
+            "field": "cost_usd",
+            "label": "API equivalent"
+          },
+          {
+            "id": "card_agent_session_id",
+            "op": "count_distinct",
+            "field": "agent_session_id",
+            "label": "Agent sessions"
+          }
+        ],
+        "valueField": "card_total_tokens",
+        "subjects": "daily groups",
+        "action": "Explore daily comparison",
+        "unit": "tokens",
+        "coverMetric": {
+          "id": "model-daily-token",
+          "op": "sum",
+          "field": "card_total_tokens",
+          "groupBy": [
+            "day",
+            "model_family"
+          ],
+          "groupLimit": 10000,
+          "label": "Daily model tokens",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Token share (%) · 7d average"
+          }
+        }
+      }
+    },
+    {
+      "id": "model-cost-share-trend",
+      "title": "Model cost share over time",
+      "description": "Model share of total API-equivalent cost over the last {days} days, smoothed over 7 days.",
+      "category": "models",
+      "idea": "models-01",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "days": [
+        90
+      ],
+      "unit": "USD",
+      "scope": "model_family",
+      "where": [
+        {
+          "field": "cost_usd",
+          "op": ">=",
+          "value": "0"
+        }
+      ],
+      "measures": [
+        {
+          "id": "model-daily-cost",
+          "op": "sum",
+          "field": "cost_usd",
+          "groupBy": [
+            "day",
+            "model_family"
+          ],
+          "groupLimit": 10000,
+          "label": "Daily model API equivalent",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Cost share (%) · 7d average"
+          }
+        }
+      ],
+      "cover": {
+        "mode": "result",
+        "metricId": "card_cost_usd",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": true,
+        "showLegend": true,
+        "showHeadline": false,
+        "height": 300,
+        "timeline": {
+          "rollingPeriods": 7,
+          "percent": true
+        }
+      },
+      "action": "Explore daily model costs",
+      "note": "Matches Machine Tokens cost share. Include all known nonnegative API-equivalent costs, including assumed and partial pricing; missing costs are excluded. API equivalent is not subscription spend or invoices. Sum by recorded local day and model family, then average amounts over each trailing seven calendar buckets, including zero-activity days, before dividing each model by the same window’s total. The first six buckets use available days in the selected window. A zero-total window has no share. Models use the existing model-family normalization and colors; providers using the same family are combined, as in Machine Tokens. Delegated usage stays with its recorded model. Missing models remain Unspecified; exact Other preserves the denominator.",
+      "exploration": {
+        "keys": [
+          "day",
+          "model_family"
+        ],
+        "summaries": [
+          {
+            "id": "card_cost_usd",
+            "op": "sum",
+            "field": "cost_usd",
+            "label": "Daily model API equivalent"
+          },
+          {
+            "id": "card_count",
+            "op": "count",
+            "label": "Usage records"
+          },
+          {
+            "id": "card_total_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Total tokens"
+          },
+          {
+            "id": "card_agent_session_id",
+            "op": "count_distinct",
+            "field": "agent_session_id",
+            "label": "Agent sessions"
+          }
+        ],
+        "valueField": "card_cost_usd",
+        "subjects": "daily groups",
+        "action": "Explore daily comparison",
+        "unit": "USD",
+        "coverMetric": {
+          "id": "model-daily-cost",
+          "op": "sum",
+          "field": "card_cost_usd",
+          "groupBy": [
+            "day",
+            "model_family"
+          ],
+          "groupLimit": 10000,
+          "label": "Daily model API equivalent",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Cost share (%) · 7d average"
+          }
+        }
+      }
+    },
+    {
       "id": "model-session-costs",
       "title": "Conversation costs",
       "description": "Whole-conversation costs including delegation over the last {days} days; models with five or more conversations.",
@@ -12997,6 +13208,110 @@
         "showOther": false
       },
       "emptyLabel": "No Pharos search methods with ten known-count successful calls; try a longer archive window"
+    },
+    {
+      "id": "provider-cost-share",
+      "title": "Provider cost share",
+      "description": "Provider share of total API-equivalent cost over the last {days} days, smoothed over 7 days.",
+      "category": "cost",
+      "idea": "cost-01",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "days": [
+        90
+      ],
+      "unit": "USD",
+      "scope": "provider",
+      "where": [
+        {
+          "field": "cost_usd",
+          "op": ">=",
+          "value": "0"
+        }
+      ],
+      "measures": [
+        {
+          "id": "provider-daily-cost",
+          "op": "sum",
+          "field": "cost_usd",
+          "groupBy": [
+            "day",
+            "provider"
+          ],
+          "groupLimit": 10000,
+          "label": "Daily provider API equivalent",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Cost share (%) · 7d average"
+          }
+        }
+      ],
+      "cover": {
+        "mode": "result",
+        "metricId": "card_cost_usd",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": true,
+        "showLegend": true,
+        "showHeadline": false,
+        "height": 300,
+        "timeline": {
+          "rollingPeriods": 7,
+          "percent": true
+        }
+      },
+      "action": "Explore daily provider costs",
+      "note": "Matches Machine Tokens cost share: include all known nonnegative API-equivalent costs, including assumed and partial pricing. Missing costs are excluded. Sum by recorded local day and provider, then average costs over each trailing seven calendar buckets, including zero-activity days, before dividing each provider by the same window’s total cost. The first six buckets use the available days in the selected window. A zero-cost window has no share. Provider attribution follows each usage fact, including delegated usage. Missing providers remain Unspecified; exact Other preserves the denominator. API equivalent is not subscription spend or invoices.",
+      "exploration": {
+        "keys": [
+          "day",
+          "provider"
+        ],
+        "summaries": [
+          {
+            "id": "card_cost_usd",
+            "op": "sum",
+            "field": "cost_usd",
+            "label": "Daily provider API equivalent"
+          },
+          {
+            "id": "card_count",
+            "op": "count",
+            "label": "Usage records"
+          },
+          {
+            "id": "card_total_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Total tokens"
+          },
+          {
+            "id": "card_agent_session_id",
+            "op": "count_distinct",
+            "field": "agent_session_id",
+            "label": "Agent sessions"
+          }
+        ],
+        "valueField": "card_cost_usd",
+        "subjects": "daily groups",
+        "action": "Explore daily comparison",
+        "unit": "USD",
+        "coverMetric": {
+          "id": "provider-daily-cost",
+          "op": "sum",
+          "field": "card_cost_usd",
+          "groupBy": [
+            "day",
+            "provider"
+          ],
+          "groupLimit": 10000,
+          "label": "Daily provider API equivalent",
+          "display": {
+            "kind": "auto",
+            "yLabel": "Cost share (%) · 7d average"
+          }
+        }
+      }
     },
     {
       "id": "api-cost-total",

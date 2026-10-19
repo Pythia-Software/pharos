@@ -23,6 +23,7 @@ export type QueryPreview = {
   metrics?: PreviewMetric[]; fields?: FieldSchema["fields"]; coverMetricId?: string;
   ranking?: { label: string; value: number; color: string }[];
   buckets?: ChartBucket[]; series?: ChartSeries[]; excerpt?: string;
+  timeline?: CardCover["timeline"];
   study?: HumanStudyPreview;
   draft?: DraftCoverData;
 };
@@ -186,6 +187,8 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   }
   // Existing daily covers keep the Usage palette, calendar gaps and exact Other.
   if (!clause.expression && !clause.distribution && (!clause.display || clause.display.kind === "auto") && clause.groupBy[0] === "day" && clause.op === "sum" && numeric.length) {
+    preview.timeline = (options.cover ?? recipe?.cover)?.timeline;
+    if (preview.timeline?.percent && (limited || result.buckets.some(bucket => bucket.error || bucket.yError))) throw new Error("Complete daily totals are required for percentage shares.");
     const entries = numeric.map(bucket => [String(bucket.keys[0]), bucket.keys.length > 1 ? bucket.keys.slice(1).map(key => String(key ?? "Unspecified")).join(" · ") : clause.label ?? "Total", Number(bucket.value)] as [string, string, number]);
     const observed = [...new Set(entries.map(([key]) => key))].sort();
     const days = options.window?.days ?? Math.min(90, observed.length);

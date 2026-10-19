@@ -14,6 +14,18 @@ const sessionSize = "SUM([total_tokens])/NULLIF(COUNT_DISTINCT([agent_session_id
 const formula = (id: string, expression: string, label: string): SummaryColumn => ({ id, op: "formula", expression, label });
 const population = "Uses recorded usage facts, including cached input; usage volume is not elapsed effort or task success. Provider and model are separate keys. A conversation or session can appear under multiple models, so reach counts do not form additive shares.";
 const pricing = "Only price_status=priced facts contribute. API equivalent is not subscription spend. Cost per million tokens reflects the observed input/output/cache mix, not a published model price or a controlled comparison of capability.";
+function modelShareTrend(costWeighted: boolean): QueryRecipe {
+  const metric = costWeighted ? "cost" : "token", field = costWeighted ? "cost_usd" : "total_tokens";
+  return {
+    id: `model-${metric}-share-trend`, title: `Model ${metric} share over time`, description: `Model share of total ${costWeighted ? "API-equivalent cost" : "recorded tokens"} over the last {days} days, smoothed over 7 days.`,
+    category: "models", idea: "models-01", dataset: "usage", field: "first_usage_at", days: [90], unit: costWeighted ? "USD" : "tokens", scope: "model_family",
+    where: [{ field, op: ">=", value: "0" }],
+    measures: [{ id: `model-daily-${metric}`, op: "sum", field, groupBy: ["day", "model_family"], groupLimit: 10000, label: `Daily model ${costWeighted ? "API equivalent" : "tokens"}`, display: { kind: "auto", yLabel: `${costWeighted ? "Cost" : "Token"} share (%) · 7d average` } }],
+    cover: { mode: "result", metricId: `card_${field}`, kind: "auto", maxGroups: 15, showOther: true, showLegend: true, showHeadline: false, height: 300, timeline: { rollingPeriods: 7, percent: true } },
+    action: `Explore daily model ${costWeighted ? "costs" : "tokens"}`,
+    note: `Matches Machine Tokens ${metric} share. ${costWeighted ? "Include all known nonnegative API-equivalent costs, including assumed and partial pricing; missing costs are excluded. API equivalent is not subscription spend or invoices." : "Include all known nonnegative recorded tokens, including cached input and assumed, partial, and unpriced usage. Repeated cached input contributes on each recorded request; tokens measure processing volume."} Sum by recorded local day and model family, then average amounts over each trailing seven calendar buckets, including zero-activity days, before dividing each model by the same window’s total. The first six buckets use available days in the selected window. A zero-total window has no share. Models use the existing model-family normalization and colors; providers using the same family are combined, as in Machine Tokens. Delegated usage stays with its recorded model. Missing models remain Unspecified; exact Other preserves the denominator.`,
+  };
+}
 function usageCard(id: string, title: string, description: string, summaries: SummaryColumn[], action: string, unit: string, extra: Partial<QueryRecipe> = {}): QueryRecipe {
   return { id, title, description, dataset: "usage", field: "first_usage_at", category: "models", idea: "models-01", unit, where: positive, measures: [], days: [7],
     exploration: { keys, summaries, valueField: summaries[0].id, unit, subjects: "model/provider groups", action, labelFields: keys, context: [{ field: sessions.id, label: "sessions" }] },
@@ -67,6 +79,8 @@ humanOutput.dataset = "conversation_activity";
 humanOutput.field = "event_at";
 humanOutput.note = "One point is a whole top-level conversation including delegated output, colored by its top-level recorded model. X estimates human-supplied text once per classified message as ceil(retained UTF-8 bytes / 4), excluding harness and automated spans. Includes pasted/quoted text and attachment references; excludes image and unretained file bytes. This is not a tokenizer result, request context size, or cache-read volume. Human messages use their own sent timestamps; output uses the usage ledger's recorded fact placement. Both are filtered by the same rolling window before aggregation. Output includes recorded reasoning where providers include it, regardless of price status. Both axes are logarithmic; nonpositive points are omitted with a visible count and remain in the table. Show up to 2,000 conversations ranked by human input. Missing classification/lineage is not evidence of absent human effort.";
 export const modelChoiceRecipes: QueryRecipe[] = [
+  modelShareTrend(false),
+  modelShareTrend(true),
   sessionDistribution,
   largestTree("largest-subagent-depth", true),
   largestTree("largest-subagent-weight", false),

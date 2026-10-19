@@ -31,6 +31,18 @@ export function rollingAverageBuckets(buckets: ChartBucket[], periods: number): 
   });
 }
 
+// Normalize after smoothing the amounts, so high-volume days carry their
+// actual weight. Include folded/hidden values in the denominator as well.
+export function shareBuckets(buckets: ChartBucket[]): ChartBucket[] {
+  return buckets.map(bucket => {
+    const total = Object.values(bucket.values).reduce((sum, value) => sum + value, 0);
+    return { ...bucket,
+      values: Object.fromEntries(Object.entries(bucket.values).map(([key, value]) => [key, total ? value / total : 0])),
+      parts: bucket.parts && Object.fromEntries(Object.entries(bucket.parts).map(([key, entries]) => [key, entries.map(([name, value]) => [name, total ? value / total : 0] as [string, number])])),
+    };
+  });
+}
+
 export function foldSeries(rows: Array<[string, string, number]>, byKey: Map<string, ChartBucket>, label: (name: string) => string, fixed: string[] | undefined, selected: string[], limit = 5, scope = "generic"): ChartSeries[] {
   const inView = rows.filter(([key]) => byKey.has(key)), totals = new Map<string, number>();
   for (const [, name, value] of inView) totals.set(name, (totals.get(name) ?? 0) + value);
