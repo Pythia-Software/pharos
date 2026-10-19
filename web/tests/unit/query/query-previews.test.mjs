@@ -1,23 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { core, execution, schemas } from "../helpers/recipes.mjs";
+import { queryCapabilities, serverQuery as sharedServerQuery } from "../../support/query-server.mjs";
 import { queryRecipes, instantiateRecipe, loadQueryPreviews, loadQueryPreview, clearPreviewCache } from "../../../src/curiosity-data";
 
 const rows = Array.from({ length: 10 }, (_, i) => ({ id: String(i), call_count: 1, error_count: i < 2 ? 1 : 0, tool_name: "Bash", command_name: "go test", duration_ms: (i + 1) * 100, result_tokens: i * 10, result_tokens_source: i % 2 ? "estimated" : "measured", repository_name: i % 2 ? "one" : "two", conversation_id: String(i), started_at: Date.now() }));
 function query(aggregations, extra = {}) { return { ...core.EMPTY_QUERY, aggregations, ...extra }; }
 function job(id, aggregations, options = {}, extra = {}) { return { id, dataset: "tool_calls", schema: schemas.tool_calls, query: query(aggregations, extra), options }; }
 const response = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
-const queryCapabilities = { version: 3, profile: execution.profile, groupedRows: true, calendarGrouping: true, computedSourceFilters: true, regex: false, maxRows: 10000, maxGroups: 10000, maxPopulation: 250000 };
-function serverQuery(request, population = rows, source = schemas.tool_calls) {
-  const state = { ...core.EMPTY_QUERY, ...request.result, select: request.result.select.map(field => ({ field })), aggregations: request.metrics,
-    ...(request.grouping ? { grouping: { ...request.grouping, source: { ...core.EMPTY_QUERY, ...request.source, select: request.source.select.map(field => ({ field })) } } } : {}) };
-  const prepared = state.grouping ? core.prepareGrouping(population, source, state.grouping, { now: request.now }) : undefined;
-  const schema = prepared?.schema ?? source;
-  const page = core.applyQuery(population, state, source, { now: request.now });
-  const metrics = core.evaluateMetrics(population, state, source, { now: request.now, shownRows: page.rows });
-  return { version: 3, now: request.now, sourceTotal: prepared?.inputs.length ?? population.length, rows: request.rows ? page.rows : [], total: page.total, metrics: metrics.metrics,
-    schema: { name: schema.name, idField: schema.idField, fields: schema.fields.map(({ name, type }) => ({ name, type })) }, execution };
-}
+const serverQuery = (request, population = rows, source = schemas.tool_calls) => sharedServerQuery(request, population, source);
 function fixture(t, intercept = () => undefined) {
   clearPreviewCache();
   const priorFetch = global.fetch, priorLocation = global.location;

@@ -4,6 +4,7 @@
 // against the catalog card it came from.
 import assert from "node:assert/strict";
 import { capabilities as queryCapabilities, core, execution, queryRecipes, instantiateRecipe, schemas } from "./recipes.mjs";
+import { population, serverQuery } from "../../support/query-server.mjs";
 import { clearPreviewCache, loadQueryPreview } from "../../../src/curiosity-data";
 import { defaultCardCover } from "../../../src/card-cover";
 import { cardLoadingPresentation } from "../../../src/card-loading-model";
@@ -11,26 +12,13 @@ import { collectQuery, updateBookmark } from "../../../src/bookmarks";
 import { queryFromURL } from "../../../src/query-links";
 
 export const active = queryRecipes.filter(recipe => !recipe.retired);
-const now = Date.parse("2026-10-16T18:00:00Z"), day = 86400000;
+const now = Date.parse("2026-10-16T18:00:00Z");
 export const json = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
-
-function population(schema) {
-  return Array.from({ length: 96 }, (_, index) => {
-    const at = new Date(now - (index % 40 + .25) * day).toISOString();
-    const row = Object.fromEntries(schema.fields.map(field => [field.name, field.type === "datetime" ? at : field.type === "number" ? (index + 1) * 100 : field.type === "bool" ? index % 2 === 0 : `${field.name}-${index % 3}`]));
-    return { ...row, id: `row-${index}`, day: at.slice(0, 10), title: `Work ${index % 8}`, conversation_id: `conversation-${index % 8}`, root_conversation_id: `conversation-${index % 8}`,
-      work_id: `row-${index % 8}`, workspace_id: `row-${index % 8}`, location: `/repo/dir-${index % 4}`, repository_name: `repo-${index % 3}`, root_repository_name: `repo-${index % 3}`,
-      provider: index % 2 ? "codex" : "claude", root_provider: index % 2 ? "codex" : "claude", session_kind: index % 3 ? "root" : "subagent",
-      session_role: index % 3 ? "root" : "subagent", price_status: "priced", tool_name: ["Read", "Bash", "Edit"][index % 3], tool_category: ["read", "command", "edit", "web"][index % 4],
-      status: index % 2 ? "ok" : "error", error_count: index % 2 ? 0 : 1, call_count: 1, result_tokens_source: "measured", evidence_type: "body-load",
-      text: "Replace 3 fields because they repeat.", text_truncated: false, segments: [{ category: "typed", text: "Replace 3 fields because they repeat." }], pasted_words: 0, attachment_words: 0 };
-  });
-}
 
 export function fixture(t, empty = false) {
   const prior = { fetch: global.fetch, window: global.window, location: global.location };
   const values = new Map(), requests = [];
-  const populations = Object.fromEntries(Object.entries(schemas).map(([dataset, schema]) => [dataset, empty ? [] : population(schema)]));
+  const populations = Object.fromEntries(Object.entries(schemas).map(([dataset, schema]) => [dataset, empty ? [] : population(schema, { now })]));
   global.location = { origin: "http://parity.test" };
   global.window = { dispatchEvent() {}, pharosPrefs: { get: (key, fallback) => values.get(key) ?? fallback, set: (key, value) => values.set(key, json(value)), remove: key => values.delete(key), keys: prefix => [...values.keys()].filter(key => key.startsWith(prefix)) } };
   t.mock.timers.enable({ apis: ["Date"], now });
@@ -41,15 +29,7 @@ export function fixture(t, empty = false) {
     if (path.endsWith("capabilities")) return Response.json({ metricCapabilities: { version: 2, expressions: true, distributions: true }, computedExecution: execution, queryCapabilities });
     const dataset = path.split("/")[3], schema = schemas[dataset], rows = populations[dataset];
     assert.ok(schema, `Unexpected request: ${path}`);
-    if (path.endsWith("/query-v3")) {
-      const state = { ...core.EMPTY_QUERY, ...request.result, select: request.result.select.map(field => ({ field })), aggregations: request.metrics,
-        ...(request.grouping ? { grouping: { ...request.grouping, source: { ...core.EMPTY_QUERY, ...request.source, select: request.source.select.map(field => ({ field })) } } } : {}) };
-      const prepared = state.grouping ? core.prepareGrouping(rows, schema, state.grouping, { now: request.now }) : undefined;
-      const projected = prepared?.schema ?? schema, page = core.applyQuery(rows, state, schema, { now: request.now });
-      return Response.json({ version: 3, now: request.now, sourceTotal: prepared?.inputs.length ?? rows.length, rows: request.rows ? page.rows : [], total: page.total,
-        metrics: core.evaluateMetrics(rows, state, schema, { now: request.now, shownRows: page.rows }).metrics, execution,
-        schema: { name: projected.name, idField: projected.idField, fields: projected.fields.map(({ name, type }) => ({ name, type })) } });
-    }
+    if (path.endsWith("/query-v3")) return Response.json(serverQuery(request, rows, schema));
     if (path.endsWith("/metrics")) return Response.json(core.evaluateMetrics(rows, { ...core.EMPTY_QUERY, ...request, aggregations: request.metrics }, schema, { now }));
     assert.ok(path.endsWith("/rows-v2"), path);
     return Response.json(core.applyQuery(rows, { ...core.EMPTY_QUERY, ...request }, schema, { now }));
