@@ -169,6 +169,10 @@ func TestIndexAttributesCapturesToTheCapturingHost(t *testing.T) {
 	}
 }
 
+// TestIndexAsksGitOnlyAboutThisMacsPaths: a capture names a checkout by its
+// path, which on another Mac may be an unrelated checkout. Only the Mac that
+// captured it asks Git about it, whether it indexes the capture or syncs the
+// source itself, and that enrichment survives another Mac's re-index.
 func TestIndexAsksGitOnlyAboutThisMacsPaths(t *testing.T) {
 	root := t.TempDir()
 	repo := filepath.Join(root, "repo")
@@ -180,27 +184,37 @@ func TestIndexAsksGitOnlyAboutThisMacsPaths(t *testing.T) {
 			t.Fatalf("git %v: %s", args, output)
 		}
 	}
+	const checkout = "git@github.com:example/checkout.git"
 	useHost(t, "host-a")
-	config := captureTestConfig(t)
 	claude := filepath.Join(root, "claude")
 	writeSourceFile(t, filepath.Join(claude, "-p", "s.jsonl"), claudeLine("s", "u1", "hi", repo, 1))
-	config.Sources = []SourceConfig{{Name: "claude", Kind: "claude", Path: claude, Account: "local", Enabled: true}}
+	source := SourceConfig{Name: "claude", Kind: "claude", Path: claude, Account: "local", Enabled: true}
+	config := captureTestConfig(t, source)
 	runCapture(t, config)
-	remote := func(indexer string) string {
-		t.Helper()
-		catalog, _ := testCatalog(t)
-		useHost(t, indexer)
-		indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	remote := func(catalog *Catalog) string {
 		var value string
 		_ = catalog.DB.QueryRow("SELECT COALESCE(r.canonical_remote,'') FROM workspaces w JOIN repositories r ON r.id=w.repository_id").Scan(&value)
 		return value
 	}
-	// The same path on another Mac may be an unrelated checkout.
-	if got := remote("host-b"); got != "" {
-		t.Fatalf("another Mac's capture was matched to this Mac's checkout: %q", got)
+	indexAs := func(catalog *Catalog, indexer string) {
+		t.Helper()
+		useHost(t, indexer)
+		indexCaptures(t, catalog, config.CaptureRoot, "host-a")
 	}
-	if got := remote("host-a"); got != "git@github.com:example/checkout.git" {
-		t.Fatalf("this Mac's capture lost its repository: %q", got)
+	elsewhere, _ := testCatalog(t)
+	if indexAs(elsewhere, "host-b"); remote(elsewhere) != "" {
+		t.Fatalf("another Mac's capture was matched to this Mac's checkout: %q", remote(elsewhere))
+	}
+	here, _ := testCatalog(t)
+	if indexAs(here, "host-a"); remote(here) != checkout {
+		t.Fatalf("this Mac's capture lost its repository: %q", remote(here))
+	}
+	useHost(t, "host-a")
+	if result := ingestSource(t, elsewhere, source); result.SkippedUnchanged || result.Parsed != 1 || remote(elsewhere) != checkout {
+		t.Fatalf("the host's own sync left what another Mac indexed as it was: %#v, remote %q", result, remote(elsewhere))
+	}
+	if indexAs(elsewhere, "host-b"); remote(elsewhere) != checkout {
+		t.Fatal("re-indexing elsewhere dropped the enrichment")
 	}
 }
 
@@ -503,44 +517,17 @@ func TestIndexKeepsDeletedConductorSessionsFromUnindexedSnapshots(t *testing.T) 
 	}
 }
 
-func TestIndexResumesAfterInterruption(t *testing.T) {
+// TestIndexResumesAndCountsWhatRemainsWithoutParsing: an interrupted index
+// keeps what it wrote, and the next one parses only the rest. Counting the
+// work left reads no transcripts.
+func TestIndexResumesAndCountsWhatRemainsWithoutParsing(t *testing.T) {
 	useHost(t, "host-a")
 	catalog, _ := testCatalog(t)
-	codex := filepath.Join(t.TempDir(), "codex")
-	for index := range 5 {
-		writeSourceFile(t, filepath.Join(codex, "sessions", fmt.Sprintf("rollout-%d.jsonl", index)), codexLines(fmt.Sprintf("session-%d", index), 1))
+	coverage := func() string {
+		var value string
+		_ = catalog.DB.QueryRow("SELECT coverage FROM source_states WHERE host_id='host-a' AND source_name='codex'").Scan(&value)
+		return value
 	}
-	config := captureTestConfig(t, SourceConfig{Name: "codex", Kind: "codex", Path: codex, Account: "local", Enabled: true})
-	runCapture(t, config)
-	targets, err := captureTargets(config.CaptureRoot, nil, false, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parses := countParses(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	result := catalog.IndexCapture(ctx, targets[0], func(phase string, workspaces, _, _, _, _ int) {
-		if workspaces == 2 {
-			cancel()
-		}
-	})
-	var coverage string
-	_ = catalog.DB.QueryRow("SELECT coverage FROM source_states WHERE host_id='host-a' AND source_name='codex'").Scan(&coverage)
-	// An index records its host's source state only once complete.
-	if result.Workspaces != 2 || !strings.Contains(fmt.Sprint(result.Error), "interrupted") || coverage != "" {
-		t.Fatalf("interrupted index: %#v, coverage %s", result, coverage)
-	}
-	parses.Store(0)
-	result = catalog.IndexCapture(context.Background(), targets[0], nil)
-	_ = catalog.DB.QueryRow("SELECT coverage FROM source_states WHERE host_id='host-a' AND source_name='codex'").Scan(&coverage)
-	if result.Error != nil || result.Workspaces != 3 || result.Unchanged != 2 || parses.Load() != 3 || coverage != "complete" {
-		t.Fatalf("resumed index: %#v, %d parses, coverage %s", result, parses.Load(), coverage)
-	}
-}
-
-func TestIndexWorkCountsWhatRemainsWithoutParsing(t *testing.T) {
-	useHost(t, "host-a")
-	catalog, _ := testCatalog(t)
 	codex := filepath.Join(t.TempDir(), "codex")
 	for index := range 5 {
 		writeSourceFile(t, filepath.Join(codex, "sessions", fmt.Sprintf("rollout-%d.jsonl", index)), codexLines(fmt.Sprintf("session-%d", index), 1))
@@ -559,20 +546,24 @@ func TestIndexWorkCountsWhatRemainsWithoutParsing(t *testing.T) {
 	if !sized || size == nil || size.Total <= 0 || size.Unit != "byte" || !strings.Contains(model, "codex") || parses.Load() != 0 {
 		t.Fatalf("planning must collect workload size without parsing transcripts: %s %+v (%v), %d parses", model, size, sized, parses.Load())
 	}
-	// Two of five, as after an interrupted index.
+	// Interrupt the index after two of five. An index records its host's
+	// source state only once complete.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	catalog.IndexCapture(ctx, targets[0], func(_ string, workspaces, _, _, _, processed int) {
+	result := catalog.IndexCapture(ctx, targets[0], func(_ string, workspaces, _, _, _, processed int) {
 		if workspaces == 2 {
 			cancel()
 		}
 	})
+	if result.Workspaces != 2 || !strings.Contains(fmt.Sprint(result.Error), "interrupted") || coverage() != "" {
+		t.Fatalf("interrupted index: %#v, coverage %s", result, coverage())
+	}
 	parses.Store(0)
 	if needed, ok := catalog.captureIndexWork(context.Background(), targets[0]); !ok || needed != 3 || parses.Load() != 0 {
 		t.Fatalf("after an interrupted index: %d needed, ok %v, %d parses", needed, ok, parses.Load())
 	}
-	if result := catalog.IndexCapture(context.Background(), targets[0], nil); result.Error != nil || result.Processed != 3 {
-		t.Fatalf("resumed index: %#v", result)
+	if result := catalog.IndexCapture(context.Background(), targets[0], nil); result.Error != nil || result.Processed != 3 || result.Workspaces != 3 || result.Unchanged != 2 || parses.Load() != 3 || coverage() != "complete" {
+		t.Fatalf("resumed index: %#v, %d parses, coverage %s", result, parses.Load(), coverage())
 	}
 	if needed, ok := catalog.captureIndexWork(context.Background(), targets[0]); !ok || needed != 0 {
 		t.Fatalf("after the index: %d needed, ok %v", needed, ok)
@@ -912,38 +903,6 @@ func TestIndexAPIRunsInBackground(t *testing.T) {
 			t.Fatalf("already-current index did not finish: %#v", body)
 		}
 		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-func TestIndexPassesOverWholeSourceCapturesOlderThanTheLastSync(t *testing.T) {
-	useHost(t, "host-a")
-	catalog, _ := testCatalog(t)
-	export := filepath.Join(t.TempDir(), "export.json")
-	write := func(title string) {
-		writeSourceFile(t, export, `{"workspaces":[{"id":"work","title":"`+title+`","conversations":[{"id":"thread","messages":[{"id":"one","role":"user","text":"hello"}]}]}]}`)
-	}
-	title := func() string {
-		var value string
-		_ = catalog.DB.QueryRow("SELECT title FROM workspaces WHERE source_id='work'").Scan(&value)
-		return value
-	}
-	source := SourceConfig{Name: "export", Kind: "canonical", Path: export, Account: "local", Enabled: true}
-	config := captureTestConfig(t, source)
-	write("Captured")
-	runCapture(t, config)
-	if indexCaptures(t, catalog, config.CaptureRoot, "host-a"); title() != "Captured" {
-		t.Fatalf("capture not indexed: %q", title())
-	}
-	write("Synced later")
-	ingestSource(t, catalog, source)
-	if result := indexCaptures(t, catalog, config.CaptureRoot, "host-a")[0]; result.Older != 1 || title() != "Synced later" {
-		t.Fatalf("older capture rolled the source back: %#v %q", result, title())
-	}
-	runCapture(t, config)
-	write("Newest")
-	runCapture(t, config)
-	if indexCaptures(t, catalog, config.CaptureRoot, "host-a"); title() != "Newest" {
-		t.Fatalf("newer capture not indexed: %q", title())
 	}
 }
 

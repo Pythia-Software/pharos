@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -36,8 +35,11 @@ func workspaceTitle(t *testing.T, catalog *Catalog, sourceID string) string {
 	return title
 }
 
-func TestOlderWholeSourceCaptureAfterAFailedOrInterruptedSync(t *testing.T) {
-	for _, later := range []string{"failed", "removed", "interrupted"} {
+// TestWholeSourceCapturesOlderThanTheLastSync: indexing a capture of a whole
+// source taken before the last sync passes over it, whatever became of that
+// sync, rather than rolling the catalog back. A newer capture is indexed.
+func TestWholeSourceCapturesOlderThanTheLastSync(t *testing.T) {
+	for _, later := range []string{"succeeded", "failed", "removed", "interrupted", "captured again"} {
 		t.Run(later, func(t *testing.T) {
 			useHost(t, "host-a")
 			catalog, _ := testCatalog(t)
@@ -49,7 +51,12 @@ func TestOlderWholeSourceCaptureAfterAFailedOrInterruptedSync(t *testing.T) {
 			canonicalExport(t, export, "Synced later", "hello", "only in the catalog")
 			ingestSource(t, catalog, source)
 			adapter, _ := MakeAdapter(source)
+			title, older := "Synced later", 1
 			switch later {
+			case "captured again":
+				canonicalExport(t, export, "Newest", "hello", "only in the catalog")
+				runCapture(t, config)
+				title, older = "Newest", 0
 			case "failed":
 				writeSourceFile(t, export, `{"workspaces":[`)
 				if result := catalog.Ingest(adapter, nil); result.Error == nil {
@@ -65,9 +72,9 @@ func TestOlderWholeSourceCaptureAfterAFailedOrInterruptedSync(t *testing.T) {
 				_ = catalog.IngestContext(ctx, adapter, nil)
 			}
 			result := indexCaptures(t, catalog, config.CaptureRoot, "host-a")[0]
-			if result.Older != 1 || countRows(t, catalog, "SELECT COUNT(*) FROM messages WHERE text='only in the catalog'") != 1 ||
-				workspaceTitle(t, catalog, "work") != "Synced later" {
-				t.Fatalf("an older capture rolled the catalog back: %#v, title %q", result, workspaceTitle(t, catalog, "work"))
+			if result.Older != older || countRows(t, catalog, "SELECT COUNT(*) FROM messages WHERE text='only in the catalog'") != 1 ||
+				workspaceTitle(t, catalog, "work") != title {
+				t.Fatalf("index of the capture: %#v, title %q, want %q", result, workspaceTitle(t, catalog, "work"), title)
 			}
 		})
 	}
@@ -162,46 +169,6 @@ func TestResumedSyncStillIngestsChangedSessions(t *testing.T) {
 	ingestSource(t, catalog, source)
 	if countRows(t, catalog, "SELECT COUNT(*) FROM messages WHERE text='the reply'") != 1 {
 		t.Fatal("the reply was never ingested")
-	}
-}
-
-// Another Mac indexes a capture without the capturing Mac's Git checkouts; the
-// capturing Mac's own sync must still fill in what only they know.
-func TestOwnSyncEnrichesWhatAnotherMacIndexed(t *testing.T) {
-	root := t.TempDir()
-	repo := filepath.Join(root, "repo")
-	os.Mkdir(repo, 0o755)
-	for _, args := range [][]string{{"init", "-q"}, {"remote", "add", "origin", "git@github.com:example/checkout.git"}} {
-		if output, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %s", args, output)
-		}
-	}
-	useHost(t, "host-a")
-	claude := filepath.Join(root, "claude")
-	writeSourceFile(t, filepath.Join(claude, "-p", "s.jsonl"), claudeLine("s", "u1", "hi", repo, 1))
-	source := SourceConfig{Name: "claude", Kind: "claude", Path: claude, Account: "local", Enabled: true}
-	config := captureTestConfig(t, source)
-	runCapture(t, config)
-	catalog, _ := testCatalog(t)
-	useHost(t, "host-b")
-	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
-	remote := func() string {
-		var value string
-		_ = catalog.DB.QueryRow("SELECT COALESCE(r.canonical_remote,'') FROM workspaces w JOIN repositories r ON r.id=w.repository_id").Scan(&value)
-		return value
-	}
-	if remote() != "" {
-		t.Fatal("setup: another Mac looked up the checkout")
-	}
-	useHost(t, "host-a")
-	if result := ingestSource(t, catalog, source); result.SkippedUnchanged || result.Parsed != 1 || remote() != "git@github.com:example/checkout.git" {
-		t.Fatalf("the host's own sync left what another Mac indexed as it was: %#v, remote %q", result, remote())
-	}
-	// Once enriched, another index of the same capture elsewhere keeps it.
-	useHost(t, "host-b")
-	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
-	if remote() != "git@github.com:example/checkout.git" {
-		t.Fatal("re-indexing elsewhere dropped the enrichment")
 	}
 }
 
