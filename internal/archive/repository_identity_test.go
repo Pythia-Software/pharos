@@ -38,69 +38,6 @@ func TestRepositoryConfigAliases(t *testing.T) {
 	}
 }
 
-func TestRepositoryIdentitySignals(t *testing.T) {
-	remote := func(id, slug string) repositoryIdentity {
-		return repositoryIdentity{ID: id, Remote: "https://" + slug + ".git", Normalized: slug, Name: filepath.Base(slug)}
-	}
-	a, b := remote("a", "github.com/one/origin"), remote("b", "github.com/two/origin")
-	a.Root, b.Root = "same", "same"
-	if groups := planRepositoryMerges([]repositoryIdentity{a, b}, nil); len(groups) != 0 {
-		t.Fatalf("different owners merged: %#v", groups)
-	}
-	if groups := planRepositoryMerges([]repositoryIdentity{{ID: "origin-one", Name: "origin"}, {ID: "origin-two", Name: "origin"}}, nil); len(groups) != 0 {
-		t.Fatalf("same names merged: %#v", groups)
-	}
-	a.Forge, b.Forge = "123", "123"
-	if groups := planRepositoryMerges([]repositoryIdentity{a, b}, nil); len(groups) != 1 {
-		t.Fatalf("forge ids did not merge: %#v", groups)
-	}
-	a.Forge, b.Forge = "", ""
-	aliases := map[string]string{"github.com/one/origin": "github.com/two/origin"}
-	if groups := planRepositoryMerges([]repositoryIdentity{a, b}, aliases); len(groups) != 1 {
-		t.Fatalf("config aliases did not merge: %#v", groups)
-	}
-	byName := repositoryIdentity{ID: "named", Name: "old-name"}
-	if groups := planRepositoryMerges([]repositoryIdentity{byName, b}, map[string]string{"old-name": "github.com/two/origin"}); len(groups) != 1 {
-		t.Fatalf("display-name alias did not merge: %#v", groups)
-	}
-	missing := repositoryIdentity{ID: "missing", Name: "origin", Locations: []string{"/old/conductor/workspaces/origin/one"}}
-	a.Locations = []string{"/old/conductor/workspaces/origin/two"}
-	if groups := planRepositoryMerges([]repositoryIdentity{a, missing}, nil); len(groups) != 1 {
-		t.Fatalf("missing remote did not attach: %#v", groups)
-	}
-	b.Locations = []string{"/other/conductor/workspaces/origin/three"}
-	if groups := planRepositoryMerges([]repositoryIdentity{a, b, missing}, nil); len(groups) != 0 {
-		t.Fatalf("ambiguous directory merged: %#v", groups)
-	}
-}
-
-func TestPharosRenamePlan(t *testing.T) {
-	rows := []repositoryIdentity{
-		{ID: "old", Name: "alexandria", Remote: "https://github.com/gbdubs/alexandria.git", Normalized: "github.com/gbdubs/alexandria", Forge: "1377317940", ForgeCanonical: "github.com/pythia-software/pharos", Workspaces: 227, Locations: []string{"/Users/test/conductor/workspaces/alexandria/one"}},
-		{ID: "missing", Name: "alexandria", Workspaces: 57, Locations: []string{"/Users/test/conductor/workspaces/alexandria/two"}},
-		// Two remote rows claim Conductor directory alexandria, but both land
-		// in the same group, so the remoteless row still attaches.
-		{ID: "middle", Name: "pharos", Remote: "https://github.com/gbdubs/pharos.git", Normalized: "github.com/gbdubs/pharos", Forge: "1377317940", ForgeCanonical: "github.com/pythia-software/pharos", Workspaces: 1, Locations: []string{"/Users/test/conductor/workspaces/alexandria/stuttgart"}},
-		{ID: "current", Name: "pharos", Remote: "https://github.com/Pythia-Software/pharos.git", Normalized: "github.com/pythia-software/pharos", Forge: "1377317940", ForgeCanonical: "github.com/pythia-software/pharos", Workspaces: 4},
-	}
-	groups := planRepositoryMerges(rows, nil)
-	if len(groups) != 1 || len(groups[0].Losers) != 3 || groups[0].Survivor.ID != "current" || groups[0].Name != "pharos" {
-		t.Fatalf("plan: %#v", groups)
-	}
-	// Without the forge redirect the two owners form separate groups, and the
-	// shared directory is ambiguous again.
-	for i := range rows {
-		rows[i].Forge, rows[i].ForgeCanonical = "", ""
-	}
-	for _, group := range planRepositoryMerges(rows, nil) {
-		for _, item := range append([]repositoryIdentity{group.Survivor}, group.Losers...) {
-			if item.ID == "missing" {
-				t.Fatalf("attached across groups: %#v", group)
-			}
-		}
-	}
-}
-
 func repositoryGroupIDs(group repositoryMergeGroup) map[string]bool {
 	ids := map[string]bool{group.Survivor.ID: true}
 	for _, loser := range group.Losers {
@@ -109,82 +46,247 @@ func repositoryGroupIDs(group repositoryMergeGroup) map[string]bool {
 	return ids
 }
 
-func TestRepositoryRemotelessCheckoutAttach(t *testing.T) {
-	remote := func(id, slug string, workspaces int, locations ...string) repositoryIdentity {
+// TestPlanRepositoryMerges: which repository rows the planner merges, and
+// which signals it trusts, without Git.
+func TestPlanRepositoryMerges(t *testing.T) {
+	// https and keyed are rows with a remote; local is a row without one.
+	https := func(id, slug string) repositoryIdentity {
+		return repositoryIdentity{ID: id, Remote: "https://" + slug + ".git", Normalized: slug, Name: filepath.Base(slug)}
+	}
+	keyed := func(id, slug string, workspaces int, locations ...string) repositoryIdentity {
 		return repositoryIdentity{ID: id, Remote: "git@" + strings.Replace(slug, "/", ":", 1) + ".git", Normalized: slug, Name: filepath.Base(slug), Workspaces: workspaces, Locations: locations}
+	}
+	rooted := func(id, slug, root string, locations ...string) repositoryIdentity {
+		row := keyed(id, slug, 0, locations...)
+		row.Root = root
+		return row
 	}
 	local := func(id, name string, workspaces int, locations ...string) repositoryIdentity {
 		return repositoryIdentity{ID: id, Name: name, Workspaces: workspaces, Locations: locations}
 	}
-
-	// A remoteless row at the clone path joins the clone's group.
-	rows := []repositoryIdentity{
-		remote("pythia", "github.com/pythia-software/excel-corpus", 327, "/Users/t/gbdubs/excel-corpus", "/Users/t/gbdubs/excel-corpus/.task-worktrees/e60-attempt-1"),
-		remote("gbdubs", "github.com/pythia-software/excel-corpus", 292, "/Users/t/gbdubs/excel-corpus"),
-		local("tl1", "excel-corpus", 10323, "/Users/t/gbdubs/excel-corpus"),
+	with := func(row repositoryIdentity, change func(*repositoryIdentity)) repositoryIdentity {
+		change(&row)
+		return row
 	}
-	groups := planRepositoryMerges(rows, nil)
-	if len(groups) != 1 || !repositoryGroupIDs(groups[0])["tl1"] || groups[0].Survivor.ID != "pythia" || groups[0].Name != "excel-corpus" {
-		t.Fatalf("clone path: %#v", groups)
+	// Two owners' "origin" repositories, cloned from one root commit.
+	one := with(https("a", "github.com/one/origin"), func(r *repositoryIdentity) { r.Root = "same" })
+	two := with(https("b", "github.com/two/origin"), func(r *repositoryIdentity) { r.Root = "same" })
+	forge := func(r *repositoryIdentity) { r.Forge = "123" }
+	inConductor := func(path string) func(*repositoryIdentity) {
+		return func(r *repositoryIdentity) { r.Locations = []string{path} }
+	}
+	missing := local("missing", "origin", 0, "/old/conductor/workspaces/origin/one")
+
+	none := func(t *testing.T, groups []repositoryMergeGroup) {
+		if len(groups) != 0 {
+			t.Fatalf("merged: %#v", groups)
+		}
+	}
+	groupsOf := func(n int) func(*testing.T, []repositoryMergeGroup) {
+		return func(t *testing.T, groups []repositoryMergeGroup) {
+			if len(groups) != n {
+				t.Fatalf("%d groups, want %d: %#v", len(groups), n, groups)
+			}
+		}
+	}
+	// merged checks that one group holds members (and no others, when exact)
+	// and, if set, its survivor and name.
+	merged := func(survivor, name string, losers int, members ...string) func(*testing.T, []repositoryMergeGroup) {
+		return func(t *testing.T, groups []repositoryMergeGroup) {
+			if len(groups) != 1 {
+				t.Fatalf("%d groups, want 1: %#v", len(groups), groups)
+			}
+			ids := repositoryGroupIDs(groups[0])
+			for _, member := range members {
+				if !ids[member] {
+					t.Fatalf("%s did not join: %#v", member, groups[0])
+				}
+			}
+			if survivor != "" && groups[0].Survivor.ID != survivor || name != "" && groups[0].Name != name || losers >= 0 && len(groups[0].Losers) != losers {
+				t.Fatalf("survivor %s, name %q, %d losers: %#v", groups[0].Survivor.ID, groups[0].Name, len(groups[0].Losers), groups[0])
+			}
+		}
+	}
+	signal := func(want string, last bool) func(*testing.T, []repositoryMergeGroup) {
+		return func(t *testing.T, groups []repositoryMergeGroup) {
+			signals := groups[0].Signals
+			if last && signals[len(signals)-1] != want || !last && !containsString(signals, want) {
+				t.Fatalf("signals %q, want %q", signals, want)
+			}
+		}
+	}
+	never := func(ids ...string) func(*testing.T, []repositoryMergeGroup) {
+		return func(t *testing.T, groups []repositoryMergeGroup) {
+			for _, group := range groups {
+				for _, id := range ids {
+					if repositoryGroupIDs(group)[id] {
+						t.Fatalf("%s joined: %#v", id, group)
+					}
+				}
+			}
+		}
 	}
 
-	// Worktrees in known in-clone layouts map to the clone, in either direction.
+	pharos := []repositoryIdentity{
+		{ID: "old", Name: "alexandria", Remote: "https://github.com/gbdubs/alexandria.git", Normalized: "github.com/gbdubs/alexandria", Forge: "1377317940", ForgeCanonical: "github.com/pythia-software/pharos", Workspaces: 227, Locations: []string{"/Users/test/conductor/workspaces/alexandria/one"}},
+		{ID: "missing", Name: "alexandria", Workspaces: 57, Locations: []string{"/Users/test/conductor/workspaces/alexandria/two"}},
+		// Two remote rows claim Conductor directory alexandria, but both land
+		// in the same group, so the remoteless row still attaches.
+		{ID: "middle", Name: "pharos", Remote: "https://github.com/gbdubs/pharos.git", Normalized: "github.com/gbdubs/pharos", Forge: "1377317940", ForgeCanonical: "github.com/pythia-software/pharos", Workspaces: 1, Locations: []string{"/Users/test/conductor/workspaces/alexandria/stuttgart"}},
+		{ID: "current", Name: "pharos", Remote: "https://github.com/Pythia-Software/pharos.git", Normalized: "github.com/pythia-software/pharos", Forge: "1377317940", ForgeCanonical: "github.com/pythia-software/pharos", Workspaces: 4},
+	}
+	unforged := []repositoryIdentity{}
+	for _, row := range pharos {
+		row.Forge, row.ForgeCanonical = "", ""
+		unforged = append(unforged, row)
+	}
+	origins := []repositoryIdentity{}
+	// Ten stress-test bare repositories share a root commit and the checkout
+	// they were cloned into, but each is its own repository.
+	for i := 0; i < 10; i++ {
+		origins = append(origins, repositoryIdentity{ID: fmt.Sprintf("origin-%d", i), Name: "origin", Remote: fmt.Sprintf("/Users/t/conductor/workspaces/tl1/edinburgh-v2/.context/run%d/origin.git", i), Root: "r1", Workspaces: 3,
+			Locations: []string{"/Users/t/conductor/workspaces/tl1/edinburgh-v2/.context/repo/.candidate-worktrees/c" + fmt.Sprint(i)}})
+	}
+	origins = append(origins, repositoryIdentity{ID: "tl1", Name: "tl1", Remote: "git@github.com:gbdubs/tl1.git", Normalized: "github.com/gbdubs/tl1", Root: "r1", Locations: []string{"/Users/t/conductor/workspaces/tl1/edinburgh-v2/.context/repo"}})
+	xlsxExec := keyed("site", "github.com/acme/xlsx-exec", 9, "/Users/t/conductor/workspaces/xlsx-exec/bilbao-v6")
+	// One clone that had both remotes over time is one repository, without
+	// GitHub.
+	moved := []repositoryIdentity{
+		rooted("old", "github.com/gbdubs/excel-corpus", "r1", "/Users/t/gbdubs/excel-corpus"),
+		rooted("new", "github.com/pythia-software/excel-corpus", "r1", "/Users/t/gbdubs/excel-corpus/.task-worktrees/e1"),
+	}
+
+	type scenario struct {
+		name    string
+		rows    []repositoryIdentity
+		aliases map[string]string
+		checks  []func(*testing.T, []repositoryMergeGroup)
+	}
+	scenarios := []scenario{
+		{"different owners with one root stay apart", []repositoryIdentity{one, two}, nil, nil},
+		{"the same name alone proves nothing", []repositoryIdentity{local("origin-one", "origin", 0), local("origin-two", "origin", 0)}, nil, nil},
+		{"a shared forge ID merges", []repositoryIdentity{with(one, forge), with(two, forge)}, nil, []func(*testing.T, []repositoryMergeGroup){groupsOf(1)}},
+		{"a configured remote alias merges", []repositoryIdentity{one, two}, map[string]string{"github.com/one/origin": "github.com/two/origin"}, []func(*testing.T, []repositoryMergeGroup){groupsOf(1)}},
+		{"a display-name alias merges", []repositoryIdentity{local("named", "old-name", 0), two}, map[string]string{"old-name": "github.com/two/origin"}, []func(*testing.T, []repositoryMergeGroup){groupsOf(1)}},
+		{"a remoteless row attaches by Conductor directory", []repositoryIdentity{with(one, inConductor("/old/conductor/workspaces/origin/two")), missing}, nil, []func(*testing.T, []repositoryMergeGroup){groupsOf(1)}},
+		{"a Conductor directory of two repositories is ambiguous", []repositoryIdentity{with(one, inConductor("/old/conductor/workspaces/origin/two")), with(two, inConductor("/other/conductor/workspaces/origin/three")), missing}, nil, nil},
+		{"a forge redirect merges a renamed repository and its remoteless rows", pharos, nil, []func(*testing.T, []repositoryMergeGroup){merged("current", "pharos", 3)}},
+		// Without the forge redirect the two owners form separate groups,
+		// and the shared directory is ambiguous again.
+		{"without the redirect the shared directory is ambiguous", unforged, nil, []func(*testing.T, []repositoryMergeGroup){never("missing")}},
+		{"a remoteless row at the clone path joins the clone", []repositoryIdentity{
+			keyed("pythia", "github.com/pythia-software/excel-corpus", 327, "/Users/t/gbdubs/excel-corpus", "/Users/t/gbdubs/excel-corpus/.task-worktrees/e60-attempt-1"),
+			keyed("gbdubs", "github.com/pythia-software/excel-corpus", 292, "/Users/t/gbdubs/excel-corpus"),
+			local("tl1", "excel-corpus", 10323, "/Users/t/gbdubs/excel-corpus"),
+		}, nil, []func(*testing.T, []repositoryMergeGroup){merged("pythia", "excel-corpus", -1, "tl1")}},
+		{"a deeper path is not truncated to an ancestor clone", []repositoryIdentity{
+			keyed("site", "github.com/gbdubs/grady.dev", 38, "/Users/t/gbdubs/grady.dev"),
+			local("nested", "grady.dev", 4, "/Users/t/gbdubs/grady.dev/.conductor/puebla-v5/.context/scratch"),
+		}, nil, nil},
+		// Without a shared root commit nothing says the two remotes are one
+		// repository.
+		{"a path of two different groups is ambiguous", []repositoryIdentity{
+			keyed("mine", "github.com/one/widget", 5, "/Users/t/widget"),
+			keyed("theirs", "github.com/two/widget", 5, "/Users/t/widget"),
+			local("orphan", "widget", 9, "/Users/t/widget"),
+		}, nil, nil},
+		// explo-candidate-v2 is a TL1 project name for the explo clone. The
+		// group keeps explo's name even though the remoteless rows have more
+		// workspaces than the remote rows.
+		{"a TL1 project name joins its clone and keeps the clone's name", []repositoryIdentity{
+			keyed("ssh", "github.com/pythia-software/explo", 464, "/Users/t/gbdubs/explo", "/Users/t/gbdubs/explo/.conductor/kampala-v6"),
+			keyed("https", "github.com/pythia-software/explo", 300, "/Users/t/gbdubs/explo/.conductor/moscow-v1"),
+			local("candidate", "explo-candidate-v2", 2631, "/Users/t/gbdubs/explo"),
+			local("bare", "explo", 2447, "/Users/t/gbdubs/explo", "/Users/t/gbdubs/explo/.conductor/los-angeles-v2"),
+		}, nil, []func(*testing.T, []repositoryMergeGroup){merged("ssh", "explo", 3)}},
+		{"a TL1 scratch origin neither merges nor makes the workspace ambiguous", []repositoryIdentity{
+			keyed("tl1", "github.com/gbdubs/tl1", 261, "/Users/t/gbdubs/tl1", "/Users/t/conductor/workspaces/tl1/yellowknife-v1"),
+			{ID: "origin", Name: "origin", Remote: "/Users/t/conductor/workspaces/tl1/edinburgh-v2/.context/run1/origin.git", Workspaces: 10, Locations: []string{"/Users/t/conductor/workspaces/tl1/edinburgh-v2/.context/run1/repo/.candidate-worktrees/4c11"}},
+			local("missing", "tl1", 19, "/Users/t/conductor/workspaces/tl1/west-monroe-v8"),
+		}, nil, []func(*testing.T, []repositoryMergeGroup){merged("", "", -1, "missing"), never("origin")}},
+		{"a checkout shared by two remotes merges them", moved, nil, []func(*testing.T, []repositoryMergeGroup){merged("", "", 1), signal("shared checkout", false)}},
+		{"the same root in different checkouts is a fork", []repositoryIdentity{
+			rooted("mine", "github.com/one/widget", "r1", "/Users/t/one/widget"),
+			rooted("theirs", "github.com/two/widget", "r1", "/Users/t/two/widget"),
+		}, nil, nil},
+		{"a shared checkout with different roots proves nothing", []repositoryIdentity{
+			rooted("a", "github.com/one/widget", "r1", "/Users/t/widget"),
+			rooted("b", "github.com/two/widget", "r2", "/Users/t/widget"),
+		}, nil, nil},
+		{"TL1 stress-test origins stay separate", origins, nil, nil},
+		{"remoteless rows of one repository merge by name and checkout, or Conductor directory", []repositoryIdentity{
+			local("a", "xlsxl-agy", 1, "/Users/t/conductor/workspaces/xlsxl-agy/one"),
+			local("b", "xlsxl-agy", 2, "/Users/t/conductor/workspaces/xlsxl-agy/two"),
+			local("c", "xlsxl-agy", 5, "/Users/t/gbdubs/xlsxl-agy/.task-worktrees/t1"),
+			local("d", "xlsxl-agy", 1, "/Users/t/gbdubs/xlsxl-agy"),
+			local("other", "elsewhere", 1, "/Users/t/conductor/workspaces/xlsxl-agy/three"),
+		}, nil, []func(*testing.T, []repositoryMergeGroup){groupsOf(2), func(t *testing.T, groups []repositoryMergeGroup) {
+			for _, group := range groups {
+				if ids := repositoryGroupIDs(group); ids["other"] || ids["a"] != ids["b"] || ids["c"] != ids["d"] || ids["a"] == ids["c"] {
+					t.Fatalf("group %v", ids)
+				}
+			}
+		}}},
+		{"remoteless rows join a sibling attached to a remote", []repositoryIdentity{
+			keyed("remote", "github.com/acme/excel-corpus", 10, "/Users/t/gbdubs/excel-corpus"),
+			local("clone", "excel-corpus", 6122, "/Users/t/gbdubs/excel-corpus"),
+			local("old", "excel-corpus", 4, "/Users/t/gbdubs/excel-corpus", "/Users/t/conductor/workspaces/excel-corpus/one"),
+			local("worktree", "excel-corpus", 2, "/Users/t/conductor/workspaces/excel-corpus/two"),
+		}, nil, []func(*testing.T, []repositoryMergeGroup){merged("remote", "", 3)}},
+		{"remoteless rows never bridge two repositories", []repositoryIdentity{
+			keyed("one", "github.com/acme/widget", 10, "/Users/t/one/widget"),
+			keyed("two", "github.com/other/widget", 10, "/Users/t/two/widget"),
+			local("a", "widget", 1, "/Users/t/one/widget", "/Users/t/conductor/workspaces/widget/w1"),
+			local("b", "widget", 1, "/Users/t/two/widget", "/Users/t/conductor/workspaces/widget/w2"),
+			local("both", "widget", 1, "/Users/t/conductor/workspaces/widget/w3"),
+		}, nil, []func(*testing.T, []repositoryMergeGroup){never("both"), func(t *testing.T, groups []repositoryMergeGroup) {
+			for _, group := range groups {
+				if ids := repositoryGroupIDs(group); ids["one"] && ids["two"] {
+					t.Fatalf("bridged two repositories: %#v", group)
+				}
+			}
+		}}},
+		// A folder in a workspace whose repository Git can no longer read is
+		// named after the Conductor directory, and belongs to that repository.
+		{"a folder named after its Conductor directory joins it", []repositoryIdentity{xlsxExec,
+			local("folder", "xlsx-exec", 0, "/Users/t/conductor/workspaces/xlsx-exec/bilbao-v6/.context/poison-workbooks")}, nil, []func(*testing.T, []repositoryMergeGroup){merged("", "", -1, "folder")}},
+		{"a scratch repository with a name of its own does not", []repositoryIdentity{xlsxExec,
+			local("scratch", "repo", 0, "/Users/t/conductor/workspaces/xlsx-exec/bilbao-v6/.context/run1/repo")}, nil, nil},
+	}
+	// Worktrees in known in-clone layouts map to the clone, in either
+	// direction.
 	for _, worktree := range []string{"/Users/t/gbdubs/grady.dev/.conductor/puebla-v5", "/Users/t/gbdubs/grady.dev/.task-worktrees/a1", "/Users/t/gbdubs/grady.dev/.claude/worktrees/agent-1"} {
-		rows = []repositoryIdentity{remote("site", "github.com/gbdubs/grady.dev", 38, "/Users/t/gbdubs/grady.dev"), local("wt", "grady.dev", 4, worktree)}
-		if groups := planRepositoryMerges(rows, nil); len(groups) != 1 || !repositoryGroupIDs(groups[0])["wt"] || groups[0].Signals[len(groups[0].Signals)-1] != "local checkout" {
-			t.Fatalf("%s: %#v", worktree, groups)
-		}
-		rows = []repositoryIdentity{remote("site", "github.com/gbdubs/grady.dev", 38, worktree), local("clone", "grady.dev", 4, "/Users/t/gbdubs/grady.dev")}
-		if groups := planRepositoryMerges(rows, nil); len(groups) != 1 {
-			t.Fatalf("clone of %s: %#v", worktree, groups)
-		}
+		scenarios = append(scenarios,
+			scenario{"a remoteless worktree joins its clone: " + worktree, []repositoryIdentity{keyed("site", "github.com/gbdubs/grady.dev", 38, "/Users/t/gbdubs/grady.dev"), local("wt", "grady.dev", 4, worktree)}, nil,
+				[]func(*testing.T, []repositoryMergeGroup){merged("", "", -1, "wt"), signal("local checkout", true)}},
+			scenario{"a remoteless clone joins its worktree: " + worktree, []repositoryIdentity{keyed("site", "github.com/gbdubs/grady.dev", 38, worktree), local("clone", "grady.dev", 4, "/Users/t/gbdubs/grady.dev")}, nil,
+				[]func(*testing.T, []repositoryMergeGroup){groupsOf(1)}})
 	}
-	// A deeper path is not truncated to an ancestor clone.
-	rows = []repositoryIdentity{remote("site", "github.com/gbdubs/grady.dev", 38, "/Users/t/gbdubs/grady.dev"), local("nested", "grady.dev", 4, "/Users/t/gbdubs/grady.dev/.conductor/puebla-v5/.context/scratch")}
-	if groups := planRepositoryMerges(rows, nil); len(groups) != 0 {
-		t.Fatalf("nested path attached: %#v", groups)
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			groups := planRepositoryMerges(scenario.rows, scenario.aliases)
+			if scenario.checks == nil {
+				none(t, groups)
+			}
+			for _, check := range scenario.checks {
+				check(t, groups)
+			}
+		})
 	}
-
-	// A path shared by two different groups is ambiguous. Without a shared root
-	// commit nothing says the two remotes are one repository.
-	rows = []repositoryIdentity{
-		remote("mine", "github.com/one/widget", 5, "/Users/t/widget"),
-		remote("theirs", "github.com/two/widget", 5, "/Users/t/widget"),
-		local("orphan", "widget", 9, "/Users/t/widget"),
+	// Ingest recognizes a moved remote of a shared checkout too, and a local
+	// remote is its own identity.
+	if !repositorySameIdentity(moved[0], moved[1], nil, nil) {
+		t.Fatal("ingest did not recognize the moved remote")
 	}
-	if groups := planRepositoryMerges(rows, nil); len(groups) != 0 {
-		t.Fatalf("ambiguous path merged: %#v", groups)
-	}
-
-	// explo-candidate-v2 is a TL1 project name for the explo clone. The
-	// remoteless rows join explo, and the group keeps explo's name even though
-	// the remoteless rows have more workspaces than the remote rows.
-	rows = []repositoryIdentity{
-		remote("ssh", "github.com/pythia-software/explo", 464, "/Users/t/gbdubs/explo", "/Users/t/gbdubs/explo/.conductor/kampala-v6"),
-		remote("https", "github.com/pythia-software/explo", 300, "/Users/t/gbdubs/explo/.conductor/moscow-v1"),
-		local("candidate", "explo-candidate-v2", 2631, "/Users/t/gbdubs/explo"),
-		local("bare", "explo", 2447, "/Users/t/gbdubs/explo", "/Users/t/gbdubs/explo/.conductor/los-angeles-v2"),
-	}
-	groups = planRepositoryMerges(rows, nil)
-	if len(groups) != 1 || len(groups[0].Losers) != 3 || groups[0].Survivor.ID != "ssh" || groups[0].Name != "explo" {
-		t.Fatalf("explo: %#v", groups)
-	}
-
-	// A TL1 scratch origin.git nested in a Conductor workspace neither merges
-	// nor makes the workspace directory ambiguous.
-	origin := repositoryIdentity{ID: "origin", Name: "origin", Remote: "/Users/t/conductor/workspaces/tl1/edinburgh-v2/.context/run1/origin.git", Workspaces: 10, Locations: []string{"/Users/t/conductor/workspaces/tl1/edinburgh-v2/.context/run1/repo/.candidate-worktrees/4c11"}}
-	rows = []repositoryIdentity{
-		remote("tl1", "github.com/gbdubs/tl1", 261, "/Users/t/gbdubs/tl1", "/Users/t/conductor/workspaces/tl1/yellowknife-v1"),
-		origin,
-		local("missing", "tl1", 19, "/Users/t/conductor/workspaces/tl1/west-monroe-v8"),
-	}
-	groups = planRepositoryMerges(rows, nil)
-	if len(groups) != 1 || !repositoryGroupIDs(groups[0])["missing"] || repositoryGroupIDs(groups[0])["origin"] {
-		t.Fatalf("tl1: %#v", groups)
+	if id := repositoryIdentityKey(origins[0]); id != origins[0].Remote {
+		t.Fatalf("identity of a local remote = %q", id)
 	}
 }
 
-func TestRepositoryRemotelessAttachChecksCheckout(t *testing.T) {
+// TestRepositoryRemotelessAttachReadsCheckoutOrigin: when the clone a
+// remoteless row sits in exists, its current origin decides where the row
+// belongs.
+func TestRepositoryRemotelessAttachReadsCheckoutOrigin(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git unavailable")
 	}
@@ -194,16 +296,33 @@ func TestRepositoryRemotelessAttachChecksCheckout(t *testing.T) {
 			t.Fatalf("git %v: %v %s", args, err, output)
 		}
 	}
-	rows := []repositoryIdentity{
-		{ID: "acme", Remote: "https://github.com/acme/widget.git", Normalized: "github.com/acme/widget", Name: "widget", Locations: []string{clone}},
-		{ID: "local", Name: "widget", Locations: []string{clone}},
-	}
-	if groups := planRepositoryMerges(rows, nil); len(groups) != 0 {
-		t.Fatalf("checkout origin disagrees but merged: %#v", groups)
-	}
-	if groups := planRepositoryMerges(rows, map[string]string{"github.com/other/widget": "github.com/acme/widget"}); len(groups) != 1 {
-		t.Fatalf("aliased checkout origin did not attach: %#v", groups)
-	}
+	acme := repositoryIdentity{ID: "acme", Remote: "https://github.com/acme/widget.git", Normalized: "github.com/acme/widget", Name: "widget", Root: "r1", Workspaces: 9, Locations: []string{clone}}
+	other := repositoryIdentity{ID: "other", Remote: "https://github.com/other/widget.git", Normalized: "github.com/other/widget", Name: "widget", Root: "r2", Workspaces: 1, Locations: []string{clone}}
+	remoteless := repositoryIdentity{ID: "local", Name: "widget", Workspaces: 3, Locations: []string{clone}}
+	t.Run("an origin that disagrees blocks the attach", func(t *testing.T) {
+		rows := []repositoryIdentity{{ID: acme.ID, Remote: acme.Remote, Normalized: acme.Normalized, Name: acme.Name, Locations: acme.Locations}, {ID: remoteless.ID, Name: remoteless.Name, Locations: remoteless.Locations}}
+		if groups := planRepositoryMerges(rows, nil); len(groups) != 0 {
+			t.Fatalf("checkout origin disagrees but merged: %#v", groups)
+		}
+		if groups := planRepositoryMerges(rows, map[string]string{"github.com/other/widget": "github.com/acme/widget"}); len(groups) != 1 {
+			t.Fatalf("aliased checkout origin did not attach: %#v", groups)
+		}
+	})
+	rows := []repositoryIdentity{acme, other, remoteless}
+	t.Run("the origin breaks a tie between two repositories", func(t *testing.T) {
+		groups := planRepositoryMerges(rows, nil)
+		if len(groups) != 1 || groups[0].Survivor.ID != "other" || !repositoryGroupIDs(groups[0])["local"] || repositoryGroupIDs(groups[0])["acme"] || !containsString(groups[0].Signals, "checkout origin") {
+			t.Fatalf("origin tie-break: %#v", groups)
+		}
+	})
+	t.Run("an origin naming neither stays ambiguous", func(t *testing.T) {
+		if output, err := exec.Command("git", "-C", clone, "remote", "set-url", "origin", "git@github.com:third/widget.git").CombinedOutput(); err != nil {
+			t.Fatalf("git: %v %s", err, output)
+		}
+		if groups := planRepositoryMerges(rows, nil); len(groups) != 0 {
+			t.Fatalf("unrelated origin merged: %#v", groups)
+		}
+	})
 }
 
 func TestRepositoryUpsertRemotelessJoinsGroup(t *testing.T) {
@@ -448,142 +567,6 @@ func TestRepositoryMergeKeepsPRLinks(t *testing.T) {
 	}
 }
 
-func TestRepositorySharedCheckoutMergesMovedRemote(t *testing.T) {
-	row := func(id, slug, root string, locations ...string) repositoryIdentity {
-		return repositoryIdentity{ID: id, Remote: "git@" + strings.Replace(slug, "/", ":", 1) + ".git", Normalized: slug, Name: filepath.Base(slug), Root: root, Locations: locations}
-	}
-	// One clone that had both remotes over time is one repository, without GitHub.
-	moved := []repositoryIdentity{
-		row("old", "github.com/gbdubs/excel-corpus", "r1", "/Users/t/gbdubs/excel-corpus"),
-		row("new", "github.com/pythia-software/excel-corpus", "r1", "/Users/t/gbdubs/excel-corpus/.task-worktrees/e1"),
-	}
-	groups := planRepositoryMerges(moved, nil)
-	if len(groups) != 1 || len(groups[0].Losers) != 1 || !containsString(groups[0].Signals, "shared checkout") {
-		t.Fatalf("moved remote: %#v", groups)
-	}
-	// The same root commit in different checkouts is a fork, or another clone.
-	fork := []repositoryIdentity{
-		row("mine", "github.com/one/widget", "r1", "/Users/t/one/widget"),
-		row("theirs", "github.com/two/widget", "r1", "/Users/t/two/widget"),
-	}
-	if groups := planRepositoryMerges(fork, nil); len(groups) != 0 {
-		t.Fatalf("fork merged: %#v", groups)
-	}
-	// A checkout alone, with different root commits, proves nothing either.
-	unrelated := []repositoryIdentity{
-		row("a", "github.com/one/widget", "r1", "/Users/t/widget"),
-		row("b", "github.com/two/widget", "r2", "/Users/t/widget"),
-	}
-	if groups := planRepositoryMerges(unrelated, nil); len(groups) != 0 {
-		t.Fatalf("different roots merged: %#v", groups)
-	}
-	// Ingest recognizes it too: the new remote joins the old row.
-	if !repositorySameIdentity(moved[0], moved[1], nil, nil) {
-		t.Fatal("ingest did not recognize the moved remote")
-	}
-}
-
-func TestRepositoryTL1OriginsStaySeparate(t *testing.T) {
-	// Ten stress-test bare repositories share a root commit and the checkout
-	// they were cloned into, but each is its own repository.
-	var rows []repositoryIdentity
-	for i := 0; i < 10; i++ {
-		remote := fmt.Sprintf("/Users/t/conductor/workspaces/tl1/edinburgh-v2/.context/run%d/origin.git", i)
-		rows = append(rows, repositoryIdentity{ID: fmt.Sprintf("origin-%d", i), Name: "origin", Remote: remote, Root: "r1", Workspaces: 3,
-			Locations: []string{"/Users/t/conductor/workspaces/tl1/edinburgh-v2/.context/repo/.candidate-worktrees/c" + fmt.Sprint(i)}})
-	}
-	rows = append(rows, repositoryIdentity{ID: "tl1", Name: "tl1", Remote: "git@github.com:gbdubs/tl1.git", Normalized: "github.com/gbdubs/tl1", Root: "r1", Locations: []string{"/Users/t/conductor/workspaces/tl1/edinburgh-v2/.context/repo"}})
-	if groups := planRepositoryMerges(rows, nil); len(groups) != 0 {
-		t.Fatalf("origin repositories merged: %#v", groups)
-	}
-	if id := repositoryIdentityKey(rows[0]); id != rows[0].Remote {
-		t.Fatalf("identity of a local remote = %q", id)
-	}
-}
-
-func TestRepositoryRemotelessDuplicatesMerge(t *testing.T) {
-	local := func(id, name string, workspaces int, locations ...string) repositoryIdentity {
-		return repositoryIdentity{ID: id, Name: name, Workspaces: workspaces, Locations: locations}
-	}
-	// Remoteless rows of one repository, with no row that has a remote, merge
-	// by name and checkout, or by Conductor repository directory.
-	rows := []repositoryIdentity{
-		local("a", "xlsxl-agy", 1, "/Users/t/conductor/workspaces/xlsxl-agy/one"),
-		local("b", "xlsxl-agy", 2, "/Users/t/conductor/workspaces/xlsxl-agy/two"),
-		local("c", "xlsxl-agy", 5, "/Users/t/gbdubs/xlsxl-agy/.task-worktrees/t1"),
-		local("d", "xlsxl-agy", 1, "/Users/t/gbdubs/xlsxl-agy"),
-		local("other", "elsewhere", 1, "/Users/t/conductor/workspaces/xlsxl-agy/three"),
-	}
-	groups := planRepositoryMerges(rows, nil)
-	if len(groups) != 2 {
-		t.Fatalf("groups: %#v", groups)
-	}
-	for _, group := range groups {
-		ids := repositoryGroupIDs(group)
-		if ids["other"] || ids["a"] != ids["b"] || ids["c"] != ids["d"] || ids["a"] == ids["c"] {
-			t.Fatalf("group %v", ids)
-		}
-	}
-
-	// They also join the group of a sibling that attached to a repository with
-	// a remote, but never bridge two such groups.
-	keyed := func(id, slug string, locations ...string) repositoryIdentity {
-		return repositoryIdentity{ID: id, Remote: "git@" + strings.Replace(slug, "/", ":", 1) + ".git", Normalized: slug, Name: filepath.Base(slug), Workspaces: 10, Locations: locations}
-	}
-	rows = []repositoryIdentity{
-		keyed("remote", "github.com/acme/excel-corpus", "/Users/t/gbdubs/excel-corpus"),
-		local("clone", "excel-corpus", 6122, "/Users/t/gbdubs/excel-corpus"),
-		local("old", "excel-corpus", 4, "/Users/t/gbdubs/excel-corpus", "/Users/t/conductor/workspaces/excel-corpus/one"),
-		local("worktree", "excel-corpus", 2, "/Users/t/conductor/workspaces/excel-corpus/two"),
-	}
-	groups = planRepositoryMerges(rows, nil)
-	if len(groups) != 1 || len(groups[0].Losers) != 3 || groups[0].Survivor.ID != "remote" {
-		t.Fatalf("attached siblings: %#v", groups)
-	}
-	rows = []repositoryIdentity{
-		keyed("one", "github.com/acme/widget", "/Users/t/one/widget"),
-		keyed("two", "github.com/other/widget", "/Users/t/two/widget"),
-		local("a", "widget", 1, "/Users/t/one/widget", "/Users/t/conductor/workspaces/widget/w1"),
-		local("b", "widget", 1, "/Users/t/two/widget", "/Users/t/conductor/workspaces/widget/w2"),
-		local("both", "widget", 1, "/Users/t/conductor/workspaces/widget/w3"),
-	}
-	for _, group := range planRepositoryMerges(rows, nil) {
-		if ids := repositoryGroupIDs(group); ids["one"] && ids["two"] || ids["both"] {
-			t.Fatalf("bridged two repositories: %#v", group)
-		}
-	}
-}
-
-func TestRepositoryRemotelessAttachUsesCheckoutOrigin(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git unavailable")
-	}
-	clone := t.TempDir()
-	for _, args := range [][]string{{"init", "-q"}, {"remote", "add", "origin", "git@github.com:other/widget.git"}} {
-		if output, err := exec.Command("git", append([]string{"-C", clone}, args...)...).CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v %s", args, err, output)
-		}
-	}
-	// Two repositories claim the clone. Its current origin says which one the
-	// remoteless row belongs to.
-	rows := []repositoryIdentity{
-		{ID: "acme", Remote: "https://github.com/acme/widget.git", Normalized: "github.com/acme/widget", Name: "widget", Root: "r1", Workspaces: 9, Locations: []string{clone}},
-		{ID: "other", Remote: "https://github.com/other/widget.git", Normalized: "github.com/other/widget", Name: "widget", Root: "r2", Workspaces: 1, Locations: []string{clone}},
-		{ID: "local", Name: "widget", Workspaces: 3, Locations: []string{clone}},
-	}
-	groups := planRepositoryMerges(rows, nil)
-	if len(groups) != 1 || groups[0].Survivor.ID != "other" || !repositoryGroupIDs(groups[0])["local"] || repositoryGroupIDs(groups[0])["acme"] || !containsString(groups[0].Signals, "checkout origin") {
-		t.Fatalf("origin tie-break: %#v", groups)
-	}
-	// A checkout whose origin names neither stays ambiguous.
-	if output, err := exec.Command("git", "-C", clone, "remote", "set-url", "origin", "git@github.com:third/widget.git").CombinedOutput(); err != nil {
-		t.Fatalf("git: %v %s", err, output)
-	}
-	if groups := planRepositoryMerges(rows, nil); len(groups) != 0 {
-		t.Fatalf("unrelated origin merged: %#v", groups)
-	}
-}
-
 func repositoryCount(t *testing.T, db repositoryQuerier) int {
 	t.Helper()
 	items, err := loadRepositoryIdentities(db)
@@ -693,21 +676,5 @@ func TestRepositoryUpsertJoinsMovedRemoteOfSharedCheckout(t *testing.T) {
 	}
 	if moved != old || fork == old {
 		t.Fatalf("old=%s moved=%s fork=%s", old, moved, fork)
-	}
-}
-
-func TestRepositoryRemotelessNestedConductorLocation(t *testing.T) {
-	keyed := repositoryIdentity{ID: "site", Remote: "git@github.com:acme/xlsx-exec.git", Normalized: "github.com/acme/xlsx-exec", Name: "xlsx-exec", Workspaces: 9,
-		Locations: []string{"/Users/t/conductor/workspaces/xlsx-exec/bilbao-v6"}}
-	// A folder in a workspace whose repository Git can no longer read is named
-	// after the Conductor directory, and belongs to that repository.
-	named := repositoryIdentity{ID: "folder", Name: "xlsx-exec", Locations: []string{"/Users/t/conductor/workspaces/xlsx-exec/bilbao-v6/.context/poison-workbooks"}}
-	if groups := planRepositoryMerges([]repositoryIdentity{keyed, named}, nil); len(groups) != 1 || !repositoryGroupIDs(groups[0])["folder"] {
-		t.Fatalf("named after the directory: %#v", groups)
-	}
-	// A scratch repository with a name of its own does not.
-	scratch := repositoryIdentity{ID: "scratch", Name: "repo", Locations: []string{"/Users/t/conductor/workspaces/xlsx-exec/bilbao-v6/.context/run1/repo"}}
-	if groups := planRepositoryMerges([]repositoryIdentity{keyed, scratch}, nil); len(groups) != 0 {
-		t.Fatalf("scratch repository attached: %#v", groups)
 	}
 }
