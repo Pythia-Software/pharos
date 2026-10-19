@@ -156,7 +156,7 @@ function useLocationRevision() {
   const [revision, setRevision] = useState(0);
   useEffect(() => {
     const changed = () => setRevision(value => value + 1);
-    const events = ["pharos:view", "pharos:route", "pharos:uri-changed"];
+    const events = ["pharos:view", "pharos:route", "pharos:uri-changed", "pharos:library-filter"];
     events.forEach(event => window.addEventListener(event, changed));
     return () => events.forEach(event => window.removeEventListener(event, changed));
   }, []);
@@ -207,6 +207,13 @@ window.addEventListener("pharos:route", () => {
 });
 
 let clearLibrarySearch: (() => void) | undefined;
+let pendingLibraryFilter: WhereTerm[] | undefined;
+
+function filterLibrary(where: WhereTerm[]) {
+  clearLibrarySearch?.();
+  pendingLibraryFilter = where;
+  window.dispatchEvent(new Event("pharos:library-filter"));
+}
 
 async function responseJSON<T>(response: Response): Promise<T> {
   const body = await response.json().catch(() => ({}));
@@ -440,6 +447,7 @@ function usageGroupFields(fields: FieldSchema<Row>["fields"], query: QueryState)
 // pagination applies; onFind hears how it went.
 function QuerySurface({ dataset, libraryView = "table", messageView = "table", find = "", onFind, trailing, header, controls, presets, selectable = false, scopeWhere, appliedScope, namespace, localRows }: { dataset: Dataset; selectable?: boolean; libraryView?: LibraryView; messageView?: MessageView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode; scopeWhere?: WhereTerm[]; appliedScope?: React.MutableRefObject<WhereTerm[]>; namespace?: "machine_calls"; localRows?: Row[] }) {
   const registryKey = namespace ?? dataset;
+  const visible = shared || datasetIsVisible(registryKey);
   const schema = useMemo(() => namespace ? { ...schemas[dataset], name: "pharos_machine_calls", defaultSelect: [{ field: "started_at", width: 155 }, { field: "repository_name", width: 140 }, { field: "operation_name", width: 180 }, { field: "tool_name", width: 140 }, { field: "command", width: 350 }, { field: "duration_ms", width: 105 }, { field: "status", width: 85 }, { field: "duration_source", width: 120 }, { field: "title", width: 240 }] } : schemas[dataset], [dataset, namespace]);
   const locationRevision = useLocationRevision();
   const tableRenderers = useUsageTableRenderers(renderers);
@@ -447,7 +455,7 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
   onFindRef.current = onFind;
   const [capabilities, setCapabilities] = useState<{ metricCapabilities: MetricCapabilities; queryCapabilities?: QueryCapabilitiesV3; computedExecution: ComputedExecution }>();
   const computedColumnStore = useMemo(() => {
-    if (shared || localRows) return undefined;
+    if (shared || localRows || !visible) return undefined;
     const backendStore = httpComputedColumnStore("/api/query-computed-columns");
     // Group projections have a derived schema name. Canonical definitions and
     // their execution handshake still belong to this surface's source dataset.
@@ -460,7 +468,7 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
       const next = await responseJSON<{ metricCapabilities: MetricCapabilities; queryCapabilities?: QueryCapabilitiesV3; computedExecution: ComputedExecution }>(await fetch(`/api/query/${dataset}/capabilities`, { signal }));
       setCapabilities(next);
     });
-  }, [dataset, Boolean(localRows)]);
+  }, [dataset, Boolean(localRows), Boolean(visible)]);
   const transport = useMemo(() => shared || localRows ? undefined : makeTransport(dataset, find, value => onFindRef.current?.(value), capabilities?.metricCapabilities, capabilities?.queryCapabilities), [dataset, find, capabilities?.metricCapabilities, capabilities?.queryCapabilities, Boolean(localRows)]);
   const [bookmarkRevision, setBookmarkRevision] = useState(0);
   useEffect(() => { const changed = () => setBookmarkRevision(value => value + 1); window.addEventListener("pharos:bookmarks", changed); return () => window.removeEventListener("pharos:bookmarks", changed); }, []);
@@ -483,7 +491,6 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
     if (JSON.stringify(where) === JSON.stringify(source.where)) return resolved;
     return resolved.grouping ? { ...resolved, grouping: { ...resolved.grouping, source: { ...source, where } } } : { ...resolved, where };
   }, [dataset, locationRevision, scopeSignature, scopeRemovals]);
-  const visible = shared || datasetIsVisible(registryKey);
   const api = useQueryTable<Row>({ schema, transport,
     computedColumnStore, computedExecution: capabilities?.computedExecution,
     clientRows: localRows ?? shared?.datasets[dataset], active: Boolean(visible),
@@ -523,6 +530,14 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
     get(_target, property) { return apiRef.current[property as keyof QueryTableApi<Row>]; },
   }), []);
   if (!namespace || visible) tableApis.set(registryKey, api);
+  useEffect(() => {
+    // Work-page links may run before Library's first mount or restoration.
+    if (dataset !== "library" || !api.restoration.ready || !pendingLibraryFilter) return;
+    const where = pendingLibraryFilter;
+    pendingLibraryFilter = undefined;
+    clearLibrarySearch?.();
+    api.setQuery(previous => ({ ...previous, where, offset: 0 }));
+  }, [dataset, api.restoration.ready, locationRevision]);
   useEffect(() => {
     return () => { tableApis.delete(registryKey); };
   }, [registryKey]);
@@ -1857,10 +1872,22 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["optimizationSettingsPage", <OptimizationSettingsPage />],
   ["tl1Page", <TL1Page attempts={<QuerySurface dataset="tl1_attempts" />} filterAttempts={(where) => tableApis.get("tl1_attempts")?.setQuery(previous => ({ ...previous, where: where as WhereTerm[], offset: 0 }))} copy={copyText} />],
 ];
+
+// Mount a page on its first visit. Hidden pages used to load capabilities,
+// definitions and dashboard data together with Usage, competing for the same
+// browser connections and catalog readers. Keep visited pages mounted so their
+// table restoration and undo history survive navigation.
+function LazyPage({ host, children }: { host: HTMLElement; children: React.ReactNode }) {
+  useLocationRevision();
+  const visited = useRef(false);
+  visited.current ||= Boolean(shared || host.id === "searchComposerDialog" || host.closest(".view.active"));
+  return visited.current ? <>{children}</> : null;
+}
+
 for (const [id, component] of mounts) {
   if (shared && !["queryTableLibrary", "queryTableUsage", "toolsPage"].includes(id)) continue;
   const element = document.getElementById(id);
-  if (element) createRoot(element).render(component);
+  if (element) createRoot(element).render(<LazyPage host={element}>{component}</LazyPage>);
 }
 if (!shared) { startFindingsChrome(); installWorkspaceInbox(); installDelegationExplorer(); }
 if (!shared && concurrencyPrototypeEnabled) {
@@ -1887,20 +1914,10 @@ window.pharosQueryTables = {
     }
   },
   filterRepository(repository) {
-    clearLibrarySearch?.();
-    tableApis.get("library")?.setQuery((previous) => ({
-      ...previous,
-      where: [{ field: "repository_name", op: "=", value: repository }],
-      offset: 0,
-    }));
+    filterLibrary([{ field: "repository_name", op: "=", value: repository }]);
   },
   filterModel(model) {
-    clearLibrarySearch?.();
-    tableApis.get("library")?.setQuery((previous) => ({
-      ...previous,
-      where: [{ field: "models", op: "contains", value: model }],
-      offset: 0,
-    }));
+    filterLibrary([{ field: "models", op: "contains", value: model }]);
   },
 };
 

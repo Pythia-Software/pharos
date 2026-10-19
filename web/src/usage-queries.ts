@@ -19,9 +19,10 @@ const grouped = (label: string, title: string, keys: string[], summaries = total
   label, title, grouping: { keys, summaries, representative: null }, orderBy: ranked,
 });
 const calendar = (label: string, key: string) => ({ ...grouped(label, `Cost, tokens, distinct sessions and cache hit rate per ${label.toLowerCase()}`, [key]), orderBy: [{ field: key, dir: "desc" as const }] });
-// The title opens the work itself; its row summary supplies the link label.
+// Usage titles come from the same workspace row for every fact. MAX retains
+// that one title without sorting and validating a representative per workspace.
 const workLink: SummaryColumn = { id: "usage_work", op: "link", label: "Work", link: { label: { column: "usage_work_title" }, to: { kind: "template", template: "/work/{field:workspace_id}" } } };
-const work = grouped("Work", "Rank work by cost across days and models; each workspace retains its own identity", ["workspace_id"], [{ id: "usage_work_title", op: "row", field: "title", label: "Title" }, workLink, ...totals]);
+const work = grouped("Work", "Rank work by cost across days and models; each workspace retains its own identity", ["workspace_id"], [{ id: "usage_work_title", op: "max", field: "title", label: "Title" }, workLink, ...totals]);
 
 export const usageGroupPresets: UsageTablePreset[] = [
   grouped("Repositories", "Compare repository cost, tokens, sessions and cache reuse", ["repository_name"]),
@@ -29,7 +30,7 @@ export const usageGroupPresets: UsageTablePreset[] = [
   grouped("Model + effort", "Keep each provider, model and recorded effort level separate, including missing effort", ["provider", "model_family", "effort"]),
   grouped("Providers", "Compare provider cost, tokens, sessions and cache reuse", ["provider"]),
   grouped("Agents", "Compare root agents and subagents within each provider", ["provider", "session_kind"]),
-  { ...work, grouping: { ...work.grouping, representative: { orderBy: [{ field: "last_usage_at", dir: "desc", nulls: "last" }] } },
+  { ...work,
     columns: [workLink.id, "workspace_id", ...totals.map(column => column.id)] },
   calendar("Day", "day"), calendar("Week", "week"), calendar("Month", "month"),
 ];

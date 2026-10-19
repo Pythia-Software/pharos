@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"maps"
 	"regexp"
 	"slices"
 	"sort"
@@ -20,6 +21,22 @@ var usageTokenFields = []string{
 // usageTimeFields are the calendar buckets derived from the ledger hour.
 var usageTimeFields = map[string]bool{"hour": true, "day": true, "week": true, "month": true}
 
+func queryFieldsFor(dataset string, names ...string) libraryFields {
+	if dataset != "usage" {
+		return libraryFieldsFor(names...)
+	}
+	return fieldSet(names...)
+}
+
+// Unlike libraryFieldsFor, this accepts fields outside the Library schema.
+func fieldSet(names ...string) libraryFields {
+	fields := libraryFields{}
+	for _, name := range names {
+		fields[name] = true
+	}
+	return fields
+}
+
 // usageRows returns one row per agent session, local calendar day, model, and effort.
 // Linked mirrors of the same work (for example a Conductor workspace and the
 // native Claude session it wraps) keep only the representative workspace, as
@@ -33,10 +50,14 @@ func (c *Catalog) usageRowsByPeriod(location *time.Location, hourly bool) ([]map
 	if err != nil {
 		return nil, err
 	}
-	lineage, err := c.usageConversationRoots(ledger)
+	rows, err := c.usageRowsFromLedger(location, hourly, ledger)
 	if err != nil {
 		return nil, err
 	}
+	return c.attachUsageLineage(rows, ledger)
+}
+
+func (c *Catalog) usageRowsFromLedger(location *time.Location, hourly bool, ledger []map[string]any) ([]map[string]any, error) {
 	book, err := c.loadPriceBook()
 	if err != nil {
 		return nil, err
@@ -73,28 +94,6 @@ func (c *Catalog) usageRowsByPeriod(location *time.Location, hourly bool) ([]map
 			}
 			for _, field := range usageTokenFields {
 				row[field] = int64(0)
-			}
-			row["session_role"] = nilIfEmpty(lineage.sessionRoles[firstString(entry["agent_session_id"])])
-			if root := lineage.roots[firstString(entry["conversation_id"])]; root != nil {
-				row["root_conversation_id"] = root["id"]
-				row["root_provider"] = root["provider"]
-				row["root_title"] = root["root_title"]
-				row["root_repository_name"] = root["root_repository_name"]
-				row["root_model_family"] = modelFamily(firstString(root["model"]))
-				row["root_effort"] = nilIfEmpty(firstString(root["effort"]))
-				row["delegated_session_id"] = nilIfEmpty(lineage.delegatedRuns[firstString(entry["agent_session_id"])])
-				if depth, known := lineage.delegatedDepth[firstString(entry["agent_session_id"])]; known {
-					row["delegated_run_depth"] = depth
-					// Canonical execution role, independent of whether a linked
-					// child transcript recorded its main session as a root.
-					if depth > 0 {
-						row["run_role"] = "delegated"
-					} else if role := firstString(row["session_role"]); role == "parent" {
-						row["run_role"] = "parent"
-					} else if role == "singleton" {
-						row["run_role"] = "standalone"
-					}
-				}
 			}
 			grouped[key] = row
 			order = append(order, key)
@@ -138,22 +137,101 @@ func (c *Catalog) usageRowsByPeriod(location *time.Location, hourly bool) ([]map
 	return rows, nil
 }
 
+// Most Usage controls need only the priced facts. Resolve the complete graph
+// only for queries that actually consume root/delegation fields. Clone maps:
+// base rows are shared with charts, metadata, and Carbon requests.
+func (c *Catalog) attachUsageLineage(base, ledger []map[string]any) ([]map[string]any, error) {
+	lineage, err := c.usageConversationRoots(ledger)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]map[string]any, len(base))
+	for i, source := range base {
+		row := maps.Clone(source)
+		rows[i] = row
+		session := firstString(row["agent_session_id"])
+		row["session_role"] = nilIfEmpty(lineage.sessionRoles[session])
+		if root := lineage.roots[firstString(row["conversation_id"])]; root != nil {
+			row["root_conversation_id"], row["root_provider"] = root["id"], root["provider"]
+			row["root_title"], row["root_repository_name"] = root["root_title"], root["root_repository_name"]
+			row["root_model_family"] = modelFamily(firstString(root["model"]))
+			row["root_effort"] = nilIfEmpty(firstString(root["effort"]))
+			row["delegated_session_id"] = nilIfEmpty(lineage.delegatedRuns[session])
+			if depth, known := lineage.delegatedDepth[session]; known {
+				row["delegated_run_depth"] = depth
+				if depth > 0 {
+					row["run_role"] = "delegated"
+				} else if role := firstString(row["session_role"]); role == "parent" {
+					row["run_role"] = "parent"
+				} else if role == "singleton" {
+					row["run_role"] = "standalone"
+				}
+			}
+		}
+	}
+	return rows, nil
+}
+
+func usageNeedsLineage(fields libraryFields) bool {
+	if len(fields) == 0 {
+		return true
+	}
+	for field := range fields {
+		if strings.HasPrefix(field, "root_") || strings.HasPrefix(field, "delegated_") || field == "session_role" || field == "run_role" {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Catalog) localUsageLedger(ctx context.Context) ([]map[string]any, error) {
+	return cachedValue(ctx, c, "usage-ledger", func(context.Context) ([]map[string]any, error) { return c.representativeLedger() })
+}
+
+func (c *Catalog) localUsageBaseRows(ctx context.Context, hourly bool) ([]map[string]any, error) {
+	key := "usage-base:" + time.Local.String() + ":" + c.clock().Format("2006-01-02")
+	if hourly {
+		key += ":hourly"
+	}
+	return cachedValue(ctx, c, key, func(ctx context.Context) ([]map[string]any, error) {
+		ledger, err := c.localUsageLedger(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return c.usageRowsFromLedger(time.Local, hourly, ledger)
+	})
+}
+
 // localUsageRows returns usageRows in local time, kept until the next commit
 // or local day, since costs at today's prices follow the date.
 func (c *Catalog) localUsageRows(ctx context.Context) ([]map[string]any, error) {
 	key := "usage:" + time.Local.String() + ":" + c.clock().Format("2006-01-02")
-	return cachedValue(ctx, c, key, func(context.Context) ([]map[string]any, error) { return c.usageRows(time.Local) })
+	return c.cachedUsageLineage(ctx, key, false)
 }
 
 // Hourly chart data keeps the ledger's time precision without changing table rows.
 func (c *Catalog) localUsageHourlyRows(ctx context.Context) ([]map[string]any, error) {
 	key := "usage-hourly:" + time.Local.String() + ":" + c.clock().Format("2006-01-02")
-	return cachedValue(ctx, c, key, func(context.Context) ([]map[string]any, error) { return c.usageRowsByPeriod(time.Local, true) })
+	return c.cachedUsageLineage(ctx, key, true)
+}
+
+func (c *Catalog) cachedUsageLineage(ctx context.Context, key string, hourly bool) ([]map[string]any, error) {
+	return cachedValue(ctx, c, key, func(ctx context.Context) ([]map[string]any, error) {
+		base, err := c.localUsageBaseRows(ctx, hourly)
+		if err != nil {
+			return nil, err
+		}
+		ledger, err := c.localUsageLedger(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return c.attachUsageLineage(base, ledger)
+	})
 }
 
 // Hourly charts keep row filters (for example a daily token threshold) at
 // the table's daily granularity, then apply timestamp bounds to the ledger hours.
-func (c *Catalog) hourlyUsageForAggregation(ctx context.Context, where []querytable.WhereTerm, schema querytable.Schema) ([]map[string]any, error) {
+func (c *Catalog) hourlyUsageForAggregation(ctx context.Context, where []querytable.WhereTerm, schema querytable.Schema, needed ...[]string) ([]map[string]any, error) {
 	var rowWhere, hourWhere []querytable.WhereTerm
 	for _, term := range where {
 		timeOnly := true
@@ -172,7 +250,20 @@ func (c *Catalog) hourlyUsageForAggregation(ctx context.Context, where []queryta
 			rowWhere = append(rowWhere, term)
 		}
 	}
-	daily, err := c.localUsageRows(ctx)
+	fields := fieldSet(whereFields(where)...)
+	for _, names := range needed {
+		for _, name := range names {
+			fields[name] = true
+		}
+	}
+	if len(fields) == 0 {
+		fields = fieldSet("id")
+	}
+	lineage := usageNeedsLineage(fields)
+	daily, err := c.localUsageBaseRows(ctx, false)
+	if lineage {
+		daily, err = c.localUsageRows(ctx)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +275,10 @@ func (c *Catalog) hourlyUsageForAggregation(ctx context.Context, where []queryta
 	for _, row := range matched {
 		ids[firstString(row["id"])] = true
 	}
-	hourly, err := c.localUsageHourlyRows(ctx)
+	hourly, err := c.localUsageBaseRows(ctx, true)
+	if lineage {
+		hourly, err = c.localUsageHourlyRows(ctx)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +295,12 @@ func (c *Catalog) hourlyUsageForAggregation(ctx context.Context, where []queryta
 // aggregateUsage selects granularity per metric. An hour filter selects daily
 // table rows containing a matching hour; it does not turn daily counts into hours.
 func (c *Catalog) aggregateUsage(ctx context.Context, daily []map[string]any, request querytable.AggregationRequest, schema querytable.Schema) (querytable.AggregationResult, error) {
-	hourly, err := c.hourlyUsageForAggregation(ctx, request.Where, schema)
+	needed := []string{}
+	for _, spec := range request.Aggregations {
+		needed = append(needed, spec.Field)
+		needed = append(needed, spec.GroupBy...)
+	}
+	hourly, err := c.hourlyUsageForAggregation(ctx, request.Where, schema, needed)
 	if err != nil {
 		return querytable.AggregationResult{}, err
 	}
@@ -282,9 +381,9 @@ func (c *Catalog) usageLedger(workspaceIDs []string) ([]map[string]any, error) {
             c.harness,c.harness_version_first,c.harness_version_last,c.harness_version_source,
 			w.id workspace_id,w.title,w.source_kind,r.display_name repository_name
 		FROM agent_session_usage u
-		JOIN agent_sessions a ON a.id=u.agent_session_id
-        LEFT JOIN conversations c ON c.id=a.conversation_id
-		JOIN workspaces w ON w.id=a.workspace_id
+		JOIN agent_sessions a INDEXED BY agent_sessions_usage_idx ON a.id=u.agent_session_id
+        LEFT JOIN conversations c INDEXED BY conversations_usage_idx ON c.id=a.conversation_id
+		JOIN workspaces w INDEXED BY workspaces_library_idx ON w.id=a.workspace_id
 		LEFT JOIN repositories r ON r.id=w.repository_id
 		WHERE u.total_tokens>0`+filter, args...)
 }

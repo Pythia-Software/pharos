@@ -56,6 +56,9 @@ func (s *Server) queryTableRows(ctx context.Context, dataset string, values url.
 		}
 		return runs, nil
 	case "usage":
+		if !usageNeedsLineage(fields) {
+			return s.Catalog.localUsageBaseRows(ctx, false)
+		}
 		return s.Catalog.localUsageRows(ctx)
 	case "conversation_activity":
 		return s.Catalog.conversationActivityRows(ctx)
@@ -178,7 +181,7 @@ func (s *Server) getQueryTable(w http.ResponseWriter, r *http.Request, dataset, 
 	// different workspace scope. It cannot resume the filtered table's cursor.
 	values := r.URL.Query()
 	values.Del("find_cursor")
-	rows, err := s.queryTableRows(r.Context(), dataset, values, libraryFieldsFor(field))
+	rows, err := s.queryTableRows(r.Context(), dataset, values, queryFieldsFor(dataset, field))
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
@@ -225,7 +228,7 @@ func (s *Server) getFieldStats(w http.ResponseWriter, r *http.Request, dataset s
 		var rows []map[string]any
 		values := r.URL.Query()
 		values.Del("find_cursor")
-		if rows, err = s.queryTableRows(r.Context(), dataset, values, libraryFieldsFor(fields...)); err == nil {
+		if rows, err = s.queryTableRows(r.Context(), dataset, values, queryFieldsFor(dataset, fields...)); err == nil {
 			result, err = querytable.FieldStats(rows, fields, schema)
 		}
 	}
@@ -311,7 +314,13 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 		if dataset == "library" {
 			rows, find, err = s.libraryRows(r.Context(), r.URL.Query(), libraryFieldsFor(needed...), &evidence, query.Where)
 		} else {
-			rows, err = s.queryTableRows(r.Context(), dataset, r.URL.Query(), libraryFieldsFor(needed...))
+			needed = append(needed, query.Select...)
+			fields := queryFieldsFor(dataset, needed...)
+			// An omitted selection requests complete legacy Usage rows.
+			if dataset == "usage" && len(query.Select) == 0 {
+				fields = nil
+			}
+			rows, err = s.queryTableRows(r.Context(), dataset, r.URL.Query(), fields)
 		}
 		if err != nil {
 			writeError(w, err, http.StatusInternalServerError)
@@ -363,7 +372,7 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 		if dataset == "library" {
 			rows, find, err = s.libraryRows(r.Context(), r.URL.Query(), libraryFieldsFor(needed...), nil, request.Where)
 		} else {
-			rows, err = s.queryTableRows(r.Context(), dataset, r.URL.Query(), libraryFieldsFor(needed...), request.Where)
+			rows, err = s.queryTableRows(r.Context(), dataset, r.URL.Query(), queryFieldsFor(dataset, needed...), request.Where)
 		}
 		if err != nil {
 			writeError(w, err, http.StatusInternalServerError)
@@ -454,7 +463,17 @@ func (s *Server) postSQLQueryTable(w http.ResponseWriter, r *http.Request, datas
 			writeError(w, fmt.Errorf("aggregation json: %w", err), http.StatusBadRequest)
 			return
 		}
-		result, err := table.Aggregate(r.Context(), s.Catalog.reader(), request, schema)
+		var result querytable.AggregationResult
+		var err error
+		var handled bool
+		if dataset == "tool_calls" {
+			result, handled, err = s.Catalog.machineTimeAggregations(r.Context(), request, schema)
+		} else if dataset == "writing_messages" {
+			result, handled, err = table.writingMessageSummary(r.Context(), s.Catalog.reader(), request, schema)
+		}
+		if !handled {
+			result, err = table.Aggregate(r.Context(), s.Catalog.reader(), request, schema)
+		}
 		if err != nil {
 			writeError(w, err, http.StatusBadRequest)
 			return

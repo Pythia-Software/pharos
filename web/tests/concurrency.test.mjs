@@ -71,6 +71,24 @@ test("zoom crops the full layout without reordering earlier arrivals", () => {
   assert.deepEqual(zoomed, full.filter(s => s.start < 38 && s.end > 12).map(s => ({ ...s, start: Math.max(12, s.start), end: Math.min(38, s.end) })));
 });
 
+test("compact ribbons preserve exact hit tests, conversation changes, running states, and zooms", () => {
+  const threads = [
+    { ...repoThread("first", "alpha", [[0, 4], [8, 15]]), id:"a", workspace_id:"same", model_spans:[[0,3],[6,12]] },
+    { ...repoThread("second", "alpha", [[2, 9], [12, 20]]), id:"b", workspace_id:"same", model_spans:[[2,9],[12,20]] },
+    { ...repoThread("third", "beta", [[3, 7], [10, 17]]), id:"c", model_spans:[[3,7],[10,17]] },
+    { ...repoThread("child", "alpha", [[1, 18]]), id:"child",workspace_id:"same",agent_depth:1,root_conversation_id:"a",model_spans:[[1,5],[10,18]] },
+  ];
+  for (const counting of ["workspace","agent"]) for (const mode of ["user","model"]) for (const gap of [0,15]) for (const bounds of [[0,20],[4,14]]) {
+    const order=[...new Set(threads.map(row=>concurrencyUnit(row,counting)))];
+    const exact=stackSegments(threads,mode,gap,order,bounds,counting);
+    const compact=stackSegments(threads,mode,gap,order,bounds,counting,true);
+    const boundaries=[...new Set([...bounds,...exact.flatMap(s=>[s.start,s.end]),...compact.flatMap(s=>[s.start,s.end])])].sort((a,b)=>a-b);
+    const hits=(segments,time)=>segments.filter(s=>s.start<=time&&time<s.end).map(({unit,bottom,conversation,running})=>({unit,bottom,conversation,running})).sort((a,b)=>a.unit.localeCompare(b.unit));
+    for (let i=1;i<boundaries.length;i++) assert.deepEqual(hits(compact,(boundaries[i-1]+boundaries[i])/2),hits(exact,(boundaries[i-1]+boundaries[i])/2));
+    assert.ok(compact.length<=exact.length);
+  }
+});
+
 test("packing stays deterministic, gap-free, and preserves workspace activity in both modes", () => {
   let seed = 123;
   const random = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 2 ** 32; };

@@ -17,8 +17,14 @@ import (
 )
 
 func queryV3Dataset(schema qt.Schema) qt.QueryDatasetV3 {
+	groups := 10_000
+	// Usage has one compact fact per execution/day/model. The built-in Work
+	// preset must cover a library with more than 10,000 workspaces.
+	if schema.Name == "pharos_usage" {
+		groups = 100_000
+	}
 	return qt.QueryDatasetV3{Schema: schema, Scope: queryTableScope, Dataset: schema.Name, Dialect: "sqlite",
-		MaxRows: querytable.MaxLimit, MaxGroups: 10_000, MaxPopulation: 10_000_000, MaxStagingBytes: 512 << 20}
+		MaxRows: querytable.MaxLimit, MaxGroups: groups, MaxPopulation: 10_000_000, MaxStagingBytes: 512 << 20}
 }
 
 func authorizeQueryV3Computed(ctx context.Context, tx *sql.Tx, d *qt.QueryDatasetV3) error {
@@ -141,7 +147,7 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 				}
 			}
 		} else if err == nil {
-			rows, err = s.queryTableRows(ctx, dataset, params, libraryFieldsFor(required...))
+			rows, err = s.queryTableRows(ctx, dataset, params, queryFieldsFor(dataset, required...))
 		}
 	}
 	if err != nil {
@@ -164,7 +170,7 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 		if e != nil {
 			return qt.QueryResultV3{}, nil, e
 		}
-		hours, e := s.Catalog.hourlyUsageForAggregation(ctx, resolved, localSchema)
+		hours, e := s.Catalog.hourlyUsageForAggregation(ctx, resolved, localSchema, required)
 		if e != nil {
 			return qt.QueryResultV3{}, nil, e
 		}

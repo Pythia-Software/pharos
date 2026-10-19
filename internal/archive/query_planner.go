@@ -19,11 +19,19 @@ func (c *Catalog) ensureQueryPlannerStatistics(ctx context.Context) error {
 		return err
 	}
 	defer conn.Close()
+	for _, index := range machineCallIndexes {
+		if _, err := conn.ExecContext(ctx, index); err != nil {
+			return err
+		}
+	}
 	var cube bool
 	if err := conn.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='tool_call_cube')").Scan(&cube); err != nil {
 		return err
 	}
 	if cube {
+		if _, err := conn.ExecContext(ctx, machineTimeIndexSQL); err != nil {
+			return err
+		}
 		if _, err := conn.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS tool_call_cube_count_idx ON tool_call_cube(call_count)"); err != nil {
 			return err
 		}

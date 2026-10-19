@@ -73,6 +73,8 @@ test('Human Words lists single messages as a table or as text highlighted by whe
     await page.locator('.authored-legend').getByRole('button', { name: /Typed/ }).click();
     await page.waitForFunction(() => document.querySelector('.authored-legend [data-category="typed"]')?.getAttribute('aria-pressed') === 'true');
     assert.deepEqual(mixes.at(-1).where.slice(-2), [{ field: 'categories', op: 'includes', value: 'pasted' }, { field: 'categories', op: 'includes', value: 'typed' }]);
+    // Native filter chips live inside the collapsed advanced query editor.
+    await page.locator('#usage').getByText('Table layout & saved queries', { exact: true }).click();
     const setChip = page.locator('#usage .qt-chip', { has: page.getByRole('button', { name: 'Edit Categories tag filter' }) });
     assert.deepEqual(await setChip.locator('.qt-set-tag .authored-pill').allInnerTexts(), ['Likely pasted', 'Typed']);
     await setChip.getByRole('button', { name: 'Remove tag typed' }).click();

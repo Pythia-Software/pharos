@@ -51,7 +51,7 @@ function ConcurrencyChart({ mode, counting, threads, gap, order, bounds, ceiling
     observer.observe(element);setWidth(element.clientWidth);
     return () => observer.disconnect();
   }, []);
-  const segments = useMemo(() => stackSegments(threads, mode, gap, order, bounds, counting), [threads, mode, gap, order, bounds, counting]);
+  const segments = useMemo(() => stackSegments(threads, mode, gap, order, bounds, counting, true), [threads, mode, gap, order, bounds, counting]);
   const byUnit = useMemo(() => {
     const groups = new Map<string, Segment[]>();
     for (const segment of segments) { if (!groups.has(segment.unit)) groups.set(segment.unit, []);groups.get(segment.unit)!.push(segment); }
@@ -271,12 +271,12 @@ export function ConcurrencyPanel({ scope, activityWindow, example = false }: { s
     <div className="concurrency-chart-footer"><div className="concurrency-repositories">{repositories.filter(repo => rangeThreads.some(thread => thread.repository === repo)).map(repo => <span key={repo}><i style={{ background: palette[repositories.indexOf(repo) % palette.length] }}/>{repo}</span>)}</div></div>
     <details className="concurrency-conversations" open={settings.showConversations} onToggle={event => { if (event.currentTarget.open !== settings.showConversations) update({ showConversations: event.currentTarget.open }); }}><summary>{scopedRows.length} conversations{selected ? (counting === "agent" ? " for selected session" : ` in ${unitInfo.get(selected)?.workspace_name}`) : " in this range"}</summary>
       {selected ? <button type="button" className="concurrency-clear-selection" onClick={() => update({ workspace: "", agent: "" })}>Show all conversations</button> : null}
-      {scopedRows.length ? <table><thead><tr><th scope="col">Repository</th><th scope="col">Conversation</th><th scope="col">Model time</th><th scope="col">Thread time</th><th scope="col" className="concurrency-open-cell" aria-label="Open conversation"><span className="concurrency-open-text">Open conversation</span><span className="concurrency-open-icon" aria-hidden="true">↗</span></th></tr></thead><tbody>{scopedRows.map(thread => <tr key={thread.id} className={selected === concurrencyUnit(thread, counting) ? "selected" : ""}>
+      {settings.showConversations ? scopedRows.length ? <table><thead><tr><th scope="col">Repository</th><th scope="col">Conversation</th><th scope="col">Model time</th><th scope="col">Thread time</th><th scope="col" className="concurrency-open-cell" aria-label="Open conversation"><span className="concurrency-open-text">Open conversation</span><span className="concurrency-open-icon" aria-hidden="true">↗</span></th></tr></thead><tbody>{scopedRows.map(thread => <tr key={thread.id} className={selected === concurrencyUnit(thread, counting) ? "selected" : ""}>
         <td><span className="concurrency-conversation-repo" title={thread.repository}><i style={{ background: colors.get(concurrencyUnit(thread, counting)) }} /><span>{thread.repository}</span></span></td>
         <td><button type="button" className="concurrency-thread-button" title={thread.title} onClick={() => chooseUnit(concurrencyUnit(thread, counting))}><span>{thread.title}</span></button></td>
         <td>{duration(rowTimings.get(thread.id)!.model)}</td><td>{duration(rowTimings.get(thread.id)!.threaded)}</td>
         <td className="concurrency-open-cell">{example ? <span className="muted">Example</span> : <a href={`/work/${encodeURIComponent(thread.work_id)}?conversation=${encodeURIComponent(thread.conversation_id)}`} target="_blank" rel="noreferrer" aria-label={`Open conversation: ${thread.title}`} title="Open conversation"><span className="concurrency-open-text">Open conversation </span>↗</a>}</td>
-      </tr>)}</tbody></table> : <p className="muted">No observed conversations in this selection.</p>}
+      </tr>)}</tbody></table> : <p className="muted">No observed conversations in this selection.</p> : null}
     </details>
     {showInfo ? <ConcurrencyInfoDialog data={data} onClose={() => setShowInfo(false)} /> : null}
   </section>;

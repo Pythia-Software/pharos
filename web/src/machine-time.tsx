@@ -50,8 +50,8 @@ function TimeTrend({ current, previous, days, window, metric, compared, onDay }:
     if (host.current) observer.observe(host.current);
     return () => observer.disconnect();
   }, []);
-  const currentDays = new Map(groupTime(current, fact => fact.day).map(group => [group.key, group]));
-  const previousDays = new Map(groupTime(previous, fact => fact.day).map(group => [group.key, group]));
+  const currentDays = useMemo(() => new Map(groupTime(current, fact => fact.day).map(group => [group.key, group])), [current]);
+  const previousDays = useMemo(() => new Map(groupTime(previous, fact => fact.day).map(group => [group.key, group])), [previous]);
   const dates = days ? Array.from({ length: days }, (_, index) => shiftMachineDay(machineDay(window.start), index)) : [...currentDays.keys()].sort();
   const values = dates.map(day => timeValue(currentDays.get(day) ?? totalTime([]), metric));
   const baseline = days && compared ? dates.map(day => timeValue(previousDays.get(shiftMachineDay(day, -days)) ?? totalTime([]), metric)) : [];
@@ -99,10 +99,10 @@ function MachineTimeDashboard({ api, scope, window, exampleRows, previousRows, o
   const [metric, setMetric] = useState<TimeMetric>("average");
   const [grouping, setGrouping] = useState<MachineGrouping>("operation");
   const current = result.current, previous = result.previous;
-  const total = totalTime(current), previousTotal = totalTime(previous);
-  const repositories = groupTime(current, fact => fact.repository);
-  const kinds = [...new Set([...current, ...previous].map(fact => fact.activity))].map(activityPresentation);
-  const operations = groupTime(current, fact => fact.operation);
+  const total = useMemo(() => totalTime(current), [current]), previousTotal = useMemo(() => totalTime(previous), [previous]);
+  const repositories = useMemo(() => groupTime(current, fact => fact.repository), [current]);
+  const kinds = useMemo(() => [...new Set([...current, ...previous].map(fact => fact.activity))].map(activityPresentation), [current, previous]);
+  const operations = useMemo(() => groupTime(current, fact => fact.operation), [current]);
   const selected = (field: string) => where.find(term => !("any" in term) && term.field === field && term.op === "=") as { value: string } | undefined;
   const operation = selected("operation_key")?.value ?? "";
   const activity = selected("activity")?.value ?? "";

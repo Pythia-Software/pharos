@@ -2,9 +2,9 @@
 
 Pharos pins core, React, UI and codegen to the published npm **0.8.0** packages,
 and the Go adapter to **v0.8.0**. The npm lockfile records registry URLs and
-integrities; `go.sum` records the released Go module. The prerelease npm archives,
-Go replacement, vendored adapter and historical patch have been removed. Clean
-builds use these releases without another Query Table checkout.
+integrities; `go.sum` records the released Go module. A root Go replacement uses
+the matching backend copy with the [Usage performance patches](../third_party/query-table-go/README.pharos.md).
+Clean builds use these pinned sources without another Query Table checkout.
 
 The [upstream migration guide](https://github.com/Pythia-Software/query-table/blob/v0.8.0/docs/host-integration-next-release.md)
 and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.8.0/CHANGELOG.md)

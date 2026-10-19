@@ -1,8 +1,10 @@
 # Query Table release builds and local development
 
 Pharos uses published Query Table **0.8.0** npm packages (core, React, UI and
-codegen) and the **v0.8.0** Go module. Production builds no longer depend on a
-Query Table worktree, source archives or a vendored adapter. See
+codegen) and a local copy of the **v0.8.0** Go module with performance patches.
+Production builds do not depend on a Query Table worktree or source archives; see
+[`third_party/query-table-go/README.pharos.md`](../third_party/query-table-go/README.pharos.md)
+for the backend patch details. See
 [the integration guide](query-table-integration.md) for feature coverage,
 contracts and execution limits.
 
@@ -21,7 +23,8 @@ GOWORK=off go vet ./...
 ```
 
 `web/package-lock.json` pins registry archives and external dependency
-integrities. `go.mod`/`go.sum` pin the released Go adapter without a replacement.
+integrities. `go.mod`/`go.sum` pin the released Go adapter, and the root replacement
+selects the matching patched copy under `third_party/query-table-go`.
 The JS/CSS assets in `internal/archive/assets` are built from these installed
 packages. Codegen regenerates the Go schemas from the canonical JSON in
 `schemas/`, and copies those same documents into the frontend assets.
