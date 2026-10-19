@@ -1,9 +1,12 @@
 package archive
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync"
@@ -290,6 +293,33 @@ func settleServer(t testing.TB, server *Server) {
 	if !waitFor(time.Minute, func() { server.life.requests.Wait(); server.life.workers.Wait() }) {
 		t.Error("the server's background work did not stop within a minute of the test ending")
 	}
+}
+
+// apiCall sends one request to server, with token as its bearer token (none
+// when empty). A string or []byte body is sent as is; any other body is sent
+// as JSON.
+func apiCall(t testing.TB, server *Server, token, method, path string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	var payload []byte
+	switch body := body.(type) {
+	case nil:
+	case string:
+		payload = []byte(body)
+	case []byte:
+		payload = body
+	default:
+		var err error
+		if payload, err = json.Marshal(body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request := httptest.NewRequest(method, path, bytes.NewReader(payload))
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	return response
 }
 
 // toolTextOf is the text of an MCP tools/call response and whether it is an

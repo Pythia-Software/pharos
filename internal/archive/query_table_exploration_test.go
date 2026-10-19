@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -23,48 +24,142 @@ func queryExplorationCall(server *Server, token, method, path, body string) *htt
 	return w
 }
 
-func TestQueryExplorationHTTP(t *testing.T) {
+var queryDatasets = []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "parallelism"}
+
+// TestQueryDatasetsHTTP calls each query endpoint for every dataset, on one
+// catalog: capabilities and V3 budgets, typed rows, an item, metrics over
+// every numeric field, and a grouped V3 query. Then it checks the endpoints
+// that are not per dataset: retired population downloads, missing items,
+// and computed columns.
+func TestQueryDatasetsHTTP(t *testing.T) {
 	catalog, config := testCatalog(t)
 	seedToolCalls(t, catalog, 31)
+	ingestUsageFixture(t, catalog)
 	server := testServer(t, config, catalog)
-	call := func(method, path, body string) *httptest.ResponseRecorder {
-		return queryExplorationCall(server, config.APIToken, method, path, body)
+	call := func(method, path string, body any) *httptest.ResponseRecorder {
+		return apiCall(t, server, config.APIToken, method, path, body)
 	}
-	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "parallelism"} {
+	for _, dataset := range queryDatasets {
 		t.Run(dataset, func(t *testing.T) {
-			w := call("POST", "/api/query/"+dataset+"/rows-v2", `{"version":2,"profile":"qt-sqlite-v1","select":["id"],"limit":1}`)
-			if w.Code != 200 {
-				t.Fatal(w.Code, w.Body.String())
+			schema, err := sqliteQuerySchema(dataset)
+			if err != nil {
+				t.Fatal(err)
 			}
-			var result struct {
+			w := call(http.MethodGet, "/api/query/"+dataset+"/capabilities", nil)
+			var handshake struct {
+				QueryCapabilities qt.QueryCapabilitiesV3 `json:"queryCapabilities"`
+			}
+			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &handshake) != nil || !handshake.QueryCapabilities.GroupedRows || !handshake.QueryCapabilities.CalendarGrouping {
+				t.Fatal("capabilities", w.Code, w.Body.String())
+			}
+			limits := handshake.QueryCapabilities
+			groups := 10_000
+			if dataset == "usage" {
+				groups = 100_000
+			}
+			if limits.MaxRows != 10_000 || limits.MaxGroups != groups || limits.MaxPopulation != 10_000_000 {
+				t.Fatalf("incorrect advertised V3 budgets: %+v", limits)
+			}
+
+			w = call(http.MethodPost, "/api/query/"+dataset+"/rows-v2", `{"version":2,"profile":"qt-sqlite-v1","select":["id"],"limit":1}`)
+			var page struct {
 				Rows  []map[string]any `json:"rows"`
 				Total int              `json:"total"`
 			}
-			if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || len(result.Rows) > 1 {
-				t.Fatalf("incomplete: %s %v", w.Body.String(), err)
+			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.Rows) > 1 {
+				t.Fatal("rows", w.Code, w.Body.String())
 			}
-			if len(result.Rows) > 0 {
-				id := result.Rows[0]["id"]
-				item := call("GET", fmt.Sprintf("/api/query/%s/item?id=%v&find=absent", dataset, id), "")
+			if len(page.Rows) > 0 {
+				item := call(http.MethodGet, fmt.Sprintf("/api/query/%s/item?id=%s&find=absent", dataset, url.QueryEscape(fmt.Sprint(page.Rows[0]["id"]))), nil)
 				if item.Code != 200 || strings.Contains(item.Body.String(), `"row":null`) {
-					t.Fatal(item.Code, item.Body.String())
+					t.Fatal("item", item.Code, item.Body.String())
+				}
+			}
+
+			selection := []string{}
+			specs := []qt.AggSpec{{ID: "n", Expression: "COUNT()"}}
+			for name, field := range schema.Fields {
+				if field.Expr != "" {
+					selection = append(selection, name)
+				}
+				if field.Kind == qt.FieldNumber && field.Expr != "" && (field.AggregateOps == nil || len(field.AggregateOps) > 0) {
+					specs = append(specs, qt.AggSpec{ID: name, Expression: "SUM([" + name + "])"})
+				}
+			}
+			w = call(http.MethodPost, "/api/query/"+dataset+"/rows-v2", qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: selection, Limit: 10}})
+			if w.Code != 200 {
+				t.Fatal("typed rows", w.Code, w.Body.String())
+			}
+			for start := 0; start < len(specs); start += 20 {
+				if w = call(http.MethodPost, "/api/query/"+dataset+"/metrics", metricRequest(specs[start:min(start+20, len(specs))]...)); w.Code != 200 {
+					t.Fatal("metrics", w.Code, w.Body.String())
+				}
+			}
+
+			// Every dataset supports a non-item group identity and ordinary summaries.
+			w = call(http.MethodPost, "/api/query/"+dataset+"/query-v3", groupRequest(schema.IDField, qt.SummaryColumn{ID: "records", Op: "count"}))
+			var result qt.QueryResultV3
+			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Version != 3 || result.Schema.IDField != qt.GroupIdentityField {
+				t.Fatal("query-v3", w.Code, w.Body.String())
+			}
+			for _, row := range result.Rows {
+				if row[qt.GroupIdentityField] == nil || row["records"] != float64(1) {
+					t.Fatal(row)
 				}
 			}
 		})
 	}
-	// Complete-population downloads are gone for every dataset and body.
-	for _, body := range []string{`null`, `[]`, `{"where":[]} {}`, `{"where":[],"limit":1}`, `{"where":[{"field":"not_a_field","op":"=","value":"x"}]}`} {
-		if w := call("POST", "/api/query/tool_calls/population", body); w.Code != http.StatusGone || strings.Contains(w.Body.String(), `"rows"`) || !strings.Contains(w.Body.String(), "server query execution") {
-			t.Fatal(w.Code, w.Body.String())
-		}
+
+	// Complete-population downloads are gone, whatever the dataset or body.
+	if w := call(http.MethodPost, "/api/query/tool_calls/population", `{"where":[]}`); w.Code != http.StatusGone || strings.Contains(w.Body.String(), `"rows"`) || !strings.Contains(w.Body.String(), "server query execution") {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if w := apiCall(t, server, "", http.MethodPost, "/api/query/tool_calls/population", `{}`); w.Code != 401 {
+		t.Fatal(w.Code)
 	}
 	for _, path := range []string{"/api/query/tool_calls/item?id=missing", "/api/query/library/item?id=missing"} {
-		if w := call("GET", path, ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"row":null`) {
+		if w := call(http.MethodGet, path, nil); w.Code != 200 || !strings.Contains(w.Body.String(), `"row":null`) {
 			t.Fatal(w.Code, w.Body.String())
 		}
 	}
-	if w := queryExplorationCall(server, "", "POST", "/api/query/tool_calls/population", `{}`); w.Code != 401 {
-		t.Fatal(w.Code)
+
+	body := `{"column":{"id":"duration_s","label":"Seconds","expression":{"language":"qt-expr","version":1,"source":"[duration_ms]/1000"}},"expectedRevision":null}`
+	w := call(http.MethodPut, "/api/query-computed-columns?dataset=pharos_tool_calls", body)
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	var column qt.ComputedColumn
+	if err := json.Unmarshal(w.Body.Bytes(), &column); err != nil {
+		t.Fatal(err)
+	}
+	if w = call(http.MethodPut, "/api/query-computed-columns?dataset=pharos_tool_calls", body); w.Code != 409 {
+		t.Fatal("create conflict", w.Code)
+	}
+	w = call(http.MethodPost, "/api/query/tool_calls/rows-v2", `{"version":2,"profile":"qt-sqlite-v1","expectedRevisions":{"duration_s":"`+column.Revision+`"},"select":["id","@computed/duration_s"],"orderBy":[{"field":"@computed/duration_s","dir":"desc"}],"limit":5}`)
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	for _, formula := range []string{"SUM([duration_ms])", "[missing]", "[@computed/bad]", "[duration_ms]+"} {
+		invalid := qt.SaveComputedColumnRequest{Column: qt.ComputedColumn{ID: "bad", Label: "Bad", Expression: qt.ComputedExpression{Language: "qt-expr", Version: 1, Source: formula}}}
+		if w = call(http.MethodPut, "/api/query-computed-columns?dataset=pharos_tool_calls", invalid); w.Code != 400 {
+			t.Fatal("invalid definition persisted", formula, w.Code, w.Body.String())
+		}
+	}
+	if w = call(http.MethodGet, "/api/query/tool_calls/capabilities", nil); w.Code != 200 {
+		t.Fatal("catalogue could not load after rejected edit", w.Body.String())
+	}
+	for _, path := range []string{"/api/query/tool_calls/metrics", "/api/query/tool_calls/rows-v2", "/api/query/tool_calls"} {
+		if w = call(http.MethodPost, path, `{"version":2,"limit":1,"metrics":[]} {}`); w.Code != 400 {
+			t.Fatal("bad envelope accepted", path, w.Code)
+		}
+	}
+	r := httptest.NewRequest(http.MethodPut, "/api/query-computed-columns?dataset=pharos_tool_calls", strings.NewReader(body))
+	r.Header.Set("Authorization", "Bearer "+config.APIToken)
+	r.Header.Set("Origin", "https://other.example")
+	w = httptest.NewRecorder()
+	server.ServeHTTP(w, r)
+	if w.Code != 403 {
+		t.Fatal("cross-origin write accepted", w.Code)
 	}
 }
 

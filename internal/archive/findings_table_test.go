@@ -46,7 +46,7 @@ func TestFindingsQueryTableMatchesTheView(t *testing.T) {
 	server := testServer(t, config, fixture.catalog)
 	call := func(method, path string, body any, into any) {
 		t.Helper()
-		w := queryV2ReviewCall(t, server, config.APIToken, method, path, body)
+		w := apiCall(t, server, config.APIToken, method, path, body)
 		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), into) != nil {
 			t.Fatal(path, w.Code, w.Body.String())
 		}
@@ -143,7 +143,7 @@ func TestFindingsQueryTableEmpty(t *testing.T) {
 	server := testServer(t, config, catalog)
 	spawned := false
 	catalog.background = func(func(context.Context)) bool { spawned = true; return true }
-	w := queryV2ReviewCall(t, server, config.APIToken, http.MethodPost, "/api/query/findings/rows-v2",
+	w := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/findings/rows-v2",
 		qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "state"}, Limit: 10}})
 	var result struct {
 		Rows []map[string]any `json:"rows"`

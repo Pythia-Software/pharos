@@ -208,7 +208,7 @@ func TestUsageCarbonSumsMatchCarbonPageAndFollowSettings(t *testing.T) {
 				metrics := metricRequest(qt.AggSpec{ID: "wh", Op: "sum", Field: "energy_wh"}, qt.AggSpec{ID: "g", Op: "sum", Field: "co2e_g"},
 					qt.AggSpec{ID: "hourly", Op: "sum", Field: "co2e_g", GroupBy: []string{"hour"}})
 				metrics.Where = where
-				w := queryV2ReviewCall(t, server, server.Config().APIToken, http.MethodPost, "/api/query/usage/metrics", metrics)
+				w := apiCall(t, server, server.Config().APIToken, http.MethodPost, "/api/query/usage/metrics", metrics)
 				var v2 struct {
 					Metrics []struct {
 						ID      string `json:"id"`
@@ -231,7 +231,7 @@ func TestUsageCarbonSumsMatchCarbonPageAndFollowSettings(t *testing.T) {
 				// v3 grouped by tier: each tier matches the page's per-tier total.
 				q := groupRequest("carbon_tier", qt.SummaryColumn{ID: "wh", Op: "sum", Field: "energy_wh"}, qt.SummaryColumn{ID: "g", Op: "sum", Field: "co2e_g"})
 				q.Source.Where = where
-				w = queryV2ReviewCall(t, server, server.Config().APIToken, http.MethodPost, "/api/query/usage/query-v3", q)
+				w = apiCall(t, server, server.Config().APIToken, http.MethodPost, "/api/query/usage/query-v3", q)
 				var v3 qt.QueryResultV3
 				if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &v3) != nil {
 					t.Fatalf("v3 HTTP %d: %s", w.Code, w.Body.String())
@@ -257,7 +257,7 @@ func TestUsageCarbonSettingsInvalidateCachedRows(t *testing.T) {
 	total := func() float64 {
 		t.Helper()
 		q := groupRequest("provider", qt.SummaryColumn{ID: "g", Op: "sum", Field: "co2e_g"})
-		w := queryV2ReviewCall(t, server, server.Config().APIToken, http.MethodPost, "/api/query/usage/query-v3", q)
+		w := apiCall(t, server, server.Config().APIToken, http.MethodPost, "/api/query/usage/query-v3", q)
 		var result qt.QueryResultV3
 		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || len(result.Rows) != 1 {
 			t.Fatalf("HTTP %d: %s", w.Code, w.Body.String())
