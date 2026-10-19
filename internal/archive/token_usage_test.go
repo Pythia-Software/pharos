@@ -72,7 +72,7 @@ func TestAccountingEvidenceSurvivesParsingStorageAndAPI(t *testing.T) {
 }
 
 func TestTokenUsageFixtures(t *testing.T) {
-	raw, err := os.ReadFile("../../tests/token-usage-fixtures.json")
+	raw, err := os.ReadFile("../../testdata/token-usage-fixtures.json")
 	if err != nil {
 		t.Fatal(err)
 	}

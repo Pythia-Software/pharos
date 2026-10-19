@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// transcriptFindFixture is a case in tests/transcript-find-fixtures.json,
+// transcriptFindFixture is a case in testdata/transcript-find-fixtures.json,
 // whose expectations come from the reader's JavaScript; the transcript-ui
 // tests check the same file, so workspace find and the Show filter agree.
 type transcriptFindFixture struct {
@@ -42,7 +42,7 @@ type transcriptFindFixture struct {
 
 func transcriptFindFixtures(t *testing.T) []transcriptFindFixture {
 	t.Helper()
-	raw, err := os.ReadFile("../../tests/transcript-find-fixtures.json")
+	raw, err := os.ReadFile("../../testdata/transcript-find-fixtures.json")
 	if err != nil {
 		t.Fatal(err)
 	}
