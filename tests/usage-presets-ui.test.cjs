@@ -17,7 +17,7 @@ test('Usage presets follow the current query across clicks, edits, reloads and r
     provider: 'codex', model_family: 'gpt-6', effort: 'high', day: `2026-10-0${day}`, total_tokens: day * 100, cost_usd: day, output_tokens: day * 10,
     uncached_input_tokens: 10, cache_read_input_tokens: 90, input_tokens: 100 }));
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  const browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
     const page = await browser.newPage({ viewport: { width: 1920, height: 963 } });
     page.setDefaultTimeout(10000);

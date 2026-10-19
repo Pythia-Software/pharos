@@ -19,7 +19,7 @@ const modelNames = ['opus-5-5', 'gpt-6-sol', 'gemini-3.8-flash', 'sonnet-5-5', '
 test('Usage toggles between tokens and writing, remembers the choice, and charts follow table filters', async () => {
   const { decodeQuery, encodeQuery, EMPTY_QUERY } = await import(pathToFileURL(path.join(root, 'web/node_modules/@pythia-software/query-table-core/dist/index.js')).href);
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  const browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();

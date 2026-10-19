@@ -11,7 +11,7 @@ const html = source.slice(source.indexOf("r'''") + 4, source.lastIndexOf("'''"))
 
 test('annotation controls stay above a native modal and return to the page when it closes', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  const browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
     const page = await browser.newPage();
     await page.route('http://annotation-modal.test/**', route => {
@@ -49,7 +49,7 @@ test('annotation controls stay above a native modal and return to the page when 
 
 test('Library table scrolls with the page below the header, and conversation cards expose stacked Markdown and work facts', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  const browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
     const errors = [];
@@ -164,7 +164,7 @@ test('Library table scrolls with the page below the header, and conversation car
 
 test('Library filter chips and picker show static option labels while queries and URLs keep raw values', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  const browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
     const errors = [];
@@ -223,7 +223,7 @@ test('Library filter chips and picker show static option labels while queries an
 
 test('Library search asks for substring matches and explanations by default and shows why each row matched', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  const browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     const errors = [];

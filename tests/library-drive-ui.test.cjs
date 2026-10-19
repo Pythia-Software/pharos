@@ -139,7 +139,7 @@ describe('library, drive and captures UI', { skip }, () => {
     const requireLocal = createRequire(packageJSON);
     const { chromium } = requireLocal('playwright');
     const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-    browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+    browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   });
 
   after(async () => {

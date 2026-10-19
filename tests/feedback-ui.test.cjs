@@ -14,7 +14,7 @@ let browser;
 before(async () => {
   const chrome = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
   const engine = process.env.FEEDBACK_BROWSER === 'webkit' ? webkit : chromium;
-  browser = await engine.launch({ headless: true, ...(engine === chromium && fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  browser = await engine.launch({ headless: true, ...(engine === chromium ? { args: ['--disable-features=MacAppCodeSignClone'] } : {}), ...(engine === chromium && fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
 });
 after(async () => { await browser?.close(); });
 

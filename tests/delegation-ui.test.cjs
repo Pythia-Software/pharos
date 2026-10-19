@@ -21,6 +21,7 @@ let browser;
 before(async () => {
   browser = await chromium.launch({
     headless: true,
+    args: ["--disable-features=MacAppCodeSignClone"],
     executablePath:
       process.env.CHROME_PATH ||
       "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",

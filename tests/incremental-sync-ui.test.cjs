@@ -11,7 +11,7 @@ const html = source.slice(source.indexOf("r'''") + 4, source.lastIndexOf("'''"))
 
 test('The header stops spinning when work finishes after leaving Settings', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  const browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
     for (const kind of ['capture', 'index', 'sync']) {
       const page = await browser.newPage();
@@ -116,7 +116,7 @@ test('Home cards refresh only when a finished run indexed something', async () =
 
 test('Index changes runs the incremental run, shares busy state with a Stop in the drive panel, and exposes cadence, source selection, resume and exhaustive verification', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  const browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
     const errors = [];
@@ -237,7 +237,7 @@ test('Index changes runs the incremental run, shares busy state with a Stop in t
 
 test('Sources links to Sync, where coordinated updates and separate capture/index share progress and busy state', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  const browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
     const errors = [];
@@ -354,7 +354,7 @@ test('Sources links to Sync, where coordinated updates and separate capture/inde
 
 test('Sync prioritizes readable history and source counts, with persistent optional diagnostics', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  const browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
     const errors = [];
@@ -469,7 +469,7 @@ test('Sync prioritizes readable history and source counts, with persistent optio
 
 test('Problems turn the drive dot red and are explained in the drive panel, not the header', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  const browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const errors = [];

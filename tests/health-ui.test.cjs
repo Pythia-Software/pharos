@@ -12,7 +12,7 @@ const html = source.slice(source.indexOf("r'''") + 4, source.lastIndexOf("'''"))
 
 test('Health sections render independently as each request finishes', async () => {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  const browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  const browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
   try {
     const page = await browser.newPage();
     const errors = [];

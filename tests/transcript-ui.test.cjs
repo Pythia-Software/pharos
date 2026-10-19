@@ -15,7 +15,7 @@ const sharedReaderSearch = html.slice(html.indexOf('function setupConversationSe
 let browser;
 before(async () => {
   const chrome = process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  browser = await chromium.launch({ headless: true, ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
+  browser = await chromium.launch({ headless: true, args: ['--disable-features=MacAppCodeSignClone'], ...(fs.existsSync(chrome) ? { executablePath: chrome } : {}) });
 });
 after(async () => { await browser?.close(); });
 
