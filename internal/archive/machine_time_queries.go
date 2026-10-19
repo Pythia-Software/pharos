@@ -224,7 +224,7 @@ func (c *Catalog) machineTimeMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQL
 			}
 			buckets = append(buckets, bucket)
 		}
-		sortMachineTimeBuckets(buckets)
+		sortMetricBuckets(buckets)
 		metric.Buckets, metric.GroupCount, metric.ProcessedRows, metric.Coverage = buckets, int64(len(buckets)), population, "exact"
 	}
 	return result, true, nil
@@ -331,37 +331,6 @@ func machineTimeGroups(rows []map[string]any, fields []string) []*machineTimeGro
 		}
 	}
 	return groups
-}
-
-// sortMachineTimeBuckets orders buckets as the generic executor does: errors
-// last, then by value, largest first and nulls last, then by each key in
-// ascending binary order with nulls last.
-func sortMachineTimeBuckets(buckets []qt.SQLiteMetricV2Bucket) {
-	sort.SliceStable(buckets, func(i, j int) bool {
-		left, right := buckets[i], buckets[j]
-		if (left.Error != "") != (right.Error != "") {
-			return left.Error == ""
-		}
-		a, aok := left.Value.(float64)
-		b, bok := right.Value.(float64)
-		if aok != bok {
-			return aok
-		}
-		if aok && a != b {
-			return a > b
-		}
-		for k := range left.Keys {
-			x, xok := left.Keys[k].(string)
-			y, yok := right.Keys[k].(string)
-			if xok != yok {
-				return xok
-			}
-			if x != y {
-				return x < y
-			}
-		}
-		return false
-	})
 }
 
 func (c *Catalog) machineTimeAggregations(ctx context.Context, request querytable.AggregationRequest, schema querytable.Schema) (querytable.AggregationResult, bool, error) {

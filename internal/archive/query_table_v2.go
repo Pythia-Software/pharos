@@ -884,56 +884,20 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 		copy.Where = nil
 		rowRequest = &copy
 	}
-	tx, release, err := beginQueryV2(ctx, s.Catalog.reader())
-	if err != nil {
-		return queryV2ExecutionResult{}, err
-	}
-	defer release()
-	ids, err := queryComputedIDs(ctx, tx, schema.Name)
-	if err != nil {
-		return queryV2ExecutionResult{}, err
-	}
-	d.ComputedGroupable = map[string]bool{}
-	for _, id := range ids {
-		d.ComputedGroupable[id] = true
-	}
-	if !sqlBacked {
-		d.SourceSQL, err = stageQueryRows(ctx, tx, "pharos_query_rows", sourceRows, schema, sourceNames)
-		if err != nil {
-			return queryV2ExecutionResult{}, err
-		}
-	}
 	options := qt.PlanOptions{Identity: queryTableScope + ":" + schema.Name, Now: clock}
 	var result queryV2ExecutionResult
-	indexed := false
-	if sqlBacked && rowRequest != nil && metrics == nil {
-		population := 10_000_000
-		if len(populationLimit) > 0 {
-			population = min(population, populationLimit[0])
-		}
-		result.SQLiteV2ExecutionResult, indexed, err = s.indexedQueryRowsV2(ctx, tx, table, d, *rowRequest, options, bounds, population)
-	}
-	if sqlBacked && metrics != nil && rowRequest == nil {
-		result.SQLiteV2ExecutionResult, indexed, err = s.countOnlyMetricsV2(ctx, tx, table, d, *metrics, options)
-		// Machine Time's cubes read the tool projection. A caller's own
-		// population budget bounds raw calls, so leave its requests to them.
-		if !indexed && err == nil && dataset == "tool_calls" && len(populationLimit) == 0 {
-			result.SQLiteV2ExecutionResult, indexed, err = s.Catalog.machineTimeMetricsV2(ctx, tx, d, *metrics, options)
+	var err error
+	handled := false
+	if metrics != nil && rowRequest == nil && (sqlBacked || dataset == "usage") {
+		result.SQLiteV2ExecutionResult, handled, err = s.metricsWithoutStaging(ctx, dataset, table, d, *metrics, options, sourceRows, usageHours, len(populationLimit) > 0)
+		if err != nil {
+			return result, err
 		}
 	}
-	if indexed {
-		// The indexed window has already executed in this same transaction.
-	} else if dataset == "usage" && metrics != nil && rowRequest == nil {
-		result.SQLiteV2ExecutionResult, err = s.executeUsageMetricsV2(ctx, tx, d, *metrics, sourceRows, usageHours, options, sourceNames)
-	} else {
-		result.SQLiteV2ExecutionResult, err = d.ExecuteV2In(ctx, tx, rowRequest, metrics, options)
-	}
-	if err != nil {
-		return result, err
-	}
-	// Release the connection before host enrichment performs its own reads.
-	if err := release(); err != nil {
-		return result, err
+	if !handled {
+		if err = s.executeStagedQueryV2(ctx, dataset, table, sqlBacked, d, rowRequest, metrics, options, bounds, sourceRows, usageHours, sourceNames, &result, populationLimit...); err != nil {
+			return result, err
+		}
 	}
 	if find != nil {
 		summary := find.summary()
@@ -960,15 +924,93 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 	return result, err
 }
 
-// Usage keeps daily row filters and selects hourly populations per metric,
-// including formulas that reach hour through canonical computed definitions.
-func (s *Server) executeUsageMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2Dataset, q qt.MetricQuery, daily, hours []map[string]any, o qt.PlanOptions, required ...[]string) (qt.SQLiteV2ExecutionResult, error) {
-	o.SourceSQL = d.SourceSQL
-	o.ComputedGroupable = d.ComputedGroupable
-	o.ExpectedRevisions = q.ExpectedRevisions
-	o.Resolver = qt.SQLiteComputedDefinitionResolver{Tx: tx, Scope: d.Scope, Dataset: d.Dataset}
-	// Granularity comes from the metric's inputs, not the daily row WHERE or
-	// page ordering. An hour predicate selects days for daily summaries.
+// metricsWithoutStaging answers metrics that need no temporary tables in a
+// plain read transaction: bare counts, Machine Time's cubes and native counts
+// and sums over a SQL dataset, and native Usage metrics over its rows in
+// memory. Leasing memory-backed temporary storage resets the connection's
+// schema on the way in and out, a fixed cost of several milliseconds that
+// these requests need not pay. It reports false for any other request.
+func (s *Server) metricsWithoutStaging(ctx context.Context, dataset string, table sqlDataset, d qt.SQLiteV2Dataset, q qt.MetricQuery, o qt.PlanOptions, daily, hours []map[string]any, budgeted bool) (qt.SQLiteV2ExecutionResult, bool, error) {
+	tx, err := s.Catalog.reader().BeginTx(ctx, nil)
+	if err != nil {
+		return qt.SQLiteV2ExecutionResult{}, true, err
+	}
+	defer tx.Rollback()
+	ids, err := queryComputedIDs(ctx, tx, d.Schema.Name)
+	if err != nil {
+		return qt.SQLiteV2ExecutionResult{}, true, err
+	}
+	d.ComputedGroupable = map[string]bool{}
+	for _, id := range ids {
+		d.ComputedGroupable[id] = true
+	}
+	if dataset == "usage" {
+		return s.usageMetricsInMemory(ctx, tx, d, q, o, daily, hours)
+	}
+	result, handled, err := s.countOnlyMetricsV2(ctx, tx, table, d, q, o)
+	// Machine Time's cubes read the tool projection. A caller's own population
+	// budget bounds raw calls, so leave its requests to them.
+	if !handled && err == nil && dataset == "tool_calls" && !budgeted {
+		result, handled, err = s.Catalog.machineTimeMetricsV2(ctx, tx, d, q, o)
+	}
+	if !handled && err == nil {
+		result, handled, err = s.Catalog.nativeMetricsV2(ctx, tx, d, q, o, &table)
+	}
+	return result, handled, err
+}
+
+// executeStagedQueryV2 runs rows, and metrics no accelerator answered, in a
+// transaction leasing memory-backed temporary storage for the adapter's
+// staging, and releases it before the caller enriches the rows.
+func (s *Server) executeStagedQueryV2(ctx context.Context, dataset string, table sqlDataset, sqlBacked bool, d qt.SQLiteV2Dataset, rowRequest *qt.ServerQueryV2, metrics *qt.MetricQuery, options qt.PlanOptions, bounds map[string][2]string, sourceRows, usageHours []map[string]any, sourceNames []string, out *queryV2ExecutionResult, populationLimit ...int) error {
+	tx, release, err := beginQueryV2(ctx, s.Catalog.reader())
+	if err != nil {
+		return err
+	}
+	defer release()
+	ids, err := queryComputedIDs(ctx, tx, d.Schema.Name)
+	if err != nil {
+		return err
+	}
+	d.ComputedGroupable = map[string]bool{}
+	for _, id := range ids {
+		d.ComputedGroupable[id] = true
+	}
+	if !sqlBacked {
+		d.SourceSQL, err = stageQueryRows(ctx, tx, "pharos_query_rows", sourceRows, d.Schema, sourceNames)
+		if err != nil {
+			return err
+		}
+	}
+	indexed := false
+	if sqlBacked && rowRequest != nil && metrics == nil {
+		population := 10_000_000
+		if len(populationLimit) > 0 {
+			population = min(population, populationLimit[0])
+		}
+		out.SQLiteV2ExecutionResult, indexed, err = s.indexedQueryRowsV2(ctx, tx, table, d, *rowRequest, options, bounds, population)
+	}
+	if indexed {
+		// The indexed window has already executed in this same transaction.
+	} else if dataset == "usage" && metrics != nil && rowRequest == nil {
+		out.SQLiteV2ExecutionResult, err = s.executeUsageMetricsV2(ctx, tx, d, *metrics, sourceRows, usageHours, options, sourceNames)
+	} else if metrics != nil && rowRequest == nil && !sqlBacked {
+		// metricsWithoutStaging tried the native path over SQL datasets.
+		out.SQLiteV2ExecutionResult, err = s.Catalog.executeMetricsV2(ctx, tx, d, *metrics, options)
+	} else {
+		out.SQLiteV2ExecutionResult, err = d.ExecuteV2In(ctx, tx, rowRequest, metrics, options)
+	}
+	if err != nil {
+		return err
+	}
+	// Release the connection before host enrichment performs its own reads.
+	return release()
+}
+
+// usageHourMetrics reports which of q's metrics read hourly rows. Granularity
+// comes from a metric's inputs, not the daily row WHERE or page ordering; an
+// hour predicate selects days for daily summaries.
+func usageHourMetrics(ctx context.Context, d qt.SQLiteV2Dataset, q qt.MetricQuery, o qt.PlanOptions) ([]bool, bool, error) {
 	inputs := q
 	inputs.Where, inputs.OrderBy = nil, nil
 	inputs.Metrics = slices.Clone(q.Metrics)
@@ -977,7 +1019,7 @@ func (s *Server) executeUsageMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQL
 	}
 	dependencies, err := metricDependencies(ctx, inputs, d.Schema, o)
 	if err != nil {
-		return qt.SQLiteV2ExecutionResult{}, err
+		return nil, false, err
 	}
 	usesHour := make([]bool, len(q.Metrics))
 	needsHours := false
@@ -985,9 +1027,103 @@ func (s *Server) executeUsageMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQL
 		usesHour[i] = slices.Contains(names, "hour")
 		needsHours = needsHours || usesHour[i]
 	}
+	return usesHour, needsHours, nil
+}
+
+// usageDaysOf is the daily rows holding any of hours.
+func usageDaysOf(daily, hours []map[string]any) []map[string]any {
+	ids := map[string]bool{}
+	for _, row := range hours {
+		ids[usageDailyID(row)] = true
+	}
+	kept := []map[string]any{}
+	for _, row := range daily {
+		if ids[firstString(row["id"])] {
+			kept = append(kept, row)
+		}
+	}
+	return kept
+}
+
+// usageMetricsInMemory answers Usage metrics natively from its rows in
+// memory, without copying them into SQLite, when executeUsageMetricsV2 would
+// leave the adapter no row filter to apply: hour metrics read the hourly rows
+// hourlyUsageForAggregation selected, and daily metrics need an empty filter,
+// or one on hours, which selects their days. It splits the request as
+// executeUsageMetricsV2 does and reports false otherwise, shown-row metrics
+// included.
+func (s *Server) usageMetricsInMemory(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2Dataset, q qt.MetricQuery, o qt.PlanOptions, daily, hours []map[string]any) (qt.SQLiteV2ExecutionResult, bool, error) {
+	if !nativeMetrics {
+		return qt.SQLiteV2ExecutionResult{}, false, nil
+	}
+	if len(daily) > queryTablePopulation {
+		// As the staged path refuses to copy them.
+		return qt.SQLiteV2ExecutionResult{}, true, fmt.Errorf("source population exceeds %d rows", queryTablePopulation)
+	}
+	o.SourceSQL = (sqlDataset{}).v2Source(d.Schema)
+	o.ComputedGroupable = d.ComputedGroupable
+	o.ExpectedRevisions = q.ExpectedRevisions
+	o.Resolver = qt.SQLiteComputedDefinitionResolver{Tx: tx, Scope: d.Scope, Dataset: d.Dataset}
+	usesHour, needsHours, err := usageHourMetrics(ctx, d, q, o)
+	if err != nil {
+		return qt.SQLiteV2ExecutionResult{}, true, err
+	}
 	hasHourFilter := slices.Contains(whereFields(q.Where), "hour")
 	if !needsHours && !hasHourFilter {
-		return d.ExecuteV2In(ctx, tx, nil, &q, o)
+		return nativeRowMetricsV2(ctx, tx, d, q, o, daily)
+	}
+	dailyRows, dailyRequest, hourRequest := daily, q, q
+	dailyRequest.Metrics, hourRequest.Metrics, hourRequest.Where = nil, nil, nil
+	if hasHourFilter {
+		dailyRows, dailyRequest.Where = usageDaysOf(daily, hours), nil
+	}
+	for i, spec := range q.Metrics {
+		switch {
+		case usesHour[i] && spec.Scope == "shownRows":
+			return qt.SQLiteV2ExecutionResult{}, false, nil
+		case usesHour[i]:
+			hourRequest.Metrics = append(hourRequest.Metrics, spec)
+		default:
+			dailyRequest.Metrics = append(dailyRequest.Metrics, spec)
+		}
+	}
+	byID := map[string]qt.SQLiteMetricV2{}
+	for _, part := range []struct {
+		q    qt.MetricQuery
+		rows []map[string]any
+	}{{dailyRequest, dailyRows}, {hourRequest, hours}} {
+		if len(part.q.Metrics) == 0 {
+			continue
+		}
+		result, handled, err := nativeRowMetricsV2(ctx, tx, d, part.q, o, part.rows)
+		if err != nil || !handled {
+			return qt.SQLiteV2ExecutionResult{}, err != nil, err
+		}
+		for _, m := range result.Metrics.Metrics {
+			byID[m.ID] = m
+		}
+	}
+	result := qt.SQLiteV2ExecutionResult{Metrics: &qt.SQLiteMetricsV2Result{Metrics: []qt.SQLiteMetricV2{}}}
+	for _, spec := range q.Metrics {
+		result.Metrics.Metrics = append(result.Metrics.Metrics, byID[spec.ID])
+	}
+	return result, true, nil
+}
+
+// Usage keeps daily row filters and selects hourly populations per metric,
+// including formulas that reach hour through canonical computed definitions.
+func (s *Server) executeUsageMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2Dataset, q qt.MetricQuery, daily, hours []map[string]any, o qt.PlanOptions, required ...[]string) (qt.SQLiteV2ExecutionResult, error) {
+	o.SourceSQL = d.SourceSQL
+	o.ComputedGroupable = d.ComputedGroupable
+	o.ExpectedRevisions = q.ExpectedRevisions
+	o.Resolver = qt.SQLiteComputedDefinitionResolver{Tx: tx, Scope: d.Scope, Dataset: d.Dataset}
+	usesHour, needsHours, err := usageHourMetrics(ctx, d, q, o)
+	if err != nil {
+		return qt.SQLiteV2ExecutionResult{}, err
+	}
+	hasHourFilter := slices.Contains(whereFields(q.Where), "hour")
+	if !needsHours && !hasHourFilter {
+		return s.Catalog.executeMetricsV2(ctx, tx, d, q, o)
 	}
 	hourSource, err := stageQueryRows(ctx, tx, "pharos_query_hours", hours, d.Schema, required...)
 	if err != nil {
@@ -995,17 +1131,7 @@ func (s *Server) executeUsageMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQL
 	}
 	dailyWhere := q.Where
 	if hasHourFilter {
-		ids := map[string]bool{}
-		for _, row := range hours {
-			ids[usageDailyID(row)] = true
-		}
-		kept := []map[string]any{}
-		for _, row := range daily {
-			if ids[firstString(row["id"])] {
-				kept = append(kept, row)
-			}
-		}
-		d.SourceSQL, err = stageQueryRows(ctx, tx, "pharos_query_selected_days", kept, d.Schema, required...)
+		d.SourceSQL, err = stageQueryRows(ctx, tx, "pharos_query_selected_days", usageDaysOf(daily, hours), d.Schema, required...)
 		if err != nil {
 			return qt.SQLiteV2ExecutionResult{}, err
 		}
@@ -1064,7 +1190,7 @@ func (s *Server) executeUsageMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQL
 		if i == 2 {
 			source.SourceSQL = shownHourSource
 		}
-		result, e := source.ExecuteV2In(ctx, tx, nil, &request, o)
+		result, e := s.Catalog.executeMetricsV2(ctx, tx, source, request, o)
 		if e != nil {
 			return qt.SQLiteV2ExecutionResult{}, e
 		}

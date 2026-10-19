@@ -5,10 +5,13 @@
 //
 //	go test -tags probe -run 'TestAggregationsRemovalProbe$' -v -timeout 60m ./internal/archive
 //
-// PHAROS_PROBE_CALLS sets the number of tool calls (default 300,000). It
-// prints one row per page surface: group counts, legacy and /metrics latency
-// (first call, then the median of five), the generic V2 executor without the
-// Machine Time accelerator, and whether every bucket matches.
+// PHAROS_PROBE_CALLS sets the number of tool calls (default 300,000), and
+// PHAROS_PROBE_ONLY keeps the surfaces whose names contain it. It prints one
+// row per page surface: group counts; for each route its first call and the
+// medians of nine more of wall and process CPU time, the two routes taking
+// turns; the generic V2 executor without the Machine Time accelerator; and
+// whether every bucket matches. On a loaded machine CPU time is the steadier
+// comparison.
 //
 // TestAggregationsRemovalProbeScaling times single /metrics requests on the
 // same data with few tool calls: Human Words' message mix with 1, 2 and 9
@@ -29,6 +32,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -57,11 +61,20 @@ func TestAggregationsRemovalProbe(t *testing.T) {
 	t.Logf("authorship in %v", time.Since(start))
 	server := testServer(t, config, catalog)
 
+	// The process's CPU time: on a loaded machine, wall time also measures
+	// waiting for a core.
+	cpu := func() time.Duration {
+		var usage syscall.Rusage
+		_ = syscall.Getrusage(syscall.RUSAGE_SELF, &usage)
+		return time.Duration(usage.Utime.Nano() + usage.Stime.Nano())
+	}
+	var spent time.Duration
 	post := func(path string, body any) (map[string]any, time.Duration, int) {
 		t.Helper()
-		started := time.Now()
+		started, before := time.Now(), cpu()
 		response := apiCall(t, server, config.APIToken, "POST", path, body)
 		elapsed := time.Since(started)
+		spent = cpu() - before
 		var decoded map[string]any
 		_ = json.Unmarshal(response.Body.Bytes(), &decoded)
 		if response.Code != 200 {
@@ -69,16 +82,33 @@ func TestAggregationsRemovalProbe(t *testing.T) {
 		}
 		return decoded, elapsed, response.Code
 	}
-	timed := func(path string, body any) (map[string]any, time.Duration, time.Duration) {
+	// Both routes run in turn, so that load on a shared machine falls on
+	// both alike: the first call of each, then the median of the next nine.
+	type timing struct {
+		body            map[string]any
+		cold, warm, cpu time.Duration
+	}
+	timed := func(paths []string, bodies []any) []timing {
 		t.Helper()
-		first, cold, _ := post(path, body)
-		samples := []time.Duration{}
-		for range 5 {
-			_, elapsed, _ := post(path, body)
-			samples = append(samples, elapsed)
+		out := make([]timing, len(paths))
+		samples, cpus := make([][]time.Duration, len(paths)), make([][]time.Duration, len(paths))
+		for round := range 10 {
+			for i := range paths {
+				body, elapsed, _ := post(paths[i], bodies[i])
+				if round == 0 {
+					out[i].body, out[i].cold = body, elapsed
+				} else {
+					samples[i] = append(samples[i], elapsed)
+					cpus[i] = append(cpus[i], spent)
+				}
+			}
 		}
-		slices.Sort(samples)
-		return first, cold, samples[len(samples)/2]
+		for i := range out {
+			slices.Sort(samples[i])
+			slices.Sort(cpus[i])
+			out[i].warm, out[i].cpu = samples[i][len(samples[i])/2], cpus[i][len(cpus[i])/2]
+		}
+		return out
 	}
 	type metric struct {
 		ID      string `json:"id"`
@@ -183,13 +213,21 @@ func TestAggregationsRemovalProbe(t *testing.T) {
 		{"Token chart hourly × model, 7 days", "usage", []map[string]any{{"field": "last_usage_at", "op": ">=", "value": now.AddDate(0, 0, -7).UTC().Format(time.RFC3339)}}, []map[string]any{sum("total_tokens", "hour", "model_family")}},
 		{"Token chart weekly × type", "usage", []map[string]any{}, types("week")},
 		{"Token chart weekly × repository", "usage", []map[string]any{}, []map[string]any{sum("total_tokens", "week", "repository_name")}},
+		{"Token chart weekly cost × provider", "usage", []map[string]any{}, []map[string]any{sum("cost_usd", "week", "provider")}},
+		{"Token chart hourly cost × provider", "usage", []map[string]any{}, []map[string]any{sum("cost_usd", "hour", "provider")}},
 		{"Token summary", "usage", []map[string]any{}, []map[string]any{sum("total_tokens"), sum("cost_usd"), sum("uncached_input_tokens"), sum("cache_read_input_tokens"), sum("output_tokens"), {"id": "agent_sessions", "op": "count_distinct", "field": "agent_session_id", "groupBy": []string{}}}},
 		{"MessageMix", "writing_messages", []map[string]any{}, mix},
 	}
-	report := []string{"| Surface | Groups | Legacy cold / warm | /metrics cold / warm | Generic V2 (no accelerator) | Values |", "|---|---|---|---|---|---|"}
+	report := []string{"| Surface | Groups | Legacy cold / warm / CPU | /metrics cold / warm / CPU | Warm ratio | CPU ratio | Generic V2 (no accelerator) | Values |", "|---|---|---|---|---|---|---|---|"}
 	for _, s := range surfaces {
-		legacyBody, legacyCold, legacyWarm := timed("/api/query/"+s.dataset+"/aggregations", map[string]any{"where": s.where, "aggregations": s.specs, "requireComplete": true})
-		currentBody, currentCold, currentWarm := timed("/api/query/"+s.dataset+"/metrics", map[string]any{"version": 2, "where": s.where, "orderBy": []any{}, "limit": 1, "offset": 0, "metrics": s.specs})
+		if only := os.Getenv("PHAROS_PROBE_ONLY"); only != "" && !strings.Contains(s.name, only) {
+			continue
+		}
+		timings := timed([]string{"/api/query/" + s.dataset + "/aggregations", "/api/query/" + s.dataset + "/metrics"}, []any{
+			map[string]any{"where": s.where, "aggregations": s.specs, "requireComplete": true},
+			map[string]any{"version": 2, "where": s.where, "orderBy": []any{}, "limit": 1, "offset": 0, "metrics": s.specs}})
+		legacyBody, legacyCold, legacyWarm, legacyCPU := timings[0].body, timings[0].cold, timings[0].warm, timings[0].cpu
+		currentBody, currentCold, currentWarm, currentCPU := timings[1].body, timings[1].cold, timings[1].warm, timings[1].cpu
 		legacy, legacyErr := read(legacyBody)
 		current, currentErr := read(currentBody)
 		verdict := "identical"
@@ -226,8 +264,10 @@ func TestAggregationsRemovalProbe(t *testing.T) {
 				}
 			}
 		}
-		line := fmt.Sprintf("| %s | %d / %d | %v / %v | %v / %v | %s | %s |", s.name, groups(legacy), groups(current),
-			legacyCold.Round(time.Millisecond), legacyWarm.Round(time.Millisecond), currentCold.Round(time.Millisecond), currentWarm.Round(time.Millisecond), generic, verdict)
+		round := func(d time.Duration) time.Duration { return d.Round(100 * time.Microsecond) }
+		line := fmt.Sprintf("| %s | %d / %d | %v / %v / %v | %v / %v / %v | %.2f× | %.2f× | %s | %s |", s.name, groups(legacy), groups(current),
+			round(legacyCold), round(legacyWarm), round(legacyCPU), round(currentCold), round(currentWarm), round(currentCPU),
+			float64(currentWarm)/float64(legacyWarm), float64(currentCPU)/float64(max(legacyCPU, time.Microsecond)), generic, verdict)
 		report = append(report, line)
 		t.Log(line)
 	}
