@@ -52,8 +52,10 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     const route = () => { setActive(isHome()); setLibrary(new URLSearchParams(location.search).get("cards") === "library"); setDraftReview(isDraftReview()); };
     const templates = () => { setPool(suggestionPool(new Date(), cardTemplates())); setGeneration(value => value + 1); };
     window.addEventListener("pharos:card-templates", templates);
-    const visibility = () => setHidden(document.hidden);
-    const refresh = () => { clearPreviewCache(); setGeneration(value => value + 1); };
+    // A hidden tab notes new data and reruns its cards once it is shown.
+    let stale = false;
+    const refresh = () => { if (document.hidden) { stale = true; return; } stale = false; clearPreviewCache(); setGeneration(value => value + 1); };
+    const visibility = () => { setHidden(document.hidden); if (!document.hidden && stale) refresh(); };
     window.addEventListener("pharos:bookmarks", bookmarks); window.addEventListener("pharos:route", route);
     window.addEventListener("pharos:view", route);
     window.addEventListener("pharos:data-refresh", refresh); document.addEventListener("visibilitychange", visibility);
