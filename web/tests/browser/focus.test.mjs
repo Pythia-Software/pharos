@@ -111,9 +111,7 @@ test("the annotation toolbar and composer stay inside the viewport after a resiz
   for (const surface of [".feedback-toolbar", ".feedback-composer"]) assert.equal(await onScreen(page.locator(surface)), true, `${surface} off screen at 580×460`);
 });
 
-test("the expanded feedback panel stays inside a 360px viewport", {
-  ...limits, todo: "With the feedback panel open at 360px wide, the toolbar is min(440px, 100vw - 16px) wide but sits 22px from the right, so it runs 6px off the left edge (ui.py .feedback-toolbar.expanded).",
-}, async t => {
+test("the expanded feedback panel stays inside a 360px viewport", limits, async t => {
   const page = await annotate(t);
   await page.locator("#feedbackNote").fill("Annotation");
   // Adding an annotation expands the toolbar into the feedback panel.

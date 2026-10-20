@@ -22,7 +22,7 @@ tests.
 
 ## Layout and focus bugs
 
-These were found by the structural browser suite. Each one runs today as a
+These were found by the structural browser suite. An open one runs as a
 `todo` (the `KNOWN` list in `web/tests/browser/structure.test.mjs`, or a `todo`
 in `focus.test.mjs`) so the suite stays green.
 
@@ -37,15 +37,6 @@ Before and after screenshots are welcome in the PR; set
 
 | Handoff | Pages and widths |
 |---|---|
-| [layout-screen-reader-labels.md](layout-screen-reader-labels.md) | Usage, Human Words, TL1 runs at phone widths; Capture & index at every width |
-| [layout-row-action-buttons.md](layout-row-action-buttons.md) | Tools, Skills, MCP and Human Words tables, every width |
-| [layout-header-navigator-320.md](layout-header-navigator-320.md) | Header at 320 px with the navigation bar open |
-| [layout-usage-summary-320.md](layout-usage-summary-320.md) | Header Usage summary popover at 320 px |
-| [layout-findings-320.md](layout-findings-320.md) | Findings and finding detail at 320 px |
-| [layout-carbon-switch-320.md](layout-carbon-switch-320.md) | Carbon Impact at 320 px |
-| [layout-transcript-offsets.md](layout-transcript-offsets.md) | Transcripts at 390 and 320 px |
-| [layout-human-words-profile-cover.md](layout-human-words-profile-cover.md) | Dashboard Catalog, every width |
-| [layout-feedback-toolbar-360.md](layout-feedback-toolbar-360.md) | Feedback panel at 360 px |
 | [focus-findings-dialog-webkit.md](focus-findings-dialog-webkit.md) | Findings prompt dialog in WebKit, which is also what the app ships in |
 
 ## Tests, tooling and runtime

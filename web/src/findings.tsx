@@ -554,7 +554,8 @@ function WeeklyChart({ chart, unit, copiedLabel }: { chart: NonNullable<Detail["
   useLayoutEffect(() => {
     if (!wrap.current) return;
     setWidth(wrap.current.clientWidth || 680);
-    const observer = new ResizeObserver(entries => setWidth(Math.max(320, entries[0].contentRect.width)));
+    // A hidden container reports zero; keep the last width until it shows again.
+    const observer = new ResizeObserver(entries => { const next = entries[0].contentRect.width; if (next > 0) setWidth(next); });
     observer.observe(wrap.current);
     return () => observer.disconnect();
   }, []);

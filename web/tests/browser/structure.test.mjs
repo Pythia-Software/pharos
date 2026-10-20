@@ -55,26 +55,7 @@ const WIDTHS = [{ width: 1440, height: 900 }, { width: 390, height: 844 }, { wid
 // Layout bugs found by this sweep and not fixed yet. A case whose only
 // problems match here is marked todo with the bug, so the suite stays honest;
 // any other problem still fails it.
-const KNOWN = [
-  { match: /content escapes span\.human-study-cover\.is-profile .*: span\.human-study-rows .* past the bottom/,
-    bug: "The Human Words size-profile cover's six rows are taller than the cover and run about 4px past its bottom (web/src/human-study.css .human-study-rows)." },
-  { match: /: span\.findings-in-cart "/,
-    bug: "At 320px a finding's \"In prompt for …\" chip and its Remove from prompt button stay on one line and run past the card and main (web/src/findings.css .findings-in-cart does not wrap)." },
-  { match: /: svg "0%[^"]*" (spans|past the right)/,
-    bug: "At 320px the finding detail chart keeps a 320px minimum width (web/src/findings.tsx WeeklyChart, Math.max(320, …)) and runs past its panel and main." },
-  { match: /a fixed surface leaves .*: section#usageSummary\.usage-summary /,
-    bug: "At 320px the header's Usage summary popover is about 366px wide and leaves the viewport; its All time column is cut off (ui.py .usage-summary)." },
-  { match: /content escapes details\.turn .*: text "\+\d+m\d+s" past the left/,
-    bug: "At phone widths a transcript event offset longer than the gutter (\"+1m03s\") is cut off past the turn's left edge (ui.py .timeline-time)." },
-  { match: /so it can scroll instead of main, reaching past it: (span\.qt-sr-only|span\.sr-only|caption\.sync-sr-only)( \(|$)/,
-    bug: "Screen-reader-only labels (Query Table's .qt-sr-only and .sr-only, sync.js's .sync-sr-only) are absolutely positioned with no positioned ancestor inside main, so main does not clip them: the document grows taller than the window, and a scrollIntoView then scrolls the whole app, header included." },
-  { match: /a control is cut off .*: button\.mcp-detail-button "[^"]*" in td\.qt-cell\.qt-trailing-cell /,
-    bug: "The trailing action buttons in Query Table rows (Details, Tool call, Evidence, Messages on Tools, MCP, Machine time and Human Words messages) are wider than their column and are cut off (web/src/index.tsx trailing cells)." },
-  { match: /a control is cut off .*: button#navBack\.header-icon in header /,
-    bug: "At 320px with the navigation bar open, the header's rows overflow its clipped box and it scrolls sideways: the Back button, the brand and the Home tab are cut off (ui.py header .navigator)." },
-  { match: /a control is cut off .*: button "High" in div\.carbon-segmented /,
-    bug: "At 320px a Carbon Impact Low/Central/High switch is wider than its clipped box and High is cut off (carbon.js .carbon-segmented)." },
-];
+const KNOWN = [];
 
 describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY || 3) }, () => {
   for (const route of ROUTES) {
