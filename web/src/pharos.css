@@ -64,6 +64,21 @@
 .pharos-query-page .qt-qb { margin-bottom: 0; border-radius: 6px 6px 0 0; box-shadow: 0 4px 18px #34230d0b; }
 .pharos-query-page .qt-table-wrap { max-height: none !important; overflow: visible !important; border-radius: 0; box-shadow: 0 4px 18px #34230d0b; }
 .pharos-query-page .qt-table { border-radius: 0; }
+.qt-empty.pharos-table-loading::before {
+  width: 18px;
+  height: 18px;
+  box-sizing: border-box;
+  border: 2px solid color-mix(in srgb, var(--accent) 20%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  background: none;
+  opacity: 1;
+  -webkit-mask: none;
+  mask: none;
+  animation: pharos-table-spin .8s linear infinite;
+}
+@keyframes pharos-table-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .qt-empty.pharos-table-loading::before { animation: none; } }
 .pharos-query-page .qt-table thead { z-index: 1; }
 /* Query Table fixes its trailing action column at 40px on the column's <col>, and a fixed table layout ignores widths on its cells. Size it here, wide enough for one action button; a surface with more sets --qt-trailing-width. */
 .qt-table col:not([data-qt-column]) { width: var(--qt-trailing-width, 86px) !important; }

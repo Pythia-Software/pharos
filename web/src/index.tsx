@@ -596,7 +596,8 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
       onNavigate={navigateLink}
       total={api.total}
       loading={api.loading}
-      emptyMessage={api.error ? failedMessage : find ? "No work matches this search and these filters." : emptyMessages[dataset]}
+      emptyMessage={api.loading ? "Loading results…" : api.error ? failedMessage : find ? "No work matches this search and these filters." : emptyMessages[dataset]}
+      classNames={{ empty: api.loading ? "pharos-table-loading" : undefined }}
       {...(api.query.grouping ? { trailing: (row: Row) => {
         const complete = api.query.grouping!.keys.every(key => Object.hasOwn(row, key));
         const records = complete ? groupSourceQuery(api.query, row, sourceSchema) : null;

@@ -217,7 +217,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     if (!options.window) chart.splice(0, chart.length, ...observed.slice(-90).map(key => ({ key, date: new Date(`${key}T12:00:00`), values: {} })));
     if (observed.length > 90 && !options.window) preview.note = [preview.note, "Chart shows the last 90 observed day buckets"].filter(Boolean).join(" · ");
     preview.buckets = chart;
-    preview.series = foldSeries(entries, new Map(chart.map(bucket => [bucket.key, bucket])), name => name || "Unspecified", undefined, [], clause.display?.maxGroups ?? 4, recipe?.scope ?? clause.groupBy.at(-1) ?? "query");
+    preview.series = foldSeries(entries, new Map(chart.map(bucket => [bucket.key, bucket])), name => name || "Unspecified", undefined, [], Math.max(clause.display?.maxGroups ?? 4, clause.groupBy.at(-1) === "level_band" ? 4 : 0), recipe?.scope ?? clause.groupBy.at(-1) ?? "query");
     if (clause.display?.showOther === false) preview.series = preview.series.filter(item => !item.hiddenCount);
     if (clause.groupBy.length === 1 && preview.series[0]) preview.series[0].color = tone;
   }
@@ -230,6 +230,13 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   // distributions, errors, or the returned subset of a ranked population.
   if ((options.cover ?? recipe?.cover)?.showHeadline !== false && ready && additive && !limited && !preview.groupSummary && numeric.length === values.length && !result.buckets.some(bucket => bucket.error || bucket.yError) && Number.isFinite(total)) {
     preview.headlineMetric = { value: clause.display?.format ? formatMetricOutput(total, clause.display.format).text : formatPreviewValue(total, unit), unit: unit && !["USD", "ms"].includes(unit) ? unit : "", ...(unit === "USD" ? { label: job.dataset === "findings" ? "likely a month" : "API equivalent" } : {}) };
+  }
+  // Hours by concurrency band summarize as the share of active hours with more than one agent,
+  // since the plain total (hours with any agent active) says nothing about parallelism.
+  const band = clause.groupBy.indexOf("level_band");
+  if (preview.headlineMetric && job.dataset === "parallelism" && clause.field === "elapsed_hours" && band >= 0 && total > 0) {
+    const multiple = numeric.reduce((sum, bucket) => sum + (String(bucket.keys[band]) === "1" ? 0 : Number(bucket.value)), 0);
+    preview.headlineMetric = { value: (multiple / total).toLocaleString(undefined, { style: "percent", maximumFractionDigits: 0 }), unit: "", label: "of active hours had 2+ agents" };
   }
   preview.action = recipe?.action ?? recipe?.exploration?.action;
   return preview;
