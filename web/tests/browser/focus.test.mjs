@@ -3,7 +3,7 @@
 // stay below the header; the annotation toolbar stays on screen.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { limits, open } from "./harness.mjs";
+import { open, skip } from "./harness.mjs";
 import { workID } from "./fixtures.mjs";
 
 // Focus is in `surface`, or with the browser itself (a native modal dialog
@@ -30,7 +30,7 @@ async function holdsFocus(page, surface, opener) {
   await page.waitForFunction(element => document.activeElement === element, await opener.elementHandle());
 }
 
-test("quick search takes focus from the header button and from the keyboard shortcut, and returns it", limits, async t => {
+test("quick search takes focus from the header button and from the keyboard shortcut, and returns it", { skip }, async t => {
   const { page } = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row" });
   const dialog = page.locator("#searchDialog"), button = page.locator("#searchToggle");
   await press(button);
@@ -40,14 +40,14 @@ test("quick search takes focus from the header button and from the keyboard shor
   await holdsFocus(page, dialog, tab);
 });
 
-test("the card template editor takes focus, keeps it and returns it on Escape", limits, async t => {
+test("the card template editor takes focus, keeps it and returns it on Escape", { skip }, async t => {
   const { page } = await open(t, { url: "/home?cards=library", ready: ".card-library-entry .query-card" });
   const edit = page.locator(".card-library-entry button[aria-label^='Edit card']").first();
   await press(edit);
   await holdsFocus(page, page.locator("dialog.card-template-editor"), edit);
 });
 
-test("the findings prompt review takes focus, keeps it and returns it on Escape", limits, async t => {
+test("the findings prompt review takes focus, keeps it and returns it on Escape", { skip }, async t => {
   const { page, settled } = await open(t, { url: "/findings", ready: ".findings-card" });
   const review = page.locator(".findings-cart button.primary").first();
   await press(review);
@@ -57,7 +57,7 @@ test("the findings prompt review takes focus, keeps it and returns it on Escape"
   await holdsFocus(page, dialog, review);
 });
 
-test("the delegation session sheet on a phone takes focus, keeps it and returns it on Escape", limits, async t => {
+test("the delegation session sheet on a phone takes focus, keeps it and returns it on Escape", { skip }, async t => {
   const { page } = await open(t, { url: `/work/${workID}/conversation/conv-child`, viewport: { width: 390, height: 844 }, ready: ".conversation-panel .turn" });
   const show = page.locator('button[aria-label="Show workspace sessions"]');
   await press(show);
@@ -66,7 +66,7 @@ test("the delegation session sheet on a phone takes focus, keeps it and returns 
   await holdsFocus(page, sheet, show);
 });
 
-test("transcript rails start below the header, with the navigation bar open, after main scrolls", limits, async t => {
+test("transcript rails start below the header, with the navigation bar open, after main scrolls", { skip }, async t => {
   const { page, settled } = await open(t, { url: `/work/${workID}/conversation/conv-root`, ready: ".conversation-panel .turn", preferences: { "pharos-show-nav-button": true } });
   await page.locator("#navigatorToggle").click();
   await page.locator("#navigator.open").waitFor();
@@ -102,14 +102,14 @@ async function annotate(t) {
   return app.page;
 }
 
-test("the annotation toolbar and composer stay inside the viewport after a resize", limits, async t => {
+test("the annotation toolbar and composer stay inside the viewport after a resize", { skip }, async t => {
   const page = await annotate(t);
   await page.setViewportSize({ width: 580, height: 460 });
   for (const surface of [".feedback-toolbar", ".feedback-composer"]) assert.equal(await onScreen(page.locator(surface)), true, `${surface} off screen at 580×460`);
 });
 
 test("the expanded feedback panel stays inside a 360px viewport", {
-  ...limits, todo: "With the feedback panel open at 360px wide, the toolbar is min(440px, 100vw - 16px) wide but sits 22px from the right, so it runs 6px off the left edge (ui.py .feedback-toolbar.expanded).",
+  skip, todo: "With the feedback panel open at 360px wide, the toolbar is min(440px, 100vw - 16px) wide but sits 22px from the right, so it runs 6px off the left edge (ui.py .feedback-toolbar.expanded).",
 }, async t => {
   const page = await annotate(t);
   await page.locator("#feedbackNote").fill("Annotation");

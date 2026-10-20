@@ -52,7 +52,6 @@ Before and after screenshots are welcome in the PR; set
 | Handoff | Problem |
 |---|---|
 | [go-test-parallelism.md](go-test-parallelism.md) | The Go suite runs one test at a time; parallelism is the next large speedup |
-| [node-runtime-upgrade.md](node-runtime-upgrade.md) | Node 20 is past end of life, and the repository does not pin a version |
 | [macos-test-harnesses.md](macos-test-harnesses.md) | The manual macOS harnesses: one is broken, one may be stale, one has no script, and one wipes `web/node_modules` |
 | [retire-python-importer-remnants.md](retire-python-importer-remnants.md) | A superseded Python migration script and docs that still describe a Python importer |
 

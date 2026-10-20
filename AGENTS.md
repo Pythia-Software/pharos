@@ -10,6 +10,9 @@ bundled into the checked-in `internal/archive/assets/query-tables.{js,css}`. See
 
 ## Running tests
 
+The JS tooling needs Node 24 LTS, pinned in `.nvmrc` (`nvm use`) and in
+`engines` in `web/package.json`; `web/tests/run.mjs` refuses an older Node.
+
 Run the narrowest tests that cover your change while you work, and the fast
 Go tier on every change. Before opening a PR, run `go test ./...`,
 `npm --prefix web run check` and `npm --prefix web run test:full`.

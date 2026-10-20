@@ -61,7 +61,7 @@ To build Pharos, you need macOS 14 or later and:
 
 - [Go](https://go.dev/dl/). `go.mod` pins Go 1.26, and an older `go` downloads it automatically.
 - Xcode Command Line Tools (`xcode-select --install`) for the Swift wrapper
-- Node.js and npm (optional; without them the checked-in frontend bundle is used)
+- [Node.js](https://nodejs.org/) 24 LTS (pinned in `.nvmrc`) and npm (optional; without them the checked-in frontend bundle is used)
 
 ### 1. Build a library
 
