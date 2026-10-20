@@ -55,10 +55,10 @@ const parallelNote = "Counts workspaces or agents (your Parallelism counting set
 const parallel = (recipe: Omit<QueryRecipe, "category" | "idea" | "dataset" | "field" | "unit"> & Partial<QueryRecipe>): QueryRecipe => ({ category: "machines", idea: "rhythm-03", dataset: "parallelism", field: "started_at", unit: "hours", note: parallelNote, ...recipe });
 
 const parallelRecipes: QueryRecipe[] = [
-  parallel({ id: "parallel-days", title: "Parallel hours by day", description: "Hours with one, two, or three or more agents active, for each day of the last {days} days.", days: [7, 30], action: "See each day's timeline",
-    note: `${parallelNote} Each hour of wall time is counted once, at the number of agents active then.`,
+  parallel({ id: "parallel-days", title: "Parallel hours by day", description: "Hours with one, two, three, or four or more agents active, for each day of the last {days} days.", days: [7, 30], action: "See each day's timeline",
+    note: `${parallelNote} Each hour of wall time is counted once, at the number of agents active then. The headline is the share of those hours with two or more agents active.`,
     measures: [{ ...daily("pl_daily", "sum", "elapsed_hours", "Active hours by agents at once"), groupBy: ["day", "level_band"] }],
-    cover: { mode: "source", metricId: "pl_daily", kind: "auto", maxGroups: 3, showOther: false, showLegend: true, height: 228 } }),
+    cover: { mode: "source", metricId: "pl_daily", kind: "auto", maxGroups: 4, showOther: false, showLegend: true, height: 228 } }),
   parallel({ id: "parallel-trend", title: "Agents at once", description: "Average number of agents running together while any is active, over each trailing seven days.", days: [30], unit: "agents", action: "Open the parallelism view",
     note: `${parallelNote} Each point weights concurrency by time: agent-hours ÷ hours with any agent active.`,
     measures: [daily("pl_daily_concurrency", "sum", "unit_ms", "Agents at once while active", { expression: "SUM([unit_ms])/NULLIF(SUM([elapsed_ms]),0)" })], cover: trendCover("pl_daily_concurrency"),
