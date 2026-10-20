@@ -10,18 +10,23 @@
 // file. TestUsagePerformanceServer serves the snapshot at
 // PHAROS_USAGE_SERVER (a loopback address) until it is interrupted;
 // PHAROS_USAGE_ASSETS serves a checkout's assets and PHAROS_USAGE_TIMING a
-// concurrency prototype file.
+// concurrency prototype file. The Machine Time probe and the server run as of
+// the day the snapshot's tool cube was built.
 
 package archive
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -46,6 +51,23 @@ func usagePerformanceCatalog(t *testing.T) *Catalog {
 	c := &Catalog{Path: path, DB: db}
 	t.Cleanup(func() { c.closeQuery(); db.Close() })
 	return c
+}
+
+// usagePerformanceDay pins c's clock to the day its tool cube was built, and
+// returns that day's local midnight. A read-only snapshot cannot rebuild the
+// cube, which is fresh, and answers Machine Time, only on that day.
+func usagePerformanceDay(t *testing.T, c *Catalog) time.Time {
+	t.Helper()
+	var built string
+	if err := c.DB.QueryRow("SELECT value FROM meta WHERE key='tool_rollup_day'").Scan(&built); err != nil {
+		t.Fatal(err)
+	}
+	midnight, err := time.ParseInLocation("2006-01-02", built, time.Local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.now = func() time.Time { return midnight.Add(12 * time.Hour) }
+	return midnight
 }
 
 func TestUsagePerformancePreparation(t *testing.T) {
@@ -96,26 +118,79 @@ func TestUsagePerformanceGroup(t *testing.T) {
 	}
 }
 
-// TestUsagePerformanceMachineTime times the all-time monthly fact cube that
-// Machine Time asks /metrics for, as the projection accelerator answers it.
+// TestUsagePerformanceMachineTime times the fact cubes that each Machine Time
+// period asks /metrics for, as the projection accelerator answers them: the
+// current and previous windows of 7, 14, 30 and 90 days, and all time by
+// month. It logs the largest metric's groups, the warm median latency and CPU
+// of the page's request, and of the single cube crossing time with operations
+// that the page asked for until October 2026.
 func TestUsagePerformanceMachineTime(t *testing.T) {
 	c := usagePerformanceCatalog(t)
 	ctx := context.Background()
-	groups := []string{"repository_name", "activity", "month", "status", "operation_key", "operation_name", "tool_name", "mcp_server"}
-	q := metricRequest(qt.AggSpec{ID: "time", Op: "sum", Field: "duration_ms", GroupBy: groups}, qt.AggSpec{ID: "timed", Op: "count", Field: "duration_ms", GroupBy: groups}, qt.AggSpec{ID: "population", Op: "count"})
-	for range 3 {
-		start := time.Now()
-		tx, release, err := beginQueryV2(ctx, c.reader())
-		if err != nil {
-			t.Fatal(err)
+	midnight := usagePerformanceDay(t, c)
+	for _, days := range []int{7, 14, 30, 90, 0} {
+		for _, previous := range []bool{false, true} {
+			if days == 0 && previous {
+				continue
+			}
+			period, where := "month", []qt.WhereTerm(nil)
+			if days > 0 {
+				end := midnight.AddDate(0, 0, map[bool]int{false: 0, true: -days}[previous])
+				period, where = "day", []qt.WhereTerm{
+					{Field: "started_at", Op: ">=", Value: end.AddDate(0, 0, -days).UTC().Format(time.RFC3339)},
+					{Field: "started_at", Op: "<", Value: end.UTC().Format(time.RFC3339)},
+				}
+			}
+			for _, shape := range []struct {
+				name  string
+				cubes [][]string
+			}{
+				{"crossed", [][]string{{"repository_name", "activity", period, "status", "operation_key", "operation_name", "tool_name", "mcp_server"}}},
+				{"page", [][]string{{"repository_name", "activity", "status", "operation_key", "operation_name", "tool_name", "mcp_server"}, {period, "status"}}},
+			} {
+				specs := []qt.AggSpec{{ID: "population", Op: "count"}}
+				for i, groups := range shape.cubes {
+					specs = append(specs, qt.AggSpec{ID: fmt.Sprint("time", i), Op: "sum", Field: "duration_ms", GroupBy: groups}, qt.AggSpec{ID: fmt.Sprint("timed", i), Op: "count", Field: "duration_ms", GroupBy: groups})
+				}
+				q := metricRequest(specs...)
+				q.Where = where
+				var elapsed, cpu []time.Duration
+				var result qt.SQLiteV2ExecutionResult
+				for range 5 {
+					start, startCPU := time.Now(), processCPU()
+					tx, release, err := beginQueryV2(ctx, c.reader())
+					if err != nil {
+						t.Fatal(err)
+					}
+					var handled bool
+					result, handled, err = c.machineTimeMetricsV2(ctx, tx, queryV2Dataset("tool_calls", PharosToolCallsSchema()), q, qt.PlanOptions{Now: time.Now()})
+					release()
+					if err != nil || !handled {
+						t.Fatal(err, handled)
+					}
+					elapsed, cpu = append(elapsed, time.Since(start)), append(cpu, processCPU()-startCPU)
+				}
+				var groups int64
+				var failure string
+				for _, metric := range result.Metrics.Metrics {
+					groups, failure = max(groups, metric.GroupCount), cmp.Or(failure, metric.Error)
+				}
+				t.Logf("days=%d previous=%v %s: groups=%d error=%q cold=%v warm median=%v cpu=%v", days, previous, shape.name, groups, failure, elapsed[0], medianDuration(elapsed[1:]), medianDuration(cpu[1:]))
+			}
 		}
-		result, handled, err := c.machineTimeMetricsV2(ctx, tx, queryV2Dataset("tool_calls", PharosToolCallsSchema()), q, qt.PlanOptions{Now: time.Now()})
-		release()
-		if err != nil || !handled {
-			t.Fatal(err, handled)
-		}
-		t.Log(len(result.Metrics.Metrics[0].Buckets), result.Metrics.Metrics[0].Error, time.Since(start))
 	}
+}
+
+func processCPU() time.Duration {
+	var usage syscall.Rusage
+	syscall.Getrusage(syscall.RUSAGE_SELF, &usage)
+	return time.Duration(usage.Utime.Nano() + usage.Stime.Nano())
+}
+
+func medianDuration(values []time.Duration) time.Duration {
+	sorted := slices.Clone(values)
+	slices.Sort(sorted)
+	return sorted[len(sorted)/2]
 }
 
 func TestUsagePerformanceServer(t *testing.T) {
@@ -123,6 +198,7 @@ func TestUsagePerformanceServer(t *testing.T) {
 		t.Skip("set PHAROS_USAGE_SERVER to a loopback address")
 	}
 	c := usagePerformanceCatalog(t)
+	usagePerformanceDay(t, c)
 	s := testServer(t, Config{Host: "127.0.0.1", APIToken: "usage-probe"}, c)
 	c.background = func(func(context.Context)) bool { return false }
 	defer s.life.cancel()
