@@ -8,6 +8,23 @@ others sit beside it). The Query Table frontend is TypeScript in `web/src`,
 bundled into the checked-in `internal/archive/assets/query-tables.{js,css}`. See
 [docs/technical-overview.md](docs/technical-overview.md) for the architecture.
 
+## Query Table dependency policy
+
+Do not add, extend, or reintroduce local Query Table patches. Required fixes
+and features belong in the upstream Query Table repository and must be
+consumed through a published release. Write a self-contained upstream handoff
+when a needed change is unavailable. Do not patch the vendored implementation,
+the module cache, installed npm packages or generated bundles to work around
+upstream behavior.
+
+The existing two-line host group-budget allowance is temporary migration debt,
+not permission to make further patches. Leave it unchanged until upstream
+ships the [host group-budget request](docs/handoffs/query-table-host-group-budget.md).
+Then upgrade to that release and remove `third_party/query-table-go/`, the
+root Go replacement and `tools/test-query-table-fork.sh`, retaining Pharos's
+Usage budgets and host integration tests. Normal package upgrades, schema
+generation and frontend bundle rebuilds remain part of the integration.
+
 ## Running tests
 
 Run the narrowest tests that cover your change while you work, and the fast

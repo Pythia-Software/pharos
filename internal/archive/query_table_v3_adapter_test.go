@@ -3,6 +3,8 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -10,13 +12,11 @@ import (
 	qt "github.com/Pythia-Software/query-table/backends/go"
 )
 
-// These tests guard Pharos's local patches to Query Table's Go backend
-// (third_party/query-table-go/README.pharos.md): fused group summaries and
-// representative rows materialized once. They are the only tests of that
-// path in go test ./...; tools/test-query-table-fork.sh runs upstream's whole
-// suite against the patched copy.
+// These tests check the released adapter's grouped results and Pharos's
+// remaining host group-budget override. tools/test-query-table-fork.sh runs
+// upstream's own suites against the retained backend copy.
 
-func patchQueryV3Fixture(t *testing.T) (*sql.DB, qt.QueryDatasetV3) {
+func adapterQueryV3Fixture(t *testing.T) (*sql.DB, qt.QueryDatasetV3) {
 	catalog, _ := testCatalog(t)
 	db := catalog.DB
 	_, err := db.Exec(`CREATE TABLE grouped(id TEXT,k TEXT,n REAL,at TEXT,label TEXT);
@@ -35,7 +35,7 @@ func patchQueryV3Fixture(t *testing.T) (*sql.DB, qt.QueryDatasetV3) {
 	return db, qt.QueryDatasetV3{Schema: schema, SourceSQL: "SELECT * FROM grouped", Dialect: "sqlite", Scope: "one", Dataset: "runs"}
 }
 
-func patchGroupedRequest() qt.QueryRequestV3 {
+func adapterGroupedRequest() qt.QueryRequestV3 {
 	return qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC).UnixMilli(), Rows: true,
 		Source:   qt.WireQuery{Limit: 1, Offset: 2},
 		Grouping: &qt.GroupingDefinition{Keys: []string{"k"}, Summaries: []qt.SummaryColumn{{ID: "num", Op: "count"}, {ID: "total", Op: "sum", Field: "n"}, {ID: "average", Op: "avg", Field: "n"}, {ID: "median", Op: "formula", Expression: "MEDIAN([n])"}, {ID: "example", Op: "row", Field: "label"}, {ID: "example_id", Op: "row", Field: "id"}}, Representative: &qt.RepresentativeRow{OrderBy: []qt.OrderBy{{Field: "n", Dir: "desc", Nulls: "last"}}}},
@@ -45,12 +45,12 @@ func patchGroupedRequest() qt.QueryRequestV3 {
 
 // Fused summaries over a computed group key keep one identity per group,
 // including the group whose key is an error.
-func TestVendoredPatchFormulaGroupErrorIdentities(t *testing.T) {
-	db, d := patchQueryV3Fixture(t)
+func TestQueryV3FormulaGroupErrorIdentities(t *testing.T) {
+	db, d := adapterQueryV3Fixture(t)
 	if _, err := db.Exec("DELETE FROM grouped; INSERT INTO grouped(id,n,label) VALUES('null',NULL,'null label'),('error',0,'error label'),('valid',2,'valid label')"); err != nil {
 		t.Fatal(err)
 	}
-	q := patchGroupedRequest()
+	q := adapterGroupedRequest()
 	q.ExpectedRevisions = map[string]string{"inv": "1"}
 	q.Grouping = &qt.GroupingDefinition{Keys: []string{"@computed/inv"}, Summaries: []qt.SummaryColumn{{ID: "num", Op: "count"}, {ID: "total", Op: "sum", Field: "n"}, {ID: "example", Op: "row", Field: "label"}}, Representative: &qt.RepresentativeRow{OrderBy: qt.OrderBys{{Field: "id", Dir: "asc"}}}}
 	q.Result = qt.WireQuery{Select: []string{"@computed/inv", "num", "total", "example"}, Limit: 10}
@@ -96,9 +96,9 @@ func TestVendoredPatchFormulaGroupErrorIdentities(t *testing.T) {
 
 // Hidden and default sorts, a field sorted by another, and enum kinds survive
 // the patched source plan and its representative rows.
-func TestVendoredPatchHiddenAndDefaultSort(t *testing.T) {
-	db, d := patchQueryV3Fixture(t)
-	q := patchGroupedRequest()
+func TestQueryV3HiddenAndDefaultSort(t *testing.T) {
+	db, d := adapterQueryV3Fixture(t)
+	q := adapterGroupedRequest()
 	q.Grouping = nil
 	q.Result = qt.WireQuery{Select: []string{"id"}, Limit: 2, OrderBy: qt.OrderBys{{Field: "n", Dir: "desc"}}}
 	plan, err := d.SourcePlan(context.Background(), q, qt.PlanOptions{})
@@ -126,7 +126,7 @@ func TestVendoredPatchHiddenAndDefaultSort(t *testing.T) {
 	k := d.Schema.Fields["k"]
 	k.Kind = qt.FieldEnum
 	d.Schema.Fields["k"] = k
-	q = patchGroupedRequest()
+	q = adapterGroupedRequest()
 	q.Grouping.Summaries = []qt.SummaryColumn{{ID: "chosen", Op: "row", Field: "k"}, {ID: "smallest", Op: "min", Field: "k"}}
 	q.Result = qt.WireQuery{Select: []string{"k", "chosen", "smallest"}, Limit: 10}
 	plan, err = d.SourcePlan(context.Background(), q, qt.PlanOptions{})
@@ -141,5 +141,39 @@ func TestVendoredPatchHiddenAndDefaultSort(t *testing.T) {
 		if field.Name != qt.GroupIdentityField && field.Type != "enum" {
 			t.Fatal(out.Schema)
 		}
+	}
+}
+
+// A tiny population checks the configured ceiling without seeding 100,000
+// groups. Actual group-budget enforcement is exercised by the Usage tests.
+func TestQueryTableGroupBudgetOverrides(t *testing.T) {
+	db, d := adapterQueryV3Fixture(t)
+	q := groupRequest("k", qt.SummaryColumn{ID: "records", Op: "count"})
+	metric := metricRequest(qt.AggSpec{ID: "records", Op: "count", GroupBy: []string{"k"}})
+	ctx := context.Background()
+	for _, groups := range []int{100_000, 100_001} {
+		check := func(t *testing.T, err error) {
+			t.Helper()
+			if groups == 100_000 {
+				if err != nil {
+					t.Fatalf("explicit Usage group budget rejected: %v", err)
+				}
+				return
+			}
+			var diagnostic *qt.PlanDiagnostic
+			if !errors.As(err, &diagnostic) || diagnostic.Code != "resource_limit" {
+				t.Fatalf("invalid host group budget: %v", err)
+			}
+		}
+		t.Run(fmt.Sprint("V2/", groups), func(t *testing.T) {
+			v2 := qt.SQLiteV2Dataset{Schema: d.Schema, SourceSQL: d.SourceSQL, Scope: d.Scope, Dataset: d.Dataset, MaxGroups: groups}
+			_, err := v2.ExecuteV2(ctx, db, nil, &metric, qt.PlanOptions{})
+			check(t, err)
+		})
+		t.Run(fmt.Sprint("V3/", groups), func(t *testing.T) {
+			d.MaxGroups = groups
+			_, err := d.Execute(ctx, db, q, qt.PlanOptions{})
+			check(t, err)
+		})
 	}
 }

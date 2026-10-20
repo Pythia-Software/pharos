@@ -97,45 +97,11 @@ func SQLiteV2Functions() []SQLiteScalarFunction {
 	}
 	return append(sqliteDistributionFunctions(), []SQLiteScalarFunction{
 		fn("qt_v2_datetime", 2, func(a []driver.Value) (driver.Value, error) {
-			var value any
-			code := ""
 			format, ok := a[1].(string)
 			if !ok {
 				return nil, fmt.Errorf("invalid datetime format")
 			}
-			if a[0] != nil {
-				var stamp time.Time
-				var err error
-				if format == "unix-millis" || format == "unix-seconds" {
-					if _, ok := sqliteFloat(a[0]); !ok {
-						code = "storage_type"
-					} else {
-						scale := int64(1)
-						if format == "unix-millis" {
-							scale = 1000
-						}
-						stamp, err = sqliteUnixTime(a[0], scale)
-					}
-				} else {
-					text, ok := a[0].(string)
-					if !ok {
-						code = "storage_type"
-					} else if text != "" {
-						stamp, err = sqliteParseTime(text)
-						if err == nil && format == "utc-millis" && text != stamp.UTC().Format("2006-01-02T15:04:05.000Z") {
-							err = fmt.Errorf("noncanonical utc-millis storage")
-						}
-					} else {
-						return string(`{"value":null}`), nil
-					}
-				}
-				if err != nil {
-					code = "datetime_invalid"
-				}
-				if code == "" {
-					value = stamp.UTC().Format("2006-01-02T15:04:05.000000000Z")
-				}
-			}
+			value, code := sqliteV2Datetime(a[0], format)
 			payload, err := json.Marshal(struct {
 				Value any    `json:"value"`
 				Error string `json:"error,omitempty"`
@@ -255,6 +221,41 @@ func SQLiteV2Functions() []SQLiteScalarFunction {
 			return sqliteNumericJSON(&v, "")
 		}),
 	}...)
+}
+
+// sqliteV2Datetime shares typed datetime decoding with the row executor.
+func sqliteV2Datetime(value driver.Value, format string) (any, string) {
+	if value == nil {
+		return nil, ""
+	}
+	var stamp time.Time
+	var err error
+	if format == "unix-millis" || format == "unix-seconds" {
+		if _, ok := sqliteFloat(value); !ok {
+			return nil, "storage_type"
+		}
+		scale := int64(1)
+		if format == "unix-millis" {
+			scale = 1000
+		}
+		stamp, err = sqliteUnixTime(value, scale)
+	} else {
+		text, ok := value.(string)
+		if !ok {
+			return nil, "storage_type"
+		}
+		if text == "" {
+			return nil, ""
+		}
+		stamp, err = sqliteParseTime(text)
+		if err == nil && format == "utc-millis" && text != stamp.UTC().Format("2006-01-02T15:04:05.000Z") {
+			err = fmt.Errorf("noncanonical utc-millis storage")
+		}
+	}
+	if err != nil {
+		return nil, "datetime_invalid"
+	}
+	return stamp.UTC().Format("2006-01-02T15:04:05.000000000Z"), ""
 }
 
 // SQLiteV2Aggregates uses exact decimal accumulators for SUM/AVG, independent of

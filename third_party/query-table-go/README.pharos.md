@@ -1,59 +1,68 @@
 # Pharos Query Table backend patch
 
-This directory retains the MIT-licensed Go backend from Query Table **v0.8.0**.
-The frontend stays on v0.8.0. The root `go.mod` replacement makes these backend
-fixes reproducible without modifying the module cache or requiring an upstream
-release.
+This directory retains the MIT-licensed Go backend from Query Table **v0.9.0**
+(release commit `bd2c730f0242f9d2b3e0913d55f1cd7c0d3229a2`), without upstream's
+test files. Core, React, UI and codegen use the published **0.9.0** npm packages.
+The root `go.mod` replacement selects this backend copy.
 
-Local changes:
+## Remaining local patch
 
-- Inline cheap native field, CASE and numeric-guard projections in SQLite.
-  Keep datetime/function payload evaluation materialized.
-- Reuse executor-validated typed values and their error sidecars after staging.
-  Caller-provided storage still passes the original validation.
-- Fuse scalar V3 group summaries through the existing expression compiler and
-  exact aggregate functions. Sampled summaries retain their original execution
-  and budgets. Fall back when a combined plan exceeds compiler limits.
-- Materialize representative rows once for both identity validation and update.
-- Permit an explicit host group budget up to 100,000, in V3
-  (`QueryDatasetV3.limits`) and V2 (`SQLiteV2Dataset.limits`). Pharos uses
-  this only for Usage's compact facts; other dataset budgets remain unchanged.
+Only two Go source lines differ from v0.9.0:
 
-Revision checks, source authorization, staging byte/population checks, numeric
-errors, lazy formula branches, representative validation, and cancellation stay
-on their existing paths. Host regression tests compare fused summaries with
-independent metric execution.
+- `query_v3.go`, `QueryDatasetV3.limits`: accept an explicit host `MaxGroups`
+  up to **100,000**, instead of upstream's 10,000.
+- `sqlite_v2_dataset.go`, `SQLiteV2Dataset.limits`: the same host-budget ceiling
+  for SQLite V2 metrics.
 
-## Testing the patches
+Defaults, row limits, population/byte/sample budgets and group-budget
+enforcement are unchanged. Pharos opts into 100,000 groups only for Usage's
+compact facts, including the Work preset for libraries with more than 10,000
+workspaces. Other datasets retain their existing budgets. This is a host
+configuration allowance; requests cannot raise it themselves.
 
-This copy holds no tests. `go test ./...` from the Pharos root would not run
-them, because this is a nested module, and the published module has no V3
-tests: those are in upstream's `backends/sqlite-tests`. Instead, run
-upstream's suites at the release tag against this copy:
+The retained source otherwise matches the release exactly, including its new
+in-memory metric executor. Pharos's host metric accelerators remain separate
+from this patch.
+
+## Performance patches now supplied upstream
+
+The four local v0.8.0 performance patches have been replaced by Query Table's
+released implementations:
+
+- Reuse representative rows for identity validation and ROW projection (#127).
+- Reuse validated staged values and their error sidecars (#128).
+- Fuse compatible scalar SQLite V3 group summaries (#129).
+- Inline cheap SQLite projections while preserving shared expensive evaluation
+  and V2 reduction reuse (#133).
+
+The previous SQL substring heuristic and unconditional field-guard inlining are
+gone. The v0.8.0 `TestV2ReductionReuse` failure is no longer an accepted exception:
+the upstream gate must pass without `-skip`.
+
+## Testing and upgrades
+
+`go test ./...` from the Pharos root does not run this nested module's upstream
+tests. Use the release's own Go and real-SQLite suites against this copy:
 
 ```sh
-tools/test-query-table-fork.sh            # QUERY_TABLE_UPSTREAM defaults to ~/gbdubs/query-table
-tools/test-query-table-fork.sh -run TestV3 -count=1
+tools/test-query-table-fork.sh
+tools/test-query-table-fork.sh -run 'TestV2ReductionReuse|TestV3' -count=1
 ```
 
-The script reads the tag from an upstream checkout with `git archive`. It then
-runs upstream's `backends/go` package tests and its `backends/sqlite-tests`
-suite with this copy's sources in place of upstream's, together with the
-`schema` fixtures both suites read. Run it after changing this copy.
+The script derives its default release tag from the root `go.mod`, extracts
+upstream tests and schema fixtures into a temporary directory, and substitutes
+this copy's sources. `QUERY_TABLE_UPSTREAM` selects the upstream checkout
+(default `~/gbdubs/query-table`); `QUERY_TABLE_TAG` can override the release for
+an explicit compatibility check. Neither checkout is modified.
 
-Known result at v0.8.0 (2026-10-19): 171 tests pass and 23 skip, most of
-them because they need Postgres. One fails: `TestV2ReductionReuse` in
-`backends/sqlite-tests`, which passes on unpatched v0.8.0. When `AVG` or
-`MIN` is batched with `SUM` over the same field, this copy evaluates the
-source once more for each of them: 39 or 54 source rows visited against one
-scan's 24. The metric values match. Fix it here, or record why it is
-acceptable. Until then, `-skip TestV2ReductionReuse` makes the rest a
-pass/fail gate.
+Pharos's `query_table_v3_adapter_test.go` retains grouped-result integration
+checks and `TestQueryTableGroupBudgetOverrides` for the remaining budget patch.
+`TestUsageFusedSummariesMatchIndependentMetrics` compares grouped Usage values
+with independent metric execution.
 
-In Pharos, `TestVendoredPatchFormulaGroupErrorIdentities` and
-`TestVendoredPatchHiddenAndDefaultSort`
-(`internal/archive/query_table_v3_patch_test.go`) exercise the patched
-grouped-summary path in the default test run.
-
-Review local changes against v0.8.0 when updating this copy; remove the root
-replacement once an upstream release includes equivalent fixes.
+The [upstream host group-budget request](../../docs/handoffs/query-table-host-group-budget.md)
+asks for the final allowance needed to remove this copy. Do not add or extend
+local Query Table patches; required changes belong upstream, as specified in
+[`AGENTS.md`](../../AGENTS.md). Once a published release accepts these budgets,
+upgrade the package pins, remove the root replacement, this directory and the
+fork test script, then run the host release checks with Usage's budgets intact.

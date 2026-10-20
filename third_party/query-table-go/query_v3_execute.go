@@ -152,7 +152,7 @@ func (d QueryDatasetV3) ExecuteIn(ctx context.Context, tx *sql.Tx, q QueryReques
 			original.ServerFilter = d.ComputedFilterable[strings.TrimPrefix(column.Field, "@computed/")]
 		}
 		original.Expr = "r." + queryIdent(column.ValueAlias)
-		original.typedValue = true
+		original.typedValue = d.Dialect == "sqlite"
 		original.SortExpr = ""
 		original.ValueErrorExpr = "r." + queryIdent(column.ErrorAlias)
 		if original.Kind == FieldDatetime {
@@ -349,35 +349,40 @@ func readQueryRows(ctx context.Context, tx *sql.Tx, p SQLPlan, grouped bool, dia
 
 func (d QueryDatasetV3) stageGroups(ctx context.Context, tx *sql.Tx, table string, g *GroupingDefinition, s Schema, o PlanOptions, maxGroups int) (Schema, error) {
 	result := Schema{Name: s.Name + ":groups", IDField: GroupIdentityField, Fields: map[string]FieldSpec{}}
-	// Scalar summaries share one typed population and one GROUP BY. Keep sampled
-	// summaries on their existing budgeted path. Every summary was independently
-	// validated by SourcePlan before source staging.
-	fused := []AggSpec{}
-	positions := map[string]int{}
+	// SQLite reduces scalar summaries in the COUNT pass: one scan of the staged
+	// population and one GROUP BY write every value and error sidecar into the
+	// group table. SourcePlan compiled each summary on its own. Any sampled
+	// summary keeps the whole set on the budget-checked independent path.
+	fused := []summaryOutput{}
 	if d.Dialect == "sqlite" {
 		for _, summary := range g.Summaries {
 			if summary.Op == "row" {
 				continue
 			}
-			spec := summarySpec(summary, g.Keys)
-			if sampledExpression(MetricExpression(spec)) {
+			expression := MetricExpression(summarySpec(summary, g.Keys))
+			if sampledExpression(expression) {
 				fused = nil
-				positions = map[string]int{}
 				break
 			}
-			positions[summary.ID] = len(fused)
-			fused = append(fused, spec)
+			fused = append(fused, summaryOutput{ID: summary.ID, Expression: expression})
 		}
 	}
-	countPlan, err := compileMetricDialect(ctx, MetricQuery{Version: 2}, AggSpec{ID: "__qt_count__", Op: "count", GroupBy: g.Keys}, s, o, d.Dialect == "sqlite", fused...)
+	countSpec := AggSpec{ID: "__qt_count__", Op: "count", GroupBy: g.Keys}
+	countPlan, err := compileMetricOutputs(ctx, MetricQuery{Version: 2}, countSpec, s, o, d.Dialect == "sqlite", fused)
 	if err != nil && len(fused) > 0 && ctx.Err() == nil {
-		// A combined expression may exceed a compiler stage budget even though
-		// every independent summary fits. Retain that supported execution path.
-		positions = map[string]int{}
-		countPlan, err = compileMetricDialect(ctx, MetricQuery{Version: 2}, AggSpec{ID: "__qt_count__", Op: "count", GroupBy: g.Keys}, s, o, d.Dialect == "sqlite")
+		// The combined plan can exceed a compiler budget that each summary fits
+		// on its own; those summaries then run independently.
+		fused = nil
+		countPlan, err = compileMetricOutputs(ctx, MetricQuery{Version: 2}, countSpec, s, o, d.Dialect == "sqlite", nil)
 	}
 	if err != nil {
 		return result, err
+	}
+	reduced := map[string]OutputColumn{}
+	for _, column := range countPlan.Columns {
+		if column.ErrorAlias != "" {
+			reduced[column.Field] = column
+		}
 	}
 	// A private ordinal lets identity batches join on one indexed integer, even
 	// when the public grouping keys contain NULLs or have different SQL types.
@@ -397,7 +402,9 @@ func (d QueryDatasetV3) stageGroups(ctx context.Context, tx *sql.Tx, table strin
 	if _, err = tx.ExecContext(ctx, "CREATE UNIQUE INDEX "+queryIdent(table+"_ordinal")+" ON "+queryIdent(table)+" (qt_group_ordinal)"); err != nil {
 		return result, err
 	}
-	result.Fields[GroupIdentityField] = resultField(GroupIdentityField, "text", "r.identity", false)
+	identity := resultField(GroupIdentityField, "text", "r.identity", false)
+	identity.typedValue = d.Dialect == "sqlite"
+	result.Fields[GroupIdentityField] = identity
 	for _, summary := range g.Summaries {
 		if sampledExpression(MetricExpression(summarySpec(summary, g.Keys))) {
 			limit, _ := d.sampleLimit()
@@ -414,7 +421,7 @@ func (d QueryDatasetV3) stageGroups(ctx context.Context, tx *sql.Tx, table strin
 	for i, key := range g.Keys {
 		original := s.Fields[key]
 		original.Expr = fmt.Sprintf("r.group%d", i)
-		original.typedValue = true
+		original.typedValue = d.Dialect == "sqlite"
 		original.ValueErrorExpr = fmt.Sprintf("r.group%d_error", i)
 		original.SortExpr = ""
 		original.SQLiteSortField = ""
@@ -423,10 +430,11 @@ func (d QueryDatasetV3) stageGroups(ctx context.Context, tx *sql.Tx, table strin
 	for i, summary := range g.Summaries {
 		typ := ""
 		var summaryPlan SQLPlan
+		column, isReduced := reduced[summary.ID]
 		if summary.Op == "row" {
 			typ = expressionType(s.Fields[summary.Field].Kind)
-		} else if index, ok := positions[summary.ID]; ok {
-			typ = countPlan.Columns[len(g.Keys)+1+index].Type
+		} else if isReduced {
+			typ = column.Type
 		} else {
 			summaryPlan, err = compileMetricDialect(ctx, MetricQuery{Version: 2}, summarySpec(summary, g.Keys), s, o, d.Dialect == "sqlite")
 			if err != nil {
@@ -435,10 +443,8 @@ func (d QueryDatasetV3) stageGroups(ctx context.Context, tx *sql.Tx, table strin
 			typ = summaryPlan.Columns[len(summaryPlan.Columns)-1].Type
 		}
 		value, errorName := fmt.Sprintf("summary%d", i), fmt.Sprintf("summary%d_error", i)
-		if index, ok := positions[summary.ID]; ok {
-			// Fused values already live in the group table. Refer to their
-			// columns directly instead of rewriting every group per summary.
-			value, errorName = fmt.Sprintf("extra%d", index), fmt.Sprintf("extra%d_error", index)
+		if isReduced {
+			value, errorName = column.ValueAlias, column.ErrorAlias
 		} else {
 			for _, definition := range []string{queryIdent(value) + " " + d.valueType(typ), queryIdent(errorName) + " TEXT"} {
 				if _, err = tx.ExecContext(ctx, "ALTER TABLE "+queryIdent(table)+" ADD COLUMN "+definition); err != nil {
@@ -451,16 +457,13 @@ func (d QueryDatasetV3) stageGroups(ctx context.Context, tx *sql.Tx, table strin
 			groupable = fieldGroupable(s.Fields[summary.Field])
 		}
 		field := resultField(summary.ID, typ, "r."+queryIdent(value), groupable)
-		field.typedValue = true
+		field.typedValue = d.Dialect == "sqlite"
 		if (summary.Op == "row" || summary.Op == "min" || summary.Op == "max") && s.Fields[summary.Field].Kind == FieldEnum {
 			field.Kind = FieldEnum
 		}
 		field.ValueErrorExpr = "r." + queryIdent(errorName)
 		result.Fields[summary.ID] = field
-		if summary.Op == "row" {
-			continue
-		}
-		if _, ok := positions[summary.ID]; ok {
+		if summary.Op == "row" || isReduced {
 			continue
 		}
 		join := groupJoin("target", "summary", len(g.Keys))
@@ -474,17 +477,19 @@ func (d QueryDatasetV3) stageGroups(ctx context.Context, tx *sql.Tx, table strin
 		if e != nil {
 			return result, e
 		}
-		representatives := queryTableName()
-		if _, err = tx.ExecContext(ctx, "CREATE TEMP TABLE "+queryIdent(representatives)+" AS "+representative.SQL, representative.Args...); err != nil {
-			return result, err
-		}
+		// Rank the population once. Identity validation and every ROW value read
+		// the same chosen rows, which hold one row per (already budgeted) group.
+		chosen := queryTableName()
 		defer func() {
 			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 			defer cancel()
-			_, _ = tx.ExecContext(cleanup, "DROP TABLE IF EXISTS "+queryIdent(representatives))
+			_, _ = tx.ExecContext(cleanup, "DROP TABLE IF EXISTS "+queryIdent(chosen))
 		}()
+		if _, err = tx.ExecContext(ctx, "CREATE TEMP TABLE "+queryIdent(chosen)+" AS "+representative.SQL, representative.Args...); err != nil {
+			return result, err
+		}
 		var invalid int64
-		if err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+queryIdent(representatives)+" WHERE qt_identity_count>1 OR qt_missing_identity>0").Scan(&invalid); err != nil {
+		if err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+queryIdent(chosen)+" WHERE qt_identity_count>1 OR qt_missing_identity>0").Scan(&invalid); err != nil {
 			return result, err
 		}
 		if invalid > 0 {
@@ -497,7 +502,7 @@ func (d QueryDatasetV3) stageGroups(ctx context.Context, tx *sql.Tx, table strin
 				assignments = append(assignments, queryIdent(value)+"=summary."+queryIdent(value), queryIdent(value+"_error")+"=summary."+queryIdent(value+"_error"))
 			}
 		}
-		update := "UPDATE " + queryIdent(table) + " AS target SET " + strings.Join(assignments, ",") + " FROM " + queryIdent(representatives) + " AS summary WHERE " + groupJoin("target", "summary", len(g.Keys))
+		update := "UPDATE " + queryIdent(table) + " AS target SET " + strings.Join(assignments, ",") + " FROM " + queryIdent(chosen) + " AS summary WHERE " + groupJoin("target", "summary", len(g.Keys))
 		if _, err = tx.ExecContext(ctx, update); err != nil {
 			return result, err
 		}

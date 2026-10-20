@@ -17,7 +17,6 @@ tests.
 | [library-find-generation-check.md](library-find-generation-check.md) | Library Find and text search return HTTP 500 when a 100 ms check after each page times out on a busy machine |
 | [machine-time-long-window-budget.md](machine-time-long-window-budget.md) | Machine Time over 90 days can exceed its 50,000-group budget and show an error instead of data |
 | [usage-filtered-metrics-fast-path.md](usage-filtered-metrics-fast-path.md) | Filtered Usage cost and distinct-count metrics still take the slow path; confirm Machine Time's all-time CPU |
-| [query-table-fork-reduction-reuse.md](query-table-fork-reduction-reuse.md) | Our patched Query Table adapter re-scans the source when `AVG` or `MIN` is batched with `SUM` |
 | [span-reason-catalog.md](span-reason-catalog.md) | Authorship span reasons and the Human Words Rules filter options are kept in sync by hand |
 
 ## Layout and focus bugs
@@ -58,6 +57,18 @@ Before and after screenshots are welcome in the PR; set
 | [retire-python-importer-remnants.md](retire-python-importer-remnants.md) | A superseded Python migration script and docs that still describe a Python importer |
 
 ## Upstream Query Table
+
+[`query-table-host-group-budget.md`](query-table-host-group-budget.md) requests
+the final two-line allowance for explicit host budgets up to 100,000 groups in
+V2 and V3. Once released, Pharos can remove its vendored backend, Go replacement
+and fork test script.
+
+[`query-table-performance-stack.md`](query-table-performance-stack.md) is
+completed: Query Table v0.9.0 supplies representative reuse, validated staged
+values, scalar V3 summary fusion and SQLite projection inlining. This upgrade
+also resolves the [fork reduction-reuse failure](query-table-fork-reduction-reuse.md).
+The only remaining adapter patch is the
+[100,000-group host-budget allowance](../../third_party/query-table-go/README.pharos.md).
 
 Requests for the Query Table library itself are collected in
 [`docs/query-table-next-release-handoff.md`](../query-table-next-release-handoff.md):

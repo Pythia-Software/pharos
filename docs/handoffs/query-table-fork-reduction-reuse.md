@@ -1,5 +1,10 @@
 # Handoff: fix reduction reuse in our patched Query Table adapter
 
+> Resolved by upgrading to Query Table v0.9.0 and replacing Pharos's local
+> performance changes with the released implementations, including upstream
+> PR #133. The current fork gate runs without `-skip TestV2ReductionReuse`.
+> The v0.8.0 failure report below is retained as historical evidence.
+
 ## Assignment
 
 Our patched copy of the Query Table Go backend

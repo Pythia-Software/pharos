@@ -3,6 +3,7 @@ package querytable
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -53,10 +54,6 @@ func CompileSQLiteRowExpression(ctx context.Context, source string, s Schema, o 
 }
 func (b *planBuilder) sqliteField(name string, v ValueSQL) (ValueSQL, error) {
 	f := b.schema.Fields[name]
-	if f.typedValue {
-		b.checked[name] = true
-		return v, nil
-	}
 	if v.Type == "number" && !f.ExpressionNumeric {
 		return v, &PlanDiagnostic{Code: "numeric_domain_required", Message: "numeric binding must opt into bounded arithmetic", Field: name}
 	}
@@ -64,6 +61,19 @@ func (b *planBuilder) sqliteField(name string, v ValueSQL) (ValueSQL, error) {
 		return v, diagnostic("unsupported_type", "arrays are outside the expression profile")
 	}
 	raw := v.Value
+	if f.typedValue {
+		// The executor staged this value through the checks below and kept its
+		// error sidecar: reuse the pair, including normalized datetimes. Staged
+		// plain text is unbounded, so formula inputs still apply the text bound.
+		out := v
+		if v.Type == "text" {
+			errSQL := "COALESCE(" + v.Error + ",CASE WHEN length(CAST(" + raw + " AS BLOB))>" + strconv.Itoa(maxFormulaTextBytes) + " THEN 'text_range' END)"
+			out = b.emitNative("CASE WHEN "+errSQL+" IS NULL THEN "+raw+" END"+b.collation(), errSQL, v.Type)
+		}
+		b.fields[name] = out
+		b.checked[name] = true
+		return out, nil
+	}
 	if v.Type == "datetime" {
 		payload := b.emit("qt_v2_datetime("+raw+","+b.param(f.SQLiteDatetimeFormat, "text")+")", "NULL", "text")
 		out := b.emit("json_extract("+payload.Value+",'$.value') COLLATE BINARY", "COALESCE("+v.Error+",json_extract("+payload.Value+",'$.error'))", "datetime")
@@ -74,10 +84,6 @@ func (b *planBuilder) sqliteField(name string, v ValueSQL) (ValueSQL, error) {
 	// Storage failures remain per-value diagnostics for lazy formula branches.
 	errSQL := "COALESCE(" + v.Error + ",qt_v2_field_error(" + raw + ",'" + v.Type + "'))"
 	out := b.emit("CASE WHEN "+errSQL+" IS NULL THEN "+raw+" END"+b.collation(), errSQL, v.Type)
-	// Native field guards are deterministic and cheap to repeat. Keep JSON
-	// datetime decoding and formula evaluation materialized, but do not copy
-	// every source row into a new B-tree merely to validate another column.
-	b.stages[len(b.stages)-1].Materialized = false
 	b.fields[name] = out
 	b.checked[name] = true
 	return out, nil
@@ -89,7 +95,7 @@ func (b *planBuilder) sqliteArithmetic(op string, a []ValueSQL, e string) (Value
 	}
 	payload := b.emit("qt_v2_arithmetic('"+op+"',"+a[0].Value+","+right+")", e, "text")
 	out := b.emit("json_extract("+payload.Value+",'$.value')", "COALESCE("+payload.Error+",json_extract("+payload.Value+",'$.error'))", "number")
-	return b.emit("CASE WHEN "+out.Error+" IS NULL THEN "+out.Value+" END", out.Error, "number"), nil
+	return b.emitNative("CASE WHEN "+out.Error+" IS NULL THEN "+out.Value+" END", out.Error, "number"), nil
 }
 func (b *planBuilder) sqliteReduction(op, raw, inputError, typ string) (string, string) {
 	errSQL := "MIN(" + inputError + ")"

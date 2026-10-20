@@ -1,7 +1,9 @@
 # Query Table release builds and local development
 
-Pharos uses published Query Table **0.8.0** npm packages (core, React, UI and
-codegen) and a local copy of the **v0.8.0** Go module with performance patches.
+Pharos uses published Query Table **0.9.0** npm packages (core, React, UI and
+codegen) and a local copy of the **v0.9.0** Go module. The only local backend
+change permits explicit host group budgets up to 100,000 in V2 and V3; the four
+earlier performance patches are now supplied by the release.
 Production builds do not depend on a Query Table worktree or source archives; see
 [`third_party/query-table-go/README.pharos.md`](../third_party/query-table-go/README.pharos.md)
 for the backend patch details. See
@@ -9,6 +11,9 @@ for the backend patch details. See
 contracts and execution limits.
 
 ## Release builds
+
+Query Table 0.9.0 requires **Node.js 22 or later**. Use a supported Node when
+installing dependencies and running the frontend checks.
 
 ```sh
 npm --prefix web ci --no-audit --no-fund
@@ -25,7 +30,11 @@ GOWORK=off go vet ./...
 
 `web/package-lock.json` pins registry archives and external dependency
 integrities. `go.mod`/`go.sum` pin the released Go adapter, and the root replacement
-selects the matching patched copy under `third_party/query-table-go`.
+selects the matching copy with the two group-ceiling edits under
+`third_party/query-table-go`. `tools/test-query-table-fork.sh` derives its default
+upstream test tag from that Go module pin and must pass without a `-skip`
+override. Upstream tests requiring an external database may still skip when
+that database is not configured.
 The JS/CSS assets in `internal/archive/assets` are built from these installed
 packages. Codegen regenerates the Go schemas from the canonical JSON in
 `schemas/`, and copies those same documents into the frontend assets.
