@@ -34,6 +34,21 @@ test("the writing-volume destination exposes daily trends", () => {
   assert.ok(recipeById("human-word-total").measures.some(metric => metric.groupBy[0] === "day"));
 });
 
+test("daily message and conversation cards are trailing seven-day trends of the writing population", () => {
+  for (const [id, metric, op] of [["human-messages-per-day", "human_daily_messages", "count"], ["human-conversations-per-day", "human_daily_conversations", "count_distinct"]]) {
+    const recipe = recipeById(id), daily = recipe.measures.find(item => item.id === metric);
+    assert.equal(recipe.category, "human");
+    assert.equal(recipe.trend.value.op, op);
+    assert.equal(recipe.trend.lookback, 7);
+    assert.deepEqual(daily.groupBy, ["day"]);
+    assert.deepEqual(recipe.where, [{ field: "typed_words", op: ">", value: "0" }], "automated-only messages are not counted");
+  }
+  assert.deepEqual(recipeById("human-conversations-per-day").trend.count, recipeById("human-conversations-per-day").trend.value, "the sample counts conversation-days, not messages");
+  const days = rows => core.evaluateMetrics(rows, { ...core.EMPTY_QUERY, where: recipeById("human-conversations-per-day").where, aggregations: recipeById("human-conversations-per-day").measures }, schema, { now }).metrics[0].buckets;
+  const sameDay = [row("a1", 10, "a", "w1"), row("a2", 30, "a", "w1"), row("b", 5, "b", "w1"), row("auto", 0, "auto", "w1")];
+  assert.deepEqual(days(sameDay).map(bucket => bucket.value), [2], "two messages in one conversation are one conversation that day; automated-only messages do not count");
+});
+
 test("repository pie preserves the full word denominator beyond the returned group limit", () => {
   const { recipe, query } = card("explaining-repos");
   const cover = cardCoverQuery(query, recipe);
