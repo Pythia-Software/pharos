@@ -758,8 +758,8 @@ func (table *parallelismTable) maps(fields libraryFields, from, to int64) []map[
 				local.AddDate(0, 0, -((int(local.Weekday()) + 6) % 7)).Format("2006-01-02"), local.Format("2006-01")}
 			clocks[cell.hour] = at
 		}
-		unit, band := table.units[cell.unit], "3+"
-		if cell.level < 3 {
+		unit, band := table.units[cell.unit], "4+"
+		if cell.level < 4 {
 			band = fmt.Sprint(cell.level)
 		}
 		values := map[string]any{"started_at": at.started, "day": at.day, "hour_of_day": at.hour, "week": at.week, "month": at.month,

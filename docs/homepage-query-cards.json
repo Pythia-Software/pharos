@@ -16891,10 +16891,10 @@
       "dataset": "parallelism",
       "field": "started_at",
       "unit": "hours",
-      "note": "Counts workspaces or agents (your Parallelism counting setting) with an active conversation: observed prompt-to-response turns joined across gaps up to your Parallelism gap setting. Delegated agents run inside their root's workspace. Timing is estimated from transcript timestamps. Each hour of wall time is counted once, at the number of agents active then.",
+      "note": "Counts workspaces or agents (your Parallelism counting setting) with an active conversation: observed prompt-to-response turns joined across gaps up to your Parallelism gap setting. Delegated agents run inside their root's workspace. Timing is estimated from transcript timestamps. Each hour of wall time is counted once, at the number of agents active then. The headline is the share of those hours with two or more agents active.",
       "id": "parallel-days",
       "title": "Parallel hours by day",
-      "description": "Hours with one, two, or three or more agents active, for each day of the last {days} days.",
+      "description": "Hours with one, two, three, or four or more agents active, for each day of the last {days} days.",
       "days": [
         7,
         30
@@ -16917,7 +16917,7 @@
         "mode": "source",
         "metricId": "pl_daily",
         "kind": "auto",
-        "maxGroups": 3,
+        "maxGroups": 4,
         "showOther": false,
         "showLegend": true,
         "height": 228

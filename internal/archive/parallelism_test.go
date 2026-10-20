@@ -214,19 +214,22 @@ func TestParallelismCardIdentities(t *testing.T) {
 				for _, day := range days {
 					from, to := dayBounds(day)
 					levels := referenceLevels(units, from, to)
-					want := map[string]float64{"1": levels[1], "2": 0, "3+": 0}
+					want := map[string]float64{"1": levels[1], "2": 0, "3": 0, "4+": 0}
 					if len(levels) > 2 {
 						want["2"] = levels[2]
 					}
-					for level := 3; level < len(levels); level++ {
-						want["3+"] += levels[level]
+					if len(levels) > 3 {
+						want["3"] = levels[3]
+					}
+					for level := 4; level < len(levels); level++ {
+						want["4+"] += levels[level]
 					}
 					for band, value := range want {
 						if got := sum("elapsed_ms", func(row map[string]any) bool { return row["day"] == day && row["level_band"] == band }); !closeTo(got, value) {
 							t.Fatalf("%s band %s: %v, want %v", day, band, got, value)
 						}
 					}
-					parallel := want["2"] + want["3+"]
+					parallel := want["2"] + want["3"] + want["4+"]
 					if got := sum("parallel_elapsed_ms", inDays(day, day)); !closeTo(got, parallel) {
 						t.Fatalf("%s parallel: %v, want %v", day, got, parallel)
 					}
@@ -351,7 +354,7 @@ func TestParallelismThreadsAndRows(t *testing.T) {
 		return result
 	}
 	rows := parallelismRows(data, parallelismSettings{gap: 60, counting: "workspace"})
-	if got := byBand(rows, "2026-11-01"); !reflect.DeepEqual(got, map[string]float64{"1": 120, "2": 30, "3+": 30}) {
+	if got := byBand(rows, "2026-11-01"); !reflect.DeepEqual(got, map[string]float64{"1": 120, "2": 30, "3": 30}) {
 		t.Fatalf("fall-back day minutes by band: %v", got)
 	}
 	// The repeated 01:00 hour is two rows, one per offset.
@@ -420,7 +423,7 @@ func TestParallelismSettingsAndHTTP(t *testing.T) {
 	}
 	w = queryExplorationCall(server, config.APIToken, http.MethodPost, "/api/query/parallelism/metrics",
 		`{"version":2,"profile":"qt-sqlite-v1","limit":50,"metrics":[{"id":"wall","expression":"SUM([elapsed_hours])","groupBy":["level_band"]}]}`)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), `"3+"`) {
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"3"`) {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	// A started_at window pre-selects staged rows without changing results:
