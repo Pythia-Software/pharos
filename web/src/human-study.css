@@ -15,7 +15,7 @@
 .human-study-point:hover .human-study-point-guide { opacity:1; }
 .human-study-trend-axis { grid-column:2; }
 .human-study-axis { display:flex; justify-content:space-between; gap:6px; color:var(--muted); font-size:8px; }
-.human-study-rows { display:flex; flex:1; flex-direction:column; justify-content:space-evenly; gap:9px; }
+.human-study-rows { display:flex; flex:1; flex-direction:column; justify-content:space-evenly; gap:5px; }
 .human-study-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 6px; color:var(--ink); font-size:10px; }
 .human-study-row>strong { font-weight:500; font-variant-numeric:tabular-nums; }
 .human-study-row small { font-size:9px; color:var(--muted); }
