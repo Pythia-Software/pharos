@@ -71,6 +71,8 @@ findings-snooze failure also reproduces on untouched Pharos code and is unrelate
 | QT-09 | Medium | Existing outstanding adapter request | Partial computed-capability descriptions |
 | QT-10 | Medium | Performance API request | Source dependency discovery for grouping/local previews |
 | QT-11 | Low | Migration/development documentation | A host integration and release migration guide |
+| QT-14 | Medium | Performance API request | Fuse metrics over different fields into one pass |
+| QT-15 | Low | Confirmed API coupling | Computed-column previews through the negotiated transport |
 
 “High” means high value for Pharos before broad use of the next release; it does
 not assert that the release must be blocked. Documented unsupported features
@@ -352,6 +354,41 @@ query or use a server page as a complete grouping population.
 **Request:** profile this paired-distribution path and distinguish source materialization cost from reduction/sorting cost. Check whether companion distributions repeat source scans or retain unnecessarily large per-group buffers. Recommend a host-facing execution approach if a synchronous preview cannot meet a reasonable small-card budget.
 
 **Acceptance:** reproduce against a comparable skewed 200,000-row fixture, report where the time/memory goes, and verify cancellation stops expensive work. Any optimization must preserve exact box summaries, measured/estimated source separation and complete coverage; a sampled result must not be presented as an exact distribution.
+
+## QT-14 — Fuse metrics over different fields into one pass
+
+**Observed:** the SQLite V2 adapter fuses metrics only when they read the same
+field, and reduces every other metric in its own pass over the source. When
+Pharos moved its pages from its legacy aggregation route to `/metrics`
+(Pharos #157), two surfaces got 3–16× slower:
+
+- **Message mix.** Human Words' message mix sends nine sums over nine fields, so it made ten passes of about 30 ms each where one pass had taken about 48 ms in total.
+- **Usage Token chart.** The chart's sums and cost totals also staged Usage's rows into a temporary table on every request.
+
+Pharos recovered legacy speed with a host fast path, which the next Query Table release could make unnecessary:
+
+- `internal/archive/query_metrics_native.go` answers plain counts, sums and distinct counts in one native statement, or over rows already in memory.
+- `query_metrics_exact.go` reproduces the adapter's exact decimal sum and single rounding.
+
+**Request:** fuse compatible reductions over different fields in one scan when they share a grouping and filter: count, sum, min, max, average and distinct count. Keep the adapter's exact arithmetic, its per-metric errors (unsafe integers, out-of-range values, text in number fields), and its group and population budgets. Where possible, also avoid staging a copy when the source is already a plain table or view.
+
+**Acceptance:**
+
+- N metrics over different fields read the source once.
+- Results are identical to reducing each metric separately, including exact decimal sums (for example ten 0.1s summing to exactly 1), NULLs, empty strings, and every error case.
+- Pharos's parity tests (`TestNativeMetricsMatchTheAdapter*` in `internal/archive/query_metrics_native_test.go`) pass with the native path switched off at legacy-comparable speed, so Pharos can delete it.
+
+## QT-15 — Computed-column previews through the negotiated transport
+
+**Observed:** Query Table's computed-column preview calls `transport.fetchRows` unconditionally (in the 0.8.0 React dist), and the `Transport` type requires `fetchRows`. Pharos therefore keeps its legacy row route, POST `/api/query/<dataset>`, alive only for that preview. The same applies to any host that has moved its tables to `fetchRowsV2` and `/query-v3`.
+
+**Request:** route computed-column previews through the transport the host negotiated through capabilities, using `fetchRowsV2` or V3 when available. Make `fetchRows` optional for hosts that advertise those.
+
+**Acceptance:**
+
+- A host that implements only `fetchRowsV2`/V3 and metrics can render tables, metric panels and computed-column previews.
+- A host without capabilities keeps working on `fetchRows`.
+- Previews show the same rows and diagnostics either way.
 
 ## Avoid duplicate or unrelated reports
 
