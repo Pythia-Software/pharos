@@ -181,10 +181,10 @@ const localDate = new Intl.DateTimeFormat(undefined, {
 export function localTime(value: number) {
   return localDateTime.format(new Date(value));
 }
-function SessionAge({ start }: { start: number | null }) {
+function SessionAge({ start, prefix = "" }: { start: number | null; prefix?: string }) {
   const label = relativeAge(start);
   if (!label || start == null) return null;
-  return <time className="delegation-session-age" dateTime={new Date(start).toISOString()} data-relative-time={start} title={`First evidence: ${localTime(start)}`}>{label}</time>;
+  return <>{prefix}<time className="delegation-session-age" dateTime={new Date(start).toISOString()} data-relative-time={start} title={`First evidence: ${localTime(start)}`}>{label}</time></>;
 }
 export function clampRange(range: Range, full: Range): Range {
   const width = Math.max(1, Math.min(full[1] - full[0], range[1] - range[0]));
@@ -1152,8 +1152,8 @@ export function DelegationExplorer({
                                         {n.model || "model unknown"} ·{" "}
                                         {n.effort || "unknown"}
                                         {n.context_only ? " · Parent context" : ""}
+                                        <SessionAge start={n.start} prefix=" · " />
                                       </small>
-                                      <SessionAge start={n.start} />
                                     </div>
                                   </div>
                                 </td>

@@ -12,9 +12,10 @@ Widening the sidebar restores the full table. Parallel activity stays available
 in the sidebar with its full-workspace overview, range selection, explicit detail
 expansion, and tool-call popovers; event grouping adapts to its narrower axis.
 
-Session rows show the age of their first retained evidence; the compact hierarchy
-places it beneath the comparison metric. Turn headers show the age of the user
-message (or first event for session setup). Ages refresh each minute and expose
+Session rows show the age of their first retained evidence on the same line as
+provider, model, and effort; the compact hierarchy places it beneath the
+comparison metric. Turn headers show the age of the user message (or first event
+for session setup). Ages refresh each minute and expose
 the exact local timestamp on hover. Missing timestamps omit the age.
 
 The reader toolbar shows the selected session number, assignment, provider,

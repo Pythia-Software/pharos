@@ -460,8 +460,6 @@
   text-decoration: underline;
 }
 .delegation-session-age {
-  display: block;
-  margin-top: 2px;
   color: var(--muted);
   font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums;
