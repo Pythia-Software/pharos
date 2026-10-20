@@ -14,7 +14,6 @@ tests.
 
 | Handoff | Problem |
 |---|---|
-| [machine-time-long-window-budget.md](machine-time-long-window-budget.md) | Machine Time over 90 days can exceed its 50,000-group budget and show an error instead of data |
 | [usage-filtered-metrics-fast-path.md](usage-filtered-metrics-fast-path.md) | Filtered Usage cost and distinct-count metrics still take the slow path; confirm Machine Time's all-time CPU |
 | [query-table-fork-reduction-reuse.md](query-table-fork-reduction-reuse.md) | Our patched Query Table adapter re-scans the source when `AVG` or `MIN` is batched with `SUM` |
 

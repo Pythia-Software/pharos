@@ -18,16 +18,20 @@ test("periods use complete local days and an adjacent calendar comparison across
 });
 
 test("missing timing is excluded from averages while recorded zero-duration calls count", () => {
-  const keys = ["repo-a", "test", "2026-03-05", "ok", "go-test", "go test", "Bash", ""];
-  const errorKeys = ["repo-a", "test", "2026-03-05", "error", "go-test", "go test", "Bash", ""];
-  const missingKeys = [null, "edit", "2026-03-05", "ok", "edit", "Edit", "Edit", ""];
-  const facts = timeFacts([
+  const keys = ["repo-a", "test", "ok", "go-test", "go test", "Bash", ""];
+  const errorKeys = ["repo-a", "test", "error", "go-test", "go test", "Bash", ""];
+  const missingKeys = [null, "edit", "ok", "edit", "Edit", "Edit", ""];
+  const { facts, days } = timeFacts([
     { id: "time", buckets: [{ keys, value: 120000, count: 4 }, { keys: errorKeys, value: 60000, count: 1 }, { keys: missingKeys, value: null, count: 2 }] },
     { id: "timed", buckets: [{ keys, value: 3, count: 4 }, { keys: errorKeys, value: 1, count: 1 }, { keys: missingKeys, value: 0, count: 2 }] },
+    { id: "trend_time", buckets: [{ keys: ["2026-03-05", "ok"], value: 120000, count: 5 }, { keys: ["2026-03-06", "error"], value: 60000, count: 1 }, { keys: ["2026-03-06", "ok"], value: null, count: 1 }] },
+    { id: "trend_timed", buckets: [{ keys: ["2026-03-05", "ok"], value: 3, count: 5 }, { keys: ["2026-03-06", "error"], value: 1, count: 1 }, { keys: ["2026-03-06", "ok"], value: 0, count: 1 }] },
     { id: "population", buckets: [{ keys: [], value: 7 }] },
   ]);
   const total = totalTime(facts);
   assert.deepEqual(total, { duration: 180000, calls: 7, timed: 4, failedDuration: 60000 });
+  assert.deepEqual(totalTime(days), total, "the trend and the breakdown count the same calls");
+  assert.deepEqual(groupTime(days, day => day.day).map(({ key, timed, failedDuration }) => [key, timed, failedDuration]), [["2026-03-05", 3, 0], ["2026-03-06", 1, 60000]]);
   assert.equal(total.duration / total.timed, 45000);
   assert.equal(facts[2].repository, noRepository);
   assert.equal(groupTime(facts, fact => fact.activity)[0].key, "test");
@@ -51,11 +55,11 @@ test("examples obey every filter and comparison dates do not overlap", () => {
   const exampleScope = { ...scope, repository: "pharos", model: "gpt-5.3-codex" };
   const current = exampleTimeFacts(exampleScope, window);
   const previous = exampleTimeFacts(exampleScope, window, true);
-  assert.ok(current.length);
-  assert.ok(current.every(fact => fact.repository === "pharos"));
-  assert.ok(current.every(fact => fact.day >= machineDay(window.start) && fact.day < machineDay(window.end)));
-  assert.ok(previous.every(fact => fact.day < machineDay(window.start)));
-  assert.deepEqual(exampleTimeFacts({ ...exampleScope, provider: "claude" }, window), []);
+  assert.ok(current.facts.length);
+  assert.ok(current.facts.every(fact => fact.repository === "pharos"));
+  assert.ok(current.days.every(total => total.day >= machineDay(window.start) && total.day < machineDay(window.end)));
+  assert.ok(previous.days.every(total => total.day < machineDay(window.start)));
+  assert.deepEqual(exampleTimeFacts({ ...exampleScope, provider: "claude" }, window), { facts: [], days: [] });
   assert.equal(exampleConcurrency(window, 7).days.length, 7);
   assert.ok(exampleConcurrency(window, 7).threads.every(thread => thread.turns.every(([start, end]) => end > start)));
 });
@@ -81,19 +85,25 @@ test("per-run trends weight calls and leave missing means empty", () => {
 });
 
 test("truncated group sets are rejected before totals or means are shown", () => {
-  const key = ["repo-a", "test", "2026-03-05", "ok", "go-test", "go test", "Bash", ""];
-  assert.throws(() => timeFacts([{id:"time", buckets:[{keys:key,value:60000,count:1}]}, {id:"timed", buckets:[{keys:key,value:1,count:1}]}, {id:"population", buckets:[{keys:[],value:2}]}]), /incomplete/);
+  const key = ["repo-a", "test", "ok", "go-test", "go test", "Bash", ""], day = ["2026-03-05", "ok"];
+  const metrics = (calls, dayCalls) => [{id:"time", buckets:[{keys:key,value:60000,count:calls}]}, {id:"timed", buckets:[{keys:key,value:1,count:calls}]},
+    {id:"trend_time", buckets:[{keys:day,value:60000,count:dayCalls}]}, {id:"trend_timed", buckets:[{keys:day,value:1,count:dayCalls}]}, {id:"population", buckets:[{keys:[],value:2}]}];
+  assert.equal(totalTime(timeFacts(metrics(2, 2)).days).calls, 2);
+  assert.throws(() => timeFacts(metrics(1, 2)), /incomplete/);
+  assert.throws(() => timeFacts(metrics(2, 1)), /incomplete/, "an incomplete trend is rejected too");
 });
 
 test("raw examples reconcile with analytics and distinguish slowdown from volume", () => {
   const scope = { days: 7, repository: "pharos", provider: "", model: "" };
   const rows = exampleTimeCalls(scope, window);
-  const facts = factsFromCalls(rows, "day");
+  const { facts, days } = factsFromCalls(rows, "day");
   assert.equal(totalTime(facts).calls, rows.length);
   assert.equal(totalTime(facts).duration, rows.reduce((sum, row) => sum + (row.duration_ms ?? 0), 0));
+  assert.deepEqual(totalTime(days), totalTime(facts));
+  assert.equal(days.length, 7);
   const buildKey = operationKey("exec_command", "", "npm", "run build");
   const builds = facts.filter(fact => fact.operation === buildKey);
-  const prior = exampleTimeFacts(scope, window, true).filter(fact => fact.operation === buildKey);
+  const prior = exampleTimeFacts(scope, window, true).facts.filter(fact => fact.operation === buildKey);
   assert.equal(totalTime(builds).calls, totalTime(prior).calls);
   assert.ok(timeValue(totalTime(builds), "average") > timeValue(totalTime(prior), "average"));
   const priorWhere = previousTimeWhere([...machineWhere(scope, window), {field:"operation_key",op:"=",value:buildKey},{field:"status",op:"=",value:"ok"}], 7);
