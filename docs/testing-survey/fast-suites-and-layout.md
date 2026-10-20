@@ -216,15 +216,17 @@ One command for all Python tests: `python3 -m unittest discover -s tools`. That 
 
 ## 5. macos/test/*
 
-| file | what it does | how it runs | cost and requirements | refs | recommendation |
-|---|---|---|---|---|---|
-| `swift-harness.sh` + `Harness.swift` (321 lines) | DiskArbitration handling and the Eject button (release, stop, eject) with an MCP server running from the drive. It also tests the service release using a fake 503 Python server. | Manual: `macos/test/swift-harness.sh [PORT]` | **Heavy.** It runs `macos/build-app.sh`, which does `npm ci` in web (**wiping web/node_modules mid-run for any concurrent JS tests**), npm build, a Go build and the Swift app. It then compiles the harness with `swiftc`, creates and attaches a 300 MB APFS DMG, and force-detaches it. Several minutes; macOS only; mounts `/Volumes/PharosTest-*`. | docs/configuration.md §Tests | Manual/opt-in only; never part of a default slate. Agents should run it only when touching `LibraryVolume.swift`, `Launch.swift` or eject flows. |
-| `eject-release.sh` | Service-side release during sync, a forced detach while syncing, and catalog integrity afterwards. | Manual | `go build`, sparse image, `hdiutil`/`diskutil`, runs the service. About 1–2 min. | docs/configuration.md | Manual/opt-in. |
-| `adopt-library.sh` | Adoption of a legacy per-user install (schema 4) into a drive library. | Manual `[LEGACY_REF] [PORT]` | Default `REF=euclid/baseline` **does not exist** in this repo, and the script builds `./cmd/alexandria`, which exists only in pre-rename commits (≤ e8cd2f2). Its default invocation is broken. | none | Archive or delete. It is a one-time migration test for a pre-release layout. Otherwise fix the default ref and document it as manual. |
-| `menu-bar.sh` + `MenuBarHarness.swift` | Compiles `MenuBar.swift` with a stub service and checks menu order, visibility, status, reopen and eject actions. | Manual `macos/test/menu-bar.sh [out]` | One `swiftc` compile (AppKit + WebKit, roughly 10–30 s); creates NSApplication; no volumes. | none | Keep as opt-in. Last touched 10-13, but `MenuBar.swift` changed on 10-15 (#124, #127), so it may be stale (unverified). Add it to a `macos/test/run-light.sh` together with UpdateCheck. |
-| `UpdateCheckHarness.swift` | Update checker against stubbed GitHub release responses. | Only via the comment header (`swiftc … && /tmp/pharos-update-check`); there is no script. | One `swiftc` compile; no volumes or network. | none | Opt-in. Give it a script, or add it to `run-light.sh`. |
+The manual harness follow-up is complete. Current commands and prerequisites
+are documented in [Manual macOS tests](../configuration.md#running-from-an-external-drive)
+and `AGENTS.md`. They remain opt-in and outside every default test tier.
 
-None of these are referenced by any automated runner, which is the correct choice. A short docs section should list them as "manual, macOS-only, run when touching X".
+| Harness | Resolution |
+|---|---|
+| `swift-harness.sh` + `Harness.swift` | Builds the app from a temporary copy of the current checkout. npm installation and generated assets stay in that copy, so concurrent JS tests retain their dependencies. Still mounts a throwaway 300 MB APFS image. |
+| `eject-release.sh` | Retained for service release, forced-detach recovery and catalog integrity on a throwaway sparse image. Integrity checks use Pharos's SQLite driver and registered SQL functions so expression indexes can be validated. |
+| Legacy adoption shell harness | Removed: its default historical ref was absent, and no pre-host-schema build is available in this branch's history. `internal/archive/adopt_test.go` retains schema-4 migration, live-WAL snapshot, concurrent writer and refusal/data-safety coverage. |
+| `menu-bar.sh` + `MenuBarHarness.swift` | Verified against the current menu implementation; also invoked by `run-light.sh`. |
+| `UpdateCheckHarness.swift` | Invoked by `run-light.sh` alongside the menu checks; stubbed release responses, no network or disk images. |
 
 ## 6. Test documentation: stale and scattered
 

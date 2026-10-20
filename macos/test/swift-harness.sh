@@ -8,7 +8,9 @@
 # It builds Pharos.app into a temporary directory (never launched), creates
 # and attaches its own disk image (/Volumes/PharosTest-*), serves a test
 # library on PORT (default 18768), and uses a temporary support directory in
-# place of ~/Library/Application Support/Pharos.
+# place of ~/Library/Application Support/Pharos. The app is built from a
+# temporary copy of the checkout so npm ci and generated assets cannot
+# disturb concurrent development or tests.
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 PORT=${1:-18768}
@@ -28,7 +30,16 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Building Pharos.app (not launched)…"
-"$ROOT/macos/build-app.sh" "$WORK/real" >"$WORK/build.log" 2>&1 || { cat "$WORK/build.log" >&2; exit 1; }
+mkdir "$WORK/source"
+rsync -a --exclude=.git --exclude=.context --exclude=node_modules \
+    --exclude=/go.work --exclude=/go.work.sum \
+    --exclude=dist --exclude=build --exclude=.test-build \
+    --exclude=.archive-data --exclude=__pycache__ \
+    "$ROOT/" "$WORK/source/"
+# Match npm ci's pinned packages with the checked-in Go backend. A local
+# go.work can reference excluded .context links or paths outside this copy;
+# GOWORK=off also overrides an inherited absolute workspace path.
+GOWORK=off "$WORK/source/macos/build-app.sh" "$WORK/real" >"$WORK/build.log" 2>&1 || { cat "$WORK/build.log" >&2; exit 1; }
 REAL="$WORK/real/Pharos.app"
 
 echo "Building the harness…"

@@ -49,7 +49,6 @@ Before and after screenshots are welcome in the PR; set
 | Handoff | Problem |
 |---|---|
 | [go-test-parallelism.md](go-test-parallelism.md) | The Go suite runs one test at a time; parallelism is the next large speedup |
-| [macos-test-harnesses.md](macos-test-harnesses.md) | The manual macOS harnesses: one is broken, one may be stale, one has no script, and one wipes `web/node_modules` |
 
 ## Upstream Query Table
 
