@@ -4,13 +4,13 @@ import type { QueryDataset } from "./query-links";
 // One palette for a card's subject, regardless of whether it is collected or
 // suggested. Named model/repository series retain the shared Usage palette.
 export const queryCategories = {
-  human: { label: "Human Words", tone: "var(--sea)" },
+  human: { label: "Human Words", tone: "var(--query-human-tone)" },
   steering: { label: "Steering", tone: "var(--warn)" },
   errors: { label: "Error Patterns", tone: "var(--bad)" },
   context: { label: "Context", tone: "var(--gold)" },
   models: { label: "Model Choice", tone: "color-mix(in srgb,var(--warn) 65%,var(--gold))" },
   usage: { label: "Token Usage", tone: "var(--heat-1)" },
-  cost: { label: "API Cost", tone: "color-mix(in srgb,var(--heat-0) 70%,var(--sea))" },
+  cost: { label: "API Cost", tone: "var(--query-cost-tone)" },
   research: { label: "Research", tone: "color-mix(in srgb,var(--heat-0) 70%,var(--sea))" },
   skills: { label: "Skills", tone: "var(--gold)" },
   tools: { label: "Tool Flow", tone: "color-mix(in srgb,var(--gold) 65%,var(--warn))" },
