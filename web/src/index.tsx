@@ -29,7 +29,11 @@ import { DataTable, FilterValueProvider, MetricsPanel, QueryBuilder, SelectionTo
 import "@pythia-software/query-table-ui/theme.css";
 import "./pharos.css";
 import { savedRollingWindow } from "./bookmarks";
-import { libraryStorageAdapter } from "./storage";
+import { libraryStorageAdapter, rejectLastQuery, retryLastQuery } from "./storage";
+import { queryRequest, queryFetch, shouldSkipQueryOnRestore } from "./query-request";
+import { PageErrorBoundary, QueryRecovery, ResetPage, tableRecoveryQuery } from "./query-recovery";
+import { createMCPMonitor, type MCPStatus, type MCPHistory } from "./mcp-monitor";
+import { MCPCallDetails } from "./mcp-call-details";
 import { HomePage } from "./home";
 import { linkTargets, navigateLink } from "./query-link-targets";
 import { QueryChip } from "./query-card";
@@ -228,51 +232,51 @@ function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary
     metricCapabilities: capabilities,
     queryCapabilities,
     ...(queryCapabilities?.version === 3 ? { async fetchQueryV3(query: Parameters<NonNullable<Transport<Row>["fetchQueryV3"]>>[0], signal?: AbortSignal) {
-      const result = await responseJSON<QueryResultV3 & { find?: FindSummary }>(await fetch(endpoint("/query-v3"), {
+      const result = await queryRequest<QueryResultV3 & { find?: FindSummary }>(endpoint("/query-v3"), {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query), signal,
-      }));
+      });
       onFind?.(result.find ?? null);
       return result;
     } } : {}),
     async fetchRow(id, signal) {
-      const result = await responseJSON<{ row: Row | null }>(await fetch(`/api/query/${dataset}/item?id=${encodeURIComponent(String(id))}`, { signal }));
+      const result = await queryRequest<{ row: Row | null }>(`/api/query/${dataset}/item?id=${encodeURIComponent(String(id))}`, { signal });
       return result.row;
     },
     async fetchRowsV2(query, signal) {
-      const result = await responseJSON<FetchRowsResultV2<Row> & { find?: FindSummary }>(await fetch(endpoint("/rows-v2", recordBudget(dataset, query.where)), {
+      const result = await queryRequest<FetchRowsResultV2<Row> & { find?: FindSummary }>(endpoint("/rows-v2", recordBudget(dataset, query.where)), {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query), signal,
-      }));
+      });
       onFind?.(result.find ?? null);
       return result;
     },
     async fetchMetrics(query, signal) {
-      return responseJSON(await fetch(endpoint("/metrics", recordBudget(dataset, query.where)), {
+      return queryRequest(endpoint("/metrics", recordBudget(dataset, query.where)), {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query), signal,
-      }));
+      });
     },
     async fetchRows(query: ServerQuery, signal?: AbortSignal) {
-      const result = await responseJSON<{ rows: Row[]; total: number; find?: FindSummary }>(await fetch(endpoint(), {
+      const result = await queryRequest<{ rows: Row[]; total: number; find?: FindSummary }>(endpoint(), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(query),
         signal,
-      }));
+      });
       onFind?.(result.find ?? null);
       return result;
     },
     async fetchDistinctValues(query, signal) {
       const params = new URLSearchParams({ field: query.field, q: query.search });
       if (query.limit) params.set("limit", String(query.limit));
-      return responseJSON(await fetch(endpoint("/distinct", params), { signal }));
+      return queryRequest(endpoint("/distinct", params), { signal });
     },
     async fetchFieldStats(fields, signal) {
-      return responseJSON(await fetch(endpoint("/field-stats", new URLSearchParams({ fields: fields.join(",") })), { signal }));
+      return queryRequest(endpoint("/field-stats", new URLSearchParams({ fields: fields.join(",") })), { signal });
     },
   };
 }
 
 type Capabilities = { metricCapabilities: MetricCapabilities; queryCapabilities?: QueryCapabilitiesV3; computedExecution: ComputedExecution };
-const fetchCapabilities = async (dataset: Dataset, signal?: AbortSignal) => responseJSON<Capabilities>(await fetch(`/api/query/${dataset}/capabilities`, { signal }));
+const fetchCapabilities = async (dataset: Dataset, signal?: AbortSignal) => queryRequest<Capabilities>(`/api/query/${dataset}/capabilities`, { signal });
 
 const renderers: RenderRegistry<Row> = {
   ...defaultRenderers,
@@ -431,21 +435,24 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
   onFindRef.current = onFind;
   const [capabilities, setCapabilities] = useState<Capabilities>();
   const [capabilityError, setCapabilityError] = useState<Error>();
+  const [capabilityRetry, setCapabilityRetry] = useState(0);
+  const [recovered, setRecovered] = useState(false);
   const remote = !shared && !localRows;
   // A server table runs only once it knows the server's capabilities: rows
   // and metrics both go through V2/V3, and nothing reads the legacy routes
   // first. A failed handshake shows its error instead.
   useEffect(() => {
     if (!remote || !visible || capabilities) return;
+    setCapabilityError(undefined);
     const controller = new AbortController();
     fetchCapabilities(dataset, controller.signal).then(setCapabilities, failure => {
       if (!controller.signal.aborted) setCapabilityError(failure instanceof Error ? failure : new Error(String(failure)));
     });
     return () => controller.abort();
-  }, [dataset, remote, Boolean(visible), Boolean(capabilities)]);
+  }, [dataset, remote, Boolean(visible), Boolean(capabilities), capabilityRetry]);
   const computedColumnStore = useMemo(() => {
     if (shared || localRows || !visible) return undefined;
-    const backendStore = httpComputedColumnStore("/api/query-computed-columns");
+    const backendStore = httpComputedColumnStore("/api/query-computed-columns", queryFetch);
     // Group projections have a derived schema name. Canonical definitions and
     // their execution handshake still belong to this surface's source dataset.
     const store: ComputedColumnStore = {
@@ -462,7 +469,7 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
   const [bookmarkRevision, setBookmarkRevision] = useState(0);
   useEffect(() => { const changed = () => setBookmarkRevision(value => value + 1); window.addEventListener("pharos:bookmarks", changed); return () => window.removeEventListener("pharos:bookmarks", changed); }, []);
   // A shared file has no origin of its own to keep saved queries apart from other files'.
-  const storage = useMemo(() => shared || localRows ? memoryStorageAdapter() : libraryStorageAdapter(), [bookmarkRevision, Boolean(localRows)]);
+  const storage = useMemo(() => shared || localRows ? memoryStorageAdapter() : libraryStorageAdapter({ fresh: new URLSearchParams(location.search).get("fresh") === "1", onRecovery: () => setRecovered(true) }), [bookmarkRevision, Boolean(localRows)]);
   const propertyStorage = useMemo(() => jsonPropertyViewStorage(
     key => preferences().get<string | null>(key, null),
     (key, value) => preferences().set(key, value),
@@ -493,6 +500,16 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
       } },
     onRefresh: () => { if (namespace) window.dispatchEvent(new Event("pharos:machine-refresh")); },
   });
+  const lastFailure = useRef<Error | null>(null);
+  useEffect(() => {
+    if (!visible || !api.error || api.error === lastFailure.current) return;
+    lastFailure.current = api.error;
+    // Only query rejection or a bounded timeout implicates the restored state.
+    // Offline, authentication and service failures must not discard preferences.
+    if (shouldSkipQueryOnRestore(api.error)) {
+      rejectLastQuery(schema.name, api.query, { defaults: api.defaults, canonicalize: canonicalizeQuery });
+    }
+  }, [visible, api.error, api.query, schema.name]);
   useMachineQueryNavigation(api, Boolean(visible && !shared && (namespace || dataset === "usage")), JSON.stringify([scopeWhere, new URLSearchParams(location.search).get("machine_view"), Boolean(localRows)]), `q_${registryKey}`, scopeWhere);
   const apiRef = useRef(api);
   apiRef.current = api;
@@ -552,6 +569,9 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
   if (!visible) return null;
 
   return <FilterValueProvider value={filterPresentations[dataset]}>
+    <QueryRecovery busy={api.loading || api.restoration.status === "resolving" || (remote && !capabilities && !capabilityError)} error={capabilityError ?? api.error} recovered={recovered} identity={JSON.stringify(api.query)}
+      onRetry={() => { retryLastQuery(schema.name); if (capabilityError) setCapabilityRetry(value => value + 1); else if (api.restoration.error) void api.restoreLocation(location.href).catch(() => {}); else api.refresh(); }}
+      onReset={() => { setRecovered(false); api.setQuery(tableRecoveryQuery(schema, scopeWhere)); if (capabilityError) setCapabilityRetry(value => value + 1); }} />
     {!api.query.grouping || namespace ? header?.(api) : null}
     {presets?.(api)}
     {api.query.grouping ? <QueryBuilder api={stableApi} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <QueryBuilder defaultCollapsed={Boolean(namespace)} api={stableApi} fields={(api.query.grouping ? api.schema!.fields : api.computed.catalogue)} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={stableApi} dataset={dataset} layout={<QueryBuilder api={stableApi} fields={(api.query.grouping ? api.schema!.fields : api.computed.catalogue)} total={api.total} running={api.loading} />} /> : <QueryBuilder api={stableApi} fields={(api.query.grouping ? api.schema!.fields : api.computed.catalogue)} total={api.total} running={api.loading} />}
@@ -576,7 +596,8 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
       onNavigate={navigateLink}
       total={api.total}
       loading={api.loading}
-      emptyMessage={api.error ? failedMessage : find ? "No work matches this search and these filters." : emptyMessages[dataset]}
+      emptyMessage={api.loading ? "Loading results…" : api.error ? failedMessage : find ? "No work matches this search and these filters." : emptyMessages[dataset]}
+      classNames={{ empty: api.loading ? "pharos-table-loading" : undefined }}
       {...(api.query.grouping ? { trailing: (row: Row) => {
         const complete = api.query.grouping!.keys.every(key => Object.hasOwn(row, key));
         const records = complete ? groupSourceQuery(api.query, row, sourceSchema) : null;
@@ -958,6 +979,7 @@ function compactNumber(value: number): string {
 }
 
 function readStored<T extends object>(key: string, fallback: T, valid: (value: T) => boolean): T {
+  if (new URLSearchParams(location.search).get("fresh") === "1") return fallback;
   const saved = preferences().get<unknown>(key, {});
   if (!saved || typeof saved !== "object") return fallback;
   const stored = { ...fallback, ...saved } as T;
@@ -1416,6 +1438,7 @@ function UsagePage() {
           ? <>Text you typed or dictated into agent chats, per conversation or per message. Harness instructions, one-click prompts, attachments, pastes, and copied agent output are counted separately; filter the table and the chart and breakdown follow. {statusText ? <span className="meta">{statusText}</span> : null}</>
           : view === "conversations" ? "Compare human-supplied text estimates and recorded output across whole conversations, including delegated work. Human text is estimated once per classified message, excluding harness and automated spans; output retains the usage ledger’s time placement." : "Estimated inference electricity and CO₂e for the tokens in this library, using published research and explicit assumptions."}</p></div>
       <div className="usage-heading-actions">
+        {!shared ? <ResetPage /> : null}
         {shared ? null : <div className="library-view-toggle" role="group" aria-label="Usage view">
           <button type="button" className={view === "writing" ? "active" : ""} aria-pressed={view === "writing"} onClick={() => choose("writing")}>Human Words</button>
           <button type="button" className={view === "tokens" ? "active" : ""} aria-pressed={view === "tokens"} onClick={() => choose("tokens")}>Machine Activity</button>
@@ -1432,9 +1455,6 @@ function UsagePage() {
   </div></UsageChartColorsProvider>;
 }
 
-type MCPStatus = { enabled: boolean; transport: string; command: string; args: string[]; install_location?: string; note: string; skill?: { name: string; text: string; paths?: Record<string, string> } };
-type MCPCall = { id: number; called_at: string; tool_name: string; arguments_json: string; status: string; error_text: string | null; duration_ms: number; response_bytes: number; estimated_output_tokens: number; result_count: number | null; truncated: boolean };
-type MCPHistory = { stats: { total_calls: number; failed_calls: number; average_output_tokens: number; largest_output_tokens: number; truncated_calls: number } };
 
 const mcpMetrics = [
   { label: "By tool", aggregations: [sum("call_count", ["tool_name"], "Calls by tool"), sum("error_count", ["tool_name"], "Errors by tool"), sum("estimated_output_tokens", ["tool_name"], "Output tokens by tool")] },
@@ -1444,37 +1464,36 @@ const mcpMetrics = [
 ];
 
 function MCPPage() {
+  useLocationRevision();
+  const active = location.pathname === "/mcp";
   const [status, setStatus] = useState<MCPStatus | null>(null);
   const [history, setHistory] = useState<MCPHistory | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [readErrors, setReadErrors] = useState({ status: "", history: "" });
   const [copied, setCopied] = useState("");
-  const [selectedCall, setSelectedCall] = useState<MCPCall | null>(null);
-  async function refresh() {
-    try {
-      const [nextStatus, nextHistory] = await Promise.all([
-        fetch("/api/mcp").then(responseJSON<MCPStatus>),
-        fetch("/api/mcp/calls?limit=1").then(responseJSON<MCPHistory>),
-      ]);
-      setStatus(nextStatus); setHistory(nextHistory); setError("");
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "MCP status unavailable"); }
-  }
+  const [selectedCall, setSelectedCall] = useState<string | null>(null);
+  useEffect(() => { if (!active) setSelectedCall(null); }, [active]);
+  const monitor = useMemo(() => createMCPMonitor({
+    status: setStatus, history: setHistory,
+    error: (part, failure) => setReadErrors(previous => ({ ...previous, [part]: failure?.message ?? "" })),
+  }), []);
 
   useEffect(() => {
-    void refresh();
-    const onRoute = () => { if (location.pathname === "/mcp") void refresh(); };
-    const timer = window.setInterval(() => { if (document.querySelector("#mcp.active")) void refresh(); }, 5000);
-    window.addEventListener("pharos:route", onRoute);
-    return () => { window.clearInterval(timer); window.removeEventListener("pharos:route", onRoute); };
-  }, []);
+    if (!active || busy) return;
+    void monitor.refresh();
+    const timer = window.setInterval(() => void monitor.refresh(), 5000);
+    return () => { window.clearInterval(timer); monitor.stop(); };
+  }, [active, busy, monitor]);
 
   async function toggle() {
     if (!status) return;
+    monitor.stop();
     setBusy(true);
     try {
-      const next = await responseJSON<{ enabled: boolean }>(await fetch("/api/mcp/enabled", {
+      const next = await queryRequest<{ enabled: boolean }>("/api/mcp/enabled", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !status.enabled }),
-      }));
+      });
       setStatus({ ...status, enabled: next.enabled }); setError("");
     } catch (failure) { setError(failure instanceof Error ? failure.message : "Could not update MCP"); }
     finally { setBusy(false); }
@@ -1493,10 +1512,12 @@ function MCPPage() {
   const prompt = status ? `Add Pharos as a local stdio MCP server. Call list_repositories with the current working directory as path (or the repository name as query) to find this repository, then use search_conversations with that repository filter, a small limit, and a max_output_tokens budget. Open get_conversation_overview for promising results, search_conversation_passages for a specific topic, and get_conversation_messages only around cited message IDs. Treat previews as leads and inspect the cited evidence before relying on an outcome. Pharos is read-only. If its tools are unavailable, enable MCP in the Pharos app and reconnect this agent client. Use list_findings and get_finding for recurring problems Pharos found in past work; reading them never starts a measurement.\n\nConnection definition:\n${connection}` : "";
   const stats = history?.stats;
   return <div className="mcp-page pharos-query-page">
-    <div className="view-heading"><div><h1>MCP</h1><p className="muted">Let local agents search past conversations in small steps. Review calls to spot oversized responses and failed queries.</p></div><button type="button" className="mcp-refresh" onClick={() => { void refresh(); tableApis.get("mcp_calls")?.refresh(); }}>Refresh</button></div>
+    <div className="view-heading"><div><h1>MCP</h1><p className="muted">Let local agents search past conversations in small steps. Review calls to spot oversized responses and failed queries.</p></div><div className="mcp-page-actions"><ResetPage /><button type="button" className="mcp-refresh" disabled={busy} onClick={() => { setError(""); void monitor.refresh(true); tableApis.get("mcp_calls")?.refresh(); }}>Refresh</button></div></div>
     {error ? <div className="query-table-error" role="alert">{error}</div> : null}
+    {readErrors.status ? <div className="query-table-error" role="alert">Connection settings could not be loaded: {readErrors.status}</div> : null}
+    {readErrors.history ? <div className="query-table-error" role="alert">Call history summary could not be loaded: {readErrors.history}</div> : null}
     <section className="mcp-card mcp-status-card" aria-label="MCP availability">
-      <div><span className={`mcp-status ${status?.enabled ? "enabled" : "disabled"}`}>{status ? status.enabled ? "Available" : "Off" : "Loading"}</span><h2>Agent access</h2><p className="muted">{status?.note ?? "Loading connection settings…"}</p>{status?.install_location ? <p className="muted">Pharos installation: <code>{status.install_location}</code></p> : null}</div>
+      <div><span className={`mcp-status ${status?.enabled ? "enabled" : "disabled"}`}>{status ? status.enabled ? "Available" : "Off" : readErrors.status ? "Unavailable" : "Loading"}</span><h2>Agent access</h2><p className="muted">{status?.note ?? (readErrors.status ? "Use Refresh to try loading connection settings again." : "Loading connection settings…")}</p>{status?.install_location ? <p className="muted">Pharos installation: <code>{status.install_location}</code></p> : null}</div>
       <button type="button" className={`toggle ${status?.enabled ? "on" : ""}`} role="switch" aria-checked={Boolean(status?.enabled)} aria-label="Enable MCP" disabled={!status || busy} onClick={() => void toggle()} />
     </section>
     <section className="mcp-history" aria-label="MCP call history">
@@ -1512,21 +1533,16 @@ function MCPPage() {
         {mcpMetrics.map(preset => <QueryChip key={preset.label} title={preset.label} description={`Explore ${preset.label.toLowerCase()} in MCP calls`} onClick={() => applyMetricPreset(preset.aggregations)} />)}
         <button type="button" className="usage-preset-clear" onClick={() => applyMetricPreset(null)}>Clear metrics</button>
       </div>
-      <QuerySurface dataset="mcp_calls" trailing={row => <button type="button" className="mcp-detail-button" onClick={() => setSelectedCall(row as MCPCall)}>Details</button>} />
+      <QuerySurface dataset="mcp_calls" trailing={row => <button type="button" className="mcp-detail-button" disabled={row.id == null} onClick={() => setSelectedCall(String(row.id))}>Details</button>} />
     </section>
     <div className="mcp-setup-grid">
-      <section className="mcp-card"><div className="mcp-card-heading"><div><h2>Connection</h2><p className="muted">Add this stdio server in an agent client’s MCP settings. The client launches Pharos locally.</p></div><button type="button" disabled={!status} onClick={() => void copy("connection", connection)}>{copied === "connection" ? "Copied" : "Copy JSON"}</button></div><pre className="mcp-code"><code>{connection || "Loading…"}</code></pre><p className="mcp-fineprint">Client settings formats vary. Use the command and args shown here if your client does not accept this JSON shape.</p></section>
-      <section className="mcp-card"><div className="mcp-card-heading"><div><h2>Prompt for an agent</h2><p className="muted">Paste this when asking an agent to add Pharos and use it efficiently.</p></div><button type="button" disabled={!status} onClick={() => void copy("prompt", prompt)}>{copied === "prompt" ? "Copied" : "Copy prompt"}</button></div><pre className="mcp-prompt">{prompt || "Loading…"}</pre></section>
+      <section className="mcp-card"><div className="mcp-card-heading"><div><h2>Connection</h2><p className="muted">Add this stdio server in an agent client’s MCP settings. The client launches Pharos locally.</p></div><button type="button" disabled={!status} onClick={() => void copy("connection", connection)}>{copied === "connection" ? "Copied" : "Copy JSON"}</button></div><pre className="mcp-code"><code>{connection || (readErrors.status ? "Connection settings unavailable. Use Refresh to try again." : "Loading…")}</code></pre><p className="mcp-fineprint">Client settings formats vary. Use the command and args shown here if your client does not accept this JSON shape.</p></section>
+      <section className="mcp-card"><div className="mcp-card-heading"><div><h2>Prompt for an agent</h2><p className="muted">Paste this when asking an agent to add Pharos and use it efficiently.</p></div><button type="button" disabled={!status} onClick={() => void copy("prompt", prompt)}>{copied === "prompt" ? "Copied" : "Copy prompt"}</button></div><pre className="mcp-prompt">{prompt || (readErrors.status ? "Connection settings unavailable. Use Refresh to try again." : "Loading…")}</pre></section>
       {status?.skill?.text ? <section className="mcp-card mcp-skill-card"><div className="mcp-card-heading"><div><h2>Skill for agents</h2><p className="muted">A short skill that teaches an agent to search prior coding sessions with Pharos, and to ask you to turn on MCP when it isn’t available. Save it as:</p></div><button type="button" onClick={() => void copy("skill", status.skill?.text ?? "")}>{copied === "skill" ? "Copied" : "Copy skill"}</button></div>
         <ul className="mcp-skill-paths">{Object.entries(status.skill.paths ?? {}).map(([harness, where]) => <li key={harness}><span>{harness === "claude" ? "Claude Code" : harness === "codex" ? "Codex" : harness}</span><code>{where}</code></li>)}</ul>
         <pre className="mcp-prompt">{status.skill.text}</pre></section> : null}
     </div>
-    {selectedCall ? <div className="mcp-dialog-backdrop" onClick={() => setSelectedCall(null)}><div className="mcp-dialog" role="dialog" aria-modal="true" aria-label="MCP call details" onClick={event => event.stopPropagation()}>
-      <div className="mcp-card-heading"><div><h2>{selectedCall.tool_name}</h2><p className="muted">{new Date(selectedCall.called_at).toLocaleString()} · {selectedCall.status}</p></div><button type="button" onClick={() => setSelectedCall(null)}>Close</button></div>
-      <p className="muted">{compactNumber(selectedCall.estimated_output_tokens)} estimated output tokens · {selectedCall.response_bytes.toLocaleString()} bytes · {selectedCall.duration_ms.toLocaleString()} ms{selectedCall.result_count === null ? "" : ` · ${selectedCall.result_count} results`}{selectedCall.truncated ? " · truncated" : ""}</p>
-      <h3>Sanitized arguments</h3><pre className="mcp-code">{selectedCall.arguments_json}</pre>
-      {selectedCall.error_text ? <><h3>Error</h3><pre className="mcp-code badtext">{selectedCall.error_text}</pre></> : null}
-    </div></div> : null}
+    {selectedCall ? <MCPCallDetails key={selectedCall} id={selectedCall} onClose={() => setSelectedCall(null)} /> : null}
   </div>;
 }
 
@@ -1800,7 +1816,7 @@ function LazyPage({ host, children }: { host: HTMLElement; children: React.React
 for (const [id, component] of mounts) {
   if (shared && !["queryTableLibrary", "queryTableUsage", "toolsPage"].includes(id)) continue;
   const element = document.getElementById(id);
-  if (element) createRoot(element).render(<LazyPage host={element}>{component}</LazyPage>);
+  if (element) createRoot(element).render(<PageErrorBoundary><LazyPage host={element}>{component}</LazyPage></PageErrorBoundary>);
 }
 if (!shared) { startFindingsChrome(); installWorkspaceInbox(); installDelegationExplorer(); }
 if (!shared && concurrencyPrototypeEnabled) {
