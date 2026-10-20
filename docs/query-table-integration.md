@@ -10,8 +10,7 @@ The [upstream migration guide](https://github.com/Pythia-Software/query-table/bl
 and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.8.0/CHANGELOG.md)
 define the release contract. Optional worktree linking is described in
 [local development](query-table-local-development.md). The earlier
-[upstream handoff](query-table-upstream-handoff.md) and
-[next-release handoff](query-table-next-release-handoff.md) are historical records.
+[next-release handoff](query-table-next-release-handoff.md) is a historical record.
 
 ## 0.8.0 feature coverage
 
