@@ -163,7 +163,7 @@ func TestVerificationIncludesDeletedConductorSessionsFromOlderCaptures(t *testin
 	runCapture(t, config)
 	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
 	config.Sources = nil
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	t.Cleanup(func() { server.stop(5 * time.Second) })
 	summary := server.verifyAllInputs(t.Context(), "history", nil)
 	if summary.Checked != 2 || summary.Passed != 2 || summary.Errors != 0 || summary.Deferred != 0 {

@@ -75,7 +75,7 @@ func carbonUsageFixture(t *testing.T) (*Catalog, *Server, carbonDocument) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return catalog, NewServer(config, catalog), doc
+	return catalog, testServer(t, config, catalog), doc
 }
 
 func carbonRowTokens(row map[string]any) map[string]map[string]int64 {

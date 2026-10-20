@@ -121,7 +121,7 @@ func ptr(value any) *float64 {
 
 func TestLibraryCacheServesConcurrentRequestsWithoutSharingPages(t *testing.T) {
 	catalog, config := libraryFixture(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	other := otherProcess(t, catalog)
 	request := func(method, path, body string) error {
 		recorder := httptest.NewRecorder()

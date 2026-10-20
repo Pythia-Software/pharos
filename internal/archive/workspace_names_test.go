@@ -110,10 +110,7 @@ func TestWorkspaceNamesKeepPreviousChoiceWhenSourcesConflict(t *testing.T) {
 
 func TestWorkspaceNamesCacheFirstHumanWordsAcrossSyncAndReopen(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "catalog.sqlite3")
-	c, err := OpenCatalog(file)
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := openTestCatalog(t, file)
 	defer func() { c.Close() }()
 	text := "<system_instruction>Injected instructions</system_instruction>\n\nPlease fix the login bug @⟦pasted_text_2026-09-01.txt⟧(.context%2Fattachments%2Fab%2Fpasted_text_2026-09-01.txt)"
 	record := namingRecord("codex", "native", "Codex native", text)

@@ -264,7 +264,7 @@ func TestDriveHealthAnswersFromCacheAndRefreshesInBackground(t *testing.T) {
 	config, _ := backupFixture(t)
 	quietDriveCache(t)
 	previousTimeout := identityTimeout
-	identityTimeout = 200 * time.Millisecond
+	identityTimeout = time.Second
 	var diskutil atomic.Int32
 	release := make(chan struct{})
 	unblock := sync.OnceFunc(func() { close(release) })
@@ -290,8 +290,9 @@ func TestDriveHealthAnswersFromCacheAndRefreshesInBackground(t *testing.T) {
 			t.Fatalf("drive before the first check finished: %v", drive)
 		}
 	}
-	// The first poll waited out the identity lookup; the others did not.
-	if elapsed := time.Since(started); elapsed > identityTimeout+time.Second {
+	// The first poll waited out the identity lookup; the others did not, or the
+	// three would take 3 s.
+	if elapsed := time.Since(started); elapsed > 2*identityTimeout+time.Second/2 {
 		t.Fatalf("health waited for a hung diskutil: %v", elapsed)
 	}
 	unblock()

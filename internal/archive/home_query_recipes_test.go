@@ -16,6 +16,7 @@ import (
 // Execute the documented production recipes through the authenticated host,
 // rather than validating only generic sample fields or the browser interpreter.
 func TestHomeQueryRecipesV2(t *testing.T) {
+	slowTest(t)
 	data, err := os.ReadFile("../../docs/homepage-query-cards.json")
 	if err != nil {
 		t.Fatal(err)
@@ -33,7 +34,7 @@ func TestHomeQueryRecipesV2(t *testing.T) {
 	}
 	catalog, config := testCatalog(t)
 	seedToolCalls(t, catalog, 300)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	for _, recipe := range tracker.Recipes {
 		t.Run(recipe.ID, func(t *testing.T) {
 			path := "/api/query/" + recipe.Dataset + "/metrics"
@@ -89,6 +90,7 @@ func TestHomeQueryRecipesV2(t *testing.T) {
 }
 
 func TestHomeQueryCardGroupedDestinations(t *testing.T) {
+	slowTest(t)
 	data, err := os.ReadFile("../../docs/homepage-query-cards.json")
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +114,7 @@ func TestHomeQueryCardGroupedDestinations(t *testing.T) {
 	catalog, config := testCatalog(t)
 	seedToolCalls(t, catalog, 300)
 	ingestUsageFixture(t, catalog)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	for _, recipe := range tracker.Recipes {
 		if recipe.Exploration == nil {
 			continue

@@ -42,7 +42,7 @@ func TestUsageQueriesLoadLineageOnlyWhenConsumed(t *testing.T) {
 func TestLegacyUsageRowsIncludeSelectedLineage(t *testing.T) {
 	c, cfg := testCatalog(t)
 	ingestUsageFixture(t, c)
-	server := NewServer(cfg, c)
+	server := testServer(t, cfg, c)
 	full, err := c.localUsageRows(context.Background())
 	if err != nil || len(full) == 0 {
 		t.Fatal("missing usage fixture", err)
@@ -267,7 +267,7 @@ func TestUsageLongMessagePresetKeepsBoundedTextAndFullFilters(t *testing.T) {
 		}
 	}
 
-	s := NewServer(cfg, c)
+	s := testServer(t, cfg, c)
 	q := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "text", "typed_words"}, Where: []qt.WhereTerm{{Field: "text", Op: "contains", Value: "rare-tail-match"}}, OrderBy: qt.OrderBys{{Field: "typed_share", Dir: "asc"}, {Field: "words", Dir: "desc"}}, Limit: 50}}
 	got, err := s.executeQueryV2(context.Background(), "writing_messages", nil, PharosWritingMessagesSchema(), &q, nil)
 	if err != nil || len(got.Rows.Rows) != 1 {
@@ -281,7 +281,7 @@ func TestUsageLongMessagePresetKeepsBoundedTextAndFullFilters(t *testing.T) {
 func TestUsageFusedSummariesMatchIndependentMetrics(t *testing.T) {
 	c, cfg := testCatalog(t)
 	ingestUsageFixture(t, c)
-	s := NewServer(cfg, c)
+	s := testServer(t, cfg, c)
 	summaries := []qt.SummaryColumn{
 		{ID: "tokens", Op: "sum", Field: "total_tokens"},
 		{ID: "sessions", Op: "count_distinct", Field: "agent_session_id"},
@@ -326,7 +326,7 @@ func TestMachineTimeCallDrilldownIndexParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := NewServer(cfg, c)
+	s := testServer(t, cfg, c)
 	for _, term := range []querytable.WhereTerm{
 		{Field: "activity", Op: "=", Value: "read"},
 		{Field: "activity", Op: "=", Value: "missing"},

@@ -329,6 +329,7 @@ func execSQL(t *testing.T, db *sql.DB, statements ...string) {
 }
 
 func TestCaptureSnapshotsSQLiteConsistentlyWhileWritten(t *testing.T) {
+	slowTest(t)
 	useHost(t, "host-a")
 	conductor := filepath.Join(t.TempDir(), "com.conductor.app")
 	if err := os.MkdirAll(conductor, 0o755); err != nil {
@@ -352,11 +353,17 @@ func TestCaptureSnapshotsSQLiteConsistentlyWhileWritten(t *testing.T) {
 		}
 		return tx.Commit()
 	}
+	// What commit would write 5000 times, in one transaction.
+	seed := seedTx(t, db)
 	for range 5000 {
-		if err := commit(); err != nil {
+		if _, err := seed.Exec("INSERT INTO messages(session_id,body) VALUES('s1',?)", body); err != nil {
 			t.Fatal(err)
 		}
 	}
+	if _, err := seed.Exec("UPDATE sessions SET message_count=5000 WHERE id='s1'"); err != nil {
+		t.Fatal(err)
+	}
+	commitSeed(t, seed)
 	cache := openWritableSQLite(t, filepath.Join(conductor, "cache.db"))
 	execSQL(t, cache, "CREATE TABLE kv(k TEXT, v TEXT)")
 
@@ -630,7 +637,7 @@ func TestCaptureAPIRunsInBackgroundAndReportsSafeToUnplug(t *testing.T) {
 	writeSourceFile(t, filepath.Join(claude, "p", "s.jsonl"), "{}\n")
 	config.CaptureRoot = filepath.Join(t.TempDir(), "captures")
 	config.Sources = []SourceConfig{{Name: "claude", Kind: "claude", Path: claude, Enabled: true}}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	release := make(chan struct{})
 	captureFault = func(stage, rel string) error { <-release; return nil }
 	t.Cleanup(func() { captureFault = nil })
@@ -684,7 +691,7 @@ func TestCaptureAPIReleasesItsLockWhenAStopBeginsFirst(t *testing.T) {
 	writeSourceFile(t, filepath.Join(claude, "p", "s.jsonl"), "{}\n")
 	config.CaptureRoot = filepath.Join(t.TempDir(), "captures")
 	config.Sources = []SourceConfig{{Name: "claude", Kind: "claude", Path: claude, Enabled: true}}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	// The request was admitted; then a release begins before its worker starts.
 	server.beginStop()
 	response := httptest.NewRecorder()

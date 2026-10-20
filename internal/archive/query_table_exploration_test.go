@@ -26,7 +26,7 @@ func queryExplorationCall(server *Server, token, method, path, body string) *htt
 func TestQueryExplorationHTTP(t *testing.T) {
 	catalog, config := testCatalog(t)
 	seedToolCalls(t, catalog, 31)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	call := func(method, path, body string) *httptest.ResponseRecorder {
 		return queryExplorationCall(server, config.APIToken, method, path, body)
 	}
@@ -69,7 +69,7 @@ func TestQueryExplorationHTTP(t *testing.T) {
 
 func TestQueryPopulationDownloadsDisabled(t *testing.T) {
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "parallelism"} {
 		for _, body := range []string{`{"where":[]}`, `{"where":[{"field":"tool_name","op":"=","value":"shell_command"}]}`} {
 			w := queryExplorationCall(server, config.APIToken, "POST", "/api/query/"+dataset+"/population", body)
@@ -82,7 +82,7 @@ func TestQueryPopulationDownloadsDisabled(t *testing.T) {
 
 func TestQuerySnapshotsPharosHTTP(t *testing.T) {
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	code := "abcdefghijklmnopqrstuv"
 	token := "2j." + base64.RawURLEncoding.EncodeToString([]byte(`{"s":[["tool_name"]]}`))
 	path := "/api/query-snapshots?dataset=pharos_tool_calls&code=" + code
@@ -127,8 +127,9 @@ func TestQuerySnapshotsPharosHTTP(t *testing.T) {
 }
 
 func TestQuerySnapshotQuotaPreservesExistingLinks(t *testing.T) {
+	override(t, &querySnapshotCount, 5)
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	_, err := catalog.DB.Exec(`WITH RECURSIVE seq(n) AS (SELECT 0 UNION ALL SELECT n+1 FROM seq WHERE n+1<?) INSERT INTO query_table_query_snapshots SELECT 'local','pharos_tool_calls',printf('%022d',n),'2j.e30',1 FROM seq`, querySnapshotCount)
 	if err != nil {
 		t.Fatal(err)
@@ -173,7 +174,7 @@ func TestQuerySnapshotDirectWritesValidateBeforeStorage(t *testing.T) {
 func TestQueryObjectReferencesHTTP(t *testing.T) {
 	catalog, config := testCatalog(t)
 	seedToolCalls(t, catalog, 4)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	body := `{"references":[{"objectType":"pharos_library","key":{"id":"ws-0"}},{"objectType":"pharos_conversations","key":{"id":"conv-0"}},{"objectType":"pharos_library","key":{"id":"missing"}},{"objectType":"pharos_library","key":{"id":"ws-0"}}]}`
 	w := queryExplorationCall(server, config.APIToken, "POST", "/api/query-object-references", body)
 	if w.Code != 200 {
@@ -197,7 +198,7 @@ func TestQueryObjectReferencesHTTP(t *testing.T) {
 func TestConversationLinkRedirectsToItsWork(t *testing.T) {
 	catalog, config := testCatalog(t)
 	seedToolCalls(t, catalog, 4)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	w := queryExplorationCall(server, config.APIToken, "GET", "/conversation/conv-0?message=m-1", "")
 	if w.Code != 302 || w.Header().Get("Location") != "/work/ws-0/conversation/conv-0?message=m-1" {
 		t.Fatal(w.Code, w.Header().Get("Location"), w.Body.String())

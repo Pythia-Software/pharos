@@ -27,7 +27,7 @@ func serveTest(server *Server, method, path string) *httptest.ResponseRecorder {
 
 func TestReleaseStopsWorkClosesCatalogAndRefusesRequests(t *testing.T) {
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	workerStopped := make(chan struct{})
 	server.spawn(func(ctx context.Context) {
 		<-ctx.Done()
@@ -64,7 +64,7 @@ func TestReleaseStopsWorkClosesCatalogAndRefusesRequests(t *testing.T) {
 
 func TestStopWaitsForInFlightRequests(t *testing.T) {
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	if !server.admit() {
 		t.Fatal("request refused before stopping")
 	}
@@ -123,7 +123,7 @@ func TestStopInterruptsSyncBetweenRecords(t *testing.T) {
 	syncAdapter = func(SourceConfig) (Adapter, error) { return source, nil }
 	t.Cleanup(func() { syncAdapter = previous })
 	config.Sources = []SourceConfig{source.config}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 
 	synced := make(chan *httptest.ResponseRecorder)
 	go func() { synced <- serveTest(server, http.MethodPost, "/api/sources/sync") }()
@@ -229,7 +229,7 @@ func TestParentFromEnvClearsIt(t *testing.T) {
 func TestAuthCookieIsPerPort(t *testing.T) {
 	catalog, config := testCatalog(t)
 	config.Port = 8766
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	login := httptest.NewRecorder()
 	server.ServeHTTP(login, httptest.NewRequest(http.MethodGet, "/?token=test-token", nil))
 	cookies := login.Result().Cookies()
@@ -250,7 +250,7 @@ func TestAuthCookieIsPerPort(t *testing.T) {
 	check(server, "pharos_token_8765", http.StatusUnauthorized)
 	check(server, "pharos_token", http.StatusUnauthorized)
 	config.Port = 8765
-	check(NewServer(config, catalog), "pharos_token_8765", http.StatusOK)
+	check(testServer(t, config, catalog), "pharos_token_8765", http.StatusOK)
 }
 
 func TestServeEndsAReleaseOnlyOnceItHasItsPort(t *testing.T) {

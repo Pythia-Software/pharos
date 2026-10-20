@@ -13,52 +13,6 @@ import (
 	"time"
 )
 
-// TestMain keeps every test, and every process a test starts, out of this
-// Mac's real support directory: detecting the host writes host.json there.
-// Helper processes share their parent's.
-func TestMain(m *testing.M) {
-	support := os.Getenv("PHAROS_TEST_SUPPORT_DIR")
-	owned := support == ""
-	if owned {
-		dir, err := os.MkdirTemp("", "pharos-test-support-")
-		if err != nil {
-			panic(err)
-		}
-		support = dir
-		os.Setenv("PHAROS_TEST_SUPPORT_DIR", support)
-	}
-	os.Setenv("PHAROS_SUPPORT_DIR", support)
-	// No test may reach GitHub. Tests of the lookup point githubCLI at a stub.
-	githubCLI, githubPause = "pharos-test-no-gh", time.Millisecond
-	code := m.Run()
-	if owned {
-		os.RemoveAll(support)
-	}
-	os.Exit(code)
-}
-
-func testCatalog(t testing.TB) (*Catalog, Config) {
-	t.Helper()
-	root := t.TempDir()
-	config := defaultConfig(filepath.Join(root, "archive.toml"))
-	config.CatalogPath = filepath.Join(root, "catalog.sqlite3")
-	config.ArchiveRoot = filepath.Join(root, "archive")
-	config.StagingRoot = filepath.Join(root, "staging")
-	// The default is this Mac's own captures, which tests must neither read
-	// nor write.
-	config.CaptureRoot = filepath.Join(root, "captures")
-	config.APIToken = "test-token"
-	if err := os.MkdirAll(config.ArchiveRoot, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	catalog, err := OpenCatalog(config.CatalogPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { catalog.Close() })
-	return catalog, config
-}
-
 func TestCatalogPoolEnforcesForeignKeys(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	connections := make([]*sql.Conn, 4)
@@ -465,7 +419,7 @@ func TestRepeatedNativeMessageIDDoesNotDuplicateSessionLink(t *testing.T) {
 
 func TestSourceInventoryReportsConversationDocumentCoverage(t *testing.T) {
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	check := func(wantDocs, wantConversations int) {
 		t.Helper()
 		inventory, err := server.sourceInventory()
@@ -809,7 +763,7 @@ func TestCanonicalIngestAndAPIContract(t *testing.T) {
 	if len(found["items"].([]map[string]any)) != 1 {
 		t.Fatalf("expected search hit: %#v", found)
 	}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	request := httptest.NewRequest(http.MethodGet, "/api/search?q=parser", nil)
 	request.Header.Set("Authorization", "Bearer test-token")
 	response := httptest.NewRecorder()
@@ -849,7 +803,7 @@ func TestCanonicalIngestAndAPIContract(t *testing.T) {
 
 func TestHealthReportsActiveSync(t *testing.T) {
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	request := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 	request.Header.Set("Authorization", "Bearer test-token")
 	check := func(want bool) {
@@ -876,7 +830,7 @@ func TestHealthReportsActiveSync(t *testing.T) {
 
 func TestAppCSPAllowsOnlyLocalBlobFormulaWorkers(t *testing.T) {
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	request := httptest.NewRequest(http.MethodGet, "/", nil)
 	request.Header.Set("Authorization", "Bearer test-token")
 	response := httptest.NewRecorder()
@@ -1124,7 +1078,7 @@ func TestEmbeddedUIIsServedWithoutPython(t *testing.T) {
 
 func TestAppRoutesServeUIOnDirectNavigation(t *testing.T) {
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	for _, path := range []string{"/", "/home", "/library?search=debug", "/sources", "/activity", "/health", "/work/workspace_123", "/work/workspace_123/conversation/conversation_456?message=tool_789"} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		request.Header.Set("Authorization", "Bearer test-token")

@@ -275,7 +275,8 @@ func bucketRange(field, value string) (from, to string, ok bool) {
 }
 
 // maxSQLBuckets bounds a metric's groups; the UI shows the largest first.
-const maxSQLBuckets = 2000
+// Tests lower it.
+var maxSQLBuckets = 2000
 
 // Complete analytical reads either return every group or an explicit error.
 // The larger bound permits repository × operation × day timelines without

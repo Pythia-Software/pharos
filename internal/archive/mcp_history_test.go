@@ -41,7 +41,7 @@ func TestMCPRequestedArchiveSourceProjection(t *testing.T) {
 			t.Fatal("source projection bypassed argument sanitization")
 		}
 	}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	request := httptest.NewRequest(http.MethodPost, "/api/query/mcp_calls", strings.NewReader(`{"select":["tool_name","query_source"],"where":[{"field":"query_source","op":"=","value":"claude"}],"limit":10}`))
 	request.Header.Set("Authorization", "Bearer test-token")
 	request.Header.Set("Content-Type", "application/json")
@@ -62,7 +62,7 @@ func TestMCPControlAndCallHistory(t *testing.T) {
 	}
 	catalog, config := testCatalog(t)
 	config.Executable = "/Applications/Pharos.app/Contents/MacOS/pharos"
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	get := func(path string) *httptest.ResponseRecorder {
 		t.Helper()
 		request := httptest.NewRequest(http.MethodGet, path, nil)

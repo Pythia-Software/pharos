@@ -227,6 +227,10 @@ func (c *Catalog) fuzzyTermsWith(ctx context.Context, word string, prefixLength,
 	return terms, nil
 }
 
+// libraryFindTextLimit bounds the messages a Library text find reads. Tests
+// lower it.
+var libraryFindTextLimit = 5000
+
 func (c *Catalog) findText(ctx context.Context, o LibraryFindOptions) ([]libraryHit, error) {
 	options := o.Search
 	options.Query = o.Query
@@ -234,7 +238,7 @@ func (c *Catalog) findText(ctx context.Context, o LibraryFindOptions) ([]library
 	options.CaseSensitive = o.CaseSensitive
 	options.Separators = o.Separators
 	options.SelectedOnly = true
-	options.Limit = 5000
+	options.Limit = libraryFindTextLimit
 	result, err := c.SearchText(ctx, options)
 	if err != nil {
 		return nil, err

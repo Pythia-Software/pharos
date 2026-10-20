@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -32,11 +33,18 @@ func auditFixture(t *testing.T) *Catalog {
 
 func addAuditMessage(t *testing.T, catalog *Catalog, id, conversation, role, kind, text string, order int, timestamp any) {
 	t.Helper()
-	if _, err := catalog.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,source_order,created_at,evidence_locator,content_hash)
+	tx := seedTx(t, catalog.DB)
+	insertAuditMessage(t, tx, id, conversation, role, kind, text, order, timestamp)
+	commitSeed(t, tx)
+}
+
+func insertAuditMessage(t *testing.T, tx *sql.Tx, id, conversation, role, kind, text string, order int, timestamp any) {
+	t.Helper()
+	if _, err := tx.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,source_order,created_at,evidence_locator,content_hash)
 		VALUES(?,?,?,?,?,?,?,?,?,?)`, id, conversation, id, role, kind, text, order, timestamp, "fixture:"+id, id); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := catalog.DB.Exec("INSERT INTO messages_fts(message_id,text) VALUES(?,?)", id, text); err != nil {
+	if _, err := tx.Exec("INSERT INTO messages_fts(message_id,text) VALUES(?,?)", id, text); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -148,11 +156,14 @@ func TestMCPSearchMessagesUnicode(t *testing.T) {
 }
 
 func TestMCPSearchMessagesExhaustivePagination(t *testing.T) {
+	slowTest(t)
 	catalog := auditFixture(t)
+	tx := seedTx(t, catalog.DB)
 	for index := range 620 {
-		addAuditMessage(t, catalog, fmt.Sprintf("wanted-%04d", index), "conversation", "user", "message", "AWS account", index, "2026-05-05T12:00:00Z")
-		addAuditMessage(t, catalog, fmt.Sprintf("noise-%04d", index), "other-conversation", "user", "message", "AWS account", index, "2026-05-05T12:00:00Z")
+		insertAuditMessage(t, tx, fmt.Sprintf("wanted-%04d", index), "conversation", "user", "message", "AWS account", index, "2026-05-05T12:00:00Z")
+		insertAuditMessage(t, tx, fmt.Sprintf("noise-%04d", index), "other-conversation", "user", "message", "AWS account", index, "2026-05-05T12:00:00Z")
 	}
+	commitSeed(t, tx)
 	seen := map[string]bool{}
 	offset := 0
 	for {

@@ -50,10 +50,7 @@ func TestAddThisMacAddsCapturesAndIndexesInOneStep(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(config.CaptureRoot, "host_new_mac", "claude", "manifest.json")); err != nil {
 		t.Fatalf("capture: %v", err)
 	}
-	catalog, err := OpenCatalog(config.CatalogPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := reopenCatalog(t, config.CatalogPath)
 	var found int
 	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM messages WHERE text='hello from the new mac'").Scan(&found); err != nil || found != 1 {
 		t.Fatalf("indexed messages: %d, %v", found, err)

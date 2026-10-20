@@ -16,6 +16,10 @@ import (
 	"github.com/gbdubs/pharos/internal/querytable"
 )
 
+// queryV3MaxRows is the V3 row budget. Tests lower it, so that a few rows
+// make a source larger than the budget.
+var queryV3MaxRows = querytable.MaxLimit
+
 func queryV3Dataset(schema qt.Schema) qt.QueryDatasetV3 {
 	groups := 10_000
 	// Usage has one compact fact per execution/day/model. The built-in Work
@@ -24,7 +28,7 @@ func queryV3Dataset(schema qt.Schema) qt.QueryDatasetV3 {
 		groups = 100_000
 	}
 	return qt.QueryDatasetV3{Schema: schema, Scope: queryTableScope, Dataset: schema.Name, Dialect: "sqlite",
-		MaxRows: querytable.MaxLimit, MaxGroups: groups, MaxPopulation: 10_000_000, MaxStagingBytes: 512 << 20}
+		MaxRows: queryV3MaxRows, MaxGroups: groups, MaxPopulation: 10_000_000, MaxStagingBytes: 512 << 20}
 }
 
 func authorizeQueryV3Computed(ctx context.Context, tx *sql.Tx, d *qt.QueryDatasetV3) error {

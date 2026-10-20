@@ -52,6 +52,7 @@ func writerSearchSnapshot(t testing.TB, db *sql.DB) string {
 }
 
 func TestIncrementalWriterSearchParity(t *testing.T) {
+	slowTest(t)
 	for _, scenario := range []string{"append", "text", "metadata", "kind", "usage", "prune", "order", "empty"} {
 		t.Run(scenario, func(t *testing.T) {
 			catalog, _ := testCatalog(t)
@@ -166,8 +167,9 @@ func incrementalBenchmarkDir(b *testing.B) string {
 }
 
 func TestIncrementalWriterRowBudget(t *testing.T) {
+	slowTest(t)
 	catalog, _ := testCatalog(t)
-	record := incrementalFixture(2000)
+	record := incrementalFixture(400) // far more rows than either budget
 	writeIncrementalFixture(t, catalog, record)
 	if rows := writeIncrementalFixture(t, catalog, record); rows > 40 {
 		t.Fatalf("unchanged writer exceeded 40-row budget: %d", rows)

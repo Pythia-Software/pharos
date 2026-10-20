@@ -104,7 +104,7 @@ func TestEffortUsageAccountingQueriesAndExports(t *testing.T) {
 		if err != nil || len(hours) != 3 {
 			t.Fatalf("hourly buckets %v: %v", hours, err)
 		}
-		schema, err := NewServer(config, catalog).queryTableSchema("usage")
+		schema, err := testServer(t, config, catalog).queryTableSchema("usage")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -126,7 +126,7 @@ func TestEffortUsageAccountingQueriesAndExports(t *testing.T) {
 			q := metricRequest(qt.AggSpec{ID: "effort-tokens", Expression: "SUM([total_tokens])", GroupBy: []string{"hour", "effort"}, Scope: scope})
 			q.Where = []qt.WhereTerm{{Field: "effort", Op: "=", Value: high}}
 			q.Limit = 1
-			v2Result, err := NewServer(config, catalog).executeQueryV2(context.Background(), "usage", nil, v2Schema, nil, &q)
+			v2Result, err := testServer(t, config, catalog).executeQueryV2(context.Background(), "usage", nil, v2Schema, nil, &q)
 			if err != nil {
 				t.Fatal(err)
 			}

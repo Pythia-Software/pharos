@@ -134,6 +134,8 @@ func TestLibraryConfigIsDiscoveredBesideAppBundle(t *testing.T) {
 }
 
 func TestInitLibraryWritesRelativeConfigAndCatalog(t *testing.T) {
+	// The catalog is a subject: create it as the app does.
+	override(t, &newCatalog, OpenCatalog)
 	dir := filepath.Join(t.TempDir(), "Pharos")
 	identity := func(string) string { return "uuid:EUCLID" }
 	config, err := InitLibrary(dir, identity)

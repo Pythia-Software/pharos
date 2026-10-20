@@ -257,14 +257,16 @@ func TestLoginShellEnvToleratesNoiseAndHangs(t *testing.T) {
 	if err != nil || values["CLAUDE_CONFIG_DIR"] != "/profiles/claude work" || len(values) != 1 {
 		t.Fatalf("noisy shell = %v, %v", values, err)
 	}
+	// Waiting for the shell would take 30 s.
 	started := time.Now()
-	if _, err := loginShellEnv(script("hangs", "sleep 30 &\nsleep 30\n"), probeEnvNames, 300*time.Millisecond); err == nil || time.Since(started) > 2*time.Second {
+	if _, err := loginShellEnv(script("hangs", "sleep 30 &\nsleep 30\n"), probeEnvNames, 300*time.Millisecond); err == nil || time.Since(started) > 10*time.Second {
 		t.Fatalf("hanging shell returned %v after %s", err, time.Since(started))
 	}
-	// A background job holding stdout open must not hold up the probe.
+	// A background job holding stdout open must not hold up the probe: waiting
+	// for it would take until the 10 s timeout.
 	started = time.Now()
-	values, err = loginShellEnv(script("holder", "eval \"$4\"\nsleep 5 &\n"), probeEnvNames, 2*time.Second)
-	if err != nil || values["CLAUDE_CONFIG_DIR"] == "" || time.Since(started) > 1500*time.Millisecond {
+	values, err = loginShellEnv(script("holder", "eval \"$4\"\nsleep 15 &\n"), probeEnvNames, 10*time.Second)
+	if err != nil || values["CLAUDE_CONFIG_DIR"] == "" || time.Since(started) > 5*time.Second {
 		t.Fatalf("background job: %v, %v after %s", values, err, time.Since(started))
 	}
 	if _, err := loginShellEnv(script("silent", "exit 0\n"), probeEnvNames, time.Second); err == nil {
@@ -355,12 +357,12 @@ func probeServer(t *testing.T, path string) *Server {
 	if err := config.EnsureDirs(); err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := OpenCatalog(config.CatalogPath)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(config.CatalogPath); err == nil {
+		catalog := reopenCatalog(t, config.CatalogPath)
+		t.Cleanup(func() { catalog.Close() })
+		return testServer(t, config, catalog)
 	}
-	t.Cleanup(func() { catalog.Close() })
-	return NewServer(config, catalog)
+	return testServer(t, config, openTestCatalog(t, config.CatalogPath))
 }
 
 func probeCall(t *testing.T, server *Server, method, path, body string) (int, map[string]any) {
@@ -480,7 +482,7 @@ func TestProbeAcceptWritesHostFileAndReloadsSources(t *testing.T) {
 func TestProbeAcceptRefusesPerUserConfig(t *testing.T) {
 	probeHome(t)
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	if code, status := probeCall(t, server, http.MethodGet, "/api/probe/status", ""); code != 200 || status["library"] != false || status["needs_onboarding"] != false {
 		t.Fatalf("status = %d %v", code, status)
 	}

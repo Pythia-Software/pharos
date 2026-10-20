@@ -9,7 +9,7 @@ import (
 
 func TestStateChangingRequestsRefuseOtherOrigins(t *testing.T) {
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	for _, check := range []struct {
 		name, origin, site string
 		want               int
@@ -39,7 +39,7 @@ func TestStateChangingRequestsRefuseOtherOrigins(t *testing.T) {
 
 func TestAPIGetsRefuseOtherOrigins(t *testing.T) {
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	for _, check := range []struct {
 		path, site string
 		want       int

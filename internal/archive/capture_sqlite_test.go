@@ -37,11 +37,17 @@ func TestSnapshotSQLiteStepsThroughOneReadTransaction(t *testing.T) {
 		}
 		return tx.Commit()
 	}
+	// What commit would write 2000 times, in one transaction.
+	seed := seedTx(t, db)
 	for range 2000 {
-		if err := commit(); err != nil {
+		if _, err := seed.Exec("INSERT INTO messages(session_id,body) VALUES('s1',?)", body); err != nil {
 			t.Fatal(err)
 		}
 	}
+	if _, err := seed.Exec("UPDATE sessions SET message_count=2000 WHERE id='s1'"); err != nil {
+		t.Fatal(err)
+	}
+	commitSeed(t, seed)
 	var commits atomic.Int64
 	stop, done := make(chan struct{}), make(chan error)
 	go func() {

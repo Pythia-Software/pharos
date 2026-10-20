@@ -9,8 +9,9 @@ import (
 )
 
 func TestToolCommandSearchIndex(t *testing.T) {
+	override(t, &toolSearchBatch, 20)
 	catalog, _ := testCatalog(t)
-	seedToolCalls(t, catalog, 650) // more than one backfill batch
+	seedToolCalls(t, catalog, toolSearchBatch+10) // more than one backfill batch
 	ctx := context.Background()
 	document, err := querySchemaDocument("tool_calls")
 	if err != nil {

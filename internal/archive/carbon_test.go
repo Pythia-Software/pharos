@@ -123,7 +123,7 @@ func TestCarbonSeriesFiltersAndHourlyTotals(t *testing.T) {
 	if _, err := catalog.DB.Exec(`UPDATE workspaces SET repository_id='carbon-repo'`); err != nil {
 		t.Fatal(err)
 	}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	for _, sample := range []struct {
 		name, where, split string
 		want, points       int64
@@ -202,7 +202,7 @@ func TestCarbonSeriesFiltersAndHourlyTotals(t *testing.T) {
 func TestCarbonSeriesNoRepository(t *testing.T) {
 	catalog, config := testCatalog(t)
 	ingestUsageFixture(t, catalog)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	schema, err := server.queryTableSchema("usage")
 	if err != nil {
 		t.Fatal(err)
@@ -229,7 +229,7 @@ func TestCarbonSeriesNamesFallbacksAndUnclassifiedTokens(t *testing.T) {
 	if _, err := catalog.DB.Exec(`UPDATE agent_session_usage SET unclassified_tokens=10,total_tokens=total_tokens+10 WHERE output_tokens=30`); err != nil {
 		t.Fatal(err)
 	}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	schema, err := server.queryTableSchema("usage")
 	if err != nil {
 		t.Fatal(err)

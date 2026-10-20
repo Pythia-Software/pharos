@@ -28,7 +28,7 @@ func metricTotal(t *testing.T, metric qt.SQLiteMetricV2) float64 {
 func TestQueryMetricPopulationsHTTP(t *testing.T) {
 	catalog, config := testCatalog(t)
 	seedToolCalls(t, catalog, 300)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	call := func(method, path string, body any) *httptest.ResponseRecorder {
 		encoded, _ := json.Marshal(body)
 		r := httptest.NewRequest(method, path, strings.NewReader(string(encoded)))
@@ -135,7 +135,7 @@ func TestQueryMetricPopulationUsageHour(t *testing.T) {
 	t.Cleanup(func() { time.Local = previous })
 	catalog, config := testCatalog(t)
 	ingestUsageFixture(t, catalog, `{"type":"token_usage_record","timestamp":"2026-09-21T03:05:00Z","payload":{"response_id":"r3","usage":{"input_tokens":90,"output_tokens":10,"total_tokens":100},"thread_token_usage":{"total_tokens":3150}}}`)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	schema, _ := sqliteQuerySchema("usage")
 	hour := []qt.WhereTerm{{Field: "hour", Op: "=", Value: "2026-09-21T03:00:00Z"}}
 	q := metricRequest(qt.AggSpec{ID: "all", Expression: "SUM([total_tokens])"}, qt.AggSpec{ID: "hour", Expression: "SUM([total_tokens])", Where: hour},

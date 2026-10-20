@@ -35,7 +35,7 @@ func queryV2ReviewCall(t testing.TB, server *Server, token, method, path string,
 func TestQueryV2ComputedCatalogueRecovery(t *testing.T) {
 	catalog, config := testCatalog(t)
 	seedToolCalls(t, catalog, 3)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	store := qt.SQLiteComputedColumnStore{DB: catalog.DB}
 	columns := map[string]qt.ComputedColumn{}
 	// Metadata left by an older schema can no longer compile. Include two
@@ -143,7 +143,7 @@ func TestQueryComputedCapabilitiesLargeCatalogue(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	w := queryV2ReviewCall(t, NewServer(config, catalog), config.APIToken, http.MethodGet, "/api/query/tool_calls/capabilities", nil)
+	w := queryV2ReviewCall(t, testServer(t, config, catalog), config.APIToken, http.MethodGet, "/api/query/tool_calls/capabilities", nil)
 	var response struct {
 		Execution qt.SQLiteComputedExecution `json:"computedExecution"`
 	}
@@ -155,7 +155,7 @@ func TestQueryComputedCapabilitiesLargeCatalogue(t *testing.T) {
 func TestQueryV2LibraryCompactRequests(t *testing.T) {
 	catalog, config := libraryFixture(t)
 	catalog.DB.SetMaxOpenConns(1)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	rowRequest := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"title"}, Limit: 1}}
 	w := queryV2ReviewCall(t, server, config.APIToken, http.MethodPost, "/api/query/library/rows-v2", rowRequest)
 	if w.Code != 200 {

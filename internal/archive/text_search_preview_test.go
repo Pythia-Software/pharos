@@ -20,7 +20,7 @@ func TestTextSearchPreview(t *testing.T) {
 	if e := catalog.refreshAllLibrary(t.Context()); e != nil {
 		t.Fatal(e)
 	}
-	server := httptest.NewServer(NewServer(config, catalog))
+	server := httptest.NewServer(testServer(t, config, catalog))
 	defer server.Close()
 	fmt.Println("PREVIEW_URL=" + server.URL + "/library?token=test-token&search=parser&text_plain=1&text_surface=user")
 	timer := time.NewTimer(2 * time.Minute)

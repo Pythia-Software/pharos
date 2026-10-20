@@ -187,7 +187,7 @@ func automaticTestServer(t *testing.T, source SourceConfig) *Server {
 	catalog, config := testCatalog(t)
 	config.Sources = []SourceConfig{source}
 	config.CaptureRoot = filepath.Join(t.TempDir(), "captures")
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	t.Cleanup(func() {
 		if err := server.stop(5 * time.Second); err != nil {
 			t.Error(err)
@@ -673,7 +673,7 @@ func TestVerificationReadsOffHostCapturesAfterSourceRemoval(t *testing.T) {
 	}
 	useHost(t, "host-b")
 	config.Sources = nil
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	t.Cleanup(func() { server.stop(5 * time.Second) })
 	summary := server.verifyAllInputs(t.Context(), "retained", nil)
 	if summary.Checked != 1 || summary.Passed != 1 || summary.Errors != 0 || summary.Deferred != 0 {

@@ -233,15 +233,16 @@ func TestConductorObservedVersionFollowsBlockedSnapshotRead(t *testing.T) {
 
 func TestVerifyAllEndpointChecksEveryInputIncludingLargeConductorSession(t *testing.T) {
 	useHost(t, "host-a")
+	override(t, &automaticAuditConductorMessages, 4)
 	codex := stableCodexSource(t, 3)
 	directory := t.TempDir()
 	execute := conductorFixture(t, directory)
-	execute(addConductorSession("large", 2001)...)
+	execute(addConductorSession("large", int(automaticAuditConductorMessages)+1)...)
 	execute(addConductorSession("small", 2)...)
 	conductor := SourceConfig{Name: "conductor", Kind: "conductor", Path: directory, Account: "local", Enabled: true}
 	catalog, config := testCatalog(t)
 	config.Sources = []SourceConfig{codex, conductor}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	t.Cleanup(func() { server.stop(5 * time.Second) })
 	ingestSource(t, catalog, codex)
 	ingestSource(t, catalog, conductor)
@@ -317,7 +318,9 @@ func TestAntigravityAuditExcludesUnrelatedRunLogEvidence(t *testing.T) {
 	directory := t.TempDir()
 	antigravityTranscript(t, directory, antigravityRoot, "transcript_full.jsonl", antigravitySteps(map[string]any{"type": "USER_INPUT", "content": "bounded real CLI evidence"}))
 	writeSourceFile(t, filepath.Join(directory, "log", "cli-relevant.log"), "Print mode: conversation="+antigravityRoot+"\n")
-	writeSourceFile(t, filepath.Join(directory, "log", "cli-unrelated.log"), strings.Repeat("unrelated log data", 1<<20))
+	// Bigger than the automatic budget on its own.
+	override(t, &automaticAuditBytes, 64<<10)
+	writeSourceFile(t, filepath.Join(directory, "log", "cli-unrelated.log"), strings.Repeat("unrelated log data", 4<<10))
 	source := SourceConfig{Name: "antigravity-cli", Kind: "antigravity", Path: directory, Account: "local", Enabled: true}
 	server := automaticTestServer(t, source)
 	ingestSource(t, server.Catalog, source)
@@ -349,7 +352,7 @@ func TestAntigravityLogReaderHandlesChunkBoundariesAndLongLines(t *testing.T) {
 func TestIncrementalActivityEstimatesKeepRunKindsSeparate(t *testing.T) {
 	useHost(t, "timing-host")
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	started := time.Now().Add(-time.Minute)
 	server.recordActivityDuration("sync", formatTime(started), formatTime(started.Add(10*time.Minute)))
 	for _, kind := range []string{automaticRunKind, "verification", "library-update"} {

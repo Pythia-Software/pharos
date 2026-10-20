@@ -102,7 +102,7 @@ func TestTextSearchEditorValidationDoesNotSearch(t *testing.T) {
 	config := defaultConfig(t.TempDir() + "/config.toml")
 	config.APIToken = "test-token"
 	// Validation needs no catalog: a malformed draft never starts a text scan.
-	server := NewServer(config, nil)
+	server := testServer(t, config, nil)
 	for _, tc := range []struct {
 		body   string
 		status int
@@ -135,7 +135,7 @@ func TestTextSearchVisualLibraryRequests(t *testing.T) {
 	if err := catalog.refreshAllLibrary(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	where := `{"op":"and","children":[{"op":"or","children":[{"op":"term","text":"parser"},{"op":"term","text":"tokenizer"}]},{"op":"phrase","text":"fix the"}]}`
 	for _, endpoint := range []string{"/api/query/library", "/api/query/library/rows-v2"} {
 		body := `{"select":["title"],"limit":10}`
@@ -360,7 +360,7 @@ func TestTextSearchHTTPAndMCPParity(t *testing.T) {
 	c := textFixture(t)
 	config := defaultConfig(t.TempDir() + "/config.toml")
 	config.APIToken = "test-token"
-	server := NewServer(config, c)
+	server := testServer(t, config, c)
 	req := httptest.NewRequest(http.MethodPost, "/api/search/text", strings.NewReader(`{"query":"cache NOT redis","selected_only":true}`))
 	req.Header.Set("Authorization", "Bearer test-token")
 	response := httptest.NewRecorder()

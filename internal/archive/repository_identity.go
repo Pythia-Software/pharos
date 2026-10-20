@@ -780,7 +780,7 @@ func githubAvailability(ctx context.Context) (string, string) {
 	if !ok {
 		return githubMissing, ""
 	}
-	authContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+	authContext, cancel := context.WithTimeout(ctx, githubTimeout)
 	defer cancel()
 	if exec.CommandContext(authContext, binary, "auth", "status").Run() != nil {
 		return githubSignedOut, binary
@@ -813,7 +813,7 @@ func resolveGitHubRepositories(ctx context.Context, items []repositoryIdentity, 
 			continue
 		}
 		if _, ok := cache[slug]; !ok {
-			request, stop := context.WithTimeout(ctx, 5*time.Second)
+			request, stop := context.WithTimeout(ctx, githubTimeout)
 			output, err := exec.CommandContext(request, binary, "api", "repos/"+strings.TrimPrefix(slug, "github.com/")).Output()
 			stop()
 			var data answer
@@ -837,3 +837,7 @@ func resolveGitHubRepositories(ctx context.Context, items []repositoryIdentity, 
 
 // githubPause separates requests to GitHub.
 var githubPause = 200 * time.Millisecond
+
+// githubTimeout bounds each gh command. Tests of a stub on a busy machine
+// raise it.
+var githubTimeout = 5 * time.Second

@@ -13,7 +13,7 @@ func TestMenuBarSourceFailureClearsAfterNewerSuccessfulIndex(t *testing.T) {
 	useHost(t, "menu-mac")
 	catalog, config := testCatalog(t)
 	config.Sources = []SourceConfig{{Name: "codex", Enabled: true}}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	host := currentHost().ID
 	_, err := catalog.DB.Exec(`INSERT INTO source_states(host_id,source_name,kind,capability,coverage,last_attempt_at,last_success_at,updated_at)
 		VALUES(?, 'codex', 'codex', 'read', 'complete', '2026-10-13T10:00:00Z', '2026-10-13T10:00:00Z', '2026-10-13T10:00:00Z')`, host)
@@ -53,7 +53,7 @@ func TestMenuBarIgnoresDisabledAndRemovedSourceFailures(t *testing.T) {
 	useHost(t, "menu-mac")
 	catalog, config := testCatalog(t)
 	config.Sources = []SourceConfig{{Name: "codex", Enabled: true}, {Name: "claude", Enabled: false}, {Name: "healthy", Enabled: true}}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	for _, name := range []string{"codex", "claude", "removed"} {
 		_, err := catalog.DB.Exec(`INSERT INTO source_states(host_id,source_name,kind,capability,coverage,last_attempt_at,error,updated_at)
 			VALUES(?, ?, 'codex', 'read', 'failed', '2026-10-13T10:00:00Z', 'manual failure', '2026-10-13T10:00:00Z')`, currentHost().ID, name)
@@ -97,7 +97,7 @@ func TestMenuBarIgnoresDisabledAndRemovedSourceFailures(t *testing.T) {
 func TestMenuBarFreshnessIsScopedToThisMac(t *testing.T) {
 	useHost(t, "menu-mac")
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	insertManual := func(host, at string) {
 		t.Helper()
 		_, err := catalog.DB.Exec(`INSERT INTO source_states(host_id,source_name,kind,capability,coverage,last_success_at,updated_at)
@@ -130,7 +130,7 @@ func TestMenuBarFreshnessIsScopedToThisMac(t *testing.T) {
 
 func TestMenuBarOffAndAuthentication(t *testing.T) {
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	if asset := preferencesCall(t, server, http.MethodGet, "/assets/menu-bar.js", ""); asset.Code != http.StatusOK || asset.Header().Get("Content-Type") != "text/javascript; charset=utf-8" {
 		t.Fatalf("menu settings script is not served: %d", asset.Code)
 	}
@@ -175,7 +175,7 @@ func TestMenuBarUsageMatchesRollingSummary(t *testing.T) {
 	ingestUsageFixture(t, catalog)
 	catalog.now = func() time.Time { return time.Date(2026, 9, 21, 2, 15, 0, 0, time.UTC) }
 	catalog.background = func(func(context.Context)) bool { return false }
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	catalog.background = func(func(context.Context)) bool { return false }
 	summary, err := catalog.UsageSummary(t.Context())
 	if err != nil {

@@ -71,6 +71,7 @@ func hookTextSearch(t *testing.T, c *Catalog, query, next func(context.Context) 
 }
 
 func TestTextSearchTimeoutRequiresProgress(t *testing.T) {
+	slowTest(t)
 	for _, phase := range []string{"query", "first row", "after row"} {
 		for _, resumed := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/resumed=%t", phase, resumed), func(t *testing.T) {

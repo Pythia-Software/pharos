@@ -15,8 +15,6 @@ import (
 	"time"
 )
 
-func init() { commitFullFsync = false }
-
 func walBytes(t *testing.T, catalog *Catalog) int64 {
 	t.Helper()
 	info, err := os.Stat(catalog.Path + "-wal")
@@ -39,9 +37,10 @@ func writeRows(t *testing.T, db *sql.DB, prefix string) {
 	}
 }
 
+// This test and the WAL tests below run with the service's durability, which
+// other tests skip (see testDurability).
 func TestCatalogPoolAppliesDurabilityPragmas(t *testing.T) {
-	commitFullFsync = true
-	t.Cleanup(func() { commitFullFsync = false })
+	useDurableCatalog(t)
 	catalog, _ := testCatalog(t)
 	if err := catalog.Checkpoint(); err != nil {
 		t.Fatal(err)
@@ -74,6 +73,7 @@ func TestCatalogPoolAppliesDurabilityPragmas(t *testing.T) {
 }
 
 func TestSyncTruncatesWALWhileLibraryMonitorIsOpen(t *testing.T) {
+	useDurableCatalog(t)
 	catalog, config := testCatalog(t)
 	export := filepath.Join(t.TempDir(), "export.json")
 	payload, _ := json.Marshal(map[string]any{"workspaces": []any{map[string]any{
@@ -94,7 +94,7 @@ func TestSyncTruncatesWALWhileLibraryMonitorIsOpen(t *testing.T) {
 	if catalog.library.versions.conn == nil {
 		t.Fatal("library monitor connection was not opened")
 	}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	request := httptest.NewRequest(http.MethodPost, "/api/sources/sync", nil)
 	request.Header.Set("Authorization", "Bearer test-token")
 	response := httptest.NewRecorder()
@@ -112,6 +112,7 @@ func TestSyncTruncatesWALWhileLibraryMonitorIsOpen(t *testing.T) {
 }
 
 func TestCloseEmptiesWALWhileAnotherProcessHasCatalogOpen(t *testing.T) {
+	useDurableCatalog(t)
 	catalog, _ := testCatalog(t)
 	other := otherProcess(t, catalog)
 	var count int
@@ -138,6 +139,8 @@ func TestCloseEmptiesWALWhileAnotherProcessHasCatalogOpen(t *testing.T) {
 }
 
 func TestCheckpointGivesUpOnAnOldReaderWithoutHoldingUpWriters(t *testing.T) {
+	useDurableCatalog(t)
+	override(t, &checkpointWaitMS, 100)
 	catalog, _ := testCatalog(t)
 	other := otherProcess(t, catalog)
 	writeRows(t, catalog.DB, "before-")
@@ -194,6 +197,7 @@ func TestCheckpointGivesUpOnAnOldReaderWithoutHoldingUpWriters(t *testing.T) {
 // The service's periodic checkpoint must empty the WAL while Library reads,
 // including the data_version monitor, keep overlapping.
 func TestKeepWALSmallTruncatesUnderContinuousReads(t *testing.T) {
+	useDurableCatalog(t)
 	catalog, _ := libraryFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	var readers sync.WaitGroup

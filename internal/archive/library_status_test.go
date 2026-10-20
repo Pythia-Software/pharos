@@ -40,7 +40,7 @@ func TestLibraryStatusNamesTheDriveAndIsIdleWhenNothingRuns(t *testing.T) {
 	useHost(t, "host-a")
 	catalog, config := testCatalog(t)
 	config.Library = true
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	status := libraryStatusCall(t, server, "/api/library/status")
 	drive, _ := status["drive"].(map[string]any)
 	if status["library_dir"] != filepath.Dir(config.Path) || status["catalog_path"] != config.CatalogPath || status["catalog_open"] != true {
@@ -94,7 +94,7 @@ func TestLibraryStatusListsEverythingHoldingTheLibrary(t *testing.T) {
 	writeSourceFile(t, filepath.Join(claude, "p", "s.jsonl"), "{}\n")
 	config.CaptureRoot = filepath.Join(t.TempDir(), "captures")
 	config.Sources = []SourceConfig{{Name: "claude", Kind: "claude", Path: claude, Enabled: true}}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	expect := func(want ...string) map[string]any {
 		t.Helper()
 		status := libraryStatusCall(t, server, "/api/library/status")
@@ -133,7 +133,8 @@ func TestLibraryStatusListsEverythingHoldingTheLibrary(t *testing.T) {
 	}
 	close(release)
 	deadline := time.Now().Add(10 * time.Second)
-	for server.captures.active() {
+	// The run ends just before it releases the capture lock.
+	for server.captureActive() {
 		if time.Now().After(deadline) {
 			t.Fatal("capture did not finish")
 		}
@@ -233,7 +234,7 @@ func TestLibraryStatusListsEverythingHoldingTheLibrary(t *testing.T) {
 func TestLibraryRefreshCanBeStoppedAndResumed(t *testing.T) {
 	useHost(t, "host-a")
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	if _, err := catalog.DB.Exec("INSERT INTO workspace_library_dirty(workspace_id) VALUES('w1'),('w2')"); err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +291,7 @@ func TestLibraryRefreshCanBeStoppedAndResumed(t *testing.T) {
 func TestGitRefreshIsTrackedWhileItRuns(t *testing.T) {
 	useHost(t, "host-a")
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	server.refreshGitInBackground(false)
 	deadline := time.Now().Add(10 * time.Second)
 	for {
@@ -312,7 +313,7 @@ func TestGitRefreshIsTrackedWhileItRuns(t *testing.T) {
 func TestBackupStatusSuggestsADestination(t *testing.T) {
 	useHost(t, "host-a")
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	// A per-user catalog on this Mac's disk: no suggestion.
 	if status := libraryStatusCall(t, server, "/api/backup"); status["suggested_destination"] != "" {
 		t.Fatalf("per-user suggestion: %#v", status["suggested_destination"])
@@ -330,13 +331,10 @@ func TestBackupStatusSuggestsADestination(t *testing.T) {
 func TestLibraryStatusNamesTheVolumeFromTheDriveChecks(t *testing.T) {
 	config, _ := backupFixture(t)
 	calls := stubDriveTool(t, map[string]string{"diskutil": euclidPlist, "mdutil": "Indexing disabled."})
-	catalog, err := OpenCatalog(config.CatalogPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := reopenCatalog(t, config.CatalogPath)
 	t.Cleanup(func() { catalog.Close() })
 	config.APIToken = "test-token"
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	before := libraryStatusCall(t, server, "/api/library/status")
 	if drive := before["drive"].(map[string]any); drive["name"] != "this Mac's internal disk" || drive["volume_uuid"] != "TEST-VOLUME" {
 		t.Fatalf("before the checks: %#v", drive)

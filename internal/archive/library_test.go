@@ -47,11 +47,7 @@ func libraryFixture(t *testing.T) (*Catalog, Config) {
 			('sc','c','cc','main',NULL,'root','claude',0),('sc1','c','cc','t1','sc','subagent','claude',1),
 			('sc2','c','cc','t2','sc1','subagent','claude',2)`,
 	}
-	for _, statement := range statements {
-		if _, err := catalog.DB.Exec(statement); err != nil {
-			t.Fatalf("%v\n%s", err, statement)
-		}
-	}
+	execTx(t, catalog.DB, statements...)
 	return catalog, config
 }
 
@@ -171,7 +167,7 @@ func TestLibraryQueryTableServesArbitrarySortsAndFilters(t *testing.T) {
 	if err := catalog.refreshAllLibrary(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	post := func(path, body string) map[string]any {
 		t.Helper()
 		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
@@ -310,7 +306,7 @@ func TestLibraryRequestsReadingFewerFieldsMatchFullRows(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		server := NewServer(config, catalog)
+		server := testServer(t, config, catalog)
 		schema, err := server.queryTableSchema("library")
 		if err != nil {
 			t.Fatal(err)
@@ -391,7 +387,7 @@ func TestLibraryDefaultPageReadsNoLongTextForOtherRows(t *testing.T) {
 	if err := catalog.refreshAllLibrary(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	request := httptest.NewRequest(http.MethodPost, "/api/query/library", strings.NewReader(
 		`{"select":["title","outcome","pr_numbers"],"orderBy":[{"field":"activity_at","dir":"desc","nulls":"last"},{"field":"id","dir":"asc"}],"limit":1,"offset":0}`))
 	request.Header.Set("Authorization", "Bearer test-token")

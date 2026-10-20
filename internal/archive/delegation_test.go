@@ -309,7 +309,7 @@ func delegationGET(t *testing.T, s *Server, path string) (int, map[string]any) {
 func TestDelegationPaginationFilteringAndSnapshot(t *testing.T) {
 	c, config := testCatalog(t)
 	seedDelegation(t, c)
-	server := NewServer(config, c)
+	server := testServer(t, config, c)
 	base := "/api/work/delegation-work/delegation"
 	status, first := delegationGET(t, server, base+"?limit=1")
 	if status != 200 {
@@ -367,7 +367,7 @@ func TestDelegationTimelineWindowEvidenceAndErrorReferences(t *testing.T) {
 	if _, err := c.DB.Exec(`UPDATE tool_calls SET ended_at=NULL,duration_ms=NULL WHERE id='t-child'`); err != nil {
 		t.Fatal(err)
 	}
-	s := NewServer(config, c)
+	s := testServer(t, config, c)
 	_, body := delegationGET(t, s, "/api/work/delegation-work/delegation")
 	snapshot := body["snapshot"].(string)
 	_, timeline := delegationGET(t, s, "/api/work/delegation-work/parallel?sessions=child-session,nested-session&snapshot="+snapshot)
@@ -444,7 +444,7 @@ func TestDelegationDeepAncestorContextIsBounded(t *testing.T) {
 		}
 		parent = id
 	}
-	status, body := delegationGET(t, NewServer(config, c), "/api/work/delegation-work/delegation?mode=rank&search=deep-104&limit=1")
+	status, body := delegationGET(t, testServer(t, config, c), "/api/work/delegation-work/delegation?mode=rank&search=deep-104&limit=1")
 	if status != 200 || len(body["rows"].([]any)) != 1 || len(body["ancestors"].([]any)) != 100 || body["ancestors_truncated"] != true {
 		t.Fatal("deep ancestry must be bounded and disclose omitted context", status)
 	}
@@ -540,7 +540,7 @@ func TestDelegationFilesEditedDeduplicatesSuccessfulPaths(t *testing.T) {
 	if s.Maxima["self"]["files"] != 2 || s.Maxima["all"]["files"] != 4 {
 		t.Fatal("file metrics need per-column maxima")
 	}
-	_, ranked := delegationGET(t, NewServer(config, c), "/api/work/delegation-work/delegation?mode=rank&sort=files&scope=all&direction=desc")
+	_, ranked := delegationGET(t, testServer(t, config, c), "/api/work/delegation-work/delegation?mode=rank&sort=files&scope=all&direction=desc")
 	if ranked["rows"].([]any)[0].(map[string]any)["id"] != "root-session" {
 		t.Fatal("file counts must support inclusive metric sorting")
 	}
@@ -558,7 +558,7 @@ func TestDelegationDefaultPageSizeIsForty(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	server := NewServer(config, c)
+	server := testServer(t, config, c)
 	_, first := delegationGET(t, server, "/api/work/delegation-work/delegation")
 	if len(first["rows"].([]any)) != 40 || first["total"] != float64(45) {
 		t.Fatalf("expected 40 of 45 sessions, got %v rows / %v", len(first["rows"].([]any)), first["total"])

@@ -12,7 +12,7 @@ import (
 
 func TestMCPWorkDetailSectionsAndFieldContinuation(t *testing.T) {
 	catalog := auditFixture(t)
-	large := strings.Repeat("界 café \"quoted\"\n", 60000)
+	large := strings.Repeat("界 café \"quoted\"\n", 3000) // several chunks
 	if _, err := catalog.DB.Exec("UPDATE workspaces SET purpose=? WHERE id='work'", large); err != nil {
 		t.Fatal(err)
 	}

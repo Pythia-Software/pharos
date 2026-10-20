@@ -109,7 +109,7 @@ func TestUsagePerformanceServer(t *testing.T) {
 		t.Skip("set PHAROS_USAGE_SERVER to a loopback address")
 	}
 	c := usagePerformanceCatalog(t)
-	s := NewServer(Config{Host: "127.0.0.1", APIToken: "usage-probe"}, c)
+	s := testServer(t, Config{Host: "127.0.0.1", APIToken: "usage-probe"}, c)
 	c.background = func(func(context.Context)) bool { return false }
 	defer s.life.cancel()
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -28,10 +28,7 @@ func backupFixture(t *testing.T) (Config, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := OpenCatalog(config.CatalogPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := reopenCatalog(t, config.CatalogPath)
 	if _, err := catalog.DB.Exec("INSERT INTO hosts(id,label,first_seen_at,last_seen_at) VALUES('host-z','Z','2026-01-01','2026-01-01')"); err != nil {
 		t.Fatal(err)
 	}
@@ -91,11 +88,7 @@ func legacyBackupFixture(t *testing.T, archiveRoot func(data string) string) (Co
 	if err := os.MkdirAll(config.ArchiveRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := OpenCatalog(config.CatalogPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := catalog.Close(); err != nil {
+	if err := openTestCatalog(t, config.CatalogPath).Close(); err != nil {
 		t.Fatal(err)
 	}
 	dest := filepath.Join(root, "Other Drive", "Pharos Backup")
@@ -490,10 +483,7 @@ func TestBackupKeepsTheLiveCatalogOutOfTrees(t *testing.T) {
 	writeSourceFile(t, filepath.Join(config.ArchiveRoot, "package", "a.json"), "{}")
 	writeSourceFile(t, filepath.Join(config.CaptureRoot, "host-a", "claude", "files", "x.jsonl"), "{}\n")
 	writeSourceFile(t, filepath.Join(config.StagingRoot, "partial.zip"), "zip")
-	catalog, err := OpenCatalog(config.CatalogPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := reopenCatalog(t, config.CatalogPath)
 	defer catalog.Close()
 	if _, err := catalog.DB.Exec("INSERT INTO hosts(id,label,first_seen_at,last_seen_at) VALUES('live','Live','2026-01-01','2026-01-01')"); err != nil {
 		t.Fatal(err)
@@ -646,14 +636,12 @@ func TestBackupLeavesOtherServicesCredentialsOut(t *testing.T) {
 // Item 6: while a writer keeps committing, a snapshot stops once the WAL it
 // pins grows past the bound, rather than letting it grow without limit.
 func TestBackupBoundsTheCatalogWAL(t *testing.T) {
+	slowTest(t)
 	config, dest := backupFixture(t)
 	previousGrowth, previousStep, previousPoll := backupWALGrowth, backupStepPages, backupWALPoll
 	backupWALGrowth, backupStepPages, backupWALPoll = 64<<10, 1, 5*time.Millisecond
 	t.Cleanup(func() { backupWALGrowth, backupStepPages, backupWALPoll = previousGrowth, previousStep, previousPoll })
-	catalog, err := OpenCatalog(config.CatalogPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := reopenCatalog(t, config.CatalogPath)
 	defer catalog.Close()
 	if _, err := catalog.DB.Exec("CREATE TABLE filler(body BLOB)"); err != nil {
 		t.Fatal(err)

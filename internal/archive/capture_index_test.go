@@ -406,7 +406,7 @@ func conductorFixture(t *testing.T, dir string) func(...string) {
 	execSQL(t, db, "CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT)",
 		"CREATE TABLE session_messages(id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, created_at TEXT, sent_at TEXT, cancelled_at TEXT)",
 		"CREATE INDEX messages_sent ON session_messages(session_id, sent_at)")
-	return func(statements ...string) { execSQL(t, db, statements...) }
+	return func(statements ...string) { execTx(t, db, statements...) }
 }
 
 func addConductorSession(id string, messages int) []string {
@@ -645,7 +645,7 @@ func TestIndexRunCountsConversationsBesideAnUncountableSource(t *testing.T) {
 	if err != nil || len(targets) != 2 {
 		t.Fatalf("targets: %v %v", targets, err)
 	}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	run := server.startRunNamed(indexRunKind, []string{targets[0].label(), targets[1].label()})
 	server.indexTargets(context.Background(), run.ID, targets)
 	finished := server.indexRuns()[0]
@@ -850,7 +850,7 @@ func TestIndexAPIRunsInBackground(t *testing.T) {
 	} else if err := os.WriteFile(manifestPath, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	call := func(method, body string) (int, map[string]any) {
 		t.Helper()
 		request := httptest.NewRequest(method, "/api/index", strings.NewReader(body))
@@ -960,7 +960,7 @@ func TestStoppingAnIndexKeepsWhatItWrote(t *testing.T) {
 	config.CaptureRoot = filepath.Join(t.TempDir(), "captures")
 	config.Sources = []SourceConfig{{Name: "codex", Kind: "codex", Path: codex, Account: "local", Enabled: true}}
 	runCapture(t, config)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	call := func(method, path, body string) map[string]any {
 		t.Helper()
 		request := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -1026,7 +1026,7 @@ func TestStoppingAnIndexKeepsWhatItWrote(t *testing.T) {
 // it cannot turn a run that indexed everything into an interrupted one.
 func TestStopAfterTheLastSourceChangesNothing(t *testing.T) {
 	catalog, config := testCatalog(t)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	run := server.startRunNamed(indexRunKind, []string{"host-a/codex"})
 	ctx, end := server.beginIngest(run.ID)
 	defer end()

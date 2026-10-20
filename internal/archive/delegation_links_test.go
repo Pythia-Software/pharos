@@ -95,7 +95,7 @@ func TestDelegationIncomingAncestorsRemainContext(t *testing.T) {
 					t.Fatal("ancestor context changed workspace clock or child count", s.Totals)
 				}
 			}
-			status, body := delegationGET(t, NewServer(config, c), "/api/work/"+childID+"/delegation?conversation="+childID+"&only_matching=1")
+			status, body := delegationGET(t, testServer(t, config, c), "/api/work/"+childID+"/delegation?conversation="+childID+"&only_matching=1")
 			if status != 200 || len(body["focus"].([]any)) != 2 || body["session_count"] != float64(1) {
 				t.Fatal("direct links must include selected child and parent context", status, body)
 			}
@@ -179,7 +179,7 @@ func TestDelegationIncomingExactOwnership(t *testing.T) {
 					// Outside also retains the unqueried leaf reference.
 					t.Fatalf("ancestor context changed workspace usage: %+v", m)
 				}
-				status, body := delegationGET(t, NewServer(config, c), "/api/work/"+selected.workspace+"/delegation?conversation="+selected.conversation)
+				status, body := delegationGET(t, testServer(t, config, c), "/api/work/"+selected.workspace+"/delegation?conversation="+selected.conversation)
 				if status != 200 || body["session_count"] != float64(selected.accounted) {
 					t.Fatal("incoming context changed execution count", status, body)
 				}
@@ -309,7 +309,7 @@ func TestDelegationCodexChildrenAcrossWorkspaces(t *testing.T) {
 	if *s.Totals["tokens"].Value != 100 || s.Totals["tokens"].Quality != "partial" {
 		t.Fatalf("outside usage must stay outside workspace accounting: %+v", s.Totals["tokens"])
 	}
-	status, body := delegationGET(t, NewServer(config, c), "/api/work/parent-work/delegation?conversation=parent&limit=100")
+	status, body := delegationGET(t, testServer(t, config, c), "/api/work/parent-work/delegation?conversation=parent&limit=100")
 	if status != 200 || len(body["focus"].([]any)) != len(s.ByID["parent-session"].children)+1 {
 		t.Fatal("external children must be present in navigation focus", status, body)
 	}
@@ -454,7 +454,7 @@ func TestDelegationIncomingAliasedParent(t *testing.T) {
 			if n.ExternalParent == nil || n.ExternalParent.ConversationID != tc.parent || n.ExternalParent.MessageID != "nested-launch" {
 				t.Fatal("parent navigation must use the canonical execution", n.ExternalParent)
 			}
-			status, body := delegationGET(t, NewServer(config, c), "/api/work/outside/delegation?conversation=nested")
+			status, body := delegationGET(t, testServer(t, config, c), "/api/work/outside/delegation?conversation=nested")
 			if status != 200 {
 				t.Fatal(status, body)
 			}
@@ -490,7 +490,7 @@ func TestDelegationIncomingLargeAncestorWorkspace(t *testing.T) {
 			if len(s.Nodes) != 2 || s.Nodes[0].ConversationID != "parent" || s.Nodes[1].Depth != 1 {
 				t.Fatal("expected only the child and its parent context", s.Nodes)
 			}
-			status, body := delegationGET(t, NewServer(config, c), "/api/work/child-work/delegation?conversation=child")
+			status, body := delegationGET(t, testServer(t, config, c), "/api/work/child-work/delegation?conversation=child")
 			if status != 200 || body["session_count"] != float64(1) {
 				t.Fatal(status, body)
 			}

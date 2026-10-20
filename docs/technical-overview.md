@@ -349,7 +349,7 @@ Test commands, test tiers and the rules for writing tests are in
 [AGENTS.md](../AGENTS.md). Before committing:
 
 ```sh
-go test -timeout 30m ./...
+go test ./...        # go test -short ./... is the fast tier
 go vet ./...
 (cd web && npm ci && npx tsc --noEmit && npm run build)
 (cd web && npm run check-bundle)

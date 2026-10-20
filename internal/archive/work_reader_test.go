@@ -239,7 +239,7 @@ func TestClipReaderMessagePreservesProviderEnvelopes(t *testing.T) {
 func TestWorkReaderRoutes(t *testing.T) {
 	catalog, config := testCatalog(t)
 	seedReaderWorkspace(t, catalog)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	get := func(path string) (int, map[string]any) {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		request.Header.Set("Authorization", "Bearer "+config.APIToken)

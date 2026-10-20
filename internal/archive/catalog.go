@@ -46,8 +46,10 @@ type Catalog struct {
 	now      func() time.Time
 	// background runs the catalog's own background work (the authorship
 	// rebuild). The service sets it to its spawn, so a release cancels the
-	// work and waits for it before closing the catalog; nil runs a goroutine.
+	// work and waits for it before closing the catalog; nil runs a goroutine,
+	// counted in unowned so that whoever closes the catalog can wait for it.
 	background        func(work func(context.Context)) bool
+	unowned           sync.WaitGroup
 	projectionBatches atomic.Int32
 	// ingestRuns counts this process's running ingests (see cacheVersion).
 	ingestRuns atomic.Int32
@@ -57,13 +59,24 @@ type Catalog struct {
 // nil, and reports false if the service is stopping.
 func (c *Catalog) runBackground(work func(context.Context)) bool {
 	if c.background == nil {
-		go work(context.Background())
+		c.unowned.Go(func() { work(context.Background()) })
 		return true
 	}
 	return c.background(work)
 }
 
 func OpenCatalog(path string) (*Catalog, error) {
+	return openCatalog(path, func(c *Catalog) error { return c.initializeLocked(true) })
+}
+
+// newCatalog opens a new library's catalog, or an audit's reference catalog,
+// which normally do not exist yet. Tests replace it to copy one they
+// initialized.
+var newCatalog = OpenCatalog
+
+// openCatalog opens path's pools, running prepare (Initialize, in
+// OpenCatalog) before the read pool.
+func openCatalog(path string, prepare func(*Catalog) error) (*Catalog, error) {
 	if err := os.MkdirAll(filepathDir(path), 0o755); err != nil {
 		return nil, err
 	}
@@ -79,7 +92,7 @@ func OpenCatalog(path string) (*Catalog, error) {
 	db.SetMaxOpenConns(4)
 	db.SetMaxIdleConns(4)
 	catalog := &Catalog{Path: path, DB: db, captureRoot: filepath.Join(filepath.Dir(path), "captures")}
-	if err := catalog.initializeLocked(true); err != nil {
+	if err := prepare(catalog); err != nil {
 		db.Close()
 		return nil, err
 	}

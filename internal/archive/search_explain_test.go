@@ -123,7 +123,7 @@ func segmentsText(message any, matchesOnly bool) string {
 func TestLibrarySubstringSearchAndExplanations(t *testing.T) {
 	catalog, config := testCatalog(t)
 	ingestRecords(t, catalog, searchFixture()...)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 
 	if rows := queryLibrary(t, server, "search=log_que"); len(rows) != 0 {
 		t.Fatalf("word search should not match inside catalog_query: %v", rows)
@@ -216,7 +216,7 @@ func TestLibraryQuotedPhraseSearch(t *testing.T) {
 			}}}},
 	)
 	ingestRecords(t, catalog, records...)
-	server := NewServer(config, catalog)
+	server := testServer(t, config, catalog)
 	search := func(query string, substring bool) []map[string]any {
 		t.Helper()
 		parameters := "search=" + url.QueryEscape(query) + "&explain=1"

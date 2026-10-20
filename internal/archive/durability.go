@@ -26,25 +26,43 @@ import (
 //     above the ~4 MB between automatic checkpoints, so routine restarts never
 //     truncate and regrow the file.
 const (
-	walSizeLimit     = 64 << 20
-	busyTimeoutMS    = 5000
-	checkpointWaitMS = 1000
-	walRetryDelay    = 30 * time.Second
+	walSizeLimit  = 64 << 20
+	busyTimeoutMS = 5000
+	walRetryDelay = 30 * time.Second
 )
 
-// commitFullFsync is off only in tests, whose many tiny commits would each
-// wait ~4.5 ms for the internal SSD to flush.
-var commitFullFsync = true
+// checkpointWaitMS bounds how long Checkpoint waits for a connection and for
+// readers. Only tests shorten it.
+var checkpointWaitMS = 1000
+
+// catalogPragmas are the durability settings above.
+type catalogPragmas struct {
+	synchronous         string // FULL
+	fullfsync           bool
+	checkpointFullfsync bool
+}
+
+// durableCatalog is what every catalog connection runs with.
+var durableCatalog = catalogPragmas{synchronous: "FULL", fullfsync: true, checkpointFullfsync: true}
+
+// catalogDurability is durableCatalog except in tests, whose many tiny
+// commits would each wait ~4.5 ms for the internal SSD to flush. The tests of
+// durability itself restore durableCatalog.
+var catalogDurability = durableCatalog
 
 func catalogDSN(path string) string {
-	fullfsync := 0
-	if commitFullFsync {
+	pragmas := catalogDurability
+	fullfsync, checkpointFullfsync := 0, 0
+	if pragmas.fullfsync {
 		fullfsync = 1
 	}
+	if pragmas.checkpointFullfsync {
+		checkpointFullfsync = 1
+	}
 	return (&url.URL{Scheme: "file", Path: path}).String() + fmt.Sprintf("?_pragma=busy_timeout(%d)&_pragma=foreign_keys(1)"+
-		"&_pragma=synchronous(FULL)&_pragma=fullfsync(%d)&_pragma=checkpoint_fullfsync(1)&_pragma=journal_size_limit(%d)"+
+		"&_pragma=synchronous(%s)&_pragma=fullfsync(%d)&_pragma=checkpoint_fullfsync(%d)&_pragma=journal_size_limit(%d)"+
 		"&_pragma=cache_size(-32768)&_pragma=mmap_size(268435456)",
-		busyTimeoutMS, fullfsync, walSizeLimit)
+		busyTimeoutMS, pragmas.synchronous, fullfsync, checkpointFullfsync, walSizeLimit)
 }
 
 // Request reads use a separate read-only pool (see Catalog.reader), so the

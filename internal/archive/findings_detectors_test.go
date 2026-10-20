@@ -19,9 +19,10 @@ func (fixture *findingFixture) addConversation(day time.Time, provider string, c
 	fixture.t.Helper()
 	fixture.next++
 	id := fmt.Sprint(fixture.next)
+	tx := seedTx(fixture.t, fixture.catalog.DB)
 	exec := func(statement string, args ...any) {
 		fixture.t.Helper()
-		if _, err := fixture.catalog.DB.Exec(statement, args...); err != nil {
+		if _, err := tx.Exec(statement, args...); err != nil {
 			fixture.t.Fatal(err)
 		}
 	}
@@ -42,6 +43,7 @@ func (fixture *findingFixture) addConversation(day time.Time, provider string, c
 		exec(`INSERT INTO model_requests(id,conversation_id,sequence,input_tokens,compacted_before) VALUES(?,?,?,?,?)`,
 			fmt.Sprintf("req-%s-%d", id, request), "conv-"+id, request, map[bool]int{true: peak, false: 1000}[request == 0], map[bool]int{true: 1, false: 0}[request < compactions])
 	}
+	commitSeed(fixture.t, tx)
 	return "conv-" + id
 }
 
