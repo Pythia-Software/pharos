@@ -123,7 +123,28 @@ func MetricExpression(spec AggSpec) string {
 func compileMetric(ctx context.Context, q MetricQuery, spec AggSpec, s Schema, o PlanOptions) (SQLPlan, error) {
 	return compileMetricDialect(ctx, q, spec, s, o, false)
 }
-func compileMetricDialect(ctx context.Context, q MetricQuery, spec AggSpec, s Schema, o PlanOptions, sqlite bool, extra ...AggSpec) (SQLPlan, error) {
+func compileMetricDialect(ctx context.Context, q MetricQuery, spec AggSpec, s Schema, o PlanOptions, sqlite bool) (SQLPlan, error) {
+	return compileMetricOutputs(ctx, q, spec, s, o, sqlite, nil)
+}
+
+// summaryOutput is an additional scalar output of one grouped reduction: an ID
+// and an aggregate expression only. It cannot carry a scope, filter, grouping,
+// limit or sampling setting, so every output shares the primary spec's.
+type summaryOutput struct{ ID, Expression string }
+
+// compileMetricOutputs compiles spec and reduces each extra expression in the
+// same pass, as extraN/extraN_error columns. Callers must compile each extra
+// on its own first: a combined plan can still exceed a compiler budget.
+func compileMetricOutputs(ctx context.Context, q MetricQuery, spec AggSpec, s Schema, o PlanOptions, sqlite bool, extra []summaryOutput) (SQLPlan, error) {
+	if len(extra) > 0 && (spec.Distribution != nil || spec.ExpressionY != "") {
+		return SQLPlan{}, diagnostic("invalid_metric", "additional outputs require a scalar metric")
+	}
+	for _, output := range extra {
+		// Sampled reducers stay on their own budget-checked statement.
+		if sampledExpression(output.Expression) {
+			return SQLPlan{}, diagnostic("invalid_metric", "sampled summaries cannot share a reduction")
+		}
+	}
 	if spec.DateGrouping != nil {
 		return SQLPlan{}, diagnostic("unsupported_date_grouping", "calendar grouping requires the negotiated v3 executor")
 	}
@@ -211,9 +232,8 @@ func compileMetricDialect(ctx context.Context, q MetricQuery, spec AggSpec, s Sc
 		return SQLPlan{}, e
 	}
 	extraNodes := make([]*exprNode, len(extra))
-	for i, additional := range extra {
-		extraNodes[i], e = parseExpression(MetricExpression(additional))
-		if e != nil {
+	for i, output := range extra {
+		if extraNodes[i], e = parseExpression(output.Expression); e != nil {
 			return SQLPlan{}, e
 		}
 	}
@@ -325,13 +345,17 @@ func compileMetricDialect(ctx context.Context, q MetricQuery, spec AggSpec, s Sc
 	if e = collect(n); e != nil {
 		return SQLPlan{}, e
 	}
+	if len(leaves) == 0 {
+		return SQLPlan{}, diagnostic("aggregate_required", "metric must contain an aggregate")
+	}
 	for _, node := range extraNodes {
+		before := len(leaves)
 		if e = collect(node); e != nil {
 			return SQLPlan{}, e
 		}
-	}
-	if len(leaves) == 0 {
-		return SQLPlan{}, diagnostic("aggregate_required", "metric must contain an aggregate")
+		if len(leaves) == before {
+			return SQLPlan{}, diagnostic("aggregate_required", "summary must contain an aggregate")
+		}
 	}
 	if y != nil {
 		before := len(leaves)
@@ -350,7 +374,7 @@ func compileMetricDialect(ctx context.Context, q MetricQuery, spec AggSpec, s Sc
 	var lower func(*exprNode) (ValueSQL, error)
 	lower = func(n *exprNode) (ValueSQL, error) {
 		if v, ok := leaves[n]; ok {
-			return b.emit("CASE WHEN "+v.Error+" IS NULL THEN "+v.Value+" END", v.Error, v.Type), nil
+			return b.emitNative("CASE WHEN "+v.Error+" IS NULL THEN "+v.Value+" END", v.Error, v.Type), nil
 		}
 		if n.op == "literal" {
 			return b.row(n)
@@ -372,8 +396,7 @@ func compileMetricDialect(ctx context.Context, q MetricQuery, spec AggSpec, s Sc
 	v = b.metricNumber(v)
 	extraValues := make([]ValueSQL, len(extraNodes))
 	for i, node := range extraNodes {
-		extraValues[i], e = lower(node)
-		if e != nil {
+		if extraValues[i], e = lower(node); e != nil {
 			return SQLPlan{}, e
 		}
 		extraValues[i] = b.metricNumber(extraValues[i])
@@ -398,18 +421,18 @@ func compileMetricDialect(ctx context.Context, q MetricQuery, spec AggSpec, s Sc
 	}
 	if len(groupErrors) > 0 {
 		ge := "COALESCE(" + strings.Join(append(groupErrors, b.nullError()), ",") + ")"
-		v = b.emit("CASE WHEN "+ge+" IS NULL THEN "+v.Value+" END", "COALESCE("+ge+","+v.Error+")", v.Type)
-		for i, value := range extraValues {
-			extraValues[i] = b.emit("CASE WHEN "+ge+" IS NULL THEN "+value.Value+" END", "COALESCE("+ge+","+value.Error+")", value.Type)
+		v = b.emitNative("CASE WHEN "+ge+" IS NULL THEN "+v.Value+" END", "COALESCE("+ge+","+v.Error+")", v.Type)
+		for i, x := range extraValues {
+			extraValues[i] = b.emitNative("CASE WHEN "+ge+" IS NULL THEN "+x.Value+" END", "COALESCE("+ge+","+x.Error+")", x.Type)
 		}
 		if y != nil {
-			yv = b.emit("CASE WHEN "+ge+" IS NULL THEN "+yv.Value+" END", "COALESCE("+ge+","+yv.Error+")", yv.Type)
+			yv = b.emitNative("CASE WHEN "+ge+" IS NULL THEN "+yv.Value+" END", "COALESCE("+ge+","+yv.Error+")", yv.Type)
 		}
 	}
 	fields := groupOutput(len(groups))
 	fields = append(fields, v.Value+" AS value", v.Error+" AS error", "count")
-	for i, value := range extraValues {
-		fields = append(fields, fmt.Sprintf("%s AS extra%d,%s AS extra%d_error", value.Value, i, value.Error, i))
+	for i, x := range extraValues {
+		fields = append(fields, fmt.Sprintf("%s AS extra%d,%s AS extra%d_error", x.Value, i, x.Error, i))
 	}
 	if y != nil {
 		fields = append(fields, yv.Value+" AS y", yv.Error+" AS y_error")
@@ -426,8 +449,8 @@ func compileMetricDialect(ctx context.Context, q MetricQuery, spec AggSpec, s Sc
 			cols = append(cols, OutputColumn{Field: spec.GroupBy[i], ValueAlias: fmt.Sprintf("group%d", i), Type: g.Type})
 		}
 		cols = append(cols, OutputColumn{ValueAlias: "value", Type: v.Type})
-		for i, value := range extraValues {
-			cols = append(cols, OutputColumn{Field: extra[i].ID, ValueAlias: fmt.Sprintf("extra%d", i), ErrorAlias: fmt.Sprintf("extra%d_error", i), Type: value.Type})
+		for i, x := range extraValues {
+			cols = append(cols, OutputColumn{Field: extra[i].ID, ValueAlias: fmt.Sprintf("extra%d", i), ErrorAlias: fmt.Sprintf("extra%d_error", i), Type: x.Type})
 		}
 		if y != nil {
 			cols = append(cols, OutputColumn{ValueAlias: "y", Type: yv.Type})
@@ -597,12 +620,7 @@ func (b *planBuilder) metricNumber(v ValueSQL) ValueSQL {
 		return v
 	}
 	err := "COALESCE(" + v.Error + ",CASE WHEN " + b.unsafeMetricNumber(v.Value) + " THEN " + b.errorLiteral("unsafe_integer") + " END)"
-	out := b.emit("CASE WHEN "+err+" IS NULL THEN "+v.Value+" END", err, v.Type)
-	// This is a deterministic native SQL guard over already evaluated inputs.
-	// Inlining it avoids copying the complete population into another B-tree
-	// for each numeric input in a fused reduction.
-	if b.sqlite {
-		b.stages[len(b.stages)-1].Materialized = false
-	}
-	return out
+	// Reading an unmaterialized guard calls qt_v2_unsafe where the value is
+	// consumed, which measured cheaper than copying every row for each input.
+	return b.emitNative("CASE WHEN "+err+" IS NULL THEN "+v.Value+" END", err, v.Type)
 }

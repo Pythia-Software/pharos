@@ -115,7 +115,17 @@ type planBuilder struct {
 	checked       map[string]bool
 	definitions   map[string]ComputedColumn
 	nodes         int
+	aliases       map[string]rowAlias
 }
+
+// rowAlias records where a row alias is defined and how many stored-column
+// reads one reference to it expands to while its stage is not materialized.
+// Host source bindings (reads < 0) may be expensive or volatile SQL.
+type rowAlias struct{ stage, reads int }
+
+// maxInlineReads bounds the expansion of one reference to an unmaterialized
+// SQLite projection, so nested CASE chains grow linearly, not exponentially.
+const maxInlineReads = 8
 
 func newPlan(ctx context.Context, s Schema, o PlanOptions) (*planBuilder, error) {
 	return newPlanDialect(ctx, s, o, false)
@@ -132,7 +142,7 @@ func newPlanDialect(ctx context.Context, s Schema, o PlanOptions, sqlite bool) (
 	if o.Now.IsZero() {
 		o.Now = time.Now()
 	}
-	b := &planBuilder{sourceFrom: "(" + o.SourceSQL + ")", sourceColumns: map[string]string{}, sourceAliases: map[string]string{}, sqlite: sqlite, emitInputs: map[int][]string{}, rowMemo: map[string]ValueSQL{}, ctx: ctx, schema: s, options: o, args: append([]any{}, o.SourceArgs...), fields: map[string]ValueSQL{}, raw: map[string]ValueSQL{}, projected: map[string]ValueSQL{}, revisions: map[string]string{}, visiting: map[string]bool{}, dependencies: map[string]bool{}, checked: map[string]bool{}, definitions: map[string]ComputedColumn{}}
+	b := &planBuilder{sourceFrom: "(" + o.SourceSQL + ")", sourceColumns: map[string]string{}, sourceAliases: map[string]string{}, aliases: map[string]rowAlias{}, sqlite: sqlite, emitInputs: map[int][]string{}, rowMemo: map[string]ValueSQL{}, ctx: ctx, schema: s, options: o, args: append([]any{}, o.SourceArgs...), fields: map[string]ValueSQL{}, raw: map[string]ValueSQL{}, projected: map[string]ValueSQL{}, revisions: map[string]string{}, visiting: map[string]bool{}, dependencies: map[string]bool{}, checked: map[string]bool{}, definitions: map[string]ComputedColumn{}}
 	// Project bindings exactly once in the source namespace. Internal aliases do
 	// not depend on request names, labels or trusted SQL identifiers.
 	names := make([]string, 0, len(s.Fields))
@@ -146,7 +156,13 @@ func newPlanDialect(ctx context.Context, s Schema, o PlanOptions, sqlite bool) (
 		if f.Expr == "" {
 			return nil, diagnostic("schema", "empty field SQL binding")
 		}
+		// Executor-staged columns are stored values; host bindings are opaque.
+		reads := -1
+		if f.typedValue {
+			reads = 1
+		}
 		v := fmt.Sprintf("f%d", i)
+		b.aliases[v] = rowAlias{0, reads}
 		expr := f.Expr
 		if !sqlite && (f.Kind == FieldText || f.Kind == FieldEnum) {
 			expr = "(" + expr + ")::text"
@@ -157,6 +173,7 @@ func newPlanDialect(ctx context.Context, s Schema, o PlanOptions, sqlite bool) (
 		b.fields[n] = ValueSQL{Value: v, Error: b.nullError(), Type: expressionType(f.Kind)}
 		if f.ValueErrorExpr != "" {
 			alias := fmt.Sprintf("f%d", len(names)+i)
+			b.aliases[alias] = rowAlias{0, reads}
 			projection := f.ValueErrorExpr + " AS " + alias
 			cols = append(cols, projection)
 			b.sourceColumns[alias] = projection
@@ -218,19 +235,30 @@ func (b *planBuilder) param(v any, typ string) string {
 	}
 	return fmt.Sprintf("$%d::%s", len(b.args), typ)
 }
-func (b *planBuilder) emit(v, e, t string) ValueSQL {
+func (b *planBuilder) emit(v, e, t string) ValueSQL { return b.project(v, e, t, false) }
+
+// emitNative projects native SQL over existing aliases (CASE, COALESCE,
+// comparisons, casts), optionally with deterministic scalar guards such as
+// qt_v2_unsafe, but no payload function whose JSON result consumers decode.
+// SQLite evaluates it where it is read instead of copying the population into
+// another B-tree, provided its inputs are stored and one reference stays
+// within maxInlineReads.
+func (b *planBuilder) emitNative(v, e, t string) ValueSQL { return b.project(v, e, t, true) }
+
+func (b *planBuilder) project(v, e, t string, native bool) ValueSQL {
 	b.serial++
 	a := fmt.Sprintf("v%d", b.serial)
 	z := fmt.Sprintf("e%d", b.serial)
+	valueReads, valueStored := b.inlineReads(v)
+	errorReads, errorStored := b.inlineReads(e)
 	if b.projection != nil {
 		b.emitInputs[len(b.stages)] = append([]string{}, b.projection...)
 	}
 	b.stage("SELECT *, " + v + " AS " + a + ", " + e + " AS " + z + " FROM " + b.rel)
-	// Native CASE/sidecar projections do not need a population copy. Keep
-	// function payloads materialized so JSON decoding and arithmetic are shared.
-	if b.sqlite && !strings.Contains(v+e, "qt_") && !strings.Contains(v+e, "json_extract") {
-		b.stages[len(b.stages)-1].Materialized = false
-	}
+	stage := len(b.stages) - 1
+	b.stages[stage].Materialized = !(b.sqlite && native && valueStored && errorStored && max(valueReads, errorReads) <= maxInlineReads)
+	b.aliases[a] = rowAlias{stage, valueReads}
+	b.aliases[z] = rowAlias{stage, errorReads}
 	if b.projection != nil {
 		b.projection = append(b.projection, a, z)
 	}
@@ -241,6 +269,31 @@ func (b *planBuilder) emit(v, e, t string) ValueSQL {
 }
 
 var rowAliasPattern = regexp.MustCompile(`\b(?:f|v|e)[0-9]+\b`)
+
+// inlineReads is how many stored-column reads an unmaterialized projection of
+// sql expands to, and false if it reads a host binding not yet stored. An
+// alias costs one read once any stage from its definition on is materialized.
+func (b *planBuilder) inlineReads(sql string) (int, bool) {
+	total := 0
+	for _, name := range rowAliasPattern.FindAllString(sql, -1) {
+		alias, ok := b.aliases[name]
+		if !ok {
+			return 0, false
+		}
+		reads := alias.reads
+		for i := alias.stage; i < len(b.stages) && reads != 1; i++ {
+			if b.stages[i].Materialized {
+				reads = 1
+			}
+		}
+		if reads < 0 {
+			return 0, false
+		}
+		total += reads
+	}
+	// Each reference also repeats the projection's own SQL.
+	return max(total, 1), true
+}
 
 // Keep each guarded expression materialized once, but stop copying dead input
 // columns through every intermediate population. Liveness is conservative:
@@ -423,7 +476,9 @@ func (b *planBuilder) sourceValue(name string) (ValueSQL, error) {
 		return v, nil
 	}
 	var v ValueSQL
-	if b.sqlite {
+	if b.sqlite && b.schema.Fields[name].typedValue {
+		v = raw // Staged text already passed this storage and encoding check.
+	} else if b.sqlite {
 		errSQL := "COALESCE(" + raw.Error + ",qt_v2_field_error(" + raw.Value + ",'source_text'))"
 		v = b.emit("CASE WHEN "+errSQL+" IS NULL THEN "+raw.Value+" END"+b.collation(), errSQL, "text")
 	} else {
@@ -640,8 +695,8 @@ func (b *planBuilder) operation(op string, a []ValueSQL) (ValueSQL, error) {
 		v = "CASE WHEN abs(" + v + ") <= 1e100::numeric AND ((" + v + ")=0 OR abs(" + v + ") >= 1e-300::numeric) THEN " + floatValue + " END"
 	}
 	// Materialize the error expression as an alias first to keep SQL growth linear.
-	out := b.emit(v, e, t)
-	clean := b.emit("CASE WHEN "+out.Error+" IS NULL THEN "+out.Value+" END", out.Error, t)
+	out := b.emitNative(v, e, t)
+	clean := b.emitNative("CASE WHEN "+out.Error+" IS NULL THEN "+out.Value+" END", out.Error, t)
 	if t == "null" {
 		clean.Value = "NULL"
 	}
@@ -713,7 +768,7 @@ func (b *planBuilder) filterSchema(where []WhereTerm) (Schema, error) {
 func (b *planBuilder) key(v ValueSQL) ValueSQL {
 	if v.Type == "null" {
 		if b.sqlite {
-			return b.emit("CAST("+v.Value+" AS TEXT)", v.Error, "text")
+			return b.emitNative("CAST("+v.Value+" AS TEXT)", v.Error, "text")
 		}
 		return b.emit("("+v.Value+")::text", v.Error, "text")
 	}
