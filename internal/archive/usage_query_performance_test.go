@@ -115,8 +115,8 @@ func TestMachineTimeProjectionMatchesCubeAndInvalidatesOnPublication(t *testing.
 	midnight := func(year int, month time.Month, day int) string {
 		return time.Date(year, month, day, 0, 0, 0, 0, time.Local).Format(time.RFC3339)
 	}
-	for _, groups := range [][]string{{}, {"repository_name", "activity", "day", "status", "operation_key", "operation_name", "tool_name", "mcp_server"},
-		{"repository_name", "activity", "month", "status", "operation_key", "operation_name", "tool_name", "mcp_server"}, {"provider", "model_family", "month"},
+	for _, groups := range [][]string{{}, {"repository_name", "activity", "status", "operation_key", "operation_name", "tool_name", "mcp_server"},
+		{"day", "status"}, {"month", "status"}, {"repository_name", "activity", "day", "status", "operation_key", "operation_name", "tool_name", "mcp_server"}, {"provider", "model_family", "month"},
 		{"model", "effort", "week"}, {"model_effort", "program", "subcommand", "tool_category", "command_category"}} {
 		for _, where := range [][]qt.WhereTerm{nil, {{Field: "provider", Op: "=", Value: "codex"}}, {{Field: "provider", Op: "=", Value: "absent"}},
 			{{Field: "started_at", Op: ">=", Value: midnight(2026, 1, 1)}, {Field: "started_at", Op: "<", Value: midnight(2027, 1, 1)}},

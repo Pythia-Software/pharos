@@ -1,4 +1,4 @@
-// swiftc -parse-as-library macos/UpdateChecker.swift macos/test/UpdateCheckHarness.swift -o /tmp/pharos-update-check && /tmp/pharos-update-check
+// Run with macos/test/run-light.sh; release responses are stubbed, with no network.
 import Foundation
 
 final class StubReleaseResponse: URLProtocol {

@@ -45,6 +45,11 @@ dependencies without changing the lockfile, and symlinks them into Pharos's
 local gitignored `go.work` selects its `backends/go` instead of the published
 module. Changes to Query Table belong in that checkout.
 
+`macos/test/swift-harness.sh` can run while these links are configured. Its
+temporary app build uses the pinned npm packages and checked-in Go backend
+with `GOWORK=off`; it excludes `go.work`/`go.work.sum` from the copy and leaves
+the original workspace files and package links intact.
+
 The combined watcher keeps package output available with `--watch --no-clean`
 and rebuilds Pharos. esbuild uses `--preserve-symlinks` so linked packages resolve
 React through Pharos's dependencies. Schema edits still require
