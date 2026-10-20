@@ -68,11 +68,14 @@ if [ -n "$PIDS" ]; then
 fi
 
 cd "$ROOT"
+if [ ! -d web/node_modules ]; then
+    echo "web/node_modules is missing; run tools/setup.sh first." >&2
+    exit 1
+fi
+# The Go service embeds these files even when --no-watch is requested. Build
+# synchronously before go run; the watcher's first build would race compilation.
+npm --prefix web run build
 if [ "$WATCH" -eq 1 ]; then
-    if [ ! -d web/node_modules ]; then
-        echo "web/node_modules is missing; run (cd web && npm ci), or pass --no-watch." >&2
-        exit 1
-    fi
     (cd web && exec npm run --silent watch:local) &
     WATCHER=$!
     trap 'kill "$WATCHER" 2>/dev/null || true' EXIT INT TERM

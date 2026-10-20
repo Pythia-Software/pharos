@@ -77,6 +77,7 @@ wait_exit() {
 }
 
 echo "Building pharos…"
+"$ROOT/tools/setup.sh"
 (cd "$ROOT" && GOTOOLCHAIN=local go build -o "$WORK/pharos" ./cmd/pharos)
 (cd "$ROOT" && GOTOOLCHAIN=local go build -o "$WORK/check-catalog" ./macos/test/check-catalog.go)
 CLI="$WORK/pharos"
