@@ -17,39 +17,11 @@ tests.
 | [usage-filtered-metrics-fast-path.md](usage-filtered-metrics-fast-path.md) | Filtered Usage cost and distinct-count metrics still take the slow path; confirm Machine Time's all-time CPU |
 | [query-table-fork-reduction-reuse.md](query-table-fork-reduction-reuse.md) | Our patched Query Table adapter re-scans the source when `AVG` or `MIN` is batched with `SUM` |
 
-## Layout and focus bugs
-
-These were found by the structural browser suite. Each one runs today as a
-`todo` (the `KNOWN` list in `web/tests/browser/structure.test.mjs`, or a `todo`
-in `focus.test.mjs`) so the suite stays green.
-
-A fix is done when:
-- its `KNOWN` entry or `todo` is removed;
-- `npm --prefix web run test:browser` passes on Chromium and with
-  `PHAROS_BROWSER=webkit`;
-- no new pixel, CSS-value or copy assertions were added.
-
-Before and after screenshots are welcome in the PR; set
-`PHAROS_UI_SCREENSHOTS=dir`, and don't assert on them.
-
-| Handoff | Pages and widths |
-|---|---|
-| [layout-screen-reader-labels.md](layout-screen-reader-labels.md) | Usage, Human Words, TL1 runs at phone widths; Capture & index at every width |
-| [layout-row-action-buttons.md](layout-row-action-buttons.md) | Tools, Skills, MCP and Human Words tables, every width |
-| [layout-header-navigator-320.md](layout-header-navigator-320.md) | Header at 320 px with the navigation bar open |
-| [layout-usage-summary-320.md](layout-usage-summary-320.md) | Header Usage summary popover at 320 px |
-| [layout-findings-320.md](layout-findings-320.md) | Findings and finding detail at 320 px |
-| [layout-carbon-switch-320.md](layout-carbon-switch-320.md) | Carbon Impact at 320 px |
-| [layout-transcript-offsets.md](layout-transcript-offsets.md) | Transcripts at 390 and 320 px |
-| [layout-human-words-profile-cover.md](layout-human-words-profile-cover.md) | Dashboard Catalog, every width |
-| [layout-feedback-toolbar-360.md](layout-feedback-toolbar-360.md) | Feedback panel at 360 px |
-
 ## Tests, tooling and runtime
 
 | Handoff | Problem |
 |---|---|
 | [go-test-parallelism.md](go-test-parallelism.md) | The Go suite runs one test at a time; parallelism is the next large speedup |
-| [macos-test-harnesses.md](macos-test-harnesses.md) | The manual macOS harnesses: one is broken, one may be stale, one has no script, and one wipes `web/node_modules` |
 
 ## Upstream Query Table
 
