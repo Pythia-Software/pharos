@@ -858,7 +858,7 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 		}
 		metrics = &copy
 		if slices.Contains(sourceNames, "hour") {
-			usageHours, e = s.Catalog.hourlyUsageForAggregation(ctx, metrics.Where, localSchema, sourceNames)
+			usageHours, e = s.Catalog.hourlyUsageForAggregation(ctx, metrics.Where, sourceNames)
 			if e != nil {
 				return queryV2ExecutionResult{}, e
 			}
@@ -874,7 +874,7 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 		if e != nil {
 			return queryV2ExecutionResult{}, e
 		}
-		hours, e := s.Catalog.hourlyUsageForAggregation(ctx, copy.Where, localSchema, sourceNames)
+		hours, e := s.Catalog.hourlyUsageForAggregation(ctx, copy.Where, sourceNames)
 		if e != nil {
 			return queryV2ExecutionResult{}, e
 		}
@@ -1053,13 +1053,14 @@ func usageDaysOf(daily, hours []map[string]any) []map[string]any {
 	return kept
 }
 
-// usageMetricsInMemory answers Usage metrics natively from its rows in
-// memory, without copying them into SQLite, when executeUsageMetricsV2 would
-// leave the adapter no row filter to apply: hour metrics read the hourly rows
-// hourlyUsageForAggregation selected, and daily metrics need an empty filter,
-// or one on hours, which selects their days. It splits the request as
-// executeUsageMetricsV2 does and reports false otherwise, shown-row metrics
-// included.
+// usageMetricsInMemory answers Usage metrics from its rows in memory with
+// Query Table's in-memory executor, without copying them into SQLite. It
+// splits the request as executeUsageMetricsV2 does: hour metrics read the
+// hourly rows hourlyUsageForAggregation selected, and daily metrics read the
+// daily rows under the request's filter, or, when it filters hours, the days
+// holding the selected hours. It reports false for anything the executor
+// cannot answer exactly, shown-row metrics and computed fields included, for
+// the staged path to answer.
 func (s *Server) usageMetricsInMemory(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2Dataset, q qt.MetricQuery, o qt.PlanOptions, daily, hours []map[string]any) (qt.SQLiteV2ExecutionResult, bool, error) {
 	if !nativeMetrics {
 		return qt.SQLiteV2ExecutionResult{}, false, nil
@@ -1078,7 +1079,7 @@ func (s *Server) usageMetricsInMemory(ctx context.Context, tx *sql.Tx, d qt.SQLi
 	}
 	hasHourFilter := slices.Contains(whereFields(q.Where), "hour")
 	if !needsHours && !hasHourFilter {
-		return nativeRowMetricsV2(ctx, tx, d, q, o, daily)
+		return usageRowMetricsV2(ctx, tx, d, q, o, daily)
 	}
 	dailyRows, dailyRequest, hourRequest := daily, q, q
 	dailyRequest.Metrics, hourRequest.Metrics, hourRequest.Where = nil, nil, nil
@@ -1103,7 +1104,7 @@ func (s *Server) usageMetricsInMemory(ctx context.Context, tx *sql.Tx, d qt.SQLi
 		if len(part.q.Metrics) == 0 {
 			continue
 		}
-		result, handled, err := nativeRowMetricsV2(ctx, tx, d, part.q, o, part.rows)
+		result, handled, err := usageRowMetricsV2(ctx, tx, d, part.q, o, part.rows)
 		if err != nil || !handled {
 			return qt.SQLiteV2ExecutionResult{}, err != nil, err
 		}
@@ -1116,6 +1117,16 @@ func (s *Server) usageMetricsInMemory(ctx context.Context, tx *sql.Tx, d qt.SQLi
 		result.Metrics.Metrics = append(result.Metrics.Metrics, byID[spec.ID])
 	}
 	return result, true, nil
+}
+
+// usageRowMetricsV2 runs q over rows in memory, and reports false where the
+// executor asks for the rows to be staged instead.
+func usageRowMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2Dataset, q qt.MetricQuery, o qt.PlanOptions, rows []map[string]any) (qt.SQLiteV2ExecutionResult, bool, error) {
+	result, err := d.ExecuteV2Rows(ctx, tx, rows, q, o)
+	if errors.Is(err, qt.ErrRowsUnsupported) {
+		return qt.SQLiteV2ExecutionResult{}, false, nil
+	}
+	return result, true, err
 }
 
 // Usage keeps daily row filters and selects hourly populations per metric,

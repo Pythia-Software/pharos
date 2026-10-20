@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gbdubs/pharos/internal/querytable"
+	qt "github.com/Pythia-Software/query-table/backends/go"
 )
 
 var usageTokenFields = []string{
@@ -271,25 +271,7 @@ func (c *Catalog) localUsageRoots(ctx context.Context) (*usageConversationAttrib
 
 // Hourly charts keep row filters (for example a daily token threshold) at
 // the table's daily granularity, then apply timestamp bounds to the ledger hours.
-func (c *Catalog) hourlyUsageForAggregation(ctx context.Context, where []querytable.WhereTerm, schema querytable.Schema, needed ...[]string) ([]map[string]any, error) {
-	var rowWhere, hourWhere []querytable.WhereTerm
-	for _, term := range where {
-		timeOnly := true
-		for _, clause := range term.Predicates() {
-			if clause.Field != "first_usage_at" && clause.Field != "last_usage_at" && clause.Field != "hour" {
-				timeOnly = false
-			}
-		}
-		hasHour := false
-		for _, clause := range term.Predicates() {
-			hasHour = hasHour || clause.Field == "hour"
-		}
-		if timeOnly || hasHour {
-			hourWhere = append(hourWhere, term)
-		} else {
-			rowWhere = append(rowWhere, term)
-		}
-	}
+func (c *Catalog) hourlyUsageForAggregation(ctx context.Context, where []qt.WhereTerm, needed ...[]string) ([]map[string]any, error) {
 	fields := fieldSet(whereFields(where)...)
 	for _, names := range needed {
 		for _, name := range names {
@@ -307,14 +289,6 @@ func (c *Catalog) hourlyUsageForAggregation(ctx context.Context, where []queryta
 	if err != nil {
 		return nil, err
 	}
-	matched, err := querytable.Filter(daily, rowWhere, schema)
-	if err != nil {
-		return nil, err
-	}
-	ids := map[string]bool{}
-	for _, row := range matched {
-		ids[firstString(row["id"])] = true
-	}
 	hourly, err := c.localUsageBaseRows(ctx, true)
 	if lineage {
 		hourly, err = c.localUsageHourlyRows(ctx)
@@ -322,14 +296,69 @@ func (c *Catalog) hourlyUsageForAggregation(ctx context.Context, where []queryta
 	if err != nil {
 		return nil, err
 	}
+	return selectUsageHours(daily, hourly, where)
+}
+
+// selectUsageHours is the hourly rows of the daily rows matching where's row
+// filters, that match its timestamp and hour filters.
+func selectUsageHours(daily, hourly []map[string]any, where []qt.WhereTerm) ([]map[string]any, error) {
+	var rowWhere, hourWhere []qt.WhereTerm
+	for _, term := range where {
+		timeOnly := true
+		for _, clause := range term.Predicates() {
+			if clause.Field != "first_usage_at" && clause.Field != "last_usage_at" && clause.Field != "hour" {
+				timeOnly = false
+			}
+		}
+		hasHour := false
+		for _, clause := range term.Predicates() {
+			hasHour = hasHour || clause.Field == "hour"
+		}
+		if timeOnly || hasHour {
+			hourWhere = append(hourWhere, term)
+		} else {
+			rowWhere = append(rowWhere, term)
+		}
+	}
+	matched, err := filterUsageRows(daily, rowWhere)
+	if err != nil {
+		return nil, err
+	}
+	ids := map[string]bool{}
+	for _, row := range matched {
+		ids[firstString(row["id"])] = true
+	}
 	kept := make([]map[string]any, 0, len(hourly))
 	for _, row := range hourly {
-		id := usageDailyID(row)
-		if ids[id] {
+		if ids[usageDailyID(row)] {
 			kept = append(kept, row)
 		}
 	}
-	return querytable.Filter(kept, hourWhere, schema)
+	return filterUsageRows(kept, hourWhere)
+}
+
+// filterUsageRows keeps the Usage rows matching where, with Query Table's
+// in-memory filter: the rows its SQLite adapter would select from a staged
+// copy of them.
+func filterUsageRows(rows []map[string]any, where []qt.WhereTerm) ([]map[string]any, error) {
+	if len(where) == 0 {
+		return rows, nil
+	}
+	filter, err := qt.CompileRowFilter(where, PharosUsageSchema(), qt.SQLiteOptions{})
+	if err != nil {
+		return nil, err
+	}
+	kept := []map[string]any{}
+	for _, row := range rows {
+		match, err := filter.Match(row)
+		if err != nil {
+			return nil, err
+		}
+		if match {
+			kept = append(kept, row)
+		}
+	}
+	return kept, nil
 }
 
 func (c *Catalog) representativeLedger() ([]map[string]any, error) {

@@ -470,7 +470,7 @@ func addCarbonTokens(target map[string]map[string]int64, tier string, counts map
 // carbonSeries returns counts before energy assumptions, so chart and totals
 // can recalculate together without refetching. Filter at ledger-hour precision
 // even for daily charts: a partial-day range must not include the whole day.
-func (c *Catalog) carbonSeries(ctx context.Context, request carbonSeriesRequest, schema querytable.Schema) (map[string]any, error) {
+func (c *Catalog) carbonSeries(ctx context.Context, request carbonSeriesRequest) (map[string]any, error) {
 	if !slices.Contains([]string{"", "provider", "repository_name", "tier"}, request.Split) {
 		return nil, fmt.Errorf("carbon series cannot split by %q", request.Split)
 	}
@@ -478,7 +478,7 @@ func (c *Catalog) carbonSeries(ctx context.Context, request carbonSeriesRequest,
 	if err != nil {
 		return nil, err
 	}
-	rows, err := c.hourlyUsageForAggregation(ctx, request.Where, schema)
+	rows, err := c.hourlyUsageForAggregation(ctx, request.Where)
 	if err != nil {
 		return nil, err
 	}

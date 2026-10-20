@@ -14,7 +14,7 @@ tests.
 
 | Handoff | Problem |
 |---|---|
-| [usage-filtered-metrics-fast-path.md](usage-filtered-metrics-fast-path.md) | Filtered Usage cost and distinct-count metrics still take the slow path; confirm Machine Time's all-time CPU |
+| [machine-time-all-time-cpu.md](machine-time-all-time-cpu.md) | Machine Time's all-time view may take twice the CPU the legacy route did; confirm or fix |
 | [query-table-schema-reload.md](query-table-schema-reload.md) | Every staged Query Table request makes its connection re-parse the whole catalog schema twice, adding about 6 ms of CPU |
 
 ## Upstream Query Table
@@ -38,7 +38,11 @@ Requests for the Query Table library itself are collected in
   delete its native count and sum path.
 - **QT-15:** let computed-column previews use the negotiated transport, so
   Pharos can retire its legacy row route.
-- **QT-16** ([query-table-in-memory-metrics.md](query-table-in-memory-metrics.md)):
-  run V2 metrics and the row filter over rows in memory, so filtered Usage
-  metrics stop staging a copy and Pharos can delete its own in-memory path
-  and its pre-adapter filter.
+- **QT-16** ([query-table-in-memory-metrics.md](query-table-in-memory-metrics.md)),
+  completed in v0.9.0: V2 metrics and the row filter over rows in memory.
+  Usage now answers its metrics with `ExecuteV2Rows`, filtered or not, and
+  filters its hours with `CompileRowFilter`.
+- **QT-17** ([query-table-in-memory-metrics-speed.md](query-table-in-memory-metrics-speed.md)):
+  remove two hot spots in `ExecuteV2Rows`, per-row JSON group keys and
+  `big.Rat` sums of float costs, which leave Usage's unfiltered metrics
+  2–3.5× slower than the reducer Pharos deleted.
