@@ -459,6 +459,13 @@
 .delegation-name:hover {
   text-decoration: underline;
 }
+.delegation-session-age {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
 .delegation-node small,
 .delegation-lane-label small {
   display: block;

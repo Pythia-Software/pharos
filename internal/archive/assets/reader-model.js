@@ -8,6 +8,17 @@
 // (web/tests/unit/reader). transcript_find.go and work_reader.go mirror parts
 // of it for the service; testdata/ holds the fixtures both must agree on.
 
+// Wall-clock ages shared by the reader and the session hierarchy. Accept both
+// message ISO timestamps and the hierarchy's epoch milliseconds.
+function relativeAge(value,now=Date.now()){
+  if(value==null||value===''||typeof value!=='string'&&typeof value!=='number')return'';
+  const time=new Date(value).getTime();if(!Number.isFinite(time)||!Number.isFinite(now))return'';
+  const minutes=Math.floor(Math.abs(now-time)/60000);if(minutes<1)return'just now';
+  const hours=Math.floor(minutes/60),days=Math.floor(hours/24);
+  const age=days?`${days}d${hours%24?` ${hours%24}h`:''}`:hours?`${hours}h${minutes%60?` ${minutes%60}m`:''}`:`${minutes}m`;
+  return time>now?`in ${age}`:`${age} ago`;
+}
+
 // Message bodies
 function parsedJSON(text){if(typeof text!=='string')return null;const trimmed=text.trim();if(!trimmed||(!trimmed.startsWith('{')&&!trimmed.startsWith('[')))return null;try{return JSON.parse(trimmed)}catch{return null}}
 // Keep parsed bodies with their message, rather than repeatedly decoding them

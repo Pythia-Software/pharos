@@ -5,6 +5,9 @@ import { preferences } from "./preferences";
 import { Icon } from "./icons";
 import "./delegation.css";
 
+// reader-model.js loads before the bundle and also supplies turn ages.
+declare function relativeAge(value: number | null | undefined): string;
+
 type Metric = {
   value: number | null;
   quality: string;
@@ -177,6 +180,11 @@ const localDate = new Intl.DateTimeFormat(undefined, {
 });
 export function localTime(value: number) {
   return localDateTime.format(new Date(value));
+}
+function SessionAge({ start }: { start: number | null }) {
+  const label = relativeAge(start);
+  if (!label || start == null) return null;
+  return <time className="delegation-session-age" dateTime={new Date(start).toISOString()} data-relative-time={start} title={`First evidence: ${localTime(start)}`}>{label}</time>;
 }
 export function clampRange(range: Range, full: Range): Range {
   const width = Math.max(1, Math.min(full[1] - full[0], range[1] - range[0]));
@@ -1145,6 +1153,7 @@ export function DelegationExplorer({
                                         {n.effort || "unknown"}
                                         {n.context_only ? " · Parent context" : ""}
                                       </small>
+                                      <SessionAge start={n.start} />
                                     </div>
                                   </div>
                                 </td>
@@ -1316,6 +1325,7 @@ function InboxSessions({ rows, data, metrics, shown, mode, metric, scope, direct
   const family = scope === "self" ? "self" : "all";
   const ranked = mode === "rank";
   const frames = ranked ? new Map<string, HierarchyFrame>() : hierarchyFrames(rows, !!data.next_cursor);
+  const metricInset = ranked ? 8 : Math.max(8, ...rows.map(row => row.depth * 8 + 8));
   return <div className="delegation-inbox-list">
     <div className="delegation-inbox-controls">
       <button onClick={hierarchy} aria-pressed={!ranked}>Hierarchy</button>
@@ -1343,7 +1353,10 @@ function InboxSessions({ rows, data, metrics, shown, mode, metric, scope, direct
           <span><b>{n.outline}</b> {n.label}{n.external_child || n.navigation ? " ↗" : ""}</span>
           <small>{n.provider} · {n.model || "unknown model"} · {n.effort || "unknown"}{n.context_only ? " · Parent context" : ""}</small>
         </button>
-        <button className="delegation-inbox-metric" onClick={() => openNode(n)} title={value ? cellTitle(value, spec) : "No retained evidence"} style={strength ? { background: `color-mix(in srgb, var(--delegation-tint) ${strength * 45}%, transparent)` } : undefined}>{formatted(value?.value, spec.unit)}{value?.quality === "partial" ? "+" : ""}</button>
+        <div className="delegation-inbox-values" style={{ marginRight: metricInset }}>
+          <span className="delegation-inbox-metric" title={value ? cellTitle(value, spec) : "No retained evidence"} style={strength ? { background: `color-mix(in srgb, var(--delegation-tint) ${strength * 28}%, transparent)` } : undefined}>{formatted(value?.value, spec.unit)}{value?.quality === "partial" ? "+" : ""}</span>
+          <SessionAge start={n.start} />
+        </div>
       </div>;
     })}
     {!rows.length && <p>No retained sessions.</p>}
