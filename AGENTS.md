@@ -103,6 +103,20 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
   GitHub, no user git configuration, and catalogs without drive flushes.
   Tests of those opt back in, for example with `stubDriveTool` or
   `useDurableCatalog`.
+- **Go tests run in several processes, one test at a time in each.**
+  `TestMain` splits the tests `-run` selects across up to eight processes
+  (`processes_test.go`), so:
+  - a test may change package variables, `time.Local` or the environment,
+    provided it restores them when it ends (`override`, `t.Setenv`);
+  - a test must not depend on another having run, in its process or any
+    other, and must keep its files under `t.TempDir()`;
+  - do not call `t.Parallel()`. On macOS every SQLite allocation in a
+    process takes one lock in `modernc.org/libc`, so catalog tests in
+    parallel in one process run no faster than one at a time.
+
+  `PHAROS_TEST_PROCESSES=1` runs everything in one process, for example
+  under a debugger. Profiles, coverage, benchmarks, fewer than 16 tests and
+  `-run` patterns with a `/` already run in one process.
 - **Keep data-safety tests**, even when slow. These include adopt, backup,
   capture, durability, and cross-host merges. Make their fixtures cheaper
   instead.
