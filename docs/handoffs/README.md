@@ -20,25 +20,6 @@ tests.
 | [query-table-fork-reduction-reuse.md](query-table-fork-reduction-reuse.md) | Our patched Query Table adapter re-scans the source when `AVG` or `MIN` is batched with `SUM` |
 | [span-reason-catalog.md](span-reason-catalog.md) | Authorship span reasons and the Human Words Rules filter options are kept in sync by hand |
 
-## Layout and focus bugs
-
-These were found by the structural browser suite. An open one runs as a
-`todo` (the `KNOWN` list in `web/tests/browser/structure.test.mjs`, or a `todo`
-in `focus.test.mjs`) so the suite stays green.
-
-A fix is done when:
-- its `KNOWN` entry or `todo` is removed;
-- `npm --prefix web run test:browser` passes on Chromium and with
-  `PHAROS_BROWSER=webkit`;
-- no new pixel, CSS-value or copy assertions were added.
-
-Before and after screenshots are welcome in the PR; set
-`PHAROS_UI_SCREENSHOTS=dir`, and don't assert on them.
-
-| Handoff | Pages and widths |
-|---|---|
-| [focus-findings-dialog-webkit.md](focus-findings-dialog-webkit.md) | Findings prompt dialog in WebKit, which is also what the app ships in |
-
 ## Tests, tooling and runtime
 
 | Handoff | Problem |
@@ -46,7 +27,6 @@ Before and after screenshots are welcome in the PR; set
 | [go-test-parallelism.md](go-test-parallelism.md) | The Go suite runs one test at a time; parallelism is the next large speedup |
 | [node-runtime-upgrade.md](node-runtime-upgrade.md) | Node 20 is past end of life, and the repository does not pin a version |
 | [macos-test-harnesses.md](macos-test-harnesses.md) | The manual macOS harnesses: one is broken, one may be stale, one has no script, and one wipes `web/node_modules` |
-| [retire-python-importer-remnants.md](retire-python-importer-remnants.md) | A superseded Python migration script and docs that still describe a Python importer |
 
 ## Upstream Query Table
 

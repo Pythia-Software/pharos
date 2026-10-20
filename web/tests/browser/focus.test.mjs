@@ -3,7 +3,6 @@
 // stay below the header; the annotation toolbar stays on screen.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { engine } from "./engine.mjs";
 import { limits, open } from "./harness.mjs";
 import { workID } from "./fixtures.mjs";
 
@@ -48,9 +47,7 @@ test("the card template editor takes focus, keeps it and returns it on Escape", 
   await holdsFocus(page, page.locator("dialog.card-template-editor"), edit);
 });
 
-test("the findings prompt review takes focus, keeps it and returns it on Escape", {
-  ...limits, todo: engine === "webkit" && "In WebKit, Tab skips buttons, so the findings dialog's trap (findings.tsx Dialog wraps only from its first or last button) never fires and Tab moves on to the Findings page's own controls behind the modal.",
-}, async t => {
+test("the findings prompt review takes focus, keeps it and returns it on Escape", limits, async t => {
   const { page, settled } = await open(t, { url: "/findings", ready: ".findings-card" });
   const review = page.locator(".findings-cart button.primary").first();
   await press(review);
