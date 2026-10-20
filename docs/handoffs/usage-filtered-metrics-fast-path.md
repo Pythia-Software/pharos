@@ -1,5 +1,11 @@
 # Handoff: measure and speed up filtered Usage metrics
 
+> **Waiting on Query Table.** Rather than extend Pharos's native path with its
+> own filter, the in-memory filter and metrics are requested upstream as QT-16
+> ([query-table-in-memory-metrics.md](query-table-in-memory-metrics.md)). Once
+> that lands, the Pharos side is to adopt it as that handoff's last section
+> describes, and record this handoff's probe results.
+
 ## Assignment
 
 #157 moved every metric onto `/metrics` and added a native path that keeps

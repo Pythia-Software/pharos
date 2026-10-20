@@ -65,3 +65,7 @@ Requests for the Query Table library itself are collected in
   delete its native count and sum path.
 - **QT-15:** let computed-column previews use the negotiated transport, so
   Pharos can retire its legacy row route.
+- **QT-16** ([query-table-in-memory-metrics.md](query-table-in-memory-metrics.md)):
+  run V2 metrics and the row filter over rows in memory, so filtered Usage
+  metrics stop staging a copy and Pharos can delete its own in-memory path
+  and its pre-adapter filter.
