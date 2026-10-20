@@ -46,7 +46,6 @@ Before and after screenshots are welcome in the PR; set
 | [layout-transcript-offsets.md](layout-transcript-offsets.md) | Transcripts at 390 and 320 px |
 | [layout-human-words-profile-cover.md](layout-human-words-profile-cover.md) | Dashboard Catalog, every width |
 | [layout-feedback-toolbar-360.md](layout-feedback-toolbar-360.md) | Feedback panel at 360 px |
-| [focus-findings-dialog-webkit.md](focus-findings-dialog-webkit.md) | Findings prompt dialog in WebKit, which is also what the app ships in |
 
 ## Tests, tooling and runtime
 
