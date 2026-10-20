@@ -25,8 +25,7 @@ export { core, instantiateRecipe, queryRecipes, cardCoverQuery };
 export const schemas = Object.fromEntries(Object.entries({
   activity, conversation_activity: conversationActivity, findings, library, mcp_calls: mcpCalls, parallelism, skill_usages: skillUsages, tl1_attempts: tl1Attempts, tool_calls: toolCalls, tools, usage, writing, writing_messages: writingMessages,
 }).map(([dataset, document]) => [dataset, core.loadSchema(document)]));
-export const execution = { profile: "qt-sqlite-v1", planToken: "", fields: {}, resolvedRevisions: {} };
-export const capabilities = { version: 3, profile: execution.profile, groupedRows: true, calendarGrouping: true, computedSourceFilters: true, regex: false, maxRows: 10000, maxGroups: 10000, maxPopulation: 250000 };
+export { execution, queryCapabilities as capabilities } from "../../support/query-server.mjs";
 export const day = 86400000;
 
 // `npm run test:full` (PHAROS_TEST_FULL=1) runs every combination of the

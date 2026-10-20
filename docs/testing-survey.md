@@ -8,6 +8,11 @@ Comparisons that ran side by side, and Pharos's own record of agent test
 runs, are the reliable numbers. Per-test working notes from the five reviews
 behind this survey are in [`testing-survey/`](testing-survey/).
 
+Status: the browser plan (§4.4 and §5, decision 1) is in place. The 23
+`tests/*-ui.test.cjs` files this survey cites are deleted; the browser tier is
+the structural suite in `web/tests/browser/`, and the library drive test is
+the opt-in `web/tests/e2e/library-drive.test.mjs`. See `AGENTS.md`.
+
 ## Recommendation
 
 Most of the time goes to **harness cost**, not to the number of tests.
@@ -62,7 +67,7 @@ Today agents either run everything or guess. A full slate cannot pass, and
 | Go `internal/archive` | 117 | 34.4k | 726 `Test*` | `go test ./...` (one package, strictly serial) |
 | Go `internal/querytable` | 3 | 0.4k | 16 | `go test ./...` |
 | Go `third_party/query-table-go` | 19 | 3.7k | 124 | **never run.** It is a nested module, and the files are byte-identical to upstream v0.8.0. |
-| Browser, `tests/*-ui.test.cjs` | 23 | 9.8k | 213 | `node --test` + Playwright from a per-workspace `.context/browser-tests` install |
+| Browser, `tests/*-ui.test.cjs` | 23 | 9.8k | 213 | `node --test` + Playwright from an undeclared per-workspace install |
 | JS unit, `tests/*.test.cjs` | 8 | 0.6k | 49 | `node --test` from any cwd |
 | JS unit, `web/tests/*.mjs` | 27 | 4.2k | 318 | `node --test` **only from `web/`**; there is no `npm test` |
 | Python, `tools/test_*.py` | 3 | 0.3k | 14 | `python3 -m unittest discover -s tools` |

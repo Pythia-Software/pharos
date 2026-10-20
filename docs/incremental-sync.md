@@ -205,12 +205,13 @@ PHAROS_BENCH_ROOT=/Volumes/YOUR_LIBRARY_SSD/scratch \
   go test ./internal/archive -run '^$' -bench '^BenchmarkIncremental' \
   -benchtime=3x -benchmem -count=1
 go tool pprof -top /tmp/pharos-benchmark.test /tmp/pharos-cpu.pprof
-npm --prefix web run test:browser -- incremental-sync-ui combo-button-ui
+npm --prefix web run test:browser -- --test-name-pattern='Capture|Sources'
 ```
 
 `PHAROS_BENCH_ROOT` must already exist. Only temporary benchmark children are
-created/deleted there. Browser tests use the existing Playwright test harness
-in `.context/browser-tests` and installed Chrome, or Playwright's Chromium.
+created/deleted there. The browser suite uses web's `playwright-core` with the
+installed Chrome; it checks only that the Sources and Capture & index pages
+render and keep their layout. Test `sync.js` logic in node.
 
 The default deterministic writer gate allows at most 40 affected rows for an
 unchanged 2,000-message record and 80 for one append (including metadata and

@@ -17,6 +17,7 @@
     "test:unit": "node tests/run.mjs unit",
     "test:full": "node tests/run.mjs unit --full",
     "test:browser": "node tests/run.mjs browser",
+    "test:e2e": "node tests/run.mjs e2e",
     "test:all": "node tests/run.mjs all",
     "test:usage-aggregations": "node tests/run.mjs unit usage-aggregations",
     "test:computed-store": "node tests/run.mjs unit computed-column-store",
@@ -40,6 +41,7 @@
     "@types/react": "18.3.28",
     "@types/react-dom": "18.3.7",
     "esbuild": "0.27.2",
+    "playwright-core": "1.64.1",
     "typescript": "5.6.3"
   }
 }

@@ -140,7 +140,7 @@ startup creates the new indexes; a manually copied probe database needs those
 indexes prepared separately to reproduce indexed timings.
 
 ```sh
-npm install --prefix .context/browser-tests playwright --no-audit --no-fund
+npm --prefix web ci --no-audit --no-fund  # playwright-core for tools/usage-bench.cjs
 
 PHAROS_USAGE_PROBE=/path/to/dev/catalog/catalog.sqlite3 \
 PHAROS_USAGE_SERVER=127.0.0.1:8859 \
