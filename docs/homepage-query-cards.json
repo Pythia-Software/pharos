@@ -9418,6 +9418,116 @@
       ]
     },
     {
+      "dataset": "writing_messages",
+      "field": "sent_at",
+      "category": "human",
+      "idea": "human-01",
+      "unit": "messages",
+      "where": [
+        {
+          "field": "typed_words",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "id": "human-messages-per-day",
+      "title": "Messages per day",
+      "description": "Messages containing your words per day, averaged over each trailing seven complete days, across the last 30 days.",
+      "days": [
+        30
+      ],
+      "action": "Explore daily message counts",
+      "measures": [
+        {
+          "id": "human_daily_messages",
+          "op": "count",
+          "groupBy": [
+            "day"
+          ],
+          "groupLimit": 10000,
+          "label": "Messages with your words per day"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "human_daily_messages",
+        "kind": "auto",
+        "height": 260
+      },
+      "trend": {
+        "value": {
+          "op": "count"
+        },
+        "perDay": true,
+        "lookback": 7,
+        "completeDays": true,
+        "valueLabel": "messages a day · 7-day average",
+        "pointValueLabel": "messages a day",
+        "trendLabel": "7d avg",
+        "sample": "messages",
+        "detail": "Each point: messages containing your words in its trailing seven complete local days ÷ 7. The norm is the mean of the prior 30 endpoints."
+      },
+      "note": "Counts messages by their local sent day. Each point divides seven days' messages by seven, including idle days; today is excluded until it is complete. Only messages containing words classified as typed or dictated contribute. Pasted and automated words are excluded. Counts describe writing, not time or quality."
+    },
+    {
+      "dataset": "writing_messages",
+      "field": "sent_at",
+      "category": "human",
+      "idea": "human-01",
+      "unit": "conversations",
+      "where": [
+        {
+          "field": "typed_words",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "id": "human-conversations-per-day",
+      "title": "Conversations per day",
+      "description": "Conversations in which you wrote per day, averaged over each trailing seven complete days, across the last 30 days.",
+      "days": [
+        30
+      ],
+      "action": "Explore daily conversation counts",
+      "measures": [
+        {
+          "id": "human_daily_conversations",
+          "op": "count_distinct",
+          "field": "conversation_id",
+          "groupBy": [
+            "day"
+          ],
+          "groupLimit": 10000,
+          "label": "Conversations with your words per day"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "human_daily_conversations",
+        "kind": "auto",
+        "height": 260
+      },
+      "trend": {
+        "value": {
+          "op": "count_distinct",
+          "field": "conversation_id"
+        },
+        "count": {
+          "op": "count_distinct",
+          "field": "conversation_id"
+        },
+        "perDay": true,
+        "lookback": 7,
+        "completeDays": true,
+        "valueLabel": "conversations a day · 7-day average",
+        "pointValueLabel": "conversations a day",
+        "trendLabel": "7d avg",
+        "sample": "conversation-days",
+        "detail": "Each point: conversations you wrote in on each of its trailing seven complete local days, summed and ÷ 7. The norm is the mean of the prior 30 endpoints."
+      },
+      "note": "A conversation counts on every day you wrote in it, so one that runs across several days is counted on each. A conversation is counted when you write in it, not when it ends. Each point divides seven days' counts by seven, including idle days; today is excluded until it is complete. Only messages containing words classified as typed or dictated contribute. Pasted and automated words are excluded. Counts describe writing, not time or quality."
+    },
+    {
       "id": "model-token-share-trend",
       "title": "Model token share over time",
       "description": "Model share of total recorded tokens over the last {days} days, smoothed over 7 days.",
