@@ -1,4 +1,11 @@
 import React, { useEffect, useState } from "react";
+import { EMPTY_QUERY, type FieldSchema, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
+
+// Empty columns/order use the source schema defaults, including host-added
+// detail columns. Never reuse a named baseline or a grouped result schema.
+export function tableRecoveryQuery(schema: FieldSchema, scopeWhere: WhereTerm[] = []): QueryState {
+  return { ...EMPTY_QUERY, where: [...scopeWhere], limit: schema.defaultLimit ?? EMPTY_QUERY.limit };
+}
 
 // Explicit route options bypass all saved Usage tabs and machine filters. The
 // storage adapter's fresh flag also bypasses last-used and named default queries.

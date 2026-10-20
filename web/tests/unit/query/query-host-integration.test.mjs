@@ -4,7 +4,8 @@ import { EMPTY_QUERY, encodeQuery, normalizeQueryState, createQueryLinkService, 
 import * as storageModule from '../../../src/storage';
 import * as bookmarksModule from '../../../src/bookmarks';
 import * as queryLinksModule from '../../../src/query-links';
-import { freshPageURL } from '../../../src/query-recovery';
+import { freshPageURL, tableRecoveryQuery } from '../../../src/query-recovery';
+import { core, schemas, execution } from '../helpers/recipes.mjs';
 import { categoryForQuery } from '../../../src/query-categories';
 import { instantiateRecipe, queryRecipes } from '../../../src/curiosity-data';
 const m={...storageModule,...bookmarksModule,...queryLinksModule,encodeQuery,normalizeQueryState,createQueryLinkService,httpQuerySnapshotStore,QuerySnapshotHttpError};
@@ -179,6 +180,21 @@ test('fresh page links bypass cached queries and named defaults, preserving the 
  assert.equal(url.searchParams.get('activity_days'),'0');assert.equal(url.searchParams.has('q_usage'),false);assert.equal(url.hash,'');
  assert.equal(JSON.stringify(m.readBookmarks()),before);
  assert.equal(freshPageURL('http://localhost/tools?tools_view=skills&q_skill_usages=invalid'),'/tools?fresh=1');
+ // Table reset starts from source-schema defaults even when the restored
+ // baseline contains removed columns, metrics, grouping or invalid filters.
+ for(const dataset of ['usage','tool_calls','mcp_calls']){
+  const scope=dataset==='mcp_calls'?[]:[{field:'provider',op:'=',value:'codex'}];
+  const schema=schemas[dataset],reset=tableRecoveryQuery(schema,scope);
+  const request=core.toServerQueryV2(reset,schema,execution);
+  assert.deepEqual(request.diagnostics,[]);
+  assert.deepEqual(reset.where,scope);
+  assert.equal(reset.offset,0);
+  assert.equal(reset.limit,schema.defaultLimit);
+  assert.equal(reset.grouping,undefined);
+  assert.ok(!reset.aggregations?.length);
+  assert.deepEqual(core.selectedFields(schema,reset).map(field=>field.name),schema.defaultSelect.map(column=>column.field));
+  assert.deepEqual(request.orderBy,schema.defaultSort);
+ }
 });
 
 

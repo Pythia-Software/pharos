@@ -35,8 +35,14 @@ test("MCP connection actions stay usable while the history summary waits", { ski
   await app.settled();
 });
 
-test("MCP opens and reopens after Tools and a Library text search", { skip }, async t => {
+for (const fallback of [false, true]) {
+test(`MCP opens and reopens after Tools and a Library text search${fallback ? " without AbortSignal.any" : ""}`, { skip }, async t => {
   const app = await open(t, { url: `/library?${carried}`, ready: "#queryTableLibrary .qt-table" });
+  if (fallback) {
+    await app.page.addInitScript(() => { AbortSignal.any = undefined; });
+    await app.page.reload();
+    await app.page.locator("#queryTableLibrary .qt-row").first().waitFor();
+  }
   for (const view of ["tools", "mcp", "library", "mcp"]) {
     await app.page.locator(`button[data-view="${view}"]`).click();
     await app.page.locator(`#${view}.active .qt-row`).first().waitFor();
@@ -45,12 +51,25 @@ test("MCP opens and reopens after Tools and a Library text search", { skip }, as
   await app.settled();
   await app.shot("returned-to-mcp");
 });
+}
 
 
-for (const minimal of [false, true]) {
-  test(`MCP call details render and return focus with ${minimal ? "minimal" : "default"} columns`, { skip }, async t => {
+for (const columns of ["default", "minimal", "recovered default"]) {
+  test(`MCP call details render and return focus with ${columns} columns`, { skip }, async t => {
+    const minimal = columns === "minimal", recovery = columns === "recovered default";
     const query = minimal ? `?q_mcp_calls=${encodeURIComponent(encodeQuery({ ...EMPTY_QUERY, select: [{ field: "tool_name" }] }))}` : "";
-    const app = await open(t, { url: `/mcp${query}`, ready: ".mcp-history .qt-row", viewport: { width: 390, height: 844 } });
+    const invalid = { ...EMPTY_QUERY, select: [{ field: "tool_name" }], where: [{ field: "removed_field", op: "=", value: "x" }] };
+    const preferences = recovery ? {
+      "query-table:default:pharos_mcp_calls": "bad-default",
+      "pharos-bookmarks-v1": [{ id: "bad-default", savedQueryId: "bad-default", title: "Failing default", url: `/mcp?q_mcp_calls=${encodeURIComponent(encodeQuery(invalid))}`, dataset: "mcp_calls", query: invalid }],
+    } : {};
+    const app = await open(t, { url: `/mcp${query}`, preferences, ready: recovery ? ".mcp-history .query-recovery" : ".mcp-history .qt-row", viewport: { width: 390, height: 844 } });
+    if (recovery) {
+      await app.page.getByRole("button", { name: "Reset table", exact: true }).click();
+      await app.page.locator(".mcp-history .qt-row").first().waitFor();
+      await app.page.locator(".mcp-history .query-recovery").waitFor({ state: "detached" });
+      await app.settled();
+    }
     const show = app.page.locator(".mcp-history .qt-row").first().getByRole("button", { name: "Details", exact: true });
     await show.focus();
     await app.page.keyboard.press("Enter");

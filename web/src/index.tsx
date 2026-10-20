@@ -31,7 +31,7 @@ import "./pharos.css";
 import { savedRollingWindow } from "./bookmarks";
 import { libraryStorageAdapter, rejectLastQuery, retryLastQuery } from "./storage";
 import { queryRequest, queryFetch, shouldSkipQueryOnRestore } from "./query-request";
-import { PageErrorBoundary, QueryRecovery, ResetPage } from "./query-recovery";
+import { PageErrorBoundary, QueryRecovery, ResetPage, tableRecoveryQuery } from "./query-recovery";
 import { createMCPMonitor, type MCPStatus, type MCPHistory } from "./mcp-monitor";
 import { MCPCallDetails } from "./mcp-call-details";
 import { HomePage } from "./home";
@@ -571,7 +571,7 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
   return <FilterValueProvider value={filterPresentations[dataset]}>
     <QueryRecovery busy={api.loading || api.restoration.status === "resolving" || (remote && !capabilities && !capabilityError)} error={capabilityError ?? api.error} recovered={recovered} identity={JSON.stringify(api.query)}
       onRetry={() => { retryLastQuery(schema.name); if (capabilityError) setCapabilityRetry(value => value + 1); else if (api.restoration.error) void api.restoreLocation(location.href).catch(() => {}); else api.refresh(); }}
-      onReset={() => { setRecovered(false); api.resetAll(); if (capabilityError) setCapabilityRetry(value => value + 1); }} />
+      onReset={() => { setRecovered(false); api.setQuery(tableRecoveryQuery(schema, scopeWhere)); if (capabilityError) setCapabilityRetry(value => value + 1); }} />
     {!api.query.grouping || namespace ? header?.(api) : null}
     {presets?.(api)}
     {api.query.grouping ? <QueryBuilder api={stableApi} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <QueryBuilder defaultCollapsed={Boolean(namespace)} api={stableApi} fields={(api.query.grouping ? api.schema!.fields : api.computed.catalogue)} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={stableApi} dataset={dataset} layout={<QueryBuilder api={stableApi} fields={(api.query.grouping ? api.schema!.fields : api.computed.catalogue)} total={api.total} running={api.loading} />} /> : <QueryBuilder api={stableApi} fields={(api.query.grouping ? api.schema!.fields : api.computed.catalogue)} total={api.total} running={api.loading} />}

@@ -85,24 +85,36 @@ test("the Token chart sums by its period's field and split; cost by type is by p
 });
 
 
-test('query deadlines abort stalled fetches and response bodies, with a recoverable error',async t=>{
+function signalCompatibility(t, fallback) {
+ if (!fallback) return;
+ const descriptor=Object.getOwnPropertyDescriptor(AbortSignal,'any');
+ Object.defineProperty(AbortSignal,'any',{configurable:true,writable:true,value:undefined});
+ t.after(()=>Object.defineProperty(AbortSignal,'any',descriptor));
+}
+
+for (const fallback of [false,true]) {
+const compatibility=fallback?'without AbortSignal.any':'with native signal composition';
+
+test(`query deadlines abort stalled fetches and response bodies, with a recoverable error (${compatibility})`,async t=>{
+ signalCompatibility(t,fallback);
  const original=global.fetch;
  t.after(()=>{global.fetch=original});
  let deadline;
  t.mock.method(AbortSignal,'timeout',()=>{deadline=new AbortController();return deadline.signal});
- for(const stage of ['headers','body']){
+ for(const stage of ['headers','body'])for(const caller of [undefined,new AbortController().signal]){
   global.fetch=async (_url,{signal})=>{
    const pending=()=>new Promise((_resolve,reject)=>{if(signal.aborted)reject(signal.reason);else signal.addEventListener('abort',()=>reject(signal.reason),{once:true});});
    return stage==='headers'?pending():{ok:true,json:pending};
   };
-  const request=queryRequest('/api/query/tool_calls/metrics');
+  const request=queryRequest('/api/query/tool_calls/metrics',{signal:caller});
   const rejected=assert.rejects(request,error=>error instanceof QueryRequestError&&/took too long/.test(error.message));
   deadline.abort(new DOMException('Deadline exceeded','TimeoutError'));
   await rejected;
  }
 });
 
-test('superseded queries preserve caller cancellation and service errors keep their status',async t=>{
+test(`superseded queries preserve caller cancellation and service errors keep their status (${compatibility})`,async t=>{
+ signalCompatibility(t,fallback);
  const original=global.fetch;
  t.after(()=>{global.fetch=original});
  const caller=new AbortController();
@@ -110,29 +122,42 @@ test('superseded queries preserve caller cancellation and service errors keep th
  const request=queryRequest('/api/query/usage/rows-v2',{signal:caller.signal});
  const reason=new DOMException('New query','AbortError'),rejected=assert.rejects(request,error=>error===reason);
  caller.abort(reason);await rejected;
+ global.fetch=async(_url,{signal})=>{signal.throwIfAborted();return response({rows:[],total:0})};
+ await assert.rejects(queryRequest('/api/query/usage/rows-v2',{signal:caller.signal}),error=>error===reason,'already cancelled callers stay cancelled');
  global.fetch=async()=>response({error:{message:'Unknown field'}},422);
  await assert.rejects(queryRequest('/api/query/usage/rows-v2'),error=>error instanceof QueryRequestError&&error.status===422&&error.message==='Unknown field');
  global.fetch=async()=>response({rows:[],total:0});
  assert.deepEqual(await queryRequest('/api/query/usage/rows-v2'),{rows:[],total:0},'empty results are successful');
 });
 
+test(`HTTP stores receive bounded fetches that still observe caller cancellation (${compatibility})`,async t=>{
+ signalCompatibility(t,fallback);
+ const original=global.fetch;
+ t.after(()=>{global.fetch=original});
+ let deadline;
+ t.mock.method(AbortSignal,'timeout',()=>{deadline=new AbortController();return deadline.signal});
+ let signal;
+ global.fetch=async(_input,init)=>{signal=init.signal;return response({ok:true})};
+ for(const source of ['caller','deadline'])for(const input of ['url','request']){
+  const caller=new AbortController(),url='http://localhost/api/query-snapshots?dataset=usage';
+  const result=await (input==='url'?queryFetch(url,{signal:caller.signal}):queryFetch(new Request(url,{signal:caller.signal})));
+  assert.deepEqual(await result.json(),{ok:true});
+  const reason=new DOMException(source,source==='caller'?'AbortError':'TimeoutError');
+  (source==='caller'?caller:deadline).abort(reason);
+  assert.equal(signal.aborted,true);
+  assert.equal(signal.reason,reason);
+  (source==='caller'?deadline:caller).abort(new Error('late abort'));
+  assert.equal(signal.reason,reason,'the first reason wins');
+ }
+ const caller=AbortSignal.abort(new DOMException('Already cancelled','AbortError'));
+ await queryFetch('/api/query-computed-columns?dataset=usage',{signal:caller});
+ assert.equal(signal.reason,caller.reason);
+});
+}
 
 test('only query rejection and deadline expiry skip automatic restoration',()=>{
  for(const status of [undefined,400,422])assert.equal(shouldSkipQueryOnRestore(new QueryRequestError('failed',status)),true);
  for(const status of [401,403,404,429,500,502,503,504])assert.equal(shouldSkipQueryOnRestore(new QueryRequestError('failed',status)),false);
  assert.equal(shouldSkipQueryOnRestore(new TypeError('Failed to fetch')),false);
  assert.equal(shouldSkipQueryOnRestore(new DOMException('Superseded','AbortError')),false);
-});
-
-test('HTTP stores receive bounded fetches that still observe caller cancellation',async t=>{
- const original=global.fetch,deadline=new AbortController(),caller=new AbortController();
- t.after(()=>{global.fetch=original});
- t.mock.method(AbortSignal,'timeout',()=>deadline.signal);
- let signal;
- global.fetch=async(_input,init)=>{signal=init.signal;return response({ok:true})};
- const result=await queryFetch('/api/query-snapshots?dataset=usage',{signal:caller.signal});
- assert.deepEqual(await result.json(),{ok:true});
- caller.abort();assert.equal(signal.aborted,true);
- await queryFetch('/api/query-computed-columns?dataset=usage');
- deadline.abort();assert.equal(signal.aborted,true);
 });
