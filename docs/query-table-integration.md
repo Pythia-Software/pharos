@@ -68,7 +68,7 @@ npm ci --no-audit --no-fund
 npm run generate-schemas
 npm run check-schemas
 npm run typecheck
-npm run test:computed-store
+npm test
 npm run build
 npm run check-bundle
 ```

@@ -11,3 +11,4 @@ archive.toml
 .archive-data/
 go.work
 go.work.sum
+web/.test-build/

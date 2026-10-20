@@ -2,7 +2,7 @@ import type { QueryCategory } from "./query-categories";
 export type ReviewThesis = { id: string; title: string; thesis: string; question: string; cards: { id: string; rationale: string; calculation: string }[] };
 export type CardVerdict = "keep" | "change" | "drop";
 export type ReviewFeedback = { overall: string; theses: Record<string, string>; cards: Record<string, { verdict?: CardVerdict; note: string }> };
-export const emptyReviewFeedback = (): ReviewFeedback => ({ overall: "", theses: {}, cards: {} });
+const emptyReviewFeedback = (): ReviewFeedback => ({ overall: "", theses: {}, cards: {} });
 export function createCardReviewModel(theses: ReviewThesis[], reportTitle: string, scope: string) {
   function readReviewFeedback(value: string | null): ReviewFeedback {
     try {

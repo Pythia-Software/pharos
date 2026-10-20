@@ -28,7 +28,7 @@ const human = (text = 'Inspect the rules and report the result.') => event('huma
 
 test('all source accounting formats reconcile against shared fixtures', async t => {
   const page=await fixture(t,[]);
-  const cases=JSON.parse(fs.readFileSync(path.join(root,'tests/token-usage-fixtures.json'),'utf8'));
+  const cases=JSON.parse(fs.readFileSync(path.join(root,'testdata/token-usage-fixtures.json'),'utf8'));
   for(const item of cases){const result=await page.evaluate(events=>conversationTokenReports(events.map((event,i)=>({native_id:String(i),text:JSON.stringify(event)}))).reduce((sum,report)=>sum+(report?.total||0),0),item.events);assert.equal(result,item.total,item.name)}
 });
 
@@ -499,7 +499,7 @@ test('workspace find counts other conversations by the kinds the Show filter sho
 
 test('reader classification and find counts match the shared fixtures the service checks', async t => {
   const page = await fixture(t, []);
-  const cases = JSON.parse(fs.readFileSync(path.join(root, 'tests/transcript-find-fixtures.json'), 'utf8'));
+  const cases = JSON.parse(fs.readFileSync(path.join(root, 'testdata/transcript-find-fixtures.json'), 'utf8'));
   const results = await page.evaluate(cases => cases.map(item => {
     const messages = conversationMessages({ messages: item.messages.map(message => ({ ...message, text: typeof message.text === 'string' ? message.text : JSON.stringify(message.text) })) }), structure = transcriptStructure(messages);
     return { events: messages.map(message => ({ kind: message.kind, path: structure.pathOf(message) })),

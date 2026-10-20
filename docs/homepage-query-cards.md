@@ -4,7 +4,7 @@ The homepage uses URL bookmarks and the retained Query Table V3 snapshot. It ret
 
 Recommendations require matching results in explicit 1, 7, 30 or 90 day lookbacks. New queries store native datetime operands such as `>= -7d` and `< +0s` in URLs, snapshots and saved views. These are elapsed windows through execution time, rather than midnight-aligned calendar spans. A day means 24 hours across daylight-saving changes. Usage is filtered at its recorded fact grain and is not prorated into imaginary partial rows. Old bookmarks explicitly marked as rolling are migrated to native operands; intentionally fixed saved ranges remain intact. Titles, descriptions, ordering and collected cover settings use `pharos-bookmarks-v1`; old saved-query IDs are preserved.
 
-The machine-readable companion [homepage-query-cards.json](homepage-query-cards.json) retains every original recipe, eligibility rule, proposed preview, implementation mapping and capability request. Update both files when a deferred card is implemented.
+The machine-readable companion [homepage-query-cards.json](homepage-query-cards.json) retains every original recipe, eligibility rule, proposed preview, implementation mapping and capability request. Update both files when a deferred card is implemented. Its `implemented_recipes` key is generated from `web/src`: run `npm --prefix web run generate-recipes` after changing a recipe (`npm --prefix web run check-recipes` reports a stale file).
 
 ## Card library and editing (October 2026)
 

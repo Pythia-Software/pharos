@@ -15,7 +15,8 @@ npm --prefix web ci --no-audit --no-fund
 npm --prefix web run generate-schemas
 npm --prefix web run typecheck
 npm --prefix web run check-schemas
-(cd web && node --test tests/*.test.mjs)
+npm --prefix web run check-recipes
+npm --prefix web test
 npm --prefix web run build
 npm --prefix web run check-bundle
 GOWORK=off go test ./...
@@ -76,7 +77,7 @@ installed Chrome when available:
 
 ```sh
 npm install --prefix .context/browser-tests playwright --no-audit --no-fund
-node --test tests/usage-presets-ui.test.cjs tests/tools-ui.test.cjs tests/home-ui.test.cjs
+npm --prefix web run test:browser -- usage-presets-ui tools-ui home-ui
 ```
 
 These exercise grouped reloads, route restoration, undo/redo after table pausing,
