@@ -58,7 +58,7 @@ func TestApplyPendingNumberFilter(t *testing.T) {
 	}
 }
 
-func TestDistinctAndAggregate(t *testing.T) {
+func TestDistinct(t *testing.T) {
 	rows := []map[string]any{
 		{"id": "a", "status": "done", "count": 2.0},
 		{"id": "b", "status": "open", "count": 4.0},
@@ -70,38 +70,6 @@ func TestDistinctAndAggregate(t *testing.T) {
 	}
 	if !reflect.DeepEqual(distinct.Values, []string{"done", "open"}) {
 		t.Fatalf("distinct: %#v", distinct)
-	}
-	aggregated, err := Aggregate(rows, AggregationRequest{Aggregations: []Aggregation{{ID: "avg", Op: "avg", Field: "count", GroupBy: []string{"status"}}}}, testSchema())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(aggregated.Metrics) != 1 || len(aggregated.Metrics[0].Buckets) != 2 {
-		t.Fatalf("aggregated: %#v", aggregated)
-	}
-}
-
-func TestCountMeasureDoesNotCountNulls(t *testing.T) {
-	rows := []map[string]any{{"id": "a", "count": nil}, {"id": "b", "count": nil}}
-	result, err := Aggregate(rows, AggregationRequest{Aggregations: []Aggregation{{ID: "count", Op: "count", Field: "count"}}}, testSchema())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := result.Metrics[0].Buckets[0].Value; got != 0 {
-		t.Fatalf("COUNT(field) = %#v, want 0", got)
-	}
-}
-
-func TestAggregateIncludesAllFilteredRows(t *testing.T) {
-	rows := make([]map[string]any, MaxLimit+7)
-	for index := range rows {
-		rows[index] = map[string]any{"id": index, "status": "open", "count": 1.0}
-	}
-	result, err := Aggregate(rows, AggregationRequest{Aggregations: []Aggregation{{ID: "total", Op: "count"}}}, testSchema())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := result.Metrics[0].Buckets[0].Value; got != MaxLimit+7 {
-		t.Fatalf("COUNT(*) = %#v, want %d", got, MaxLimit+7)
 	}
 }
 

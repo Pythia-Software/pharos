@@ -127,37 +127,87 @@ func BenchmarkQueryTableV2(b *testing.B) {
 	}
 }
 
+// Usage keeps daily rows, and selects each request hour for metrics that read
+// hour: a filter on hour picks the days holding those hours, and a metric
+// grouped by hour counts hours, not days.
 func TestQueryV2UsageHourly(t *testing.T) {
 	previous := time.Local
 	time.Local = time.UTC
 	t.Cleanup(func() { time.Local = previous })
 	catalog, config := testCatalog(t)
 	ingestUsageFixture(t, catalog, `{"type":"token_usage_record","timestamp":"2026-09-21T03:05:00Z","payload":{"response_id":"r3","usage":{"input_tokens":90,"output_tokens":10,"total_tokens":100},"thread_token_usage":{"total_tokens":3150}}}`)
+	rows, err := catalog.usageRows(time.UTC)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("daily table changed: %v %#v", err, rows)
+	}
+	hourly, err := catalog.usageRowsByPeriod(time.UTC, true)
+	if err != nil || len(hourly) != 3 {
+		t.Fatalf("expected three request hours: %v %#v", err, hourly)
+	}
+	var tokens int64
+	for _, row := range hourly {
+		tokens += integer(row["total_tokens"])
+	}
+	if tokens != 3150 {
+		t.Fatalf("hourly tokens = %d", tokens)
+	}
 	server := testServer(t, config, catalog)
 	schema, _ := sqliteQuerySchema("usage")
 	for _, sample := range []struct {
-		where            []qt.WhereTerm
-		days, hours, sum float64
+		name                      string
+		where                     []qt.WhereTerm
+		days, hours, average, sum float64
+		last                      string
 	}{
-		{nil, 2, 3, 3150},
-		{[]qt.WhereTerm{{Field: "total_tokens", Op: ">", Value: "1500"}}, 1, 2, 2130},
-		{[]qt.WhereTerm{{Field: "hour", Op: "=", Value: "2026-09-21T03:00:00Z"}}, 1, 1, 2130},
+		{"unfiltered", nil, 2, 3, 1575, 3150, "2026-09-21T03:00:00Z"},
+		{"daily threshold", []qt.WhereTerm{{Field: "total_tokens", Op: ">", Value: "1500"}}, 1, 2, 2130, 2130, "2026-09-21T03:00:00Z"},
+		{"timestamp", []qt.WhereTerm{{Field: "first_usage_at", Op: "<", Value: "2026-09-21T02:00:00Z"}}, 2, 2, 1575, 3150, "2026-09-21T01:00:00Z"},
+		{"hour filter", []qt.WhereTerm{{Field: "hour", Op: "=", Value: "2026-09-21T03:00:00Z"}}, 1, 1, 2130, 2130, "2026-09-21T03:00:00Z"},
+		{"mixed hour OR", []qt.WhereTerm{{Any: []qt.WhereClause{{Field: "hour", Op: "=", Value: "2026-09-21T03:00:00Z"}, {Field: "total_tokens", Op: ">", Value: "2000"}}}}, 1, 2, 2130, 2130, "2026-09-21T03:00:00Z"},
 	} {
-		q := metricRequest(qt.AggSpec{ID: "days", Expression: "COUNT()"}, qt.AggSpec{ID: "hours", Expression: "COUNT()", GroupBy: []string{"hour"}}, qt.AggSpec{ID: "sum", Expression: "SUM([total_tokens])"})
-		q.Where = sample.where
-		result, err := server.executeQueryV2(context.Background(), "usage", nil, schema, nil, &q)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for i, want := range []float64{sample.days, sample.hours, sample.sum} {
-			var got float64
-			for _, bucket := range result.Metrics.Metrics[i].Buckets {
-				got += bucket.Value.(float64)
+		t.Run(sample.name, func(t *testing.T) {
+			q := metricRequest(qt.AggSpec{ID: "days", Op: "count", GroupBy: []string{"model"}}, qt.AggSpec{ID: "hours", Expression: "COUNT()", GroupBy: []string{"hour"}},
+				qt.AggSpec{ID: "average", Op: "avg", Field: "total_tokens"}, qt.AggSpec{ID: "sum", Expression: "SUM([total_tokens])"}, qt.AggSpec{ID: "last", Op: "max", Field: "hour"},
+				qt.AggSpec{ID: "newest", Op: "sum", Field: "total_tokens", GroupBy: []string{"hour"}, Sort: []qt.MetricSort{{Key: "group0", Dir: "desc"}}})
+			q.Where = sample.where
+			result, err := server.executeQueryV2(context.Background(), "usage", nil, schema, nil, &q)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if got != want {
-				t.Fatalf("%s=%v want %v", q.Metrics[i].ID, got, want)
+			metrics := result.Metrics.Metrics
+			for i, want := range []float64{sample.days, sample.hours, sample.average, sample.sum} {
+				var got float64
+				for _, bucket := range metrics[i].Buckets {
+					got += bucket.Value.(float64)
+					// Daily metrics count days, whatever their hours.
+					if i != 1 && bucket.Count != int64(sample.days) {
+						t.Fatalf("%s counted hours: %#v", metrics[i].ID, bucket)
+					}
+				}
+				if metrics[i].Error != "" || got != want {
+					t.Fatalf("%s=%v want %v (%s)", metrics[i].ID, got, want, metrics[i].Error)
+				}
 			}
-		}
+			if len(metrics[4].Buckets) != 1 || metrics[4].Buckets[0].Value != sample.last {
+				t.Fatalf("latest hour: %#v", metrics[4])
+			}
+			newest := metrics[5].Buckets
+			if len(newest) != int(sample.hours) || newest[0].Keys[0] != sample.last {
+				t.Fatalf("hours newest first: %#v", newest)
+			}
+		})
+	}
+	// Usage has its own group budget, beyond other datasets'; past it a metric
+	// fails rather than dropping groups.
+	override(t, &queryV2MaxGroups, 1)
+	hours := metricRequest(qt.AggSpec{ID: "hours", Expression: "COUNT()", GroupBy: []string{"hour"}})
+	result, err := server.executeQueryV2(context.Background(), "usage", nil, schema, nil, &hours)
+	if err != nil || result.Metrics.Metrics[0].Error != "" || len(result.Metrics.Metrics[0].Buckets) != 3 {
+		t.Fatal("usage group budget", err, result.Metrics)
+	}
+	override(t, &queryV2UsageMaxGroups, 2)
+	if result, err = server.executeQueryV2(context.Background(), "usage", nil, schema, nil, &hours); err != nil || !strings.Contains(result.Metrics.Metrics[0].Error, "group population exceeds host budget") {
+		t.Fatal("usage groups beyond the budget", err, result.Metrics)
 	}
 	// Temp staging, enrichment and canonical-definition reads must not consume a
 	// second connection while holding the sole connection in a transaction.
@@ -455,6 +505,73 @@ func TestQueryTempStorageLease(t *testing.T) {
 			if err := catalog.DB.QueryRow("PRAGMA temp_store").Scan(&mode); err != nil || mode != original {
 				t.Fatal("cancelled connection leaked", mode, original, err)
 			}
+		})
+	}
+}
+
+// Metrics answered without staging read in a plain transaction, on one pooled
+// connection; anything the adapter executes still leases memory-backed
+// temporary storage.
+func TestQueryV2LeasesTempStorageOnlyToStage(t *testing.T) {
+	catalog, config := testCatalog(t)
+	seedToolCalls(t, catalog, 30)
+	ingestUsageFixture(t, catalog)
+	if err := catalog.ensureToolRollup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	server := testServer(t, config, catalog)
+	pool := catalog.reader()
+	previous := pool.Stats().MaxOpenConnections
+	t.Cleanup(func() { pool.SetMaxOpenConns(previous) })
+	leases := 0
+	override(t, &leaseQueryV2, func(ctx context.Context, db *sql.DB) (*sql.Tx, func() error, error) {
+		leases++
+		tx, release, err := beginQueryV2(ctx, db)
+		var mode int
+		if err == nil && (tx.QueryRow("PRAGMA temp_store").Scan(&mode) != nil || mode != 2) {
+			t.Errorf("staged work without memory-backed temporary storage: temp_store=%d", mode)
+		}
+		return tx, release, err
+	})
+	machine := []string{"repository_name", "activity", "day", "status", "operation_key", "operation_name", "tool_name", "mcp_server"}
+	for _, sample := range []struct {
+		name, dataset string
+		q             qt.MetricQuery
+		staged        bool
+	}{
+		{"a bare count", "tool_calls", metricRequest(qt.AggSpec{ID: "n", Op: "count"}), false},
+		{"a Machine Time cube", "tool_calls", metricRequest(qt.AggSpec{ID: "time", Op: "sum", Field: "duration_ms", GroupBy: machine}), false},
+		{"native tool sums", "tool_calls", metricRequest(qt.AggSpec{ID: "calls", Op: "sum", Field: "call_count", GroupBy: []string{"tool_name"}}), false},
+		{"Usage in memory", "usage", metricRequest(qt.AggSpec{ID: "tokens", Op: "sum", Field: "total_tokens", GroupBy: []string{"week"}}, qt.AggSpec{ID: "sessions", Op: "count_distinct", Field: "agent_session_id"}), false},
+		{"an average", "tool_calls", metricRequest(qt.AggSpec{ID: "mean", Op: "avg", Field: "duration_ms"}), true},
+		{"filtered Usage", "usage", func() qt.MetricQuery {
+			q := metricRequest(qt.AggSpec{ID: "tokens", Op: "sum", Field: "total_tokens", GroupBy: []string{"week"}})
+			q.Where = []qt.WhereTerm{{Field: "total_tokens", Op: ">", Value: "1"}}
+			return q
+		}(), true},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			schema, _ := sqliteQuerySchema(sample.dataset)
+			for _, connections := range []int{previous, 1} {
+				// One pooled connection is enough: nothing reads beside the transaction.
+				pool.SetMaxOpenConns(connections)
+				leases = 0
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				result, err := server.executeQueryV2(ctx, sample.dataset, nil, schema, nil, &sample.q)
+				cancel()
+				if err != nil {
+					t.Fatal(connections, err)
+				}
+				for _, metric := range result.Metrics.Metrics {
+					if metric.Error != "" || len(metric.Buckets) == 0 {
+						t.Fatalf("%d connections: %+v", connections, metric)
+					}
+				}
+				if staged := leases > 0; staged != sample.staged {
+					t.Fatalf("%d connections: leased temporary storage %d times", connections, leases)
+				}
+			}
+			pool.SetMaxOpenConns(previous)
 		})
 	}
 }

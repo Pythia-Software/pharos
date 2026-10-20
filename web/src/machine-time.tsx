@@ -3,8 +3,9 @@ import { loadSchema, matchesClause, type WhereTerm } from "@pythia-software/quer
 import type { QueryTableApi } from "@pythia-software/query-table-react";
 import { machineFilterKey, useDrilldownHistory, ZoomNavigation } from "./machine-navigation";
 import toolCallsDocument from "../../schemas/tool_calls.schema.json";
+import { MetricRequestError, postMetrics, postQueryV3Metrics } from "./metric-request";
 import { MachineAnalyticsTable, type MachineGrouping } from "./machine-analytics-table";
-import { activityPresentation, exampleTimeCalls, factsFromCalls, groupTime, machineDrilldownWhere, selectedMachineRepository, machineDay, shiftMachineDay, machineWhere, previousTimeWhere, relativeChange, timeAggregationWhere, timeAggregations, timeFacts, timeLabel, timeValue, totalTime, type MachineCall, type MachineScope, type MachineWindow, type Metric, type TimeFact, type TimeMetric } from "./machine-activity-data";
+import { activityPresentation, exampleTimeCalls, factsFromCalls, groupTime, machineDrilldownWhere, selectedMachineRepository, machineDay, shiftMachineDay, machineWhere, previousTimeWhere, relativeChange, timeAggregationWhere, timeAggregations, timeFacts, timeLabel, timeValue, totalTime, type MachineCall, type MachineScope, type MachineWindow, type TimeFact, type TimeMetric } from "./machine-activity-data";
 
 type Row = Record<string, any>;
 export type MachineCallsSurface = (props: { scopeWhere: WhereTerm[]; appliedScope: React.MutableRefObject<WhereTerm[]>; localRows?: Row[]; header: (api: QueryTableApi<Row>) => React.ReactNode }) => React.ReactNode;
@@ -29,10 +30,15 @@ function useTimeFacts(where: WhereTerm[], scope: MachineScope, exampleRows: Row[
       return () => controller.abort();
     }
     async function load(filters: WhereTerm[]): Promise<TimeFact[]> {
-      const response = await fetch("/api/query/tool_calls/aggregations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ where: timeAggregationWhere(filters), aggregations: timeAggregations(period), requireComplete: true }), signal: controller.signal });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Could not read machine activity");
-      return timeFacts(result.metrics as Metric[]);
+      const where = timeAggregationWhere(filters), clauses = timeAggregations(period);
+      try {
+        return timeFacts(await postMetrics("tool_calls", callSchema, where, clauses, controller.signal));
+      } catch (error) {
+        // Filters beyond the cube's fields, such as a command, read raw calls
+        // within /metrics's budgets. /query-v3 can stage many more.
+        if (!(error instanceof MetricRequestError && error.resourceLimit)) throw error;
+        return timeFacts(await postQueryV3Metrics("tool_calls", callSchema, where, clauses, controller.signal));
+      }
     }
     Promise.all([load(where), priorWhere ? load(priorWhere) : Promise.resolve([])])
       .then(([current, previous]) => { if (!controller.signal.aborted) setState({ key, current, previous, error: "" }); })

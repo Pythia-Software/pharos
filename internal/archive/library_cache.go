@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// Every Library table request (rows, distinct values, aggregations) starts
+// Every Library table request (rows, distinct values, metrics) starts
 // from the full unfiltered row set, which takes most of a second to build on a
 // large catalog. libraryCache keeps the last set until anything it depends on
 // may have changed:

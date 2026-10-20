@@ -160,9 +160,15 @@ func TestMCPControlAndCallHistory(t *testing.T) {
 	if strings.Contains(row["arguments_json"].(string), "must not be logged") {
 		t.Fatal("MCP query exposed secret argument")
 	}
-	metrics := query("/api/query/mcp_calls/aggregations", `{"where":[],"aggregations":[{"id":"calls_by_tool","op":"sum","field":"call_count","groupBy":["tool_name"]},{"id":"errors_by_tool","op":"sum","field":"error_count","groupBy":["tool_name"]}]}`)
-	if len(metrics["metrics"].([]any)) != 2 {
+	metrics := query("/api/query/mcp_calls/metrics", `{"version":2,"where":[],"orderBy":[],"limit":1,"offset":0,"metrics":[{"id":"calls_by_tool","op":"sum","field":"call_count","groupBy":["tool_name"]},{"id":"errors_by_tool","op":"sum","field":"error_count","groupBy":["tool_name"]}]}`)
+	list, _ := metrics["metrics"].([]any)
+	if len(list) != 2 {
 		t.Fatalf("MCP query-table metrics: %#v", metrics)
+	}
+	for _, item := range list {
+		if metric := item.(map[string]any); metric["error"] != nil || len(metric["buckets"].([]any)) == 0 {
+			t.Fatalf("MCP query-table metric: %#v", metric)
+		}
 	}
 	distinct := get("/api/query/mcp_calls/distinct?field=tool_name&q=search")
 	if distinct.Code != 200 || !strings.Contains(distinct.Body.String(), "search_conversations") {

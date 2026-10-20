@@ -4,12 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
+	"math"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
+	qt "github.com/Pythia-Software/query-table/backends/go"
 	"github.com/gbdubs/pharos/internal/querytable"
 )
 
@@ -22,29 +22,6 @@ var machineTimeDimensions = fieldSet("repository_name", "provider", "model", "mo
 const machineTimeIndexSQL = `CREATE INDEX IF NOT EXISTS tool_call_cube_machine_time_idx ON tool_call_cube(
  repository_name,provider,model,effort,day,status,tool_name,mcp_server,program,subcommand,
  tool_category,command_category,duration_ms_sum,duration_ms_n,call_count)`
-
-func (c *Catalog) machineTimeRows(ctx context.Context) ([]map[string]any, error) {
-	rows, _, err := c.machineTimeQueryRows(ctx, false)
-	return rows, err
-}
-
-func (c *Catalog) machineTimeQueryRows(ctx context.Context, requireFresh bool) ([]map[string]any, bool, error) {
-	tx, release, err := beginQueryV2(ctx, c.reader())
-	if err != nil {
-		return nil, false, err
-	}
-	defer release()
-	// Check freshness and read the publication in the same snapshot as the cube.
-	// Timestamp queries previously read raw calls and must not reuse stale facts.
-	if requireFresh {
-		fresh, err := c.toolCubeFresh(ctx, tx)
-		if err != nil || !fresh {
-			return nil, false, err
-		}
-	}
-	rows, err := c.machineTimeRowsIn(ctx, tx)
-	return rows, true, err
-}
 
 func (c *Catalog) machineTimeRowsIn(ctx context.Context, tx *sql.Tx) ([]map[string]any, error) {
 	publication, err := readMeta(tx, ctx, "tool_rollup_publication")
@@ -131,125 +108,202 @@ func machineTimeDayRange(terms []querytable.WhereTerm) (lower, upper string, whe
 	return lower, upper, where, true
 }
 
-func (c *Catalog) machineTimeAggregations(ctx context.Context, request querytable.AggregationRequest, schema querytable.Schema) (querytable.AggregationResult, bool, error) {
-	lower, upper, where, valid := machineTimeDayRange(request.Where)
-	if !valid {
-		return querytable.AggregationResult{}, false, nil
+// machineTimeMaxGroups bounds the groups in one metric the Machine Time
+// accelerator answers: enough for repository × operation × day timelines over
+// months. Beyond it the metric fails rather than returning part of the cube.
+// Tests lower it.
+var machineTimeMaxGroups = 50_000
+
+// machineTimeMetricsV2 answers a Tool calls /metrics request from the Machine
+// Time projection, read in the request's own transaction, when every metric
+// counts calls, counts timed calls or sums duration_ms, and every group and
+// filter field is one of the projection's dimensions. Machine Time and its
+// home cards ask for cubes like these over months of calls, which the generic
+// executor would read call by call against its 250,000-call and 2,000-group
+// budgets. It reports false for a request it cannot answer exactly as the
+// generic executor would, which then runs there.
+func (c *Catalog) machineTimeMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2Dataset, q qt.MetricQuery, o qt.PlanOptions) (qt.SQLiteV2ExecutionResult, bool, error) {
+	if d.Dataset != "pharos_tool_calls" || len(q.Metrics) == 0 {
+		return qt.SQLiteV2ExecutionResult{}, false, nil
 	}
-	for _, field := range whereFields(where) {
-		if !machineTimeDimensions.has(field) {
-			return querytable.AggregationResult{}, false, nil
+	lower, upper, where, valid := machineTimeDayRange(q.Where)
+	if !valid || !machineTimeFilterable(where, d.Schema) {
+		return qt.SQLiteV2ExecutionResult{}, false, nil
+	}
+	for _, spec := range q.Metrics {
+		if !machineTimeMetric(spec) {
+			return qt.SQLiteV2ExecutionResult{}, false, nil
 		}
-	}
-	for _, spec := range request.Aggregations {
-		if !(spec.Op == "count" && (spec.Field == "" || spec.Field == "duration_ms") || spec.Op == "sum" && spec.Field == "duration_ms") {
-			return querytable.AggregationResult{}, false, nil
-		}
-		for _, key := range spec.GroupBy {
-			if !machineTimeDimensions.has(key) {
-				return querytable.AggregationResult{}, false, nil
-			}
-		}
-	}
-	rows, handled, err := c.machineTimeQueryRows(ctx, lower != "")
-	if err != nil {
-		return querytable.AggregationResult{}, true, err
-	}
-	if !handled {
-		return querytable.AggregationResult{}, false, nil
-	}
-	filtered, err := querytable.Filter(rows, where, schema)
-	if err != nil {
-		return querytable.AggregationResult{}, true, err
 	}
 	if lower != "" {
-		kept := make([]map[string]any, 0, len(filtered))
-		for _, row := range filtered {
-			day := firstString(row["day"])
-			if day >= lower && day < upper {
-				kept = append(kept, row)
-			}
+		// A timestamp range otherwise reads raw calls: check in this snapshot
+		// that the cube holds every call before answering from it.
+		fresh, err := c.toolCubeFresh(ctx, tx)
+		if err != nil || !fresh {
+			return qt.SQLiteV2ExecutionResult{}, err != nil, err
 		}
-		filtered = kept
 	}
-	type total struct {
-		keys         []any
-		label        string
-		calls, timed int64
-		duration     float64
-		hasDuration  bool
+	// Run the ordinary adapter over an empty source first, as countOnlyMetricsV2
+	// does: it validates the request and its revisions, and returns each
+	// metric's result envelope or error.
+	validation := d
+	validation.SourceSQL = (sqlDataset{}).v2Source(d.Schema) + " WHERE 0"
+	validation.SourceArgs = nil
+	result, err := validation.ExecuteV2In(ctx, tx, nil, &q, o)
+	if err != nil {
+		return result, true, err
 	}
-	groupings := map[string][]*total{}
-	out := querytable.AggregationResult{Metrics: []querytable.Metric{}}
-	for _, spec := range request.Aggregations {
-		if spec.ID == "" || len(spec.GroupBy) > 20 {
-			return querytable.AggregationResult{}, true, fmt.Errorf("invalid aggregation ID or group fields")
+	rows, err := c.machineTimeRowsIn(ctx, tx)
+	if err != nil {
+		return result, true, err
+	}
+	kept := make([]map[string]any, 0, len(rows))
+	var population int64
+	for _, row := range rows {
+		if day := firstString(row["day"]); lower != "" && (day < lower || day >= upper) {
+			continue
+		}
+		if machineTimeMatches(row, where) {
+			kept = append(kept, row)
+			population += integer(row["machine_calls"])
+		}
+	}
+	groupings := map[string][]*machineTimeGroup{}
+	for i, spec := range q.Metrics {
+		metric := &result.Metrics.Metrics[i]
+		if metric.Error != "" {
+			continue
 		}
 		signature, _ := json.Marshal(spec.GroupBy)
-		groups, exists := groupings[string(signature)]
-		if !exists {
-			byKey := map[string]*total{}
-			for _, row := range filtered {
-				keys := make([]any, len(spec.GroupBy))
-				for i, field := range spec.GroupBy {
-					keys[i] = row[field]
-				}
-				encoded, _ := json.Marshal(keys)
-				key := string(encoded)
-				group := byKey[key]
-				if group == nil {
-					group = &total{keys: keys, label: fmt.Sprint(keys)}
-					byKey[key] = group
-					groups = append(groups, group)
-				}
-				group.calls += integer(row["machine_calls"])
-				group.timed += integer(row["machine_timed"])
-				if value, ok := number(row["duration_ms"]); ok {
-					group.duration += value
-					group.hasDuration = true
-				}
-			}
-			if len(filtered) == 0 && len(spec.GroupBy) == 0 {
-				groups = []*total{{keys: []any{}}}
-			}
+		groups, ok := groupings[string(signature)]
+		if !ok {
+			groups = machineTimeGroups(kept, spec.GroupBy)
 			groupings[string(signature)] = groups
 		}
-		valueFor := func(group *total) any {
-			var value any
-			if spec.Op == "count" {
-				if spec.Field == "" {
-					value = group.calls
-				} else {
-					value = group.timed
-				}
-			} else if group.hasDuration {
-				value = group.duration
+		if len(groups) > machineTimeMaxGroups {
+			*metric = qt.SQLiteMetricV2{ID: metric.ID, Scope: metric.Scope, Buckets: []qt.SQLiteMetricV2Bucket{}, Error: "group population exceeds the " + thousands(machineTimeMaxGroups) + "-group host budget"}
+			continue
+		}
+		buckets := make([]qt.SQLiteMetricV2Bucket, 0, len(groups))
+		for _, group := range groups {
+			bucket := qt.SQLiteMetricV2Bucket{Keys: slices.Clone(group.keys), Count: group.calls}
+			switch {
+			case spec.Op == "count" && spec.Field == "":
+				bucket.Value = float64(group.calls)
+			case spec.Op == "count":
+				bucket.Value = float64(group.timed)
+			case group.durations && math.Abs(group.duration) > 1<<53-1:
+				bucket.Error = "unsafe_integer"
+			case group.durations:
+				bucket.Value = group.duration
 			}
-			return value
+			buckets = append(buckets, bucket)
 		}
-		ordered := slices.Clone(groups)
-		sort.Slice(ordered, func(i, j int) bool {
-			left, lok := number(valueFor(ordered[i]))
-			right, rok := number(valueFor(ordered[j]))
-			if lok != rok {
-				return lok
-			}
-			if lok && rok && left != right {
-				return left > right
-			}
-			return ordered[i].label < ordered[j].label
-		})
-		metric := querytable.Metric{ID: spec.ID, Buckets: make([]querytable.Bucket, 0, len(groups))}
-		for _, group := range ordered {
-			metric.Buckets = append(metric.Buckets, querytable.Bucket{Keys: slices.Clone(group.keys), Value: valueFor(group), Count: int(group.calls)})
-		}
-		if request.RequireComplete && len(metric.Buckets) > maxCompleteSQLBuckets {
-			return querytable.AggregationResult{}, true, fmt.Errorf("complete aggregation exceeds %d groups; choose a shorter period or a single repository", maxCompleteSQLBuckets)
-		}
-		if !request.RequireComplete && len(metric.Buckets) > maxSQLBuckets {
-			metric.Buckets = metric.Buckets[:maxSQLBuckets]
-		}
-		out.Metrics = append(out.Metrics, metric)
+		sortMetricBuckets(buckets)
+		metric.Buckets, metric.GroupCount, metric.ProcessedRows, metric.Coverage = buckets, int64(len(buckets)), population, "exact"
 	}
-	return out, true, nil
+	return result, true, nil
+}
+
+// machineTimeMetric reports whether the accelerator answers spec: a plain
+// count of calls, count of timed calls or sum of durations over all matching
+// calls, grouped by projection dimensions.
+func machineTimeMetric(spec qt.AggSpec) bool {
+	plain := spec.Op == "count" && (spec.Field == "" || spec.Field == "duration_ms") || spec.Op == "sum" && spec.Field == "duration_ms"
+	if !plain || spec.Expression != "" || spec.ExpressionY != "" || spec.Distribution != nil || spec.DateGrouping != nil || len(spec.Sort) > 0 ||
+		spec.GroupLimit != 0 || spec.MinCount != 0 || len(spec.Where) > 0 || len(spec.Diagnostics) > 0 || spec.Scope != "" && spec.Scope != "allMatching" {
+		return false
+	}
+	for _, field := range spec.GroupBy {
+		if !machineTimeDimensions.has(field) {
+			return false
+		}
+	}
+	return true
+}
+
+// machineTimeFilterable reports whether machineTimeMatches evaluates every
+// predicate exactly as the SQLite compiler does: equality, inequality and
+// nullity on a text or enum dimension.
+func machineTimeFilterable(where []qt.WhereTerm, schema qt.Schema) bool {
+	for _, term := range where {
+		for _, clause := range term.Predicates() {
+			field, ok := schema.Fields[clause.Field]
+			if !ok || !machineTimeDimensions.has(clause.Field) || field.Kind != qt.FieldText && field.Kind != qt.FieldEnum ||
+				!slices.Contains([]string{"=", "!=", "is_null", "is_not_null"}, clause.Op) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// machineTimeMatches applies where with the SQLite compiler's text semantics:
+// = and != read NULL as the empty string, is_null also matches the empty
+// string, and a negated predicate never matches a null value.
+func machineTimeMatches(row map[string]any, where []qt.WhereTerm) bool {
+	for _, term := range where {
+		matched := false
+		for _, clause := range term.Predicates() {
+			text, _ := row[clause.Field].(string)
+			null := text == ""
+			var match bool
+			switch clause.Op {
+			case "=":
+				match = text == clause.Value
+			case "!=":
+				match = text != clause.Value
+			case "is_null":
+				match = null
+			case "is_not_null":
+				match = !null
+			}
+			if clause.Negated {
+				match = !match && !null
+			}
+			matched = matched || match
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+type machineTimeGroup struct {
+	keys         []any
+	calls, timed int64
+	duration     float64
+	durations    bool // some call in the group has a duration
+}
+
+// machineTimeGroups sums the projection's rows into groups by fields. With no
+// fields there is one group, however few rows match.
+func machineTimeGroups(rows []map[string]any, fields []string) []*machineTimeGroup {
+	groups := []*machineTimeGroup{}
+	byKey := map[string]*machineTimeGroup{}
+	if len(fields) == 0 {
+		groups = append(groups, &machineTimeGroup{keys: []any{}})
+		byKey["[]"] = groups[0]
+	}
+	for _, row := range rows {
+		keys := make([]any, len(fields))
+		for i, field := range fields {
+			keys[i] = row[field]
+		}
+		encoded, _ := json.Marshal(keys)
+		group := byKey[string(encoded)]
+		if group == nil {
+			group = &machineTimeGroup{keys: keys}
+			byKey[string(encoded)] = group
+			groups = append(groups, group)
+		}
+		group.calls += integer(row["machine_calls"])
+		group.timed += integer(row["machine_timed"])
+		if value, ok := number(row["duration_ms"]); ok {
+			group.duration += value
+			group.durations = true
+		}
+	}
+	return groups
 }

@@ -1,8 +1,10 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { createSetFilter, isOrGroup, readSetFilter, type WhereTerm } from "@pythia-software/query-table-core";
+import { createSetFilter, isOrGroup, loadSchema, readSetFilter, type AggregationClause, type WhereTerm } from "@pythia-software/query-table-core";
 import type { QueryTableApi } from "@pythia-software/query-table-react";
 import type { CellContext } from "@pythia-software/query-table-ui";
+import writingMessagesDocument from "../../schemas/writing_messages.schema.json";
+import { postMetrics } from "./metric-request";
 
 // The Human Words message view: one row per user message, with its text
 // highlighted by what the authorship classification counted each span as (see
@@ -304,6 +306,8 @@ export function toggleCategory(where: WhereTerm[], category: string): WhereTerm[
 }
 
 type MixResult = { messages: number; words: Record<string, number> };
+const messageSchema = loadSchema(writingMessagesDocument);
+const messageMixMetrics: AggregationClause[] = [{ id: "messages", op: "count", groupBy: [] }, ...authorshipCategories.map(category => ({ id: category.key, op: "sum" as const, field: `${category.key}_words`, groupBy: [] }))];
 
 // The words per category of every message the filters match, as a stacked
 // bar and a key that filters to messages holding a category.
@@ -313,12 +317,9 @@ export function MessageMix({ where, reload, onFilter }: { where: WhereTerm[]; re
   useEffect(() => {
     const controller = new AbortController();
     setState(previous => ({ ...previous, loading: true }));
-    const aggregations = [{ id: "messages", op: "count", groupBy: [] }, ...authorshipCategories.map(category => ({ id: category.key, op: "sum", field: `${category.key}_words`, groupBy: [] }))];
-    fetch("/api/query/writing_messages/aggregations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ where, aggregations }), signal: controller.signal })
-      .then(async response => {
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(body.error || `Request failed with HTTP ${response.status}`);
-        const value = (id: string) => Number(body.metrics?.find((metric: Row) => metric.id === id)?.buckets?.[0]?.value) || 0;
+    postMetrics("writing_messages", messageSchema, where, messageMixMetrics, controller.signal)
+      .then(metrics => {
+        const value = (id: string) => Number(metrics.find(metric => metric.id === id)?.buckets[0]?.value) || 0;
         setState({ result: { messages: value("messages"), words: Object.fromEntries(authorshipCategories.map(category => [category.key, value(category.key)])) }, error: "", loading: false });
       })
       .catch(failure => { if (!controller.signal.aborted) setState({ result: null, error: failure instanceof Error ? failure.message : String(failure), loading: false }); });

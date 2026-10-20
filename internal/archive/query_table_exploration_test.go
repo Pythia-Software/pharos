@@ -47,7 +47,8 @@ func TestQueryDatasetsHTTP(t *testing.T) {
 			}
 			w := call(http.MethodGet, "/api/query/"+dataset+"/capabilities", nil)
 			var handshake struct {
-				QueryCapabilities qt.QueryCapabilitiesV3 `json:"queryCapabilities"`
+				MetricCapabilities qt.SQLiteMetricCapabilities `json:"metricCapabilities"`
+				QueryCapabilities  qt.QueryCapabilitiesV3      `json:"queryCapabilities"`
 			}
 			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &handshake) != nil || !handshake.QueryCapabilities.GroupedRows || !handshake.QueryCapabilities.CalendarGrouping {
 				t.Fatal("capabilities", w.Code, w.Body.String())
@@ -59,6 +60,13 @@ func TestQueryDatasetsHTTP(t *testing.T) {
 			}
 			if limits.MaxRows != 10_000 || limits.MaxGroups != groups || limits.MaxPopulation != 10_000_000 {
 				t.Fatalf("incorrect advertised V3 budgets: %+v", limits)
+			}
+			// Usage charts its compact facts by period and split with V2 metrics.
+			if groups = 2_000; dataset == "usage" {
+				groups = 100_000
+			}
+			if handshake.MetricCapabilities.Version != 2 || handshake.MetricCapabilities.MaxGroups != groups {
+				t.Fatalf("incorrect advertised V2 budgets: %+v", handshake.MetricCapabilities)
 			}
 
 			w = call(http.MethodPost, "/api/query/"+dataset+"/rows-v2", `{"version":2,"profile":"qt-sqlite-v1","select":["id"],"limit":1}`)
@@ -115,6 +123,16 @@ func TestQueryDatasetsHTTP(t *testing.T) {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	if w := apiCall(t, server, "", http.MethodPost, "/api/query/tool_calls/population", `{}`); w.Code != 401 {
+		t.Fatal(w.Code)
+	}
+	// So is the legacy grouped route: a page from before an upgrade is told to
+	// reload, for SQL and in-memory datasets alike, before any body is read.
+	for _, dataset := range []string{"tool_calls", "writing_messages", "usage", "library"} {
+		if w := call(http.MethodPost, "/api/query/"+dataset+"/aggregations", `not json`); w.Code != http.StatusGone || !strings.Contains(w.Body.String(), "reload the page") {
+			t.Fatal(dataset, w.Code, w.Body.String())
+		}
+	}
+	if w := apiCall(t, server, "", http.MethodPost, "/api/query/usage/aggregations", `{}`); w.Code != 401 {
 		t.Fatal(w.Code)
 	}
 	for _, path := range []string{"/api/query/tool_calls/item?id=missing", "/api/query/library/item?id=missing"} {

@@ -99,62 +99,84 @@ func TestMachineTimeProjectionMatchesCubeAndInvalidatesOnPublication(t *testing.
 	if err := c.ensureToolRollup(ctx); err != nil {
 		t.Fatal(err)
 	}
-	schema, err := (&Server{Catalog: c}).queryTableSchema("tool_calls")
-	if err != nil {
-		t.Fatal(err)
+	// /metrics answers the same shapes from the projection exactly as the
+	// generic executor answers them from the calls, in the same order.
+	v2Schema := PharosToolCallsSchema()
+	generic := queryV2Dataset("tool_calls", v2Schema)
+	generic.SourceSQL = toolCallDataset.v2Source(v2Schema)
+	accelerated := func(q qt.MetricQuery) (qt.SQLiteV2ExecutionResult, bool, error) {
+		tx, release, err := beginQueryV2(ctx, c.reader())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer release()
+		return c.machineTimeMetricsV2(ctx, tx, queryV2Dataset("tool_calls", v2Schema), q, qt.PlanOptions{Now: time.Now()})
 	}
-	for _, groups := range [][]string{{}, {"repository_name", "activity", "day", "status", "operation_key", "operation_name", "tool_name", "mcp_server"}, {"provider", "model_family", "month"}} {
-		for _, where := range [][]querytable.WhereTerm{nil, {{Field: "provider", Op: "=", Value: "codex"}}, {{Field: "provider", Op: "=", Value: "absent"}}, {
-			{Field: "started_at", Op: ">=", Value: time.Date(2026, 1, 1, 0, 0, 0, 0, time.Local).Format(time.RFC3339)},
-			{Field: "started_at", Op: "<", Value: time.Date(2027, 1, 1, 0, 0, 0, 0, time.Local).Format(time.RFC3339)},
-		}} {
-			request := querytable.AggregationRequest{Where: where, RequireComplete: true, Aggregations: []querytable.Aggregation{
-				{ID: "time", Op: "sum", Field: "duration_ms", GroupBy: groups},
-				{ID: "timed", Op: "count", Field: "duration_ms", GroupBy: groups},
-				{ID: "calls", Op: "count", GroupBy: groups},
-			}}
-			want, err := toolCallDataset.Aggregate(ctx, c.reader(), request, schema)
-			if err != nil {
-				t.Fatal(err)
+	midnight := func(year int, month time.Month, day int) string {
+		return time.Date(year, month, day, 0, 0, 0, 0, time.Local).Format(time.RFC3339)
+	}
+	for _, groups := range [][]string{{}, {"repository_name", "activity", "day", "status", "operation_key", "operation_name", "tool_name", "mcp_server"},
+		{"repository_name", "activity", "month", "status", "operation_key", "operation_name", "tool_name", "mcp_server"}, {"provider", "model_family", "month"},
+		{"model", "effort", "week"}, {"model_effort", "program", "subcommand", "tool_category", "command_category"}} {
+		for _, where := range [][]qt.WhereTerm{nil, {{Field: "provider", Op: "=", Value: "codex"}}, {{Field: "provider", Op: "=", Value: "absent"}},
+			{{Field: "started_at", Op: ">=", Value: midnight(2026, 1, 1)}, {Field: "started_at", Op: "<", Value: midnight(2027, 1, 1)}},
+			{{Field: "started_at", Op: ">=", Value: midnight(2026, 8, 31)}, {Field: "started_at", Op: "<", Value: midnight(2026, 9, 2)}, {Field: "status", Op: "=", Value: "ok"}},
+			{{Any: []qt.WhereClause{{Field: "day", Op: "=", Value: "2026-08-31"}, {Field: "day", Op: "=", Value: "2026-09-02"}}}},
+			{{Any: []qt.WhereClause{{Field: "repository_name", Op: "is_null"}, {Field: "repository_name", Op: "="}}}},
+			{{Field: "repository_name", Op: "="}}, {{Field: "repository_name", Op: "!="}}, {{Field: "mcp_server", Op: "!=", Value: "pharos"}},
+			{{Field: "tool_name", Op: "=", Value: "Bash", Negated: true}, {Field: "program", Op: "is_not_null"}},
+			{{Field: "model", Op: "is_null"}}, {{Field: "activity", Op: "=", Value: "git"}, {Field: "operation_name", Op: "!=", Value: "git status"}},
+		} {
+			q := metricRequest(qt.AggSpec{ID: "time", Op: "sum", Field: "duration_ms", GroupBy: groups}, qt.AggSpec{ID: "timed", Op: "count", Field: "duration_ms", GroupBy: groups},
+				qt.AggSpec{ID: "calls", Op: "count", GroupBy: groups}, qt.AggSpec{ID: "population", Op: "count"})
+			q.Where = where
+			got, handled, err := accelerated(q)
+			if err != nil || !handled {
+				t.Fatalf("accelerator declined %v/%v: %v", groups, where, err)
 			}
-			got, handled, err := c.machineTimeAggregations(ctx, request, schema)
-			// The legacy SQL post-sort interleaves NULL sums by key, without a
-			// stable total ordering. Compare the complete typed bucket population.
-			for _, result := range []*querytable.AggregationResult{&want, &got} {
-				for i := range result.Metrics {
-					sort.Slice(result.Metrics[i].Buckets, func(a, b int) bool {
-						left, _ := json.Marshal(result.Metrics[i].Buckets[a].Keys)
-						right, _ := json.Marshal(result.Metrics[i].Buckets[b].Keys)
-						return string(left) < string(right)
-					})
-				}
-			}
-			left, _ := json.Marshal(want)
-			right, _ := json.Marshal(got)
-			if err != nil || !handled || string(left) != string(right) {
-				t.Fatalf("projection changed %v/%v: %v", groups, where, err)
+			want, err := generic.ExecuteV2(ctx, c.reader(), nil, &q, qt.PlanOptions{})
+			if err != nil || !same(got, want) {
+				left, _ := json.Marshal(got)
+				right, _ := json.Marshal(want)
+				t.Fatalf("accelerated metrics differ for %v/%v: %v\n got %s\nwant %s", groups, where, err, left, right)
 			}
 		}
 	}
-	for _, request := range []querytable.AggregationRequest{
-		{Aggregations: []querytable.Aggregation{{ID: "ids", Op: "count", GroupBy: []string{"id"}}}},
-		{Where: []querytable.WhereTerm{{Field: "duration_ms", Op: ">", Value: "100"}}, Aggregations: []querytable.Aggregation{{ID: "time", Op: "sum", Field: "duration_ms"}}},
-		{Where: []querytable.WhereTerm{{Field: "started_at", Op: ">=", Value: time.Date(2026, 1, 1, 12, 0, 0, 0, time.Local).Format(time.RFC3339)}, {Field: "started_at", Op: "<", Value: time.Date(2027, 1, 1, 0, 0, 0, 0, time.Local).Format(time.RFC3339)}}, Aggregations: []querytable.Aggregation{{ID: "calls", Op: "count"}}},
+	for _, q := range []qt.MetricQuery{
+		metricRequest(qt.AggSpec{ID: "ids", Op: "count", GroupBy: []string{"id"}}),
+		metricRequest(qt.AggSpec{ID: "tokens", Op: "sum", Field: "result_tokens"}),
+		metricRequest(qt.AggSpec{ID: "formula", Expression: "COUNT()", GroupBy: []string{"day"}}),
+		metricRequest(qt.AggSpec{ID: "top", Op: "count", GroupBy: []string{"tool_name"}, GroupLimit: 2}),
+		metricRequest(qt.AggSpec{ID: "shown", Op: "count", GroupBy: []string{"tool_name"}, Scope: "shownRows"}),
+		metricRequest(qt.AggSpec{ID: "filtered", Op: "count", GroupBy: []string{"tool_name"}, Where: []qt.WhereTerm{{Field: "status", Op: "=", Value: "ok"}}}),
+		{Version: 2, Limit: 50, Where: []qt.WhereTerm{{Field: "duration_ms", Op: ">", Value: "100"}}, Metrics: []qt.AggSpec{{ID: "time", Op: "sum", Field: "duration_ms"}}},
+		{Version: 2, Limit: 50, Where: []qt.WhereTerm{{Field: "tool_name", Op: "contains", Value: "Ba"}}, Metrics: []qt.AggSpec{{ID: "calls", Op: "count"}}},
+		{Version: 2, Limit: 50, Where: []qt.WhereTerm{{Field: "started_at", Op: ">=", Value: time.Date(2026, 1, 1, 12, 0, 0, 0, time.Local).Format(time.RFC3339)}, {Field: "started_at", Op: "<", Value: midnight(2027, 1, 1)}}, Metrics: []qt.AggSpec{{ID: "calls", Op: "count"}}},
+		{Version: 2, Limit: 50, Where: []qt.WhereTerm{{Field: "started_at", Op: ">=", Value: midnight(2026, 1, 1)}}, Metrics: []qt.AggSpec{{ID: "calls", Op: "count"}}},
 	} {
-		if _, handled, err := c.machineTimeAggregations(ctx, request, schema); handled || err != nil {
-			t.Fatal("raw-call query incorrectly used grouped facts", handled, err)
+		if _, handled, err := accelerated(q); handled || err != nil {
+			t.Fatal("accelerator answered a raw-call shape", q, handled, err)
 		}
 	}
-	before, err := c.machineTimeRows(ctx)
-	if err != nil {
+	projection := func() []map[string]any {
+		t.Helper()
+		tx, err := c.reader().BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		rows, err := c.machineTimeRowsIn(ctx, tx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rows
+	}
+	before := projection()
+	if _, err := c.DB.Exec(`UPDATE tool_call_cube SET duration_ms_sum=123456; INSERT INTO meta(key,value) VALUES('tool_rollup_publication','next-publication') ON CONFLICT(key) DO UPDATE SET value=excluded.value`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = c.DB.Exec(`UPDATE tool_call_cube SET duration_ms_sum=123456; INSERT INTO meta(key,value) VALUES('tool_rollup_publication','next-publication') ON CONFLICT(key) DO UPDATE SET value=excluded.value`); err != nil {
-		t.Fatal(err)
-	}
-	after, err := c.machineTimeRows(ctx)
-	if err != nil || reflect.DeepEqual(before, after) {
-		t.Fatal("cached facts survived a new cube publication", err)
+	if after := projection(); reflect.DeepEqual(before, after) {
+		t.Fatal("cached facts survived a new cube publication")
 	}
 	c.derived.mu.Lock()
 	defer c.derived.mu.Unlock()
@@ -184,47 +206,56 @@ func TestMachineTimeTimestampRangesRequireFreshCube(t *testing.T) {
 			if err := c.ensureToolRollup(ctx); err != nil {
 				t.Fatal(err)
 			}
-			schema, err := (&Server{Catalog: c}).queryTableSchema("tool_calls")
-			if err != nil {
-				t.Fatal(err)
-			}
-			request := querytable.AggregationRequest{Where: []querytable.WhereTerm{
+			where := []qt.WhereTerm{
 				{Field: "started_at", Op: ">=", Value: time.Date(2026, 1, 1, 0, 0, 0, 0, time.Local).Format(time.RFC3339)},
 				{Field: "started_at", Op: "<", Value: time.Date(2027, 1, 1, 0, 0, 0, 0, time.Local).Format(time.RFC3339)},
-			}, Aggregations: []querytable.Aggregation{{ID: "calls", Op: "count"}}}
+			}
+			accelerated := func(where []qt.WhereTerm) bool {
+				t.Helper()
+				tx, release, err := beginQueryV2(ctx, c.reader())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer release()
+				q := metricRequest(qt.AggSpec{ID: "calls", Op: "count", GroupBy: []string{"tool_name"}})
+				q.Where = where
+				_, handled, err := c.machineTimeMetricsV2(ctx, tx, queryV2Dataset("tool_calls", PharosToolCallsSchema()), q, qt.PlanOptions{Now: time.Now()})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return handled
+			}
+			rangeCount := func() (int64, bool) {
+				t.Helper()
+				tx, err := c.reader().BeginTx(ctx, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer tx.Rollback()
+				total, fresh, err := c.freshToolCubeRangeCount(ctx, tx, where)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return total, fresh
+			}
 			// Warm the projection before invalidation: cached facts cannot bypass guards.
-			if _, handled, err := c.machineTimeAggregations(ctx, request, schema); !handled || err != nil {
-				t.Fatal(handled, err)
+			if !accelerated(where) {
+				t.Fatal("fresh cube declined a whole-day range")
 			}
-			tx, err := c.reader().BeginTx(ctx, nil)
-			if err != nil {
-				t.Fatal(err)
+			if total, fresh := rangeCount(); !fresh || total != 4 {
+				t.Fatal("range count", total, fresh)
 			}
-			total, fresh, err := c.freshToolCubeRangeCount(ctx, tx, request.Where)
-			tx.Rollback()
-			if err != nil || !fresh || total != 4 {
-				t.Fatal("range count", total, fresh, err)
-			}
-
 			if _, err := c.DB.Exec(mutation); err != nil {
 				t.Fatal(err)
 			}
-			if _, handled, err := c.machineTimeAggregations(ctx, request, schema); handled || err != nil {
-				t.Fatal("stale cube used for raw timestamp range", handled, err)
+			if accelerated(where) {
+				t.Fatal("stale cube used for raw timestamp range")
 			}
-			tx, err = c.reader().BeginTx(ctx, nil)
-			if err != nil {
-				t.Fatal(err)
+			if _, fresh := rangeCount(); fresh {
+				t.Fatal("stale range count")
 			}
-			_, fresh, err = c.freshToolCubeRangeCount(ctx, tx, request.Where)
-			tx.Rollback()
-			if err != nil || fresh {
-				t.Fatal("stale range count", fresh, err)
-			}
-
-			request.Where = nil
-			if _, handled, err := c.machineTimeAggregations(ctx, request, schema); !handled || err != nil {
-				t.Fatal("published cube queries changed", handled, err)
+			if !accelerated(nil) {
+				t.Fatal("published cube queries changed")
 			}
 		})
 	}
@@ -248,26 +279,39 @@ func TestUsageLongMessagePresetKeepsBoundedTextAndFullFilters(t *testing.T) {
 	if err = c.RebuildAuthorship(context.Background(), "test"); err != nil {
 		t.Fatal(err)
 	}
-	schema, err := (&Server{Catalog: c}).queryTableSchema("writing_messages")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, where := range [][]querytable.WhereTerm{nil, {{Field: "provider", Op: "=", Value: "missing"}}, {{Field: "provider", Op: "=", Value: "codex"}}} {
-		request := querytable.AggregationRequest{Where: where, Aggregations: []querytable.Aggregation{{ID: "messages", Op: "count"}, {ID: "text", Op: "count", Field: "text"}}}
+	s := testServer(t, cfg, c)
+	// Human Words' message mix: a long message is counted, and its words are
+	// all in its categories.
+	for _, sample := range []struct {
+		where    []qt.WhereTerm
+		messages float64
+	}{{nil, 1}, {[]qt.WhereTerm{{Field: "provider", Op: "=", Value: "missing"}}, 0}, {[]qt.WhereTerm{{Field: "provider", Op: "=", Value: "codex"}}, 1}} {
+		mix := metricRequest(qt.AggSpec{ID: "messages", Op: "count"}, qt.AggSpec{ID: "words", Op: "sum", Field: "words"})
 		for _, category := range authorshipCategories {
-			request.Aggregations = append(request.Aggregations, querytable.Aggregation{ID: category, Op: "sum", Field: category + "_words"})
+			mix.Metrics = append(mix.Metrics, qt.AggSpec{ID: category, Op: "sum", Field: category + "_words"})
 		}
-		want, err := writingMessageDataset.Aggregate(context.Background(), c.reader(), request, schema)
+		mix.Where = sample.where
+		result, err := s.executeQueryV2(context.Background(), "writing_messages", nil, PharosWritingMessagesSchema(), nil, &mix)
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, handled, err := writingMessageDataset.writingMessageSummary(context.Background(), c.reader(), request, schema)
-		if err != nil || !handled || !reflect.DeepEqual(want, got) {
-			t.Fatalf("summary differs for %v: %v, want=%#v got=%#v", where, err, want, got)
+		values := map[string]float64{}
+		for _, metric := range result.Metrics.Metrics {
+			value, _ := metric.Buckets[0].Value.(float64)
+			if metric.Error != "" || len(metric.Buckets) != 1 || metric.Buckets[0].Error != "" {
+				t.Fatalf("%v: %+v", sample.where, metric)
+			}
+			values[metric.ID] = value
+		}
+		categorized := 0.0
+		for _, category := range authorshipCategories {
+			categorized += values[category]
+		}
+		if values["messages"] != sample.messages || categorized != values["words"] || sample.messages > 0 && values["words"] < 30_000 {
+			t.Fatalf("message mix for %v: %v", sample.where, values)
 		}
 	}
 
-	s := testServer(t, cfg, c)
 	q := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "text", "typed_words"}, Where: []qt.WhereTerm{{Field: "text", Op: "contains", Value: "rare-tail-match"}}, OrderBy: qt.OrderBys{{Field: "typed_share", Dir: "asc"}, {Field: "words", Dir: "desc"}}, Limit: 50}}
 	got, err := s.executeQueryV2(context.Background(), "writing_messages", nil, PharosWritingMessagesSchema(), &q, nil)
 	if err != nil || len(got.Rows.Rows) != 1 {

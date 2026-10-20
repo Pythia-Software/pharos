@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	qt "github.com/Pythia-Software/query-table/backends/go"
 	"github.com/gbdubs/pharos/internal/querytable"
 )
 
@@ -234,9 +235,10 @@ func TestSkillUsageStoreAndBackfill(t *testing.T) {
 			t.Fatalf("MCP dimensions = %#v", call)
 		}
 	}
-	metric, err := skillUsageDataset.Aggregate(ctx, catalog.DB, querytable.AggregationRequest{Aggregations: []querytable.Aggregation{{ID: "skills", Op: "count", GroupBy: []string{"skill_name", "evidence_type"}}}}, schema)
-	if err != nil || len(metric.Metrics) != 1 || len(metric.Metrics[0].Buckets) != 2 {
-		t.Fatalf("skill metrics = %#v, %v", metric, err)
+	skills := metricRequest(qt.AggSpec{ID: "skills", Op: "count", GroupBy: []string{"skill_name", "evidence_type"}})
+	metric, err := (&Server{Catalog: catalog}).executeQueryV2(ctx, "skill_usages", nil, PharosSkillUsagesSchema(), nil, &skills)
+	if err != nil || len(metric.Metrics.Metrics) != 1 || metric.Metrics.Metrics[0].Error != "" || len(metric.Metrics.Metrics[0].Buckets) != 2 {
+		t.Fatalf("skill metrics = %#v, %v", metric.Metrics, err)
 	}
 	page, _, err := catalog.SharedHTML(ctx, []string{firstString(result.Rows[0]["workspace_id"])})
 	if err != nil || len(sharedPayload(t, page).Datasets["skill_usages"]) != 2 {
@@ -314,16 +316,11 @@ func TestMCPMethodQueriesMatchCube(t *testing.T) {
 	if err != nil || rows.Total != 1 || rows.Rows[0]["mcp_server"] != "browser" {
 		t.Fatalf("method filter = %#v, %v", rows, err)
 	}
-	request := querytable.AggregationRequest{Where: where, Aggregations: []querytable.Aggregation{{ID: "methods", Op: "count", GroupBy: []string{"mcp_server", "mcp_method"}}}}
-	cubed, err := toolCallDataset.Aggregate(ctx, catalog.DB, request, schema)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plain := toolCallDataset
-	plain.cube = nil
-	direct, err := plain.Aggregate(ctx, catalog.DB, request, schema)
-	if err != nil || !same(cubed, direct) || integer(cubed.Metrics[0].Buckets[0].Value) != 1 {
-		t.Fatalf("method aggregation cube=%#v direct=%#v, %v", cubed, direct, err)
+	methods := metricRequest(qt.AggSpec{ID: "methods", Op: "count", GroupBy: []string{"mcp_server", "mcp_method"}})
+	methods.Where = where
+	grouped, err := (&Server{Catalog: catalog}).executeQueryV2(ctx, "tool_calls", nil, PharosToolCallsSchema(), nil, &methods)
+	if err != nil || len(grouped.Metrics.Metrics[0].Buckets) != 1 || grouped.Metrics.Metrics[0].Buckets[0].Value != float64(1) || grouped.Metrics.Metrics[0].Buckets[0].Keys[1] != "navigate" {
+		t.Fatalf("method metric = %#v, %v", grouped.Metrics, err)
 	}
 	document, err = querySchemaDocument("tools")
 	if err != nil {

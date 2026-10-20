@@ -15,8 +15,9 @@ Local changes:
   exact aggregate functions. Sampled summaries retain their original execution
   and budgets. Fall back when a combined plan exceeds compiler limits.
 - Materialize representative rows once for both identity validation and update.
-- Permit an explicit host group budget up to 100,000. Pharos uses this only for
-  Usage's compact facts; other dataset budgets remain unchanged.
+- Permit an explicit host group budget up to 100,000, in V3
+  (`QueryDatasetV3.limits`) and V2 (`SQLiteV2Dataset.limits`). Pharos uses
+  this only for Usage's compact facts; other dataset budgets remain unchanged.
 
 Revision checks, source authorization, staging byte/population checks, numeric
 errors, lazy formula branches, representative validation, and cancellation stay

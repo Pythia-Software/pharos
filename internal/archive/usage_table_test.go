@@ -1,16 +1,11 @@
 package archive
 
 import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/gbdubs/pharos/internal/querytable"
 )
 
 func ingestUsageFixture(t *testing.T, catalog *Catalog, extra ...string) {
@@ -134,36 +129,6 @@ func TestUsageRowsSuppressMirroredWorkspaces(t *testing.T) {
 	}
 }
 
-func TestUsageMetricsReadAsTimeline(t *testing.T) {
-	catalog, config := testCatalog(t)
-	ingestUsageFixture(t, catalog)
-	server := testServer(t, config, catalog)
-	schema, err := server.queryTableSchema("usage")
-	if err != nil {
-		t.Fatal(err)
-	}
-	rows, err := catalog.usageRows(time.UTC)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := querytable.AggregationRequest{Aggregations: []querytable.Aggregation{
-		{ID: "daily", Op: "sum", Field: "total_tokens", GroupBy: []string{"day"}},
-		{ID: "models", Op: "sum", Field: "cache_read_input_tokens", GroupBy: []string{"model_family"}},
-	}}
-	result, err := querytable.Aggregate(rows, request, schema)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sortUsageTimeBuckets(request, result)
-	daily := result.Metrics[0].Buckets
-	if len(daily) != 2 || daily[0].Keys[0] != "2026-09-21" || daily[1].Keys[0] != "2026-09-20" {
-		t.Fatalf("daily buckets should be newest first, not largest first: %#v", daily)
-	}
-	if result.Metrics[1].Buckets[0].Value != float64(2300) {
-		t.Fatalf("cache reads by model: %#v", result.Metrics[1])
-	}
-}
-
 func TestModelFamilyFoldsVariants(t *testing.T) {
 	for input, want := range map[string]string{
 		"claude-opus-5-5": "opus-5-5", "opus-5-5-1m": "opus-5-5", "claude-opus-5-5[1m]": "opus-5-5",
@@ -171,113 +136,6 @@ func TestModelFamilyFoldsVariants(t *testing.T) {
 	} {
 		if got := modelFamily(input); got != want {
 			t.Errorf("modelFamily(%q) = %q, want %q", input, got, want)
-		}
-	}
-}
-
-func TestUsageHourlyAggregationsKeepRequestHoursAndDailyRows(t *testing.T) {
-	previousLocation := time.Local
-	time.Local = time.UTC
-	t.Cleanup(func() { time.Local = previousLocation })
-	catalog, config := testCatalog(t)
-	ingestUsageFixture(t, catalog, `{"type":"token_usage_record","timestamp":"2026-09-21T03:05:00Z","payload":{"response_id":"r3","usage":{"input_tokens":90,"output_tokens":10,"total_tokens":100},"thread_token_usage":{"total_tokens":3150}}}`)
-	rows, err := catalog.usageRows(time.UTC)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 2 {
-		t.Fatalf("daily table changed: %#v", rows)
-	}
-	hours, err := catalog.usageRowsByPeriod(time.UTC, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(hours) != 3 {
-		t.Fatalf("expected three request hours: %#v", hours)
-	}
-	var total int64
-	for _, row := range hours {
-		total += integer(row["total_tokens"])
-	}
-	if total != 3150 {
-		t.Fatalf("hourly tokens = %d", total)
-	}
-	server := testServer(t, config, catalog)
-	for _, sample := range []struct {
-		name                               string
-		where                              string
-		count, hourlyCount, total, average float64
-	}{
-		{"unfiltered", "[]", 2, 3, 3150, 1575},
-		{"daily threshold", `[{"field":"total_tokens","op":">","value":"1500"}]`, 1, 2, 2130, 2130},
-		{"timestamp", `[{"field":"first_usage_at","op":"<","value":"2026-09-21T02:00:00Z"}]`, 2, 2, 3150, 1575},
-		{"hour filter", `[{"field":"hour","op":"=","value":"2026-09-21T03:00:00Z"}]`, 1, 1, 2130, 2130},
-		{"mixed hour OR", `[{"any":[{"field":"hour","op":"=","value":"2026-09-21T03:00:00Z"},{"field":"total_tokens","op":">","value":"2000"}]}]`, 1, 2, 2130, 2130},
-	} {
-		t.Run(sample.name, func(t *testing.T) {
-			body := `{"where":` + sample.where + `,"aggregations":[{"id":"days","op":"count","groupBy":["model"]},{"id":"hours","op":"count","groupBy":["hour"]},{"id":"avg","op":"avg","field":"total_tokens","groupBy":[]},{"id":"sum","op":"sum","field":"total_tokens","groupBy":[]},{"id":"last-hour","op":"max","field":"hour","groupBy":[]}]}`
-			request := httptest.NewRequest(http.MethodPost, "/api/query/usage/aggregations", strings.NewReader(body))
-			response := httptest.NewRecorder()
-			server.postQueryTable(response, request, "usage", "aggregations")
-			if response.Code != http.StatusOK {
-				t.Fatalf("HTTP %d: %s", response.Code, response.Body.String())
-			}
-			var result querytable.AggregationResult
-			if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
-				t.Fatal(err)
-			}
-			if len(result.Metrics) != 5 {
-				t.Fatalf("metrics: %#v", result)
-			}
-			for i, id := range []string{"days", "hours", "avg", "sum", "last-hour"} {
-				if result.Metrics[i].ID != id {
-					t.Fatalf("metric order: %#v", result.Metrics)
-				}
-			}
-			for i, want := range []float64{sample.count, sample.hourlyCount, sample.average, sample.total} {
-				var value float64
-				for _, bucket := range result.Metrics[i].Buckets {
-					value += bucket.Value.(float64)
-					if i != 1 && bucket.Count != int(sample.count) {
-						t.Fatalf("daily metric counted hours: %#v", bucket)
-					}
-				}
-				if value != want {
-					t.Fatalf("%s = %v, want %v", result.Metrics[i].ID, value, want)
-				}
-			}
-		})
-	}
-
-	for _, sample := range []struct {
-		where string
-		want  int
-	}{
-		{"[]", 3},
-		{`[{"field":"first_usage_at","op":"<","value":"2026-09-21T02:00:00Z"}]`, 2},
-		{`[{"field":"total_tokens","op":">","value":"1500"}]`, 2},
-	} {
-		body := `{"where":` + sample.where + `,"aggregations":[{"id":"hourly","op":"sum","field":"total_tokens","groupBy":["hour"]}]}`
-		request := httptest.NewRequest(http.MethodPost, "/api/query/usage/aggregations", strings.NewReader(body))
-		response := httptest.NewRecorder()
-		server.postQueryTable(response, request, "usage", "aggregations")
-		if response.Code != http.StatusOK {
-			t.Fatalf("hourly HTTP %d: %s", response.Code, response.Body.String())
-		}
-		var result querytable.AggregationResult
-		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
-			t.Fatal(err)
-		}
-		buckets := result.Metrics[0].Buckets
-		if len(buckets) != sample.want {
-			t.Fatalf("hourly buckets: %#v", buckets)
-		}
-		wantLast := "2026-09-21T03:00:00Z"
-		if strings.Contains(sample.where, "first_usage_at") {
-			wantLast = "2026-09-21T01:00:00Z"
-		}
-		if buckets[0].Keys[0] != wantLast {
-			t.Fatalf("hour order: %#v", buckets)
 		}
 	}
 }

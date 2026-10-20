@@ -181,10 +181,17 @@ func TestModelEffortFilterSortAndGroupingAcrossDatasets(t *testing.T) {
 				}
 			}
 			for _, grouping := range [][]string{{"model", "effort"}, {"model_effort"}} {
-				request := querytable.AggregationRequest{Aggregations: []querytable.Aggregation{{ID: "pairs", Op: "count", GroupBy: grouping}}}
-				result, err := querytable.Aggregate(rows, request, schema)
-				if err != nil || len(result.Metrics[0].Buckets) != 4 {
-					t.Fatalf("share pair grouping: %v %v", result, err)
+				// A shared file groups its rows in the browser, by the same values.
+				pairs := map[string]bool{}
+				for _, row := range rows {
+					keys := []any{}
+					for _, field := range grouping {
+						keys = append(keys, row[field])
+					}
+					pairs[string(mustJSON(t, keys))] = true
+				}
+				if len(pairs) != 4 {
+					t.Fatalf("share pair grouping: %v", pairs)
 				}
 				v2Schema, err := sqliteQuerySchema(dataset)
 				if err != nil {
@@ -255,7 +262,12 @@ func TestModelEffortFilterSortAndGroupingAcrossDatasets(t *testing.T) {
 		if err := schema.ValidateQuery(query); err != nil {
 			t.Fatalf("%s combined field: %v", dataset, err)
 		}
-		if _, err := querytable.Aggregate(shared[dataset], querytable.AggregationRequest{Aggregations: []querytable.Aggregation{{ID: "pairs", Op: "count", GroupBy: []string{field}}}}, schema); err != nil {
+		v2Schema, err := sqliteQuerySchema(dataset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		grouped := metricRequest(qt.AggSpec{ID: "pairs", Op: "count", GroupBy: []string{field}})
+		if _, err := qt.CompileSQLiteMetrics(ctx, grouped, v2Schema, qt.PlanOptions{SourceSQL: (sqlDataset{}).v2Source(v2Schema)}); err != nil {
 			t.Fatalf("%s grouping combined field: %v", dataset, err)
 		}
 	}

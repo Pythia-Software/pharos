@@ -8,9 +8,10 @@ import (
 // tool_call_cube groups tool calls by workspace, local day, and every field
 // with few values, keeping each group's call count and the sums and ranges of
 // its numbers. It has a quarter of tool_calls' rows at a fraction of their
-// width, so the Tool calls table answers counts, metrics, filter values, and
-// column stats from it whenever a request reads only those fields (see
-// sqlCube), and tool_usage_daily is summed from it rather than from the calls.
+// width, so the Tool calls table answers row counts, filter values and column
+// stats from it whenever a request reads only those fields (see sqlCube),
+// Machine Time's metrics are summed from it (see machineTimeMetricsV2), and
+// tool_usage_daily is summed from it rather than from the calls.
 // Both are rebuilt together (see rebuildToolRollup) and leave out mirrored
 // workspaces.
 

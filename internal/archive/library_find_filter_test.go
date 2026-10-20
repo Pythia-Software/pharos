@@ -65,8 +65,8 @@ func TestLibraryQueryTableCombinesKeywordSearchWithFilters(t *testing.T) {
 	if page := request(http.MethodPost, "/api/query/library", `{"select":["title"],"limit":10,"offset":0}`); page["total"] != float64(2) || page["find"] != nil {
 		t.Fatalf("unfiltered page: %#v", page)
 	}
-	metrics := request(http.MethodPost, "/api/query/library/aggregations?find=parser", `{"aggregations":[{"id":"n","op":"count","groupBy":[]}]}`)
-	if encoded, _ := json.Marshal(metrics); !strings.Contains(string(encoded), `"value":1`) {
+	metrics := request(http.MethodPost, "/api/query/library/metrics?find=parser", `{"version":2,"where":[],"orderBy":[],"limit":1,"offset":0,"metrics":[{"id":"n","op":"count","groupBy":[]}]}`)
+	if encoded, _ := json.Marshal(metrics["metrics"]); !strings.Contains(string(encoded), `"value":1`) || metrics["find"] == nil {
 		t.Fatalf("metrics ignore the keyword search: %s", encoded)
 	}
 	distinct := request(http.MethodGet, "/api/query/library/distinct?field=title&q=&find=parser", "")

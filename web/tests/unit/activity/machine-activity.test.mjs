@@ -106,6 +106,7 @@ test("raw examples reconcile with analytics and distinguish slowdown from volume
 test("complete local-day bounds use equivalent cube filters across DST, while exact times stay exact", () => {
   const current = machineWhere(scope, window);
   assert.deepEqual(timeAggregationWhere(current).at(-1), {any:Array.from({length:7},(_,index)=>({field:"day",op:"=",value:`2026-03-${String(index+3).padStart(2,"0")}`}))});
+  assert.deepEqual(timeAggregationWhere(machineWhere({...scope,days:1}, machineWindow(1, new Date(2026,2,10,12)))).at(-1), {field:"day",op:"=",value:"2026-03-09"}, "one day is a plain predicate, which metric requests accept");
   const untouched = [{field:"started_at",op:">=",value:"2026-03-04T15:30:00.000Z"}, {field:"started_at",op:"<=",value:window.end}, {field:"ended_at",op:"<",value:window.end}];
   assert.deepEqual(timeAggregationWhere(untouched), untouched);
   assert.deepEqual(timeAggregationWhere([{field:"started_at",op:">=",value:window.start,negated:true},{field:"started_at",op:"<",value:window.end}]), [{field:"started_at",op:">=",value:window.start,negated:true},{field:"started_at",op:"<",value:window.end}]);

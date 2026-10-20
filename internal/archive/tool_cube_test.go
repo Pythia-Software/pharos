@@ -209,27 +209,7 @@ func TestToolCallCubeAnswersLikeTheCalls(t *testing.T) {
 		{{Field: "duration_ms", Op: ">", Value: "100"}, {Field: "tool_name", Op: "=", Value: "Read"}},
 		{{Field: "started_at", Op: ">=", Value: "2026-09-02T00:00:00Z"}},
 	}
-	// Every measure the cube routes, for a few filters; counts for the rest.
-	full, counts := []querytable.Aggregation{{ID: "calls", Op: "count"}}, []querytable.Aggregation{{ID: "calls", Op: "count"}}
-	for _, group := range [][]string{nil, {"day"}, {"week", "tool_category"}, {"tool_name"}, {"error_type"}, {"command_name", "exit_code"}, {"host", "tool_name"}, {"model_family"}, {"model", "effort"}, {"model_effort"}, {"repository_name"}} {
-		counts = append(counts, querytable.Aggregation{ID: fmt.Sprint("count", group), Op: "count", GroupBy: group},
-			querytable.Aggregation{ID: fmt.Sprint("duration", group), Op: "sum", Field: "duration_ms", GroupBy: group})
-		full = append(full, querytable.Aggregation{ID: fmt.Sprint("count", group), Op: "count", GroupBy: group})
-		for _, field := range []string{"error_count", "call_count", "duration_ms", "output_tokens", "lines_added", "exit_code", "interrupted"} {
-			for _, op := range []string{"sum", "avg", "min", "max", "count"} {
-				full = append(full, querytable.Aggregation{ID: fmt.Sprint(op, field, group), Op: op, Field: field, GroupBy: group})
-			}
-		}
-		full = append(full,
-			querytable.Aggregation{ID: fmt.Sprint("distinct", group), Op: "count_distinct", Field: "tool_name", GroupBy: group},
-			querytable.Aggregation{ID: fmt.Sprint("started", group), Op: "max", Field: "started_at", GroupBy: group},
-			querytable.Aggregation{ID: fmt.Sprint("programs", group), Op: "count", Field: "program", GroupBy: group})
-	}
-	for index, where := range wheres {
-		aggregations := counts
-		if index%6 == 0 {
-			aggregations = full
-		}
+	for _, where := range wheres {
 		query := querytable.Query{Where: where, OrderBy: []querytable.OrderBy{{Field: "started_at", Dir: "desc"}}, Limit: 25}
 		got, err := toolCallDataset.Rows(ctx, catalog.DB, query, schema)
 		if err != nil {
@@ -241,20 +221,6 @@ func TestToolCallCubeAnswersLikeTheCalls(t *testing.T) {
 		}
 		if got.Total == 0 || !same(got, want) {
 			t.Fatalf("rows where %v: total %d, want %d", where, got.Total, want.Total)
-		}
-		request := querytable.AggregationRequest{Where: where, Aggregations: aggregations}
-		gotMetrics, err := toolCallDataset.Aggregate(ctx, catalog.DB, request, schema)
-		if err != nil {
-			t.Fatalf("%v: %v", where, err)
-		}
-		wantMetrics, err := direct.Aggregate(ctx, catalog.DB, request, schema)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for index := range wantMetrics.Metrics {
-			if !same(gotMetrics.Metrics[index], wantMetrics.Metrics[index]) {
-				t.Fatalf("where %v, metric %s:\ncube  %v\ncalls %v", where, wantMetrics.Metrics[index].ID, gotMetrics.Metrics[index].Buckets, wantMetrics.Metrics[index].Buckets)
-			}
 		}
 	}
 	for _, field := range []string{"tool_name", "day", "week", "command_name", "model_family", "model_effort", "exit_code", "host", "title", "error_type"} {
