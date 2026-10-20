@@ -3,6 +3,7 @@ import test from "node:test";
 import { core, schemas } from "../helpers/recipes.mjs";
 import { answerQuery, population } from "../../support/query-server.mjs";
 import { MetricRequestError, metricRequest, metricResults, postMetrics, postQueryV3Metrics } from "../../../src/metric-request";
+import { queryRequest, queryFetch, QueryRequestError, shouldSkipQueryOnRestore } from "../../../src/query-request";
 import { tokenChartMetrics, tokenChartSplit, tokenSummaryMetrics, tokenTypes } from "../../../src/token-chart-request";
 
 const response = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -81,4 +82,57 @@ test("the Token chart sums by its period's field and split; cost by type is by p
   assert.deepEqual(tokenChartMetrics(view("week", "type", "cost")).map(metric => [metric.field, metric.groupBy]), [["cost_usd", ["week", "provider"]]]);
   assert.deepEqual(tokenSummaryMetrics.map(metric => metric.id), ["total_tokens:", "cost_usd:", "uncached_input_tokens:", "cache_read_input_tokens:", "output_tokens:", "agent_sessions"]);
   for (const clauses of [tokenSummaryMetrics, tokenChartMetrics(view("hour", "repository_name"))]) assert.deepEqual(core.toMetricQuery({ ...core.EMPTY_QUERY, aggregations: clauses }, schemas.usage).diagnostics, []);
+});
+
+
+test('query deadlines abort stalled fetches and response bodies, with a recoverable error',async t=>{
+ const original=global.fetch;
+ t.after(()=>{global.fetch=original});
+ let deadline;
+ t.mock.method(AbortSignal,'timeout',()=>{deadline=new AbortController();return deadline.signal});
+ for(const stage of ['headers','body']){
+  global.fetch=async (_url,{signal})=>{
+   const pending=()=>new Promise((_resolve,reject)=>{if(signal.aborted)reject(signal.reason);else signal.addEventListener('abort',()=>reject(signal.reason),{once:true});});
+   return stage==='headers'?pending():{ok:true,json:pending};
+  };
+  const request=queryRequest('/api/query/tool_calls/metrics');
+  const rejected=assert.rejects(request,error=>error instanceof QueryRequestError&&/took too long/.test(error.message));
+  deadline.abort(new DOMException('Deadline exceeded','TimeoutError'));
+  await rejected;
+ }
+});
+
+test('superseded queries preserve caller cancellation and service errors keep their status',async t=>{
+ const original=global.fetch;
+ t.after(()=>{global.fetch=original});
+ const caller=new AbortController();
+ global.fetch=async(_url,{signal})=>new Promise((_resolve,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}));
+ const request=queryRequest('/api/query/usage/rows-v2',{signal:caller.signal});
+ const reason=new DOMException('New query','AbortError'),rejected=assert.rejects(request,error=>error===reason);
+ caller.abort(reason);await rejected;
+ global.fetch=async()=>response({error:{message:'Unknown field'}},422);
+ await assert.rejects(queryRequest('/api/query/usage/rows-v2'),error=>error instanceof QueryRequestError&&error.status===422&&error.message==='Unknown field');
+ global.fetch=async()=>response({rows:[],total:0});
+ assert.deepEqual(await queryRequest('/api/query/usage/rows-v2'),{rows:[],total:0},'empty results are successful');
+});
+
+
+test('only query rejection and deadline expiry skip automatic restoration',()=>{
+ for(const status of [undefined,400,422])assert.equal(shouldSkipQueryOnRestore(new QueryRequestError('failed',status)),true);
+ for(const status of [401,403,404,429,500,502,503,504])assert.equal(shouldSkipQueryOnRestore(new QueryRequestError('failed',status)),false);
+ assert.equal(shouldSkipQueryOnRestore(new TypeError('Failed to fetch')),false);
+ assert.equal(shouldSkipQueryOnRestore(new DOMException('Superseded','AbortError')),false);
+});
+
+test('HTTP stores receive bounded fetches that still observe caller cancellation',async t=>{
+ const original=global.fetch,deadline=new AbortController(),caller=new AbortController();
+ t.after(()=>{global.fetch=original});
+ t.mock.method(AbortSignal,'timeout',()=>deadline.signal);
+ let signal;
+ global.fetch=async(_input,init)=>{signal=init.signal;return response({ok:true})};
+ const result=await queryFetch('/api/query-snapshots?dataset=usage',{signal:caller.signal});
+ assert.deepEqual(await result.json(),{ok:true});
+ caller.abort();assert.equal(signal.aborted,true);
+ await queryFetch('/api/query-computed-columns?dataset=usage');
+ deadline.abort();assert.equal(signal.aborted,true);
 });

@@ -24,6 +24,8 @@ const ROUTES = [
   { name: "TL1 quality", url: "/tl1/quality", ready: "#tl1-errors" },
   { name: "TL1 runs", url: "/tl1/runs", ready: "#tl1Page .qt-row" },
   { name: "Usage tokens", url: "/usage?usage=tokens&machine_view=tokens", ready: "#queryTableUsage .usage-chart" },
+  { name: "Usage fresh", url: "/usage?fresh=1&usage=tokens&machine_view=tokens&activity_days=0&activity_repo=&activity_provider=&activity_model=", preferences: { "pharos-usage-view": "writing", "pharos-machine-view": "time", "pharos-machine-scope": { days: 7, repository: "missing", provider: "missing", model: "missing" } }, ready: "#queryTableUsage .qt-row" },
+  { name: "Usage query recovery", url: "/usage?usage=tokens&machine_view=tokens&q_usage=invalid", ready: ".query-recovery", open: page => page.getByRole("button", { name: "Reset table", exact: true }).click(), shown: "#queryTableUsage .qt-row" },
   { name: "Usage machine time", url: "/usage?usage=tokens&machine_view=time", ready: ".machine-call-surface .qt-row" },
   { name: "Usage parallelism", url: "/usage?usage=tokens&machine_view=parallelism&machine_demo=1", ready: ".concurrency-chart svg" },
   { name: "Human Words", url: "/usage?usage=writing", ready: ".writing-panel .usage-chart" },

@@ -1,4 +1,5 @@
 import { EMPTY_QUERY, toMetricQuery, toQueryRequestV3, type AggregationClause, type ComputedExecution, type FieldSchema, type MetricQuery, type QueryCapabilitiesV3, type WhereTerm } from "@pythia-software/query-table-core";
+import { queryRequest, QueryRequestError } from "./query-request";
 
 // Charts and cards outside a table ask the server for metrics directly: a
 // V2 /metrics request over the rows matching where, as a table's metric panel
@@ -41,13 +42,12 @@ export function metricResults(response: MetricResponse, clauses: AggregationClau
 }
 
 async function post<T>(url: string, body: unknown, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
-  const parsed = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const message = typeof parsed.error === "string" ? parsed.error : parsed.error?.message ?? `Request failed with HTTP ${response.status}`;
-    throw new MetricRequestError(message, /resource_limit/.test(message));
+  try {
+    return await queryRequest<T>(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+  } catch (error) {
+    if (error instanceof QueryRequestError) throw new MetricRequestError(error.message, /resource_limit/.test(error.message));
+    throw error;
   }
-  return parsed as T;
 }
 
 // postMetrics runs clauses over dataset's rows matching where.
@@ -59,9 +59,8 @@ export async function postMetrics(dataset: string, schema: FieldSchema<any>, whe
 // to ten million matching rows and allows more groups than /metrics: slower,
 // but it answers what /metrics refuses for its budgets.
 export async function postQueryV3Metrics(dataset: string, schema: FieldSchema<any>, where: WhereTerm[], clauses: AggregationClause[], signal?: AbortSignal): Promise<MetricResult[]> {
-  const response = await fetch(`/api/query/${dataset}/capabilities`, { signal });
-  const handshake = await response.json().catch(() => ({})) as { queryCapabilities?: QueryCapabilitiesV3; computedExecution?: ComputedExecution; error?: string };
-  if (!response.ok || handshake.queryCapabilities?.version !== 3) throw new MetricRequestError(handshake.error ?? "This server cannot run the query with a larger budget.");
+  const handshake = await queryRequest<{ queryCapabilities?: QueryCapabilitiesV3; computedExecution?: ComputedExecution }>(`/api/query/${dataset}/capabilities`, { signal });
+  if (handshake.queryCapabilities?.version !== 3) throw new MetricRequestError("This server cannot run the query with a larger budget.");
   const request = toQueryRequestV3({ ...EMPTY_QUERY, where, aggregations: clauses }, schema, handshake.queryCapabilities, handshake.computedExecution, { rows: false });
   if (request.diagnostics?.length) throw new MetricRequestError(request.diagnostics.join(" "));
   return metricResults(await post<MetricResponse>(`/api/query/${dataset}/query-v3`, request, signal), clauses);
