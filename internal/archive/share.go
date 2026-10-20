@@ -377,6 +377,10 @@ func sharedPage(app string, payload []byte, title string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	readerModel, err := assets.ReadFile("assets/reader-model.js")
+	if err != nil {
+		return nil, err
+	}
 	head := fmt.Sprintf(`<head>
   <meta http-equiv="Content-Security-Policy" content="%s">
   <script>document.documentElement.classList.add('shared')</script>
@@ -384,7 +388,8 @@ func sharedPage(app string, payload []byte, title string) ([]byte, error) {
 	footer := fmt.Sprintf(`<footer class="share-footer">Shared from a <a href="%s" target="_blank" rel="noopener noreferrer">Pharos</a> conversation · <a href="%s" target="_blank" rel="noopener noreferrer">View on GitHub</a></footer>`, shareRepositoryURL, shareRepositoryURL)
 	page := app
 	for _, edit := range []struct{ old, new string }{
-		// The tables' bundle and styles travel inside the file.
+		// The reader's model, and the tables' bundle and styles, travel inside the file.
+		{`<script src="/assets/reader-model.js"></script>`, "<script>" + strings.ReplaceAll(string(readerModel), "</script", `<\/script`) + "</script>"},
 		{`<script src="/assets/query-tables.js"></script>`, "<script>" + strings.ReplaceAll(string(tableScript), "</script", `<\/script`) + "</script>"},
 		{`<link rel="stylesheet" href="/assets/query-tables.css">`, "<style>" + string(tableStyle) + "</style>"},
 	} {

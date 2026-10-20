@@ -57,6 +57,10 @@ func TestSharedWorkIsStandaloneAndOmitsArchiveDetails(t *testing.T) {
 	if strings.Contains(page, `"/assets/`) || strings.Contains(page, "<script src=") || strings.Contains(page, "<link ") {
 		t.Fatalf("page still loads external files: %v", regexp.MustCompile(`<(script src|link )[^>]*>`).FindAllString(page, -1))
 	}
+	// The reader renders with reader-model.js, which travels inside the file.
+	if !strings.Contains(page, "function conversationMessages(") {
+		t.Fatal("page lacks the conversation reader's model")
+	}
 	if !strings.Contains(page, "Content-Security-Policy") || !strings.Contains(page, "Shared from a") || !strings.Contains(page, shareRepositoryURL) {
 		t.Fatal("page lacks its policy or its attribution footer")
 	}

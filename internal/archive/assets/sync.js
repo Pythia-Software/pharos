@@ -206,15 +206,22 @@
     dialog.showModal();
   }
 
+  // Whether a run among `followed` (the ids running at the last poll) has
+  // since finished having indexed something. A run that has left the list
+  // can't say what it changed, so it counts.
+  const finishedRunsChanged = (followed, runs) => [...followed].map(id => runs.find(run => run.id === id))
+    .filter(run => run?.state !== 'running').some(run => !run || run.workspaces > 0 || run.conversations > 0);
+  // The header's Index changes is busy while a run is running.
+  const runningRun = activity => (activity.runs || []).find(run => run.state === 'running');
+
   // Home and the card pages rerun their queries when a run finishes having
   // indexed something. Runs that found no changes leave their results as they
   // were. Every run is followed, so one finishing beside another still counts.
   function announceChanges(activity) {
     const runs = activity.runs || [];
-    const finished = [...runningIds].map(id => runs.find(run => run.id === id)).filter(run => run?.state !== 'running');
+    const changed = finishedRunsChanged(runningIds, runs);
     runningIds = new Set(runs.filter(run => run.state === 'running').map(run => run.id));
-    // A run that has left the list can't say what it changed.
-    if (finished.some(run => !run || run.workspaces > 0 || run.conversations > 0)) {
+    if (changed) {
       window.dispatchEvent(new CustomEvent('pharos:data-refresh', {detail: 'sync'}));
     }
   }
@@ -222,7 +229,7 @@
   function renderHeader(activity) {
     const action = document.getElementById('headerSync');
     if (!action) return;
-    const active = (activity.runs || []).find(run => run.state === 'running');
+    const active = runningRun(activity);
     const wasActive = Boolean(activeRun);
     activeRun = active || null;
     // A running sync is stopped from the drive panel, not the header.
@@ -499,6 +506,8 @@
     finally { busy = false; clearTimeout(timer); timer = setTimeout(refresh, 3000); }
   }
   window.addEventListener('pharos:route', refresh);
-  window.pharosSync = {refresh, recovery, isBusy: () => Boolean(activeRun), issues: () => openIssues};
+  window.pharosSync = {refresh, recovery, isBusy: () => Boolean(activeRun), issues: () => openIssues,
+    // Pure helpers, for web/tests/unit/page/sync.test.mjs.
+    finishedRunsChanged, runningRun, sourceNames, format: {seconds, memory, when}};
   refresh();
 })();

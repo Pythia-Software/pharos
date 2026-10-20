@@ -166,25 +166,46 @@
     if (seconds < 3600) return `${Math.ceil(seconds / 60)} min`;
     return `${(Math.ceil(seconds / 360) / 10).toFixed(1)} hr`;
   };
-  const completionEstimate = activity => {
-    const timing = node('div', 'pharos-sub pharos-activity-timing');
+  const ESTIMATE_TEXT = {learning: 'Measuring pace…', unknown: 'Time remaining not known', stalled: 'Waiting for progress…', finishing: 'Finishing this stage…', stopping: 'Stopping safely…'};
+  // What an activity's timing column shows: whole seconds since it started
+  // (null if it reports no start), and either the range of time left in this
+  // stage or the estimate's state. A range needs a positive low and a high no
+  // lower than it; any other estimate, and every estimate while the status
+  // is unavailable, shows its state, unknown if unrecognised.
+  function activityTiming(activity, {now = Date.now(), unavailable = Boolean(statusError)} = {}) {
     const started = Date.parse(activity.started_at);
-    if (Number.isFinite(started)) {
-      const seconds = Math.max(0, Math.floor((Date.now() - started) / 1000));
-      timing.append(node('div', '', `${seconds < 60 ? `${seconds} sec` : `${Math.floor(seconds / 60)} min`} elapsed`));
-    }
-    const estimate = statusError ? {state: 'unknown', basis: 'Status unavailable; reconnecting before updating the estimate'} : activity.estimate;
-    let text = {learning: 'Measuring pace…', unknown: 'Time remaining not known', stalled: 'Waiting for progress…', finishing: 'Finishing this stage…', stopping: 'Stopping safely…'}[estimate?.state] || 'Time remaining not known';
+    const elapsed = Number.isFinite(started) ? Math.max(0, Math.floor((now - started) / 1000)) : null;
+    const estimate = unavailable ? {state: 'unknown', basis: 'Status unavailable; reconnecting before updating the estimate'} : activity.estimate;
+    let range = null;
     if (estimate?.state === 'estimating' && estimate.low_seconds > 0 && estimate.high_seconds >= estimate.low_seconds) {
       const low = duration(estimate.low_seconds), high = duration(estimate.high_seconds);
       const sameUnit = low.split(' ').at(-1) === high.split(' ').at(-1);
-      const range = low === high ? high : sameUnit ? `${low.split(' ')[0]}–${high}` : `${low}–${high}`;
-      text = `This stage: ~${range} left`;
+      range = low === high ? high : sameUnit ? `${low.split(' ')[0]}–${high}` : `${low}–${high}`;
     }
-    timing.append(node('div', '', text));
-    timing.title = estimate?.basis || 'This stage does not report a measurable total.';
+    const state = range ? 'estimating' : ESTIMATE_TEXT[estimate?.state] ? estimate.state : 'unknown';
+    return {elapsed, state, range, basis: estimate?.basis || 'This stage does not report a measurable total.'};
+  }
+  const completionEstimate = activity => {
+    const timing = node('div', 'pharos-sub pharos-activity-timing');
+    const {elapsed, state, range, basis} = activityTiming(activity);
+    if (elapsed !== null) timing.append(node('div', '', `${elapsed < 60 ? `${elapsed} sec` : `${Math.floor(elapsed / 60)} min`} elapsed`));
+    timing.append(node('div', '', range ? `This stage: ~${range} left` : ESTIMATE_TEXT[state]));
+    timing.title = basis;
     return timing;
   };
+  // A stage's progress is measured by its input size when it reports one,
+  // else by its unit count. Work without a total has no known progress
+  // (null); an activity without work may report its own fraction.
+  const workMeasure = work => work?.size?.total > 0 ? work.size : work;
+  const activityProgress = activity => {
+    const measure = workMeasure(activity.work);
+    return measure?.total > 0 ? measure.done / measure.total : activity.work ? null : activity.progress;
+  };
+  // An estimate's measured pace: bytes per second, or other units per minute.
+  const estimateRate = (estimate, unit) => estimate.units_per_second > 0 && unit
+    ? unit === 'byte' ? `${size(estimate.units_per_second)}/sec`
+      : `${(estimate.units_per_second * 60).toLocaleString(undefined, {maximumFractionDigits: 1})} ${unit}s/min`
+    : '';
   const workCount = work => {
     if (!work?.unit) return '';
     const done = work.unit === 'byte' ? size(work.done) : Number(work.done || 0).toLocaleString();
@@ -201,8 +222,8 @@
     if (activity.detail) info.append(node('div', 'pharos-sub', activity.detail));
     row.append(info, completionEstimate(activity));
     item.append(row);
-    const work = activity.work, measure = work?.size?.total > 0 ? work.size : work, measured = measure?.total > 0;
-    const progress = measured ? measure.done / measure.total : work ? null : activity.progress;
+    const work = activity.work, measured = workMeasure(work)?.total > 0;
+    const progress = activityProgress(activity);
     item.append(progressBar(progress, `${activity.label}: ${work?.phase || 'current stage'}`));
     if (work?.unit) {
       const percent = measured ? `${Math.min(100, Math.floor(progress * 100))}% of ${work.size?.total > 0 ? 'input data' : 'this stage'}` : '';
@@ -211,11 +232,7 @@
     }
     const estimate = activity.estimate;
     if (estimate && !statusError) {
-      const unit = estimate.unit || work?.unit;
-      const rate = estimate.units_per_second > 0 && unit
-        ? unit === 'byte' ? `${size(estimate.units_per_second)}/sec`
-          : `${(estimate.units_per_second * 60).toLocaleString(undefined, {maximumFractionDigits: 1})} ${unit}s/min`
-        : '';
+      const rate = estimateRate(estimate, estimate.unit || work?.unit);
       item.append(node('div', 'pharos-sub pharos-activity-basis', [rate, estimate.basis].filter(Boolean).join(' · ')));
     }
     if (work?.next) item.append(node('div', 'pharos-sub pharos-next', `After this: ${work.next}`));
@@ -367,14 +384,20 @@
     return headerSync;
   }
 
+  // Index changes is busy while the live drive activity has a capture or
+  // index, an incremental run is running (sync.js), this page awaits a
+  // capture or index it started, or an upgrade runs. Source snapshots stop
+  // refreshing outside Settings, so they are not consulted: a cached run
+  // cannot keep the header spinning after the drive panel reports that it
+  // finished.
+  const headerBusy = ({activities, incremental, local, upgrading}) => Boolean(local)
+    || Boolean(activities?.some(activity => ['capture', 'capture-other', 'sync', 'index'].includes(activity.kind)))
+    || Boolean(incremental) || Boolean(upgrading);
+
   function renderHeaderAction() {
     const action = ensureHeaderAction();
-    const active = status?.activities?.some(activity => ['capture', 'capture-other', 'sync', 'index'].includes(activity.kind));
-    const incremental = Boolean(window.pharosSync?.isBusy());
-    // Source snapshots stop refreshing outside Settings. Use the live drive
-    // activity and locally awaited operations so a cached run cannot keep
-    // the header spinning after the drive panel reports that it finished.
-    const busy = headerCaptureIndexRunning || Boolean(hostsBusy) || Boolean(active) || incremental || Boolean(upgradeStatus?.running);
+    const busy = headerBusy({activities: status?.activities, incremental: window.pharosSync?.isBusy(),
+      local: headerCaptureIndexRunning || hostsBusy, upgrading: upgradeStatus?.running});
     if (action) {
       action.disabled = busy;
       action.setAttribute('aria-busy', String(busy));
@@ -393,23 +416,29 @@
     if (index) index.disabled = busy || !(hostsData?.index.hosts || []).some(host => (host.sources || []).some(source => source.needs_index));
   }
 
-  function libraryUpdate(activities) {
-    const recent = recentIndex?.state === 'complete' && Date.now() - new Date(recentIndex.completed_at).getTime() < 300_000;
+  // The running activities that make up a library update, shown together:
+  // captures and indexes, a library upgrade (with its Tools ledger step), and
+  // the Git lookup and findings update that follow an index completed in the
+  // last five minutes. Other work, such as standalone maintenance, stays
+  // separate. A capture, else an index, else the first gives the label and
+  // progress. Null when nothing is updating. The last index run and upgrade
+  // status default to this page's.
+  function libraryUpdate(activities, {lastIndex = recentIndex, upgradeState = upgradeStatus, now = Date.now()} = {}) {
+    const recent = lastIndex?.state === 'complete' && now - new Date(lastIndex.completed_at).getTime() < 300_000;
     const indexFollowUp = recent && activities.find(activity => activity.kind === 'git'
       && activity.detail?.includes('after the last index')
-      && new Date(activity.started_at).getTime() >= new Date(recentIndex.started_at).getTime());
+      && new Date(activity.started_at).getTime() >= new Date(lastIndex.started_at).getTime());
     const updating = activities.filter(activity => ['capture', 'sync', 'index'].includes(activity.kind)
       || activity.label === 'Upgrading the library'
-      || (upgradeStatus?.running && upgradeStatus.step === 'tools' && activity.label === 'Building the Tools ledger')
+      || (upgradeState?.running && upgradeState.step === 'tools' && activity.label === 'Building the Tools ledger')
       || (indexFollowUp && (activity === indexFollowUp || activity.label === 'Updating findings')));
     if (!updating.length) return null;
     const capturing = updating.find(activity => activity.kind === 'capture');
     const indexing = updating.find(activity => activity.kind === 'sync' || activity.kind === 'index');
-    const upgrade = upgradeStatus?.running;
-    const step = upgradeStatus?.steps?.find(item => item.id === upgradeStatus.step);
+    const upgrade = upgradeState?.running;
+    const step = upgradeState?.steps?.find(item => item.id === upgradeState.step);
     const primary = capturing || indexing || updating[0];
-    const measure = primary.work?.size?.total > 0 ? primary.work.size : primary.work;
-    const progress = measure ? (measure.total > 0 ? measure.done / measure.total : null) : primary.progress;
+    const progress = activityProgress(primary);
     // Index changes says which step it is on ("Indexing changes: checking for changes").
     const changesStep = indexing?.automatic && indexing.label?.replace(/^Indexing changes: (.)/, (_, first) => first.toUpperCase());
     const label = primary.work?.phase ? primary.work.phase.replace(/^./, letter => letter.toUpperCase()) : capturing ? 'Capturing sources' : indexing ? changesStep || 'Indexing conversations' : upgrade ? (step?.label || 'Upgrading the library') : 'Finishing capture & index';
@@ -1149,7 +1178,9 @@
     if (settingsVisible()) refreshSettings();
   }
 
-  window.pharosLibrary = {refresh: refreshStatus, status: () => status, runs, refreshSettings, refreshSyncControls: renderSyncControls, renderAlerts: () => { renderChip(); renderPanel(); }, onStatus: listener => listeners.add(listener), toggleActivityPanel: () => (panel && panelMode === 'activity' ? closePanel() : openPanel('activity'))};
+  window.pharosLibrary = {refresh: refreshStatus, status: () => status, runs, refreshSettings, refreshSyncControls: renderSyncControls, renderAlerts: () => { renderChip(); renderPanel(); }, onStatus: listener => listeners.add(listener), toggleActivityPanel: () => (panel && panelMode === 'activity' ? closePanel() : openPanel('activity')),
+    // Pure helpers, for web/tests/unit/page/library.test.mjs.
+    libraryUpdate, activityTiming, activityProgress, estimateRate, workCount, headerBusy};
   const sheet = node('style');
   sheet.textContent = CSS;
   document.head.append(sheet);

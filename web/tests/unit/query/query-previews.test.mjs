@@ -8,13 +8,13 @@ function query(aggregations, extra = {}) { return { ...core.EMPTY_QUERY, aggrega
 function job(id, aggregations, options = {}, extra = {}) { return { id, dataset: "tool_calls", schema: schemas.tool_calls, query: query(aggregations, extra), options }; }
 const response = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const queryCapabilities = { version: 3, profile: execution.profile, groupedRows: true, calendarGrouping: true, computedSourceFilters: true, regex: false, maxRows: 10000, maxGroups: 10000, maxPopulation: 250000 };
-function serverQuery(request, population = rows) {
+function serverQuery(request, population = rows, source = schemas.tool_calls) {
   const state = { ...core.EMPTY_QUERY, ...request.result, select: request.result.select.map(field => ({ field })), aggregations: request.metrics,
     ...(request.grouping ? { grouping: { ...request.grouping, source: { ...core.EMPTY_QUERY, ...request.source, select: request.source.select.map(field => ({ field })) } } } : {}) };
-  const prepared = state.grouping ? core.prepareGrouping(population, schemas.tool_calls, state.grouping, { now: request.now }) : undefined;
-  const schema = prepared?.schema ?? schemas.tool_calls;
-  const page = core.applyQuery(population, state, schemas.tool_calls, { now: request.now });
-  const metrics = core.evaluateMetrics(population, state, schemas.tool_calls, { now: request.now, shownRows: page.rows });
+  const prepared = state.grouping ? core.prepareGrouping(population, source, state.grouping, { now: request.now }) : undefined;
+  const schema = prepared?.schema ?? source;
+  const page = core.applyQuery(population, state, source, { now: request.now });
+  const metrics = core.evaluateMetrics(population, state, source, { now: request.now, shownRows: page.rows });
   return { version: 3, now: request.now, sourceTotal: prepared?.inputs.length ?? population.length, rows: request.rows ? page.rows : [], total: page.total, metrics: metrics.metrics,
     schema: { name: schema.name, idField: schema.idField, fields: schema.fields.map(({ name, type }) => ({ name, type })) }, execution };
 }
@@ -128,6 +128,35 @@ test("saved local-hour cards keep the catalog's 24 combined clock-hour buckets",
     }
   }
   assert.ok(requests.every(({ path }) => path.endsWith("/rows-v2")), "saved cards must use the clock-hour study instead of dated hourly metrics");
+});
+
+test("relative daily covers chart every local date their window touches, across daylight saving", async t => {
+  const previousTZ = process.env.TZ;
+  process.env.TZ = "America/Denver";
+  t.after(() => { if (previousTZ === undefined) delete process.env.TZ; else process.env.TZ = previousTZ; });
+  // Preview requests take their clock from Date.
+  t.mock.timers.enable({ apis: ["Date"] });
+  const localDate = time => { const date = new Date(time); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`; };
+  const recipe = queryRecipes.find(recipe => recipe.id === "human-words");
+  let population = [];
+  fixture(t, (path, request) => {
+    if (path.includes("/writing_messages/query-v3")) return response(serverQuery(request, population, schemas.writing_messages));
+  });
+  // The second clock's 90-day window starts in daylight time and ends in standard time.
+  for (const now of [Date.parse("2026-10-16T18:00:00Z"), Date.parse("2026-12-15T18:00:00Z")]) {
+    t.mock.timers.setTime(now);
+    clearPreviewCache();
+    population = [{ id: "recent", sent_at: new Date(now - 3 * 86400000).toISOString(), day: localDate(now - 3 * 86400000), typed_words: 10, typed_message: true }];
+    for (const days of [7, 30, 90]) {
+      const item = instantiateRecipe(recipe, days);
+      const preview = await loadQueryPreview(item.dataset, item.query, schemas.writing_messages, { recipe: item, window: item.window });
+      assert.equal(preview.state, "ready");
+      assert.equal(preview.buckets.length, days + 1, `${days}d: the partial first day and today both get a column`);
+      assert.equal(preview.buckets[0].key, localDate(now - days * 86400000));
+      assert.equal(preview.buckets.at(-1).key, localDate(now));
+      assert.equal(new Set(preview.buckets.map(bucket => bucket.key)).size, days + 1, "each local date appears once");
+    }
+  }
 });
 
 test("sparse tool-size cohorts explain their cutoff in calls rather than conversations", async t => {

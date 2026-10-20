@@ -209,8 +209,9 @@ for tool and status. Output token counts are estimates from bytes.
 ## Sharing conversations
 
 `GET /api/share?id=<work>&id=<work>…` (up to 200; `/api/share/work/<id>` for
-one) returns the works as an attachment: the app's own page with its assets
-inlined (including the query-table bundle) and the data embedded as JSON in
+one) returns the works as an attachment: the app's own page with the reader's
+model (`assets/reader-model.js`) and the query-table bundle inlined, its other
+scripts left out, and the data embedded as JSON in
 `#pharosShareData`. When that element exists, `ui.py` sets `SHARE` and answers
 the reader's `/api/work/…` requests (overview, one conversation at a time, and search across a work's conversations) from it, routes between pages with `?page=` and `?work=`
 (a file cannot change its path), and hides the library chrome

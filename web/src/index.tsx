@@ -15,9 +15,10 @@ import { activityPresentation } from "./machine-activity-data";
 import { ChartSelect, PeriodControl, RangeControl, ScaleControl, RollingControl, StackedColumns, chartPeriodCount, chartSpan, pickRange, timeBounds, withTimeRange, usageTime, writingTime, type FilterChange } from "./usage-chart";
 import { applyUsageAggregations } from "./usage-aggregations";
 import { applyUsageTablePreset, usageGroupPresets, usageComparisonPresets, usageTablePresetMatches, type UsageTablePreset } from "./usage-queries";
+import { applyUsagePreset, messageMetricPresets, messagePresets, presetMatches, usageChartPresets, writingMetricPresets, writingPresets, type TokenChartView, type TokenSplit, type UsagePreset } from "./usage-presets";
 import { withComputedCapabilityRefresh } from "./computed-column-store";
 import { chartPeriods, earliestKey, isHourly, localDay, parseDay, periodBuckets, periodKey, periodLabel, validPeriodCount, type ChartPeriod } from "./chart-period";
-import { defaultChartScale, validChartScale, type ChartScale } from "./chart-scale";
+import { defaultChartScale, validChartScale } from "./chart-scale";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { EMPTY_QUERY, exitGrouping, groupSourceQuery, httpComputedColumnStore, inspectBucketQuery, applyAggregations, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, toServerQuery, type ComputedColumnStore, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
@@ -31,6 +32,8 @@ import { HomePage } from "./home";
 import { linkTargets, navigateLink } from "./query-link-targets";
 import { QueryChip } from "./query-card";
 import { readRollingWindow, resolveRollingQuery, rollingQueryMatches } from "./query-links";
+import { mainIntegration, pullRequestLabel, pullRequestURL, pullRequests } from "./pull-requests";
+import { optionLabels } from "./option-labels";
 import { preferences } from "./preferences";
 import { foldSeries, validRollingPeriods, type ChartSeries } from "./chart-series";
 import { isSliceTerm, readSlice, updateSlice, withSlice, type LegendAction, type SliceSelection } from "./chart-selection";
@@ -66,7 +69,6 @@ type MessageView = "table" | "text";
 type TranscriptMessage = { role: string; text: unknown; raw_text?: unknown };
 type TurnSummary = { human: TranscriptMessage | null; response: TranscriptMessage | null };
 type ConversationTurn = { provider: string; conversation: number; turn: number; input: TranscriptMessage | null; response: TranscriptMessage | null };
-type PullRequest = { number: number; title?: string | null; url?: string | null; host?: string | null };
 // Messages render with the conversation view's own renderer (ui.py), so XML
 // chips, Markdown, and Show more behave the same in both places.
 function ResultMessage({ label, message, kind }: { label: string; message: TranscriptMessage; kind: "human" | "assistant" }) {
@@ -82,30 +84,11 @@ function ResultMessage({ label, message, kind }: { label: string; message: Trans
   </div>;
 }
 
-function githubPullURL(remote: unknown, number: number): string {
-  const match = String(remote ?? "").match(/github\.com(?::|\/)([^/\s]+\/[^/\s]+?)(?:\.git)?$/i);
-  return match ? `https://github.com/${match[1]}/pull/${number}` : "";
-}
-
-function pullRequests(row: Row): PullRequest[] {
-  try {
-    const details = typeof row.pr_details === "string" ? JSON.parse(row.pr_details) : row.pr_details;
-    return Array.isArray(details) ? details.filter(pr => Number.isInteger(pr?.number) && pr.number > 0) : [];
-  } catch { return []; }
-}
-
-function pullRequestURL(pr: PullRequest, remote: unknown): string {
-  const url = pr.url || (pr.host === "github.com" ? githubPullURL(remote, pr.number) : "");
-  return /^https?:\/\//i.test(url ?? "") ? String(url) : "";
-}
-
-function mainIntegration(row: Row): React.ReactNode {
-  if (!row.main_merge_commit) return "";
-  const prefix = row.main_merge_method === "merge" ? "Merged" : "On main";
-  const label = `${prefix}: ${row.main_merge_title || String(row.main_merge_commit).slice(0, 12)}`;
-  const url = /^https:\/\/github\.com\//i.test(String(row.main_merge_url ?? "")) ? String(row.main_merge_url) : "";
-  return url ? <a className="qt-pr-link" href={url} target="_blank" rel="noopener noreferrer" title={String(row.main_merge_commit)} onClick={event => event.stopPropagation()}>{label}</a>
-    : <span title={String(row.main_merge_commit)}>{label}</span>;
+function mainIntegrationLink(row: Row): React.ReactNode {
+  const merge = mainIntegration(row);
+  if (!merge) return "";
+  return merge.url ? <a className="qt-pr-link" href={merge.url} target="_blank" rel="noopener noreferrer" title={merge.commit} onClick={event => event.stopPropagation()}>{merge.label}</a>
+    : <span title={merge.commit}>{merge.label}</span>;
 }
 
 function formatUSD(amount: number): string {
@@ -320,7 +303,7 @@ const renderers: RenderRegistry<Row> = {
     const prs = pullRequests(row);
     if (!prs.length) return String(value ?? "");
     return <span className="qt-pr-list">{prs.map((pr, index) => {
-      const label = pr.title?.trim() ? `${pr.title.trim()} · #${pr.number}` : `PR #${pr.number}`;
+      const label = pullRequestLabel(pr);
       const url = pullRequestURL(pr, row.canonical_remote);
       return url ? <a key={`${pr.host}:${pr.number}:${index}`} className="qt-pr-link" href={url} target="_blank" rel="noopener noreferrer" title={label} onClick={event => event.stopPropagation()}>{label}</a>
         : <span key={`${pr.host}:${pr.number}:${index}`} title={label}>{label}</span>;
@@ -336,7 +319,7 @@ const renderers: RenderRegistry<Row> = {
       void openConversation(id);
     }}>{id}</a>;
   },
-  main_integration({ row }: CellContext<Row>) { return mainIntegration(row); },
+  main_integration({ row }: CellContext<Row>) { return mainIntegrationLink(row); },
   run_state({ value }: CellContext<Row>) {
     const state = String(value ?? "unknown");
     return <span className={`qt-state-pill ${state}`}>{state}</span>;
@@ -360,18 +343,6 @@ const renderers: RenderRegistry<Row> = {
 // Filter chips, pickers, and cell quick filters show each value's schema label
 // and, for status fields, the badge its cells use. Queries and URLs keep the
 // raw value.
-function optionLabels(fields: FieldSchema<Row>["fields"]): Map<string, Map<string, string>> {
-  const labels = new Map<string, Map<string, string>>();
-  for (const field of fields) {
-    const values = field.filter?.values;
-    if (values?.source !== "static") continue;
-    const options = new Map<string, string>();
-    for (const option of values.options) if (typeof option !== "string") options.set(option.value, option.label);
-    if (options.size) labels.set(field.name, options);
-  }
-  return labels;
-}
-
 const statusBadges: Record<string, (value: string, label: string) => React.ReactNode> = {
   run_state: (value, label) => <span className={`qt-state-pill ${value}`}>{label}</span>,
   mcp_status: (value, label) => <span className={`mcp-call-state ${value}`}>{label}</span>,
@@ -707,11 +678,11 @@ function ConversationResultCard({ row }: { row: Row }) {
           <span className="conversation-result-count conversation-result-cost" title="API list-price equivalent cost">{usdCost(row.cost_usd, row)} API cost</span>
           {prs.map((pr, index) => {
             const url = pullRequestURL(pr, row.canonical_remote);
-            const label = pr.title?.trim() ? `${pr.title.trim()} · #${pr.number}` : `PR #${pr.number}`;
+            const label = pullRequestLabel(pr);
             return url ? <a key={`${pr.host}:${pr.number}:${index}`} className="conversation-result-count conversation-result-pr" href={url} target="_blank" rel="noopener noreferrer" title={pr.title || label}>{label}</a>
               : <span key={`${pr.host}:${pr.number}:${index}`} className="conversation-result-count" title={pr.title || label}>{label}</span>;
           })}
-          {row.main_merge_commit ? <span className="conversation-result-count conversation-result-pr">{mainIntegration(row)}</span> : null}
+          {row.main_merge_commit ? <span className="conversation-result-count conversation-result-pr">{mainIntegrationLink(row)}</span> : null}
         </div>
       </div>
       <div className="conversation-result-actions">
@@ -888,47 +859,7 @@ function LibraryPage() {
   </div>;
 }
 
-type TokenSplit = "type" | "provider" | "model_family" | "model_effort" | "effort" | "repository_name" | "session_kind";
-type TokenChartView = { metric: "tokens" | "cost" | "percent" | "percent_cost"; split: TokenSplit; period: ChartPeriod; hours: number; days: number; rollingPeriods: number; scale: ChartScale };
-// Chart shortcuts and the writing page's metric/sort shortcuts.
-type UsagePreset = { label: string; title: string; aggregations?: AggregationClause[]; chart?: Partial<TokenChartView>; orderBy?: OrderByClause[] };
 const sum = (field: string, groupBy: string[], label: string): AggregationClause => ({ id: `${field}:${groupBy.join(",")}`, op: "sum", field, groupBy, label });
-const usageChartPresets: UsagePreset[] = [
-  { label: "Daily by provider", title: "Chart total tokens per day, split by provider", chart: { metric: "tokens", split: "provider", period: "day" } },
-  { label: "Weekly cache mix", title: "Chart uncached input, cache reads, cache writes, and output per week", chart: { metric: "tokens", split: "type", period: "week" } },
-  { label: "Daily cost", title: "Chart API-equivalent cost per day, split by provider", chart: { metric: "cost", split: "provider", period: "day" } },
-  { label: "Model + effort", title: "Chart tokens for each recorded model and effort pair", chart: { metric: "tokens", split: "model_effort", period: "week" } },
-  { label: "Subagents", title: "Chart root agent versus subagent tokens per week", chart: { metric: "tokens", split: "session_kind", period: "week" } },
-  { label: "Subagent cost", title: "Chart root agent versus subagent cost per week", chart: { metric: "cost", split: "session_kind", period: "week" } },
-];
-
-const byDesc = (field: string): OrderByClause[] => [{ field, dir: "desc" }];
-const writingPresets: UsagePreset[] = [
-  { label: "Deepest conversations", title: "Conversations with the most words you typed", orderBy: byDesc("typed_words") },
-  { label: "Most hands-on", title: "Conversations with the most messages you typed into", orderBy: byDesc("typed_turns") },
-  { label: "Longest messages", title: "Conversations holding your longest single typed message", orderBy: byDesc("longest_typed_words") },
-  { label: "Most pasted-in", title: "Conversations with the most text that looks pasted", orderBy: byDesc("pasted_words") },
-  { label: "Most copied from agents", title: "Conversations with the most agent output or earlier messages copied in", orderBy: byDesc("copied_words") },
-];
-const writingMetricPresets: UsagePreset[] = [
-  { label: "By repository", title: "Typed and pasted words by repository", aggregations: [sum("typed_words", ["repository_name"], "Typed words by repository"), sum("pasted_words", ["repository_name"], "Likely pasted words by repository")] },
-  { label: "By provider", title: "Typed words and tokens by provider", aggregations: [sum("typed_words", ["providers"], "Typed words by provider"), sum("total_tokens", ["providers"], "Tokens by provider")] },
-  { label: "By source", title: "Typed words by source app", aggregations: [sum("typed_words", ["source_kind"], "Typed words by source")] },
-];
-
-const byAsc = (field: string): OrderByClause[] => [{ field, dir: "asc" }];
-const messagePresets: UsagePreset[] = [
-  { label: "Newest", title: "Most recent messages first", orderBy: byDesc("sent_at") },
-  { label: "Longest typed", title: "Messages with the most words you typed", orderBy: byDesc("typed_words") },
-  { label: "Most pasted", title: "Messages with the most text that looks pasted", orderBy: byDesc("pasted_words") },
-  { label: "Most copied", title: "Messages with the most agent output or earlier messages copied in", orderBy: byDesc("copied_words") },
-  { label: "Least typed", title: "Messages whose text is least your own", orderBy: [...byAsc("typed_share"), ...byDesc("words")] },
-];
-const messageMetricPresets: UsagePreset[] = [
-  { label: "By category", title: "Messages by the category holding most of their words", aggregations: [{ id: "messages:main_category", op: "count", groupBy: ["main_category"], label: "Messages by main category" }, sum("other_words", ["main_category"], "Words from elsewhere by main category")] },
-  { label: "Per week", title: "Typed and pasted words per week", aggregations: [sum("typed_words", ["week"], "Typed words per week"), sum("pasted_words", ["week"], "Likely pasted words per week")] },
-  { label: "By repository", title: "Typed words and messages by repository", aggregations: [sum("typed_words", ["repository_name"], "Typed words by repository"), sum("message_count", ["repository_name"], "Messages by repository")] },
-];
 
 type PricingModel = { model: string; provider: string; tokens: number; first_day: string; last_day: string };
 type PricingStatus = { prompt: string; unpriced_models: PricingModel[]; unpriced_tokens: number; confirmed_changes: number; proposed_changes: number };
@@ -1160,19 +1091,6 @@ function TokenChart({ where, onFilter, onTimeFilter = onFilter, view, onChange }
     tickFormat={percent ? value => `${value}%` : cost ? costTick : compactNumber}
     noun={view.metric === "tokens" ? "tokens" : ""} loading={result.loading} error={result.error} legend={series.length > 0} percent={percent}
     selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => setSeriesLimit(limit => limit + 5)} onRange={pickRange(onTimeFilter, usageTime, view.period, periodCount, period => onChange({ period }))} />;
-}
-
-// Compare what each preset controls. Filters, paging, and unrelated settings
-// can change while its sort, metrics, or chart still match.
-function presetMatches(preset: UsagePreset, query: QueryTableApi<Row>["query"], chart?: TokenChartView): boolean {
-  if (preset.chart) return Boolean(chart && Object.entries(preset.chart).every(([key, value]) => chart[key as keyof TokenChartView] === value));
-  if (preset.orderBy) return query.orderBy.length === preset.orderBy.length && preset.orderBy.every((clause, index) => {
-    const current = query.orderBy[index];
-    return current.field === clause.field && current.dir === clause.dir && (current.nulls ?? "last") === (clause.nulls ?? "last") && current.extract?.regex === clause.extract?.regex;
-  });
-  // IDs and presentation choices do not change the metric being calculated.
-  const metricToken = (aggregations: AggregationClause[]) => encodeQuery({ ...EMPTY_QUERY, aggregations: aggregations.map(({ id, label, display, layout, diagnostics, ...clause }, index) => ({ ...clause, id: String(index) })) });
-  return Boolean(preset.aggregations && metricToken(query.aggregations ?? []) === metricToken(preset.aggregations));
 }
 
 function PresetRow({ label, presets, query, chart, onApply, clear }: { label: string; presets: UsagePreset[]; query: QueryTableApi<Row>["query"]; chart?: TokenChartView; onApply: (preset: UsagePreset | null) => void; clear?: boolean }) {
@@ -1448,7 +1366,7 @@ function WritingUsage({ onStatus }: { onStatus: (status: AuthorshipStatus | null
     chooseRows("messages");
   }
   function apply(dataset: Dataset, preset: UsagePreset | null) {
-    tableApis.get(dataset)?.setQuery(previous => ({ ...previous, ...(preset?.orderBy ? { orderBy: preset.orderBy } : { aggregations: preset?.aggregations ?? [] }), offset: 0 }));
+    tableApis.get(dataset)?.setQuery(previous => applyUsagePreset(previous, preset));
   }
   const toggle = <div className="writing-rows-bar">
     <Segmented label="List" value={rows} options={[["conversations", "Conversations"], ["messages", "Messages"]]} onChange={chooseRows} />

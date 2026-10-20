@@ -17,8 +17,9 @@ import (
 // Find searches only the kinds shown. Workspace find counts matches in other
 // conversations the same way, so this file mirrors the reader's
 // normalizeMessages, transcriptStructure, transcriptCategory, and
-// findableText (internal/archive/assets/ui.py). tests/transcript-find-fixtures.json
-// holds cases both implementations must agree on.
+// findableText (internal/archive/assets/reader-model.js).
+// testdata/transcript-find-fixtures.json holds cases both implementations must
+// agree on.
 var transcriptKinds = []string{"prompts", "response", "replies", "thinking", "edits", "commands", "reads", "tools", "agents", "events", "usage"}
 
 // transcriptEvent is one event as the reader shows it: a stored message, or

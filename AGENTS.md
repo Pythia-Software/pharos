@@ -2,9 +2,10 @@
 
 Pharos is a Go service (`internal/archive`, one package) with an embedded web
 UI. The page shell and its scripts live in `internal/archive/assets/`
-(`ui.py` holds the HTML; `library.js`, `sync.js`, `carbon.js` and others sit
-beside it). The Query Table frontend is TypeScript in `web/src`, bundled into
-the checked-in `internal/archive/assets/query-tables.{js,css}`. See
+(`ui.py` holds the HTML and its inline script; `reader-model.js` holds the
+conversation reader's DOM-free model; `library.js`, `sync.js`, `carbon.js` and
+others sit beside it). The Query Table frontend is TypeScript in `web/src`,
+bundled into the checked-in `internal/archive/assets/query-tables.{js,css}`. See
 [docs/technical-overview.md](docs/technical-overview.md) for the architecture.
 
 ## Running tests
@@ -32,7 +33,10 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
   into a gitignored `web/.test-build/` and runs them with `node --test`;
   invoke tests through it, since the source files cannot be run by
   `node --test` directly. Cross-language fixtures that Go also reads live in
-  `testdata/`.
+  `testdata/`. Tests of the page's classic scripts (`reader-model.js`,
+  `carbon.js`, `sync.js`, `library.js`) load them with
+  `helpers/classic-script.mjs`, so keep their logic in functions those
+  scripts expose rather than in DOM code.
 
 - **Browser tests:** they need Playwright installed once per workspace:
   `npm install --prefix .context/browser-tests playwright --no-audit --no-fund`.

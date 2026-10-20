@@ -249,9 +249,9 @@ func clipReaderMessage(message map[string]any) {
 
 // readerReinterprets reports whether the reader's normalizeMessages turns
 // this body into prose or a tool call, which must arrive whole. It mirrors
-// normalizeMessages in ui.py: provider envelopes with text/tool blocks (split
-// for every kind but results and errors), and Codex function calls,
-// messages, and todo lists.
+// normalizeMessages in reader-model.js: provider envelopes with text/tool
+// blocks (split for every kind but results and errors), and Codex function
+// calls, messages, and todo lists.
 func readerReinterprets(kind string, value any) bool {
 	if object, ok := value.(map[string]any); ok {
 		if payload, ok := object["payload"].(map[string]any); ok {
