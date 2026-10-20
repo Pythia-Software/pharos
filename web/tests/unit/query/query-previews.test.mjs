@@ -479,3 +479,12 @@ test("grouped cards with link columns execute without sending the links", async 
   const measured = await loadQueryPreview("tool_calls", { ...grouped, aggregations: [{ id: "total", op: "sum", field: "calls", groupBy: [] }] }, schemas.tool_calls);
   assert.equal(measured.total, 10);
 });
+
+test("parallel hours by day headline is the share of active hours with several agents", async t => {
+  const population = [["2026-10-19", "1", 6], ["2026-10-19", "2", 2], ["2026-10-20", "3", 1], ["2026-10-20", "4+", 1]].map(([day, level_band, elapsed_hours], i) => ({ id: String(i), day, level_band, elapsed_hours }));
+  fixture(t, (path, request) => path.endsWith("/metrics") ? response(core.evaluateMetrics(population, query(request.metrics, request), schemas.parallelism)) : undefined);
+  const recipe = queryRecipes.find(recipe => recipe.id === "parallel-days");
+  const preview = await loadQueryPreview("parallelism", query(recipe.measures), schemas.parallelism, { recipe });
+  assert.equal(preview.headlineMetric.value, "40%");
+  assert.match(preview.headlineMetric.label, /2\+ agents/);
+});

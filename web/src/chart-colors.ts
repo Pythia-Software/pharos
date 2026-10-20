@@ -72,6 +72,12 @@ export function chartSeriesStyle(scope: string, name: string): SeriesStyle {
     const index = levels.indexOf(name.toLowerCase());
     return { color: index < 0 ? otherSeriesColor : colors[index], order: `${index < 0 ? 99 : index}:${name}` };
   }
+  if (scope === "level_band") {
+    // Agents active at once, named by their displayed label ("2 at once"). The busiest band is the
+    // bottom of each stack and the reddest, so colour and height both rise with concurrency.
+    const level = Number.parseInt(name, 10), colors = ["#f7b77e", "#ee8272", "#e0668f", "#d6403a"];
+    return Number.isInteger(level) && level >= 1 && level <= 4 ? { color: colors[level - 1], order: String(5 - level) } : { color: otherSeriesColor, order: "9" };
+  }
   if (scope === "model_family") {
     const key = modelColorKey(name), model = Object.hasOwn(models, key) ? models[key] : undefined, provider = model?.provider ?? modelProvider(key);
     const modelClass = model?.class ?? (/codex/.test(key) ? "Codex" : /gemini.*flash/.test(key) ? "Flash" : /gemini.*pro/.test(key) ? "Pro" : key.split(/[-.]/)[0]);
