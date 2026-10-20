@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -128,6 +130,7 @@ func TestNativeMetricsMatchTheAdapter(t *testing.T) {
 		"an unsafe sum":      {ID: "x", Op: "sum", Field: "huge"},
 		"negative values":    {ID: "x", Op: "sum", Field: "signed", GroupBy: []string{"kind"}},
 		"a text count":       {ID: "x", Op: "count", Field: "kind"},
+		"a distinct count":   {ID: "x", Op: "count_distinct", Field: "kind"},
 		"an average":         {ID: "x", Op: "avg", Field: "n"},
 		"an expression":      {ID: "x", Expression: "SUM([n])"},
 		"a number key":       {ID: "x", Op: "count", GroupBy: []string{"n"}},
@@ -154,59 +157,6 @@ func TestNativeMetricsMatchTheAdapter(t *testing.T) {
 	if _, handled, err := native(d, filtered); handled || err != nil {
 		t.Error("a computed filter must reach the adapter", err)
 	}
-	// Usage rows in memory: the same answers, and the same refusals.
-	rows := []map[string]any{}
-	if err := func() error {
-		result, err := db.Query("SELECT id,kind,side,n,m,share,huge,signed FROM facts")
-		if err != nil {
-			return err
-		}
-		defer result.Close()
-		for result.Next() {
-			var id string
-			var kind, side, n, m, share, huge, signed any
-			if err := result.Scan(&id, &kind, &side, &n, &m, &share, &huge, &signed); err != nil {
-				return err
-			}
-			rows = append(rows, map[string]any{"id": id, "kind": kind, "side": side, "n": n, "m": m, "share": share, "huge": huge, "signed": signed})
-		}
-		return result.Err()
-	}(); err != nil {
-		t.Fatal(err)
-	}
-	inMemory := func(q qt.MetricQuery, rows []map[string]any) (qt.SQLiteV2ExecutionResult, bool, error) {
-		t.Helper()
-		tx, err := db.BeginTx(ctx, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer tx.Rollback()
-		return nativeRowMetricsV2(ctx, tx, d, q, qt.PlanOptions{}, rows)
-	}
-	for _, groups := range [][]string{{}, {"kind"}, {"kind", "side"}} {
-		q := metricRequest(qt.AggSpec{ID: "rows", Op: "count", GroupBy: groups}, qt.AggSpec{ID: "valued", Op: "count", Field: "n", GroupBy: groups}, qt.AggSpec{ID: "n", Op: "sum", Field: "n", GroupBy: groups})
-		for _, population := range [][]map[string]any{rows, {}} {
-			got, handled, err := inMemory(q, population)
-			staged := d
-			if len(population) == 0 {
-				staged.SourceSQL += " WHERE 0"
-			}
-			want, wantErr := staged.ExecuteV2(ctx, db, nil, &q, qt.PlanOptions{})
-			if err != nil || wantErr != nil || !handled || !identical(got, want) {
-				left, _ := json.Marshal(got)
-				right, _ := json.Marshal(want)
-				t.Fatalf("in memory %v over %d rows: %v %v\n got %s\nwant %s", groups, len(population), err, wantErr, left, right)
-			}
-		}
-	}
-	// In memory, reals and negatives are added exactly (see
-	// TestNativeSumsMatchTheAdapterExactly); an unsafe total still falls through.
-	if _, handled, err := inMemory(metricRequest(qt.AggSpec{ID: "x", Op: "sum", Field: "huge"}), rows); handled || err != nil {
-		t.Errorf("in memory, an unsafe sum: answered natively (%v)", err)
-	}
-	if _, handled, _ := inMemory(filtered, rows); handled {
-		t.Error("rows in memory cannot apply a filter")
-	}
 }
 
 // identical compares results exactly: two floats match only if they are the
@@ -217,12 +167,12 @@ func identical(left, right any) bool {
 	return string(a) == string(b)
 }
 
-// Usage's sums of other numbers and its distinct counts, in memory, must give
-// the adapter's values exactly: it adds the decimals the values spell and
-// rounds once, which naive float64 addition does not. Each case is compared
-// with the adapter over a staged copy of the same rows, as the Usage path
-// would stage them.
-func TestNativeSumsMatchTheAdapterExactly(t *testing.T) {
+// Usage's metrics over its rows in memory, filtered or not, must give the
+// adapter's answers over a staged copy of the same rows, as the Usage path
+// would stage them: sums of decimals added exactly and rounded once, which
+// naive float64 addition does not, distinct counts, NULLs and empty strings,
+// and the adapter's errors.
+func TestUsageRowMetricsMatchTheStagedAdapter(t *testing.T) {
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "exact.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -241,39 +191,46 @@ func TestNativeSumsMatchTheAdapterExactly(t *testing.T) {
 	}
 	d := qt.SQLiteV2Dataset{Schema: schema, Scope: "local", Dataset: "usage_like"}
 	ctx := context.Background()
+	// Each population is compared unfiltered and under filters on NULL, empty
+	// and text values, numbers, OR and negation.
+	filters := [][]qt.WhereTerm{nil, {{Field: "kind", Op: "=", Value: "a"}}, {{Field: "kind", Op: "is_null"}}, {{Field: "session", Op: "contains", Value: "nil"}},
+		{{Field: "session", Op: "!=", Value: "x"}}, {{Field: "cost", Op: ">", Value: "0.2"}}, {{Field: "kind", Op: "=", Value: "b", Negated: true}},
+		{{Any: []qt.WhereClause{{Field: "kind", Op: "=", Value: "c"}, {Field: "session", Op: "is_null"}}}}}
 	compare := func(name string, rows []map[string]any, specs ...qt.AggSpec) (qt.SQLiteV2ExecutionResult, bool) {
 		t.Helper()
-		tx, release, err := beginQueryV2(ctx, db)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer release()
-		q := metricRequest(specs...)
-		got, handled, err := nativeRowMetricsV2(ctx, tx, d, q, qt.PlanOptions{}, rows)
-		if err != nil {
-			t.Fatal(name, err)
-		}
-		staged := d
-		if staged.SourceSQL, err = stageQueryRows(ctx, tx, "exact_rows", rows, schema, []string{"cost", "id", "kind", "session"}); err != nil {
-			t.Fatal(err)
-		}
-		want, err := staged.ExecuteV2In(ctx, tx, nil, &q, qt.PlanOptions{})
-		if err != nil {
-			t.Fatal(name, err)
-		}
-		for _, metric := range want.Metrics.Metrics {
-			for _, bucket := range metric.Buckets {
-				if handled && (metric.Error != "" || bucket.Error != "") {
-					t.Fatalf("%s: answered natively where the adapter reports %q%q", name, metric.Error, bucket.Error)
-				}
+		var unfiltered qt.SQLiteV2ExecutionResult
+		answered := true
+		for _, where := range filters {
+			tx, release, err := beginQueryV2(ctx, db)
+			if err != nil {
+				t.Fatal(err)
 			}
+			q := metricRequest(specs...)
+			q.Where = where
+			got, handled, err := usageRowMetricsV2(ctx, tx, d, q, qt.PlanOptions{}, rows)
+			if err != nil {
+				t.Fatal(name, where, err)
+			}
+			staged := d
+			if staged.SourceSQL, err = stageQueryRows(ctx, tx, "exact_rows", rows, schema, []string{"cost", "id", "kind", "session"}); err != nil {
+				t.Fatal(err)
+			}
+			want, err := staged.ExecuteV2In(ctx, tx, nil, &q, qt.PlanOptions{})
+			release()
+			if err != nil {
+				t.Fatal(name, where, err)
+			}
+			if handled && !identical(got, want) {
+				left, _ := json.Marshal(got)
+				right, _ := json.Marshal(want)
+				t.Fatalf("%s %v:\n got %s\nwant %s", name, where, left, right)
+			}
+			if where == nil {
+				unfiltered = want
+			}
+			answered = answered && handled
 		}
-		if handled && !identical(got, want) {
-			left, _ := json.Marshal(got)
-			right, _ := json.Marshal(want)
-			t.Fatalf("%s:\n got %s\nwant %s", name, left, right)
-		}
-		return want, handled
+		return unfiltered, answered
 	}
 	row := func(i int, kind, session, cost any) map[string]any {
 		return map[string]any{"id": fmt.Sprint("r", i), "kind": kind, "session": session, "cost": cost}
@@ -313,7 +270,8 @@ func TestNativeSumsMatchTheAdapterExactly(t *testing.T) {
 	if _, handled := compare("no rows", nil, byKind...); !handled {
 		t.Fatal("no rows fell through")
 	}
-	// Where the adapter reports an error, the native path leaves the answer to it.
+	// Where the adapter reports an error, the answer is the adapter's, from
+	// memory or staged.
 	for name, rows := range map[string][]map[string]any{
 		"an absolute total beyond safe integers": {row(0, "a", "s", 4503599627370495.5), row(1, "a", "s", 4503599627370495.5), row(2, "a", "s", 0.5)},
 		"a value out of range":                   {row(0, "a", "s", 1e-301)},
@@ -321,8 +279,32 @@ func TestNativeSumsMatchTheAdapterExactly(t *testing.T) {
 		"text in a number field":                 {row(0, "a", "s", "1.5")},
 		"a number in a text field":               {row(0, "a", int64(3), 1.5)},
 	} {
-		if _, handled := compare(name, rows, byKind...); handled {
-			t.Errorf("%s: answered natively", name)
+		compare(name, rows, byKind...)
+	}
+}
+
+// Usage's rows hold only values Query Table's in-memory executor reads, so
+// that its metrics are not staged for want of a type it does not take.
+func TestUsageRowsHoldValuesTheExecutorReads(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	ingestUsageFixture(t, catalog)
+	schema := PharosUsageSchema()
+	columns := slices.Sorted(maps.Keys(schema.Fields))
+	ctx := context.Background()
+	for name, read := range map[string]func() ([]map[string]any, error){
+		"daily":               func() ([]map[string]any, error) { return catalog.localUsageBaseRows(ctx, false) },
+		"hourly":              func() ([]map[string]any, error) { return catalog.localUsageBaseRows(ctx, true) },
+		"daily with lineage":  func() ([]map[string]any, error) { return catalog.localUsageRows(ctx) },
+		"hourly with lineage": func() ([]map[string]any, error) { return catalog.localUsageHourlyRows(ctx) },
+	} {
+		rows, err := read()
+		if err != nil || len(rows) == 0 {
+			t.Fatalf("%s: %d rows, %v", name, len(rows), err)
+		}
+		for _, row := range rows {
+			if _, err := qt.SQLiteRowValues(row, schema, columns); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
 		}
 	}
 }
@@ -364,10 +346,12 @@ func TestNativeMetricsMatchTheAdapterOnPharosDatasets(t *testing.T) {
 	}
 	types := []string{"uncached_input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens", "unclassified_tokens"}
 	filtered := func(q qt.MetricQuery, where ...qt.WhereTerm) qt.MetricQuery { q.Where = where; return q }
+	summary := sums([]string{"total_tokens", "cost_usd", "uncached_input_tokens", "cache_read_input_tokens", "output_tokens"})
+	summary.Metrics = append(summary.Metrics, qt.AggSpec{ID: "agent_sessions", Op: "count_distinct", Field: "agent_session_id"})
 	for _, sample := range []struct {
 		name, dataset string
 		q             qt.MetricQuery
-		unstaged      bool // answered natively without staging rows
+		unstaged      bool // answered without staging rows
 	}{
 		{"message mix", "writing_messages", mix, true},
 		{"message mix, filtered", "writing_messages", filtered(mix, qt.WhereTerm{Field: "provider", Op: "=", Value: "codex"}), true},
@@ -377,10 +361,17 @@ func TestNativeMetricsMatchTheAdapterOnPharosDatasets(t *testing.T) {
 		{"hourly tokens by model", "usage", sums([]string{"total_tokens"}, "hour", "model_family"), true},
 		{"hourly tokens in one hour", "usage", filtered(sums([]string{"total_tokens"}, "hour"), qt.WhereTerm{Field: "hour", Op: "=", Value: "2026-09-21T03:00:00Z"}), true},
 		{"weekly tokens by repository", "usage", sums([]string{"total_tokens"}, "week", "repository_name"), true},
-		// A daily filter is applied to staged rows, by the native statement.
-		{"weekly tokens over a threshold", "usage", filtered(sums([]string{"total_tokens"}, "week"), qt.WhereTerm{Field: "total_tokens", Op: ">", Value: "1500"}), false},
+		{"token summary", "usage", summary, true},
+		// Daily filters are applied in memory too.
+		{"token summary, one provider", "usage", filtered(summary, qt.WhereTerm{Field: "provider", Op: "=", Value: "codex"}), true},
+		{"weekly tokens over a threshold", "usage", filtered(sums([]string{"total_tokens"}, "week"), qt.WhereTerm{Field: "total_tokens", Op: ">", Value: "1500"}), true},
+		{"daily cost by provider since a time", "usage", filtered(sums([]string{"cost_usd"}, "day", "provider"), qt.WhereTerm{Field: "first_usage_at", Op: ">=", Value: "2026-09-21T00:00:00Z"}), true},
+		{"weekly cost by model, no repository", "usage", filtered(sums([]string{"cost_usd"}, "week", "model"), qt.WhereTerm{Field: "repository_name", Op: "is_null"}), true},
 		// Hourly rows are selected before, as the adapter's are.
 		{"hourly tokens over a threshold", "usage", filtered(sums([]string{"total_tokens"}, "hour"), qt.WhereTerm{Field: "total_tokens", Op: ">", Value: "1500"}), true},
+		{"hourly cost by provider, one model", "usage", filtered(sums([]string{"cost_usd"}, "hour", "provider"), qt.WhereTerm{Field: "model", Op: "!=", Value: "absent"}), true},
+		// A formula is staged.
+		{"tokens per day", "usage", metricRequest(qt.AggSpec{ID: "per day", Expression: "SUM([total_tokens]) / COUNT()"}), false},
 	} {
 		t.Run(sample.name, func(t *testing.T) {
 			schema, err := sqliteQuerySchema(sample.dataset)
@@ -413,8 +404,7 @@ func TestNativeMetricsMatchTheAdapterOnPharosDatasets(t *testing.T) {
 				if daily, err = server.queryTableRows(context.Background(), sample.dataset, nil, nil); err != nil {
 					t.Fatal(err)
 				}
-				local, _ := server.queryTableSchema("usage")
-				if hours, err = catalog.hourlyUsageForAggregation(context.Background(), sample.q.Where, local); err != nil {
+				if hours, err = catalog.hourlyUsageForAggregation(context.Background(), sample.q.Where); err != nil {
 					t.Fatal(err)
 				}
 			}

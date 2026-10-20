@@ -1,16 +1,32 @@
-# Query Table 0.9.0 in Pharos
+# Query Table 0.9.2 in Pharos
 
-Pharos pins core, React, UI and codegen to the published npm **0.9.0** packages,
-and the Go adapter to **v0.9.0**. The npm lockfile records registry URLs and
-integrities; `go.sum` records the released Go module. A root Go replacement uses
-the matching backend copy with only the [Usage group-budget allowance](../third_party/query-table-go/README.pharos.md).
-Clean builds use these pinned sources without another Query Table checkout.
+Pharos pins core, React, UI and codegen to the published npm **0.9.2** packages,
+and the Go adapter to the published **v0.9.2** module, with no replacement or
+local copy. The npm lockfile records registry URLs and integrities; `go.sum`
+records the released Go module. Clean builds use these pinned sources without
+another Query Table checkout.
 
-The [upstream migration guide](https://github.com/Pythia-Software/query-table/blob/v0.9.0/docs/host-integration-next-release.md)
-and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.9.0/CHANGELOG.md)
+The [upstream migration guide](https://github.com/Pythia-Software/query-table/blob/v0.9.2/docs/host-integration-next-release.md)
+and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.9.2/CHANGELOG.md)
 define the release contract. Optional worktree linking is described in
 [local development](query-table-local-development.md). The earlier
 [next-release handoff](query-table-next-release-handoff.md) is a historical record.
+
+## 0.9.1 and 0.9.2 changes
+
+- **0.9.1** accepts an explicit host group budget up to 100,000 in SQLite V2
+  and V3. Usage opts into it; other datasets keep their budgets. It was the
+  last change Pharos patched locally, so the vendored backend, its Go
+  replacement and its fork test script are gone.
+- **0.9.2** speeds up `ExecuteV2Rows` (typed group keys, decimal sums by
+  scale). Usage answers its metrics with it, filtered or not, and selects its
+  hourly rows with `CompileRowFilter`; see `usageMetricsInMemory` and
+  `selectUsageHours`. On `TestUsagePerformanceFilteredMetrics` (20,000 daily
+  and 60,000 hourly synthetic rows, `-tags probe`) the Token summary takes
+  about 8 ms unfiltered and 3–11 ms filtered, against about 115–200 ms staged.
+  0.9.2's frontend packages also compute `shownRows` metrics from the
+  browser page when a transport lacks them; Pharos advertises native
+  `shownRows`, so its routes are unchanged.
 
 ## 0.9.0 backend changes
 
@@ -18,13 +34,9 @@ The release supplies representative-row reuse, validated staged values and
 error sidecars, fused scalar SQLite V3 summaries, and bounded native projection
 inlining that preserves expensive input evaluation and V2 reduction reuse.
 Pharos no longer carries its implementations of those four optimizations.
-The retained backend differs from v0.9.0 on only two source lines: the accepted
-explicit host group-budget ceiling is 100,000 instead of 10,000 in SQLite V2
-and V3. Usage opts into that allowance; other datasets keep their budgets.
-
-The release also adds `ExecuteV2Rows` for metrics over authorized maps.
-Pharos's native SQL/in-memory metric accelerators remain host code; this
-upgrade does not replace those separate execution paths.
+The release also adds `ExecuteV2Rows` for metrics over authorized maps, which
+replaced Pharos's own in-memory Usage reducer. Pharos's native SQL path for
+plain counts and sums over SQL datasets remains host code.
 
 ## 0.8.0 feature coverage
 
@@ -199,7 +211,8 @@ inputs retain their storage/domain checks. Other datetime bindings normalize
 RFC3339 values.
 
 Map sources retain host enrichment/search and stage one temporary table per
-request. Library stages only referenced selections, filters, ordering, metric
+request; Usage metrics are the exception, answered from its rows in memory
+unless the executor reports a shape unsupported. Library stages only referenced selections, filters, ordering, metric
 inputs and transitive computed inputs, plus its identity field. Population reads
 retain the compact cache and add long text and costs only when referenced;
 unused payloads stay out of staging when an earlier request has widened the
@@ -249,7 +262,7 @@ go test ./internal/archive -run '^$' \
 ```
 
 The upstream `backends/sqlite-tests` real-SQLite suite was also run with the
-race detector and vet against the patched module. Integration coverage includes
+race detector and vet against the module then patched. Integration coverage includes
 typed rows and every bound numeric SUM across the dataset schemas, aggregate/formula
 matrices, paired values, distribution sidecars/shared histogram edges, computed
 graphs/revisions, scope/window/order parity, storage guards, population/group

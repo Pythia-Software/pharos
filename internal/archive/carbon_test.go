@@ -200,18 +200,13 @@ func TestCarbonSeriesFiltersAndHourlyTotals(t *testing.T) {
 }
 
 func TestCarbonSeriesNoRepository(t *testing.T) {
-	catalog, config := testCatalog(t)
+	catalog, _ := testCatalog(t)
 	ingestUsageFixture(t, catalog)
-	server := testServer(t, config, catalog)
-	schema, err := server.queryTableSchema("usage")
-	if err != nil {
-		t.Fatal(err)
-	}
 	var request carbonSeriesRequest
 	if err := json.Unmarshal([]byte(`{"where":[{"field":"repository_name","op":"is_null","value":""}],"split":"repository_name"}`), &request); err != nil {
 		t.Fatal(err)
 	}
-	result, err := catalog.carbonSeries(t.Context(), request, schema)
+	result, err := catalog.carbonSeries(t.Context(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +216,7 @@ func TestCarbonSeriesNoRepository(t *testing.T) {
 }
 
 func TestCarbonSeriesNamesFallbacksAndUnclassifiedTokens(t *testing.T) {
-	catalog, config := testCatalog(t)
+	catalog, _ := testCatalog(t)
 	ingestUsageFixture(t, catalog)
 	if _, err := catalog.DB.Exec(`UPDATE agent_sessions SET model='mystery-model'`); err != nil {
 		t.Fatal(err)
@@ -229,12 +224,7 @@ func TestCarbonSeriesNamesFallbacksAndUnclassifiedTokens(t *testing.T) {
 	if _, err := catalog.DB.Exec(`UPDATE agent_session_usage SET unclassified_tokens=10,total_tokens=total_tokens+10 WHERE output_tokens=30`); err != nil {
 		t.Fatal(err)
 	}
-	server := testServer(t, config, catalog)
-	schema, err := server.queryTableSchema("usage")
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := catalog.carbonSeries(t.Context(), carbonSeriesRequest{}, schema)
+	result, err := catalog.carbonSeries(t.Context(), carbonSeriesRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -174,7 +174,7 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 		if e != nil {
 			return qt.QueryResultV3{}, nil, e
 		}
-		hours, e := s.Catalog.hourlyUsageForAggregation(ctx, resolved, localSchema, required)
+		hours, e := s.Catalog.hourlyUsageForAggregation(ctx, resolved, required)
 		if e != nil {
 			return qt.QueryResultV3{}, nil, e
 		}

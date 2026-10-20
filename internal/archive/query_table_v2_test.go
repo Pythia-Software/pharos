@@ -164,6 +164,8 @@ func TestQueryV2UsageHourly(t *testing.T) {
 		{"timestamp", []qt.WhereTerm{{Field: "first_usage_at", Op: "<", Value: "2026-09-21T02:00:00Z"}}, 2, 2, 1575, 3150, "2026-09-21T01:00:00Z"},
 		{"hour filter", []qt.WhereTerm{{Field: "hour", Op: "=", Value: "2026-09-21T03:00:00Z"}}, 1, 1, 2130, 2130, "2026-09-21T03:00:00Z"},
 		{"mixed hour OR", []qt.WhereTerm{{Any: []qt.WhereClause{{Field: "hour", Op: "=", Value: "2026-09-21T03:00:00Z"}, {Field: "total_tokens", Op: ">", Value: "2000"}}}}, 1, 2, 2130, 2130, "2026-09-21T03:00:00Z"},
+		// Hours and days are filtered alike: a NULL repository contains no text.
+		{"repository OR threshold", []qt.WhereTerm{{Any: []qt.WhereClause{{Field: "repository_name", Op: "contains", Value: "nil"}, {Field: "total_tokens", Op: ">", Value: "2000"}}}}, 1, 2, 2130, 2130, "2026-09-21T03:00:00Z"},
 	} {
 		t.Run(sample.name, func(t *testing.T) {
 			q := metricRequest(qt.AggSpec{ID: "days", Op: "count", GroupBy: []string{"model"}}, qt.AggSpec{ID: "hours", Expression: "COUNT()", GroupBy: []string{"hour"}},
@@ -548,7 +550,8 @@ func TestQueryV2LeasesTempStorageOnlyToStage(t *testing.T) {
 			q := metricRequest(qt.AggSpec{ID: "tokens", Op: "sum", Field: "total_tokens", GroupBy: []string{"week"}})
 			q.Where = []qt.WhereTerm{{Field: "total_tokens", Op: ">", Value: "1"}}
 			return q
-		}(), true},
+		}(), false},
+		{"a Usage formula", "usage", metricRequest(qt.AggSpec{ID: "per day", Expression: "SUM([total_tokens]) / COUNT()"}), true},
 	} {
 		t.Run(sample.name, func(t *testing.T) {
 			schema, _ := sqliteQuerySchema(sample.dataset)

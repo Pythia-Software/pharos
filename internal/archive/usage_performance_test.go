@@ -6,6 +6,12 @@
 //	PHAROS_USAGE_PROBE=<dev library>/catalog/catalog.sqlite3 \
 //	  go test -tags probe -run 'TestUsagePerformance(Preparation|MachineTime)' -v ./internal/archive
 //
+// TestUsagePerformanceFilteredMetrics needs no snapshot: it times the Usage
+// Token chart's and summary's metrics over a synthetic population, filtered
+// and not, in memory and staged:
+//
+//	go test -tags probe -run TestUsagePerformanceFilteredMetrics -v ./internal/archive
+//
 // TestUsagePerformanceGroup also needs PHAROS_USAGE_REQUEST, a V3 request
 // file. TestUsagePerformanceServer serves the snapshot at
 // PHAROS_USAGE_SERVER (a loopback address) until it is interrupted;
@@ -21,6 +27,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -177,6 +184,130 @@ func TestUsagePerformanceMachineTime(t *testing.T) {
 				}
 				t.Logf("days=%d previous=%v %s: groups=%d error=%q cold=%v warm median=%v cpu=%v", days, previous, shape.name, groups, failure, elapsed[0], medianDuration(elapsed[1:]), medianDuration(cpu[1:]))
 			}
+		}
+	}
+}
+
+// TestUsagePerformanceFilteredMetrics times Usage's chart and summary metrics
+// over 20,000 daily and 60,000 hourly rows across 10 repositories, models and
+// providers, unfiltered and under typical filters. It logs the warm median
+// latency and process CPU of each request answered in memory (as /metrics
+// answers it), staged with the native SQL path (as filtered requests were
+// answered before Query Table's in-memory executor), and staged through the
+// adapter alone. Hourly rows are selected once per filter, outside the timing,
+// as every path shares that step.
+func TestUsagePerformanceFilteredMetrics(t *testing.T) {
+	catalog, config := testCatalog(t)
+	s := testServer(t, config, catalog)
+	ctx := context.Background()
+	schema := PharosUsageSchema()
+	origin := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	var daily, hourly []map[string]any
+	for i := range 20_000 {
+		day := origin.AddDate(0, 0, i%180)
+		row := map[string]any{
+			"agent_session_id": fmt.Sprint("session-", i/5), "day": day.Format("2006-01-02"), "week": day.AddDate(0, 0, -int(day.Weekday()+6)%7).Format("2006-01-02"),
+			"month": day.Format("2006-01"), "repository_name": fmt.Sprint("repository-", i%10), "provider": []string{"claude", "codex", "antigravity"}[i%3],
+			"model": fmt.Sprint("model-", i%10), "model_family": fmt.Sprint("family-", i%5), "effort": nil,
+			"first_usage_at": day.Add(9 * time.Hour).Format(time.RFC3339), "last_usage_at": day.Add(11 * time.Hour).Format(time.RFC3339),
+		}
+		row["id"] = usageDailyID(row)
+		totals := map[string]int64{}
+		var cost float64
+		for h := range 3 {
+			hour := maps.Clone(row)
+			hour["hour"] = day.Add(time.Duration(9+h) * time.Hour).Format(time.RFC3339)
+			values := map[string]int64{"uncached_input_tokens": int64(100 + (i*7+h)%900), "cache_read_input_tokens": int64(1000 + (i*13+h)%9000),
+				"cache_creation_input_tokens": int64((i + h) % 300), "output_tokens": int64(20 + (i*3+h)%400), "unclassified_tokens": 0}
+			var total int64
+			for field, value := range values {
+				hour[field], totals[field], total = value, totals[field]+value, total+value
+			}
+			hour["total_tokens"], totals["total_tokens"] = total, totals["total_tokens"]+total
+			hour["cost_usd"] = float64(total) * 0.0000031
+			cost += hour["cost_usd"].(float64)
+			hourly = append(hourly, hour)
+		}
+		for field, value := range totals {
+			row[field] = value
+		}
+		row["cost_usd"] = cost
+		daily = append(daily, row)
+	}
+	sums := func(fields []string, groups ...string) []qt.AggSpec {
+		specs := []qt.AggSpec{}
+		for _, field := range fields {
+			specs = append(specs, qt.AggSpec{ID: field, Op: "sum", Field: field, GroupBy: groups})
+		}
+		return specs
+	}
+	types := []string{"uncached_input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens", "unclassified_tokens"}
+	summary := append(sums([]string{"total_tokens", "cost_usd", "uncached_input_tokens", "cache_read_input_tokens", "output_tokens"}),
+		qt.AggSpec{ID: "agent_sessions", Op: "count_distinct", Field: "agent_session_id"})
+	for _, surface := range []struct {
+		name  string
+		specs []qt.AggSpec
+	}{
+		{"token summary", summary},
+		{"weekly cost by provider", sums([]string{"cost_usd"}, "week", "provider")},
+		{"daily token types", sums(types, "day")},
+		{"hourly cost by provider", sums([]string{"cost_usd"}, "hour", "provider")},
+	} {
+		for _, filter := range []struct {
+			name  string
+			where []qt.WhereTerm
+		}{
+			{"unfiltered", nil},
+			{"repository", []qt.WhereTerm{{Field: "repository_name", Op: "=", Value: "repository-3"}}},
+			{"model", []qt.WhereTerm{{Field: "model", Op: "=", Value: "model-5"}}},
+			{"provider", []qt.WhereTerm{{Field: "provider", Op: "=", Value: "codex"}}},
+			{"90 days", []qt.WhereTerm{{Field: "first_usage_at", Op: ">=", Value: origin.AddDate(0, 0, 90).Format(time.RFC3339)}}},
+			{"repository contains", []qt.WhereTerm{{Field: "repository_name", Op: "contains", Value: "ITORY-1"}}},
+		} {
+			q := metricRequest(surface.specs...)
+			q.Where = filter.where
+			options := qt.PlanOptions{Identity: queryTableScope + ":" + schema.Name, Now: time.Now()}
+			names, err := queryV2SourceFields(ctx, catalog.reader(), schema, nil, &q, options.Now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			hours, err := selectUsageHours(daily, hourly, q.Where)
+			if err != nil {
+				t.Fatal(err)
+			}
+			line := fmt.Sprintf("%-24s %-20s", surface.name, filter.name)
+			var answers []qt.SQLiteV2ExecutionResult
+			for _, path := range []string{"in memory", "staged", "adapter"} {
+				override(t, &nativeMetrics, path != "adapter")
+				var elapsed, cpu []time.Duration
+				var result queryV2ExecutionResult
+				for range 7 {
+					start, startCPU := time.Now(), processCPU()
+					d := queryV2Dataset("usage", schema)
+					if path == "in memory" {
+						var handled bool
+						result.SQLiteV2ExecutionResult, handled, err = s.metricsWithoutStaging(ctx, "usage", sqlDataset{}, d, q, options, daily, hours, false)
+						if err == nil && !handled {
+							t.Fatalf("%s: not answered in memory", line)
+						}
+					} else {
+						// The staged paths, without the in-memory executor ahead of them.
+						err = s.executeStagedQueryV2(ctx, "usage", sqlDataset{}, false, d, nil, &q, options, nil, daily, hours, names, &result)
+					}
+					if err != nil {
+						t.Fatal(line, path, err)
+					}
+					elapsed, cpu = append(elapsed, time.Since(start)), append(cpu, processCPU()-startCPU)
+				}
+				answers = append(answers, result.SQLiteV2ExecutionResult)
+				line += fmt.Sprintf("  %s %8v (cpu %8v)", path, medianDuration(elapsed[1:]).Round(10*time.Microsecond), medianDuration(cpu[1:]).Round(10*time.Microsecond))
+			}
+			for _, answer := range answers[1:] {
+				if !identical(answer, answers[0]) {
+					t.Fatalf("%s: paths disagree", line)
+				}
+			}
+			t.Log(line)
 		}
 	}
 }

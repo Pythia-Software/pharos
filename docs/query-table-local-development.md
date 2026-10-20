@@ -1,12 +1,8 @@
 # Query Table release builds and local development
 
-Pharos uses published Query Table **0.9.0** npm packages (core, React, UI and
-codegen) and a local copy of the **v0.9.0** Go module. The only local backend
-change permits explicit host group budgets up to 100,000 in V2 and V3; the four
-earlier performance patches are now supplied by the release.
-Production builds do not depend on a Query Table worktree or source archives; see
-[`third_party/query-table-go/README.pharos.md`](../third_party/query-table-go/README.pharos.md)
-for the backend patch details. See
+Pharos uses published Query Table **0.9.2** npm packages (core, React, UI and
+codegen) and the published **v0.9.2** Go module, unpatched. Production builds
+do not depend on a Query Table worktree or source archives. See
 [the integration guide](query-table-integration.md) for feature coverage,
 contracts and execution limits.
 
@@ -29,12 +25,9 @@ GOWORK=off go vet ./...
 ```
 
 `web/package-lock.json` pins registry archives and external dependency
-integrities. `go.mod`/`go.sum` pin the released Go adapter, and the root replacement
-selects the matching copy with the two group-ceiling edits under
-`third_party/query-table-go`. `tools/test-query-table-fork.sh` derives its default
-upstream test tag from that Go module pin and must pass without a `-skip`
-override. Upstream tests requiring an external database may still skip when
-that database is not configured.
+integrities. `go.mod`/`go.sum` pin the released Go adapter;
+`GOWORK=off go list -m -json github.com/Pythia-Software/query-table/backends/go`
+shows the selected version and no `Replace`.
 The JS/CSS assets in `internal/archive/assets` are built from these installed
 packages. Codegen regenerates the Go schemas from the canonical JSON in
 `schemas/`, and copies those same documents into the frontend assets.
@@ -55,7 +48,7 @@ local gitignored `go.work` selects its `backends/go` instead of the published
 module. Changes to Query Table belong in that checkout.
 
 `macos/test/swift-harness.sh` can run while these links are configured. Its
-temporary app build uses the pinned npm packages and checked-in Go backend
+temporary app build uses the pinned npm packages and published Go module
 with `GOWORK=off`; it excludes `go.work`/`go.work.sum` from the copy and leaves
 the original workspace files and package links intact.
 

@@ -284,7 +284,7 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 			writeError(w, fmt.Errorf("carbon json: %w", err), http.StatusBadRequest)
 			return
 		}
-		value, err := s.Catalog.carbonSeries(r.Context(), request, schema)
+		value, err := s.Catalog.carbonSeries(r.Context(), request)
 		if err != nil {
 			writeError(w, err, http.StatusBadRequest)
 			return
