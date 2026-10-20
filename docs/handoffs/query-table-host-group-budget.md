@@ -1,5 +1,9 @@
 # Query Table explicit host group budgets
 
+> Completed in Query Table v0.9.1. Pharos now uses the published module, with
+> no vendored backend, Go replacement or fork test script. The original
+> request below is retained as a historical record.
+
 ## Request
 
 Please allow an explicit host `MaxGroups` of up to **100,000** in the Go

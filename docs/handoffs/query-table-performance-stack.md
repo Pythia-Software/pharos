@@ -1,10 +1,10 @@
 # Query Table backend performance PR stack
 
 > Completed in Query Table v0.9.0 through upstream PRs #127, #128, #129 and
-> #133. Pharos now uses the released implementations. The only remaining
-> adapter patch is the separate host group-budget allowance described in
-> [README.pharos.md](../../third_party/query-table-go/README.pharos.md).
-> The original request below is retained as a historical record.
+> #133. Pharos now uses the released implementations. The separate host
+> group-budget allowance followed in v0.9.1, after which Pharos removed its
+> vendored backend. The original request below is retained as a historical
+> record; its paths under `third_party/query-table-go` no longer exist.
 
 ## Request and scope
 

@@ -38,7 +38,7 @@ reader connection was used, and each step was followed by one ordinary query.
   - `beginQueryWithTempStore` (around line 590) sets `temp_store` and `temp.cache_size`, begins the transaction, and returns `release`, which rolls back and restores both.
   - `beginQueryV2` and `leaseQueryV2`; the V2 caller is around line 974.
 - `internal/archive/query_table_v3.go`, around line 207: V3 picks mode 1 or 2 per dataset and population size.
-- Staging temp tables are created by the Query Table fork: `third_party/query-table-go/query_v3_execute.go` and `sqlite_v2_reuse.go`. Changes there need `tools/test-query-table-fork.sh`.
+- Query Table creates its own staging temp tables, in its `backends/go/query_v3_execute.go` and `sqlite_v2_reuse.go`. Pharos uses the published module unpatched, so a change needed there is an upstream request (see the dependency policy in `AGENTS.md`).
 - The reader pool: `readerDSN` and `readerConns` in `internal/archive/durability.go`.
 - Other code that creates temp tables inside a transaction may pay the same reload if it rolls back: `mcp_statistics.go`, `share.go`, `findings_features.go`, `ingest.go`, `tool_rollup_incremental.go`. Check them once the main path is fixed; they run far less often.
 
@@ -62,4 +62,4 @@ Choose with evidence, and say why. Some directions:
 
 - The probe shows a lease, release and one query costs close to the 53 µs above, not milliseconds. Record before and after in the PR.
 - In a CPU profile of `TestHomeQueryRecipesV2`, `_sqlite3ReadSchema` comes only from opening connections, not from statements on connections already open. That test issues 256 Query Table requests.
-- `go test ./...` passes, and `tools/test-query-table-fork.sh` passes if the fork changed.
+- `go test ./...` passes.

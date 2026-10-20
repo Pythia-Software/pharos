@@ -1,5 +1,10 @@
 # Handoff: make in-memory V2 metrics as fast as a hand-written reducer (QT-17)
 
+> Completed in Query Table v0.9.2. On Pharos's probe, unfiltered Usage
+> requests now beat the deleted reducer: Token summary about 8.5 ms (was 12),
+> weekly cost by provider 5.4 ms (was 8), hourly cost by provider 16.7 ms (was
+> 22). The original request below is retained as a historical record.
+
 For the Query Table team. File paths are in the Query Table repository unless
 marked **Pharos**. This follows QT-16
 ([query-table-in-memory-metrics.md](query-table-in-memory-metrics.md)), which

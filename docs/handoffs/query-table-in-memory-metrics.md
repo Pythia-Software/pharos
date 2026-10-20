@@ -1,5 +1,9 @@
 # Handoff: run V2 metrics over rows in memory (QT-16)
 
+> Completed in Query Table v0.9.0 (`ExecuteV2Rows`, `CompileRowFilter`,
+> `SQLiteRowValues`). Pharos answers Usage's metrics and selects its hours with
+> them. The original request below is retained as a historical record.
+
 For the Query Table team. File paths are in the Query Table repository unless
 marked **Pharos**.
 

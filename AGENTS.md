@@ -13,17 +13,11 @@ bundled into the checked-in `internal/archive/assets/query-tables.{js,css}`. See
 Do not add, extend, or reintroduce local Query Table patches. Required fixes
 and features belong in the upstream Query Table repository and must be
 consumed through a published release. Write a self-contained upstream handoff
-when a needed change is unavailable. Do not patch the vendored implementation,
-the module cache, installed npm packages or generated bundles to work around
-upstream behavior.
-
-The existing two-line host group-budget allowance is temporary migration debt,
-not permission to make further patches. Leave it unchanged until upstream
-ships the [host group-budget request](docs/handoffs/query-table-host-group-budget.md).
-Then upgrade to that release and remove `third_party/query-table-go/`, the
-root Go replacement and `tools/test-query-table-fork.sh`, retaining Pharos's
-Usage budgets and host integration tests. Normal package upgrades, schema
-generation and frontend bundle rebuilds remain part of the integration.
+when a needed change is unavailable. Do not vendor or replace the Go module, or
+patch the module cache, installed npm packages or generated bundles, to work
+around upstream behavior. Normal package upgrades, schema generation and
+frontend bundle rebuilds are part of the integration: pin all four npm
+packages and the Go module to the same release.
 
 ## Running tests
 
@@ -80,8 +74,7 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
   recovery (Go, Python 3, curl, sqlite3; mounts a 2 GB sparse image; default
   port 18767). See [Manual macOS tests](docs/configuration.md#running-from-an-external-drive)
   for details; `macos/test/menu-bar.sh` runs just the menu checks.
-  Also manual: `tools/*bench*` and `tools/test-query-table-fork.sh` (after changing
-  `third_party/query-table-go`). Run these only when you change the code they
+  Also manual: `tools/*bench*`. Run these only when you change the code they
   exercise. Go probes, which time or inspect a real catalog, build only with
   `-tags probe`; each file's header says how to run it.
 

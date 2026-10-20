@@ -8,8 +8,9 @@ Parallelism uses a captured 14-day timing snapshot with 2,439 conversations
 and 1,342 roots. These are local measurements, not cross-machine guarantees.
 These timings predate the Query Table v0.8.0 merge; the backend performance
 patches were carried forward, with the correctness checks rerun after merging.
-Query Table v0.9.0 now supplies all four performance optimizations; Pharos's
-only remaining adapter patch raises the explicit host group-budget ceiling.
+Query Table now supplies all four performance optimizations (v0.9.0) and the
+explicit 100,000-group host budget (v0.9.1); Pharos uses the published module
+without patches.
 
 ## Scope and measurements
 
@@ -64,9 +65,7 @@ than claiming every first load is identical.
   validated staged values, fuses scalar group summaries, and materializes
   representatives once. These optimizations were local during the audit and
   are now supplied by v0.9.0. Fused outputs are used directly without rewriting
-  every group per summary. The remaining local patch allows Usage's explicit
-  100,000-group budget. See
-  `third_party/query-table-go/README.pharos.md` for provenance and maintenance.
+  every group per summary. v0.9.1 allows Usage's explicit 100,000-group budget.
 - Work uses `MAX(title)` because every fact for a workspace has the same current
   workspace title, avoiding representative-row sorting for that preset.
 - Machine Time chart grouping appends facts instead of repeatedly copying whole

@@ -12,9 +12,8 @@ import (
 	qt "github.com/Pythia-Software/query-table/backends/go"
 )
 
-// These tests check the released adapter's grouped results and Pharos's
-// remaining host group-budget override. tools/test-query-table-fork.sh runs
-// upstream's own suites against the retained backend copy.
+// These tests check the released adapter's grouped results and the 100,000
+// group budget Pharos configures for Usage.
 
 func adapterQueryV3Fixture(t *testing.T) (*sql.DB, qt.QueryDatasetV3) {
 	catalog, _ := testCatalog(t)
