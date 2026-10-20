@@ -1,0 +1,96 @@
+diff --git a/internal/archive/archive_test.go b/internal/archive/archive_test.go
+index 69fa8f2..55db6ab 100644
+--- a/internal/archive/archive_test.go
++++ b/internal/archive/archive_test.go
+@@ -9,6 +9,7 @@ import (
+ 	"os"
+ 	"path/filepath"
+ 	"strings"
++	"sync"
+ 	"testing"
+ 	"time"
+ )
+@@ -51,7 +52,7 @@ func testCatalog(t testing.TB) (*Catalog, Config) {
+ 	if err := os.MkdirAll(config.ArchiveRoot, 0o755); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	catalog, err := OpenCatalog(config.CatalogPath)
++	catalog, err := openTemplateCatalog(config.CatalogPath)
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+@@ -59,6 +60,58 @@ func testCatalog(t testing.TB) (*Catalog, Config) {
+ 	return catalog, config
+ }
+ 
++// SURVEY PROTOTYPE: initialize one catalog per process, then copy it per test.
++var catalogTemplate struct {
++	once  sync.Once
++	bytes []byte
++	err   error
++}
++
++func openTemplateCatalog(path string) (*Catalog, error) {
++	catalogTemplate.once.Do(func() {
++		dir, err := os.MkdirTemp("", "pharos-catalog-template-")
++		if err != nil {
++			catalogTemplate.err = err
++			return
++		}
++		defer os.RemoveAll(dir)
++		template := filepath.Join(dir, "catalog.sqlite3")
++		// Host-neutral: register no host in the template; each open does.
++		previous := currentHost
++		currentHost = func() Host { return Host{ID: "template", Fallback: true} }
++		c, err := OpenCatalog(template)
++		currentHost = previous
++		if err != nil {
++			catalogTemplate.err = err
++			return
++		}
++		c.Close()
++		catalogTemplate.bytes, catalogTemplate.err = os.ReadFile(template)
++	})
++	if catalogTemplate.err != nil {
++		return nil, catalogTemplate.err
++	}
++	if err := os.WriteFile(path, catalogTemplate.bytes, 0o600); err != nil {
++		return nil, err
++	}
++	db, err := sql.Open("sqlite", catalogDSN(path))
++	if err != nil {
++		return nil, err
++	}
++	db.SetMaxOpenConns(4)
++	db.SetMaxIdleConns(4)
++	catalog := &Catalog{Path: path, DB: db, captureRoot: filepath.Join(filepath.Dir(path), "captures")}
++	if err := catalog.migrateHosts(); err != nil {
++		db.Close()
++		return nil, err
++	}
++	if err := catalog.openReader(); err != nil {
++		db.Close()
++		return nil, err
++	}
++	return catalog, nil
++}
++
+ func TestCatalogPoolEnforcesForeignKeys(t *testing.T) {
+ 	catalog, _ := testCatalog(t)
+ 	connections := make([]*sql.Conn, 4)
+diff --git a/internal/archive/durability.go b/internal/archive/durability.go
+index 723482a..5e9bebf 100644
+--- a/internal/archive/durability.go
++++ b/internal/archive/durability.go
+@@ -41,6 +41,11 @@ func catalogDSN(path string) string {
+ 	if commitFullFsync {
+ 		fullfsync = 1
+ 	}
++	if !commitFullFsync { // SURVEY PROTOTYPE: tests skip fsync entirely
++		return (&url.URL{Scheme: "file", Path: path}).String() + fmt.Sprintf("?_pragma=busy_timeout(%d)&_pragma=foreign_keys(1)"+
++			"&_pragma=synchronous(OFF)&_pragma=checkpoint_fullfsync(0)&_pragma=journal_size_limit(%d)"+
++			"&_pragma=cache_size(-32768)&_pragma=mmap_size(268435456)", busyTimeoutMS, walSizeLimit)
++	}
+ 	return (&url.URL{Scheme: "file", Path: path}).String() + fmt.Sprintf("?_pragma=busy_timeout(%d)&_pragma=foreign_keys(1)"+
+ 		"&_pragma=synchronous(FULL)&_pragma=fullfsync(%d)&_pragma=checkpoint_fullfsync(1)&_pragma=journal_size_limit(%d)"+
+ 		"&_pragma=cache_size(-32768)&_pragma=mmap_size(268435456)",
