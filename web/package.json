@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "build": "esbuild src/index.tsx --bundle --preserve-symlinks --minify --format=iife --target=safari17 --outfile=../internal/archive/assets/query-tables.js",
     "watch": "esbuild src/index.tsx --bundle --preserve-symlinks --minify --format=iife --target=safari17 --outfile=../internal/archive/assets/query-tables.js --watch=forever",
@@ -28,20 +31,23 @@
     "watch:local": "node ../tools/watch-query-table.mjs"
   },
   "dependencies": {
-    "@pythia-software/query-table-core": "0.8.0",
-    "@pythia-software/query-table-react": "0.8.0",
-    "@pythia-software/query-table-ui": "0.8.0",
+    "@pythia-software/query-table-core": "0.9.0",
+    "@pythia-software/query-table-react": "0.9.0",
+    "@pythia-software/query-table-ui": "0.9.0",
     "@types/markdown-it": "14.1.2",
     "markdown-it": "15.0.2",
     "react": "18.3.1",
     "react-dom": "18.3.1"
   },
   "devDependencies": {
-    "@pythia-software/query-table-codegen": "0.8.0",
+    "@pythia-software/query-table-codegen": "0.9.0",
     "@types/react": "18.3.28",
     "@types/react-dom": "18.3.7",
     "esbuild": "0.27.2",
     "playwright-core": "1.64.1",
     "typescript": "5.6.3"
+  },
+  "allowScripts": {
+    "esbuild": false
   }
 }

@@ -61,6 +61,9 @@
 .pharos-query-page .qt-table-wrap { max-height: none !important; overflow: visible !important; border-radius: 0; box-shadow: 0 4px 18px #34230d0b; }
 .pharos-query-page .qt-table { border-radius: 0; }
 .pharos-query-page .qt-table thead { z-index: 1; }
+/* Query Table fixes its trailing action column at 40px on the column's <col>, and a fixed table layout ignores widths on its cells. Size it here, wide enough for one action button; a surface with more sets --qt-trailing-width. */
+.qt-table col:not([data-qt-column]) { width: var(--qt-trailing-width, 86px) !important; }
+.qt-trailing-cell { padding-inline: 8px; }
 .pharos-query-page .qt-table tfoot { position: static; }
 .pharos-query-page .qt-th { font-family: var(--serif); color: var(--ink); }
 .pharos-query-page .qt-header-role { font-family: var(--sans); }
@@ -310,7 +313,6 @@ button.usage-legend-item:hover { border-color: var(--line); color: var(--ink); }
 .mcp-history { min-width: 0; }
 .mcp-history .mcp-card-heading { margin: 0 0 12px; }
 .mcp-history .usage-presets { margin: 2px 0 10px; }
-.mcp-history .qt-table th:last-child,.mcp-history .qt-trailing-cell { width: 86px; min-width: 86px; max-width: 86px; }
 .mcp-detail-button { padding: 3px 8px; border-radius: 4px; cursor: pointer; }
 .mcp-dialog-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 20px; background: #1118; }
 .mcp-dialog { width: min(680px, 100%); max-height: min(80vh, 700px); overflow: auto; padding: 22px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 20px 70px #0003; }
@@ -353,8 +355,7 @@ button.usage-legend-item:hover { border-color: var(--line); color: var(--ink); }
 
 .tool-ledger-banner { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: -6px 0 16px; padding: 11px 14px; border: 1px solid var(--line); border-radius: 5px; background: color-mix(in srgb, var(--gold) 10%, var(--panel)); font-size: var(--fs-md); }
 .tool-ledger-banner button { flex: none; padding: 4px 12px; border: 1px solid var(--accent); border-radius: 4px; background: var(--accent); color: var(--panel); }
-.tools-page .qt-table th:last-child,.tools-page .qt-trailing-cell { width: 86px; min-width: 86px; max-width: 86px; }
-.tools-page .skill-usages .qt-table th:last-child,.tools-page .skill-usages .qt-trailing-cell { width: 180px; min-width: 180px; max-width: 180px; }
+.tools-page .skill-usages { --qt-trailing-width: 180px; }
 .skill-usage-actions { display: inline-flex; gap: 6px; }
 .tool-dialog { width: min(920px, 100%); max-height: min(88vh, 900px); }
 .tool-dialog h2 { margin: 0 0 5px; font: 650 var(--fs-2xl)/1.2 var(--serif); }

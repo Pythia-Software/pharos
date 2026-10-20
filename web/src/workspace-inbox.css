@@ -84,7 +84,9 @@
 .delegation-inbox-row .delegation-name > span { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .delegation-inbox-row .delegation-name b { font-weight: 500; color: var(--accent); margin-right: 3px; }
 .delegation-inbox-row small { display: block; font-size: 9px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; margin-top: 3px; white-space: nowrap; }
-.delegation-inbox-row .delegation-inbox-metric { flex-shrink: 0; min-width: 55px; margin-right: 8px; padding: 5px 4px; color: var(--ink); font-size: var(--fs-xs); text-align: right; font-variant-numeric: tabular-nums; }
+.delegation-inbox-values { flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; margin-right: 8px; padding: 5px 0; font-variant-numeric: tabular-nums; }
+.delegation-inbox-row .delegation-inbox-metric { padding: 0 2px; color: var(--ink); font-size: var(--fs-xs); text-align: right; }
+.delegation-inbox-values .delegation-session-age { font-size: 9px; margin: 0; white-space: nowrap; }
 .workspace-session-sheet-open :is(.conversation-find,.conversation-find-rail,.conversation-map,.conversation-map-window) { display: none !important; }
 @keyframes workspace-reader-in { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: none; } }
 @media (max-width:959px) {

@@ -45,8 +45,9 @@ func kindFromString(s string) (FieldKind, error) {
 // expression (from the document's bindings.postgres.expr) and is the injection
 // boundary: it is never built from request input.
 type FieldSpec struct {
-	// typedValue is private to executor-created relations. The source compiler
-	// has already validated these values and retained their error sidecars.
+	// typedValue marks a column of an executor-created SQLite relation whose
+	// value already passed this compiler's typed field checks, with its error
+	// sidecar kept. It is unexported so caller storage is always validated.
 	typedValue bool
 	// ExpressionNumeric certifies a SQL numeric binding eligible for the bounded
 	// v2 profile. Values outside +/-1e100 produce numeric_range, never DB overflow.

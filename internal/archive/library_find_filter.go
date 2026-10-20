@@ -111,7 +111,9 @@ func (c *Catalog) libraryFindMatches(ctx context.Context, o LibraryFindOptions) 
 			match.Count++
 		}
 	}
-	if versionErr == nil {
+	// A page withheld because its overlap check timed out is not the answer
+	// for this catalog version; keep it out so a retry searches again.
+	if versionErr == nil && search.StopReason != "consistency_check_timeout" {
 		cache.mu.Lock()
 		if cache.version != version || len(cache.entries) >= 8 {
 			cache.entries = nil

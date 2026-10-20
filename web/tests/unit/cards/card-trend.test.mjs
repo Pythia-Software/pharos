@@ -44,6 +44,16 @@ test("per-day averages include idle days and ratios pool window totals", () => {
   assert.equal(pooled.points[0], null, "windows without timed calls are gaps");
 });
 
+test("distinct counts are requested per day and pooled over the window", () => {
+  const measure = { op: "count_distinct", field: "conversation_id" };
+  const queries = cardTrendQueries([], { value: measure, count: measure }, cardTrendDays(7, true, now).days);
+  assert.deepEqual(queries[0].aggregations.map(metric => [metric.id, metric.op, metric.field]), [["trend-value", "count_distinct", "conversation_id"], ["trend-rows", "count_distinct", "conversation_id"]], "the sample counts the same distinct measure");
+  assert.deepEqual(queries[0].aggregations[0], { id: "trend-value", op: "count_distinct", field: "conversation_id", groupBy: ["day"], groupLimit: 100 });
+  const last = shiftDay(localDay(now), -1);
+  const { study } = buildCardTrend({ value: { op: "count_distinct", field: "conversation_id" }, perDay: true, lookback: 7, completeDays: true, valueLabel: "", pointValueLabel: "", sample: "conversation-days", detail: "" }, 7, results({ [last]: 3, [shiftDay(last, -2)]: 4 }), now);
+  assert.equal(study.points.at(-1), 1, "(3 + 4) / 7 days");
+});
+
 test("incomplete daily results fail instead of reading as idle days", () => {
   const partial = results({ [localDay(now)]: 1 });
   partial[0][0].coverage = "partial";

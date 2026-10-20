@@ -244,68 +244,11 @@ func sqliteLiteral(c WhereClause, s Schema, now time.Time) (string, []any, error
 	case "is_not_null":
 		sql = "NOT (" + sqliteNull(f) + ")"
 	case "=", "!=", ">", ">=", "<", "<=":
-		var value any = c.Value
-		comparisonOp := c.Op
-		constant := ""
-		if f.Kind == FieldDatetime {
-			var t time.Time
-			var err error
-			if strings.HasPrefix(c.Value, "+") || strings.HasPrefix(c.Value, "-") {
-				offset, e := parseRelativeDuration(c.Value)
-				err = e
-				if e == nil {
-					t, err = relativeTimestamp(now, offset)
-				}
-			} else {
-				t, err = sqliteParseTime(c.Value)
-			}
-			if err != nil {
-				return "", nil, err
-			}
-			if t.UTC().Year() < 0 || t.UTC().Year() > 9999 {
-				return "", nil, fmt.Errorf("datetime outside years 0000..9999")
-			}
-			switch f.SQLiteDatetimeFormat {
-			case "utc-millis":
-				// Keep indexed comparisons exact when a filter lies between stored milliseconds.
-				if remainder := t.Nanosecond() % 1_000_000; remainder != 0 {
-					switch c.Op {
-					case "=":
-						constant = "0"
-					case "!=":
-						constant = "1"
-					case ">", ">=":
-						comparisonOp = ">="
-						t = t.Add(time.Duration(1_000_000 - remainder))
-						if t.UTC().Year() > 9999 {
-							constant = "0"
-						}
-					case "<", "<=":
-						comparisonOp = "<="
-						t = t.Add(-time.Duration(remainder))
-					}
-				}
-				value = t.UTC().Format("2006-01-02T15:04:05.000Z")
-			case "unix-millis":
-				value = float64(t.Unix())*1000 + float64(t.Nanosecond())/1e6
-			case "unix-seconds":
-				value = float64(t.Unix()) + float64(t.Nanosecond())/1e9
-			default:
-				expr = "qt_datetime(" + expr + ")"
-				value = t.UTC().Format("2006-01-02T15:04:05.000000000Z")
-			}
-		} else if f.Kind == FieldNumber || f.Kind == FieldBool {
-			v, e := coerce(f.Kind, c.Value)
-			if e != nil {
-				return "", nil, e
-			}
-			value = v
-			if n, ok := v.(float64); ok && (math.IsNaN(n) || math.IsInf(n, 0)) {
-				return "", nil, fmt.Errorf("filter requires a finite number")
-			}
-		} else {
-			expr = "COALESCE(" + expr + ",'') COLLATE BINARY"
+		comparisonExpr, value, comparisonOp, constant, err := sqliteComparison(c, f, now)
+		if err != nil {
+			return "", nil, err
 		}
+		expr = comparisonExpr
 		op := comparisonOp
 		if op == "!=" {
 			op = "<>"
@@ -358,6 +301,75 @@ func sqliteLiteral(c WhereClause, s Schema, now time.Time) (string, []any, error
 		sql = "(NOT (" + sql + ") AND NOT (" + sqliteNull(f) + "))"
 	}
 	return sql, args, nil
+}
+
+// sqliteComparison shares literal coercion, relative clocks and indexed datetime
+// boundary rounding between SQL compilation and the in-memory row filter.
+func sqliteComparison(c WhereClause, f FieldSpec, now time.Time) (expr string, value any, comparisonOp, constant string, err error) {
+	expr = f.Expr
+	value = c.Value
+	comparisonOp = c.Op
+	constant = ""
+	if f.Kind == FieldDatetime {
+		var t time.Time
+		var err error
+		if strings.HasPrefix(c.Value, "+") || strings.HasPrefix(c.Value, "-") {
+			offset, e := parseRelativeDuration(c.Value)
+			err = e
+			if e == nil {
+				t, err = relativeTimestamp(now, offset)
+			}
+		} else {
+			t, err = sqliteParseTime(c.Value)
+		}
+		if err != nil {
+			return "", nil, "", "", err
+		}
+		if t.UTC().Year() < 0 || t.UTC().Year() > 9999 {
+			return "", nil, "", "", fmt.Errorf("datetime outside years 0000..9999")
+		}
+		switch f.SQLiteDatetimeFormat {
+		case "utc-millis":
+			// Keep indexed comparisons exact when a filter lies between stored milliseconds.
+			if remainder := t.Nanosecond() % 1_000_000; remainder != 0 {
+				switch c.Op {
+				case "=":
+					constant = "0"
+				case "!=":
+					constant = "1"
+				case ">", ">=":
+					comparisonOp = ">="
+					t = t.Add(time.Duration(1_000_000 - remainder))
+					if t.UTC().Year() > 9999 {
+						constant = "0"
+					}
+				case "<", "<=":
+					comparisonOp = "<="
+					t = t.Add(-time.Duration(remainder))
+				}
+			}
+			value = t.UTC().Format("2006-01-02T15:04:05.000Z")
+		case "unix-millis":
+			value = float64(t.Unix())*1000 + float64(t.Nanosecond())/1e6
+		case "unix-seconds":
+			value = float64(t.Unix()) + float64(t.Nanosecond())/1e9
+		default:
+			expr = "qt_datetime(" + expr + ")"
+			value = t.UTC().Format("2006-01-02T15:04:05.000000000Z")
+		}
+	} else if f.Kind == FieldNumber || f.Kind == FieldBool {
+		v, e := coerce(f.Kind, c.Value)
+		if e != nil {
+			return "", nil, "", "", e
+		}
+		value = v
+		if n, ok := v.(float64); ok && (math.IsNaN(n) || math.IsInf(n, 0)) {
+			return "", nil, "", "", fmt.Errorf("filter requires a finite number")
+		}
+	} else {
+		expr = "COALESCE(" + expr + ",'') COLLATE BINARY"
+	}
+	return expr, value, comparisonOp, constant, nil
 }
 
 // CompileSQLiteAggregation supports the six basic aggregate operations. Modern

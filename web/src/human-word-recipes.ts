@@ -1,4 +1,5 @@
 import type { AggregationClause, SummaryColumn } from "@pythia-software/query-table-core";
+import { trendCover } from "./card-trend";
 import type { QueryRecipe } from "./curiosity-data";
 
 const words: SummaryColumn = { id: "human_words", op: "sum", field: "typed_words", label: "Your words" };
@@ -6,6 +7,7 @@ const messages: SummaryColumn = { id: "human_messages", op: "count", label: "Mes
 const conversations: SummaryColumn = { id: "human_conversations", op: "count_distinct", field: "conversation_id", label: "Conversations with your words" };
 const formula = (id: string, expression: string, label: string): SummaryColumn => ({ id, op: "formula", expression, label });
 const base = { dataset: "writing_messages", field: "sent_at", category: "human", idea: "human-01", unit: "words", where: [{ field: "typed_words", op: ">", value: "0" }] } as const;
+const dailyHuman = (id: string, op: AggregationClause["op"], field: string, label: string): AggregationClause => ({ id, op, ...(field ? { field } : {}), groupBy: ["day"], groupLimit: 10000, label });
 const ownWords = "Only messages containing words classified as typed or dictated contribute. Pasted and automated words are excluded. Counts describe writing, not time or quality.";
 function summary(id: string, title: string, description: string, primary: SummaryColumn, extra: SummaryColumn[], denominator: string): QueryRecipe {
   const measures = [primary, ...extra].map(column => ({ id: column.id, op: column.op === "formula" ? "count" : column.op, ...(column.field ? { field: column.field } : {}), ...(column.op === "formula" ? { expression: column.expression } : {}), groupBy: [], label: column.label, display: { kind: "value", format: { kind: "number", decimals: column.op === "formula" ? 1 : 0 } } } as AggregationClause));
@@ -35,6 +37,16 @@ export const humanWordRecipes: QueryRecipe[] = [
     note: `Each sample is a conversation's total typed/dictated words during the window. Conversations started earlier are included; this is not a lifetime conversation length. ${ownWords}` },
   { ...base, where: [{ any: ["typed_words", "pasted_words", "attachment_words"].map(field => ({ field, op: ">" as const, value: "0" })) }], id: "human-contribution-patterns", title: "Human contribution patterns", description: "Brief continuations, concrete feedback cues, supplied context, and other writing.", measures: [], unit: "percent", humanStudy: "contribution-patterns", note: "Mutually exclusive message categories based on visible human-authored evidence. A brief or unclassified message is not necessarily low value. No quality score is inferred." },
   { ...base, where: [...base.where], id: "human-specific-feedback", title: "Feedback with concrete detail", description: "Direction or correction paired with a reason, condition, target, example, or reference.", measures: [], unit: "percent", humanStudy: "specific-feedback", note: "Share of fully visible authored messages matching explicit feedback and detail cues. Inspect the linked excerpts to judge whether the rule captures useful feedback." },
+  { ...base, where: [...base.where], id: "human-messages-per-day", title: "Messages per day", description: "Messages containing your words per day, averaged over each trailing seven complete days, across the last 30 days.", days: [30], unit: "messages", action: "Explore daily message counts",
+    measures: [dailyHuman("human_daily_messages", "count", "", "Messages with your words per day")], cover: trendCover("human_daily_messages"),
+    trend: { value: { op: "count" }, perDay: true, lookback: 7, completeDays: true, valueLabel: "messages a day · 7-day average", pointValueLabel: "messages a day", trendLabel: "7d avg", sample: "messages",
+      detail: "Each point: messages containing your words in its trailing seven complete local days ÷ 7. The norm is the mean of the prior 30 endpoints." },
+    note: `Counts messages by their local sent day. Each point divides seven days' messages by seven, including idle days; today is excluded until it is complete. ${ownWords}` },
+  { ...base, where: [...base.where], id: "human-conversations-per-day", title: "Conversations per day", description: "Conversations in which you wrote per day, averaged over each trailing seven complete days, across the last 30 days.", days: [30], unit: "conversations", action: "Explore daily conversation counts",
+    measures: [dailyHuman("human_daily_conversations", "count_distinct", "conversation_id", "Conversations with your words per day")], cover: trendCover("human_daily_conversations"),
+    trend: { value: { op: "count_distinct", field: "conversation_id" }, count: { op: "count_distinct", field: "conversation_id" }, perDay: true, lookback: 7, completeDays: true, valueLabel: "conversations a day · 7-day average", pointValueLabel: "conversations a day", trendLabel: "7d avg", sample: "conversation-days",
+      detail: "Each point: conversations you wrote in on each of its trailing seven complete local days, summed and ÷ 7. The norm is the mean of the prior 30 endpoints." },
+    note: `A conversation counts on every day you wrote in it, so one that runs across several days is counted on each. A conversation is counted when you write in it, not when it ends. Each point divides seven days' counts by seven, including idle days; today is excluded until it is complete. ${ownWords}` },
 ];
 
 // Keep retired definitions resolvable for saved collections; new suggestions

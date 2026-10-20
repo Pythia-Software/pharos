@@ -248,32 +248,12 @@ func (d SQLiteV2Dataset) ExecuteV2In(ctx context.Context, tx *sql.Tx, rows *Serv
 	if metrics != nil && metrics.ExpectedRevisions != nil {
 		revisions = metrics.ExpectedRevisions
 	}
-	verified := map[string]string{}
-	capabilities := map[string]SQLiteComputedFieldCapability{}
+	verified, capabilities, e := d.verifyV2Revisions(ctx, o, revisions)
+	if e != nil {
+		return out, e
+	}
 	capabilityOptions := o
 	capabilityOptions.ExpectedRevisions = revisions
-	if len(revisions) > 64 {
-		return out, diagnostic("dependency_limit", "revision envelope exceeds budget")
-	}
-	for id, revision := range revisions {
-		if !computedID.MatchString(id) || revision == "" || len(revision) > 256 {
-			return out, diagnostic("definition_changed", "invalid revision envelope")
-		}
-		c, err := o.Resolver.ResolveComputed(ctx, id)
-		if err != nil {
-			return out, err
-		}
-		if c.ID != id || c.Revision != revision {
-			return out, diagnostic("definition_changed", "missing or mismatched expected revision")
-		}
-		verified[id] = revision
-		name := "@computed/" + id
-		preview, err := CompileSQLiteRowExpression(ctx, "["+name+"]", d.Schema, capabilityOptions)
-		if err != nil {
-			return out, err
-		}
-		capabilities[name] = d.capabilityForPlan(name, preview)
-	}
 	if rows != nil {
 		for id, revision := range rowPlan.ResolvedRevisions {
 			verified[id] = revision
@@ -342,6 +322,38 @@ func (d SQLiteV2Dataset) ExecuteV2In(ctx context.Context, tx *sql.Tx, rows *Serv
 	}
 	return out, nil
 }
+
+// verifyV2Revisions checks the complete handshake, including unused fields.
+func (d SQLiteV2Dataset) verifyV2Revisions(ctx context.Context, o PlanOptions, revisions map[string]string) (map[string]string, map[string]SQLiteComputedFieldCapability, error) {
+	verified := map[string]string{}
+	capabilities := map[string]SQLiteComputedFieldCapability{}
+	capabilityOptions := o
+	capabilityOptions.ExpectedRevisions = revisions
+	if len(revisions) > 64 {
+		return nil, nil, diagnostic("dependency_limit", "revision envelope exceeds budget")
+	}
+	for id, revision := range revisions {
+		if !computedID.MatchString(id) || revision == "" || len(revision) > 256 {
+			return nil, nil, diagnostic("definition_changed", "invalid revision envelope")
+		}
+		c, err := o.Resolver.ResolveComputed(ctx, id)
+		if err != nil {
+			return nil, nil, err
+		}
+		if c.ID != id || c.Revision != revision {
+			return nil, nil, diagnostic("definition_changed", "missing or mismatched expected revision")
+		}
+		verified[id] = revision
+		name := "@computed/" + id
+		preview, err := CompileSQLiteRowExpression(ctx, "["+name+"]", d.Schema, capabilityOptions)
+		if err != nil {
+			return nil, nil, err
+		}
+		capabilities[name] = d.capabilityForPlan(name, preview)
+	}
+	return verified, capabilities, nil
+}
+
 func sqliteError(v any) *SQLiteValueError {
 	if v == nil {
 		return nil

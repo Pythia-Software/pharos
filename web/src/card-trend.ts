@@ -8,10 +8,12 @@ import { rollingQueryMatches } from "./query-links";
 // A trend card plots a trailing-window value of its own population at each of
 // the last 31 local days, from complete daily totals of one metric request.
 // Ratios divide window totals, never averages of daily ratios.
-type TrendMeasure = { op: "sum" | "count"; field?: string };
+type TrendMeasure = { op: "sum" | "count" | "count_distinct"; field?: string };
 export type CardTrend = {
   value: TrendMeasure; per?: TrendMeasure; perDay?: boolean; scale?: number;
-  // What the sample label counts; rows of the population when omitted.
+  // What the sample label counts; rows of the population when omitted. A
+  // count_distinct measure counts per day, so a window total adds each day's
+  // distinct values and a value spanning days counts once on every day.
   count?: TrendMeasure;
   // Trailing days per point; the card's own lookback when omitted.
   lookback?: number;

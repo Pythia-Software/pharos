@@ -8,7 +8,27 @@ others sit beside it). The Query Table frontend is TypeScript in `web/src`,
 bundled into the checked-in `internal/archive/assets/query-tables.{js,css}`. See
 [docs/technical-overview.md](docs/technical-overview.md) for the architecture.
 
+## Query Table dependency policy
+
+Do not add, extend, or reintroduce local Query Table patches. Required fixes
+and features belong in the upstream Query Table repository and must be
+consumed through a published release. Write a self-contained upstream handoff
+when a needed change is unavailable. Do not patch the vendored implementation,
+the module cache, installed npm packages or generated bundles to work around
+upstream behavior.
+
+The existing two-line host group-budget allowance is temporary migration debt,
+not permission to make further patches. Leave it unchanged until upstream
+ships the [host group-budget request](docs/handoffs/query-table-host-group-budget.md).
+Then upgrade to that release and remove `third_party/query-table-go/`, the
+root Go replacement and `tools/test-query-table-fork.sh`, retaining Pharos's
+Usage budgets and host integration tests. Normal package upgrades, schema
+generation and frontend bundle rebuilds remain part of the integration.
+
 ## Running tests
+
+The JS tooling needs Node 24 LTS, pinned in `.nvmrc` (`nvm use`) and in
+`engines` in `web/package.json`; `web/tests/run.mjs` refuses an older Node.
 
 Run the narrowest tests that cover your change while you work, and the fast
 Go tier on every change. Before opening a PR, run `go test ./...`,
@@ -50,8 +70,17 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
   a new endpoint needs a default stub in `fixtures.mjs`. `focus.test.mjs`
   checks dialogs' focus. Known layout bugs are listed in `KNOWN` and run as
   todo. `PHAROS_UI_SCREENSHOTS=dir` saves screenshots; nothing asserts on them.
-- **Manual only:** `macos/test/*` (builds the app and mounts disk images),
-  `tools/*bench*`, and `tools/test-query-table-fork.sh` (after changing
+- **Manual only:** on macOS with Xcode Command Line Tools,
+  `macos/test/run-light.sh` checks `MenuBar.swift` and `UpdateChecker.swift`
+  (AppKit needs a GUI session; no images or service).
+  `macos/test/swift-harness.sh [PORT]` checks `LibraryVolume.swift`,
+  `Launch.swift` and eject flows (Go, npm, Python 3, rsync; builds in a
+  temporary copy, mounts a 300 MB image; default port 18768).
+  `macos/test/eject-release.sh [PORT]` checks service shutdown and drive
+  recovery (Go, Python 3, curl, sqlite3; mounts a 2 GB sparse image; default
+  port 18767). See [Manual macOS tests](docs/configuration.md#running-from-an-external-drive)
+  for details; `macos/test/menu-bar.sh` runs just the menu checks.
+  Also manual: `tools/*bench*` and `tools/test-query-table-fork.sh` (after changing
   `third_party/query-table-go`). Run these only when you change the code they
   exercise. Go probes, which time or inspect a real catalog, build only with
   `-tags probe`; each file's header says how to run it.
@@ -91,6 +120,20 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
   GitHub, no user git configuration, and catalogs without drive flushes.
   Tests of those opt back in, for example with `stubDriveTool` or
   `useDurableCatalog`.
+- **Go tests run in several processes, one test at a time in each.**
+  `TestMain` splits the tests `-run` selects across up to eight processes
+  (`processes_test.go`), so:
+  - a test may change package variables, `time.Local` or the environment,
+    provided it restores them when it ends (`override`, `t.Setenv`);
+  - a test must not depend on another having run, in its process or any
+    other, and must keep its files under `t.TempDir()`;
+  - do not call `t.Parallel()`. On macOS every SQLite allocation in a
+    process takes one lock in `modernc.org/libc`, so catalog tests in
+    parallel in one process run no faster than one at a time.
+
+  `PHAROS_TEST_PROCESSES=1` runs everything in one process, for example
+  under a debugger. Profiles, coverage, benchmarks, fewer than 16 tests and
+  `-run` patterns with a `/` already run in one process.
 - **Keep data-safety tests**, even when slow. These include adopt, backup,
   capture, durability, and cross-host merges. Make their fixtures cheaper
   instead.

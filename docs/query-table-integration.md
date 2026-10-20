@@ -1,16 +1,30 @@
-# Query Table 0.8.0 in Pharos
+# Query Table 0.9.0 in Pharos
 
-Pharos pins core, React, UI and codegen to the published npm **0.8.0** packages,
-and the Go adapter to **v0.8.0**. The npm lockfile records registry URLs and
+Pharos pins core, React, UI and codegen to the published npm **0.9.0** packages,
+and the Go adapter to **v0.9.0**. The npm lockfile records registry URLs and
 integrities; `go.sum` records the released Go module. A root Go replacement uses
-the matching backend copy with the [Usage performance patches](../third_party/query-table-go/README.pharos.md).
+the matching backend copy with only the [Usage group-budget allowance](../third_party/query-table-go/README.pharos.md).
 Clean builds use these pinned sources without another Query Table checkout.
 
-The [upstream migration guide](https://github.com/Pythia-Software/query-table/blob/v0.8.0/docs/host-integration-next-release.md)
-and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.8.0/CHANGELOG.md)
+The [upstream migration guide](https://github.com/Pythia-Software/query-table/blob/v0.9.0/docs/host-integration-next-release.md)
+and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.9.0/CHANGELOG.md)
 define the release contract. Optional worktree linking is described in
 [local development](query-table-local-development.md). The earlier
 [next-release handoff](query-table-next-release-handoff.md) is a historical record.
+
+## 0.9.0 backend changes
+
+The release supplies representative-row reuse, validated staged values and
+error sidecars, fused scalar SQLite V3 summaries, and bounded native projection
+inlining that preserves expensive input evaluation and V2 reduction reuse.
+Pharos no longer carries its implementations of those four optimizations.
+The retained backend differs from v0.9.0 on only two source lines: the accepted
+explicit host group-budget ceiling is 100,000 instead of 10,000 in SQLite V2
+and V3. Usage opts into that allowance; other datasets keep their budgets.
+
+The release also adds `ExecuteV2Rows` for metrics over authorized maps.
+Pharos's native SQL/in-memory metric accelerators remain host code; this
+upgrade does not replace those separate execution paths.
 
 ## 0.8.0 feature coverage
 
@@ -90,9 +104,13 @@ the adapter's values, and passes everything else to the adapter:
 
 - **Bare counts** of Tool calls come from the rollup (`countOnlyMetricsV2`).
 - **Machine Time's cubes** (calls, timed calls and total duration by
-  repository, activity, day or month, status and operation) come from the
-  cached tool-cube projection (`machineTimeMetricsV2`), with a 50,000-group
-  budget, so months of calls need not be read one by one.
+  repository, activity, status and operation, and separately by day or month
+  and status) come from the cached tool-cube projection
+  (`machineTimeMetricsV2`), with a 50,000-group budget per metric, so months
+  of calls need not be read one by one. The page never crosses days with
+  operations, so a longer period adds few groups: on a library of a million
+  calls in October 2026 the largest cube had about 12,000 groups over 90 days
+  and 20,000 over all time.
 - **Plain counts and sums** grouped by text fields (`nativeMetricsV2`) run in
   one native statement over a SQL dataset's source, or, for Usage, in Go over
   the rows already in memory, instead of one adapter pass per metric. In
@@ -130,7 +148,7 @@ frontend uses V3 when grouping, calendar buckets or computed predicates require
 it; ordinary pages and metrics keep their existing V2 execution path.
 
 V3 allows 10 million matching source rows, 512 MiB of narrow staging, 10,000
-groups and 10,000 shown rows, with a 30-second deadline. Incomplete searches,
+groups (100,000 for Usage) and 10,000 shown rows, with a 30-second deadline. Incomplete searches,
 invalid values, cancelled requests and exceeded budgets return errors rather
 than partial groups. The old 10,000-row browser population cap does not apply.
 See `query-table-local-development.md` for release builds and optional local links.

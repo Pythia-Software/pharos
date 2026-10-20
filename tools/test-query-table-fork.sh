@@ -19,19 +19,21 @@
 #
 # Environment:
 #   QUERY_TABLE_UPSTREAM  Upstream checkout. Default: ~/gbdubs/query-table
-#   QUERY_TABLE_TAG       Release the fork is based on. Default: v0.8.0
+#   QUERY_TABLE_TAG       Release the fork is based on. Default: root go.mod version
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 FORK="$ROOT/third_party/query-table-go"
 UPSTREAM=${QUERY_TABLE_UPSTREAM:-$HOME/gbdubs/query-table}
-TAG=${QUERY_TABLE_TAG:-v0.8.0}
 MODULE=github.com/Pythia-Software/query-table/backends/go
+TAG=${QUERY_TABLE_TAG:-$(awk -v module="$MODULE" '$1 == module { print $2; exit }' "$ROOT/go.mod")}
 
 fail() {
 	echo "test-query-table-fork: $*" >&2
 	exit 2
 }
+
+[ -n "$TAG" ] || fail "root go.mod does not pin $MODULE"
 
 git -C "$UPSTREAM" rev-parse --git-dir >/dev/null 2>&1 ||
 	fail "no Query Table checkout at $UPSTREAM; clone it there or set QUERY_TABLE_UPSTREAM"

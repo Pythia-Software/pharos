@@ -33,12 +33,8 @@ function asset(path) {
   return assetCache.get(path);
 }
 
-// Options for every browser test: skip, with the install hint, when the
-// engine cannot run, and a bound on each test. The runner's --test-timeout
-// cannot be that bound: on Node 20 it limits a whole file.
+// Every browser test skips, with the install hint, when the engine cannot run.
 export const skip = launchPlan().skip ?? false;
-export const testTimeout = 30000;
-export const limits = { skip, timeout: testTimeout };
 
 let connection;
 const browser = () => connection ??= connectBrowser();

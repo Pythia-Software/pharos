@@ -8,6 +8,8 @@ Parallelism uses a captured 14-day timing snapshot with 2,439 conversations
 and 1,342 roots. These are local measurements, not cross-machine guarantees.
 These timings predate the Query Table v0.8.0 merge; the backend performance
 patches were carried forward, with the correctness checks rerun after merging.
+Query Table v0.9.0 now supplies all four performance optimizations; Pharos's
+only remaining adapter patch raises the explicit host group-budget ceiling.
 
 ## Scope and measurements
 
@@ -58,11 +60,12 @@ than claiming every first load is identical.
   conversation/delegation graph. Queries consuming lineage fields still resolve
   it. Enrichment clones maps so shared cached facts remain immutable. Covering
   indexes avoid reading wide conversation/session rows for ledger metadata.
-- The local Query Table Go backend retains v0.8.0's validation and exact
-  aggregates while inlining inexpensive SQL guards, reusing validated staged
-  values, fusing scalar group summaries, and materializing representatives once.
-  Fused outputs are used directly without rewriting every group per summary.
-  Usage alone accepts up to 100,000 groups. See
+- The Query Table Go backend inlines inexpensive SQL projections, reuses
+  validated staged values, fuses scalar group summaries, and materializes
+  representatives once. These optimizations were local during the audit and
+  are now supplied by v0.9.0. Fused outputs are used directly without rewriting
+  every group per summary. The remaining local patch allows Usage's explicit
+  100,000-group budget. See
   `third_party/query-table-go/README.pharos.md` for provenance and maintenance.
 - Work uses `MAX(title)` because every fact for a workspace has the same current
   workspace title, avoiding representative-row sorting for that preset.
