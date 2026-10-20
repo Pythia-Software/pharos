@@ -551,3 +551,11 @@ These go in AGENTS.md:
   prototype. The per-test medians (1.0 s versus 0.09 s) are less sensitive
   to this.
 - **Browser projections are estimates.** No browser change was prototyped.
+
+## 7. Follow-up handoffs
+
+The work above turned up product bugs, layout and focus bugs, and further test
+and tooling changes. Each one is written up as an agent handoff, indexed in
+[`docs/handoffs/README.md`](handoffs/README.md). Two of them are requests for
+the Query Table library itself (QT-14 and QT-15 in
+[`docs/query-table-next-release-handoff.md`](query-table-next-release-handoff.md)).
