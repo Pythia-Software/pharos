@@ -477,6 +477,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	}
 	result.Count = cursor.Count
 	result.SkippedOversize = cursor.Skipped
+	pageStart := cursor
 	pageBefore := cursor.Before
 	clauses := []string{match, key + "<?", textSurfacePredicate(o.Surface)}
 	if !scan && ready && small && o.Surface != "prose" {
@@ -720,12 +721,26 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 		result.stopPage(cursor, pageBefore)
 	}
 	// Detect writes that overlapped this page instead of mixing source versions.
+	// The check may use what is left of the search's budget, and at least
+	// textSearchCheckTimeout, so a page that finished on a busy machine is not
+	// failed for want of a few milliseconds.
 	_ = rows.Close()
 	{
-		checkCtx, checkCancel := context.WithTimeout(parent, 100*time.Millisecond)
+		deadline := time.Now().Add(textSearchCheckTimeout)
+		if budget, _ := ctx.Deadline(); budget.After(deadline) {
+			deadline = budget
+		}
+		checkCtx, checkCancel := context.WithDeadline(parent, deadline)
 		defer checkCancel()
 		after, e := c.textSearchGeneration(checkCtx, o)
 		if e != nil {
+			if parent.Err() != nil {
+				return result, parent.Err()
+			}
+			if checkCtx.Err() != nil {
+				result.unconfirmedPage(pageStart)
+				return result, nil
+			}
 			return result, e
 		}
 		if after != generation {
@@ -733,6 +748,25 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 		}
 	}
 	return result, nil
+}
+
+// textSearchCheckTimeout is the least time the overlap check after each page
+// gets, even when the page used the whole search budget. Tests lower it.
+var textSearchCheckTimeout = 250 * time.Millisecond
+
+// unconfirmedPage withholds a page whose overlap check could not finish: its
+// matches may mix two versions of the messages. It offers no cursor, as
+// time_budget_no_progress does, so a caller retries the same request rather
+// than continuing past matches it never saw.
+func (r *textSearchResult) unconfirmedPage(start textSearchCursor) {
+	r.Items = []textSearchItem{}
+	r.Count = start.Count
+	r.SkippedOversize = start.Skipped
+	r.Complete = false
+	r.CountRelation = "lower_bound"
+	r.NextCursor = ""
+	r.StopReason = "consistency_check_timeout"
+	r.StopMessage = "The search could not confirm in time that messages did not change during this page, so its matches are withheld. Retry the same request; this is not a complete result."
 }
 func lexicalExcerpt(body string, node *textQuery) (int, int) {
 	if lo, hi, found := lexicalLocation(body, node); found {

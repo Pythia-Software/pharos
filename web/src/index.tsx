@@ -7,7 +7,7 @@ import { SearchHelp } from "./search-help";
 import { RecordSearchEditor, recordSearchTargets } from "./record-search-editor";
 import { SearchDialog } from "./search-dialog";
 import { SearchOrder } from "./search-order";
-import { emptyTextSearch, readTextSearch, textFindParameters, textSearchSummary, type TextSearchDraft } from "./text-search-model";
+import { emptyTextSearch, readTextSearch, textFindParameters, textSearchSummary, withheldBatch, type TextSearchDraft } from "./text-search-model";
 import { CarbonImpact } from "./carbon-impact";
 import { pushMachineLocation, useMachineQueryNavigation } from "./machine-location";
 import { MachineActivity } from "./machine-activity";
@@ -799,8 +799,8 @@ function UserMessageSurface({ header, messageView }: { messageView: MessageView;
   const find = applied ? textFindParameters(applied, cursor) : "";
   useEffect(() => setFound(null), [find]);
   return <QuerySurface dataset="writing_messages" messageView={messageView} header={api => header(api, !!find)} find={find} onFind={setFound} controls={(api, builder) => <>
-    <MessageTableSearch api={api} value={value} active={!!applied} initialError={error} onApply={next => { setValue(next); setApplied(next); setCursor(""); setError(""); }} onClear={() => { setValue(newMessageSearch()); setApplied(null); setCursor(""); setError(""); }} layout={builder} />
-    {find && found?.search ? <div className="library-find-status" role="status"><p>{found.search.complete ? "All eligible messages checked." : "Partial search batch; more messages may match."} Table filters and metrics apply to the matching messages in this batch. Ordering is within this batch.</p><p>{found.search.elapsed_ms} ms · {found.search.candidates.toLocaleString()} candidates checked{found.search.skipped_oversize ? ` · ${found.search.skipped_oversize} oversized messages skipped` : ""}.</p>{found.search.stop_message ? <p>{found.search.stop_message}</p> : null}{found.search.next_cursor ? <button type="button" onClick={() => setCursor(found.search!.next_cursor)}>Next message search batch</button> : null}{cursor ? <button type="button" onClick={() => setCursor("")}>Restart message search</button> : null}</div> : null}
+    <MessageTableSearch api={api} value={value} active={!!applied} initialError={error} onApply={next => { if (textFindParameters(next) === find) api.refresh(); setValue(next); setApplied(next); setCursor(""); setError(""); }} onClear={() => { setValue(newMessageSearch()); setApplied(null); setCursor(""); setError(""); }} layout={builder} />
+    {find && found?.search ? <div className="library-find-status" role="status"><p>{found.search.complete ? "All eligible messages checked." : "Partial search batch; more messages may match."} Table filters and metrics apply to the matching messages in this batch. Ordering is within this batch.</p><p>{found.search.elapsed_ms} ms · {found.search.candidates.toLocaleString()} candidates checked{found.search.skipped_oversize ? ` · ${found.search.skipped_oversize} oversized messages skipped` : ""}.</p>{found.search.stop_message ? <p>{found.search.stop_message}</p> : null}{found.search.next_cursor ? <button type="button" onClick={() => setCursor(found.search!.next_cursor)}>Next message search batch</button> : null}{withheldBatch(found.search) ? <button type="button" onClick={() => api.refresh()}>Retry this batch</button> : null}{cursor ? <button type="button" onClick={() => setCursor("")}>Restart message search</button> : null}</div> : null}
   </>} />;
 }
 
@@ -852,7 +852,7 @@ function LibraryPage() {
     <div className="view-heading library-heading"><div><h1>{shared ? "Conversations" : "Find past work"}</h1></div><div className="library-view-toggle" role="group" aria-label="Library result view"><button type="button" className={view === "table" ? "active" : ""} aria-pressed={view === "table"} onClick={() => setView("table")}>Table</button><button type="button" className={view === "conversation" ? "active" : ""} aria-pressed={view === "conversation"} onClick={() => setView("conversation")}>Conversations</button></div></div>
     <QuerySurface dataset="library" libraryView={view} find={find} onFind={setFound} selectable={!shared && view === "table"} {...(find ? { trailing: (row: Row) => <FindMatchCell row={row} /> } : {})} controls={shared ? undefined : (api, builder) => <>
       <TextSearchEditor value={editorValue} active={!!applied} initialError={initialError} kind={kind} onKind={next => { setKind(next); setCursor(""); }}
-        onApply={next => { setEditorValue(next); setApplied(next); setInitialError(""); setCursor(""); }} onClear={clearText}
+        onApply={next => { if (kind === "text" && textFindParameters(next) === find) api.refresh(); setEditorValue(next); setApplied(next); setInitialError(""); setCursor(""); }} onClear={clearText}
         file={{ text: fileDraft, caseSensitive: fileCaseDraft, active: !!fileSearch, dirty: fileDraft.trim() !== fileSearch || fileCaseDraft !== fileCase, onText: setFileDraft, onCase: setFileCaseDraft, onApply: () => { setFileSearch(fileDraft.trim()); setFileCase(fileCaseDraft); }, onClear: () => { setFileDraft(""); setFileSearch(""); } }}
         workspaceScope={{ filters: workspaceFilterLabels(api), editor: builder }} orderControl={<SearchOrder api={api} batched={!!found?.search} />} />
     {find && found ? <div className="library-find-status muted" role="status">
@@ -863,6 +863,7 @@ function LibraryPage() {
       {found.search?.skipped_oversize ? <p>{found.search.skipped_oversize.toLocaleString()} large messages were skipped. Missing results may still be in those messages.</p> : null}
       {found.search ? <details><summary>Search details and coverage</summary><p>{found.search.candidates.toLocaleString()} candidates checked; {(found.search.verified_bytes / 1048576).toFixed(1)} MiB verified in {found.search.elapsed_ms} ms. {found.search.complete ? "Complete" : `Stopped: ${found.search.stop_reason.replaceAll("_", " ")}`}. Table counts and metrics describe this batch.</p><p>{found.search.coverage}</p>{found.search.expansions && Object.keys(found.search.expansions).length ? <p>Word variations: {Object.entries(found.search.expansions).map(([word, terms]) => `${word} → ${terms.join(", ")}`).join("; ")}</p> : null}</details> : null}
       {found.search?.next_cursor ? <button type="button" onClick={() => setCursor(found.search!.next_cursor)}>Continue to next batch</button> : null}
+      {withheldBatch(found.search) ? <button type="button" onClick={() => api.refresh()}>Retry this batch</button> : null}
       {cursor ? <button type="button" onClick={() => setCursor("")}>Start over</button> : null}
     </div> : null}
     {cursor && !found ? <button type="button" onClick={() => setCursor("")}>Restart search from the beginning</button> : null}

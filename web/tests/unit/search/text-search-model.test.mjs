@@ -125,3 +125,9 @@ test("matching options are read, counted, and sent only where they change the se
   assert.deepEqual(m.optionsInEffect(literal), { caseSensitive: true, separators: false, fuzzy: false });
   assert.deepEqual(options(literal), ["matching letter case"]);
 });
+
+test("only a withheld batch offers a retry of the same request", () => {
+  assert.equal(m.withheldBatch({ stop_reason: "consistency_check_timeout" }), true);
+  for (const stop_reason of ["complete", "time_budget", "time_budget_no_progress", "page_limit"]) assert.equal(m.withheldBatch({ stop_reason }), false);
+  assert.equal(m.withheldBatch(undefined), false);
+});

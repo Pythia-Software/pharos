@@ -43,7 +43,7 @@ export async function buildUnitTests(outdir = join(buildRoot, "unit")) {
     splitting: true,
     format: "esm",
     platform: "node",
-    target: "node20",
+    target: "node24",
     packages: "external",
     plugins: [emptyCSS],
     sourcemap: "inline",

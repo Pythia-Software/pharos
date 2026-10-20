@@ -8,7 +8,7 @@
 // reached by a click rather than a URL.
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { limits, open } from "./harness.mjs";
+import { open, skip } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
 import { rootConversation, workID } from "./fixtures.mjs";
 
@@ -61,7 +61,7 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
   for (const route of ROUTES) {
     for (const viewport of WIDTHS) {
       const name = `${route.name} @ ${viewport.width}`;
-      test(name, limits, async t => {
+      test(name, { skip }, async t => {
         const app = await open(t, { url: route.url, viewport, ready: route.ready, preferences: route.preferences });
         if (route.open) {
           await route.open(app.page);

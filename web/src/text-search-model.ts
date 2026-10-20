@@ -107,6 +107,10 @@ export function textFindParameters(draft: TextSearchDraft, cursor = ""): string 
   if (cursor) params.set("find_cursor", cursor);
   return params.toString();
 }
+// The service withholds a batch, with no cursor, when it cannot confirm in time
+// that the messages held still while it searched. The request that produced the
+// batch, with the same cursor, is safe to send again.
+export const withheldBatch = (batch?: { stop_reason?: string } | null) => batch?.stop_reason === "consistency_check_timeout";
 export function conditionSummary(c: TextCondition): string {
   if (c.kind === "group") {
     const positive = c.children.filter(c => !c.exclude).map(conditionSummary).join(c.join === "all" ? "; and " : "; or ");

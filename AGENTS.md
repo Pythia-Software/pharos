@@ -10,6 +10,9 @@ bundled into the checked-in `internal/archive/assets/query-tables.{js,css}`. See
 
 ## Running tests
 
+The JS tooling needs Node 24 LTS, pinned in `.nvmrc` (`nvm use`) and in
+`engines` in `web/package.json`; `web/tests/run.mjs` refuses an older Node.
+
 Run the narrowest tests that cover your change while you work, and the fast
 Go tier on every change. Before opening a PR, run `go test ./...`,
 `npm --prefix web run check` and `npm --prefix web run test:full`.
@@ -50,8 +53,17 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
   a new endpoint needs a default stub in `fixtures.mjs`. `focus.test.mjs`
   checks dialogs' focus. Known layout bugs are listed in `KNOWN` and run as
   todo. `PHAROS_UI_SCREENSHOTS=dir` saves screenshots; nothing asserts on them.
-- **Manual only:** `macos/test/*` (builds the app and mounts disk images),
-  `tools/*bench*`, and `tools/test-query-table-fork.sh` (after changing
+- **Manual only:** on macOS with Xcode Command Line Tools,
+  `macos/test/run-light.sh` checks `MenuBar.swift` and `UpdateChecker.swift`
+  (AppKit needs a GUI session; no images or service).
+  `macos/test/swift-harness.sh [PORT]` checks `LibraryVolume.swift`,
+  `Launch.swift` and eject flows (Go, npm, Python 3, rsync; builds in a
+  temporary copy, mounts a 300 MB image; default port 18768).
+  `macos/test/eject-release.sh [PORT]` checks service shutdown and drive
+  recovery (Go, Python 3, curl, sqlite3; mounts a 2 GB sparse image; default
+  port 18767). See [Manual macOS tests](docs/configuration.md#running-from-an-external-drive)
+  for details; `macos/test/menu-bar.sh` runs just the menu checks.
+  Also manual: `tools/*bench*` and `tools/test-query-table-fork.sh` (after changing
   `third_party/query-table-go`). Run these only when you change the code they
   exercise. Go probes, which time or inspect a real catalog, build only with
   `-tags probe`; each file's header says how to run it.

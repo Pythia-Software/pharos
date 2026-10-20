@@ -4,20 +4,25 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
-// Intercept the candidate statement, leaving planning and generation reads on
-// real SQLite. This makes pre-row timeouts deterministic instead of depending
-// on machine speed or a multi-million-row fixture.
+// Intercept the candidate statement or the generation reads, leaving the rest
+// on real SQLite. This makes timeouts deterministic instead of depending on
+// machine speed or a multi-million-row fixture.
 type searchHookDriver struct {
 	driver.Driver
-	query func(context.Context) error
-	next  func(context.Context) error
+	query      func(context.Context) error
+	next       func(context.Context) error
+	generation func(context.Context) error
 }
 type searchHookConn struct {
 	driver.Conn
@@ -34,6 +39,11 @@ func (d *searchHookDriver) Open(name string) (driver.Conn, error) {
 	return &searchHookConn{Conn: c, hooks: d}, err
 }
 func (c *searchHookConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if c.hooks.generation != nil && strings.Contains(query, "key='text_search_generation'") {
+		if err := c.hooks.generation(ctx); err != nil {
+			return nil, err
+		}
+	}
 	candidate := strings.Contains(query, "CASE WHEN length(CAST(m.text AS BLOB))")
 	if candidate && c.hooks.query != nil {
 		if err := c.hooks.query(ctx); err != nil {
@@ -57,9 +67,22 @@ var searchHookID atomic.Uint64
 
 func hookTextSearch(t *testing.T, c *Catalog, query, next func(context.Context) error) {
 	t.Helper()
+	hookSearchReads(t, c, &searchHookDriver{query: query, next: next})
+}
+
+// hookTextSearchGeneration calls read before each read of the search
+// generation: one before a page and one after it.
+func hookTextSearchGeneration(t *testing.T, c *Catalog, read func(context.Context) error) {
+	t.Helper()
+	hookSearchReads(t, c, &searchHookDriver{generation: read})
+}
+
+func hookSearchReads(t *testing.T, c *Catalog, hooks *searchHookDriver) {
+	t.Helper()
 	original := c.reader()
+	hooks.Driver = original.Driver()
 	name := fmt.Sprintf("search-hook-%d", searchHookID.Add(1))
-	sql.Register(name, &searchHookDriver{Driver: original.Driver(), query: query, next: next})
+	sql.Register(name, hooks)
 	db, err := sql.Open(name, c.Path)
 	if err != nil {
 		t.Fatal(err)
@@ -227,6 +250,50 @@ func TestTextSearchAppendDuringPage(t *testing.T) {
 				t.Fatalf("overlapping append rejected: %+v %v", result, err)
 			}
 		})
+	}
+}
+
+// An overlap check that cannot finish withholds the page with a retryable
+// stop instead of failing the search, which Library Find showed as a 500.
+func TestTextSearchSlowGenerationCheck(t *testing.T) {
+	c := textFixture(t)
+	config := defaultConfig(t.TempDir() + "/config.toml")
+	config.APIToken = "test-token"
+	server := testServer(t, config, c)
+	// The check waits for what is left of a 300 ms budget, or 10 ms if the
+	// page used it all.
+	override(t, &textSearchCheckTimeout, 10*time.Millisecond)
+	var stall atomic.Bool
+	var reads atomic.Int64
+	hookTextSearchGeneration(t, c, func(ctx context.Context) error {
+		if reads.Add(1)%2 == 0 && stall.Load() {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return nil
+	})
+	stall.Store(true)
+	req := httptest.NewRequest(http.MethodPost, "/api/search/text", strings.NewReader(`{"query":"cache","limit":1,"timeout_ms":300}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, req)
+	var result textSearchResult
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &result) != nil {
+		t.Fatalf("slow check failed the search: %d %s", response.Code, response.Body.String())
+	}
+	if len(result.Items) != 0 || result.Count != 0 || result.Complete || result.NextCursor != "" ||
+		result.StopReason != "consistency_check_timeout" || !strings.Contains(result.StopMessage, "Retry") {
+		t.Fatalf("unconfirmed page not withheld: %+v", result)
+	}
+	find := LibraryFindOptions{Query: "cache", Search: TextSearchOptions{TimeoutMS: 300}}
+	set, err := c.libraryFindMatches(t.Context(), find)
+	if err != nil || len(set.matches) != 0 || !set.limited || set.search.StopReason != "consistency_check_timeout" {
+		t.Fatalf("Library Find did not withhold the page: %+v %v", set, err)
+	}
+	// Library Find does not cache the withheld page, so a retry searches again.
+	stall.Store(false)
+	if set, err = c.libraryFindMatches(t.Context(), find); err != nil || len(set.matches) == 0 {
+		t.Fatalf("retry did not search again: %+v %v", set, err)
 	}
 }
 

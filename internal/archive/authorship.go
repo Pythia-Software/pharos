@@ -101,29 +101,92 @@ type authorSpan struct {
 
 // Rules name what claimed a span without its particulars (how long ago,
 // how many sessions), so spans and messages can be filtered and grouped by
-// them. Most reasons are already fixed text and are their own rule.
+// them. Text no rule claimed is typed and has ruleTyped.
 const ruleTyped = "No other rule matched"
 
-var ruleReasons = []struct{ prefix, suffix, rule string }{
-	{"Launched with ", " by a command", "Launched by a command"},
-	{"Sent by automation ", "", "Sent by automation"},
-	{"Repeated prompt: ", "", "Repeated prompt"},
-	{"Matches agent output from ", " earlier", "Matches recent agent output"},
-	{"Already sent ", " earlier", "Already sent earlier"},
-	{"Sent ", ", faster than typing", "Sent faster than typing"},
+// spanReason is a reason the classifier gives a span. A reason that carries
+// particulars renders them between prefix and suffix, and its rule leaves
+// them out; a reason without a prefix is fixed text and is its own rule.
+type spanReason struct{ rule, prefix, suffix, particulars string }
+
+// spanReasons is the catalog of every reason the classifier can give a span.
+// The writing_messages schema offers each one's rule as a Rules option, and
+// TestSpanRulesMatchTheSchema checks that it does. Declare reasons with
+// fixedReason and reasonTemplate, which add them here; renaming one orphans
+// the rule already stored for it.
+var spanReasons []spanReason
+
+func fixedReason(rule string) spanReason {
+	return reasonTemplate(rule, "", "")
 }
+
+func reasonTemplate(rule, prefix, suffix string) spanReason {
+	reason := spanReason{rule: rule, prefix: prefix, suffix: suffix}
+	spanReasons = append(spanReasons, reason)
+	return reason
+}
+
+// with returns the reason carrying particulars.
+func (r spanReason) with(particulars string) spanReason {
+	r.particulars = particulars
+	return r
+}
+
+// text returns the reason as a span records it.
+func (r spanReason) text() string {
+	if r.prefix == "" {
+		return r.rule
+	}
+	return r.prefix + r.particulars + r.suffix
+}
+
+// The catalog, in the order the Rules filter offers it.
+var (
+	reasonCodeBlock       = fixedReason("Code block")
+	reasonMachineOutput   = fixedReason("Log, trace, code, or data")
+	reasonTable           = fixedReason("Table")
+	reasonAgentFormat     = fixedReason("Formatted like agent output")
+	reasonIdentifierLine  = fixedReason("Mostly identifiers, paths, or code")
+	reasonIdentifier      = fixedReason("Path, URL, or ID")
+	reasonFasterThanTyped = reasonTemplate("Sent faster than typing", "Sent ", " after the previous message, faster than typing")
+	reasonPageFeedback    = fixedReason("Generated page feedback")
+	reasonFeedbackComment = fixedReason("Human feedback comment")
+	reasonQuoted          = fixedReason("Quoted with >")
+	reasonAgentOutput     = reasonTemplate("Matches recent agent output", "Matches agent output from ", " earlier")
+	reasonAlreadySent     = reasonTemplate("Already sent earlier", "Already sent ", " earlier")
+	reasonLineSent        = fixedReason("Line already sent in other conversations")
+	reasonRepeatedPrompt  = reasonTemplate("Repeated prompt", "Repeated prompt: ", "")
+	reasonSlashCommand    = fixedReason("Slash command")
+	reasonAttachment      = fixedReason("Attachment reference")
+	// harnessReasons names the harness blocks leadingHarnessBlocks finds by
+	// source; any other block is reasonHarness.
+	harnessReasons = map[string]spanReason{
+		"conductor_instruction":            fixedReason("Conductor system instruction"),
+		"system_reminder":                  fixedReason("System reminder"),
+		"environments.environment_context": fixedReason("Environment context"),
+		"user_instructions":                fixedReason("Project instructions"),
+		"plugins.recommendations":          fixedReason("Plugin recommendations"),
+	}
+	reasonHarness          = fixedReason("Harness context")
+	reasonLaunched         = reasonTemplate("Launched by a command", "Launched with ", " by a command")
+	reasonClaudePrint      = fixedReason("Sent by a headless claude -p run")
+	reasonCodexExec        = fixedReason("Sent by a codex exec run")
+	reasonAgyPrint         = fixedReason("Sent by a headless agy -p run")
+	reasonAutomation       = reasonTemplate("Sent by automation", "Sent by automation ", "")
+	reasonAgentSession     = fixedReason("Sent by another agent session")
+	reasonTL1              = fixedReason("Sent by TL1 orchestration")
+	reasonSubAgent         = fixedReason("Sub-agent conversation")
+	reasonUnrecordedClaude = fixedReason("Sent by a headless claude -p or SDK run Conductor did not start")
+)
 
 // spanRule returns the rule that claimed span.
 func spanRule(span authorSpan) string {
 	if span.Reason == "" {
-		if span.Category == spanTyped {
-			return ruleTyped
-		}
-		return span.Category
+		return ruleTyped
 	}
-	for _, pattern := range ruleReasons {
-		if strings.HasPrefix(span.Reason, pattern.prefix) && strings.HasSuffix(span.Reason, pattern.suffix) {
-			return pattern.rule
+	for _, reason := range spanReasons {
+		if reason.prefix != "" && strings.HasPrefix(span.Reason, reason.prefix) && strings.HasSuffix(span.Reason, reason.suffix) {
+			return reason.rule
 		}
 	}
 	return span.Reason
@@ -134,14 +197,6 @@ type authorshipState struct {
 	mu        sync.Mutex
 	running   bool
 	lastError string
-}
-
-var harnessLabels = map[string]string{
-	"conductor_instruction":            "Conductor system instruction",
-	"system_reminder":                  "System reminder",
-	"environments.environment_context": "Environment context",
-	"user_instructions":                "Project instructions",
-	"plugins.recommendations":          "Plugin recommendations",
 }
 
 var (
@@ -397,7 +452,7 @@ func newLabeler(text string) *labeler {
 	return &labeler{text: text, owner: owner}
 }
 
-func (l *labeler) claim(start, end int, category, reason string, origin textOrigin) {
+func (l *labeler) claim(start, end int, category string, reason spanReason, origin textOrigin) {
 	start, end = max(start, 0), min(end, len(l.text))
 	if start >= end {
 		return
@@ -411,7 +466,7 @@ func (l *labeler) claim(start, end int, category, reason string, origin textOrig
 		}
 	}
 	if claimed {
-		l.details = append(l.details, authorSpan{Category: category, Reason: reason, Source: origin.conversation, Message: origin.message})
+		l.details = append(l.details, authorSpan{Category: category, Reason: reason.text(), Source: origin.conversation, Message: origin.message})
 	}
 }
 
@@ -471,34 +526,34 @@ func (use templateUse) template() bool {
 	return len(use.sessions) >= templateSessions && len(use.days) >= templateDays
 }
 
-// automatedReason explains why a message came from a program or agent, or
-// returns "" when a person sent it.
-func automatedReason(input authorInput) string {
+// automatedReason explains why a message came from a program or agent, and
+// reports false when a person sent it.
+func automatedReason(input authorInput) (spanReason, bool) {
 	switch {
 	case input.Launch != nil:
-		return "Launched with " + headlessLabels[input.Launch.program] + " by a command"
+		return reasonLaunched.with(headlessLabels[input.Launch.program]), true
 	case input.Sender == "automation:claude-sdk-cli":
-		return "Sent by a headless claude -p run"
+		return reasonClaudePrint, true
 	case input.Sender == "automation:codex-exec":
-		return "Sent by a codex exec run"
+		return reasonCodexExec, true
 	case input.Sender == "automation:agy-print":
-		return "Sent by a headless agy -p run"
+		return reasonAgyPrint, true
 	case strings.HasPrefix(input.Sender, "automation:"):
-		return "Sent by automation " + strings.TrimPrefix(input.Sender, "automation:")
+		return reasonAutomation.with(strings.TrimPrefix(input.Sender, "automation:")), true
 	case strings.HasPrefix(input.Sender, "agent:"):
-		return "Sent by another agent session"
+		return reasonAgentSession, true
 	case input.SourceKind == "tl1" || input.SourceKind == "tl1-export":
-		return "Sent by TL1 orchestration"
+		return reasonTL1, true
 	case input.SubAgent:
 		// Forked sub-agents also carry the parent's history, already counted there.
-		return "Sub-agent conversation"
+		return reasonSubAgent, true
 	case input.Unclaimed && headlessRun("claude", input.Harness) != "":
 		// Conductor runs Claude through the SDK too, but records each
 		// session it starts; a claude -p started under another Claude
 		// session inherits its sdk-ts entrypoint.
-		return "Sent by a headless claude -p or SDK run Conductor did not start"
+		return reasonUnrecordedClaude, true
 	}
-	return ""
+	return spanReason{}, false
 }
 
 // lineUse records the first message a line was sent in and the distinct
@@ -522,7 +577,7 @@ type classifier struct {
 func newClassifier(inputs []authorInput) *classifier {
 	templates := map[string]*templateUse{}
 	for _, input := range inputs {
-		if automatedReason(input) != "" {
+		if _, automated := automatedReason(input); automated {
 			continue
 		}
 		key := templateKey(input.Text)
@@ -547,7 +602,7 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 	l := newLabeler(text)
 	previous, hasPrevious := c.lastUserSent[input.ConversationID]
 	c.lastUserSent[input.ConversationID] = input.SentAt
-	if reason := automatedReason(input); reason != "" {
+	if reason, automated := automatedReason(input); automated {
 		origin := textOrigin{}
 		if input.Launch != nil {
 			origin = textOrigin{input.Launch.parent, input.Launch.message}
@@ -557,7 +612,11 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 	}
 	bodyStart := 0
 	for _, block := range leadingHarnessBlocks(text) {
-		l.claim(block.Start, block.End, spanHarness, defaultString(harnessLabels[block.Source], "Harness context"), textOrigin{})
+		reason, known := harnessReasons[block.Source]
+		if !known {
+			reason = reasonHarness
+		}
+		l.claim(block.Start, block.End, spanHarness, reason, textOrigin{})
 		bodyStart = block.End
 	}
 	bodyStart += len(text[bodyStart:]) - len(strings.TrimLeft(text[bodyStart:], " \t\r\n"))
@@ -565,23 +624,23 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 	feedback := pageFeedbackReports(text, bodyStart)
 	claimFeedbackMetadata(l, feedback)
 	if use := c.templates[templateKey(text)]; use != nil && use.template() {
-		l.claim(0, len(text), spanTemplate, fmt.Sprintf("Repeated prompt: sent in %d sessions on %d days", len(use.sessions), len(use.days)), textOrigin{})
+		l.claim(0, len(text), spanTemplate, reasonRepeatedPrompt.with(fmt.Sprintf("sent in %d sessions on %d days", len(use.sessions), len(use.days))), textOrigin{})
 	}
 	if match := slashPattern.FindStringIndex(body); match != nil && !strings.Contains(body, "\n") {
-		l.claim(bodyStart+match[0], bodyStart+match[1], spanTemplate, "Slash command", textOrigin{})
+		l.claim(bodyStart+match[0], bodyStart+match[1], spanTemplate, reasonSlashCommand, textOrigin{})
 	}
 	for _, match := range attachmentPattern.FindAllStringIndex(text, -1) {
-		l.claim(match[0], match[1], spanAttachment, "Attachment reference", textOrigin{})
+		l.claim(match[0], match[1], spanAttachment, reasonAttachment, textOrigin{})
 	}
 	comparisonText := maskFeedback(text, feedback, false)
 	heuristicText := maskFeedback(text, feedback, true)
 	for _, match := range fencePattern.FindAllStringIndex(heuristicText, -1) {
-		l.claim(match[0], match[1], spanPasted, "Code block", textOrigin{})
+		l.claim(match[0], match[1], spanPasted, reasonCodeBlock, textOrigin{})
 	}
 	lines := textLines(text)
 	for _, line := range lines {
 		if strings.HasPrefix(strings.TrimLeft(heuristicText[line[0]:line[1]], " "), ">") {
-			l.claim(line[0], line[1], spanQuoted, "Quoted with >", textOrigin{})
+			l.claim(line[0], line[1], spanQuoted, reasonQuoted, textOrigin{})
 		}
 	}
 	// Harness text is left out of word runs, or its closing words and the
@@ -592,10 +651,10 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 	}
 	hashes := shingles(tokens)
 	for _, run := range copiedRuns(tokens, hashes, c.agentText, input.SentAt.Add(-authorshipWindow)) {
-		l.claim(run.start, run.end, spanQuoted, "Matches agent output from "+ago(input.SentAt, run.at)+" earlier", run.origin)
+		l.claim(run.start, run.end, spanQuoted, reasonAgentOutput.with(ago(input.SentAt, run.at)), run.origin)
 	}
 	for _, run := range copiedRuns(tokens, hashes, c.userText, time.Time{}) {
-		l.claim(run.start, run.end, spanResent, "Already sent "+ago(input.SentAt, run.at)+" earlier", run.origin)
+		l.claim(run.start, run.end, spanResent, reasonAlreadySent.with(ago(input.SentAt, run.at)), run.origin)
 	}
 	// A reused line counts as re-sent on its own only when it is too long to
 	// be a phrase typed again by chance; shorter ones only mark pasted output.
@@ -603,19 +662,19 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 	for index, line := range lines {
 		value := comparisonText[line[0]:line[1]]
 		if use := c.lines[keys[index]]; repeated[index] && use != nil && len(wordTokens(value)) >= shingleWords && !machineLine(value) {
-			l.claim(line[0], line[1], spanResent, "Line already sent in other conversations", use.origin)
+			l.claim(line[0], line[1], spanResent, reasonLineSent, use.origin)
 		}
 	}
 	for _, report := range feedback {
 		for _, note := range report.notes {
-			l.claim(note[0], note[1], spanTyped, "Human feedback comment", textOrigin{})
+			l.claim(note[0], note[1], spanTyped, reasonFeedbackComment, textOrigin{})
 		}
 	}
 	claimStructuredBlocks(l, heuristicText, lines, repeated)
 	if remaining := l.unclaimed(); hasPrevious && remaining >= typingCheckMinChars {
 		seconds := input.SentAt.Sub(previous).Seconds()
 		if seconds <= 0 || float64(remaining)/seconds > typingCharsPerSecond {
-			l.claim(0, len(text), spanPasted, fmt.Sprintf("Sent %s after the previous message, faster than typing", roundDuration(input.SentAt.Sub(previous))), textOrigin{})
+			l.claim(0, len(text), spanPasted, reasonFasterThanTyped.with(roundDuration(input.SentAt.Sub(previous))), textOrigin{})
 		}
 	}
 	// After the speed check, so pasted identifiers still count as text that
@@ -804,7 +863,7 @@ func claimMachineBlocks(l *labeler, text string, lines [][2]int, machine []bool)
 			}
 		}
 		if machines >= 3 && machines >= prose {
-			l.claim(lines[index][0], lines[last][1], spanPasted, "Log, trace, code, or data", textOrigin{})
+			l.claim(lines[index][0], lines[last][1], spanPasted, reasonMachineOutput, textOrigin{})
 		}
 		index = last + 1
 	}
@@ -814,7 +873,7 @@ func claimMachineBlocks(l *labeler, text string, lines [][2]int, machine []bool)
 // message formatted the way agents format replies. Repeated lines count as
 // machine lines.
 func claimStructuredBlocks(l *labeler, text string, lines [][2]int, repeated []bool) {
-	claimRuns := func(match func(string) bool, minimum int, reason string) {
+	claimRuns := func(match func(string) bool, minimum int, reason spanReason) {
 		for index := 0; index < len(lines); {
 			end := index
 			for end < len(lines) && match(text[lines[end][0]:lines[end][1]]) {
@@ -832,7 +891,7 @@ func claimStructuredBlocks(l *labeler, text string, lines [][2]int, repeated []b
 		machine[index] = repeated[index] || machineLine(value) || indentedLine(value)
 	}
 	claimMachineBlocks(l, text, lines, machine)
-	claimRuns(tableLine, 2, "Table")
+	claimRuns(tableLine, 2, reasonTable)
 	first, last, headings, bullets := -1, -1, 0, 0
 	for index, line := range lines {
 		value := text[line[0]:line[1]]
@@ -855,7 +914,7 @@ func claimStructuredBlocks(l *labeler, text string, lines [][2]int, repeated []b
 		for end+1 < len(lines) && strings.TrimSpace(text[lines[end+1][0]:lines[end+1][1]]) != "" {
 			end++
 		}
-		l.claim(lines[first][0], lines[end][1], spanPasted, "Formatted like agent output", textOrigin{})
+		l.claim(lines[first][0], lines[end][1], spanPasted, reasonAgentFormat, textOrigin{})
 	}
 }
 
@@ -913,7 +972,7 @@ func claimIdentifiers(l *labeler, text string, lines [][2]int, bodyStart int) {
 		counted := words + identifiers
 		share := float64(identifiers) / float64(max(counted, 1))
 		if counted >= identifierLineMin && share >= identifierLineShare || counted >= identifierProseMin && share >= identifierProseShare {
-			l.claim(start, line[1], spanPasted, "Mostly identifiers, paths, or code", textOrigin{})
+			l.claim(start, line[1], spanPasted, reasonIdentifierLine, textOrigin{})
 			continue
 		}
 		for index := 0; index < len(fields); {
@@ -928,7 +987,7 @@ func claimIdentifiers(l *labeler, text string, lines [][2]int, bodyStart int) {
 				}
 			}
 			if chars >= identifierRunChars {
-				l.claim(fields[index].start, fields[last].end, spanPasted, "Path, URL, or ID", textOrigin{})
+				l.claim(fields[index].start, fields[last].end, spanPasted, reasonIdentifier, textOrigin{})
 			}
 			index = end
 		}

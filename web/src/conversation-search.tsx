@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { TextSearchEditor } from "./text-search-editor";
-import { emptyTextSearch, searchRequest, type TextSearchDraft } from "./text-search-model";
+import { emptyTextSearch, searchRequest, withheldBatch, type TextSearchDraft } from "./text-search-model";
 import { SearchSelect } from "./search-select";
 import { Icon } from "./icons";
 
 type Hit = { message_id: string; conversation_id: string; workspace_id: string; snippet: string; start_byte: number; end_byte: number; range_kind: string };
-type Batch = { items: Hit[]; complete: boolean; next_cursor?: string; skipped_oversize: number; elapsed_ms: number; stop_reason: string; stop_message?: string; coverage: string };
+// cursor is the one this batch was requested with, so a withheld batch can be retried.
+type Batch = { items: Hit[]; complete: boolean; next_cursor?: string; skipped_oversize: number; elapsed_ms: number; stop_reason: string; stop_message?: string; coverage: string; cursor: string };
 type Options = { conversationID: string; workspaceID: string; title: string; reveal: (hit: Hit | null) => void; position: (id: string) => number };
 type Handle = { open: (term?: string, options?: { regex?: boolean; caseSensitive?: boolean; output?: boolean }) => void; close: () => void; destroy: () => void };
 declare global { interface Window { pharosMountConversationSearch?: (host: HTMLElement, options: Options) => Handle; } }
@@ -26,7 +27,7 @@ function ConversationSearch({ options, host, register }: { options: Options; hos
       const response = await fetch("/api/search/text", { method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
         body: JSON.stringify({ ...request, workspace_id: options.workspaceID, conversation_id: options.conversationID, cursor, limit: 50, timeout_ms: 1500 }) });
       const batch = await response.json(); if (!response.ok) throw new Error(batch.error ?? "Search failed");
-      if (!controller.signal.aborted) { setResult(batch); setApplied(value); setActive(-1); options.reveal(null); }
+      if (!controller.signal.aborted) { setResult({ ...batch, cursor }); setApplied(value); setActive(-1); options.reveal(null); }
     } catch (cause) { if (!controller.signal.aborted) setError(String(cause instanceof Error ? cause.message : cause)); }
     finally { if (!controller.signal.aborted) setBusy(false); }
   };
@@ -64,6 +65,7 @@ function ConversationSearch({ options, host, register }: { options: Options; hos
         <p className="text-editor-scope-note">{result.elapsed_ms} ms · {result.complete ? "All eligible messages checked." : `Stopped: ${result.stop_reason.replaceAll("_", " ")}. More messages may match.`}{result.skipped_oversize ? ` ${result.skipped_oversize} oversized messages were skipped.` : ""} Navigation reveals matching messages in the transcript.</p>
         {result.stop_message ? <p role="status">{result.stop_message}</p> : null}
         {result.next_cursor ? <button type="button" disabled={busy || !applied} onClick={() => applied && void run(applied, result.next_cursor)}>Next search batch</button> : null}
+        {withheldBatch(result) ? <button type="button" disabled={busy || !applied} onClick={() => applied && void run(applied, result.cursor)}>Retry this batch</button> : null}
         <details><summary>Search coverage</summary>{result.coverage}</details>
       </> : null}
     </div>
