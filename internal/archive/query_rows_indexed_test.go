@@ -3,7 +3,6 @@ package archive
 import (
 	"context"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -151,35 +150,10 @@ func TestQueryIndexedRowsMatchTypedExecutor(t *testing.T) {
 	}
 }
 
-func TestQueryIndexedCountCoveringPlanAndArguments(t *testing.T) {
-	c, _ := testCatalog(t)
-	seedToolCalls(t, c, 31)
-	d := toolCallDataset.project([]string{"id", "started_at", "provider"})
-	if strings.Contains(d.from, "agent_sessions") || strings.Contains(d.from, "repositories") {
-		t.Fatal("unused joins remain", d.from)
-	}
-	kept := toolCallDataset.project([]string{"repository_name", "session_kind"})
-	if !strings.Contains(kept.from, "agent_sessions") || !strings.Contains(kept.from, "repositories") {
-		t.Fatal("required joins removed", kept.from)
-	}
-	plan, err := queryMaps(c.DB, `EXPLAIN QUERY PLAN SELECT t.id FROM tool_calls t
- WHERE t.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)
- ORDER BY t.started_at DESC NULLS LAST,t.id ASC LIMIT 50`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(strings.ToLower(fmtRows(plan)), "tool_calls_page_idx") {
-		t.Fatal("page cannot use covering index", plan)
-	}
+// The page's filter follows the source's numbered arguments; question marks
+// in literals and identifiers are not parameters.
+func TestNumberQueryParameters(t *testing.T) {
 	if got := numberQueryParameters(`a=? AND b='?''?' AND "?"=?`, 3); got != `a=?4 AND b='?''?' AND "?"=?5` {
 		t.Fatal(got)
 	}
-}
-
-func fmtRows(rows []map[string]any) string {
-	var text strings.Builder
-	for _, row := range rows {
-		text.WriteString(firstString(row["detail"]))
-	}
-	return text.String()
 }

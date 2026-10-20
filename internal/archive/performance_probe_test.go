@@ -1,3 +1,14 @@
+//go:build probe
+
+// Query plan and timing probes for the Tools datasets, on an isolated
+// tools/dev.py snapshot. Probes build only with the probe tag, so they stay
+// out of go test ./...:
+//
+//	PHAROS_QUERY_PROBE=<dev library>/catalog/catalog.sqlite3 \
+//	  go test -tags probe -run 'TestQuery(PerformanceProbe|PerformanceProfile|IndexedPerformanceProfile)' -v ./internal/archive
+//
+// PHAROS_QUERY_PROBE_SQL=<file> also writes the compiled rows query there.
+
 package archive
 
 import (
@@ -12,8 +23,8 @@ import (
 	qt "github.com/Pythia-Software/query-table/backends/go"
 )
 
-// Explicitly opt in with an isolated tools/dev.py snapshot. No initialization,
-// migrations or source writes run against the selected library.
+// No initialization, migrations or source writes run against the selected
+// library.
 func TestQueryPerformanceProbe(t *testing.T) {
 	path := os.Getenv("PHAROS_QUERY_PROBE")
 	if path == "" {

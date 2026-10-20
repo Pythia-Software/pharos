@@ -132,7 +132,7 @@ func TestHomeQueryCardGroupedDestinations(t *testing.T) {
 			if view.CoverMetric != nil {
 				request.Metrics = []qt.AggSpec{*view.CoverMetric}
 			}
-			w := queryV2ReviewCall(t, server, config.APIToken, http.MethodPost, "/api/query/"+recipe.Dataset+"/query-v3", request)
+			w := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/"+recipe.Dataset+"/query-v3", request)
 			if w.Code != http.StatusOK {
 				t.Fatal(w.Code, w.Body.String())
 			}

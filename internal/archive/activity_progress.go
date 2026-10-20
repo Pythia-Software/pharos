@@ -87,6 +87,21 @@ func workTimingKey(kind string, work activityWork) string {
 	return activityTimingKey("work-v1:" + kind + ":" + work.Model + ":" + work.Phase + ":" + work.Unit)
 }
 
+func activityTimingKey(kind string) string {
+	return "activity_durations:" + currentHost().ID + ":" + kind
+}
+
+func activityTimingKind(runKind string) string {
+	switch runKind {
+	case "source-sync":
+		return "sync"
+	case indexRunKind:
+		return "index"
+	default:
+		return runKind
+	}
+}
+
 // Successful, measured stages only. Old whole-run durations deliberately do
 // not seed this model: they have no workload, phase, or extractor information.
 func (s *Server) recordWorkTiming(kind string, work activityWork, completed time.Time) {

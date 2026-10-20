@@ -1,13 +1,16 @@
 package archive
 
 import (
+	"context"
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -469,5 +472,143 @@ func TestAntigravityPrintModeSurvivesSharedRunLogs(t *testing.T) {
 	}
 	if got := printed(); !got[antigravityRoot] || got[antigravityOther] {
 		t.Fatalf("print-mode conversations with a log started long before = %v", got)
+	}
+}
+
+// TestAntigravityUnreadableRequestWAL: a conversation whose request database
+// has a WAL that cannot be read fails discovery, rather than being taken for
+// one with no requests. It is neither checked nor emitted, and a healthy
+// sibling still is. Once the WAL is readable, discovery recovers.
+func TestAntigravityUnreadableRequestWAL(t *testing.T) {
+	directory := t.TempDir()
+	content := antigravitySteps(map[string]any{"type": "USER_INPUT", "content": "request metadata"})
+	antigravityTranscript(t, directory, antigravityRoot, "transcript_full.jsonl", content)
+	antigravityTranscript(t, directory, antigravityOther, "transcript_full.jsonl", content)
+	antigravityRequestRows(t, directory, antigravityRoot)
+	// A WAL that links to itself cannot be opened.
+	wal := filepath.Join(directory, "conversations", antigravityRoot+".db-wal")
+	if err := os.Symlink(filepath.Base(wal), wal); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &antigravityAdapter{baseAdapter: baseAdapter{config: SourceConfig{Name: "antigravity", Kind: "antigravity", Path: directory}}}
+	var checked, emitted []string
+	err := adapter.discoverParts(func(parts []sourcePart) bool {
+		checked = append(checked, parts[0].item)
+		return false
+	}, func(record *WorkspaceRecord, _ []sourcePart) error {
+		emitted = append(emitted, record.SourceID)
+		return nil
+	})
+	// The one group checked is the sibling, which was emitted.
+	if err == nil || len(checked) != 1 || !slices.Equal(emitted, []string{antigravityOther}) {
+		t.Fatalf("an unreadable WAL advanced its group or aborted its sibling: checked=%v emitted=%v error=%v", checked, emitted, err)
+	}
+	if err := os.Remove(wal); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.discoverParts(func([]sourcePart) bool { return true }, func(*WorkspaceRecord, []sourcePart) error { return nil }); err != nil {
+		t.Fatalf("discovery did not recover after the WAL became readable: %v", err)
+	}
+}
+
+func TestAntigravityMovingGroupDoesNotAbortHealthySibling(t *testing.T) {
+	for _, movement := range []string{"append", "remove", "remove-before-open", "remove-before-stat"} {
+		t.Run(movement, func(t *testing.T) {
+			directory := t.TempDir()
+			content := antigravitySteps(map[string]any{"type": "USER_INPUT", "content": "stable message"})
+			rootPath := antigravityTranscript(t, directory, antigravityRoot, "transcript_full.jsonl", content)
+			childPath := antigravityTranscript(t, directory, antigravityChild, "transcript_full.jsonl", content)
+			antigravityTranscript(t, directory, antigravityOther, "transcript_full.jsonl", content)
+			antigravitySummaryRows(t, directory,
+				[]any{antigravityRoot, "Root", "", "", 0, ""},
+				[]any{antigravityChild, "Child", "", antigravityRoot, 1, ""},
+				[]any{antigravityOther, "Sibling", "", "", 0, ""})
+			adapter := &antigravityAdapter{baseAdapter: baseAdapter{config: SourceConfig{Name: "antigravity", Kind: "antigravity", Path: directory}}}
+			previousHook := parseHook
+			t.Cleanup(func() { parseHook = previousHook })
+			parseHook = func(path string) {
+				if path != rootPath {
+					return
+				}
+				switch movement {
+				case "append":
+					appendSourceFile(t, rootPath, content)
+				case "remove":
+					if err := os.Remove(rootPath); err != nil {
+						t.Fatal(err)
+					}
+				case "remove-before-open":
+					if err := os.Remove(childPath); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			var emitted []string
+			unchanged := func(parts []sourcePart) bool {
+				if movement == "remove-before-stat" && parts[0].item == adapter.original(rootPath) {
+					if err := os.Remove(filepath.Join(directory, "brain", antigravityOther, antigravityLogs, "transcript_full.jsonl")); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return false
+			}
+			err := adapter.discoverParts(unchanged, func(record *WorkspaceRecord, _ []sourcePart) error {
+				emitted = append(emitted, record.SourceID)
+				return nil
+			})
+			want := []string{antigravityOther}
+			if movement == "remove-before-stat" {
+				want = []string{antigravityRoot}
+			}
+			if err != nil || !slices.Equal(emitted, want) {
+				t.Fatalf("moving group aborted discovery or emitted partial state: emitted=%v error=%v", emitted, err)
+			}
+			parseHook = nil
+			if movement == "append" {
+				emitted = nil
+				if err := adapter.discoverParts(nil, func(record *WorkspaceRecord, _ []sourcePart) error {
+					emitted = append(emitted, record.SourceID)
+					return nil
+				}); err != nil || !slices.Contains(emitted, antigravityRoot) {
+					t.Fatalf("stable group was not eligible on retry: emitted=%v error=%v", emitted, err)
+				}
+			}
+		})
+	}
+}
+
+func TestAntigravityAuditExcludesUnrelatedRunLogEvidence(t *testing.T) {
+	useHost(t, "host-a")
+	directory := t.TempDir()
+	antigravityTranscript(t, directory, antigravityRoot, "transcript_full.jsonl", antigravitySteps(map[string]any{"type": "USER_INPUT", "content": "bounded real CLI evidence"}))
+	writeSourceFile(t, filepath.Join(directory, "log", "cli-relevant.log"), "Print mode: conversation="+antigravityRoot+"\n")
+	// Bigger than the automatic budget on its own.
+	override(t, &automaticAuditBytes, 64<<10)
+	writeSourceFile(t, filepath.Join(directory, "log", "cli-unrelated.log"), strings.Repeat("unrelated log data", 4<<10))
+	source := SourceConfig{Name: "antigravity-cli", Kind: "antigravity", Path: directory, Account: "local", Enabled: true}
+	server := automaticTestServer(t, source)
+	ingestSource(t, server.Catalog, source)
+	unit := firstSyncUnit(t, server.Catalog, source)
+	if result := server.Catalog.auditUnit(t.Context(), unit, "cli-evidence", automaticAuditBytes); result.Outcome != "passed" {
+		t.Fatalf("unrelated CLI logs defeated a bounded group audit: %+v", result)
+	}
+}
+
+func TestAntigravityLogReaderHandlesChunkBoundariesAndLongLines(t *testing.T) {
+	for _, offset := range []int{0, 32710, 32740, 32768, 65500, 65536} {
+		path := filepath.Join(t.TempDir(), "cli.log")
+		content := strings.Repeat("x", offset) + "Print mode: conversation=" + antigravityRoot + "\n" + strings.Repeat("x", 128*1024) + "Print mode: conversation=" + antigravityChild + "\nPrint mode: conversation=" + antigravityRoot
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		log, err := readAntigravityRunLog(t.Context(), path, make([]byte, 64*1024))
+		if err != nil || !log.print || !slices.Equal(log.ids, []string{antigravityRoot, antigravityChild}) {
+			t.Fatalf("offset %d: streaming print-mode IDs=%v error=%v", offset, log.ids, err)
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		if _, err := readAntigravityRunLog(ctx, path, make([]byte, 64*1024)); !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled log read did not stop: %v", err)
+		}
 	}
 }

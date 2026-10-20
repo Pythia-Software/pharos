@@ -36,6 +36,26 @@ func configurationPredicate(modelColumn, effortColumn, model, effort string) (st
 	return strings.Join(clauses, " AND "), args
 }
 
+// workspaceConfigurationFilter matches workspaces w with a conversation, or a
+// message within one, recorded with the model and effort. It selects the
+// workspaces once, rather than probing messages for each of tens of
+// thousands of workspaces.
+func workspaceConfigurationFilter(model, effort string) (string, []any) {
+	conversation, conversationArgs := configurationPredicate("ce.model", "ce.effort", model, effort)
+	message, messageArgs := configurationPredicate("COALESCE(me.model,ce.model)", "me.effort", model, effort)
+	return "w.id IN (SELECT ce.workspace_id FROM conversations ce WHERE " + conversation + " UNION SELECT ce.workspace_id FROM messages me JOIN conversations ce ON ce.id=me.conversation_id WHERE (me.model IS NOT NULL OR me.effort IS NOT NULL) AND " + message + ")",
+		append(conversationArgs, messageArgs...)
+}
+
+// conversationConfigurationFilter matches conversations c recorded with the
+// model and effort, or with a message that was.
+func conversationConfigurationFilter(model, effort string) (string, []any) {
+	conversation, conversationArgs := configurationPredicate("c.model", "c.effort", model, effort)
+	message, messageArgs := configurationPredicate("COALESCE(me.model,c.model)", "me.effort", model, effort)
+	return "((" + conversation + ") OR EXISTS(SELECT 1 FROM messages me WHERE me.conversation_id=c.id AND (me.model IS NOT NULL OR me.effort IS NOT NULL) AND " + message + "))",
+		append(conversationArgs, messageArgs...)
+}
+
 // effortSetting reads explicit configuration only. Thinking token counts and
 // budgets do not establish an effort level, and absence does not imply a default.
 // The boolean distinguishes a recorded reset (null/empty) from an absent field.

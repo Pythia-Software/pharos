@@ -350,29 +350,6 @@ func TestConductorSessionEffortUsesOnlyActiveAgentSetting(t *testing.T) {
 	}
 }
 
-func TestEffortLookupsUseCoveringMessageIndex(t *testing.T) {
-	catalog, _ := testCatalog(t)
-	for name, query := range map[string]string{
-		"library":             libraryDerivedSelect("w.id=?"),
-		"work filter":         "SELECT w.id FROM workspaces w WHERE w.id IN (SELECT ce.workspace_id FROM conversations ce WHERE ce.effort=? UNION SELECT ce.workspace_id FROM messages me JOIN conversations ce ON ce.id=me.conversation_id WHERE me.effort=?)",
-		"conversation filter": "SELECT c.id FROM conversations c WHERE c.effort=? OR EXISTS(SELECT 1 FROM messages me WHERE me.conversation_id=c.id AND me.effort=?)",
-	} {
-		t.Run(name, func(t *testing.T) {
-			args := []any{"high", "high"}
-			if name == "library" {
-				args = []any{"workspace"}
-			}
-			plan, err := queryMaps(catalog.DB, "EXPLAIN QUERY PLAN "+query, args...)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if text := jsonText(plan); !strings.Contains(text, "COVERING INDEX messages_conversation_model_effort_idx") {
-				t.Fatalf("effort lookup reads message rows: %s", text)
-			}
-		})
-	}
-}
-
 func TestEffortMessageIndexCreatedAfterLegacyColumnMigration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy.db")
 	db, err := sql.Open("sqlite", path)

@@ -118,7 +118,8 @@ GOWORK=off go test -race ./internal/archive \
 ```
 
 The benchmark creates its request fixture if absent; retain it to compare the
-same clock and filters. Opt-in profiles in `performance_probe_test.go` require
+same clock and filters. Opt-in profiles in `performance_probe_test.go` (built
+with `-tags probe`) require
 `PHAROS_QUERY_PROBE` to point to a dev catalog with a `.pharos-dev` marker, and
 open the source read only without initialization.
 

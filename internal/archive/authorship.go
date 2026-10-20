@@ -1166,6 +1166,19 @@ func (c *Catalog) RebuildAuthorship(ctx context.Context, generation string) erro
 	return c.storeAuthorship(ctx, results, launches, generation)
 }
 
+// The user messages to classify, and the agent replies, in send order, that
+// they are compared with. messages_prose_idx serves both without a temporary
+// sort.
+const (
+	authorshipInputsQuery = `SELECT m.id,m.conversation_id,c.workspace_id,m.text,m.created_at,COALESCE(m.sender,''),w.source_kind,c.parent_id IS NOT NULL,
+			COALESCE(c.harness,''),COALESCE(c.origin_host_id,'')
+		FROM messages m
+		JOIN conversations c ON c.id=m.conversation_id JOIN workspaces w ON w.id=c.workspace_id
+		WHERE m.kind='message' AND m.role='user' AND m.created_at IS NOT NULL`
+	authorshipRepliesQuery = `SELECT id,conversation_id,created_at,text FROM messages
+		WHERE kind='message' AND role='assistant' AND created_at>=? ORDER BY created_at`
+)
+
 // authorshipInputs links headless runs to the commands that launched them,
 // and reads the user messages to classify.
 func (c *Catalog) authorshipInputs(ctx context.Context) ([]authorInput, []conversationLaunch, error) {
@@ -1245,11 +1258,7 @@ func (c *Catalog) authorInputs(ctx context.Context, representative map[string]st
 	for index := range launches {
 		launched[launches[index].child] = &launches[index]
 	}
-	rows, err := c.DB.QueryContext(ctx, `SELECT m.id,m.conversation_id,c.workspace_id,m.text,m.created_at,COALESCE(m.sender,''),w.source_kind,c.parent_id IS NOT NULL,
-			COALESCE(c.harness,''),COALESCE(c.origin_host_id,'')
-		FROM messages m
-		JOIN conversations c ON c.id=m.conversation_id JOIN workspaces w ON w.id=c.workspace_id
-		WHERE m.kind='message' AND m.role='user' AND m.created_at IS NOT NULL`)
+	rows, err := c.DB.QueryContext(ctx, authorshipInputsQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -1290,8 +1299,7 @@ func (c *Catalog) classifyInputs(ctx context.Context, inputs []authorInput) ([]a
 	if len(inputs) == 0 {
 		return results, nil
 	}
-	rows, err := c.DB.QueryContext(ctx, `SELECT id,conversation_id,created_at,text FROM messages
-		WHERE kind='message' AND role='assistant' AND created_at>=? ORDER BY created_at`, formatTime(inputs[0].SentAt.Add(-authorshipWindow)))
+	rows, err := c.DB.QueryContext(ctx, authorshipRepliesQuery, formatTime(inputs[0].SentAt.Add(-authorshipWindow)))
 	if err != nil {
 		return nil, err
 	}

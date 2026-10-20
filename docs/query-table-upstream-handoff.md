@@ -251,8 +251,7 @@ Raw logs are in Pharos's gitignored `.context/` directory:
 `query-table-final-memory-bench.txt`, `query-table-ledger-bench.txt`,
 `query-table-day-optimized.txt`, `query-table-peak-memory.txt`, and
 `query-table-library-staging-review.txt`. Benchmarks are checked in at
-`internal/archive/query_table_v2_test.go` and
-`internal/archive/query_table_v2_review_test.go` so the results can be
+`internal/archive/query_table_v2_test.go` so the results can be
 reproduced without these local logs.
 
 ## Follow-up priorities

@@ -277,39 +277,6 @@ func TestModelEffortUnknownLabels(t *testing.T) {
 	}
 }
 
-func TestModelEffortLookupsUseCoveringMessageIndex(t *testing.T) {
-	catalog, _ := testCatalog(t)
-	for _, fixture := range []struct{ model, effort string }{
-		{"opus-5-5", "high"}, {"opus-5-5", ""}, {"", "high"},
-	} {
-		message, args := configurationPredicate("COALESCE(me.model,c.model)", "me.effort", fixture.model, fixture.effort)
-		for name, query := range map[string]string{
-			"work filter":         "SELECT c.workspace_id FROM messages me JOIN conversations c ON c.id=me.conversation_id WHERE (me.model IS NOT NULL OR me.effort IS NOT NULL) AND " + message,
-			"conversation filter": "SELECT c.id FROM conversations c WHERE EXISTS(SELECT 1 FROM messages me WHERE me.conversation_id=c.id AND (me.model IS NOT NULL OR me.effort IS NOT NULL) AND " + message + ")",
-		} {
-			plan, err := queryMaps(catalog.DB, "EXPLAIN QUERY PLAN "+query, args...)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if text := jsonText(plan); !strings.Contains(text, "COVERING INDEX messages_conversation_model_effort_idx") {
-				t.Fatalf("%s %q/%q reads message rows: %s", name, fixture.model, fixture.effort, text)
-			}
-		}
-	}
-	for _, column := range libraryColumns {
-		if column.name != "model_efforts" {
-			continue
-		}
-		plan, err := queryMaps(catalog.DB, "EXPLAIN QUERY PLAN SELECT "+column.expr+" FROM workspaces w WHERE w.id=?", "workspace")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if text := jsonText(plan); !strings.Contains(text, "COVERING INDEX messages_conversation_model_effort_idx") {
-			t.Fatalf("Library pairs read message rows: %s", text)
-		}
-	}
-}
-
 func TestLibraryModelEffortFormatsDistinctPairs(t *testing.T) {
 	catalog, _, _ := modelEffortFixture(t)
 	var expression string

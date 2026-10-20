@@ -146,7 +146,7 @@ PHAROS_USAGE_PROBE=/path/to/dev/catalog/catalog.sqlite3 \
 PHAROS_USAGE_SERVER=127.0.0.1:8859 \
 PHAROS_USAGE_ASSETS="$PWD/internal/archive/assets" \
 PHAROS_USAGE_TIMING=/path/to/captured-timing.json \
-go test ./internal/archive -run '^TestUsagePerformanceServer$' \
+go test -tags probe ./internal/archive -run '^TestUsagePerformanceServer$' \
   -v -count=1 -timeout=120m
 ```
 

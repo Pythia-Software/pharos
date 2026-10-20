@@ -114,6 +114,10 @@ func absentMetrics(status string) map[string]statMetricValue {
 	return values
 }
 
+// childConversationQuery asks whether a conversation has children, from
+// conversations_parent_idx alone.
+const childConversationQuery = "SELECT EXISTS(SELECT 1 FROM conversations WHERE parent_id=?)"
+
 func (c *Catalog) projectWorkspaceMetrics(ctx context.Context, tx *sql.Tx, book priceBook, id string) error {
 	conversations, err := queryMapsContext(ctx, tx, `SELECT c.id,c.provider,c.started_at,c.ended_at FROM conversations c WHERE c.workspace_id=? AND `+currentGroupConversation("c"), id)
 	if err != nil {
@@ -205,7 +209,7 @@ func (c *Catalog) projectWorkspaceMetrics(ctx context.Context, tx *sql.Tx, book 
 			}
 		}
 		var childExists bool
-		if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM conversations WHERE parent_id=?)", cid).Scan(&childExists); err != nil {
+		if err = tx.QueryRowContext(ctx, childConversationQuery, cid).Scan(&childExists); err != nil {
 			return err
 		}
 		hasChildren = hasChildren || childExists

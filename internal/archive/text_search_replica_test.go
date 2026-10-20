@@ -1,3 +1,12 @@
+//go:build probe
+
+// Times text search and the record composers against interactive budgets on
+// a consistent scratch backup of a real catalog. Probes build only with the
+// probe tag, so they stay out of go test ./...:
+//
+//	PHAROS_SEARCH_REPLICA=/path/to/scratch-backup.sqlite3 \
+//	  go test -tags probe -run TestTextSearchReplica -v ./internal/archive
+
 package archive
 
 import (
@@ -13,7 +22,6 @@ import (
 	qt "github.com/Pythia-Software/query-table/backends/go"
 )
 
-// Opt in with PHAROS_SEARCH_REPLICA pointing at a consistent scratch backup.
 // This harness is read-only and never calls OpenCatalog / migrations.
 func TestTextSearchReplica(t *testing.T) {
 	path := os.Getenv("PHAROS_SEARCH_REPLICA")

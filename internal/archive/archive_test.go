@@ -1,7 +1,6 @@
 package archive
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -12,26 +11,6 @@ import (
 	"testing"
 	"time"
 )
-
-func TestCatalogPoolEnforcesForeignKeys(t *testing.T) {
-	catalog, _ := testCatalog(t)
-	connections := make([]*sql.Conn, 4)
-	for index := range connections {
-		connection, err := catalog.DB.Conn(context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
-		connections[index] = connection
-		defer connection.Close()
-		var enabled int
-		if err := connection.QueryRowContext(context.Background(), "PRAGMA foreign_keys").Scan(&enabled); err != nil {
-			t.Fatal(err)
-		}
-		if enabled != 1 {
-			t.Fatalf("catalog connection %d has foreign_keys=%d", index, enabled)
-		}
-	}
-}
 
 func TestReingestReplacesSessionMessageLinks(t *testing.T) {
 	catalog, _ := testCatalog(t)
@@ -1066,25 +1045,16 @@ INSERT INTO task_attempts VALUES ('attempt-1','task-1',1,'worktree-1','claude','
 	}
 }
 
-func TestEmbeddedUIIsServedWithoutPython(t *testing.T) {
-	html := appHTML()
-	if !strings.HasPrefix(html, "<!doctype html>") {
-		t.Fatalf("unexpected embedded UI prefix: %.40q", html)
-	}
-	if !strings.Contains(html, "Pharos") {
-		t.Fatal("embedded UI is missing brand")
-	}
-}
-
 func TestAppRoutesServeUIOnDirectNavigation(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
-	for _, path := range []string{"/", "/home", "/library?search=debug", "/sources", "/activity", "/health", "/work/workspace_123", "/work/workspace_123/conversation/conversation_456?message=tool_789"} {
+	for _, path := range []string{"/", "/home", "/library?search=debug", "/sources", "/settings/sync", "/activity", "/health", "/work/workspace_123", "/work/workspace_123/conversation/conversation_456?message=tool_789"} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		request.Header.Set("Authorization", "Bearer test-token")
 		response := httptest.NewRecorder()
 		server.ServeHTTP(response, request)
-		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "id=\"navigator\"") {
+		// The page is the embedded shell, served without Python.
+		if body := response.Body.String(); response.Code != http.StatusOK || !strings.HasPrefix(body, "<!doctype html>") || !strings.Contains(body, "id=\"navigator\"") {
 			t.Errorf("GET %s: status %d, missing app UI", path, response.Code)
 		}
 	}

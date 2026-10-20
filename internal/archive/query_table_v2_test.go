@@ -6,15 +6,17 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
-	"modernc.org/sqlite"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"modernc.org/sqlite"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
 )
@@ -73,213 +75,6 @@ func TestGeneratedQuerySchemas(t *testing.T) {
 				t.Fatalf("generated schema differs: %v", err)
 			}
 		})
-	}
-}
-func TestQueryV2MetricMatrix(t *testing.T) {
-	db, d := queryV2Fixture(t, 1001)
-	specs := []qt.AggSpec{}
-	for _, op := range []string{"count", "count_distinct", "sum", "avg", "min", "max"} {
-		specs = append(specs, qt.AggSpec{ID: op, Op: op, Field: "x", GroupBy: []string{"category", "other"}})
-	}
-	for i, formula := range []string{"COUNT()", "MEDIAN([x])", "SUM([x])/NULLIF(SUM([y]),0)", "AVG(IF([flag],[x],NULL))", "IF(COUNT()>0,SUM([x]),1/0)", "COALESCE(SUM([x]),1/0)"} {
-		specs = append(specs, qt.AggSpec{ID: fmt.Sprint("formula", i), Expression: formula, GroupBy: []string{"category"}})
-	}
-	specs = append(specs, qt.AggSpec{ID: "paired", Expression: "AVG([x])", ExpressionY: "SUM([y])", GroupBy: []string{"category"}, Sort: []qt.MetricSort{{Key: "value", Dir: "desc"}}, GroupLimit: 3}, qt.AggSpec{ID: "box", Distribution: &qt.MetricDistribution{Kind: "box", Input: "[x]+1", Whiskers: "tukey"}, GroupBy: []string{"category"}}, qt.AggSpec{ID: "histogram", Distribution: &qt.MetricDistribution{Kind: "histogram", Input: "[x]", Bins: 30}, GroupBy: []string{"category"}})
-	q := metricRequest(specs...)
-	result, err := d.ExecuteV2(context.Background(), db, nil, &q, qt.PlanOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(result.Metrics.Metrics) != len(specs) {
-		t.Fatal(result)
-	}
-	var edges []float64
-	for _, m := range result.Metrics.Metrics {
-		if m.ProcessedRows != 1001 || m.Coverage != "exact" || len(m.Buckets) == 0 {
-			t.Fatal(m)
-		}
-		var count int64
-		for _, bucket := range m.Buckets {
-			if bucket.Error != "" {
-				t.Fatalf("%s: %s", m.ID, bucket.Error)
-			}
-			count += bucket.Count
-			if m.ID == "histogram" {
-				h := bucket.Distribution.(*qt.MetricHistogramDistribution)
-				if edges == nil {
-					edges = h.Edges
-				}
-				if !reflect.DeepEqual(edges, h.Edges) {
-					t.Fatal("histogram edges differ")
-				}
-				var n int64
-				for _, c := range h.Counts {
-					n += c
-				}
-				if n != h.N || *bucket.NullCount+h.N != bucket.Count {
-					t.Fatal(bucket)
-				}
-			}
-			if m.ID == "paired" && bucket.Y == nil {
-				t.Fatal("paired Y missing")
-			}
-		}
-		if m.ID == "paired" {
-			if m.GroupCount != 10 || len(m.Buckets) != 3 {
-				t.Fatal(m)
-			}
-		} else if count != 1001 {
-			t.Fatalf("%s count=%d", m.ID, count)
-		}
-	}
-	q = metricRequest(qt.AggSpec{ID: "shown", Expression: "COUNT()", Scope: "shownRows"})
-	q.Limit = 7
-	q.Offset = 3
-	q.OrderBy = []qt.OrderBy{{Field: "x", Dir: "desc"}}
-	result, err = d.ExecuteV2(context.Background(), db, nil, &q, qt.PlanOptions{})
-	if err != nil || result.Metrics.Metrics[0].Buckets[0].Value != float64(7) || result.Metrics.Metrics[0].ProcessedRows != 7 {
-		t.Fatalf("shown rows: %+v %v", result, err)
-	}
-	q = metricRequest(qt.AggSpec{ID: "zero", Expression: "SUM([x])/0"})
-	result, err = d.ExecuteV2(context.Background(), db, nil, &q, qt.PlanOptions{})
-	if err != nil || result.Metrics.Metrics[0].Buckets[0].Error != "divide_by_zero" {
-		t.Fatalf("division diagnostic: %+v %v", result, err)
-	}
-}
-func TestQueryV2ComputedAndLimits(t *testing.T) {
-	db, d := queryV2Fixture(t, 100)
-	store := qt.SQLiteComputedColumnStore{DB: db}
-	revisions := map[string]string{}
-	for _, c := range []qt.ComputedColumn{{ID: "double", Label: "Double", Expression: qt.ComputedExpression{Language: "qt-expr", Version: 1, Source: "[x]*2"}}, {ID: "next", Label: "Next", Expression: qt.ComputedExpression{Language: "qt-expr", Version: 1, Source: "[@computed/double]+1"}}} {
-		saved, err := store.Save(context.Background(), "local", "samples", qt.SaveComputedColumnRequest{Column: c})
-		if err != nil {
-			t.Fatal(err)
-		}
-		revisions[c.ID] = saved.Revision
-	}
-	tx, err := db.Begin()
-	if err != nil {
-		t.Fatal(err)
-	}
-	handshake, err := d.DescribeComputedIn(context.Background(), tx, []string{"next"}, qt.PlanOptions{})
-	tx.Rollback()
-	if err != nil || !reflect.DeepEqual(handshake.ResolvedRevisions, revisions) {
-		t.Fatalf("handshake %+v %v", handshake, err)
-	}
-	q := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, ExpectedRevisions: revisions, WireQuery: qt.WireQuery{Select: []string{"@computed/next"}, Limit: 5, OrderBy: qt.OrderBys{{Field: "@computed/next", Dir: "desc"}}}}
-	result, err := d.ExecuteV2(context.Background(), db, &q, nil, qt.PlanOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(result.Rows.Computed) != 5 || result.Rows.Computed[0].Values["next"].Value != float64(199) {
-		t.Fatal(result)
-	}
-	q.ExpectedRevisions = map[string]string{"double": "stale", "next": revisions["next"]}
-	if _, err = d.ExecuteV2(context.Background(), db, &q, nil, qt.PlanOptions{}); err == nil {
-		t.Fatal("stale revision accepted")
-	}
-	m := metricRequest(qt.AggSpec{ID: "count", Expression: "COUNT()"})
-	d.MaxPopulation = 99
-	if _, err = d.ExecuteV2(context.Background(), db, nil, &m, qt.PlanOptions{}); err == nil {
-		t.Fatal("population budget ignored")
-	}
-	d.MaxPopulation = 100
-	d.MaxGroups = 2
-	m.Metrics[0].GroupBy = []string{"category"}
-	m.Metrics[0].GroupLimit = 1
-	// Query Table 0.8 reports a metric's budget failure on that metric.
-	if result, err := d.ExecuteV2(context.Background(), db, nil, &m, qt.PlanOptions{}); err != nil || !strings.Contains(result.Metrics.Metrics[0].Error, "group") || len(result.Metrics.Metrics[0].Buckets) != 0 {
-		t.Fatalf("top-N hid group budget: %+v %v", result.Metrics, err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err = d.ExecuteV2(ctx, db, nil, &m, qt.PlanOptions{}); err == nil {
-		t.Fatal("cancellation ignored")
-	}
-}
-func TestQueryV2PharosHTTP(t *testing.T) {
-	catalog, config := testCatalog(t)
-	seedToolCalls(t, catalog, 300)
-	server := testServer(t, config, catalog)
-	call := func(method, path, body string) *httptest.ResponseRecorder {
-		r := httptest.NewRequest(method, path, strings.NewReader(body))
-		r.Header.Set("Authorization", "Bearer "+config.APIToken)
-		w := httptest.NewRecorder()
-		server.ServeHTTP(w, r)
-		return w
-	}
-	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "parallelism"} {
-		t.Run(dataset, func(t *testing.T) {
-			w := call(http.MethodGet, "/api/query/"+dataset+"/capabilities", "")
-			if w.Code != 200 {
-				t.Fatal(w.Code, w.Body.String())
-			}
-			schema, _ := sqliteQuerySchema(dataset)
-			selection := []string{}
-			specs := []qt.AggSpec{{ID: "n", Expression: "COUNT()"}}
-			for name, field := range schema.Fields {
-				if field.Expr != "" {
-					selection = append(selection, name)
-				}
-				if field.Kind == qt.FieldNumber && field.Expr != "" && (field.AggregateOps == nil || len(field.AggregateOps) > 0) {
-					specs = append(specs, qt.AggSpec{ID: name, Expression: "SUM([" + name + "])"})
-				}
-			}
-			rowsBody, _ := json.Marshal(qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: selection, Limit: 10}})
-			w = call(http.MethodPost, "/api/query/"+dataset+"/rows-v2", string(rowsBody))
-			if w.Code != 200 {
-				t.Fatal("typed rows", w.Code, w.Body.String())
-			}
-			for start := 0; start < len(specs); start += 20 {
-				metricBody, _ := json.Marshal(metricRequest(specs[start:min(start+20, len(specs))]...))
-				w = call(http.MethodPost, "/api/query/"+dataset+"/metrics", string(metricBody))
-				if w.Code != 200 {
-					t.Fatal(w.Code, w.Body.String())
-				}
-			}
-		})
-	}
-	body := `{"column":{"id":"duration_s","label":"Seconds","expression":{"language":"qt-expr","version":1,"source":"[duration_ms]/1000"}},"expectedRevision":null}`
-	w := call(http.MethodPut, "/api/query-computed-columns?dataset=pharos_tool_calls", body)
-	if w.Code != 200 {
-		t.Fatal(w.Code, w.Body.String())
-	}
-	var column qt.ComputedColumn
-	if err := json.Unmarshal(w.Body.Bytes(), &column); err != nil {
-		t.Fatal(err)
-	}
-	w = call(http.MethodPut, "/api/query-computed-columns?dataset=pharos_tool_calls", body)
-	if w.Code != 409 {
-		t.Fatal("create conflict", w.Code)
-	}
-	w = call(http.MethodPost, "/api/query/tool_calls/rows-v2", `{"version":2,"profile":"qt-sqlite-v1","expectedRevisions":{"duration_s":"`+column.Revision+`"},"select":["id","@computed/duration_s"],"orderBy":[{"field":"@computed/duration_s","dir":"desc"}],"limit":5}`)
-	if w.Code != 200 {
-		t.Fatal(w.Code, w.Body.String())
-	}
-	for _, formula := range []string{"SUM([duration_ms])", "[missing]", "[@computed/bad]", "[duration_ms]+"} {
-		invalid, _ := json.Marshal(qt.SaveComputedColumnRequest{Column: qt.ComputedColumn{ID: "bad", Label: "Bad", Expression: qt.ComputedExpression{Language: "qt-expr", Version: 1, Source: formula}}})
-		w = call(http.MethodPut, "/api/query-computed-columns?dataset=pharos_tool_calls", string(invalid))
-		if w.Code != 400 {
-			t.Fatal("invalid definition persisted", formula, w.Code, w.Body.String())
-		}
-	}
-	w = call(http.MethodGet, "/api/query/tool_calls/capabilities", "")
-	if w.Code != 200 {
-		t.Fatal("catalogue could not load after rejected edit", w.Body.String())
-	}
-	for _, path := range []string{"/api/query/tool_calls/metrics", "/api/query/tool_calls/rows-v2", "/api/query/tool_calls"} {
-		w = call(http.MethodPost, path, `{"version":2,"limit":1,"metrics":[]} {}`)
-		if w.Code != 400 {
-			t.Fatal("bad envelope accepted", path, w.Code)
-		}
-	}
-	r := httptest.NewRequest(http.MethodPut, "/api/query-computed-columns?dataset=pharos_tool_calls", strings.NewReader(body))
-	r.Header.Set("Authorization", "Bearer "+config.APIToken)
-	r.Header.Set("Origin", "https://other.example")
-	w = httptest.NewRecorder()
-	server.ServeHTTP(w, r)
-	if w.Code != 403 {
-		t.Fatal("cross-origin write accepted", w.Code)
 	}
 }
 
@@ -409,17 +204,6 @@ func TestQueryV2IndexedCandidates(t *testing.T) {
 		if err != nil || !same(got.SQLiteV2ExecutionResult, want) {
 			t.Fatalf("candidate result differs: %v %v", where, err)
 		}
-	}
-	indexed := toolCallDataset
-	indexed.toolSearchIndexed = true
-	source, args := indexed.v2IndexedSource(schema, []qt.WhereTerm{{Field: "command", Op: "contains", Value: "go test"}})
-	plan, err := queryMapsContext(context.Background(), catalog.DB, "EXPLAIN QUERY PLAN SELECT count(*) FROM ("+source+")", args...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := fmt.Sprint(plan)
-	if !strings.Contains(text, "VIRTUAL TABLE INDEX") {
-		t.Fatal("trigram index missing", text)
 	}
 }
 
@@ -615,44 +399,130 @@ func BenchmarkPharosToolLedgerV2(b *testing.B) {
 	}
 }
 
-func TestQueryV2TempStorageLease(t *testing.T) {
+// TestQueryTempStorageLease: each engine's transaction sets the temp store
+// its queries need, and on release restores the connection's own (also
+// after cancellation, and when released twice) and leaves no scratch tables.
+func TestQueryTempStorageLease(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	catalog.DB.SetMaxOpenConns(1)
-	var original int
-	if err := catalog.DB.QueryRow("PRAGMA temp_store").Scan(&original); err != nil {
-		t.Fatal(err)
+	for _, engine := range []struct {
+		name  string
+		begin func(context.Context, *sql.DB) (*sql.Tx, func() error, error)
+		mode  int    // what the engine's queries need
+		prior string // the connection's own setting
+	}{
+		{"V2 stages in memory", beginQueryV2, 2, "DEFAULT"},
+		{"large V3 copies spill to disk", beginQueryV3, 1, "MEMORY"},
+	} {
+		t.Run(engine.name, func(t *testing.T) {
+			if _, err := catalog.DB.Exec("PRAGMA temp_store=" + engine.prior); err != nil {
+				t.Fatal(err)
+			}
+			var original, mode int
+			if err := catalog.DB.QueryRow("PRAGMA temp_store").Scan(&original); err != nil {
+				t.Fatal(err)
+			}
+			tx, release, err := engine.begin(context.Background(), catalog.DB)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := tx.QueryRow("PRAGMA temp_store").Scan(&mode); err != nil || mode != engine.mode {
+				t.Fatalf("temp_store=%d during the query, want %d: %v", mode, engine.mode, err)
+			}
+			if _, err := tx.Exec("CREATE TEMP TABLE lease_probe(n)"); err != nil {
+				t.Fatal(err)
+			}
+			if err := release(); err != nil {
+				t.Fatal(err)
+			}
+			if err := release(); err != nil {
+				t.Fatal("second release:", err)
+			}
+			if err := catalog.DB.QueryRow("PRAGMA temp_store").Scan(&mode); err != nil || mode != original {
+				t.Fatal("connection settings leaked", mode, original, err)
+			}
+			var tables int
+			if err := catalog.DB.QueryRow("SELECT count(*) FROM sqlite_temp_master").Scan(&tables); err != nil || tables != 0 {
+				t.Fatal("staging leaked", tables, err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			_, release, err = engine.begin(ctx, catalog.DB)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cancel()
+			_ = release()
+			if err := catalog.DB.QueryRow("PRAGMA temp_store").Scan(&mode); err != nil || mode != original {
+				t.Fatal("cancelled connection leaked", mode, original, err)
+			}
+		})
 	}
-	tx, release, err := beginQueryV2(context.Background(), catalog.DB)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var mode int
-	if err := tx.QueryRow("PRAGMA temp_store").Scan(&mode); err != nil || mode != 2 {
-		t.Fatal(mode, err)
-	}
-	if _, err := tx.Exec("CREATE TEMP TABLE lease_probe(n)"); err != nil {
-		t.Fatal(err)
-	}
-	if err := release(); err != nil {
-		t.Fatal(err)
-	}
-	if err := catalog.DB.QueryRow("PRAGMA temp_store").Scan(&mode); err != nil || mode != original {
-		t.Fatal("connection settings leaked", mode, original, err)
-	}
-	var tables int
-	if err := catalog.DB.QueryRow("SELECT count(*) FROM sqlite_temp_master").Scan(&tables); err != nil || tables != 0 {
-		t.Fatal("staging leaked", tables, err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	_, release, err = beginQueryV2(ctx, catalog.DB)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cancel()
-	_ = release()
-	if err := catalog.DB.QueryRow("PRAGMA temp_store").Scan(&mode); err != nil || mode != original {
-		t.Fatal("cancelled connection leaked", mode, original, err)
-	}
+}
+
+// TestQueryMetadataQueue: metadata scans (distinct values, field stats) wait
+// in one queue. A scan's deadline starts when it leaves the queue, a
+// cancelled request stops waiting, and foreground queries do not wait at all.
+func TestQueryMetadataQueue(t *testing.T) {
+	catalog, config := testCatalog(t)
+	seedToolCalls(t, catalog, 10)
+	server := testServer(t, config, catalog)
+	t.Run("deadline starts after the queue", func(t *testing.T) {
+		_, release, err := server.beginQueryMetadata(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		type acquired struct {
+			ctx     context.Context
+			release func()
+			err     error
+		}
+		next := make(chan acquired, 1)
+		go func() {
+			ctx, release, err := server.beginQueryMetadata(context.Background())
+			next <- acquired{ctx, release, err}
+		}()
+		select {
+		case result := <-next:
+			release()
+			if result.release != nil {
+				result.release()
+			}
+			t.Fatal("metadata scan bypassed the queue")
+		case <-time.After(30 * time.Millisecond):
+		}
+		release()
+		result := <-next
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		defer result.release()
+		deadline, ok := result.ctx.Deadline()
+		if !ok || time.Until(deadline) < queryTableDeadline-time.Second {
+			t.Fatalf("scan lost its execution budget: %v", deadline)
+		}
+		waiting, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, _, err = server.beginQueryMetadata(waiting); err != context.Canceled {
+			t.Fatalf("cancelled queued metadata: %v", err)
+		}
+	})
+	t.Run("foreground queries do not wait", func(t *testing.T) {
+		server.queryMetadata <- struct{}{}
+		defer func() { <-server.queryMetadata }()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		request := httptest.NewRequest(http.MethodGet, "/api/query/tool_calls/distinct?field=tool_name", nil).WithContext(ctx)
+		request.Header.Set("Authorization", "Bearer "+config.APIToken)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusRequestTimeout {
+			t.Fatalf("metadata wait ignored cancellation: %d", response.Code)
+		}
+		foreground := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/tool_calls/metrics", metricRequest(qt.AggSpec{ID: "calls", Expression: "COUNT()"}))
+		if foreground.Code != http.StatusOK {
+			t.Fatal(foreground.Code, foreground.Body.String())
+		}
+	})
 }
 
 func TestQueryIndexedDatetimeCandidatesPreserveTypedResults(t *testing.T) {
@@ -706,23 +576,277 @@ func TestQueryIndexedDatetimeCandidatesPreserveTypedResults(t *testing.T) {
 	}
 }
 
-func TestQueryMetadataQueueLeavesForegroundQueriesAvailable(t *testing.T) {
+func TestQueryV2ComputedCatalogueRecovery(t *testing.T) {
 	catalog, config := testCatalog(t)
-	seedToolCalls(t, catalog, 10)
+	seedToolCalls(t, catalog, 3)
 	server := testServer(t, config, catalog)
-	server.queryMetadata <- struct{}{}
-	defer func() { <-server.queryMetadata }()
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	request := httptest.NewRequest(http.MethodGet, "/api/query/tool_calls/distinct?field=tool_name", nil).WithContext(ctx)
-	request.Header.Set("Authorization", "Bearer "+config.APIToken)
-	response := httptest.NewRecorder()
-	server.ServeHTTP(response, request)
-	if response.Code != http.StatusRequestTimeout {
-		t.Fatalf("metadata wait ignored cancellation: %d", response.Code)
+	store := qt.SQLiteComputedColumnStore{DB: catalog.DB}
+	columns := map[string]qt.ComputedColumn{}
+	// Metadata left by an older schema can no longer compile. Include two
+	// unrelated failures so the UI must be able to repair them incrementally.
+	for id, source := range map[string]string{"good": "[duration_ms]/1000", "good_child": "[@computed/good]*2", "broken": "[removed_field]", "broken_child": "[@computed/broken]*2", "other": "[another_removed_field]"} {
+		column, err := store.Save(context.Background(), queryTableScope, "pharos_tool_calls", qt.SaveComputedColumnRequest{Column: qt.ComputedColumn{ID: id, Label: id, Expression: qt.ComputedExpression{Language: "qt-expr", Version: 1, Source: source}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		columns[id] = column
 	}
-	foreground := queryV2ReviewCall(t, server, config.APIToken, http.MethodPost, "/api/query/tool_calls/metrics", metricRequest(qt.AggSpec{ID: "calls", Expression: "COUNT()"}))
-	if foreground.Code != http.StatusOK {
-		t.Fatal(foreground.Code, foreground.Body.String())
+	call := func(method, path string, value any) *httptest.ResponseRecorder {
+		return apiCall(t, server, config.APIToken, method, path, value)
+	}
+	capabilities := func() (qt.SQLiteComputedExecution, map[string]*qt.PlanDiagnostic) {
+		t.Helper()
+		w := call(http.MethodGet, "/api/query/tool_calls/capabilities", nil)
+		if w.Code != 200 {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		var response struct {
+			Execution   qt.SQLiteComputedExecution    `json:"computedExecution"`
+			Unavailable map[string]*qt.PlanDiagnostic `json:"computedDiagnostics"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		return response.Execution, response.Unavailable
+	}
+	execution, unavailable := capabilities()
+	if len(execution.Fields) != 2 || len(execution.ResolvedRevisions) != 2 || len(unavailable) != 3 {
+		t.Fatalf("partial handshake: %+v, %+v", execution, unavailable)
+	}
+	for _, id := range []string{"good", "good_child"} {
+		field := execution.Fields["@computed/"+id]
+		if !field.Select || !field.Group || !field.Filter {
+			t.Fatalf("healthy canonical field lost V3 permissions: %s, %+v", id, field)
+		}
+	}
+	for _, id := range []string{"broken", "broken_child", "other"} {
+		if unavailable[id] == nil || execution.ResolvedRevisions[id] != "" {
+			t.Fatalf("invalid graph advertised: %s", id)
+		}
+	}
+	w := call(http.MethodGet, "/api/query-computed-columns?dataset=pharos_tool_calls", nil)
+	var listed []qt.ComputedColumn
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &listed) != nil || len(listed) != 5 {
+		t.Fatal("repair catalogue lost definitions", w.Code, w.Body.String())
+	}
+	rows := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, ExpectedRevisions: execution.ResolvedRevisions, WireQuery: qt.WireQuery{Select: []string{"id", "@computed/good_child"}, Limit: 2}}
+	if w = call(http.MethodPost, "/api/query/tool_calls/rows-v2", rows); w.Code != 200 {
+		t.Fatal("valid rows blocked by unrelated formula", w.Code, w.Body.String())
+	}
+	save := func(id, source string) *httptest.ResponseRecorder {
+		column := columns[id]
+		column.Expression.Source = source
+		w := call(http.MethodPut, "/api/query-computed-columns?dataset=pharos_tool_calls", qt.SaveComputedColumnRequest{Column: column, ExpectedRevision: &column.Revision})
+		if w.Code == 200 {
+			if err := json.Unmarshal(w.Body.Bytes(), &column); err != nil {
+				t.Fatal(err)
+			}
+			columns[id] = column
+		}
+		return w
+	}
+	// A valid replacement may not invalidate an already valid dependent.
+	if w = save("good", `"text"`); w.Code != 400 {
+		t.Fatal("new dependent failure committed", w.Code, w.Body.String())
+	}
+	execution, _ = capabilities()
+	if execution.ResolvedRevisions["good"] != "1" {
+		t.Fatal("rejected edit changed revision", execution)
+	}
+	if w = save("broken", "[duration_ms]*2"); w.Code != 200 {
+		t.Fatal("unrelated invalid definition prevented repair", w.Code, w.Body.String())
+	}
+	execution, unavailable = capabilities()
+	if len(unavailable) != 1 || unavailable["other"] == nil || execution.ResolvedRevisions["broken"] != "2" || !execution.Fields["@computed/broken_child"].Select {
+		t.Fatalf("repair did not restore dependent graph: %+v, %+v", execution, unavailable)
+	}
+	metrics := metricRequest(qt.AggSpec{ID: "restored", Expression: "SUM([@computed/broken_child])"})
+	metrics.ExpectedRevisions = execution.ResolvedRevisions
+	if w = call(http.MethodPost, "/api/query/tool_calls/metrics", metrics); w.Code != 200 {
+		t.Fatal("restored graph unusable", w.Code, w.Body.String())
+	}
+	if w = save("other", "[missing_again]"); w.Code != 400 {
+		t.Fatal("repair accepted another invalid formula", w.Code, w.Body.String())
+	}
+	if w = save("other", "[duration_ms]"); w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	_, unavailable = capabilities()
+	if len(unavailable) != 0 {
+		t.Fatal("repaired definitions still unavailable", unavailable)
+	}
+}
+
+func TestQueryComputedCapabilitiesLargeCatalogue(t *testing.T) {
+	catalog, config := testCatalog(t)
+	store := qt.SQLiteComputedColumnStore{DB: catalog.DB}
+	for i := range 70 {
+		id := fmt.Sprintf("field_%02d", i)
+		_, err := store.Save(context.Background(), queryTableScope, "pharos_tool_calls", qt.SaveComputedColumnRequest{Column: qt.ComputedColumn{ID: id, Label: id, Expression: qt.ComputedExpression{Language: "qt-expr", Version: 1, Source: "[duration_ms]/1000"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := apiCall(t, testServer(t, config, catalog), config.APIToken, http.MethodGet, "/api/query/tool_calls/capabilities", nil)
+	var response struct {
+		Execution qt.SQLiteComputedExecution `json:"computedExecution"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &response) != nil || len(response.Execution.Fields) != 70 || len(response.Execution.ResolvedRevisions) != 70 {
+		t.Fatal("catalogue description truncated or rejected", w.Code, w.Body.String())
+	}
+}
+
+func TestQueryV2LibraryCompactRequests(t *testing.T) {
+	catalog, config := libraryFixture(t)
+	catalog.DB.SetMaxOpenConns(1)
+	server := testServer(t, config, catalog)
+	rowRequest := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"title"}, Limit: 1}}
+	w := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/library/rows-v2", rowRequest)
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	var page qt.SQLiteRowsV2Result
+	if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil || len(page.Rows) != 1 {
+		t.Fatal("page", err, w.Body.String())
+	}
+	for _, name := range []string{"purpose", "outcome", "pr_details", "cost_usd", "first_input"} {
+		if _, found := page.Rows[0][name]; !found {
+			t.Fatalf("page enrichment lost %s", name)
+		}
+	}
+	w = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/library/metrics", metricRequest(qt.AggSpec{ID: "count", Expression: "COUNT()"}))
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	for _, row := range catalog.library.rows {
+		for _, name := range append(slices.Clone(libraryLargeFields), libraryCostFields...) {
+			if _, found := row[name]; found {
+				t.Fatalf("compact v2 request loaded %s for the whole population", name)
+			}
+		}
+	}
+}
+
+func TestQueryV2LibraryDependencies(t *testing.T) {
+	catalog, _ := libraryFixture(t)
+	schema, _ := sqliteQuerySchema("library")
+	store := qt.SQLiteComputedColumnStore{DB: catalog.DB}
+	revisions := map[string]string{}
+	for id, source := range map[string]string{"text": "COALESCE([purpose],[outcome])", "nested": "[@computed/text]", "number": "[token_count]*2"} {
+		column, err := store.Save(context.Background(), queryTableScope, schema.Name, qt.SaveComputedColumnRequest{Column: qt.ComputedColumn{ID: id, Label: id, Expression: qt.ComputedExpression{Language: "qt-expr", Version: 1, Source: source}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		revisions[id] = column.Revision
+	}
+	// Keep a wide cache: staging must still omit unused values from these maps.
+	wide, err := catalog.searchRows(SearchOptions{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rowQuery := func(selects []string, where []qt.WhereTerm, order qt.OrderBys) *qt.ServerQueryV2 {
+		return &qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, ExpectedRevisions: revisions, WireQuery: qt.WireQuery{Select: selects, Where: where, OrderBy: order, Limit: 2}}
+	}
+	metricQuery := func(spec qt.AggSpec, where []qt.WhereTerm, order []qt.OrderBy) *qt.MetricQuery {
+		q := metricRequest(spec)
+		q.ExpectedRevisions, q.Where, q.OrderBy = revisions, where, order
+		return &q
+	}
+	for _, sample := range []struct {
+		name    string
+		rows    *qt.ServerQueryV2
+		metrics *qt.MetricQuery
+		fields  []string
+	}{
+		{"default row order", rowQuery([]string{"title"}, nil, nil), nil, []string{"activity_at", "id", "title"}},
+		{"OR filter and cost sort", rowQuery([]string{"outcome"}, []qt.WhereTerm{{Any: []qt.WhereClause{{Field: "purpose", Op: "contains", Value: "purpose"}, {Field: "changed_files", Op: "contains", Value: "parser"}}}}, qt.OrderBys{{Field: "cost_usd", Dir: "desc"}}), nil, []string{"changed_files", "cost_usd", "id", "outcome", "purpose"}},
+		{"transitive computed select and sort", rowQuery([]string{"@computed/number"}, nil, qt.OrderBys{{Field: "@computed/nested", Dir: "asc"}}), nil, []string{"id", "outcome", "purpose", "token_count"}},
+		{"ratio and grouping", nil, metricQuery(qt.AggSpec{ID: "ratio", Expression: "SUM([token_count])/NULLIF(SUM([tool_use_count]),0)", GroupBy: []string{"source_kind"}}, []qt.WhereTerm{{Field: "purpose", Op: "contains", Value: "purpose"}}, nil), []string{"id", "purpose", "source_kind", "token_count", "tool_use_count"}},
+		{"paired shown and computed grouping", nil, metricQuery(qt.AggSpec{ID: "paired", Expression: "AVG([token_count])", ExpressionY: "SUM([cost_usd])", GroupBy: []string{"@computed/number"}, Scope: "shownRows"}, nil, []qt.OrderBy{{Field: "@computed/nested", Dir: "desc"}}), []string{"cost_usd", "id", "outcome", "purpose", "token_count"}},
+		{"distribution input", nil, metricQuery(qt.AggSpec{ID: "hist", Distribution: &qt.MetricDistribution{Kind: "histogram", Input: `IF([purpose]="Summarized purpose",[token_count],0)`, Bins: 4}, GroupBy: []string{"source_kind"}, Scope: "shownRows"}, nil, nil), []string{"activity_at", "id", "purpose", "source_kind", "token_count"}},
+		{"count", nil, metricQuery(qt.AggSpec{ID: "count", Expression: "COUNT()"}, nil, nil), []string{"id"}},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			clock := time.Now()
+			fields, err := queryV2SourceFields(context.Background(), catalog.DB, schema, sample.rows, sample.metrics, clock)
+			if err != nil || !reflect.DeepEqual(fields, sample.fields) {
+				t.Fatalf("fields=%v, want=%v, err=%v", fields, sample.fields, err)
+			}
+			tx, release, err := beginQueryV2(context.Background(), catalog.DB)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer release()
+			d := queryV2Dataset("library", schema)
+			d.ComputedGroupable = map[string]bool{"text": true, "nested": true, "number": true}
+			d.SourceSQL, err = stageQueryRows(context.Background(), tx, "wide_rows", wide, schema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			full, err := d.ExecuteV2In(context.Background(), tx, sample.rows, sample.metrics, qt.PlanOptions{Now: clock})
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.SourceSQL, err = stageQueryRows(context.Background(), tx, "narrow_rows", wide, schema, fields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			columns, err := tx.Query("SELECT name FROM pragma_table_info('narrow_rows') ORDER BY name")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var staged []string
+			for columns.Next() {
+				var name string
+				if err := columns.Scan(&name); err != nil {
+					t.Fatal(err)
+				}
+				staged = append(staged, name)
+			}
+			if err := columns.Err(); err != nil {
+				t.Fatal(err)
+			}
+			columns.Close()
+			if !reflect.DeepEqual(staged, fields) {
+				t.Fatalf("staged unused values: %v, want %v", staged, fields)
+			}
+			narrow, err := d.ExecuteV2In(context.Background(), tx, sample.rows, sample.metrics, qt.PlanOptions{Now: clock})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(full.Metrics, narrow.Metrics) || full.Rows != nil && (full.Rows.Total != narrow.Rows.Total || !reflect.DeepEqual(full.Rows.Rows, narrow.Rows.Rows) || !reflect.DeepEqual(full.Rows.Computed, narrow.Rows.Computed)) {
+				t.Fatalf("selective staging changed results: full=%+v narrow=%+v", full, narrow)
+			}
+		})
+	}
+}
+
+func BenchmarkQueryV2LibraryStaging(b *testing.B) {
+	catalog, _ := testCatalog(b)
+	schema, _ := sqliteQuerySchema("library")
+	rows := make([]map[string]any, 10_000)
+	large := strings.Repeat("long library text ", 512)
+	for i := range rows {
+		rows[i] = map[string]any{"id": fmt.Sprint(i), "title": "Work", "activity_at": "2026-10-08T00:00:00Z", "purpose": large, "outcome": large, "changed_files": large}
+	}
+	for _, selective := range []bool{false, true} {
+		b.Run(fmt.Sprintf("selective_%t", selective), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				tx, release, err := beginQueryV2(context.Background(), catalog.DB)
+				if err != nil {
+					b.Fatal(err)
+				}
+				var fields [][]string
+				if selective {
+					fields = [][]string{{"id", "title", "activity_at"}}
+				}
+				_, err = stageQueryRows(context.Background(), tx, "library_bench", rows, schema, fields...)
+				releaseError := release()
+				if err != nil || releaseError != nil {
+					b.Fatal(err, releaseError)
+				}
+			}
+		})
 	}
 }

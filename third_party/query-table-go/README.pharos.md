@@ -23,13 +23,36 @@ errors, lazy formula branches, representative validation, and cancellation stay
 on their existing paths. Host regression tests compare fused summaries with
 independent metric execution.
 
-Upstream tests are included. Two tests reference schema fixtures outside the
-published Go module and cannot run from that module's zip:
+## Testing the patches
+
+This copy holds no tests. `go test ./...` from the Pharos root would not run
+them, because this is a nested module, and the published module has no V3
+tests: those are in upstream's `backends/sqlite-tests`. Instead, run
+upstream's suites at the release tag against this copy:
 
 ```sh
-GOWORK=off go test github.com/Pythia-Software/query-table/backends/go \
-  -skip 'TestExampleSchemaLoads|TestRelativeDurationFixtures'
+tools/test-query-table-fork.sh            # QUERY_TABLE_UPSTREAM defaults to ~/gbdubs/query-table
+tools/test-query-table-fork.sh -run TestV3 -count=1
 ```
+
+The script reads the tag from an upstream checkout with `git archive`. It then
+runs upstream's `backends/go` package tests and its `backends/sqlite-tests`
+suite with this copy's sources in place of upstream's, together with the
+`schema` fixtures both suites read. Run it after changing this copy.
+
+Known result at v0.8.0 (2026-10-19): 171 tests pass and 23 skip, most of
+them because they need Postgres. One fails: `TestV2ReductionReuse` in
+`backends/sqlite-tests`, which passes on unpatched v0.8.0. When `AVG` or
+`MIN` is batched with `SUM` over the same field, this copy evaluates the
+source once more for each of them: 39 or 54 source rows visited against one
+scan's 24. The metric values match. Fix it here, or record why it is
+acceptable. Until then, `-skip TestV2ReductionReuse` makes the rest a
+pass/fail gate.
+
+In Pharos, `TestVendoredPatchFormulaGroupErrorIdentities` and
+`TestVendoredPatchHiddenAndDefaultSort`
+(`internal/archive/query_table_v3_patch_test.go`) exercise the patched
+grouped-summary path in the default test run.
 
 Review local changes against v0.8.0 when updating this copy; remove the root
 replacement once an upstream release includes equivalent fixes.

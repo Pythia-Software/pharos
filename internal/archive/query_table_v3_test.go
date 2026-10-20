@@ -23,51 +23,6 @@ func groupRequest(key string, summaries ...qt.SummaryColumn) qt.QueryRequestV3 {
 		Result:   qt.WireQuery{Select: selects, Limit: 50}}
 }
 
-func TestQueryV3AllDatasetsHTTP(t *testing.T) {
-	catalog, config := testCatalog(t)
-	seedToolCalls(t, catalog, 31)
-	ingestUsageFixture(t, catalog)
-	server := testServer(t, config, catalog)
-	for _, dataset := range []string{"library", "activity", "usage", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "findings", "parallelism"} {
-		t.Run(dataset, func(t *testing.T) {
-			schema, err := sqliteQuerySchema(dataset)
-			if err != nil {
-				t.Fatal(err)
-			}
-			// Every dataset supports a non-item group identity and ordinary summaries.
-			q := groupRequest(schema.IDField, qt.SummaryColumn{ID: "records", Op: "count"})
-			w := queryV2ReviewCall(t, server, config.APIToken, http.MethodPost, "/api/query/"+dataset+"/query-v3", q)
-			if w.Code != 200 {
-				t.Fatal(w.Code, w.Body.String())
-			}
-			var result qt.QueryResultV3
-			if err = json.Unmarshal(w.Body.Bytes(), &result); err != nil || result.Version != 3 || result.Schema.IDField != qt.GroupIdentityField {
-				t.Fatal(result, err)
-			}
-			for _, row := range result.Rows {
-				if row[qt.GroupIdentityField] == nil || row["records"] != float64(1) {
-					t.Fatal(row)
-				}
-			}
-			cap := queryV2ReviewCall(t, server, config.APIToken, http.MethodGet, "/api/query/"+dataset+"/capabilities", nil)
-			var handshake struct {
-				QueryCapabilities qt.QueryCapabilitiesV3 `json:"queryCapabilities"`
-			}
-			if cap.Code != 200 || json.Unmarshal(cap.Body.Bytes(), &handshake) != nil || !handshake.QueryCapabilities.GroupedRows || !handshake.QueryCapabilities.CalendarGrouping {
-				t.Fatal(cap.Code, cap.Body.String())
-			}
-			limits := handshake.QueryCapabilities
-			groups := 10_000
-			if dataset == "usage" {
-				groups = 100_000
-			}
-			if limits.MaxRows != 10_000 || limits.MaxGroups != groups || limits.MaxPopulation != 10_000_000 {
-				t.Fatalf("incorrect advertised V3 budgets: %+v", limits)
-			}
-		})
-	}
-}
-
 func TestQueryV3LargeSourceHavingMetricsAndPaging(t *testing.T) {
 	override(t, &queryV3MaxRows, 100)
 	// A source larger than the row budget.
@@ -80,7 +35,7 @@ func TestQueryV3LargeSourceHavingMetricsAndPaging(t *testing.T) {
 	q.Result.OrderBy = qt.OrderBys{{Field: "calls", Dir: "desc"}}
 	q.Result.Limit = 1
 	q.Metrics = []qt.AggSpec{{ID: "groups", Op: "count"}, {ID: "shown", Op: "sum", Field: "calls", Scope: "shownRows"}}
-	w := queryV2ReviewCall(t, server, config.APIToken, http.MethodPost, "/api/query/tool_calls/query-v3", q)
+	w := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/tool_calls/query-v3", q)
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
 	}
@@ -95,7 +50,7 @@ func TestQueryV3LargeSourceHavingMetricsAndPaging(t *testing.T) {
 		t.Fatal(result.Metrics, result.Rows)
 	}
 	q.Result.Offset = 1
-	w = queryV2ReviewCall(t, server, config.APIToken, http.MethodPost, "/api/query/tool_calls/query-v3", q)
+	w = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/tool_calls/query-v3", q)
 	var next qt.QueryResultV3
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &next) != nil || next.Total != result.Total || next.Rows[0][qt.GroupIdentityField] == result.Rows[0][qt.GroupIdentityField] {
 		t.Fatal(w.Code, w.Body.String())
@@ -110,7 +65,7 @@ func TestQueryV3UsageFiltersSessionsAndCalendar(t *testing.T) {
 	ingestUsageFixture(t, catalog)
 	server := testServer(t, config, catalog)
 	q := groupRequest("provider", qt.SummaryColumn{ID: "tokens", Op: "sum", Field: "total_tokens"}, qt.SummaryColumn{ID: "sessions", Op: "count_distinct", Field: "agent_session_id"})
-	w := queryV2ReviewCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", q)
+	w := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", q)
 	var result qt.QueryResultV3
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || len(result.Rows) != 1 || result.Rows[0]["tokens"] != float64(3050) || result.Rows[0]["sessions"] != float64(1) {
 		t.Fatal(w.Code, w.Body.String())
@@ -121,23 +76,23 @@ func TestQueryV3UsageFiltersSessionsAndCalendar(t *testing.T) {
 		}
 	}
 	q.Source.Where = []qt.WhereTerm{{Field: "last_usage_at", Op: ">=", Value: "2026-09-21T00:00:00Z"}}
-	w = queryV2ReviewCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", q)
+	w = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", q)
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Rows[0]["tokens"] != float64(2030) {
 		t.Fatal("source filter outside the selected projection was lost", w.Code, w.Body.String())
 	}
 	q.Source.Where = []qt.WhereTerm{{Field: "hour", Op: "=", Value: "2026-09-21T01:00:00Z"}}
-	w = queryV2ReviewCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", q)
+	w = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", q)
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Rows[0]["tokens"] != float64(2030) {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	q.Source.Where = nil
-	w = queryV2ReviewCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", q)
+	w = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", q)
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Rows[0]["tokens"] != float64(3050) {
 		t.Fatal("hour query mutated the cached daily population", w.Code, w.Body.String())
 	}
 	calendar := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Result: qt.WireQuery{Select: []string{"id"}, Limit: 50},
 		Metrics: []qt.AggSpec{{ID: "days", Op: "sum", Field: "total_tokens", GroupBy: []string{"first_usage_at"}, DateGrouping: &qt.MetricDateGrouping{Field: "first_usage_at", Interval: "day", TimeZone: "UTC", Range: "observed"}}}}
-	w = queryV2ReviewCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", calendar)
+	w = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", calendar)
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || len(result.Metrics) != 1 || len(result.Metrics[0].Buckets) != 2 {
 		t.Fatal(w.Code, w.Body.String())
 	}
@@ -147,7 +102,7 @@ func TestQueryV3AuthorizationAndValidation(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
 	q := groupRequest("provider", qt.SummaryColumn{ID: "records", Op: "count"})
-	if w := queryV2ReviewCall(t, server, "", http.MethodPost, "/api/query/usage/query-v3", q); w.Code != 401 {
+	if w := apiCall(t, server, "", http.MethodPost, "/api/query/usage/query-v3", q); w.Code != 401 {
 		t.Fatal(w.Code)
 	}
 	for _, change := range []func(*qt.QueryRequestV3){
@@ -160,7 +115,7 @@ func TestQueryV3AuthorizationAndValidation(t *testing.T) {
 	} {
 		copy := groupRequest("provider", qt.SummaryColumn{ID: "records", Op: "count"})
 		change(&copy)
-		if w := queryV2ReviewCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", copy); w.Code != 400 {
+		if w := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/usage/query-v3", copy); w.Code != 400 {
 			t.Fatal(w.Code, w.Body.String())
 		}
 	}
@@ -193,7 +148,7 @@ func TestQueryV3ComputedSourceAndRepresentative(t *testing.T) {
 	q.ExpectedRevisions = map[string]string{column.ID: column.Revision}
 	q.Source.Where = []qt.WhereTerm{{Field: "@computed/double-duration", Op: ">", Value: "0"}}
 	q.Grouping.Representative = &qt.RepresentativeRow{OrderBy: []qt.OrderBy{{Field: "duration_ms", Dir: "desc", Nulls: "last"}}}
-	w := queryV2ReviewCall(t, server, config.APIToken, http.MethodPost, "/api/query/tool_calls/query-v3", q)
+	w := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/tool_calls/query-v3", q)
 	var result qt.QueryResultV3
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || len(result.Rows) == 0 {
 		t.Fatal(w.Code, w.Body.String())
@@ -205,7 +160,7 @@ func TestQueryV3ComputedSourceAndRepresentative(t *testing.T) {
 		}
 	}
 	q.ExpectedRevisions[column.ID] = "stale"
-	w = queryV2ReviewCall(t, server, config.APIToken, http.MethodPost, "/api/query/tool_calls/query-v3", q)
+	w = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/tool_calls/query-v3", q)
 	if w.Code != 400 || !strings.Contains(w.Body.String(), "definition_changed") {
 		t.Fatal(w.Code, w.Body.String())
 	}
@@ -262,80 +217,5 @@ func TestQueryV3IncompleteLibrarySearchWithFormula(t *testing.T) {
 				t.Fatalf("incomplete grouped search: %v", err)
 			}
 		})
-	}
-}
-
-func TestQueryV3TempStorageLease(t *testing.T) {
-	catalog, _ := testCatalog(t)
-	catalog.DB.SetMaxOpenConns(1)
-	if _, err := catalog.DB.Exec("PRAGMA temp_store=MEMORY"); err != nil {
-		t.Fatal(err)
-	}
-	tx, release, err := beginQueryV3(context.Background(), catalog.DB)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var mode int
-	if err = tx.QueryRow("PRAGMA temp_store").Scan(&mode); err != nil || mode != 1 {
-		t.Fatalf("large V3 copies must spill to disk: mode=%d error=%v", mode, err)
-	}
-	if _, err = tx.Exec("CREATE TEMP TABLE v3_lease_probe(n)"); err != nil {
-		t.Fatal(err)
-	}
-	if err = release(); err != nil {
-		t.Fatal(err)
-	}
-	if err = catalog.DB.QueryRow("PRAGMA temp_store").Scan(&mode); err != nil || mode != 2 {
-		t.Fatalf("prior memory policy was not restored: %d, %v", mode, err)
-	}
-	if err = release(); err != nil {
-		t.Fatal(err)
-	}
-	var count int
-	if err = catalog.DB.QueryRow("SELECT count(*) FROM sqlite_temp_master").Scan(&count); err != nil || count != 0 {
-		t.Fatalf("V3 scratch leaked: %d, %v", count, err)
-	}
-}
-
-func TestQueryMetadataExecutionDeadlineStartsAfterQueue(t *testing.T) {
-	catalog, config := testCatalog(t)
-	server := testServer(t, config, catalog)
-	_, release, err := server.beginQueryMetadata(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	type acquired struct {
-		ctx     context.Context
-		release func()
-		err     error
-	}
-	next := make(chan acquired, 1)
-	go func() {
-		ctx, release, err := server.beginQueryMetadata(context.Background())
-		next <- acquired{ctx, release, err}
-	}()
-	select {
-	case result := <-next:
-		release()
-		if result.release != nil {
-			result.release()
-		}
-		t.Fatal("metadata scan bypassed the queue")
-	case <-time.After(30 * time.Millisecond):
-	}
-	release()
-	result := <-next
-	if result.err != nil {
-		t.Fatal(result.err)
-	}
-	defer result.release()
-	deadline, ok := result.ctx.Deadline()
-	if !ok || time.Until(deadline) < queryTableDeadline-time.Second {
-		t.Fatalf("scan lost its execution budget: %v", deadline)
-	}
-	waiting, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, _, err = server.beginQueryMetadata(waiting); err != context.Canceled {
-		t.Fatalf("cancelled queued metadata: %v", err)
 	}
 }

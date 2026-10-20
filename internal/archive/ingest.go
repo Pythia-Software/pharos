@@ -1315,6 +1315,11 @@ func pruneMessages(tx *sql.Tx, conversationID string, retained map[string]bool) 
 	return nil
 }
 
+// nativeAliasMatchQuery finds the other conversations an alias names. It
+// searches conversations_native_alias_idx; a scan would read every
+// conversation for each alias of each ingested conversation.
+const nativeAliasMatchQuery = "SELECT id,provider FROM conversations WHERE account=? AND native_id=? AND id<>?"
+
 func linkAliases(tx *sql.Tx, conversationID string, aliases []string) error {
 	return linkAliasesContext(context.Background(), tx, conversationID, aliases)
 }
@@ -1328,7 +1333,7 @@ func linkAliasesContext(ctx context.Context, tx *sql.Tx, conversationID string, 
 		if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO declared_native_aliases(conversation_id,account,native_id) VALUES(?,?,?)", conversationID, account, alias); err != nil {
 			return err
 		}
-		matches, err := queryMapsContext(ctx, tx, "SELECT id,provider FROM conversations WHERE account=? AND native_id=? AND id<>?", account, alias, conversationID)
+		matches, err := queryMapsContext(ctx, tx, nativeAliasMatchQuery, account, alias, conversationID)
 		if err != nil {
 			return err
 		}

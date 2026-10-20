@@ -1,3 +1,5 @@
+//go:build probe
+
 package archive
 
 import (
@@ -11,12 +13,13 @@ import (
 )
 
 // TestCaptureBenchmark captures this Mac's real sources (read-only) into a
-// scratch directory and removes the capture afterwards. It runs only when
-// PHAROS_CAPTURE_BENCH_ROOT names an existing scratch directory
-// (PHAROS_CAPTURE_BENCH_SOURCES=claude,codex limits the sources):
+// scratch directory and removes the capture afterwards. It is a probe, built
+// only with the probe tag, and runs only when PHAROS_CAPTURE_BENCH_ROOT names
+// an existing scratch directory (PHAROS_CAPTURE_BENCH_SOURCES=claude,codex
+// limits the sources):
 //
 //	PHAROS_CAPTURE_BENCH_ROOT=/Volumes/euclid/.pharos-capture-bench-XXXX \
-//	  go test ./internal/archive -run TestCaptureBenchmark -v -timeout 30m
+//	  go test -tags probe ./internal/archive -run TestCaptureBenchmark -v -timeout 30m
 func TestCaptureBenchmark(t *testing.T) {
 	root := os.Getenv("PHAROS_CAPTURE_BENCH_ROOT")
 	if root == "" {

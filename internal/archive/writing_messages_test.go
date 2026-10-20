@@ -162,6 +162,8 @@ func TestSpanRulesMatchTheSchema(t *testing.T) {
 			options = append(options, option)
 		}
 	}
+	// A hand-kept list: a new classifier reason must be added here and to the
+	// schema's Rules options.
 	reasons := []string{"", "Launched with claude -p by a command", "Sent by a headless claude -p run", "Sent by a codex exec run", "Sent by a headless agy -p run",
 		"Sent by automation nightly", "Sent by another agent session", "Sent by TL1 orchestration", "Sub-agent conversation",
 		"Sent by a headless claude -p or SDK run Conductor did not start", "Harness context", "Repeated prompt: sent in 6 sessions on 4 days", "Slash command",

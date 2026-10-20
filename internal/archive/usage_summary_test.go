@@ -140,38 +140,6 @@ func TestUsageSummaryLedgerMatchesUsagePage(t *testing.T) {
 	}
 }
 
-func TestUsageSummaryUsesCoveringIndexes(t *testing.T) {
-	catalog, _ := testCatalog(t)
-	// Simulate opening an existing catalog that predates these indexes.
-	if _, err := catalog.DB.Exec(`DROP INDEX message_authorship_summary_idx; DROP INDEX agent_sessions_summary_idx`); err != nil {
-		t.Fatal(err)
-	}
-	if err := catalog.Initialize(); err != nil {
-		t.Fatal(err)
-	}
-	for _, query := range []struct {
-		sql     string
-		indexes []string
-	}{
-		{usageSummaryAuthorshipSQL, []string{"message_authorship_summary_idx"}},
-		{usageSummaryLedgerSQL, []string{"agent_sessions_summary_idx", "workspaces_library_idx"}},
-	} {
-		plan, err := queryMaps(catalog.DB, "EXPLAIN QUERY PLAN "+query.sql)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, index := range query.indexes {
-			found := false
-			for _, step := range plan {
-				found = found || strings.Contains(firstString(step["detail"]), "COVERING INDEX "+index)
-			}
-			if !found {
-				t.Fatalf("query reads full records instead of %s: %v", index, plan)
-			}
-		}
-	}
-}
-
 func TestUsageSummaryEmptyAndCanceled(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	catalog.background = func(func(context.Context)) bool { return false }

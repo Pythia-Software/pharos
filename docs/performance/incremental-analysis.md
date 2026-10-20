@@ -198,7 +198,7 @@ The opt-in harness rejects the installed production catalog path, including
 symlinks. Supply only a consistent scratch backup:
 
 ```sh
-go test -c ./internal/archive -o .context/performance/analysis.test
+go test -c -tags probe ./internal/archive -o .context/performance/analysis.test
 PHAROS_ANALYSIS_REPLICA="$PWD/.context/performance/scratch.sqlite3" \
 PHAROS_ANALYSIS_INCREMENTAL=1 PHAROS_ANALYSIS_PROFILE=1 \
 PHAROS_ANALYSIS_PARITY=1 \
