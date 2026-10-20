@@ -286,11 +286,23 @@ function Dialog({ title, onClose, children, footer, wide }: { title: string; onC
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") { event.preventDefault(); closeRef.current(); return; }
       if (event.key !== "Tab" || !box.current) return;
-      const focusable = [...box.current.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), textarea, select, [tabindex='0'], h2[tabindex]")];
+      // Tab moves focus here rather than in the engine: WebKit leaves buttons
+      // out of the tab order unless Full Keyboard Access is on, so a trap that
+      // only wraps from the first or last control never fires there.
+      const dialog = box.current;
+      const focusable = [...dialog.querySelectorAll<HTMLElement>("a[href], button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex='-1'])")].filter(element => {
+        if (!element.getClientRects().length) return false;
+        // A radio group is one stop: its checked radio, or its first when none is.
+        if (!(element instanceof HTMLInputElement) || element.type !== "radio" || element.checked) return true;
+        const group = [...dialog.querySelectorAll<HTMLInputElement>("input[type=radio]")].filter(radio => radio.name === element.name);
+        return !group.some(radio => radio.checked) && group[0] === element;
+      });
+      event.preventDefault();
       if (!focusable.length) return;
-      const first = focusable[0], last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) { last.focus(); event.preventDefault(); }
-      else if (!event.shiftKey && document.activeElement === last) { first.focus(); event.preventDefault(); }
+      const active = document.activeElement ?? document.body;
+      const following = focusable.filter(element => active !== element && active.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING);
+      const preceding = focusable.filter(element => active.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_PRECEDING);
+      (event.shiftKey ? preceding[preceding.length - 1] ?? focusable[focusable.length - 1] : following[0] ?? focusable[0]).focus();
     };
     document.addEventListener("keydown", onKey);
     return () => { document.removeEventListener("keydown", onKey); opener?.focus?.(); };
@@ -554,7 +566,8 @@ function WeeklyChart({ chart, unit, copiedLabel }: { chart: NonNullable<Detail["
   useLayoutEffect(() => {
     if (!wrap.current) return;
     setWidth(wrap.current.clientWidth || 680);
-    const observer = new ResizeObserver(entries => setWidth(Math.max(320, entries[0].contentRect.width)));
+    // A hidden container reports zero; keep the last width until it shows again.
+    const observer = new ResizeObserver(entries => { const next = entries[0].contentRect.width; if (next > 0) setWidth(next); });
     observer.observe(wrap.current);
     return () => observer.disconnect();
   }, []);

@@ -78,6 +78,7 @@ wait_exit() {
 
 echo "Building pharos…"
 (cd "$ROOT" && GOTOOLCHAIN=local go build -o "$WORK/pharos" ./cmd/pharos)
+(cd "$ROOT" && GOTOOLCHAIN=local go build -o "$WORK/check-catalog" ./macos/test/check-catalog.go)
 CLI="$WORK/pharos"
 
 # A canonical export large enough that a sync is still running a second in.
@@ -151,8 +152,7 @@ attach
 [ "$MOUNT" = "$YANKED" ] || echo "note: re-attached at $MOUNT"
 CONFIG="$MOUNT/Pharos/library.toml"
 CATALOG="$MOUNT/Pharos/catalog/catalog.sqlite3"
-check=$(sqlite3 "$CATALOG" 'PRAGMA integrity_check;')
-[ "$check" = ok ] || fail "integrity_check: $check"
+"$WORK/check-catalog" "$CATALOG" || fail "integrity_check failed"
 KEPT=$(sqlite3 "$CATALOG" 'SELECT COUNT(*) FROM workspaces;')
 pass "catalog integrity_check ok ($KEPT workspaces kept)"
 serve

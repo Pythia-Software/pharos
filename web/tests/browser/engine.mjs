@@ -2,9 +2,9 @@
 //
 // PHAROS_BROWSER picks the engine: `chromium` (the default) uses CHROME_PATH,
 // else Google Chrome, else Playwright's own Chromium; `webkit` uses
-// Playwright's WebKit. web/tests/run.mjs starts one browser per run with
-// `startBrowser` and passes its endpoint in PHAROS_BROWSER_WS; a test file
-// run on its own launches one for its process.
+// Playwright's WebKit. The runner's global setup (./setup.mjs) starts one
+// browser per run with `startBrowser` and passes its endpoint in
+// PHAROS_BROWSER_WS; a test file run without it launches one for its process.
 import { existsSync } from "node:fs";
 import { chromium, webkit } from "playwright-core";
 

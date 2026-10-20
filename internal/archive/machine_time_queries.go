@@ -109,9 +109,9 @@ func machineTimeDayRange(terms []querytable.WhereTerm) (lower, upper string, whe
 }
 
 // machineTimeMaxGroups bounds the groups in one metric the Machine Time
-// accelerator answers: enough for repository × operation × day timelines over
-// months. Beyond it the metric fails rather than returning part of the cube.
-// Tests lower it.
+// accelerator answers: enough for every repository × operation, or for
+// repository × operation × day timelines over a month. Beyond it the metric
+// fails rather than returning part of the cube. Tests lower it.
 var machineTimeMaxGroups = 50_000
 
 // machineTimeMetricsV2 answers a Tool calls /metrics request from the Machine

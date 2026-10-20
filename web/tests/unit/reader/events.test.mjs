@@ -9,6 +9,30 @@ const { commandKind, conversationMessages, fileChanges, filePathParts, messageFa
 const ids = messages => plain([...messages].map(message => message.native_id));
 const calls = events => [...events].filter(message => message.kind === "tool_call");
 
+test("session and turn ages accept epoch and ISO timestamps and keep two useful units", () => {
+  const now = Date.parse("2026-10-20T15:20:00Z");
+  for (const [elapsed, expected] of [
+    [0, "just now"], [59000, "just now"], [60000, "1m ago"],
+    [3599999, "59m ago"], [3600000, "1h ago"], [8100000, "2h 15m ago"],
+    [86400000, "1d ago"], [176400000, "2d 1h ago"],
+  ]) {
+    const time = now - elapsed;
+    assert.equal(reader.relativeAge(time, now), expected);
+    assert.equal(reader.relativeAge(new Date(time).toISOString(), now), expected);
+  }
+  assert.equal(reader.relativeAge(now + 8100000, now), "in 2h 15m", "future source timestamps do not show negative ages");
+  assert.equal(reader.relativeAge(0, 86400000), "1d ago", "epoch zero is a valid timestamp");
+  assert.equal(reader.relativeAge(now - 60000, now + 60000), "2m ago", "refreshing uses the current clock");
+});
+
+test("missing or invalid timestamps omit the age instead of inventing one", () => {
+  const now = Date.parse("2026-10-20T15:20:00Z");
+  for (const value of [undefined, null, "", " ", "unknown", false, NaN, Infinity, 1e20]) {
+    assert.equal(reader.relativeAge(value, now), "", String(value));
+  }
+  assert.equal(reader.relativeAge(now, NaN), "");
+});
+
 test("JSON-string command arguments show the command and associate failures with it", () => {
   const { events, graph } = render([human(),
     event("cmd", "tool_call", { name: "exec_command", arguments: JSON.stringify({ cmd: "npm test", workdir: "/repo" }) }, 10, { call_id: "command-1" }),

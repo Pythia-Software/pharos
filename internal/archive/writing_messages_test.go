@@ -162,20 +162,24 @@ func TestSpanRulesMatchTheSchema(t *testing.T) {
 			options = append(options, option)
 		}
 	}
-	// A hand-kept list: a new classifier reason must be added here and to the
-	// schema's Rules options.
-	reasons := []string{"", "Launched with claude -p by a command", "Sent by a headless claude -p run", "Sent by a codex exec run", "Sent by a headless agy -p run",
-		"Sent by automation nightly", "Sent by another agent session", "Sent by TL1 orchestration", "Sub-agent conversation",
-		"Sent by a headless claude -p or SDK run Conductor did not start", "Harness context", "Repeated prompt: sent in 6 sessions on 4 days", "Slash command",
-		"Attachment reference", "Generated page feedback", "Human feedback comment", "Code block", "Quoted with >", "Matches agent output from 3h earlier", "Already sent 2d earlier",
-		"Line already sent in other conversations", "Sent 4s after the previous message, faster than typing", "Log, trace, code, or data", "Table",
-		"Formatted like agent output", "Mostly identifiers, paths, or code", "Path, URL, or ID"}
-	for _, label := range harnessLabels {
-		reasons = append(reasons, label)
+	// Every reason in the catalog renders to its own rule, and every rule
+	// spanRule can produce is a Rules option, and every option a rule.
+	rules := []string{spanRule(authorSpan{Category: spanTyped})}
+	for _, reason := range spanReasons {
+		text := reason.with("3 sample particulars").text()
+		if rule := spanRule(authorSpan{Category: spanPasted, Reason: text}); rule != reason.rule {
+			t.Errorf("reason %q has rule %q, want %q", text, rule, reason.rule)
+		}
+		rules = append(rules, reason.rule)
 	}
-	for _, reason := range reasons {
-		if rule := spanRule(authorSpan{Category: spanTyped, Reason: reason}); !slices.Contains(options, rule) {
-			t.Errorf("rule %q (reason %q) is not a Rules option", rule, reason)
+	for _, rule := range rules {
+		if !slices.Contains(options, rule) {
+			t.Errorf("rule %q is not a Rules option", rule)
+		}
+	}
+	for _, option := range options {
+		if !slices.Contains(rules, option) {
+			t.Errorf("Rules option %q is no classifier rule", option)
 		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"net/http/httptest"
 	"os"
@@ -20,13 +21,18 @@ import (
 // durability itself call useDurableCatalog.
 var testDurability = catalogPragmas{synchronous: "OFF"}
 
-// TestMain keeps every test, and every process a test starts, out of this
-// Mac's real support directory: detecting the host writes host.json there.
-// Helper processes share their parent's. It also keeps tests off this Mac's
-// tools: no test may reach GitHub, ask ioreg or scutil who the Mac is, run
-// diskutil, mdutil or hdiutil, or read the user's git configuration. Tests of
-// those lookups opt back in.
+// TestMain first runs the tests in several processes (see runInProcesses).
+// It keeps every test, and every process a test starts, out of this Mac's
+// real support directory: detecting the host writes host.json there. Each
+// process running tests has its own; helper processes share their parent's.
+// It also keeps tests off this Mac's tools: no test may reach GitHub, ask
+// ioreg or scutil who the Mac is, run diskutil, mdutil or hdiutil, or read the
+// user's git configuration. Tests of those lookups opt back in.
 func TestMain(m *testing.M) {
+	flag.Parse()
+	if code, ran := runInProcesses(); ran {
+		os.Exit(code)
+	}
 	support := os.Getenv("PHAROS_TEST_SUPPORT_DIR")
 	owned := support == ""
 	if owned {

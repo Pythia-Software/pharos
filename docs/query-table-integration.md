@@ -10,8 +10,7 @@ The [upstream migration guide](https://github.com/Pythia-Software/query-table/bl
 and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.9.0/CHANGELOG.md)
 define the release contract. Optional worktree linking is described in
 [local development](query-table-local-development.md). The earlier
-[upstream handoff](query-table-upstream-handoff.md) and
-[next-release handoff](query-table-next-release-handoff.md) are historical records.
+[next-release handoff](query-table-next-release-handoff.md) is a historical record.
 
 ## 0.9.0 backend changes
 
@@ -105,9 +104,13 @@ the adapter's values, and passes everything else to the adapter:
 
 - **Bare counts** of Tool calls come from the rollup (`countOnlyMetricsV2`).
 - **Machine Time's cubes** (calls, timed calls and total duration by
-  repository, activity, day or month, status and operation) come from the
-  cached tool-cube projection (`machineTimeMetricsV2`), with a 50,000-group
-  budget, so months of calls need not be read one by one.
+  repository, activity, status and operation, and separately by day or month
+  and status) come from the cached tool-cube projection
+  (`machineTimeMetricsV2`), with a 50,000-group budget per metric, so months
+  of calls need not be read one by one. The page never crosses days with
+  operations, so a longer period adds few groups: on a library of a million
+  calls in October 2026 the largest cube had about 12,000 groups over 90 days
+  and 20,000 over all time.
 - **Plain counts and sums** grouped by text fields (`nativeMetricsV2`) run in
   one native statement over a SQL dataset's source, or, for Usage, in Go over
   the rows already in memory, instead of one adapter pass per metric. In

@@ -19,7 +19,13 @@ export const activities = [
 ] as const;
 export type Activity = string;
 export type TimeTotal = { duration: number; calls: number; timed: number; failedDuration: number };
-export type TimeFact = TimeTotal & { repository: string; activity: Activity; day: string; operation: string; name: string; tool: string; server: string };
+export type TimeFact = TimeTotal & { repository: string; activity: Activity; operation: string; name: string; tool: string; server: string };
+export type DayTime = TimeTotal & { day: string };
+// Machine time in a selection: its breakdown by repository, activity and
+// operation, and its trend by day or month. Nothing on the page crosses the
+// two, so they are separate cubes whose groups do not multiply as the period
+// lengthens.
+export type MachineTime = { facts: TimeFact[]; days: DayTime[] };
 export type Metric = { id: string; buckets: { keys: unknown[]; value: unknown; count?: number }[] };
 export type TimeMetric = "average" | "total" | "calls";
 export const noRepository = "(No repository)";
@@ -99,8 +105,12 @@ export function operationName(tool: string, server: string, program: string, sub
   return program ? [program, subcommand].filter(Boolean).join(" ") : !tool ? "(Unidentified tool)" : server ? `${server} / ${tool}` : tool;
 }
 export function timeAggregations(period: "day" | "month"): AggregationClause[] {
-  const groupBy = ["repository_name", "activity", period, "status", "operation_key", "operation_name", "tool_name", "mcp_server"];
-  return [{ id: "time", op: "sum", field: "duration_ms", groupBy }, { id: "timed", op: "count", field: "duration_ms", groupBy }, { id: "population", op: "count", groupBy: [] }];
+  const groupBy = ["repository_name", "activity", "status", "operation_key", "operation_name", "tool_name", "mcp_server"], trend = [period, "status"];
+  return [
+    { id: "time", op: "sum", field: "duration_ms", groupBy }, { id: "timed", op: "count", field: "duration_ms", groupBy },
+    { id: "trend_time", op: "sum", field: "duration_ms", groupBy: trend }, { id: "trend_timed", op: "count", field: "duration_ms", groupBy: trend },
+    { id: "population", op: "count", groupBy: [] },
+  ];
 }
 // A bounded set of full local days selects the same calls through the day
 // column and lets SQL use its cube. Other timestamps retain exact predicates.
@@ -122,31 +132,39 @@ export function timeAggregationWhere(where: WhereTerm[]): WhereTerm[] {
   // A one-day group is a plain predicate: metric requests refuse a one-clause OR.
   return [...where.filter(term => !bounds.includes(term as Exclude<WhereTerm, { any: unknown }>)), days.length === 1 ? days[0] : { any: days }];
 }
-export function timeFacts(metrics: Metric[]): TimeFact[] {
-  const times = metrics.find(metric => metric.id === "time")?.buckets ?? [];
-  const measured = metrics.find(metric => metric.id === "timed")?.buckets ?? [];
+export function timeFacts(metrics: Metric[]): MachineTime {
+  const buckets = (id: string) => metrics.find(metric => metric.id === id)?.buckets ?? [];
   const population = metrics.find(metric => metric.id === "population")?.buckets[0]?.value;
   // Every call in the population belongs to one group of each metric. Never
   // turn sums and counts that disagree into a seemingly exact average.
-  if (population === undefined || times.reduce((sum, bucket) => sum + (bucket.count ?? 0), 0) !== Number(population) || measured.reduce((sum, bucket) => sum + (bucket.count ?? 0), 0) !== Number(population))
+  if (population === undefined || ["time", "timed", "trend_time", "trend_timed"].some(id => buckets(id).reduce((sum, bucket) => sum + (bucket.count ?? 0), 0) !== Number(population)))
     throw new Error("Operation groups are incomplete. Choose a shorter period or a single repository to inspect the full selection.");
-  const timed = new Map(measured.map(bucket => [JSON.stringify(bucket.keys), Number(bucket.value) || 0]));
-  return times.map(bucket => {
-    const [repository, activity, day, status, operation, name, tool, server] = bucket.keys.map(value => String(value ?? ""));
-    const duration = Math.max(0, Number(bucket.value) || 0);
-    return { repository: repository || noRepository, activity, day, operation, name, tool, server, duration, calls: bucket.count ?? 0, timed: timed.get(JSON.stringify(bucket.keys)) ?? 0, failedDuration: status === "error" ? duration : 0 };
-  });
+  // status is the index of a group's status among its keys.
+  const totals = <T>(time: string, timed: string, identity: (keys: string[]) => T, status: number): Array<T & TimeTotal> => {
+    const counts = new Map(buckets(timed).map(bucket => [JSON.stringify(bucket.keys), Number(bucket.value) || 0]));
+    return buckets(time).map(bucket => {
+      const keys = bucket.keys.map(value => String(value ?? "")), duration = Math.max(0, Number(bucket.value) || 0);
+      return { ...identity(keys), duration, calls: bucket.count ?? 0, timed: counts.get(JSON.stringify(bucket.keys)) ?? 0, failedDuration: keys[status] === "error" ? duration : 0 };
+    });
+  };
+  return {
+    facts: totals("time", "timed", ([repository, activity, , operation, name, tool, server]) => ({ repository: repository || noRepository, activity, operation, name, tool, server }), 2),
+    days: totals("trend_time", "trend_timed", ([day]) => ({ day }), 1),
+  };
 }
-export function factsFromCalls(rows: MachineCall[], period: "day" | "month"): TimeFact[] {
-  const groups = new Map<string, TimeFact>();
+export function factsFromCalls(rows: MachineCall[], period: "day" | "month"): MachineTime {
+  const facts = new Map<string, TimeFact>(), days = new Map<string, DayTime>();
+  const add = <T extends TimeTotal>(groups: Map<string, T>, key: string, empty: T, row: MachineCall) => {
+    const total = groups.get(key) ?? empty, duration = row.duration_ms == null ? 0 : Number(row.duration_ms);
+    groups.set(key, { ...total, calls: total.calls + 1, timed: total.timed + (row.duration_ms == null ? 0 : 1), duration: total.duration + duration, failedDuration: total.failedDuration + (row.status === "error" ? duration : 0) });
+  };
+  const zero = { duration: 0, calls: 0, timed: 0, failedDuration: 0 };
   for (const row of rows) {
     const day = String(row.day).slice(0, period === "month" ? 7 : 10);
-    const key = JSON.stringify([row.repository_name, row.activity, day, row.operation_key, row.tool_name, row.mcp_server]);
-    const fact = groups.get(key) ?? { repository: row.repository_name || noRepository, activity: row.activity, day, operation: row.operation_key, name: row.operation_name, tool: row.tool_name, server: row.mcp_server ?? "", duration: 0, calls: 0, timed: 0, failedDuration: 0 };
-    const duration = row.duration_ms == null ? 0 : Number(row.duration_ms);
-    groups.set(key, { ...fact, calls: fact.calls + 1, timed: fact.timed + (row.duration_ms == null ? 0 : 1), duration: fact.duration + duration, failedDuration: fact.failedDuration + (row.status === "error" ? duration : 0) });
+    add(facts, JSON.stringify([row.repository_name, row.activity, row.operation_key, row.tool_name, row.mcp_server]), { repository: row.repository_name || noRepository, activity: row.activity, operation: row.operation_key, name: row.operation_name, tool: row.tool_name, server: row.mcp_server ?? "", ...zero }, row);
+    add(days, day, { day, ...zero }, row);
   }
-  return [...groups.values()];
+  return { facts: [...facts.values()], days: [...days.values()] };
 }
 export function totalTime(facts: TimeTotal[]): TimeTotal {
   return facts.reduce((sum, fact) => ({ duration: sum.duration + fact.duration, calls: sum.calls + fact.calls, timed: sum.timed + fact.timed, failedDuration: sum.failedDuration + fact.failedDuration }), { duration: 0, calls: 0, timed: 0, failedDuration: 0 });
@@ -232,7 +250,7 @@ export function exampleTimeCalls(scope: MachineScope, window: MachineWindow, pre
   }
   return rows;
 }
-export function exampleTimeFacts(scope: MachineScope, window: MachineWindow, previous = false): TimeFact[] {
+export function exampleTimeFacts(scope: MachineScope, window: MachineWindow, previous = false): MachineTime {
   return factsFromCalls(exampleTimeCalls(scope, window, previous), scope.days ? "day" : "month");
 }
 

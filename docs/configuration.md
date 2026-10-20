@@ -499,11 +499,28 @@ running on its own.
 login cookie `pharos_token_<port>`; a per-user install on 8765 and a library on
 8766 do not sign each other out.
 
-**Tests.** `macos/test/eject-release.sh` exercises the service (release during a
-sync, eject, a forced detach while syncing, catalog integrity afterwards), and
-`macos/test/swift-harness.sh` the app's DiskArbitration handling and the Eject
-button's release, stop, and eject with an MCP server running from the drive.
-Both use a throwaway disk image and never launch Pharos.
+**Manual macOS tests.** These are opt-in and are not run by any default test
+tier. Run them from the repository root when changing the code they exercise.
+All require macOS and Xcode Command Line Tools (`xcode-select --install`).
+
+| Command | Coverage and when to run | Other requirements |
+|---|---|---|
+| `macos/test/run-light.sh` | Native menu state, preferences, reopen/index/eject actions and update checks against stubbed release responses; after changing `MenuBar.swift` or `UpdateChecker.swift`. | A logged-in GUI session for AppKit. No app build, service, disk images or network. |
+| `macos/test/menu-bar.sh` | Just the native menu checks. | Same GUI requirement; optionally pass an output PNG path to save the menu icon. |
+| `macos/test/swift-harness.sh [PORT]` | App DiskArbitration handling, service logs, release, Quit/MCP cleanup and the Eject flow; after changing `LibraryVolume.swift`, `Launch.swift` or eject behavior. | Go, Node.js/npm, Python 3 and rsync; dependency downloads for the app build. Builds from a temporary checkout copy, then creates a 300 MB APFS image. Default port: 18768. |
+| `macos/test/eject-release.sh [PORT]` | Service release during sync, forced detach, catalog integrity and sync recovery; after changing service shutdown or drive handling. | Go, Python 3, curl and sqlite3. Creates a 2 GB sparse APFS image. Default port: 18767. |
+
+The two drive harnesses use `hdiutil` and `diskutil` on their own throwaway
+images under `/Volumes/PharosTest-*`, use temporary support directories, and
+never launch Pharos. Choose unused test ports (never 8765/8766). The Swift app
+build installs npm dependencies and generates assets only in its temporary
+copy, so it can run alongside `npm --prefix web test` in this checkout.
+It uses the pinned npm packages and checked-in Go backend (`GOWORK=off`),
+leaving any local Query Table links and workspace files in the checkout intact.
+
+Legacy per-user adoption is covered by `internal/archive/adopt_test.go`,
+including schema-4 fixtures and copying while the source catalog is being
+written. Run `go test -run TestAdopt ./internal/archive` when changing adoption.
 
 ### Library status and Eject
 

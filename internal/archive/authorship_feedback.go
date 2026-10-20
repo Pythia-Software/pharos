@@ -251,10 +251,10 @@ func claimFeedbackMetadata(l *labeler, reports []feedbackReport) {
 	for _, report := range reports {
 		start := report.start
 		for _, note := range report.notes {
-			l.claim(start, note[0], spanHarness, "Generated page feedback", textOrigin{})
+			l.claim(start, note[0], spanHarness, reasonPageFeedback, textOrigin{})
 			start = note[1]
 		}
-		l.claim(start, report.end, spanHarness, "Generated page feedback", textOrigin{})
+		l.claim(start, report.end, spanHarness, reasonPageFeedback, textOrigin{})
 	}
 }
 

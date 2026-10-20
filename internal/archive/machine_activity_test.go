@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
 	"github.com/gbdubs/pharos/internal/querytable"
@@ -90,39 +91,60 @@ func TestMachineOperationFamilies(t *testing.T) {
 }
 
 // Machine Time's cubes keep every group past the generic executor's budget,
-// up to the accelerator's own; past that the metric fails, not truncates.
+// up to the accelerator's own; past that the metric fails, not truncates. The
+// page asks for a long period as two cubes, operations without days and days
+// without operations, so a budget that crossing them would exceed still
+// answers it.
 func TestMachineTimeMetricsBeyondTheGenericGroupBudget(t *testing.T) {
 	override(t, &queryV2MaxGroups, 5)
 	catalog, config := testCatalog(t)
 	seedToolCalls(t, catalog, 60)
+	if err := catalog.ensureToolRollup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	server := testServer(t, config, catalog)
-	groups := []string{"repository_name", "activity", "day", "status", "operation_key", "operation_name", "tool_name", "mcp_server"}
-	metrics := func(spent qt.AggSpec) qt.SQLiteMetricsV2Result {
+	metrics := func(where []qt.WhereTerm, specs ...qt.AggSpec) []qt.SQLiteMetricV2 {
 		t.Helper()
-		response := apiCall(t, server, config.APIToken, "POST", "/api/query/tool_calls/metrics", metricRequest(spent, qt.AggSpec{ID: "calls", Op: "count"}))
+		q := metricRequest(append(specs, qt.AggSpec{ID: "calls", Op: "count"})...)
+		q.Where = where
+		response := apiCall(t, server, config.APIToken, "POST", "/api/query/tool_calls/metrics", q)
 		var result qt.SQLiteMetricsV2Result
-		if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &result) != nil || len(result.Metrics) != 2 || result.Metrics[1].Error != "" {
+		if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &result) != nil || len(result.Metrics) != len(specs)+1 || result.Metrics[len(specs)].Error != "" {
 			t.Fatal(response.Code, response.Body.String())
 		}
-		return result
+		return result.Metrics[:len(specs)]
 	}
-	spent := qt.AggSpec{ID: "time", Op: "sum", Field: "duration_ms", GroupBy: groups}
-	cube := metrics(spent).Metrics[0]
-	var calls int64
-	for _, bucket := range cube.Buckets {
-		calls += bucket.Count
+	calls := func(metric qt.SQLiteMetricV2) (total int64) {
+		for _, bucket := range metric.Buckets {
+			total += bucket.Count
+		}
+		return total
 	}
-	if cube.Error != "" || len(cube.Buckets) <= queryV2MaxGroups || cube.GroupCount != int64(len(cube.Buckets)) || calls != 60 || cube.ProcessedRows != 60 {
-		t.Fatalf("accelerated cube stopped at the generic budget: %d groups, %d calls, %q", len(cube.Buckets), calls, cube.Error)
+	spent := func(groups ...string) qt.AggSpec {
+		return qt.AggSpec{ID: strings.Join(groups, "/"), Op: "sum", Field: "duration_ms", GroupBy: groups}
+	}
+	crossed := spent("repository_name", "activity", "day", "status", "operation_key", "operation_name", "tool_name", "mcp_server")
+	cube := metrics(nil, crossed)[0]
+	if cube.Error != "" || len(cube.Buckets) <= queryV2MaxGroups || cube.GroupCount != int64(len(cube.Buckets)) || calls(cube) != 60 || cube.ProcessedRows != 60 {
+		t.Fatalf("accelerated cube stopped at the generic budget: %d groups, %d calls, %q", len(cube.Buckets), calls(cube), cube.Error)
 	}
 	// A shape the accelerator declines keeps the generic budget.
-	limited := spent
+	limited := crossed
 	limited.GroupLimit = 1000
-	if generic := metrics(limited).Metrics[0]; !strings.Contains(generic.Error, "group population exceeds host budget") {
+	if generic := metrics(nil, limited)[0]; !strings.Contains(generic.Error, "group population exceeds host budget") {
 		t.Fatalf("generic metric past its budget: %+v", generic)
 	}
 	override(t, &machineTimeMaxGroups, len(cube.Buckets)-1)
-	if over := metrics(spent).Metrics[0]; !strings.Contains(over.Error, "group population exceeds the "+thousands(machineTimeMaxGroups)+"-group host budget") || len(over.Buckets) != 0 {
+	if over := metrics(nil, crossed)[0]; !strings.Contains(over.Error, "group population exceeds the "+thousands(machineTimeMaxGroups)+"-group host budget") || len(over.Buckets) != 0 {
 		t.Fatalf("accelerated cube past its budget: %+v", over)
+	}
+	midnight := func(month time.Month, day int) string {
+		return time.Date(2026, month, day, 0, 0, 0, 0, time.Local).Format(time.RFC3339)
+	}
+	long := []qt.WhereTerm{{Field: "started_at", Op: ">=", Value: midnight(6, 1)}, {Field: "started_at", Op: "<", Value: midnight(9, 30)}}
+	for _, metric := range metrics(long, spent("repository_name", "activity", "status", "operation_key", "operation_name", "tool_name", "mcp_server"), spent("day", "status")) {
+		if metric.Error != "" || calls(metric) != 60 || metric.Coverage != "exact" {
+			t.Fatalf("long period past a budget its crossed cube exceeds: %+v", metric)
+		}
 	}
 }

@@ -23,7 +23,7 @@
 .carbon-comparison select{width:50px;min-width:0;padding:0 15px 0 3px;border:1px solid var(--line,#ccc);border-radius:5px;background-color:var(--panel,#fff);background-position:calc(100% - 9px) center,calc(100% - 5px) center;background-size:4px 4px;color:var(--ink,#222);font:inherit}
 .carbon-comparison select[data-carbon-control="vehicle"]{width:110px}
 .carbon-comparison .carbon-info-button{margin-left:2px}
-.carbon-segmented{display:inline-flex;border:1px solid var(--line,#ccc);border-radius:5px;overflow:hidden}
+.carbon-segmented{display:inline-flex;flex:none;border:1px solid var(--line,#ccc);border-radius:5px;overflow:hidden}
 .carbon-segmented button{border:0;border-radius:0;background:none;color:var(--muted,#666);padding:4px 10px}
 .carbon-segmented button+button{border-left:1px solid var(--line,#ccc)}
 .carbon-segmented button[aria-pressed="true"]{background:var(--accent,#315845);color:var(--panel,#fff)}
@@ -174,7 +174,7 @@
 }
 
 .carbon-cite{font-size:var(--fs-xs,11px);vertical-align:super;margin-left:1px}
-@media(max-width:760px){.carbon-controls{display:grid;gap:8px}.carbon-controls>.carbon-control:not(:first-child){flex-direction:row;align-items:center;justify-content:space-between;gap:12px}.carbon-segmented button{min-height:30px}.carbon-table th:first-child,.carbon-table td:first-child{white-space:normal}.carbon-method .carbon-table{display:block;overflow-x:auto}.carbon-comparison{max-width:100%;flex-wrap:wrap;white-space:normal}.carbon-table .carbon-share{display:none}.carbon-controls select{min-width:0;width:100%}}`;
+@media(max-width:760px){.carbon-controls{display:grid;gap:8px}.carbon-controls>.carbon-control:not(:first-child){flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px 12px}.carbon-segmented button{min-height:30px}.carbon-table th:first-child,.carbon-table td:first-child{white-space:normal}.carbon-method .carbon-table{display:block;overflow-x:auto}.carbon-comparison{max-width:100%;flex-wrap:wrap;white-space:normal}.carbon-table .carbon-share{display:none}.carbon-controls select{min-width:0;width:100%}}`;
 
   const CATEGORY_LABELS = {
     uncached_input: ['Uncached input', 'Prompt tokens processed in full'],

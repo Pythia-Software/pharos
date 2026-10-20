@@ -12,8 +12,8 @@ contracts and execution limits.
 
 ## Release builds
 
-Query Table 0.9.0 requires **Node.js 22 or later**. Use a supported Node when
-installing dependencies and running the frontend checks.
+Pharos uses **Node.js 24 LTS**, pinned in `.nvmrc` (`nvm use`), for dependency
+installation and frontend checks.
 
 ```sh
 npm --prefix web ci --no-audit --no-fund
@@ -53,6 +53,11 @@ dependencies without changing the lockfile, and symlinks them into Pharos's
 `web/node_modules`. `.context/query-table` points at the selected checkout. A
 local gitignored `go.work` selects its `backends/go` instead of the published
 module. Changes to Query Table belong in that checkout.
+
+`macos/test/swift-harness.sh` can run while these links are configured. Its
+temporary app build uses the pinned npm packages and checked-in Go backend
+with `GOWORK=off`; it excludes `go.work`/`go.work.sum` from the copy and leaves
+the original workspace files and package links intact.
 
 The combined watcher keeps package output available with `--watch --no-clean`
 and rebuilds Pharos. esbuild uses `--preserve-symlinks` so linked packages resolve
