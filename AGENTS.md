@@ -5,7 +5,7 @@ UI. The page shell and its scripts live in `internal/archive/assets/`
 (`ui.py` holds the HTML and its inline script; `reader-model.js` holds the
 conversation reader's DOM-free model; `library.js`, `sync.js`, `carbon.js` and
 others sit beside it). The Query Table frontend is TypeScript in `web/src`,
-bundled into the checked-in `internal/archive/assets/query-tables.{js,css}`. See
+bundled into the gitignored `internal/archive/assets/query-tables.{js,css}`. See
 [docs/technical-overview.md](docs/technical-overview.md) for the architecture.
 
 ## Query Table dependency policy
@@ -24,6 +24,20 @@ packages and the Go module to the same release.
 The JS tooling needs Node 24 LTS, pinned in `.nvmrc` (`nvm use`) and in
 `engines` in `web/package.json`; `web/tests/run.mjs` refuses an older Node.
 
+Run `tools/setup.sh` on a fresh checkout before Go builds or tests. It installs
+the locked npm packages and builds the ignored frontend; Conductor runs it as
+workspace setup. Go explicitly embeds both bundles, so a missing bundle fails
+compilation. Run `npm --prefix web run build` again after changing frontend
+sources or dependencies. `npm --prefix web run check` and browser/e2e test runs
+build the frontend themselves. Never commit generated JS/CSS bundles.
+
+To merge master, use `tools/update-branch.py`: it fetches `origin/master`,
+merges without committing, rebuilds the frontend from locked dependencies, runs
+the web checks and Go fast tier, then commits the merge. It never pushes.
+It handles legacy bundle conflicts by keeping the bundles untracked. For source
+conflicts, resolve and stage them, then run `tools/update-branch.py --continue`.
+Failed checks leave the merge pending for the same continuation command.
+
 Run the narrowest tests that cover your change while you work, and the fast
 Go tier on every change. Before opening a PR, run `go test ./...`,
 `npm --prefix web run check` and `npm --prefix web run test:full`.
@@ -40,7 +54,7 @@ Go tier on every change. Before opening a PR, run `go test ./...`,
 | Library drive end to end (macOS, slow) | `npm --prefix web run test:e2e` (real build, disk image and service) |
 | JS checks before a PR | `npm --prefix web run check` (typecheck, schemas, recipe snapshot, bundle, unit tests) |
 | Python tools | `python3 -m unittest discover -s tools` |
-| Frontend bundle | `(cd web && npm run build && npm run check-bundle)` after any `web/src` or `pricing/*.json` change |
+| Frontend bundle | `npm --prefix web run build` after any `web/src` or `pricing/*.json` change; outputs are gitignored |
 | Recipe snapshot | `npm --prefix web run generate-recipes` after changing card recipes; it rewrites `implemented_recipes` in `docs/homepage-query-cards.json`, which Go's `TestHomeQueryRecipesV2` executes |
 
 - **JS unit tests** live in `web/tests/unit/**` and import `web/src` and

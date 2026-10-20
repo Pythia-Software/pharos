@@ -13,7 +13,7 @@
 // `--test-name-pattern=x` works. Each tier's timeout bounds each test, unless
 // the test sets its own. The 10 slowest tests are listed at the end, and the
 // exit status is non-zero on failure. Needs the Node in .nvmrc or later.
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -93,6 +93,11 @@ const timings = [];
 // Ctrl-C reaches the test processes too; stop after them and clean up.
 process.on("SIGINT", () => { interrupted = true; });
 try {
+  // Browser fixtures serve the generated assets, and e2e embeds them in Go.
+  // Build once before either tier, including on a fresh checkout.
+  if (selected.some(tier => tier.name !== "unit" && tier.files.length)) {
+    execFileSync("npm", ["run", "build"], { cwd: web, stdio: "inherit" });
+  }
   for (const tier of selected) {
     if (!tier.files.length || interrupted) continue;
     let files = tier.files.map(file => join(tier.source, file));

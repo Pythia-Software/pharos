@@ -10,8 +10,10 @@ import (
 
 // assets contains the existing catalog contract and the existing Pharos UI.
 // Keeping both embedded makes the service a single, relocatable executable.
+// Name the generated bundles explicitly so a fresh checkout cannot compile a
+// service without its frontend. Run tools/setup.sh before Go builds or tests.
 //
-//go:embed assets
+//go:embed assets assets/query-tables.js assets/query-tables.css
 var assets embed.FS
 
 func schemaSQL() string {

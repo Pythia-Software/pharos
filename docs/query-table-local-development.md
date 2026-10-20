@@ -9,7 +9,10 @@ contracts and execution limits.
 ## Release builds
 
 Pharos uses **Node.js 24 LTS**, pinned in `.nvmrc` (`nvm use`), for dependency
-installation and frontend checks.
+installation and frontend checks. `tools/setup.sh` installs the locked packages,
+checks schemas and builds the frontend, selecting an installed Node 24 through
+nvm when necessary. Conductor runs it for new workspaces. The app/release build
+also runs it and requires Node/npm; there is no prebuilt-bundle fallback.
 
 ```sh
 npm --prefix web ci --no-audit --no-fund
@@ -29,8 +32,49 @@ integrities. `go.mod`/`go.sum` pin the released Go adapter;
 `GOWORK=off go list -m -json github.com/Pythia-Software/query-table/backends/go`
 shows the selected version and no `Replace`.
 The JS/CSS assets in `internal/archive/assets` are built from these installed
-packages. Codegen regenerates the Go schemas from the canonical JSON in
+packages and are gitignored. Run setup before a fresh checkout's Go builds or
+tests: the embed directives explicitly require both bundles so a missing
+frontend fails compilation. After frontend edits, run `npm --prefix web run
+build` before running Go tests. `npm --prefix web run check` builds automatically,
+as do the browser and e2e test runners. Codegen regenerates the Go schemas from the canonical JSON in
 `schemas/`, and copies those same documents into the frontend assets.
+
+## Updating a branch
+
+Start with a clean feature branch, then run:
+
+```sh
+tools/update-branch.py
+```
+
+The command fetches and merges `origin/master` without committing, reinstalls
+the locked npm dependencies, rebuilds the frontend, runs `npm --prefix web run
+check` and `GOWORK=off go test -short ./...`, and commits the verified merge.
+It never pushes. Review and push the resulting commit separately, and run the
+full PR checks in [AGENTS.md](../AGENTS.md) before opening a PR.
+
+During the transition, older branches may still track or modify the bundles.
+The command keeps those files deleted from Git and regenerates ignored copies
+from the merged source. It handles both content and modify/delete conflicts.
+It never automatically resolves source conflicts. Resolve and stage those,
+then continue the same merge:
+
+```sh
+git add <resolved-source-files>
+tools/update-branch.py --continue
+```
+
+Stage new helpers too: untracked files are rejected before verification and
+again before committing, so checks cannot pass using files missing from the
+commit. Gitignored build outputs are allowed.
+
+Failed installation, generation or checks leave the merge uncommitted; fix the
+problem and use the same continuation command. If a schema or recipe snapshot
+check fails, regenerate it with `npm --prefix web run generate-schemas` or
+`npm --prefix web run generate-recipes`, review and stage it, then continue.
+`git merge --abort` cancels a pending merge; rerun setup afterwards to refresh
+the ignored assets. Setup replaces optional local Query Table links with the
+published dependencies; restore links explicitly when returning to upstream work.
 
 ## Optional worktree links
 
