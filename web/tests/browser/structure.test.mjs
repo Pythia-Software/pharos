@@ -10,10 +10,18 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { open, skip } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
-import { rootConversation, workID } from "./fixtures.mjs";
+import { defaultApi, rootConversation, workID } from "./fixtures.mjs";
 
 const work = `/work/${workID}`;
 const ROUTES = [
+  ...['provisional', 'partial'].map(state => ({
+    name: `Indexing forecast (${state})`, url: '/library', ready: '#pharosDrive',
+    api: {'GET /api/library/status': {...defaultApi['GET /api/library/status'], idle: false, activities: [{id: 'index-forecast', kind: 'sync', label: 'Capture & index', started_at: '2026-10-01T00:00:00Z',
+      work: {phase: 'loading authorship inputs', done: 0, total: 0, next: 'Tools, authorship and findings'},
+      estimate: {state: 'unknown', basis: 'Loading inputs before the stage count is available'},
+      forecast: {state, low_seconds: state === 'provisional' ? 180 : 0, high_seconds: state === 'provisional' ? 600 : 0, predicted_steps: state === 'provisional' ? 4 : 3, remaining_steps: 4, basis: 'Remaining sources and analyses on this Mac', unknown_steps: state === 'partial' ? ['Classify authorship for retained conversations'] : []}}]}},
+    open: page => page.locator('#pharosDrive').click(), shown: '#pharosDrivePanel .pharos-activity',
+  })),
   { name: "Home", url: "/", ready: ".home-belt-row .query-card" },
   { name: "Dashboard Catalog", url: "/home?cards=library", ready: ".card-library-entry .query-card" },
   { name: "Library table", url: "/library", ready: "#queryTableLibrary .qt-row" },
@@ -50,6 +58,8 @@ const ROUTES = [
   { name: "Analyze workspace carbon dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=carbon", ready: ".usage-dashboard #carbonSummary" },
   { name: "Analyze workspace query", url: "/analyze?analyze_workspace=1&analyze_mode=query&analyze_data=tool_calls", ready: ".usage-workspace-table .qt-row" },
   { name: "Analyze workspace optional search", url: "/analyze?analyze_workspace=1&analyze_mode=search&analyze_data=tool_calls", ready: ".usage-workspace-table .qt-row" },
+  { name: "Analyze fresh", url: "/analyze?fresh=1&analyze_view=tokens&machine_view=tokens&activity_days=0&activity_repo=&activity_provider=&activity_model=", preferences: { "pharos-usage-view": "writing", "pharos-machine-view": "time", "pharos-machine-scope": { days: 7, repository: "missing", provider: "missing", model: "missing" } }, ready: "#queryTableUsage .qt-row" },
+  { name: "Analyze query recovery", url: "/analyze?analyze_view=tokens&machine_view=tokens&q_usage=invalid", ready: ".query-recovery", open: page => page.getByRole("button", { name: "Reset table", exact: true }).click(), shown: "#queryTableUsage .qt-row" },
   { name: "Tool calls", url: "/tools", ready: "#toolsPage .qt-row" },
   { name: "Tool summary", url: "/tools?tools_view=summary", ready: "#toolsPage .qt-row" },
   { name: "Skills", url: "/tools?tools_view=skills", ready: ".skill-usages .qt-row" },
@@ -64,6 +74,7 @@ const ROUTES = [
   { name: "Sources", url: "/settings/sources", ready: "#sourceGrid .source-card" },
   { name: "Capture & index", url: "/settings/sync", ready: "#syncDashboard .sync-panel table" },
   { name: "Optimization settings", url: "/settings/optimization", ready: "#optimizationSettingsPage .findings-panel" },
+  { name: "Header settings", url: "/settings/header", ready: "#headerActive .header-tool" },
   { name: "App preferences", url: "/settings/preferences", ready: "#optionalBehaviors .optional-behavior" },
   { name: "Workspace overview", url: work, ready: ".delegation-table tbody tr" },
   { name: "Workspace parallel activity", url: `${work}?explorer=parallel`, ready: ".delegation-parallel" },
@@ -86,7 +97,7 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
     for (const viewport of WIDTHS) {
       const name = `${route.name} @ ${viewport.width}`;
       test(name, { skip }, async t => {
-        const app = await open(t, { url: route.url, viewport, ready: route.ready, preferences: route.preferences, concurrency: route.concurrency });
+        const app = await open(t, { url: route.url, viewport, ready: route.ready, preferences: route.preferences, concurrency: route.concurrency, api: route.api });
         if (route.open) {
           await route.open(app.page);
           await app.page.locator(route.shown).first().waitFor();

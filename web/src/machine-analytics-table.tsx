@@ -72,7 +72,9 @@ export function MachineAnalyticsTable({ current, previous, grouping, compared, f
     <MetricsPanel api={stableApi} aggregations={api.aggregations} fields={api.query.grouping ? api.schema!.fields : api.computed.catalogue} renderers={renderers}
       onInspect={(bucket, clause) => { const rows = inspectBucketQuery(api.query, bucket, clause, schema); if (rows) api.setQuery(rows); }} />
     <DataTable fields={api.visibleFields} rows={api.rows} query={api.query} onQueryChange={api.setQuery} renderers={renderers} rowId={api.rowId} columnDrag={api.columnDrag} total={api.total} loading={api.loading}
-      emptyMessage="No operations match these analytics-table filters." {...(!api.query.grouping ? { trailing: (row: Row) => <button type="button" className="machine-cell-link" onClick={() => filter(groupFilters(row.fact, grouping), true)}>Inspect calls ↓</button>, trailingLabel: "Source calls" } : {})} />
+      emptyMessage={api.loading ? "Loading results…" : "No operations match these analytics-table filters."}
+      classNames={{ empty: api.loading ? "pharos-table-loading" : undefined }}
+      {...(!api.query.grouping ? { trailing: (row: Row) => <button type="button" className="machine-cell-link" onClick={() => filter(groupFilters(row.fact, grouping), true)}>Inspect calls ↓</button>, trailingLabel: "Source calls" } : {})} />
     {api.error ? <p role="alert">{api.error.message}</p> : null}
   </section>;
 }

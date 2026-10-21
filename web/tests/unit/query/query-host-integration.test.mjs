@@ -4,6 +4,8 @@ import { EMPTY_QUERY, encodeQuery, normalizeQueryState, createQueryLinkService, 
 import * as storageModule from '../../../src/storage';
 import * as bookmarksModule from '../../../src/bookmarks';
 import * as queryLinksModule from '../../../src/query-links';
+import { freshPageURL, tableRecoveryQuery } from '../../../src/query-recovery';
+import { core, schemas, execution } from '../helpers/recipes.mjs';
 import { categoryForQuery } from '../../../src/query-categories';
 import { instantiateRecipe, queryRecipes } from '../../../src/curiosity-data';
 import { usageDatasets, usageWorkspaceURL } from '../../../src/usage-workspace-model';
@@ -178,4 +180,78 @@ test('changing a saved range preserves query structure, indexed search context, 
  for(const [key,value] of [['search','indexing'],['case','1'],['fuzzy','0'],['heat_grain','week']])assert.equal(url.searchParams.get(key),value);
  assert.equal(url.hash,'#library');
  assert.equal(categoryForQuery(spec.dataset,spec.query),'cost');
+});
+
+
+test('failed last-used queries are skipped across adapters without deleting named views', async () => {
+ const key='pharos_tool_calls',storage=m.libraryStorageAdapter();
+ await storage.saveLast(key,query);
+ const saved=await storage.loadDefaultSaved(key),before=JSON.stringify(m.readBookmarks());
+ m.rejectLastQuery(key,query);
+ await storage.saveLast(key,query); // Query Table can persist after a request fails.
+ let recovered=0;
+ const next=m.libraryStorageAdapter({onRecovery:()=>recovered++});
+ assert.equal(await next.loadLast(key),null);
+ assert.equal(recovered,1);
+ const changed={...query,limit:26};
+ await next.saveLast(key,changed);
+ assert.deepEqual(await next.loadLast(key),changed);
+ assert.equal(JSON.stringify(m.readBookmarks()),before);
+ // An explicit retry can make the same query eligible for restoration again.
+ m.retryLastQuery(key);
+ await next.saveLast(key,query);
+ assert.deepEqual(await next.loadLast(key),query);
+ if(saved)assert.equal((await next.loadDefaultSaved(key)).id,saved.id);
+});
+
+test('a rejected named default is bypassed while the saved query and default choice survive',async()=>{
+ const key='pharos_tool_calls',storage=m.libraryStorageAdapter();
+ const saved=await storage.loadDefaultSaved(key),before=JSON.stringify(m.readBookmarks());
+ m.rejectLastQuery(key,saved.query);
+ let recovered=false;
+ assert.equal(await m.libraryStorageAdapter({onRecovery:()=>recovered=true}).loadDefaultSaved(key),null);
+ assert.equal(recovered,true);
+ assert.equal(JSON.stringify(m.readBookmarks()),before);
+ m.retryLastQuery(key);
+ assert.equal((await storage.loadDefaultSaved(key)).id,saved.id);
+});
+
+test('fresh page links bypass cached queries and named defaults, preserving the saved library',async()=>{
+ const storage=m.libraryStorageAdapter({fresh:true}),before=JSON.stringify(m.readBookmarks());
+ assert.equal(await storage.loadLast('pharos_tool_calls'),null);
+ assert.equal(await storage.loadDefaultSaved('pharos_tool_calls'),null);
+ const url=new URL(freshPageURL('http://localhost/analyze?q_usage=invalid&analyze_topic=human&activity_repo=gone#chart'),location.origin);
+ assert.equal(url.pathname,'/analyze');assert.equal(url.searchParams.get('fresh'),'1');
+ assert.equal(url.searchParams.get('analyze_topic'),'tokens');assert.equal(url.searchParams.get('analyze_mode'),'dashboards');
+ assert.equal(url.searchParams.has('activity_repo'),false);assert.equal(url.searchParams.has('q_usage'),false);assert.equal(url.hash,'');
+ assert.equal(JSON.stringify(m.readBookmarks()),before);
+ assert.equal(freshPageURL('http://localhost/tools?tools_view=skills&q_skill_usages=invalid'),'/tools?fresh=1');
+ // Table reset starts from source-schema defaults even when the restored
+ // baseline contains removed columns, metrics, grouping or invalid filters.
+ for(const dataset of ['usage','tool_calls','mcp_calls']){
+  const scope=dataset==='mcp_calls'?[]:[{field:'provider',op:'=',value:'codex'}];
+  const schema=schemas[dataset],reset=tableRecoveryQuery(schema,scope);
+  const request=core.toServerQueryV2(reset,schema,execution);
+  assert.deepEqual(request.diagnostics,[]);
+  assert.deepEqual(reset.where,scope);
+  assert.equal(reset.offset,0);
+  assert.equal(reset.limit,schema.defaultLimit);
+  assert.equal(reset.grouping,undefined);
+  assert.ok(!reset.aggregations?.length);
+  assert.deepEqual(core.selectedFields(schema,reset).map(field=>field.name),schema.defaultSelect.map(column=>column.field));
+  assert.deepEqual(request.orderBy,schema.defaultSort);
+ }
+});
+
+
+test('failed defaults are recognized after schema normalization and machine scope, without skipping a different default',async()=>{
+ const key='pharos_tool_calls',storage=m.libraryStorageAdapter(),saved=await storage.loadDefaultSaved(key);
+ const defaults=m.normalizeQueryState({...EMPTY_QUERY,limit:50});
+ const canonicalize=query=>({...query,where:[...query.where,{field:'provider',op:'=',value:'codex'}]});
+ const effective=canonicalize(m.normalizeQueryState(saved.query,defaults));
+ m.rejectLastQuery(key,{...effective,limit:effective.limit+1},{defaults,canonicalize});
+ assert.equal((await storage.loadDefaultSaved(key)).id,saved.id,'another failed query must not skip this default');
+ m.rejectLastQuery(key,effective,{defaults,canonicalize});
+ assert.equal(await storage.loadDefaultSaved(key),null);
+ m.retryLastQuery(key);
 });

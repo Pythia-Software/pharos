@@ -1,7 +1,8 @@
-import { localStorageAdapter, normalizeQueryState, type SavedQuery, type StorageAdapter, httpQuerySnapshotStore, createQueryLinkService } from "@pythia-software/query-table-core";
+import { localStorageAdapter, normalizeQueryState, type QueryState, type SavedQuery, type StorageAdapter, httpQuerySnapshotStore, createQueryLinkService } from "@pythia-software/query-table-core";
 import { preferences } from "./preferences";
 import { collectDurableQuery, replaceSavedQuery, migrateSavedQueries, readBookmarks, removeBookmark, savedQueries } from "./bookmarks";
 import { queryDatasets, readRollingWindow, rollingQueryMatches, queryURL, type QueryDataset } from "./query-links";
+import { queryFetch } from "./query-request";
 
 // Saved queries and each table's default view are choices the user made, so
 // they live in the library and follow it between Macs. The last-used query
@@ -11,6 +12,32 @@ import { queryDatasets, readRollingWindow, rollingQueryMatches, queryURL, type Q
 const DEFAULT_PREFIX = "query-table:default:";
 const MAX_SAVED_QUERIES = 100;
 const MAX_SAVED_NAME_LENGTH = 200;
+const REJECTED_PREFIX = "pharos-query-rejected:";
+const queryFingerprint = (query: QueryState) => JSON.stringify(normalizeQueryState(query));
+
+export function rejectLastQuery(key: string, query: QueryState, restoration?: { defaults: QueryState; canonicalize: (query: QueryState) => QueryState }) {
+  const fingerprints = [queryFingerprint(query)];
+  // A default can acquire schema details and host scope during restoration.
+  // Match that effective query before also skipping its original saved form.
+  if (restoration) {
+    const id = readDefaultId(key), saved = id && readSaved(key).find(saved => saved.id === id);
+    if (saved && queryFingerprint(restoration.canonicalize(normalizeQueryState(saved.query, restoration.defaults))) === fingerprints[0]) {
+      fingerprints.push(queryFingerprint(saved.query));
+    }
+  }
+  try { localStorage.setItem(REJECTED_PREFIX + key, JSON.stringify(fingerprints)); } catch { /* Storage can be unavailable. */ }
+}
+
+export function retryLastQuery(key: string) {
+  try { localStorage.removeItem(REJECTED_PREFIX + key); } catch { /* Storage can be unavailable. */ }
+}
+
+function rejected(key: string, query: QueryState) {
+  try {
+    const fingerprints: unknown = JSON.parse(localStorage.getItem(REJECTED_PREFIX + key) ?? "null");
+    return Array.isArray(fingerprints) && fingerprints.includes(queryFingerprint(query));
+  } catch { return false; }
+}
 
 function datasetOf(key: string): QueryDataset | undefined {
   return queryDatasets.find(dataset => key === `pharos_${dataset}`);
@@ -31,20 +58,29 @@ function writeDefaultId(key: string, id: string | null) {
   else preferences().remove(DEFAULT_PREFIX + key);
 }
 
-export function libraryStorageAdapter(): StorageAdapter {
+export function libraryStorageAdapter(options: { fresh?: boolean; onRecovery?: () => void } = {}): StorageAdapter {
   const local = localStorageAdapter();
   return {
-    snapshots: httpQuerySnapshotStore("/api/query-snapshots"),
-    loadLast: key => local.loadLast(key),
-    saveLast: (key, query) => local.saveLast(key, query),
+    snapshots: httpQuerySnapshotStore("/api/query-snapshots", queryFetch),
+    async loadLast(key) {
+      if (options.fresh) return null;
+      const query = await local.loadLast(key);
+      if (query && rejected(key, query)) { options.onRecovery?.(); return null; }
+      return query;
+    },
+    async saveLast(key, query) {
+      if (!rejected(key, query)) await local.saveLast(key, query);
+    },
     async listSaved(key) {
       return readSaved(key).sort((a, b) => b.savedAt - a.savedAt);
     },
     async loadDefaultSaved(key) {
+      if (options.fresh) return null;
       const id = readDefaultId(key);
       if (!id) return null;
       const found = readSaved(key).find(query => query.id === id);
       if (!found) writeDefaultId(key, null);
+      if (found && rejected(key, found.query)) { options.onRecovery?.(); return null; }
       return found ?? null;
     },
     async setDefaultSaved(key, id) {
@@ -71,7 +107,7 @@ export function libraryStorageAdapter(): StorageAdapter {
       if (!dataset) throw new Error("Unknown saved-query dataset.");
       const candidate = readRollingWindow(new URLSearchParams(location.search), dataset);
       const window = candidate && rollingQueryMatches(query, candidate) ? candidate : undefined;
-      const service = createQueryLinkService(key, httpQuerySnapshotStore("/api/query-snapshots"));
+      const service = createQueryLinkService(key, httpQuerySnapshotStore("/api/query-snapshots", queryFetch));
       const link = await service.durable(query, new URL(queryURL(dataset, query, window), location.origin).href, `q_${dataset}`);
       const url = new URL(link.url);
       return replaceSavedQuery(dataset, id, query, savedAt, `${url.pathname}${url.search}${url.hash}`);

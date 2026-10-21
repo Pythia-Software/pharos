@@ -92,6 +92,12 @@ func (env *findingEnv) asOf(day string) *findingEnv {
 func (env *findingEnv) persistence(candidates []*findingCandidate, treated map[string]bool) map[string]findingPersist {
 	sums, cases := map[string]float64{}, map[string]int{}
 	start := env.from.Format("2006-01-02")
+	windows := 0
+	for gate := dayTime(env.today).AddDate(0, 0, -findingGateDays); gate.AddDate(0, 0, -findingGateDays+1).Format("2006-01-02") >= start; gate = gate.AddDate(0, 0, -7) {
+		windows++
+	}
+	total, done := windows*len(candidates), 0
+	reportWork(env.ctx, "backtesting findings", "candidate-window", 0, total)
 	for gate := dayTime(env.today).AddDate(0, 0, -findingGateDays); ; gate = gate.AddDate(0, 0, -7) {
 		at := env.asOf(gate.Format("2006-01-02"))
 		if at.gateFrom < start {
@@ -99,7 +105,10 @@ func (env *findingEnv) persistence(candidates []*findingCandidate, treated map[s
 		}
 		afterFrom := gate.AddDate(0, 0, 1).Format("2006-01-02")
 		afterTo := gate.AddDate(0, 0, 1+findingGateDays).Format("2006-01-02")
-		for _, candidate := range candidates {
+		for index, candidate := range candidates {
+			if index%100 == 0 {
+				reportWork(env.ctx, "backtesting findings", "candidate-window", done+index, total)
+			}
 			if candidate.Hidden || treated[candidate.Spec.id()] {
 				continue
 			}
@@ -122,6 +131,8 @@ func (env *findingEnv) persistence(candidates []*findingCandidate, treated map[s
 			sums[candidate.Spec.Detector] += math.Min(after.Rate/before.Rate, findingPersistCap)
 			cases[candidate.Spec.Detector]++
 		}
+		done += len(candidates)
+		reportWork(env.ctx, "backtesting findings", "candidate-window", done, total)
 	}
 	output := map[string]findingPersist{}
 	for _, detector := range findingDetectors {

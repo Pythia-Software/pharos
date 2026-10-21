@@ -4,6 +4,7 @@ import type { QueryTableApi } from "@pythia-software/query-table-react";
 import { RecordSearchEditor } from "./record-search-editor";
 import { groupedDashboardQuery } from "./usage-dashboard-model";
 import { Icon } from "./icons";
+import { ResetPage } from "./query-recovery";
 import { readUsageWorkspace, usageAnalysisLink, usageDashboardReturn, usageDatasets, usageDatasetTopics, usageSearchQuery, usageTopics, usageWorkspaceURL, type UsageDataset, type UsageMode, type UsageTopic } from "./usage-workspace-model";
 import { NestedPageLayout, PageLink } from "./nested-pages";
 import "./usage-workspace.css";
@@ -52,7 +53,7 @@ export function UsageWorkspace({ renderDashboard, renderTable }: { renderDashboa
   return <NestedPageLayout className="pharos-query-page usage-workspace" contentClassName="usage-workspace-content"
     label="Analyze" pages={pages} current={`${mode}:${mode === "dashboards" ? topic : dataset}`} title={title}
     description={mode === "dashboards" ? usageTopics[topic].description : "Build your own analysis. Change filters, columns, groups, formulas, and metrics. Add search conditions when you need them."}
-    actions={mode !== "dashboards" ? <UsageWorkspaceLink href={back.href}>{back.label}<Icon name="arrow-right" /></UsageWorkspaceLink> : null}>
+    actions={<><ResetPage />{mode !== "dashboards" ? <UsageWorkspaceLink href={back.href}>{back.label}<Icon name="arrow-right" /></UsageWorkspaceLink> : null}</>}>
     {mode === "dashboards" ? <div className="usage-dashboard" key={topic}>{renderDashboard(topic)}</div>
       : <div className="usage-workspace-table" key={dataset}>{renderTable(dataset)}</div>}
   </NestedPageLayout>;

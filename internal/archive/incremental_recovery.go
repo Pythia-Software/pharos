@@ -191,6 +191,21 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 	started := s.spawn(func(context.Context) {
 		defer s.ingestMu.Unlock()
 		defer end()
+		op := s.beginOperation(run.ID, "library-update:"+mode)
+		ctx := withOperationForecast(ctx, op)
+		if mode == "retained" {
+			op.add("repair", "retained-v1", "Rebuild retained messages", s.analysisForecastFeatures(), true)
+		} else {
+			op.add("capture", "capture-v1", "Capture selected sources", workFeatures{}, false)
+			op.add("discovery", "capture-discovery-v1", "Discover captured inputs", workFeatures{}, false)
+			op.add("index", "", "Index captured inputs", workFeatures{}, false)
+			addAnalysisForecast(op, false)
+			op.add("verification", "audit-v1", "Verify retained inputs", workFeatures{}, true)
+		}
+		op.checkpoint("launch")
+		workMeter := &runWorkMeter{server: s, runID: run.ID, kind: "sync", model: "analysis-v1"}
+		defer func() { workMeter.release(ctx.Err() == nil) }()
+		ctx = withWorkProgress(ctx, workMeter.report)
 		var failure error
 		results := []IngestResult{}
 		finish := func() {
@@ -200,6 +215,8 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 			} else if failure != nil {
 				state = "failed"
 			}
+			workMeter.release(state == "complete")
+			op.finish(state)
 			s.Catalog.DB.Exec("UPDATE sync_recovery_jobs SET state=?,updated_at=?,error=?,progress_json=? WHERE id=?", state, now(), nilIfEmpty(errorString(failure)), jsonText(results), job)
 			s.updateRun(run.ID, func(run *SyncRun) {
 				run.State, run.Phase = state, state
@@ -211,6 +228,7 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 		}
 		defer finish()
 		if mode == "retained" {
+			op.begin("repair")
 			failure = s.Catalog.repairRetained(ctx, job, names, func(done, total int) {
 				s.updateRun(run.ID, func(run *SyncRun) {
 					run.Phase = "rebuilding retained messages"
@@ -218,6 +236,7 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 					run.setWork(run.Phase, firstString(run.CurrentSource), "workspace", float64(done), float64(total))
 				})
 			})
+			op.end("repair", failure == nil && ctx.Err() == nil)
 			return
 		}
 		config := s.Config()
@@ -231,6 +250,7 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 			}
 		}
 		s.updateRun(run.ID, func(run *SyncRun) { run.Phase = "capturing fresh evidence" })
+		op.begin("capture")
 		if len(sources) > 0 {
 			completed := 0
 			var previous CaptureSourceResult
@@ -254,6 +274,7 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 				failure = errors.New("some selected inputs could not be freshly captured; retained evidence is still indexed")
 			}
 		}
+		op.end("capture", failure == nil && ctx.Err() == nil)
 		if ctx.Err() != nil {
 			return
 		}
@@ -263,8 +284,12 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 			return
 		}
 		s.updateRun(run.ID, func(run *SyncRun) { run.CurrentSource = nil; run.TotalSources, run.CompletedSources = len(targets), 0 })
-		indexCtx := withIngestMode(ctx, ingestMode{force: mode == "full"})
+		indexCtx := withIngestMode(ctx, ingestMode{force: mode == "full", deferGit: true})
+		op.begin("discovery")
 		plan := s.countIndexWork(indexCtx, run.ID, targets)
+		op.end("discovery", ctx.Err() == nil)
+		op.checkpoint("discovered")
+		op.begin("index")
 		for index, target := range targets {
 			if ctx.Err() != nil {
 				return
@@ -293,20 +318,26 @@ func (s *Server) startRecovery(w http.ResponseWriter, r *http.Request, body map[
 			}
 			s.Catalog.DB.Exec("UPDATE sync_recovery_jobs SET progress_json=?,updated_at=? WHERE id=?", jsonText(results), now(), job)
 		}
+		op.end("index", failure == nil && ctx.Err() == nil)
 		if ctx.Err() == nil {
 			s.updateRun(run.ID, func(run *SyncRun) {
 				run.Phase, run.CurrentSource = "reconciling deferred work", nil
 				run.Progress = nil
 			})
 			if err := s.finishDeferredSyncPhases(ctx, false, func(name string, work func() error) error {
-				s.updateRun(run.ID, func(run *SyncRun) { run.Phase = "refreshing " + name })
-				return work()
+				workMeter.model = "analysis-v1:" + name
+				workMeter.report(activityWork{Phase: "refreshing " + name})
+				err := work()
+				workMeter.finish(err == nil)
+				return err
 			}); err != nil {
 				failure = err
 			}
+			op.begin("verification")
 			s.updateRun(run.ID, func(run *SyncRun) { run.Phase = "verifying" })
 			s.auditOpenIssues(ctx, run.ID, names)
 			s.auditIntentional(ctx, run.ID, names)
+			op.end("verification", ctx.Err() == nil)
 		}
 	})
 	if !started {
@@ -332,8 +363,21 @@ func (s *Server) finishDeferredSync(ctx context.Context) error {
 // runPhase lets manual sync expose and measure each expensive stage. Keep the
 // same completion guards for Capture & index and manual incremental indexing.
 func (s *Server) finishDeferredSyncPhases(ctx context.Context, forceFindings bool, runPhase func(string, func() error) error) error {
-	if runPhase == nil {
-		runPhase = func(_ string, work func() error) error { return work() }
+	invoke := runPhase
+	if invoke == nil {
+		invoke = func(_ string, work func() error) error { return work() }
+	}
+	op := operationOf(ctx)
+	runPhase = invoke
+	if op != nil {
+		runPhase = func(name string, work func() error) error {
+			features := s.analysisStepFeatures(ctx, name, s.analysisForecastFeatures(), forceFindings, false)
+			op.revise("analysis:"+name, "", features, true)
+			op.begin("analysis:" + name)
+			err := invoke(name, work)
+			op.end("analysis:"+name, err == nil && ctx.Err() == nil)
+			return err
+		}
 	}
 	if err := runPhase("github", func() error { return s.Catalog.RefreshRepositoryForgeIDs(ctx) }); err != nil {
 		return err

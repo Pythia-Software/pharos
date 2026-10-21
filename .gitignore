@@ -12,3 +12,5 @@ archive.toml
 go.work
 go.work.sum
 web/.test-build/
+internal/archive/assets/query-tables.js
+internal/archive/assets/query-tables.css

@@ -378,14 +378,14 @@ Test commands, test tiers and the rules for writing tests are in
 [AGENTS.md](../AGENTS.md). Before committing:
 
 ```sh
+tools/setup.sh      # install pinned npm packages and generate embedded assets
 go test ./...        # go test -short ./... is the fast tier
 go vet ./...
-(cd web && npm ci && npm run build)
 (cd web && npm run check)
 ```
 
 `npm run check` runs the typecheck, the schema and recipe-snapshot checks,
-`check-bundle` and the JS unit tests.
+the frontend build, `check-bundle` and the JS unit tests.
 
 `./launch.sh --no-open` builds and installs the app for a per-user setup; it
 is not a test.
@@ -393,12 +393,17 @@ is not a test.
 The Go tests cover stable cross-language IDs, source configuration, canonical
 ingestion, API compatibility, the query-table allowlist/filter/sort/pagination/
 aggregation contract, semantic search vectors, and native Conductor
-repository/PR/tool/sub-agent extraction. `macos/build-app.sh` reinstalls
-`web/` from its lockfile and rebuilds the frontend when npm is available, and
-otherwise embeds the checked-in bundle with a warning. `npm run check-bundle`
-rebuilds into a scratch directory and fails unless the checked-in
-`internal/archive/assets/query-tables.{js,css}` match `web/src` byte for byte;
-run it before committing frontend changes.
+repository/PR/tool/sub-agent extraction. `macos/build-app.sh` runs
+`tools/setup.sh`, which requires Node 24/npm, reinstalls `web/` from its
+lockfile, checks the generated schemas and builds the frontend. The generated
+`internal/archive/assets/query-tables.{js,css}` are gitignored and explicitly
+required by `go:embed`, so a clean checkout needs setup before Go compilation.
+`npm run check-bundle` rebuilds into a scratch directory and checks the local
+bundles byte for byte; `npm run check` builds them first. Browser and e2e test
+runs also build them before loading or embedding them.
+Use [`tools/update-branch.py`](../tools/update-branch.py) to merge master and
+verify the merged source before committing; see
+[branch updates](query-table-local-development.md#updating-a-branch).
 `go vet -tags reclamation ./...` keeps the parked Go reclamation queue code
 compiling. The TL1 hook must maintain
 its own disposable integration tests because its repository concurrency

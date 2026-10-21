@@ -166,30 +166,35 @@
     if (seconds < 3600) return `${Math.ceil(seconds / 60)} min`;
     return `${(Math.ceil(seconds / 360) / 10).toFixed(1)} hr`;
   };
-  const ESTIMATE_TEXT = {learning: 'Measuring pace…', unknown: 'Time remaining not known', stalled: 'Waiting for progress…', finishing: 'Finishing this stage…', stopping: 'Stopping safely…'};
+  const ESTIMATE_TEXT = {partial: 'Some steps still being estimated…', provisional: 'Early forecast…', complete: 'Planned work finished', learning: 'Learning this workload…', unknown: 'Time remaining not known', stalled: 'Waiting for progress…', finishing: 'Finishing this stage…', stopping: 'Stopping safely…'};
   // What an activity's timing column shows: whole seconds since it started
   // (null if it reports no start), and either the range of time left in this
   // stage or the estimate's state. A range needs a positive low and a high no
   // lower than it; any other estimate, and every estimate while the status
   // is unavailable, shows its state, unknown if unrecognised.
-  function activityTiming(activity, {now = Date.now(), unavailable = Boolean(statusError)} = {}) {
+  function activityTiming(activity, {now = Date.now(), unavailable = Boolean(statusError), scope = 'operation'} = {}) {
     const started = Date.parse(activity.started_at);
     const elapsed = Number.isFinite(started) ? Math.max(0, Math.floor((now - started) / 1000)) : null;
-    const estimate = unavailable ? {state: 'unknown', basis: 'Status unavailable; reconnecting before updating the estimate'} : activity.estimate;
+    const forecast = scope !== 'stage' && activity.forecast;
+    const estimate = unavailable ? {state: 'unknown', basis: 'Status unavailable; reconnecting before updating the estimate'} : forecast || activity.estimate;
     let range = null;
-    if (estimate?.state === 'estimating' && estimate.low_seconds > 0 && estimate.high_seconds >= estimate.low_seconds) {
+    if (['estimating', 'provisional'].includes(estimate?.state) && estimate.low_seconds > 0 && estimate.high_seconds >= estimate.low_seconds) {
       const low = duration(estimate.low_seconds), high = duration(estimate.high_seconds);
       const sameUnit = low.split(' ').at(-1) === high.split(' ').at(-1);
       range = low === high ? high : sameUnit ? `${low.split(' ')[0]}–${high}` : `${low}–${high}`;
     }
-    const state = range ? 'estimating' : ESTIMATE_TEXT[estimate?.state] ? estimate.state : 'unknown';
-    return {elapsed, state, range, basis: estimate?.basis || 'This stage does not report a measurable total.'};
+    const state = range ? estimate.state : ESTIMATE_TEXT[estimate?.state] ? estimate.state : 'unknown';
+    return {elapsed, state, range, scope: forecast ? 'operation' : 'stage', basis: estimate?.basis || 'This stage does not report a measurable total.'};
   }
   const completionEstimate = activity => {
     const timing = node('div', 'pharos-sub pharos-activity-timing');
-    const {elapsed, state, range, basis} = activityTiming(activity);
+    const {elapsed, state, range, basis, scope} = activityTiming(activity);
     if (elapsed !== null) timing.append(node('div', '', `${elapsed < 60 ? `${elapsed} sec` : `${Math.floor(elapsed / 60)} min`} elapsed`));
-    timing.append(node('div', '', range ? `This stage: ~${range} left` : ESTIMATE_TEXT[state]));
+    timing.append(node('div', '', range ? `${scope === 'operation' ? 'Whole operation' : 'This stage'}: ~${range} left${state === 'provisional' ? ' (early forecast)' : ''}` : ESTIMATE_TEXT[state]));
+    if (scope === 'operation') {
+      const stage = activityTiming(activity, {scope: 'stage'});
+      if (stage.range) timing.append(node('div', '', `This stage: ~${stage.range} left`));
+    }
     timing.title = basis;
     return timing;
   };
@@ -199,7 +204,7 @@
   const workMeasure = work => work?.size?.total > 0 ? work.size : work;
   const activityProgress = activity => {
     const measure = workMeasure(activity.work);
-    return measure?.total > 0 ? measure.done / measure.total : activity.work ? null : activity.progress;
+    return measure?.total > 0 ? measure.done / measure.total : activity.work?.total_known && measure?.total === 0 ? 1 : activity.work ? null : activity.progress;
   };
   // An estimate's measured pace: bytes per second, or other units per minute.
   const estimateRate = (estimate, unit) => estimate.units_per_second > 0 && unit
@@ -233,7 +238,13 @@
     const estimate = activity.estimate;
     if (estimate && !statusError) {
       const rate = estimateRate(estimate, estimate.unit || work?.unit);
-      item.append(node('div', 'pharos-sub pharos-activity-basis', [rate, estimate.basis].filter(Boolean).join(' · ')));
+      item.append(node('div', 'pharos-sub pharos-activity-basis', [rate, activity.forecast ? `Current stage: ${estimate.basis}` : estimate.basis].filter(Boolean).join(' · ')));
+    }
+    const forecast = activity.forecast;
+    if (forecast && !statusError) {
+      const coverage = forecast.remaining_steps > 0 ? `${forecast.predicted_steps} of ${forecast.remaining_steps} remaining steps estimated` : '';
+      const unknown = forecast.unknown_steps?.length ? `Learning: ${forecast.unknown_steps.join(', ')}` : '';
+      item.append(node('div', 'pharos-sub', [forecast.basis, coverage, unknown].filter(Boolean).join(' · ')));
     }
     if (work?.next) item.append(node('div', 'pharos-sub pharos-next', `After this: ${work.next}`));
     return item;
@@ -335,16 +346,16 @@
   let controls = null, chip = null, headerSync = null, headerCaptureIndexRunning = false, panel = null, panelMode = 'drive', ejectState = null;
   let driveSpace = null, driveSpaceRequest = null, driveSpaceError = false;
   // The drive chip and Index changes share one combo button (ui.py's
-  // .combo-button) at the start of the header icons. Stop, and the full
+  // .combo-button) in the configurable library slot. Stop, and the full
   // Capture & index, are in the drive panel.
   function ensureControls() {
     if (controls?.isConnected) return controls;
-    const icons = document.querySelector('body>header .header-icons');
+    const icons = document.getElementById('headerLibrary');
     if (!icons) return null;
     controls = node('div', 'combo-button pharos-library-controls');
     controls.setAttribute('role', 'group');
     controls.setAttribute('aria-label', 'Library');
-    icons.prepend(controls);
+    icons.append(controls);
     return controls;
   }
 
@@ -395,10 +406,10 @@
     || Boolean(incremental) || Boolean(upgrading);
 
   function renderHeaderAction() {
-    const action = ensureHeaderAction();
+    const actions = [ensureHeaderAction(), document.getElementById('headerSyncOnly')];
     const busy = headerBusy({activities: status?.activities, incremental: window.pharosSync?.isBusy(),
       local: headerCaptureIndexRunning || hostsBusy, upgrading: upgradeStatus?.running});
-    if (action) {
+    for (const action of actions) if (action) {
       action.disabled = busy;
       action.setAttribute('aria-busy', String(busy));
     }
@@ -524,7 +535,9 @@
     const anchor = chip;
     if (!panel || !anchor) return;
     const box = anchor.getBoundingClientRect(), header = document.querySelector('body>header')?.getBoundingClientRect();
-    panel.style.top = `${Math.round((header?.bottom ?? box.bottom) + 8)}px`;
+    const top = Math.round((header?.bottom ?? box.bottom) + 8);
+    panel.style.top = `${top}px`;
+    panel.style.maxHeight = `${Math.max(0, window.innerHeight - top - 12)}px`;
     panel.style.left = `${Math.round(Math.max(12, Math.min(box.left, window.innerWidth - panel.offsetWidth - 12)))}px`;
   }
 
@@ -1178,7 +1191,10 @@
     if (settingsVisible()) refreshSettings();
   }
 
-  window.pharosLibrary = {refresh: refreshStatus, status: () => status, runs, refreshSettings, refreshSyncControls: renderSyncControls, renderAlerts: () => { renderChip(); renderPanel(); }, onStatus: listener => listeners.add(listener), toggleActivityPanel: () => (panel && panelMode === 'activity' ? closePanel() : openPanel('activity')),
+  const syncOnly = document.getElementById('headerSyncOnly');
+  if (syncOnly) syncOnly.onclick = syncNow;
+
+  window.pharosLibrary = {closePanel, refresh: refreshStatus, status: () => status, runs, refreshSettings, refreshSyncControls: renderSyncControls, renderAlerts: () => { renderChip(); renderPanel(); }, onStatus: listener => listeners.add(listener), toggleActivityPanel: () => (panel && panelMode === 'activity' ? closePanel() : openPanel('activity')),
     // Pure helpers, for web/tests/unit/page/library.test.mjs.
     libraryUpdate, activityTiming, activityProgress, estimateRate, workCount, headerBusy};
   const sheet = node('style');

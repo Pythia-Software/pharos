@@ -40,19 +40,8 @@ for name in schema.sql ui.py; do
         exit 1
     fi
 done
-if command -v npm >/dev/null 2>&1; then
-    # Always reinstall from the lockfile: an existing node_modules may have
-    # drifted from package-lock.json or been modified, and `npm ci` checks
-    # every package against its recorded integrity hash.
-    (cd "$ROOT/web" && npm ci --no-audit --no-fund)
-    (cd "$ROOT/web" && npm run generate-schemas && npm run build)
-elif [ ! -f "$ROOT/internal/archive/assets/query-tables.js" ] || [ ! -f "$ROOT/internal/archive/assets/query-tables.css" ]; then
-    echo "Node.js/npm is required to build the query-table frontend." >&2
-    exit 1
-else
-    echo "warning: npm not found; embedding the checked-in query-table bundle unverified." >&2
-    echo "warning: run \`(cd web && npm ci && npm run check-bundle)\` to confirm it matches web/src." >&2
-fi
+# Reinstall pinned packages and build the ignored frontend before embedding it.
+"$ROOT/tools/setup.sh"
 
 if [ "${PHAROS_UNIVERSAL:-0}" = 1 ]; then
     GOARCHES="arm64 amd64"

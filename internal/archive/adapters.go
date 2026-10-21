@@ -529,6 +529,14 @@ func (a *jsonlAdapter) transcriptInfo(path string, entry os.DirEntry, walkErr er
 // discoverParts parses each transcript, a Claude session together with its
 // subagents' files, unless unchanged passes over the files as they are.
 func (a *jsonlAdapter) discoverParts(unchanged func([]sourcePart) bool, emit func(*WorkspaceRecord, []sourcePart) error) error {
+	plan, err := a.planParts()
+	if err != nil {
+		return err
+	}
+	return plan.discover(a.context(), unchanged, emit)
+}
+
+func (a *jsonlAdapter) planParts() (*sourceWorkPlan, error) {
 	groups, infos, roots := map[string][]string{}, map[string]fs.FileInfo{}, []string{}
 	if err := filepath.WalkDir(a.config.Path, func(path string, entry os.DirEntry, walkErr error) error {
 		info, err := a.transcriptInfo(path, entry, walkErr)
@@ -549,20 +557,18 @@ func (a *jsonlAdapter) discoverParts(unchanged func([]sourcePart) bool, emit fun
 		infos[path] = info
 		return nil
 	}); err != nil {
-		return err
+		return nil, err
 	}
 	if a.provider == "claude" {
 		sort.Strings(roots)
 	}
 	names, err := a.transcriptNames(roots)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	a.names = names
+	plan := &sourceWorkPlan{}
 	for _, root := range roots {
-		if err := a.context().Err(); err != nil {
-			return err
-		}
 		paths := groups[root]
 		sort.Slice(paths, func(i, j int) bool {
 			if paths[i] == root || paths[j] == root {
@@ -570,52 +576,54 @@ func (a *jsonlAdapter) discoverParts(unchanged func([]sourcePart) bool, emit fun
 			}
 			return paths[i] < paths[j]
 		})
-		if unchanged != nil {
-			parts := make([]sourcePart, 0, len(paths))
-			for _, path := range paths {
-				if info := infos[path]; info != nil {
-					part := sourcePart{item: a.original(path), size: info.Size(), version: info.ModTime().UnixNano()}
-					if name, ok := a.names[path]; ok {
-						part.signal = name.signal()
-					}
-					parts = append(parts, part)
-				}
-			}
-			if len(parts) == len(paths) && unchanged(parts) {
-				continue
-			}
-		}
-		var combined *WorkspaceRecord
-		read := []sourcePart{}
+		parts := make([]sourcePart, 0, len(paths))
 		for _, path := range paths {
-			record, part, ok, err := a.parseFile(path)
+			info := infos[path]
+			part := sourcePart{item: a.original(path), size: info.Size(), version: info.ModTime().UnixNano()}
+			if name, ok := a.names[path]; ok {
+				part.signal = name.signal()
+			}
+			parts = append(parts, part)
+		}
+		plan.groups = append(plan.groups, plannedPartGroup{parts: parts, read: func(emit partEmitter) error {
+			record, read, err := a.readTranscriptGroup(paths)
 			if err != nil {
-				return fmt.Errorf("parse %s: %w", path, err)
+				return err
 			}
-			if part.item != "" {
-				read = append(read, part)
-			}
-			if !ok || len(record.Conversations) == 0 || len(record.Conversations[0].Messages) == 0 {
-				continue
-			}
-			if combined == nil {
-				combined = &record
-			} else {
-				combined.Conversations = append(combined.Conversations, record.Conversations...)
-				combined.Observed = max(combined.Observed, record.Observed)
-				if record.ActivityAt > combined.ActivityAt {
-					combined.ActivityAt = record.ActivityAt
-				}
-			}
+			return emit(record, read)
+		}})
+	}
+	return plan, nil
+}
+
+func (a *jsonlAdapter) readTranscriptGroup(paths []string) (*WorkspaceRecord, []sourcePart, error) {
+	var combined *WorkspaceRecord
+	read := []sourcePart{}
+	for _, path := range paths {
+		record, part, ok, err := a.parseFile(path)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse %s: %w", path, err)
 		}
-		if combined != nil && a.provider == "claude" {
-			combined.Metrics = reconciledTokenMetrics(*combined)
+		if part.item != "" {
+			read = append(read, part)
 		}
-		if err := emit(combined, read); err != nil {
-			return fmt.Errorf("ingest %s: %w", root, err)
+		if !ok || len(record.Conversations) == 0 || len(record.Conversations[0].Messages) == 0 {
+			continue
+		}
+		if combined == nil {
+			combined = &record
+		} else {
+			combined.Conversations = append(combined.Conversations, record.Conversations...)
+			combined.Observed = max(combined.Observed, record.Observed)
+			if record.ActivityAt > combined.ActivityAt {
+				combined.ActivityAt = record.ActivityAt
+			}
 		}
 	}
-	return nil
+	if combined != nil && a.provider == "claude" {
+		combined.Metrics = reconciledTokenMetrics(*combined)
+	}
+	return combined, read, nil
 }
 
 func claudeRootPath(path string) string {

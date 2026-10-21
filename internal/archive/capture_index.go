@@ -35,6 +35,12 @@ type captureView struct {
 	mappings []capturePathMapping
 }
 
+// Retained readers and membership belong to this exact capture inventory.
+// Include its directory so a plan cannot be reused for another source/host.
+func (v *captureView) planSignature() string {
+	return hashBytes([]byte(v.dir + "\x00" + jsonText(v.manifest) + "\x00" + jsonText(v.mappings)))
+}
+
 func newCaptureView(host Host, dir string, manifest *captureManifest) *captureView {
 	view := &captureView{host: host, dir: dir, manifest: manifest}
 	for _, mapping := range manifest.PathMap {
@@ -248,51 +254,20 @@ func (c *Catalog) captureIndexWork(ctx context.Context, target captureTarget) (n
 }
 
 func (c *Catalog) captureIndexWorkMeasured(ctx context.Context, target captureTarget) (needed int, model string, size *activitySize, ok bool) {
-	adapter, _, view, err := openCaptureAdapter(target)
+	needed, model, size, _, ok = c.captureIndexPlan(ctx, target)
+	return
+}
+
+func (c *Catalog) captureIndexPlan(ctx context.Context, target captureTarget) (int, string, *activitySize, *sourceWorkPlan, bool) {
+	adapter, _, _, err := openCaptureAdapter(target)
 	if err != nil {
-		return 0, "", nil, false
+		return 0, "", nil, nil, false
 	}
-	setAdapterContext(adapter, ctx)
-	partial, incremental := adapter.(partialAdapter)
-	if !incremental {
-		return 0, "", nil, false
+	plan, err := c.prepareSourcePlan(ctx, adapter)
+	if err != nil || plan == nil || plan.discoveryError != nil || ctx.Err() != nil {
+		return 0, "", nil, nil, false
 	}
-	tracker, err := c.newPartTracker(view.host.ID, target.Source, partial, view)
-	if err != nil {
-		return 0, "", nil, false
-	}
-	size = &activitySize{}
-	sizeKnown := true
-	count := func(parts []sourcePart) {
-		needed++
-		amount, unit := partWorkSize(parts)
-		if unit == "" || (size.Unit != "" && size.Unit != unit) {
-			sizeKnown = false
-		}
-		size.Unit, size.Total = unit, size.Total+amount
-	}
-	// Passing over every group keeps the adapter from parsing any; a group it
-	// parses anyway (its parts could not all be read) is counted as needed.
-	err = partial.discoverParts(func(parts []sourcePart) bool {
-		if ctx.Err() == nil && !tracker.unchanged(parts) {
-			count(parts)
-		}
-		return true
-	}, func(_ *WorkspaceRecord, parts []sourcePart) error {
-		count(parts)
-		return nil
-	})
-	if !sizeKnown {
-		size = nil
-	}
-	// A recovery generation forces fresh work but is not an extractor change.
-	// Reuse comparable rebuild history across generations, separately from
-	// ordinary updates that can skip writes when the record digest is current.
-	model = adapter.Config().Kind + ":" + sourceIndexVersion(adapter) + ":changes"
-	if modeOf(ctx).force {
-		model = adapter.Config().Kind + ":" + sourceIndexVersion(adapter) + ":rebuild"
-	}
-	return needed, model, size, err == nil && ctx.Err() == nil
+	return plan.needed, plannedIndexModel(adapter, modeOf(ctx).force), plan.size, plan, true
 }
 
 // IndexCapture parses one host's captured source into the catalog. It reads
@@ -305,10 +280,6 @@ func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progre
 		result.Error = err.Error()
 		return result
 	}
-	adapter, manifest, view, err := openCaptureAdapter(target)
-	if err != nil {
-		return fail(err)
-	}
 	// Only one index of a capture at a time, by the service or the CLI.
 	lock, err := os.OpenFile(filepath.Join(target.Dir, indexLockName), os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
@@ -318,6 +289,18 @@ func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progre
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		return fail(fmt.Errorf("%s is already being indexed: %w", target.label(), err))
 	}
+	adapter, manifest, view, err := openCaptureAdapter(target)
+	if err != nil {
+		return fail(err)
+	}
+	mode := modeOf(ctx)
+	if mode.plan != nil && mode.plan.captureSignature != view.planSignature() {
+		// A capture committed between counting and execution. Discover its
+		// actual membership before reading or authorizing any index markers.
+		mode.plan = nil
+		ctx = withIngestMode(ctx, mode)
+	}
+
 	// What is written is guarded record by record (see guardCapture), so a
 	// capture older than what its host already indexed rolls nothing back.
 	if result = c.IngestContext(ctx, adapter, progress); result.Error != nil || ctx.Err() != nil {
@@ -360,6 +343,11 @@ func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progre
 // snapshot holding them, so an older copy never rolls one back. Other kinds
 // cannot index only what is missing, so their generations are merely recorded.
 func (c *Catalog) indexGenerations(ctx context.Context, adapter Adapter, view *captureView, marker *indexMarker, result *IngestResult) error {
+	// A current-transcript plan must never be reused for an older snapshot.
+	mode := modeOf(ctx)
+	mode.plan, mode.planned, mode.processed = nil, nil, nil
+	ctx = withIngestMode(ctx, mode)
+
 	conductor, ok := adapter.(*conductorAdapter)
 	force := modeOf(ctx).force
 	for _, snapshot := range view.manifest.Snapshots {
@@ -377,10 +365,12 @@ func (c *Catalog) indexGenerations(ctx context.Context, adapter Adapter, view *c
 		if err != nil {
 			return err
 		}
-		for _, generation := range snapshot.Generations { // newest first
+		reportWork(ctx, "indexing retained snapshots", "snapshot", 0, len(snapshot.Generations))
+		for generationIndex, generation := range snapshot.Generations { // newest first
 			file := filepath.Join(view.dir, filepath.FromSlash(generation.Captured))
 			if _, err := os.Stat(file); errors.Is(err, fs.ErrNotExist) {
 				marker.add(snapshot.Path, generation.CapturedAt) // gone: nothing left to take
+				reportWork(ctx, "indexing retained snapshots", "snapshot", generationIndex+1, len(snapshot.Generations))
 				continue
 			}
 			ids, err := conductorSessionIDs(file)
@@ -396,16 +386,23 @@ func (c *Catalog) indexGenerations(ctx context.Context, adapter Adapter, view *c
 			}
 			if (!force && marker.has(snapshot.Path, generation.CapturedAt)) || len(missing) == 0 {
 				marker.add(snapshot.Path, generation.CapturedAt)
+				reportWork(ctx, "indexing retained snapshots", "snapshot", generationIndex+1, len(snapshot.Generations))
 				continue
 			}
 			older := &captureView{host: view.host, dir: view.dir, manifest: view.manifest, mappings: []capturePathMapping{{Original: snapshot.Path, Captured: file}}}
 			config := conductor.config
 			config.Path = file
 			reader := &conductorAdapter{baseAdapter: baseAdapter{config: config, capability: conductor.capability, view: older}, selected: missing}
-			if err := c.ingestPass(ctx, reader, view.host.ID, false, result, func(string) {}, func(string) {}); err != nil {
+			setAdapterContext(reader, ctx)
+			baseProcessed := result.Processed
+			reportWork(ctx, "indexing retained sessions", "session", 0, len(missing))
+			if err := c.ingestPass(ctx, reader, view.host.ID, false, result, func(string) {
+				reportWork(ctx, "indexing retained sessions", "session", result.Processed-baseProcessed, len(missing))
+			}, func(string) {}); err != nil {
 				return err
 			}
 			marker.add(snapshot.Path, generation.CapturedAt)
+			reportWork(ctx, "indexing retained snapshots", "snapshot", generationIndex+1, len(snapshot.Generations))
 		}
 	}
 	return nil

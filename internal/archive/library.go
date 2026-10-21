@@ -257,10 +257,12 @@ func (c *Catalog) RefreshLibrary(ctx context.Context, batch int) (int, error) {
 }
 
 func (c *Catalog) refreshLibraryWorkspaces(ctx context.Context, workspaces []string) error {
+	reportWork(ctx, "refreshing the Library view", "workspace", 0, len(workspaces))
 	for offset := 0; offset < len(workspaces); offset += 10 {
 		if _, err := c.refreshLibrary(ctx, 10, workspaces[offset:min(offset+10, len(workspaces))]); err != nil {
 			return err
 		}
+		reportWork(ctx, "refreshing the Library view", "workspace", min(offset+10, len(workspaces)), len(workspaces))
 	}
 	return nil
 }

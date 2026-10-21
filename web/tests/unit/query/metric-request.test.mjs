@@ -3,6 +3,7 @@ import test from "node:test";
 import { core, schemas } from "../helpers/recipes.mjs";
 import { answerQuery, population } from "../../support/query-server.mjs";
 import { MetricRequestError, metricRequest, metricResults, postMetrics, postQueryV3Metrics } from "../../../src/metric-request";
+import { queryRequest, queryFetch, QueryRequestError, shouldSkipQueryOnRestore } from "../../../src/query-request";
 import { tokenChartMetrics, tokenChartSplit, tokenSummaryMetrics, tokenTypes } from "../../../src/token-chart-request";
 
 const response = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -81,4 +82,82 @@ test("the Token chart sums by its period's field and split; cost by type is by p
   assert.deepEqual(tokenChartMetrics(view("week", "type", "cost")).map(metric => [metric.field, metric.groupBy]), [["cost_usd", ["week", "provider"]]]);
   assert.deepEqual(tokenSummaryMetrics.map(metric => metric.id), ["total_tokens:", "cost_usd:", "uncached_input_tokens:", "cache_read_input_tokens:", "output_tokens:", "agent_sessions"]);
   for (const clauses of [tokenSummaryMetrics, tokenChartMetrics(view("hour", "repository_name"))]) assert.deepEqual(core.toMetricQuery({ ...core.EMPTY_QUERY, aggregations: clauses }, schemas.usage).diagnostics, []);
+});
+
+
+function signalCompatibility(t, fallback) {
+ if (!fallback) return;
+ const descriptor=Object.getOwnPropertyDescriptor(AbortSignal,'any');
+ Object.defineProperty(AbortSignal,'any',{configurable:true,writable:true,value:undefined});
+ t.after(()=>Object.defineProperty(AbortSignal,'any',descriptor));
+}
+
+for (const fallback of [false,true]) {
+const compatibility=fallback?'without AbortSignal.any':'with native signal composition';
+
+test(`query deadlines abort stalled fetches and response bodies, with a recoverable error (${compatibility})`,async t=>{
+ signalCompatibility(t,fallback);
+ const original=global.fetch;
+ t.after(()=>{global.fetch=original});
+ let deadline;
+ t.mock.method(AbortSignal,'timeout',()=>{deadline=new AbortController();return deadline.signal});
+ for(const stage of ['headers','body'])for(const caller of [undefined,new AbortController().signal]){
+  global.fetch=async (_url,{signal})=>{
+   const pending=()=>new Promise((_resolve,reject)=>{if(signal.aborted)reject(signal.reason);else signal.addEventListener('abort',()=>reject(signal.reason),{once:true});});
+   return stage==='headers'?pending():{ok:true,json:pending};
+  };
+  const request=queryRequest('/api/query/tool_calls/metrics',{signal:caller});
+  const rejected=assert.rejects(request,error=>error instanceof QueryRequestError&&/took too long/.test(error.message));
+  deadline.abort(new DOMException('Deadline exceeded','TimeoutError'));
+  await rejected;
+ }
+});
+
+test(`superseded queries preserve caller cancellation and service errors keep their status (${compatibility})`,async t=>{
+ signalCompatibility(t,fallback);
+ const original=global.fetch;
+ t.after(()=>{global.fetch=original});
+ const caller=new AbortController();
+ global.fetch=async(_url,{signal})=>new Promise((_resolve,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}));
+ const request=queryRequest('/api/query/usage/rows-v2',{signal:caller.signal});
+ const reason=new DOMException('New query','AbortError'),rejected=assert.rejects(request,error=>error===reason);
+ caller.abort(reason);await rejected;
+ global.fetch=async(_url,{signal})=>{signal.throwIfAborted();return response({rows:[],total:0})};
+ await assert.rejects(queryRequest('/api/query/usage/rows-v2',{signal:caller.signal}),error=>error===reason,'already cancelled callers stay cancelled');
+ global.fetch=async()=>response({error:{message:'Unknown field'}},422);
+ await assert.rejects(queryRequest('/api/query/usage/rows-v2'),error=>error instanceof QueryRequestError&&error.status===422&&error.message==='Unknown field');
+ global.fetch=async()=>response({rows:[],total:0});
+ assert.deepEqual(await queryRequest('/api/query/usage/rows-v2'),{rows:[],total:0},'empty results are successful');
+});
+
+test(`HTTP stores receive bounded fetches that still observe caller cancellation (${compatibility})`,async t=>{
+ signalCompatibility(t,fallback);
+ const original=global.fetch;
+ t.after(()=>{global.fetch=original});
+ let deadline;
+ t.mock.method(AbortSignal,'timeout',()=>{deadline=new AbortController();return deadline.signal});
+ let signal;
+ global.fetch=async(_input,init)=>{signal=init.signal;return response({ok:true})};
+ for(const source of ['caller','deadline'])for(const input of ['url','request']){
+  const caller=new AbortController(),url='http://localhost/api/query-snapshots?dataset=usage';
+  const result=await (input==='url'?queryFetch(url,{signal:caller.signal}):queryFetch(new Request(url,{signal:caller.signal})));
+  assert.deepEqual(await result.json(),{ok:true});
+  const reason=new DOMException(source,source==='caller'?'AbortError':'TimeoutError');
+  (source==='caller'?caller:deadline).abort(reason);
+  assert.equal(signal.aborted,true);
+  assert.equal(signal.reason,reason);
+  (source==='caller'?deadline:caller).abort(new Error('late abort'));
+  assert.equal(signal.reason,reason,'the first reason wins');
+ }
+ const caller=AbortSignal.abort(new DOMException('Already cancelled','AbortError'));
+ await queryFetch('/api/query-computed-columns?dataset=usage',{signal:caller});
+ assert.equal(signal.reason,caller.reason);
+});
+}
+
+test('only query rejection and deadline expiry skip automatic restoration',()=>{
+ for(const status of [undefined,400,422])assert.equal(shouldSkipQueryOnRestore(new QueryRequestError('failed',status)),true);
+ for(const status of [401,403,404,429,500,502,503,504])assert.equal(shouldSkipQueryOnRestore(new QueryRequestError('failed',status)),false);
+ assert.equal(shouldSkipQueryOnRestore(new TypeError('Failed to fetch')),false);
+ assert.equal(shouldSkipQueryOnRestore(new DOMException('Superseded','AbortError')),false);
 });
