@@ -83,7 +83,7 @@ export function enrichCardRecipe(recipe: QueryRecipe): QueryRecipe {
   // A formula reads source fields, so it cannot cover the grouped daily rows.
   if (!exploration && metric?.op === "sum" && metric.field && !metric.expression && metric.groupBy[0] === "day") {
     const primary = sum(metric.field, metric.label ?? "Total");
-    const summaries = [primary, count("card_count", recipe.dataset === "writing_messages" ? "Messages" : "Usage records")];
+    const summaries = [primary, count("card_count", recipe.dataset === "writing_messages" ? "Messages" : recipe.dataset === "mcp_calls" ? "Requests" : "Usage records")];
     if (recipe.dataset === "usage") {
       for (const field of ["total_tokens", "cost_usd"]) if (field !== metric.field) summaries.push(sum(field, field === "cost_usd" ? "API equivalent" : "Total tokens"));
       summaries.push(distinct("agent_session_id", "Agent sessions"));

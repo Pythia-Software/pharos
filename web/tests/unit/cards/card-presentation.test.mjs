@@ -1,6 +1,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { compactMetricPresentation } from "../../../src/card-presentation";
+import { compactTimelineBuckets } from "../../../src/column-marks";
+
+test("cumulative card covers start at the selected range, fill idle days and normalize only accumulated amounts", () => {
+  const source = [
+    { key: "2026-10-01", date: new Date("2026-10-01"), values: { a: 1000 }, history: true },
+    { key: "2026-10-02", date: new Date("2026-10-02"), values: { a: 2, b: 1 } },
+    { key: "2026-10-03", date: new Date("2026-10-03"), values: {} },
+    { key: "2026-10-04", date: new Date("2026-10-04"), values: { a: 3, b: 4 } },
+  ], before = structuredClone(source);
+  const amounts = compactTimelineBuckets(source, { display: "cumulative", rollingPeriods: 7 });
+  assert.deepEqual(amounts.map(bucket => bucket.values), [{ a: 2, b: 1 }, { a: 2, b: 1 }, { a: 5, b: 5 }]);
+  const shares = compactTimelineBuckets(source, { display: "cumulative", percent: true });
+  assert.equal(shares.at(-1).values.a, 0.5);
+  assert.equal(shares.at(-1).values.b, 0.5);
+  assert.deepEqual(source, before, "cover calculations preserve query results");
+});
 function preview(extra = {}) {
   const clause = { id: "tokens", op: "sum", field: "total_tokens", groupBy: ["price_status"], display: { kind: "donut" } };
   const result = { id: "tokens", groupCount: 1, coverage: "exact", buckets: [{ keys: ["priced"], value: 500, count: 20 }] };

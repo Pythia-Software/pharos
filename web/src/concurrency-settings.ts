@@ -3,8 +3,13 @@ import { zonedDayBounds, type ConcurrencyCounting, type ConcurrencyData, type Co
 import { validRollingPeriods } from "./chart-series";
 
 export const concurrencySettingsKey = "pharos-concurrency-v1";
-export type ConcurrencyRange = "day" | "3d" | "7d" | "30d" | "all" | "custom";
-export const concurrencyRangePresets = [["3d", 3, "Last 3 days"], ["7d", 7, "Last 7 days"], ["30d", 30, "Last 30 days"]] as const;
+export type ConcurrencyRange = "day" | "3d" | "7d" | "30d" | "90d" | "180d" | "365d" | "all" | "custom";
+export const concurrencyRangePresets = [["3d", 3, "Last 3 days"], ["7d", 7, "Last 7 days"], ["30d", 30, "Last 30 days"], ["90d", 90, "Last 90 days"], ["180d", 180, "Last 180 days"], ["365d", 365, "Last year"]] as const;
+
+export function concurrencyWindowRange(days?: number | null): ConcurrencyRange {
+  if (days === 1) return "day";
+  return concurrencyRangePresets.find(([, count]) => count === days)?.[0] ?? "all";
+}
 export type ConcurrencySettings = {
   mode: ConcurrencyMode; gap: number; repository: string; day: string;
   counting: ConcurrencyCounting; agent: string;
@@ -56,7 +61,7 @@ export function normalizeConcurrencySettings(value: unknown): ConcurrencySetting
     gap: [0, 15, 30, 60].includes(saved.gap as number) ? saved.gap! : 60,
     repository: typeof saved.repository === "string" ? saved.repository : "",
     day: validDay(saved.day),
-    range: ["day", "3d", "7d", "30d", "all", "custom"].includes(saved.range as string) ? saved.range! : "day",
+    range: saved.range === "day" || saved.range === "all" || saved.range === "custom" || concurrencyRangePresets.some(([key]) => key === saved.range) ? saved.range! : "day",
     startDay: validDay(saved.startDay), endDay: validDay(saved.endDay),
     workspace: typeof saved.workspace === "string" ? saved.workspace : "",
     zoom, showConversations: saved.showConversations === true,
@@ -64,8 +69,8 @@ export function normalizeConcurrencySettings(value: unknown): ConcurrencySetting
   };
 }
 
-export function readConcurrencySettings(): ConcurrencySettings {
-  return normalizeConcurrencySettings(preferences().get(concurrencySettingsKey, defaultConcurrencySettings));
+export function readConcurrencySettings(overrides: Partial<ConcurrencySettings> = {}): ConcurrencySettings {
+  return normalizeConcurrencySettings({ ...normalizeConcurrencySettings(preferences().get(concurrencySettingsKey, defaultConcurrencySettings)), ...overrides });
 }
 
 export function readMachineConcurrencySettings(): ConcurrencySettings {

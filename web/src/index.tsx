@@ -1291,14 +1291,17 @@ function WritingPanel({ where, onFilter, status, reload, chartOnly = false, view
   const periodCount = chartPeriodCount(view);
   const cumulative = view.display === "cumulative";
   const hourly = isHourly(view.period);
-  const bounds = timeBounds(where, writingTime);
+  // Resolved timestamps are part of the series request key. Keep one clock
+  // through loading/data renders; renew it when filters change or refresh.
+  const clock = useMemo(() => Date.now(), [JSON.stringify(where), reload]);
+  const bounds = timeBounds(where, writingTime, clock);
   const window = { hourly, start: bounds.from?.toISOString(), end: bounds.to?.toISOString(), from: bounds.from ? localDay(bounds.from) : undefined, to: bounds.to ? localDay(new Date(bounds.to.getTime() - 1)) : undefined };
   const split = view.split === "kind" ? null : view.split;
   const selection = split ? readSlice(where, split) : kinds;
   const chosen = selection.values.map(value => value ?? "");
   const chartWhere = split ? where.filter(term => !isSliceTerm(term, split)) : where;
-  const requestedWhere = smoothingWhere(chartWhere, writingTime, view.period, cumulative ? 0 : view.rollingPeriods, periodCount);
-  const requestedBounds = timeBounds(requestedWhere, writingTime);
+  const requestedWhere = smoothingWhere(chartWhere, writingTime, view.period, cumulative ? 0 : view.rollingPeriods, periodCount, clock);
+  const requestedBounds = timeBounds(requestedWhere, writingTime, clock);
   const chartWindow = { hourly, start: requestedBounds.from?.toISOString(), end: requestedBounds.to?.toISOString(), from: requestedBounds.from ? localDay(requestedBounds.from) : undefined, to: requestedBounds.to ? localDay(new Date(requestedBounds.to.getTime() - 1)) : undefined };
   // Without a key filter, one request answers both the totals and the chart.
   const separate = chartWhere.length !== where.length || requestedWhere !== chartWhere;
@@ -1527,10 +1530,16 @@ function TokenUsageDashboard() {
 
 function HumanUsageDashboard() {
   const state = useUsageDashboardState<WritingChartView>(defaultWritingChart, validWritingChart, writingTime);
+  const [reload, setReload] = useState(0);
+  useEffect(() => {
+    const refresh = () => setReload(value => value + 1);
+    window.addEventListener("pharos:usage-refresh", refresh);
+    return () => window.removeEventListener("pharos:usage-refresh", refresh);
+  }, []);
   const status = useAuthorshipStatus(() => window.dispatchEvent(new Event("pharos:usage-refresh")));
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   return <>
-    <WritingPanel chartOnly where={state.where} onFilter={state.onFilter} status={status} reload={0} viewOverride={state.view} onViewChange={state.update} />
+    <WritingPanel chartOnly where={state.where} onFilter={state.onFilter} status={status} reload={reload} viewOverride={state.view} onViewChange={state.update} />
     <UsageDashboardLinks dataset="writing" groupedLabel="Open grouped conversation totals" query={{ ...EMPTY_QUERY, where: state.where, aggregations: [sum(state.view.scope === "typed" ? "typed_words" : "user_words", [state.view.split === "kind" ? "repository_name" : state.view.split], state.view.scope === "typed" ? "Typed words per conversation group" : "User input per conversation group")] }} currentURL="/analyze?analyze_view=writing" />
     <p className="usage-dashboard-note">The grouped query contains whole-conversation totals for the matching conversations. The graph restricts their writing to the selected dates.</p>
     <p className="usage-dashboard-note">Typed and dictated words are distinguished from pastes, harness instructions, and other supplied text. The full analysis includes the authorship breakdown and build status.</p>

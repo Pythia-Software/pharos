@@ -27,6 +27,25 @@ globalThis.fetch=async (input,options)=>{
  return snapshots.has(key)?Response.json(snapshots.get(key)):new Response('',{status:404});
 };
 const query=m.normalizeQueryState({select:[{field:'tool_name'}],where:[{field:'status',op:'=',value:'error'}],orderBy:[],limit:25,offset:0});
+test('collecting a dashboard card preserves its destination and durable editable query',async t=>{
+ const before=[...m.readBookmarks()];
+ t.after(()=>m.writeBookmarks(before));
+ const recipe=queryRecipes.find(recipe=>recipe.id==='model-token-share-trend'),item=instantiateRecipe(recipe,90);
+ const old=m.collectQuery(item.dataset,item.query,item.title,{window:item.window,templateId:item.instanceId,cover:item.cover});
+ const saved=await m.collectDurableQuery(item.dataset,item.query,item.title,{url:item.url,window:item.window,templateId:item.instanceId,cover:item.cover});
+ assert.notEqual(saved.id,old.id,'an older query bookmark must not replace a newly collected dashboard');
+ const duplicate=await m.collectDurableQuery(item.dataset,item.query,item.title,{url:item.url,window:item.window,templateId:item.instanceId,cover:item.cover});
+ assert.equal(duplicate.id,saved.id,'identical dashboard saves still deduplicate');
+ const url=new URL(saved.url,location.origin),original=new URL(item.url,location.origin);
+ assert.equal(url.searchParams.get('analyze_mode'),'dashboards');
+ assert.equal(url.searchParams.get('analyze_chart'),original.searchParams.get('analyze_chart'));
+ assert.equal(url.searchParams.get('analyze_filters'),original.searchParams.get('analyze_filters'));
+ assert.match(url.searchParams.get('q_usage'),/^@[A-Za-z0-9_-]{22}$/);
+ cache.clear();
+ const loaded=await m.createQueryLinkService('pharos_usage',m.httpQuerySnapshotStore('/api/query-snapshots')).resolve(url.href,'q_usage');
+ assert.deepEqual(loaded,normalizeQueryState(item.query));
+ assert.deepEqual(m.queryFromURL(saved.url,saved.query).query,normalizeQueryState(item.query));
+});
 test('metadata shares stable results, queues scans and isolates subscriber cancellation', async()=>{
  let now=0,reads=0,finish;
  const load=createQueryMetadataLoader(()=>now,5),controller=new AbortController();
@@ -129,7 +148,8 @@ test('page parameters choose the dataset, and every card URL opens its own datas
  for(const recipe of queryRecipes)assert.equal(m.queryFromURL(instantiateRecipe(recipe,7,clock).url)?.dataset,recipe.dataset,recipe.id);
  const writing=new URL(instantiateRecipe(queryRecipes.find(item=>item.id==='human-words'),7,clock).url,location.origin);
  assert.equal(writing.pathname,'/analyze');
- assert.equal(writing.searchParams.get('analyze_data'),'writing_messages');
+ assert.equal(writing.searchParams.get('analyze_data'),'writing');
+ assert.equal(writing.searchParams.get('card_query'),'writing_messages');
 });
 
 test('MCP query links use Analyze and older MCP bookmarks preserve query and window state',()=>{

@@ -5,7 +5,7 @@ import { availableChartKinds, cardCoverGroupLimit, cardDatasets, cardTemplates, 
 import { cardKind, defaultCardCover } from "./card-cover";
 import { cardLoadingPresentation } from "./card-loading-model";
 import { queryCategories, type QueryCategory } from "./query-categories";
-import type { QueryDataset } from "./query-links";
+import { queryURL, type QueryDataset } from "./query-links";
 import { QueryCard } from "./query-card";
 import { Icon } from "./icons";
 import { preferences } from "./preferences";
@@ -130,6 +130,8 @@ export function CardLibrary({ schemas, active, generation, collected, message, o
       ...(showOther !== "auto" ? { showOther: showOther === "true" } : {}) };
   };
   const destinationKeys = chosenCover?.mode === "source" ? editing?.measures.find(metric => metric.id === chosenCover.metricId)?.groupBy ?? editing?.exploration?.keys : editing?.exploration?.keys;
+  const editedItem = editing && instantiateRecipe({ ...editing, cover: editedCover() }, editDays);
+  const opensDashboard = editedItem && new URL(editedItem.url, location.origin).searchParams.get("analyze_mode") === "dashboards";
   const tabKeys = [ALL, ...topics], index = tabKeys.indexOf(topic);
   const activeFilters = [search, dataset, kind].filter(Boolean).length;
   return <section id="home-card-library" className="card-library" aria-labelledby="card-library-title">
@@ -170,7 +172,7 @@ export function CardLibrary({ schemas, active, generation, collected, message, o
     <div id="card-library-panel" className="card-library-grid" role="tabpanel" aria-labelledby={`card-library-tab-${topic}`} aria-busy={loading}>{cards.map(item => <div className="card-library-entry" id={`card-${item.id}`} data-card-definition={item.id} data-card-idea={item.idea} key={item.id}>
       <QueryCard discovery id={item.id} title={item.title} description={item.description} actionLabel={item.action} url={item.url} windowLabel={suggestionWindowLabel(item)} category={item.category} loadingSpec={cardLoadingPresentation(item.query, { recipe: item, cover: item.cover, days: item.window?.days })} preview={previews[item.id]} error={errors[item.id]}
         onOpen={() => onOpen(item.url)} onKeep={() => onKeep(item)} onReload={() => reloadPreview(job(item))} onDragStart={event => onDragStart(event, item)} onDragEnd={onDragEnd} />
-      {editMode ? <div className="card-library-meta"><code className="card-library-id" title={`Card definition: ${item.id} · Wishlist: ${item.idea}`}>ID: {item.id}</code><span>{cardDatasets[item.dataset]}</span><span>{cardKind(item)} · {item.exploration ? "Grouped table" : "Records + metrics"}</span>{collected.has(item.id) ? <span className="card-library-collected"><Icon name="check" /> In your collection</span> : null}
+      {editMode ? <div className="card-library-meta"><code className="card-library-id" title={`Card definition: ${item.id} · Wishlist: ${item.idea}`}>ID: {item.id}</code><span>{cardDatasets[item.dataset]}</span><span>{cardKind(item)} · {new URL(item.url, location.origin).searchParams.get("analyze_mode") === "dashboards" ? "Analyze dashboard" : item.exploration ? "Grouped table" : "Records + metrics"}</span>{collected.has(item.id) ? <span className="card-library-collected"><Icon name="check" /> In your collection</span> : null}
         <button type="button" onClick={() => openEditor(item)} aria-label={`Edit card ${item.title}`}><Icon name="edit" /> Edit card</button>
       </div> : collected.has(item.id) ? <span className="card-library-collected"><Icon name="check" /> In your collection</span> : null}
     </div>)}</div>
@@ -188,7 +190,7 @@ export function CardLibrary({ schemas, active, generation, collected, message, o
         <label>Visible rows / series<input type="number" aria-label="Visible rows / series" min={1} max={cardCoverGroupLimit(editing)} step={1} placeholder="Automatic" value={maxGroups} onChange={event => setMaxGroups(event.target.value)} /></label>
         <label>Chart key<select aria-label="Chart key" value={showLegend} onChange={event => setShowLegend(event.target.value)}><option value="auto">Automatic (multiple series only)</option><option value="true">Show</option><option value="false">Hide</option></select></label>
         <label>Other remainder<select aria-label="Other remainder" value={showOther} onChange={event => setShowOther(event.target.value)}><option value="auto">Automatic</option><option value="true">Show when exact and additive</option><option value="false">Hide</option></select></label></> : null}
-      {editing ? <div className="card-template-destination"><strong>Opens {editing.exploration ? "a grouped table" : "source records"}</strong><p>{editing.exploration ? destinationKeys?.length ? `Group by ${destinationKeys.map(key => schemas[editing.dataset].fields.find(field => field.name === key)?.label ?? key).join(", ")}.` : "One summary row for the whole window." : "Matched observations and their metrics."} Window: Last {editDays}d.</p><small>{editing.note}</small><button type="button" className="card-template-query" onClick={() => { dialog.current?.close(); onOpen(instantiateRecipe({ ...editing, cover: editedCover() }, editDays).url); }}>Open query to edit grouping and filters <Icon name="arrow-right" /></button></div> : null}
+      {editing && editedItem ? <div className="card-template-destination"><strong>Opens {opensDashboard ? "an Analyze dashboard" : editing.exploration ? "a grouped table" : "source records"}</strong><p>{opensDashboard ? `${editedItem.action}.` : editing.exploration ? destinationKeys?.length ? `Group by ${destinationKeys.map(key => schemas[editing.dataset].fields.find(field => field.name === key)?.label ?? key).join(", ")}.` : "One summary row for the whole window." : "Matched observations and their metrics."} Window: Last {editDays}d.</p><small>{editing.note}</small><button type="button" className="card-template-query" onClick={() => { dialog.current?.close(); onOpen(queryURL(editing.dataset, editedItem.query, editedItem.window)); }}>Open query to edit grouping and filters <Icon name="arrow-right" /></button></div> : null}
       {error ? <p role="alert">{error}</p> : null}<div className="home-editor-actions"><button type="button" onClick={() => { if (editing) saveCardTemplate(editing.id); dialog.current?.close(); }}>Reset template</button><button type="button" onClick={() => dialog.current?.close()}>Cancel</button><button type="submit">Save template</button></div>
     </form></dialog>
   </section>;

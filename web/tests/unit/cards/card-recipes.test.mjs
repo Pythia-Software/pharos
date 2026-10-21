@@ -7,7 +7,106 @@ import { queryFromURL, queryHasTimeFilter, queryURL, resolveRollingQuery } from 
 import { migrateSavedQueries, readBookmarks, removeBookmark, savedQueries, updateBookmark, replaceSavedQuery } from "../../../src/bookmarks";
 import { cardCoverQuery, defaultCardCover } from "../../../src/card-cover";
 import { wishlistCardRecipes } from "../../../src/wishlist-card-recipes";
+import { updateQueryWindowURL } from "../../../src/query-links";
+import { parallelismSelectionQuery, readDashboardQuery } from "../../../src/usage-dashboard-model";
+import { concurrencySettingsKey, readConcurrencySettings, resolveConcurrencyRange } from "../../../src/concurrency-settings";
+import { cardDashboardWhere, cardDetailsURL } from "../../../src/card-exploration";
+import { usageWorkspaceURL } from "../../../src/usage-workspace-model";
 const clock = new Date(2026, 9, 13, 12);
+
+test("dashboard card windows and retained cover queries stay aligned after collection edits", t => {
+  bookmarkFixture(t, []);
+  for (const recipe of queryRecipes.filter(recipe => recipe.destination)) {
+    const item = instantiateRecipe(recipe, 30, clock);
+    assert.deepEqual(queryFromURL(item.url).query, core.normalizeQueryState(item.query), recipe.id);
+    for (const days of [1, 7, 30, 90, 180, 365, null]) {
+      const url = new URL(updateQueryWindowURL(item.url, days), location.origin);
+      const spec = queryFromURL(url.href), filters = readDashboardQuery(url.searchParams, core.EMPTY_QUERY);
+      assert.deepEqual(filters.query.where, cardDashboardWhere(recipe.dataset, recipe.destination.dataset, (spec.query.grouping?.source ?? spec.query).where), `${recipe.id} @${days}`);
+      assert.equal(filters.error, "");
+      assert.deepEqual(JSON.parse(url.searchParams.get("analyze_chart")), recipe.destination.chart);
+      assert.equal(spec.window?.days, days ?? undefined);
+    }
+  }
+  assert.equal(queryFromURL("/analyze?analyze_mode=dashboards&analyze_data=usage"), undefined, "ordinary dashboards have no card cover query");
+});
+
+test("parallelism card destinations and edited windows retain saved record settings and bound the chart", t => {
+  const prefs = bookmarkFixture(t, []);
+  const data = { period_start: "2025-01-01", period_end: "2026-10-21", timezone: "UTC" };
+  for (const counting of ["workspace", "agent"]) for (const gap of [0, 15, 30, 60]) {
+    prefs.set(concurrencySettingsKey, { counting, gap, repository: "previous-repo", day: "2025-03-01", zoom: [1, 2] });
+    for (const recipe of queryRecipes.filter(recipe => recipe.destination?.topic === "parallelism")) {
+      const original = instantiateRecipe(recipe, 7);
+      for (const days of [1, 7, 30, 90, 180, 365, null]) {
+        const urls = [updateQueryWindowURL(original.url, days)];
+        if (days !== null) urls.push(instantiateRecipe(recipe, days).url);
+        for (const url of urls) {
+          const route = JSON.parse(new URL(url, location.origin).searchParams.get("analyze_parallelism"));
+          const settings = readConcurrencySettings(route), range = resolveConcurrencyRange(data, settings);
+          assert.equal(settings.counting, counting, recipe.id);
+          assert.equal(settings.gap, gap, recipe.id);
+          assert.equal(settings.repository, ""); assert.equal(settings.day, ""); assert.equal(settings.zoom, null);
+          assert.equal(range.endDay, data.period_end);
+          if (days === null) assert.equal(range.startDay, data.period_start);
+          else assert.equal((range.bounds[1] - range.bounds[0]) / 86400000, days, `${recipe.id} @${days}`);
+          const records = parallelismSelectionQuery({ settings, bounds: range.bounds, selected: null });
+          assert.ok(records.where.some(term => term.field === "counting" && term.value === counting));
+          assert.ok(records.where.some(term => term.field === "gap_minutes" && term.value === String(gap)));
+        }
+      }
+    }
+  }
+});
+
+test("editing a card cover keeps the dashboard as its exploration entry point", () => {
+  for (const id of ["cost-repos", "token-volume-trend"]) {
+    const recipe = queryRecipes.find(recipe => recipe.id === id);
+    const cover = defaultCardCover(recipe);
+    const alternate = { ...recipe, cover: { ...cover, mode: "source", metricId: "different" } };
+    assert.equal(new URL(instantiateRecipe(alternate, 7).url, "http://home.test").searchParams.get("analyze_mode"), "dashboards");
+    const cosmetic = { ...recipe, cover: { ...cover, height: 400 } };
+    assert.equal(new URL(instantiateRecipe(cosmetic, 7).url, "http://home.test").searchParams.get("analyze_mode"), "dashboards");
+  }
+  const recipe = queryRecipes.find(recipe => recipe.id === "token-volume-trend");
+  const item = instantiateRecipe({ ...recipe, cover: { ...recipe.cover, timeline: { rollingPeriods: 14 } } }, 30);
+  assert.equal(new URL(item.url, "http://home.test").searchParams.get("analyze_mode"), "dashboards");
+});
+
+test("changing a collected cover preserves the dashboard and the matching detail query", t => {
+  const recipe = queryRecipes.find(recipe => recipe.id === "cost-repos"), item = instantiateRecipe(recipe, 30);
+  bookmarkFixture(t, [{ id: "saved", title: item.title, url: item.url, query: item.query, cover: defaultCardCover(recipe) }]);
+  const updated = updateBookmark("saved", item.title, item.description, undefined, "card_total_tokens");
+  assert.equal(new URL(updated.url, location.origin).searchParams.get("analyze_mode"), "dashboards");
+  const restored = queryFromURL(updated.url);
+  assert.equal(restored.window.days, 30);
+  assert.deepEqual(restored.query.grouping.source.where, item.query.grouping.source.where);
+});
+
+test("dashboard context projects shared cohorts without treating per-record evidence as summary filters", () => {
+  const where = [{ field: "tool_category", op: "=", value: "edit" }, { field: "repo_path", op: "=", value: "main.go" }, { field: "error_count", op: ">", value: "0" },
+    { field: "started_at", op: ">=", value: "-7d" }, { field: "started_at", op: "<", value: "+0s" },
+    { any: [{ field: "tool_name", op: "=", value: "Read" }, { field: "repo_path", op: "=", value: "another.go" }] }];
+  assert.deepEqual(cardDashboardWhere("tool_calls", "tools", where), [where[0], { field: "day", op: ">=", value: "-7d" }, { field: "day", op: "<", value: "+0s" }]);
+  assert.deepEqual(cardDashboardWhere("writing_messages", "writing", [{ field: "repository_name", op: "=", value: "repo" }, { field: "text", op: "contains", value: "try again" }, { field: "sent_at", op: ">=", value: "-7d" }, { field: "sent_at", op: "<", value: "+0s" }]),
+    [{ field: "repository_name", op: "=", value: "repo" }, { field: "last_message_at", op: ">=", value: "-7d" }, { field: "first_message_at", op: "<", value: "+0s" }]);
+});
+
+test("card detail links retain durable source tokens across dashboard datasets and navigation", t => {
+  bookmarkFixture(t, []);
+  const recipe = queryRecipes.find(recipe => recipe.id === "tool-failure-rates"), item = instantiateRecipe(recipe, 7);
+  const url = new URL(item.url, location.origin);
+  url.searchParams.set("q_tool_calls", "@immutable-card-query");
+  const details = new URL(cardDetailsURL(url.searchParams), location.origin);
+  assert.equal(details.searchParams.get("analyze_mode"), "query");
+  assert.equal(details.searchParams.get("analyze_data"), "tool_calls");
+  assert.equal(details.searchParams.get("q_tool_calls"), "@immutable-card-query");
+  const tokenCard = instantiateRecipe(queryRecipes.find(recipe => recipe.id === "task-token-ranges"), 7);
+  const records = { ...core.EMPTY_QUERY, where: [{ field: "repository_name", op: "=", value: "chosen-repo" }] };
+  const drilled = new URL(usageWorkspaceURL({ mode: "query", dataset: "usage", query: records }, new URL(tokenCard.url, location.origin).searchParams), location.origin);
+  assert.deepEqual(core.decodeQueryStrict(drilled.searchParams.get("q_usage")), core.normalizeQueryState(records), "dashboard drilldowns use the newly selected records");
+  assert.equal(drilled.searchParams.has("card_id"), false, "new analysis is distinct from the original card details");
+});
 
 test("cover visibility settings survive cover queries while destination data remains unchanged", () => {
   for (const id of ["cost-repos", "human-words"]) {
@@ -47,7 +146,7 @@ test("failure-rate cover and destination agree, include successful calls and exp
   assert.equal(preview.metrics[0].clause.display.kind, "bar-horizontal");
   assert.equal(requests[0].rows, false);
   assert.ok(!requests[0].source.where.some(term => term.field === "error_count"));
-  assert.equal(preview.action, "Compare failure rates");
+  assert.equal(preview.action, recipe.action);
 });
 
 test("repeated-path HAVING excludes singleton reads and keeps repositories separate", () => {
