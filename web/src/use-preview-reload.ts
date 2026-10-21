@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, type DependencyList, type Dispatch, type SetStateAction } from "react";
-import { clearPreviewCache, loadQueryPreviews, type PreviewJob, type QueryPreview } from "./query-previews";
+import { invalidateCardPreviews, loadCardPreviews } from "./card-previews";
+import { clearPreviewCache, type PreviewJob, type QueryPreview } from "./query-previews";
 
 // Retry one card without disturbing healthy previews. A change of query scope
 // cancels pending retries so old results cannot replace the new view's cards.
@@ -17,10 +18,9 @@ export function usePreviewReload(
   return useCallback((job: PreviewJob) => {
     if (pending.current.has(job.id)) return;
     const controller = new AbortController(); pending.current.set(job.id, controller);
-    clearPreviewCache();
-    setPreviews(current => { const next = { ...current }; delete next[job.id]; return next; });
+    clearPreviewCache(); invalidateCardPreviews();
     setErrors(current => { const next = { ...current }; delete next[job.id]; return next; });
-    void loadQueryPreviews([job], (id, preview, error) => {
+    void loadCardPreviews([job], (id, preview, error) => {
       if (controller.signal.aborted) return;
       if (preview) setPreviews(current => ({ ...current, [id]: preview }));
       if (error) setErrors(current => ({ ...current, [id]: String(error) }));

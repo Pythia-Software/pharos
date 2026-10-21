@@ -15,6 +15,7 @@ import { buildCardTrend, cardTrendDays, cardTrendQueries, trendSchemas, usesCard
 
 export type PreviewMetric = { clause: AggregationClause; result: AggregationResultEntry };
 export type QueryPreview = {
+  refreshing?: boolean; refreshError?: string; updatedAt?: number;
   state: "ready" | "empty"; emptyLabel?: string; density?: "compact"; stackBy?: string; coverHeight?: number; legendColumns?: 1 | 2; total: number; summary: string; note?: string;
   headline?: string; action?: string; evidence?: string;
   headlineMetric?: { value: string; unit: string; label?: string };
@@ -29,7 +30,7 @@ export type QueryPreview = {
   study?: HumanStudyPreview;
 };
 type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean };
-export type PreviewJob = { id: string; dataset: QueryDataset; query: QueryState; schema: FieldSchema; options?: PreviewOptions };
+export type PreviewJob = { priority?: () => number; id: string; dataset: QueryDataset; query: QueryState; schema: FieldSchema; options?: PreviewOptions };
 type Context = { schema: FieldSchema; execution: ComputedExecution; capabilities: MetricCapabilities; queryCapabilities?: QueryCapabilitiesV3 };
 type Payload = { now?: number; metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number; sourceTotal?: number; find?: { search?: { complete: boolean } } };
 type Cached = { at: number; payload: Payload; schema: FieldSchema };
@@ -416,7 +417,11 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
   for (const group of groups.values()) {
     let batch: Item[] = [], size = 0;
     for (const item of group) {
-      const count = item.query.aggregations?.length ?? 1;
+      if (item.query.grouping || item.query.aggregations?.some(metric => metric.dateGrouping) || !item.query.aggregations?.length) {
+        if (batch.length) tasks.push(batch);
+        batch = []; size = 0; tasks.push([item]); continue;
+      }
+      const count = item.query.aggregations.length;
       if (size + count > 20 || !item.query.aggregations?.length) { if (batch.length) tasks.push(batch); batch = []; size = 0; }
       batch.push(item); size += count;
     }
@@ -482,8 +487,18 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
     cache.set(JSON.stringify([item.job.dataset, item.query, item.search]), { at: Date.now(), payload, schema });
     item.accept({ at: Date.now(), payload, schema });
   }
-  let cursor = 0;
-  async function work() { while (cursor < tasks.length && !signal?.aborted) await run(tasks[cursor++]); }
+  async function work() {
+    while (tasks.length && !signal?.aborted) {
+      // Re-evaluate between requests: scrolling may bring a different set of
+      // cold cards into view while earlier queries are still running.
+      let next = 0, priority = Infinity;
+      tasks.forEach((task, index) => {
+        const rank = Math.min(...task.map(item => item.job.priority?.() ?? 1));
+        if (rank < priority) { next = index; priority = rank; }
+      });
+      await run(tasks.splice(next, 1)[0]);
+    }
+  }
   await Promise.all([work(), work(), work(), studyWork, costWork, trendWork]);
 }
 

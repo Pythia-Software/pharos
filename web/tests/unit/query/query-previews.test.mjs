@@ -488,3 +488,173 @@ test("parallel hours by day headline is the share of active hours with several a
   assert.equal(preview.headlineMetric.value, "40%");
   assert.match(preview.headlineMetric.label, /2\+ agents/);
 });
+
+// Card covers can be shown from a prior visit while canonical queries refresh.
+import { cardPreviewKey, invalidateCardPreviews, loadCardPreviews } from "../../../src/card-previews";
+import { createCardPreviewCache } from "../../../src/card-preview-cache";
+
+test("cached card covers revalidate and remain visible after refresh failure", async t => {
+  const priorWindow = global.window;
+  global.window = { pharosPreviewScope: t.name };
+  t.after(() => { global.window = priorWindow; });
+  let fail = false, release, requestStarted;
+  const refreshingRequest = new Promise(resolve => { requestStarted = resolve; });
+  const requests = fixture(t, async path => {
+    if (fail && path.endsWith("metrics")) {
+      await new Promise(resolve => { release = resolve; requestStarted(); });
+      return response({ error: "Offline" }, 503);
+    }
+  });
+  const item = job("saved", [{ id: "total", op: "sum", field: "duration_ms", groupBy: [] }]);
+  const initial = [];
+  await loadCardPreviews([item], (_id, preview, error) => { assert.ifError(error); initial.push(preview); });
+  assert.equal(initial.length, 1);
+  assert.equal(initial[0].metrics[0].result.buckets[0].value, 5500);
+  const before = requests.length, hit = [];
+  await loadCardPreviews([{ ...item, id: "catalog" }], (_id, preview, error) => { assert.ifError(error); hit.push(preview); });
+  assert.equal(requests.length, before, "a recent identical cover is shared across caller IDs");
+  assert.equal(hit[0].refreshing, false);
+
+  clearPreviewCache(); invalidateCardPreviews(); fail = true;
+  const updates = [];
+  let sawCached;
+  const cached = new Promise(resolve => { sawCached = resolve; });
+  const refresh = loadCardPreviews([item], (_id, preview, error) => {
+    assert.ifError(error); updates.push(preview);
+    if (preview?.refreshing) sawCached();
+  });
+  await cached;
+  assert.equal(updates[0].metrics[0].result.buckets[0].value, 5500, "the chart remains available during revalidation");
+  // Wait for the intercepted request rather than a timer.
+  await refreshingRequest;
+  release(); await refresh;
+  assert.equal(updates.at(-1).refreshing, false);
+  assert.match(updates.at(-1).refreshError, /Offline/);
+  assert.equal(updates.at(-1).metrics[0].result.buckets[0].value, 5500);
+});
+
+test("card preview identity separates query, cover, template, schema and search changes", async () => {
+  const item = job("one", [{ id: "total", op: "sum", field: "duration_ms", groupBy: [] }]);
+  const key = await cardPreviewKey(item);
+  assert.equal(key, await cardPreviewKey({ ...item, id: "two" }));
+  assert.equal(key, await cardPreviewKey(Object.fromEntries(Object.entries(item).reverse())), "property order does not change a cover");
+  for (const changed of [
+    { ...item, query: { ...item.query, where: [{ field: "repository_name", op: "=", value: "one" }] } },
+    { ...item, options: { coverMetricId: "other" } },
+    { ...item, options: { url: "/library?search=cache" } },
+    { ...item, schema: { ...item.schema, fields: item.schema.fields.slice(1) } },
+    { ...item, options: { recipe: { ...queryRecipes[0], title: "Edited" } } },
+  ]) assert.notEqual(key, await cardPreviewKey(changed));
+});
+
+test("persisted covers are stale on a new page and storage failures do not block live results", async t => {
+  let saved = [];
+  const storage = { read: async () => saved, write: async entries => { saved = entries; } };
+  const first = createCardPreviewCache(storage);
+  await first.ready;
+  first.put("one", { state: "empty", total: 0, summary: "No observations", refreshing: true });
+  assert.equal(first.get("one").fresh, true);
+  await first.save();
+  assert.equal(saved[0].preview.refreshing, undefined, "transient refresh status is never persisted");
+  const next = createCardPreviewCache(storage);
+  await next.ready;
+  assert.equal(next.get("one").fresh, false);
+  assert.equal(next.get("one").preview.state, "empty", "empty covers are cached too");
+  const generation = next.generation();
+  next.invalidate(); next.put("one", { state: "ready", total: 1, summary: "New" }, generation);
+  assert.equal(next.get("one").fresh, false, "an older in-flight computation cannot undo invalidation");
+  const broken = createCardPreviewCache({ read: async () => { throw Error("blocked"); }, write: async () => { throw Error("full"); } });
+  await broken.ready;
+  broken.put("one", { state: "ready", total: 1, summary: "Live" });
+  await broken.save();
+  assert.equal(broken.get("one").preview.summary, "Live");
+});
+
+test("grouped card requests do not wait for every sibling in their metrics batch", async t => {
+  const waiting = [], completed = new Map();
+  let started, release;
+  const twoStarted = new Promise(resolve => { started = resolve; });
+  const requests = fixture(t, async path => {
+    if (!path.includes("query-v3")) return;
+    waiting.push(new Promise(resolve => { if (!release) release = resolve; else resolve(); }));
+    if (waiting.length === 2) started();
+    await waiting.at(-1);
+  });
+  const items = Array.from({ length: 3 }, (_, i) => job(String(i), [{ id: "metric", op: "sum", field: "total", groupBy: [] }], {}, {
+    grouping: { source: core.EMPTY_QUERY, keys: ["repository_name"], summaries: [{ id: "total", op: "sum", field: "duration_ms" }], representative: null },
+  }));
+  const work = loadQueryPreviews(items, (id, preview, error) => { assert.ifError(error); completed.set(id, preview); });
+  await twoStarted;
+  assert.ok(requests.filter(request => request.path.includes("query-v3")).length >= 2, "another grouped query can start while the first is pending");
+  release(); await work;
+  assert.equal(completed.size, 3);
+});
+
+
+test("card snapshot retention is bounded and expired or malformed entries are ignored", async () => {
+  const now = Date.now();
+  let saved = [
+    { key: "expired", at: now - 8 * 86400000, preview: { state: "ready" } },
+    { key: "future", at: now + 86400000, preview: { state: "ready" } },
+    { key: "bad", at: now, preview: { state: "broken" } },
+    { key: "one", at: now - 2000, preview: { state: "empty", total: 0, summary: "One" } },
+    { key: "two", at: now - 1000, preview: { state: "empty", total: 0, summary: "Two" } },
+  ];
+  const store = createCardPreviewCache({ read: async () => saved, write: async entries => { saved = entries; } }, { entries: 2, bytes: 1000 });
+  await store.ready;
+  for (const key of ["expired", "future", "bad"]) assert.equal(store.get(key), undefined);
+  store.put("three", { state: "ready", total: 1, summary: "Three" });
+  store.put("huge", { state: "ready", total: 1, summary: "x".repeat(1000) });
+  await store.save();
+  assert.deepEqual(saved.map(entry => entry.key), ["three", "two"]);
+  assert.equal(store.get("one"), undefined);
+  assert.equal(store.get("huge"), undefined);
+});
+
+test("cancelled card loads never publish a cached result or issue requests", async t => {
+  const priorWindow = global.window;
+  global.window = { pharosPreviewScope: t.name };
+  t.after(() => { global.window = priorWindow; });
+  const requests = fixture(t);
+  const item = job("saved", [{ id: "total", op: "sum", field: "duration_ms", groupBy: [] }]);
+  await loadCardPreviews([item], () => {});
+  const before = requests.length, controller = new AbortController();
+  let published = 0;
+  const work = loadCardPreviews([item], () => { published++; }, controller.signal);
+  controller.abort(); await work;
+  assert.equal(published, 0);
+  assert.equal(requests.length, before);
+  global.window = { pharosPreviewScope: `${t.name}-other-library` };
+  await loadCardPreviews([item], () => {});
+  assert.ok(requests.length > before, "another library cannot reuse the saved cover");
+});
+
+
+test("scrolling promotes newly visible cards ahead of the remaining cold queue", async t => {
+  let promoted = false, release, began;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { began = resolve; });
+  const order = [];
+  fixture(t, async (path, request) => {
+    if (!path.endsWith("rows-v2")) return;
+    order.push(request.where[0].value);
+    if (order.length <= 3) { if (order.length === 3) began(); await gate; }
+  });
+  const jobs = Array.from({ length: 6 }, (_, index) => ({
+    ...job(String(index), [], {}, { where: [{ field: "id", op: "=", value: String(index) }] }),
+    priority: () => promoted && index === 5 ? 0 : 1,
+  }));
+  const work = loadQueryPreviews(jobs, (_id, _preview, error) => assert.ifError(error));
+  await started; promoted = true; release(); await work;
+  assert.deepEqual(order.slice(0, 4), ["0", "1", "2", "5"]);
+});
+
+
+test("a stalled browser cache cannot delay live card queries indefinitely", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const store = createCardPreviewCache({ read: () => new Promise(() => {}), write: async () => {} });
+  t.mock.timers.tick(200);
+  await store.ready;
+  store.put("live", { state: "ready", total: 1, summary: "Live" });
+  assert.equal(store.get("live").fresh, true);
+});
