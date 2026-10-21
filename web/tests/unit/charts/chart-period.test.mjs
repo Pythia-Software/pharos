@@ -1,6 +1,21 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { periodStart, periodKey, nextPeriod, periodBuckets, earliestKey, validPeriodCount } from '../../../src/chart-period';
+import { periodStart, periodKey, nextPeriod, periodBuckets, earliestKey, periodIndex, shiftPeriod, validPeriodCount } from '../../../src/chart-period';
+
+test('smoothing history shifts and counts calendar/custom intervals across DST', () => {
+  const previous = process.env.TZ; process.env.TZ = 'America/Denver';
+  try {
+    const from = new Date(2026,10,2), earlier = new Date(2026,10,1);
+    assert.equal(shiftPeriod(from,'day',-1).getTime(),earlier.getTime());
+    assert.equal(periodIndex(from,'day')-periodIndex(earlier,'day'),1);
+    assert.equal(periodIndex(from,'hour')-periodIndex(earlier,'hour'),25);
+    assert.equal(periodIndex(from,'hours',6)-periodIndex(earlier,'hours',6),4);
+    assert.equal(shiftPeriod(from,'hours',-4,6).getTime(),earlier.getTime());
+    assert.equal(shiftPeriod(new Date(2026,2,15),'month',-2).getTime(),new Date(2026,0,1).getTime());
+    assert.equal(shiftPeriod(from,'days',-2,3).getTime(),new Date(periodStart(from,'days',3).getFullYear(),periodStart(from,'days',3).getMonth(),periodStart(from,'days',3).getDate()-6).getTime());
+    assert.equal(periodIndex(from,'week')-periodIndex(shiftPeriod(from,'week',-19),'week'),19);
+  } finally { if(previous===undefined) delete process.env.TZ; else process.env.TZ=previous; }
+});
 
 test('hour buckets align actual timestamps and combine N-hour intervals in UTC', () => {
   const previous = process.env.TZ;

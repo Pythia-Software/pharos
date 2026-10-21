@@ -75,7 +75,7 @@ function serve(routes, state, record) {
     }
     if (!path.startsWith("/api/")) {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
-      return response.end(html);
+      return response.end(state.concurrency ? html.replace("<html", "<html data-concurrency-prototype") : html);
     }
     const chunks = [];
     // The context can close mid-request when the test ends; drop that request.
@@ -110,12 +110,13 @@ let shotCount = 0;
 // for `ready` (a selector) and `settled()`. Options:
 //   api          stubs that take precedence over the defaults,
 //                { "GET /api/x/:id": body | ({ params, query, body, state }) => body }
+//   concurrency  enable the captured timing snapshot, as the dev UI does
 //   preferences  library preferences served at /assets/preferences.js
 // Returns the page, `settled`, `shot(name)` (a screenshot, only when
 // PHAROS_UI_SCREENSHOTS is set), `problems()` (what will fail the test when
 // it ends) and the API `calls` made so far.
-export async function open(t, { url = "/", viewport = { width: 1440, height: 900 }, api = {}, preferences = {}, ready } = {}) {
-  const state = { preferences: { "pharos-theme": "dark", ...preferences }, unexpected: [], stubErrors: [] };
+export async function open(t, { url = "/", viewport = { width: 1440, height: 900 }, api = {}, preferences = {}, concurrency = false, ready } = {}) {
+  const state = { concurrency, preferences: { "pharos-theme": "dark", ...preferences }, unexpected: [], stubErrors: [] };
   const errors = [], failed = [], calls = [], inflight = new Set();
   let wake = () => {};
   const routes = [...routeTable(api), ...routeTable(defaultApi)];

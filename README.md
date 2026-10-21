@@ -163,7 +163,7 @@ sharing.
 
 ### 5. See where the tokens go
 
-**Usage → Machine Activity** has three views: **Machine Tokens**, **Machine
+**Analyze → Machine Activity** has three views: **Machine Tokens**, **Machine
 Parallelism**, and **Machine Time**, with shared period, repository, provider,
 and model filters. Machine Tokens breaks down tokens and API-equivalent cost by day,
 model, effort level, provider, repository, and agent. Costs use list prices on the day of use,
@@ -180,14 +180,14 @@ total agent compute or elapsed work time. Machine Parallelism uses the existing
 captured timing snapshot when available. Both views have an explicitly labeled
 **Example data** option for exploring the design without a populated library.
 
-![The Usage tab: tokens per day split by model, with total cost, cost per month, and cost by provider](docs/images/usage.png)
+![The Analyze tab: tokens per day split by model, with total cost, cost per month, and cost by provider](docs/images/usage.png)
 
-**Usage → Human Words** estimates how much you actually typed, as opposed to
+**Analyze → Human Words** estimates how much you actually typed, as opposed to
 pasted, re-sent, or harness-injected text.
 
 ![Human Words: words typed, words per message, and a breakdown of where user-turn text came from](docs/images/human-words.png)
 
-**Usage → Carbon Impact** estimates the electricity and CO₂e behind your token
+**Analyze → Carbon Impact** estimates the electricity and CO₂e behind your token
 usage. Compare all time with the last 30 days and adjust the grid, data center
 overhead, and energy assumptions.
 
@@ -243,8 +243,8 @@ chooses which menu lines appear. Their order is fixed. Last-index freshness
 and the three usage metrics are on by default; estimated API cost, last
 successful backup, library size and free space, Index changes now, and safe
 Eject are optional. Eject appears only for an ejectable library drive.
-Carbon uses the assumptions in Usage → Carbon Impact; API cost is the same
-list-price estimate used in Usage. These preferences follow the library
+Carbon uses the assumptions in Analyze → Carbon Impact; API cost is the same
+list-price estimate used in Analyze. These preferences follow the library
 between Macs.
 
 ## Make it yours

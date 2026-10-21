@@ -246,7 +246,7 @@ func TestToolTablesQueryInSQL(t *testing.T) {
 		t.Fatal("field stats accepted an unknown field")
 	}
 	detail, err := catalog.toolCallDetail(ctx, firstString(failures.Rows[0]["id"]))
-	if err != nil || detail == nil || detail["result_text"] == "" || detail["request"] == nil {
+	if err != nil || detail == nil || detail["result_text"] == "" || detail["request"] == nil || detail["call_message_id"] == nil || detail["result_message_id"] == nil {
 		t.Fatalf("detail: %#v %v", detail, err)
 	}
 }

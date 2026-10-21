@@ -100,10 +100,17 @@ var queryV2MaxGroups = 2000
 // ranges exceeds the ordinary budget; V3 allows Usage the same.
 var queryV2UsageMaxGroups = 100_000
 
+// Daily Tool summaries can have more than 2,000 program or date groups.
+// Match their V3 budget so a valid chart does not need a second execution.
+var queryV2ToolMaxGroups = 10_000
+
 func queryV2Dataset(dataset string, schema qt.Schema) qt.SQLiteV2Dataset {
 	groups := queryV2MaxGroups
 	if schema.Name == "pharos_usage" {
 		groups = queryV2UsageMaxGroups
+	}
+	if schema.Name == "pharos_tools" {
+		groups = queryV2ToolMaxGroups
 	}
 	return qt.SQLiteV2Dataset{Schema: schema, Scope: queryTableScope, Dataset: schema.Name, MaxRows: querytable.MaxLimit, MaxGroups: groups, MaxPopulation: queryTablePopulation}
 }
@@ -151,6 +158,9 @@ func (d sqlDataset) v2CandidateSource(schema qt.Schema, terms []qt.WhereTerm, cl
 		saved := len(args)
 		for _, clause := range term.Predicates() {
 			predicate := ""
+			if d.calendarFacts && clause.Field == "day" && !clause.Negated && clause.Op == "is_null" {
+				predicate = "t.rowid IN (SELECT rowid FROM tool_query_facts WHERE day IS NULL OR day='')"
+			}
 			if !clause.Negated && clause.Op == "=" && clause.Value != "" && d.lookups[clause.Field] && d.columns[clause.Field] != "" &&
 				(schema.Fields[clause.Field].Kind == qt.FieldText || schema.Fields[clause.Field].Kind == qt.FieldEnum) {
 				predicate = d.columns[clause.Field] + "=" + bind(clause.Value)
@@ -184,6 +194,9 @@ func (d sqlDataset) v2CandidateSource(schema qt.Schema, terms []qt.WhereTerm, cl
 					}
 					predicate = "(" + d.buckets[clause.Field] + ">=" + bind(from) + " AND " + d.buckets[clause.Field] + "<" + bind(to) + ")"
 				}
+			}
+			if d.queryText.term(clause) {
+				predicate = d.queryText.predicate(clause, bind, d.pageFrom == "FROM tool_query_facts t")
 			}
 			if predicate == "" {
 				branches = nil
@@ -736,6 +749,18 @@ func metricDependencies(ctx context.Context, q qt.MetricQuery, schema qt.Schema,
 }
 
 func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.Values, schema qt.Schema, rowRequest *qt.ServerQueryV2, metrics *qt.MetricQuery, populationLimit ...int) (queryV2ExecutionResult, error) {
+	if dataset == "usage" {
+		var err error
+		ctx, err = withCarbonPreferences(ctx, params.Get("carbon_settings"))
+		if err != nil {
+			return queryV2ExecutionResult{}, err
+		}
+	}
+	if rowRequest != nil {
+		copy := *rowRequest
+		copy.Select = queryRowActionFields(dataset, rowRequest.Select)
+		rowRequest = &copy
+	}
 	clock := time.Now()
 	d := queryV2Dataset(dataset, schema)
 	if len(populationLimit) > 0 {
@@ -750,6 +775,11 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 	if sqlBacked {
 		if err := s.Catalog.prepareSQLDataset(ctx, dataset); err != nil {
 			return queryV2ExecutionResult{}, err
+		}
+		var textErr error
+		table, textErr = s.Catalog.queryTextDataset(ctx, dataset, table)
+		if textErr != nil {
+			return queryV2ExecutionResult{}, textErr
 		}
 		if dataset == "tool_calls" {
 			ready, e := s.Catalog.toolSearchReady(ctx)
@@ -785,6 +815,15 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 		if metrics != nil {
 			var covered bool
 			projected, covered = projected.preferCoveringScan(where)
+			if !covered && len(table.residualWhere(where)) < len(where) {
+				copy := *metrics
+				copy.Where = table.residualWhere(where)
+				exactNames, e := queryV2SourceFields(ctx, s.Catalog.reader(), schema, nil, &copy, clock)
+				if e != nil {
+					return queryV2ExecutionResult{}, e
+				}
+				_, covered = table.project(exactNames).preferCoveringScan(where)
+			}
 			if covered {
 				// Narrow covered scalar populations can read the full live ledger
 				// without copying command/result payloads. Exact sample/group limits
@@ -930,6 +969,43 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 		}
 	}
 	return result, err
+}
+
+// Collection actions need source identity even when their columns are hidden.
+// Keep these small dimensions in the row payload; the client's projection
+// still controls which columns are displayed. Group results have no such
+// source-record identity and must never receive these fields.
+func queryRowActionFields(dataset string, selected []string) []string {
+	if len(selected) == 0 {
+		return selected
+	}
+	var required []string
+	switch dataset {
+	case "tools":
+		required = []string{"day", "tool_name", "tool_category", "mcp_server", "program", "subcommand", "command_category", "provider", "model", "effort", "repository_name", "session_kind", "source_kind"}
+	case "usage":
+		required = []string{"workspace_id", "conversation_id", "first_usage_at"}
+	case "conversation_activity":
+		required = []string{"workspace_id", "conversation_id", "message_id", "event_at"}
+	case "writing_messages":
+		required = []string{"workspace_id", "conversation_id"}
+	case "tool_calls":
+		required = []string{"workspace_id", "conversation_id", "call_message_id", "result_message_id", "call_id"}
+	case "parallelism":
+		required = []string{"conversation_id", "started_at", "location"}
+	case "skill_usages":
+		required = []string{"workspace_id", "conversation_id", "tool_call_id", "evidence_message_id", "body_message_id"}
+	}
+	if len(required) == 0 {
+		return selected
+	}
+	fields := slices.Clone(selected)
+	for _, field := range required {
+		if !slices.Contains(fields, field) {
+			fields = append(fields, field)
+		}
+	}
+	return fields
 }
 
 // metricsWithoutStaging answers metrics that need no temporary tables in a

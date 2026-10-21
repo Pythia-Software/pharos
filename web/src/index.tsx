@@ -5,6 +5,9 @@ import "./conversation-search";
 import { TextSearchEditor, type LibrarySearchKind as FindKind } from "./text-search-editor";
 import { SearchHelp } from "./search-help";
 import { RecordSearchEditor, recordSearchTargets } from "./record-search-editor";
+import { usageDetailsSchema } from "./usage-row-model";
+import { UsageRowActions, usageRowRenderers } from "./usage-row-renderers";
+import { createQueryMetadataLoader } from "./query-metadata";
 import { SearchDialog } from "./search-dialog";
 import { SearchOrder } from "./search-order";
 import { emptyTextSearch, readTextSearch, textFindParameters, textSearchSummary, withheldBatch, type TextSearchDraft } from "./text-search-model";
@@ -12,28 +15,29 @@ import { CarbonImpact } from "./carbon-impact";
 import { pushMachineLocation, useMachineQueryNavigation } from "./machine-location";
 import { MachineActivity } from "./machine-activity";
 import { activityPresentation } from "./machine-activity-data";
-import { ChartSelect, PeriodControl, RangeControl, ScaleControl, RollingControl, StackedColumns, chartPeriodCount, chartSpan, pickRange, timeBounds, withTimeRange, usageTime, writingTime, type FilterChange } from "./usage-chart";
+import { ChartSelect, DisplayControl, PeriodControl, RangeControl, ScaleControl, RollingControl, StackedColumns, chartPeriodCount, chartSpan, pickRange, smoothingWhere, timeBounds, withTimeRange, usageTime, writingTime, type FilterChange } from "./usage-chart";
 import { applyUsageAggregations } from "./usage-aggregations";
 import { applyUsageTablePreset, usageGroupPresets, usageComparisonPresets, usageTablePresetMatches, type UsageTablePreset } from "./usage-queries";
 import { applyUsagePreset, messageMetricPresets, messagePresets, presetMatches, usageChartPresets, writingMetricPresets, writingPresets, type TokenChartView, type TokenSplit, type UsagePreset } from "./usage-presets";
 import { withComputedCapabilityRefresh } from "./computed-column-store";
-import { postMetrics, type MetricResult } from "./metric-request";
+import { MetricRequestError, postMetrics, postQueryV3Metrics, type MetricResult } from "./metric-request";
 import { costMetric, tokenChartMetrics, tokenChartSplit, tokenSummaryMetrics, tokenTypes } from "./token-chart-request";
-import { chartPeriods, earliestKey, isHourly, localDay, parseDay, periodBuckets, periodKey, periodLabel, validPeriodCount, type ChartPeriod } from "./chart-period";
+import { chartPeriods, earliestKey, isHourly, localDay, parseDay, periodKey, periodLabel, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { defaultChartScale, validChartScale } from "./chart-scale";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { EMPTY_QUERY, exitGrouping, groupSourceQuery, httpComputedColumnStore, inspectBucketQuery, applyAggregations, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, toServerQuery, type ComputedColumnStore, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
+import { useLocationRevision } from "./nested-pages";
+import { SettingsWorkspace } from "./settings-workspace";
+import { EMPTY_QUERY, exitGrouping, groupSourceQuery, httpComputedColumnStore, inspectBucketQuery, applyAggregations, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, toServerQuery, type ComputedColumnStore, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type AggregationResultEntry, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
 import { useQueryTable, type QueryTableApi } from "@pythia-software/query-table-react";
-import { DataTable, FilterValueProvider, MetricsPanel, QueryBuilder, SelectionToolbar, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
+import { DataTable, FilterValueProvider, MetricCard, MetricsPanel, QueryBuilder, SelectionToolbar, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
 import "@pythia-software/query-table-ui/theme.css";
 import "./pharos.css";
 import { savedRollingWindow } from "./bookmarks";
 import { libraryStorageAdapter, rejectLastQuery, retryLastQuery } from "./storage";
 import { queryRequest, queryFetch, shouldSkipQueryOnRestore } from "./query-request";
 import { PageErrorBoundary, QueryRecovery, ResetPage, tableRecoveryQuery } from "./query-recovery";
-import { createMCPMonitor, type MCPStatus, type MCPHistory } from "./mcp-monitor";
-import { MCPCallDetails } from "./mcp-call-details";
+import { createMCPMonitor, type MCPStatus } from "./mcp-monitor";
 import { HomePage } from "./home";
 import { linkTargets, navigateLink } from "./query-link-targets";
 import { QueryChip } from "./query-card";
@@ -41,8 +45,8 @@ import { readRollingWindow, resolveRollingQuery, rollingQueryMatches } from "./q
 import { mainIntegration, pullRequestLabel, pullRequestURL, pullRequests } from "./pull-requests";
 import { optionLabels } from "./option-labels";
 import { preferences } from "./preferences";
-import { foldSeries, validRollingPeriods } from "./chart-series";
-import { isSliceTerm, readSlice, updateSlice, withSlice, type LegendAction, type SliceSelection } from "./chart-selection";
+import { chartBucketsWithHistory, foldSeries, plottedBucketKey, rollingMetricTrend, validChartDisplay, validRollingPeriods, type ChartDisplay } from "./chart-series";
+import { isSliceTerm, readSlice, updateSlice, withSlice, validChartPresentation, type ChartPresentation, type LegendAction, type SliceSelection } from "./chart-selection";
 import { UsageChartColorsProvider, useUsageChartPalette, useUsageTableRenderers } from "./usage-chart-colors";
 import libraryDocument from "../../schemas/library.schema.json";
 import usageDocument from "../../schemas/usage.schema.json";
@@ -60,8 +64,13 @@ import { TL1Page } from "./tl1";
 import { FindingsPage, OptimizationSettingsPage, startFindingsChrome } from "./findings";
 import { Icon } from "./icons";
 import { AuthoredMessages, CategoryPill, MessageMix, authoredRenderers } from "./authored";
-import { ConcurrencyModal, concurrencyPrototypeEnabled } from "./concurrency";
+import { ConcurrencyModal, ConcurrencyPanel, concurrencyPrototypeEnabled, type ConcurrencySelection } from "./concurrency";
 import { openConcurrencyModal, startConcurrencySummary } from "./concurrency-store";
+import { currentUsageAnalyses, isUsageWorkspace, readUsageWorkspace, usageDatasets, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
+import { defaultMCPDashboard, validMCPDashboard, cumulativeMCPTrend, mcpDashboardMeasures, mcpDashboardBreakdowns, mcpDashboardQuery, mcpTrendRanking, withMCPTrendGroups, mcpTrendGroups } from "./mcp-dashboard-model";
+import { UsageWorkspace, UsageQueryLinks, UsageDashboardLinks, UsageWorkspaceLink } from "./usage-workspace";
+import { toolSummaryCallFilters, defaultToolDashboard, validToolDashboard, cumulativeToolTrend, toolDashboardMeasures, toolDashboardBreakdowns, toolDashboardQuery, toolTrendRanking, withToolTrendGroups, toolTrendGroups } from "./tools-dashboard-model";
+import { readDashboardQuery, inspectDashboardBucket, recordDashboardMetric, recordDashboards, parallelismSelectionQuery, toolDashboardWhere, type RecordDashboardTopic } from "./usage-dashboard-model";
 
 type Row = Record<string, any>;
 const relationships: RelationshipAdapter = {
@@ -122,14 +131,18 @@ const shared: SharedExport | null = (window as unknown as { pharosShare?: Shared
 const queryParameter = (dataset: Dataset) => `q_${dataset}`;
 function datasetIsVisible(dataset: Dataset | "machine_calls") {
   const params = new URLSearchParams(location.search), path = location.pathname;
-  if (dataset === "machine_calls") return path === "/usage" && (params.get("usage") ?? "tokens") === "tokens" && (params.get("machine_view") ?? preferences().get("pharos-machine-view", "tokens")) === "time";
+  if (path === "/analyze" && isUsageWorkspace(params)) {
+    const workspace = readUsageWorkspace(params);
+    return workspace.mode !== "dashboards" && workspace.dataset === dataset;
+  }
+  if (dataset === "machine_calls") return path === "/analyze" && (params.get("analyze_view") ?? "tokens") === "tokens" && (params.get("machine_view") ?? preferences().get("pharos-machine-view", "tokens")) === "time";
   if (dataset === "library") return path === "/library";
   if (dataset === "findings") return path === "/findings" && params.get("view") === "table";
-  if (dataset === "parallelism") return path === "/usage" && (params.get("usage") ?? "tokens") === "tokens" && (params.get("machine_view") ?? preferences().get("pharos-machine-view", "tokens")) === "parallelism";
-  const usageView = params.get("usage") ?? preferences().get("pharos-usage-view", "tokens");
-  if (dataset === "conversation_activity") return path === "/usage" && usageView === "conversations";
-  if (dataset === "usage") return path === "/usage" && usageView === "tokens";
-  if (dataset === "writing" || dataset === "writing_messages") return path === "/usage" && usageView === "writing" && (params.get("writing") === "messages") === (dataset === "writing_messages");
+  if (dataset === "parallelism") return path === "/analyze" && (params.get("analyze_view") ?? "tokens") === "tokens" && (params.get("machine_view") ?? preferences().get("pharos-machine-view", "tokens")) === "parallelism";
+  const usageView = params.get("analyze_view") ?? preferences().get("pharos-usage-view", "tokens");
+  if (dataset === "conversation_activity") return path === "/analyze" && usageView === "conversations";
+  if (dataset === "usage") return path === "/analyze" && usageView === "tokens";
+  if (dataset === "writing" || dataset === "writing_messages") return path === "/analyze" && usageView === "writing" && (params.get("writing") === "messages") === (dataset === "writing_messages");
   if (["tools", "tool_calls", "skill_usages"].includes(dataset)) return path === "/tools" && (params.get("tools_view") ?? "calls") === (dataset === "tools" ? "summary" : dataset === "skill_usages" ? "skills" : "calls");
   return dataset === "mcp_calls" ? path === "/mcp" : path.startsWith("/tl1");
 }
@@ -143,17 +156,6 @@ function updateURI(name: string, value: string) {
     history.replaceState(null, "", url);
     window.dispatchEvent(new Event("pharos:uri-changed"));
   }
-}
-
-function useLocationRevision() {
-  const [revision, setRevision] = useState(0);
-  useEffect(() => {
-    const changed = () => setRevision(value => value + 1);
-    const events = ["pharos:view", "pharos:route", "pharos:uri-changed", "pharos:library-filter"];
-    events.forEach(event => window.addEventListener(event, changed));
-    return () => events.forEach(event => window.removeEventListener(event, changed));
-  }, []);
-  return revision;
 }
 
 declare global {
@@ -176,9 +178,7 @@ declare global {
 const schemas: Record<Dataset, FieldSchema<Row>> = {
   conversation_activity: loadSchema<Row>(conversationActivityDocument),
   library: loadSchema<Row>(libraryDocument),
-  // The reused prototype snapshot runs a schema-12 backend, before effort
-  // tracking. Leave that optional column out of its default token table.
-  usage: loadSchema<Row>(concurrencyPrototypeEnabled ? { ...usageDocument, defaultSelect: usageDocument.defaultSelect.filter(column => column.field !== "effort") } : usageDocument),
+  usage: loadSchema<Row>(usageDocument),
   writing: loadSchema<Row>(writingDocument),
   writing_messages: loadSchema<Row>(writingMessagesDocument),
   mcp_calls: loadSchema<Row>(mcpCallsDocument),
@@ -222,9 +222,12 @@ function recordBudget(dataset: Dataset, where: WhereTerm[]) {
   const fields = dataset === "tool_calls" ? ["command", "file_path"] : dataset === "writing_messages" ? ["text"] : dataset === "mcp_calls" ? ["arguments_json", "error_text"] : [];
   return where.some(term => ("any" in term ? term.any : [term]).some(c => fields.includes(c.field))) ? new URLSearchParams({ interactive_search: "1" }) : undefined;
 }
+const queryMetadata = createQueryMetadataLoader();
 function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary | null) => void, capabilities?: MetricCapabilities, queryCapabilities?: QueryCapabilitiesV3): Transport<Row> {
-  const endpoint = (suffix = "", params?: URLSearchParams) => {
-    const query = new URLSearchParams(extra);
+  const endpoint = (suffix = "", params?: URLSearchParams, collection = true) => {
+    const query = new URLSearchParams(collection ? extra : "");
+    const carbon = new URLSearchParams(location.search).get("analyze_carbon");
+    if (dataset === "usage" && carbon) query.set("carbon_settings", carbon);
     params?.forEach((value, name) => query.set(name, value));
     return `/api/query/${dataset}${suffix}${query.size ? `?${query}` : ""}`;
   };
@@ -239,7 +242,7 @@ function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary
       return result;
     } } : {}),
     async fetchRow(id, signal) {
-      const result = await queryRequest<{ row: Row | null }>(`/api/query/${dataset}/item?id=${encodeURIComponent(String(id))}`, { signal });
+      const result = await queryRequest<{ row: Row | null }>(endpoint("/item", new URLSearchParams({ id: String(id) }), false), { signal });
       return result.row;
     },
     async fetchRowsV2(query, signal) {
@@ -267,10 +270,12 @@ function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary
     async fetchDistinctValues(query, signal) {
       const params = new URLSearchParams({ field: query.field, q: query.search });
       if (query.limit) params.set("limit", String(query.limit));
-      return queryRequest(endpoint("/distinct", params), { signal });
+      const url = endpoint("/distinct", params);
+      return queryMetadata(url, async () => queryRequest(url), signal);
     },
     async fetchFieldStats(fields, signal) {
-      return queryRequest(endpoint("/field-stats", new URLSearchParams({ fields: fields.join(",") })), { signal });
+      const url = endpoint("/field-stats", new URLSearchParams({ fields: fields.join(",") }));
+      return queryMetadata(url, async () => queryRequest(url), signal);
     },
   };
 }
@@ -425,19 +430,21 @@ function usageGroupFields(fields: FieldSchema<Row>["fields"], query: QueryState)
 // can follow the table's filters.
 // find, for the Library, is a keyword search that narrows the rows before the
 // pagination applies; onFind hears how it went.
-function QuerySurface({ dataset, libraryView = "table", messageView = "table", find = "", onFind, trailing, header, controls, presets, selectable = false, scopeWhere, appliedScope, namespace, localRows }: { dataset: Dataset; selectable?: boolean; libraryView?: LibraryView; messageView?: MessageView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode; scopeWhere?: WhereTerm[]; appliedScope?: React.MutableRefObject<WhereTerm[]>; namespace?: "machine_calls"; localRows?: Row[] }) {
+function QuerySurface({ dataset, libraryView = "table", messageView = "table", find = "", onFind, trailing, header, controls, presets, selectable = false, scopeWhere, appliedScope, namespace }: { dataset: Dataset; selectable?: boolean; libraryView?: LibraryView; messageView?: MessageView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode; scopeWhere?: WhereTerm[]; appliedScope?: React.MutableRefObject<WhereTerm[]>; namespace?: "machine_calls" }) {
   const registryKey = namespace ?? dataset;
   const visible = shared || datasetIsVisible(registryKey);
   const schema = useMemo(() => namespace ? { ...schemas[dataset], name: "pharos_machine_calls", defaultSelect: [{ field: "started_at", width: 155 }, { field: "repository_name", width: 140 }, { field: "operation_name", width: 180 }, { field: "tool_name", width: 140 }, { field: "command", width: 350 }, { field: "duration_ms", width: 105 }, { field: "status", width: 85 }, { field: "duration_source", width: 120 }, { field: "title", width: 240 }] } : schemas[dataset], [dataset, namespace]);
   const locationRevision = useLocationRevision();
-  const tableRenderers = useUsageTableRenderers(renderers);
+  const usageRenderers = useMemo(() => Object.hasOwn(usageDatasets, dataset) ? { ...renderers, ...usageRowRenderers(dataset as UsageDataset, Boolean(shared)) } : renderers, [dataset]);
+  const tableRenderers = useUsageTableRenderers(usageRenderers);
+  const detailSchema = useMemo(() => usageDetailsSchema(schema, dataset), [schema, dataset]);
   const onFindRef = useRef(onFind);
   onFindRef.current = onFind;
   const [capabilities, setCapabilities] = useState<Capabilities>();
   const [capabilityError, setCapabilityError] = useState<Error>();
   const [capabilityRetry, setCapabilityRetry] = useState(0);
   const [recovered, setRecovered] = useState(false);
-  const remote = !shared && !localRows;
+  const remote = !shared;
   // A server table runs only once it knows the server's capabilities: rows
   // and metrics both go through V2/V3, and nothing reads the legacy routes
   // first. A failed handshake shows its error instead.
@@ -451,7 +458,7 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
     return () => controller.abort();
   }, [dataset, remote, Boolean(visible), Boolean(capabilities), capabilityRetry]);
   const computedColumnStore = useMemo(() => {
-    if (shared || localRows || !visible) return undefined;
+    if (shared || !visible) return undefined;
     const backendStore = httpComputedColumnStore("/api/query-computed-columns", queryFetch);
     // Group projections have a derived schema name. Canonical definitions and
     // their execution handshake still belong to this surface's source dataset.
@@ -464,12 +471,12 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
       setCapabilities(await fetchCapabilities(dataset, signal));
       setCapabilityError(undefined);
     });
-  }, [dataset, Boolean(localRows), Boolean(visible)]);
-  const transport = useMemo(() => shared || localRows ? undefined : makeTransport(dataset, find, value => onFindRef.current?.(value), capabilities?.metricCapabilities, capabilities?.queryCapabilities), [dataset, find, capabilities?.metricCapabilities, capabilities?.queryCapabilities, Boolean(localRows)]);
+  }, [dataset, Boolean(visible)]);
+  const transport = useMemo(() => shared ? undefined : makeTransport(dataset, find, value => onFindRef.current?.(value), capabilities?.metricCapabilities, capabilities?.queryCapabilities), [dataset, find, capabilities?.metricCapabilities, capabilities?.queryCapabilities]);
   const [bookmarkRevision, setBookmarkRevision] = useState(0);
   useEffect(() => { const changed = () => setBookmarkRevision(value => value + 1); window.addEventListener("pharos:bookmarks", changed); return () => window.removeEventListener("pharos:bookmarks", changed); }, []);
   // A shared file has no origin of its own to keep saved queries apart from other files'.
-  const storage = useMemo(() => shared || localRows ? memoryStorageAdapter() : libraryStorageAdapter({ fresh: new URLSearchParams(location.search).get("fresh") === "1", onRecovery: () => setRecovered(true) }), [bookmarkRevision, Boolean(localRows)]);
+  const storage = useMemo(() => shared ? memoryStorageAdapter() : libraryStorageAdapter({ fresh: new URLSearchParams(location.search).get("fresh") === "1", onRecovery: () => setRecovered(true) }), [bookmarkRevision]);
   const propertyStorage = useMemo(() => jsonPropertyViewStorage(
     key => preferences().get<string | null>(key, null),
     (key, value) => preferences().set(key, value),
@@ -489,12 +496,12 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
   }, [dataset, locationRevision, scopeSignature, scopeRemovals]);
   const api = useQueryTable<Row>({ schema, transport,
     computedColumnStore, computedExecution: capabilities?.computedExecution,
-    clientRows: localRows ?? shared?.datasets[dataset], active: Boolean(visible) && (!remote || Boolean(capabilities || capabilityError)),
+    clientRows: shared?.datasets[dataset], active: Boolean(visible) && (!remote || Boolean(capabilities || capabilityError)),
     // Keep URL configuration stable; active pauses execution/synchronization
     // without resetting restoration or undo history when a table is hidden.
     storage, debounceMs: 100, syncUrl: true, queryParameter: `q_${registryKey}`, canonicalizeQuery,
-    itemDetails: { storage: propertyStorage, relationships: shared || localRows ? undefined : relationships,
-      loadRow: shared || localRows ? undefined : async (id, signal) => {
+    itemDetails: { storage: propertyStorage, ...(detailSchema ? { schema: detailSchema, defaultModes: ["modal", "expand"] as ("modal" | "expand")[] } : {}), relationships: shared ? undefined : relationships,
+      loadRow: shared ? undefined : async (id, signal) => {
         const row = await transport!.fetchRow!(id, signal);
         return row ? { row, loadedFields: Object.keys(row) } : null;
       } },
@@ -510,7 +517,7 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
       rejectLastQuery(schema.name, api.query, { defaults: api.defaults, canonicalize: canonicalizeQuery });
     }
   }, [visible, api.error, api.query, schema.name]);
-  useMachineQueryNavigation(api, Boolean(visible && !shared && (namespace || dataset === "usage")), JSON.stringify([scopeWhere, new URLSearchParams(location.search).get("machine_view"), Boolean(localRows)]), `q_${registryKey}`, scopeWhere);
+  useMachineQueryNavigation(api, Boolean(visible && !shared && (namespace || dataset === "usage")), JSON.stringify([scopeWhere, new URLSearchParams(location.search).get("machine_view")]), `q_${registryKey}`, scopeWhere);
   const apiRef = useRef(api);
   apiRef.current = api;
   const priorScopeSignature = useRef(scopeSignature);
@@ -980,7 +987,11 @@ function compactNumber(value: number): string {
 
 function readStored<T extends object>(key: string, fallback: T, valid: (value: T) => boolean): T {
   if (new URLSearchParams(location.search).get("fresh") === "1") return fallback;
-  const saved = preferences().get<unknown>(key, {});
+  let saved = preferences().get<unknown>(key, {});
+  const chart = new URLSearchParams(location.search).get("analyze_chart");
+  if (chart && [tokenChartKey, writingViewKey].includes(key)) {
+    try { saved = JSON.parse(chart); } catch { /* Keep the saved default for invalid chart state. */ }
+  }
   if (!saved || typeof saved !== "object") return fallback;
   const stored = { ...fallback, ...saved } as T;
   return valid(stored) ? stored : fallback;
@@ -1000,7 +1011,7 @@ function Segmented<T extends string>({ label, value, options, onChange }: { labe
 // Fetches metrics for the given filters from /metrics, or from a shared file's
 // rows, refetching when either changes or Usage is refreshed. Results are
 // tagged so a stale response never renders under new chart settings.
-function useMetrics(dataset: Dataset, where: WhereTerm[], clauses: AggregationClause[]) {
+function useMetrics(dataset: Dataset, where: WhereTerm[], clauses: AggregationClause[], largerBudget = false) {
   const key = JSON.stringify({ where, clauses });
   const [state, setState] = useState<{ key: string; metrics: MetricResult[]; error: string; loading: boolean }>({ key: "", metrics: [], error: "", loading: true });
   const [refresh, setRefresh] = useState(0);
@@ -1011,6 +1022,7 @@ function useMetrics(dataset: Dataset, where: WhereTerm[], clauses: AggregationCl
   }, []);
   useEffect(() => {
     const request = JSON.parse(key) as { where: WhereTerm[]; clauses: AggregationClause[] };
+    if (!request.clauses.length) { setState({ key, metrics: [], error: "", loading: false }); return; }
     if (shared) {
       const rows = shared.datasets[dataset];
       const result = dataset === "usage"
@@ -1022,20 +1034,26 @@ function useMetrics(dataset: Dataset, where: WhereTerm[], clauses: AggregationCl
     const controller = new AbortController();
     setState(previous => ({ ...previous, loading: true }));
     postMetrics(dataset, schemas[dataset], request.where, request.clauses, controller.signal)
+      .catch(failure => {
+        // Guided record graphs can exceed /metrics's generic group budget.
+        // Use the same native V3 fallback as the existing Machine Time view.
+        if (largerBudget && failure instanceof MetricRequestError && failure.resourceLimit) return postQueryV3Metrics(dataset, schemas[dataset], request.where, request.clauses, controller.signal);
+        throw failure;
+      })
       .then(metrics => setState({ key, metrics, error: "", loading: false }))
       .catch(failure => { if (!controller.signal.aborted) setState({ key, metrics: [], error: failure instanceof Error ? failure.message : String(failure), loading: false }); });
     return () => controller.abort();
-  }, [dataset, key, refresh]);
-  return { ...state, metrics: state.key === key ? state.metrics : [] };
+  }, [dataset, key, refresh, largerBudget]);
+  return { ...state, metrics: state.key === key ? state.metrics : [], loading: state.key !== key || state.loading, error: state.key === key ? state.error : "" };
 }
 
-const tokenSplits: Array<[TokenSplit, string]> = [["type", "Token type"], ["provider", "Provider"], ["model_family", "Model"], ["model_effort", "Model + effort"], ["effort", "Effort"], ["repository_name", "Repository"], ["session_kind", "Agent"]];
+const tokenSplits: Array<[TokenSplit, string]> = [["type", "Token type"], ["provider", "Provider"], ["model_family", "Model"], ["model_effort", "Model + effort"], ["effort", "Effort"], ["repository_name", "Repository"], ["session_kind", "Root Agent/Subagent"]];
 // Providers and agent kinds keep one color each whatever the filters; models
 // and repositories show the fifteen largest in view and fold the rest into Other.
 const fixedSplitOrder: Partial<Record<TokenSplit, string[]>> = { provider: ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"], session_kind: ["root", "subagent"] };
 const sessionKindLabels: Record<string, string> = { root: "Root agent", subagent: "Sub-agent" };
 const tokenChartKey = "pharos-usage-chart";
-const defaultTokenChart: TokenChartView = { metric: "tokens", split: "type", period: "week", hours: 6, days: 3, rollingPeriods: 0, scale: defaultChartScale };
+const defaultTokenChart: TokenChartView = { metric: "cost", split: "model_family", period: "week", hours: 6, days: 3, rollingPeriods: 0, scale: defaultChartScale, display: "interval" };
 const costTick = (value: number) => Math.abs(value) >= 1e4 ? `$${compactNumber(value)}` : `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 
 function splitLabel(split: TokenSplit, value: unknown): string {
@@ -1053,56 +1071,67 @@ function splitLabel(split: TokenSplit, value: unknown): string {
 function TokenChart({ where, onFilter, onTimeFilter = onFilter, view, onChange }: { where: WhereTerm[]; onFilter: FilterChange; onTimeFilter?: FilterChange; view: TokenChartView; onChange: (next: Partial<TokenChartView>) => void }) {
   const cost = costMetric(view);
   const percent = view.metric === "percent" || view.metric === "percent_cost";
+  const cumulative = view.display === "cumulative";
   const split = tokenChartSplit(view);
   const periodCount = chartPeriodCount(view);
-  const [types, setTypes] = useState<SliceSelection<string>>({ values: [], excluded: false });
-  const [seriesLimit, setSeriesLimit] = useState(15);
-  useEffect(() => setSeriesLimit(15), [split]);
+  const types = view.selection ?? { values: [], excluded: false };
+  const seriesLimit = view.seriesLimit ?? 15;
   const sliced = split !== "type";
   const selection = sliced ? readSlice(where, split) : types;
   const chosen = selection.values.map(value => value ?? "");
   const chartWhere = sliced ? where.filter(term => !isSliceTerm(term, split)) : where;
+  const requestedWhere = smoothingWhere(chartWhere, usageTime, view.period, cumulative ? 0 : view.rollingPeriods, periodCount);
   const clauses = useMemo(() => tokenChartMetrics(view), [view.metric, view.split, view.period]);
-  const result = useMetrics("usage", chartWhere, clauses);
+  const result = useMetrics("usage", requestedWhere, clauses);
   const bounds = timeBounds(where, usageTime);
-  const { series, buckets } = useMemo(() => {
+  const { series, buckets, cumulativeStart } = useMemo(() => {
+    const dates = result.metrics.flatMap(metric => metric.buckets.map(bucket => parseDay(String(bucket.keys[0]))));
     const earliest = earliestKey(result.metrics.flatMap(metric => metric.buckets.map(bucket => bucket.keys[0])));
-    const buckets = periodBuckets(view.period, ...chartSpan(bounds, earliest), periodCount), byKey = new Map(buckets.map(bucket => [bucket.key, bucket]));
+    const buckets = chartBucketsWithHistory(view.period, ...chartSpan(bounds, earliest), periodCount, dates,
+      !cumulative && view.rollingPeriods > 1 ? timeBounds(requestedWhere, usageTime).from ?? earliest : undefined), byKey = new Map(buckets.map(bucket => [bucket.key, bucket]));
+    // Keep the full range's total even when only the latest 5,000 intervals
+    // fit on screen. Earlier amounts become the first visible point's balance.
+    const plottedKey = (value: unknown) => {
+      const key = periodKey(parseDay(String(value)), view.period, periodCount);
+      return cumulative && buckets.length && key < buckets[0].key ? buckets[0].key : key;
+    };
+    const cumulativeStart = bounds.from ?? earliest;
     if (split === "type") {
       result.metrics.forEach((metric, index) => {
         for (const bucket of metric.buckets) {
-          const target = byKey.get(periodKey(parseDay(String(bucket.keys[0])), view.period, periodCount));
+          const target = byKey.get(plottedKey(bucket.keys[0]));
           if (target) target.values[tokenTypes[index].key] = (target.values[tokenTypes[index].key] ?? 0) + (Number(bucket.value) || 0);
         }
       });
-      return { series: tokenTypes.filter(type => type.key !== "unclassified_tokens" || buckets.some(bucket => bucket.values[type.key])).map(type => ({ ...type, value: type.key })), buckets };
+      return { series: tokenTypes.filter(type => type.key !== "unclassified_tokens" || buckets.some(bucket => bucket.values[type.key])).map(type => ({ ...type, value: type.key })), buckets, cumulativeStart };
     }
-    const rows = (result.metrics[0]?.buckets ?? []).map(bucket => [periodKey(parseDay(String(bucket.keys[0])), view.period, periodCount), String(bucket.keys[1] ?? ""), Number(bucket.value) || 0] as [string, string, number]);
-    return { series: foldSeries(rows, byKey, name => splitLabel(split, name), fixedSplitOrder[split], chosen, seriesLimit, split), buckets };
-  }, [result.metrics, split, view.period, periodCount, bounds.from?.getTime(), bounds.to?.getTime(), chosen.join("\u0000"), seriesLimit]);
+    const rows = (result.metrics[0]?.buckets ?? []).map(bucket => [plottedKey(bucket.keys[0]), String(bucket.keys[1] ?? ""), Number(bucket.value) || 0] as [string, string, number]);
+    return { series: foldSeries(rows, byKey, name => splitLabel(split, name), fixedSplitOrder[split], chosen, seriesLimit, split), buckets, cumulativeStart };
+  }, [result.metrics, split, view.period, periodCount, bounds.from?.getTime(), bounds.to?.getTime(), chosen.join("\u0000"), seriesLimit, cumulative, view.rollingPeriods]);
   useUsageChartPalette(sliced ? split : null, series);
   const selected = series.filter(item => item.value !== undefined && chosen.includes(item.value)).map(item => item.key);
   function select(key: string | null, action: LegendAction) {
     const value = key === null ? undefined : series.find(item => item.key === key)?.value;
-    if (!sliced) setTypes(current => updateSlice(current, value ?? "", action));
+    if (!sliced) onChange({ selection: updateSlice(types, value ?? "", action) });
     else onFilter(current => withSlice(current, split, updateSlice(readSlice(current, split), value || null, action)));
   }
   const unit = periodLabel(view.period, periodCount), splitName = tokenSplits.find(([value]) => value === split)?.[1].toLowerCase() ?? split;
-  const title = `${percent ? cost ? "Cost share" : "Token share" : cost ? "API cost" : "Tokens"} per ${unit} by ${splitName}`;
+  const title = `${cumulative ? "Cumulative " : ""}${percent ? cost ? "Cost share" : "Token share" : cost ? "API cost" : "Tokens"}${cumulative ? "" : ` per ${unit}`} by ${splitName}`;
   const controls = <>
-    <ChartSelect label="Metric" value={view.metric} options={[["tokens", "Tokens"], ["cost", "API cost"], ["percent_cost", "Cost share (%)"], ["percent", "Token share (%)"]]} onChange={metric => onChange({ metric })} />
+    <ChartSelect label="Metric" value={view.metric} options={[["cost", "API Cost"], ["tokens", "Token Count"], ["percent_cost", "% API Cost"], ["percent", "% Token Count"]]} onChange={metric => onChange({ metric })} />
     <ChartSelect label="Breakdown" value={split} options={tokenSplits.map(([value, text]) => [value, text, value === "type" && cost ? "Cost is priced per request, not per token type" : undefined])}
-      title={cost ? "Token type is only available for token metrics; cost is priced per request." : "How each chart column is divided"} onChange={next => onChange({ split: next })} />
-    <PeriodControl view={view} onChange={onChange} />
-    <RangeControl bounds={bounds} onChange={from => onTimeFilter(current => withTimeRange(current, usageTime, from))} />
+      title={cost ? "Token type is only available for token metrics; cost is priced per request." : "How each chart column is divided"} onChange={next => onChange({ split: next, seriesLimit: 15, selection: { values: [], excluded: false } })} />
+    <DisplayControl value={view.display} onChange={display => onChange({ display })} />
+    <RangeControl bounds={bounds} includeTime={isHourly(view.period)} onChange={(from, to) => onTimeFilter(current => withTimeRange(current, usageTime, from, to))} />
     <ScaleControl value={view.scale} onChange={scale => onChange({ scale })} percent={percent} />
-    <RollingControl value={view.rollingPeriods} period={view.period} count={periodCount} onChange={rollingPeriods => onChange({ rollingPeriods })} />
+    <PeriodControl view={view} onChange={onChange} />
+    <RollingControl value={cumulative ? 0 : view.rollingPeriods} period={view.period} count={periodCount} disabled={cumulative} note={cumulative ? "Cumulative totals use original amounts. Smoothing applies per interval." : undefined} onChange={rollingPeriods => onChange({ rollingPeriods })} />
   </>;
-  return <StackedColumns title={title} controls={controls} series={series.length ? series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={buckets} period={view.period} periodCount={periodCount} rollingPeriods={view.rollingPeriods} scale={view.scale}
+  return <StackedColumns title={title} controls={controls} series={series.length ? series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={buckets} period={view.period} periodCount={periodCount} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={cumulativeStart} scale={view.scale}
     format={percent ? value => `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })}%` : cost ? formatUSD : compactNumber}
     tickFormat={percent ? value => `${value}%` : cost ? costTick : compactNumber}
     noun={view.metric === "tokens" ? "tokens" : ""} loading={result.loading} error={result.error} legend={series.length > 0} percent={percent}
-    selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => setSeriesLimit(limit => limit + 5)} onRange={pickRange(onTimeFilter, usageTime, view.period, periodCount, period => onChange({ period }))} />;
+    selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => onChange({ seriesLimit: Math.min(1000, seriesLimit + 5) })} onRange={pickRange(onTimeFilter, usageTime, view.period, periodCount, period => onChange({ period }))} />;
 }
 
 function PresetRow({ label, presets, query, chart, onApply, clear }: { label: string; presets: UsagePreset[]; query: QueryTableApi<Row>["query"]; chart?: TokenChartView; onApply: (preset: UsagePreset | null) => void; clear?: boolean }) {
@@ -1115,7 +1144,7 @@ function PresetRow({ label, presets, query, chart, onApply, clear }: { label: st
 
 function TokenUsage({ scopeWhere, appliedScope, onTimeRangeChange }: { scopeWhere?: WhereTerm[]; appliedScope?: React.MutableRefObject<WhereTerm[]>; onTimeRangeChange?: () => void } = {}) {
   const [chart, setChart] = useState<TokenChartView>(() => readStored(tokenChartKey, defaultTokenChart, view =>
-    ["tokens", "cost", "percent", "percent_cost"].includes(view.metric) && tokenSplits.some(([value]) => value === view.split) && Object.hasOwn(chartPeriods, view.period) && validPeriodCount(view.hours) && validPeriodCount(view.days) && validRollingPeriods(view.rollingPeriods) && validChartScale(view.scale)));
+    ["tokens", "cost", "percent", "percent_cost"].includes(view.metric) && tokenSplits.some(([value]) => value === view.split) && Object.hasOwn(chartPeriods, view.period) && validPeriodCount(view.hours) && validPeriodCount(view.days) && validRollingPeriods(view.rollingPeriods) && validChartScale(view.scale) && validChartDisplay(view.display) && validChartPresentation(view)));
   const update = (next: Partial<TokenChartView>) => setChart(previous => { const merged = { ...previous, ...next }; store(tokenChartKey, merged); return merged; });
   return <QuerySurface dataset="usage" scopeWhere={scopeWhere} appliedScope={appliedScope} header={api => {
     const where = toAggregationQuery({ ...api.query, aggregations: [] }, schemas.usage).where;
@@ -1247,32 +1276,44 @@ function useWritingSeries(body: object | null, reload: number) {
 // The chart and totals cover only the days inside the time filter. Split by
 // a row field, the key filters the table as on the tokens chart; the input
 // kinds are not rows, so clicking one only narrows the chart.
-function WritingPanel({ where, onFilter, status, reload }: { where: WhereTerm[]; onFilter: FilterChange; status: AuthorshipStatus | null; reload: number }) {
-  const [view, setView] = useState(() => readStored(writingViewKey, { period: "week" as ChartPeriod, scope: "typed" as "typed" | "all", split: "kind" as WritingSplit, hours: 6, days: 3, rollingPeriods: 0, scale: defaultChartScale }, value => Object.hasOwn(chartPeriods, value.period) && validPeriodCount(value.hours) && validPeriodCount(value.days) && ["typed", "all"].includes(value.scope) && writingSplits.some(([option]) => option === value.split) && validRollingPeriods(value.rollingPeriods) && validChartScale(value.scale)));
-  const update = (next: Partial<typeof view>) => setView(previous => { const merged = { ...previous, ...next }; store(writingViewKey, merged); return merged; });
-  const [kinds, setKinds] = useState<SliceSelection<string>>({ values: [], excluded: false });
-  const [seriesLimit, setSeriesLimit] = useState(15);
+const defaultWritingChart = { period: "day" as ChartPeriod, scope: "typed" as "typed" | "all", split: "kind" as WritingSplit, hours: 6, days: 3, rollingPeriods: 0, scale: defaultChartScale, display: "interval" as ChartDisplay };
+type WritingChartView = typeof defaultWritingChart & ChartPresentation;
+const validWritingChart = (value: WritingChartView) => Object.hasOwn(chartPeriods, value.period) && validPeriodCount(value.hours) && validPeriodCount(value.days) && ["typed", "all"].includes(value.scope) && writingSplits.some(([option]) => option === value.split) && validRollingPeriods(value.rollingPeriods) && validChartScale(value.scale) && validChartDisplay(value.display) && validChartPresentation(value);
+function WritingPanel({ where, onFilter, status, reload, chartOnly = false, viewOverride, onViewChange }: { where: WhereTerm[]; onFilter: FilterChange; status: AuthorshipStatus | null; reload: number; chartOnly?: boolean; viewOverride?: WritingChartView; onViewChange?: (next: Partial<WritingChartView>) => void }) {
+  const [savedView, setView] = useState<WritingChartView>(() => readStored(writingViewKey, { ...defaultWritingChart, period: "week" as ChartPeriod }, validWritingChart));
+  const view = viewOverride ?? savedView;
+  const update = (next: Partial<typeof view>) => {
+    if (onViewChange) { onViewChange(next); return; }
+    setView(previous => { const merged = { ...previous, ...next }; store(writingViewKey, merged); return merged; });
+  };
+  const kinds = view.selection ?? { values: [], excluded: false };
+  const seriesLimit = view.seriesLimit ?? 15;
   const periodCount = chartPeriodCount(view);
+  const cumulative = view.display === "cumulative";
   const hourly = isHourly(view.period);
   const bounds = timeBounds(where, writingTime);
   const window = { hourly, start: bounds.from?.toISOString(), end: bounds.to?.toISOString(), from: bounds.from ? localDay(bounds.from) : undefined, to: bounds.to ? localDay(new Date(bounds.to.getTime() - 1)) : undefined };
   const split = view.split === "kind" ? null : view.split;
-  useEffect(() => setSeriesLimit(15), [split]);
   const selection = split ? readSlice(where, split) : kinds;
   const chosen = selection.values.map(value => value ?? "");
   const chartWhere = split ? where.filter(term => !isSliceTerm(term, split)) : where;
+  const requestedWhere = smoothingWhere(chartWhere, writingTime, view.period, cumulative ? 0 : view.rollingPeriods, periodCount);
+  const requestedBounds = timeBounds(requestedWhere, writingTime);
+  const chartWindow = { hourly, start: requestedBounds.from?.toISOString(), end: requestedBounds.to?.toISOString(), from: requestedBounds.from ? localDay(requestedBounds.from) : undefined, to: requestedBounds.to ? localDay(new Date(requestedBounds.to.getTime() - 1)) : undefined };
   // Without a key filter, one request answers both the totals and the chart.
-  const separate = chartWhere.length !== where.length;
+  const separate = chartWhere.length !== where.length || requestedWhere !== chartWhere;
   const data = useWritingSeries({ where, ...window, ...(split && !separate ? { split } : {}) }, reload);
-  const chart = useWritingSeries(separate ? { where: chartWhere, split, ...window } : null, reload);
+  const chart = useWritingSeries(separate ? { where: requestedWhere, ...(split ? { split } : {}), ...chartWindow } : null, reload);
   const chartData = separate ? chart : data;
   const series = data.series, totals = series?.totals ?? {};
   const groups = view.scope === "typed" ? writingGroups.slice(0, 1) : writingGroups;
-  const { chartSeries, buckets } = useMemo(() => {
-    const timeline = hourly ? series?.hourly ?? [] : series?.daily ?? [];
+  const { chartSeries, buckets, cumulativeStart } = useMemo(() => {
+    const timeline = hourly ? chartData.series?.hourly ?? [] : chartData.series?.daily ?? [];
     const days = split ? (chartData.series?.split ?? []).map(entry => entry.day) : timeline.map(day => day.day);
-    const buckets = periodBuckets(view.period, ...chartSpan(bounds, earliestKey(days)), periodCount), byKey = new Map(buckets.map(bucket => [bucket.key, bucket])), messages = new Map<string, number>();
-    const bucketOf = (day: unknown) => periodKey(parseDay(String(day)), view.period, periodCount);
+    const buckets = chartBucketsWithHistory(view.period, ...chartSpan(bounds, earliestKey(days)), periodCount, days.map(day => parseDay(String(day))),
+      !cumulative && view.rollingPeriods > 1 ? requestedBounds.from ?? earliestKey(days) : undefined), byKey = new Map(buckets.map(bucket => [bucket.key, bucket])), messages = new Map<string, number>();
+    const cumulativeStart = bounds.from ?? earliestKey(days);
+    const bucketOf = (day: unknown) => plottedBucketKey(parseDay(String(day)), view.period, periodCount, buckets, view.display);
     for (const day of timeline) {
       const bucket = byKey.get(bucketOf(day.day));
       if (!bucket) continue;
@@ -1280,15 +1321,15 @@ function WritingPanel({ where, onFilter, status, reload }: { where: WhereTerm[];
       if (!split) for (const group of writingGroups) bucket.values[group.key] = (bucket.values[group.key] ?? 0) + groupTotal(day, group, "words");
     }
     for (const bucket of buckets) bucket.detail = `${(messages.get(bucket.key) ?? 0).toLocaleString()} messages with typed text`;
-    if (!split) return { chartSeries: groups.map(group => ({ key: group.key, label: group.label, color: group.color, value: group.key })), buckets };
+    if (!split) return { chartSeries: groups.map(group => ({ key: group.key, label: group.label, color: group.color, value: group.key })), buckets, cumulativeStart };
     const rows = (chartData.series?.split ?? []).map(entry => [bucketOf(entry.day), entry.value ?? "", Number(view.scope === "typed" ? entry.typed_words : entry.words) || 0] as [string, string, number]);
-    return { chartSeries: foldSeries(rows, byKey, name => writingSplitLabel(split, name), undefined, chosen, seriesLimit, `writing:${split}`), buckets };
-  }, [series, chartData.series, split, view.scope, view.period, periodCount, hourly, bounds.from?.getTime(), bounds.to?.getTime(), chosen.join("\u0000"), seriesLimit]);
+    return { chartSeries: foldSeries(rows, byKey, name => writingSplitLabel(split, name), undefined, chosen, seriesLimit, `writing:${split}`), buckets, cumulativeStart };
+  }, [series, chartData.series, split, view.scope, view.period, periodCount, hourly, bounds.from?.getTime(), bounds.to?.getTime(), chosen.join("\u0000"), seriesLimit, view.rollingPeriods, cumulative]);
   useUsageChartPalette(split, chartSeries);
   const selected = chartSeries.filter(item => item.value !== undefined && chosen.includes(item.value)).map(item => item.key);
   function select(key: string | null, action: LegendAction) {
     const value = key === null ? undefined : chartSeries.find(item => item.key === key)?.value;
-    if (!split) setKinds(current => updateSlice(current, value ?? "", action));
+    if (!split) update({ selection: updateSlice(kinds, value ?? "", action) });
     else onFilter(current => withSlice(current, split, updateSlice(readSlice(current, split), value || null, action)));
   }
   const typed = Number(totals.typed_words) || 0, pasted = Number(totals.pasted_words) || 0, typedMessages = Number(totals.typed_messages) || 0;
@@ -1301,7 +1342,7 @@ function WritingPanel({ where, onFilter, status, reload }: { where: WhereTerm[];
   const allChars = writingGroups.reduce((sum, group) => sum + groupTotal(totals, group, "chars"), 0);
   return <section className="writing-panel" aria-label="Human Words">
     {data.error ? <div className="query-table-error">{data.error}</div> : null}
-    <div className="mcp-metrics usage-cards">
+    {chartOnly ? null : <div className="mcp-metrics usage-cards">
       {building ? card("Words you wrote", "Building…", "Classifying every retained user message") : <>
         {card("Words you wrote", compactNumber(typed), `Up to ${compactNumber(typed + pasted)} including text that only looks pasted${totals.first_day ? ` · since ${totals.first_day}` : ""}`)}
         {card("Last 30 days", compactNumber(recentTyped), `${recentMessages.toLocaleString()} messages with typed text`)}
@@ -1309,21 +1350,22 @@ function WritingPanel({ where, onFilter, status, reload }: { where: WhereTerm[];
         {card("Words per message", typedMessages ? Math.round(typed / typedMessages).toLocaleString() : "—", "average typed words, where any were typed")}
         {card("Novels", (typed / 90000).toFixed(1), "at 90,000 words each")}
       </>}
-    </div>
-    <StackedColumns title={`${view.scope === "typed" ? "Typed words" : "Words of user input"} per ${unit}${split ? ` by ${writingSplits.find(([value]) => value === split)?.[1].toLowerCase()}` : ""}`}
+    </div>}
+    <StackedColumns title={`${cumulative ? "Cumulative " : ""}${view.scope === "typed" ? "Typed words" : "Words of user input"}${cumulative ? "" : ` per ${unit}`}${split ? ` by ${writingSplits.find(([value]) => value === split)?.[1].toLowerCase()}` : ""}`}
       controls={<>
         <ChartSelect label="Metric" value={view.scope} options={[["typed", "Typed words"], ["all", "All user input"]]} onChange={scope => update({ scope })} />
         <ChartSelect label="Breakdown" value={view.split} options={writingSplits.map(([value, text]) => [value, value === "kind" ? "Text source" : text])}
-          title="How each chart column is divided" onChange={next => update({ split: next })} />
-        <PeriodControl view={view} onChange={update} />
-        <RangeControl bounds={bounds} onChange={from => onFilter(current => withTimeRange(current, writingTime, from))} />
+          title="How each chart column is divided" onChange={next => update({ split: next, seriesLimit: 15, selection: { values: [], excluded: false } })} />
+        <DisplayControl value={view.display} onChange={display => update({ display })} />
+        <RangeControl bounds={bounds} includeTime={isHourly(view.period)} onChange={(from, to) => onFilter(current => withTimeRange(current, writingTime, from, to))} />
         <ScaleControl value={view.scale} onChange={scale => update({ scale })} />
-        <RollingControl value={view.rollingPeriods} period={view.period} count={periodCount} onChange={rollingPeriods => update({ rollingPeriods })} />
+        <PeriodControl view={view} onChange={update} />
+        <RollingControl value={view.rollingPeriods} display={view.display} period={view.period} count={periodCount} onChange={rollingPeriods => update({ rollingPeriods })} />
       </>}
-      series={chartSeries} buckets={buckets} period={view.period} periodCount={periodCount} rollingPeriods={view.rollingPeriods} scale={view.scale} legend={chartSeries.length > 0}
+      series={chartSeries} buckets={buckets} period={view.period} periodCount={periodCount} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={cumulativeStart} scale={view.scale} legend={chartSeries.length > 0}
       format={value => value.toLocaleString()} tickFormat={compactNumber} noun="words" loading={chartData.loading} error={chartData.error}
-      selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => setSeriesLimit(limit => limit + 5)} onRange={pickRange(onFilter, writingTime, view.period, periodCount, period => update({ period }))} />
-    <div className="writing-mix">
+      selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => update({ seriesLimit: Math.min(1000, seriesLimit + 5) })} onRange={pickRange(onFilter, writingTime, view.period, periodCount, period => update({ period }))} />
+    {chartOnly ? null : <div className="writing-mix">
       <h3>Where user-turn text came from</h3>
       {!allChars ? <p className="muted">{data.loading ? "Loading…" : "No classified user messages match these filters."}</p> : <>
         <div className="writing-stack" role="img" aria-label={writingGroups.map(group => `${group.label} ${Math.round(100 * groupTotal(totals, group, "chars") / allChars)}%`).join(", ")}>
@@ -1337,7 +1379,7 @@ function WritingPanel({ where, onFilter, status, reload }: { where: WhereTerm[];
           </tr>; })}</tbody>
         </table>
       </>}
-    </div>
+    </div>}
   </section>;
 }
 
@@ -1399,47 +1441,192 @@ function WritingUsage({ onStatus }: { onStatus: (status: AuthorshipStatus | null
 type UsageView = "tokens" | "writing" | "carbon" | "conversations";
 const usageViewKey = "pharos-usage-view";
 
-// ?usage= picks the view; otherwise the last choice is kept.
+// ?analyze_view= picks the view; otherwise the last choice is kept.
 function initialUsageView(): UsageView {
   // Human Words and Carbon Impact read the live library.
   if (shared) return "tokens";
-  const requested = new URLSearchParams(location.search).get("usage");
+  const requested = new URLSearchParams(location.search).get("analyze_view");
   if (requested === "tokens" || requested === "writing" || requested === "carbon" || requested === "conversations") { store(usageViewKey, requested); return requested; }
   const saved = preferences().get<unknown>(usageViewKey, "tokens");
   return saved === "writing" || saved === "carbon" || saved === "conversations" ? saved : "tokens";
 }
 
+function useUsageDashboardState<T extends object>(defaults: T, valid: (value: T) => boolean, time: { first: string; last: string }) {
+  const read = () => {
+    const params = new URLSearchParams(location.search);
+    let view = defaults, error = "";
+    if (params.has("analyze_chart")) {
+      try {
+        const saved = JSON.parse(params.get("analyze_chart")!);
+        if (!saved || typeof saved !== "object" || Array.isArray(saved)) throw new Error();
+        const candidate = { ...defaults, ...saved };
+        if (valid(candidate)) view = candidate; else throw new Error();
+      }
+      catch { error = "This dashboard link has invalid chart settings. Choose another dashboard to reset it."; }
+    }
+    const from = new Date(); from.setHours(0, 0, 0, 0); from.setDate(from.getDate() - readUsageWorkspace(params).days + 1);
+    const restored = readDashboardQuery(params, { ...EMPTY_QUERY, where: withTimeRange([], time, from) });
+    return { view, where: restored.query.where, error: error || restored.error };
+  };
+  const [state, setState] = useState(read);
+  const live = useRef(state); live.current = state;
+  useEffect(() => {
+    if (state.error) return;
+    const url = new URL(location.href);
+    if (!url.searchParams.has("analyze_chart")) url.searchParams.set("analyze_chart", JSON.stringify(state.view));
+    if (!url.searchParams.has("analyze_filters")) url.searchParams.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where: state.where }));
+    history.replaceState(history.state, "", url);
+  }, []);
+  useEffect(() => {
+    const restore = () => setState(read());
+    window.addEventListener("pharos:route", restore);
+    return () => window.removeEventListener("pharos:route", restore);
+  }, [time.first, time.last]);
+  const update = (change: Partial<T>) => {
+    const view = { ...live.current.view, ...change };
+    live.current = { ...live.current, view }; setState(live.current); updateURI("analyze_chart", JSON.stringify(view));
+  };
+  const onFilter: FilterChange = change => {
+    const where = change(live.current.where);
+    live.current = { ...live.current, where }; setState(live.current); updateURI("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where }));
+  };
+  return { ...state, update, onFilter };
+}
+
+function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
+  if (topic === "tokens") return <TokenUsageDashboard />;
+  if (topic === "human") return <HumanUsageDashboard />;
+  if (topic === "parallelism") return <ParallelismUsageDashboard />;
+  if (topic === "tools") return <ToolsUsageDashboard />;
+  if (topic === "mcp") return <MCPUsageDashboard />;
+  if (topic === "carbon") return <CarbonImpact queryLinks={({ where, view }) => <>
+    <UsageDashboardLinks dataset="usage" query={{ ...EMPTY_QUERY, where, aggregations: [sum(view.metric === "energy" ? "energy_wh" : "co2e_g", [isHourly(view.period) ? "hour" : view.period === "days" ? "day" : view.period, ...(view.split === "type" ? [] : [view.split === "tier" ? "carbon_tier" : view.split])], view.metric === "energy" ? "Estimated Wh" : "Estimated CO₂e (g)")] }} currentURL="/analyze?analyze_view=carbon" />
+    <p className="usage-dashboard-note">Grouped rows show total estimates with your current Carbon assumptions. Token-type components are combined; the chart keeps their breakdown.</p>
+  </>} />;
+  return <RecordUsageDashboard topic={topic} />;
+}
+
+function ParallelismUsageDashboard() {
+  const [selection, setSelection] = useState<ConcurrencySelection | null>(null);
+  return <>
+    <ConcurrencyPanel routeParameter="analyze_parallelism" onSelection={setSelection} />
+    {selection ? <UsageDashboardLinks dataset="parallelism" query={parallelismSelectionQuery(selection)} currentURL="/analyze?analyze_view=tokens&machine_view=parallelism" /> : null}
+    <p className="usage-dashboard-note">The query view contains the hourly occupancy records touching the selected range, with the same repository, counting, gap, and ribbon selection. Those records describe threaded activity; model-only timing remains in the chart.</p>
+  </>;
+}
+
+function TokenUsageDashboard() {
+  const state = useUsageDashboardState({ ...defaultTokenChart, period: "day" as ChartPeriod }, view => ["tokens", "cost", "percent", "percent_cost"].includes(view.metric) && tokenSplits.some(([key]) => key === view.split) && Object.hasOwn(chartPeriods, view.period) && validPeriodCount(view.hours) && validPeriodCount(view.days) && validRollingPeriods(view.rollingPeriods) && validChartScale(view.scale) && validChartDisplay(view.display) && validChartPresentation(view), usageTime);
+  if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
+  return <>
+    <TokenChart where={state.where} onFilter={state.onFilter} view={state.view} onChange={state.update} />
+    <UsageDashboardLinks dataset="usage" query={{ ...EMPTY_QUERY, where: state.where, aggregations: tokenChartMetrics(state.view).map(clause => ({ ...clause, label: clause.label === "chart" ? costMetric(state.view) ? "API cost (USD)" : "Tokens" : clause.label })) }} currentURL="/analyze?analyze_view=tokens&machine_view=tokens" />
+    <p className="usage-dashboard-note">Drag across the graph to zoom into a period. Select legend entries to compare or exclude series. Cumulative lines total each series from the range start; click a point to select the range contributing to it. Grouped rows expose the underlying interval amounts before percentages, smoothing, accumulation, or folded series. API cost is the list-price equivalent; subscriptions and long-context premiums are excluded. ≈ marks assumed prices.</p>
+  </>;
+}
+
+function HumanUsageDashboard() {
+  const state = useUsageDashboardState<WritingChartView>(defaultWritingChart, validWritingChart, writingTime);
+  const status = useAuthorshipStatus(() => window.dispatchEvent(new Event("pharos:usage-refresh")));
+  if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
+  return <>
+    <WritingPanel chartOnly where={state.where} onFilter={state.onFilter} status={status} reload={0} viewOverride={state.view} onViewChange={state.update} />
+    <UsageDashboardLinks dataset="writing" groupedLabel="Open grouped conversation totals" query={{ ...EMPTY_QUERY, where: state.where, aggregations: [sum(state.view.scope === "typed" ? "typed_words" : "user_words", [state.view.split === "kind" ? "repository_name" : state.view.split], state.view.scope === "typed" ? "Typed words per conversation group" : "User input per conversation group")] }} currentURL="/analyze?analyze_view=writing" />
+    <p className="usage-dashboard-note">The grouped query contains whole-conversation totals for the matching conversations. The graph restricts their writing to the selected dates.</p>
+    <p className="usage-dashboard-note">Typed and dictated words are distinguished from pastes, harness instructions, and other supplied text. The full analysis includes the authorship breakdown and build status.</p>
+  </>;
+}
+
+function RecordUsageDashboard({ topic }: { topic: RecordDashboardTopic }) {
+  const spec = recordDashboards[topic];
+  const state = useUsageDashboardState({ metric: 0, split: spec.splits[0][0], period: "day" as "day" | "week" | "month", rollingPeriods: 0, display: "interval" as ChartDisplay, scale: defaultChartScale, seriesLimit: 15 }, view => Number.isInteger(view.metric) && Boolean(spec.measures[view.metric]) && spec.splits.some(([key]) => key === view.split) && ["day", "week", "month"].includes(view.period) && validRollingPeriods(view.rollingPeriods) && validChartScale(view.scale) && validChartDisplay(view.display) && validChartPresentation(view), { first: spec.time, last: spec.time });
+  const { view, where, onFilter } = state;
+  const cumulative = view.display === "cumulative";
+  const limit = view.seriesLimit;
+  const clause = recordDashboardMetric(topic, view.metric, view.period, view.split);
+  // Keep the legend's alternatives available while a series is selected.
+  const chartWhere = where.filter(term => !isSliceTerm(term, view.split));
+  const requestedWhere = smoothingWhere(chartWhere, { first: spec.time, last: spec.time }, view.period, cumulative ? 0 : view.rollingPeriods);
+  const result = useMetrics(spec.dataset as Dataset, requestedWhere, state.error ? [] : [clause], true);
+  const selection = readSlice(where, view.split), chosen = selection.values.map(value => value ?? "");
+  const bounds = timeBounds(where, { first: spec.time, last: spec.time });
+  const measure = spec.measures[view.metric];
+  const { buckets, series } = useMemo(() => {
+    const metrics = result.metrics[0]?.buckets ?? [];
+    const earliest = earliestKey(metrics.map(bucket => bucket.keys[0]));
+    const buckets = chartBucketsWithHistory(view.period, ...chartSpan(bounds, earliest), 1, metrics.map(bucket => parseDay(String(bucket.keys[0]))),
+      !cumulative && view.rollingPeriods > 1 ? timeBounds(requestedWhere, { first: spec.time, last: spec.time }).from ?? earliest : undefined);
+    const byKey = new Map(buckets.map(bucket => [bucket.key, bucket]));
+    const rows = metrics.map(bucket => [plottedBucketKey(parseDay(String(bucket.keys[0])), view.period, 1, buckets, view.display), String(bucket.keys[1] ?? ""), (Number(bucket.value) || 0) / (measure.divisor ?? 1)] as [string, string, number]);
+    const name = (value: string) => view.split === "activity" ? activityPresentation(value).label : (optionLabels(schemas[spec.dataset].fields).get(view.split)?.get(value) ?? value) || "Unspecified";
+    return { buckets, series: foldSeries(rows, byKey, name, undefined, chosen, limit, view.split) };
+  }, [result.metrics, view.period, view.split, view.metric, bounds.from?.getTime(), bounds.to?.getTime(), chosen.join("\u0000"), limit, view.rollingPeriods, cumulative]);
+  if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
+  return <>
+    <StackedColumns title={`${cumulative ? "Cumulative " : ""}${measure.label}${cumulative ? "" : ` per ${view.period}`} by ${spec.splits.find(([key]) => key === view.split)?.[1].toLowerCase()}`} controls={<>
+      <ChartSelect label="Metric" value={String(view.metric)} options={spec.measures.map((item, index) => [String(index), item.label])} onChange={metric => state.update({ metric: Number(metric) })} />
+      <ChartSelect label="Breakdown" value={view.split} options={spec.splits} onChange={split => state.update({ split, seriesLimit: 15 })} />
+      <DisplayControl value={view.display} onChange={display => state.update({ display })} />
+      <RangeControl bounds={bounds} onChange={(from, to) => onFilter(current => withTimeRange(current, { first: spec.time, last: spec.time }, from, to))} />
+      <ScaleControl value={view.scale} onChange={scale => state.update({ scale })} />
+      <ChartSelect label="Time Bucket" value={view.period} options={[["day", "Day"], ["week", "Week"], ["month", "Month"]]} onChange={period => state.update({ period })} />
+      <RollingControl value={view.rollingPeriods} display={view.display} period={view.period} onChange={rollingPeriods => state.update({ rollingPeriods })} />
+    </>} buckets={buckets} series={series} period={view.period} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={bounds.from ?? earliestKey(result.metrics[0]?.buckets.map(bucket => bucket.keys[0]) ?? [])} scale={view.scale} legend={series.length > 0} loading={result.loading} error={result.error} format={compactNumber} tickFormat={compactNumber} noun={measure.unit}
+      selected={series.filter(item => chosen.includes(String(item.value ?? ""))).map(item => item.key)} excluded={selection.excluded}
+      onSelect={(key, action) => onFilter(current => withSlice(current, view.split, updateSlice(readSlice(current, view.split), key === null ? null : String(series.find(item => item.key === key)?.value ?? "") || null, action)))}
+      onExpand={() => state.update({ seriesLimit: Math.min(1000, limit + 5) })} onRange={pickRange(onFilter, { first: spec.time, last: spec.time }, view.period, 1, period => state.update({ period: period === "month" || period === "week" ? period : "day" }))} />
+    <UsageDashboardLinks dataset={spec.dataset} query={{ ...EMPTY_QUERY, where, aggregations: [clause] }} currentURL={currentUsageAnalyses.find(item => item.topic === topic)!.url} />
+    <p className="usage-dashboard-note">{spec.note}</p>
+  </>;
+}
+
 function UsagePage() {
+  useLocationRevision();
+  if (shared || location.pathname !== "/analyze" || !isUsageWorkspace()) return <LegacyUsagePage />;
+  return <UsageChartColorsProvider>
+    <UsageWorkspace renderDashboard={topic => <GuidedUsageDashboard topic={topic} />} renderTable={dataset => <>
+      <QuerySurface dataset={dataset}
+        presets={api => <>
+          {dataset === "mcp_calls" ? <><MCPUsageNote /><MCPQueryPresets api={api} /></> : null}
+          <UsageQueryLinks dataset={dataset} api={api} />
+        </>}
+        controls={(_api, builder) => builder}
+        trailing={["tool_calls", "tools", "writing", "skill_usages"].includes(dataset) ? row => <UsageRowActions dataset={dataset} row={row} compact /> : undefined} />
+    </>} />
+  </UsageChartColorsProvider>;
+}
+
+function LegacyUsagePage() {
   useLocationRevision();
   const [view, setView] = useState<UsageView>(initialUsageView);
   const [status, setStatus] = useState<AuthorshipStatus | null>(null);
-  const [selectedCall, setSelectedCall] = useState<{ id: string; example?: Row } | null>(null);
+  const [selectedCall, setSelectedCall] = useState<{ id: string } | null>(null);
   useEffect(() => {
-    const restore = () => { if (location.pathname === "/usage") setView(initialUsageView()); };
+    const restore = () => { if (location.pathname === "/analyze") setView(initialUsageView()); };
     window.addEventListener("pharos:route", restore);
     return () => window.removeEventListener("pharos:route", restore);
   }, []);
   function choose(next: UsageView) {
     setView(next); store(usageViewKey, next);
     const url = new URL(location.href);
-    url.searchParams.set("usage", next);
+    url.searchParams.set("analyze_view", next);
     if (next !== "writing") { url.searchParams.delete("writing"); url.searchParams.delete("messages"); }
     pushMachineLocation(url);
   }
   const statusText = !status ? "" : status.error ? `Last update failed: ${status.error}` : status.running ? "Updating…" : status.built_at ? `Updated ${new Date(status.built_at).toLocaleString()}` : "Waiting to build";
   // Machine controls fetch scope choices and canonicalize their route on mount.
   // Keep them unmounted while another page (including Home) is active.
-  if (!shared && location.pathname !== "/usage") return null;
+  if (!shared && location.pathname !== "/analyze") return null;
   return <UsageChartColorsProvider><div className="pharos-query-page usage-page">
     <div className="view-heading library-heading usage-heading">
-      <div><h1>Usage</h1><p className="muted">{view === "tokens"
+      <div><h1>Analyze</h1><p className="muted">{view === "tokens"
         ? "Understand how your agents use tokens, work in parallel, and spend their time across repositories."
         : view === "writing"
           ? <>Text you typed or dictated into agent chats, per conversation or per message. Harness instructions, one-click prompts, attachments, pastes, and copied agent output are counted separately; filter the table and the chart and breakdown follow. {statusText ? <span className="meta">{statusText}</span> : null}</>
           : view === "conversations" ? "Compare human-supplied text estimates and recorded output across whole conversations, including delegated work. Human text is estimated once per classified message, excluding harness and automated spans; output retains the usage ledger’s time placement." : "Estimated inference electricity and CO₂e for the tokens in this library, using published research and explicit assumptions."}</p></div>
       <div className="usage-heading-actions">
         {!shared ? <ResetPage /> : null}
-        {shared ? null : <div className="library-view-toggle" role="group" aria-label="Usage view">
+        {shared ? null : <div className="library-view-toggle" role="group" aria-label="Analyze view">
           <button type="button" className={view === "writing" ? "active" : ""} aria-pressed={view === "writing"} onClick={() => choose("writing")}>Human Words</button>
           <button type="button" className={view === "tokens" ? "active" : ""} aria-pressed={view === "tokens"} onClick={() => choose("tokens")}>Machine Activity</button>
           <button type="button" className={view === "carbon" ? "active" : ""} aria-pressed={view === "carbon"} onClick={() => choose("carbon")}>Carbon Impact</button>
@@ -1447,11 +1634,11 @@ function UsagePage() {
         {view === "tokens" && !shared && (new URLSearchParams(location.search).get("machine_view") ?? preferences().get("pharos-machine-view", "tokens")) === "tokens" ? <div className="usage-heading-tools"><RefreshPricesButton /></div> : null}
       </div>
     </div>
-    {view === "conversations" ? <QuerySurface dataset="conversation_activity" /> : view === "tokens" ? shared ? <TokenUsage /> : <MachineActivity tokens={(where, applied, onTimeRangeChange) => <TokenUsage scopeWhere={where} appliedScope={applied} onTimeRangeChange={onTimeRangeChange} />} calls={props => <div className="machine-call-surface"><QuerySurface key={props.localRows ? "example" : "library"} dataset="tool_calls" namespace="machine_calls" {...props}
+    {view === "conversations" ? <QuerySurface dataset="conversation_activity" /> : view === "tokens" ? shared ? <TokenUsage /> : <MachineActivity tokens={(where, applied, onTimeRangeChange) => <TokenUsage scopeWhere={where} appliedScope={applied} onTimeRangeChange={onTimeRangeChange} />} calls={props => <div className="machine-call-surface"><QuerySurface dataset="tool_calls" namespace="machine_calls" {...props}
       controls={(api, builder) => <div id="machineRawCalls" className="machine-raw-calls"><div className="machine-panel-heading"><div><h3>Raw calls backing this selection</h3><p className="muted">{api.total?.toLocaleString() ?? "…"} matching calls · Full invocations, timings, statuses, and source conversations. Filters here also update the charts and analytics.</p></div></div>{builder}</div>}
-      trailing={row => <span className="machine-inline-actions"><button type="button" className="mcp-detail-button" onClick={() => setSelectedCall({ id: String(row.id), example: props.localRows ? { ...row, started_at: new Date(row.started_at).toISOString(), workspace_id: undefined } : undefined })}>Details</button>{!props.localRows && row.workspace_id ? <a href={`/work/${encodeURIComponent(row.workspace_id)}?conversation=${encodeURIComponent(row.conversation_id ?? "")}`}>Conversation ↗</a> : null}</span>} /></div>}
+      trailing={row => <span className="machine-inline-actions"><button type="button" className="mcp-detail-button" onClick={() => setSelectedCall({ id: String(row.id) })}>Details</button>{row.workspace_id ? <a href={`/work/${encodeURIComponent(row.workspace_id)}?conversation=${encodeURIComponent(row.conversation_id ?? "")}`}>Conversation ↗</a> : null}</span>} /></div>}
       parallelism={() => <div className="machine-call-surface"><QuerySurface dataset="parallelism" controls={(api, builder) => <div className="machine-raw-calls"><div className="machine-panel-heading"><div><h3>Parallel activity records</h3><p className="muted">{api.total?.toLocaleString() ?? "…"} hour-by-agent records · Estimated from transcript timestamps with your Parallelism counting and gap settings. Group, filter and chart them like any table.</p></div></div>{builder}</div>} /></div>} /> : view === "writing" ? <WritingUsage onStatus={setStatus} /> : <CarbonImpact />}
-    {selectedCall ? <ToolCallDialog id={selectedCall.id} exampleCall={selectedCall.example} onClose={() => setSelectedCall(null)} /> : null}
+    {selectedCall ? <ToolCallDialog id={selectedCall.id} onClose={() => setSelectedCall(null)} /> : null}
   </div></UsageChartColorsProvider>;
 }
 
@@ -1463,28 +1650,76 @@ const mcpMetrics = [
   { label: "Token cost", aggregations: [sum("estimated_output_tokens", ["tool_name"], "Output tokens by tool"), sum("truncated_count", ["tool_name"], "Truncated calls by tool")] },
 ];
 
-function MCPPage() {
+function MCPUsageNote() {
+  return <p className="usage-dashboard-note">Calls to Pharos's own MCP server. The latest 5,000 calls are retained; the selected dates can include fewer. Output tokens are estimated from response size, and response text is not stored. <UsageWorkspaceLink href="/settings/mcp">MCP settings<Icon name="arrow-right" /></UsageWorkspaceLink></p>;
+}
+
+function MCPQueryPresets({ api }: { api: QueryTableApi<Row> }) {
+  return <details className="usage-query-search"><summary>Saved MCP analyses</summary><div className="usage-presets" role="group" aria-label="MCP metric presets">
+    {mcpMetrics.map(preset => <QueryChip key={preset.label} title={preset.label} description={`Explore ${preset.label.toLowerCase()} in MCP calls`} onClick={() => api.setQuery(previous => ({ ...exitGrouping(previous), aggregations: preset.aggregations, offset: 0 }))} />)}
+    <button type="button" className="usage-preset-clear" onClick={() => api.setQuery(previous => ({ ...previous, aggregations: [], offset: 0 }))}>Clear metrics</button>
+  </div></details>;
+}
+
+function MCPUsageDashboard() {
+  const state = useUsageDashboardState(defaultMCPDashboard, validMCPDashboard, { first: "called_at", last: "called_at" });
+  const { view } = state;
+  const cumulative = view.view === "trend" && view.display === "cumulative";
+  const baseQuery = mcpDashboardQuery(view, state.where);
+  const requestedWhere = smoothingWhere(baseQuery.where, { first: "called_at", last: "called_at" }, view.period, view.view === "trend" && !cumulative ? view.rollingPeriods ?? 0 : 0);
+  const ranking = useMetrics("mcp_calls", requestedWhere, view.view === "trend" && !state.error ? [mcpTrendRanking(view.split)] : [], true);
+  const pending = view.view === "trend" && ranking.loading;
+  const query = view.view === "trend" ? withMCPTrendGroups(baseQuery, view.split, (ranking.metrics[0]?.buckets ?? []).map(bucket => bucket.keys[0] === null ? null : String(bucket.keys[0]))) : baseQuery;
+  const clause = query.aggregations![0];
+  const result = useMetrics("mcp_calls", smoothingWhere(query.where, { first: "called_at", last: "called_at" }, view.period, view.view === "trend" && !cumulative ? view.rollingPeriods ?? 0 : 0), state.error || pending || ranking.error ? [] : cumulative ? query.aggregations! : [clause], true);
+  const bounds = timeBounds(state.where, { first: "called_at", last: "called_at" });
+  const metric = useMemo(() => cumulative ? cumulativeMCPTrend(view, result.metrics,
+    ...chartSpan(bounds, earliestKey(result.metrics[0]?.buckets.map(bucket => bucket.keys[0]) ?? []))) : view.view === "trend" ? rollingMetricTrend(result.metrics[0], view.period, view.rollingPeriods ?? 0,
+    ...chartSpan(bounds, earliestKey(result.metrics[0]?.buckets.map(bucket => bucket.keys[0]) ?? [])), timeBounds(requestedWhere, { first: "called_at", last: "called_at" }).from ?? earliestKey(result.metrics[0]?.buckets.map(bucket => bucket.keys[0]) ?? [])) : result.metrics[0], [result.metrics, view.view, view.period, view.rollingPeriods, bounds.from?.getTime(), bounds.to?.getTime(), cumulative, view.metric]);
+  if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
+  return <section className="usage-mcp-dashboard">
+    <div className="usage-tools-controls">
+      <ChartSelect label="Metric" value={view.metric} options={Object.entries(mcpDashboardMeasures).map(([key, item]) => [key as typeof view.metric, item.label])} onChange={metric => state.update({ metric })} />
+      <ChartSelect label="Breakdown" value={view.split} options={Object.entries(mcpDashboardBreakdowns).map(([key, label]) => [key as typeof view.split, label])} onChange={split => state.update({ split })} />
+      <ChartSelect label="Display" value={view.view === "compare" ? "compare" : view.display ?? "interval"} options={[["compare", "Compare groups"], ["interval", "Per interval"], ["cumulative", "Cumulative"]]} onChange={display => state.update(display === "compare" ? { view: "compare" } : { view: "trend", display })} />
+      <RangeControl editable shortRanges bounds={timeBounds(state.where, { first: "called_at", last: "called_at" })} onChange={(from, to) => state.onFilter(current => withTimeRange(current, { first: "called_at", last: "called_at" }, from, to))} />
+      {view.view === "trend" ? <ChartSelect label="Time Bucket" value={view.period} options={[["day", "Day"], ["week", "Week"], ["month", "Month"]]} onChange={period => state.update({ period })} /> : null}
+      <RollingControl value={view.rollingPeriods ?? 0} display={cumulative ? "cumulative" : "interval"} period={view.period} disabled={view.view !== "trend"} note={view.view !== "trend" ? "Choose Per interval to smooth time buckets." : undefined} onChange={rollingPeriods => state.update({ rollingPeriods })} />
+    </div>
+    <div className="usage-mcp-measure-note"><p className="usage-dashboard-note">{mcpDashboardMeasures[view.metric].note}{view.view === "trend" ? ` Up to ${mcpTrendGroups} busiest groups by call volume in this range.` : ""}{view.split === "query_source" ? " This is the caller's explicit archive-source filter; unscoped requests have no recorded source." : ""}</p><button type="button" onClick={() => window.dispatchEvent(new Event("pharos:usage-refresh"))}>Refresh</button></div>
+    {view.view === "trend" && !cumulative && (view.rollingPeriods ?? 0) > 1 ? <p className="usage-dashboard-note">{view.rollingPeriods}-{view.period} trailing average of interval values; empty intervals count as zero. Points and query links open the original interval records and measures.</p> : null}
+    {cumulative ? <p className="usage-dashboard-note">Values run from the selected range start. Rates and averages use running totals and counts. Largest output is the largest response so far. Select a point to open all contributing records through that interval. Grouped queries show the original interval measures.</p> : null}
+    {result.error || ranking.error ? <p className="query-table-error" role="alert">{result.error || ranking.error}</p> : <MetricCard clause={cumulative ? { ...clause, label: `Cumulative ${clause.label}`, display: { ...clause.display, kind: "line" as const, yLabel: `Cumulative ${clause.label}` } } : clause} result={metric as AggregationResultEntry | undefined} fields={schemas.mcp_calls.fields} loading={result.loading || pending} renderers={defaultRenderers} onInspect={bucket => {
+      const records = inspectDashboardBucket(query, bucket, clause, schemas.mcp_calls, cumulative);
+      if (records) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset: "mcp_calls", query: records }, new URLSearchParams(location.search)));
+    }} />}
+    {!pending && !ranking.error ? <UsageDashboardLinks dataset="mcp_calls" query={query} /> : null}
+    <MCPUsageNote />
+  </section>;
+}
+
+function MCPSettings() {
   useLocationRevision();
-  const active = location.pathname === "/mcp";
+  return location.pathname === "/settings/mcp" ? <MCPSettingsPage /> : null;
+}
+
+function MCPSettingsPage() {
   const [status, setStatus] = useState<MCPStatus | null>(null);
-  const [history, setHistory] = useState<MCPHistory | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [readErrors, setReadErrors] = useState({ status: "", history: "" });
+  const [readErrors, setReadErrors] = useState({ status: "" });
   const [copied, setCopied] = useState("");
-  const [selectedCall, setSelectedCall] = useState<string | null>(null);
-  useEffect(() => { if (!active) setSelectedCall(null); }, [active]);
   const monitor = useMemo(() => createMCPMonitor({
-    status: setStatus, history: setHistory,
+    status: setStatus,
     error: (part, failure) => setReadErrors(previous => ({ ...previous, [part]: failure?.message ?? "" })),
   }), []);
 
   useEffect(() => {
-    if (!active || busy) return;
+    if (busy) return;
     void monitor.refresh();
     const timer = window.setInterval(() => void monitor.refresh(), 5000);
     return () => { window.clearInterval(timer); monitor.stop(); };
-  }, [active, busy, monitor]);
+  }, [busy, monitor]);
 
   async function toggle() {
     if (!status) return;
@@ -1504,36 +1739,15 @@ function MCPPage() {
     catch { setError("Could not copy to clipboard. Select the text and copy it manually."); }
   }
 
-  function applyMetricPreset(aggregations: AggregationClause[] | null) {
-    tableApis.get("mcp_calls")?.setQuery(previous => ({ ...previous, aggregations: aggregations ?? [], offset: 0 }));
-  }
-
   const connection = status ? JSON.stringify({ mcpServers: { pharos: { command: status.command, args: status.args } } }, null, 2) : "";
   const prompt = status ? `Add Pharos as a local stdio MCP server. Call list_repositories with the current working directory as path (or the repository name as query) to find this repository, then use search_conversations with that repository filter, a small limit, and a max_output_tokens budget. Open get_conversation_overview for promising results, search_conversation_passages for a specific topic, and get_conversation_messages only around cited message IDs. Treat previews as leads and inspect the cited evidence before relying on an outcome. Pharos is read-only. If its tools are unavailable, enable MCP in the Pharos app and reconnect this agent client. Use list_findings and get_finding for recurring problems Pharos found in past work; reading them never starts a measurement.\n\nConnection definition:\n${connection}` : "";
-  const stats = history?.stats;
   return <div className="mcp-page pharos-query-page">
-    <div className="view-heading"><div><h1>MCP</h1><p className="muted">Let local agents search past conversations in small steps. Review calls to spot oversized responses and failed queries.</p></div><div className="mcp-page-actions"><ResetPage /><button type="button" className="mcp-refresh" disabled={busy} onClick={() => { setError(""); void monitor.refresh(true); tableApis.get("mcp_calls")?.refresh(); }}>Refresh</button></div></div>
+    <div className="mcp-settings-actions"><UsageWorkspaceLink href={usageWorkspaceURL({ topic: "mcp" })}>View MCP usage<Icon name="arrow-right" /></UsageWorkspaceLink><button type="button" className="mcp-refresh" disabled={busy} onClick={() => { setError(""); void monitor.refresh(true); }}>Refresh</button></div>
     {error ? <div className="query-table-error" role="alert">{error}</div> : null}
     {readErrors.status ? <div className="query-table-error" role="alert">Connection settings could not be loaded: {readErrors.status}</div> : null}
-    {readErrors.history ? <div className="query-table-error" role="alert">Call history summary could not be loaded: {readErrors.history}</div> : null}
     <section className="mcp-card mcp-status-card" aria-label="MCP availability">
       <div><span className={`mcp-status ${status?.enabled ? "enabled" : "disabled"}`}>{status ? status.enabled ? "Available" : "Off" : readErrors.status ? "Unavailable" : "Loading"}</span><h2>Agent access</h2><p className="muted">{status?.note ?? (readErrors.status ? "Use Refresh to try loading connection settings again." : "Loading connection settings…")}</p>{status?.install_location ? <p className="muted">Pharos installation: <code>{status.install_location}</code></p> : null}</div>
       <button type="button" className={`toggle ${status?.enabled ? "on" : ""}`} role="switch" aria-checked={Boolean(status?.enabled)} aria-label="Enable MCP" disabled={!status || busy} onClick={() => void toggle()} />
-    </section>
-    <section className="mcp-history" aria-label="MCP call history">
-      <div className="mcp-card-heading"><div><h2>Call history</h2><p className="muted">Newest first by default. Token counts are estimates from response size; no response text is stored. The latest 5,000 calls are retained. Summary cards cover all retained calls; table filters and metrics apply below.</p></div></div>
-      <div className="mcp-metrics">
-        <div className="mcp-metric"><span>Calls</span><strong>{stats?.total_calls?.toLocaleString() ?? "—"}</strong></div>
-        <div className="mcp-metric"><span>Errors</span><strong>{stats?.failed_calls?.toLocaleString() ?? "—"}</strong></div>
-        <div className="mcp-metric"><span>Average output</span><strong>{stats ? `${compactNumber(stats.average_output_tokens)} est. tokens` : "—"}</strong></div>
-        <div className="mcp-metric"><span>Largest output</span><strong>{stats ? `${compactNumber(stats.largest_output_tokens)} est. tokens` : "—"}</strong></div>
-        <div className="mcp-metric"><span>Truncated</span><strong>{stats?.truncated_calls?.toLocaleString() ?? "—"}</strong></div>
-      </div>
-      <div className="usage-presets" role="group" aria-label="MCP metric presets">
-        {mcpMetrics.map(preset => <QueryChip key={preset.label} title={preset.label} description={`Explore ${preset.label.toLowerCase()} in MCP calls`} onClick={() => applyMetricPreset(preset.aggregations)} />)}
-        <button type="button" className="usage-preset-clear" onClick={() => applyMetricPreset(null)}>Clear metrics</button>
-      </div>
-      <QuerySurface dataset="mcp_calls" trailing={row => <button type="button" className="mcp-detail-button" disabled={row.id == null} onClick={() => setSelectedCall(String(row.id))}>Details</button>} />
     </section>
     <div className="mcp-setup-grid">
       <section className="mcp-card"><div className="mcp-card-heading"><div><h2>Connection</h2><p className="muted">Add this stdio server in an agent client’s MCP settings. The client launches Pharos locally.</p></div><button type="button" disabled={!status} onClick={() => void copy("connection", connection)}>{copied === "connection" ? "Copied" : "Copy JSON"}</button></div><pre className="mcp-code"><code>{connection || (readErrors.status ? "Connection settings unavailable. Use Refresh to try again." : "Loading…")}</code></pre><p className="mcp-fineprint">Client settings formats vary. Use the command and args shown here if your client does not accept this JSON shape.</p></section>
@@ -1542,7 +1756,7 @@ function MCPPage() {
         <ul className="mcp-skill-paths">{Object.entries(status.skill.paths ?? {}).map(([harness, where]) => <li key={harness}><span>{harness === "claude" ? "Claude Code" : harness === "codex" ? "Codex" : harness}</span><code>{where}</code></li>)}</ul>
         <pre className="mcp-prompt">{status.skill.text}</pre></section> : null}
     </div>
-    {selectedCall ? <MCPCallDetails key={selectedCall} id={selectedCall} onClose={() => setSelectedCall(null)} /> : null}
+
   </div>;
 }
 
@@ -1583,6 +1797,53 @@ const toolSummaryPresets: Array<{ group: string; presets: ToolPreset[] }> = [
   ] },
 ];
 
+function ToolsUsageDashboard() {
+  const state = useUsageDashboardState(defaultToolDashboard, validToolDashboard, { first: "day", last: "day" });
+  const { view } = state;
+  const cumulative = view.view === "trend" && view.display === "cumulative";
+  let where: WhereTerm[] = [], chartWhere: WhereTerm[] = [], error = state.error;
+  const requestedWhere = smoothingWhere(state.where, { first: "day", last: "day" }, view.period, view.view === "trend" && !cumulative ? view.rollingPeriods ?? 0 : 0);
+  try {
+    where = toolDashboardWhere(state.where, timeBounds(state.where, { first: "day", last: "day" }));
+    chartWhere = toolDashboardWhere(requestedWhere, timeBounds(requestedWhere, { first: "day", last: "day" }));
+  }
+  catch (failure) { error = failure instanceof Error ? failure.message : String(failure); }
+  const baseQuery = toolDashboardQuery(view, where);
+  const chartBaseQuery = toolDashboardQuery(view, chartWhere);
+  const ranking = useMetrics("tools", chartBaseQuery.where, view.view === "trend" && !error ? [toolTrendRanking(view.split)] : [], true);
+  const pending = view.view === "trend" && ranking.loading;
+  const query = view.view === "trend" ? withToolTrendGroups(baseQuery, view.split, (ranking.metrics[0]?.buckets ?? []).map(bucket => bucket.keys[0] === null ? null : String(bucket.keys[0]))) : baseQuery;
+  const chartQuery = view.view === "trend" ? withToolTrendGroups(chartBaseQuery, view.split, (ranking.metrics[0]?.buckets ?? []).map(bucket => bucket.keys[0] === null ? null : String(bucket.keys[0]))) : chartBaseQuery;
+  const clause = query.aggregations![0];
+  const result = useMetrics("tools", chartQuery.where, error || pending || ranking.error ? [] : cumulative ? query.aggregations! : [clause], true);
+  const bounds = timeBounds(state.where, { first: "day", last: "day" });
+  const metric = useMemo(() => cumulative ? cumulativeToolTrend(view, result.metrics,
+    ...chartSpan(bounds, earliestKey(result.metrics[0]?.buckets.map(bucket => bucket.keys[0]) ?? []))) : view.view === "trend" ? rollingMetricTrend(result.metrics[0], view.period, view.rollingPeriods ?? 0,
+    ...chartSpan(bounds, earliestKey(result.metrics[0]?.buckets.map(bucket => bucket.keys[0]) ?? [])), timeBounds(requestedWhere, { first: "day", last: "day" }).from ?? earliestKey(result.metrics[0]?.buckets.map(bucket => bucket.keys[0]) ?? [])) : result.metrics[0], [result.metrics, view.view, view.period, view.rollingPeriods, bounds.from?.getTime(), bounds.to?.getTime(), cumulative, view.metric]);
+  const measure = toolDashboardMeasures[view.metric];
+  if (error) return <p className="query-table-error" role="alert">{error}</p>;
+  return <section className="usage-tools-dashboard">
+    <ToolLedgerBanner />
+    <div className="usage-tools-controls">
+      <ChartSelect label="Metric" value={view.metric} options={Object.entries(toolDashboardMeasures).map(([key, item]) => [key as typeof view.metric, item.label])} onChange={metric => state.update({ metric })} />
+      <ChartSelect label="Breakdown" value={view.split} options={Object.entries(toolDashboardBreakdowns).map(([key, item]) => [key as typeof view.split, item.label])} onChange={split => state.update({ split })} />
+      <ChartSelect label="Display" value={view.view === "compare" ? "compare" : view.display ?? "interval"} options={[["compare", "Compare groups"], ["interval", "Per interval"], ["cumulative", "Cumulative"]]} onChange={display => state.update(display === "compare" ? { view: "compare" } : { view: "trend", display })} />
+      <RangeControl bounds={bounds} onChange={(from, to) => state.onFilter(current => withTimeRange(current, { first: "day", last: "day" }, from, to))} />
+      {view.view === "trend" ? <ChartSelect label="Time Bucket" value={view.period} options={[["day", "Day"], ["week", "Week"], ["month", "Month"]]} onChange={period => state.update({ period })} /> : null}
+      <RollingControl value={view.rollingPeriods ?? 0} display={cumulative ? "cumulative" : "interval"} period={view.period} disabled={view.view !== "trend"} note={view.view !== "trend" ? "Choose Per interval to smooth time buckets." : undefined} onChange={rollingPeriods => state.update({ rollingPeriods })} />
+    </div>
+    <p className="usage-dashboard-note">{toolDashboardBreakdowns[view.split].note}{view.view === "trend" ? ` · Up to ${toolTrendGroups} busiest groups by call volume in this range` : ""} · {measure.note}</p>
+    {view.view === "trend" && !cumulative && (view.rollingPeriods ?? 0) > 1 ? <p className="usage-dashboard-note">{view.rollingPeriods}-{view.period} trailing average of interval values; empty intervals count as zero. Points and query links open the original interval records and measures.</p> : null}
+    {cumulative ? <p className="usage-dashboard-note">Values run from the selected range start. Rates and averages use running totals and counts. Select a point to open all contributing records through that interval. Grouped queries show the original interval measures.</p> : null}
+    {result.error || ranking.error ? <p className="query-table-error" role="alert">{result.error || ranking.error}</p> : <MetricCard clause={cumulative ? { ...clause, label: `Cumulative ${clause.label}`, display: { ...clause.display, kind: "line" as const, yLabel: `Cumulative ${clause.label}` } } : clause} result={metric as AggregationResultEntry | undefined} fields={schemas.tools.fields} loading={result.loading || pending} renderers={defaultRenderers} onInspect={bucket => {
+      const records = inspectDashboardBucket(query, bucket, clause, schemas.tools, cumulative);
+      if (records) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset: "tools", query: records }, new URLSearchParams(location.search)));
+    }} />}
+    {!pending && !ranking.error ? <UsageDashboardLinks dataset="tools" query={query} currentURL="/tools?tools_view=summary" analysisLabel="More tool analyses" /> : null}
+    <p className="usage-dashboard-note">Select a bar or point to inspect its daily summaries, then follow a summary’s Calls link to individual calls and source conversations. Open the grouped query to compare the measures and their call counts. More tool analyses includes failure kinds, MCP methods, and the existing command and context presets.</p>
+  </section>;
+}
+
 const toolCallPresets: ToolPreset[] = [
   { label: "Calls by day", title: "Tool call volume and errors over time", aggregations: [count(["day"], "Calls per day"), sum("error_count", ["day"], "Errors per day")] },
   { label: "Calls by week", title: "Weekly tool call volume by category", aggregations: [count(["week", "tool_category"], "Calls per week by category")] },
@@ -1601,12 +1862,7 @@ const toolCallPresets: ToolPreset[] = [
 
 // Filters that select the calls behind one summary row.
 function drillFilters(row: Row): WhereTerm[] {
-  const where: WhereTerm[] = [];
-  for (const field of ["day", "tool_name", "program", "subcommand", "provider", "model", "effort", "repository_name", "session_kind", "source_kind"]) {
-    const value = row[field];
-    where.push(value === null || value === undefined || value === "" ? { field, op: "is_null", value: "" } : { field, op: "=", value: String(value) });
-  }
-  return where;
+  return toolSummaryCallFilters(row);
 }
 
 function formatDurationMS(value: unknown): string {
@@ -1631,11 +1887,10 @@ function ToolCallURLs({ urls }: { urls: Row[] }) {
   </>;
 }
 
-function ToolCallDialog({ id, onClose, exampleCall }: { id: string; onClose: () => void; exampleCall?: Row }) {
+function ToolCallDialog({ id, onClose }: { id: string; onClose: () => void }) {
   const [call, setCall] = useState<Row | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
-    if (exampleCall) { setCall(exampleCall); return; }
     if (shared) {
       const row = shared.datasets.tool_calls.find(item => item.id === id);
       if (row) setCall({ ...row, ...shared.tool_calls[id] });
@@ -1646,7 +1901,7 @@ function ToolCallDialog({ id, onClose, exampleCall }: { id: string; onClose: () 
     fetch(`/api/tool-calls/${encodeURIComponent(id)}`, { signal: controller.signal }).then(responseJSON<Row>).then(setCall)
       .catch(failure => { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "Call unavailable"); });
     return () => controller.abort();
-  }, [id, exampleCall]);
+  }, [id]);
   const number = (value: unknown) => value === null || value === undefined ? "—" : Number(value).toLocaleString();
   return <div className="mcp-dialog-backdrop" onClick={onClose}><div className="mcp-dialog tool-dialog" role="dialog" aria-modal="true" aria-label="Tool call details" onClick={event => event.stopPropagation()}>
     <div className="mcp-card-heading"><div><h2>{call ? String(call.tool_name) : "Tool call"}</h2><p className="muted">{call ? `${new Date(String(call.started_at)).toLocaleString()} · ${call.status}${call.error_type ? ` · ${String(call.error_type).replace(/_/g, " ")}` : ""}` : error || "Loading…"}</p></div>
@@ -1687,13 +1942,13 @@ function ToolLedgerBanner() {
   useEffect(() => {
     if (shared) return;
     void load.current();
-    const timer = window.setInterval(() => { if (document.querySelector("#tools.active")) void load.current(); }, 3000);
+    const timer = window.setInterval(() => { if (document.querySelector("#tools.active, .usage-tools-dashboard")) void load.current(); }, 3000);
     return () => window.clearInterval(timer);
   }, []);
   const running = status?.backfill.running ?? false;
   const wasRunning = useRef(false);
   useEffect(() => {
-    if (wasRunning.current && !running) { tableApis.get("tools")?.refresh(); tableApis.get("tool_calls")?.refresh(); tableApis.get("skill_usages")?.refresh(); }
+    if (wasRunning.current && !running) { tableApis.get("tools")?.refresh(); tableApis.get("tool_calls")?.refresh(); tableApis.get("skill_usages")?.refresh(); window.dispatchEvent(new Event("pharos:usage-refresh")); }
     wasRunning.current = running;
   }, [running]);
   async function build() {
@@ -1786,17 +2041,18 @@ function ToolsPage() {
   </div>;
 }
 
-if (!shared && concurrencyPrototypeEnabled && location.pathname === "/usage" && new URLSearchParams(location.search).get("usage") === "concurrency") {
-  const url = new URL(location.href);url.searchParams.set("usage", "tokens");url.searchParams.set("parallelism", "1");history.replaceState(null, "", url);
+if (!shared && concurrencyPrototypeEnabled && location.pathname === "/analyze" && new URLSearchParams(location.search).get("analyze_view") === "concurrency") {
+  const url = new URL(location.href);url.searchParams.set("analyze_view", "tokens");url.searchParams.set("parallelism", "1");history.replaceState(null, "", url);
 }
 
 const mounts: Array<[string, React.ReactNode]> = [
   ["searchComposerDialog", <SearchDialog schema={schemas.library} />],
   ["homePage", <HomePage schemas={schemas} />],
+  ["settingsPage", <SettingsWorkspace content={document.getElementById("settingsContent")!} />],
   ["queryTableLibrary", <LibraryPage />],
   ["queryTableUsage", <UsagePage />],
   ["toolsPage", <ToolsPage />],
-  ["mcpPage", <MCPPage />],
+  ["mcpSettingsPage", <MCPSettings />],
   ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" />} />],
   ["optimizationSettingsPage", <OptimizationSettingsPage />],
   ["tl1Page", <TL1Page attempts={<QuerySurface dataset="tl1_attempts" />} filterAttempts={(where) => tableApis.get("tl1_attempts")?.setQuery(previous => ({ ...previous, where: where as WhereTerm[], offset: 0 }))} copy={copyText} />],

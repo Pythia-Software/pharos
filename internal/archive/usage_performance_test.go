@@ -362,3 +362,56 @@ func TestUsagePerformanceServer(t *testing.T) {
 	})
 	t.Fatal(http.ListenAndServe(os.Getenv("PHAROS_USAGE_SERVER"), handler))
 }
+
+// A captured /metrics request diagnoses the exact narrow SQL plan without
+// changing the isolated catalog. Set PHAROS_USAGE_REQUEST to its JSON body.
+func TestUsagePerformanceNativeMetrics(t *testing.T) {
+	c := usagePerformanceCatalog(t)
+	file := os.Getenv("PHAROS_USAGE_REQUEST")
+	if file == "" {
+		t.Skip("set PHAROS_USAGE_REQUEST")
+	}
+	body, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var q qt.MetricQuery
+	if err = json.Unmarshal(body, &q); err != nil {
+		t.Fatal(err)
+	}
+	schema := PharosToolCallsSchema()
+	d := queryV2Dataset("tool_calls", schema)
+	d.MaxPopulation = 2_000_000
+	table, err := c.queryTextDataset(t.Context(), "tool_calls", toolCallDataset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Log("facts", table.scalarFacts, "text", table.queryText != nil)
+	consumed := whereFields(table.residualWhere(q.Where))
+	for _, m := range q.Metrics {
+		consumed = append(consumed, m.GroupBy...)
+		if m.Field != "" {
+			consumed = append(consumed, m.Field)
+		}
+	}
+	projected, covered := table.project(consumed).preferCoveringScan(q.Where)
+	d.SourceSQL, d.SourceArgs = projected.v2WindowedSource(schema, q.Where, time.Now())
+	t.Log("covered", covered, "facts source", strings.Contains(d.SourceSQL, "FROM tool_query_facts"))
+	plan, err := queryMapsContext(t.Context(), c.DB, "EXPLAIN QUERY PLAN SELECT r.week,r.activity,COUNT(*),SUM(r.duration_ms) FROM ("+d.SourceSQL+") r GROUP BY 1,2", d.SourceArgs...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range plan {
+		t.Log(firstString(row["detail"]))
+	}
+	for i := 0; i < 2; i++ {
+		tx, err := c.DB.BeginTx(t.Context(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		started := time.Now()
+		result, handled, err := c.nativeMetricsV2(t.Context(), tx, d, q, qt.PlanOptions{Now: time.Now()}, &table)
+		_ = tx.Rollback()
+		t.Log("native", time.Since(started), "handled", handled, "err", err, "metrics", len(result.Metrics.Metrics))
+	}
+}

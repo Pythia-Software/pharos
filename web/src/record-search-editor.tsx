@@ -13,8 +13,8 @@ export const recordSearchTargets: Record<string, { label: string; field: string 
   tools: { label: "Tool summaries", field: "tool_name" },
   skill_usages: { label: "Skill uses", field: "skill_name" },
 };
-export function RecordSearchEditor<Row>({ api, dataset, layout }: { api: QueryTableApi<Row>; dataset: string; layout: React.ReactNode }) {
-  const target = recordSearchTargets[dataset], fields = api.computed.catalogue;
+export function RecordSearchEditor<Row>({ api, dataset, layout, target = recordSearchTargets[dataset] }: { api: QueryTableApi<Row>; dataset: string; layout?: React.ReactNode; target?: { label: string; field: string } }) {
+  const fields = api.query.grouping ? api.schema!.fields : api.computed.catalogue;
   const [where, setWhere] = useState(api.query.where), [order, setOrder] = useState(api.query.orderBy);
   useEffect(() => { setWhere(api.query.where); setOrder(api.query.orderBy); }, [api.query.where, api.query.orderBy]);
   const dirty = JSON.stringify([where, order]) !== JSON.stringify([api.query.where, api.query.orderBy]);
@@ -39,7 +39,7 @@ export function RecordSearchEditor<Row>({ api, dataset, layout }: { api: QueryTa
           {where.length ? <button type="button" onClick={() => setWhere([])}>Clear</button> : null}
           <button type="submit" className="text-search-submit" disabled={!valid}><Icon name="search" />Search {target.label.toLowerCase()}</button>
         </div>
-        <details><summary>Columns, metrics & saved queries</summary>{layout}</details>
+        {layout ? <details><summary>Columns, metrics & saved queries</summary>{layout}</details> : null}
       </div>
     </form>
   </section>;

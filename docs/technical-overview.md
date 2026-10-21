@@ -43,7 +43,7 @@ onto the drive, and indexes it ([Adding a Mac](configuration.md#adding-a-mac)).
 To bring an existing per-user install along without re-indexing, add `--adopt`
 with its `archive.toml`; see [Moving an existing install onto a drive](configuration.md#moving-an-existing-install-onto-a-drive).
 
-The UI has separate Library, Usage, Tools, Findings, MCP, and Settings areas. Library, Usage, Tools, and MCP call history
+The UI has separate Library, Analyze, Tools, Findings, MCP, and Settings areas. Library, Analyze, Tools, and MCP call history
 use the shared query-table pattern: schema-driven columns, field discovery,
 filtering (including OR/NOT), multi-sort, paging, persistent saved views,
 optional aggregate metrics, column reorder, and resize.
@@ -52,7 +52,7 @@ optional aggregate metrics, column reorder, and resize.
 
 Past Work also shows when an archived commit appears on the local `origin/main` history. It links the first mainline commit containing that work, whether it arrived through a merge commit or directly. This uses local Git objects only; squash merges and work without a retained commit ID cannot be attributed by ancestry. Refresh the local `origin/main` ref and index a source to update these associations.
 - **TL1** appears once a TL1 source is indexed. It compares each flavor across agent configurations (advance, escalation, and agent error rates, cost per useful result, time, tokens, cache reuse), clusters errors by normalized signature and who can fix them, traces human attention and review findings to their causes, and segments work by TL1's large enqueues (defaulting to the latest, so analysis follows the most recent flavor revisions). Its recommendations (error clusters, reruns, cost outliers) are findings scoped to each flavor, measured like any other. Flavor and candidate drill-downs and a per-run query table sit underneath. See [`docs/tl1-analysis.md`](tl1-analysis.md).
-- **Usage** has two views, switched at the top of the page, and remembers the last one. **Tokens** is the token-usage query table: one row per agent session, local day, and model, with uncached input, cache reads, cache writes, output, and reasoning kept separate. Provider, model, repository, source, agent kind, and day/week/month are all filter and group-by fields, so metrics such as "cache reads per week by model" are a saved view. A stacked chart above the table shows tokens or cost per day, week, or month, split by token type, provider, model, repository, or agent kind. The chart, the summary cards, and the table share one set of filters: clicking a key filters to that provider, model, repository, or agent kind (⌘-click adds more; clicking the lone selection, or its ×, clears it), dragging across columns or choosing a range preset sets a time filter, and a filter typed into the table narrows the chart and cards too. Token types are not rows, so clicking one only narrows the chart. When a few columns dwarf the rest (the tallest is over twice the 80th percentile of non-empty columns, rounded up to a round number), the chart breaks its axis there: linear below in the lower half, logarithmic above in the upper half, marked with broken-axis slashes and a "log scale" label. The Human Words chart does the same. Preset buttons set up common breakdowns. Linked mirrors of the same work are counted once. **Your writing** is described below.
+- **Analyze** has two views, switched at the top of the page, and remembers the last one. **Tokens** is the token-usage query table: one row per agent session, local day, and model, with uncached input, cache reads, cache writes, output, and reasoning kept separate. Provider, model, repository, source, agent kind, and day/week/month are all filter and group-by fields, so metrics such as "cache reads per week by model" are a saved view. A stacked chart above the table shows tokens or cost per day, week, or month, split by token type, provider, model, repository, or agent kind. The chart, the summary cards, and the table share one set of filters: clicking a key filters to that provider, model, repository, or agent kind (⌘-click adds more; clicking the lone selection, or its ×, clears it), dragging across columns or choosing a range preset sets a time filter, and a filter typed into the table narrows the chart and cards too. Token types are not rows, so clicking one only narrows the chart. When a few columns dwarf the rest (the tallest is over twice the 80th percentile of non-empty columns, rounded up to a round number), the chart breaks its axis there: linear below in the lower half, logarithmic above in the upper half, marked with broken-axis slashes and a "log scale" label. The Human Words chart does the same. Preset buttons set up common breakdowns. Linked mirrors of the same work are counted once. **Your writing** is described below.
 - **Tools** analyzes tool use from retained transcripts. A daily summary table groups calls by tool, shell program and subcommand (`git status`, `go test`, `sed`), model, repository, and agent kind, with error counts by kind, durations, the tokens each result added to the context, the tokens re-read by later requests until compaction, and their API-equivalent cost. A per-call table filters and sorts every call; a summary row drills into its calls, and each call opens with its parsed commands, input, and result. Each call also records the sites it reached: URLs from web fetches, browser navigation, Codex web searches, and network commands such as `curl`, plus any web search query and the links it returned. Presets cover error rates, failure kinds, top commands, shell calls a dedicated tool could make, slow tools, test and build time, context cost, sites reached, and web searches. Definitions are in [`docs/tool-analytics.md`](tool-analytics.md).
 - **Findings** turns recurring, fixable patterns (failures, instruction drift between harnesses, CLI friction, context-heavy commands, orientation and exploration cost, cost outliers, and TL1 flavor problems) into plain-language cards with a proposed change. Findings go into per-target prompts ("carts") saved in the library; copying one is the intervention that starts a before-and-after measurement with a fixed analysis plan, guard metrics, and weekly net savings. Manual Index changes runs a full findings pass; scheduled indexing defers findings. Capture & index and separate index actions retain daily full discovery and watched-finding measurements between daily passes. See [`docs/findings.md`](findings.md).
 - **MCP** controls local agent access, provides a copyable stdio connection definition and setup prompt, and offers a query-table of recent tool calls with filters, saved views, metrics, response-size estimates, duration, result counts, truncation, and errors.
@@ -61,8 +61,8 @@ Past Work also shows when an archived commit appears on the local `origin/main` 
 - **Macs and captures** (in Settings → Sources) lists this Mac and every Mac whose captures are in the library, with when each source was captured and indexed and which need indexing. **Open Capture & index** links to the capture and index controls and their progress. A newly added Mac is captured right after onboarding, then offered **Index now**.
 - **Library drive** checks and **Backups** (in Settings → Health) show the drive's encryption, Spotlight, file system, free space, volume pin and backup age, each with what to do and a copyable command, and back the library up to a folder on another drive.
 - **Library drive** in the header shows live indexing progress and the latest completed index result, including updated workspace and conversation counts and any error.
-- **Your writing** (in Usage) estimates how much text you typed or dictated into agent chats. Each user message is split into typed text, harness instructions, one-click templates, attachments, agent output copied from the previous 48 hours, re-sent text, likely pastes, and prompts sent by scripts or other agents. A query table lists one row per conversation, sortable and filterable by each kind of input and by tokens and cost, so "deepest conversations" is one click; the chart and breakdown above it follow the filters. The chart splits words by kind of input, repository, app, or provider; its key and a dragged time range filter the table the same way as on Tokens, and a time filter counts only the words sent inside it. A second query table lists one row per user message, filterable by the categories and rules that labelled its text, and shows messages either as rows or as text highlighted span by span, each span explaining on hover why it counted as what. The transcript reader shows the split for each message, and Settings has cards that open each Usage view. Definitions are in [`docs/human-authorship.md`](human-authorship.md).
-- **Usage → Carbon Impact** estimates the electricity and CO₂e behind your token usage, all time or the last 30 days, split by token type (uncached input, cache writes, cache reads, output) and model tier. Energy per token comes from published inference measurements, with cache reads charged far less than recomputed input; you choose the electricity grid, data-center overhead (PUE), and a low, central, or high estimate. It is an estimate, not a measurement: factors and sources are in [`carbon/`](../carbon/README.md).
+- **Your writing** (in Analyze) estimates how much text you typed or dictated into agent chats. Each user message is split into typed text, harness instructions, one-click templates, attachments, agent output copied from the previous 48 hours, re-sent text, likely pastes, and prompts sent by scripts or other agents. A query table lists one row per conversation, sortable and filterable by each kind of input and by tokens and cost, so "deepest conversations" is one click; the chart and breakdown above it follow the filters. The chart splits words by kind of input, repository, app, or provider; its key and a dragged time range filter the table the same way as on Tokens, and a time filter counts only the words sent inside it. A second query table lists one row per user message, filterable by the categories and rules that labelled its text, and shows messages either as rows or as text highlighted span by span, each span explaining on hover why it counted as what. The transcript reader shows the split for each message, and Settings has cards that open each Analyze view. Definitions are in [`docs/human-authorship.md`](human-authorship.md).
+- **Analyze → Carbon Impact** estimates the electricity and CO₂e behind your token usage, all time or the last 30 days, split by token type (uncached input, cache writes, cache reads, output) and model tier. Energy per token comes from published inference measurements, with cache reads charged far less than recomputed input; you choose the electricity grid, data-center overhead (PUE), and a low, central, or high estimate. It is an estimate, not a measurement: factors and sources are in [`carbon/`](../carbon/README.md).
 - **Library upgrade** appears when a catalog indexed by an older version needs its derived data brought up to date: repository merges, token attribution, harness versions, loaded instructions, and the tool ledger, run in that order as one resumable background job. See [Upgrading an existing library](releases-and-updates.md#upgrading-an-existing-library).
 - **Health** shows retrieval coverage/freshness, index size, and external-storage health. Retrieval-only is shown as an intentional capability.
 
@@ -204,12 +204,12 @@ The existing `search_work`, `get_work_detail`, `get_conversation_excerpt`,
 available. `get_conversation_excerpt` is a compatibility alias for bounded
 message windows. MCP exposes no arbitrary deletion tool.
 
-The MCP page controls a shared enabled flag in the local catalog. Turning it off
+Settings → MCP controls a shared enabled flag in the local catalog. Turning it off
 hides tools from new listings and rejects calls from already-connected clients;
 it does not alter another client's configuration. Tool-call history retains the
 latest 5,000 calls with an allowlisted, shortened argument summary and response
-metrics, never response bodies. The page provides per-tool totals and filters
-for tool and status. Output token counts are estimates from bytes.
+metrics, never response bodies. Analyze → Pharos MCP provides guided charts;
+Analyze → Query → MCP calls provides filtering, grouping, metrics, and call details. Output token counts are estimates from bytes.
 
 ## Sharing conversations
 
@@ -228,7 +228,7 @@ the reader's `/api/work/…` requests (overview, one conversation at a time, and
   `QuerySurface` passes each table its rows as `clientRows`, so filtering,
   sorting, metrics, and charts run in the browser (`applyQuery` and
   `applyAggregations` from query-table-core) rather than on the service.
-- **Tables:** Library, Tools (summary and calls), and Usage (Machine Tokens),
+- **Tables:** Library, Tools (summary and calls), and Analyze (Machine Tokens),
   each holding only the selected works' rows. Tools summary rows come from the
   same SQL and record builder as the rollup (`toolUsageRecord`), run over a
   temporary cube that excludes every other work. Human Words, Carbon Impact,
@@ -351,6 +351,29 @@ uploaded by the archive service.
 
 For new interface icons, follow the [icon drawing and usage guide](iconography.md).
 
+### Nested page layouts
+
+Analyze, Settings, and TL1 use `web/src/nested-pages.tsx` and its scoped CSS
+for their sidebar, mobile disclosure menu, breadcrumbs, and page heading.
+A `NestedPage` tree supplies labels, destinations, descriptions, and stable
+page IDs. The selected page's ancestry determines breadcrumbs and which menu
+branches open; the tree can nest further without adding another renderer.
+Use `NestedPageLayout` for another area with this shape, and `PageLink` for
+its links. Plain local clicks call the existing `pharosNavigate` app router;
+modified clicks, downloads, and external links retain browser behavior.
+`useLocationRevision` subscribes to the host router's notifications, including
+Back/Forward. Changing pages closes the mobile menu and moves keyboard focus
+to the destination heading.
+
+Settings panels in `ui.py` declare their route, title, and description with
+`data-settings-route`, `data-page-title`, and `data-page-description`. Both the
+classic router and `settings-workspace.tsx` read this registry, so a new panel
+does not require a second menu or route list. The Settings adapter places the
+existing content nodes inside the shared layout once, preserving classic
+event handlers, form state, and child React roots. Panel scripts retain data
+loading and controls; the shared layout owns navigation and headings. Keep
+page-specific charts and forms outside the navigation component.
+
 Test commands, test tiers and the rules for writing tests are in
 [AGENTS.md](../AGENTS.md). Before committing:
 
@@ -456,7 +479,7 @@ go run ./cmd/pharos --config /Volumes/euclid/pharos-dev/library.toml dev-ui \
   --concurrency-data .context/concurrency-real-data.json
 ```
 
-Open `/usage?usage=tokens&parallelism=1` in that dev UI, or choose
+Open `/analyze?analyze_view=tokens&parallelism=1` in that dev UI, or choose
 **Parallelism…** beside the pricing prompt in the Machine Tokens header. The URL opens a compact
 modal with one selectable view. The summary's **Parallelism** link opens it over
 the current page; adding `parallelism=1` to any page URL opens the same modal,
@@ -474,7 +497,7 @@ title highlights its workspace or session, according to Count by.
 The header's Usage summary includes **Parallelism**, using the saved counting
 unit, gap and repository for each full trailing window, including idle time. Timing windows
 outside the prototype export show unavailable instead of treating seven days as all time.
-The legacy `/usage?usage=concurrency` link redirects to the modal.
+The legacy `/analyze?analyze_view=concurrency` link redirects to the modal.
 
 Ribbon rows prefer continuity: continuing workspaces keep their row while it
 fits within the active count, and arriving checkouts reuse rows last occupied

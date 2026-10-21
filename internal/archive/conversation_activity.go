@@ -20,9 +20,11 @@ func (c *Catalog) conversationActivityRows(ctx context.Context) ([]map[string]an
 		if err != nil {
 			return nil, err
 		}
-		messages, err := queryMapsContext(ctx, c.reader(), `SELECT message_id,conversation_id,sent_at,
-			MAX(total_chars-harness_chars-automated_chars,0) human_chars
-			FROM message_authorship WHERE total_chars>harness_chars+automated_chars ORDER BY sent_at,message_id`)
+		messages, err := queryMapsContext(ctx, c.reader(), `SELECT ma.message_id,ma.conversation_id,ma.sent_at,c.workspace_id,w.title,r.display_name repository_name,
+            MAX(ma.total_chars-ma.harness_chars-ma.automated_chars,0) human_chars
+            FROM message_authorship ma JOIN conversations c ON c.id=ma.conversation_id
+            JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories r ON r.id=w.repository_id
+            WHERE ma.total_chars>ma.harness_chars+ma.automated_chars ORDER BY ma.sent_at,ma.message_id`)
 		if err != nil {
 			return nil, err
 		}
@@ -30,7 +32,7 @@ func (c *Catalog) conversationActivityRows(ctx context.Context) ([]map[string]an
 		base := func(id string, root map[string]any, at any, kind string) map[string]any {
 			return map[string]any{"id": id, "root_conversation_id": root["id"], "root_provider": root["provider"],
 				"root_model_family": modelFamily(firstString(root["model"])), "root_effort": nilIfEmpty(firstString(root["effort"])),
-				"workspace_id": root["workspace_id"], "event_at": at, "event_kind": kind,
+				"root_title": root["root_title"], "event_at": at, "event_kind": kind,
 				"human_input_tokens_estimate": int64(0), "human_messages": int64(0), "output_tokens": int64(0)}
 		}
 		for _, row := range usage {
@@ -40,6 +42,9 @@ func (c *Catalog) conversationActivityRows(ctx context.Context) ([]map[string]an
 			}
 			event := base("usage:"+firstString(row["id"]), root, row["first_usage_at"], "usage")
 			event["output_tokens"] = row["output_tokens"]
+			for _, field := range []string{"workspace_id", "conversation_id", "title", "repository_name"} {
+				event[field] = row[field]
+			}
 			rows = append(rows, event)
 		}
 		for _, message := range messages {
@@ -53,6 +58,9 @@ func (c *Catalog) conversationActivityRows(ctx context.Context) ([]map[string]an
 			// harness/automated spans. Image and unretained file bytes are absent.
 			event["human_input_tokens_estimate"] = (integer(message["human_chars"]) + 3) / 4
 			event["human_messages"] = int64(1)
+			for _, field := range []string{"workspace_id", "conversation_id", "title", "repository_name", "message_id"} {
+				event[field] = message[field]
+			}
 			rows = append(rows, event)
 		}
 		return rows, nil

@@ -37,7 +37,10 @@ type sqlDataset struct {
 	// lookups are fields with an index that finds their few rows directly,
 	// such as IDs; filters on other fields are marked likely() (see where).
 	lookups           map[string]bool
-	toolSearchIndexed bool // the command trigram index is complete
+	toolSearchIndexed bool            // the command trigram index is complete
+	queryText         *queryTextIndex // complete, normalized exact substring membership
+	scalarFacts       bool            // complete compact per-call time/activity projection
+	calendarFacts     bool            // calendar matches the current local timezone
 	// cube, when set, answers what it can in place of the rows (see sqlCube).
 	cube *sqlCube
 	// Joins to unique primary keys can be omitted when no consumed expression
@@ -53,13 +56,11 @@ type sqlDataset struct {
 }
 
 func (d sqlDataset) preferCoveringScan(terms []querytable.WhereTerm) (sqlDataset, bool) {
+	if d.pageFrom == "FROM tool_query_facts t" {
+		return d, true
+	}
 	if d.coveringIndex == "" {
 		return d, false
-	}
-	for field := range d.columns {
-		if !d.coveredFields[field] {
-			return d, false
-		}
 	}
 	for _, term := range terms {
 		for _, clause := range term.Predicates() {
@@ -68,15 +69,23 @@ func (d sqlDataset) preferCoveringScan(terms []querytable.WhereTerm) (sqlDataset
 			}
 		}
 	}
+	for field := range d.columns {
+		if !d.coveredFields[field] {
+			return d, false
+		}
+	}
 	index := d.coveringIndex
+	compact := true
+	for field := range d.columns {
+		compact = compact && d.timeCoveringFields[field]
+	}
+	if compact {
+		index = d.pageIndexes["started_at"]
+	}
 	for _, term := range terms {
 		if !term.IsGroup() && !term.Negated && slices.Contains([]string{"started_at", "day", "week", "month"}, term.Field) {
 			index = d.rangeCoveringIndex
-			covered := true
-			for field := range d.columns {
-				covered = covered && d.timeCoveringFields[field]
-			}
-			if covered {
+			if compact {
 				index = d.pageIndexes["started_at"]
 			}
 		}
@@ -93,6 +102,26 @@ func (d sqlDataset) project(fields []string) sqlDataset {
 		}
 	}
 	d.columns = columns
+	if d.scalarFacts && d.pageFrom == "FROM tool_calls t" {
+		compact := true
+		for field := range columns {
+			compact = compact && slices.Contains([]string{"id", "workspace_id", "started_at", "day", "week", "month", "duration_ms", "provider", "activity", "tool_category", "call_count", "repository_name", "source_kind", "title"}, field)
+		}
+		if compact {
+			d.from = strings.Replace(d.from, "FROM tool_calls t", "FROM tool_query_facts t", 1)
+			d.pageFrom = "FROM tool_query_facts t"
+			if _, ok := columns["activity"]; ok {
+				columns["activity"] = "t.activity"
+			}
+			if d.calendarFacts {
+				for field, expr := range map[string]string{"day": "t.day", "week": "date(t.day,'-6 days','weekday 1')", "month": "substr(t.day,1,7)"} {
+					if _, ok := columns[field]; ok {
+						columns[field] = expr
+					}
+				}
+			}
+		}
+	}
 	for changed := true; changed; {
 		changed = false
 		for alias, join := range d.optionalJoins {
@@ -554,8 +583,14 @@ func (d sqlDataset) Rows(ctx context.Context, q queryer, query querytable.Query,
 
 func (d sqlDataset) Distinct(ctx context.Context, q queryer, fieldName, search string, limit int, schema querytable.Schema) (querytable.DistinctResult, error) {
 	if _, ok := d.cube.dimensionFor(fieldName); ok {
+		// Daily summaries preserve this set of dimension values, including
+		// absent values, with far fewer and narrower rows than the raw cube.
+		if d.cube == toolCallCube && slices.Contains([]string{"day", "week", "month", "repository_name", "source_kind", "provider", "model", "effort", "model_family", "model_effort", "session_kind", "tool_name", "tool_category", "mcp_server", "mcp_method", "program", "subcommand", "command_name", "command_category", "activity", "operation_key", "operation_name"}, fieldName) {
+			return toolRollupDataset.Distinct(ctx, q, fieldName, search, limit, schema)
+		}
 		return d.cube.table().Distinct(ctx, q, fieldName, search, limit, schema)
 	}
+	d = d.project([]string{fieldName})
 	field, ok := schema.Fields[fieldName]
 	if !ok || !field.Filterable {
 		return querytable.DistinctResult{}, fmt.Errorf("unknown filter field %q", fieldName)

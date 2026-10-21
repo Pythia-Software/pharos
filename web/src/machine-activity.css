@@ -9,10 +9,8 @@
 .machine-scope { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
 .machine-scope > label { flex: 1 1 150px; display: flex; flex-direction: column; gap: 5px; min-width: 0; color: var(--muted); font-size: var(--fs-xs); }
 .machine-scope > label:first-child { flex-grow: 1.2; }
-.machine-scope > label.machine-data-source { flex: .8 1 130px; }
 .machine-scope select { width: 100%; min-width: 0; padding: 7px 26px 7px 10px; border: 1px solid var(--line); border-radius: 5px; color: var(--ink); background-color: var(--panel); font: var(--fs-sm) var(--sans); text-overflow: ellipsis; }
 .machine-scope-note { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px 14px; margin: 9px 0 24px; color: var(--muted); font-size: var(--fs-xs); }
-.machine-example-label { color: var(--accent); }
 .machine-section-heading { display: flex; justify-content: space-between; align-items: start; gap: 12px; margin: 0 0 18px; }
 .machine-section-heading h2 { margin: 0; font: 400 25px/1.2 var(--serif); }
 .machine-section-heading p { margin: 7px 0 0; font-size: var(--fs-sm); }
@@ -132,7 +130,7 @@
   .machine-view-tabs > button span { font-size: var(--fs-sm); }
   .machine-view-tabs > button small { display: none; }
   .machine-scope { gap: 10px; }
-  .machine-scope > label,.machine-scope > label:first-child,.machine-scope > label.machine-data-source { flex: 1 1 43%; }
+  .machine-scope > label,.machine-scope > label:first-child { flex: 1 1 43%; }
   .machine-scope select { padding-left: 7px; }
   .machine-scope-note { margin-bottom: 20px; line-height: 1.6; }
   .machine-section-heading h2 { font-size: 23px; }

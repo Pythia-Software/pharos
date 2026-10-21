@@ -24,23 +24,15 @@
     },
     {
       "field": "tool_name",
-      "width": 120
+      "width": 145
     },
     {
-      "field": "command",
-      "width": 300
+      "field": "target",
+      "width": 335
     },
     {
       "field": "status",
-      "width": 80
-    },
-    {
-      "field": "effort",
-      "width": 90
-    },
-    {
-      "field": "error_type",
-      "width": 120
+      "width": 95
     },
     {
       "field": "duration_ms",
@@ -48,19 +40,11 @@
     },
     {
       "field": "result_tokens",
-      "width": 110
-    },
-    {
-      "field": "carried_tokens",
-      "width": 120
-    },
-    {
-      "field": "tool_cost_usd",
-      "width": 95
+      "width": 115
     },
     {
       "field": "title",
-      "width": 240
+      "width": 220
     }
   ],
   "fields": [
@@ -597,7 +581,8 @@
         "sqlite": {
           "expr": "r.\"skill_path\""
         }
-      }
+      },
+      "render": "usage_code_snippet"
     },
     {
       "name": "program",
@@ -761,10 +746,10 @@
     },
     {
       "name": "title",
-      "label": "Work",
+      "label": "Conversation",
       "type": "text",
       "group": "Context",
-      "render": "work_title",
+      "render": "usage_conversation",
       "bindings": {
         "postgres": {
           "expr": "title",
@@ -838,7 +823,7 @@
       "label": "Command",
       "type": "text",
       "group": "Command",
-      "render": "truncate",
+      "render": "usage_code_snippet",
       "select": {
         "default": false
       },
@@ -953,7 +938,7 @@
       "label": "File",
       "type": "text",
       "group": "Tool",
-      "render": "truncate",
+      "render": "usage_code_snippet",
       "select": {
         "default": false
       },
@@ -1151,7 +1136,7 @@
       "label": "Search query",
       "type": "text",
       "group": "Web",
-      "render": "truncate",
+      "render": "usage_code_snippet",
       "aliases": [
         "web search",
         "query"
@@ -1285,7 +1270,7 @@
       "label": "Error signature",
       "type": "text",
       "group": "Outcome",
-      "render": "truncate",
+      "render": "usage_code_snippet",
       "select": {
         "default": false
       },
@@ -1387,7 +1372,6 @@
       "label": "Duration (ms)",
       "type": "number",
       "group": "Duration",
-      "render": "duration_ms",
       "select": {
         "align": "right"
       },
@@ -1403,6 +1387,10 @@
       },
       "aggregate": {
         "groupable": true
+      },
+      "display": {
+        "kind": "duration",
+        "sourceUnit": "milliseconds"
       }
     },
     {
@@ -1913,6 +1901,72 @@
       },
       "aggregate": {
         "groupable": true
+      }
+    },
+    {
+      "name": "target",
+      "label": "Invocation / target",
+      "type": "text",
+      "group": "Tool",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "target",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"target\""
+        }
+      },
+      "description": "Display preview of command, file path, search query, or URL, in that order. Filter and sort the original fields; full input is available in Details.",
+      "render": "usage_code_snippet",
+      "filter": {
+        "enabled": false
+      },
+      "sort": {
+        "enabled": false
+      },
+      "aggregate": {
+        "groupable": false,
+        "measure": false
+      }
+    },
+    {
+      "name": "call_message_id",
+      "label": "Call message",
+      "type": "text",
+      "group": "Evidence",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "call_message_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"call_message_id\""
+        }
+      }
+    },
+    {
+      "name": "result_message_id",
+      "label": "Result message",
+      "type": "text",
+      "group": "Evidence",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "result_message_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"result_message_id\""
+        }
       }
     }
   ]

@@ -73,7 +73,7 @@ func (d *devUI) withLocalCarbonFactors(response *http.Response) error {
 	}
 	// assets is the checkout's internal/archive/assets; the factors live at
 	// the checkout root.
-	factors, err := os.ReadFile(filepath.Join(d.assets, "..", "..", "carbon", "co2_factors.json"))
+	factors, err := os.ReadFile(filepath.Join(d.assets, "..", "..", "..", "carbon", "co2_factors.json"))
 	if err != nil {
 		return fmt.Errorf("read local carbon factors: %w", err)
 	}
@@ -164,7 +164,7 @@ func runDevUICLI(config Config, args []string) error {
 	}
 	page, err := url.Parse(*openPath)
 	if err != nil || page.IsAbs() || page.Host != "" || page.User != nil || !isUIPage(page.Path) {
-		return fmt.Errorf("--open-path must be a local UI page, such as /usage?machine_view=time")
+		return fmt.Errorf("--open-path must be a local UI page, such as /analyze?machine_view=time")
 	}
 	if _, err := os.Stat(filepath.Join(*assets, "ui.py")); err != nil {
 		return fmt.Errorf("no ui.py in %s; run from the repository root or pass --assets DIR", *assets)

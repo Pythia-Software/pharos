@@ -9,7 +9,7 @@ type Part = "status" | "history";
 // explicit refresh and leaving the page invalidate all older publications.
 export function createMCPMonitor(handlers: {
   status: (status: MCPStatus) => void;
-  history: (history: MCPHistory) => void;
+  history?: (history: MCPHistory) => void;
   error: (part: Part, error: Error | null) => void;
 }) {
   let current: { controller: AbortController; done: Promise<void> } | undefined;
@@ -33,7 +33,7 @@ export function createMCPMonitor(handlers: {
     };
     const done = Promise.all([
       read("status", "/api/mcp", handlers.status),
-      read("history", "/api/mcp/calls?limit=1", handlers.history),
+      ...(handlers.history ? [read("history", "/api/mcp/calls?limit=1", handlers.history)] : []),
     ]).then(() => {
       if (current?.controller === controller) current = undefined;
     });

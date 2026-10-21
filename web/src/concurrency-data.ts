@@ -226,6 +226,34 @@ export function zonedDayBounds(day: string, timezone: string): Interval {
   return [midnight(utc), midnight(utc + 24 * 60 * minute)];
 }
 
+// Integrate simultaneous occupancy, then sample its trailing time average.
+// Averaging elapsed time (rather than event samples) gives idle gaps and long
+// intervals their actual weight. The ribbons retain their exact identities.
+export function concurrencyAverage(spans: Map<string, Interval[]>, bounds: Interval, windowMs: number, steps = 600, historyStart = bounds[0]): Array<{ at: number; value: number }> {
+  if (!(windowMs > 0) || !Number.isFinite(windowMs) || bounds[1] <= bounds[0]) return [];
+  const first = Math.max(historyStart, bounds[0] - windowMs);
+  const changes = new Map<number, number>([[first, 0], [bounds[1], 0]]);
+  for (const intervals of spans.values()) for (const [start, end] of clipIntervals(intervals, [first, bounds[1]])) {
+    changes.set(start, (changes.get(start) ?? 0) + 1); changes.set(end, (changes.get(end) ?? 0) - 1);
+  }
+  let total = 0, count = 0, previous = first;
+  const events = [...changes].sort((a, b) => a[0] - b[0]).map(([at, change]) => {
+    total += (at - previous) * count; count += change; previous = at;
+    return { at, total, count };
+  });
+  const integral = (at: number) => {
+    let low = 0, high = events.length - 1;
+    while (low < high) { const middle = Math.ceil((low + high) / 2); if (events[middle].at <= at) low = middle; else high = middle - 1; }
+    const event = events[low];
+    return event.total + (at - event.at) * event.count;
+  };
+  const samples = Math.max(1, Math.min(2000, Math.floor(steps)));
+  return Array.from({ length: samples + 1 }, (_, index) => {
+    const at = bounds[0] + (bounds[1] - bounds[0]) * index / samples, start = Math.max(first, at - windowMs);
+    return { at, value: at === start ? events[0].count : (integral(at) - integral(start)) / (at - start) };
+  });
+}
+
 export function ribbonPath(segments: Segment[], x: (time: number) => number, y: (count: number) => number): string {
   // Each disjoint region is its own polygon. Vertical steps preserve integer
   // concurrency; smoothing would suggest fractional workspaces or fake time.

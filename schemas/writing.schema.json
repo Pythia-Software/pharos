@@ -19,19 +19,19 @@
   "defaultSelect": [
     {
       "field": "title",
-      "width": 280
+      "width": 260
     },
     {
       "field": "repository_name",
-      "width": 150
+      "width": 145
     },
     {
       "field": "last_message_at",
-      "width": 120
+      "width": 150
     },
     {
       "field": "typed_words",
-      "width": 105
+      "width": 110
     },
     {
       "field": "typed_turns",
@@ -42,27 +42,7 @@
       "width": 100
     },
     {
-      "field": "pasted_words",
-      "width": 110
-    },
-    {
-      "field": "copied_words",
-      "width": 120
-    },
-    {
       "field": "user_words",
-      "width": 120
-    },
-    {
-      "field": "total_tokens",
-      "width": 115
-    },
-    {
-      "field": "cost_usd",
-      "width": 105
-    },
-    {
-      "field": "typed_per_mtok",
       "width": 120
     }
   ],
@@ -86,10 +66,10 @@
     },
     {
       "name": "title",
-      "label": "Work",
+      "label": "Conversation",
       "type": "text",
       "group": "Context",
-      "render": "work_title",
+      "render": "usage_conversation",
       "bindings": {
         "postgres": {
           "expr": "title",

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +55,55 @@ func TestQueryV3LargeSourceHavingMetricsAndPaging(t *testing.T) {
 	var next qt.QueryResultV3
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &next) != nil || next.Total != result.Total || next.Rows[0][qt.GroupIdentityField] == result.Rows[0][qt.GroupIdentityField] {
 		t.Fatal(w.Code, w.Body.String())
+	}
+}
+
+func TestQueryV3NativeGroupsMatchGeneralExecution(t *testing.T) {
+	c, config := testCatalog(t)
+	seedToolCalls(t, c, 40)
+	if _, err := c.DB.Exec("UPDATE tool_calls SET started_at=NULL WHERE id='call-0'; UPDATE tool_calls SET started_at='invalid' WHERE id='call-1'"); err != nil {
+		t.Fatal(err)
+	}
+	c.maintainQueryTextIndexes(t.Context())
+	if err := c.ensureToolRollup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	server := testServer(t, config, c)
+	for _, dataset := range []string{"tool_calls", "tools"} {
+		field := "duration_ms"
+		if dataset == "tools" {
+			field = "total_duration_ms"
+		}
+		for _, key := range []string{"provider", "tool_name", "repository_name", "day"} {
+			wheres := [][]qt.WhereTerm{nil, {{Field: "provider", Op: "=", Value: "codex"}}, {{Field: "tool_name", Op: "contains", Value: "absent"}}}
+			if dataset == "tool_calls" {
+				wheres = append(wheres, []qt.WhereTerm{{Field: "command", Op: "contains", Value: "test", Negated: true}},
+					[]qt.WhereTerm{{Field: "command", Op: "contains", Value: "absent", Negated: true}, {Field: "command", Op: "contains", Value: "git", Negated: true}},
+					[]qt.WhereTerm{{Field: "day", Op: "is_null"}})
+			}
+			for _, where := range wheres {
+				q := groupRequest(key, qt.SummaryColumn{ID: "n", Op: "count"}, qt.SummaryColumn{ID: "total", Op: "sum", Field: field}, qt.SummaryColumn{ID: "mean", Op: "avg", Field: field}, qt.SummaryColumn{ID: "known", Op: "count", Field: field})
+				q.Source.Where = where
+				q.Result.OrderBy = qt.OrderBys{{Field: "n", Dir: "desc"}, {Field: key, Dir: "asc"}}
+				q.Result.Limit = 2
+				q.Metrics = []qt.AggSpec{{ID: "groups", Op: "count"}, {ID: "shown", Op: "sum", Field: "n", Scope: "shownRows"}}
+				schema, _ := sqliteQuerySchema(dataset)
+				nativeMetrics = true
+				got, _, err := server.executeQueryV3(t.Context(), dataset, nil, schema, q)
+				nativeMetrics = false
+				if _, e := c.DB.Exec("DELETE FROM meta WHERE key='tool_query_facts_ready'"); e != nil {
+					t.Fatal(e)
+				}
+				want, _, e := server.executeQueryV3(t.Context(), dataset, nil, schema, q)
+				if _, e := c.DB.Exec("INSERT INTO meta(key,value) VALUES('tool_query_facts_ready',?)", toolQueryFacts.version()); e != nil {
+					t.Fatal(e)
+				}
+				nativeMetrics = true
+				if err != nil || e != nil || !reflect.DeepEqual(got, want) {
+					t.Fatalf("%s/%s/%v: native=%+v general=%+v errors=%v/%v", dataset, key, where, got, want, err, e)
+				}
+			}
+		}
 	}
 }
 

@@ -7,15 +7,15 @@ export function tableRecoveryQuery(schema: FieldSchema, scopeWhere: WhereTerm[] 
   return { ...EMPTY_QUERY, where: [...scopeWhere], limit: schema.defaultLimit ?? EMPTY_QUERY.limit };
 }
 
-// Explicit route options bypass all saved Usage tabs and machine filters. The
+// Explicit route options bypass all saved Analyze tabs and machine filters. The
 // storage adapter's fresh flag also bypasses last-used and named default queries.
 // Saved views stay available in Saved; a reset never deletes them.
 export function freshPageURL(href: string): string {
   const url = new URL(href);
   url.search = "fresh=1";
   url.hash = "";
-  if (url.pathname === "/usage") {
-    for (const [key, value] of Object.entries({ usage: "tokens", machine_view: "tokens", activity_days: "0", activity_repo: "", activity_provider: "", activity_model: "" })) url.searchParams.set(key, value);
+  if (url.pathname === "/analyze") {
+    for (const [key, value] of Object.entries({ analyze_mode: "dashboards", analyze_topic: "tokens" })) url.searchParams.set(key, value);
   }
   return `${url.pathname}${url.search}`;
 }

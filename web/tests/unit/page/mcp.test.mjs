@@ -41,6 +41,17 @@ test("connection settings are published while history is stalled, without overla
   await next;
 });
 
+test("connection-only monitoring does not read call history", async t => {
+  const prior = global.fetch, requests = [], events = [];
+  t.after(() => { global.fetch = prior; });
+  global.fetch = async url => { requests.push(url); return Response.json(status); };
+  const monitor = createMCPMonitor({ status: value => events.push(value), error: (_part, error) => assert.equal(error, null) });
+  t.after(() => monitor.stop());
+  await monitor.refresh();
+  assert.deepEqual(requests, ["/api/mcp"]);
+  assert.deepEqual(events, [status]);
+});
+
 test("history remains usable if connection settings fail, and a later refresh recovers", async t => {
   const { monitor, requests, events, errors } = harness(t);
   const pending = monitor.refresh();

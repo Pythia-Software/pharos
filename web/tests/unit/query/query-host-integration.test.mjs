@@ -8,6 +8,8 @@ import { freshPageURL, tableRecoveryQuery } from '../../../src/query-recovery';
 import { core, schemas, execution } from '../helpers/recipes.mjs';
 import { categoryForQuery } from '../../../src/query-categories';
 import { instantiateRecipe, queryRecipes } from '../../../src/curiosity-data';
+import { usageDatasets, usageWorkspaceURL } from '../../../src/usage-workspace-model';
+import { createQueryMetadataLoader } from '../../../src/query-metadata';
 const m={...storageModule,...bookmarksModule,...queryLinksModule,encodeQuery,normalizeQueryState,createQueryLinkService,httpQuerySnapshotStore,QuerySnapshotHttpError};
 const prefs=new Map(),cache=new Map(),snapshots=new Map();
 let fail=false,writes=0;
@@ -25,6 +27,23 @@ globalThis.fetch=async (input,options)=>{
  return snapshots.has(key)?Response.json(snapshots.get(key)):new Response('',{status:404});
 };
 const query=m.normalizeQueryState({select:[{field:'tool_name'}],where:[{field:'status',op:'=',value:'error'}],orderBy:[],limit:25,offset:0});
+test('metadata shares stable results, queues scans and isolates subscriber cancellation', async()=>{
+ let now=0,reads=0,finish;
+ const load=createQueryMetadataLoader(()=>now,5),controller=new AbortController();
+ const first=load('first',()=>{reads++;return new Promise(resolve=>{finish=resolve;});});
+ const cancelled=load('first',()=>{throw Error('duplicate');},controller.signal);
+ const second=load('second',async()=>{reads++;return {values:['second']};});
+ await Promise.resolve();await Promise.resolve();
+ assert.equal(reads,1);
+ controller.abort();await assert.rejects(cancelled,{name:'AbortError'});
+ const value={values:['first']};finish(value);
+ assert.equal(await first,value);assert.deepEqual(await second,{values:['second']});
+ assert.equal(await load('first',()=>{throw Error('cached');}),value);
+ assert.equal(reads,2);
+ now=6;assert.deepEqual(await load('first',async()=>({values:['updated']})),{values:['updated']});
+ await assert.rejects(load('failed',async()=>{throw Error('retry');}),/retry/);
+ assert.deepEqual(await load('failed',async()=>({values:[]})),{values:[]});
+});
 test('named saves create durable links, resolve on another Mac and keep defaults during updates',async()=>{
  const storage=m.libraryStorageAdapter();
  const saved=await storage.saveNamed('pharos_tool_calls','Errors',query,10);
@@ -91,13 +110,41 @@ test('native bookmarks created before dataset metadata can still be updated',asy
 });
 
 test('page parameters choose the dataset, and every card URL opens its own dataset',()=>{
- assert.equal(m.queryFromURL('/usage?q_library=&q_usage=').dataset,'usage');
+ assert.equal(m.queryFromURL('/analyze?analyze_view=tokens&q_library=&q_usage=').dataset,'usage');
  assert.equal(m.queryFromURL('/tools?tools_view=skills&q_library=&q_skill_usages=').dataset,'skill_usages');
+ for(const dataset of Object.keys(usageDatasets)) for(const mode of ['query','search']) {
+  const url=usageWorkspaceURL({mode,dataset,query:EMPTY_QUERY});
+  assert.equal(m.queryFromURL(url)?.dataset,dataset,`${mode} bookmarks keep their record type`);
+ }
+ for(const dataset of Object.keys(usageDatasets)) {
+  const url=new URL(m.queryURL(dataset,query),location.origin);
+  assert.equal(url.pathname,'/analyze');
+  assert.equal(url.searchParams.get('analyze_mode'),'query');
+  assert.equal(url.searchParams.get('analyze_data'),dataset);
+  assert.ok(![...url.searchParams.keys()].some(key=>key.startsWith('usage_')));
+  assert.deepEqual(m.queryFromURL(url.href),{dataset,query,window:undefined});
+ }
+ assert.equal(m.queryFromURL('/analyze?analyze_workspace=1&q_usage='),undefined,'A dashboard is not a token-table bookmark');
  const clock=new Date(2026,9,8,15);
  for(const recipe of queryRecipes)assert.equal(m.queryFromURL(instantiateRecipe(recipe,7,clock).url)?.dataset,recipe.dataset,recipe.id);
  const writing=new URL(instantiateRecipe(queryRecipes.find(item=>item.id==='human-words'),7,clock).url,location.origin);
- assert.equal(writing.searchParams.get('usage'),'writing');
- assert.equal(writing.searchParams.get('writing'),'messages');
+ assert.equal(writing.pathname,'/analyze');
+ assert.equal(writing.searchParams.get('analyze_data'),'writing_messages');
+});
+
+test('MCP query links use Analyze and older MCP bookmarks preserve query and window state',()=>{
+ const window={field:'called_at',days:7,mode:'relative'};
+ const url=new URL(m.queryURL('mcp_calls',query,window),location.origin);
+ assert.equal(url.pathname,'/analyze');
+ assert.equal(url.searchParams.get('analyze_topic'),'mcp');
+ assert.equal(url.searchParams.get('analyze_data'),'mcp_calls');
+ const parsed=m.queryFromURL(url.href);
+ assert.equal(parsed.dataset,'mcp_calls');
+ assert.deepEqual(parsed.window,window);
+ const old=new URL(url);old.pathname='/mcp';
+ for(const key of ['analyze_mode','analyze_topic','analyze_data'])old.searchParams.delete(key);
+ old.searchParams.set('q_usage','stale');
+ assert.deepEqual(m.queryFromURL(old.href),parsed);
 });
 
 test('rolling windows recognize whole local calendar spans across midnight and daylight saving',()=>{
@@ -173,11 +220,10 @@ test('fresh page links bypass cached queries and named defaults, preserving the 
  const storage=m.libraryStorageAdapter({fresh:true}),before=JSON.stringify(m.readBookmarks());
  assert.equal(await storage.loadLast('pharos_tool_calls'),null);
  assert.equal(await storage.loadDefaultSaved('pharos_tool_calls'),null);
- const url=new URL(freshPageURL('http://localhost/usage?q_usage=invalid&usage=writing&activity_repo=gone#chart'),location.origin);
- assert.equal(url.pathname,'/usage');assert.equal(url.searchParams.get('fresh'),'1');
- assert.equal(url.searchParams.get('usage'),'tokens');assert.equal(url.searchParams.get('machine_view'),'tokens');
- for(const key of ['activity_repo','activity_provider','activity_model'])assert.equal(url.searchParams.get(key),'');
- assert.equal(url.searchParams.get('activity_days'),'0');assert.equal(url.searchParams.has('q_usage'),false);assert.equal(url.hash,'');
+ const url=new URL(freshPageURL('http://localhost/analyze?q_usage=invalid&analyze_topic=human&activity_repo=gone#chart'),location.origin);
+ assert.equal(url.pathname,'/analyze');assert.equal(url.searchParams.get('fresh'),'1');
+ assert.equal(url.searchParams.get('analyze_topic'),'tokens');assert.equal(url.searchParams.get('analyze_mode'),'dashboards');
+ assert.equal(url.searchParams.has('activity_repo'),false);assert.equal(url.searchParams.has('q_usage'),false);assert.equal(url.hash,'');
  assert.equal(JSON.stringify(m.readBookmarks()),before);
  assert.equal(freshPageURL('http://localhost/tools?tools_view=skills&q_skill_usages=invalid'),'/tools?fresh=1');
  // Table reset starts from source-schema defaults even when the restored

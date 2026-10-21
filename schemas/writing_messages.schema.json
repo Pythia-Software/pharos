@@ -20,11 +20,11 @@
   "defaultSelect": [
     {
       "field": "sent_at",
-      "width": 110
+      "width": 150
     },
     {
       "field": "text",
-      "width": 480
+      "width": 410
     },
     {
       "field": "main_category",
@@ -36,15 +36,11 @@
     },
     {
       "field": "other_words",
-      "width": 110
+      "width": 100
     },
     {
       "field": "title",
       "width": 220
-    },
-    {
-      "field": "repository_name",
-      "width": 140
     }
   ],
   "fields": [
@@ -803,10 +799,10 @@
     },
     {
       "name": "title",
-      "label": "Work",
+      "label": "Conversation",
       "type": "text",
       "group": "Context",
-      "render": "work_title",
+      "render": "usage_conversation",
       "bindings": {
         "postgres": {
           "expr": "title",

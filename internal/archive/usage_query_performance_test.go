@@ -91,7 +91,7 @@ func TestLegacyUsageRowsIncludeSelectedLineage(t *testing.T) {
 func TestMachineTimeProjectionMatchesCubeAndInvalidatesOnPublication(t *testing.T) {
 	c, _ := testCatalog(t)
 	seedToolCalls(t, c, 80)
-	if _, err := c.DB.Exec(`UPDATE tool_calls SET program=' '||char(10)||'git',model=' null ',mcp_server=' null ' WHERE id='call-0';
+	if _, err := c.DB.Exec(`UPDATE tool_calls SET program=' '||char(10)||'git',model=' null ',mcp_server=' null ',started_at=NULL WHERE id='call-0';
  UPDATE tool_calls SET program='null',subcommand=' status ' WHERE id='call-1'`); err != nil {
 		t.Fatal(err)
 	}
@@ -126,6 +126,8 @@ func TestMachineTimeProjectionMatchesCubeAndInvalidatesOnPublication(t *testing.
 			{{Field: "repository_name", Op: "="}}, {{Field: "repository_name", Op: "!="}}, {{Field: "mcp_server", Op: "!=", Value: "pharos"}},
 			{{Field: "tool_name", Op: "=", Value: "Bash", Negated: true}, {Field: "program", Op: "is_not_null"}},
 			{{Field: "model", Op: "is_null"}}, {{Field: "activity", Op: "=", Value: "git"}, {Field: "operation_name", Op: "!=", Value: "git status"}},
+			{{Field: "started_at", Op: ">=", Value: midnight(2026, 9, 1)}},
+			{{Field: "started_at", Op: "<", Value: midnight(2026, 9, 1)}},
 		} {
 			q := metricRequest(qt.AggSpec{ID: "time", Op: "sum", Field: "duration_ms", GroupBy: groups}, qt.AggSpec{ID: "timed", Op: "count", Field: "duration_ms", GroupBy: groups},
 				qt.AggSpec{ID: "calls", Op: "count", GroupBy: groups}, qt.AggSpec{ID: "population", Op: "count"})
@@ -152,7 +154,6 @@ func TestMachineTimeProjectionMatchesCubeAndInvalidatesOnPublication(t *testing.
 		{Version: 2, Limit: 50, Where: []qt.WhereTerm{{Field: "duration_ms", Op: ">", Value: "100"}}, Metrics: []qt.AggSpec{{ID: "time", Op: "sum", Field: "duration_ms"}}},
 		{Version: 2, Limit: 50, Where: []qt.WhereTerm{{Field: "tool_name", Op: "contains", Value: "Ba"}}, Metrics: []qt.AggSpec{{ID: "calls", Op: "count"}}},
 		{Version: 2, Limit: 50, Where: []qt.WhereTerm{{Field: "started_at", Op: ">=", Value: time.Date(2026, 1, 1, 12, 0, 0, 0, time.Local).Format(time.RFC3339)}, {Field: "started_at", Op: "<", Value: midnight(2027, 1, 1)}}, Metrics: []qt.AggSpec{{ID: "calls", Op: "count"}}},
-		{Version: 2, Limit: 50, Where: []qt.WhereTerm{{Field: "started_at", Op: ">=", Value: midnight(2026, 1, 1)}}, Metrics: []qt.AggSpec{{ID: "calls", Op: "count"}}},
 	} {
 		if _, handled, err := accelerated(q); handled || err != nil {
 			t.Fatal("accelerator answered a raw-call shape", q, handled, err)

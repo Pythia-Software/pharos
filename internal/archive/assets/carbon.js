@@ -204,7 +204,16 @@
   };
   const load = () => { const saved = window.pharosPrefs.get(STORE, {}); return saved && typeof saved === 'object' ? saved : {}; };
   const save = () => window.pharosPrefs.set(STORE, prefs);
-  const prefs = load();
+  const routeSettings = () => {
+    if (typeof location === 'undefined') return null;
+    const encoded = new URLSearchParams(location.search).get('analyze_carbon');
+    if (!encoded) return null;
+    try {
+      const value = JSON.parse(encoded);
+      return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+    } catch { return null; }
+  };
+  const prefs = {...(routeSettings() || load())};
   let data = null, factorsData = null, error = '', usageLabel = 'all time', usageScope = '';
   const disclosureState = new Map();
 
@@ -841,10 +850,31 @@
   }
 
   function updatePreferences(change) {
-    Object.assign(prefs, change); save(); render();
+    Object.assign(prefs, change); save(); syncSettingsURL(); render();
     // Usage rows carry estimates under the saved settings, so listeners that
     // refetch must wait for the save rather than the debounced write.
     Promise.resolve(window.pharosPrefs.flush?.()).then(() => window.dispatchEvent(new Event('pharos:carbon-settings')));
+  }
+
+  // A linked estimate must be independent of the next reader's preferences.
+  // Visiting the link applies an override without changing saved settings.
+  function settingsSnapshot(factors = factorsData) {
+    if (!factors) return {...prefs};
+    const setup = settings(factors), comparison = comparisonSettings(factors);
+    return {scenario: setup.scenario, pueScenario: setup.pueScenario, inputSensitivity: setup.inputSensitivity,
+      grid: setup.grid?.key ?? 'custom', customGrid: Math.max(0, Number(prefs.customGrid) || 0),
+      vehicle: comparison.vehicleKey, flightFrom: comparison.from.key, flightTo: comparison.to.key};
+  }
+
+  function syncSettingsURL() {
+    if (typeof location === 'undefined' || typeof history === 'undefined') return;
+    const url = new URL(location.href);
+    if (url.pathname !== '/analyze' || !(url.searchParams.get('analyze_topic') === 'carbon' || url.searchParams.get('analyze_view') === 'carbon')) return;
+    url.searchParams.set('analyze_carbon', JSON.stringify(settingsSnapshot()));
+    if (url.href !== location.href) {
+      history.replaceState(history.state, '', url);
+      window.dispatchEvent(new Event('pharos:uri-changed'));
+    }
   }
 
   function restoreFocus(focused, ...roots) {
@@ -985,6 +1015,7 @@
     error = '';
     usageLabel = label || 'all time';
     usageScope = scope || usageLabel;
+    syncSettingsURL();
     render();
   }
 
@@ -1002,6 +1033,12 @@
   const sheet = node('style');
   sheet.textContent = CSS;
   document.head.append(sheet);
-  window.pharosCarbon = {show, pending, estimate, mass, energy};
+  window.pharosCarbon = {show, pending, estimate, mass, energy, settingsSnapshot};
+  window.addEventListener('pharos:route', () => {
+    for (const key of Object.keys(prefs)) delete prefs[key];
+    Object.assign(prefs, routeSettings() || load());
+    render();
+    window.dispatchEvent(new Event('pharos:carbon-settings'));
+  });
   window.dispatchEvent(new Event('pharos:carbon-ready'));
 })();

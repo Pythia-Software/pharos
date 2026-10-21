@@ -1275,3 +1275,59 @@ WHEN (old.native_id,old.conversation_id) IS NOT (new.native_id,new.conversation_
  INSERT INTO parallelism_dirty VALUES(old.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
  INSERT INTO parallelism_dirty VALUES(new.conversation_id,hex(randomblob(8))) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision;
 END;
+
+-- Exact substring membership for Usage queries. Normalize with the same Unicode
+-- lowercase function as the query compiler, then preserve those codepoints in
+-- a case-sensitive trigram tokenizer. Backfill readiness is tracked in meta.
+CREATE VIRTUAL TABLE IF NOT EXISTS tool_query_text_fts USING fts5(body,content='',contentless_delete=1,tokenize='trigram case_sensitive 1');
+CREATE VIRTUAL TABLE IF NOT EXISTS human_query_text_fts USING fts5(body,content='',contentless_delete=1,tokenize='trigram case_sensitive 1');
+CREATE TRIGGER IF NOT EXISTS tool_query_text_insert AFTER INSERT ON tool_calls WHEN new.command IS NOT NULL AND new.command<>'' BEGIN
+ INSERT INTO tool_query_text_fts(rowid,body) VALUES(new.rowid,qt_lower(new.command));
+END;
+CREATE TRIGGER IF NOT EXISTS tool_query_text_delete AFTER DELETE ON tool_calls BEGIN
+ DELETE FROM tool_query_text_fts WHERE rowid=old.rowid;
+END;
+CREATE TRIGGER IF NOT EXISTS tool_query_text_update AFTER UPDATE OF command ON tool_calls BEGIN
+ DELETE FROM tool_query_text_fts WHERE rowid=old.rowid;
+ INSERT INTO tool_query_text_fts(rowid,body) SELECT new.rowid,qt_lower(new.command) WHERE new.command IS NOT NULL AND new.command<>'';
+END;
+CREATE TRIGGER IF NOT EXISTS human_query_text_insert AFTER INSERT ON message_authorship BEGIN
+ INSERT INTO human_query_text_fts(rowid,body) SELECT new.rowid,qt_lower(text) FROM messages WHERE id=new.message_id AND text IS NOT NULL AND text<>'';
+END;
+CREATE TRIGGER IF NOT EXISTS human_query_text_delete AFTER DELETE ON message_authorship BEGIN
+ DELETE FROM human_query_text_fts WHERE rowid=old.rowid;
+END;
+CREATE TRIGGER IF NOT EXISTS human_query_text_update AFTER UPDATE OF message_id ON message_authorship BEGIN
+ DELETE FROM human_query_text_fts WHERE rowid=old.rowid;
+ INSERT INTO human_query_text_fts(rowid,body) SELECT new.rowid,qt_lower(text) FROM messages WHERE id=new.message_id AND text IS NOT NULL AND text<>'';
+END;
+CREATE TRIGGER IF NOT EXISTS human_query_text_body_update AFTER UPDATE OF text ON messages BEGIN
+ DELETE FROM human_query_text_fts WHERE rowid IN (SELECT rowid FROM message_authorship WHERE message_id=new.id);
+ INSERT INTO human_query_text_fts(rowid,body) SELECT rowid,qt_lower(new.text) FROM message_authorship WHERE message_id=new.id AND new.text IS NOT NULL AND new.text<>'';
+END;
+
+-- The summary's usual descending call-count page uses the same typed numeric
+-- order and stable identity tie as the query adapter.
+CREATE INDEX IF NOT EXISTS tool_usage_daily_calls_page_idx
+ ON tool_usage_daily(CASE WHEN qt_v2_field_error(call_count,'number') IS NULL THEN call_count END DESC,id ASC);
+
+-- One narrow fact per raw call, sharing its rowid with the substring index.
+-- Membership lookups can seek directly to scalars without reading payload pages.
+CREATE TABLE IF NOT EXISTS tool_query_facts (
+ rowid INTEGER PRIMARY KEY,id TEXT NOT NULL UNIQUE,workspace_id TEXT NOT NULL,
+ started_at TEXT,duration_ms INTEGER,provider TEXT,activity TEXT,tool_category TEXT,day TEXT
+);
+CREATE INDEX IF NOT EXISTS tool_query_facts_page_idx ON tool_query_facts(started_at DESC,id ASC);
+CREATE INDEX IF NOT EXISTS tool_query_facts_duration_idx ON tool_query_facts(CASE WHEN qt_v2_field_error(duration_ms,'number') IS NULL THEN duration_ms END DESC,id ASC);
+CREATE TRIGGER IF NOT EXISTS tool_query_facts_insert AFTER INSERT ON tool_calls BEGIN
+ INSERT INTO tool_query_facts(rowid,id,workspace_id,started_at,duration_ms,provider,activity,tool_category,day)
+ VALUES(new.rowid,new.id,new.workspace_id,new.started_at,new.duration_ms,new.provider,machine_activity(new.tool_category,new.command_category,new.tool_name,new.mcp_server,new.program),new.tool_category,date(new.started_at,'localtime'));
+END;
+CREATE TRIGGER IF NOT EXISTS tool_query_facts_delete AFTER DELETE ON tool_calls BEGIN
+ DELETE FROM tool_query_facts WHERE rowid=old.rowid;
+END;
+CREATE TRIGGER IF NOT EXISTS tool_query_facts_update AFTER UPDATE OF id,workspace_id,started_at,duration_ms,provider,tool_category,command_category,tool_name,mcp_server,program ON tool_calls BEGIN
+ DELETE FROM tool_query_facts WHERE rowid=old.rowid;
+ INSERT INTO tool_query_facts(rowid,id,workspace_id,started_at,duration_ms,provider,activity,tool_category,day)
+ VALUES(new.rowid,new.id,new.workspace_id,new.started_at,new.duration_ms,new.provider,machine_activity(new.tool_category,new.command_category,new.tool_name,new.mcp_server,new.program),new.tool_category,date(new.started_at,'localtime'));
+END;

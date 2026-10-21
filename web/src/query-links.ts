@@ -1,4 +1,5 @@
 import { decodeQueryStrict, localQuerySnapshotCache, encodeQuery, type QueryState } from "@pythia-software/query-table-core";
+import { isUsageWorkspace, readUsageWorkspace, usageDatasetTopics, type UsageDataset } from "./usage-workspace-model";
 
 export const queryDatasets = ["library", "usage", "conversation_activity", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "parallelism", "findings"] as const;
 export type QueryDataset = typeof queryDatasets[number];
@@ -83,19 +84,14 @@ export function rollingQueryMatches(query: QueryState, window: RollingWindow): b
 export function queryURL(dataset: QueryDataset, query: QueryState, window?: RollingWindow): string {
   const params = new URLSearchParams({ [`q_${dataset}`]: encodeQuery(window?.mode === "relative" ? resolveRollingQuery(query, window) : query) });
   let path = "/library";
-  if (["tools", "tool_calls", "skill_usages"].includes(dataset)) {
-    path = "/tools";
-    if (dataset !== "tool_calls") params.set("tools_view", dataset === "tools" ? "summary" : "skills");
-  } else if (["usage", "conversation_activity", "writing", "writing_messages"].includes(dataset)) {
-    path = "/usage";
-    params.set("usage", dataset === "usage" ? "tokens" : dataset === "conversation_activity" ? "conversations" : "writing");
-    if (dataset === "writing_messages") params.set("writing", "messages");
-  } else if (dataset === "parallelism") {
-    path = "/usage";
-    params.set("usage", "tokens"); params.set("machine_view", "parallelism");
+  if (Object.hasOwn(usageDatasetTopics, dataset)) {
+    path = "/analyze";
+    params.set("analyze_mode", "query");
+    params.set("analyze_topic", usageDatasetTopics[dataset as UsageDataset]);
+    params.set("analyze_data", dataset);
   } else if (dataset === "findings") {
     path = "/findings"; params.set("view", "table");
-  } else if (dataset === "mcp_calls") path = "/mcp";
+  }
   else if (dataset === "tl1_attempts") path = "/tl1/runs";
   if (window) {
     if (window.mode === "relative") params.set("window_mode", "relative");
@@ -109,12 +105,14 @@ export function queryFromURL(url: string, fallback?: QueryState): { dataset: Que
     const parsed = new URL(url, location.origin);
     if (parsed.origin !== location.origin) return;
     const params = parsed.searchParams, path = parsed.pathname;
+    const workspace = path === "/analyze" && isUsageWorkspace(params) ? readUsageWorkspace(params) : null;
     // Older URLs can carry offscreen tables' state as well. The route and
     // selected tab decide the dataset, rather than the first q_* parameter.
-    const dataset: QueryDataset | undefined = path === "/library" || path === "/" ? "library"
-      : path === "/usage" && params.get("machine_view") === "parallelism" && params.has("q_parallelism") ? "parallelism"
+    const dataset: QueryDataset | undefined = workspace ? workspace.mode === "dashboards" ? undefined : workspace.dataset
+      : path === "/library" || path === "/" ? "library"
+      : path === "/analyze" && params.get("machine_view") === "parallelism" && params.has("q_parallelism") ? "parallelism"
       : path === "/findings" ? params.get("view") === "table" ? "findings" : undefined
-      : path === "/usage" ? params.get("usage") === "conversations" ? "conversation_activity" : params.get("usage") === "writing" ? params.get("writing") === "messages" ? "writing_messages" : "writing" : "usage"
+      : path === "/analyze" ? params.get("analyze_view") === "conversations" ? "conversation_activity" : params.get("analyze_view") === "writing" ? params.get("writing") === "messages" ? "writing_messages" : "writing" : "usage"
       : path === "/tools" ? params.get("tools_view") === "summary" ? "tools" : params.get("tools_view") === "skills" ? "skill_usages" : "tool_calls"
       : path === "/mcp" ? "mcp_calls" : path.startsWith("/tl1") ? "tl1_attempts" : undefined;
     if (dataset) {

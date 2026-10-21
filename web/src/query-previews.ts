@@ -2,8 +2,9 @@ import { apiCostTrendQuery, apiCostTrendFacts, buildApiCostTrend, usesApiCostTre
 import { formatMetricOutput } from "@pythia-software/query-table-ui";
 import { metricPopulationError, parseRelativeDuration, createGroupingModel, sourceExecutionSchema, toQueryRequestV3, validateQueryResultV3, validateComputedColumn, toMetricQuery, toServerQueryV2, type QueryCapabilitiesV3, type QueryResultV3, type ComputedColumn, type AggregationClause, type AggregationResult, type AggregationResultEntry, type ComputedExecution, type FieldSchema, type MetricCapabilities, type MetricQuery, type QueryState } from "@pythia-software/query-table-core";
 import { categoryForQuery, queryCategories } from "./query-categories";
-import { foldSeries, type ChartBucket, type ChartSeries } from "./chart-series";
-import { resolveRollingQuery, rollingQueryMatches, type QueryDataset, type RollingWindow } from "./query-links";
+import { chartBucketsWithHistory, foldSeries, rollingAverageBuckets, validRollingPeriods, type ChartBucket, type ChartSeries } from "./chart-series";
+import { earliestKey, parseDay, shiftPeriod } from "./chart-period";
+import { resolveRollingQuery, rollingQueryMatches, rollingWindowField, type QueryDataset, type RollingWindow } from "./query-links";
 import type { QueryRecipe } from "./curiosity-data";
 import { readTextSearch, textFindParameters } from "./text-search-model";
 import { cardCoverQuery, humanStudyCoverMatches, type CardCover } from "./card-cover";
@@ -101,7 +102,39 @@ function keyLabel(schema: FieldSchema, field: string): ((key: unknown) => string
   return key => { const option = values.options.find(option => typeof option === "object" && option.value === key); return typeof option === "object" ? option.label : String(key ?? "Unspecified"); };
 }
 
-function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema: FieldSchema): QueryPreview {
+const dailyColumns = (clause: AggregationClause) => !clause.expression && !clause.distribution && (!clause.display || clause.display.kind === "auto") && clause.groupBy[0] === "day" && clause.op === "sum";
+function smoothingPeriods(job: PreviewJob, query: QueryState): number {
+  const options = job.options, clause = query.aggregations?.find(metric => metric.id === options?.coverMetricId) ?? query.aggregations?.[0];
+  const periods = (options?.cover ?? options?.recipe?.cover)?.timeline?.rollingPeriods;
+  return clause && dailyColumns(clause) && validRollingPeriods(periods) && periods > 1 ? periods : 0;
+}
+
+function stamp(value: string, now: number): Date {
+  const relative = parseRelativeDuration(value);
+  return new Date(relative === null ? value : now + relative);
+}
+function lowerBound(query: QueryState, field: string, now: number): Date | undefined {
+  const source = query.grouping?.source ?? query;
+  const dates = source.where.flatMap(term => "field" in term && term.field === field && !term.negated && [">", ">="].includes(term.op) ? [stamp(term.value, now)] : []).filter(date => Number.isFinite(date.getTime()));
+  return dates.length ? new Date(Math.max(...dates.map(date => date.getTime()))) : undefined;
+}
+
+// Fetch chart context separately: a relative display window can cut through
+// its first calendar day, so its exact totals cannot be recovered by trimming
+// a broader daily reduction. Saved predicates and result-stage filters survive.
+function smoothingQuery(job: PreviewJob, query: QueryState, now: number): QueryState | undefined {
+  const periods = smoothingPeriods(job, query), field = job.options?.window?.field ?? job.options?.recipe?.field ?? rollingWindowField(job.dataset);
+  if (!periods || !field) return;
+  const start = lowerBound(query, field, now);
+  if (!start) return; // All history is already present in an unbounded query.
+  const from = shiftPeriod(start, "day", 1 - periods), source = query.grouping?.source ?? query;
+  const where = source.where.filter(term => !("field" in term && term.field === field && !term.negated && [">", ">="].includes(term.op)));
+  if (from) where.push({ field, op: ">=", value: from.toISOString() });
+  return query.grouping ? { ...query, grouping: { ...query.grouping, source: { ...source, where } } } : { ...query, where };
+}
+
+type SmoothingHistory = { query: QueryState; payload: Payload };
+function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema: FieldSchema, history?: SmoothingHistory): QueryPreview {
   const options = job.options ?? {}, recipe = options.recipe;
   const searchNote = payload.find?.search ? payload.find.search.complete ? "This search batch" : "Partial search batch; open the search to continue" : undefined;
   const tone = queryCategories[recipe?.category ?? categoryForQuery(job.dataset, query)].tone;
@@ -160,10 +193,11 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     result.groupCount !== undefined && result.groupCount > result.buckets.length ? "Open the view for all results" : undefined,
     hidden ? `${hidden.toLocaleString()} ${hidden === 1 ? "group" : "groups"} hidden (fewer than ${clause.minCount?.toLocaleString()} rows)` : undefined,
     result.buckets.some(bucket => bucket.error || bucket.yError) ? "Some groups have calculation errors" : undefined];
-  let ready = values.length > 0;
+  let ready = values.length > 0, eligible = true;
   if (options.suggested && recipe?.eligibility && !query.grouping) {
     const evidence = metrics.find(item => item.clause.id === recipe.eligibility!.metricId)?.result;
-    ready &&= Boolean(evidence && !evidence.error && evidence.buckets.some(bucket => !bucket.error && typeof bucket.value === "number" && bucket.value >= recipe.eligibility!.minValue));
+    eligible = Boolean(evidence && !evidence.error && evidence.buckets.some(bucket => !bucket.error && typeof bucket.value === "number" && bucket.value >= recipe.eligibility!.minValue));
+    ready &&= eligible;
   }
   const preview: QueryPreview = { density: (options.cover ?? recipe?.cover)?.density, stackBy: (options.cover ?? recipe?.cover)?.stackBy, coverHeight: (options.cover ?? recipe?.cover)?.height, legendColumns: (options.cover ?? recipe?.cover)?.legendColumns, state: ready ? "ready" : "empty", total, summary, note: notes.filter(Boolean).join(" · ") || undefined, metrics, fields: schema.fields, coverMetricId: clause.id };
   const minimum = (options.cover ?? recipe?.cover)?.minSamples;
@@ -200,13 +234,18 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     preview.groupLabels = Object.fromEntries(values.map(bucket => [JSON.stringify(bucket.keys), bucket.keys.map((key, i) => keyLabels[i]?.(key) ?? String(key ?? "Unspecified")).join(" · ")]));
   }
   // Existing daily covers keep the Usage palette, calendar gaps and exact Other.
-  if (!clause.expression && !clause.distribution && (!clause.display || clause.display.kind === "auto") && clause.groupBy[0] === "day" && clause.op === "sum" && numeric.length) {
+  if (dailyColumns(clause) && (numeric.length || history)) {
     preview.timeline = (options.cover ?? recipe?.cover)?.timeline;
     if (preview.timeline?.percent && (limited || result.buckets.some(bucket => bucket.error || bucket.yError))) throw new Error("Complete daily totals are required for percentage shares.");
+    const periods = smoothingPeriods(job, query);
+    const chartResult = history ? history.payload.metrics?.find(metric => metric.id === clause.id) : result;
+    if (!chartResult) throw new Error(`No smoothing history returned for ${clause.label ?? clause.id}.`);
+    if (periods && (chartResult.error || chartResult.coverage === "partial" || (chartResult.hiddenGroups ?? 0) > 0 || (chartResult.groupCount ?? 0) > chartResult.buckets.length || chartResult.buckets.some(bucket => bucket.error || bucket.yError))) throw new Error("Complete daily totals are required for smoothing.");
+    const chartValues = periods ? chartResult.buckets.filter(bucket => typeof bucket.value === "number" && Number.isFinite(bucket.value) && bucket.count !== 0) : numeric;
     // Recorded durations chart as hours; milliseconds make unreadable axes.
     const scale = clause.field === "duration_ms" ? 36e5 : 1;
-    const entries = numeric.map(bucket => [String(bucket.keys[0]), bucket.keys.length > 1 ? bucket.keys.slice(1).map((key, i) => keyLabels[i + 1]?.(key) ?? String(key ?? "Unspecified")).join(" · ") : clause.label ?? "Total", Number(bucket.value) / scale] as [string, string, number]);
-    const observed = [...new Set(entries.map(([key]) => key))].sort();
+    const entries = chartValues.map(bucket => [String(bucket.keys[0]), bucket.keys.length > 1 ? bucket.keys.slice(1).map((key, i) => keyLabels[i + 1]?.(key) ?? String(key ?? "Unspecified")).join(" · ") : clause.label ?? "Total", Number(bucket.value) / scale] as [string, string, number]);
+    const observed = [...new Set(numeric.map(bucket => String(bucket.keys[0])))].sort();
     const days = options.window?.days ?? Math.min(90, observed.length);
     const bound = options.window && (query.grouping?.source.where ?? query.where).find(term => "field" in term && term.field === options.window!.field && term.op === ">=");
     const now = new Date(payload.now ?? Date.now());
@@ -215,11 +254,18 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
     const chart: ChartBucket[] = [];
     for (let i = 0; i < count; i++) { const date = new Date(start); date.setHours(0, 0, 0, 0); date.setDate(date.getDate() + i); const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`; chart.push({ key, date, values: {} }); }
     if (!options.window) chart.splice(0, chart.length, ...observed.slice(-90).map(key => ({ key, date: new Date(`${key}T12:00:00`), values: {} })));
-    if (observed.length > 90 && !options.window) preview.note = [preview.note, "Chart shows the last 90 observed day buckets"].filter(Boolean).join(" · ");
+    if (observed.length > 90 && !options.window) preview.note = [preview.note, periods ? "Chart fills calendar gaps across the last 90 observed dates" : "Chart shows the last 90 observed day buckets"].filter(Boolean).join(" · ");
+    if (periods && chart.length) {
+      const field = options.window?.field ?? recipe?.field ?? rollingWindowField(job.dataset);
+      const historyStart = field ? lowerBound(history?.query ?? query, field, now.getTime()) : undefined;
+      const extended = chartBucketsWithHistory("day", chart[0].date, chart.at(-1)!.date, 1, entries.map(([key]) => parseDay(key)), historyStart ?? earliestKey(entries.map(([key]) => key)));
+      chart.splice(0, chart.length, ...extended);
+    }
     preview.buckets = chart;
     preview.series = foldSeries(entries, new Map(chart.map(bucket => [bucket.key, bucket])), name => name || "Unspecified", undefined, [], Math.max(clause.display?.maxGroups ?? 4, clause.groupBy.at(-1) === "level_band" ? 4 : 0), recipe?.scope ?? clause.groupBy.at(-1) ?? "query");
     if (clause.display?.showOther === false) preview.series = preview.series.filter(item => !item.hiddenCount);
     if (clause.groupBy.length === 1 && preview.series[0]) preview.series[0].color = tone;
+    if (!ready && eligible && periods && rollingAverageBuckets(chart, periods, { period: "day" }).some(bucket => !bucket.history && Object.values(bucket.values).some(value => value > 0))) preview.state = "ready";
   }
   if (query.grouping && recipe?.exploration && !clause.distribution && !clause.expressionY && (!additive || !recipe.exploration.coverMetric)) {
     const count = result.groupCount ?? result.processedRows ?? values.length;
@@ -337,18 +383,34 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
       } else resolved.push({ job, query: resolveRollingQuery(job.query, job.options?.window, clock), search: searchContext(job) });
     } catch (error) { publish(job.id, undefined, error); }
   }
-  type Item = typeof resolved[number];
+  type Item = typeof resolved[number] & { now: number; accept: (data: Cached) => void; fail: (error: unknown) => void };
   const groups = new Map<string, Item[]>();
-  for (const item of resolved) {
+  function enqueue(item: Item) {
     if (signal?.aborted) return;
     const key = JSON.stringify([item.job.dataset, item.query, item.search]), cached = cache.get(key);
     if (cached && Date.now() - cached.at < 60_000) {
-      try { publish(item.job.id, previewOf(item.job, item.query, cached.payload, cached.schema)); } catch (error) { publish(item.job.id, undefined, error); }
-      continue;
+      item.accept(cached);
+      return;
     }
     const grouped = Boolean(item.query.aggregations?.length);
-    const groupKey = JSON.stringify([item.job.dataset, item.search, grouped, item.query.where, grouped && !item.query.aggregations?.some(metric => metric.scope === "shownRows") ? null : [item.query.select, item.query.orderBy, item.query.limit, item.query.offset]]);
+    const groupKey = JSON.stringify([item.job.dataset, item.search, item.now, grouped, item.query.where, item.query.grouping?.source.where, grouped && !item.query.aggregations?.some(metric => metric.scope === "shownRows") ? null : [item.query.select, item.query.orderBy, item.query.limit, item.query.offset]]);
     const group = groups.get(groupKey) ?? []; group.push(item); groups.set(groupKey, group);
+  }
+  for (const item of resolved) {
+    const cached = cache.get(JSON.stringify([item.job.dataset, item.query, item.search]));
+    const now = cached && Date.now() - cached.at < 60_000 ? cached.payload.now ?? clock.getTime() : clock.getTime();
+    const historyQuery = smoothingQuery(item.job, item.query, now);
+    let visible: Cached | undefined, history: Cached | undefined, done = false;
+    const fail = (error: unknown) => { if (!done && !signal?.aborted) { done = true; publish(item.job.id, undefined, error); } };
+    const complete = () => {
+      if (done || signal?.aborted || !visible || historyQuery && !history) return;
+      try {
+        const preview = previewOf(item.job, item.query, visible.payload, visible.schema, historyQuery && history ? { query: historyQuery, payload: history.payload } : undefined);
+        done = true; publish(item.job.id, preview);
+      } catch (error) { fail(error); }
+    };
+    enqueue({ ...item, now, fail, accept: data => { visible = data; complete(); } });
+    if (historyQuery) enqueue({ ...item, query: historyQuery, now, fail, accept: data => { history = data; complete(); } });
   }
   const tasks: Item[][] = [];
   for (const group of groups.values()) {
@@ -377,7 +439,7 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
             const labels = Boolean(item.query.grouping && item.job.options?.recipe?.exploration?.labelFields);
             const labelLimit = Math.max(12, ...(item.query.aggregations ?? []).map(metric => Math.max(metric.groupLimit ?? 0, metric.display?.maxGroups ?? 0)));
             const query = labels ? { ...item.query, limit: labelLimit } : item.query.aggregations?.length ? item.query : { ...item.query, limit: Math.min(item.query.limit || 3, 3) };
-            const request = toQueryRequestV3(query, item.job.schema, ctx.queryCapabilities, ctx.execution, { now: clock.getTime(), rows: labels || !query.aggregations?.length });
+            const request = toQueryRequestV3(query, item.job.schema, ctx.queryCapabilities, ctx.execution, { now: item.now, rows: labels || !query.aggregations?.length });
             if (request.diagnostics.length) throw new Error(request.diagnostics.join(" · "));
             const schema = query.grouping ? createGroupingModel(sourceExecutionSchema(item.job.schema, ctx.execution)).resultSchema(query.grouping.keys, query.grouping.summaries) : ctx.schema;
             const result = await fetchPreview<QueryResultV3 & Pick<Payload, "find">>(`/api/query/${item.job.dataset}/query-v3${item.search}`, signal, request);
@@ -392,7 +454,7 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
             if (request.diagnostics.length) throw new Error(request.diagnostics.map(d => d.message).join(" · "));
             finish(item, await fetchPreview<Payload>(`/api/query/${item.job.dataset}/rows-v2${item.search}`, signal, request), ctx.schema);
           }
-        } catch (error) { if (!signal?.aborted) publish(item.job.id, undefined, error); }
+        } catch (error) { item.fail(error); }
       }
       if (!valid.length || signal?.aborted) return;
       const request = { ...valid[0].request, expectedRevisions: Object.assign({}, ...valid.map(({ request }) => request.expectedRevisions)), metrics: valid.flatMap(({ request }, i) => request.metrics.map((metric, j) => ({ ...metric, id: `preview:${i}:${j}` }))) };
@@ -411,14 +473,14 @@ export async function loadQueryPreviews(jobs: PreviewJob[], publish: (id: string
           for (const { item } of valid) await run([item]);
         } else throw error;
       }
-    } catch (error) { if (!signal?.aborted) for (const { job } of items) publish(job.id, undefined, error); }
+    } catch (error) { for (const item of items) item.fail(error); }
   }
   function finish(item: Item, payload: Payload, schema: FieldSchema) {
     if (signal?.aborted) return;
     if (cache.size >= 200) cache.delete(cache.keys().next().value!);
-    payload = { ...payload, now: payload.now ?? clock.getTime() };
+    payload = { ...payload, now: payload.now ?? item.now };
     cache.set(JSON.stringify([item.job.dataset, item.query, item.search]), { at: Date.now(), payload, schema });
-    try { publish(item.job.id, previewOf(item.job, item.query, payload, schema)); } catch (error) { publish(item.job.id, undefined, error); }
+    item.accept({ at: Date.now(), payload, schema });
   }
   let cursor = 0;
   async function work() { while (cursor < tasks.length && !signal?.aborted) await run(tasks[cursor++]); }

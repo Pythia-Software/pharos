@@ -56,7 +56,20 @@ func (c *Catalog) nativeMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2
 		now = time.Now()
 	}
 	// The adapter's own row filter, as it applies it to count the population.
-	filter, err := qt.CompileSQLiteWhere(q.Where, d.Schema, qt.SQLiteOptions{Now: now})
+	where := q.Where
+	if table != nil {
+		where = table.residualWhere(where)
+		consumed := whereFields(where)
+		for _, spec := range q.Metrics {
+			consumed = append(consumed, spec.GroupBy...)
+			if spec.Field != "" {
+				consumed = append(consumed, spec.Field)
+			}
+		}
+		projected, _ := table.project(consumed).preferCoveringScan(q.Where)
+		d.SourceSQL, d.SourceArgs = projected.v2WindowedSource(d.Schema, q.Where, now)
+	}
+	filter, err := qt.CompileSQLiteWhere(where, d.Schema, qt.SQLiteOptions{Now: now})
 	if err != nil {
 		return qt.SQLiteV2ExecutionResult{}, false, nil
 	}
@@ -72,6 +85,9 @@ func (c *Catalog) nativeMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2
 			if err != nil || !safe || matched > int64(population) {
 				return nil, matched, err == nil && matched > int64(population), err
 			}
+			if groups, matched, used, err := c.nativeTextComplementGroups(ctx, tx, *table, d.Schema, q.Where, keys, fields, now); used || err != nil {
+				return groups, matched, used, err
+			}
 		}
 		return nativeGroups(ctx, tx, d.SourceSQL, predicate, args, keys, fields.names, fields.counted, table == nil)
 	})
@@ -85,7 +101,11 @@ func (c *Catalog) nativeMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQLiteV2
 // answer is cached for the snapshot's data generation, as page counts are, so
 // a request repeated between writes reads its rows once.
 func (c *Catalog) nativeTableBounds(ctx context.Context, tx *sql.Tx, table sqlDataset, schema qt.Schema, fields []string, population int, count string, args []any) (int64, bool, error) {
-	matched, err := c.queryCount(ctx, tx, "SELECT COUNT(*) FROM ("+table.project([]string{schema.IDField}).v2Source(schema)+")", nil)
+	var fast []func(context.Context, *sql.Tx) (int64, bool, error)
+	if table.cube == toolCallCube {
+		fast = append(fast, c.freshToolCubeCount)
+	}
+	matched, err := c.queryCount(ctx, tx, "SELECT COUNT(*) FROM ("+table.project([]string{schema.IDField}).v2Source(schema)+")", nil, fast...)
 	if err == nil && matched > int64(population) {
 		matched, err = c.queryCount(ctx, tx, count, args)
 	}

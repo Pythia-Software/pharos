@@ -18,6 +18,14 @@ export function population(schema, { now = Date.now(), count = 96 } = {}) {
   return Array.from({ length: count }, (_, index) => {
     const at = new Date(now - (index % 40 + .25) * day).toISOString();
     const row = Object.fromEntries(schema.fields.map(field => [field.name, field.type === "datetime" ? at : field.type === "number" ? (index + 1) * 100 : field.type === "bool" ? index % 2 === 0 : `${field.name}-${index % 3}`]));
+    // Calendar bucket keys are text dimensions. Keep their synthetic values
+    // on the same date/ISO-hour contract as the service.
+    if (Object.hasOwn(row, "hour")) row.hour = `${at.slice(0, 13)}:00:00.000Z`;
+    if (Object.hasOwn(row, "month")) row.month = at.slice(0, 7);
+    if (Object.hasOwn(row, "week")) {
+      const monday = new Date(at); monday.setUTCDate(monday.getUTCDate() - (monday.getUTCDay() + 6) % 7);
+      row.week = monday.toISOString().slice(0, 10);
+    }
     return { ...row, id: `row-${index}`, day: at.slice(0, 10), title: `Work ${index % 8}`, conversation_id: `conversation-${index % 8}`, root_conversation_id: `conversation-${index % 8}`,
       work_id: `row-${index % 8}`, workspace_id: `row-${index % 8}`, location: `/repo/dir-${index % 4}`, repository_name: `repo-${index % 3}`, root_repository_name: `repo-${index % 3}`,
       provider: index % 2 ? "codex" : "claude", root_provider: index % 2 ? "codex" : "claude", session_kind: index % 3 ? "root" : "subagent",

@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { applyQuery, loadSchema, EMPTY_QUERY } from "@pythia-software/query-table-core";
 import toolCalls from "../../../../schemas/tool_calls.schema.json";
-import { machineWindow, machineDay, machineWhere, activityFor, timeFacts, totalTime, groupTime, relativeChange, exampleTimeFacts, exampleConcurrency, noRepository, operationKey, operationName, activityPresentation, timeValue, factsFromCalls, exampleTimeCalls, previousTimeWhere, timeAggregationWhere, machineDrilldownWhere, selectedMachineRepository } from "../../../src/machine-activity-data";
+import { machineWindow, machineDay, machineWhere, activityFor, timeFacts, totalTime, groupTime, relativeChange, noRepository, operationKey, operationName, activityPresentation, timeValue, factsFromCalls, previousTimeWhere, timeAggregationWhere, machineDrilldownWhere, selectedMachineRepository } from "../../../src/machine-activity-data";
+import { exampleTimeFacts, exampleConcurrency, exampleTimeCalls } from "../helpers/machine-activity-fixtures";
 process.env.TZ = "America/Denver";
 const scope = { days: 7, repository: "repo-a", provider: "codex", model: "example-model" };
 const window = machineWindow(7, new Date("2026-03-10T19:25:00-06:00"));
@@ -35,7 +36,7 @@ test("missing timing is excluded from averages while recorded zero-duration call
   assert.equal(total.duration / total.timed, 45000);
   assert.equal(facts[2].repository, noRepository);
   assert.equal(groupTime(facts, fact => fact.activity)[0].key, "test");
-  assert.equal(machineWhere({ ...scope, repository: noRepository, operationKey, operationName, activityPresentation, timeValue, factsFromCalls, exampleTimeCalls, previousTimeWhere }, window)[0].any[0].op, "is_null");
+  assert.equal(machineWhere({ ...scope, repository: noRepository, operationKey, operationName, activityPresentation, timeValue, factsFromCalls, previousTimeWhere }, window)[0].any[0].op, "is_null");
 });
 
 test("activity is based on recorded categories and never invents preflight or reasoning time", () => {

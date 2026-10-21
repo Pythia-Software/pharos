@@ -246,19 +246,21 @@ const inlineChars = 400;
 // Table cells: the start of a message on one line, highlighted, with each
 // span's category and reason as its tooltip.
 export const authoredRenderers = {
-  authored_text({ row }: CellContext<Row>) {
+  authored_text({ row, presentation }: CellContext<Row>) {
+    const detail = presentation === "property", limit = detail ? Infinity : inlineChars;
     const shown: React.ReactNode[] = [];
     let used = 0;
     for (const [index, segment] of segmentsOf(row).entries()) {
-      if (used >= inlineChars) break;
+      if (used >= limit) break;
       // Harness blocks shrink to a marker, so the text after them shows.
-      const text = segment.category === "harness" ? "harness " : segment.text.slice(0, inlineChars - used);
+      const text = !detail && segment.category === "harness" ? "[Harness instructions] " : segment.text.slice(0, limit - used);
       used += text.length;
       shown.push(segment.category
         ? <mark key={index} className="authored-span" data-category={segment.category} title={`${categoryLabel(segment.category)} · ${segment.reason || segment.rule || ""}${segment.words ? ` · ${segment.words} words` : ""}`}>{text}</mark>
         : <React.Fragment key={index}>{text}</React.Fragment>);
     }
-    return <span className="authored-inline">{shown}</span>;
+    const Content = detail ? "div" : "span";
+    return <Content className={detail ? "usage-authored-detail" : "usage-authored-snippet"}>{shown}{!detail && segmentsOf(row).reduce((n, s) => n + s.text.length, 0) > used ? "…" : null}{detail && row.text_truncated ? <p className="muted">Retained preview is truncated. Open the source message to read further.</p> : null}</Content>;
   },
   authorship_category({ value }: CellContext<Row>) {
     return value ? <CategoryPill category={String(value)} /> : "";

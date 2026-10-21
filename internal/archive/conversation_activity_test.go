@@ -35,6 +35,9 @@ func TestConversationActivityPreservesHumanGrainAndTime(t *testing.T) {
 	}{{"mixed", "root", "2026-10-15T12:15:00Z", 12, 4, 2}, {"paste", "root", "2026-10-15T13:05:00Z", 4, 0, 0}, {"old", "root", "2026-10-14T12:15:00Z", 8, 0, 0}, {"machine", "root", "2026-10-15T12:00:00Z", 8, 8, 0}, {"human-only", "human-only", "2026-10-15T12:00:00Z", 8, 0, 0}, {"orphan", "orphan", "2026-10-15T12:00:00Z", 100, 0, 0}} {
 		run(`INSERT INTO message_authorship(message_id,conversation_id,workspace_id,sent_at,day,total_chars,harness_chars,automated_chars,spans_json) VALUES(?,?,'work',?,'2026-10-15',?,?,?,'[]')`, message.id, message.cv, message.at, message.chars, message.harness, message.automated)
 	}
+	run(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('child-work','codex','local','child-work','Delegated work','2026-10-15')`)
+	run(`UPDATE conversations SET workspace_id='child-work' WHERE id='child'`)
+	run(`UPDATE agent_sessions SET workspace_id='child-work' WHERE conversation_id='child'`)
 	rows, err := catalog.conversationActivityRows(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -49,6 +52,12 @@ func TestConversationActivityPreservesHumanGrainAndTime(t *testing.T) {
 	}
 	totals := map[string][3]int64{}
 	for _, row := range selected {
+		if row["conversation_id"] == "child" && (row["workspace_id"] != "child-work" || row["title"] != "Delegated work" || row["root_title"] != "Work" || row["root_conversation_id"] != "root") {
+			t.Fatalf("source event lost its distinct root attribution: %#v", row)
+		}
+		if row["event_kind"] == "human" && firstString(row["message_id"]) == "" {
+			t.Fatalf("human event has no exact source: %#v", row)
+		}
 		root := firstString(row["root_conversation_id"])
 		total := totals[root]
 		total[0] += integer(row["human_input_tokens_estimate"])

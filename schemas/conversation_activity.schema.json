@@ -18,25 +18,28 @@
   ],
   "defaultSelect": [
     {
-      "field": "event_at"
+      "field": "event_at",
+      "width": 155
     },
     {
-      "field": "root_provider"
+      "field": "title",
+      "width": 235
     },
     {
-      "field": "root_model_family"
+      "field": "event_kind",
+      "width": 100
     },
     {
-      "field": "root_effort"
+      "field": "root_model_family",
+      "width": 145
     },
     {
-      "field": "human_input_tokens_estimate"
+      "field": "human_input_tokens_estimate",
+      "width": 125
     },
     {
-      "field": "output_tokens"
-    },
-    {
-      "field": "root_conversation_id"
+      "field": "output_tokens",
+      "width": 115
     }
   ],
   "fields": [
@@ -91,6 +94,13 @@
       },
       "aggregate": {
         "groupable": true
+      },
+      "display": {
+        "kind": "chip",
+        "labels": {
+          "human": "Human input",
+          "usage": "Agent output"
+        }
       }
     },
     {
@@ -241,6 +251,97 @@
       },
       "aggregate": {
         "groupable": true
+      }
+    },
+    {
+      "name": "title",
+      "label": "Conversation",
+      "type": "text",
+      "group": "Context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "title",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"title\""
+        }
+      },
+      "render": "usage_conversation"
+    },
+    {
+      "name": "repository_name",
+      "label": "Repository",
+      "type": "text",
+      "group": "Context",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "repository_name",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"repository_name\""
+        }
+      }
+    },
+    {
+      "name": "conversation_id",
+      "label": "Source conversation",
+      "type": "text",
+      "group": "Evidence",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "conversation_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"conversation_id\""
+        }
+      }
+    },
+    {
+      "name": "message_id",
+      "label": "Source message",
+      "type": "text",
+      "group": "Evidence",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "message_id",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"message_id\""
+        }
+      }
+    },
+    {
+      "name": "root_title",
+      "label": "Root conversation",
+      "type": "text",
+      "group": "Attribution",
+      "select": {
+        "default": false
+      },
+      "bindings": {
+        "postgres": {
+          "expr": "root_title",
+          "synthetic": true
+        },
+        "sqlite": {
+          "expr": "r.\"root_title\""
+        }
       }
     }
   ]
