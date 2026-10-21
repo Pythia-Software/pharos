@@ -151,4 +151,15 @@ test("Index changes is busy while a capture or index holds the library, or other
     [{ activities: [], upgrading: true }, true],
   ];
   for (const [state, busy] of cases) assert.equal(library.headerBusy(state), busy, JSON.stringify(state));
+
+  // The standalone action must receive busy updates even when the drive
+  // control is absent, and recover after the work finishes.
+  const { window } = loadClassicScript('library.js');
+  const attributes = new Map(), syncOnly = { setAttribute: (key, value) => attributes.set(key, value) };
+  window.document.getElementById = id => id === 'headerSyncOnly' ? syncOnly : null;
+  for (const running of [true, false]) {
+    window.dispatchEvent(new window.CustomEvent('pharos:upgrade-status', { detail: { running, steps: [] } }));
+    assert.equal(syncOnly.disabled, running);
+    assert.equal(attributes.get('aria-busy'), String(running));
+  }
 });

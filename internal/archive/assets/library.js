@@ -335,16 +335,16 @@
   let controls = null, chip = null, headerSync = null, headerCaptureIndexRunning = false, panel = null, panelMode = 'drive', ejectState = null;
   let driveSpace = null, driveSpaceRequest = null, driveSpaceError = false;
   // The drive chip and Index changes share one combo button (ui.py's
-  // .combo-button) at the start of the header icons. Stop, and the full
+  // .combo-button) in the configurable library slot. Stop, and the full
   // Capture & index, are in the drive panel.
   function ensureControls() {
     if (controls?.isConnected) return controls;
-    const icons = document.querySelector('body>header .header-icons');
+    const icons = document.getElementById('headerLibrary');
     if (!icons) return null;
     controls = node('div', 'combo-button pharos-library-controls');
     controls.setAttribute('role', 'group');
     controls.setAttribute('aria-label', 'Library');
-    icons.prepend(controls);
+    icons.append(controls);
     return controls;
   }
 
@@ -395,10 +395,10 @@
     || Boolean(incremental) || Boolean(upgrading);
 
   function renderHeaderAction() {
-    const action = ensureHeaderAction();
+    const actions = [ensureHeaderAction(), document.getElementById('headerSyncOnly')];
     const busy = headerBusy({activities: status?.activities, incremental: window.pharosSync?.isBusy(),
       local: headerCaptureIndexRunning || hostsBusy, upgrading: upgradeStatus?.running});
-    if (action) {
+    for (const action of actions) if (action) {
       action.disabled = busy;
       action.setAttribute('aria-busy', String(busy));
     }
@@ -1178,7 +1178,10 @@
     if (settingsVisible()) refreshSettings();
   }
 
-  window.pharosLibrary = {refresh: refreshStatus, status: () => status, runs, refreshSettings, refreshSyncControls: renderSyncControls, renderAlerts: () => { renderChip(); renderPanel(); }, onStatus: listener => listeners.add(listener), toggleActivityPanel: () => (panel && panelMode === 'activity' ? closePanel() : openPanel('activity')),
+  const syncOnly = document.getElementById('headerSyncOnly');
+  if (syncOnly) syncOnly.onclick = syncNow;
+
+  window.pharosLibrary = {closePanel, refresh: refreshStatus, status: () => status, runs, refreshSettings, refreshSyncControls: renderSyncControls, renderAlerts: () => { renderChip(); renderPanel(); }, onStatus: listener => listeners.add(listener), toggleActivityPanel: () => (panel && panelMode === 'activity' ? closePanel() : openPanel('activity')),
     // Pure helpers, for web/tests/unit/page/library.test.mjs.
     libraryUpdate, activityTiming, activityProgress, estimateRate, workCount, headerBusy};
   const sheet = node('style');
