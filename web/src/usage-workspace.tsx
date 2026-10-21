@@ -1,3 +1,4 @@
+import { analyzePages } from "./app-navigation-model";
 import React from "react";
 import type { QueryState } from "@pythia-software/query-table-core";
 import type { QueryTableApi } from "@pythia-software/query-table-react";
@@ -5,7 +6,7 @@ import { RecordSearchEditor } from "./record-search-editor";
 import { groupedDashboardQuery } from "./usage-dashboard-model";
 import { Icon } from "./icons";
 import { ResetPage } from "./query-recovery";
-import { readUsageWorkspace, usageAnalysisLink, usageDashboardReturn, usageDatasets, usageDatasetTopics, usageSearchQuery, usageTopics, usageWorkspaceURL, type UsageDataset, type UsageMode, type UsageTopic } from "./usage-workspace-model";
+import { readUsageWorkspace, usageAnalysisLink, usageDashboardReturn, usageDatasets, usageTopics, usageSearchQuery, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { NestedPageLayout, PageLink } from "./nested-pages";
 import { cardDetailsURL, cardSourceDataset } from "./card-exploration";
 import { instantiateRecipe, queryRecipes } from "./curiosity-data";
@@ -13,8 +14,6 @@ import { readRollingWindow } from "./query-links";
 import "./usage-workspace.css";
 
 export const UsageWorkspaceLink = PageLink;
-const entries = <T extends object,>(value: T) => Object.entries(value) as Array<[keyof T & string, T[keyof T]]>;
-const modeLabels = { dashboards: "Dashboards", query: "Query" };
 
 // Query keeps the complete analysis. Search opens source records explicitly.
 export function UsageQueryLinks({ dataset, api }: { dataset: UsageDataset; api: QueryTableApi<Record<string, any>> }) {
@@ -51,11 +50,7 @@ export function UsageWorkspace({ renderDashboard, renderTable }: { renderDashboa
   const card = recipe && instantiateRecipe(recipe, source && readRollingWindow(params, source)?.days || readUsageWorkspace(params).days);
   const back = usageDashboardReturn(params);
   const title = mode === "dashboards" ? usageTopics[topic].label : `Query · ${usageDatasets[dataset].label}`;
-  const pages = (["dashboards", "query"] as UsageMode[]).map(mode => ({
-    id: mode, label: modeLabels[mode], children: mode === "dashboards"
-      ? entries(usageTopics).map(([topic, item]) => ({ id: `dashboards:${topic}`, label: item.label, href: usageWorkspaceURL({ mode, topic, report: "" }, params) }))
-      : entries(usageDatasets).map(([dataset, item]) => ({ id: `query:${dataset}`, label: item.label, href: usageWorkspaceURL({ mode, dataset, topic: usageDatasetTopics[dataset], report: "" }, params) })),
-  }));
+  const pages = analyzePages(params);
   return <NestedPageLayout className="pharos-query-page usage-workspace" contentClassName="usage-workspace-content"
     label="Analyze" pages={pages} current={`${mode}:${mode === "dashboards" ? topic : dataset}`} title={title}
     description={mode === "dashboards" ? usageTopics[topic].description : "Build your own analysis. Change filters, columns, groups, formulas, and metrics. Add search conditions when you need them."}

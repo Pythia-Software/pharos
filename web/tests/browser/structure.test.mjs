@@ -8,8 +8,7 @@
 // reached by a click rather than a URL.
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { EMPTY_QUERY, encodeQuery } from "@pythia-software/query-table-core";
-import { open, skip } from "./harness.mjs";
+import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
 import { defaultApi, rootConversation, workID } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
@@ -93,16 +92,50 @@ const ROUTES = [
   { name: "Long transcript", url: `${work}/conversation/${rootConversation}`, ready: ".conversation-panel .turn" },
   { name: "Child transcript", url: `${work}/conversation/conv-nested`, ready: ".conversation-panel .turn" },
   { name: "Quick search", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.keyboard.press("ControlOrMeta+k"), shown: "#searchDialog[open]" },
-  { name: "Analyze summary", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.locator("#usageSummaryToggle").click(), shown: "#usageSummary" },
-  { name: "Bookmarks drawer", url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-show-nav-button": true }, open: async page => { await page.locator("#navigatorToggle").click(); await page.locator("#bookmarksToggle").click(); }, shown: "#bookmarksDrawer.open" },
-  { name: "History drawer", url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-show-nav-button": true }, open: async page => { await page.locator("#navigatorToggle").click(); await page.locator("#historyToggle").click(); }, shown: "#historyDrawer.open" },
+  { name: "Analyze summary", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page, "usageSummaryToggle"), shown: "#usageSummary" },
+  { name: "App navigation", url: "/analyze", ready: ".usage-dashboard .usage-chart", open: async page => {
+    if (await page.locator('#appNavigationToggle').isVisible()) await page.locator('#appNavigationToggle').click();
+    else {
+      await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click();
+      await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
+    }
+  }, shown: '#appNavigationRail:not([hidden]), #appNavigationDialog[open]' },
+  { name: "Bookmarks drawer", url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-show-nav-button": true }, open: async page => { await activateHeaderTool(page, "navigatorToggle"); await page.locator("#bookmarksToggle").click(); }, shown: "#bookmarksDrawer.open" },
+  { name: "History drawer", url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-show-nav-button": true }, open: async page => { await activateHeaderTool(page, "navigatorToggle"); await page.locator("#historyToggle").click(); }, shown: "#historyDrawer.open" },
 ];
-const WIDTHS = [{ width: 1440, height: 900 }, { width: 390, height: 844 }, { width: 320, height: 640 }];
+const WIDTHS = [{ width: 1440, height: 900 }, { width: 1280, height: 720 }, { width: 1024, height: 768 }, { width: 390, height: 844 }, { width: 320, height: 640 }];
 
 // Layout bugs found by this sweep and not fixed yet. A case whose only
 // problems match here is marked todo with the bug, so the suite stays honest;
 // any other problem still fails it.
 const KNOWN = [];
+
+for (const width of [1649, 2133]) test(`pages without section menus use the full window at ${width}px`, { skip }, async t => {
+  const { page } = await open(t, { url: '/analyze', viewport: { width, height: 1075 }, ready: '.usage-dashboard .usage-chart' });
+  const primary = page.getByRole('navigation', { name: 'Primary navigation', exact: true });
+  const fillsWindow = async () => {
+    await page.waitForFunction(() => {
+      const main = document.querySelector('main'), view = main.querySelector('.view.active');
+      const box = main.getBoundingClientRect(), content = view.getBoundingClientRect();
+      return Math.abs(box.left) < 1 && Math.abs(box.right - innerWidth) < 1 && Math.abs(content.left - box.left) < 1 && Math.abs(content.width - main.clientWidth) < 1;
+    });
+    assert.deepEqual(await layoutProblems(page), []);
+  };
+  await primary.getByRole('button', { name: 'Home', exact: true }).click();
+  await page.locator('.home-belt-row .query-card').first().waitFor();
+  await fillsWindow();
+  await page.locator('.home-library-toggle').click();
+  await page.locator('.card-library-entry .query-card').first().waitFor();
+  await fillsWindow();
+  await primary.getByRole('button', { name: 'Search', exact: true }).click();
+  await page.locator('#queryTableLibrary .qt-row').first().waitFor();
+  await fillsWindow();
+  await primary.getByRole('button', { name: /^Optimize/ }).click();
+  await page.locator('.findings-card').first().waitFor();
+  await fillsWindow();
+  await page.setViewportSize({ width: width + 400, height: 1075 });
+  await fillsWindow();
+});
 
 for (const [name, chart, requestCount] of [
   ["text sources", { split: "kind" }, 1],

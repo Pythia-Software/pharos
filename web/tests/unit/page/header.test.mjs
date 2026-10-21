@@ -2,6 +2,18 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadClassicScript, plain } from '../helpers/classic-script.mjs';
 
+test('compact headers retain selected live tools and overflow the rest in saved order', () => {
+  const header = loadClassicScript('header.js');
+  const saved = ['theme', 'library', 'history', 'settings', 'search'];
+  assert.deepEqual(plain(header.headerToolPlacement(saved, 'wide')), { inline: saved, overflow: [] });
+  for (const mode of ['compact', 'phone']) {
+    assert.deepEqual(plain(header.headerToolPlacement(saved, mode)), { inline: ['library', 'search'], overflow: ['theme', 'history', 'settings'] });
+    assert.deepEqual(plain(header.headerToolPlacement(['settings', 'sync'], mode)), { inline: ['sync'], overflow: ['settings'] });
+    assert.deepEqual(plain(header.headerToolPlacement(['settings'], mode)), { inline: [], overflow: ['settings'] });
+  }
+  assert.deepEqual(saved, ['theme', 'library', 'history', 'settings', 'search']);
+});
+
 test('header defaults start with navigation and preserve previous visibility choices', () => {
   const header = loadClassicScript('header.js');
   const defaults = plain(header.defaultHeaderTools());

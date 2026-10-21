@@ -1,3 +1,4 @@
+import { tl1Pages } from "./app-navigation-model";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./tl1.css";
 import { Icon } from "./icons";
@@ -103,13 +104,6 @@ const typing = (target: EventTarget | null) => target instanceof HTMLElement && 
   || (target instanceof HTMLInputElement && !["checkbox", "radio", "button"].includes(target.type)));
 
 const dispositionLabel: Record<string, string> = { advanced: "Advanced", escalated: "Escalated to human", error: "Error", retried: "Retried", open: "Open" };
-const tl1Pages = [
-  { path: "/tl1", label: "Overview", title: "Overview", description: "Spend, throughput, and workflow activity." },
-  { path: "/tl1/configurations", label: "Configurations", title: "Configurations", description: "Compare flavors and the agents that run them." },
-  { path: "/tl1/followups", label: "Follow-up outcomes", title: "Follow-up outcomes", description: "See what happened in the next action and the action after it." },
-  { path: "/tl1/quality", label: "Quality & review", title: "Quality & review", description: "Errors, human attention, and review findings." },
-  { path: "/tl1/runs", label: "Runs", title: "Runs", description: "Explore individual attempts and filter their metrics." },
-] as const;
 const tl1Path = () => tl1Pages.some(item => item.path === window.location.pathname) ? window.location.pathname : "/tl1";
 
 function Followups({ data, onFlavor }: { data?: Overview["followups"]; onFlavor: (name: string) => void }) {

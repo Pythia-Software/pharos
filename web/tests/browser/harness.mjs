@@ -36,6 +36,13 @@ function asset(path) {
 // Every browser test skips, with the install hint, when the engine cannot run.
 export const skip = launchPlan().skip ?? false;
 
+// A configured header tool can be inline or in More at the current width.
+export async function activateHeaderTool(page, id) {
+  const tool = page.locator(`#${id}`);
+  if (!await tool.isVisible()) await page.getByRole('button', { name: 'More tools', exact: true }).click();
+  await tool.click();
+}
+
 let connection;
 const browser = () => connection ??= connectBrowser();
 after(async () => { if (connection) await (await connection).close(); });
