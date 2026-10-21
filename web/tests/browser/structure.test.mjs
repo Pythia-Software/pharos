@@ -302,3 +302,41 @@ test("Usage source links reveal and highlight the exact call, result, or nearest
   await page.locator('.authorship-target[data-message-id="result-one"]').waitFor({ state: "visible" });
   assert.equal(new URL(page.url()).searchParams.get("at"), "2026-10-21T10:00:20Z");
 });
+
+
+// IndexedDB and painting saved charts during navigation require a real browser.
+test("Dashboard Catalog restores saved covers while fresh queries are pending", { skip }, async t => {
+  let hold = false, release;
+  const gate = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  const app = await open(t, {
+    url: "/home?cards=library&card_search=tool-call-share",
+    ready: ".card-library-entry .query-card",
+    api: { "* /api/query/:dataset/:operation": async call => {
+      if (hold && ["metrics", "query-v3", "rows-v2"].includes(call.params.operation)) await gate;
+      return defaultApi["* /api/query/:dataset/:operation"](call);
+    } },
+  });
+  // Confirm the browser has committed the snapshot before reloading its page.
+  await app.page.waitForFunction(async () => {
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open("pharos-card-previews-v1", 1);
+      request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+    });
+    const entries = await new Promise((resolve, reject) => {
+      const request = db.transaction("libraries").objectStore("libraries").get("browser-fixture");
+      request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+    });
+    db.close(); return entries?.length > 0;
+  });
+  hold = true;
+  await app.page.reload();
+  await app.page.getByRole("status", { name: "Refreshing preview", exact: true }).first().waitFor();
+  const catalog = app.page.locator("#home-card-library");
+  await catalog.scrollIntoViewIfNeeded();
+  assert.deepEqual(await layoutProblems(app.page), []);
+  await app.shot("saved-covers-refreshing");
+  release(); await app.settled();
+  await app.page.getByRole("status", { name: "Refreshing preview", exact: true }).first().waitFor({ state: "hidden" });
+  assert.deepEqual(app.problems(), []);
+});

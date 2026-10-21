@@ -72,7 +72,7 @@ function serve(routes, state, record) {
     if (path === "/favicon.ico") return response.writeHead(204).end();
     if (path === "/assets/preferences.js") {
       response.writeHead(200, { "Content-Type": types[".js"], "Cache-Control": "no-store" });
-      return response.end(`window.pharosPreferenceValues=${JSON.stringify(state.preferences)};`);
+      return response.end(`window.pharosPreferenceValues=${JSON.stringify(state.preferences)};window.pharosPreviewScope="browser-fixture";`);
     }
     if (path.startsWith("/assets/")) {
       const body = asset(path.slice("/assets/".length));
