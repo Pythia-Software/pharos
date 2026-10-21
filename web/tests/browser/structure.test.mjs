@@ -8,6 +8,7 @@
 // reached by a click rather than a URL.
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
 import { defaultApi, rootConversation, workID } from "./fixtures.mjs";
@@ -109,6 +110,71 @@ const WIDTHS = [{ width: 1440, height: 900 }, { width: 1280, height: 720 }, { wi
 // problems match here is marked todo with the bug, so the suite stays honest;
 // any other problem still fails it.
 const KNOWN = [];
+
+test("macOS window controls stay clear of the lighthouse when resizing", { skip }, async t => {
+  const source = readFileSync(new URL("../../../macos/PharosApp.swift", import.meta.url), "utf8");
+  const chromeCSS = source.match(/static let windowChromeScript = """[\s\S]*?style.textContent = `([\s\S]*?)`;/)[1];
+  const { page, settled, shot } = await open(t, { url: '/library', ready: '#queryTableLibrary .qt-row' });
+  await page.addStyleTag({ content: chromeCSS });
+  await page.evaluate(() => {
+    document.documentElement.classList.add('pharos-window');
+    // AppKit places three 14 pt buttons at x=19, 39 and 59 in a 52 pt bar.
+    const controls = document.createElement('div');
+    controls.id = 'nativeWindowControls';
+    controls.style.cssText = 'position:fixed;left:19px;top:19px;display:flex;gap:6px;z-index:100';
+    for (const color of ['#ff5f57', '#febc2e', '#28c840']) {
+      const button = document.createElement('span');
+      button.style.cssText = `width:14px;height:14px;border-radius:50%;background:${color}`;
+      controls.append(button);
+    }
+    document.body.append(controls);
+  });
+  for (const width of [1180, 1440, 2133, 800, 620, 1180]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settled();
+    const brand = page.locator('body > header .brand');
+    const controls = await page.locator('#nativeWindowControls').boundingBox();
+    const windowed = await brand.boundingBox();
+    assert.ok(windowed.x >= controls.x + controls.width, `lighthouse clears window controls at ${width}px`);
+    assert.deepEqual(await layoutProblems(page), []);
+    await shot(`windowed-${width}`);
+
+    await page.evaluate(() => {
+      document.documentElement.classList.add('pharos-fullscreen');
+      document.querySelector('#nativeWindowControls').hidden = true;
+    });
+    await settled();
+    assert.ok((await brand.boundingBox()).x < windowed.x, 'fullscreen reclaims the hidden controls’ space');
+    assert.deepEqual(await layoutProblems(page), []);
+    await page.evaluate(() => {
+      document.documentElement.classList.remove('pharos-fullscreen');
+      document.querySelector('#nativeWindowControls').hidden = false;
+    });
+    await settled();
+    assert.ok((await brand.boundingBox()).x >= controls.x + controls.width, 'leaving fullscreen restores clearance');
+  }
+});
+
+test("dashboard collection wraps after four bookmarked cards", { skip }, async t => {
+  const bookmarks = Array.from({ length: 9 }, (_, index) => ({ id: `card-${index}`, title: `Saved view ${index + 1}`, url: `/settings/preferences?card=${index}` }));
+  const { page, settled, shot } = await open(t, { url: '/', ready: '.home-collection .query-card', preferences: { 'pharos-bookmarks-v1': bookmarks } });
+  const collection = page.getByRole('region', { name: 'Your collection', exact: true });
+  for (const width of [2133, 3000, 1180, 800, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settled();
+    const cards = await collection.locator('.query-card').evaluateAll(cards => cards.map(card => {
+      const { top, left, right } = card.getBoundingClientRect();
+      return { top, left, right };
+    }));
+    assert.equal(cards.length, bookmarks.length, 'all bookmarked cards remain visible');
+    const rows = Map.groupBy(cards, card => Math.round(card.top));
+    assert.ok([...rows.values()].every(row => row.length <= 4), `at most four cards per row at ${width}px`);
+    if (width >= 1180) assert.equal(rows.values().next().value.length, 4, 'wide windows fit four cards before wrapping');
+    assert.ok(cards.every(card => card.left >= 0 && card.right <= width), 'cards stay inside narrow windows');
+    assert.deepEqual(await layoutProblems(page), []);
+    await shot(`collection-${width}`);
+  }
+});
 
 for (const width of [1649, 2133]) test(`pages without section menus use the full window at ${width}px`, { skip }, async t => {
   const { page } = await open(t, { url: '/analyze', viewport: { width, height: 1075 }, ready: '.usage-dashboard .usage-chart' });
