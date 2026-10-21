@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -62,6 +63,35 @@ func (a *conductorAdapter) DiscoverSelected(selected map[string]bool, emit func(
 // an unchanged session's messages are never read.
 func (a *conductorAdapter) discoverParts(unchanged func([]sourcePart) bool, emit func(*WorkspaceRecord, []sourcePart) error) error {
 	return a.discover(a.selected, unchanged, emit)
+}
+
+type conductorPlanKey struct{}
+type conductorPlanCollector struct {
+	plan    *sourceWorkPlan
+	adapter *conductorAdapter
+}
+
+// Bind readers while the metadata pass still has the database path and session
+// ID, rather than trying to recover either from an opaque evidence locator.
+func (a *conductorAdapter) planSession(path, sid string, parts []sourcePart) bool {
+	collector, ok := a.context().Value(conductorPlanKey{}).(*conductorPlanCollector)
+	if !ok {
+		return false
+	}
+	collector.plan.groups = append(collector.plan.groups, plannedPartGroup{parts: parts, read: func(emit partEmitter) error {
+		return collector.adapter.database(path, map[string]bool{sid: true}, func([]sourcePart) bool { return false }, emit)
+	}})
+	return true
+}
+
+func (a *conductorAdapter) planParts() (*sourceWorkPlan, error) {
+	plan := &sourceWorkPlan{}
+	reader := *a
+	reader.setContext(context.WithValue(a.context(), conductorPlanKey{}, &conductorPlanCollector{plan, a}))
+	err := reader.discover(a.selected, func([]sourcePart) bool { return true }, func(*WorkspaceRecord, []sourcePart) error {
+		return fmt.Errorf("Conductor planning unexpectedly parsed a session")
+	})
+	return plan, err
 }
 
 func (a *conductorAdapter) discover(selected map[string]bool, unchanged func([]sourcePart) bool, emit func(*WorkspaceRecord, []sourcePart) error) error {
@@ -176,7 +206,7 @@ func (a *conductorAdapter) database(path string, selected map[string]bool, uncha
 	origin := a.original(path)
 	var signals map[string]sourcePart
 	if unchanged != nil {
-		if signals, err = conductorSignals(tx, sessionTable, messageTable, sidColumn, fkColumn, sessions, scols, mcols, tables, selected); err != nil {
+		if signals, err = conductorSignals(a.context(), tx, sessionTable, messageTable, sidColumn, fkColumn, sessions, scols, mcols, tables, selected); err != nil {
 			return err
 		}
 	}
@@ -189,6 +219,9 @@ func (a *conductorAdapter) database(path string, selected map[string]bool, uncha
 			sid := firstString(session[sidColumn])
 			part := signals[sid]
 			part.item = "sqlite:" + origin + ":sessions:" + sid
+			if a.planSession(path, sid, []sourcePart{part}) {
+				continue
+			}
 			if !unchanged([]sourcePart{part}) {
 				selected[sid] = true
 			}
@@ -219,7 +252,8 @@ func (a *conductorAdapter) database(path string, selected map[string]bool, uncha
 		if signals != nil {
 			part := signals[sid]
 			part.item = "sqlite:" + origin + ":sessions:" + sid
-			if parts = []sourcePart{part}; unchanged(parts) {
+			parts = []sourcePart{part}
+			if a.planSession(path, sid, parts) || unchanged(parts) {
 				continue
 			}
 		}
@@ -245,7 +279,7 @@ func (a *conductorAdapter) database(path string, selected map[string]bool, uncha
 // updates the session row as its status changes. Git lookups made while
 // building a record are not covered either (main-branch merges are refreshed
 // separately after each sync).
-func conductorSignals(tx *sql.Tx, sessionTable, messageTable, sidColumn, fkColumn string, sessions []map[string]any, scols, mcols, tables map[string]bool, selection ...map[string]bool) (map[string]sourcePart, error) {
+func conductorSignals(ctx context.Context, tx queryer, sessionTable, messageTable, sidColumn, fkColumn string, sessions []map[string]any, scols, mcols, tables map[string]bool, selection ...map[string]bool) (map[string]sourcePart, error) {
 	stats := map[string]sourcePart{}
 	aggregates := "COUNT(*) messages,MAX(rowid) last"
 	if mcols["sent_at"] {
@@ -258,7 +292,7 @@ func conductorSignals(tx *sql.Tx, sessionTable, messageTable, sidColumn, fkColum
 		}
 		where = " WHERE " + fkColumn + " IN (" + placeholders(len(args)) + ")"
 	}
-	rows, err := queryMaps(tx, "SELECT "+fkColumn+" sid,"+aggregates+" FROM "+messageTable+where+" GROUP BY "+fkColumn, args...)
+	rows, err := queryMapsContext(ctx, tx, "SELECT "+fkColumn+" sid,"+aggregates+" FROM "+messageTable+where+" GROUP BY "+fkColumn, args...)
 	if err != nil {
 		// A table without rowids (or anything else unexpected) is parsed whole.
 		return nil, err
@@ -276,7 +310,7 @@ func conductorSignals(tx *sql.Tx, sessionTable, messageTable, sidColumn, fkColum
 		} else {
 			cancelWhere += " AND "
 		}
-		rows, err := queryMaps(tx, "SELECT "+fkColumn+" sid,MAX(cancelled_at) cancelled FROM "+messageTable+cancelWhere+"cancelled_at IS NOT NULL GROUP BY "+fkColumn, args...)
+		rows, err := queryMapsContext(ctx, tx, "SELECT "+fkColumn+" sid,MAX(cancelled_at) cancelled FROM "+messageTable+cancelWhere+"cancelled_at IS NOT NULL GROUP BY "+fkColumn, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -285,26 +319,51 @@ func conductorSignals(tx *sql.Tx, sessionTable, messageTable, sidColumn, fkColum
 			latest[sid] = append(latest[sid], row["cancelled"])
 		}
 	}
-	lookup := func(table, column string) (map[string]map[string]any, error) {
+	// A planned read opens a fresh snapshot for one session. Read only its
+	// dependencies, so N session reads do not reload N metadata rows each.
+	lookup := func(table, foreignKey string, parents []map[string]any) (map[string]map[string]any, error) {
 		result := map[string]map[string]any{}
-		if !tables[table] {
+		if !tables[table] || len(parents) == 0 {
 			return result, nil
 		}
 		columns, err := tableColumns(tx, table)
-		if err != nil || !columns[column] {
+		if err != nil || !columns["id"] {
 			return result, err
 		}
-		rows, err := queryMaps(tx, "SELECT * FROM "+table)
-		for _, row := range rows {
-			result[firstString(row[column])] = row
+		ids, seen := []any{}, map[string]bool{}
+		for _, parent := range parents {
+			if id := firstString(parent[foreignKey]); id != "" && !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
 		}
-		return result, err
+		// Full discovery can have more dependencies than SQLite bind slots.
+		for len(ids) > 0 {
+			batch := ids[:min(len(ids), 500)]
+			rows, err := queryMapsContext(ctx, tx, "SELECT * FROM "+table+" WHERE id IN ("+placeholders(len(batch))+")", batch...)
+			if err != nil {
+				return nil, err
+			}
+			for _, row := range rows {
+				result[firstString(row["id"])] = row
+			}
+			ids = ids[len(batch):]
+		}
+		return result, nil
 	}
-	workspaces, err := lookup("workspaces", "id")
+	var workspaceParents []map[string]any
+	if scols["workspace_id"] && sessionTable != "workspaces" {
+		workspaceParents = sessions
+	}
+	workspaces, err := lookup("workspaces", "workspace_id", workspaceParents)
 	if err != nil {
 		return nil, err
 	}
-	repositories, err := lookup("repos", "id")
+	repoParents := make([]map[string]any, 0, len(workspaces))
+	for _, workspace := range workspaces {
+		repoParents = append(repoParents, workspace)
+	}
+	repositories, err := lookup("repos", "repository_id", repoParents)
 	if err != nil {
 		return nil, err
 	}
@@ -600,7 +659,7 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 			metadata["base_ref"] = change["base_id"]
 		}
 	}
-	if archiveCommit != "" && a.localLookups() {
+	if archiveCommit != "" && a.localLookups() && !modeOf(a.context()).automatic && !modeOf(a.context()).deferGit {
 		for _, path := range uniqueStrings([]string{repositoryRoot, location}) {
 			if integration := mainIntegration(path, archiveCommit, remote); integration != nil {
 				for key, value := range integration {

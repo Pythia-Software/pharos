@@ -430,7 +430,8 @@ func TestAuthorshipRebuildsAfterIndex(t *testing.T) {
 func TestAuthorshipManualRefreshHonorsRunCancellation(t *testing.T) {
 	for _, builtGeneration := range []string{"", "1/authorship-v0"} {
 		t.Run("ledger="+builtGeneration, func(t *testing.T) {
-			catalog, _ := testCatalog(t)
+			catalog, config := testCatalog(t)
+			server := testServer(t, config, catalog)
 			if builtGeneration != "" {
 				if _, err := catalog.DB.Exec(`INSERT INTO meta(key,value) VALUES('authorship_generation',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, builtGeneration); err != nil {
 					t.Fatal(err)
@@ -466,6 +467,35 @@ func TestAuthorshipManualRefreshHonorsRunCancellation(t *testing.T) {
 			if catalog.authorshipRunning() || catalog.ensureAuthorship() {
 				t.Fatal("page retry did not publish a current ledger")
 			}
+			// A coordinated retry must receive the worker's actual denominators.
+			execTx(t, catalog.DB,
+				`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','codex','local','w','Work','2026-09-01')`,
+				`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','codex','local','c')`,
+				`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES('m','c','m','user','message','Fix the parser','hash','2026-09-01T12:00:00Z')`)
+			if err := bumpToolLedgerGeneration(catalog.DB); err != nil {
+				t.Fatal(err)
+			}
+			run := server.startRunNamed(indexRunKind, nil)
+			meter := &runWorkMeter{server: server, runID: run.ID, kind: "index", model: "authorship"}
+			defer meter.release(false)
+			catalog.refreshAuthorshipInContext(withWorkProgress(t.Context(), meter.report))
+			if len(rebuilds) != 3 {
+				t.Fatalf("coordinated retry did not start: %d", len(rebuilds))
+			}
+			rebuilds[2](t.Context())
+			stages := meter.finish(true)
+			for _, phase := range []string{"classifying authorship", "saving authorship"} {
+				found := false
+				for _, stage := range stages {
+					if stage.Phase == phase && stage.TotalKnown && stage.Total == 1 && stage.Done == 1 && stage.Completed {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("worker lost %s progress: %+v", phase, stages)
+				}
+			}
+
 		})
 	}
 }

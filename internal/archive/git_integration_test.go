@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -136,8 +137,9 @@ func TestMainIntegrationNegativeLookupCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	trace := filepath.Join(t.TempDir(), "git-calls")
+	other := ""
 	shimDir := t.TempDir()
-	shim := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$PHAROS_GIT_TRACE\"\nexec '" + strings.ReplaceAll(gitPath, "'", "'\\''") + "' \"$@\"\n"
+	shim := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$PHAROS_GIT_TRACE\"\nif [ \"$PHAROS_GIT_FAIL_BATCH\" = 1 ]; then case \"$*\" in *cat-file*) exit 1 ;; esac; fi\nexec '" + strings.ReplaceAll(gitPath, "'", "'\\''") + "' \"$@\"\n"
 	if err := os.WriteFile(filepath.Join(shimDir, "git"), []byte(shim), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +161,7 @@ func TestMainIntegrationNegativeLookupCache(t *testing.T) {
 		// the process runs.
 		calls := []string{}
 		for _, call := range strings.Split(strings.TrimSpace(string(traced)), "\n") {
-			if strings.HasPrefix(call, "-C "+repo+" ") {
+			if strings.HasPrefix(call, "-C "+repo+" ") || other != "" && strings.HasPrefix(call, "-C "+other+" ") {
 				calls = append(calls, call)
 			}
 		}
@@ -178,7 +180,7 @@ func TestMainIntegrationNegativeLookupCache(t *testing.T) {
 	for attempt := 1; ; attempt++ {
 		calls := refresh()
 		if cached() {
-			if len(calls) < 3 {
+			if len(calls) < 2 {
 				t.Fatalf("first negative scan made only %d Git calls: %v", len(calls), calls)
 			}
 			break
@@ -187,14 +189,20 @@ func TestMainIntegrationNegativeLookupCache(t *testing.T) {
 			t.Fatalf("no negative lookup was cached after %d scans: %v", attempt, calls)
 		}
 	}
-	if calls := refresh(); len(calls) != 1 || !strings.Contains(calls[0], "rev-parse --verify refs/remotes/origin/main") {
+	if calls := refresh(); len(calls) != 1 || !strings.Contains(calls[0], "for-each-ref") {
 		t.Fatalf("unchanged tip should need only one ref lookup, got %v", calls)
 	}
 	git("checkout", "main")
 	git("commit", "--allow-empty", "-m", "More main work")
 	git("update-ref", "refs/remotes/origin/main", "HEAD")
-	if calls := refresh(); len(calls) < 3 {
-		t.Fatalf("advanced main tip did not repeat ancestry check: %v", calls)
+	advanced := refresh()
+	if len(advanced) < 2 {
+		t.Fatalf("advanced main tip did not inspect the graph delta: %v", advanced)
+	}
+	for _, call := range advanced {
+		if strings.Contains(call, "merge-base --is-ancestor "+head+" ") {
+			t.Fatalf("unchanged negative head was individually rechecked after a fast-forward: %v", advanced)
+		}
 	}
 	git("checkout", "feature")
 	git("commit", "--allow-empty", "-m", "More feature work")
@@ -202,7 +210,7 @@ func TestMainIntegrationNegativeLookupCache(t *testing.T) {
 	if _, err := catalog.DB.Exec(`UPDATE workspaces SET head_ref=? WHERE id='work'`, newHead); err != nil {
 		t.Fatal(err)
 	}
-	if calls := refresh(); len(calls) < 3 {
+	if calls := refresh(); len(calls) < 2 {
 		t.Fatalf("changed workspace head did not repeat ancestry check: %v", calls)
 	}
 	git("checkout", "main")
@@ -213,4 +221,71 @@ func TestMainIntegrationNegativeLookupCache(t *testing.T) {
 	if err := catalog.DB.QueryRow(`SELECT main_merge_commit FROM workspaces WHERE id='work'`).Scan(&merged); err != nil || merged == "" {
 		t.Fatalf("merge after cached negatives was not recorded: %q, %v", merged, err)
 	}
+	// A failed ref probe must leave its repository retryable without crashing
+	// the scan or preventing a healthy sibling from being integrated.
+	broken := t.TempDir()
+	if err := os.Mkdir(filepath.Join(broken, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, catalog.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,head_ref,indexed_at) SELECT 'broken','conductor','local','broken','Broken',head_ref,'t' FROM workspaces WHERE id='work'`,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,head_ref,indexed_at) SELECT 'healthy','conductor','local','healthy','Healthy',head_ref,'t' FROM workspaces WHERE id='work'`)
+	if _, err := catalog.DB.Exec(`INSERT INTO workspace_sightings(workspace_id,host_id,source_name,location,first_seen_at,last_seen_at) VALUES('broken',?,'conductor',?,'t','t'),('healthy',?,'conductor',?,'t','t')`, currentHost().ID, broken, currentHost().ID, repo); err != nil {
+		t.Fatal(err)
+	}
+	refresh()
+	if countRows(t, catalog, `SELECT COUNT(*) FROM workspaces WHERE id='healthy' AND main_merge_commit IS NOT NULL`) != 1 || countRows(t, catalog, `SELECT COUNT(*) FROM git_main_negative_lookups WHERE workspace_id='broken'`) != 0 {
+		t.Fatal("a damaged repository hid healthy results or supplied durable negative evidence")
+	}
+	if err := os.Remove(filepath.Join(broken, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	git("worktree", "add", "--detach", broken, "HEAD")
+	refresh()
+	if countRows(t, catalog, `SELECT COUNT(*) FROM workspaces WHERE id='broken' AND main_merge_commit IS NOT NULL`) != 1 {
+		t.Fatal("a repaired repository was not retried")
+	}
+
+	// A second worktree and many workspaces share one object inventory and
+	// history. Missing objects remain retryable without a subprocess per head.
+	other = filepath.Join(t.TempDir(), "worktree")
+	git("worktree", "add", "--detach", other, "HEAD")
+	statements := []string{}
+	for index := 0; index < 36; index++ {
+		id := fmt.Sprintf("batch-%d", index)
+		candidate := newHead
+		if index >= 24 {
+			candidate = fmt.Sprintf("%040x", index)
+		}
+		statements = append(statements, fmt.Sprintf(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,head_ref,indexed_at) VALUES('%s','conductor','local','%s','Batch','%s','t')`, id, id, candidate), fmt.Sprintf(`INSERT INTO workspace_sightings(workspace_id,host_id,source_name,location,first_seen_at,last_seen_at) VALUES('%s','%s','conductor','%s','t','t')`, id, currentHost().ID, other))
+	}
+	execTx(t, catalog.DB, statements...)
+	t.Setenv("PHAROS_GIT_FAIL_BATCH", "1")
+	if failed := refresh(); len(failed) > 5 {
+		t.Fatalf("failed object inventory was retried for each head: %v", failed)
+	}
+	t.Setenv("PHAROS_GIT_FAIL_BATCH", "")
+	calls := refresh()
+	t.Logf("36 workspace heads sharing a repository: %d Git commands", len(calls))
+	if len(calls) > 10 {
+		t.Fatalf("shared repository repeated Git work for each workspace: %d calls: %v", len(calls), calls)
+	}
+	var integrated int
+	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM workspaces WHERE id LIKE 'batch-%' AND main_merge_commit IS NOT NULL").Scan(&integrated); err != nil || integrated != 24 {
+		t.Fatalf("batched integration lost results: %d %v", integrated, err)
+	}
+	calls = refresh()
+	for _, call := range calls {
+		if strings.Contains(call, "merge-base") {
+			t.Fatalf("missing heads were checked individually: %v", calls)
+		}
+	}
+	// The remote's declared default branch can be master or another name.
+	git("update-ref", "refs/remotes/origin/master", "HEAD")
+	git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
+	git("update-ref", "-d", "refs/remotes/origin/main")
+	if value := mainIntegration(repo, newHead, ""); value == nil {
+		t.Fatal("declared default branch was ignored")
+	}
+
 }

@@ -54,6 +54,7 @@ func (c *Catalog) constructToolRollup(ctx context.Context, generation, day strin
 }
 
 func (c *Catalog) prepareToolRollup(ctx context.Context, conn *sql.Conn, generation, day string, force bool) (build toolRollupBuild, err error) {
+	reportWork(ctx, "preparing tool rollup", "", 0, -1)
 	snapshot, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return build, err
@@ -138,9 +139,17 @@ func (c *Catalog) prepareToolRollup(ctx context.Context, conn *sql.Conn, generat
 	if !build.full {
 		cubeQuery = strings.Replace(cubeQuery, " GROUP BY ", " AND t.workspace_id IN (SELECT workspace_id FROM temp.tool_dirty_build) GROUP BY ", 1)
 	}
+	aggregateCount := len(workspaces)
+	if !build.full {
+		if err := snapshot.QueryRowContext(ctx, "SELECT COUNT(*) FROM temp.tool_dirty_build").Scan(&aggregateCount); err != nil {
+			return build, err
+		}
+	}
+	reportWork(ctx, "aggregating tool calls", "workspace", 0, aggregateCount)
 	if _, err := snapshot.ExecContext(ctx, "CREATE TEMP TABLE tool_cube_build AS "+cubeQuery); err != nil {
 		return build, err
 	}
+	reportWork(ctx, "aggregating tool calls", "workspace", aggregateCount, aggregateCount)
 	if build.full {
 		if _, err := snapshot.ExecContext(ctx, "CREATE TEMP VIEW tool_cube_merge AS SELECT * FROM temp.tool_cube_build"); err != nil {
 			return build, err
@@ -174,7 +183,8 @@ func (c *Catalog) prepareToolRollup(ctx context.Context, conn *sql.Conn, generat
 	if err != nil {
 		return build, err
 	}
-	for _, row := range daily {
+	reportWork(ctx, "pricing tool usage", "bucket", 0, len(daily))
+	for index, row := range daily {
 		record := toolUsageRecord(book, row)
 		values := make([]any, len(toolUsageColumns))
 		for i, column := range toolUsageColumns {
@@ -183,6 +193,9 @@ func (c *Catalog) prepareToolRollup(ctx context.Context, conn *sql.Conn, generat
 		if _, err := stmt.ExecContext(ctx, values...); err != nil {
 			stmt.Close()
 			return build, err
+		}
+		if index%100 == 0 || index+1 == len(daily) {
+			reportWork(ctx, "pricing tool usage", "bucket", index+1, len(daily))
 		}
 	}
 	if err := stmt.Close(); err != nil {
@@ -229,10 +242,12 @@ func (c *Catalog) publishToolPartitions(ctx context.Context, conn *sql.Conn, bui
 	}
 	statements = append(statements, "INSERT INTO tool_usage_daily SELECT * FROM temp.tool_daily_build",
 		`DELETE FROM tool_rollup_dirty WHERE EXISTS(SELECT 1 FROM temp.tool_dirty_build b WHERE b.workspace_id=tool_rollup_dirty.workspace_id AND b.revision=tool_rollup_dirty.revision)`)
-	for _, statement := range statements {
+	reportWork(ctx, "publishing tool rollup", "statement", 0, len(statements))
+	for index, statement := range statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return err
 		}
+		reportWork(ctx, "publishing tool rollup", "statement", index+1, len(statements))
 	}
 	for key, value := range map[string]string{"tool_rollup_generation": build.generation, "tool_rollup_day": build.day, "tool_rollup_timezone": build.timezone, "tool_rollup_built_full_revision": build.fullRevision,
 		"tool_rollup_writer_ms": fmt.Sprint(time.Since(started).Milliseconds())} {

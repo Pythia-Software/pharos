@@ -26,6 +26,8 @@ import (
 
 // libraryActivity is one piece of work that holds or writes the library.
 type libraryActivity struct {
+	operation  *operationForecast
+	Forecast   *operationEstimate `json:"forecast,omitempty"`
 	timingKind string
 	ID         string `json:"id,omitempty"`
 	// Kind is sync, index, capture, capture-other (a capture by another
@@ -78,6 +80,7 @@ type backgroundTasks struct {
 	git       int
 	gitSince  string
 	gitReason string
+	gitWork   *activityWork
 }
 
 func (t *backgroundTasks) addGit(delta int, reason string) {
@@ -85,14 +88,34 @@ func (t *backgroundTasks) addGit(delta int, reason string) {
 	defer t.mu.Unlock()
 	if t.git == 0 && delta > 0 {
 		t.gitSince, t.gitReason = now(), reason
+		t.gitWork = nil
 	}
 	t.git += delta
+	if t.git == 0 {
+		t.gitWork = nil
+	}
 }
 
 func (t *backgroundTasks) gitRunning() (bool, string, string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.git > 0, t.gitSince, t.gitReason
+}
+
+func (t *backgroundTasks) setGitWork(w activityWork) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	copy := cloneWork(w)
+	t.gitWork = &copy
+}
+func (t *backgroundTasks) gitProgress() *activityWork {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.gitWork == nil {
+		return nil
+	}
+	copy := cloneWork(*t.gitWork)
+	return &copy
 }
 
 // refreshGitInBackground looks up main-branch merges in local Git checkouts
@@ -108,6 +131,11 @@ func (s *Server) refreshGitInBackground(backfill bool) {
 	s.tasks.addGit(1, reason)
 	started := s.spawn(func(ctx context.Context) {
 		defer s.tasks.addGit(-1, "")
+		_, since, _ := s.tasks.gitRunning()
+		meter := &runWorkMeter{server: s, runID: "git:" + since, kind: "git", model: "analysis-v1:git", publish: s.tasks.setGitWork}
+		defer func() { meter.release(ctx.Err() == nil) }()
+		ctx = withWorkProgress(ctx, meter.report)
+		meter.report(activityWork{Phase: "waiting for Git refresh"})
 		refresh, name := s.Catalog.refreshMainIntegrations, "refresh"
 		if backfill {
 			refresh, name = s.Catalog.backfillMainIntegrations, "backfill"
@@ -115,13 +143,19 @@ func (s *Server) refreshGitInBackground(backfill bool) {
 		if err := refresh(ctx); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Git integration %s: %v\n", name, err)
 		}
+		meter.finish(ctx.Err() == nil)
 		if backfill {
 			return
 		}
+		meter.model = "analysis-v1:tools"
+		meter.report(activityWork{Phase: "refreshing tools"})
 		// Rebuild the Tools rollup now rather than on the next page view.
 		if err := s.Catalog.ensureToolRollup(ctx); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "Tool rollup: %v\n", err)
 		}
+		meter.finish(ctx.Err() == nil)
+		meter.model = "analysis-v1:findings"
+		meter.report(activityWork{Phase: "refreshing findings"})
 		// Then findings, from the fresh rollup: the full pass once a day,
 		// and between them only the findings being measured.
 		if err := s.Catalog.RefreshFindings(ctx, false); err != nil && ctx.Err() == nil {
@@ -200,7 +234,7 @@ func (s *Server) libraryActivities() []libraryActivity {
 		if run.State != "running" {
 			continue
 		}
-		activity := libraryActivity{ID: run.ID, Kind: "sync", Label: "Indexing sources", StartedAt: run.StartedAt, Writes: true, timingKind: activityTimingKind(run.Kind),
+		activity := libraryActivity{operation: run.operation, ID: run.ID, Kind: "sync", Label: "Indexing sources", StartedAt: run.StartedAt, Writes: true, timingKind: activityTimingKind(run.Kind),
 			OnEject: "Stops between workspaces; the next index resumes it.", Stoppable: true, StopPath: "/api/index/cancel", Stopping: run.StopRequested}
 		if run.Kind == automaticRunKind {
 			activity.Automatic = true
@@ -254,7 +288,7 @@ func (s *Server) libraryActivities() []libraryActivity {
 			sourceSummary = fmt.Sprintf("%d of %d sources finished", run.CompletedSources, run.TotalSources)
 		}
 		if run.Work != nil {
-			work := *run.Work // snapshots must not share the mutable run
+			work := cloneWork(*run.Work) // snapshots must not share mutable counters
 			activity.Work = &work
 			activity.Detail = strings.Join(nonemptyParts(work.Source, sourceSummary), " · ")
 		} else if run.Phase != "starting" && run.Phase != "counting" {
@@ -303,7 +337,7 @@ func (s *Server) libraryActivities() []libraryActivity {
 	}
 	if running, since, reason := s.tasks.gitRunning(); running {
 		activities = append(activities, libraryActivity{Kind: "git", Label: "Looking up merges in Git", Detail: "Main-branch merges of indexed work, " + reason,
-			StartedAt: since, Writes: true, OnEject: "Stops; it runs again after the next index."})
+			ID: "git:" + since, Work: s.tasks.gitProgress(), StartedAt: since, Writes: true, OnEject: "Stops; it runs again after the next index."})
 	}
 	if upgrade := s.Catalog.upgrade(); upgrade != nil {
 		upgrade.mu.Lock()

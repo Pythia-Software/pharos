@@ -14,6 +14,7 @@ import (
 )
 
 type IngestResult struct {
+	DiscoverySeconds      float64 `json:"discovery_seconds,omitempty"`
 	WriteSeconds          float64 `json:"write_seconds,omitempty"`
 	DiscoveryParseSeconds float64 `json:"discovery_parse_seconds,omitempty"`
 	WriteRows             int64   `json:"write_rows,omitempty"`
@@ -104,21 +105,35 @@ func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress P
 		result.Error = message
 		return result
 	}
-	if antigravity, ok := adapter.(*antigravityAdapter); ok {
-		if err := antigravity.prepareInstalledVersions(c); err != nil {
-			result.Error = err.Error()
-			return result
-		}
-	}
-	report("checking")
 	seen := ""
 	if view != nil {
 		seen = view.seen()
 	}
 	_ = c.registerHost(host, seen)
+	report("discovering inputs")
+	if mode.plan == nil {
+		plan, err := c.prepareSourcePlan(ctx, adapter)
+		if err != nil {
+			state("failed", "", "", err.Error(), 0, false)
+			result.Error = err.Error()
+			report("failed")
+			return result
+		}
+		mode.plan = plan
+		ctx = withIngestMode(ctx, mode)
+	}
+	if mode.plan != nil {
+		result.DiscoverySeconds = mode.plan.discoverySeconds
+	}
+	if mode.plan != nil && mode.planned != nil {
+		mode.planned(mode.plan, plannedIndexModel(adapter, mode.force))
+	}
+	report("checking")
 	fingerprint, err := "", error(nil)
 	_, partialSource := adapter.(partialAdapter)
-	if !mode.automatic || !partialSource {
+	if mode.plan != nil {
+		fingerprint = mode.plan.fingerprint()
+	} else if !mode.automatic || !partialSource {
 		fingerprint, err = adapter.Fingerprint()
 	}
 	if err != nil {
@@ -147,7 +162,7 @@ func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress P
 	var priorVersion sql.NullString
 	var pending int64
 	err = c.DB.QueryRow("SELECT fingerprint,index_version,last_success_at,error,pending_count,coverage FROM source_states WHERE host_id=? AND source_name=?", host.ID, config.Name).Scan(&priorFingerprint, &priorVersion, &lastSuccess, &priorError, &pending, &coverage)
-	if !mode.automatic && !mode.force && err == nil && priorFingerprint.String == fingerprint && priorVersion.String == indexVersion && lastSuccess.Valid && !priorError.Valid && pending == 0 && coverage.String == "complete" {
+	if !mode.automatic && !mode.force && (mode.plan == nil || mode.plan.discoveryError == nil && mode.plan.needed == 0) && err == nil && priorFingerprint.String == fingerprint && priorVersion.String == indexVersion && lastSuccess.Valid && !priorError.Valid && pending == 0 && coverage.String == "complete" {
 		state("complete", fingerprint, fingerprint, "", 0, true)
 		result.SkippedUnchanged = true
 		report("complete")
@@ -219,7 +234,9 @@ func sourceIndexVersion(adapter Adapter) string {
 // progress every 25 workspaces written.
 func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, resume bool, result *IngestResult, report func(string), cursor func(string)) error {
 	started := time.Now()
-	defer func() { result.DiscoveryParseSeconds = time.Since(started).Seconds() - result.WriteSeconds }()
+	defer func() {
+		result.DiscoveryParseSeconds = result.DiscoverySeconds + time.Since(started).Seconds() - result.WriteSeconds
+	}()
 	config := adapter.Config()
 	mode := modeOf(ctx)
 	indexVersion, err := c.effectiveIndexVersion(host, config.Name, adapter)
@@ -230,7 +247,13 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 	partial, incremental := adapter.(partialAdapter)
 	if incremental {
 		var err error
-		if tracker, err = c.newPartTracker(host, config.Name, partial, captureViewOf(adapter)); err != nil {
+		if mode.plan != nil {
+			tracker = mode.plan.tracker
+		}
+		if tracker == nil {
+			tracker, err = c.newPartTracker(host, config.Name, partial, captureViewOf(adapter))
+		}
+		if err != nil {
 			return err
 		}
 		if mode.automatic {
@@ -247,6 +270,9 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 		if record == nil {
 			err := tracker.hold(c, parts)
 			return err
+		}
+		if mode.plan != nil {
+			mode.plan.observe(record)
 		}
 		digest, err := workspaceRecordDigest(*record)
 		if err != nil {
@@ -377,7 +403,13 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 	if !incremental {
 		return adapter.Discover(func(record WorkspaceRecord) error { return process(&record, nil) })
 	}
-	err = partial.discoverParts(func(parts []sourcePart) bool {
+	discover := partial.discoverParts
+	if mode.plan != nil {
+		discover = func(unchanged func([]sourcePart) bool, emit func(*WorkspaceRecord, []sourcePart) error) error {
+			return mode.plan.discover(ctx, unchanged, emit)
+		}
+	}
+	err = discover(func(parts []sourcePart) bool {
 		if ctx.Err() != nil {
 			return false
 		}
@@ -1817,7 +1849,8 @@ func (c *Catalog) ReconcileIdentitiesContext(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	for _, row := range rows {
+	reportWork(ctx, "linking conversation identities", "conversation", 0, len(rows))
+	for index, row := range rows {
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
@@ -1830,6 +1863,7 @@ func (c *Catalog) ReconcileIdentitiesContext(ctx context.Context) (int, error) {
 		}); err != nil {
 			return 0, err
 		}
+		reportWork(ctx, "linking conversation identities", "conversation", index+1, len(rows))
 	}
 	if err := c.backfillHarnessVersionsContext(ctx); err != nil {
 		return 0, err
@@ -1845,7 +1879,8 @@ func (c *Catalog) ReconcileIdentitiesContext(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	for _, link := range links {
+	reportWork(ctx, "updating linked workspaces", "link", 0, len(links))
+	for index, link := range links {
 		pairs := [][5]string{
 			{firstString(link["left_id"]), firstString(link["left_kind"]), firstString(link["left_activity"]), firstString(link["right_kind"]), firstString(link["right_activity"])},
 			{firstString(link["right_id"]), firstString(link["right_kind"]), firstString(link["right_activity"]), firstString(link["left_kind"]), firstString(link["left_activity"])},
@@ -1865,6 +1900,7 @@ func (c *Catalog) ReconcileIdentitiesContext(ctx context.Context) (int, error) {
 				}
 			}
 		}
+		reportWork(ctx, "updating linked workspaces", "link", index+1, len(links))
 	}
 	if err := c.writeTransaction(ctx, "resolve linked workspace names", func(tx *sql.Tx) error {
 		return refreshWorkspaceNames(tx, nil)

@@ -158,6 +158,58 @@ func TestInstalledVersionObservationMovesOnUpgrade(t *testing.T) {
 	}
 }
 
+func TestPlannedCapturesRetainInstalledVersions(t *testing.T) {
+	useHost(t, "capturing-host")
+	dir := antigravityFixture(t)
+	source := SourceConfig{Name: "antigravity-cli", Kind: "antigravity", Path: dir, Account: "local", Enabled: true}
+	config := captureTestConfig(t, source)
+	runCapture(t, config)
+	targets, err := captureTargets(config.CaptureRoot, nil, true, nil)
+	if err != nil || len(targets) != 1 {
+		t.Fatalf("capture targets: %+v %v", targets, err)
+	}
+	for _, host := range []string{"capturing-host", "other-host"} {
+		t.Run(host, func(t *testing.T) {
+			useHost(t, host)
+			catalog, _ := testCatalog(t)
+			catalog.now = func() time.Time { return time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC) }
+			adapter, _, _, err := openCaptureAdapter(targets[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			observations := 0
+			adapter.(*antigravityAdapter).installedVersion = func(app string) string {
+				observations++
+				if app == "antigravity-cli" {
+					return "2.17.0"
+				}
+				return ""
+			}
+			plan, err := catalog.prepareSourcePlan(t.Context(), adapter)
+			if err != nil || plan == nil {
+				t.Fatalf("plan: %+v %v", plan, err)
+			}
+			// IndexCapture opens a different adapter; the retained readers must
+			// carry the observation prepared on the discovery adapter.
+			result := catalog.IndexCapture(withIngestMode(t.Context(), ingestMode{plan: plan}), targets[0], nil)
+			if result.Error != nil || result.Conversations != 3 {
+				t.Fatalf("planned index: %+v", result)
+			}
+			var first, last, provenance string
+			if err := catalog.DB.QueryRow(`SELECT COALESCE(harness_version_first,''),COALESCE(harness_version_last,''),COALESCE(harness_version_source,'') FROM conversations WHERE native_id=?`, antigravityRoot).Scan(&first, &last, &provenance); err != nil {
+				t.Fatal(err)
+			}
+			if host == "capturing-host" {
+				if first != "2.17.0" || last != "2.17.0" || provenance != "installed-app" || observations != 3 {
+					t.Fatalf("local observation lost: %q %q %q, reads=%d", first, last, provenance, observations)
+				}
+			} else if first != "" || last != "" || provenance != "" || observations != 0 {
+				t.Fatalf("off-host capture used local installation: %q %q %q, reads=%d", first, last, provenance, observations)
+			}
+		})
+	}
+}
+
 func TestInstalledVersionUpsertPreservesFirstAndPastLast(t *testing.T) {
 	c, _ := testCatalog(t)
 	if _, err := c.DB.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','antigravity','local','w','Work','2026-09-28')`); err != nil {

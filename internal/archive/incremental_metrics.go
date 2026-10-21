@@ -15,35 +15,37 @@ import (
 const syncMeasurementLimits = "CPU is process-wide plus completed child processes and includes concurrent Pharos work. CPU percent is relative to one core. RSS is sampled whole-process resident memory, not sync allocations; peaks between samples can be missed. Go allocation counters are process-wide. OS block counts are not byte counts. Telemetry overhead is included."
 
 type syncPhase struct {
-	Name       string  `json:"name"`
-	Seconds    float64 `json:"seconds"`
-	CPUSeconds float64 `json:"cpu_seconds"`
+	Name       string                 `json:"name"`
+	Seconds    float64                `json:"seconds"`
+	CPUSeconds float64                `json:"cpu_seconds"`
+	Work       []workStageMeasurement `json:"work,omitempty"`
 }
 
 type syncMeasurement struct {
-	RunID         string         `json:"run_id"`
-	Trigger       string         `json:"trigger,omitempty"`
-	FinishedAt    string         `json:"finished_at,omitempty"`
-	Sources       []string       `json:"sources,omitempty"`
-	SourceResults []IngestResult `json:"source_results,omitempty"`
-	State         string         `json:"state"`
-	Class         string         `json:"class"`
-	ColdStart     bool           `json:"cold_start"`
-	Seconds       float64        `json:"seconds"`
-	CPUSeconds    float64        `json:"cpu_seconds"`
-	CPUPercent    float64        `json:"cpu_percent_one_core"`
-	RSSBaseline   int64          `json:"rss_baseline_bytes"`
-	RSSPeak       int64          `json:"rss_observed_peak_bytes"`
-	HeapBaseline  uint64         `json:"heap_baseline_bytes"`
-	HeapPeak      uint64         `json:"heap_observed_peak_bytes"`
-	Allocated     uint64         `json:"allocated_bytes"`
-	ReadBlocks    int64          `json:"read_blocks"`
-	WrittenBlocks int64          `json:"written_blocks"`
-	Workspaces    int            `json:"changed_groups"`
-	Conversations int            `json:"conversations"`
-	Messages      int            `json:"messages_in_changed_groups"`
-	Audit         auditResult    `json:"audit"`
-	Phases        []syncPhase    `json:"phases"`
+	Forecasts     []forecastSnapshot `json:"forecasts,omitempty"`
+	RunID         string             `json:"run_id"`
+	Trigger       string             `json:"trigger,omitempty"`
+	FinishedAt    string             `json:"finished_at,omitempty"`
+	Sources       []string           `json:"sources,omitempty"`
+	SourceResults []IngestResult     `json:"source_results,omitempty"`
+	State         string             `json:"state"`
+	Class         string             `json:"class"`
+	ColdStart     bool               `json:"cold_start"`
+	Seconds       float64            `json:"seconds"`
+	CPUSeconds    float64            `json:"cpu_seconds"`
+	CPUPercent    float64            `json:"cpu_percent_one_core"`
+	RSSBaseline   int64              `json:"rss_baseline_bytes"`
+	RSSPeak       int64              `json:"rss_observed_peak_bytes"`
+	HeapBaseline  uint64             `json:"heap_baseline_bytes"`
+	HeapPeak      uint64             `json:"heap_observed_peak_bytes"`
+	Allocated     uint64             `json:"allocated_bytes"`
+	ReadBlocks    int64              `json:"read_blocks"`
+	WrittenBlocks int64              `json:"written_blocks"`
+	Workspaces    int                `json:"changed_groups"`
+	Conversations int                `json:"conversations"`
+	Messages      int                `json:"messages_in_changed_groups"`
+	Audit         auditResult        `json:"audit"`
+	Phases        []syncPhase        `json:"phases"`
 }
 
 type syncMeter struct {
@@ -125,6 +127,11 @@ func (meter *syncMeter) beginPhase(name string) phaseStart {
 
 func (meter *syncMeter) endPhase(phase phaseStart) {
 	meter.measurement.Phases = append(meter.measurement.Phases, syncPhase{Name: phase.name, Seconds: time.Since(phase.started).Seconds(), CPUSeconds: processResourceUsage().cpu - phase.cpu})
+}
+
+func (meter *syncMeter) endPhaseWork(phase phaseStart, work []workStageMeasurement) {
+	meter.endPhase(phase)
+	meter.measurement.Phases[len(meter.measurement.Phases)-1].Work = work
 }
 
 func (meter *syncMeter) finish() syncMeasurement {

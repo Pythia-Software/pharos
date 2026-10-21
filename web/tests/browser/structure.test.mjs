@@ -10,10 +10,18 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { open, skip } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
-import { rootConversation, workID } from "./fixtures.mjs";
+import { defaultApi, rootConversation, workID } from "./fixtures.mjs";
 
 const work = `/work/${workID}`;
 const ROUTES = [
+  ...['provisional', 'partial'].map(state => ({
+    name: `Indexing forecast (${state})`, url: '/library', ready: '#pharosDrive',
+    api: {'GET /api/library/status': {...defaultApi['GET /api/library/status'], idle: false, activities: [{id: 'index-forecast', kind: 'sync', label: 'Capture & index', started_at: '2026-10-01T00:00:00Z',
+      work: {phase: 'loading authorship inputs', done: 0, total: 0, next: 'Tools, authorship and findings'},
+      estimate: {state: 'unknown', basis: 'Loading inputs before the stage count is available'},
+      forecast: {state, low_seconds: state === 'provisional' ? 180 : 0, high_seconds: state === 'provisional' ? 600 : 0, predicted_steps: state === 'provisional' ? 4 : 3, remaining_steps: 4, basis: 'Remaining sources and analyses on this Mac', unknown_steps: state === 'partial' ? ['Classify authorship for retained conversations'] : []}}]}},
+    open: page => page.locator('#pharosDrive').click(), shown: '#pharosDrivePanel .pharos-activity',
+  })),
   { name: "Home", url: "/", ready: ".home-belt-row .query-card" },
   { name: "Dashboard Catalog", url: "/home?cards=library", ready: ".card-library-entry .query-card" },
   { name: "Library table", url: "/library", ready: "#queryTableLibrary .qt-row" },
@@ -64,7 +72,7 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
     for (const viewport of WIDTHS) {
       const name = `${route.name} @ ${viewport.width}`;
       test(name, { skip }, async t => {
-        const app = await open(t, { url: route.url, viewport, ready: route.ready, preferences: route.preferences });
+        const app = await open(t, { url: route.url, viewport, ready: route.ready, preferences: route.preferences, api: route.api });
         if (route.open) {
           await route.open(app.page);
           await app.page.locator(route.shown).first().waitFor();

@@ -20,6 +20,9 @@ func physicalPartCount(parts []sourcePart) int {
 }
 
 type ingestMode struct {
+	deferGit   bool
+	plan       *sourceWorkPlan
+	planned    func(*sourceWorkPlan, string)
 	automatic  bool
 	force      bool
 	discovered func([]sourcePart, bool)

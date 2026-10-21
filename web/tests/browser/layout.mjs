@@ -119,7 +119,11 @@ function inspect({ wide, extraContainers, slack }) {
   for (const container of containers) {
     const cr = container.getBoundingClientRect();
     if (hidden(getComputedStyle(container), cr)) continue;
-    const beyond = r => ["left", "right", "top", "bottom"].filter((_, i) => [cr.left - r.left, r.right - cr.right, cr.top - r.top, r.bottom - cr.bottom][i] > slack);
+    // A scrollable dialog can hold more content than its viewport. Its
+    // vertical descendants remain reachable; escaping the screen is checked
+    // above, and horizontal clipping/control visibility stay checked below.
+    const scrollsVertically = ['auto', 'scroll'].includes(getComputedStyle(container).overflowY);
+    const beyond = r => ["left", "right", "top", "bottom"].filter((side, i) => [cr.left - r.left, r.right - cr.right, cr.top - r.top, r.bottom - cr.bottom][i] > slack && !(scrollsVertically && (side === 'top' || side === 'bottom')));
     const escapes = `content escapes ${label(container)}`;
     walk(container, (el, s, r) => {
       if (positioned(s) || el.matches(wide)) return false;

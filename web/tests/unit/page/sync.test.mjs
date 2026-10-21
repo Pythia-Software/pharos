@@ -80,3 +80,18 @@ test("a run's sources come from its record, else from its results and per-source
   assert.deepEqual(plain(pharosSync.sourceNames({ sources: [], source_results: [{ source: "codex" }, { source: "claude" }], phases: phases(["claude", "git", "findings"]) })), ["codex", "claude"]);
   assert.deepEqual(plain(pharosSync.sourceNames({})), []);
 });
+
+test("stage workload distinguishes a known empty inventory from an unknown total", () => {
+  assert.equal(pharosSync.stageWork({unit: "group", done: 0, total: 0, total_known: true}), "0 / 0 group");
+  assert.equal(pharosSync.stageWork({unit: "group", done: 3, total: 0}), "3 group");
+  assert.equal(pharosSync.stageWork({unit: "message", done: 4, total: 10}), "4 / 10 message");
+});
+
+test('forecast errors distinguish missing predictions and interrupted outcomes', () => {
+  const error = pharosSync.forecastError;
+  assert.equal(error({estimate: {state: 'partial'}}), 'Not available');
+  assert.equal(error({estimate: {point_seconds: 60}}), 'Not evaluated');
+  assert.equal(error({estimate: {point_seconds: 60}, actual_remaining_seconds: null}), 'Not evaluated');
+  assert.match(error({estimate: {point_seconds: 60}, actual_remaining_seconds: 90}), /under$/);
+  assert.match(error({estimate: {point_seconds: 90}, actual_remaining_seconds: 60}), /over$/);
+});
