@@ -19,7 +19,7 @@ export const queryCategories = {
   machines: { label: "Machine Time", tone: "var(--heat-1)" },
   carbon: { label: "Carbon", tone: "var(--sea)" },
   findings: { label: "Findings", tone: "var(--gold)" },
-  library: { label: "Library", tone: "color-mix(in srgb,var(--muted) 70%,var(--sea))" },
+  library: { label: "Search", tone: "color-mix(in srgb,var(--muted) 70%,var(--sea))" },
   tl1: { label: "TL1", tone: "color-mix(in srgb,var(--heat-2) 70%,var(--warn))" },
 } as const;
 export type QueryCategory = keyof typeof queryCategories;

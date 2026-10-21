@@ -39,17 +39,27 @@ export function SearchPopover({ label, title, className, popupClassName = "", tr
     const outside = (event: Event) => { if (!trigger.current?.contains(event.target as Node) && !popup.current?.contains(event.target as Node)) setOpen(false); };
     const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setOpen(false); trigger.current?.focus(); } };
     place();
+    // Explicit tab stops keep menu buttons reachable with Safari's default
+    // keyboard settings. Preserve any deliberate tabindex supplied by a child.
+    popup.current?.querySelectorAll("button:not([tabindex])").forEach(button => { (button as HTMLButtonElement).tabIndex = 0; });
     popup.current?.querySelector<HTMLElement>("select, button, input")?.focus();
     document.addEventListener("pointerdown", outside);
     document.addEventListener("focusin", outside);
-    document.addEventListener("keydown", escape);
+    // Dismiss this menu before a containing modal handles Escape.
+    document.addEventListener("keydown", escape, true);
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);
-    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("focusin", outside); document.removeEventListener("keydown", escape); window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
+    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("focusin", outside); document.removeEventListener("keydown", escape, true); window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
   }, [open]);
   return <>
-    <button ref={trigger} type="button" className={className} aria-label={label} title={title} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(!open)}>{triggerContent}</button>
-    {open ? createPortal(<div ref={popup} id={id} role="dialog" aria-label={label} className={`text-condition-popup ${popupClassName}`} style={position}>{children(() => setOpen(false))}</div>, trigger.current?.closest("dialog") ?? document.body) : null}
+    <button ref={trigger} type="button" tabIndex={0} className={className} aria-label={label} title={title} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(!open)}>{triggerContent}</button>
+    {open ? createPortal(<div ref={popup} id={id} role="dialog" aria-label={label} className={`text-condition-popup ${popupClassName}`} style={position} onMouseDown={event => {
+      const element = event.target as Element;
+      const control = element.closest<HTMLElement>('button, input[type="checkbox"]') ?? element.closest("label")?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+      // Safari blurs the active control when clicking buttons or checkboxes.
+      // Keep focus in the menu before the modal redirects it and dismisses it.
+      if (event.button === 0 && control) { event.preventDefault(); control.focus(); }
+    }}>{children(() => setOpen(false))}</div>, trigger.current?.closest('dialog, [role="dialog"][aria-modal="true"]') ?? document.body) : null}
   </>;
 }
 function ConditionOptions({ node, path, scopeLabel, onExclude }: { node: TextCondition; path: string; scopeLabel: string; onExclude: (exclude: boolean) => void }) {
