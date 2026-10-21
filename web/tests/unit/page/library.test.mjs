@@ -3,7 +3,7 @@
 // (window.pharosLibrary).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { loadClassicScript } from "../helpers/classic-script.mjs";
+import { loadClassicScript, plain } from "../helpers/classic-script.mjs";
 
 const script = loadClassicScript("library.js");
 const library = script.window.pharosLibrary;
@@ -179,4 +179,58 @@ test("whole-operation forecasts take priority while stage progress stays measure
   assert.equal(library.activityTiming(activity, {now: started, unavailable: true}).range, null);
   activity.forecast = {state: 'stopping'};
   assert.equal(library.activityTiming(activity, {now: started}).state, 'stopping');
+});
+
+test("activity summaries keep unique context and measured progress, with explanations available separately", () => {
+  const activity = {label: 'Capture & index', detail: 'Codex · discovering inputs · 0 of 4 sources finished',
+    work: {phase: 'discovering inputs', source: 'Codex', unit: 'conversation group', done: 0, total: 0, next: 'Index conversations'},
+    estimate: {state: 'unknown', basis: 'Discovering inputs before the count is available'},
+    forecast: {state: 'partial', predicted_steps: 3, remaining_steps: 4, basis: 'Some remaining steps have no comparable history yet', unknown_steps: ['Classify authorship']}};
+  const discovery = library.activityPresentation(activity);
+  assert.equal(discovery.title, 'Discovering inputs');
+  assert.equal(discovery.context, 'Capture & index · Codex · 0 of 4 sources finished');
+  assert.equal(discovery.caption, ''); // Discovery has no measurable progress yet.
+  const explanations = discovery.details.join('\n');
+  for (const fact of [activity.estimate.basis, activity.forecast.basis, '3 of 4', 'Classify authorship', activity.work.next]) assert.ok(explanations.includes(fact), fact);
+
+  const indexing = library.activityPresentation({...activity,
+    work: {...activity.work, phase: 'indexing', done: 120, total: 600, size: {unit: 'byte', done: 150e6, total: 300e6}},
+    estimate: {state: 'estimating', unit: 'byte', units_per_second: 1e6, basis: 'Recent pace'}});
+  for (const fact of ['120 of 600 conversation groups', '150 MB of 300 MB', '50% of input data', '1.0 MB/sec']) assert.ok(indexing.caption.includes(fact), fact);
+
+  const maintenance = library.activityPresentation({label: 'Building substring search', detail: '10 of 20 conversations',
+    work: {phase: 'Building substring search', unit: 'conversation', done: 10, total: 20}});
+  assert.equal(maintenance.context, '');
+  assert.match(maintenance.caption, /10 of 20 conversations/);
+  const unstructured = library.activityPresentation({label: 'Looking up merges in Git', detail: 'First scan of this catalog'});
+  assert.equal(unstructured.title, 'Looking up merges in Git');
+  assert.equal(unstructured.context, 'First scan of this catalog');
+  assert.equal(unstructured.caption, '');
+
+  const unavailable = library.activityPresentation({...activity, estimate: {units_per_second: 10, unit: 'conversation', basis: 'Stale estimate'}}, {unavailable: true});
+  assert.equal(unavailable.caption, '');
+  assert.deepEqual(plain(unavailable.details), ['Next: Index conversations']);
+});
+
+test("Capture & index availability follows running work, source settings, upgrades and release", () => {
+  for (const state of [{activities: [{kind: 'index'}]}, {activities: [{kind: 'capture-other'}]}, {incremental: true},
+    {local: true}, {upgrading: true}, {sourcesEnabled: false}, {releasing: true}]) {
+    assert.equal(library.captureIndexDisabled(state), true, JSON.stringify(state));
+  }
+  for (const state of [{}, {activities: []}, {sourcesEnabled: true}, {sourcesEnabled: false, upgradeNeeded: true}]) {
+    assert.equal(library.captureIndexDisabled(state), false, JSON.stringify(state));
+  }
+});
+
+test("one Stop reaches each stoppable task once and stays available until every target is stopping", () => {
+  const index = {kind: 'index', stoppable: true, stop_path: '/api/index/cancel'};
+  const refresh = {kind: 'maintenance', stoppable: true, stop_path: '/api/library/refresh/stop'};
+  assert.deepEqual(plain(library.stopTargets([index, {...index, kind: 'sync'}, refresh, {kind: 'capture'}])), [
+    {path: index.stop_path, stopping: false}, {path: refresh.stop_path, stopping: false},
+  ]);
+  assert.deepEqual(plain(library.stopTargets([{...index, stopping: true}, refresh])), [
+    {path: index.stop_path, stopping: true}, {path: refresh.stop_path, stopping: false},
+  ]);
+  assert.deepEqual(plain(library.stopTargets([{stoppable: true, stopping: true}])), [{path: index.stop_path, stopping: true}]);
+  assert.equal(library.stopTargets([{kind: 'capture'}, {kind: 'backup'}]).length, 0);
 });

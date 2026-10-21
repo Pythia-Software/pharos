@@ -14,14 +14,19 @@ import { defaultApi, rootConversation, workID } from "./fixtures.mjs";
 
 const work = `/work/${workID}`;
 const ROUTES = [
-  ...['provisional', 'partial'].map(state => ({
-    name: `Indexing forecast (${state})`, url: '/library', ready: '#pharosDrive',
-    api: {'GET /api/library/status': {...defaultApi['GET /api/library/status'], idle: false, activities: [{id: 'index-forecast', kind: 'sync', label: 'Capture & index', started_at: '2026-10-01T00:00:00Z',
-      work: {phase: 'loading authorship inputs', done: 0, total: 0, next: 'Tools, authorship and findings'},
-      estimate: {state: 'unknown', basis: 'Loading inputs before the stage count is available'},
+  ...['provisional', 'partial'].flatMap(state => [false, true].map(expanded => ({
+    name: `Indexing forecast (${state}${expanded ? ', details' : ''})`, url: '/library', ready: '#pharosDrive',
+    api: {'GET /api/library/status': {...defaultApi['GET /api/library/status'], idle: false, activities: [{id: 'index-forecast', kind: 'sync', label: 'Capture & index', started_at: new Date(Date.now() - 120_000).toISOString(),
+      stoppable: true, stop_path: '/api/index/cancel', detail: 'Codex · 0 of 4 sources finished',
+      work: {phase: 'discovering inputs', source: 'Codex', done: 0, total: 0, next: 'Tools, authorship and findings'},
+      estimate: {state: 'unknown', basis: 'Discovering inputs before the stage count is available'},
       forecast: {state, low_seconds: state === 'provisional' ? 180 : 0, high_seconds: state === 'provisional' ? 600 : 0, predicted_steps: state === 'provisional' ? 4 : 3, remaining_steps: 4, basis: 'Remaining sources and analyses on this Mac', unknown_steps: state === 'partial' ? ['Classify authorship for retained conversations'] : []}}]}},
-    open: page => page.locator('#pharosDrive').click(), shown: '#pharosDrivePanel .pharos-activity',
-  })),
+    open: async page => {
+      await page.evaluate(() => { window.webkit = {messageHandlers: {pharosLibrary: {postMessage: async () => {}}}}; });
+      await page.locator('#pharosDrive').click();
+      if (expanded) await page.locator('#pharosDrivePanel summary').click();
+    }, shown: '#pharosDrivePanel .pharos-activity',
+  }))),
   { name: "Home", url: "/", ready: ".home-belt-row .query-card" },
   { name: "Dashboard Catalog", url: "/home?cards=library", ready: ".card-library-entry .query-card" },
   { name: "Library table", url: "/library", ready: "#queryTableLibrary .qt-row" },
