@@ -152,3 +152,20 @@ test("Index changes is busy while a capture or index holds the library, or other
   ];
   for (const [state, busy] of cases) assert.equal(library.headerBusy(state), busy, JSON.stringify(state));
 });
+
+test("whole-operation forecasts take priority while stage progress stays measured", () => {
+  const activity = {started_at: new Date(started).toISOString(), work: {unit: 'group', done: 20, total: 100},
+    estimate: {state: 'estimating', low_seconds: 30, high_seconds: 50},
+    forecast: {state: 'provisional', low_seconds: 180, high_seconds: 300, basis: 'All sources and analyses'}};
+  const whole = library.activityTiming(activity, {now: started + 10_000});
+  assert.deepEqual([whole.range, whole.state, whole.scope, whole.basis], ['3–5 min', 'provisional', 'operation', 'All sources and analyses']);
+  const stage = library.activityTiming(activity, {scope: 'stage', now: started + 10_000});
+  assert.deepEqual([stage.range, stage.scope], ['30–50 sec', 'stage']);
+  assert.equal(library.activityProgress(activity), .2);
+  activity.forecast = {state: 'partial', predicted_steps: 3, remaining_steps: 4};
+  const partial = library.activityTiming(activity, {now: started});
+  assert.deepEqual([partial.range, partial.state, partial.scope], [null, 'partial', 'operation']);
+  assert.equal(library.activityTiming(activity, {now: started, unavailable: true}).range, null);
+  activity.forecast = {state: 'stopping'};
+  assert.equal(library.activityTiming(activity, {now: started}).state, 'stopping');
+});

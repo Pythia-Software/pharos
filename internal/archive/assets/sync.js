@@ -248,6 +248,30 @@
     window.pharosLibrary?.refreshSyncControls?.();
   }
 
+  const stageWork = work => {
+    if (!work.unit) return '—';
+    const amount = value => work.unit === 'byte' ? memory(value) : number(value);
+    const known = work.total_known || work.total > 0;
+    return `${amount(work.done)}${known ? ` / ${amount(work.total)}` : ''} ${work.unit === 'byte' ? '' : work.unit}`.trim();
+  };
+  const workloadInputs = features => [features?.conversations ? `${number(features.conversations)} conversations` : features?.groups ? `${number(features.groups)} groups` : '', features?.bytes ? `${memory(features.bytes)}${features.bytes_basis === 'message_text' ? ' of message text' : ''}` : '', features?.messages ? `${number(features.messages)} messages` : ''].filter(Boolean).join(' · ') || '—';
+
+  const forecastError = snapshot => {
+    const predicted = snapshot.estimate?.point_seconds;
+    if (!(predicted > 0)) return 'Not available';
+    if (!Number.isFinite(snapshot.actual_remaining_seconds)) return 'Not evaluated';
+    const difference = predicted - snapshot.actual_remaining_seconds;
+    return `${seconds(Math.abs(difference))} ${difference >= 0 ? 'over' : 'under'}`;
+  };
+  function forecastTable(snapshots, key) {
+    const forecasts = table('Forecast accuracy', ['When predicted', 'Estimated remaining', 'Actual remaining', 'Error'], `forecasts-${key}`);
+    for (const snapshot of snapshots || []) {
+      const estimate = snapshot.estimate || {};
+      const predicted = estimate.point_seconds > 0 ? `${seconds(estimate.low_seconds)}–${seconds(estimate.high_seconds)}` : `${estimate.predicted_steps || 0} of ${estimate.remaining_steps || 0} steps estimated`;
+      cells(forecasts.body, [snapshot.reason === 'launch' ? 'At launch' : snapshot.reason === 'discovered' ? 'After discovery' : `${seconds(snapshot.elapsed_seconds)} into run`, predicted, Number.isFinite(snapshot.actual_remaining_seconds) ? seconds(snapshot.actual_remaining_seconds) : '—', forecastError(snapshot)]);
+    }
+    return forecasts.wrapper;
+  }
   function renderRunDetails(element, run) {
     element.replaceChildren();
     if (run.source_results?.length) {
@@ -262,7 +286,14 @@
       const phases = table('Time by phase', ['Phase', 'Elapsed', 'CPU time'], `phases-${run.run_id || run.finished_at}`);
       for (const phase of run.phases) cells(phases.body, [phase.name === 'audit' ? 'Verification' : phase.name === 'projections' ? 'Library view' : phase.name, seconds(phase.seconds), seconds(phase.cpu_seconds)]);
       element.append(phases.wrapper);
+      const measured = run.phases.flatMap(phase => (phase.work || []).map(work => ({...work, parent: phase.name})));
+      if (measured.length) {
+        const stages = table('Stage measurements', ['Stage', 'Work', 'Elapsed', 'Input', 'Since prior index', 'Load (1 min)'], `work-${run.run_id || run.finished_at}`);
+        for (const work of measured) cells(stages.body, [`${work.parent}: ${work.phase}`, stageWork(work), seconds(work.seconds), workloadInputs(work.features), work.features?.since_last_index_seconds > 0 ? seconds(work.features.since_last_index_seconds) : '—', Number.isFinite(work.features?.load_one_minute) ? work.features.load_one_minute.toFixed(1) : '—']);
+        element.append(stages.wrapper);
+      }
     }
+    if (run.forecasts?.length) element.append(forecastTable(run.forecasts, run.run_id || run.finished_at));
     const audit = run.audit;
     if (run.trigger) element.append(node('p', run.trigger === 'manual' ? 'Manual sync · includes analysis refreshes' : 'Automatic indexing · analyses deferred', 'muted'));
     if (audit) element.append(node('p', `Verification: ${audit.outcome || 'Unknown'} · ${number(audit.discovered_units)} discoverable units · ${number(audit.deferred_units)} deferred. ${audit.detail || ''}`));
@@ -359,6 +390,22 @@
     }
     if (costs.body.childElementCount) diagnostics.append(costs.wrapper);
     else diagnostics.append(node('p', 'Performance measurements will appear after the first run.', 'muted'));
+    const operationLabels = {'automatic-sync': 'Automatic changes', 'manual-sync': 'Manual changes', 'capture-index': 'Index captures', 'library-update:update': 'Capture & index', 'library-update:full': 'Full rebuild', 'library-update:retained': 'Retained repair'};
+    const forecastAccuracy = table('Operation forecast accuracy', ['Operation / checkpoint', 'Available', 'Evaluated', 'Median error', 'Within range', 'Median range width']);
+    for (const [model, checkpoints] of Object.entries(status.forecast_accuracy || {})) {
+      for (const [checkpoint, stats] of Object.entries(checkpoints)) {
+        if (!stats.attempts) continue;
+        cells(forecastAccuracy.body, [`${operationLabels[model] || model} · ${checkpoint === 'discovered' ? 'after discovery' : checkpoint}`, `${number(stats.predicted)} / ${number(stats.attempts)}`, number(stats.evaluated), stats.evaluated ? `${seconds(stats.median_absolute_error_seconds)} (${percent(stats.median_relative_error * 100)})` : '—', stats.evaluated ? `${number(stats.covered)} / ${number(stats.evaluated)}` : '—', stats.evaluated ? seconds(stats.median_interval_width_seconds) : '—']);
+      }
+    }
+    if (forecastAccuracy.body.childElementCount) {
+      diagnostics.append(node('h3', 'Forecast accuracy'), forecastAccuracy.wrapper, node('p', 'Availability includes runs without an estimate. Errors and range coverage use completed runs only, with one prediction per run at each checkpoint. Ranges widen using previous errors; coverage is measured rather than guaranteed.', 'muted'));
+    }
+    for (const run of (status.forecast_runs || []).filter(run => run.model?.startsWith('library-update:') || run.model === 'capture-index').slice(0, 5)) {
+      const detail = document.createElement('details');
+      detail.append(node('summary', `${operationLabels[run.model] || run.model} · ${when(run.finished_at)} · ${run.state}`), forecastTable(run.forecasts, run.run_id));
+      diagnostics.append(detail);
+    }
     if (status.measurement_limits) diagnostics.append(node('p', status.measurement_limits, 'muted'));
     if (status.coverage?.length) {
       const coverage = table('Verification coverage', ['Source', 'Units', 'Result', 'Last verified']);
@@ -506,8 +553,8 @@
     finally { busy = false; clearTimeout(timer); timer = setTimeout(refresh, 3000); }
   }
   window.addEventListener('pharos:route', refresh);
-  window.pharosSync = {refresh, recovery, isBusy: () => Boolean(activeRun), issues: () => openIssues,
+  window.pharosSync = {forecastError, refresh, recovery, isBusy: () => Boolean(activeRun), issues: () => openIssues,
     // Pure helpers, for web/tests/unit/page/sync.test.mjs.
-    finishedRunsChanged, runningRun, sourceNames, format: {seconds, memory, when}};
+    finishedRunsChanged, runningRun, sourceNames, stageWork, format: {seconds, memory, when}};
   refresh();
 })();

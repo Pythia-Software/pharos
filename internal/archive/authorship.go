@@ -1184,6 +1184,9 @@ func (c *Catalog) startAuthorshipInContext(generation string, parent context.Con
 				cancel()
 			}
 			ctx = workCtx
+			if report, ok := parent.Value(workProgressKey{}).(func(activityWork)); ok {
+				ctx = withWorkProgress(ctx, report)
+			}
 		}
 		err := c.RebuildAuthorship(ctx, generation)
 		state.mu.Lock()
@@ -1214,6 +1217,7 @@ func (c *Catalog) authorshipRunning() bool {
 // by, in send order, and replaces message_authorship and
 // conversation_launches.
 func (c *Catalog) RebuildAuthorship(ctx context.Context, generation string) error {
+	reportWork(ctx, "reading authorship inputs", "", 0, -1)
 	inputs, launches, err := c.authorshipInputs(ctx)
 	if err != nil {
 		return err
@@ -1390,7 +1394,8 @@ func (c *Catalog) classifyInputs(ctx context.Context, inputs []authorInput) ([]a
 	if err := next(); err != nil {
 		return nil, err
 	}
-	for _, input := range inputs {
+	reportWork(ctx, "classifying authorship", "message", 0, len(inputs))
+	for index, input := range inputs {
 		for pending != nil && pending.at.Before(input.SentAt) {
 			classifier.agentText.add(pending.at, pending.origin, shingles(wordTokens(pending.text)))
 			if err := next(); err != nil {
@@ -1400,6 +1405,9 @@ func (c *Catalog) classifyInputs(ctx context.Context, inputs []authorInput) ([]a
 		cutoff := input.SentAt.Add(-authorshipWindow)
 		classifier.agentText.evict(cutoff)
 		results = append(results, authorResult{Input: input, Spans: classifier.classify(input)})
+		if index%100 == 0 || index+1 == len(inputs) {
+			reportWork(ctx, "classifying authorship", "message", index+1, len(inputs))
+		}
 	}
 	return results, nil
 }
@@ -1442,7 +1450,8 @@ func (c *Catalog) storeAuthorship(ctx context.Context, results []authorResult, l
 		return err
 	}
 	defer spanStatement.Close()
-	for _, result := range results {
+	reportWork(ctx, "saving authorship", "message", 0, len(results))
+	for resultIndex, result := range results {
 		input := result.Input
 		counts := countSpans(input.Text, result.Spans)
 		spans, _ := json.Marshal(result.Spans)
@@ -1464,6 +1473,9 @@ func (c *Catalog) storeAuthorship(ctx context.Context, results []authorResult, l
 				utf8.RuneCountInString(strings.TrimSpace(value)), len(strings.Fields(value)), nilIfEmpty(span.Source), nilIfEmpty(span.Message)); err != nil {
 				return err
 			}
+		}
+		if resultIndex%100 == 0 || resultIndex+1 == len(results) {
+			reportWork(ctx, "saving authorship", "message", resultIndex+1, len(results))
 		}
 	}
 	for key, value := range map[string]string{"authorship_generation": generation, "authorship_built_at": now()} {

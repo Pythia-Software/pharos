@@ -46,7 +46,7 @@ func TestStageEstimateLearnsCurrentPaceAndHandlesPauses(t *testing.T) {
 
 func TestStageEstimateUsesWorkSizeAndRequiresComparableHistory(t *testing.T) {
 	start := time.Now()
-	history := []workTiming{{100, 100}, {200, 200}, {400, 400}, {100, 10000}}
+	history := []workTiming{{Units: 100, Seconds: 100}, {Units: 200, Seconds: 200}, {Units: 400, Seconds: 400}, {Units: 100, Seconds: 10000}}
 	estimate := func(total float64) activityEstimate {
 		return (&progressObservation{history: history}).estimate(activityWork{Unit: "conversation", Total: total}, start)
 	}
@@ -64,7 +64,7 @@ func TestStageEstimateUsesWorkSizeAndRequiresComparableHistory(t *testing.T) {
 		t.Fatalf("two past runs were presented as a reliable estimate: %+v", got)
 	}
 	// A very fast history must give way to this run's actual slower pace.
-	o := &progressObservation{history: []workTiming{{100, 1}, {100, 1}, {100, 1}}}
+	o := &progressObservation{history: []workTiming{{Units: 100, Seconds: 1}, {Units: 100, Seconds: 1}, {Units: 100, Seconds: 1}}}
 	w := activityWork{Total: 100}
 	o.estimate(w, start)
 	for _, seconds := range []int{10, 20, 30} {
@@ -75,7 +75,7 @@ func TestStageEstimateUsesWorkSizeAndRequiresComparableHistory(t *testing.T) {
 		}
 	}
 	for _, priorSeconds := range []float64{1, 10000} {
-		o := &progressObservation{history: []workTiming{{100, priorSeconds}, {100, priorSeconds}, {100, priorSeconds}}}
+		o := &progressObservation{history: []workTiming{{Units: 100, Seconds: priorSeconds}, {Units: 100, Seconds: priorSeconds}, {Units: 100, Seconds: priorSeconds}}}
 		w := activityWork{Total: 100}
 		o.estimate(w, start)
 		for _, seconds := range []int{4, 8} {
@@ -212,7 +212,7 @@ func TestIndexProgressWeightsUnequalTranscripts(t *testing.T) {
 	if *a[0].Progress != 0.09 || a[0].Estimate.Unit != "byte" {
 		t.Fatalf("ignored transcript sizes: %+v", a[0])
 	}
-	o := &progressObservation{history: []workTiming{{1000, 100}, {1000, 100}, {1000, 100}}}
+	o := &progressObservation{history: []workTiming{{Units: 1000, Seconds: 100}, {Units: 1000, Seconds: 100}, {Units: 1000, Seconds: 100}}}
 	if got := o.estimate(w, time.Now()); got.LowSeconds > 91 || got.HighSeconds < 91 || got.Rate != 10 {
 		t.Fatalf("estimate should cover 910 bytes at 10/sec: %+v", got)
 	}
@@ -224,7 +224,7 @@ func TestIndexProgressWeightsUnequalTranscripts(t *testing.T) {
 		{[]sourcePart{{item: "/session.jsonl", size: 123}, {item: "group:session", size: 99}}, 123, "byte"},
 		{[]sourcePart{{item: "sqlite:db:sessions:one", size: 10, sizeUnit: "message"}, {item: "sqlite:db:sessions:two", size: 20, sizeUnit: "message"}}, 30, "message"},
 		{[]sourcePart{{item: "/session.jsonl", size: 10}, {item: "sqlite:db:sessions:one", size: 10, sizeUnit: "message"}}, 0, ""},
-		{[]sourcePart{{item: "/session.jsonl", size: 10}, {item: "sqlite:/requests.db", size: 4096}}, 4106, "byte"},
+		{[]sourcePart{{item: "/session.jsonl", size: 10}, {item: "sqlite:/requests.db", size: 4096}}, 10, "byte"},
 	} {
 		if amount, unit := partWorkSize(test.parts); amount != test.amount || unit != test.unit {
 			t.Fatalf("mixed size units: %v %s, want %v %s", amount, unit, test.amount, test.unit)
@@ -336,5 +336,270 @@ func TestIndexProgressMeasuresDatabaseSessionsByMessages(t *testing.T) {
 	})
 	if result.Error != nil || meter.processed != 2 || meter.size.Done != 5 {
 		t.Fatalf("database progress: %+v, processed=%d size=%+v", result, meter.processed, meter.size)
+	}
+}
+
+func TestIncrementalWorkLearnsWithoutStatusPollingAndRetainsFeatures(t *testing.T) {
+	catalog, config := testCatalog(t)
+	server := testServer(t, config, catalog)
+	run := server.startRunNamed(automaticRunKind, []string{"codex"})
+	clock := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	meter := &runWorkMeter{server: server, runID: run.ID, kind: "sync", clock: func() time.Time { return clock }}
+	t.Cleanup(func() { meter.release(false) })
+	load := 2.5
+	work := activityWork{Phase: "indexing", Source: "codex", Unit: "byte", Total: 100, TotalKnown: true, Kind: "incremental", Model: "codex:test:changes",
+		Features: workFeatures{Groups: 4, Bytes: 100, SinceLastIndexSeconds: 300, LoadOneMinute: &load}}
+	for _, seconds := range []int{0, 4, 8, 12} {
+		clock = time.Date(2026, 10, 1, 0, 0, seconds, 0, time.UTC)
+		work.Done = float64(seconds)
+		meter.report(work)
+	}
+	activities := server.libraryActivities()
+	server.estimateActivities(activities, clock)
+	if len(activities) != 1 || activities[0].Estimate.State != "estimating" || activities[0].Estimate.Rate != 1 {
+		t.Fatalf("worker events did not train the estimator before the first status request: %+v", activities)
+	}
+	// Interrupting a stage preserves measurements without treating it as a
+	// successfully completed workload for future ETA priors.
+	stages := meter.finish(false)
+	if len(stages) != 1 || stages[0].Completed || stages[0].Done != 12 || stages[0].Features.Bytes != 100 {
+		t.Fatalf("partial stage: %+v", stages)
+	}
+	if history := server.workTimings(workTimingKey("incremental", work)); len(history) != 0 {
+		t.Fatalf("partial stage became a completed sample: %+v", history)
+	}
+	clock = clock.Add(time.Second)
+	work.Done = 0
+	meter.report(work)
+	clock = clock.Add(20 * time.Second)
+	work.Done = 100
+	meter.report(work)
+	stages = meter.finish(true)
+	history := server.workTimings(workTimingKey("incremental", work))
+	if len(stages) != 1 || !stages[0].Completed || len(history) != 1 || history[0].Seconds != 20 || history[0].Features.Groups != 4 || history[0].Features.LoadOneMinute == nil || *history[0].Features.LoadOneMinute != load {
+		t.Fatalf("completed stage lost workload or conditions: stages=%+v history=%+v", stages, history)
+	}
+	// A retry resumes cumulative source counters, but its clock starts after
+	// the wait. Train only that segment's work, including byte-sized progress.
+	for _, sized := range []bool{false, true} {
+		segment := activityWork{Phase: "indexing", Source: "resumed", Unit: "byte", Total: 100, TotalKnown: true, Kind: "incremental", Model: "resume"}
+		if sized {
+			segment.Unit, segment.Total, segment.Size = "conversation group", 10, &activitySize{Unit: "byte", Total: 100}
+		}
+		meter.report(segment)
+		clock = clock.Add(90 * time.Second)
+		if sized {
+			segment.Done, segment.Size.Done = 9, 90
+		} else {
+			segment.Done = 90
+		}
+		meter.report(segment)
+		meter.report(activityWork{Phase: "waiting for catalog", Source: "resumed"})
+		clock = clock.Add(30 * time.Second)
+		meter.report(segment)
+		clock = clock.Add(10 * time.Second)
+		if sized {
+			segment.Done, segment.Size.Done = 10, 100
+		} else {
+			segment.Done = 100
+		}
+		meter.report(segment)
+		stages = meter.finish(true)
+		history = server.workTimings(workTimingKey("incremental", segment))
+		last := history[len(history)-1]
+		if len(stages) != 3 || stages[2].Done != 10 || stages[2].Total != 10 || last.Units != 10 || last.Seconds != 10 {
+			t.Fatalf("resumed counters inflated throughput (sized=%v): stages=%+v timing=%+v", sized, stages, last)
+		}
+	}
+
+	// A subsequent analysis must publish its own progress rather than inheriting
+	// the transcript size or source of the stage that just ended.
+	meter.model = "analysis-v1:git"
+	meter.report(activityWork{Phase: "checking Git history", Unit: "workspace", Total: 8, TotalKnown: true})
+	activities = server.libraryActivities()
+	if activities[0].Work.Phase != "checking Git history" || activities[0].Work.Source != "" || activities[0].Work.Size != nil || activities[0].Work.Kind != "analysis" || activities[0].Work.Model != "analysis-v1" {
+		t.Fatalf("stage handoff: %+v", activities[0].Work)
+	}
+	empty := activityWork{Phase: "indexing", Unit: "conversation group", TotalKnown: true}
+	if got := (&progressObservation{}).estimate(empty, clock); got.State == "unknown" {
+		t.Fatalf("known empty workload described as undiscovered: %+v", got)
+	}
+}
+
+func TestOperationForecastComposesDependenciesAndUnknownSteps(t *testing.T) {
+	at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	op := &operationForecast{started: at}
+	for _, item := range []struct {
+		id      string
+		seconds float64
+		after   []string
+	}{
+		{"index", 20, nil}, {"git", 100, []string{"index"}}, {"tools", 40, []string{"index"}}, {"findings", 10, []string{"git", "tools"}},
+	} {
+		step := forecastStep{ID: item.id, Model: "v1", Label: item.id, State: "pending", Inventory: true, After: item.after}
+		op.steps = append(op.steps, step)
+		step.State, step.Seconds = "complete", item.seconds
+		op.history = append(op.history, forecastRun{State: "complete", Steps: []forecastStep{step}})
+	}
+	got := op.estimate(at, false)
+	if got.Point != 130 || got.Remaining != 4 || got.State != "provisional" || got.LowSeconds >= 130 || got.HighSeconds <= 130 {
+		t.Fatalf("should use the longer concurrent branch and broad sparse-history bounds: %+v", got)
+	}
+	op.steps = append(op.steps, forecastStep{ID: "new", Label: "New analysis", State: "pending", After: []string{"findings"}})
+	got = op.estimate(at, false)
+	if got.State != "partial" || got.Point != 0 || got.HighSeconds != 0 || got.Predicted != 4 || len(got.Unknown) != 1 {
+		t.Fatalf("a partial path became a whole-operation ETA: %+v", got)
+	}
+	op.skip("new")
+	op.steps[0].State, op.steps[0].Started = "running", at
+	got = op.estimate(at.Add(5*time.Minute), false)
+	if got.Point <= 110 || got.HighSeconds <= got.Point {
+		t.Fatalf("overrunning stage counted through zero: %+v", got)
+	}
+	if got = op.estimate(at, true); got.State != "stopping" || got.Point != 0 {
+		t.Fatalf("stop retained ETA: %+v", got)
+	}
+}
+
+func TestOperationModelLearnsVolumeAndLoadWithoutMixingVersions(t *testing.T) {
+	history := []forecastRun{}
+	for i := range 60 {
+		groups, load := float64(5+i%10*10), float64(1+i/10)
+		step := forecastStep{ID: "source:a", Model: "codex:v1:changes", State: "complete", Inventory: true,
+			Features: workFeatures{Groups: groups, Bytes: groups * 1000, BytesBasis: "transcript", LoadOneMinute: &load},
+			Seconds:  2 * (1 + groups) * (1 + load)}
+		history = append(history, forecastRun{State: "complete", Steps: []forecastStep{step}})
+	}
+	low, high := 1.5, 5.5
+	target := forecastStep{ID: "source:a", Model: "codex:v1:changes", Inventory: true, Features: workFeatures{Groups: 40, Bytes: 40_000, BytesBasis: "transcript", LoadOneMinute: &low}}
+	fast := predictStep(history, target)
+	target.Features.LoadOneMinute = &high
+	slow := predictStep(history, target)
+	if slow.point < fast.point*1.8 || fast.point < 150 || fast.point > 280 || slow.low > slow.point || slow.high < slow.point {
+		t.Fatalf("did not learn machine load at equal volume: fast=%+v slow=%+v", fast, slow)
+	}
+	target.Model = "codex:v2:changes"
+	if got := predictStep(history, target); got.point != 0 {
+		t.Fatalf("extractor versions shared a fit: %+v", got)
+	}
+	target.Model, target.Features.BytesBasis = "codex:v1:changes", "message_text"
+	if got := predictStep(history, target); got.point != 0 {
+		t.Fatalf("mixed file bytes and decoded database text: %+v", got)
+	}
+	target.Features = workFeatures{}
+	if got := predictStep(history, target); got.point != 0 {
+		t.Fatalf("a known empty inventory borrowed nonempty duration: %+v", got)
+	}
+	// Interrupted work is never a completed runtime observation.
+	history[0].State = "interrupted"
+	target.Inventory = false
+	target.Model = "codex:v1:changes"
+	if got := predictStep(history[:1], target); got.point != 0 {
+		t.Fatalf("censored run trained a fit: %+v", got)
+	}
+}
+
+func TestOperationForecastPersistsWorkerSnapshotsAndEvaluatesOnlyCompletedRuns(t *testing.T) {
+	useHost(t, "forecast-host")
+	catalog, config := testCatalog(t)
+	s := testServer(t, config, catalog)
+	at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	for _, state := range []string{"complete", "complete", "interrupted"} {
+		run := s.startRunNamed(manualSyncRunKind, nil)
+		op := s.beginOperation(run.ID, manualSyncRunKind)
+		op.started, op.clock = at, func() time.Time { return at }
+		op.add("index", "v1", "Index", workFeatures{Groups: 100}, true)
+		op.checkpoint("launch")
+		op.begin("index")
+		at = at.Add(20 * time.Second)
+		op.observe(&activityWork{Phase: "indexing", Unit: "group", Done: 10, Total: 100}, at)
+		at = at.Add(80 * time.Second)
+		op.end("index", state == "complete")
+		op.finish(state)
+		op.finish(state) // terminal cleanup must be idempotent
+	}
+	history := (&Server{Catalog: catalog}).forecastHistory(manualSyncRunKind)
+	if len(history) != 3 || len(history[0].Forecasts) < 3 {
+		t.Fatalf("worker snapshots were not retained without polling: %+v", history)
+	}
+	if history[0].Forecasts[0].Estimate.Point != 0 || history[0].Forecasts[0].Actual == nil {
+		t.Fatalf("cold prediction borrowed its own final duration: %+v", history[0].Forecasts[0])
+	}
+	if history[1].Forecasts[0].Estimate.Point != 100 || *history[1].Forecasts[0].Actual != 100 {
+		t.Fatalf("second run did not use prior completed work: %+v", history[1].Forecasts[0])
+	}
+	if history[2].Forecasts[0].Actual != nil {
+		t.Fatal("interrupted duration was scored as completion")
+	}
+	accuracy := forecastAccuracy(history)["launch"].(map[string]any)
+	if accuracy["attempts"] != 3 || accuracy["predicted"] != 2 || accuracy["evaluated"] != 1 || accuracy["covered"] != 1 {
+		t.Fatalf("availability/error denominators: %+v", accuracy)
+	}
+	useHost(t, "another-forecast-host")
+	if len(s.forecastHistory(manualSyncRunKind)) != 0 {
+		t.Fatal("cross-host prediction history")
+	}
+}
+
+func TestOperationForecastKeepsStageMeasurementSeparateAndUsesWholeCompletion(t *testing.T) {
+	at := time.Now()
+	step := forecastStep{ID: "analysis", Model: "v1", Label: "Analysis", State: "pending", Inventory: true}
+	prior := step
+	prior.State, prior.Seconds = "complete", 100
+	op := &operationForecast{started: at, steps: []forecastStep{step}, history: []forecastRun{{State: "complete", Steps: []forecastStep{prior}}}}
+	activities := []libraryActivity{{ID: "run", Kind: "index", operation: op, Work: &activityWork{Phase: "saving", Done: 0, Total: 0}}}
+	s := &Server{}
+	s.estimateActivities(activities, at)
+	a := activities[0]
+	if a.Progress != nil || a.Estimate.State != "unknown" || a.Forecast.Point != 100 || a.EstimatedCompletionAt != formatTime(at.Add(100*time.Second)) {
+		t.Fatalf("opaque measured stage should keep a whole-operation forecast: %+v", a)
+	}
+	op.steps = append(op.steps, forecastStep{ID: "unknown", Label: "Unseen step", State: "pending"})
+	s.estimateActivities(activities, at)
+	if activities[0].EstimatedCompletionAt != "" {
+		t.Fatalf("partial forecast published a complete ETA: %+v", activities[0])
+	}
+}
+
+func TestOperationForecastSeparatesReusableAnalysisAndCalibratesPriorErrors(t *testing.T) {
+	clean, dirty := false, true
+	step := forecastStep{ID: "analysis:tools", Model: "v1", State: "complete", Inventory: true, Seconds: 1, Features: workFeatures{Groups: 100, Dirty: &clean}}
+	rebuild := step
+	rebuild.Seconds, rebuild.Features.Dirty = 100, &dirty
+	history := []forecastRun{{State: "complete", Steps: []forecastStep{step}}, {State: "complete", Steps: []forecastStep{rebuild}}}
+	current := predictStep(history, step)
+	fresh := predictStep(history, rebuild)
+	if current.point != 1 || fresh.point != 100 {
+		t.Fatalf("cache hits diluted rebuild durations: current=%+v rebuild=%+v", current, fresh)
+	}
+	at := time.Now()
+	rebuild.State = "pending"
+	op := &operationForecast{started: at, steps: []forecastStep{rebuild}, history: history, snapshots: []forecastSnapshot{{Reason: "discovered", At: 0}}}
+	before := op.estimate(at, false)
+	actual := 1000.0
+	for range 8 {
+		op.history = append(op.history, forecastRun{State: "complete", Forecasts: []forecastSnapshot{{Reason: "discovered", Estimate: operationEstimate{Point: 100}, Actual: &actual}}})
+	}
+	after := op.estimate(at, false)
+	if after.HighSeconds < 1000 || after.HighSeconds <= before.HighSeconds || after.Point != before.Point {
+		t.Fatalf("previous underestimates did not widen bounds: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestOperationForecastCanUseLiveSourcePaceBeforeSourceHistoryExists(t *testing.T) {
+	at := time.Now()
+	work := activityWork{Phase: "indexing", Unit: "group", Total: 100}
+	o := &progressObservation{}
+	for _, seconds := range []int{0, 4, 8, 12} {
+		work.Done = float64(seconds)
+		o.estimate(work, at.Add(time.Duration(seconds)*time.Second))
+	}
+	future := forecastStep{ID: "analysis:git", Model: "v1", State: "pending", Inventory: true, After: []string{"source:new"}}
+	prior := future
+	prior.State, prior.Seconds = "complete", 100
+	op := &operationForecast{started: at, steps: []forecastStep{{ID: "source:new", State: "running", Started: at, Inventory: true, Work: &work, Observation: o}, future}, history: []forecastRun{{State: "complete", Steps: []forecastStep{prior}}}}
+	got := op.estimate(at.Add(12*time.Second), false)
+	if got.State != "provisional" || got.Predicted != 2 || len(got.Unknown) != 0 || got.Point < 180 {
+		t.Fatalf("live source pace did not fill the missing source prior: %+v", got)
 	}
 }

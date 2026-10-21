@@ -919,6 +919,7 @@ func (c *Catalog) runFindingsPassWithFeatures(ctx context.Context, full, feature
 	if !full && len(specs) == 0 {
 		return nil
 	}
+	reportWork(ctx, "reading findings inputs", "", 0, -1)
 	c.setFindingsPhase("reading conversations")
 	env, err := c.loadFindingEnv(ctx, snapshot, full, specs)
 	if err != nil {
@@ -926,7 +927,14 @@ func (c *Catalog) runFindingsPassWithFeatures(ctx context.Context, full, feature
 	}
 	env.measuring, env.stored, env.featureCache = measuring, existing, features
 	candidates := []*findingCandidate{}
+	detectors := []findingDetector{}
 	for _, detector := range findingDetectors {
+		if full || len(env.specs[detector.name]) > 0 {
+			detectors = append(detectors, detector)
+		}
+	}
+	reportWork(ctx, "evaluating findings", "detector", 0, len(detectors))
+	for index, detector := range detectors {
 		if !full && len(env.specs[detector.name]) == 0 {
 			continue
 		}
@@ -942,6 +950,7 @@ func (c *Catalog) runFindingsPassWithFeatures(ctx context.Context, full, feature
 			return fmt.Errorf("%s detector: %w", detector.name, err)
 		}
 		candidates = append(candidates, found...)
+		reportWork(ctx, "evaluating findings", "detector", index+1, len(detectors))
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -980,10 +989,13 @@ func (c *Catalog) runFindingsPassWithFeatures(ctx context.Context, full, feature
 		return err
 	}
 	env.db = conn
+	reportWork(ctx, "saving findings", "finding", 0, len(kept))
 	c.setFindingsPhase("saving")
 	if err := c.storeFindings(ctx, env, kept, existing, states, retired, full); err != nil {
 		return err
 	}
+	reportWork(ctx, "saving findings", "finding", len(kept), len(kept))
+	reportWork(ctx, "measuring findings results", "", 0, -1)
 	c.setFindingsPhase("measuring results")
 	if err := c.decideInterventions(ctx, env, kept); err != nil {
 		return err

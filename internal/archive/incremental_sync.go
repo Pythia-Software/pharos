@@ -45,6 +45,39 @@ type syncUnit struct {
 	Reader  Adapter      `json:"-"`
 }
 
+type preparedSyncSource struct {
+	adapter   Adapter
+	plan      *sourceWorkPlan
+	preflight string
+	skipped   bool
+	err       error
+}
+
+// Discover every selected source before reading transcripts. The retained
+// inventory is the execution plan, so estimation adds no second filesystem walk.
+func (s *Server) prepareSyncSource(ctx context.Context, source SourceConfig, p *preparedSyncSource) {
+	setAdapterContext(p.adapter, ctx)
+	if source.Kind == "conductor" {
+		p.preflight, p.err = conductorPreflight(p.adapter)
+		if p.err == nil {
+			var version string
+			version, p.err = s.Catalog.effectiveIndexVersion(currentHost().ID, source.Name, p.adapter)
+			p.preflight = hashBytes([]byte(p.preflight + ":" + version))
+		}
+		if p.err != nil {
+			return
+		}
+		var previous string
+		_ = s.Catalog.reader().QueryRowContext(ctx, "SELECT COALESCE(preflight,'') FROM automatic_source_states WHERE host_id=? AND source_name=?", currentHost().ID, source.Name).Scan(&previous)
+		if p.preflight == previous {
+			p.skipped = true
+			return
+		}
+	}
+	_ = s.Catalog.registerHost(currentHost(), "")
+	p.plan, p.err = s.Catalog.prepareSourcePlan(withIngestMode(ctx, ingestMode{automatic: true}), p.adapter)
+}
+
 func (unit syncUnit) hostID() string {
 	return defaultString(unit.Host, currentHost().ID)
 }
@@ -201,63 +234,126 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 	stop := context.AfterFunc(registered, cancel)
 	defer stop()
 	meter := beginSyncMeasurement()
+	workMeter := &runWorkMeter{server: s, runID: run.ID, kind: "sync"}
+	defer func() { workMeter.release(ctx.Err() == nil) }()
+	ctx = withWorkProgress(ctx, workMeter.report)
 	results := []IngestResult{}
 	attemptedSources := []string{}
 	var failure any
 	pool := newAuditPool(s.Catalog)
 	changedWorkspaces := map[string]bool{}
+	op := s.beginOperation(run.ID, kind)
+	ctx = withOperationForecast(ctx, op)
+	op.add("discovery", "incremental-discovery-v1", "Discover selected sources", workFeatures{}, false)
+	prepared := make([]preparedSyncSource, len(sources))
+	for index, source := range sources {
+		prepared[index].adapter, prepared[index].err = syncAdapter(source)
+		model := source.Kind
+		if prepared[index].adapter != nil {
+			model = plannedIndexModel(prepared[index].adapter, false)
+		}
+		op.add("source:"+source.Name, model, "Index "+source.Name, workFeatures{}, false)
+	}
+	op.add("projections", "analysis-v1", "Refresh the Library view", workFeatures{}, true)
+	op.add("audit", "audit-v1", "Verify changed inputs", workFeatures{}, true)
+	if manual {
+		addAnalysisForecast(op, true)
+	}
+	op.checkpoint("launch")
+	op.begin("discovery")
+	discoveryPhase := meter.beginPhase("discovery")
+	for index, source := range sources {
+		if ctx.Err() != nil {
+			break
+		}
+		workMeter.model = "discovery-v1:" + source.Kind
+		workMeter.report(activityWork{Phase: "discovering inputs", Source: source.Name})
+		p := &prepared[index]
+		if p.err == nil {
+			s.prepareSyncSource(ctx, source, p)
+		}
+		if p.err != nil {
+			continue
+		}
+		if p.skipped {
+			op.revise("source:"+source.Name, "", workFeatures{}, true)
+			op.skip("source:" + source.Name)
+		} else if p.plan != nil {
+			op.revise("source:"+source.Name, plannedIndexModel(p.adapter, false), p.plan.features, p.plan.discoveryError == nil)
+			if p.plan.discoveryError == nil {
+				features := p.plan.features
+				features.Groups = float64(len(p.plan.groups))
+				workMeter.report(activityWork{Phase: "discovering inputs", Source: source.Name, Unit: "conversation group", Done: features.Groups, Total: features.Groups, TotalKnown: true, Features: features})
+			}
+		}
+	}
+	meter.endPhaseWork(discoveryPhase, workMeter.finish(ctx.Err() == nil))
+	op.end("discovery", ctx.Err() == nil)
+	willWrite := false
+	for _, p := range prepared {
+		willWrite = willWrite || p.plan != nil && p.plan.needed > 0
+	}
+	if manual {
+		op.reviseAnalyses(ctx, true, willWrite)
+	}
+	op.checkpoint("discovered")
 	for index, source := range sources {
 		if ctx.Err() != nil {
 			break
 		}
 		attemptedSources = append(attemptedSources, source.Name)
 		phase := meter.beginPhase(source.Name)
+		workMeter.model = "incremental-v1:" + source.Kind
+		p := &prepared[index]
+		adapter, err, preflight := p.adapter, p.err, p.preflight
+		op.begin("source:" + source.Name)
 		s.updateRun(run.ID, func(run *SyncRun) {
-			run.CurrentSource = source.Name
-			run.Phase = "checking"
-			run.CompletedSources = index
-			run.InputsChecked = 0
+			run.CurrentSource, run.Phase = source.Name, "checking"
+			run.CompletedSources, run.InputsChecked = index, 0
 		})
-		adapter, err := syncAdapter(source)
 		if err != nil {
 			failure = err.Error()
 			s.Catalog.recordAutomaticCheck(source.Name, err)
-			meter.endPhase(phase)
+			op.end("source:"+source.Name, false)
 			continue
 		}
-		setAdapterContext(adapter, ctx)
-		preflight := ""
-		if source.Kind == "conductor" {
-			preflight, err = conductorPreflight(adapter)
-			if err == nil {
-				version, versionErr := s.Catalog.effectiveIndexVersion(currentHost().ID, source.Name, adapter)
-				err = versionErr
-				preflight = hashBytes([]byte(preflight + ":" + version))
-			}
-			if err != nil {
+		if p.skipped {
+			if err := s.Catalog.recordAutomaticCheck(source.Name, nil); err != nil {
 				failure = err.Error()
-				s.Catalog.recordAutomaticCheck(source.Name, err)
-				meter.endPhase(phase)
-				continue
 			}
-			var previous string
-			s.Catalog.DB.QueryRowContext(ctx, "SELECT COALESCE(preflight,'') FROM automatic_source_states WHERE host_id=? AND source_name=?", currentHost().ID, source.Name).Scan(&previous)
-			if preflight == previous {
-				if err := s.Catalog.recordAutomaticCheck(source.Name, nil); err != nil {
-					failure = err.Error()
-				}
-				results = append(results, IngestResult{Source: source.Name, Host: currentHost().ID, SkippedUnchanged: true})
-				meter.endPhase(phase)
-				pool.preflightSkipped(source)
-				continue
-			}
+			results = append(results, IngestResult{Source: source.Name, Host: currentHost().ID, SkippedUnchanged: true})
+			op.skip("source:" + source.Name)
+			pool.preflightSkipped(source)
+			continue
 		}
 		checked := 0
-		mode := ingestMode{automatic: true, discovered: func(parts []sourcePart, changed bool) {
+		var plan *sourceWorkPlan
+		model := ""
+		var previousIndex string
+		_ = s.Catalog.reader().QueryRowContext(ctx, "SELECT COALESCE(indexed_at,'') FROM automatic_source_states WHERE host_id=? AND source_name=?", currentHost().ID, source.Name).Scan(&previousIndex)
+		elapsedSince := 0.0
+		if indexed, ok := parseTime(previousIndex); ok {
+			elapsedSince = max(0, time.Since(indexed).Seconds())
+		}
+		load := machineLoad()
+		mode := ingestMode{automatic: true, plan: p.plan, planned: func(planned *sourceWorkPlan, key string) {
+			plan, model = planned, key
+			if elapsedSince > 0 {
+				plan.features.SinceLastIndexSeconds = elapsedSince
+			}
+			plan.features.LoadOneMinute = load
+
+		}, processed: func(parts []sourcePart) {
+			if plan != nil && plan.size != nil {
+				amount, unit := partWorkSize(parts)
+				if unit == plan.size.Unit {
+					plan.size.Done += amount
+				}
+			}
+		}, discovered: func(parts []sourcePart, changed bool) {
 			pool.consider(unitOf(source, parts, changed))
 			checked++
-			// Discovery is streamed. Report checks without adding a second full
-			// filesystem scan just to manufacture a denominator for the bar.
+			// This visits the retained inventory; it does not walk the source again.
 			if checked == 1 || checked%100 == 0 {
 				s.updateRun(run.ID, func(run *SyncRun) { run.InputsChecked = checked })
 			}
@@ -270,10 +366,16 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 				run.Conversations = baseC + c
 				run.Messages = baseM + m
 				run.InputsChecked = checked
-				run.setWork(phase, source.Name, "conversation group", float64(processed), 0)
-				run.Work.Next = "Refresh the Library view and verify changed inputs"
 			})
+			work := activityWork{Phase: phase, Source: source.Name}
+			if plan != nil && phase == "indexing" {
+				work = plan.work(phase, source.Name, model, processed)
+				work.Kind = "incremental"
+			}
+			work.Next = "Refresh the Library view and verify changed inputs"
+			workMeter.report(work)
 		})
+		op.end("source:"+source.Name, result.Error == nil && ctx.Err() == nil)
 		results = append(results, result)
 		if result.Error != nil {
 			failure = result.Error
@@ -289,12 +391,18 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 		if err != nil {
 			failure = err.Error()
 		}
-		meter.endPhase(phase)
+		meter.endPhaseWork(phase, workMeter.finish(ctx.Err() == nil))
 		s.updateRun(run.ID, func(run *SyncRun) { run.Results = slices.Clone(results); run.CompletedSources = index + 1 })
 	}
+	if len(changedWorkspaces) == 0 {
+		op.skip("projections")
+	}
 	if len(changedWorkspaces) > 0 && ctx.Err() == nil {
+		op.begin("projections")
 		s.updateRun(run.ID, func(run *SyncRun) { run.Phase, run.CurrentSource = "refreshing the Library view", nil })
 		phase := meter.beginPhase("projections")
+		workMeter.model = "analysis-v1:projections"
+		workMeter.report(activityWork{Phase: "refreshing the Library view"})
 		ids := []string{}
 		for id := range changedWorkspaces {
 			ids = append(ids, id)
@@ -303,21 +411,31 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 		if err := s.Catalog.refreshLibraryWorkspaces(ctx, ids); err != nil {
 			failure = err.Error()
 		}
-		meter.endPhase(phase)
+		meter.endPhaseWork(phase, workMeter.finish(ctx.Err() == nil))
+		op.end("projections", failure == nil && ctx.Err() == nil)
 	}
 	audit := auditResult{Outcome: "deferred", Detail: "run did not complete"}
 	if ctx.Err() == nil && failure == nil {
 		s.updateRun(run.ID, func(run *SyncRun) { run.Phase = "verifying"; run.CurrentSource = nil })
 		phase := meter.beginPhase("audit")
+		workMeter.model = "analysis-v1:audit"
+		workMeter.report(activityWork{Phase: "verifying", Unit: "input", TotalKnown: true, Total: float64(min(1, len(pool.units)))})
+		op.begin("audit")
 		audit = s.Catalog.auditPool(ctx, pool, run.ID)
-		meter.endPhase(phase)
+		op.end("audit", ctx.Err() == nil && audit.Outcome != "read_error")
+		if audit.Outcome == "passed" {
+			workMeter.report(activityWork{Phase: "verifying", Unit: "input", TotalKnown: true, Done: 1, Total: 1})
+		}
+		meter.endPhaseWork(phase, workMeter.finish(ctx.Err() == nil))
 	}
 	if manual && ctx.Err() == nil {
 		err := s.finishDeferredSyncPhases(ctx, true, func(name string, work func() error) error {
 			s.updateRun(run.ID, func(run *SyncRun) { run.Phase = "refreshing " + name; run.CurrentSource = nil })
 			phase := meter.beginPhase(name)
+			workMeter.model = "analysis-v1:" + name
+			workMeter.report(activityWork{Phase: "refreshing " + name})
 			err := work()
-			meter.endPhase(phase)
+			meter.endPhaseWork(phase, workMeter.finish(err == nil && ctx.Err() == nil))
 			return err
 		})
 		if err != nil {
@@ -360,6 +478,8 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 	s.Catalog.DB.Exec(`DELETE FROM sync_history WHERE host_id=? AND id NOT IN (SELECT id FROM sync_history WHERE host_id=? ORDER BY id DESC LIMIT 200)`, currentHost().ID, currentHost().ID)
 	next := time.Now().Add(time.Duration(settings.Interval) * time.Second).UTC().Format(time.RFC3339Nano)
 	s.Catalog.DB.Exec("UPDATE sync_settings SET next_at=? WHERE host_id=? AND interval_seconds=? AND enabled=1 AND COALESCE(next_at,'')=?", next, currentHost().ID, settings.Interval, settings.NextAt)
+	workMeter.release(state == "complete")
+	op.finish(state)
 	s.updateRun(run.ID, func(run *SyncRun) {
 		run.State, run.Phase = state, state
 		run.Results = slices.Clone(results)
@@ -485,8 +605,18 @@ func (s *Server) getIncrementalSync(w http.ResponseWriter, r *http.Request) {
 			samples = append(samples, sample)
 		}
 	}
+	forecastAccuracy, forecastRuns := s.forecastReports()
+	for i := range samples {
+		for _, forecast := range forecastRuns {
+			if forecast.RunID == samples[i].RunID {
+				samples[i].Forecasts = forecast.Forecasts
+				break
+			}
+		}
+	}
+
 	if r.URL.Path == "/api/sync/history" {
-		writeJSON(w, map[string]any{"samples": samples, "statistics": syncStatistics(samples, settings.Interval)}, 200)
+		writeJSON(w, map[string]any{"samples": samples, "statistics": syncStatistics(samples, settings.Interval), "forecast_accuracy": forecastAccuracy, "forecast_runs": forecastRuns}, 200)
 		return
 	}
 	states, err := queryMapsContext(r.Context(), s.Catalog.reader(), `SELECT a.*,s.last_success_at AS intentional_index_at FROM automatic_source_states a LEFT JOIN source_states s ON s.host_id=a.host_id AND s.source_name=a.source_name WHERE a.host_id=?`, currentHost().ID)
@@ -513,7 +643,7 @@ func (s *Server) getIncrementalSync(w http.ResponseWriter, r *http.Request) {
 	} else if s.syncActive() {
 		pause = "Indexing"
 	}
-	writeJSON(w, map[string]any{"settings": settings, "sources": syncSourceChoices(s.autoSources(settings)), "available_sources": syncSourceChoices(s.autoSources(syncSettings{})), "source_states": states, "history": samples, "statistics": syncStatistics(samples, settings.Interval), "pause_reason": pause, "busy": s.syncActive() || s.captureActive(), "recovery_jobs": jobs, "deferred": deferred, "coverage": coverage, "issues": issues, "measurement_limits": syncMeasurementLimits}, 200)
+	writeJSON(w, map[string]any{"settings": settings, "sources": syncSourceChoices(s.autoSources(settings)), "available_sources": syncSourceChoices(s.autoSources(syncSettings{})), "source_states": states, "history": samples, "statistics": syncStatistics(samples, settings.Interval), "pause_reason": pause, "busy": s.syncActive() || s.captureActive(), "recovery_jobs": jobs, "deferred": deferred, "coverage": coverage, "issues": issues, "measurement_limits": syncMeasurementLimits, "forecast_accuracy": forecastAccuracy, "forecast_runs": forecastRuns}, 200)
 }
 
 func lastCaptureAt(root, host, source string) string {

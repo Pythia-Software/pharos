@@ -11,17 +11,20 @@ import (
 )
 
 // Work describes one measured stage, not an invented fraction of the whole job.
-// Total == 0 means discovery is incomplete. Never extrapolate a source count:
+// A nonpositive total is unknown unless TotalKnown explicitly marks an empty
+// workload. Never extrapolate a source count:
 // one source can contain a handful of sessions and another several thousand.
 type activityWork struct {
-	Phase     string        `json:"phase"`
-	Source    string        `json:"source,omitempty"`
-	Unit      string        `json:"unit,omitempty"`
-	Done      float64       `json:"done"`
-	Total     float64       `json:"total"`
-	StartedAt string        `json:"started_at,omitempty"`
-	Next      string        `json:"next,omitempty"`
-	Size      *activitySize `json:"size,omitempty"`
+	Phase      string        `json:"phase"`
+	Source     string        `json:"source,omitempty"`
+	Unit       string        `json:"unit,omitempty"`
+	Done       float64       `json:"done"`
+	Total      float64       `json:"total"`
+	TotalKnown bool          `json:"total_known,omitempty"`
+	Features   workFeatures  `json:"features,omitempty"`
+	StartedAt  string        `json:"started_at,omitempty"`
+	Next       string        `json:"next,omitempty"`
+	Size       *activitySize `json:"size,omitempty"`
 	// Model separates providers and extractor versions, without exposing paths.
 	Model string `json:"-"`
 	Kind  string `json:"-"`
@@ -46,7 +49,7 @@ func partWorkSize(parts []sourcePart) (float64, string) {
 	var size float64
 	unit := ""
 	for _, part := range parts {
-		if strings.HasPrefix(part.item, "group:") {
+		if strings.HasPrefix(part.item, "group:") || strings.HasPrefix(part.item, "sqlite:") && part.sizeUnit != "message" {
 			continue
 		}
 		next := defaultString(part.sizeUnit, "byte")
@@ -78,8 +81,9 @@ type activityEstimate struct {
 }
 
 type workTiming struct {
-	Units   float64 `json:"units"`
-	Seconds float64 `json:"seconds"`
+	Units    float64      `json:"units"`
+	Seconds  float64      `json:"seconds"`
+	Features workFeatures `json:"features,omitempty"`
 }
 
 func workTimingKey(kind string, work activityWork) string {
@@ -114,7 +118,7 @@ func (s *Server) recordWorkTiming(kind string, work activityWork, completed time
 	s.timingMu.Lock()
 	defer s.timingMu.Unlock()
 	key := workTimingKey(kind, work)
-	history := append(s.workTimings(key), workTiming{work.Done, seconds})
+	history := append(s.workTimings(key), workTiming{Units: work.Done, Seconds: seconds, Features: work.Features})
 	if len(history) > 20 {
 		history = history[len(history)-20:]
 	}
@@ -223,7 +227,7 @@ func (o *progressObservation) estimate(work activityWork, at time.Time) activity
 	if finitePositive(rate) {
 		result.Rate = rate
 	}
-	if work.Total <= 0 {
+	if work.Total <= 0 && !work.TotalKnown {
 		result.State, result.Basis = "unknown", "Still discovering work; total size is not known yet"
 		return result
 	}
@@ -258,12 +262,13 @@ func (s *Server) estimateActivities(activities []libraryActivity, at time.Time) 
 	active := map[string]bool{}
 	for i := range activities {
 		a := &activities[i]
+		a.Forecast = a.operation.estimate(at, a.Stopping)
 		a.EstimatedCompletionAt = ""
 		a.Estimate = &activityEstimate{State: "unknown", Basis: "This stage does not report a measurable total"}
 		if a.Work != nil {
 			work := *a.Work
 			measure := work.measured()
-			key := strings.Join([]string{a.ID, a.Kind, work.Phase, work.Source, measure.Unit, work.StartedAt}, "\x1f")
+			key := observationKey(a.ID, a.Kind, work)
 			active[key] = true
 			o := s.estimator.observations[key]
 			if o == nil {
@@ -272,7 +277,9 @@ func (s *Server) estimateActivities(activities []libraryActivity, at time.Time) 
 			}
 			estimate := o.estimate(work, at)
 			a.Estimate = &estimate
-			if measure.Total > 0 {
+			if measure.Total == 0 && work.TotalKnown {
+				a.Progress = fraction(1, 1)
+			} else if measure.Total > 0 {
 				a.Progress = fraction(measure.Done, measure.Total)
 			} else {
 				a.Progress = nil
@@ -300,7 +307,14 @@ func (s *Server) estimateActivities(activities []libraryActivity, at time.Time) 
 				a.Estimate.Basis = "Taking consistent database snapshots; file-copy progress does not measure this stage"
 			}
 		}
-		// Compatibility for the menu bar, explicitly scoped to this stage.
+		// Prefer the whole-operation forecast for the native menu bar.
+		if a.Forecast != nil {
+			if a.Forecast.Point > 0 {
+				a.EstimatedCompletionAt = formatTime(at.Add(time.Duration(a.Forecast.Point * float64(time.Second))))
+			}
+			continue
+		}
+		// Compatibility for activities without a complete operation forecast.
 		if a.Estimate.State == "estimating" {
 			seconds := (a.Estimate.LowSeconds + a.Estimate.HighSeconds) / 2
 			a.EstimatedCompletionAt = formatTime(at.Add(time.Duration(seconds * float64(time.Second))))
@@ -332,7 +346,9 @@ func captureWork(result CaptureSourceResult) activityWork {
 // Both the explicit capture index and Capture & index/recovery use this meter.
 // Keep retained snapshot work outside the measured current-transcript stage.
 type indexProgressMeter struct {
+	planned   func(context.Context, *sourceWorkPlan, string)
 	needed    int
+	plan      *sourceWorkPlan
 	model     string
 	size      *activitySize
 	started   string
@@ -342,15 +358,51 @@ type indexProgressMeter struct {
 
 func (p *indexPlan) meter(index int) *indexProgressMeter {
 	m := &indexProgressMeter{needed: p.needed[index], model: p.models[index]}
+	if index < len(p.plans) {
+		m.plan = p.plans[index]
+	}
 	if p.sizes[index] != nil {
 		copied := *p.sizes[index]
 		m.size = &copied
+	}
+	m.planned = func(ctx context.Context, plan *sourceWorkPlan, model string) {
+		needed := plan.needed
+		if plan.discoveryError != nil {
+			needed = -1
+		}
+		p.totalUnits += planUnits(needed) - planUnits(p.needed[index])
+		p.needed[index], p.models[index] = needed, model
+		if index < len(p.plans) {
+			p.plans[index] = plan
+		}
+		if index < len(p.sizes) {
+			p.sizes[index] = nil
+			if plan.discoveryError == nil {
+				p.sizes[index] = plan.size
+			}
+		}
+		p.reviseForecast(ctx)
 	}
 	return m
 }
 
 func (m *indexProgressMeter) context(ctx context.Context) context.Context {
 	mode := modeOf(ctx)
+	mode.plan = m.plan
+	mode.planned = func(plan *sourceWorkPlan, model string) {
+		changed := plan != m.plan || model != m.model
+		m.plan, m.needed, m.model, m.size = plan, plan.needed, model, nil
+		if plan.discoveryError != nil {
+			m.needed = -1
+		}
+		if plan.size != nil && plan.discoveryError == nil {
+			copied := *plan.size
+			m.size = &copied
+		}
+		if changed && m.planned != nil {
+			m.planned(ctx, plan, model)
+		}
+	}
 	mode.processed = func(parts []sourcePart) {
 		if !m.finished.IsZero() || m.size == nil {
 			return
@@ -360,6 +412,9 @@ func (m *indexProgressMeter) context(ctx context.Context) context.Context {
 			m.size = nil
 		} else {
 			m.size.Done += amount
+			if m.plan != nil && m.plan.size != nil {
+				m.size.Total = m.plan.size.Total
+			}
 		}
 	}
 	return withIngestMode(ctx, mode)
@@ -368,6 +423,10 @@ func (m *indexProgressMeter) context(ctx context.Context) context.Context {
 func (m *indexProgressMeter) report(run *SyncRun, phase, source string, processed int) {
 	run.setWork(phase, source, "conversation group", float64(processed), float64(max(0, m.needed)))
 	run.Work.Model, run.Work.Kind = m.model, "index"
+	run.Work.TotalKnown = m.needed >= 0
+	if m.plan != nil {
+		run.Work.Features = m.plan.features
+	}
 	run.Work.Next = "Remaining sources, identity links, and library maintenance"
 	if phase == "indexing" {
 		if m.started == "" {
@@ -378,6 +437,7 @@ func (m *indexProgressMeter) report(run *SyncRun, phase, source string, processe
 			run.Work.Size = &copied
 		}
 	} else {
+		run.Work.TotalKnown = false
 		run.Work.Total = 0
 	}
 	if phase == "complete" {
@@ -387,7 +447,11 @@ func (m *indexProgressMeter) report(run *SyncRun, phase, source string, processe
 
 func (m *indexProgressMeter) record(s *Server, ctx context.Context, result IngestResult) {
 	if result.Error == nil && ctx.Err() == nil && m.needed > 0 {
+		features := workFeatures{}
+		if m.plan != nil {
+			features = m.plan.features
+		}
 		s.recordWorkTiming("index", activityWork{Phase: "indexing", Model: m.model, Unit: "conversation group", StartedAt: m.started,
-			Done: float64(m.processed), Total: float64(m.needed), Size: m.size}, m.finished)
+			Done: float64(m.processed), Total: float64(m.needed), Size: m.size, Features: features}, m.finished)
 	}
 }

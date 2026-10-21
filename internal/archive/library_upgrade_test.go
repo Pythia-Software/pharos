@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -80,27 +81,55 @@ func TestUpgradeStatusReportsWholeJobProgress(t *testing.T) {
 }
 
 func TestIndexCanContinueWithPendingUpgrade(t *testing.T) {
-	stubGitHub(t, false, nil)
-	catalog := legacyUpgradeCatalog(t)
-	server := testServer(t, Config{CatalogPath: catalog.Path, CaptureRoot: t.TempDir()}, catalog)
-	response := httptest.NewRecorder()
-	server.startIndex(response, map[string]any{"all_hosts": true, "auto_upgrade": true})
-	if response.Code != http.StatusAccepted {
-		t.Fatalf("start index: %d %s", response.Code, response.Body.String())
-	}
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		status, err := catalog.UpgradeStatus(context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if status["needed"] == false && status["running"] == false {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("index did not finish its upgrade: %#v", status)
-		}
-		time.Sleep(20 * time.Millisecond)
+	for _, busy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("checkpoint_busy=%v", busy), func(t *testing.T) {
+			stubGitHub(t, false, nil)
+			useDurableCatalog(t)
+			override(t, &checkpointWaitMS, 10)
+			catalog := legacyUpgradeCatalog(t)
+			config := Config{CatalogPath: catalog.Path, CaptureRoot: t.TempDir()}
+			if busy {
+				source := SourceConfig{Name: "codex", Kind: "codex", Path: t.TempDir(), Account: "local", Enabled: true}
+				writeSourceFile(t, filepath.Join(source.Path, "rollout.jsonl"), codexLines("checkpoint", 1))
+				config.Sources = []SourceConfig{source}
+				runCapture(t, config)
+				other := otherProcess(t, catalog)
+				reader, err := other.DB.Begin()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer reader.Rollback()
+				var count int
+				if err := reader.QueryRow("SELECT COUNT(*) FROM conversations").Scan(&count); err != nil {
+					t.Fatal(err)
+				}
+			}
+			server := testServer(t, config, catalog)
+			response := httptest.NewRecorder()
+			server.startIndex(response, map[string]any{"all_hosts": true, "auto_upgrade": true})
+			if response.Code != http.StatusAccepted {
+				t.Fatalf("start index: %d %s", response.Code, response.Body.String())
+			}
+			if !waitFor(10*time.Second, server.life.workers.Wait) {
+				t.Fatal("index and upgrade did not finish")
+			}
+			runs := server.indexRuns()
+			if len(runs) != 1 || runs[0].State != "complete" || runs[0].Error != nil {
+				t.Fatalf("committed index failed: %+v", runs)
+			}
+			if busy {
+				if conversationMessages(t, catalog, "checkpoint") != 1 {
+					t.Fatal("capture was not indexed")
+				}
+				if err := catalog.Checkpoint(); !errors.Is(err, errCheckpointBusy) {
+					t.Fatalf("fixture did not hold an old WAL snapshot: %v", err)
+				}
+			}
+			status, err := catalog.UpgradeStatus(t.Context())
+			if err != nil || status["needed"] != false || status["running"] != false || status["started_at"] == nil {
+				t.Fatalf("index did not finish its upgrade: %#v %v", status, err)
+			}
+		})
 	}
 }
 

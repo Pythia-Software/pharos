@@ -489,18 +489,26 @@ func fileURIPath(uri string) string {
 // discoverParts emits a record per top-level conversation, with the
 // transcripts of the subagents it started, as the Claude adapter does.
 func (a *antigravityAdapter) discoverParts(unchanged func([]sourcePart) bool, emit func(*WorkspaceRecord, []sourcePart) error) error {
-	transcripts, err := a.transcripts()
+	plan, err := a.planParts()
 	if err != nil {
 		return err
+	}
+	return plan.discover(a.context(), unchanged, emit)
+}
+
+func (a *antigravityAdapter) planParts() (*sourceWorkPlan, error) {
+	transcripts, err := a.transcripts()
+	if err != nil {
+		return nil, err
 	}
 	metadataVersion := a.databaseVersion(filepath.Join(a.config.Path, antigravitySummaries))
 	summaries, err := a.summaries(transcripts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	printed, err := a.printModeConversations(transcripts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for id := range printed {
 		if _, ok := transcripts[id]; ok {
@@ -529,11 +537,12 @@ func (a *antigravityAdapter) discoverParts(unchanged func([]sourcePart) bool, em
 		roots = append(roots, id)
 	}
 	sort.Strings(roots)
+	plan := &sourceWorkPlan{continueOnError: true}
 	var failures []error
 groupsLoop:
 	for _, rootID := range roots {
 		if err := a.context().Err(); err != nil {
-			return err
+			return nil, err
 		}
 		ids := groups[rootID]
 		sort.Slice(ids, func(i, j int) bool {
@@ -564,67 +573,73 @@ groupsLoop:
 			manifest = append(manifest, part.item)
 		}
 		parts = append(parts, sourcePart{item: "group:" + a.original(a.config.Path) + ":" + rootID, signal: hashBytes([]byte(jsonText(manifest)))})
-		if unchanged != nil && unchanged(parts) {
+
+		plan.groups = append(plan.groups, plannedPartGroup{parts: parts, read: func(emit partEmitter) error {
+			return a.readPlannedGroup(rootID, ids, parts, transcripts, summaries, metadataVersion, emit)
+		}})
+	}
+	plan.discoveryError = errors.Join(failures...)
+	return plan, nil
+}
+
+func (a *antigravityAdapter) readPlannedGroup(rootID string, ids []string, parts []sourcePart, transcripts map[string]string, summaries map[string]antigravitySummary, metadataVersion int64, emit partEmitter) error {
+	var combined *WorkspaceRecord
+	read := slices.Clone(parts)
+	for _, id := range ids {
+		record, part, err := a.parseFile(id, transcripts[id], summaries[id])
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("parse %s: %w", transcripts[id], err)
+			}
+			return nil
+		}
+		if part.item == "" {
 			continue
 		}
-		var combined *WorkspaceRecord
-		read := slices.Clone(parts)
-		for _, id := range ids {
-			record, part, err := a.parseFile(id, transcripts[id], summaries[id])
-			if err != nil {
-				if !errors.Is(err, os.ErrNotExist) {
-					failures = append(failures, fmt.Errorf("parse %s: %w", transcripts[id], err))
-				}
-				continue groupsLoop
-			}
-			if part.item == "" {
-				continue
-			}
-			observe(&record, max(record.Observed, metadataVersion))
-			if len(record.Conversations) == 0 || len(record.Conversations[0].Messages) == 0 {
-				continue
-			}
-			if combined == nil {
-				record.SourceID = rootID
-				combined = &record
-				continue
-			}
-			combined.Conversations = append(combined.Conversations, record.Conversations...)
-			combined.Observed = max(combined.Observed, record.Observed)
-			if record.ActivityAt > combined.ActivityAt {
-				combined.ActivityAt = record.ActivityAt
-			}
+		observe(&record, max(record.Observed, metadataVersion))
+		if len(record.Conversations) == 0 || len(record.Conversations[0].Messages) == 0 {
+			continue
 		}
-		if combined != nil {
-			combined.Metrics = reconciledTokenMetrics(*combined)
+		if combined == nil {
+			record.SourceID = rootID
+			combined = &record
+			continue
 		}
-		for _, part := range parts {
-			if strings.HasPrefix(part.item, "sqlite:") {
-				continue
-			}
-			if strings.HasPrefix(part.item, "group:") {
-				continue
-			}
-			for _, transcript := range transcripts {
-				if a.original(transcript) == part.item {
-					info, err := os.Stat(transcript)
-					if err != nil {
-						if !errors.Is(err, os.ErrNotExist) {
-							failures = append(failures, fmt.Errorf("stat group %s after parse: %w", rootID, err))
-						}
-						continue groupsLoop
-					}
-					if info.Size() != part.size || info.ModTime().UnixNano() != part.version {
-						continue groupsLoop
-					}
-				}
-			}
-		}
-		if err := emit(combined, read); err != nil {
-			return fmt.Errorf("ingest %s: %w", rootID, err)
+		combined.Conversations = append(combined.Conversations, record.Conversations...)
+		combined.Observed = max(combined.Observed, record.Observed)
+		if record.ActivityAt > combined.ActivityAt {
+			combined.ActivityAt = record.ActivityAt
 		}
 	}
-	return errors.Join(failures...)
+	if combined != nil {
+		combined.Metrics = reconciledTokenMetrics(*combined)
+	}
+	for _, part := range parts {
+		if strings.HasPrefix(part.item, "sqlite:") {
+			continue
+		}
+		if strings.HasPrefix(part.item, "group:") {
+			continue
+		}
+		for _, transcript := range transcripts {
+			if a.original(transcript) == part.item {
+				info, err := os.Stat(transcript)
+				if err != nil {
+					if !errors.Is(err, os.ErrNotExist) {
+						return fmt.Errorf("stat group %s after parse: %w", rootID, err)
+					}
+					return nil
+				}
+				if info.Size() != part.size || info.ModTime().UnixNano() != part.version {
+					return nil
+				}
+			}
+		}
+	}
+	if err := emit(combined, read); err != nil {
+		return fmt.Errorf("ingest %s: %w", rootID, err)
+	}
+	return nil
 }
 
 // readJSONLines decodes each line of the first size bytes of r that holds a

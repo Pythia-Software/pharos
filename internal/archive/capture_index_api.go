@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -196,6 +197,20 @@ func (s *Server) startIndex(w http.ResponseWriter, body map[string]any) {
 }
 
 func (s *Server) indexTargets(ctx context.Context, runID string, targets []captureTarget) {
+	op := s.beginOperation(runID, indexRunKind)
+	ctx = withOperationForecast(ctx, op)
+	op.add("discovery", "capture-discovery-v1", "Discover captured inputs", workFeatures{}, false)
+	op.add("index", "", "Index captured inputs", workFeatures{}, false)
+	op.add("checkpoint", "checkpoint-v1", "Save the catalog", workFeatures{}, true)
+	addAnalysisForecast(op, false)
+	op.checkpoint("launch")
+	workMeter := &runWorkMeter{server: s, runID: runID, kind: "index", model: "analysis-v1"}
+	defer func() { workMeter.release(ctx.Err() == nil) }()
+	ctx = withWorkProgress(ctx, workMeter.report)
+	mode := modeOf(ctx)
+	mode.deferGit = true
+	ctx = withIngestMode(ctx, mode)
+
 	results := []IngestResult{}
 	var failure any
 	// interrupted is decided when the sources are done, not after the finishing
@@ -215,6 +230,16 @@ func (s *Server) indexTargets(ctx context.Context, runID string, targets []captu
 				failure = valueOr(failure, result.Error)
 			}
 		}
+		// Persist telemetry before publishing completion: callers may immediately
+		// start the next coordinated operation once they observe this state.
+		workMeter.release(ok)
+		state := "complete"
+		if interrupted {
+			state = "interrupted"
+		} else if !ok {
+			state = "failed"
+		}
+		op.finish(state)
 		s.updateRun(runID, func(run *SyncRun) {
 			run.State, run.Phase = "complete", "complete"
 			if interrupted {
@@ -229,7 +254,11 @@ func (s *Server) indexTargets(ctx context.Context, runID string, targets []captu
 		})
 	}()
 	// Counted first, so the run can report how many conversations remain.
+	op.begin("discovery")
 	plan := s.countIndexWork(ctx, runID, targets)
+	op.end("discovery", ctx.Err() == nil)
+	op.checkpoint("discovered")
+	op.begin("index")
 	for index, target := range targets {
 		if ctx.Err() != nil {
 			break
@@ -263,31 +292,40 @@ func (s *Server) indexTargets(ctx context.Context, runID string, targets []captu
 			run.Messages, run.SkippedCurrent = base.Messages+result.Messages, base.SkippedCurrent+result.SkippedCurrent
 		})
 	}
+	op.end("index", ctx.Err() == nil && !slices.ContainsFunc(results, func(r IngestResult) bool { return r.Error != nil }))
 	interrupted = ctx.Err() != nil
 	s.closeIngestStop()
 	// A stop from the user leaves the service up, so what the index did write
 	// is still linked, checkpointed and looked up in Git; only a release
 	// (before an eject) skips the linking and the authorship rebuild.
 	serviceUp := s.life.ctx.Err() == nil
-	s.updateRun(runID, func(run *SyncRun) { run.Phase, run.CurrentSource = "linking identities", nil; run.Progress = nil })
+	op.begin("checkpoint")
 	if wroteRecords(results) {
-		if serviceUp {
-			if _, err := s.Catalog.ReconcileIdentities(); err != nil {
-				failure = err.Error()
-			}
+		// Readers may keep the WAL open after these writes have committed.
+		// That best-effort checkpoint can wait for a later pass.
+		if err := s.Catalog.Checkpoint(); err != nil && !errors.Is(err, errCheckpointBusy) {
+			failure = err.Error()
 		}
-		_ = s.Catalog.Checkpoint()
-		s.refreshGitInBackground(false)
-	} else if !interrupted {
-		// Nothing new, but the first index of a day still rebuilds findings.
-		s.Catalog.refreshFindingsInBackground(false)
 	}
-	// Before the run reports complete, so Usage sees the rebuild running. It
-	// also picks up a rebuild an eject stopped, even if this index wrote nothing.
+	op.end("checkpoint", failure == nil)
 	if serviceUp {
-		s.updateRun(runID, func(run *SyncRun) { run.Phase = "refreshing authorship" })
-		s.Catalog.refreshAuthorship()
+		// A user stop cancels ingestion, not reconciliation of committed data.
+		// The service lifetime still cancels this work for release/eject.
+		finishCtx := withOperationForecast(withWorkProgress(s.life.ctx, workMeter.report), op)
+		// The operation includes the required derived work. Run it through the
+		// same coordinator as manual incremental indexing, so completion and its
+		// forecast cover Git, tools, authorship and findings as well.
+		if err := s.finishDeferredSyncPhases(finishCtx, false, func(name string, work func() error) error {
+			workMeter.model = "analysis-v1:" + name
+			workMeter.report(activityWork{Phase: "refreshing " + name})
+			err := work()
+			workMeter.finish(err == nil && finishCtx.Err() == nil)
+			return err
+		}); err != nil && finishCtx.Err() == nil {
+			failure = err.Error()
+		}
 	}
+
 }
 
 // indexPlan is what a counting pass found for an index run: per target, the
@@ -299,6 +337,7 @@ type indexPlan struct {
 	needed []int
 	models []string
 	sizes  []*activitySize
+	plans  []*sourceWorkPlan
 	// conversationsBefore and unitsBefore are what the targets already
 	// finished account for, in conversations and in bar steps.
 	conversationsBefore, unitsBefore int
@@ -315,6 +354,10 @@ func planUnits(needed int) int {
 // report sets the run's counts as the target at index has handled processed
 // of its conversations; targets before index are done.
 func (p *indexPlan) report(run *SyncRun, index, processed int) {
+	run.TotalConversations = 0
+	for _, needed := range p.needed {
+		run.TotalConversations += max(needed, 0)
+	}
 	conversations, units := p.conversationsBefore, p.unitsBefore
 	if index < len(p.needed) && p.needed[index] > 0 {
 		conversations += min(processed, p.needed[index])
@@ -335,12 +378,12 @@ func (p *indexPlan) finish(index int) {
 // measure it against.
 func (s *Server) countIndexWork(ctx context.Context, runID string, targets []captureTarget) *indexPlan {
 	s.updateRun(runID, func(run *SyncRun) { run.Phase = "counting" })
-	plan := &indexPlan{needed: make([]int, len(targets)), models: make([]string, len(targets)), sizes: make([]*activitySize, len(targets))}
+	plan := &indexPlan{needed: make([]int, len(targets)), models: make([]string, len(targets)), sizes: make([]*activitySize, len(targets)), plans: make([]*sourceWorkPlan, len(targets))}
 	conversations := 0
 	for index, target := range targets {
 		count, ok := 0, false
 		if ctx.Err() == nil {
-			count, plan.models[index], plan.sizes[index], ok = s.Catalog.captureIndexWorkMeasured(ctx, target)
+			count, plan.models[index], plan.sizes[index], plan.plans[index], ok = s.Catalog.captureIndexPlan(ctx, target)
 		}
 		if !ok {
 			count = -1
@@ -350,11 +393,24 @@ func (s *Server) countIndexWork(ctx context.Context, runID string, targets []cap
 		conversations += max(count, 0)
 		plan.totalUnits += planUnits(count)
 	}
+	plan.reviseForecast(ctx)
+
 	s.updateRun(runID, func(run *SyncRun) {
 		run.Phase, run.TotalConversations = "starting", conversations
 		plan.report(run, 0, 0)
 	})
 	return plan
+}
+
+func (p *indexPlan) reviseForecast(ctx context.Context) {
+	if op := operationOf(ctx); op != nil {
+		known := !slices.Contains(p.needed, -1)
+		models := slices.Clone(p.models)
+		slices.Sort(models)
+		features := p.forecastFeatures()
+		op.revise("index", "capture-index-v1:"+hashBytes([]byte(strings.Join(models, "\n"))), features, known)
+		op.reviseAnalyses(ctx, false, features.Groups > 0)
+	}
 }
 
 func wroteRecords(results []IngestResult) bool {

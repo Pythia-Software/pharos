@@ -35,6 +35,25 @@ func TestScheduledSyncDefersAnalysesAndManualSyncRefreshesGitHub(t *testing.T) {
 	if !server.runAutomatic(server.life.ctx, syncSettings{Interval: 60}) {
 		t.Fatal("scheduled sync not admitted")
 	}
+	var encoded string
+	if err := catalog.DB.QueryRow("SELECT sample_json FROM sync_history ORDER BY id DESC LIMIT 1").Scan(&encoded); err != nil {
+		t.Fatal(err)
+	}
+	var sample syncMeasurement
+	if err := json.Unmarshal([]byte(encoded), &sample); err != nil {
+		t.Fatal(err)
+	}
+	measured := false
+	for _, phase := range sample.Phases {
+		for _, work := range phase.Work {
+			if work.Phase == "indexing" {
+				measured = work.TotalKnown && work.Total > 0 && work.Done == work.Total && work.Features.Groups == 1 && work.Features.Bytes > 0
+			}
+		}
+	}
+	if !measured {
+		t.Fatalf("incremental history lost its measured input workload: %+v", sample.Phases)
+	}
 	if started != 0 || stubbedCalls(t, calls) != "" {
 		t.Fatal("scheduled sync started an expensive analysis or GitHub lookup")
 	}
@@ -824,5 +843,70 @@ func TestDeferredIdentityReconciliationHonorsCancellation(t *testing.T) {
 	}
 	if err := catalog.backfillHarnessVersionsContext(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("harness backfill ignored cancellation: %v", err)
+	}
+}
+
+type inventoryOrderAdapter struct {
+	*jsonlAdapter
+	planned, read func()
+}
+
+func (a *inventoryOrderAdapter) planParts() (*sourceWorkPlan, error) {
+	plan, err := a.jsonlAdapter.planParts()
+	if err != nil {
+		return plan, err
+	}
+	a.planned()
+	for i := range plan.groups {
+		read := plan.groups[i].read
+		plan.groups[i].read = func(emit partEmitter) error { a.read(); return read(emit) }
+	}
+	return plan, nil
+}
+
+func TestIncrementalDiscoversAllSourcesBeforeReadingAndRetainsForecasts(t *testing.T) {
+	catalog, config := testCatalog(t)
+	first, second := stableCodexSource(t, 1), stableCodexSource(t, 1)
+	second.Name = "second"
+	config.Sources = []SourceConfig{first, second}
+	s := testServer(t, config, catalog)
+	planned := map[string]bool{}
+	reads := 0
+	prior := syncAdapter
+	override(t, &syncAdapter, func(config SourceConfig) (Adapter, error) {
+		adapter, err := prior(config)
+		if err != nil {
+			return adapter, err
+		}
+		return &inventoryOrderAdapter{jsonlAdapter: adapter.(*jsonlAdapter), planned: func() { planned[config.Name] = true }, read: func() {
+			reads++
+			if len(planned) != 2 {
+				t.Error("transcript parsing began before every source was discovered")
+			}
+		}}, nil
+	})
+	if !s.runAutomatic(t.Context(), syncSettings{Interval: 60}) || reads == 0 {
+		t.Fatal("run did not execute its retained inventories")
+	}
+	history := s.forecastHistory(automaticRunKind)
+	if len(history) != 1 || history[0].State != "complete" {
+		t.Fatalf("operation outcome: %+v", history)
+	}
+	for _, step := range history[0].Steps {
+		if step.ID != "audit" && step.State != "complete" && step.State != "skipped" {
+			t.Errorf("operation completed with unfinished step: %+v", step)
+		}
+		if strings.HasPrefix(step.ID, "source:") && (!step.Inventory || step.Features.Groups != 1 || step.Features.Bytes <= 0) {
+			t.Errorf("discovered workload lost: %+v", step)
+		}
+	}
+	response := httptest.NewRecorder()
+	s.getIncrementalSync(response, httptest.NewRequest("GET", "/api/sync/history", nil))
+	var result struct {
+		Samples  []syncMeasurement `json:"samples"`
+		Accuracy map[string]any    `json:"forecast_accuracy"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || len(result.Samples) != 1 || len(result.Samples[0].Forecasts) == 0 || result.Accuracy[automaticRunKind] == nil {
+		t.Fatalf("forecast evidence missing from history API: %s (%v)", response.Body.String(), err)
 	}
 }

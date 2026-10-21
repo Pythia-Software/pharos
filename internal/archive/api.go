@@ -20,6 +20,7 @@ import (
 )
 
 type SyncRun struct {
+	operation        *operationForecast
 	ID               string   `json:"id"`
 	Kind             string   `json:"kind"`
 	State            string   `json:"state"`
@@ -68,6 +69,7 @@ type Server struct {
 	tasks      backgroundTasks
 	timingMu   sync.Mutex
 	estimator  activityEstimator
+	forecasts  forecastStore
 	auto       automaticSync
 	// Leave catalog connections available for rows/previews while metadata scans run.
 	queryMetadata chan struct{}
@@ -944,6 +946,7 @@ func (s *Server) updateRun(id string, update func(*SyncRun)) {
 			if run.Work != nil && (run.Work.Phase != run.Phase || run.Work.Source != firstString(run.CurrentSource)) {
 				run.Work = nil
 			}
+			run.operation.observe(run.Work, time.Now())
 			run.UpdatedAt = now()
 			return
 		}

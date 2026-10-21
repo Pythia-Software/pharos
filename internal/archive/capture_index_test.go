@@ -466,6 +466,143 @@ func TestConductorParsesOnlyChangedSessions(t *testing.T) {
 	}
 }
 
+// Count rows materialized by signal queries without relying on wall-clock
+// timings. Each query is replayed against the same read-only fixture snapshot.
+type conductorRowCounter struct {
+	queryer
+	rows int
+}
+
+func (q *conductorRowCounter) QueryContext(ctx context.Context, statement string, args ...any) (*sql.Rows, error) {
+	rows, err := q.queryer.QueryContext(ctx, statement, args...)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		q.rows++
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	return q.queryer.QueryContext(ctx, statement, args...)
+}
+
+func TestConductorSignalsReadOnlySessionDependencies(t *testing.T) {
+	dir := t.TempDir()
+	execute := conductorFixture(t, dir)
+	execute(addConductorSession("selected", 1)...)
+	execute("ALTER TABLE sessions ADD COLUMN workspace_id TEXT",
+		"CREATE TABLE workspaces(id TEXT PRIMARY KEY, repository_id TEXT, workspace_name TEXT)",
+		"CREATE TABLE repos(id TEXT PRIMARY KEY, name TEXT)",
+		"INSERT INTO workspaces VALUES('selected','selected','Selected workspace')",
+		"INSERT INTO repos VALUES('selected','Selected repository')",
+		"UPDATE sessions SET workspace_id='selected'")
+	db, err := openReadOnlySQLite(filepath.Join(dir, "conductor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	read := func() (sourcePart, int) {
+		t.Helper()
+		tx, err := db.BeginTx(t.Context(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		sessions, err := queryMaps(tx, "SELECT * FROM sessions WHERE id='selected'")
+		if err != nil {
+			t.Fatal(err)
+		}
+		q := &conductorRowCounter{queryer: tx}
+		signals, err := conductorSignals(t.Context(), q, "sessions", "session_messages", "id", "session_id", sessions,
+			map[string]bool{"workspace_id": true}, map[string]bool{"sent_at": true, "cancelled_at": true},
+			map[string]bool{"workspaces": true, "repos": true}, map[string]bool{"selected": true})
+		if err != nil || len(signals) != 1 || signals["selected"].size != 1 {
+			t.Fatalf("session signal: %+v %v", signals, err)
+		}
+		return signals["selected"], q.rows
+	}
+	before, small := read()
+	statements := []string{}
+	for index := range 20 {
+		id := fmt.Sprintf("unrelated-%d", index)
+		// The fixture gained a workspace_id column; name the original columns.
+		statements = append(statements,
+			fmt.Sprintf("INSERT INTO sessions(id,workspace_id) VALUES('%s','%s')", id, id),
+			fmt.Sprintf("INSERT INTO workspaces VALUES('%s','%s','Unrelated')", id, id),
+			fmt.Sprintf("INSERT INTO repos VALUES('%s','Unrelated')", id))
+	}
+	execute(statements...)
+	after, large := read()
+	if large != small || after.signal != before.signal {
+		t.Fatalf("unrelated sessions increased signal work: rows %d -> %d, signal %q -> %q", small, large, before.signal, after.signal)
+	}
+	for _, update := range []string{
+		"UPDATE workspaces SET workspace_name='Renamed' WHERE id='selected'",
+		"UPDATE repos SET name='Renamed' WHERE id='selected'",
+	} {
+		execute(update)
+		after, _ := read()
+		if after.signal == before.signal {
+			t.Fatal("signal omitted a changed dependency")
+		}
+		before = after
+	}
+}
+
+func TestCapturedPlanRefreshesWhenManifestChanges(t *testing.T) {
+	slowTest(t)
+	for _, alreadyIndexed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("already-indexed=%v", alreadyIndexed), func(t *testing.T) {
+			useHost(t, "host-a")
+			catalog, config := testCatalog(t)
+			dir := filepath.Join(t.TempDir(), "conductor")
+			exec := conductorFixture(t, dir)
+			config.CaptureRoot = filepath.Join(t.TempDir(), "captures")
+			config.Sources = []SourceConfig{{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true}}
+			exec(addConductorSession("s1", 1)...)
+			runCapture(t, config)
+			targets, err := captureTargets(config.CaptureRoot, nil, false, nil)
+			if err != nil || len(targets) != 1 {
+				t.Fatalf("capture targets: %+v %v", targets, err)
+			}
+			if alreadyIndexed {
+				indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+			}
+			server := testServer(t, config, catalog)
+			run := server.startRunNamed(indexRunKind, []string{targets[0].label()})
+			plan := server.countIndexWork(t.Context(), run.ID, targets)
+			want := 2
+			if alreadyIndexed {
+				want = 1
+			}
+			if plan.needed[0] != want-1 {
+				t.Fatalf("initial plan: %+v", plan.needed)
+			}
+			exec(addConductorSession("s2", 1)...)
+			runCapture(t, config)
+			latest := readCaptureManifest(t, config, "conductor").Snapshots[0]
+			meter := plan.meter(0)
+			var progress SyncRun
+			result := catalog.IndexCapture(meter.context(t.Context()), targets[0], func(phase string, w, c, m, skipped, processed int) {
+				plan.report(&progress, 0, processed)
+				meter.report(&progress, phase, targets[0].label(), processed)
+			})
+			if result.Error != nil || conversationMessages(t, catalog, "conductor:s2") != 1 {
+				t.Fatalf("saved plan omitted a newly captured session: %+v", result)
+			}
+			if progress.TotalConversations != want || plan.needed[0] != want || meter.needed != want || meter.size == nil || meter.size.Total != float64(want) {
+				t.Fatalf("replacement inventory lost its denominator: run=%+v needed=%v meter=%+v", progress, plan.needed, meter)
+			}
+			if !loadIndexMarker(targets[0].Dir).has(latest.Path, latest.CapturedAt) {
+				t.Fatal("successfully indexed replacement snapshot was not marked complete")
+			}
+		})
+	}
+}
+
 func TestIndexKeepsDeletedConductorSessionsFromUnindexedSnapshots(t *testing.T) {
 	useHost(t, "host-a")
 	catalog, _ := testCatalog(t)
@@ -491,7 +628,18 @@ func TestIndexKeepsDeletedConductorSessionsFromUnindexedSnapshots(t *testing.T) 
 	if kept := generations(); len(kept) != 2 {
 		t.Fatalf("generations: %#v", kept)
 	}
-	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
+	targets, err := captureTargets(config.CaptureRoot, nil, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, plan, ok := catalog.captureIndexPlan(t.Context(), targets[0])
+	if !ok {
+		t.Fatal("could not plan latest snapshot")
+	}
+	if result := catalog.IndexCapture(withIngestMode(t.Context(), ingestMode{plan: plan}), targets[0], nil); result.Error != nil {
+		t.Fatalf("planned index: %+v", result)
+	}
+
 	var origin, writer string
 	if err := catalog.DB.QueryRow("SELECT origin,origin_host_id FROM conversations WHERE native_id='conductor:s2'").Scan(&origin, &writer); err != nil {
 		t.Fatalf("session deleted at the source was not indexed from its snapshot: %v", err)
@@ -619,6 +767,17 @@ func TestIndexPlanCountsAnUncountableSourceAsOneStep(t *testing.T) {
 	if empty.report(&run, 0, 0); run.Progress != nil {
 		t.Fatalf("nothing to measure progress by: %v", *run.Progress)
 	}
+	// A replacement inventory with discovery errors still has an unknown
+	// total, even when its healthy subset has a count and size.
+	partial := &indexPlan{needed: []int{-1}, models: []string{"test"}, sizes: []*activitySize{nil}, plans: []*sourceWorkPlan{nil}, totalUnits: 1}
+	meter := partial.meter(0)
+	ctx := meter.context(t.Context())
+	modeOf(ctx).planned(&sourceWorkPlan{needed: 2, discoveryError: errors.New("unreadable input"), size: &activitySize{Unit: "byte", Total: 200}}, "test")
+	meter.report(&run, "indexing", "partial", 1)
+	if partial.needed[0] != -1 || run.Work.TotalKnown || run.Work.Size != nil {
+		t.Fatalf("partial discovery became a complete denominator: %+v", run.Work)
+	}
+
 }
 
 func TestIndexRunCountsConversationsBesideAnUncountableSource(t *testing.T) {
@@ -885,6 +1044,18 @@ func TestIndexAPIRunsInBackground(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	history := server.forecastHistory(indexRunKind)
+	if len(history) != 1 || history[0].State != "complete" {
+		t.Fatalf("missing completed operation forecast: %+v", history)
+	}
+	for _, step := range history[0].Steps {
+		if step.State != "complete" && step.State != "skipped" {
+			t.Fatalf("index reported completion before %s finished: %+v", step.Label, step)
+		}
+	}
+	if running, _ := catalog.findingsRunning(); running || catalog.authorshipRunning() {
+		t.Fatal("index reported completion with required analyses still running")
+	}
 	if !server.ingestMu.TryLock() {
 		t.Fatal("the index kept the sync lock")
 	}
@@ -953,6 +1124,8 @@ func TestStoppingAnIndexKeepsWhatItWrote(t *testing.T) {
 	var parses atomic.Int64
 	parseHook = func(string) {
 		if parses.Add(1) == 3 {
+			// Simulate reconciliation still owed for records already committed.
+			execTx(t, catalog.DB, `UPDATE conversations SET aliases_json='["session-1"]',harness=NULL WHERE native_id='session-0'`)
 			call(http.MethodPost, "/api/index/cancel", "")
 		}
 	}
@@ -968,6 +1141,10 @@ func TestStoppingAnIndexKeepsWhatItWrote(t *testing.T) {
 	if stored != written {
 		t.Fatalf("stopped index reported %d workspaces but the catalog holds %d", written, stored)
 	}
+	if countRows(t, catalog, `SELECT COUNT(*) FROM conversation_identity_links`) != 1 || countRows(t, catalog, `SELECT COUNT(*) FROM conversations WHERE native_id='session-0' AND harness IS NOT NULL`) != 1 {
+		t.Fatal("a user stop skipped identity or harness reconciliation for committed records")
+	}
+
 	if !server.ingestMu.TryLock() {
 		t.Fatal("a stopped index kept the lock")
 	}
@@ -1152,5 +1329,35 @@ func TestConductorObservedVersionFollowsBlockedSnapshotRead(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("snapshot did not finish after writer committed")
+	}
+}
+
+func TestSourcePlanBoundsDiscoveryAndRechecksReadVersions(t *testing.T) {
+	useHost(t, "host-a")
+	catalog, _ := testCatalog(t)
+	root := t.TempDir()
+	first := filepath.Join(root, "rollout-first.jsonl")
+	writeSourceFile(t, first, codexLines("planned-first", 1))
+	source := SourceConfig{Name: "codex", Kind: "codex", Path: root, Account: "local", Enabled: true}
+	adapter, err := MakeAdapter(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parses := countParses(t)
+	plan, err := catalog.prepareSourcePlan(t.Context(), adapter)
+	if err != nil || parses.Load() != 0 || plan.needed != 1 || plan.size == nil || plan.size.Total <= 0 {
+		t.Fatalf("planning parsed input or lost its size: plan=%+v err=%v", plan, err)
+	}
+	before := plan.size.Total
+	// Membership is fixed, but an existing input's actual read version wins over
+	// metadata from discovery. A later source scan picks up the new file.
+	writeSourceFile(t, filepath.Join(root, "rollout-later.jsonl"), codexLines("planned-later", 1))
+	appendSourceFile(t, first, `{"type":"event_msg","timestamp":"2026-09-01T01:00:00Z","payload":{"type":"agent_message","message":"reply"}}`+"\n")
+	result := catalog.IngestContext(withIngestMode(t.Context(), ingestMode{plan: plan}), adapter, nil)
+	if result.Error != nil || parses.Load() != 1 || result.Processed != 1 || conversationMessages(t, catalog, "planned-first") != 2 || plan.size.Total <= before {
+		t.Fatalf("plan was rediscovered or its read version was stale: result=%+v parses=%d size=%+v", result, parses.Load(), plan.size)
+	}
+	if result = ingestSource(t, catalog, source); result.Error != nil || result.Parsed != 1 || conversationMessages(t, catalog, "planned-later") != 1 {
+		t.Fatalf("later input was lost: %+v", result)
 	}
 }
