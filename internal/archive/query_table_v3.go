@@ -209,20 +209,6 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 			q.Result.Where = nil
 		}
 	}
-	var reducedPopulation *int64
-	if sqlBacked && q.Grouping != nil {
-		compact, reduced, request, population, handled, e := s.nativeGroupedRows(ctx, table, d, q)
-		if e != nil {
-			return qt.QueryResultV3{}, nil, e
-		}
-		if handled {
-			rows, d, q = compact, reduced, request
-			sqlBacked = false
-			required = nativeGroupFields(q, d.Schema.IDField)
-			schema = d.Schema
-			reducedPopulation = &population
-		}
-	}
 	// Small summary/map populations benefit from memory scratch storage: SQLite's
 	// ephemeral CTE B-trees otherwise write pages even with a temp cache. Keep the
 	// full raw tool ledger and message payloads on the spill-capable path. The
@@ -249,9 +235,6 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 	result, err := d.ExecuteIn(ctx, tx, q, qt.PlanOptions{Identity: queryTableScope + ":" + schema.Name})
 	if err != nil {
 		return qt.QueryResultV3{}, nil, fmt.Errorf("%s query: %w", strings.TrimPrefix(schema.Name, "pharos_"), err)
-	}
-	if reducedPopulation != nil {
-		result.SourceTotal = *reducedPopulation
 	}
 	if err = release(); err != nil {
 		return qt.QueryResultV3{}, nil, err

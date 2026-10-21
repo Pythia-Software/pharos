@@ -1,3 +1,4 @@
+import { matchingSelectionIDs } from "./query-selection";
 import { installDelegationExplorer } from "./delegation";
 import { installWorkspaceInbox } from "./workspace-inbox";
 import { MessageTableSearch, newMessageSearch, readMessageSearch } from "./message-table-search";
@@ -31,7 +32,7 @@ import { createRoot } from "react-dom/client";
 import { useLocationRevision } from "./nested-pages";
 import { SettingsWorkspace } from "./settings-workspace";
 import { installAppNavigation } from "./app-navigation";
-import { EMPTY_QUERY, exitGrouping, groupSourceQuery, httpComputedColumnStore, inspectBucketQuery, applyAggregations, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, toServerQuery, type ComputedColumnStore, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type AggregationResultEntry, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, exitGrouping, groupSourceQuery, httpComputedColumnStore, inspectBucketQuery, applyAggregations, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, type ComputedColumnStore, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type AggregationResultEntry, type FieldSchema, type OrderByClause, type Transport, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
 import { useQueryTable, type QueryTableApi, type QueryFilterApi } from "@pythia-software/query-table-react";
 import { DataTable, FilterValueProvider, MetricCard, MetricsPanel, QueryBuilder, QueryFilterRow, SelectionToolbar, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
 import "@pythia-software/query-table-ui/theme.css";
@@ -259,16 +260,6 @@ function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary
       return queryRequest(endpoint("/metrics", recordBudget(dataset, query.where)), {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query), signal,
       });
-    },
-    async fetchRows(query: ServerQuery, signal?: AbortSignal) {
-      const result = await queryRequest<{ rows: Row[]; total: number; find?: FindSummary }>(endpoint(), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(query),
-        signal,
-      });
-      onFind?.(result.find ?? null);
-      return result;
     },
     async fetchDistinctValues(query, signal) {
       const params = new URLSearchParams({ field: query.field, q: query.search });
@@ -603,7 +594,7 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
       onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(records); }} />
     {capabilityError && !capabilities ? <div className="query-table-error">Could not read this table's query capabilities: {capabilityError.message}</div> : null}
     {api.error ? <div className="query-table-error">{api.error?.message}</div> : null}
-    {selectable && !api.query.grouping ? <SelectionToolbar selection={api.selection} actions={ids => <ShareSelection ids={ids} api={api} transport={transport} />} /> : null}
+    {selectable && !api.query.grouping ? <SelectionToolbar selection={api.selection} actions={ids => <ShareSelection ids={ids} api={api} transport={transport} execution={capabilities?.computedExecution} />} /> : null}
     {dataset === "library" && searchResultsView(api.query, libraryView) === "conversation" ? <ConversationResults api={api} searching={Boolean(find)} />
       : dataset === "writing_messages" && messageView === "text" && !api.query.grouping ? <AuthoredMessages api={api} emptyMessage={api.error ? failedMessage : emptyMessages[dataset]} /> : <DataTable
       maxHeight={100000}
@@ -638,18 +629,21 @@ const shareWorkLimit = 200;
 // Share, for the works checked in the Library: one standalone HTML file with
 // their conversations and tables. It can also check every work the current
 // filters match, when they fit in one export.
-function ShareSelection({ ids, api, transport }: { ids: unknown[]; api: QueryTableApi<Row>; transport?: Transport<Row> }) {
+function ShareSelection({ ids, api, transport, execution }: { ids: unknown[]; api: QueryTableApi<Row>; transport?: Transport<Row>; execution?: ComputedExecution }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const tooMany = ids.length > shareWorkLimit;
   const total = api.total ?? 0;
-  const canSelectAll = Boolean(transport) && total > ids.length && total <= shareWorkLimit;
+  const canFetchRows = Boolean((transport?.queryCapabilities?.version === 3 && transport.fetchQueryV3) || transport?.fetchRowsV2);
+  const canSelectAll = Boolean(execution) && canFetchRows && total > ids.length && total <= shareWorkLimit;
   async function selectAll() {
-    if (!transport) return;
+    if (!transport || !execution) return;
     setBusy(true);
+    setError("");
     try {
-      const result = await transport.fetchRows({ ...toServerQuery(api.query, schemas.library), limit: shareWorkLimit, offset: 0 });
-      api.selection.replace(result.rows.map(row => api.rowId(row)).filter((id): id is NonNullable<typeof id> => id !== null));
+      api.selection.replace(await matchingSelectionIDs(api.query, api.schema ?? schemas.library, execution, transport, shareWorkLimit));
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Could not select the matching works");
     } finally { setBusy(false); }
   }
   return <>

@@ -1,16 +1,51 @@
-# Query Table 0.9.3 in Pharos
+# Query Table 0.9.4 in Pharos
 
-Pharos pins core, React, UI and codegen to the published npm **0.9.3** packages,
-and the Go adapter to the published **v0.9.3** module, with no replacement or
+Pharos pins core, React, UI and codegen to the published npm **0.9.4** packages,
+and the Go adapter to the published **v0.9.4** module, with no replacement or
 local copy. The npm lockfile records registry URLs and integrities; `go.sum`
 records the released Go module. Clean builds use these pinned sources without
 another Query Table checkout.
 
-The [upstream migration guide](https://github.com/Pythia-Software/query-table/blob/v0.9.3/docs/host-integration-next-release.md)
-and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.9.3/CHANGELOG.md)
+The [upstream migration guide](https://github.com/Pythia-Software/query-table/blob/v0.9.4/docs/host-integration-next-release.md)
+and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.9.4/CHANGELOG.md)
 define the release contract. Optional worktree linking is described in
 [local development](query-table-local-development.md). The earlier
 [next-release handoff](query-table-next-release-handoff.md) is a historical record.
+
+## 0.9.4 changes
+
+Ordinary V3 execution now owns eligible direct SQLite grouping and its exact
+fallback. Pharos passes the authorized narrow source and original request to
+`QueryDatasetV3.ExecuteIn`. The general `nativeGroupedRows` pre-reducer, its
+synthetic source rows/schema fields, MAX summary rewrites and source-total
+correction have been removed. Group identities, HAVING, ordering, paging,
+source budgets and result metrics remain library-owned. Source filters still
+select the full population before result paging.
+
+The frontend transport implements modern V2/V3 rows without legacy `fetchRows`.
+Computed-column previews negotiate those methods in Query Table. Library
+**Select all** prefers negotiated V3 with the execution schema and computed
+handshake, preserving canonical computed predicates and sorting even though the
+table catalogue describes those fields as derived. V2 is a fallback for
+V2-only transports; it cannot execute computed filters under Pharos's policy.
+Selection requests identities from offset zero and validates the response's
+schema, execution context and computed revisions.
+It rejects incomplete or oversized results before replacing the selection and
+shows failures in the toolbar. The legacy HTTP row routes remain available for
+older clients; current tables, previews and selection no longer need them.
+
+The synthetic HTTP probe at this upgrade measured ordinary V3 at 66 ms versus
+45 ms with the former host pre-reducer, with complete response parity. This
+trades about 22 ms on that 50,000-row fixture for removing the custom execution
+path. V2 still measured 49–77 ms through the adapter versus 16–33 ms through
+Pharos's cached reducer, so `nativeMetricsV2` remains enabled. The domain-specific
+Machine Time V2 cubes and indexed text complements also remain. These are local
+warm medians, not production or concurrent-dashboard guarantees. See
+[the release's direct grouping contract](https://github.com/Pythia-Software/query-table/blob/v0.9.4/docs/sqlite-direct-groups.md)
+and [preview migration](https://github.com/Pythia-Software/query-table/blob/v0.9.4/docs/computed-columns.md#modern-row-transports).
+
+The existing scratch lease/connection policy is a separate host migration,
+tracked in [the schema-reload handoff](handoffs/query-table-schema-reload.md).
 
 ## 0.9.3 changes
 
@@ -25,14 +60,14 @@ The release also qualifies scratch-table cleanup, handles interrupted creation,
 and returns V3 cleanup errors before reporting success. Successful caller-owned
 V2/V3 transactions may be committed after adapter cleanup; failures must roll
 back. Pharos still needs to drop its own staging tables and change its lease
-and connection policy before adopting that lifecycle. There is no new direct
-V3 grouping API.
+and connection policy before adopting that lifecycle. At that release there was
+no direct V3 grouping path.
 
 See the [manual-interventions audit](handoffs/query-table-manual-interventions.md)
 for host parity/timing results and the remaining removal decisions, and the
 [upstream performance/lifecycle guide](https://github.com/Pythia-Software/query-table/blob/v0.9.3/docs/sqlite-performance-handoff.md)
-for the supported contract. The general host SQL reducers remain enabled;
-the dependency upgrade alone does not remove them.
+for the supported contract. Both general host SQL reducers remained enabled in
+0.9.3; 0.9.4 removes the V3 pre-reducer as described above.
 
 ## 0.9.1 and 0.9.2 changes
 
@@ -145,14 +180,13 @@ the adapter's values, and passes everything else to the adapter:
   operations, so a longer period adds few groups: on a library of a million
   calls in October 2026 the largest cube had about 12,000 groups over 90 days
   and 20,000 over all time.
-- **Plain counts and sums** grouped by text fields (`nativeMetricsV2`) run in
-  one native statement over a SQL dataset's source, or, for Usage, in Go over
-  the rows already in memory, instead of one adapter pass per metric. In
-  SQLite every value must be a stored integer; in memory, sums of other
-  numbers are added exactly as the adapter adds them and rounded once, and
-  text fields can be counted distinctly. Anything else, including any value
-  the adapter would report as an error, falls through to it. Cross-field
-  metric fusion upstream in Query Table would make this path unnecessary.
+- **Plain integer counts and sums** grouped by text fields (`nativeMetricsV2`)
+  share one guarded SQL reduction and generation-scoped bounds/count caches.
+  Unsupported shapes and storage retain ordinary adapter execution. Upstream
+  cross-field fusion is available, but the measured residual strict-proof cost
+  still makes this host cache/reducer useful.
+- **Usage metrics** run through Query Table's `ExecuteV2Rows` over authorized
+  daily/hourly row maps, retaining exact decimal arithmetic without SQL staging.
 
 These run in a plain read transaction; requests the adapter executes lease
 memory-backed temporary storage. Usage's V2 metric group budget is 100,000,
