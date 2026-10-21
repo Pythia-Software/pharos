@@ -2,15 +2,21 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadClassicScript, plain } from '../helpers/classic-script.mjs';
 
-test('compact headers retain selected live tools and overflow the rest in saved order', () => {
+test('headers overflow only tools that do not fit and retain saved order', () => {
   const header = loadClassicScript('header.js');
   const saved = ['theme', 'library', 'history', 'settings', 'search'];
-  assert.deepEqual(plain(header.headerToolPlacement(saved, 'wide')), { inline: saved, overflow: [] });
-  for (const mode of ['compact', 'phone']) {
-    assert.deepEqual(plain(header.headerToolPlacement(saved, mode)), { inline: ['library', 'search'], overflow: ['theme', 'history', 'settings'] });
-    assert.deepEqual(plain(header.headerToolPlacement(['settings', 'sync'], mode)), { inline: ['sync'], overflow: ['settings'] });
-    assert.deepEqual(plain(header.headerToolPlacement(['settings'], mode)), { inline: [], overflow: ['settings'] });
-  }
+  const widths = { theme: 36, library: 120, history: 71, settings: 36, search: 36, sync: 36 };
+  const place = (tools, available) => plain(header.headerToolPlacement(tools, available, widths, 6, 36));
+  assert.deepEqual(place(saved, 323), { inline: saved, overflow: [] }, 'all tools stay inline at the exact fit');
+  assert.deepEqual(place(saved, 322), { inline: ['theme', 'library', 'search'], overflow: ['history', 'settings'] }, 'overflow includes room for More');
+  assert.deepEqual(place(saved, 246), { inline: ['theme', 'library', 'search'], overflow: ['history', 'settings'] });
+  assert.deepEqual(place(saved, 245), { inline: ['library', 'search'], overflow: ['theme', 'history', 'settings'] });
+  assert.deepEqual(place(['settings', 'sync'], 78), { inline: ['settings', 'sync'], overflow: [] });
+  assert.deepEqual(place(['settings'], 36), { inline: ['settings'], overflow: [] }, 'a minimal layout does not need More');
+  assert.deepEqual(place(saved, 170), { inline: ['library'], overflow: ['theme', 'history', 'settings', 'search'] }, 'even priority controls overflow if necessary');
+  assert.deepEqual(place(saved, 40), { inline: [], overflow: saved });
+  assert.deepEqual(place([], 40), { inline: [], overflow: [] });
+  assert.deepEqual(place(saved, 323), { inline: saved, overflow: [] }, 'tools return as soon as there is room');
   assert.deepEqual(saved, ['theme', 'library', 'history', 'settings', 'search']);
 });
 
