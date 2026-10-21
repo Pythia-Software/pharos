@@ -1,5 +1,7 @@
-import { decodeQueryStrict, localQuerySnapshotCache, encodeQuery, type QueryState } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, decodeQueryStrict, localQuerySnapshotCache, encodeQuery, type QueryState } from "@pythia-software/query-table-core";
 import { isUsageWorkspace, readUsageWorkspace, usageDatasetTopics, type UsageDataset } from "./usage-workspace-model";
+import { cardDashboardWhere, cardSourceDataset } from "./card-exploration";
+import { concurrencyWindowRange } from "./concurrency-settings";
 
 export const queryDatasets = ["library", "usage", "conversation_activity", "writing", "writing_messages", "mcp_calls", "tools", "tool_calls", "skill_usages", "tl1_attempts", "parallelism", "findings"] as const;
 export type QueryDataset = typeof queryDatasets[number];
@@ -45,6 +47,15 @@ export function updateQueryWindowURL(url: string, days: number | null, fallback?
   const query = resolveRollingQuery(spec.query.grouping ? { ...spec.query, offset: 0, grouping: { ...spec.query.grouping, source: { ...adjusted, offset: 0 } } } : { ...adjusted, offset: 0 }, window);
   const parsed = new URL(url, location.origin);
   parsed.searchParams.set(`q_${spec.dataset}`, encodeQuery(query));
+  if (parsed.searchParams.get("card_query") === spec.dataset && parsed.searchParams.get("analyze_mode") === "dashboards") {
+    const target = readUsageWorkspace(parsed.searchParams).dataset;
+    parsed.searchParams.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where: cardDashboardWhere(spec.dataset as UsageDataset, target, (query.grouping?.source ?? query).where) }));
+    if (days !== null) parsed.searchParams.set("analyze_days", String(days));
+    if (parsed.searchParams.has("analyze_parallelism")) {
+      const settings = JSON.parse(parsed.searchParams.get("analyze_parallelism")!);
+      parsed.searchParams.set("analyze_parallelism", JSON.stringify({ ...settings, range: concurrencyWindowRange(days) }));
+    }
+  }
   if (window) {
     parsed.searchParams.set("window_mode", "relative"); parsed.searchParams.set("window_days", String(days)); parsed.searchParams.set("window_field", field); parsed.searchParams.set("window_dataset", spec.dataset);
   } else {
@@ -108,7 +119,7 @@ export function queryFromURL(url: string, fallback?: QueryState): { dataset: Que
     const workspace = path === "/analyze" && isUsageWorkspace(params) ? readUsageWorkspace(params) : null;
     // Older URLs can carry offscreen tables' state as well. The route and
     // selected tab decide the dataset, rather than the first q_* parameter.
-    const dataset: QueryDataset | undefined = workspace ? workspace.mode === "dashboards" ? undefined : workspace.dataset
+    const dataset: QueryDataset | undefined = workspace ? workspace.mode === "dashboards" ? cardSourceDataset(params) : workspace.dataset
       : path === "/library" || path === "/" ? "library"
       : path === "/analyze" && params.get("machine_view") === "parallelism" && params.has("q_parallelism") ? "parallelism"
       : path === "/findings" ? params.get("view") === "table" ? "findings" : undefined

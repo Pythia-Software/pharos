@@ -172,7 +172,7 @@ export function ConcurrencyPanel({ scope, activityWindow, routeParameter, onSele
   const readSettings = () => {
     if (routeParameter) {
       const encoded = new URLSearchParams(location.search).get(routeParameter);
-      if (encoded) { try { return normalizeConcurrencySettings(JSON.parse(encoded)); } catch { /* Use the saved counting settings. */ } }
+      if (encoded) { try { return readConcurrencySettings(JSON.parse(encoded)); } catch { /* Use the saved counting settings. */ } }
       return { ...readConcurrencySettings(), range: "30d" as const, workspace: "", agent: "", zoom: null };
     }
     return scope ? readMachineConcurrencySettings() : readConcurrencySettings();

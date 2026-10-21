@@ -1632,7 +1632,8 @@
         "mcp-response-size",
         "pharos-mcp-sources",
         "pharos-mcp-query-sources",
-        "pharos-mcp-durations"
+        "pharos-mcp-durations",
+        "mcp-call-trend"
       ],
       "current_preview": "Recorded MCP methods. Retained agent tool calls with MCP methods during the last 30 days, grouped by server and method. Pharos MCP payloads. Individual Pharos response sizes over the last 30 days, grouped by tool; three-response minimum, including errors. Pharos MCP calling clients. Recorded agent requests to Pharos in the last 30 days, grouped by caller source and provider. Pharos MCP queried sources. Pharos requests by explicit archive source filter in the last 30 days; unspecified filters remain visible. Pharos MCP tool durations. Positive Pharos server durations in the last 30 days, grouped by tool; zero-millisecond entries excluded.",
       "blocked_on_query_table": [
@@ -1979,7 +1980,10 @@
         "carbon-models",
         "carbon-providers",
         "carbon-effort",
-        "models-needing-prices"
+        "models-needing-prices",
+        "token-volume-trend",
+        "token-volume-log",
+        "cumulative-api-cost"
       ],
       "current_preview": "Daily token volume. Recorded tokens by day and repository over the last 30 days; cached and unpriced usage included. Daily API equivalent. Fully priced API equivalent by recorded day and repository over the last 30 days. Token pricing coverage. Recorded token shares by pricing status over the last 30 days; assumed and missing prices stay visible. API equivalent this period. Total recorded API equivalent over the last 30 days, using fully priced positive-token usage facts only. Repository cost share. Fully priced API equivalent over the last 30 days, attributed to each usage fact’s recorded repository. Repository token share. Recorded tokens over the last 30 days, attributed to each usage fact’s repository; includes cached input. Output share by repository. Output tokens divided by all recorded tokens over the last 30 days, grouped by repository.",
       "blocked_on_query_table": [
@@ -3139,7 +3143,7 @@
           }
         }
       },
-      "action": "Inspect tool error calls",
+      "action": "Explore Tools",
       "note": "Each tool-call row is one recorded call, selected by its start time. error_count is one for status=error and zero otherwise. Recorded errors include rejected, interrupted, blocked, and timed-out calls as well as execution errors; these are not automatically mistakes or avoidable failures. Calls with no recorded result remain in all-call denominators and are not asserted errors. Counts do not measure wasted time, model quality, or whether the overall task succeeded.",
       "cover": {
         "mode": "result",
@@ -3149,6 +3153,19 @@
         "showOther": true,
         "showLegend": true,
         "showHeadline": false
+      },
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "failures",
+          "split": "tool_name",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Inspect tool error calls"
       }
     },
     {
@@ -3246,7 +3263,7 @@
           }
         ]
       },
-      "action": "Inspect recurring error evidence",
+      "action": "Explore Tools",
       "note": "Each tool-call row is one recorded call, selected by its start time. error_count is one for status=error and zero otherwise. Recorded errors include rejected, interrupted, blocked, and timed-out calls as well as execution errors; these are not automatically mistakes or avoidable failures. Calls with no recorded result remain in all-call denominators and are not asserted errors. Counts do not measure wasted time, model quality, or whether the overall task succeeded. Signatures are retained normalized diagnostic excerpts, not semantic root-cause labels. The same text can have different causes; different text can describe the same cause. Blank/missing signatures are excluded. Conversation counts use recorded agent transcripts, not whole delegated trees; missing IDs are excluded from distinct counts but their recorded error calls can still contribute.",
       "days": [
         7
@@ -3257,6 +3274,19 @@
         "kind": "bar-horizontal",
         "maxGroups": 6,
         "showOther": false
+      },
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "failures",
+          "split": "tool_name",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Inspect recurring error evidence"
       }
     },
     {
@@ -3442,7 +3472,7 @@
           }
         ]
       },
-      "action": "Inspect failed file edits",
+      "action": "Explore Tools",
       "emptyLabel": "No recorded edit errors with mapped paths",
       "note": "Each tool-call row is one recorded call, selected by its start time. error_count is one for status=error and zero otherwise. Recorded errors include rejected, interrupted, blocked, and timed-out calls as well as execution errors; these are not automatically mistakes or avoidable failures. Calls with no recorded result remain in all-call denominators and are not asserted errors. Counts do not measure wasted time, model quality, or whether the overall task succeeded. Only edit-category calls with a mapped, nonempty repository-relative path contribute. Identical paths in different repositories stay separate. Unmapped paths are excluded. Expanding a group shows the recorded calls and error types; counts do not establish that edits were ultimately abandoned.",
       "days": [
@@ -3454,6 +3484,19 @@
         "kind": "bar-horizontal",
         "maxGroups": 6,
         "showOther": false
+      },
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "failures",
+          "split": "repository_name",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Inspect failed file edits"
       }
     },
     {
@@ -3521,7 +3564,7 @@
           "repository_name"
         ]
       },
-      "action": "Inspect reported test failures",
+      "action": "Explore Tools",
       "note": "Each tool-call row is one recorded call, selected by its start time. error_count is one for status=error and zero otherwise. Recorded errors include rejected, interrupted, blocked, and timed-out calls as well as execution errors; these are not automatically mistakes or avoidable failures. Calls with no recorded result remain in all-call denominators and are not asserted errors. Counts do not measure wasted time, model quality, or whether the overall task succeeded. Select test_failure=true independently of tool error status. The flag is a retained output/classification signal, not a count of failed test cases, a complete test-run census, or proof that a test later passed. A flagged call may have status=ok; an error call may have no test-failure signal. No pass rate is inferred. Missing command names remain Unspecified.",
       "days": [
         7
@@ -3532,6 +3575,19 @@
         "kind": "bar-horizontal",
         "maxGroups": 6,
         "showOther": false
+      },
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "failures",
+          "split": "command_name",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Inspect reported test failures"
       }
     },
     {
@@ -3667,7 +3723,7 @@
         "showLegend": true,
         "showHeadline": false
       },
-      "action": "Inspect tool context additions",
+      "action": "Explore Tools",
       "note": "Result tokens are attributed additions to context, not model output tokens. ‘Measured’ allocates the next request’s positive prompt growth across incoming content; ‘estimated’ uses retained result size. Neither is exact per-tool tokenization. Attribution sources remain separate. Zero or missing result sizes do not establish an empty original output.",
       "where": [
         {
@@ -3675,7 +3731,20 @@
           "op": ">",
           "value": "0"
         }
-      ]
+      ],
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "context_added",
+          "split": "tool_name",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Inspect tool context additions"
+      }
     },
     {
       "id": "truncated-outputs",
@@ -3751,8 +3820,21 @@
         "maxGroups": 6,
         "showOther": false
       },
-      "action": "Inspect truncated tool calls",
-      "note": "For each tool, divide calls marked truncated by all recorded calls started in the selected window, including successful and zero-size calls. Require ten calls per tool, then show six highest rates. Missing truncation flags are not asserted truncations and remain in the denominator; recording coverage can vary. Truncation does not establish that important content was lost. The destination retains numerator and denominator, with underlying call rows available through group expansion."
+      "action": "Explore Tools",
+      "note": "For each tool, divide calls marked truncated by all recorded calls started in the selected window, including successful and zero-size calls. Require ten calls per tool, then show six highest rates. Missing truncation flags are not asserted truncations and remain in the denominator; recording coverage can vary. Truncation does not establish that important content was lost. The destination retains numerator and denominator, with underlying call rows available through group expansion.",
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "calls",
+          "split": "tool_name",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Inspect truncated tool calls"
+      }
     },
     {
       "id": "read-paths",
@@ -3812,7 +3894,7 @@
         "kind": "table",
         "maxGroups": 6
       },
-      "action": "Explore frequently read paths",
+      "action": "Explore Tools",
       "note": "Count all retained read calls with a mapped repository-relative path. Repository and path remain separate keys; identical paths in different repositories are not merged. This shows frequency across conversations, not repeated reads within one conversation. Missing paths and non-read tools are excluded. A recorded call can refer to a partial file; frequency does not establish unchanged content or redundant work.",
       "where": [
         {
@@ -3825,7 +3907,20 @@
           "op": "is_not_null",
           "value": ""
         }
-      ]
+      ],
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "calls",
+          "split": "tool_name",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Explore frequently read paths"
+      }
     },
     {
       "dataset": "tool_calls",
@@ -4012,7 +4107,20 @@
         "showOther": false,
         "showHeadline": false
       },
-      "action": "Explore recorded web sites"
+      "action": "Explore Tools",
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "calls",
+          "split": "tool_name",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Explore recorded web sites"
+      }
     },
     {
       "dataset": "tool_calls",
@@ -4084,7 +4192,7 @@
           "mcp_method"
         ]
       },
-      "action": "Explore connected tool methods",
+      "action": "Explore Tools",
       "note": "Count recorded agent-side tool calls with a nonempty MCP method, including errors and no-result calls. Server and method remain separate keys; missing server labels stay Unspecified. A call counts once in its recorded server/method pair. This does not cover every external API request or every tool provided by a connector.",
       "days": [
         7
@@ -4095,6 +4203,19 @@
         "kind": "bar-horizontal",
         "maxGroups": 6,
         "showOther": false
+      },
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "calls",
+          "split": "mcp_server",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Explore connected tool methods"
       }
     },
     {
@@ -4206,8 +4327,22 @@
           "value": ""
         }
       ],
-      "action": "Inspect conversations using each skill",
-      "note": "Evidence records distinguish explicit invocations, file-load attempts, and harness-reported loads. A listing is not use, a recorded load does not prove the instructions were followed, and multiple evidence types can describe related activity. Names can combine versions or skills with the same name. Catalog mirror exclusion applies; remaining source capture can differ between agents. Count each nonempty recorded conversation ID once per skill across successful evidence of any type. Repeated loads do not increase reach. The denominator excludes conversations with no recorded skill evidence; these are counts, not an adoption rate."
+      "action": "Explore Skills",
+      "note": "Evidence records distinguish explicit invocations, file-load attempts, and harness-reported loads. A listing is not use, a recorded load does not prove the instructions were followed, and multiple evidence types can describe related activity. Names can combine versions or skills with the same name. Catalog mirror exclusion applies; remaining source capture can differ between agents. Count each nonempty recorded conversation ID once per skill across successful evidence of any type. Repeated loads do not increase reach. The denominator excludes conversations with no recorded skill evidence; these are counts, not an adoption rate.",
+      "destination": {
+        "topic": "skills",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": 0,
+          "split": "skill_name"
+        },
+        "dataset": "skill_usages",
+        "detailAction": "Inspect conversations using each skill"
+      }
     },
     {
       "id": "skill-load-failures",
@@ -4370,7 +4505,23 @@
           "label": "Your words per day"
         }
       },
-      "action": "Explore daily word counts"
+      "action": "Explore Human Words",
+      "destination": {
+        "topic": "human",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "scope": "typed",
+          "split": "kind",
+          "hours": 6,
+          "days": 3
+        },
+        "dataset": "writing",
+        "detailAction": "Explore daily word counts"
+      }
     },
     {
       "id": "explaining-repos",
@@ -4434,7 +4585,7 @@
           }
         ]
       },
-      "action": "See breakdown by repo",
+      "action": "Explore Human Words",
       "note": "Pie shares use the full human-word total; Other combines every repository beyond the seven named.",
       "cover": {
         "mode": "result",
@@ -4443,6 +4594,22 @@
         "maxGroups": 7,
         "showOther": true,
         "showLegend": true
+      },
+      "destination": {
+        "topic": "human",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "scope": "typed",
+          "split": "repository_name",
+          "hours": 6,
+          "days": 3
+        },
+        "dataset": "writing",
+        "detailAction": "See breakdown by repo"
       }
     },
     {
@@ -4519,7 +4686,7 @@
           "label": "Daily tokens by model"
         }
       },
-      "action": "Explore daily model use",
+      "action": "Explore Tokens and Cost",
       "cover": {
         "mode": "result",
         "metricId": "card_total_tokens",
@@ -4528,6 +4695,26 @@
         "showOther": true,
         "showLegend": true,
         "height": 300
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "model_family",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore daily model use"
       }
     },
     {
@@ -4609,7 +4796,7 @@
         7,
         30
       ],
-      "action": "Explore daily repository tokens",
+      "action": "Explore Tokens and Cost",
       "note": "Retained positive-token usage facts, including assumed, partial, and unpriced usage. Tokens are recorded processing volume, not unique text, context-window size, human effort, quality, or value. Repeated cached input contributes again on each recorded request. Time selection uses first_usage_at at the retained fact grain, which can use request time or session-based placement (session-start or reconciled session-remainder). Facts are not prorated. Daily buckets use their recorded local day. Missing repositories remain Unspecified.",
       "cover": {
         "mode": "result",
@@ -4619,6 +4806,26 @@
         "showOther": true,
         "showLegend": true,
         "height": 300
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "repository_name",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore daily repository tokens"
       }
     },
     {
@@ -4711,7 +4918,7 @@
         7,
         30
       ],
-      "action": "Explore daily repository costs",
+      "action": "Explore Tokens and Cost",
       "cover": {
         "mode": "result",
         "metricId": "card_cost_usd",
@@ -4720,6 +4927,26 @@
         "showOther": true,
         "showLegend": true,
         "height": 300
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "cost",
+          "split": "repository_name",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore daily repository costs"
       }
     },
     {
@@ -5032,7 +5259,7 @@
           }
         ]
       },
-      "action": "Compare failure rates",
+      "action": "Explore Tools",
       "days": [
         7
       ],
@@ -5042,6 +5269,19 @@
         "kind": "bar-horizontal",
         "maxGroups": 6,
         "showOther": false
+      },
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "failure_rate",
+          "split": "tool_name",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Compare failure rates"
       }
     },
     {
@@ -5183,7 +5423,7 @@
           "duration_source"
         ]
       },
-      "action": "Explore command duration ranges",
+      "action": "Explore Tools",
       "days": [
         7
       ],
@@ -5194,6 +5434,19 @@
         "maxGroups": 6,
         "minSamples": 3,
         "density": "compact"
+      },
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "mean_time",
+          "split": "command_name",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Explore command duration ranges"
       }
     },
     {
@@ -5286,7 +5539,7 @@
         "minSamples": 3,
         "density": "compact"
       },
-      "action": "Explore tool result sizes",
+      "action": "Explore Tools",
       "note": "Result tokens are attributed additions to context, not model output tokens. ‘Measured’ allocates the next request’s positive prompt growth across incoming content; ‘estimated’ uses retained result size. Neither is exact per-tool tokenization. Attribution sources remain separate. Zero or missing result sizes do not establish an empty original output. Each nonempty recorded call is one observation. Require three calls per tool/source cohort before selecting six cohorts by observation count. All cohorts remain in the destination. Shared logarithmic token axis; median, quartiles, Tukey whiskers, sampled outliers and extremes. Hover supplies mean, range, and sample size. Zero-size calls are excluded from this size comparison.",
       "where": [
         {
@@ -5294,7 +5547,20 @@
           "op": ">",
           "value": "0"
         }
-      ]
+      ],
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "context_added",
+          "split": "tool_name",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Explore tool result sizes"
+      }
     },
     {
       "dataset": "tool_calls",
@@ -5473,7 +5739,7 @@
           }
         ]
       },
-      "action": "Compare cross-repository errors",
+      "action": "Explore Tools",
       "note": "Each tool-call row is one recorded call, selected by its start time. error_count is one for status=error and zero otherwise. Recorded errors include rejected, interrupted, blocked, and timed-out calls as well as execution errors; these are not automatically mistakes or avoidable failures. Calls with no recorded result remain in all-call denominators and are not asserted errors. Counts do not measure wasted time, model quality, or whether the overall task succeeded. Signatures are retained normalized diagnostic excerpts, not semantic root-cause labels. The same text can have different causes; different text can describe the same cause. Blank/missing signatures are excluded. Conversation counts use recorded agent transcripts, not whole delegated trees; missing IDs are excluded from distinct counts but their recorded error calls can still contribute.",
       "days": [
         7
@@ -5484,6 +5750,19 @@
         "kind": "bar-horizontal",
         "maxGroups": 6,
         "showOther": false
+      },
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "failures",
+          "split": "tool_name",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Compare cross-repository errors"
       }
     },
     {
@@ -5572,10 +5851,23 @@
         "maxGroups": 6,
         "showOther": false
       },
-      "action": "Explore repository error evidence",
+      "action": "Explore Tools",
       "days": [
         7
-      ]
+      ],
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "failures",
+          "split": "repository_name",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Explore repository error evidence"
+      }
     },
     {
       "id": "skill-reach",
@@ -5704,8 +5996,22 @@
           "value": ""
         }
       ],
-      "action": "Inspect skills across repositories",
-      "emptyLabel": "No skills recorded across at least two named repositories"
+      "action": "Explore Skills",
+      "emptyLabel": "No skills recorded across at least two named repositories",
+      "destination": {
+        "topic": "skills",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": 0,
+          "split": "skill_name"
+        },
+        "dataset": "skill_usages",
+        "detailAction": "Inspect skills across repositories"
+      }
     },
     {
       "id": "tl1-advancement",
@@ -6302,7 +6608,7 @@
         "kind": "table",
         "maxGroups": 6
       },
-      "action": "Inspect repeated conversation reads",
+      "action": "Explore Tools",
       "note": "Count read calls per repository/path/conversation, then retain groups with at least two calls in the window. Recorded conversation IDs identify individual agent transcripts, not whole delegated trees. The count includes the first read; it is not an extra-read count. File content, read ranges, and prior reads outside the window can differ. Repetition is an inspection cue, not proof of wasted effort. Missing paths/conversation IDs are excluded; source calls retain their identities.",
       "where": [
         {
@@ -6320,7 +6626,20 @@
           "op": "is_not_null",
           "value": ""
         }
-      ]
+      ],
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "calls",
+          "split": "tool_name",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Inspect repeated conversation reads"
+      }
     },
     {
       "id": "human-word-mix",
@@ -6427,7 +6746,23 @@
         "maxGroups": 8,
         "showOther": false
       },
-      "action": "Explore authorship by repo"
+      "action": "Explore Human Words",
+      "destination": {
+        "topic": "human",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "scope": "typed",
+          "split": "kind",
+          "hours": 6,
+          "days": 3
+        },
+        "dataset": "writing",
+        "detailAction": "Explore authorship by repo"
+      }
     },
     {
       "id": "usage-work",
@@ -6531,13 +6866,33 @@
         7,
         30
       ],
-      "action": "Inspect large token workloads",
+      "action": "Explore Tokens and Cost",
       "cover": {
         "mode": "result",
         "metricId": "card_total_tokens",
         "kind": "bar-horizontal",
         "maxGroups": 6,
         "showOther": false
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "repository_name",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect large token workloads"
       }
     },
     {
@@ -6613,7 +6968,7 @@
         "maxGroups": 6,
         "showOther": false
       },
-      "action": "Inspect model input reuse",
+      "action": "Explore Tokens and Cost",
       "note": "Cache-read share is SUM(cache_read_input_tokens) / SUM(input_tokens), weighted by tokens rather than averaging row percentages. All input includes cache reads, cache writes, and fresh input; unlike the previous cache-efficiency definition, writes now remain in the denominator. Provider accounting and retained usage coverage can differ. These totals reflect usage-fact time placement, not exact request timestamps, unique text, saved money, or model quality.",
       "where": [
         {
@@ -6621,7 +6976,27 @@
           "op": ">",
           "value": "0"
         }
-      ]
+      ],
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "type",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect model input reuse"
+      }
     },
     {
       "id": "effort-cost",
@@ -6682,7 +7057,7 @@
           }
         ]
       },
-      "action": "Compare model effort per session",
+      "action": "Explore Tokens and Cost",
       "where": [
         {
           "field": "total_tokens",
@@ -6705,6 +7080,26 @@
         "metricId": "mc_session_cost",
         "kind": "bar-horizontal",
         "maxGroups": 6
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "cost",
+          "split": "model_effort",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Compare model effort per session"
       }
     },
     {
@@ -6913,13 +7308,33 @@
         7,
         30
       ],
-      "action": "Inspect delegated execution depths",
+      "action": "Explore Tokens and Cost",
       "cover": {
         "mode": "result",
         "metricId": "dg_tokens",
         "kind": "bar-horizontal",
         "maxGroups": 12,
         "showOther": false
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "session_kind",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect delegated execution depths"
       }
     },
     {
@@ -7008,7 +7423,27 @@
           "value": "0"
         }
       ],
-      "action": "Inspect token pricing coverage"
+      "action": "Explore Tokens and Cost",
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "provider",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect token pricing coverage"
+      }
     },
     {
       "id": "batched-tools",
@@ -7187,7 +7622,7 @@
         "action": "Explore Pharos payload size ranges",
         "unit": "bytes"
       },
-      "action": "Explore Pharos payload size ranges",
+      "action": "Explore Pharos MCP",
       "days": [
         30,
         90
@@ -7207,7 +7642,20 @@
           "value": "0"
         }
       ],
-      "emptyLabel": "No Pharos MCP responses in this window; try 30 or 90 days"
+      "emptyLabel": "No Pharos MCP responses in this window; try 30 or 90 days",
+      "destination": {
+        "topic": "mcp",
+        "chart": {
+          "metric": "bytes",
+          "split": "tool_name",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "mcp_calls",
+        "detailAction": "Explore Pharos payload size ranges"
+      }
     },
     {
       "dataset": "writing_messages",
@@ -7717,10 +8165,26 @@
       "measures": [],
       "note": "Counts observed supply formats, not literal example phrases. Categories overlap. Percentages use human messages/contributions, including context-only messages; no link to resulting code changes or quality is inferred.",
       "humanStudy": "examples",
-      "action": "Inspect human contributions",
+      "action": "Explore Human Words",
       "days": [
         7
-      ]
+      ],
+      "destination": {
+        "topic": "human",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "scope": "all",
+          "split": "kind",
+          "hours": 6,
+          "days": 3
+        },
+        "dataset": "writing",
+        "detailAction": "Inspect human contributions"
+      }
     },
     {
       "dataset": "skill_usages",
@@ -8690,8 +9154,21 @@
         "maxGroups": 6,
         "showOther": false
       },
-      "action": "Inspect shared web references",
-      "emptyLabel": "No primary web URLs shared across two recorded conversations"
+      "action": "Explore Tools",
+      "emptyLabel": "No primary web URLs shared across two recorded conversations",
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "calls",
+          "split": "tool_name",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Inspect shared web references"
+      }
     },
     {
       "dataset": "writing_messages",
@@ -8843,7 +9320,23 @@
       ],
       "note": "Uses the device’s timezone. All dates are combined into 24 clock-hour buckets. Inspect source messages for the full window.",
       "humanStudy": "hours",
-      "action": "Explore writing times"
+      "action": "Explore Human Words",
+      "destination": {
+        "topic": "human",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "scope": "typed",
+          "split": "kind",
+          "hours": 6,
+          "days": 3
+        },
+        "dataset": "writing",
+        "detailAction": "Explore writing times"
+      }
     },
     {
       "dataset": "writing_messages",
@@ -8925,10 +9418,26 @@
       },
       "note": "Sum of your words sent during this window. Only messages containing words classified as typed or dictated contribute. Pasted and automated words are excluded. Counts describe writing, not time or quality.",
       "humanStudy": "volume",
-      "action": "Explore daily writing trends",
+      "action": "Explore Human Words",
       "days": [
         7
-      ]
+      ],
+      "destination": {
+        "topic": "human",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "scope": "typed",
+          "split": "kind",
+          "hours": 6,
+          "days": 3
+        },
+        "dataset": "writing",
+        "detailAction": "Explore daily writing trends"
+      }
     },
     {
       "dataset": "writing_messages",
@@ -8996,10 +9505,26 @@
       },
       "note": "Denominator: messages containing at least one of your words; automated-only messages do not dilute the average. Only messages containing words classified as typed or dictated contribute. Pasted and automated words are excluded. Counts describe writing, not time or quality.",
       "humanStudy": "message-average",
-      "action": "Inspect message lengths",
+      "action": "Explore Human Words",
       "days": [
         7
-      ]
+      ],
+      "destination": {
+        "topic": "human",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "scope": "typed",
+          "split": "kind",
+          "hours": 6,
+          "days": 3
+        },
+        "dataset": "writing",
+        "detailAction": "Inspect message lengths"
+      }
     },
     {
       "dataset": "writing_messages",
@@ -9081,10 +9606,26 @@
       },
       "note": "Denominator: distinct conversations with your writing in this window, including conversations started earlier. This is not a lifetime conversation total. Only messages containing words classified as typed or dictated contribute. Pasted and automated words are excluded. Counts describe writing, not time or quality.",
       "humanStudy": "conversation-average",
-      "action": "Explore conversation writing",
+      "action": "Explore Human Words",
       "days": [
         7
-      ]
+      ],
+      "destination": {
+        "topic": "human",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "scope": "typed",
+          "split": "kind",
+          "hours": 6,
+          "days": 3
+        },
+        "dataset": "writing",
+        "detailAction": "Explore conversation writing"
+      }
     },
     {
       "dataset": "writing_messages",
@@ -9105,10 +9646,26 @@
       "measures": [],
       "humanStudy": "workspace-average",
       "note": "Directory identity comes from the Library location joined through the message’s work ID. All conversations in the same repository and exact directory are combined. Missing mappings are excluded and disclosed. A work ID alone is not a workspace directory.",
-      "action": "Inspect contributing messages",
+      "action": "Explore Human Words",
       "days": [
         7
-      ]
+      ],
+      "destination": {
+        "topic": "human",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "scope": "typed",
+          "split": "kind",
+          "hours": 6,
+          "days": 3
+        },
+        "dataset": "writing",
+        "detailAction": "Inspect contributing messages"
+      }
     },
     {
       "dataset": "writing_messages",
@@ -9175,7 +9732,23 @@
         "showOther": false
       },
       "note": "Divide each repository's word total by its distinct conversations with your writing. This is a weighted ratio, not a mean of message averages. Small samples remain visible in the table. Only messages containing words classified as typed or dictated contribute. Pasted and automated words are excluded. Counts describe writing, not time or quality.",
-      "action": "Compare repository averages"
+      "action": "Explore Human Words",
+      "destination": {
+        "topic": "human",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "scope": "typed",
+          "split": "repository_name",
+          "hours": 6,
+          "days": 3
+        },
+        "dataset": "writing",
+        "detailAction": "Compare repository averages"
+      }
     },
     {
       "dataset": "writing_messages",
@@ -9349,11 +9922,27 @@
         "kind": "histogram"
       },
       "note": "Each sample is a conversation's total typed/dictated words during the window. Conversations started earlier are included; this is not a lifetime conversation length. Only messages containing words classified as typed or dictated contribute. Pasted and automated words are excluded. Counts describe writing, not time or quality.",
-      "action": "Compare conversation totals",
+      "action": "Explore Human Words",
       "humanStudy": "conversation-lengths",
       "days": [
         7
-      ]
+      ],
+      "destination": {
+        "topic": "human",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "scope": "typed",
+          "split": "kind",
+          "hours": 6,
+          "days": 3
+        },
+        "dataset": "writing",
+        "detailAction": "Compare conversation totals"
+      }
     },
     {
       "dataset": "writing_messages",
@@ -9412,10 +10001,26 @@
       "measures": [],
       "humanStudy": "specific-feedback",
       "note": "Share of fully visible authored messages matching explicit feedback and detail cues. Inspect the linked excerpts to judge whether the rule captures useful feedback.",
-      "action": "Read source messages",
+      "action": "Explore Human Words",
       "days": [
         7
-      ]
+      ],
+      "destination": {
+        "topic": "human",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "scope": "typed",
+          "split": "kind",
+          "hours": 6,
+          "days": 3
+        },
+        "dataset": "writing",
+        "detailAction": "Read source messages"
+      }
     },
     {
       "dataset": "writing_messages",
@@ -9436,7 +10041,7 @@
       "days": [
         30
       ],
-      "action": "Explore daily message counts",
+      "action": "Explore Human Words",
       "measures": [
         {
           "id": "human_daily_messages",
@@ -9467,7 +10072,23 @@
         "sample": "messages",
         "detail": "Each point: messages containing your words in its trailing seven complete local days ÷ 7. The norm is the mean of the prior 30 endpoints."
       },
-      "note": "Counts messages by their local sent day. Each point divides seven days' messages by seven, including idle days; today is excluded until it is complete. Only messages containing words classified as typed or dictated contribute. Pasted and automated words are excluded. Counts describe writing, not time or quality."
+      "note": "Counts messages by their local sent day. Each point divides seven days' messages by seven, including idle days; today is excluded until it is complete. Only messages containing words classified as typed or dictated contribute. Pasted and automated words are excluded. Counts describe writing, not time or quality.",
+      "destination": {
+        "topic": "human",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "scope": "typed",
+          "split": "kind",
+          "hours": 6,
+          "days": 3
+        },
+        "dataset": "writing",
+        "detailAction": "Explore daily message counts"
+      }
     },
     {
       "dataset": "writing_messages",
@@ -9488,7 +10109,7 @@
       "days": [
         30
       ],
-      "action": "Explore daily conversation counts",
+      "action": "Explore Human Words",
       "measures": [
         {
           "id": "human_daily_conversations",
@@ -9525,7 +10146,23 @@
         "sample": "conversation-days",
         "detail": "Each point: conversations you wrote in on each of its trailing seven complete local days, summed and ÷ 7. The norm is the mean of the prior 30 endpoints."
       },
-      "note": "A conversation counts on every day you wrote in it, so one that runs across several days is counted on each. A conversation is counted when you write in it, not when it ends. Each point divides seven days' counts by seven, including idle days; today is excluded until it is complete. Only messages containing words classified as typed or dictated contribute. Pasted and automated words are excluded. Counts describe writing, not time or quality."
+      "note": "A conversation counts on every day you wrote in it, so one that runs across several days is counted on each. A conversation is counted when you write in it, not when it ends. Each point divides seven days' counts by seven, including idle days; today is excluded until it is complete. Only messages containing words classified as typed or dictated contribute. Pasted and automated words are excluded. Counts describe writing, not time or quality.",
+      "destination": {
+        "topic": "human",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "scope": "typed",
+          "split": "kind",
+          "hours": 6,
+          "days": 3
+        },
+        "dataset": "writing",
+        "detailAction": "Explore daily conversation counts"
+      }
     },
     {
       "id": "model-token-share-trend",
@@ -9578,7 +10215,7 @@
           "percent": true
         }
       },
-      "action": "Explore daily model tokens",
+      "action": "Explore Tokens and Cost",
       "note": "Matches Machine Tokens token share. Include all known nonnegative recorded tokens, including cached input and assumed, partial, and unpriced usage. Repeated cached input contributes on each recorded request; tokens measure processing volume. Sum by recorded local day and model family, then average amounts over each trailing seven calendar buckets, including zero-activity days, before dividing each model by the same window’s total. The first visible bucket includes the preceding six calendar days; earlier history is used only for smoothing, while totals and destination filters keep the selected window. A zero-total window has no share. Models use the existing model-family normalization and colors; providers using the same family are combined, as in Machine Tokens. Delegated usage stays with its recorded model. Missing models remain Unspecified; exact Other preserves the denominator.",
       "exploration": {
         "keys": [
@@ -9629,6 +10266,26 @@
             "yLabel": "Token share (%) · 7d average"
           }
         }
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 7,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "percent",
+          "split": "model_family",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore daily model tokens"
       }
     },
     {
@@ -9682,7 +10339,7 @@
           "percent": true
         }
       },
-      "action": "Explore daily model costs",
+      "action": "Explore Tokens and Cost",
       "note": "Matches Machine Tokens cost share. Include all known nonnegative API-equivalent costs, including assumed and partial pricing; missing costs are excluded. API equivalent is not subscription spend or invoices. Sum by recorded local day and model family, then average amounts over each trailing seven calendar buckets, including zero-activity days, before dividing each model by the same window’s total. The first visible bucket includes the preceding six calendar days; earlier history is used only for smoothing, while totals and destination filters keep the selected window. A zero-total window has no share. Models use the existing model-family normalization and colors; providers using the same family are combined, as in Machine Tokens. Delegated usage stays with its recorded model. Missing models remain Unspecified; exact Other preserves the denominator.",
       "exploration": {
         "keys": [
@@ -9733,6 +10390,26 @@
             "yLabel": "Cost share (%) · 7d average"
           }
         }
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 7,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "percent_cost",
+          "split": "model_family",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore daily model costs"
       }
     },
     {
@@ -9843,8 +10520,28 @@
         "density": "compact",
         "minSamples": 5
       },
-      "action": "Explore whole conversation costs",
-      "note": "Only fully priced positive-token usage facts contribute; assumed, partial and unpriced facts are excluded. API equivalent is not subscription spend. Session means one top-level conversation including all recorded delegated runs, linked command launches, and continuations. Totals cover the priced usage inside the selected window, not lifetime cost. Each conversation belongs to its top-level recorded provider/model/effort cohort, including delegated usage on other models. Missing or cyclic parent chains are excluded from session comparisons; unrecorded delegation cannot be included. The box cover shows only model cohorts with at least five conversations; the destination retains individual conversations for inspection. One observation is the summed priced cost for one whole conversation across all its models and delegated agents. Boxes show Q1–Q3 and median, with Tukey whiskers; outliers remain in the summaries and drill-down. Model rows are selected by observation count. All rows share a logarithmic dollar axis covering their minima and maxima; zero-cost samples trigger a shared linear axis instead. Compact rows label the median; hover retains the mean and full summary. Outlier dots are the retained sample plus extremes, not every outlier."
+      "action": "Explore Tokens and Cost",
+      "note": "Only fully priced positive-token usage facts contribute; assumed, partial and unpriced facts are excluded. API equivalent is not subscription spend. Session means one top-level conversation including all recorded delegated runs, linked command launches, and continuations. Totals cover the priced usage inside the selected window, not lifetime cost. Each conversation belongs to its top-level recorded provider/model/effort cohort, including delegated usage on other models. Missing or cyclic parent chains are excluded from session comparisons; unrecorded delegation cannot be included. The box cover shows only model cohorts with at least five conversations; the destination retains individual conversations for inspection. One observation is the summed priced cost for one whole conversation across all its models and delegated agents. Boxes show Q1–Q3 and median, with Tukey whiskers; outliers remain in the summaries and drill-down. Model rows are selected by observation count. All rows share a logarithmic dollar axis covering their minima and maxima; zero-cost samples trigger a shared linear axis instead. Compact rows label the median; hover retains the mean and full summary. Outlier dots are the retained sample plus extremes, not every outlier.",
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "cost",
+          "split": "model_family",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore whole conversation costs"
+      }
     },
     {
       "id": "largest-subagent-depth",
@@ -10016,8 +10713,28 @@
         "kind": "auto",
         "height": 200
       },
-      "action": "Find the largest fan-outs",
-      "note": "One headline is the maximum number of distinct delegated executions excluding the root among whole conversations with positive-token activity in the selected window. Includes linked command launches and nested agents; handles and child transcripts count once and continuations add no execution or depth. Weight means active descendant run count, not tokens, cost, concurrent agents, or direct-child count. The destination ranks conversations by this measure so outliers remain findable even when their model cohort is too small for a box plot. Missing lineage and unrecorded/tokenless activity cannot contribute."
+      "action": "Explore Tokens and Cost",
+      "note": "One headline is the maximum number of distinct delegated executions excluding the root among whole conversations with positive-token activity in the selected window. Includes linked command launches and nested agents; handles and child transcripts count once and continuations add no execution or depth. Weight means active descendant run count, not tokens, cost, concurrent agents, or direct-child count. The destination ranks conversations by this measure so outliers remain findable even when their model cohort is too small for a box plot. Missing lineage and unrecorded/tokenless activity cannot contribute.",
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "model_family",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Find the largest fan-outs"
+      }
     },
     {
       "id": "session-human-output",
@@ -10122,8 +10839,24 @@
         "kind": "scatter",
         "height": 300
       },
-      "action": "Explore human input and output",
-      "note": "One point is a whole top-level conversation including delegated output, colored by its top-level recorded model. X estimates human-supplied text once per classified message as ceil(retained UTF-8 bytes / 4), excluding harness and automated spans. Includes pasted/quoted text and attachment references; excludes image and unretained file bytes. This is not a tokenizer result, request context size, or cache-read volume. Human messages use their own sent timestamps; output uses the usage ledger's recorded fact placement. Both are filtered by the same rolling window before aggregation. Output includes recorded reasoning where providers include it, regardless of price status. Both axes are logarithmic; nonpositive points are omitted with a visible count and remain in the table. Show up to 2,000 conversations ranked by human input. Missing classification/lineage is not evidence of absent human effort."
+      "action": "Explore Human Words",
+      "note": "One point is a whole top-level conversation including delegated output, colored by its top-level recorded model. X estimates human-supplied text once per classified message as ceil(retained UTF-8 bytes / 4), excluding harness and automated spans. Includes pasted/quoted text and attachment references; excludes image and unretained file bytes. This is not a tokenizer result, request context size, or cache-read volume. Human messages use their own sent timestamps; output uses the usage ledger's recorded fact placement. Both are filtered by the same rolling window before aggregation. Output includes recorded reasoning where providers include it, regardless of price status. Both axes are logarithmic; nonpositive points are omitted with a visible count and remain in the table. Show up to 2,000 conversations ranked by human input. Missing classification/lineage is not evidence of absent human effort.",
+      "destination": {
+        "topic": "human",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "scope": "all",
+          "split": "providers",
+          "hours": 6,
+          "days": 3
+        },
+        "dataset": "writing",
+        "detailAction": "Explore human input and output"
+      }
     },
     {
       "id": "session-delegation-count",
@@ -10239,8 +10972,28 @@
         "density": "compact",
         "minSamples": 3
       },
-      "action": "Explore conversation delegation",
-      "note": "The box cover excludes model/effort cohorts with fewer than three delegating conversations; individual delegating conversations remain in the destination. One observation is a whole top-level conversation with positive-token usage in the selected window, excluding conversations with zero active delegated runs. Count distinct recorded delegated executions with positive-token usage inside that window, including nested subagents and linked command launches, regardless of pricing status. Handles and child transcripts count once; filename continuations are the same execution. The top-level run is excluded. Unresolved lineage and unrecorded/tokenless runs cannot contribute. Group each conversation once by its top-level recorded provider/model/effort. Show up to twelve cohorts with most conversations on one shared linear count axis starting at zero. Boxes show Q1–Q3 and median with Tukey whiskers; dots retain sampled outliers and actual extremes. Hover shows mean, range, and conversation count. This is observed delegation activity, not a measure of quality or simultaneous concurrency."
+      "action": "Explore Tokens and Cost",
+      "note": "The box cover excludes model/effort cohorts with fewer than three delegating conversations; individual delegating conversations remain in the destination. One observation is a whole top-level conversation with positive-token usage in the selected window, excluding conversations with zero active delegated runs. Count distinct recorded delegated executions with positive-token usage inside that window, including nested subagents and linked command launches, regardless of pricing status. Handles and child transcripts count once; filename continuations are the same execution. The top-level run is excluded. Unresolved lineage and unrecorded/tokenless runs cannot contribute. Group each conversation once by its top-level recorded provider/model/effort. Show up to twelve cohorts with most conversations on one shared linear count axis starting at zero. Boxes show Q1–Q3 and median with Tukey whiskers; dots retain sampled outliers and actual extremes. Hover shows mean, range, and conversation count. This is observed delegation activity, not a measure of quality or simultaneous concurrency.",
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "model_family",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore conversation delegation"
+      }
     },
     {
       "id": "model-agent-roles",
@@ -10342,8 +11095,28 @@
         "maxGroups": 6,
         "height": 360
       },
-      "action": "Explore model session roles",
-      "note": "Each bar divides distinct active agent-session counts into singleton, parent, and subagent roles within a provider/model pair. Recorded subagents remain subagents even when they delegate. Recorded roots are parents when their resolved execution has recorded delegated children; otherwise they are singletons. Parent status uses the full recorded graph, including tokenless children, nested/linked launches, and continuations, rather than requiring child activity inside this window. Continuations alone do not create a parent. Standalone child transcripts can retain the recorded root role. Missing or cyclic root lineage is excluded. Repeated usage facts count once per session/model; a session using multiple models appears under each. Three roles sum to 100% per model; no token or conversation weighting. Show the six models with most sessions; the destination retains all model/role counts."
+      "action": "Explore Tokens and Cost",
+      "note": "Each bar divides distinct active agent-session counts into singleton, parent, and subagent roles within a provider/model pair. Recorded subagents remain subagents even when they delegate. Recorded roots are parents when their resolved execution has recorded delegated children; otherwise they are singletons. Parent status uses the full recorded graph, including tokenless children, nested/linked launches, and continuations, rather than requiring child activity inside this window. Continuations alone do not create a parent. Standalone child transcripts can retain the recorded root role. Missing or cyclic root lineage is excluded. Repeated usage facts count once per session/model; a session using multiple models appears under each. Three roles sum to 100% per model; no token or conversation weighting. Show the six models with most sessions; the destination retains all model/role counts.",
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "model_family",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore model session roles"
+      }
     },
     {
       "id": "effort-cost-share",
@@ -10410,8 +11183,28 @@
         "showOther": true,
         "showLegend": true
       },
-      "action": "Explore effort cost shares",
-      "note": "Only fully priced positive-token usage facts contribute; assumed, partial and unpriced facts are excluded. API equivalent is not subscription spend. Session means one top-level conversation including all recorded delegated runs, linked command launches, and continuations. Totals cover the priced usage inside the selected window, not lifetime cost. Each conversation belongs to its top-level recorded provider/model/effort cohort, including delegated usage on other models. Missing or cyclic parent chains are excluded from session comparisons; unrecorded delegation cannot be included."
+      "action": "Explore Tokens and Cost",
+      "note": "Only fully priced positive-token usage facts contribute; assumed, partial and unpriced facts are excluded. API equivalent is not subscription spend. Session means one top-level conversation including all recorded delegated runs, linked command launches, and continuations. Totals cover the priced usage inside the selected window, not lifetime cost. Each conversation belongs to its top-level recorded provider/model/effort cohort, including delegated usage on other models. Missing or cyclic parent chains are excluded from session comparisons; unrecorded delegation cannot be included.",
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "cost",
+          "split": "effort",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore effort cost shares"
+      }
     },
     {
       "id": "model-token-cost",
@@ -10635,8 +11428,28 @@
         "kind": "scatter",
         "height": 300
       },
-      "action": "Explore session cost outliers",
-      "note": "Uses recorded usage facts, including cached input; usage volume is not elapsed effort or task success. Provider and model are separate keys. A conversation or session can appear under multiple models, so reach counts do not form additive shares. Both axes use logarithmic scales. Points with a zero or negative coordinate cannot be plotted; their omission count is shown and their raw values remain in the table. Only fully priced positive-token usage facts contribute; assumed, partial and unpriced facts are excluded. API equivalent is not subscription spend. Session means one top-level conversation including all recorded delegated runs, linked command launches, and continuations. Totals cover the priced usage inside the selected window, not lifetime cost. Each conversation belongs to its top-level recorded provider/model/effort cohort, including delegated usage on other models. Missing or cyclic parent chains are excluded from session comparisons; unrecorded delegation cannot be included. Each point is one whole conversation including delegated usage, colored by its top-level recorded model. Show up to 2,000 highest-input or highest-token groups; this is a ranked subset if more exist, not a random sample. Open the table for all groups."
+      "action": "Explore Tokens and Cost",
+      "note": "Uses recorded usage facts, including cached input; usage volume is not elapsed effort or task success. Provider and model are separate keys. A conversation or session can appear under multiple models, so reach counts do not form additive shares. Both axes use logarithmic scales. Points with a zero or negative coordinate cannot be plotted; their omission count is shown and their raw values remain in the table. Only fully priced positive-token usage facts contribute; assumed, partial and unpriced facts are excluded. API equivalent is not subscription spend. Session means one top-level conversation including all recorded delegated runs, linked command launches, and continuations. Totals cover the priced usage inside the selected window, not lifetime cost. Each conversation belongs to its top-level recorded provider/model/effort cohort, including delegated usage on other models. Missing or cyclic parent chains are excluded from session comparisons; unrecorded delegation cannot be included. Each point is one whole conversation including delegated usage, colored by its top-level recorded model. Show up to 2,000 highest-input or highest-token groups; this is a ranked subset if more exist, not a random sample. Open the table for all groups.",
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "cost",
+          "split": "model_family",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore session cost outliers"
+      }
     },
     {
       "id": "session-input-output",
@@ -10752,8 +11565,28 @@
         "kind": "scatter",
         "height": 300
       },
-      "action": "Explore session token balance",
-      "note": "Uses recorded usage facts, including cached input; usage volume is not elapsed effort or task success. Provider and model are separate keys. A conversation or session can appear under multiple models, so reach counts do not form additive shares. Both axes use logarithmic scales. Points with a zero or negative coordinate cannot be plotted; their omission count is shown and their raw values remain in the table. Input includes cached input; output includes recorded reasoning where the provider includes it. Neither axis measures quality. Session totals include delegated runs and linked launches, grouped by the top-level recorded model. Unresolved parent chains are excluded. Each point is one whole conversation including delegated usage, colored by its top-level recorded model. Show up to 2,000 highest-input or highest-token groups; this is a ranked subset if more exist, not a random sample. Open the table for all groups."
+      "action": "Explore Tokens and Cost",
+      "note": "Uses recorded usage facts, including cached input; usage volume is not elapsed effort or task success. Provider and model are separate keys. A conversation or session can appear under multiple models, so reach counts do not form additive shares. Both axes use logarithmic scales. Points with a zero or negative coordinate cannot be plotted; their omission count is shown and their raw values remain in the table. Input includes cached input; output includes recorded reasoning where the provider includes it. Neither axis measures quality. Session totals include delegated runs and linked launches, grouped by the top-level recorded model. Unresolved parent chains are excluded. Each point is one whole conversation including delegated usage, colored by its top-level recorded model. Show up to 2,000 highest-input or highest-token groups; this is a ranked subset if more exist, not a random sample. Open the table for all groups.",
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "model_family",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore session token balance"
+      }
     },
     {
       "id": "model-token-share",
@@ -10823,8 +11656,28 @@
         "showOther": true,
         "showLegend": true
       },
-      "action": "Explore model token shares",
-      "note": "Uses recorded usage facts, including cached input; usage volume is not elapsed effort or task success. Provider and model are separate keys. A conversation or session can appear under multiple models, so reach counts do not form additive shares."
+      "action": "Explore Tokens and Cost",
+      "note": "Uses recorded usage facts, including cached input; usage volume is not elapsed effort or task success. Provider and model are separate keys. A conversation or session can appear under multiple models, so reach counts do not form additive shares.",
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "percent",
+          "split": "model_family",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore model token shares"
+      }
     },
     {
       "id": "model-conversation-reach",
@@ -10904,8 +11757,28 @@
         "showLegend": true,
         "showHeadline": false
       },
-      "action": "Inspect conversations by model",
-      "note": "The denominator is the sum of distinct conversation counts across provider/model pairs, not unique conversations. A conversation using two models contributes one pairing to each. Missing conversation IDs are excluded."
+      "action": "Explore Tokens and Cost",
+      "note": "The denominator is the sum of distinct conversation counts across provider/model pairs, not unique conversations. A conversation using two models contributes one pairing to each. Missing conversation IDs are excluded.",
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "model_family",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect conversations by model"
+      }
     },
     {
       "id": "repository-model-use",
@@ -10976,8 +11849,28 @@
         "maxGroups": 6,
         "showOther": false
       },
-      "action": "Explore repository model use",
-      "note": "Uses recorded usage facts, including cached input; usage volume is not elapsed effort or task success. Provider and model are separate keys. A conversation or session can appear under multiple models, so reach counts do not form additive shares."
+      "action": "Explore Tokens and Cost",
+      "note": "Uses recorded usage facts, including cached input; usage volume is not elapsed effort or task success. Provider and model are separate keys. A conversation or session can appear under multiple models, so reach counts do not form additive shares.",
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "model_family",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore repository model use"
+      }
     },
     {
       "id": "model-session-size",
@@ -11161,8 +12054,28 @@
         "showLegend": true,
         "legendColumns": 2
       },
-      "action": "Inspect model cost shares",
-      "note": "Uses recorded usage facts, including cached input; usage volume is not elapsed effort or task success. Provider and model are separate keys. A conversation or session can appear under multiple models, so reach counts do not form additive shares. Only price_status=priced facts contribute. API equivalent is not subscription spend. Cost per million tokens reflects the observed input/output/cache mix, not a published model price or a controlled comparison of capability."
+      "action": "Explore Tokens and Cost",
+      "note": "Uses recorded usage facts, including cached input; usage volume is not elapsed effort or task success. Provider and model are separate keys. A conversation or session can appear under multiple models, so reach counts do not form additive shares. Only price_status=priced facts contribute. API equivalent is not subscription spend. Cost per million tokens reflects the observed input/output/cache mix, not a published model price or a controlled comparison of capability.",
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "percent_cost",
+          "split": "model_family",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect model cost shares"
+      }
     },
     {
       "id": "model-effective-cost",
@@ -11431,7 +12344,7 @@
         "maxGroups": 6,
         "showOther": false
       },
-      "action": "Inspect repository input reuse",
+      "action": "Explore Tokens and Cost",
       "note": "Cache-read share is SUM(cache_read_input_tokens) / SUM(input_tokens), weighted by tokens rather than averaging row percentages. All input includes cache reads, cache writes, and fresh input; unlike the previous cache-efficiency definition, writes now remain in the denominator. Provider accounting and retained usage coverage can differ. These totals reflect usage-fact time placement, not exact request timestamps, unique text, saved money, or model quality.",
       "where": [
         {
@@ -11439,7 +12352,27 @@
           "op": ">",
           "value": "0"
         }
-      ]
+      ],
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "type",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect repository input reuse"
+      }
     },
     {
       "id": "cache-workload",
@@ -11648,7 +12581,7 @@
       "measures": [],
       "title": "Repository failure rates",
       "description": "Error calls divided by all calls started in the last {days} days; repositories with ten or more calls.",
-      "action": "Compare repository failure rates",
+      "action": "Explore Tools",
       "note": "Each tool-call row is one recorded call, selected by its start time. error_count is one for status=error and zero otherwise. Recorded errors include rejected, interrupted, blocked, and timed-out calls as well as execution errors; these are not automatically mistakes or avoidable failures. Calls with no recorded result remain in all-call denominators and are not asserted errors. Counts do not measure wasted time, model quality, or whether the overall task succeeded. Ratios use all recorded calls in each repository, not averages of tool or conversation percentages. Require ten calls; include zero-error groups, and show six highest rates. Missing repository labels remain Unspecified. Different tool mixes and recording coverage can explain differences.",
       "exploration": {
         "keys": [
@@ -11711,6 +12644,19 @@
         "kind": "bar-horizontal",
         "maxGroups": 6,
         "showOther": false
+      },
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "failure_rate",
+          "split": "repository_name",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Compare repository failure rates"
       }
     },
     {
@@ -11743,7 +12689,7 @@
       "measures": [],
       "title": "Failures per conversation",
       "description": "Error calls per affected agent conversation over the last {days} days; tools with three or more affected conversations.",
-      "action": "Explore conversation error counts",
+      "action": "Explore Tools",
       "note": "Each tool-call row is one recorded call, selected by its start time. error_count is one for status=error and zero otherwise. Recorded errors include rejected, interrupted, blocked, and timed-out calls as well as execution errors; these are not automatically mistakes or avoidable failures. Calls with no recorded result remain in all-call denominators and are not asserted errors. Counts do not measure wasted time, model quality, or whether the overall task succeeded. One observation is the error-call count for one tool in one recorded agent conversation. Only affected conversations contribute; zero-error conversations are excluded. A conversation using several failing tools contributes one observation under each. Require three affected conversations per tool before selecting six tools by observation count. All individual affected conversations remain inspectable, including tools below the cover cutoff. Boxes share a logarithmic count axis with quartiles, median, Tukey whiskers, sampled outliers, and extremes. Counts do not establish consecutive retries or recovery.",
       "exploration": {
         "keys": [
@@ -11803,6 +12749,19 @@
         "maxGroups": 6,
         "density": "compact",
         "minSamples": 3
+      },
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "failures",
+          "split": "tool_name",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Explore conversation error counts"
       }
     },
     {
@@ -11818,7 +12777,7 @@
       ],
       "unit": "calls",
       "measures": [],
-      "action": "Inspect tool call activity",
+      "action": "Explore Tools",
       "exploration": {
         "keys": [
           "tool_name"
@@ -11866,7 +12825,20 @@
         "showLegend": true,
         "showHeadline": false
       },
-      "note": "Count every recorded call once, including errors and calls without a retained result. Five leading tools plus the exact remainder form the complete call denominator. Call counts are not tokens, time, distinct tasks, or output quality. Tool naming and capture coverage can differ between harnesses."
+      "note": "Count every recorded call once, including errors and calls without a retained result. Five leading tools plus the exact remainder form the complete call denominator. Call counts are not tokens, time, distinct tasks, or output quality. Tool naming and capture coverage can differ between harnesses.",
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "calls",
+          "split": "tool_name",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Inspect tool call activity"
+      }
     },
     {
       "id": "tool-calls-per-conversation",
@@ -11881,7 +12853,7 @@
       ],
       "unit": "calls",
       "measures": [],
-      "action": "Explore conversation tool activity",
+      "action": "Explore Tools",
       "exploration": {
         "keys": [
           "repository_name",
@@ -11952,7 +12924,20 @@
           "value": ""
         }
       ],
-      "note": "Each observation counts all retained calls in one repository/agent-conversation pair, including errors and no-result calls. This is an individual agent transcript, not a top-level conversation including delegation. Missing IDs are excluded; missing repositories remain Unspecified. Require three observed conversations per repository before selecting six cohorts by observation count. Zero-tool conversations cannot enter this tool-call relation. All observed conversation totals remain in the destination. Boxes share a logarithmic call-count axis; this measures recorded tool activity, not task complexity or productivity."
+      "note": "Each observation counts all retained calls in one repository/agent-conversation pair, including errors and no-result calls. This is an individual agent transcript, not a top-level conversation including delegation. Missing IDs are excluded; missing repositories remain Unspecified. Require three observed conversations per repository before selecting six cohorts by observation count. Zero-tool conversations cannot enter this tool-call relation. All observed conversation totals remain in the destination. Boxes share a logarithmic call-count axis; this measures recorded tool activity, not task complexity or productivity.",
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "calls",
+          "split": "tool_name",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Explore conversation tool activity"
+      }
     },
     {
       "id": "tool-timing-coverage",
@@ -12153,7 +13138,7 @@
       ],
       "unit": "calls",
       "measures": [],
-      "action": "Inspect Pharos calling clients",
+      "action": "Explore Tools",
       "exploration": {
         "keys": [
           "source_kind",
@@ -12206,7 +13191,20 @@
         }
       ],
       "emptyLabel": "No captured Pharos requests in this window; try 30 or 90 days",
-      "note": "Count captured agent-side tool requests to the server named pharos, grouped by recorded workspace source and provider. Include errors and calls without results. These are observed tools/call attempts from retained transcripts, not a complete endpoint access log: initialize, tools/list, missing captures, and differently named aliases are absent. Source means the calling agent’s recorded origin, not the source argument that selects archive data. Source/provider keys distinguish Claude and Codex requests inside Conductor. Server-log payload and duration counts have a different capture population; do not use one as the other’s denominator."
+      "note": "Count captured agent-side tool requests to the server named pharos, grouped by recorded workspace source and provider. Include errors and calls without results. These are observed tools/call attempts from retained transcripts, not a complete endpoint access log: initialize, tools/list, missing captures, and differently named aliases are absent. Source means the calling agent’s recorded origin, not the source argument that selects archive data. Source/provider keys distinguish Claude and Codex requests inside Conductor. Server-log payload and duration counts have a different capture population; do not use one as the other’s denominator.",
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "calls",
+          "split": "source_kind",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Inspect Pharos calling clients"
+      }
     },
     {
       "id": "pharos-mcp-query-sources",
@@ -12222,7 +13220,7 @@
       ],
       "unit": "calls",
       "measures": [],
-      "action": "Inspect requested archive sources",
+      "action": "Explore Pharos MCP",
       "note": "Count each retained Pharos server tools/call log entry once, including errors, grouped by the explicit source argument from its sanitized request. Missing, empty, malformed, and non-string filters remain Unspecified. That bucket does not establish that every source was queried: some tools accept no source filter, while individual-record requests may target one source implicitly. This measures requested archive filters, not the actual provenance of all returned records or the calling client. Use server completion-time placement and the retained log of at most 5,000 calls. Caller counts come from separate captured agent transcripts.",
       "exploration": {
         "keys": [
@@ -12256,7 +13254,20 @@
         "maxGroups": 6,
         "showOther": false
       },
-      "emptyLabel": "No Pharos MCP requests in this window; try 30 or 90 days"
+      "emptyLabel": "No Pharos MCP requests in this window; try 30 or 90 days",
+      "destination": {
+        "topic": "mcp",
+        "chart": {
+          "metric": "calls",
+          "split": "query_source",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "mcp_calls",
+        "detailAction": "Inspect requested archive sources"
+      }
     },
     {
       "id": "pharos-mcp-durations",
@@ -12312,7 +13323,7 @@
           }
         }
       ],
-      "action": "Explore Pharos tool duration ranges",
+      "action": "Explore Pharos MCP",
       "note": "One completed Pharos tools/call server-log entry with a positive recorded duration is one observation, including error responses. Durations cover server handling through response serialization, excluding client/network overhead; the recorded called_at time is written when handling completes. Integer-millisecond zeros (including sub-millisecond handlers), negative and missing durations are excluded. Require three positive-duration calls per tool before selecting six tools by observation count. All positive-duration tool cohorts remain in the destination. Boxes share a logarithmic millisecond axis with exact values on hover. The server retains at most 5,000 calls, so long windows can be incomplete. This population differs from captured agent-side request counts.",
       "exploration": {
         "keys": [
@@ -12352,6 +13363,19 @@
         "maxGroups": 6,
         "minSamples": 3,
         "density": "compact"
+      },
+      "destination": {
+        "topic": "mcp",
+        "chart": {
+          "metric": "mean_time",
+          "split": "tool_name",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "mcp_calls",
+        "detailAction": "Explore Pharos tool duration ranges"
       }
     },
     {
@@ -12471,7 +13495,7 @@
           }
         }
       ],
-      "action": "Explore retained skill body sizes",
+      "action": "Explore Skills",
       "where": [
         {
           "field": "status",
@@ -12536,6 +13560,20 @@
         "minSamples": 3,
         "density": "compact",
         "sampleUnit": "body records"
+      },
+      "destination": {
+        "topic": "skills",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": 1,
+          "split": "skill_name"
+        },
+        "dataset": "skill_usages",
+        "detailAction": "Explore retained skill body sizes"
       }
     },
     {
@@ -12625,7 +13663,7 @@
       ],
       "unit": "loads",
       "measures": [],
-      "action": "Explore skill loading across conversations",
+      "action": "Explore Skills",
       "where": [
         {
           "field": "status",
@@ -12772,6 +13810,20 @@
         "minSamples": 3,
         "density": "compact",
         "sampleUnit": "conversation/path groups"
+      },
+      "destination": {
+        "topic": "skills",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": 0,
+          "split": "skill_name"
+        },
+        "dataset": "skill_usages",
+        "detailAction": "Explore skill loading across conversations"
       }
     },
     {
@@ -13043,7 +14095,7 @@
         }
       ],
       "measures": [],
-      "action": "Explore conversation search counts",
+      "action": "Explore Tools",
       "note": "Count retained web-category calls with a nonempty extracted search_query, including errors and calls without retained results. Exclude SQL, metadata, and other non-web queries. One parent call counts once; only the first supported query may be extracted from a batched request. Stored query text is trimmed and capped at 500 characters, without topic or near-duplicate normalization. Missing capture is not absence of research. Calls use start-time selection. These are observed search attempts, not effort, useful results, knowledge gained, or research quality. One repository/recorded agent-conversation pair is one sample, including single-search conversations. Zero-search conversations are absent, missing IDs are excluded, and missing repositories remain Unspecified. Require three searching conversations per repository before selecting six cohorts by sample count. Sparse cohorts stay in the destination. Boxes share a log-count axis. This is individual agent-transcript activity, not whole top-level conversations including delegation.",
       "exploration": {
         "keys": [
@@ -13127,6 +14179,19 @@
         "maxGroups": 6,
         "minSamples": 3,
         "density": "compact"
+      },
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "calls",
+          "split": "tool_name",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Explore conversation search counts"
       }
     },
     {
@@ -13281,7 +14346,7 @@
         }
       ],
       "measures": [],
-      "action": "Inspect empty-search denominators",
+      "action": "Explore Pharos MCP",
       "note": "Use successful retained Pharos MCP search_work, search_conversations, search_conversation_passages, search_messages, and search_text calls with explicit nonnegative result_count. Missing counts, errors, disabled, and oversized calls are excluded. Zero is a recorded empty response, not proof of absent knowledge, an ineffective search, or a failed task. Server called_at records completion time, and the log retains at most the latest 5,000 calls; longer windows may be incomplete. These server records have a separate population from agent-side web searches. Divide zero-result calls by all successful calls with known nonnegative result counts within each method. Require ten known-count calls before selecting six highest rates, retaining zero-rate methods and numerator/denominator counts. This is a rate among known-count successful searches, not all requests or all searches attempted.",
       "exploration": {
         "keys": [
@@ -13338,7 +14403,20 @@
         "maxGroups": 6,
         "showOther": false
       },
-      "emptyLabel": "No Pharos search methods with ten known-count successful calls; try a longer archive window"
+      "emptyLabel": "No Pharos search methods with ten known-count successful calls; try a longer archive window",
+      "destination": {
+        "topic": "mcp",
+        "chart": {
+          "metric": "calls",
+          "split": "status",
+          "view": "compare",
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval"
+        },
+        "dataset": "mcp_calls",
+        "detailAction": "Inspect empty-search denominators"
+      }
     },
     {
       "id": "provider-cost-share",
@@ -13391,7 +14469,7 @@
           "percent": true
         }
       },
-      "action": "Explore daily provider costs",
+      "action": "Explore Tokens and Cost",
       "note": "Matches Machine Tokens cost share: include all known nonnegative API-equivalent costs, including assumed and partial pricing. Missing costs are excluded. Sum by recorded local day and provider, then average costs over each trailing seven calendar buckets, including zero-activity days, before dividing each provider by the same window’s total cost. The first visible bucket includes the preceding six calendar days; earlier history is used only for smoothing, while totals and destination filters keep the selected window. A zero-cost window has no share. Provider attribution follows each usage fact, including delegated usage. Missing providers remain Unspecified; exact Other preserves the denominator. API equivalent is not subscription spend or invoices.",
       "exploration": {
         "keys": [
@@ -13442,6 +14520,26 @@
             "yLabel": "Cost share (%) · 7d average"
           }
         }
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 7,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "percent_cost",
+          "split": "provider",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore daily provider costs"
       }
     },
     {
@@ -13475,7 +14573,7 @@
         }
       ],
       "measures": [],
-      "action": "Inspect priced cost totals",
+      "action": "Explore Tokens and Cost",
       "note": "API equivalent uses retained price schedules, not subscription charges, invoices, human effort, or measured value. Period cost cards include positive-token facts with price_status=priced and nonnegative known cost; assumed, partial, and unpriced facts are excluded. Costs follow usage-fact time placement, which can be request time or session-start placement. Zero-priced facts remain valid observations. Missing cost is unknown, not zero. Repository attribution follows each fact’s recorded repository, including delegated facts where they were recorded.",
       "exploration": {
         "keys": [
@@ -13515,6 +14613,26 @@
         "metricId": "ac_cost",
         "kind": "auto",
         "height": 260
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "cost",
+          "split": "repository_name",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect priced cost totals"
       }
     },
     {
@@ -13548,7 +14666,7 @@
         }
       ],
       "measures": [],
-      "action": "Explore repository cost shares",
+      "action": "Explore Tokens and Cost",
       "note": "API equivalent uses retained price schedules, not subscription charges, invoices, human effort, or measured value. Period cost cards include positive-token facts with price_status=priced and nonnegative known cost; assumed, partial, and unpriced facts are excluded. Costs follow usage-fact time placement, which can be request time or session-start placement. Zero-priced facts remain valid observations. Missing cost is unknown, not zero. Repository attribution follows each fact’s recorded repository, including delegated facts where they were recorded. Five leading repositories plus exact Other partition all matching priced cost. Missing repository labels stay Unspecified. Zero-cost groups contribute no pie area and remain in the destination.",
       "exploration": {
         "keys": [
@@ -13603,6 +14721,26 @@
         "showOther": true,
         "showLegend": true,
         "legendColumns": 2
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "percent_cost",
+          "split": "repository_name",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore repository cost shares"
       }
     },
     {
@@ -13646,7 +14784,7 @@
         }
       ],
       "measures": [],
-      "action": "Inspect costly work this period",
+      "action": "Explore Tokens and Cost",
       "note": "API equivalent uses retained price schedules, not subscription charges, invoices, human effort, or measured value. Period cost cards include positive-token facts with price_status=priced and nonnegative known cost; assumed, partial, and unpriced facts are excluded. Costs follow usage-fact time placement, which can be request time or session-start placement. Zero-priced facts remain valid observations. Missing cost is unknown, not zero. Repository attribution follows each fact’s recorded repository, including delegated facts where they were recorded. One work observation is a resolved top-level conversation including all recorded delegated work, linked launches, and continuations. Child facts stay in their root task even across workspaces or repositories, attributed to the root repository. Multiple independent root conversations in one workspace remain separate. Sum fully priced usage within the selected period, including children of roots with no activity of their own in the period; older usage is excluded. Missing or cyclic lineage is excluded from these work comparisons. Missing root repositories remain Unspecified. Rank six root tasks by their summed period cost, retaining all pairs in the destination. The root workspace supplies the representative title.",
       "exploration": {
         "keys": [
@@ -13702,6 +14840,26 @@
         "kind": "bar-horizontal",
         "maxGroups": 6,
         "showOther": false
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "cost",
+          "split": "repository_name",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect costly work this period"
       }
     },
     {
@@ -13745,7 +14903,7 @@
         }
       ],
       "measures": [],
-      "action": "Explore work cost ranges",
+      "action": "Explore Tokens and Cost",
       "note": "API equivalent uses retained price schedules, not subscription charges, invoices, human effort, or measured value. Period cost cards include positive-token facts with price_status=priced and nonnegative known cost; assumed, partial, and unpriced facts are excluded. Costs follow usage-fact time placement, which can be request time or session-start placement. Zero-priced facts remain valid observations. Missing cost is unknown, not zero. Repository attribution follows each fact’s recorded repository, including delegated facts where they were recorded. One work observation is a resolved top-level conversation including all recorded delegated work, linked launches, and continuations. Child facts stay in their root task even across workspaces or repositories, attributed to the root repository. Multiple independent root conversations in one workspace remain separate. Sum fully priced usage within the selected period, including children of roots with no activity of their own in the period; older usage is excluded. Missing or cyclic lineage is excluded from these work comparisons. Missing root repositories remain Unspecified. Require three root-task observations per repository before selecting six cohorts by observation count. Zero-cost work stays in the distribution and triggers a shared linear dollar axis; otherwise all boxes share one log-dollar axis. Sparse cohorts and large outliers remain inspectable in the destination.",
       "exploration": {
         "keys": [
@@ -13831,6 +14989,26 @@
         "minSamples": 3,
         "sampleUnit": "root tasks",
         "density": "compact"
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "cost",
+          "split": "repository_name",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore work cost ranges"
       }
     },
     {
@@ -13874,7 +15052,7 @@
         }
       ],
       "measures": [],
-      "action": "Compare work volume with cost",
+      "action": "Explore Tokens and Cost",
       "note": "API equivalent uses retained price schedules, not subscription charges, invoices, human effort, or measured value. Period cost cards include positive-token facts with price_status=priced and nonnegative known cost; assumed, partial, and unpriced facts are excluded. Costs follow usage-fact time placement, which can be request time or session-start placement. Zero-priced facts remain valid observations. Missing cost is unknown, not zero. Repository attribution follows each fact’s recorded repository, including delegated facts where they were recorded. One work observation is a resolved top-level conversation including all recorded delegated work, linked launches, and continuations. Child facts stay in their root task even across workspaces or repositories, attributed to the root repository. Multiple independent root conversations in one workspace remain separate. Sum fully priced usage within the selected period, including children of roots with no activity of their own in the period; older usage is excluded. Missing or cyclic lineage is excluded from these work comparisons. Missing root repositories remain Unspecified. One point per repository compares distinct active root_conversation_id count with summed priced cost for those same facts. This is an observed workload relationship, not controlled unit pricing or task complexity. Both axes are logarithmic; zero-cost points are omitted with a count and stay in the destination. Show up to 200 repositories.",
       "exploration": {
         "keys": [
@@ -13945,6 +15123,26 @@
         "metricId": "ac_work",
         "kind": "scatter",
         "maxGroups": 200
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "cost",
+          "split": "repository_name",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Compare work volume with cost"
       }
     },
     {
@@ -13983,7 +15181,7 @@
         }
       ],
       "measures": [],
-      "action": "Explore runs by effort",
+      "action": "Explore Tokens and Cost",
       "note": "Retained positive-token usage facts, including assumed, partial, and unpriced usage. Tokens are recorded processing volume, not unique text, context-window size, human effort, quality, or value. Repeated cached input contributes again on each recorded request. Time selection uses first_usage_at at the retained fact grain, which can use request time or session-based placement (session-start or reconciled session-remainder). Facts are not prorated. Daily buckets use their recorded local day. Missing repositories remain Unspecified. One observation is a canonical execution’s own selected-period tokens at one recorded effort, excluding its descendants’ tokens. Separate Standalone (root with no known children), Parent (root with known children), and Delegated (any non-root execution, even if it delegates further). Roles use full recorded lineage, including tokenless children and linked launches. Missing/cyclic execution ancestry is excluded. Group by root conversation and canonical delegated identity, merging continuations and exact handles/child transcripts. Own effort comes from each usage fact, not the root; a run changing effort contributes a separate, nonoverlapping run/effort observation to each setting. Missing effort remains Unspecified. Require three run/effort observations per cohort; sparse cohorts stay in the destination. All boxes share one log-token axis. Workload and model mix can differ across roles.",
       "exploration": {
         "keys": [
@@ -14085,6 +15283,26 @@
         "minSamples": 3,
         "sampleUnit": "run/effort pairs",
         "density": "compact"
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "effort",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore runs by effort"
       }
     },
     {
@@ -14108,7 +15326,7 @@
         }
       ],
       "measures": [],
-      "action": "Explore repository token shares",
+      "action": "Explore Tokens and Cost",
       "note": "Retained positive-token usage facts, including assumed, partial, and unpriced usage. Tokens are recorded processing volume, not unique text, context-window size, human effort, quality, or value. Repeated cached input contributes again on each recorded request. Time selection uses first_usage_at at the retained fact grain, which can use request time or session-based placement (session-start or reconciled session-remainder). Facts are not prorated. Daily buckets use their recorded local day. Missing repositories remain Unspecified.",
       "exploration": {
         "keys": [
@@ -14163,6 +15381,26 @@
         "showOther": true,
         "showLegend": true,
         "legendColumns": 2
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "percent",
+          "split": "repository_name",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore repository token shares"
       }
     },
     {
@@ -14196,7 +15434,7 @@
         }
       ],
       "measures": [],
-      "action": "Explore task token ranges",
+      "action": "Explore Tokens and Cost",
       "note": "Retained positive-token usage facts, including assumed, partial, and unpriced usage. Tokens are recorded processing volume, not unique text, context-window size, human effort, quality, or value. Repeated cached input contributes again on each recorded request. Time selection uses first_usage_at at the retained fact grain, which can use request time or session-based placement (session-start or reconciled session-remainder). Facts are not prorated. Daily buckets use their recorded local day. Missing repositories remain Unspecified. A task is one resolved top-level conversation including recorded embedded agents, delegated conversations, linked launches, and continuations. Attribute descendants to the root repository, including across workspaces and repositories. Roots with only child activity in the selected period still count; independent roots in one workspace stay separate. Missing/cyclic ancestry is excluded from task comparisons. Only selected-period usage contributes, not lifetime totals. Each root task supplies one observation. Require three tasks per repository before selecting cohorts by sample count. All boxes share one token axis: logarithmic for strictly positive values, linear if any visible cohort contains zero. Zero output remains a valid observation; it is not a failed task. Sparse cohorts and outliers remain in the destination.",
       "exploration": {
         "keys": [
@@ -14288,6 +15526,26 @@
         "minSamples": 3,
         "sampleUnit": "root tasks",
         "density": "compact"
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "repository_name",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore task token ranges"
       }
     },
     {
@@ -14321,7 +15579,7 @@
         }
       ],
       "measures": [],
-      "action": "Explore task output ranges",
+      "action": "Explore Tokens and Cost",
       "note": "Retained positive-token usage facts, including assumed, partial, and unpriced usage. Tokens are recorded processing volume, not unique text, context-window size, human effort, quality, or value. Repeated cached input contributes again on each recorded request. Time selection uses first_usage_at at the retained fact grain, which can use request time or session-based placement (session-start or reconciled session-remainder). Facts are not prorated. Daily buckets use their recorded local day. Missing repositories remain Unspecified. A task is one resolved top-level conversation including recorded embedded agents, delegated conversations, linked launches, and continuations. Attribute descendants to the root repository, including across workspaces and repositories. Roots with only child activity in the selected period still count; independent roots in one workspace stay separate. Missing/cyclic ancestry is excluded from task comparisons. Only selected-period usage contributes, not lifetime totals. Each root task supplies one observation. Require three tasks per repository before selecting cohorts by sample count. All boxes share one token axis: logarithmic for strictly positive values, linear if any visible cohort contains zero. Zero output remains a valid observation; it is not a failed task. Sparse cohorts and outliers remain in the destination.",
       "exploration": {
         "keys": [
@@ -14413,6 +15671,26 @@
         "minSamples": 3,
         "sampleUnit": "root tasks",
         "density": "compact"
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "repository_name",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore task output ranges"
       }
     },
     {
@@ -14436,7 +15714,7 @@
         }
       ],
       "measures": [],
-      "action": "Inspect output-share denominators",
+      "action": "Explore Tokens and Cost",
       "note": "Retained positive-token usage facts, including assumed, partial, and unpriced usage. Tokens are recorded processing volume, not unique text, context-window size, human effort, quality, or value. Repeated cached input contributes again on each recorded request. Time selection uses first_usage_at at the retained fact grain, which can use request time or session-based placement (session-start or reconciled session-remainder). Facts are not prorated. Daily buckets use their recorded local day. Missing repositories remain Unspecified. Divide summed output_tokens by summed total_tokens for the same repository population, not the mean of per-fact ratios. Total tokens include reused input and retained unclassified tokens. Providers differ in output/reasoning reporting; reasoning_output_tokens is a subset and is not added again. A lower output share is not evidence of waste or lower usefulness.",
       "exploration": {
         "keys": [
@@ -14492,6 +15770,26 @@
         "kind": "bar-horizontal",
         "maxGroups": 6,
         "showOther": false
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "type",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect output-share denominators"
       }
     },
     {
@@ -14525,7 +15823,7 @@
         }
       ],
       "measures": [],
-      "action": "Explore tasks in each cohort",
+      "action": "Explore Tokens and Cost",
       "note": "Retained positive-token usage facts, including assumed, partial, and unpriced usage. Tokens are recorded processing volume, not unique text, context-window size, human effort, quality, or value. Repeated cached input contributes again on each recorded request. Time selection uses first_usage_at at the retained fact grain, which can use request time or session-based placement (session-start or reconciled session-remainder). Facts are not prorated. Daily buckets use their recorded local day. Missing repositories remain Unspecified. A task is one resolved top-level conversation including recorded embedded agents, delegated conversations, linked launches, and continuations. Attribute descendants to the root repository, including across workspaces and repositories. Roots with only child activity in the selected period still count; independent roots in one workspace stay separate. Missing/cyclic ancestry is excluded from task comparisons. Only selected-period usage contributes, not lifetime totals. Cohorts use the root conversation’s recorded configuration. Model class means the existing model-family grouping, with providers kept separate; unspecified model/effort stays visible. Children keep the root cohort even when they use another model or effort. Names can combine model versions. These are observed workloads with different tasks and recording coverage, not controlled comparisons of capability or efficiency. Sum each root task’s selected-period tokens before constructing distributions. Require three tasks per cohort before selecting cohorts by sample count. Each task has equal observation weight. Compact boxes share one log-token axis, with exact values on hover; sparse cohorts and outliers remain in the destination.",
       "exploration": {
         "keys": [
@@ -14624,6 +15922,26 @@
         "minSamples": 3,
         "sampleUnit": "root tasks",
         "density": "compact"
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "effort",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore tasks in each cohort"
       }
     },
     {
@@ -14657,7 +15975,7 @@
         }
       ],
       "measures": [],
-      "action": "Explore tasks in each cohort",
+      "action": "Explore Tokens and Cost",
       "note": "Retained positive-token usage facts, including assumed, partial, and unpriced usage. Tokens are recorded processing volume, not unique text, context-window size, human effort, quality, or value. Repeated cached input contributes again on each recorded request. Time selection uses first_usage_at at the retained fact grain, which can use request time or session-based placement (session-start or reconciled session-remainder). Facts are not prorated. Daily buckets use their recorded local day. Missing repositories remain Unspecified. A task is one resolved top-level conversation including recorded embedded agents, delegated conversations, linked launches, and continuations. Attribute descendants to the root repository, including across workspaces and repositories. Roots with only child activity in the selected period still count; independent roots in one workspace stay separate. Missing/cyclic ancestry is excluded from task comparisons. Only selected-period usage contributes, not lifetime totals. Cohorts use the root conversation’s recorded configuration. Model class means the existing model-family grouping, with providers kept separate; unspecified model/effort stays visible. Children keep the root cohort even when they use another model or effort. Names can combine model versions. These are observed workloads with different tasks and recording coverage, not controlled comparisons of capability or efficiency. Sum each root task’s selected-period tokens before constructing distributions. Require three tasks per cohort before selecting cohorts by sample count. Each task has equal observation weight. Compact boxes share one log-token axis, with exact values on hover; sparse cohorts and outliers remain in the destination.",
       "exploration": {
         "keys": [
@@ -14759,6 +16077,26 @@
         "minSamples": 3,
         "sampleUnit": "root tasks",
         "density": "compact"
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "repository_name",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore tasks in each cohort"
       }
     },
     {
@@ -14792,7 +16130,7 @@
         }
       ],
       "measures": [],
-      "action": "Explore tasks in each cohort",
+      "action": "Explore Tokens and Cost",
       "note": "Retained positive-token usage facts, including assumed, partial, and unpriced usage. Tokens are recorded processing volume, not unique text, context-window size, human effort, quality, or value. Repeated cached input contributes again on each recorded request. Time selection uses first_usage_at at the retained fact grain, which can use request time or session-based placement (session-start or reconciled session-remainder). Facts are not prorated. Daily buckets use their recorded local day. Missing repositories remain Unspecified. A task is one resolved top-level conversation including recorded embedded agents, delegated conversations, linked launches, and continuations. Attribute descendants to the root repository, including across workspaces and repositories. Roots with only child activity in the selected period still count; independent roots in one workspace stay separate. Missing/cyclic ancestry is excluded from task comparisons. Only selected-period usage contributes, not lifetime totals. Cohorts use the root conversation’s recorded configuration. Model class means the existing model-family grouping, with providers kept separate; unspecified model/effort stays visible. Children keep the root cohort even when they use another model or effort. Names can combine model versions. These are observed workloads with different tasks and recording coverage, not controlled comparisons of capability or efficiency. Sum each root task’s selected-period tokens before constructing distributions. Require three tasks per cohort before selecting cohorts by sample count. Each task has equal observation weight. Compact boxes share one log-token axis, with exact values on hover; sparse cohorts and outliers remain in the destination.",
       "exploration": {
         "keys": [
@@ -14897,6 +16235,26 @@
         "minSamples": 3,
         "sampleUnit": "root tasks",
         "density": "compact"
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "model_effort",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore tasks in each cohort"
       }
     },
     {
@@ -15556,7 +16914,7 @@
         }
       ],
       "measures": [],
-      "action": "Inspect delegated token shares",
+      "action": "Explore Tokens and Cost",
       "note": "Retained positive-token usage of every pricing status, selected by recorded fact time placement. Cached input contributes again when processed again. Resolve canonical execution ancestry, including embedded agents, exact handles and linked child transcripts, linked launches, mirrors, and continuations. Missing/cyclic execution ancestry is excluded. Active means positive-token evidence inside this window; tokenless or uncaptured runs do not contribute. Root-task comparisons attribute all included executions to the root repository; missing repository stays Unspecified. These are recorded workload patterns, not quality, productivity, simultaneous execution, or measured savings. Divide summed delegated tokens by all tokens for the same resolved repository population. Root and root-continuation tokens enter only the denominator. Keep repositories with zero delegated tokens; child-only activity can reach 100%. This is a ratio of summed tokens, not an average of task shares. Each token belongs once to its root repository.",
       "exploration": {
         "keys": [
@@ -15622,6 +16980,26 @@
         "kind": "bar-horizontal",
         "maxGroups": 6,
         "showOther": false
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "session_kind",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect delegated token shares"
       }
     },
     {
@@ -15660,7 +17038,7 @@
         }
       ],
       "measures": [],
-      "action": "Explore tasks using delegation",
+      "action": "Explore Tokens and Cost",
       "note": "Retained positive-token usage of every pricing status, selected by recorded fact time placement. Cached input contributes again when processed again. Resolve canonical execution ancestry, including embedded agents, exact handles and linked child transcripts, linked launches, mirrors, and continuations. Missing/cyclic execution ancestry is excluded. Active means positive-token evidence inside this window; tokenless or uncaptured runs do not contribute. Root-task comparisons attribute all included executions to the root repository; missing repository stays Unspecified. These are recorded workload patterns, not quality, productivity, simultaneous execution, or measured savings. First make one row per active root task, including roots with child-only activity. A task counts as delegating if it has a positive canonical delegated-run count in this period. Divide the number of delegating task rows by all active task rows in the same root repository; zero-delegation tasks remain in that denominator and in the destination. Inactive historical children alone do not make a task delegating for this measure.",
       "exploration": {
         "keys": [
@@ -15746,6 +17124,26 @@
         "kind": "bar-horizontal",
         "maxGroups": 6,
         "showOther": false
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "session_kind",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore tasks using delegation"
       }
     },
     {
@@ -15789,7 +17187,7 @@
         }
       ],
       "measures": [],
-      "action": "Explore individual delegated workloads",
+      "action": "Explore Tokens and Cost",
       "note": "Retained positive-token usage of every pricing status, selected by recorded fact time placement. Cached input contributes again when processed again. Resolve canonical execution ancestry, including embedded agents, exact handles and linked child transcripts, linked launches, mirrors, and continuations. Missing/cyclic execution ancestry is excluded. Active means positive-token evidence inside this window; tokenless or uncaptured runs do not contribute. Root-task comparisons attribute all included executions to the root repository; missing repository stays Unspecified. These are recorded workload patterns, not quality, productivity, simultaneous execution, or measured savings. Each delegated observation is one canonical execution inside a root conversation, summed over the selected period. Handles and their child transcripts merge; continuations add tokens to the same execution. Include linked child transcripts even when their recorded session kind says root. Own tokens exclude descendant tokens, so each selected fact contributes to one execution only. Depth is the resolved level in the full recorded ancestry, not the number of active ancestors in this window. Sum each execution before constructing repository distributions; each run gets equal observation weight. Require three delegated runs per root repository before selecting cohorts by observation count. Boxes share one log-token axis; sparse runs and outliers remain inspectable.",
       "exploration": {
         "keys": [
@@ -15876,6 +17274,26 @@
         "density": "compact",
         "minSamples": 3,
         "sampleUnit": "delegated runs"
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "session_kind",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore individual delegated workloads"
       }
     },
     {
@@ -16550,7 +17968,7 @@
         7,
         30
       ],
-      "action": "Explore machine time",
+      "action": "Explore Agent Time",
       "where": [
         {
           "field": "duration_ms",
@@ -16613,6 +18031,20 @@
           "groupLimit": 10000,
           "label": "Recorded machine time by day"
         }
+      },
+      "destination": {
+        "topic": "time",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": 0,
+          "split": "activity"
+        },
+        "dataset": "tool_calls",
+        "detailAction": "Explore machine time"
       }
     },
     {
@@ -16629,7 +18061,7 @@
         7,
         30
       ],
-      "action": "Compare activities",
+      "action": "Explore Agent Time",
       "where": [
         {
           "field": "duration_ms",
@@ -16702,6 +18134,20 @@
         "showLegend": true,
         "legendColumns": 2,
         "height": 300
+      },
+      "destination": {
+        "topic": "time",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": 0,
+          "split": "activity"
+        },
+        "dataset": "tool_calls",
+        "detailAction": "Compare activities"
       }
     },
     {
@@ -16718,7 +18164,7 @@
         7,
         30
       ],
-      "action": "Inspect slow operations",
+      "action": "Explore Agent Time",
       "where": [
         {
           "field": "duration_ms",
@@ -16776,6 +18222,20 @@
         "kind": "bar-horizontal",
         "maxGroups": 6,
         "showOther": false
+      },
+      "destination": {
+        "topic": "time",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": 0,
+          "split": "activity"
+        },
+        "dataset": "tool_calls",
+        "detailAction": "Inspect slow operations"
       }
     },
     {
@@ -16791,7 +18251,7 @@
       "days": [
         30
       ],
-      "action": "Explore daily tool calls",
+      "action": "Explore Tools",
       "measures": [
         {
           "id": "mt_daily_calls",
@@ -16827,6 +18287,19 @@
         "trendLabel": "7d avg",
         "sample": "calls",
         "detail": "Each point: tool calls in its trailing seven complete local days ÷ 7. The norm is the mean of the prior 30 endpoints."
+      },
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "calls",
+          "split": "tool_category",
+          "view": "trend",
+          "period": "day",
+          "rollingPeriods": 7,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Explore daily tool calls"
       }
     },
     {
@@ -16842,7 +18315,7 @@
       "days": [
         30
       ],
-      "action": "Inspect daily call times",
+      "action": "Explore Tools",
       "measures": [
         {
           "id": "mt_daily_mean",
@@ -16883,6 +18356,19 @@
         "trendLabel": "7d mean",
         "sample": "timed calls",
         "detail": "Each point: recorded duration ÷ timed calls over its trailing seven complete local days. The norm is the mean of the prior 30 endpoints."
+      },
+      "destination": {
+        "topic": "tools",
+        "chart": {
+          "metric": "mean_time",
+          "split": "tool_category",
+          "view": "trend",
+          "period": "day",
+          "rollingPeriods": 7,
+          "display": "interval"
+        },
+        "dataset": "tools",
+        "detailAction": "Inspect daily call times"
       }
     },
     {
@@ -16899,7 +18385,7 @@
         7,
         30
       ],
-      "action": "See each day's timeline",
+      "action": "Explore Parallelism",
       "measures": [
         {
           "id": "pl_daily",
@@ -16955,6 +18441,12 @@
           "groupLimit": 10000,
           "label": "Active hours by agents at once"
         }
+      },
+      "destination": {
+        "topic": "parallelism",
+        "chart": null,
+        "dataset": "parallelism",
+        "detailAction": "See each day's timeline"
       }
     },
     {
@@ -16970,7 +18462,7 @@
       "days": [
         30
       ],
-      "action": "Open the parallelism view",
+      "action": "Explore Parallelism",
       "measures": [
         {
           "id": "pl_daily_concurrency",
@@ -17006,6 +18498,12 @@
         "trendLabel": "7d avg",
         "sample": "agent-hour records",
         "detail": "Each point: agent time ÷ wall time with any agent active, over its trailing seven complete local days. Windows with no activity are gaps."
+      },
+      "destination": {
+        "topic": "parallelism",
+        "chart": null,
+        "dataset": "parallelism",
+        "detailAction": "Open the parallelism view"
       }
     },
     {
@@ -17022,7 +18520,7 @@
         7,
         30
       ],
-      "action": "Find your parallel hours",
+      "action": "Explore Parallelism",
       "measures": [
         {
           "id": "pl_hours",
@@ -17056,6 +18554,12 @@
         "kind": "bar-vertical",
         "maxGroups": 24,
         "height": 170
+      },
+      "destination": {
+        "topic": "parallelism",
+        "chart": null,
+        "dataset": "parallelism",
+        "detailAction": "Find your parallel hours"
       }
     },
     {
@@ -17072,7 +18576,7 @@
         7,
         30
       ],
-      "action": "Compare repositories",
+      "action": "Explore Parallelism",
       "measures": [],
       "exploration": {
         "keys": [
@@ -17128,6 +18632,12 @@
         "kind": "bar-horizontal",
         "maxGroups": 6,
         "showOther": true
+      },
+      "destination": {
+        "topic": "parallelism",
+        "chart": null,
+        "dataset": "parallelism",
+        "detailAction": "Compare repositories"
       }
     },
     {
@@ -17150,7 +18660,7 @@
           "value": "0"
         }
       ],
-      "action": "Explore carbon impact",
+      "action": "Explore Carbon Impact",
       "note": "Uses your Carbon Impact settings (estimate range, facility overhead, grid). Token counts are reported; energy and CO₂e are modeled estimates. Models are assigned to size tiers by name; unmatched models use the default tier. Daily endpoints use local calendar days, so the latest point includes today so far.",
       "measures": [
         {
@@ -17229,6 +18739,21 @@
           "groupLimit": 10000,
           "label": "Estimated CO₂e by day (kg)"
         }
+      },
+      "destination": {
+        "topic": "carbon",
+        "chart": {
+          "metric": "co2",
+          "split": "type",
+          "period": "day",
+          "hours": 6,
+          "days": 3,
+          "rollingPeriods": 0,
+          "display": "interval",
+          "seriesLimit": 15
+        },
+        "dataset": "usage",
+        "detailAction": "Explore carbon impact"
       }
     },
     {
@@ -17252,7 +18777,7 @@
         }
       ],
       "measures": [],
-      "action": "Compare model tiers",
+      "action": "Explore Carbon Impact",
       "note": "Uses your Carbon Impact settings (estimate range, facility overhead, grid). Token counts are reported; energy and CO₂e are modeled estimates. Models are assigned to size tiers by name; unmatched models use the default tier.",
       "exploration": {
         "keys": [
@@ -17318,6 +18843,21 @@
         "showLegend": true,
         "legendColumns": 2,
         "height": 230
+      },
+      "destination": {
+        "topic": "carbon",
+        "chart": {
+          "metric": "co2",
+          "split": "tier",
+          "period": "day",
+          "hours": 6,
+          "days": 3,
+          "rollingPeriods": 0,
+          "display": "interval",
+          "seriesLimit": 15
+        },
+        "dataset": "usage",
+        "detailAction": "Compare model tiers"
       }
     },
     {
@@ -17341,7 +18881,7 @@
         }
       ],
       "measures": [],
-      "action": "Compare repositories",
+      "action": "Explore Carbon Impact",
       "note": "Uses your Carbon Impact settings (estimate range, facility overhead, grid). Token counts are reported; energy and CO₂e are modeled estimates. Models are assigned to size tiers by name; unmatched models use the default tier.",
       "exploration": {
         "keys": [
@@ -17391,6 +18931,21 @@
         "kind": "bar-horizontal",
         "maxGroups": 5,
         "showOther": true
+      },
+      "destination": {
+        "topic": "carbon",
+        "chart": {
+          "metric": "co2",
+          "split": "repository_name",
+          "period": "day",
+          "hours": 6,
+          "days": 3,
+          "rollingPeriods": 0,
+          "display": "interval",
+          "seriesLimit": 15
+        },
+        "dataset": "usage",
+        "detailAction": "Compare repositories"
       }
     },
     {
@@ -17414,7 +18969,7 @@
         }
       ],
       "measures": [],
-      "action": "Compare models",
+      "action": "Explore Carbon Impact",
       "note": "Uses your Carbon Impact settings (estimate range, facility overhead, grid). Token counts are reported; energy and CO₂e are modeled estimates. Models are assigned to size tiers by name; unmatched models use the default tier.",
       "exploration": {
         "keys": [
@@ -17464,6 +19019,21 @@
         "kind": "bar-horizontal",
         "maxGroups": 5,
         "showOther": true
+      },
+      "destination": {
+        "topic": "carbon",
+        "chart": {
+          "metric": "co2",
+          "split": "type",
+          "period": "day",
+          "hours": 6,
+          "days": 3,
+          "rollingPeriods": 0,
+          "display": "interval",
+          "seriesLimit": 15
+        },
+        "dataset": "usage",
+        "detailAction": "Compare models"
       }
     },
     {
@@ -17487,7 +19057,7 @@
         }
       ],
       "measures": [],
-      "action": "Compare providers",
+      "action": "Explore Carbon Impact",
       "note": "Uses your Carbon Impact settings (estimate range, facility overhead, grid). Token counts are reported; energy and CO₂e are modeled estimates. Models are assigned to size tiers by name; unmatched models use the default tier.",
       "exploration": {
         "keys": [
@@ -17553,6 +19123,21 @@
         "showLegend": true,
         "legendColumns": 2,
         "height": 300
+      },
+      "destination": {
+        "topic": "carbon",
+        "chart": {
+          "metric": "co2",
+          "split": "provider",
+          "period": "day",
+          "hours": 6,
+          "days": 3,
+          "rollingPeriods": 0,
+          "display": "interval",
+          "seriesLimit": 15
+        },
+        "dataset": "usage",
+        "detailAction": "Compare providers"
       }
     },
     {
@@ -17576,7 +19161,7 @@
         }
       ],
       "measures": [],
-      "action": "Compare effort levels",
+      "action": "Explore Carbon Impact",
       "note": "Uses your Carbon Impact settings (estimate range, facility overhead, grid). Token counts are reported; energy and CO₂e are modeled estimates. Models are assigned to size tiers by name; unmatched models use the default tier. Effort is the level recorded on each usage fact; unspecified effort stays its own slice.",
       "exploration": {
         "keys": [
@@ -17642,6 +19227,21 @@
         "showLegend": true,
         "legendColumns": 2,
         "height": 300
+      },
+      "destination": {
+        "topic": "carbon",
+        "chart": {
+          "metric": "co2",
+          "split": "type",
+          "period": "day",
+          "hours": 6,
+          "days": 3,
+          "rollingPeriods": 0,
+          "display": "interval",
+          "seriesLimit": 15
+        },
+        "dataset": "usage",
+        "detailAction": "Compare effort levels"
       }
     },
     {
@@ -17857,7 +19457,7 @@
       "field": "first_usage_at",
       "unit": "tokens",
       "period": "all",
-      "action": "Review model pricing",
+      "action": "Explore Tokens and Cost",
       "note": "All-time token volume. Assumed models borrow a sibling model's price; unpriced models have no retained price on their usage day. Placeholder model names are excluded.",
       "where": [
         {
@@ -17932,6 +19532,470 @@
         "kind": "bar-horizontal",
         "maxGroups": 5,
         "showOther": false
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "model_family",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Review model pricing"
+      }
+    },
+    {
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "unit": "tokens",
+      "category": "usage",
+      "idea": "cost-01",
+      "id": "token-volume-trend",
+      "title": "Smoothed token volume",
+      "description": "Daily tokens by provider over the last {days} days, averaged over seven calendar days including idle days.",
+      "days": [
+        30,
+        90
+      ],
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">=",
+          "value": "0"
+        }
+      ],
+      "measures": [
+        {
+          "id": "daily_tokens",
+          "op": "sum",
+          "field": "total_tokens",
+          "groupBy": [
+            "day",
+            "provider"
+          ],
+          "groupLimit": 10000,
+          "label": "Daily provider tokens"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "daily_tokens",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": true,
+        "showLegend": true,
+        "showHeadline": false,
+        "height": 300,
+        "timeline": {
+          "rollingPeriods": 7
+        }
+      },
+      "action": "Explore Tokens and Cost",
+      "note": "Recorded processing volume includes cached input, assumed, partial and unpriced usage. It is not unique text, effort or value. Dates use the retained usage fact’s placement; facts are not prorated. Six preceding days supply smoothing history without changing the selected-period totals.",
+      "exploration": {
+        "keys": [
+          "day",
+          "provider"
+        ],
+        "summaries": [
+          {
+            "id": "card_total_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Daily provider tokens"
+          },
+          {
+            "id": "card_count",
+            "op": "count",
+            "label": "Usage records"
+          },
+          {
+            "id": "card_cost_usd",
+            "op": "sum",
+            "field": "cost_usd",
+            "label": "API equivalent"
+          },
+          {
+            "id": "card_agent_session_id",
+            "op": "count_distinct",
+            "field": "agent_session_id",
+            "label": "Agent sessions"
+          }
+        ],
+        "valueField": "card_total_tokens",
+        "subjects": "daily groups",
+        "action": "Explore daily comparison",
+        "unit": "tokens",
+        "coverMetric": {
+          "id": "daily_tokens",
+          "op": "sum",
+          "field": "card_total_tokens",
+          "groupBy": [
+            "day",
+            "provider"
+          ],
+          "groupLimit": 10000,
+          "label": "Daily provider tokens"
+        }
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 7,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "provider",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore smoothed token volume"
+      }
+    },
+    {
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "unit": "tokens",
+      "category": "usage",
+      "idea": "cost-01",
+      "id": "token-volume-log",
+      "title": "Token volume across scales",
+      "description": "Daily repository tokens over the last {days} days on a logarithmic scale, keeping smaller workloads visible.",
+      "days": [
+        30,
+        90
+      ],
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">=",
+          "value": "0"
+        }
+      ],
+      "measures": [
+        {
+          "id": "daily_tokens_log",
+          "op": "sum",
+          "field": "total_tokens",
+          "groupBy": [
+            "day",
+            "repository_name"
+          ],
+          "groupLimit": 10000,
+          "label": "Daily repository tokens (log scale)"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "daily_tokens_log",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": true,
+        "showLegend": true,
+        "showHeadline": false,
+        "height": 300,
+        "timeline": {
+          "scale": "logarithmic"
+        }
+      },
+      "action": "Explore Tokens and Cost",
+      "note": "Recorded processing volume includes cached input, assumed, partial and unpriced usage. It is not unique text, effort or value. Dates use the retained usage fact’s placement; facts are not prorated. Log1p scaling keeps zero at zero; vertical distance does not represent an additive difference. Switch to linear to compare absolute amounts.",
+      "exploration": {
+        "keys": [
+          "day",
+          "repository_name"
+        ],
+        "summaries": [
+          {
+            "id": "card_total_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Daily repository tokens (log scale)"
+          },
+          {
+            "id": "card_count",
+            "op": "count",
+            "label": "Usage records"
+          },
+          {
+            "id": "card_cost_usd",
+            "op": "sum",
+            "field": "cost_usd",
+            "label": "API equivalent"
+          },
+          {
+            "id": "card_agent_session_id",
+            "op": "count_distinct",
+            "field": "agent_session_id",
+            "label": "Agent sessions"
+          }
+        ],
+        "valueField": "card_total_tokens",
+        "subjects": "daily groups",
+        "action": "Explore daily comparison",
+        "unit": "tokens",
+        "coverMetric": {
+          "id": "daily_tokens_log",
+          "op": "sum",
+          "field": "card_total_tokens",
+          "groupBy": [
+            "day",
+            "repository_name"
+          ],
+          "groupLimit": 10000,
+          "label": "Daily repository tokens (log scale)"
+        }
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "logarithmic",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "repository_name",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore logarithmic token volume"
+      }
+    },
+    {
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "unit": "USD",
+      "category": "cost",
+      "idea": "cost-01",
+      "id": "cumulative-api-cost",
+      "title": "Accumulating API equivalent",
+      "description": "API-equivalent cost accumulated from the start of the last {days} days, split by provider; fully priced facts only.",
+      "days": [
+        30,
+        90
+      ],
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        },
+        {
+          "field": "price_status",
+          "op": "=",
+          "value": "priced"
+        },
+        {
+          "field": "cost_usd",
+          "op": ">=",
+          "value": "0"
+        }
+      ],
+      "measures": [
+        {
+          "id": "daily_cost",
+          "op": "sum",
+          "field": "cost_usd",
+          "groupBy": [
+            "day",
+            "provider"
+          ],
+          "groupLimit": 10000,
+          "label": "Cumulative API equivalent (USD)"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "daily_cost",
+        "kind": "auto",
+        "maxGroups": 15,
+        "showOther": true,
+        "showLegend": true,
+        "showHeadline": false,
+        "height": 300,
+        "timeline": {
+          "display": "cumulative"
+        }
+      },
+      "action": "Explore Tokens and Cost",
+      "note": "Each point adds recorded daily costs from the range start. Zero-priced facts remain included; missing, assumed and partial prices are excluded. API equivalent is not subscription spend or invoices. Grouped rows retain interval costs.",
+      "exploration": {
+        "keys": [
+          "day",
+          "provider"
+        ],
+        "summaries": [
+          {
+            "id": "card_cost_usd",
+            "op": "sum",
+            "field": "cost_usd",
+            "label": "Cumulative API equivalent (USD)"
+          },
+          {
+            "id": "card_count",
+            "op": "count",
+            "label": "Usage records"
+          },
+          {
+            "id": "card_total_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Total tokens"
+          },
+          {
+            "id": "card_agent_session_id",
+            "op": "count_distinct",
+            "field": "agent_session_id",
+            "label": "Agent sessions"
+          }
+        ],
+        "valueField": "card_cost_usd",
+        "subjects": "daily groups",
+        "action": "Explore daily comparison",
+        "unit": "USD",
+        "coverMetric": {
+          "id": "daily_cost",
+          "op": "sum",
+          "field": "card_cost_usd",
+          "groupBy": [
+            "day",
+            "provider"
+          ],
+          "groupLimit": 10000,
+          "label": "Cumulative API equivalent (USD)"
+        }
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "cumulative",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "cost",
+          "split": "provider",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Explore cumulative API cost"
+      }
+    },
+    {
+      "id": "mcp-call-trend",
+      "title": "Pharos request activity",
+      "description": "Daily requests served by Pharos over the last {days} days, split by tool and averaged over seven days.",
+      "dataset": "mcp_calls",
+      "field": "called_at",
+      "category": "tools",
+      "idea": "skills-06",
+      "unit": "calls",
+      "days": [
+        30,
+        90
+      ],
+      "measures": [
+        {
+          "id": "daily_mcp_calls",
+          "op": "sum",
+          "field": "call_count",
+          "groupBy": [
+            "day",
+            "tool_name"
+          ],
+          "groupLimit": 10000,
+          "label": "Daily Pharos requests"
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "daily_mcp_calls",
+        "kind": "auto",
+        "maxGroups": 6,
+        "showOther": false,
+        "showLegend": true,
+        "showHeadline": false,
+        "height": 300,
+        "timeline": {
+          "rollingPeriods": 7
+        }
+      },
+      "action": "Explore Pharos MCP",
+      "note": "Includes successful and failed server requests. Tools are selected by request volume over the chart’s requested history. The server retains at most 5,000 requests, so long windows may be incomplete. These are Pharos server calls, not all captured external MCP activity.",
+      "exploration": {
+        "keys": [
+          "day",
+          "tool_name"
+        ],
+        "summaries": [
+          {
+            "id": "card_call_count",
+            "op": "sum",
+            "field": "call_count",
+            "label": "Daily Pharos requests"
+          },
+          {
+            "id": "card_count",
+            "op": "count",
+            "label": "Requests"
+          }
+        ],
+        "valueField": "card_call_count",
+        "subjects": "daily groups",
+        "action": "Explore daily comparison",
+        "unit": "calls",
+        "coverMetric": {
+          "id": "daily_mcp_calls",
+          "op": "sum",
+          "field": "card_call_count",
+          "groupBy": [
+            "day",
+            "tool_name"
+          ],
+          "groupLimit": 10000,
+          "label": "Daily Pharos requests"
+        }
+      },
+      "destination": {
+        "topic": "mcp",
+        "chart": {
+          "metric": "calls",
+          "split": "tool_name",
+          "view": "trend",
+          "period": "day",
+          "rollingPeriods": 7,
+          "display": "interval"
+        },
+        "dataset": "mcp_calls",
+        "detailAction": "Explore Pharos request trends"
       }
     }
   ],

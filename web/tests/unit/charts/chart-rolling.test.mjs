@@ -5,6 +5,22 @@ import { shiftPeriod } from '../../../src/chart-period';
 import { smoothingWhere, timeBounds, usageTime, withTimeRange } from '../../../src/usage-chart';
 const bucketsOf = values => values.map((values, index) => ({ key: `2026-10-${String(index + 1).padStart(2, '0')}`, date: new Date(2026, 9, index + 1), values }));
 
+test('relative card ranges stay elapsed across DST and smoothing preserves fact-time selection and stable requests', () => {
+  const now = new Date(2026, 2, 10, 12).getTime();
+  const where = [{field:'provider',op:'=',value:'codex'}, {field:'first_usage_at',op:'>=',value:'-7d'}, {field:'first_usage_at',op:'<',value:'+0s'}];
+  const before = structuredClone(where), bounds = timeBounds(where, usageTime, now);
+  assert.equal(bounds.from.getTime(), now - 7 * 86400000);
+  assert.equal(bounds.to.getTime(), now);
+  const history = smoothingWhere(where, usageTime, 'day', 7, 1, now);
+  const start = new Date(now - 7 * 86400000); start.setHours(0,0,0,0); start.setDate(start.getDate()-6);
+  assert.equal(timeBounds(history, usageTime, now).from.getTime(), start.getTime());
+  assert.ok(history.some(term=>term.field==='first_usage_at' && term.op==='>='));
+  assert.ok(!history.some(term=>term.field==='last_usage_at'), 'a source-fact window must not turn into an overlapping-session window');
+  assert.ok(history.some(term=>term.op==='<' && term.value==='+0s'));
+  assert.deepEqual(smoothingWhere(where, usageTime, 'day', 7, 1, now+1000), history, 'rerenders within a calendar bucket reuse the same request');
+  assert.deepEqual(where, before);
+});
+
 test('a 20-day average starts with its full history before the selected 30-day range', () => {
   const start = new Date(2026, 9, 1), end = new Date(2026, 9, 31);
   const where = withTimeRange([{ field: 'provider', op: '=', value: 'codex' }], usageTime, start, end);

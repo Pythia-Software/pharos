@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { isOrGroup, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
+import { isOrGroup, parseRelativeDuration, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
 import { chartPeriods, isHourly, localDay, nextPeriod, parseDay, periodKey, periodUnit, shiftPeriod, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { columnScale, defaultChartScale, type ChartScale } from "./chart-scale";
 import { cumulativeBuckets, rollingAverageBuckets, validRollingPeriods, type ChartBucket, type ChartDisplay, type ChartSeries } from "./chart-series";
@@ -39,7 +39,9 @@ export type TimeBounds = { from?: Date; to?: Date };
 
 // parseStamp reads a datetime filter value as the service does: RFC 3339, or a
 // zone-less date or time as UTC.
-function parseStamp(raw: string): Date | undefined {
+function parseStamp(raw: string, now: number): Date | undefined {
+  const relative = parseRelativeDuration(raw.trim());
+  if (relative !== null) return new Date(now + relative);
   let text = raw.trim().replace(" ", "T");
   if (/^\d{4}-\d{2}-\d{2}$/.test(text)) text += "T00:00:00";
   if (/T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(text)) text += "Z";
@@ -58,11 +60,11 @@ function isTimeTerm(term: WhereTerm, fields: TimeFields): term is WhereClause {
   return !isOrGroup(term) && (term.field === fields.first || term.field === fields.last) && !term.negated && [">", ">=", "<", "<="].includes(term.op);
 }
 
-export function timeBounds(where: WhereTerm[], fields: TimeFields): TimeBounds {
+export function timeBounds(where: WhereTerm[], fields: TimeFields, now = Date.now()): TimeBounds {
   const bounds: TimeBounds = {};
   for (const term of where) {
     if (!isTimeTerm(term, fields)) continue;
-    const at = parseStamp(term.value);
+    const at = parseStamp(term.value, now);
     if (!at) continue;
     if (term.op === ">" || term.op === ">=") { if (!bounds.from || at > bounds.from) bounds.from = at; }
     else {
@@ -83,10 +85,15 @@ export function withTimeRange(where: WhereTerm[], fields: TimeFields, from?: Dat
 // Expand only the chart request. The visible filters, totals and drilldowns
 // retain their original dates. N periods includes the current interval and
 // N-1 preceding intervals, aligned to the chart's calendar grid.
-export function smoothingWhere(where: WhereTerm[], fields: TimeFields, period: ChartPeriod, periods: number, count = 1): WhereTerm[] {
-  const bounds = timeBounds(where, fields);
+export function smoothingWhere(where: WhereTerm[], fields: TimeFields, period: ChartPeriod, periods: number, count = 1, now = Date.now()): WhereTerm[] {
+  const bounds = timeBounds(where, fields, now);
   if (!bounds.from || !validRollingPeriods(periods) || periods < 2) return where;
-  return withTimeRange(where, fields, shiftPeriod(bounds.from, period, 1 - periods, count), bounds.to);
+  const lower = (term: WhereTerm): term is WhereClause => isTimeTerm(term, fields) && [">", ">="].includes(term.op);
+  const field = where.find(term => lower(term) && parseStamp(term.value, now)?.getTime() === bounds.from!.getTime());
+  const start = shiftPeriod(bounds.from, period, 1 - periods, count);
+  // Preserve fact-time vs overlap-time selection and relative upper bounds.
+  // Resolving +0s into a new timestamp on each render would refetch forever.
+  return [...where.filter(term => !lower(term)), ...(start ? [{ field: field && "field" in field ? field.field : fields.last, op: ">=" as const, value: localStamp(start) }] : [])];
 }
 
 // chartSpan is the first and last day a chart shows: the time filter's range,

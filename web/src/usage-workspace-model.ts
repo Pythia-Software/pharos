@@ -36,6 +36,9 @@ export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
 
 export function usageDashboardReturn(current: URLSearchParams) {
   const state = readUsageWorkspace(current), dataset = usageTopicDatasets[state.topic];
+  if (current.get("card_id") && current.get("card_query") === state.dataset && current.has(`q_${state.dataset}`)) return {
+    href: usageWorkspaceURL({ mode: "dashboards", dataset, search: false }, current), label: "Back to dashboard", resetsFilters: false,
+  };
   let query: QueryState | undefined;
   try { query = decodeQueryStrict(current.get(`q_${state.dataset}`) ?? "") ?? undefined; } catch { /* Explicitly reset an unavailable query. */ }
   const compatible = dataset === state.dataset && state.topic !== "parallelism" && Boolean(query);
@@ -78,10 +81,10 @@ export function readUsageWorkspace(params: URLSearchParams) {
 export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?: boolean; dataset?: UsageDataset; topic?: UsageTopic; report?: string; days?: number; query?: QueryState }, current = new URLSearchParams()) {
   const previous = readUsageWorkspace(current), next = { ...previous, ...change };
   const params = new URLSearchParams(current);
-  if (next.topic !== previous.topic) { params.delete("analyze_filters"); params.delete("analyze_chart"); }
+  if (next.topic !== previous.topic) { params.delete("analyze_filters"); params.delete("analyze_chart"); params.delete("analyze_parallelism"); }
   for (const key of [...params.keys()]) {
     // A different dataset must never inherit another table's query/window.
-    if (key.startsWith("q_") || key.startsWith("window_") || ["analyze_workspace", "analyze_view", "writing", "machine_view", "activity_days", "activity_repo", "activity_provider", "activity_model", "machine_demo", "tools_view"].includes(key)) params.delete(key);
+    if (key.startsWith("q_") || key.startsWith("window_") || ["card_query", "analyze_workspace", "analyze_view", "writing", "machine_view", "activity_days", "activity_repo", "activity_provider", "activity_model", "machine_demo", "tools_view"].includes(key)) params.delete(key);
   }
   const mode = next.mode === "search" ? "query" : next.mode;
   params.set("analyze_mode", mode);
@@ -94,6 +97,11 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
     else if (next.dataset === previous.dataset && current.has(`q_${next.dataset}`)) params.set(`q_${next.dataset}`, current.get(`q_${next.dataset}`)!);
     if (current.get("window_dataset") === next.dataset) for (const [key, value] of current) if (key.startsWith("window_")) params.set(key, value);
   }
+  const cardDataset = current.get("card_query");
+  if (!change.query && current.get("card_id") && cardDataset && Object.hasOwn(usageDatasets, cardDataset) && current.has(`q_${cardDataset}`) && next.topic === previous.topic && (mode === "dashboards" || next.dataset === cardDataset)) {
+    params.set("card_query", cardDataset); params.set(`q_${cardDataset}`, current.get(`q_${cardDataset}`)!);
+    if (current.get("window_dataset") === cardDataset) for (const [key, value] of current) if (key.startsWith("window_")) params.set(key, value);
+  } else params.delete("card_id");
   return `/analyze?${params}`;
 }
 

@@ -2,7 +2,8 @@ import type { MetricDisplay } from "@pythia-software/query-table-core";
 import { queryRecipes, type QueryRecipe } from "./curiosity-data";
 import { defaultCardCover, type CardCover } from "./card-cover";
 import { preferences } from "./preferences";
-import { validRollingPeriods } from "./chart-series";
+import { validChartDisplay, validRollingPeriods } from "./chart-series";
+import { validChartScale } from "./chart-scale";
 
 export const CARD_TEMPLATES_KEY = "pharos-card-templates-v1";
 export const cardDatasets: Record<string, string> = { conversation_activity: "Conversation input/output", usage: "Token usage", library: "Workspaces", tool_calls: "Tool calls", skill_usages: "Skills", writing_messages: "Human messages", tl1_attempts: "TL1 attempts", mcp_calls: "MCP responses", parallelism: "Parallel agents", findings: "Findings" };
@@ -56,6 +57,7 @@ export function saveCardTemplate(id: string, edit?: CardTemplateEdit) {
     if (edit.cover?.maxGroups !== undefined && (!Number.isInteger(edit.cover.maxGroups) || edit.cover.maxGroups < 1 || edit.cover.maxGroups > cardCoverGroupLimit(recipe))) throw new Error(`Choose between 1 and ${cardCoverGroupLimit(recipe)} visible rows or series.`);
     if (edit.cover?.legendColumns !== undefined && ![1, 2].includes(edit.cover.legendColumns)) throw new Error("Choose one or two legend columns.");
     if (edit.cover?.timeline && (edit.cover.timeline.rollingPeriods !== undefined && !validRollingPeriods(edit.cover.timeline.rollingPeriods) || edit.cover.timeline.percent !== undefined && typeof edit.cover.timeline.percent !== "boolean")) throw new Error("Choose valid timeline smoothing and percentage settings.");
+    if (edit.cover?.timeline && (edit.cover.timeline.scale !== undefined && !validChartScale(edit.cover.timeline.scale) || !validChartDisplay(edit.cover.timeline.display))) throw new Error("Choose valid timeline scale and display settings.");
     if (edit.cover?.minSamples !== undefined && (!Number.isInteger(edit.cover.minSamples) || edit.cover.minSamples < 1 || edit.cover.minSamples > 10000)) throw new Error("Choose a valid minimum sample size.");
     if (edit.cover && [edit.cover.showOther, edit.cover.showLegend, edit.cover.showHeadline].some(value => value !== undefined && typeof value !== "boolean")) throw new Error("Choose valid key and remainder settings.");
     next[id] = { ...edit, title: edit.title.trim(), description: edit.description.trim() };

@@ -8,6 +8,7 @@
 // reached by a click rather than a URL.
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { EMPTY_QUERY, encodeQuery } from "@pythia-software/query-table-core";
 import { open, skip } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
 import { defaultApi, rootConversation, workID } from "./fixtures.mjs";
@@ -102,6 +103,44 @@ const WIDTHS = [{ width: 1440, height: 900 }, { width: 390, height: 844 }, { wid
 // problems match here is marked todo with the bug, so the suite stays honest;
 // any other problem still fails it.
 const KNOWN = [];
+
+for (const [name, chart, requestCount] of [
+  ["text sources", { split: "kind" }, 1],
+  ["smoothed repositories", { split: "repository_name", rollingPeriods: 7 }, 2],
+  ["hourly", { split: "kind", period: "hour" }, 1],
+]) test(`Human Words relative dates settle across renders and renew on refresh (${name})`, { skip }, async t => {
+  const query = days => ({ ...EMPTY_QUERY, where: [
+    { field: "last_message_at", op: ">=", value: `-${days}d` },
+    { field: "first_message_at", op: "<", value: "+0s" },
+  ] });
+  const params = new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "human", analyze_filters: encodeQuery(query(7)), analyze_chart: JSON.stringify({ period: "day", ...chart }) });
+  const app = await open(t, { url: `/analyze?${params}`, ready: ".writing-panel .usage-chart" });
+  const requests = () => app.calls.filter(call => call.path === "/api/query/writing/series");
+  assert.equal(requests().length, requestCount, "loading and data renders complete without refetching");
+  const initial = requests().map(call => call.body);
+  await app.page.clock.setFixedTime(new Date(Date.now() + 86400000));
+  await app.page.getByRole("combobox", { name: "Metric", exact: true }).selectOption("all");
+  await app.page.setViewportSize({ width: 390, height: 844 });
+  await app.settled();
+  assert.equal(requests().length, requestCount, "presentation changes keep the resolved request bounds");
+
+  const refreshed = app.page.waitForResponse(response => response.url().endsWith("/api/query/writing/series"));
+  await app.page.evaluate(() => window.dispatchEvent(new Event("pharos:usage-refresh")));
+  await refreshed;
+  await app.settled();
+  assert.equal(requests().length, requestCount * 2);
+  assert.ok(requests().slice(requestCount).every(call => call.body.end > initial[0].end), "refresh renews the relative end");
+
+  const filtered = app.page.waitForResponse(response => response.url().endsWith("/api/query/writing/series"));
+  await app.page.evaluate(filters => {
+    const url = new URL(location.href); url.searchParams.set("analyze_filters", filters);
+    history.replaceState(history.state, "", url); window.dispatchEvent(new Event("pharos:route"));
+  }, encodeQuery(query(30)));
+  await filtered;
+  await app.settled();
+  assert.equal(requests().length, requestCount * 3);
+  assert.ok(requests().slice(requestCount * 2).some(call => call.body.where.some(term => term.value === "-30d")), "filter changes issue the new request");
+});
 
 describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY || 3) }, () => {
   for (const route of ROUTES) {
