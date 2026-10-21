@@ -315,6 +315,71 @@ func TestDelegationCodexChildrenAcrossWorkspaces(t *testing.T) {
 	}
 }
 
+func TestDelegationCommandLaunchedChildrenAcrossWorkspaces(t *testing.T) {
+	c, config := testCatalog(t)
+	tx := seedTx(t, c.DB)
+	run := func(q string, args ...any) {
+		t.Helper()
+		if _, err := tx.Exec(q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []string{"parent", "author", "critic", "launched-critic", "unrelated"} {
+		run(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES(?,'codex','local',?,?,'2026-01-01')`, id, id, id)
+		provider := "claude"
+		if id == "parent" {
+			provider = "codex"
+		}
+		run(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,model,effort) VALUES(?,?,?,'local',?,'own-model','medium')`, id, id, provider, id)
+		run(`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider,usage_status,total_tokens) VALUES(?,?,?,'main','root',?,'reported-reconciled',100)`, id+"-session", id, id, provider)
+	}
+	run(`UPDATE conversations SET parent_id='author',agent_depth=1 WHERE id='critic'`)
+	for _, launch := range []struct{ parent, child string }{{"parent", "author"}, {"author", "launched-critic"}, {"unrelated", "critic"}} {
+		id := launch.child + "-launch"
+		run(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES(?,?,?,'assistant','tool_call','{}',?)`, id, launch.parent, id, id)
+		run(`INSERT INTO tool_calls(id,workspace_id,conversation_id,sequence,provider,kind,tool_name,tool_category,status,call_message_id) VALUES(?,?,?,0,'codex','tool_call','exec_command','shell','ok',?)`, id, launch.parent, launch.parent, id)
+		run(`INSERT INTO conversation_launches(child_id,parent_id,tool_call_id,program) VALUES(?,?,?,'claude')`, launch.child, launch.parent, id)
+	}
+	commitSeed(t, tx)
+	s, err := c.delegationSnapshot(context.Background(), "parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Nodes) != 4 || len(s.Roots) != 1 || s.Roots[0].ID != "parent-session" || s.Roots[0].ChildCount != 1 {
+		t.Fatalf("command-launched family missing from parent hierarchy: %+v", s.Nodes)
+	}
+	for _, child := range []struct{ id, parent, proof, message string }{
+		{"author", "parent-session", "inferred-command-launch", "author-launch"},
+		{"critic", "external-conversation:author", "conversation-parent", ""},
+		{"launched-critic", "external-conversation:author", "inferred-command-launch", "launched-critic-launch"},
+	} {
+		n := s.ByID["external-conversation:"+child.id]
+		if n == nil || n.ParentID != child.parent || n.ParentEvidence != child.proof || n.MessageID != child.message {
+			t.Fatalf("child %s lost launch ownership: %+v", child.id, n)
+		}
+		if n.ExternalChild == nil || n.ConversationID != child.id || n.WorkspaceID != child.id || n.Provider != "claude" || n.Model != "own-model" || n.Effort != "medium" {
+			t.Fatalf("child %s lost transcript identity: %+v", child.id, n)
+		}
+		for _, key := range []string{"tokens", "calls", "messages", "clock"} {
+			if n.Self[key].Value != nil {
+				t.Fatalf("unqueried child %s %s must remain unknown: %+v", child.id, key, n.Self[key])
+			}
+		}
+	}
+	if total := s.Totals["tokens"]; total.Value == nil || *total.Value != 100 || total.Quality != "partial" {
+		t.Fatalf("outside usage changed workspace accounting: %+v", total)
+	}
+	status, body := delegationGET(t, testServer(t, config, c), "/api/work/parent/delegation?conversation=parent")
+	if status != 200 || body["session_count"] != float64(4) || len(body["focus"].([]any)) != 2 {
+		t.Fatal("command-launched child must restore hierarchy and transcript navigation", status, body)
+	}
+	// An inferred launch cannot steal a child from its recorded parent.
+	unrelated, err := c.delegationSnapshot(context.Background(), "unrelated")
+	if err != nil || len(unrelated.Nodes) != 1 {
+		t.Fatalf("inferred launch overrode recorded ownership: %+v %v", unrelated, err)
+	}
+}
+
 func TestDelegationCodexLocalHandlesAndAmbiguity(t *testing.T) {
 	for _, tc := range []struct {
 		name, result string

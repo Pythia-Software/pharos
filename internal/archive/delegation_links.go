@@ -89,13 +89,19 @@ func loadDelegationLinks(ctx context.Context, tx *sql.Tx, workspace string, conv
 var errDelegationFamilyLimit = errors.New("workspace exceeds the 10,000-conversation family analysis limit")
 
 func loadDelegationFamily(ctx context.Context, tx *sql.Tx, workspace string) ([]map[string]any, error) {
-	// Codex archives one workspace per rollout, including subagents. Follow the
-	// reverse parent edges even though their transcripts live outside this scope.
+	// Child transcripts can live in other workspaces. Follow both recorded
+	// parents and inferred command launches, including mixed-provider chains.
+	// Recorded parents take precedence over inferred launches.
 	family, err := queryMapsContext(ctx, tx, `WITH RECURSIVE family(id) AS (
  SELECT id FROM conversations WHERE workspace_id=?
- UNION SELECT c.id FROM family p JOIN conversations c ON c.parent_id=p.id WHERE c.agent_depth>0 LIMIT 10001)
- SELECT c.id,c.workspace_id,c.native_id,c.parent_id,c.provider,c.account,c.agent_path,c.agent_nickname,c.model,c.effort,c.coverage
- FROM family f JOIN conversations c ON c.id=f.id ORDER BY c.started_at,c.id`, workspace)
+ UNION SELECT c.id FROM family p JOIN conversations c ON c.parent_id=p.id WHERE c.agent_depth>0
+ UNION SELECT c.id FROM family p JOIN conversation_launches l ON l.parent_id=p.id
+ JOIN conversations c ON c.id=l.child_id WHERE c.parent_id IS NULL LIMIT 10001)
+ SELECT c.id,c.workspace_id,c.native_id,c.parent_id,c.provider,c.account,c.agent_path,c.agent_nickname,c.model,c.effort,c.coverage,
+ l.parent_id launch_parent_id,t.call_message_id launch_message_id
+ FROM family f JOIN conversations c ON c.id=f.id
+ LEFT JOIN conversation_launches l ON l.child_id=c.id
+ LEFT JOIN tool_calls t ON t.id=l.tool_call_id ORDER BY c.started_at,c.id`, workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -213,13 +219,17 @@ func resolveDelegationLinks(ctx context.Context, tx *sql.Tx, workspace string, c
 			continue
 		}
 		id := "external-conversation:" + child
-		row := map[string]any{"id": id, "native_id": id, "conversation_id": cv["parent_id"], "parent_id": roots[firstString(cv["parent_id"])], "provider": cv["provider"], "usage_status": "unavailable", "assignment": firstString(cv["agent_nickname"], cv["agent_path"], cv["native_id"])}
+		parent, proof, message := firstString(cv["parent_id"]), "conversation-parent", ""
+		if parent == "" {
+			parent, proof, message = firstString(cv["launch_parent_id"]), "inferred-command-launch", firstString(cv["launch_message_id"])
+		}
+		row := map[string]any{"id": id, "native_id": id, "conversation_id": parent, "provider": cv["provider"], "usage_status": "unavailable", "assignment": firstString(cv["agent_nickname"], cv["agent_path"], cv["native_id"]), "delegation_message_id": message}
 		bind(row, cv)
+		row["parent_evidence"] = proof
 		links.extra = append(links.extra, row)
 	}
 	for _, row := range links.extra {
 		row["parent_id"] = representatives[firstString(row["conversation_id"])]
-		row["parent_evidence"] = "conversation-parent"
 	}
 	return links, nil
 }
