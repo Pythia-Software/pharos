@@ -1,5 +1,6 @@
 import { preferences } from "./preferences";
 import { zonedDayBounds, type ConcurrencyCounting, type ConcurrencyData, type ConcurrencyMode, type Interval } from "./concurrency-data";
+import { validRollingPeriods } from "./chart-series";
 
 export const concurrencySettingsKey = "pharos-concurrency-v1";
 export type ConcurrencyRange = "day" | "3d" | "7d" | "30d" | "all" | "custom";
@@ -9,11 +10,13 @@ export type ConcurrencySettings = {
   counting: ConcurrencyCounting; agent: string;
   range: ConcurrencyRange; startDay: string; endDay: string;
   workspace: string; zoom: Interval | null; showConversations: boolean;
+  smoothingMinutes: number;
 };
 export const defaultConcurrencySettings: ConcurrencySettings = {
   mode: "user", gap: 60, repository: "", day: "", workspace: "", zoom: null, showConversations: false,
   range: "day", startDay: "", endDay: "",
   counting: "workspace", agent: "",
+  smoothingMinutes: 0,
 };
 
 function validDay(value: unknown): string {
@@ -57,6 +60,7 @@ export function normalizeConcurrencySettings(value: unknown): ConcurrencySetting
     startDay: validDay(saved.startDay), endDay: validDay(saved.endDay),
     workspace: typeof saved.workspace === "string" ? saved.workspace : "",
     zoom, showConversations: saved.showConversations === true,
+    smoothingMinutes: validRollingPeriods(saved.smoothingMinutes) ? saved.smoothingMinutes : 0,
   };
 }
 

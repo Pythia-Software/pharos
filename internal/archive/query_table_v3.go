@@ -96,6 +96,16 @@ func (s *Server) queryV3SourceFields(ctx context.Context, schema qt.Schema, q qt
 }
 
 func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.Values, schema qt.Schema, q qt.QueryRequestV3) (qt.QueryResultV3, *libraryFindSummary, error) {
+	if dataset == "usage" {
+		var err error
+		ctx, err = withCarbonPreferences(ctx, params.Get("carbon_settings"))
+		if err != nil {
+			return qt.QueryResultV3{}, nil, err
+		}
+	}
+	if q.Grouping == nil && q.Rows {
+		q.Result.Select = queryRowActionFields(dataset, q.Result.Select)
+	}
 	d := queryV3Dataset(schema)
 	where := q.Result.Where
 	if q.Grouping != nil {
@@ -108,6 +118,10 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 	var err error
 	if sqlBacked {
 		if err = s.Catalog.prepareSQLDataset(ctx, dataset); err != nil {
+			return qt.QueryResultV3{}, nil, err
+		}
+		table, err = s.Catalog.queryTextDataset(ctx, dataset, table)
+		if err != nil {
 			return qt.QueryResultV3{}, nil, err
 		}
 		if dataset == "tool_calls" {
@@ -195,6 +209,20 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 			q.Result.Where = nil
 		}
 	}
+	var reducedPopulation *int64
+	if sqlBacked && q.Grouping != nil {
+		compact, reduced, request, population, handled, e := s.nativeGroupedRows(ctx, table, d, q)
+		if e != nil {
+			return qt.QueryResultV3{}, nil, e
+		}
+		if handled {
+			rows, d, q = compact, reduced, request
+			sqlBacked = false
+			required = nativeGroupFields(q, d.Schema.IDField)
+			schema = d.Schema
+			reducedPopulation = &population
+		}
+	}
 	// Small summary/map populations benefit from memory scratch storage: SQLite's
 	// ephemeral CTE B-trees otherwise write pages even with a temp cache. Keep the
 	// full raw tool ledger and message payloads on the spill-capable path. The
@@ -221,6 +249,9 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 	result, err := d.ExecuteIn(ctx, tx, q, qt.PlanOptions{Identity: queryTableScope + ":" + schema.Name})
 	if err != nil {
 		return qt.QueryResultV3{}, nil, fmt.Errorf("%s query: %w", strings.TrimPrefix(schema.Name, "pharos_"), err)
+	}
+	if reducedPopulation != nil {
+		result.SourceTotal = *reducedPopulation
 	}
 	if err = release(); err != nil {
 		return qt.QueryResultV3{}, nil, err

@@ -19,9 +19,10 @@ import (
 // of the dashboard's metrics and comparison windows.
 var machineTimeDimensions = fieldSet("repository_name", "provider", "model", "model_family", "model_effort", "effort", "day", "week", "month", "status", "operation_key", "operation_name", "activity", "tool_name", "mcp_server", "program", "subcommand", "tool_category", "command_category")
 
-const machineTimeIndexSQL = `CREATE INDEX IF NOT EXISTS tool_call_cube_machine_time_idx ON tool_call_cube(
+const machineTimeIndexSQL = `CREATE INDEX IF NOT EXISTS tool_call_cube_machine_time_command_idx ON tool_call_cube(
  repository_name,provider,model,effort,day,status,tool_name,mcp_server,program,subcommand,
- tool_category,command_category,duration_ms_sum,duration_ms_n,call_count)`
+ tool_category,command_category,present_command,duration_ms_sum,duration_ms_n,call_count);
+ DROP INDEX IF EXISTS tool_call_cube_machine_time_idx`
 
 func (c *Catalog) machineTimeRowsIn(ctx context.Context, tx *sql.Tx) ([]map[string]any, error) {
 	publication, err := readMeta(tx, ctx, "tool_rollup_publication")
@@ -31,10 +32,10 @@ func (c *Catalog) machineTimeRowsIn(ctx context.Context, tx *sql.Tx) ([]map[stri
 	key := "machine-time:" + time.Local.String() + ":" + c.clock().Format("2006-01-02") + ":" + publication
 	rows, err := cachedValue(ctx, c, key, func(ctx context.Context) ([]map[string]any, error) {
 		rows, err := queryMapsContext(ctx, tx, `SELECT repository_name,provider,model,effort,day,status,
- tool_name,mcp_server,program,subcommand,tool_category,command_category,
+ tool_name,mcp_server,program,subcommand,tool_category,command_category,present_command,
  SUM(duration_ms_sum) duration_ms,SUM(duration_ms_n) machine_timed,SUM(call_count) machine_calls
  FROM tool_call_cube GROUP BY repository_name,provider,model,effort,day,status,
- tool_name,mcp_server,program,subcommand,tool_category,command_category`)
+ tool_name,mcp_server,program,subcommand,tool_category,command_category,present_command`)
 		if err != nil {
 			return nil, err
 		}
@@ -43,6 +44,9 @@ func (c *Catalog) machineTimeRowsIn(ctx context.Context, tx *sql.Tx) ([]map[stri
 		operations := map[operationInputs]operation{}
 		calendar := map[string][2]string{}
 		for _, row := range rows {
+			if integer(row["present_command"]) != 0 {
+				row["command"] = "present"
+			}
 			// Match the SQLite functions' raw string inputs. firstString trims
 			// whitespace and treats the literal "null" as missing, which would
 			// merge distinct recorded command families.
@@ -101,11 +105,14 @@ func machineTimeDayRange(terms []querytable.WhereTerm) (lower, upper string, whe
 			upper = day
 		}
 	}
-	// Only complete local calendar days can reuse additive cube facts.
-	if (lower == "") != (upper == "") {
-		return "", "", nil, false
-	}
 	return lower, upper, where, true
+}
+
+func machineTimeWithinDay(day, lower, upper string) bool {
+	if lower == "" && upper == "" {
+		return true
+	}
+	return day != "" && (lower == "" || day >= lower) && (upper == "" || day < upper)
 }
 
 // machineTimeMaxGroups bounds the groups in one metric the Machine Time
@@ -135,7 +142,7 @@ func (c *Catalog) machineTimeMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQL
 			return qt.SQLiteV2ExecutionResult{}, false, nil
 		}
 	}
-	if lower != "" {
+	if lower != "" || upper != "" {
 		// A timestamp range otherwise reads raw calls: check in this snapshot
 		// that the cube holds every call before answering from it.
 		fresh, err := c.toolCubeFresh(ctx, tx)
@@ -160,7 +167,7 @@ func (c *Catalog) machineTimeMetricsV2(ctx context.Context, tx *sql.Tx, d qt.SQL
 	kept := make([]map[string]any, 0, len(rows))
 	var population int64
 	for _, row := range rows {
-		if day := firstString(row["day"]); lower != "" && (day < lower || day >= upper) {
+		if !machineTimeWithinDay(firstString(row["day"]), lower, upper) {
 			continue
 		}
 		if machineTimeMatches(row, where) {
@@ -229,7 +236,8 @@ func machineTimeFilterable(where []qt.WhereTerm, schema qt.Schema) bool {
 	for _, term := range where {
 		for _, clause := range term.Predicates() {
 			field, ok := schema.Fields[clause.Field]
-			if !ok || !machineTimeDimensions.has(clause.Field) || field.Kind != qt.FieldText && field.Kind != qt.FieldEnum ||
+			presence := clause.Field == "command" && (clause.Op == "is_null" || clause.Op == "is_not_null")
+			if !ok || !machineTimeDimensions.has(clause.Field) && !presence || field.Kind != qt.FieldText && field.Kind != qt.FieldEnum ||
 				!slices.Contains([]string{"=", "!=", "is_null", "is_not_null"}, clause.Op) {
 				return false
 			}

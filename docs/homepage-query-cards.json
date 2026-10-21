@@ -9579,7 +9579,7 @@
         }
       },
       "action": "Explore daily model tokens",
-      "note": "Matches Machine Tokens token share. Include all known nonnegative recorded tokens, including cached input and assumed, partial, and unpriced usage. Repeated cached input contributes on each recorded request; tokens measure processing volume. Sum by recorded local day and model family, then average amounts over each trailing seven calendar buckets, including zero-activity days, before dividing each model by the same window’s total. The first six buckets use available days in the selected window. A zero-total window has no share. Models use the existing model-family normalization and colors; providers using the same family are combined, as in Machine Tokens. Delegated usage stays with its recorded model. Missing models remain Unspecified; exact Other preserves the denominator.",
+      "note": "Matches Machine Tokens token share. Include all known nonnegative recorded tokens, including cached input and assumed, partial, and unpriced usage. Repeated cached input contributes on each recorded request; tokens measure processing volume. Sum by recorded local day and model family, then average amounts over each trailing seven calendar buckets, including zero-activity days, before dividing each model by the same window’s total. The first visible bucket includes the preceding six calendar days; earlier history is used only for smoothing, while totals and destination filters keep the selected window. A zero-total window has no share. Models use the existing model-family normalization and colors; providers using the same family are combined, as in Machine Tokens. Delegated usage stays with its recorded model. Missing models remain Unspecified; exact Other preserves the denominator.",
       "exploration": {
         "keys": [
           "day",
@@ -9683,7 +9683,7 @@
         }
       },
       "action": "Explore daily model costs",
-      "note": "Matches Machine Tokens cost share. Include all known nonnegative API-equivalent costs, including assumed and partial pricing; missing costs are excluded. API equivalent is not subscription spend or invoices. Sum by recorded local day and model family, then average amounts over each trailing seven calendar buckets, including zero-activity days, before dividing each model by the same window’s total. The first six buckets use available days in the selected window. A zero-total window has no share. Models use the existing model-family normalization and colors; providers using the same family are combined, as in Machine Tokens. Delegated usage stays with its recorded model. Missing models remain Unspecified; exact Other preserves the denominator.",
+      "note": "Matches Machine Tokens cost share. Include all known nonnegative API-equivalent costs, including assumed and partial pricing; missing costs are excluded. API equivalent is not subscription spend or invoices. Sum by recorded local day and model family, then average amounts over each trailing seven calendar buckets, including zero-activity days, before dividing each model by the same window’s total. The first visible bucket includes the preceding six calendar days; earlier history is used only for smoothing, while totals and destination filters keep the selected window. A zero-total window has no share. Models use the existing model-family normalization and colors; providers using the same family are combined, as in Machine Tokens. Delegated usage stays with its recorded model. Missing models remain Unspecified; exact Other preserves the denominator.",
       "exploration": {
         "keys": [
           "day",
@@ -13392,7 +13392,7 @@
         }
       },
       "action": "Explore daily provider costs",
-      "note": "Matches Machine Tokens cost share: include all known nonnegative API-equivalent costs, including assumed and partial pricing. Missing costs are excluded. Sum by recorded local day and provider, then average costs over each trailing seven calendar buckets, including zero-activity days, before dividing each provider by the same window’s total cost. The first six buckets use the available days in the selected window. A zero-cost window has no share. Provider attribution follows each usage fact, including delegated usage. Missing providers remain Unspecified; exact Other preserves the denominator. API equivalent is not subscription spend or invoices.",
+      "note": "Matches Machine Tokens cost share: include all known nonnegative API-equivalent costs, including assumed and partial pricing. Missing costs are excluded. Sum by recorded local day and provider, then average costs over each trailing seven calendar buckets, including zero-activity days, before dividing each provider by the same window’s total cost. The first visible bucket includes the preceding six calendar days; earlier history is used only for smoothing, while totals and destination filters keep the selected window. A zero-cost window has no share. Provider attribution follows each usage fact, including delegated usage. Missing providers remain Unspecified; exact Other preserves the denominator. API equivalent is not subscription spend or invoices.",
       "exploration": {
         "keys": [
           "day",

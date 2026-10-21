@@ -230,6 +230,7 @@ func (c *Catalog) Initialize() error {
 		return err
 	}
 	for _, migration := range []struct{ table, column, statement string }{
+		{"tool_query_facts", "day", "ALTER TABLE tool_query_facts ADD COLUMN day TEXT"},
 		{"source_item_states", "indexed_by", "ALTER TABLE source_item_states ADD COLUMN indexed_by TEXT NOT NULL DEFAULT 'intentional'"},
 		{"source_states", "index_version", "ALTER TABLE source_states ADD COLUMN index_version TEXT"},
 		{"messages", "raw_text", "ALTER TABLE messages ADD COLUMN raw_text TEXT"},
@@ -298,10 +299,14 @@ func (c *Catalog) Initialize() error {
 			}
 		}
 	}
+	if err := c.ensureQueryFactTriggers(); err != nil {
+		return err
+	}
 	if err := c.migrateEffortUsage(); err != nil {
 		return err
 	}
 	for _, index := range []string{
+		"CREATE INDEX IF NOT EXISTS tool_query_facts_day_idx ON tool_query_facts(day)",
 		"CREATE INDEX IF NOT EXISTS messages_conversation_model_effort_idx ON messages(conversation_id,effort,model) WHERE model IS NOT NULL OR effort IS NOT NULL",
 		"DROP INDEX IF EXISTS messages_conversation_effort_idx",
 		"CREATE INDEX IF NOT EXISTS agent_sessions_child_conversation_idx ON agent_sessions(child_conversation_id)",

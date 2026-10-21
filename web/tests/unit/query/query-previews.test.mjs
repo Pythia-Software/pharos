@@ -270,7 +270,7 @@ test("Human Words bookmark previews preserve the bounded message search and curs
   const draft = { editor: "visual", match: "rules", text: "", mode: "advanced", fuzzy: false, caseSensitive: false, separators: false,
     root: { kind: "group", join: "any", exclude: false, children: ["cache", "buffer"].map(text => ({ kind: "words", text, other: "", distance: "8", exclude: false })) },
     scope: { surface: "user", roles: [], kinds: [], repository: "pharos", provider: "", source: "", from: "", to: "", conversation_id: "", workspace_id: "" } };
-  const url = `/usage?${new URLSearchParams({ message_query: JSON.stringify(draft), message_cursor: "saved-cursor" })}`;
+  const url = `/analyze?${new URLSearchParams({ message_query: JSON.stringify(draft), message_cursor: "saved-cursor" })}`;
   const preview = await loadQueryPreview("writing_messages", query([]), schemas.writing_messages, { url });
   const params = new URL(requests.find(r => r.path.includes("rows-v2")).path, global.location.origin).searchParams;
   assert.deepEqual(JSON.parse(params.get("find_where")), { op: "or", children: [{ op: "term", text: "cache" }, { op: "term", text: "buffer" }] });

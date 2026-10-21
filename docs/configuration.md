@@ -1075,7 +1075,7 @@ backup, so back it up to a new folder.
 
 ## MCP access
 
-The MCP page shows the local stdio command and configuration to copy into an
+Settings → MCP shows the local stdio command and configuration to copy into an
 agent client's MCP settings. For a per-user install that is the configured
 `executable` with `--config PATH mcp`. For a library it is the `pharos` inside
 the library's own app, which finds `library.toml` beside the app by itself:
@@ -1089,13 +1089,23 @@ the drive has to be connected for agents to use it; Eject in Pharos stops these
 servers (see [Running from an external drive](#running-from-an-external-drive)),
 and agent clients do not restart them by themselves, so reconnect Pharos in the
 agent once the drive is back (in Claude Code, `/mcp`). MCP is enabled by default for existing installations;
-the page's switch stores its state in the catalog so it takes effect for both
+the Settings → MCP switch stores its state in the catalog so it takes effect for both
 new and already running MCP processes. Enabling access does not start a network
 listener or configure an agent client automatically. After enabling it,
-reconnect a client that previously saw an empty tool list. The page also offers a
+reconnect a client that previously saw an empty tool list. Settings → MCP also offers a
 `search-prior-coding-sessions` skill to save in Claude Code or Codex: it walks
 an agent through the conversation search tools and has it ask the user to turn
 on and reconnect Pharos when the tools are unavailable.
+
+Analyze → Dashboards → Pharos MCP charts requests served by Pharos, including
+call volume, failures, estimated output size, truncation, and duration. Choose
+a breakdown and compare groups or follow them over time. Open the grouped
+query or matching records with the selected filters preserved. Analyze → Query
+→ MCP calls provides the full query editor, optional search, saved analyses,
+and sanitized call details. The latest 5,000 calls are retained; output tokens
+are estimates from response size, and no response text is stored. Both Analyze
+views link to Settings → MCP. Older `/mcp` links open the dashboard, or the
+query when they include saved query state.
 
 ### Auditing messages and archive coverage
 

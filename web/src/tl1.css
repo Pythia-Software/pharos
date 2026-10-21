@@ -1,10 +1,5 @@
 /* TL1 analysis. Magnitude uses the accent hue; status colors indicate errors
    and escalations. */
-.tl1-layout { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 44px; align-items: start; margin-top: 20px; }
-.tl1-content { min-width: 0; }
-.tl1-page-heading { margin-bottom: 12px; }
-.tl1-page-heading h2 { margin: 0 0 4px; }
-.tl1-page-heading p { margin: 0; }
 .tl1-followup-filters { display: flex; flex-wrap: wrap; gap: 12px; margin: 18px 0 4px; }
 .tl1-followup-filters label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: var(--fs-md); }
 .tl1-followup-filters select { min-width: 140px; max-width: 220px; padding: 4px 28px 4px 8px; border: 1px solid var(--line); border-radius: 5px; background-color: var(--panel); background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 16px) center, calc(100% - 11px) center; background-size: 5px 5px; background-repeat: no-repeat; color: var(--ink); }
@@ -109,11 +104,6 @@ button.tl1-bar-row:hover { background: color-mix(in srgb, var(--accent) 9%, tran
 .tl1-timeline-bar { position: absolute; top: 0; height: 100%; min-width: 8px; border-radius: 3px; }
 .tl1-timeline-outcome { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 1000px) {
-  .tl1-layout { display: block; }
-  .tl1-nav { position: static; display: flex; gap: 4px; overflow-x: auto; margin-bottom: 24px; padding: 0 0 12px; border-bottom: 1px solid var(--line); }
-  .tl1-nav .settings-nav-label { display: none; }
-  .tl1-nav a { flex: none; white-space: nowrap; border-left: 0; border-bottom: 2px solid transparent; border-radius: 4px 4px 0 0; }
-  .tl1-nav a[aria-current="page"] { border-left: 0; border-bottom-color: var(--accent); }
   .tl1-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .tl1-two { grid-template-columns: 1fr; }
   .tl1-timeline li { grid-template-columns: 130px minmax(80px, 1fr); }

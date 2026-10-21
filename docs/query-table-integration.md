@@ -134,7 +134,7 @@ the adapter's values, and passes everything else to the adapter:
 
 These run in a plain read transaction; requests the adapter executes lease
 memory-backed temporary storage. Usage's V2 metric group budget is 100,000,
-as V3's is; other datasets keep 2,000.
+as V3's is; Tool summary keeps 10,000, and other datasets keep 2,000.
 
 V2 adds:
 
@@ -200,9 +200,24 @@ quartiles and spread. Arbitrary scalar percentiles such as p95 remain unavailabl
 
 SQL datasets preserve Pharos's trusted joins, pricing boundary, and exclusion
 of mirrored tool work. Command-search candidates use the existing trigram index;
-day/week/month equality can use coarse indexed timestamp bounds. The full
-upstream predicate still checks every candidate. OR narrowing requires a safe
-candidate for every branch; negation never narrows incorrectly.
+day/week/month equality can use indexed timestamp bounds. The full upstream
+predicate still checks candidates. A separate, complete substring index can
+answer supported ASCII `contains` predicates of at least three characters
+exactly, including the compiler's nonempty guard for negation. Only an exact
+term is removed from residual filtering; other text operators and incomplete
+indexes retain the ordinary predicate. OR narrowing requires a safe relation
+for every branch.
+
+Tool calls also have a narrow, transactionally maintained fact projection for
+identity, timing, activity, category, provider, and local calendar. Eligible
+counts and integer grouped summaries reduce these facts before staging and
+return compact groups to the adapter for identities, HAVING, ordering, paging,
+and result metrics. Fresh cube counts and supported text-complement reductions
+use the same read snapshot. Unsupported shapes retain general execution.
+See [Usage audit repairs](usage-audit-repairs.md) and the
+[upstream handoff](usage-query-upstream-handoff.md) for exactness boundaries and
+parity tests. Filter suggestions share a small host metadata queue, so they
+cannot fill the browser's connections ahead of foreground data requests.
 
 SQL timestamps bound as `utc-millis` must be ingested as fixed-width canonical
 UTC milliseconds. Those fields and trusted text IDs keep raw BINARY ordering so

@@ -5,6 +5,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gbdubs/pharos/internal/querytable"
 	"modernc.org/sqlite"
@@ -41,7 +42,12 @@ var toolRollupDataset = func() sqlDataset {
 	}
 	columns["mcp_method"] = mcpMethodSQL("d.")
 	columns["model_effort"] = "model_effort(d.model,d.effort)"
-	return sqlDataset{from: "FROM tool_usage_daily d", columns: columns}
+	// These identities depend only on dimensions retained by the daily summary.
+	// Raw-call filter suggestions can use that smaller population as well.
+	columns["activity"] = "machine_activity(d.tool_category,d.command_category,d.tool_name,d.mcp_server,d.program)"
+	columns["operation_key"] = "machine_operation_key(d.tool_name,d.mcp_server,d.program,d.subcommand)"
+	columns["operation_name"] = "machine_operation_name(d.tool_name,d.mcp_server,d.program,d.subcommand)"
+	return sqlDataset{from: "FROM tool_usage_daily d", columns: columns, pageFrom: "FROM tool_usage_daily d", pageIndexes: map[string]string{"call_count": "tool_usage_daily_calls_page_idx"}}
 }()
 
 // toolCallDataset serves one row per tool call, excluding mirrored work.
@@ -55,6 +61,7 @@ var toolCallDataset = sqlDataset{
 	cube:       toolCallCube,
 	lookups:    map[string]bool{"id": true, "conversation_id": true, "workspace_id": true, "operation_key": true, "activity": true},
 	optionalJoins: map[string]string{
+		"w": " JOIN workspaces w ON w.id=t.workspace_id",
 		"r": " LEFT JOIN repositories r ON r.id=w.repository_id",
 		"a": "LEFT JOIN agent_sessions a ON a.id=t.agent_session_id",
 	},
@@ -71,6 +78,8 @@ var toolCallDataset = sqlDataset{
 	timeCoveringFields: map[string]bool{"id": true, "workspace_id": true, "provider": true, "duration_ms": true, "started_at": true, "day": true, "week": true, "month": true, "call_count": true},
 	columns: map[string]string{
 		"id": "t.id", "call_id": "t.call_id", "sequence": "t.sequence",
+		"call_message_id": "t.call_message_id", "result_message_id": "t.result_message_id",
+		"target":     "COALESCE(NULLIF(t.command,''),NULLIF(t.file_path,''),NULLIF(t.search_query,''),t.url)",
 		"started_at": "t.started_at", "ended_at": "t.ended_at",
 		"day":             "date(t.started_at,'localtime')",
 		"week":            "date(t.started_at,'localtime','-6 days','weekday 1')",
@@ -154,10 +163,13 @@ func toolCallText(call map[string]any, callText, resultText string, limit int) {
 	if callText != "" {
 		if json.Unmarshal([]byte(callText), &input) != nil {
 			call["input_text"] = clipText(callText, limit)
+			call["input_text_bytes"], call["input_text_truncated"] = len(callText), utf8.RuneCountInString(strings.TrimSpace(callText)) > limit
 		} else if script, ok := input["input"].(string); ok {
 			call["input_text"] = clipText(script, limit)
+			call["input_text_bytes"], call["input_text_truncated"] = len(script), utf8.RuneCountInString(strings.TrimSpace(script)) > limit
 		} else if pretty, err := json.MarshalIndent(input["input"], "", "  "); err == nil {
 			call["input_text"] = clipText(string(pretty), limit)
+			call["input_text_bytes"], call["input_text_truncated"] = len(pretty), utf8.RuneCount(pretty) > limit
 		}
 	}
 	if resultText != "" {
@@ -171,6 +183,7 @@ func toolCallText(call map[string]any, callText, resultText string, limit int) {
 			}
 		}
 		call["result_text"], call["result_text_bytes"] = clipText(content, limit), len(content)
+		call["result_text_truncated"] = utf8.RuneCountInString(strings.TrimSpace(content)) > limit
 	}
 }
 
@@ -194,6 +207,7 @@ func (c *Catalog) toolCallDetail(ctx context.Context, id string) (map[string]any
 		return call, err
 	}
 	link := links[0]
+	call["call_message_id"], call["result_message_id"] = link["call_message_id"], link["result_message_id"]
 	messageText := func(messageID any) string {
 		var text string
 		if messageID != nil {

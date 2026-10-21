@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -50,7 +51,7 @@ func (s *Server) getQueryItem(w http.ResponseWriter, r *http.Request, dataset st
 	request := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{
 		Select: querySourceFields(schema), Where: []qt.WhereTerm{{Field: schema.IDField, Op: "=", Value: id}}, Limit: 1,
 	}}
-	result, err := s.executeQueryV2(ctx, dataset, nil, schema, &request, nil)
+	result, err := s.executeQueryV2(ctx, dataset, url.Values{"carbon_settings": r.URL.Query()["carbon_settings"]}, schema, &request, nil)
 	if err != nil {
 		writeError(w, err, 400)
 		return
@@ -60,7 +61,19 @@ func (s *Server) getQueryItem(w http.ResponseWriter, r *http.Request, dataset st
 		writeJSON(w, map[string]any{"row": nil}, 200)
 		return
 	}
-	writeJSON(w, map[string]any{"row": result.Rows.Rows[0]}, 200)
+	row := result.Rows.Rows[0]
+	if dataset == "tool_calls" {
+		detail, detailErr := s.Catalog.toolCallDetail(ctx, id)
+		if detailErr != nil {
+			writeError(w, detailErr, 400)
+			return
+		}
+		// Preserve canonical V2 types and enrich only on explicit inspection.
+		for _, name := range []string{"input_text", "input_text_bytes", "input_text_truncated", "result_text", "result_text_bytes", "result_text_truncated", "result_details", "commands", "urls", "request", "next_request"} {
+			row[name] = detail[name]
+		}
+	}
+	writeJSON(w, map[string]any{"row": row}, 200)
 }
 
 func querySourceFields(schema qt.Schema) []string {

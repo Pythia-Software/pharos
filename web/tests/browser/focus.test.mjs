@@ -35,9 +35,50 @@ test("quick search takes focus from the header button and from the keyboard shor
   const dialog = page.locator("#searchDialog"), button = page.locator("#searchToggle");
   await press(button);
   await holdsFocus(page, dialog, button);
-  const tab = page.locator('nav.tabs button[data-view="usage"]');
+  const tab = page.locator('nav.tabs button[data-view="analyze"]');
   await press(tab, "ControlOrMeta+k");
   await holdsFocus(page, dialog, tab);
+});
+
+for (const route of [
+  { name: "Analyze", url: "/analyze", ready: ".usage-dashboard .usage-chart", link: /^Human words$/i, destination: ".usage-dashboard .writing-panel .usage-chart" },
+  { name: "Settings", url: "/settings", ready: "#healthCards .panel:not([aria-busy])", link: /^Sources$/, destination: "#sourceGrid .source-card" },
+  { name: "TL1", url: "/tl1", ready: ".tl1-tiles", link: /^Configurations$/, destination: "#tl1-matrix" },
+]) test(`${route.name} sidebar navigation is usable from the keyboard on a phone`, { skip }, async t => {
+  const { page } = await open(t, { url: route.url, viewport: { width: 390, height: 844 }, ready: route.ready });
+  const menu = page.locator(".view.active .nested-page-mobile");
+  await press(menu.locator(":scope > summary"));
+  const target = menu.getByRole("link", { name: route.link });
+  await target.waitFor();
+  await press(target);
+  await page.locator(route.destination).first().waitFor();
+  await page.waitForFunction(() => document.activeElement?.tagName === "H1");
+  assert.equal(await menu.getAttribute("open"), null);
+  await page.goBack();
+  await page.locator(route.ready).first().waitFor();
+});
+
+test("MCP call details take focus, keep it and return it on Escape", { skip }, async t => {
+  const { page } = await open(t, { url: "/analyze?analyze_mode=query&analyze_data=mcp_calls&analyze_topic=mcp", ready: ".usage-workspace-table .qt-row" });
+  const opener = page.getByRole("button", { name: /^Open item .+ in modal$/ }).first();
+  await press(opener);
+  const dialog = page.getByRole("dialog");
+  await dialog.getByText("Arguments (sanitized)", { exact: true }).waitFor();
+  await holdsFocus(page, dialog, opener);
+});
+
+test("MCP settings switch remains usable when moving between Settings and Analyze", { skip }, async t => {
+  const { page, settled } = await open(t, { url: "/settings/mcp", ready: "#mcpSettingsPage .mcp-setup-grid" });
+  const toggle = page.getByRole("switch", { name: "Enable MCP", exact: true });
+  await page.waitForFunction(() => !document.querySelector('[aria-label="Enable MCP"]').disabled);
+  await press(toggle);
+  await page.waitForFunction(() => document.querySelector('[aria-label="Enable MCP"]').getAttribute("aria-checked") === "false");
+  await press(page.getByRole("link", { name: "View MCP usage", exact: true }));
+  await page.locator(".usage-mcp-dashboard .qt-metric").waitFor();
+  await press(page.getByRole("link", { name: "MCP settings", exact: true }));
+  await toggle.waitFor();
+  await settled();
+  assert.equal(await toggle.getAttribute("aria-checked"), "false");
 });
 
 test("the card template editor takes focus, keeps it and returns it on Escape", { skip }, async t => {
@@ -97,7 +138,7 @@ async function annotate(t) {
   const app = await open(t, { url: "/settings", ready: "#healthCards .panel", preferences: { "pharos-show-agent-annotation-button": true } });
   await app.page.locator("#feedbackToggle").click();
   await app.page.locator("#feedbackTarget").click();
-  await app.page.locator("#healthHeading").click();
+  await app.page.getByRole("heading", { level: 1 }).click();
   await app.page.locator(".feedback-composer").waitFor();
   return app.page;
 }

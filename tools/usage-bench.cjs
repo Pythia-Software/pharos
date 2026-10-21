@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Exercise the real Usage controls against an isolated development service.
+// Exercise the real Analyze controls against an isolated development service.
 // Uses web/'s playwright-core (run `npm --prefix web ci` once) with the
 // installed Chrome, like the browser tests.
 const fs = require('node:fs');
@@ -57,11 +57,11 @@ async function main() {
       // and two paint frames, along with metadata, in the action measurement.
       await page.waitForTimeout(180);
       while (pending.size && Date.now() - start < 45_000) await page.waitForTimeout(25);
-      if (pending.size) throw new Error('Usage requests did not complete within 45 seconds');
+      if (pending.size) throw new Error('Analyze requests did not complete within 45 seconds');
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       actions.push({ name, ms: Date.now() - start, requests: requests.length - first,
         heapMiB: await page.evaluate(() => Math.round((performance.memory?.usedJSHeapSize ?? 0) / 1048576)),
-        errors: await page.locator('#usage .query-table-error,#usage .usage-chart-error,#usage .machine-error').allTextContents() });
+        errors: await page.locator('#analyze .query-table-error,#analyze .usage-chart-error,#analyze .machine-error').allTextContents() });
     } catch (error) { actions.push({ name, ms: Date.now() - start, error: error.message }); }
     save();
     console.log(`${name}: ${actions.at(-1).ms} ms${actions.at(-1).error ? ' FAILED' : ''}`);
@@ -76,8 +76,8 @@ async function main() {
       for (const choice of choices) await run(`${prefix}/${label}/${choice.label}`, () => select.selectOption(choice.value));
     }
   }
-  const chart = '#usage .usage-chart';
-  const chartOptions = prefix => selectOptions(`${prefix}/chart`, chart, ['Metric', 'Breakdown', 'Chart interval', 'Range', 'Scale', 'Smoothing']);
+  const chart = '#analyze .usage-chart';
+  const chartOptions = prefix => selectOptions(`${prefix}/chart`, chart, ['Metric', 'Breakdown', 'Display', 'Range', 'Scale', 'Time Bucket', 'Smoothing']);
   async function presets(prefix, selector) {
     const count = await page.locator(selector).count();
     for (let i = 0; i < count; i++) {
@@ -85,11 +85,11 @@ async function main() {
       await run(`${prefix}/preset/${await chip.innerText()}`, () => chip.click());
     }
   }
-  const open = (name, query) => run(`${name}/open`, () => page.goto(new URL(`/usage?${query}`, origin).href));
+  const open = (name, query) => run(`${name}/open`, () => page.goto(new URL(`/analyze?${query}`, origin).href));
   try {
     if (section !== 'time') {
-    await open('tokens', 'usage=tokens&machine_view=tokens');
-    await presets('tokens', '#usage [aria-label="Chart presets"] .query-chip');
+    await open('tokens', 'analyze_view=tokens&machine_view=tokens');
+    await presets('tokens', '#analyze [aria-label="Chart presets"] .query-chip');
     await chartOptions('tokens');
     await run('tokens/restore-metric', () => page.locator(chart).first().locator('select[aria-label="Metric"]').selectOption('tokens'));
     await selectOptions('tokens/chart', chart, ['Scale', 'Smoothing']);
@@ -102,15 +102,15 @@ async function main() {
       await run(`tokens/filter/${label}`, () => select.selectOption(value));
       await run(`tokens/clear/${label}`, () => select.selectOption(''));
     }
-    await presets('tokens', '#usage .usage-table-queries .query-chip');
-    await open('writing', 'usage=writing');
-    await presets('writing', '#usage .usage-presets .query-chip');
+    await presets('tokens', '#analyze .usage-table-queries .query-chip');
+    await open('writing', 'analyze_view=writing');
+    await presets('writing', '#analyze .usage-presets .query-chip');
     await chartOptions('writing');
     await run('messages/open', () => page.getByRole('group', { name: 'List', exact: true }).getByRole('button', { name: 'Messages', exact: true }).click());
-    await presets('messages', '#usage .usage-presets .query-chip');
-    await open('carbon', 'usage=carbon');
+    await presets('messages', '#analyze .usage-presets .query-chip');
+    await open('carbon', 'analyze_view=carbon');
     await chartOptions('carbon');
-    await selectOptions('carbon/filters', '#usage .carbon-filters', ['Repository', 'Provider']);
+    await selectOptions('carbon/filters', '#analyze .carbon-filters', ['Repository', 'Provider']);
     await selectOptions('carbon/assumptions', '#carbonAssumptions', ['Electricity grid']);
     for (const label of ['PUE', 'Estimate', 'Input sensitivity']) {
       const group = page.getByRole('group', { name: label, exact: true });
@@ -118,10 +118,10 @@ async function main() {
       for (const name of names) await run(`carbon/${label}/${name}`, () => group.getByRole('button', { name, exact: true }).click());
     }
     }
-    await open('time', 'usage=tokens&machine_view=time');
+    await open('time', 'analyze_view=tokens&machine_view=time');
     for (const days of ['7', '14', '30', '90', '0']) await run(`time/period/${days}`,
       () => page.getByRole('combobox', { name: 'Activity period', exact: true }).selectOption(days));
-    await selectOptions('time', '#usage', ['Analytics grouping', 'Trend measure']);
+    await selectOptions('time', '#analyze', ['Analytics grouping', 'Trend measure']);
     for (const measure of ['Hours', 'Share']) await run(`time/repository-measure/${measure}`, () =>
       page.getByRole('group', { name: 'Repository chart measure', exact: true }).getByRole('button', { name: measure, exact: true }).click());
     const family = page.getByRole('combobox', { name: 'Trend command family', exact: true });
@@ -147,14 +147,14 @@ async function main() {
     await run('time/library-data', () => page.getByRole('combobox', { name: 'Activity data source', exact: true }).selectOption('library'));
     if (await page.locator('html[data-concurrency-prototype]').count()) {
       await run('parallelism/open', async () => {
-        await page.goto(new URL('/usage?usage=tokens&machine_view=parallelism&activity_days=0', origin).href);
+        await page.goto(new URL('/analyze?analyze_view=tokens&machine_view=parallelism&activity_days=0', origin).href);
         await page.locator('.concurrency-chart svg').waitFor();
       });
       await run('parallelism/threaded-view', () => page.getByRole('combobox', { name: 'View', exact: true }).selectOption('user'));
-      await selectOptions('parallelism', '#usage', ['Turn gap']);
+      await selectOptions('parallelism', '#analyze', ['Turn gap']);
       for (const counting of ['workspace', 'agent']) {
         await run(`parallelism/count/${counting}`, () => page.getByRole('combobox', { name: 'Count by', exact: true }).selectOption(counting));
-        await selectOptions(`parallelism/${counting}`, '#usage', ['View']);
+        await selectOptions(`parallelism/${counting}`, '#analyze', ['View']);
       }
     }
     await run('parallelism/example-data', () => page.getByRole('combobox', { name: 'Activity data source', exact: true }).selectOption('example'));

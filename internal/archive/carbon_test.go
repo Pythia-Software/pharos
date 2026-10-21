@@ -1,15 +1,18 @@
 package archive
 
 import (
+	"context"
 	"encoding/json"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	qt "github.com/Pythia-Software/query-table/backends/go"
 	"github.com/gbdubs/pharos/carbon"
 )
 
@@ -70,6 +73,61 @@ func TestCarbonEnergyArithmetic(t *testing.T) {
 	}
 	if !(window.CO2eGrams["low"] < window.CO2eGrams["central"] && window.CO2eGrams["central"] < window.CO2eGrams["high"]) {
 		t.Errorf("scenarios out of order: %v", window.CO2eGrams)
+	}
+}
+
+func TestCarbonLinkedQueryAssumptions(t *testing.T) {
+	c, config := testCatalog(t)
+	ingestUsageFixture(t, c)
+	if _, err := c.DB.Exec(`INSERT INTO ui_preferences(key,value) VALUES('pharos-carbon-v1','{"scenario":"high","grid":"custom","customGrid":900}')`); err != nil {
+		t.Fatal(err)
+	}
+	s := testServer(t, config, c)
+	request := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"co2e_g"}, Limit: 100}}
+	read := func(settings string) float64 {
+		t.Helper()
+		result, err := s.executeQueryV2(t.Context(), "usage", url.Values{"carbon_settings": {settings}}, PharosUsageSchema(), &request, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var sum float64
+		for _, row := range result.Rows.Rows {
+			n, _ := number(row["co2e_g"])
+			sum += n
+		}
+		return sum
+	}
+	saved := read("")
+	linked := read(`{"scenario":"high","grid":"custom","customGrid":100}`)
+	if saved <= 0 || math.Abs(linked*9-saved) > 1e-8 {
+		t.Fatalf("linked estimate=%v saved=%v", linked, saved)
+	}
+	q := groupRequest("provider", qt.SummaryColumn{ID: "co2", Op: "sum", Field: "co2e_g"})
+	grouped, _, err := s.executeQueryV3(t.Context(), "usage", url.Values{"carbon_settings": {`{"scenario":"high","grid":"custom","customGrid":100}`}}, PharosUsageSchema(), q)
+	if err != nil || math.Abs(grouped.Rows[0]["co2"].(float64)-linked) > 1e-8 {
+		t.Fatalf("grouped estimate=%+v err=%v", grouped, err)
+	}
+	itemRequest := qt.ServerQueryV2{Version: 2, Profile: qt.SQLiteExpressionProfile, WireQuery: qt.WireQuery{Select: []string{"id", "co2e_g"}, Limit: 1}}
+	assumptions := `{"scenario":"high","grid":"custom","customGrid":100}`
+	itemRows, itemErr := s.executeQueryV2(t.Context(), "usage", url.Values{"carbon_settings": {assumptions}}, PharosUsageSchema(), &itemRequest, nil)
+	if itemErr != nil || len(itemRows.Rows.Rows) != 1 {
+		t.Fatal(itemErr)
+	}
+	source := itemRows.Rows.Rows[0]
+	response := queryExplorationCall(s, config.APIToken, "GET", "/api/query/usage/item?"+url.Values{"id": {firstString(source["id"])}, "carbon_settings": {assumptions}}.Encode(), "")
+	var item struct {
+		Row map[string]any `json:"row"`
+	}
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &item) != nil || item.Row["co2e_g"] != source["co2e_g"] {
+		t.Fatalf("Details lost linked assumptions: %d %s", response.Code, response.Body.String())
+	}
+	if read("") != saved {
+		t.Fatal("following a link changed saved assumptions")
+	}
+	for _, invalid := range []string{"[]", "null", "{", `{"scenario":"invalid"}`, `{"customGrid":-1}`} {
+		if _, err := withCarbonPreferences(context.Background(), invalid); err == nil {
+			t.Fatalf("accepted invalid assumptions %s", invalid)
+		}
 	}
 }
 

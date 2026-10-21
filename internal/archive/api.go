@@ -107,6 +107,7 @@ func (s *Server) Serve() error {
 	s.spawn(s.Catalog.maintainSubstringIndex)
 	s.spawn(s.Catalog.maintainTextSearch)
 	s.spawn(s.Catalog.maintainToolSearch)
+	s.spawn(s.Catalog.maintainQueryTextIndexes)
 	s.spawn(func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
 	s.spawn(s.automaticLoop)
 	s.refreshGitInBackground(true)
@@ -202,7 +203,7 @@ func (s *Server) authorized(r *http.Request) bool {
 // of which serves the single-page UI.
 func isUIPage(path string) bool {
 	switch path {
-	case "/", "/home", "/library", "/settings", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/preferences", "/sources", "/activity", "/usage", "/tools", "/tl1", "/tl1/configurations", "/tl1/followups", "/tl1/quality", "/tl1/runs", "/health", "/mcp", "/findings":
+	case "/", "/home", "/library", "/settings", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/preferences", "/sources", "/activity", "/analyze", "/tools", "/tl1", "/tl1/configurations", "/tl1/followups", "/tl1/quality", "/tl1/runs", "/health", "/mcp", "/findings":
 		return true
 	}
 	return strings.HasPrefix(path, "/work/")

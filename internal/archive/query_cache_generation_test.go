@@ -195,6 +195,7 @@ func TestReadySeparatesLivenessFromProjectionCatchUp(t *testing.T) {
 			break
 		}
 	}
+	catalog.maintainQueryTextIndexes(context.Background())
 	status = libraryStatusCall(t, server, "/api/ready?projections=1")
 	if status["projections_ready"] != true || status["library_pending"] != float64(0) || status["metrics_pending"] != float64(0) || status["text_search_ready"] != true {
 		t.Fatalf("caught-up projections: %v", status)

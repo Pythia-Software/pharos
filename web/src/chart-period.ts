@@ -9,8 +9,13 @@ export const isHourly = (period: ChartPeriod) => period === "hour" || period ===
 export const periodLabel = (period: ChartPeriod, count = 1) => period === "hours" || period === "days" ? `${count} ${chartPeriods[period].unit}${count === 1 ? "" : "s"}` : chartPeriods[period].unit;
 export const periodUnit = (period: ChartPeriod, count = 1) => period === "hours" || period === "days" ? `${count}-${chartPeriods[period].unit} period` : chartPeriods[period].unit;
 const pad2 = (value: number) => String(value).padStart(2, "0");
-export const localDay = (date: Date) => `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+export const localDay = (date: Date) => `${String(date.getFullYear()).padStart(4, "0")}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
 const hourMs = 3600000, dayMs = 24 * hourMs;
+const calendarDay = (date: Date) => {
+  const utc = new Date(0);
+  utc.setUTCFullYear(date.getFullYear(), date.getMonth(), date.getDate());
+  return utc.getTime() / dayMs;
+};
 
 // Divide local calendar days evenly; single hours keep both occurrences at DST fall-back.
 const localHours = (period: ChartPeriod, count: number) => period === "hours" && count > 1 && 24 % count === 0;
@@ -31,7 +36,7 @@ export function periodStart(date: Date, period: ChartPeriod, count = 1): Date {
   if (period === "month") start.setDate(1);
   if (period === "days") {
     // Align calendar days independently of timezone offsets and daylight saving.
-    const day = Date.UTC(start.getFullYear(), start.getMonth(), start.getDate()) / dayMs;
+    const day = calendarDay(start);
     const aligned = new Date(Math.floor(day / count) * count * dayMs);
     start.setFullYear(aligned.getUTCFullYear(), aligned.getUTCMonth(), aligned.getUTCDate());
   }
@@ -62,6 +67,29 @@ export function nextPeriod(date: Date, period: ChartPeriod, count = 1) {
   else if (period === "day" || period === "days") date.setDate(date.getDate() + (period === "days" ? count : 1));
   else if (period === "week") date.setDate(date.getDate() + 7);
   else date.setMonth(date.getMonth() + 1);
+}
+
+// Calendar shifts preserve local interval boundaries through DST. Extremely
+// large windows fall back to querying all retained history, without an invalid
+// date or an allocation proportional to the requested window.
+export function shiftPeriod(date: Date, period: ChartPeriod, steps: number, count = 1): Date | undefined {
+  const shifted = periodStart(date, period, count);
+  if (localHours(period, count)) shifted.setHours(shifted.getHours() + steps * count);
+  else if (isHourly(period)) shifted.setTime(shifted.getTime() + steps * hourMs * (period === "hours" ? count : 1));
+  else if (period === "month") shifted.setMonth(shifted.getMonth() + steps);
+  else shifted.setDate(shifted.getDate() + steps * (period === "week" ? 7 : period === "days" ? count : 1));
+  return Number.isFinite(shifted.getTime()) && shifted.getFullYear() >= 1 && shifted.getFullYear() <= 9999 ? shifted : undefined;
+}
+
+// An ordinal counts empty intervals without materializing them. Local calendar
+// intervals and UTC-aligned hour intervals use their respective chart grids.
+export function periodIndex(date: Date, period: ChartPeriod, count = 1): number {
+  const start = periodStart(date, period, count);
+  const day = calendarDay(start);
+  if (localHours(period, count)) return day * (24 / count) + start.getHours() / count;
+  if (isHourly(period)) return Math.floor(start.getTime() / (hourMs * (period === "hours" ? count : 1)));
+  if (period === "month") return start.getFullYear() * 12 + start.getMonth();
+  return period === "week" ? Math.floor(day / 7) : period === "days" ? Math.floor(day / count) : day;
 }
 
 export function periodBuckets(period: ChartPeriod, start: Date, end: Date, count = 1): ChartBucket[] {

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import "./tl1.css";
 import { Icon } from "./icons";
 import { preferences } from "./preferences";
+import { NestedPageLayout, useLocationRevision } from "./nested-pages";
 
 // The TL1 tab: a project's performance by flavor and agent configuration,
 // combined across the Macs that run it, and drill-downs into flavors, candidates, and individual runs.
@@ -361,15 +362,9 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
   const [loading, setLoading] = useState(false);
   const [flavor, setFlavor] = useState("");
   const [candidate, setCandidate] = useState("");
-  const [page, setPage] = useState(tl1Path);
+  useLocationRevision();
+  const page = tl1Path();
   const runsRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const update = () => setPage(tl1Path());
-    window.addEventListener("pharos:route", update);
-    window.addEventListener("pharos:view", update);
-    return () => { window.removeEventListener("pharos:route", update); window.removeEventListener("pharos:view", update); };
-  }, []);
-  useEffect(() => { if (page !== "/tl1/runs" && document.querySelector("#tl1.active")) document.querySelector("main")?.scrollTo(0, 0); }, [page]);
 
   const loadInstallations = useCallback(async () => {
     try {
@@ -449,7 +444,10 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
     window.requestAnimationFrame(() => runsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }, [filterAttempts, windowWhere, projectWhere]);
 
-  if (!projects.length) return <div className="tl1-page"><div className="view-heading"><div><h1>TL1</h1><p className="muted">No TL1 installations are indexed. Enable the tl1 source in Settings and index it.</p></div></div></div>;
+  const pages = tl1Pages.map(item => ({ ...item, id: item.path, href: item.path }));
+  if (!projects.length) return <NestedPageLayout label="TL1" className="tl1-page" pages={pages} current={page}>
+    <p className="muted">No TL1 installations are indexed. Enable the tl1 source in Settings and index it.</p>
+  </NestedPageLayout>;
 
   const totals = overview?.totals ?? {};
   const coverage = overview?.coverage ?? {};
@@ -460,11 +458,7 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
   const candidates = overview?.candidates ?? {};
   const reviews = overview?.reviews ?? {};
 
-  const activePage = tl1Pages.find(item => item.path === page) ?? tl1Pages[0];
-  return <div className="tl1-page">
-    <div className="view-heading">
-      <div><h1>TL1</h1><p className="muted">Analyze flavor performance and the actions that follow each run. Cost is the API list-price equivalent from transcripts.</p></div>
-    </div>
+  return <NestedPageLayout label="TL1" className="tl1-page" contentClassName="tl1-content" pages={pages} current={page}>
     <div className="tl1-controls" role="group" aria-label="TL1 filters">
       <label>Project <select value={selected} onChange={event => {
         setProject(event.target.value);
@@ -492,10 +486,6 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
     </div>
     <WindowControls value={timeWindow} onChange={setTimeWindow} enqueues={enqueues} resolved={overview?.window} />
     {error ? <div className="query-table-error" role="alert">{error}</div> : null}
-    <div className="tl1-layout">
-      <nav className="settings-nav tl1-nav" aria-label="TL1 pages"><span className="settings-nav-label">TL1 analysis</span>{tl1Pages.map(item => <a key={item.path} href={item.path} aria-current={page === item.path ? "page" : undefined} onClick={event => { if (event.metaKey || event.ctrlKey || event.shiftKey || event.button || !window.pharosNavigate) return; event.preventDefault(); window.pharosNavigate(item.path); }}>{item.label}</a>)}</nav>
-      <div className="tl1-content">
-      <div className="tl1-page-heading"><h2>{activePage.title}</h2><p className="muted">{activePage.description}</p></div>
     {overview ? <>
       <WindowSummary resolved={overview.window ?? {}} enqueues={enqueues} onFlavor={setFlavor} onCurrent={scope === "all" ? () => setScope("current") : undefined} />
       <p className="tl1-coverage muted" title={(coverage.by_executor ?? []).map((row: Row) => `${row.executor}: ${row.with_transcript}/${row.attempts} with transcript, ${row.priced_from_tokens} priced`).join("\n")}>
@@ -586,10 +576,7 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
       <div className="pharos-query-page">{attempts}</div>
     </Section></div>
 
-      </div>
-    </div>
-
     {flavor ? <FlavorDialog query={query} name={flavor} onClose={() => setFlavor("")} copy={copy} onRuns={showRuns} /> : null}
     {candidate ? <CandidateDialog query={query} id={candidate} onClose={() => setCandidate("")} /> : null}
-  </div>;
+  </NestedPageLayout>;
 }

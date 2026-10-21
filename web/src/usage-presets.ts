@@ -1,9 +1,11 @@
 import { EMPTY_QUERY, encodeQuery, type AggregationClause, type OrderByClause, type QueryState } from "@pythia-software/query-table-core";
 import type { ChartPeriod } from "./chart-period";
 import type { ChartScale } from "./chart-scale";
+import type { ChartPresentation } from "./chart-selection";
+import type { ChartDisplay } from "./chart-series";
 
 export type TokenSplit = "type" | "provider" | "model_family" | "model_effort" | "effort" | "repository_name" | "session_kind";
-export type TokenChartView = { metric: "tokens" | "cost" | "percent" | "percent_cost"; split: TokenSplit; period: ChartPeriod; hours: number; days: number; rollingPeriods: number; scale: ChartScale };
+export type TokenChartView = ChartPresentation & { metric: "tokens" | "cost" | "percent" | "percent_cost"; split: TokenSplit; period: ChartPeriod; hours: number; days: number; rollingPeriods: number; scale: ChartScale; display?: ChartDisplay };
 // Chart shortcuts and the writing page's metric/sort shortcuts.
 export type UsagePreset = { label: string; title: string; aggregations?: AggregationClause[]; chart?: Partial<TokenChartView>; orderBy?: OrderByClause[] };
 const sum = (field: string, groupBy: string[], label: string): AggregationClause => ({ id: `${field}:${groupBy.join(",")}`, op: "sum", field, groupBy, label });

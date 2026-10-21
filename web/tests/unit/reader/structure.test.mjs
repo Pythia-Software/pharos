@@ -70,3 +70,19 @@ test("find patterns escape plain terms and respect case", () => {
   assert.equal(transcriptFindPattern("Quorum", false, true).test("quorum"), false);
   assert.throws(() => transcriptFindPattern("(", true, false));
 });
+
+test("Source anchors choose exact identity or nearest timestamp without inventing an event", () => {
+  const messages = [
+    { id: "late", created_at: "2026-10-21T11:00:00Z" },
+    { id: "early", created_at: "2026-10-21T10:00:00Z" },
+    { id: "invalid", created_at: "not a date" },
+  ];
+  assert.equal(reader.transcriptAnchor(messages, { message: "early", at: "2026-10-21T11:00:00Z" }), "early");
+  assert.equal(reader.transcriptAnchor(messages, { message: "missing", at: "2026-10-21T11:00:00Z" }), null);
+  assert.equal(reader.transcriptAnchor(messages, { at: "2026-10-21T10:30:00Z" }), "early");
+  assert.equal(reader.transcriptAnchor(messages, { at: "2026-10-21T10:45:00Z" }), "late");
+  assert.equal(reader.transcriptAnchor(messages, { at: "invalid" }), null);
+  assert.equal(reader.transcriptAnchor([{id: "multi", call_id: "one"}, {id: "multi", call_id: "two"}], {message: "multi", call: "two"}), "multi");
+  assert.equal(reader.transcriptAnchor([{id: "multi", call_id: "one"}], {message: "multi", call: "two"}), null);
+  assert.equal(reader.transcriptAnchor([], { at: "2026-10-21T10:30:00Z" }), null);
+});

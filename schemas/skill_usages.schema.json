@@ -28,23 +28,19 @@
     },
     {
       "field": "evidence_type",
-      "width": 160
+      "width": 155
     },
     {
       "field": "status",
-      "width": 90
+      "width": 95
     },
     {
-      "field": "effort",
-      "width": 90
-    },
-    {
-      "field": "skill_path",
-      "width": 300
+      "field": "content_bytes",
+      "width": 110
     },
     {
       "field": "title",
-      "width": 230
+      "width": 245
     }
   ],
   "fields": [
@@ -185,7 +181,8 @@
         "sqlite": {
           "expr": "r.\"skill_path\""
         }
-      }
+      },
+      "render": "usage_code_snippet"
     },
     {
       "name": "evidence_type",
@@ -220,6 +217,14 @@
             }
           ]
         }
+      },
+      "display": {
+        "kind": "chip",
+        "labels": {
+          "explicit_invocation": "Invocation",
+          "file_load": "File-load attempt",
+          "harness_load": "Harness-reported load"
+        }
       }
     },
     {
@@ -246,7 +251,8 @@
             "no_result"
           ]
         }
-      }
+      },
+      "render": "tool_status"
     },
     {
       "name": "content_bytes",
@@ -401,7 +407,7 @@
     },
     {
       "name": "title",
-      "label": "Title",
+      "label": "Conversation",
       "type": "text",
       "group": "Context",
       "filter": {
@@ -417,7 +423,8 @@
         "sqlite": {
           "expr": "r.\"title\""
         }
-      }
+      },
+      "render": "usage_conversation"
     },
     {
       "name": "session_kind",
@@ -520,7 +527,13 @@
       }
     },
     {
-      "name": "workspace_id", "relationship": {"objectType": "pharos_library", "key": {"id": "workspace_id"}},
+      "name": "workspace_id",
+      "relationship": {
+        "objectType": "pharos_library",
+        "key": {
+          "id": "workspace_id"
+        }
+      },
       "label": "workspace id",
       "type": "text",
       "group": "Evidence",
@@ -540,7 +553,13 @@
       }
     },
     {
-      "name": "conversation_id", "relationship": {"objectType": "pharos_conversations", "key": {"id": "conversation_id"}},
+      "name": "conversation_id",
+      "relationship": {
+        "objectType": "pharos_conversations",
+        "key": {
+          "id": "conversation_id"
+        }
+      },
       "label": "conversation id",
       "type": "text",
       "render": "conversation_link",

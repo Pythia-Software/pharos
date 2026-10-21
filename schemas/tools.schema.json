@@ -23,60 +23,40 @@
   ],
   "defaultSelect": [
     {
-      "field": "day",
-      "width": 105
-    },
-    {
       "field": "tool_name",
       "width": 140
     },
     {
       "field": "command_name",
-      "width": 150
+      "width": 130
     },
     {
-      "field": "provider",
-      "width": 85
+      "field": "day",
+      "width": 105
     },
     {
-      "field": "model_family",
-      "width": 120
+      "field": "repository_name",
+      "width": 125
     },
     {
-      "field": "effort",
-      "width": 90
+      "field": "model_effort",
+      "width": 155
     },
     {
       "field": "call_count",
-      "width": 85
-    },
-    {
-      "field": "error_count",
       "width": 80
     },
     {
       "field": "error_rate",
-      "width": 85
-    },
-    {
-      "field": "avg_duration_ms",
-      "width": 110
+      "width": 90
     },
     {
       "field": "result_tokens",
-      "width": 115
-    },
-    {
-      "field": "carried_tokens",
-      "width": 130
+      "width": 110
     },
     {
       "field": "tool_cost_usd",
-      "width": 100
-    },
-    {
-      "field": "repository_name",
-      "width": 150
+      "width": 95
     }
   ],
   "fields": [
@@ -959,7 +939,6 @@
       "label": "Total duration (ms)",
       "type": "number",
       "group": "Duration",
-      "render": "duration_ms",
       "select": {
         "default": false,
         "align": "right"
@@ -976,6 +955,10 @@
       },
       "aggregate": {
         "groupable": true
+      },
+      "display": {
+        "kind": "duration",
+        "sourceUnit": "milliseconds"
       }
     },
     {
@@ -983,7 +966,6 @@
       "label": "Avg duration (ms)",
       "type": "number",
       "group": "Duration",
-      "render": "duration_ms",
       "select": {
         "align": "right"
       },
@@ -1000,6 +982,10 @@
           "expr": "r.\"avg_duration_ms\"",
           "expressionNumeric": true
         }
+      },
+      "display": {
+        "kind": "duration",
+        "sourceUnit": "milliseconds"
       }
     },
     {
@@ -1007,7 +993,6 @@
       "label": "Max duration (ms)",
       "type": "number",
       "group": "Duration",
-      "render": "duration_ms",
       "select": {
         "default": false,
         "align": "right"
@@ -1024,6 +1009,10 @@
       },
       "aggregate": {
         "groupable": true
+      },
+      "display": {
+        "kind": "duration",
+        "sourceUnit": "milliseconds"
       }
     },
     {

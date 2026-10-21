@@ -413,3 +413,13 @@ function markdownTree(text,depth=0){
     const paragraph=[line];i++;while(i<lines.length&&lines[i].trim()&&!/^\s*(?:#{1,6}\s|>|[-+*]\s|\d+[.)]\s|\x60{3,}|~{3,})/.test(lines[i])){if(lines[i].includes('|')&&/^\s*\|?\s*:?-{3,}/.test(lines[i+1]||''))break;paragraph.push(lines[i++])}root.children.push(inline('p',paragraph.join('\n')));
   }return root;
 }
+
+// Exact source identities take precedence. Aggregated time rows resolve to the
+// nearest retained event; equal distances prefer the earlier recorded event.
+function transcriptAnchor(messages,{message='',at='',call=''}={}){
+  if(message)return messages.find(item=>item.id===message&&(!call||item.call_id===call))?.id||null;
+  const time=typeof at==='string'&&at?Date.parse(at):NaN;if(!Number.isFinite(time))return null;
+  let best=null,distance=Infinity,bestTime=Infinity;
+  for(const item of messages){const when=Date.parse(item.created_at),delta=Math.abs(when-time);if(!item.id||!Number.isFinite(when))continue;if(delta<distance||delta===distance&&when<bestTime){best=item.id;distance=delta;bestTime=when}}
+  return best;
+}

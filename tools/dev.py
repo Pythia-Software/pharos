@@ -220,11 +220,12 @@ def wait_for_projections(server, port, token):
         if status.get("projections_ready"):
             print("Query projections ready", flush=True)
             return
-        progress = (status["library_pending"], status["metrics_pending"], status["text_search_ready"])
+        progress = (status["library_pending"], status["metrics_pending"], status["text_search_ready"], status.get("query_text_ready", True))
         if progress != last_report:
             print(f"Preparing queries: {progress[0]:,} Library workspaces, "
                   f"{progress[1]:,} metrics workspaces pending; "
-                  f"text search {'ready' if progress[2] else 'indexing'}", flush=True)
+                  f"text search {'ready' if progress[2] else 'indexing'}; "
+                  f"query text {'ready' if progress[3] else 'indexing'}", flush=True)
             last_report = progress
         time.sleep(1)
 
@@ -236,6 +237,7 @@ def main():
     parser.add_argument("--port", type=int, default=8798, help="Backend port (default: 8798)")
     parser.add_argument("--ui-port", type=int, default=8799)
     parser.add_argument("--no-open", action="store_true")
+    parser.add_argument("--concurrency-data", type=Path, help="Read-only captured timing JSON for the Parallelism preview")
     parser.add_argument("--reuse-library", action="store_true",
                         help="Restart against the existing dev snapshot instead of copying production again")
     args = parser.parse_args()
@@ -278,6 +280,12 @@ def main():
                 env.pop(name, None)
             config = str(destination / "library.toml")
 
+            # A snapshot can retain deferred tool work from an in-flight sync.
+            # Sync is disabled in dev, so finish its ledger/summary projection
+            # explicitly before measuring queries against the isolated copy.
+            subprocess.run([str(binary), "--config", config, "build-tools"],
+                           cwd=ROOT, env=env, check=True)
+
             def launch(command, cwd=ROOT):
                 child = subprocess.Popen(command, cwd=cwd, env=env, start_new_session=True)
                 children.append(child)
@@ -301,6 +309,8 @@ def main():
             command = [str(binary), "--config", config, "dev-ui", "--assets", str(ROOT / "internal/archive/assets"), "--port", str(args.ui_port)]
             if args.no_open:
                 command.append("--no-open")
+            if args.concurrency_data:
+                command.extend(["--concurrency-data", str(args.concurrency_data.expanduser().resolve())])
             launch(command)
             print(f"Dev library: {destination}\nFrontend: http://127.0.0.1:{args.ui_port}/\n"
                   "Ctrl-C stops all dev processes. Rerun to refresh from production; "

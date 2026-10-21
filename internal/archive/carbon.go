@@ -310,8 +310,49 @@ func (a carbonAssumptions) key() string {
 	return strconv.FormatUint(hash.Sum64(), 36)
 }
 
-// carbonPreferences reads the Carbon page's saved assumptions.
+type carbonPreferencesKey struct{}
+
+// Linked Usage views carry their own assumptions. The override is scoped to
+// this request; opening a link must never overwrite another reader's settings.
+func withCarbonPreferences(ctx context.Context, encoded string) (context.Context, error) {
+	if encoded == "" {
+		return ctx, nil
+	}
+	var prefs map[string]any
+	if len(encoded) > 4096 || json.Unmarshal([]byte(encoded), &prefs) != nil || prefs == nil {
+		return ctx, fmt.Errorf("invalid Carbon assumptions")
+	}
+	for key, value := range prefs {
+		switch key {
+		case "scenario", "pueScenario":
+			if value != "low" && value != "central" && value != "high" {
+				return ctx, fmt.Errorf("invalid Carbon %s", key)
+			}
+		case "inputSensitivity":
+			if value != "current" && value != "third" {
+				return ctx, fmt.Errorf("invalid Carbon input sensitivity")
+			}
+		case "customGrid":
+			n, ok := value.(float64)
+			if !ok || math.IsNaN(n) || math.IsInf(n, 0) || n < 0 {
+				return ctx, fmt.Errorf("invalid Carbon grid intensity")
+			}
+		case "grid", "vehicle", "flightFrom", "flightTo":
+			if _, ok := value.(string); !ok {
+				return ctx, fmt.Errorf("invalid Carbon %s", key)
+			}
+		default:
+			return ctx, fmt.Errorf("unknown Carbon assumption %q", key)
+		}
+	}
+	return context.WithValue(ctx, carbonPreferencesKey{}, prefs), nil
+}
+
+// carbonPreferences reads a link's assumptions or the saved defaults.
 func (c *Catalog) carbonPreferences(ctx context.Context) (map[string]any, error) {
+	if prefs, ok := ctx.Value(carbonPreferencesKey{}).(map[string]any); ok {
+		return prefs, nil
+	}
 	var value string
 	err := c.reader().QueryRowContext(ctx, "SELECT value FROM ui_preferences WHERE key='pharos-carbon-v1'").Scan(&value)
 	if errors.Is(err, sql.ErrNoRows) {

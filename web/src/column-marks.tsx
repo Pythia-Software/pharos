@@ -26,7 +26,7 @@ export function ColumnMarks({ bucket, series, scale, percent = false }: {
 }
 
 export function CompactColumns({ buckets: sourceBuckets, series, unit = "", showLegend = series.length > 1, legendColumns, xLabel = "Day", yLabel = unit || "Value", rollingPeriods = 0, percent = false }: { buckets: ChartBucket[]; series: ChartSeries[]; unit?: string; showLegend?: boolean; legendColumns?: 1 | 2 | 3; xLabel?: string; yLabel?: string; rollingPeriods?: number; percent?: boolean }) {
-  const averaged = rollingAverageBuckets(sourceBuckets, rollingPeriods), buckets = percent ? shareBuckets(averaged) : averaged;
+  const averaged = rollingAverageBuckets(sourceBuckets, rollingPeriods, { period: "day" }).filter(bucket => !bucket.history), buckets = percent ? shareBuckets(averaged) : averaged;
   const { y, ticks } = percent ? { y: (value: number) => value * 100, ticks: [.25, .5, .75, 1] } : columnScale(buckets.map(bucket => series.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0)), "linear");
   const axis: number[] = [0];
   for (const tick of ticks) if (y(tick) - y(axis.at(-1)!) >= 20) axis.push(tick);

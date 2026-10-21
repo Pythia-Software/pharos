@@ -99,10 +99,13 @@ func (c *Catalog) ensureQueryCacheGeneration() error {
 func (c *Catalog) projectionReadiness(ctx context.Context) (map[string]any, error) {
 	var library, metrics int64
 	var textReady bool
+	var queryTextReady bool
 	err := c.DB.QueryRowContext(ctx, `SELECT
  (SELECT COUNT(*) FROM workspace_library_dirty),
  (SELECT COUNT(*) FROM mcp_metric_dirty),
- EXISTS(SELECT 1 FROM meta WHERE key='text_search_documents_version' AND value='1')`).Scan(&library, &metrics, &textReady)
-	return map[string]any{"ok": true, "projections_ready": library == 0 && metrics == 0 && textReady,
-		"library_pending": library, "metrics_pending": metrics, "text_search_ready": textReady}, err
+ EXISTS(SELECT 1 FROM meta WHERE key='text_search_documents_version' AND value='1'),
+ (SELECT COUNT(*) FROM meta WHERE key IN ('human_query_text_fts_ready','tool_query_text_fts_ready') AND value='1')=2 AND
+ EXISTS(SELECT 1 FROM meta WHERE key='tool_query_facts_ready' AND value=?)`, toolQueryFacts.version()).Scan(&library, &metrics, &textReady, &queryTextReady)
+	return map[string]any{"ok": true, "projections_ready": library == 0 && metrics == 0 && textReady && queryTextReady,
+		"library_pending": library, "metrics_pending": metrics, "text_search_ready": textReady, "query_text_ready": queryTextReady}, err
 }

@@ -1,8 +1,8 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { isOrGroup, type WhereClause, type WhereTerm } from "@pythia-software/query-table-core";
-import { chartPeriods, isHourly, localDay, nextPeriod, parseDay, periodKey, periodUnit, validPeriodCount, type ChartPeriod } from "./chart-period";
+import { chartPeriods, isHourly, localDay, nextPeriod, parseDay, periodKey, periodUnit, shiftPeriod, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { columnScale, defaultChartScale, type ChartScale } from "./chart-scale";
-import { rollingAverageBuckets, type ChartBucket, type ChartSeries } from "./chart-series";
+import { cumulativeBuckets, rollingAverageBuckets, validRollingPeriods, type ChartBucket, type ChartDisplay, type ChartSeries } from "./chart-series";
 import { ColumnMarks } from "./column-marks";
 import { ChartLegendChip } from "./chart-legend-chip";
 import { type LegendAction } from "./chart-selection";
@@ -31,7 +31,7 @@ function rangeStart(range: ChartRange): Date {
 // The charts and the table share one time filter: a row matches when its
 // activity, from its first to its last timestamp, overlaps the range. Dragging
 // across columns, a range preset, and a filter typed into the table all set it.
-type TimeFields = { first: string; last: string };
+export type TimeFields = { first: string; last: string };
 export const usageTime: TimeFields = { first: "first_usage_at", last: "last_usage_at" };
 export const writingTime: TimeFields = { first: "first_message_at", last: "last_message_at" };
 // to is exclusive.
@@ -80,6 +80,15 @@ export function withTimeRange(where: WhereTerm[], fields: TimeFields, from?: Dat
   return kept;
 }
 
+// Expand only the chart request. The visible filters, totals and drilldowns
+// retain their original dates. N periods includes the current interval and
+// N-1 preceding intervals, aligned to the chart's calendar grid.
+export function smoothingWhere(where: WhereTerm[], fields: TimeFields, period: ChartPeriod, periods: number, count = 1): WhereTerm[] {
+  const bounds = timeBounds(where, fields);
+  if (!bounds.from || !validRollingPeriods(periods) || periods < 2) return where;
+  return withTimeRange(where, fields, shiftPeriod(bounds.from, period, 1 - periods, count), bounds.to);
+}
+
 // chartSpan is the first and last day a chart shows: the time filter's range,
 // else from the earliest data to today.
 export function chartSpan(bounds: TimeBounds, earliest?: Date): [Date, Date] {
@@ -120,13 +129,13 @@ export function rangeLabel(bounds: TimeBounds): string {
 }
 
 // A date selection from the chart or table remains visible alongside presets.
-export function RangeControl({ bounds, onChange, editable = false, includeTime = false, shortRanges = false }: { bounds: TimeBounds; onChange: (from?: Date, to?: Date) => void; editable?: boolean; includeTime?: boolean; shortRanges?: boolean }) {
+export function RangeControl({ bounds, onChange, editable = true, includeTime = false, shortRanges = false }: { bounds: TimeBounds; onChange: (from?: Date, to?: Date) => void; editable?: boolean; includeTime?: boolean; shortRanges?: boolean }) {
   const ranges: Array<[ChartRange, string]> = shortRanges ? [["1d", "1 day"], ["7d", "7 days"], ...chartRanges] : chartRanges;
   const active = !bounds.from && !bounds.to ? "all" : bounds.from && !bounds.to ? ranges.find(([range]) => rangeStart(range).getTime() === bounds.from!.getTime())?.[0] : undefined;
   const [custom, setCustom] = useState(false);
   useEffect(() => { if (!bounds.from && !bounds.to) setCustom(false); }, [bounds.from?.getTime(), bounds.to?.getTime()]);
   const picker = <ChartSelect label="Range" value={custom || !active ? "custom" : active}
-    options={[["all", "All time"], ...ranges.map(([range, text]): [string, string] => [range, `Last ${text}`]), ...(editable ? [["custom", "Custom dates…"] as [string, string]] : active ? [] : [["custom", rangeLabel(bounds), "Dates selected in the chart or table"] as [string, string, string]])]}
+    options={[...ranges.map(([range, text]): [string, string] => [range, `Last ${text}`]), ...(editable ? [["custom", "Custom dates…"] as [string, string]] : active ? [] : [["custom", rangeLabel(bounds), "Dates selected in the chart or table"] as [string, string, string]]), ["all", "All time"]]}
     title="Dates included in this usage view. Choose All time to clear the date filter."
     onChange={range => { setCustom(range === "custom"); if (range !== "custom") onChange(range === "all" ? undefined : rangeStart(range as ChartRange)); }} />;
   return editable ? <div className={`usage-date-range${custom || !active ? " custom" : ""}`}>{picker}{custom || !active ? <CustomDates key={includeTime ? "time" : "date"} bounds={bounds} onChange={onChange} includeTime={includeTime} /> : null}</div> : picker;
@@ -176,10 +185,10 @@ export function ChartSelect<T extends string>({ label, ariaLabel = label, value,
 export type PeriodView = { period: ChartPeriod; hours: number; days: number };
 export function PeriodControl({ view, onChange }: { view: PeriodView; onChange: (next: Partial<PeriodView>) => void }) {
   const custom = view.period === "hours" || view.period === "days" ? view.period : null;
-  return <div className="usage-chart-field usage-period-control" role="group" aria-label="Chart interval">
-    <ChartSelect label="Interval" ariaLabel="Chart interval" value={view.period}
+  return <div className="usage-chart-field usage-period-control" role="group" aria-label="Time Bucket">
+    <ChartSelect label="Time Bucket" value={view.period}
       options={[["hour", "Hour"], ["day", "Day"], ["week", "Week"], ["month", "Month"], ["hours", "Custom hours…"], ["days", "Custom days…"]]}
-      title="Time covered by each chart column" onChange={period => onChange({ period })} />
+      title="Time covered by each chart bucket" onChange={period => onChange({ period })} />
     {custom ? <CustomPeriod key={custom} period={custom} value={view[custom]} onChange={value => onChange({ [custom]: value })} /> : null}
   </div>;
 }
@@ -188,11 +197,10 @@ function CustomPeriod({ period, value, onChange }: { period: "hours" | "days"; v
   const [draft, setDraft] = useState(String(value));
   useEffect(() => setDraft(String(value)), [value]);
   return <label className="usage-period-custom">
-    <span>Every</span>
     <input type="number" aria-label={`Number of ${period}`} min={1} max={10000} step={1} value={draft}
+      title={`Number of ${period} per interval`}
       onChange={event => { setDraft(event.target.value); if (validPeriodCount(event.target.valueAsNumber)) onChange(event.target.valueAsNumber); }}
       onBlur={() => setDraft(String(value))} />
-    <span>{period}</span>
   </label>;
 }
 
@@ -203,12 +211,33 @@ export function ScaleControl({ value, onChange, percent = false }: { value: Char
     title={descriptions[percent ? "linear" : value]} note={percent ? "Shares use a linear scale." : undefined} onChange={onChange} />;
 }
 
-export function RollingControl({ value, period, count = 1, onChange }: { value: number; period: ChartPeriod; count?: number; onChange: (next: number) => void }) {
-  const unit = chartPeriods[period].unit;
-  return <ChartSelect label="Smoothing" value={String(value <= 1 ? 0 : value)}
-    options={[["0", "Off"], ...Array.from({ length: 9 }, (_, index): [string, string] => [String(index + 2), `${(index + 2) * count} ${unit}s`])]}
-    title="Trailing average including the current interval. Off shows the original values. Empty intervals count as zero; the start of the range uses available intervals only."
-    onChange={next => onChange(Number(next))} />;
+export function DisplayControl({ value = "interval", onChange }: { value?: ChartDisplay; onChange: (next: ChartDisplay) => void }) {
+  return <ChartSelect label="Display" value={value} options={[["interval", "Per interval"], ["cumulative", "Cumulative"]]} onChange={onChange} />;
+}
+
+export function SmoothingControl({ value, unit, onChange, disabled = false, note = "Trailing average · includes preceding history" }: { value: number; unit: string; onChange: (next: number) => void; disabled?: boolean; note?: string }) {
+  const [draft, setDraft] = useState(String(value));
+  const previous = useRef(value >= 2 ? value : 7);
+  useEffect(() => { setDraft(String(value)); if (value >= 2) previous.current = value; }, [value]);
+  // Older links and preferences can contain the former one-interval no-op.
+  // Upgrade them through the owner so the chart and its URL stay in sync.
+  useEffect(() => { if (value === 1) onChange(2); }, [value, onChange]);
+  const enabled = value > 0;
+  return <div className="usage-chart-field usage-smoothing-control" role="group" aria-label="Chart smoothing">
+    <div className="usage-smoothing-row">
+      <ChartSelect label="Smoothing" value={enabled ? "on" : "off"} options={[["off", "Off"], ["on", "On"]]} disabled={disabled}
+        onChange={next => onChange(next === "off" ? 0 : previous.current)} />
+      {enabled ? <label className="usage-smoothing-input"><input type="number" aria-label="Smoothing window" min={2} step={1} value={draft} disabled={disabled}
+        title="Trailing average window in intervals, including history before the selected range."
+        onChange={event => { setDraft(event.target.value); if (validRollingPeriods(event.target.valueAsNumber) && event.target.valueAsNumber >= 2) onChange(event.target.valueAsNumber); }} onBlur={() => setDraft(String(value))} /><span>{unit}</span></label> : null}
+    </div>
+    {enabled || disabled ? <span className="usage-chart-control-note">{note}</span> : null}
+  </div>;
+}
+
+export function RollingControl({ value, period, count = 1, onChange, disabled, note, display }: { value: number; period: ChartPeriod; count?: number; onChange: (next: number) => void; disabled?: boolean; note?: string; display?: ChartDisplay }) {
+  const cumulative = display === "cumulative";
+  return <SmoothingControl value={cumulative ? 0 : value} unit={`${count > 1 ? `× ${count} ` : ""}${chartPeriods[period].unit}s`} onChange={onChange} disabled={disabled || cumulative} note={cumulative ? "Cumulative values use original amounts. Smoothing applies per interval." : note} />;
 }
 
 // The legend can name even a single series. Hovering a column shows a key of the series
@@ -216,10 +245,10 @@ export function RollingControl({ value, period, count = 1, onChange }: { value: 
 // With onSelect, clicking a key selects its series: only selected series are
 // drawn and the rest stay in the key, dimmed. With onRange, dragging across
 // columns (or clicking or pressing Enter on one) picks a time range.
-export function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, periodCount = 1, rollingPeriods = 0, scale = defaultChartScale, format, tickFormat = format, noun, loading, error, legend = false, selected = [], excluded = false, percent = false, onSelect, onExpand, onRange }: {
+export function StackedColumns({ title, controls, series, buckets: sourceBuckets, period, periodCount = 1, rollingPeriods = 0, display = "interval", cumulativeStart, scale = defaultChartScale, format, tickFormat = format, noun, loading, error, legend = false, selected = [], excluded = false, percent = false, onSelect, onExpand, onRange }: {
   title: string; controls: React.ReactNode; series: ChartSeries[]; buckets: ChartBucket[]; period: ChartPeriod; periodCount?: number;
   format: (value: number) => string; tickFormat?: (value: number) => string; noun: string; loading: boolean; error: string; legend?: boolean;
-  selected?: string[]; excluded?: boolean; percent?: boolean; rollingPeriods?: number; scale?: ChartScale; onSelect?: (key: string | null, action: LegendAction) => void; onExpand?: () => void; onRange?: (first: ChartBucket, last: ChartBucket) => void;
+  selected?: string[]; excluded?: boolean; percent?: boolean; rollingPeriods?: number; display?: ChartDisplay; cumulativeStart?: Date; scale?: ChartScale; onSelect?: (key: string | null, action: LegendAction) => void; onExpand?: () => void; onRange?: (first: ChartBucket, last: ChartBucket) => void;
 }) {
   const root = useRef<HTMLDivElement>(null), tipRef = useRef<HTMLDivElement>(null), bars = useRef<HTMLDivElement>(null);
   const [tip, setTip] = useState<{ bucket: ChartBucket; x: number; width: number; top: number } | null>(null);
@@ -228,8 +257,11 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   const dragRef = useRef(drag);
   const moveDrag = (next: typeof drag) => { dragRef.current = next; setDrag(next); };
   const drawn = selected.length ? series.filter(item => excluded ? !selected.includes(item.key) : selected.includes(item.key)) : series;
-  const averagedBuckets = useMemo(() => rollingAverageBuckets(sourceBuckets, rollingPeriods), [sourceBuckets, rollingPeriods]);
-  useEffect(() => setTip(null), [rollingPeriods]);
+  const cumulative = display === "cumulative";
+  // A cumulative line always shows exact totals. Retain the interval smoothing
+  // setting in view state, but don't average away the accumulated amounts.
+  const averagedBuckets = useMemo(() => (cumulative ? cumulativeBuckets(sourceBuckets) : rollingAverageBuckets(sourceBuckets, rollingPeriods, { period, count: periodCount })).filter(bucket => !bucket.history), [sourceBuckets, rollingPeriods, cumulative, period, periodCount]);
+  useEffect(() => setTip(null), [rollingPeriods, display, sourceBuckets, selected.join("\u0000"), excluded, percent]);
   const buckets = percent ? averagedBuckets.map(bucket => {
     const total = drawn.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0);
     const values = Object.fromEntries(drawn.map(item => [item.key, total ? 100 * (bucket.values[item.key] ?? 0) / total : 0]));
@@ -237,13 +269,19 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
     return { ...bucket, values, parts };
   }) : averagedBuckets;
   const total = (bucket: ChartBucket) => drawn.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0);
-  const { y, ticks, split } = percent ? { y: (value: number) => value, ticks: [25, 50, 75, 100], split: undefined } : columnScale(buckets.map(total), scale);
+  const { y, ticks, split } = percent ? { y: (value: number) => value, ticks: [25, 50, 75, 100], split: undefined } : columnScale(cumulative ? buckets.map(bucket => drawn.reduce((peak, item) => Math.max(peak, bucket.values[item.key] ?? 0), 0)) : buckets.map(total), scale);
   const unit = periodUnit(period, periodCount), stacked = drawn.length > 1;
   const averageDuration = (size: number) => `${size * periodCount}-${chartPeriods[period].unit}`;
-  const averageLabel = rollingPeriods > 1 ? `${averageDuration(rollingPeriods)} rolling average` : "";
+  const averageLabel = !cumulative && rollingPeriods > 1 ? `${averageDuration(rollingPeriods)} rolling average` : "";
   const chartLabel = `${averageLabel ? `${title}; ${averageLabel}` : title}; ${percent || scale === "linear" ? "linear" : scale === "logarithmic" ? "logarithmic" : "linear and logarithmic"} scale`;
   const label = (date: Date) => isHourly(period) ? date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }) : period === "month" ? date.toLocaleDateString(undefined, { month: "short", year: "numeric" }) : date.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(period === "day" && buckets.length > 120 ? { year: "2-digit" } : {}) });
-  const heading = (bucket: ChartBucket) => `${period === "week" ? "Week of " : ""}${label(bucket.date)}${averageLabel ? ` · ${averageDuration(bucket.windowSize ?? rollingPeriods)} average` : ""}`;
+  const heading = (bucket: ChartBucket) => {
+    if (cumulative) {
+      const end = new Date(bucket.date); nextPeriod(end, period, periodCount);
+      return `Cumulative through ${label(new Date(end.getTime() - 1))}`;
+    }
+    return `${period === "week" ? "Week of " : ""}${label(bucket.date)}${averageLabel ? ` · ${averageDuration(bucket.windowSize ?? rollingPeriods)} average` : ""}`;
+  };
   const suffix = noun ? ` ${noun}` : "";
   const present = (bucket: ChartBucket) => drawn.filter(item => (bucket.values[item.key] ?? 0) > 0).sort((left, right) => bucket.values[right.key] - bucket.values[left.key]);
   const describe = (bucket: ChartBucket) => `${heading(bucket)}: `
@@ -272,6 +310,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
   };
   const span = (value: { anchor: number; current: number } | null) => value ? [Math.min(value.anchor, value.current), Math.max(value.anchor, value.current)] : null;
   const picked = span(drag);
+  const firstCumulativeBucket = () => ({ ...buckets[0], date: cumulativeStart ?? buckets[0].date });
   const picking = onRange && buckets.length ? {
     onPointerDown(event: React.PointerEvent<HTMLDivElement>) {
       if (event.button !== 0) return;
@@ -288,7 +327,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
       if (!range) return;
       moveDrag(null);
       setTip(null);
-      onRange(buckets[range[0]], buckets[range[1]]);
+      onRange(cumulative && range[0] === range[1] ? firstCumulativeBucket() : buckets[range[0]], buckets[range[1]]);
     },
     onPointerCancel() { moveDrag(null); },
   } : {};
@@ -310,18 +349,24 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
           : <React.Fragment key="ungrouped">{items}</React.Fragment>;
       }) : null}
       {selected.length > 0 ? <button type="button" className="usage-legend-item usage-legend-clear" onClick={() => onSelect?.(null, "clear")}>Show all</button> : null}
-      {onRange ? <span className="usage-chart-hint">{series.some(selectable) ? "Click a key for filter options · drag" : "Drag"} across columns to filter dates</span> : null}
+      {onRange ? <span className="usage-chart-hint">{series.some(selectable) ? "Click a key for filter options · " : ""}{cumulative ? "click a point for its cumulative range · drag to filter dates" : "Drag across columns to filter dates"}</span> : null}
     </div> : null}
     {error ? <p className="query-table-error">{error}</p> : null}
     <div className={`usage-chart-plot${split ? " broken" : ""}`}>
       {split ? <div className="usage-chart-log" aria-hidden="true"><span>log scale</span></div> : null}
       {ticks.map(tick => <div key={tick} className="usage-chart-grid" style={{ bottom: `${y(tick)}%` }} aria-hidden="true"><span>{tickFormat(tick)}</span></div>)}
       <div ref={bars} className={`usage-chart-bars ${density} ${loading ? "loading" : ""} ${onRange ? "pickable" : ""}`} role="list" aria-busy={loading} aria-label={split ? `${chartLabel}; linear up to ${tickFormat(split)}, logarithmic above` : chartLabel} {...picking}>
+        {cumulative && buckets.length ? <svg className="usage-chart-lines" viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
+          {drawn.map(item => <path key={item.key} fill="none" stroke={item.color} strokeWidth="2" vectorEffect="non-scaling-stroke"
+            d={`M ${500 / buckets.length} ${100 - y(buckets[0].values[item.key] ?? 0)} ${buckets.map((bucket, index) => `L ${1000 * (index + .5) / buckets.length} ${100 - y(bucket.values[item.key] ?? 0)}`).join(" ")}${buckets.length === 1 ? ` L 1000 ${100 - y(buckets[0].values[item.key] ?? 0)}` : ""}`} />)}
+        </svg> : null}
         {buckets.map((bucket, index) => {
           const className = [tip?.bucket.key === bucket.key && !drag ? "active" : "", picked && index >= picked[0] && index <= picked[1] ? "picked" : ""].filter(Boolean).join(" ");
           return <span key={bucket.key} role="listitem" tabIndex={0} aria-label={describe(bucket)} className={className} onMouseEnter={event => show(event, bucket)} onFocus={event => show(event, bucket)} onMouseLeave={() => setTip(null)} onBlur={() => setTip(null)}
-            onKeyDown={onRange ? event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onRange(bucket, bucket); } } : undefined}>
-            <ColumnMarks bucket={bucket} series={drawn} scale={y} percent={percent} />
+            onKeyDown={onRange ? event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onRange(cumulative ? firstCumulativeBucket() : bucket, bucket); } } : undefined}>
+            {cumulative ? <>{tip?.bucket.key === bucket.key && !drag ? <span className="usage-chart-line-focus" aria-hidden="true">
+              {drawn.map(item => <i key={item.key} className="usage-chart-line-point" style={{ bottom: `${y(bucket.values[item.key] ?? 0)}%`, background: item.color }} />)}
+            </span> : null}</> : <ColumnMarks bucket={bucket} series={drawn} scale={y} percent={percent} />}
           </span>;
         })}
       </div>
@@ -330,7 +375,7 @@ export function StackedColumns({ title, controls, series, buckets: sourceBuckets
         <span>{picked[0] === picked[1] ? heading(buckets[picked[0]]) : `${label(buckets[picked[0]].date)} – ${label(buckets[picked[1]].date)}`}</span>
       </div> : null}
     </div>
-    {buckets.length === 5000 ? <p className="muted">Showing the latest 5,000 periods. Narrow the date range to see earlier activity.</p> : null}
+    {buckets.length === 5000 ? <p className="muted">Showing the latest 5,000 periods.{cumulative ? " Cumulative balances include earlier activity in the selected range." : " Narrow the date range to see earlier activity."}</p> : null}
     <div className="usage-chart-axis"><span>{buckets.length ? label(buckets[0].date) : ""}</span><span>{middle && buckets.length > 4 ? label(middle.date) : ""}</span><span>{!last ? "" : last.key !== periodKey(new Date(), period, periodCount) ? label(last.date) : period === "day" ? "today" : `this ${unit}`}</span></div>
     {tip && !drag ? <div className="usage-chart-tip" ref={tipRef} role="status">
       <div className="usage-chart-tip-head">{heading(tip.bucket)}</div>

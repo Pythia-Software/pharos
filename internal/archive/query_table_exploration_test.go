@@ -65,6 +65,9 @@ func TestQueryDatasetsHTTP(t *testing.T) {
 			if groups = 2_000; dataset == "usage" {
 				groups = 100_000
 			}
+			if dataset == "tools" {
+				groups = 10_000
+			}
 			if handshake.MetricCapabilities.Version != 2 || handshake.MetricCapabilities.MaxGroups != groups {
 				t.Fatalf("incorrect advertised V2 budgets: %+v", handshake.MetricCapabilities)
 			}
@@ -78,6 +81,11 @@ func TestQueryDatasetsHTTP(t *testing.T) {
 				t.Fatal("rows", w.Code, w.Body.String())
 			}
 			if len(page.Rows) > 0 {
+				for _, field := range queryRowActionFields(dataset, []string{"id"}) {
+					if _, ok := page.Rows[0][field]; !ok {
+						t.Fatalf("hidden action identity missing: %s", field)
+					}
+				}
 				item := call(http.MethodGet, fmt.Sprintf("/api/query/%s/item?id=%s&find=absent", dataset, url.QueryEscape(fmt.Sprint(page.Rows[0]["id"]))), nil)
 				if item.Code != 200 || strings.Contains(item.Body.String(), `"row":null`) {
 					t.Fatal("item", item.Code, item.Body.String())
@@ -178,6 +186,55 @@ func TestQueryDatasetsHTTP(t *testing.T) {
 	server.ServeHTTP(w, r)
 	if w.Code != 403 {
 		t.Fatal("cross-origin write accepted", w.Code)
+	}
+}
+
+// Large payloads belong to identity-based Details requests; even a minimal
+// collection projection retains the small identities needed for exact links.
+func TestUsageQueryItemsRetainSourceAndLoadPayloadOnDemand(t *testing.T) {
+	catalog, config := testCatalog(t)
+	seedToolCalls(t, catalog, 1)
+	tx := seedTx(t, catalog.DB)
+	exec := func(statement string, args ...any) {
+		t.Helper()
+		if _, err := tx.Exec(statement, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at)
+        SELECT 'call-message',conversation_id,'call-message','assistant','tool_call','{"input":{"command":"go test ./..."}}','call-hash',started_at FROM tool_calls WHERE id='call-0'`)
+	result, _ := json.Marshal(map[string]any{"content": strings.Repeat("Result content ", 2000)})
+	exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at)
+        SELECT 'result-message',conversation_id,'result-message','tool','tool_result',?,'result-hash',started_at FROM tool_calls WHERE id='call-0'`, string(result))
+	exec(`UPDATE tool_calls SET call_message_id='call-message',result_message_id='result-message' WHERE id='call-0'`)
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	server := testServer(t, config, catalog)
+	w := queryExplorationCall(server, config.APIToken, "POST", "/api/query/tool_calls/rows-v2", `{"version":2,"profile":"qt-sqlite-v1","select":["id"],"limit":1}`)
+	var collection struct {
+		Rows []map[string]any `json:"rows"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &collection) != nil || len(collection.Rows) != 1 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	row := collection.Rows[0]
+	if row["call_message_id"] != "call-message" || row["result_message_id"] != "result-message" || row["conversation_id"] == nil || row["workspace_id"] == nil {
+		t.Fatal(row)
+	}
+	if _, exists := row["result_text"]; exists {
+		t.Fatal("list loaded a detail payload")
+	}
+	w = queryExplorationCall(server, config.APIToken, "GET", "/api/query/tool_calls/item?id=call-0&find=absent", "")
+	var item struct {
+		Row map[string]any `json:"row"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &item) != nil {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	row = item.Row
+	if !strings.Contains(firstString(row["input_text"]), "go test") || row["result_text_truncated"] != true || len([]rune(firstString(row["result_text"]))) > 20001 || row["commands"] == nil || row["urls"] == nil || row["call_message_id"] != "call-message" {
+		t.Fatalf("incomplete on-demand properties: truncated=%v commands=%T urls=%T input=%q", row["result_text_truncated"], row["commands"], row["urls"], row["input_text"])
 	}
 }
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeIntervals, workspaceSpans, concurrencySpans, concurrencyUnit, conversationTimings, formatConcurrencyDuration, clipIntervals, workSessions, concurrencyMetrics, stackSegments, zonedDayBounds } from "../../../src/concurrency-data";
+import { mergeIntervals, workspaceSpans, concurrencyAverage, concurrencySpans, concurrencyUnit, conversationTimings, formatConcurrencyDuration, clipIntervals, workSessions, concurrencyMetrics, stackSegments, zonedDayBounds } from "../../../src/concurrency-data";
 import { threadedSummaryWindow, openConcurrencyModal, closeConcurrencyModal } from "../../../src/concurrency-store";
 import { normalizeConcurrencySettings, resolveConcurrencyRange } from "../../../src/concurrency-settings";
 
@@ -262,13 +262,28 @@ test("opening and closing parallelism preserve the underlying page and query", (
 
 test("persistent settings reject invalid values and retain valid graph and zoom choices", () => {
   const saved = normalizeConcurrencySettings({ mode: "model", gap: 15, day: "2026-10-07", repository: "pharos", workspace: "worktree", zoom: [100, 200], showConversations: true });
-  assert.deepEqual(saved, { mode: "model", counting: "workspace", agent: "", gap: 15, day: "2026-10-07", range: "day", startDay: "", endDay: "", repository: "pharos", workspace: "worktree", zoom: [100, 200], showConversations: true });
+  assert.deepEqual(saved, { mode: "model", counting: "workspace", agent: "", gap: 15, day: "2026-10-07", range: "day", startDay: "", endDay: "", repository: "pharos", workspace: "worktree", zoom: [100, 200], showConversations: true, smoothingMinutes: 0 });
   const invalid = normalizeConcurrencySettings({ mode: "unknown", gap: 90, day: 4, repository: [], workspace: 123, zoom: [200, 100] });
-  assert.deepEqual(invalid, { mode: "user", counting: "workspace", agent: "", gap: 60, day: "", range: "day", startDay: "", endDay: "", repository: "", workspace: "", zoom: null, showConversations: false });
+  assert.deepEqual(invalid, { mode: "user", counting: "workspace", agent: "", gap: 60, day: "", range: "day", startDay: "", endDay: "", repository: "", workspace: "", zoom: null, showConversations: false, smoothingMinutes: 0 });
   const agents = normalizeConcurrencySettings({ counting: "agent", agent: "conversation", workspace: "checkout" });
   assert.equal(agents.counting, "agent");
   assert.equal(agents.agent, "conversation");
   assert.equal(normalizeConcurrencySettings({ counting: "invalid", agent: 123 }).counting, "workspace");
+  assert.equal(normalizeConcurrencySettings({ smoothingMinutes: 1440 }).smoothingMinutes, 1440);
+  assert.equal(normalizeConcurrencySettings({ smoothingMinutes: -2 }).smoothingMinutes, 0);
+});
+
+test("parallelism smoothing weights elapsed occupancy and idle time without changing ribbons", () => {
+  const spans = new Map([["a", [[0, 10 * minute]]], ["b", [[0, 5 * minute]]]]);
+  const before = structuredClone(spans);
+  const points = concurrencyAverage(spans, [0, 20 * minute], 10 * minute, 4);
+  assert.deepEqual(points.map(point => point.value), [2, 2, 1.5, 0.5, 0]);
+  assert.deepEqual(concurrencyAverage(spans, [0, 20 * minute], 100000 * minute, 4).map(point => point.value), [2, 2, 1.5, 1, 0.75]);
+  assert.deepEqual(concurrencyAverage(spans, [0, 20 * minute], 0), []);
+  assert.deepEqual(spans, before);
+  const history = new Map([["earlier", [[-10 * minute, 0]]]]);
+  assert.deepEqual(concurrencyAverage(history, [0,20 * minute],10 * minute,4,-20 * minute).map(point=>point.value),[1,0.5,0,0,0], 'the first visible point incorporates activity before the range');
+  assert.deepEqual(concurrencyAverage(history, [0,20 * minute],10 * minute,4,-5 * minute).map(point=>point.value),[1,0.5,0,0,0], 'only available captured history contributes at the capture boundary');
 });
 
 test("date presets use inclusive calendar days ending at the latest captured day", () => {

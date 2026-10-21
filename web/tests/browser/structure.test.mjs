@@ -23,19 +23,43 @@ const ROUTES = [
   { name: "TL1 follow-ups", url: "/tl1/followups", ready: "#tl1-followup-next tbody tr" },
   { name: "TL1 quality", url: "/tl1/quality", ready: "#tl1-errors" },
   { name: "TL1 runs", url: "/tl1/runs", ready: "#tl1Page .qt-row" },
-  { name: "Usage tokens", url: "/usage?usage=tokens&machine_view=tokens", ready: "#queryTableUsage .usage-chart" },
-  { name: "Usage machine time", url: "/usage?usage=tokens&machine_view=time", ready: ".machine-call-surface .qt-row" },
-  { name: "Usage parallelism", url: "/usage?usage=tokens&machine_view=parallelism&machine_demo=1", ready: ".concurrency-chart svg" },
-  { name: "Human Words", url: "/usage?usage=writing", ready: ".writing-panel .usage-chart" },
-  { name: "Human Words messages", url: "/usage?usage=writing&writing=messages", ready: "#queryTableUsage .qt-row" },
-  { name: "Carbon Impact", url: "/usage?usage=carbon", ready: "#carbonSummary" },
-  { name: "Usage conversations", url: "/usage?usage=conversations", ready: "#queryTableUsage .qt-row" },
+  { name: "Analyze tokens", url: "/analyze?analyze_view=tokens&machine_view=tokens", ready: "#queryTableUsage .usage-chart" },
+  { name: "Analyze machine time", url: "/analyze?analyze_view=tokens&machine_view=time", ready: ".machine-call-surface .qt-row" },
+  { name: "Analyze parallelism", concurrency: true, url: "/analyze?analyze_view=tokens&machine_view=parallelism", ready: ".concurrency-chart svg" },
+  { name: "Human Words", url: "/analyze?analyze_view=writing", ready: ".writing-panel .usage-chart" },
+  { name: "Human Words messages", url: "/analyze?analyze_view=writing&writing=messages", ready: "#queryTableUsage .qt-row" },
+  { name: "Carbon Impact", url: "/analyze?analyze_view=carbon", ready: "#carbonSummary" },
+  { name: "Analyze conversations", url: "/analyze?analyze_view=conversations", ready: "#queryTableUsage .qt-row" },
+  { name: "Analyze workspace dashboards", url: "/analyze", ready: ".usage-dashboard .usage-chart" },
+  { name: "Analyze workspace cumulative", url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify({ display: "cumulative", period: "days", days: 3, split: "model_family", metric: "percent_cost" }))}`, ready: ".usage-dashboard .usage-chart-lines" },
+  { name: "Analyze cumulative human", url: `/analyze?analyze_topic=human&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20}))}`, ready: ".usage-dashboard .usage-chart-lines" },
+  { name: "Analyze cumulative skills", url: `/analyze?analyze_topic=skills&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20}))}`, ready: ".usage-dashboard .usage-chart-lines" },
+  { name: "Analyze cumulative time", url: `/analyze?analyze_topic=time&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20}))}`, ready: ".usage-dashboard .usage-chart-lines" },
+  { name: "Analyze cumulative carbon", url: `/analyze?analyze_topic=carbon&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20}))}`, ready: ".usage-dashboard .usage-chart-lines" },
+  { name: "Analyze cumulative tools", url: `/analyze?analyze_topic=tools&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20, "view": "trend", "metric": "mean_time", "period": "day"}))}`, ready: ".usage-tools-dashboard .qt-metric-mark" },
+  { name: "Analyze cumulative mcp", url: `/analyze?analyze_topic=mcp&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20, "view": "trend", "metric": "mean_time", "period": "day"}))}`, ready: ".usage-mcp-dashboard .qt-metric-mark" },
+  { name: "Analyze workspace custom intervals", url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify({ period: "hours", hours: 6, rollingPeriods: 37 }))}`, ready: ".usage-dashboard .usage-period-custom input" },
+  { name: "Analyze workspace human dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=human", ready: ".usage-dashboard .writing-panel .usage-chart" },
+  { name: "Analyze workspace tools dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=tools", ready: ".usage-tools-dashboard .qt-metric" },
+  // Seven weeks keeps the history request within the stub's equality-filter
+  // capability; wider day regex filters are exercised against the Go service.
+  { name: "Analyze workspace tools trends", url: `/analyze?analyze_workspace=1&analyze_topic=tools&analyze_chart=${encodeURIComponent(JSON.stringify({ metric: "failure_rate", split: "tool_category", view: "trend", period: "week", rollingPeriods: 7 }))}`, ready: ".usage-tools-dashboard .qt-metric-mark" },
+  { name: "Analyze workspace skills dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=skills", ready: ".usage-dashboard .usage-chart" },
+  { name: "Analyze workspace time dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=time", ready: ".usage-dashboard .usage-chart" },
+  { name: "Analyze workspace parallelism dashboard", concurrency: true, url: "/analyze?analyze_workspace=1&analyze_topic=parallelism", ready: ".usage-dashboard .concurrency-chart svg" },
+  { name: "Analyze workspace carbon dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=carbon", ready: ".usage-dashboard #carbonSummary" },
+  { name: "Analyze workspace query", url: "/analyze?analyze_workspace=1&analyze_mode=query&analyze_data=tool_calls", ready: ".usage-workspace-table .qt-row" },
+  { name: "Analyze workspace optional search", url: "/analyze?analyze_workspace=1&analyze_mode=search&analyze_data=tool_calls", ready: ".usage-workspace-table .qt-row" },
   { name: "Tool calls", url: "/tools", ready: "#toolsPage .qt-row" },
   { name: "Tool summary", url: "/tools?tools_view=summary", ready: "#toolsPage .qt-row" },
   { name: "Skills", url: "/tools?tools_view=skills", ready: ".skill-usages .qt-row" },
   { name: "Findings", url: "/findings", ready: ".findings-card" },
   { name: "Finding detail", url: "/findings?finding=drift%3Arepo%3Arepo_tl1%3Aghi", ready: ".findings-detail svg" },
-  { name: "MCP", url: "/mcp", ready: ".mcp-history .qt-row" },
+  { name: "MCP dashboard", url: "/analyze?analyze_topic=mcp", ready: ".usage-mcp-dashboard .qt-metric-bar-row" },
+  { name: "MCP trends", url: `/analyze?analyze_topic=mcp&analyze_chart=${encodeURIComponent(JSON.stringify({ metric: "failure_rate", split: "tool_name", view: "trend", period: "week", rollingPeriods: 37 }))}`, ready: ".usage-mcp-dashboard .qt-metric-mark" },
+  { name: "MCP query", url: "/analyze?analyze_mode=query&analyze_data=mcp_calls&analyze_topic=mcp&analyze_search=1", ready: ".usage-workspace-table .qt-row" },
+  { name: "MCP legacy link", url: "/mcp", ready: ".usage-mcp-dashboard .qt-metric" },
+  { name: "MCP settings", url: "/settings/mcp", ready: "#mcpSettingsPage .mcp-setup-grid" },
   { name: "Library health", url: "/settings", ready: "#healthCards .panel:not([aria-busy])" },
   { name: "Sources", url: "/settings/sources", ready: "#sourceGrid .source-card" },
   { name: "Capture & index", url: "/settings/sync", ready: "#syncDashboard .sync-panel table" },
@@ -46,7 +70,7 @@ const ROUTES = [
   { name: "Long transcript", url: `${work}/conversation/${rootConversation}`, ready: ".conversation-panel .turn" },
   { name: "Child transcript", url: `${work}/conversation/conv-nested`, ready: ".conversation-panel .turn" },
   { name: "Quick search", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.keyboard.press("ControlOrMeta+k"), shown: "#searchDialog[open]" },
-  { name: "Usage summary", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.locator("#usageSummaryToggle").click(), shown: "#usageSummary" },
+  { name: "Analyze summary", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.locator("#usageSummaryToggle").click(), shown: "#usageSummary" },
   { name: "Bookmarks drawer", url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-show-nav-button": true }, open: async page => { await page.locator("#navigatorToggle").click(); await page.locator("#bookmarksToggle").click(); }, shown: "#bookmarksDrawer.open" },
   { name: "History drawer", url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-show-nav-button": true }, open: async page => { await page.locator("#navigatorToggle").click(); await page.locator("#historyToggle").click(); }, shown: "#historyDrawer.open" },
 ];
@@ -62,7 +86,7 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
     for (const viewport of WIDTHS) {
       const name = `${route.name} @ ${viewport.width}`;
       test(name, { skip }, async t => {
-        const app = await open(t, { url: route.url, viewport, ready: route.ready, preferences: route.preferences });
+        const app = await open(t, { url: route.url, viewport, ready: route.ready, preferences: route.preferences, concurrency: route.concurrency });
         if (route.open) {
           await route.open(app.page);
           await app.page.locator(route.shown).first().waitFor();
@@ -83,4 +107,38 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
       });
     }
   }
+});
+
+// Source links must open lazy tool bodies and paired results, including a
+// retained message containing several provider tool-use blocks.
+test("Usage source links reveal and highlight the exact call, result, or nearest event", { skip }, async t => {
+  const time = "2026-10-21T10:00:00Z";
+  const messages = [
+    { id: "prompt", native_id: "prompt", role: "user", kind: "message", text: "Inspect both files", created_at: time },
+    { id: "multi", native_id: "multi", role: "assistant", kind: "message", created_at: "2026-10-21T10:00:10Z", text: JSON.stringify({ message: { content: [
+      { type: "tool_use", id: "call-one", name: "Read", input: { file_path: "/one" } },
+      { type: "tool_use", id: "call-two", name: "Read", input: { file_path: "/two" } },
+    ] } }) },
+    ...["one", "two"].map((name, index) => ({ id: `result-${name}`, native_id: `result-${name}`, role: "tool", kind: "tool_result", call_id: `call-${name}`, text: JSON.stringify({ content: `Content of ${name}` }), created_at: `2026-10-21T10:00:${20 + index}Z` })),
+    { id: "next", native_id: "next", role: "user", kind: "message", text: "Continue", created_at: "2026-10-21T11:00:00Z" },
+  ];
+  messages.find(message => message.id === "result-two").text_clipped = true;
+  const api = {
+    "GET /api/work/:id/conversations/:conversation": { id: rootConversation, provider: "claude", messages },
+    "GET /api/messages/:id": { text: JSON.stringify({ content: "Content of two · full retained output" }) },
+  };
+  const { page, settled } = await open(t, { url: `${work}/conversation/${rootConversation}?message=result-two&call=call-two`, api });
+  const result = page.locator('.authorship-target[data-message-id="result-two"][data-call-id="call-two"]');
+  await result.waitFor({ state: "visible" });
+  await settled();
+  await page.waitForFunction(() => document.querySelector('.authorship-target[data-message-id="result-two"]')?.textContent.includes("full retained output"));
+  assert.match(await result.textContent(), /Content of two/);
+  assert.equal(new URL(page.url()).searchParams.get("message"), "result-two");
+  await page.evaluate(href => window.pharosNavigate(href), `${work}/conversation/${rootConversation}?message=multi&call=call-two`);
+  const call = page.locator('.event-body.authorship-target[data-message-id="multi"][data-call-id="call-two"]');
+  await call.waitFor({ state: "visible" });
+  assert.match(await call.textContent(), /\/two/);
+  await page.evaluate(href => window.pharosNavigate(href), `${work}/conversation/${rootConversation}?at=2026-10-21T10%3A00%3A20Z`);
+  await page.locator('.authorship-target[data-message-id="result-one"]').waitFor({ state: "visible" });
+  assert.equal(new URL(page.url()).searchParams.get("at"), "2026-10-21T10:00:20Z");
 });

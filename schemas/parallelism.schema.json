@@ -8,13 +8,13 @@
   "defaultSort": [{ "field": "started_at", "dir": "desc" }],
   "tiebreakSort": [{ "field": "id", "dir": "asc" }],
   "defaultSelect": [
-    { "field": "started_at", "width": 165 },
-    { "field": "unit_label", "width": 240 },
-    { "field": "repository_name", "width": 170 },
-    { "field": "level", "width": 80 },
-    { "field": "repo_level", "width": 95 },
-    { "field": "unit_hours", "width": 100 },
-    { "field": "elapsed_hours", "width": 110 }
+    {"field": "started_at", "width": 150},
+    {"field": "unit_label", "width": 230},
+    {"field": "repository_name", "width": 145},
+    {"field": "level", "width": 100},
+    {"field": "repo_level", "width": 110},
+    {"field": "unit_hours", "width": 100},
+    {"field": "elapsed_hours", "width": 110}
   ],
   "fields": [
     { "name": "id", "label": "Row ID", "type": "text", "group": "Evidence", "select": {"default": false}, "bindings": {"postgres": {"expr": "id", "synthetic": true}, "sqlite": {"expr": "r.\"id\""}} },
@@ -26,7 +26,7 @@
     { "name": "counting", "label": "Counting", "type": "enum", "group": "Settings", "select": {"default": false}, "filter": {"editor": "set", "values": {"source": "static", "options": [{"value": "workspace", "label": "Workspaces"}, {"value": "agent", "label": "Agent sessions"}]}}, "bindings": {"postgres": {"expr": "counting", "synthetic": true}, "sqlite": {"expr": "r.\"counting\""}}, "description": "What one unit is, from the Parallelism setting: a checkout location (workspace), or a top-level conversation with its continuations (agent session)." },
     { "name": "gap_minutes", "label": "Gap joined (min)", "type": "number", "group": "Settings", "render": "number", "select": {"default": false, "align": "right"}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "gap_minutes", "synthetic": true}, "sqlite": {"expr": "r.\"gap_minutes\"", "expressionNumeric": true}}, "description": "Idle minutes between a conversation's turns still counted as continuous work, from the Parallelism setting." },
     { "name": "unit_id", "label": "Unit ID", "type": "text", "group": "Unit", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "unit_id", "synthetic": true}, "sqlite": {"expr": "r.\"unit_id\""}}, "description": "The checkout location (or Pharos workspace without one) when counting workspaces; the top-level conversation ID when counting agent sessions. Count distinct for units active." },
-    { "name": "unit_label", "label": "Unit", "type": "text", "group": "Unit", "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "unit_label", "synthetic": true}, "sqlite": {"expr": "r.\"unit_label\""}}, "description": "Checkout folder name, or the top-level conversation's workspace title." },
+    {"name": "unit_label", "label": "Unit", "type": "text", "group": "Unit", "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "unit_label", "synthetic": true}, "sqlite": {"expr": "r.\"unit_label\""}}, "description": "Checkout folder name, or the top-level conversation's workspace title.", "render": "usage_conversation"},
     { "name": "repository_name", "label": "Repository", "type": "text", "group": "Unit", "aliases": ["repo"], "filter": {"values": {"source": "distinct"}}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "repository_name", "synthetic": true}, "sqlite": {"expr": "r.\"repository_name\""}}, "description": "Repository of the unit's top-level workspace; empty when none is recorded." },
     { "name": "workspace_name", "label": "Workspace", "type": "text", "group": "Unit", "select": {"default": false}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "workspace_name", "synthetic": true}, "sqlite": {"expr": "r.\"workspace_name\""}} },
     { "name": "location", "label": "Location", "type": "text", "group": "Unit", "render": "truncate", "select": {"default": false}, "bindings": {"postgres": {"expr": "location", "synthetic": true}, "sqlite": {"expr": "r.\"location\""}} },
@@ -40,9 +40,9 @@
     { "name": "elapsed_ms", "label": "Elapsed share (ms)", "type": "number", "group": "Measures", "render": "number", "select": {"default": false, "align": "right"}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "elapsed_ms", "synthetic": true}, "sqlite": {"expr": "r.\"elapsed_ms\"", "expressionNumeric": true}}, "description": "Unit time ÷ level. Summed over all units it is wall-clock time with any unit active, never double-counting overlap." },
     { "name": "repo_elapsed_ms", "label": "Repository elapsed share (ms)", "type": "number", "group": "Measures", "render": "number", "select": {"default": false, "align": "right"}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "repo_elapsed_ms", "synthetic": true}, "sqlite": {"expr": "r.\"repo_elapsed_ms\"", "expressionNumeric": true}}, "description": "Unit time ÷ repository level. Summed over a repository's rows it is wall-clock time with any of its units active." },
     { "name": "parallel_elapsed_ms", "label": "Parallel elapsed share (ms)", "type": "number", "group": "Measures", "render": "number", "select": {"default": false, "align": "right"}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "parallel_elapsed_ms", "synthetic": true}, "sqlite": {"expr": "r.\"parallel_elapsed_ms\"", "expressionNumeric": true}}, "description": "Elapsed share while two or more units were active. Summed, wall-clock time with 2+ active." },
-    { "name": "unit_hours", "label": "Unit hours", "type": "number", "group": "Measures", "render": "number", "select": {"align": "right"}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "unit_hours", "synthetic": true}, "sqlite": {"expr": "r.\"unit_hours\"", "expressionNumeric": true}}, "description": "Unit time in hours." },
-    { "name": "elapsed_hours", "label": "Elapsed hours", "type": "number", "group": "Measures", "render": "number", "select": {"align": "right"}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "elapsed_hours", "synthetic": true}, "sqlite": {"expr": "r.\"elapsed_hours\"", "expressionNumeric": true}}, "description": "Elapsed share in hours." },
-    { "name": "repo_elapsed_hours", "label": "Repository elapsed hours", "type": "number", "group": "Measures", "render": "number", "select": {"default": false, "align": "right"}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "repo_elapsed_hours", "synthetic": true}, "sqlite": {"expr": "r.\"repo_elapsed_hours\"", "expressionNumeric": true}}, "description": "Repository elapsed share in hours." },
-    { "name": "parallel_elapsed_hours", "label": "Parallel elapsed hours", "type": "number", "group": "Measures", "render": "number", "select": {"default": false, "align": "right"}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "parallel_elapsed_hours", "synthetic": true}, "sqlite": {"expr": "r.\"parallel_elapsed_hours\"", "expressionNumeric": true}}, "description": "Parallel elapsed share in hours." }
+    {"name": "unit_hours", "label": "Unit hours", "type": "number", "group": "Measures", "select": {"align": "right"}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "unit_hours", "synthetic": true}, "sqlite": {"expr": "r.\"unit_hours\"", "expressionNumeric": true}}, "description": "Unit time in hours.", "display": {"kind": "number", "decimals": 3}},
+    {"name": "elapsed_hours", "label": "Elapsed hours", "type": "number", "group": "Measures", "select": {"align": "right"}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "elapsed_hours", "synthetic": true}, "sqlite": {"expr": "r.\"elapsed_hours\"", "expressionNumeric": true}}, "description": "Elapsed share in hours.", "display": {"kind": "number", "decimals": 3}},
+    {"name": "repo_elapsed_hours", "label": "Repository elapsed hours", "type": "number", "group": "Measures", "select": {"default": false, "align": "right"}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "repo_elapsed_hours", "synthetic": true}, "sqlite": {"expr": "r.\"repo_elapsed_hours\"", "expressionNumeric": true}}, "description": "Repository elapsed share in hours.", "display": {"kind": "number", "decimals": 3}},
+    {"name": "parallel_elapsed_hours", "label": "Parallel elapsed hours", "type": "number", "group": "Measures", "select": {"default": false, "align": "right"}, "aggregate": {"groupable": true}, "bindings": {"postgres": {"expr": "parallel_elapsed_hours", "synthetic": true}, "sqlite": {"expr": "r.\"parallel_elapsed_hours\"", "expressionNumeric": true}}, "description": "Parallel elapsed share in hours.", "display": {"kind": "number", "decimals": 3}}
   ]
 }

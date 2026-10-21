@@ -3,6 +3,12 @@ import { isOrGroup, type WhereClause, type WhereTerm } from "@pythia-software/qu
 export type LegendAction = "only" | "toggle" | "exclude" | "clear";
 export type SliceValue = string | null;
 export type SliceSelection<Value> = { values: Value[]; excluded: boolean };
+export type ChartPresentation = { selection?: SliceSelection<string>; seriesLimit?: number };
+export function validChartPresentation(value: ChartPresentation): boolean {
+  return (value.seriesLimit === undefined || Number.isInteger(value.seriesLimit) && value.seriesLimit >= 1 && value.seriesLimit <= 1000)
+    && (value.selection === undefined || Boolean(value.selection) && typeof value.selection.excluded === "boolean" && Array.isArray(value.selection.values)
+      && value.selection.values.length <= 1000 && value.selection.values.every(item => typeof item === "string"));
+}
 
 function clauseSelection(clause: WhereClause, field: string): SliceSelection<SliceValue> | null {
   if (clause.field !== field) return null;

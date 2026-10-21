@@ -45,6 +45,8 @@ var writingMessageDataset = func() sqlDataset {
 		columns:    columns,
 		timestamps: map[string]string{"sent_at": "ma.sent_at"},
 		optionalJoins: map[string]string{
+			"m": "JOIN messages m ON m.id=ma.message_id",
+			"c": " JOIN conversations c ON c.id=ma.conversation_id",
 			"w": "LEFT JOIN workspaces w ON w.id=COALESCE(ma.work_id,ma.workspace_id)",
 			"r": " LEFT JOIN repositories r ON r.id=w.repository_id",
 		},

@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -35,11 +36,11 @@ func TestDevUIConcurrencyPrototypeIsOptionalAndAuthenticated(t *testing.T) {
 		handler.ServeHTTP(w, r)
 		return w
 	}
-	if w := serve("/usage", true, false); strings.Contains(w.Body.String(), "data-concurrency-prototype") {
+	if w := serve("/analyze", true, false); strings.Contains(w.Body.String(), "data-concurrency-prototype") {
 		t.Fatal("prototype enabled without a data file")
 	}
 	handler.concurrencyData = data
-	if w := serve("/usage", true, false); !strings.Contains(w.Body.String(), "<html data-concurrency-prototype>") {
+	if w := serve("/analyze", true, false); !strings.Contains(w.Body.String(), "<html data-concurrency-prototype>") {
 		t.Fatal("prototype not enabled for the opted-in dev UI")
 	}
 	path := "/api/usage/concurrency-prototype"
@@ -62,7 +63,16 @@ func TestDevUIServesCheckoutAndForwardsAPIWithToken(t *testing.T) {
 	}))
 	defer service.Close()
 	target, _ := url.Parse(service.URL)
-	assets := t.TempDir()
+	checkout := t.TempDir()
+	assets := filepath.Join(checkout, "internal", "archive", "assets")
+	for _, directory := range []string{assets, filepath.Join(checkout, "carbon")} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(checkout, "carbon", "co2_factors.json"), []byte(`{"local":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	write := func(name, text string) {
 		if err := os.WriteFile(filepath.Join(assets, name), []byte(text), 0o644); err != nil {
 			t.Fatal(err)
@@ -111,6 +121,18 @@ func TestDevUIServesCheckoutAndForwardsAPIWithToken(t *testing.T) {
 	if forwarded != nil {
 		t.Fatal("pages and assets must not reach the service")
 	}
+	for path, field := range map[string]string{"/api/health/carbon": "factors", "/api/query/usage/carbon": "factors", "/api/usage/summary": "carbon_factors"} {
+		response := serve(http.MethodGet, path, nil)
+		var body map[string]any
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		factors, ok := body[field].(map[string]any)
+		if response.Code != http.StatusOK || !ok || factors["local"] != true || body["ok"] != true {
+			t.Fatalf("checkout carbon factors at %s: %d %s", path, response.Code, response.Body.String())
+		}
+	}
+	forwarded = nil
 
 	api := serve(http.MethodPost, "/api/sync?kind=quick", map[string]string{"Origin": "http://evil.test", "Sec-Fetch-Site": "cross-site"})
 	if api.Code != http.StatusForbidden {
@@ -136,7 +158,7 @@ func TestDevUIServesCheckoutAndForwardsAPIWithToken(t *testing.T) {
 func TestDevUIDeepLoginPreservesFiltersAndReplacesStaleCookie(t *testing.T) {
 	service, _ := url.Parse("http://127.0.0.1:8806")
 	handler := newDevUI(t.TempDir(), service, "current-secret", 8807)
-	path := "/usage?machine_view=time&activity_days=14&activity_repo=repo%2Fa"
+	path := "/analyze?machine_view=time&activity_days=14&activity_repo=repo%2Fa"
 	request := httptest.NewRequest(http.MethodGet, path+"&token=current-secret", nil)
 	request.AddCookie(&http.Cookie{Name: handler.cookie, Value: "old-secret"})
 	response := httptest.NewRecorder()
@@ -145,14 +167,14 @@ func TestDevUIDeepLoginPreservesFiltersAndReplacesStaleCookie(t *testing.T) {
 		t.Fatalf("deep login: %d", response.Code)
 	}
 	location, err := url.Parse(response.Header().Get("Location"))
-	if err != nil || location.Path != "/usage" || location.Query().Get("machine_view") != "time" || location.Query().Get("activity_days") != "14" || location.Query().Get("activity_repo") != "repo/a" || location.Query().Has("token") {
+	if err != nil || location.Path != "/analyze" || location.Query().Get("machine_view") != "time" || location.Query().Get("activity_days") != "14" || location.Query().Get("activity_repo") != "repo/a" || location.Query().Has("token") {
 		t.Fatalf("login lost filters or retained token: %q", response.Header().Get("Location"))
 	}
 	cookies := response.Result().Cookies()
 	if len(cookies) != 1 || cookies[0].Name != handler.cookie || cookies[0].Value != "current-secret" || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteStrictMode {
 		t.Fatal("login did not replace stale cookie securely")
 	}
-	for _, path := range []string{"/usage?token=old-secret", "/api/ready?token=current-secret", "//evil.test/usage?token=current-secret"} {
+	for _, path := range []string{"/analyze?token=old-secret", "/api/ready?token=current-secret", "//evil.test/analyze?token=current-secret"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
 		if response.Code != http.StatusUnauthorized || response.Header().Get("Set-Cookie") != "" {

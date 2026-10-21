@@ -223,7 +223,7 @@ func TestToolCallCubeAnswersLikeTheCalls(t *testing.T) {
 			t.Fatalf("rows where %v: total %d, want %d", where, got.Total, want.Total)
 		}
 	}
-	for _, field := range []string{"tool_name", "day", "week", "command_name", "model_family", "model_effort", "exit_code", "host", "title", "error_type"} {
+	for _, field := range []string{"tool_name", "day", "week", "command_name", "model_family", "model_effort", "exit_code", "host", "title", "error_type", "activity", "operation_key", "operation_name"} {
 		for _, search := range []string{"", "o"} {
 			got, err := toolCallDataset.Distinct(ctx, catalog.DB, field, search, 50, schema)
 			if err != nil {

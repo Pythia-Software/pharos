@@ -1,34 +1,25 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { loadSchema, matchesClause, type WhereTerm } from "@pythia-software/query-table-core";
+import { loadSchema, type WhereTerm } from "@pythia-software/query-table-core";
 import type { QueryTableApi } from "@pythia-software/query-table-react";
 import { machineFilterKey, useDrilldownHistory, ZoomNavigation } from "./machine-navigation";
 import toolCallsDocument from "../../schemas/tool_calls.schema.json";
 import { MetricRequestError, postMetrics, postQueryV3Metrics } from "./metric-request";
 import { MachineAnalyticsTable, type MachineGrouping } from "./machine-analytics-table";
-import { activityPresentation, exampleTimeCalls, factsFromCalls, groupTime, machineDrilldownWhere, selectedMachineRepository, machineDay, shiftMachineDay, machineWhere, previousTimeWhere, relativeChange, timeAggregationWhere, timeAggregations, timeFacts, timeLabel, timeValue, totalTime, type MachineCall, type MachineScope, type MachineWindow, type DayTime, type MachineTime, type TimeMetric } from "./machine-activity-data";
+import { activityPresentation, groupTime, machineDrilldownWhere, selectedMachineRepository, machineDay, shiftMachineDay, machineWhere, previousTimeWhere, relativeChange, timeAggregationWhere, timeAggregations, timeFacts, timeLabel, timeValue, totalTime, type MachineCall, type MachineScope, type MachineWindow, type DayTime, type MachineTime, type TimeMetric } from "./machine-activity-data";
 
 type Row = Record<string, any>;
-export type MachineCallsSurface = (props: { scopeWhere: WhereTerm[]; appliedScope: React.MutableRefObject<WhereTerm[]>; localRows?: Row[]; header: (api: QueryTableApi<Row>) => React.ReactNode }) => React.ReactNode;
+export type MachineCallsSurface = (props: { scopeWhere: WhereTerm[]; appliedScope: React.MutableRefObject<WhereTerm[]>; header: (api: QueryTableApi<Row>) => React.ReactNode }) => React.ReactNode;
 const callSchema = loadSchema<MachineCall>(toolCallsDocument);
 const percent = (value: number, total: number) => total ? `${Math.round(value / total * 100)}%` : "—";
 const emptyTime: MachineTime = { facts: [], days: [] };
 
-export function filterExampleCalls(rows: MachineCall[], where: WhereTerm[]): MachineCall[] {
-  return rows.filter(row => where.every(term => "any" in term ? term.any.some(clause => matchesClause(row, clause, callSchema)) : matchesClause(row, term, callSchema)));
-}
-
-function useTimeFacts(where: WhereTerm[], scope: MachineScope, exampleRows: Row[] | undefined, previousRows: Row[], refresh: number) {
+function useTimeFacts(where: WhereTerm[], scope: MachineScope, refresh: number) {
   const priorWhere = scope.days ? previousTimeWhere(where, scope.days) : null;
-  const key = JSON.stringify([where, scope.days, Boolean(exampleRows), refresh]);
+  const key = JSON.stringify([where, scope.days, refresh]);
   const [state, setState] = useState<{ key: string; current: MachineTime; previous: MachineTime; error: string }>({ key: "", current: emptyTime, previous: emptyTime, error: "" });
   useEffect(() => {
     const controller = new AbortController();
     const period = scope.days ? "day" : "month";
-    if (exampleRows) {
-      try { setState({ key, current: factsFromCalls(filterExampleCalls(exampleRows, where), period), previous: priorWhere ? factsFromCalls(filterExampleCalls(previousRows, priorWhere), period) : emptyTime, error: "" }); }
-      catch (error) { setState({ key, current: emptyTime, previous: emptyTime, error: String(error) }); }
-      return () => controller.abort();
-    }
     async function load(filters: WhereTerm[]): Promise<MachineTime> {
       const where = timeAggregationWhere(filters), clauses = timeAggregations(period);
       try {
@@ -44,7 +35,7 @@ function useTimeFacts(where: WhereTerm[], scope: MachineScope, exampleRows: Row[
       .then(([current, previous]) => { if (!controller.signal.aborted) setState({ key, current, previous, error: "" }); })
       .catch(error => { if (!controller.signal.aborted) setState({ key, current: emptyTime, previous: emptyTime, error: error.message }); });
     return () => controller.abort();
-  }, [key, exampleRows, previousRows]);
+  }, [key]);
   return { ...state, loading: state.key !== key, current: state.key === key ? state.current : emptyTime, previous: state.key === key ? state.previous : emptyTime, compared: priorWhere !== null };
 }
 
@@ -85,12 +76,12 @@ function TimeTrend({ current, previous, days, window, metric, compared, onDay }:
   </div>;
 }
 
-function MachineTimeDashboard({ api, scope, window, exampleRows, previousRows, onRepository }: { api: QueryTableApi<Row>; scope: MachineScope; window: MachineWindow; exampleRows?: Row[]; previousRows: Row[]; onRepository: (repository: string) => void }) {
+function MachineTimeDashboard({ api, scope, window, onRepository }: { api: QueryTableApi<Row>; scope: MachineScope; window: MachineWindow; onRepository: (repository: string) => void }) {
   const where = (api.query.grouping?.source ?? api.query).where;
   const baseline = machineWhere(scope, window);
   // Native query restoration is asynchronous. Its empty undo history distinguishes
   // loading a saved view from a person changing the current exploration.
-  const navigation = useDrilldownHistory(where, JSON.stringify([scope, Boolean(exampleRows)]), filters => JSON.stringify(filters.map(machineFilterKey).sort()), api.canUndo);
+  const navigation = useDrilldownHistory(where, JSON.stringify(scope), filters => JSON.stringify(filters.map(machineFilterKey).sort()), api.canUndo);
   const extraFilters = where.filter(term => !baseline.some(base => machineFilterKey(base) === machineFilterKey(term)));
   const zoomed = extraFilters.length > 0;
   function restore(filters: WhereTerm[]) {
@@ -100,7 +91,7 @@ function MachineTimeDashboard({ api, scope, window, exampleRows, previousRows, o
   }
   const [refresh, setRefresh] = useState(0);
   useEffect(() => { const changed = () => setRefresh(value => value + 1); windowGlobal.addEventListener("pharos:machine-refresh", changed); return () => windowGlobal.removeEventListener("pharos:machine-refresh", changed); }, []);
-  const result = useTimeFacts(where, scope, exampleRows, previousRows, refresh);
+  const result = useTimeFacts(where, scope, refresh);
   const [measure, setMeasure] = useState<"hours" | "share">("hours");
   const [metric, setMetric] = useState<TimeMetric>("average");
   const [grouping, setGrouping] = useState<MachineGrouping>("operation");
@@ -164,17 +155,15 @@ function MachineTimeDashboard({ api, scope, window, exampleRows, previousRows, o
         <div className="machine-panel-heading machine-analytics-heading"><div><h3>Tool & command analytics</h3><p>Compare named tools and parsed command families. Inspect a group to filter its underlying calls.</p></div><label className="machine-chart-select">Group by<select aria-label="Analytics grouping" value={grouping} onChange={event => setGrouping(event.target.value as MachineGrouping)}><option value="operation">Command family / tool</option><option value="tool">Specific tool</option><option value="activity">Activity</option></select></label></div>
         <MachineAnalyticsTable current={current} previous={previous} grouping={grouping} compared={result.compared} filter={filter} selectionKey={selectionKey} />
       </>}
-      <details className="machine-methodology"><summary>How identities and time are measured</summary><p>Command families use the parsed program and named subcommand, such as npm run test:unit. Environment wrappers, paths to executables, and arguments are kept in the full invocation below. Different scripts, subcommands, named tools, and MCP servers retain separate identities. Activity categories help navigation; unclassified tools remain individually named.</p><p>Total time sums recorded tool durations, including overlapping calls. Time per timed run divides that sum by the number of calls with recorded timing, including recorded zeroes; calls without durations are excluded from the mean. An empty day has no per-run measurement. A family can still contain different flags or targets: inspect its exact invocations before attributing a change to performance. A run means one recorded tool call, not a completed user task.</p><p>Compound commands keep one primary family and their full source invocation. Their duration is counted once; it is not assigned to each subcommand. Timestamp timing may include approval waits. Comparisons shift the same call filters to the preceding complete local calendar days. Model inference and preflight phases are not yet attributed.{exampleRows ? " All example analytics are computed from the synthetic call rows below." : ""}</p></details>
+      <details className="machine-methodology"><summary>How identities and time are measured</summary><p>Command families use the parsed program and named subcommand, such as npm run test:unit. Environment wrappers, paths to executables, and arguments are kept in the full invocation below. Different scripts, subcommands, named tools, and MCP servers retain separate identities. Activity categories help navigation; unclassified tools remain individually named.</p><p>Total time sums recorded tool durations, including overlapping calls. Time per timed run divides that sum by the number of calls with recorded timing, including recorded zeroes; calls without durations are excluded from the mean. An empty day has no per-run measurement. A family can still contain different flags or targets: inspect its exact invocations before attributing a change to performance. A run means one recorded tool call, not a completed user task.</p><p>Compound commands keep one primary family and their full source invocation. Their duration is counted once; it is not assigned to each subcommand. Timestamp timing may include approval waits. Comparisons shift the same call filters to the preceding complete local calendar days. Model inference and preflight phases are not yet attributed.</p></details>
     </> : null}
   </div></>;
 }
 const windowGlobal = globalThis.window;
 
-export function MachineTime({ scope, window, example, onRepository, calls }: { scope: MachineScope; window: MachineWindow; example: boolean; onRepository: (repository: string) => void; calls: MachineCallsSurface }) {
+export function MachineTime({ scope, window, onRepository, calls }: { scope: MachineScope; window: MachineWindow; onRepository: (repository: string) => void; calls: MachineCallsSurface }) {
   const appliedScope = useRef<WhereTerm[]>([]);
-  const currentRows = useMemo(() => example ? exampleTimeCalls(scope, window) : undefined, [scope, window, example]);
-  const previousRows = useMemo(() => example ? exampleTimeCalls(scope, window, true) : [], [scope, window, example]);
   const where = useMemo(() => machineWhere(scope, window), [scope, window]);
-  const header = (api: QueryTableApi<Row>) => <MachineTimeDashboard api={api} scope={scope} window={window} exampleRows={currentRows} previousRows={previousRows} onRepository={onRepository} />;
-  return <section className="machine-time" aria-label="Machine Time">{calls({ scopeWhere: where, appliedScope, localRows: currentRows, header })}</section>;
+  const header = (api: QueryTableApi<Row>) => <MachineTimeDashboard api={api} scope={scope} window={window} onRepository={onRepository} />;
+  return <section className="machine-time" aria-label="Machine Time">{calls({ scopeWhere: where, appliedScope, header })}</section>;
 }

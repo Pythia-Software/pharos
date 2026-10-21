@@ -6,10 +6,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	qt "github.com/Pythia-Software/query-table/backends/go"
 	"github.com/gbdubs/pharos/internal/querytable"
@@ -101,7 +103,7 @@ func (c *Catalog) freshToolCubeCount(ctx context.Context, tx *sql.Tx) (int64, bo
 // as Machine Time, provided every freshness guard holds in this transaction.
 func (c *Catalog) freshToolCubeRangeCount(ctx context.Context, tx *sql.Tx, terms []querytable.WhereTerm) (int64, bool, error) {
 	lower, upper, rest, valid := machineTimeDayRange(terms)
-	if !valid || lower == "" || len(rest) != 0 {
+	if !valid || lower == "" || upper == "" || len(rest) != 0 {
 		return 0, false, nil
 	}
 	fresh, err := c.toolCubeFresh(ctx, tx)
@@ -140,11 +142,84 @@ func (c *Catalog) freshMachineCubeCount(ctx context.Context, tx *sql.Tx, terms [
 	var total int64
 	for _, row := range rows {
 		day := firstString(row["day"])
-		if lower == "" || day >= lower && day < upper {
+		if machineTimeWithinDay(day, lower, upper) {
 			total += integer(row["machine_calls"])
 		}
 	}
 	return total, true, nil
+}
+
+// Full summary-row identities include source/session/category dimensions that
+// the smaller Machine Time projection omits. The published cube keeps them all.
+func (c *Catalog) freshToolDimensionCount(ctx context.Context, tx *sql.Tx, terms []qt.WhereTerm, schema qt.Schema) (int64, bool, error) {
+	bound := schema
+	bound.Fields = maps.Clone(schema.Fields)
+	for _, term := range terms {
+		for _, p := range term.Predicates() {
+			expr, ok := toolCallCube.dimensionFor(p.Field)
+			if presence, found := toolCallCube.present[p.Field]; found && (p.Op == "is_null" || p.Op == "is_not_null") {
+				expr, ok = "CASE WHEN "+presence+" THEN 'present' END", true
+			}
+			if !ok {
+				return 0, false, nil
+			}
+			field := bound.Fields[p.Field]
+			field.Expr = expr
+			bound.Fields[p.Field] = field
+		}
+	}
+	fresh, err := c.toolCubeFresh(ctx, tx)
+	if err != nil || !fresh {
+		return 0, false, err
+	}
+	filter, err := qt.CompileSQLiteWhere(terms, bound, qt.SQLiteOptions{})
+	if err != nil {
+		return 0, false, nil
+	}
+	where, args := filter.SQL, slices.Clone(filter.Args)
+	for _, term := range terms {
+		if term.IsGroup() || term.Negated || term.Op != "=" || term.Value == "" {
+			continue
+		}
+		field := bound.Fields[term.Field]
+		if field.Kind != qt.FieldText && field.Kind != qt.FieldEnum {
+			continue
+		}
+		if where != "" {
+			where += " AND "
+		}
+		where += field.Expr + "=?"
+		args = append(args, term.Value)
+	}
+	if where != "" {
+		where = " WHERE " + where
+	}
+	var total int64
+	err = tx.QueryRowContext(ctx, "SELECT COALESCE(SUM(call_count),0) FROM tool_call_cube"+where, args...).Scan(&total)
+	return total, err == nil, err
+}
+
+func (c *Catalog) freshToolTextCount(ctx context.Context, tx *sql.Tx, table sqlDataset, terms []qt.WhereTerm, schema qt.Schema, now time.Time) (int64, bool, error) {
+	base, excluded, ok := textComplementWhere(table, terms)
+	if !ok {
+		return 0, false, nil
+	}
+	total, used, err := c.freshToolDimensionCount(ctx, tx, base, schema)
+	if err != nil || !used {
+		return 0, used, err
+	}
+	residual := table.residualWhere(excluded)
+	source, args := table.project(append(whereFields(residual), schema.IDField)).v2WindowedSource(schema, excluded, now)
+	filter, err := qt.CompileSQLiteWhere(residual, schema, qt.SQLiteOptions{Now: now})
+	if err != nil {
+		return 0, false, nil
+	}
+	if filter.SQL != "" {
+		source = "SELECT * FROM (" + source + ") AS r WHERE " + numberQueryParameters(filter.SQL, len(args))
+	}
+	var removed int64
+	err = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM ("+source+")", append(args, filter.Args...)...).Scan(&removed)
+	return total - removed, err == nil, err
 }
 
 func (s *Server) countOnlyMetricsV2(ctx context.Context, tx *sql.Tx, table sqlDataset, d qt.SQLiteV2Dataset, q qt.MetricQuery, o qt.PlanOptions) (qt.SQLiteV2ExecutionResult, bool, error) {
@@ -237,11 +312,12 @@ func (s *Server) indexedQueryRowsV2(ctx context.Context, tx *sql.Tx, table sqlDa
 	if _, err := qt.CompileSQLiteRowsV2(ctx, q, d.Schema, o); err != nil {
 		return qt.SQLiteV2ExecutionResult{}, true, err
 	}
-	filter, err := qt.CompileSQLiteWhere(q.Where, d.Schema, qt.SQLiteOptions{Now: o.Now})
+	residual := table.residualWhere(q.Where)
+	filter, err := qt.CompileSQLiteWhere(residual, d.Schema, qt.SQLiteOptions{Now: o.Now})
 	if err != nil {
 		return qt.SQLiteV2ExecutionResult{}, true, err
 	}
-	countFields := append(whereFields(q.Where), d.Schema.IDField)
+	countFields := append(whereFields(residual), d.Schema.IDField)
 	countTable, _ := table.project(countFields).preferCoveringScan(q.Where)
 	countSource, countArgs := countTable.v2WindowedSource(d.Schema, q.Where, o.Now, bounds)
 	countPredicate := ""
@@ -265,6 +341,12 @@ func (s *Server) indexedQueryRowsV2(ctx context.Context, tx *sql.Tx, table sqlDa
 			fast = append(fast, func(ctx context.Context, tx *sql.Tx) (int64, bool, error) {
 				return s.Catalog.freshMachineCubeCount(ctx, tx, q.Where, schema)
 			})
+			fast = append(fast, func(ctx context.Context, tx *sql.Tx) (int64, bool, error) {
+				return s.Catalog.freshToolDimensionCount(ctx, tx, q.Where, d.Schema)
+			})
+			fast = append(fast, func(ctx context.Context, tx *sql.Tx) (int64, bool, error) {
+				return s.Catalog.freshToolTextCount(ctx, tx, table, q.Where, d.Schema, o.Now)
+			})
 		}
 	}
 	total, err := s.Catalog.queryCount(ctx, tx, countSQL, countArgs, fast...)
@@ -273,6 +355,19 @@ func (s *Server) indexedQueryRowsV2(ctx context.Context, tx *sql.Tx, table sqlDa
 	}
 	if total > int64(population) {
 		return qt.SQLiteV2ExecutionResult{}, true, fmt.Errorf("resource_limit: matching population exceeds host budget")
+	}
+	if int64(q.Offset) >= total {
+		// No source row can reach this page. Still let the adapter validate
+		// computed projections/revisions and construct its normal envelope.
+		d.SourceSQL = (sqlDataset{}).v2Source(d.Schema) + " WHERE 0"
+		d.SourceArgs = nil
+		copy := q
+		copy.Where, copy.Offset = nil, 0
+		result, err := d.ExecuteV2In(ctx, tx, &copy, nil, qt.PlanOptions{Identity: o.Identity, Now: o.Now})
+		if err == nil {
+			result.Rows.Total = total
+		}
+		return result, true, err
 	}
 	predicate := ""
 	if filter.SQL != "" {
@@ -287,6 +382,9 @@ func (s *Server) indexedQueryRowsV2(ctx context.Context, tx *sql.Tx, table sqlDa
 		if !term.IsGroup() && !term.Negated && term.Op == "=" && term.Value != "" && table.lookups[term.Field] {
 			lookup = true
 		}
+		if table.calendarFacts && term.Field == "day" && !term.Negated && term.Op == "is_null" {
+			lookup = true
+		}
 	}
 	fullSource := d.SourceSQL
 	if !lookup && len(order) > 0 {
@@ -299,7 +397,7 @@ func (s *Server) indexedQueryRowsV2(ctx context.Context, tx *sql.Tx, table sqlDa
 	if d.Dataset == "pharos_writing_messages" {
 		// Sort and page narrow identities before fetching message bodies. SQLite
 		// otherwise puts every selected long message into its numeric-sort B-tree.
-		earlyFields := append(whereFields(q.Where), d.Schema.IDField)
+		earlyFields := append(whereFields(residual), d.Schema.IDField)
 		for _, term := range order {
 			earlyFields = append(earlyFields, term.Field)
 		}

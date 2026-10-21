@@ -19,6 +19,13 @@ const day = 86400000, iso = offset => new Date(now - offset).toISOString();
 const longTitle = "Investigate why the incremental indexer re-reads every capture after a laptop sleeps through a scheduled sync window";
 const datasets = Object.fromEntries(Object.entries(schemas).map(([name, schema]) => [name, population(schema, { now, count: 48 }).map((row, index) => index % 5 ? row
   : { ...row, title: longTitle, repository_name: "pythia-software/an-unusually-long-repository-name-for-layout", location: "/Users/someone/conductor/workspaces/pharos/a-deeply-nested-worktree-directory/internal/archive" })]));
+// Usage trends consume the calendar keys of their source records.
+for (const row of [...datasets.tools, ...datasets.mcp_calls]) {
+  const monday = new Date(`${row.day}T00:00:00Z`);
+  monday.setUTCDate(monday.getUTCDate() - (monday.getUTCDay() + 6) % 7);
+  row.week = monday.toISOString().slice(0, 10);
+  row.month = row.day.slice(0, 7);
+}
 
 // The workspace behind /work/<id>: a root conversation with a long
 // transcript (long code blocks, a wide table, tool output, an edit, nested
@@ -197,6 +204,18 @@ export const defaultApi = {
   "GET /api/probe/status": { library: true, needs_onboarding: false, host: { id: "test-mac", label: "This Mac" } },
   "GET /api/upgrade": { running: false, needed: false, steps: [], repository_renames: {} },
   "GET /api/pricing": { unpriced_models: [], priced_tokens: 1000, unpriced_tokens: 0, confirmed_changes: 0, proposed_changes: 0 },
+  "GET /api/usage/concurrency-prototype": {
+    generated_at: iso(0), timezone: "UTC", period_start: iso(day).slice(0, 10), period_end: iso(0).slice(0, 10),
+    days: [iso(day).slice(0, 10), iso(0).slice(0, 10)],
+    threads: [0, 1].map(index => ({
+      id: `timing-${index}`, conversation_id: rootConversation, work_id: workID,
+      workspace_id: `${workID}-${index}`, workspace_name: `Workspace ${index + 1}`,
+      repository: "pharos", title: longTitle, provider: "codex", model: "gpt-5.3-codex", agent_depth: 0,
+      turns: [[now - 2 * 3600000 + index * 600000, now - 3600000]],
+      model_spans: [[now - 2 * 3600000 + index * 600000, now - 5400000]],
+    })),
+    coverage: { conversations: 2, mirrors_removed: 0, unexplained_waits_excluded: 0, timing: "Captured timing", catalog: "Test catalog" },
+  },
   "GET /api/usage/summary": { windows: ["1h", "6h", "24h", "7d", "30d", "all"].map((key, index) => ({ key, human_words: 100 * (index + 1), tokens: 1000 * (index + 1), cost_usd: index + 1, co2e_g: { central: 10 * (index + 1) } })), carbon_factors: carbonFactors },
   "GET /api/search/text/options": { providers: ["codex", "claude"], sources: ["conductor"] },
   "GET /api/search/text/capabilities": { fuzzy: true, regex: true, case_sensitive: true },
@@ -228,7 +247,8 @@ export const defaultApi = {
   "GET /api/findings/:id": ({ params }) => { const card = findingCards.find(item => item.id === params.id); return card && findingDetail(card); },
   "GET /api/tl1": { projects: [{ project: "example", tasks: 14, installations: [{ installation_id: "mac", host_label: "Mac", tasks: 14 }] }] },
   "GET /api/tl1/overview": tl1Overview,
-  "GET /api/mcp": { enabled: true, transport: "stdio", command: "/Applications/Pharos.app/Contents/MacOS/pharos", args: ["--config", "/Users/someone/Library/Application Support/Pharos/archive.toml", "mcp"], note: "Agent clients launch this local command when they connect." },
+  "GET /api/mcp": ({ state }) => ({ enabled: state.mcpEnabled ?? true, transport: "stdio", command: "/Applications/Pharos.app/Contents/MacOS/pharos", args: ["--config", "/Users/someone/Library/Application Support/Pharos/archive.toml", "mcp"], note: "Agent clients launch this local command when they connect.", skill: { name: "search-prior-coding-sessions", text: "Search prior coding sessions with Pharos.", paths: { codex: "~/.codex/skills/search-prior-coding-sessions/SKILL.md" } } }),
+  "POST /api/mcp/enabled": ({ body, state }) => { state.mcpEnabled = body.enabled; return { enabled: body.enabled }; },
   "GET /api/mcp/calls": { items: [mcpCall], filtered_total: 1, tool_stats: [{ tool_name: "search_conversations", calls: 1, errors: 0, average_output_tokens: 300, largest_output_tokens: 300, truncated_calls: 0, average_duration_ms: 18 }], stats: { total_calls: 1, failed_calls: 0, average_output_tokens: 300, largest_output_tokens: 300, truncated_calls: 0 } },
 
   // The workspace reader and delegation explorer.
