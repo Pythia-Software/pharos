@@ -20,6 +20,12 @@ tests.
 ## Upstream Query Table
 
 Pharos uses the published Query Table module and packages without patches.
+The current standalone assignment is
+[`query-table-after-0.9.3.md`](query-table-after-0.9.3.md): close the remaining
+V3/V2 reduction cost gaps and let computed previews use modern transports.
+It includes the 0.9.3 baseline, complete reproduction context and acceptance
+criteria, and can be sent directly to the Query Table team.
+
 The [manual-interventions audit and upstream handoff](query-table-manual-interventions.md)
 records the previous patches and source snapshots, the 0.9.3 response, and the
 remaining host SQL reduction and scratch-lifecycle decisions. Cross-field V2
