@@ -112,6 +112,62 @@ const WIDTHS = [{ width: 1440, height: 900 }, { width: 1280, height: 720 }, { wi
 // any other problem still fails it.
 const KNOWN = [];
 
+test('header tools use available space and primary navigation stays centered while resizing', { skip }, async t => {
+  const { page, settled, shot } = await open(t, { url: '/library', ready: '#queryTableLibrary .qt-row' });
+  const more = page.getByRole('button', { name: 'More tools', exact: true });
+  for (const width of [1440, 1350, 1280, 1180, 1050, 1024, 1001, 1000, 900, 760, 700, 390, 320, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settled();
+    if (width === 1280 || width === 1350) assert.equal(await more.isVisible(), false, `tools still fit at ${width}px`);
+    const bounds = await page.evaluate(() => {
+      const bar = document.querySelector('body > header .bar'), style = getComputedStyle(bar);
+      const box = bar.getBoundingClientRect();
+      const tabs = document.querySelector('body > header .tabs');
+      return {
+        center: (box.left + parseFloat(style.paddingLeft) + box.right - parseFloat(style.paddingRight)) / 2,
+        tabs: tabs.getClientRects().length ? tabs.getBoundingClientRect().toJSON() : null,
+        brand: document.querySelector('body > header .brand').getBoundingClientRect().toJSON(),
+        tools: document.querySelector('body > header .header-icons').getBoundingClientRect().toJSON(),
+      };
+    });
+    const { tabs, brand, tools } = bounds;
+    assert.ok(brand.right <= tools.left, `brand and tools stay apart at ${width}px`);
+    if (tabs) {
+      assert.ok(Math.abs((tabs.left + tabs.right) / 2 - bounds.center) < 1, `navigation is centered at ${width}px`);
+      if (tabs.top < brand.bottom) {
+        assert.ok(brand.right <= tabs.left && tabs.right <= tools.left, `navigation and tools stay apart at ${width}px`);
+      }
+      const buttons = await page.getByRole('navigation', { name: 'Primary navigation', exact: true }).getByRole('button').all();
+      const first = await buttons[0].boundingBox(), last = await buttons.at(-1).boundingBox();
+      assert.ok(Math.abs((first.x + last.x + last.width) / 2 - bounds.center) < 1, `navigation buttons are centered at ${width}px`);
+    }
+    assert.deepEqual(await layoutProblems(page), []);
+    await shot(`header-${width}`);
+  }
+});
+
+test('header fit responds to tool choices and label changes without resizing', { skip }, async t => {
+  const { page, settled } = await open(t, {
+    url: '/settings/header', viewport: { width: 1180, height: 900 }, ready: '#headerActive .header-tool',
+    preferences: { 'pharos-header-tools-v1': ['library', 'search', 'summary', 'settings', 'theme'] },
+  });
+  const more = page.getByRole('button', { name: 'More tools', exact: true });
+  assert.equal(await more.isVisible(), false, 'a smaller tool selection fits');
+  const name = page.locator('body > header .pharos-drive-name');
+  const original = await name.textContent();
+  await name.evaluate(element => { element.textContent = 'A library with a much longer drive label'; });
+  await more.waitFor();
+  assert.deepEqual(await layoutProblems(page), []);
+  await name.evaluate((element, label) => { element.textContent = label; }, original);
+  await more.waitFor({ state: 'hidden' });
+  await page.getByRole('button', { name: 'Add Back / forward', exact: true }).click();
+  await more.waitFor();
+  await page.getByRole('button', { name: 'Arrange Back / forward', exact: true }).focus();
+  await page.keyboard.press('Delete');
+  await more.waitFor({ state: 'hidden' });
+  await settled();
+});
+
 test("macOS window controls stay clear of the lighthouse when resizing", { skip }, async t => {
   const source = readFileSync(new URL("../../../macos/PharosApp.swift", import.meta.url), "utf8");
   const chromeCSS = source.match(/static let windowChromeScript = """[\s\S]*?style.textContent = `([\s\S]*?)`;/)[1];

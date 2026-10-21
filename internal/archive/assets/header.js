@@ -14,10 +14,18 @@ const HEADER_TOOLS = [
 ];
 const HEADER_LAYOUT_KEY = 'pharos-header-tools-v1';
 
-// Saved order is retained in both places. The CSS shell supplies one shared
-// layout mode; service actions and their original DOM nodes stay intact.
-function headerToolPlacement(tools, layout) {
-  const inline = layout === 'wide' ? tools : tools.filter(id => ['library', 'sync', 'search'].includes(id));
+// Keep tools inline until they run out of room, retaining drive and search
+// longest. Reserve More's own width as soon as anything overflows.
+function headerToolPlacement(tools, available, widths, gap, moreWidth) {
+  const inline = [...tools];
+  const used = () => inline.reduce((sum, id) => sum + widths[id], 0)
+    + (inline.length < tools.length ? moreWidth + gap * inline.length : gap * Math.max(0, inline.length - 1));
+  const priority = id => ['library', 'sync', 'search'].includes(id);
+  const candidates = [...tools].reverse();
+  for (const id of [...candidates.filter(id => !priority(id)), ...candidates.filter(priority)]) {
+    if (used() <= available) break;
+    inline.splice(inline.indexOf(id), 1);
+  }
   return { inline, overflow: tools.filter(id => !inline.includes(id)) };
 }
 
@@ -29,6 +37,7 @@ function initHeaderOverflow(readTools) {
   const root = document.querySelector('body>header .header-icons');
   const more = document.getElementById('headerMore'), popup = document.getElementById('headerOverflow'), list = document.getElementById('headerOverflowTools');
   if (!root || !more || !popup || !list) return () => {};
+  const bar = root.parentElement, brand = bar.querySelector('.brand'), tabs = bar.querySelector('.tabs');
   const rows = new Map();
   for (const tool of HEADER_TOOLS) {
     const row = document.createElement('div'), label = document.createElement('span');
@@ -38,34 +47,63 @@ function initHeaderOverflow(readTools) {
     row.append(label);list.append(row);rows.set(tool.id, row);
   }
   const close = () => { if (popup.matches(':popover-open')) popup.hidePopover(); };
+  function placement() {
+    const tools = readTools(), style = getComputedStyle(bar), gap = parseFloat(style.columnGap) || 0;
+    const width = bar.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    const brandBox = brand.getBoundingClientRect(), tabsBox = tabs.getBoundingClientRect();
+    const sharedRow = tabs.getClientRects().length && tabsBox.top < brandBox.bottom;
+    const available = sharedRow
+      ? Math.min(width - brandBox.width - tabsBox.width - 2 * gap, (width - tabsBox.width) / 2 - gap)
+      : width - brandBox.width - gap;
+    // Measure inert copies in the inline context, including tools currently
+    // inside the closed popover. Never move live controls just to measure them:
+    // doing so would blur keyboard focus and reset their popovers.
+    const probe = document.createElement('div');
+    probe.className = 'header-icons';
+    probe.inert = true;
+    probe.setAttribute('aria-hidden', 'true');
+    probe.style.cssText = 'position:absolute;visibility:hidden;width:max-content;max-width:none;left:0;top:0';
+    const ids = [...tools, 'more'];
+    for (const id of ids) {
+      const source = id === 'more' ? more : document.getElementById(HEADER_TOOLS.find(tool => tool.id === id).element);
+      const copy = source.cloneNode(true);
+      for (const node of [copy, ...copy.querySelectorAll('[id]')]) node.removeAttribute('id');
+      copy.hidden = false;
+      probe.append(copy);
+    }
+    bar.append(probe);
+    const widths = Object.fromEntries(ids.map((id, index) => [id, probe.children[index].getBoundingClientRect().width]));
+    const controlGap = parseFloat(getComputedStyle(probe).columnGap) || 0;
+    probe.remove();
+    return headerToolPlacement(tools, available, widths, controlGap, widths.more);
+  }
   function layout(focused = document.activeElement) {
     const ownsFocus = root.contains(focused) || list.contains(focused);
-    const mode = getComputedStyle(document.documentElement).getPropertyValue('--app-shell-layout').trim() || 'wide';
-    const placement = headerToolPlacement(readTools(), mode);
+    const { inline, overflow } = placement();
     for (const tool of HEADER_TOOLS) {
       const node = document.getElementById(tool.element), row = rows.get(tool.id);
-      const overflow = placement.overflow.includes(tool.id);
-      row.hidden = !overflow;
+      const overflows = overflow.includes(tool.id);
+      if (row.hidden !== !overflows) row.hidden = !overflows;
       if (!node) continue;
-      const target = overflow ? row : root;
+      const target = overflows ? row : root;
       if (node.parentElement !== target) target === root ? root.insertBefore(node, more) : target.append(node);
     }
     // Work backwards from each list's end, leaving controls in place when
     // their order is already correct. Reinserting a focused node blurs it.
     let next = more;
-    for (const id of [...placement.inline].reverse()) {
+    for (const id of [...inline].reverse()) {
       const node = document.getElementById(HEADER_TOOLS.find(tool => tool.id === id).element);
       if (!node) continue;
       if (node.nextElementSibling !== next) root.insertBefore(node, next);
       next = node;
     }
     next = null;
-    for (const id of [...placement.overflow].reverse()) {
+    for (const id of [...overflow].reverse()) {
       const row = rows.get(id);
       if (row.nextElementSibling !== next) list.insertBefore(row, next);
       next = row;
     }
-    more.hidden = placement.overflow.length === 0;
+    if (more.hidden !== (overflow.length === 0)) more.hidden = overflow.length === 0;
     if (more.hidden) close();
     if (popup.matches(':popover-open')) place();
     if (ownsFocus) {
@@ -90,6 +128,17 @@ function initHeaderOverflow(readTools) {
   list.addEventListener('click', event => { if (event.target.closest('button')) { close(); more.focus({ preventScroll: true }); } }, true);
   addEventListener('resize', () => { const focused = document.activeElement; close(); layout(focused); });
   addEventListener('pharos:route', close);
+  let frame = 0;
+  const schedule = () => {
+    if (!frame) frame = requestAnimationFrame(() => { frame = 0; layout(); });
+  };
+  // Font loading, drive labels, tab visibility, preferences, and native window
+  // padding can change the fit without a window resize.
+  const resize = new ResizeObserver(schedule);
+  for (const node of [bar, brand, tabs, root]) resize.observe(node);
+  const changes = new MutationObserver(schedule);
+  for (const node of [tabs, root, list]) changes.observe(node, { subtree: true, childList: true, characterData: true, attributes: true });
+  document.fonts?.ready.then(schedule);
   return layout;
 }
 
