@@ -236,7 +236,7 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   // Existing daily covers keep the Usage palette, calendar gaps and exact Other.
   if (dailyColumns(clause) && (numeric.length || history)) {
     preview.timeline = (options.cover ?? recipe?.cover)?.timeline;
-    if (preview.timeline?.percent && (limited || result.buckets.some(bucket => bucket.error || bucket.yError))) throw new Error("Complete daily totals are required for percentage shares.");
+    if ((preview.timeline?.percent || preview.timeline?.display === "cumulative") && (limited || result.buckets.some(bucket => bucket.error || bucket.yError))) throw new Error("Complete daily totals are required for percentage shares or cumulative totals.");
     const periods = smoothingPeriods(job, query);
     const chartResult = history ? history.payload.metrics?.find(metric => metric.id === clause.id) : result;
     if (!chartResult) throw new Error(`No smoothing history returned for ${clause.label ?? clause.id}.`);

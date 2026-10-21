@@ -17,7 +17,7 @@ export function QueryChip({ title, description, active, onClick }: { title: stri
 }
 
 // Daily covers chart durations in hours (see previewOf) and carbon in kilograms.
-const columnUnit = (field = "") => field.includes("cost") ? "USD" : field.includes("words") ? "words" : field === "duration_ms" || field.endsWith("_hours") ? "h" : field === "co2e_kg" ? "kg" : "tokens";
+const columnUnit = (field = "") => field.includes("cost") ? "USD" : field.includes("words") ? "words" : field === "duration_ms" || field.endsWith("_hours") ? "h" : field === "co2e_kg" ? "kg" : field === "call_count" ? "calls" : "tokens";
 export function QueryCard({ id, title, description, actionLabel, url, windowLabel, category, preview, loadingSpec, error, discovery, xray, lean = 0, onOpen, onReveal, onKeep, onEdit, onRemove, onMove, onReload, onDragStart, onDragEnd, onDrop, before }: {
   id: string; title: string; description: string; actionLabel?: string; url: string; windowLabel: string; category: QueryCategory;
   preview?: QueryPreview; error?: string; discovery?: boolean; xray?: boolean; lean?: number; before?: boolean;

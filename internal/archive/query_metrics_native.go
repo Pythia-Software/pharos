@@ -19,15 +19,15 @@ import (
 // with the adapter's.
 var nativeMetrics = true
 
-// The adapter reduces each metric in its own pass over the source, through
-// exact-arithmetic SQL functions, and fuses metrics only when they read the
-// same field. For Human Words' message mix (nine sums over nine fields) and
-// that took several times the legacy route's single pass. The native path
-// below answers plain counts and sums the way the legacy route did: one
-// statement per grouping, natively in SQLite over a SQL dataset's source or a
-// staged copy. Cross-field metric fusion upstream in Query Table would make it
-// unnecessary. (Usage's rows in memory need no copy: Query Table's in-memory
-// executor answers them; see usageMetricsInMemory.)
+// Query Table 0.9.3 fuses metrics across fields, replacing the repeated
+// reductions that originally motivated this path. The full HTTP probe still
+// measures the general adapter at about 2-3 times this path's warm latency on
+// Human Words' count and nine sums (TestUsagePerformanceSQLHost, -tags probe).
+// Keep the native path pending that performance/simplicity decision: one
+// statement per grouping over a SQL dataset's source or a staged copy.
+// Usage's rows in memory already use Query Table's in-memory executor; see
+// usageMetricsInMemory. The removal audit is documented in
+// docs/handoffs/query-table-manual-interventions.md.
 //
 // It answers only what it computes exactly as the adapter does: every counted
 // or summed value is a stored integer and each sum's absolute total stays

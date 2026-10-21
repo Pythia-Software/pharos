@@ -1,16 +1,38 @@
-# Query Table 0.9.2 in Pharos
+# Query Table 0.9.3 in Pharos
 
-Pharos pins core, React, UI and codegen to the published npm **0.9.2** packages,
-and the Go adapter to the published **v0.9.2** module, with no replacement or
+Pharos pins core, React, UI and codegen to the published npm **0.9.3** packages,
+and the Go adapter to the published **v0.9.3** module, with no replacement or
 local copy. The npm lockfile records registry URLs and integrities; `go.sum`
 records the released Go module. Clean builds use these pinned sources without
 another Query Table checkout.
 
-The [upstream migration guide](https://github.com/Pythia-Software/query-table/blob/v0.9.2/docs/host-integration-next-release.md)
-and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.9.2/CHANGELOG.md)
+The [upstream migration guide](https://github.com/Pythia-Software/query-table/blob/v0.9.3/docs/host-integration-next-release.md)
+and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.9.3/CHANGELOG.md)
 define the release contract. Optional worktree linking is described in
 [local development](query-table-local-development.md). The earlier
 [next-release handoff](query-table-next-release-handoff.md) is a historical record.
+
+## 0.9.3 changes
+
+SQLite V2 batches now fuse compatible scalar reductions across different
+fields. Guarded integer reductions can read resolved stored-column sources
+directly; unsupported storage and numeric domains retain exact decimal
+execution. Metric predicates, scopes, errors, sorting and budgets stay
+independent. This supplies QT-14's library capability without changing Pharos's
+requests.
+
+The release also qualifies scratch-table cleanup, handles interrupted creation,
+and returns V3 cleanup errors before reporting success. Successful caller-owned
+V2/V3 transactions may be committed after adapter cleanup; failures must roll
+back. Pharos still needs to drop its own staging tables and change its lease
+and connection policy before adopting that lifecycle. There is no new direct
+V3 grouping API.
+
+See the [manual-interventions audit](handoffs/query-table-manual-interventions.md)
+for host parity/timing results and the remaining removal decisions, and the
+[upstream performance/lifecycle guide](https://github.com/Pythia-Software/query-table/blob/v0.9.3/docs/sqlite-performance-handoff.md)
+for the supported contract. The general host SQL reducers remain enabled;
+the dependency upgrade alone does not remove them.
 
 ## 0.9.1 and 0.9.2 changes
 

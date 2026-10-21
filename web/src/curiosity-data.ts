@@ -1,6 +1,6 @@
 import { EMPTY_QUERY, type AggregationClause, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { type QueryCategory } from "./query-categories";
-import { queryURL, resolveRollingQuery, type QueryDataset, type RollingWindow } from "./query-links";
+import { resolveRollingQuery, type QueryDataset, type RollingWindow } from "./query-links";
 import { richerQueryRecipes } from "./query-recipes-v2";
 import { enrichCardRecipe, newCardRecipes, type CardExploration } from "./card-recipes";
 import { wishlistCardRecipes } from "./wishlist-card-recipes";
@@ -19,6 +19,8 @@ import { apiCostRecipes, refineApiCostRecipe } from "./api-cost-recipes";
 import type { HumanStudy } from "./human-study";
 import type { CardTrend } from "./card-trend";
 import { coverageRecipes } from "./coverage-recipes";
+import { dashboardCardRecipes } from "./dashboard-card-recipes";
+import { cardDestination, refineCardDestination, type CardDestination } from "./card-destinations";
 export { clearPreviewCache, loadQueryPreview, loadQueryPreviews, formatPreviewValue } from "./query-previews";
 export type { QueryPreview } from "./query-previews";
 
@@ -36,6 +38,7 @@ export type QueryRecipe = {
   // Current-state and all-time cards carry no rolling lookback.
   period?: "current" | "all";
   trend?: CardTrend;
+  destination?: CardDestination;
 };
 export type QuerySuggestion = QueryRecipe & { query: QueryState; window?: RollingWindow; url: string; instanceId: string };
 export function suggestionWindowLabel(item: { window?: RollingWindow; period?: QueryRecipe["period"] }): string {
@@ -90,8 +93,9 @@ const baseRecipes: QueryRecipe[] = [
   ...delegationRecipes,
   ...steeringRecipes,
   ...coverageRecipes,
+  ...dashboardCardRecipes,
 ];
-export const queryRecipes = baseRecipes.map(enrichCardRecipe).map(refineHumanRecipe).map(applyHumanCardCopy).map(refineModelChoiceRecipe).map(refineContextCachingRecipe).map(refineErrorPatternRecipe).map(refineToolFlowRecipe).map(refineSkillsInstructionsRecipe).map(refineResearchRecipe).map(refineApiCostRecipe).map(refineTokenUsageRecipe).map(refineDelegationRecipe).map(refineSteeringRecipe).map(recipe => recipe.humanStudy ? { ...recipe, days: [7] } : recipe);
+export const queryRecipes = baseRecipes.map(enrichCardRecipe).map(refineHumanRecipe).map(applyHumanCardCopy).map(refineModelChoiceRecipe).map(refineContextCachingRecipe).map(refineErrorPatternRecipe).map(refineToolFlowRecipe).map(refineSkillsInstructionsRecipe).map(refineResearchRecipe).map(refineApiCostRecipe).map(refineTokenUsageRecipe).map(refineDelegationRecipe).map(refineSteeringRecipe).map(recipe => recipe.humanStudy ? { ...recipe, days: [7] } : recipe).map(refineCardDestination);
 
 export function instantiateRecipe(recipe: QueryRecipe, days: number, clock = new Date()): QuerySuggestion {
   const window: RollingWindow | undefined = recipe.period ? undefined : { days, field: recipe.field, mode: "relative" };
@@ -108,7 +112,7 @@ export function instantiateRecipe(recipe: QueryRecipe, days: number, clock = new
     aggregations: view.coverMetric && !coverMetric ? [view.coverMetric] : [],
   } : source, window, clock);
   const describe = (text: string) => text.replaceAll("{days}", String(days)).replaceAll("{period}", days === 7 ? "Weekly" : days === 1 ? "Daily" : `${days}-day`).replaceAll("{lastDays}", days === 7 ? "Last seven days" : days === 1 ? "Last 24 hours" : `Last ${days} days`);
-  return { ...recipe, title: describe(recipe.title), description: describe(recipe.description), measures, window, query, url: queryURL(recipe.dataset, query, window), instanceId: `${recipe.id}:${recipe.period ?? days}` };
+  return { ...recipe, title: describe(recipe.title), description: describe(recipe.description), measures, window, query, url: cardDestination(recipe, query, window), instanceId: `${recipe.id}:${recipe.period ?? days}` };
 }
 
 export function shuffled<T>(items: T[]): T[] {

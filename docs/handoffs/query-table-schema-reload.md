@@ -1,5 +1,14 @@
 # Handoff: stop Query Table requests reloading the catalog schema
 
+> Query Table v0.9.3 documents successful caller-owned V2/V3 commits, qualifies
+> scratch cleanup and propagates cleanup errors. Its library-side work is
+> available in the published release; this host change remains open. Follow
+> [the upstream lifecycle contract](https://github.com/Pythia-Software/query-table/blob/v0.9.3/docs/sqlite-performance-handoff.md#supported-sqlite-scratch-lifetime).
+> Pharos must drop its own `pharos_query_rows`, `pharos_query_hours`,
+> `pharos_query_selected_days` and `pharos_query_shown_hours` tables when created,
+> commit only successful executions, roll back every execution/cleanup failure,
+> and avoid per-request `temp_store` changes while retaining memory/disk policy.
+
 ## Assignment
 
 Every staged Query Table request (V2 and V3) makes its reader connection

@@ -104,7 +104,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
 
   async function keep(item: QuerySuggestion, before?: string, from: "home" | "library" = "home") {
     try {
-      const saved = await collectDurableQuery(item.dataset, item.query, item.title, { description: item.description, templateId: item.instanceId, window: item.window, cover: item.cover ?? defaultCardCover(item) });
+      const saved = await collectDurableQuery(item.dataset, item.query, item.title, { description: item.description, templateId: item.instanceId, window: item.window, cover: item.cover ?? defaultCardCover(item), url: item.url });
       if (before) moveBookmark(saved.id, before);
       setMessage(`Collected “${item.title}”.`, from); setUndo(null);
       setPreviews(current => ({ ...current, [saved.id]: current[item.instanceId] }));

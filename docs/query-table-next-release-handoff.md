@@ -357,6 +357,12 @@ query or use a server page as a complete grouping population.
 
 ## QT-14 — Fuse metrics over different fields into one pass
 
+> Updated audit and assignment: [manual interventions, request A](handoffs/query-table-manual-interventions.md#a-fuse-v2-reductions-across-fields-qt-14).
+> Cross-field V2 fusion is delivered in Query Table v0.9.3; removal of Pharos's
+> SQL fast path still needs host parity and cost validation. The in-memory reducer and
+> `query_metrics_exact.go` mentioned below were deleted in Pharos #174 after
+> adopting the published in-memory executor.
+
 **Observed:** the SQLite V2 adapter fuses metrics only when they read the same
 field, and reduces every other metric in its own pass over the source. When
 Pharos moved its pages from its legacy aggregation route to `/metrics`

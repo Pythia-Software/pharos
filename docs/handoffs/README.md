@@ -20,6 +20,19 @@ tests.
 ## Upstream Query Table
 
 Pharos uses the published Query Table module and packages without patches.
+The current standalone assignment is
+[`query-table-after-0.9.3.md`](query-table-after-0.9.3.md): close the remaining
+V3/V2 reduction cost gaps and let computed previews use modern transports.
+It includes the 0.9.3 baseline, complete reproduction context and acceptance
+criteria, and can be sent directly to the Query Table team.
+
+The [manual-interventions audit and upstream handoff](query-table-manual-interventions.md)
+records the previous patches and source snapshots, the 0.9.3 response, and the
+remaining host SQL reduction and scratch-lifecycle decisions. Cross-field V2
+fusion is delivered and host parity passes; deleting the faster host reducer
+remains a performance decision. Direct V3 grouping remains an upstream
+performance opportunity.
+
 These requests are completed:
 
 - [`query-table-performance-stack.md`](query-table-performance-stack.md), in
@@ -30,11 +43,11 @@ These requests are completed:
   v0.9.1: explicit host budgets up to 100,000 groups. Pharos then removed its
   vendored backend, Go replacement and fork test script.
 
-Requests for the Query Table library itself are collected in
+Earlier numbered requests for the Query Table library are recorded in
 [`docs/query-table-next-release-handoff.md`](../query-table-next-release-handoff.md):
 
-- **QT-14:** fuse metrics over different fields in one pass, so Pharos can
-  delete its native count and sum path.
+- **QT-14:** cross-field V2 scalar fusion is delivered in v0.9.3. Pharos's
+  native count and sum path remains pending the host performance decision.
 - **QT-15:** let computed-column previews use the negotiated transport, so
   Pharos can retire its legacy row route.
 - **QT-16** ([query-table-in-memory-metrics.md](query-table-in-memory-metrics.md)),

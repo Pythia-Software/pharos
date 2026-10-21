@@ -73,6 +73,10 @@ export function savedRollingWindow(dataset: QueryDataset, query: QueryState): Ro
 
 export function collectQuery(dataset: QueryDataset, query: QueryState, title: string, options: { description?: string; templateId?: string; window?: RollingWindow; savedAt?: number; dedupe?: boolean; url?: string; cover?: CardCover } = {}): Bookmark {
   const items = readBookmarks(), url = options.url ?? queryURL(dataset, query, options.window);
+  const dashboardContext = (address: string) => {
+    const params = new URL(address, location.origin).searchParams;
+    return params.get("card_query") && params.get("analyze_mode") === "dashboards" ? JSON.stringify([params.get("analyze_topic"), params.get("analyze_chart"), params.get("analyze_filters")]) : "";
+  };
   const existing = items.find(item => {
     // A template can select a specialized study even when its source query
     // and cover match another card. Preserve that identity when collecting.
@@ -80,7 +84,7 @@ export function collectQuery(dataset: QueryDataset, query: QueryState, title: st
     if (JSON.stringify(item.cover) !== JSON.stringify(options.cover)) return false;
     if (item.url === url) return true;
     const spec = options.templateId && item.templateId === options.templateId ? queryFromURL(item.url, item.query) : undefined;
-    return spec?.dataset === dataset && encodeQuery(spec.query) === encodeQuery(query);
+    return spec?.dataset === dataset && encodeQuery(spec.query) === encodeQuery(query) && dashboardContext(item.url) === dashboardContext(url);
   });
   if (existing && options.dedupe !== false) return existing;
   if (savedQueries(dataset).length >= 100) throw new Error("This table already has 100 saved queries.");
@@ -146,7 +150,7 @@ export function moveBookmark(id: string, before?: string) {
 // collection. Keep its query alongside the link for synchronous cover editing.
 export async function collectDurableQuery(dataset: QueryDataset, query: QueryState, title: string, options: Parameters<typeof collectQuery>[3] = {}): Promise<Bookmark> {
   const service = createQueryLinkService(`pharos_${dataset}`, httpQuerySnapshotStore("/api/query-snapshots"));
-  const link = await service.durable(query, new URL(queryURL(dataset, query, options.window), location.origin).href, `q_${dataset}`);
+  const link = await service.durable(query, new URL(options.url ?? queryURL(dataset, query, options.window), location.origin).href, `q_${dataset}`);
   const url = new URL(link.url);
   return collectQuery(dataset, query, title, { ...options, url: `${url.pathname}${url.search}${url.hash}` });
 }

@@ -21,7 +21,7 @@ export type AppSection = { id: string; label: string; href: string; pages: reado
 export function appSections(settings: readonly NestedPage[], params: URLSearchParams, hasTL1: boolean): AppSection[] {
   return [
     { id: "home", label: "Home", href: "/", pages: [] },
-    { id: "library", label: "Library", href: "/library", pages: [] },
+    { id: "library", label: "Search", href: "/library", pages: [] },
     ...(hasTL1 ? [{ id: "tl1", label: "TL1", href: "/tl1", pages: tl1Pages.map(page => ({ ...page, id: page.path, href: page.path })) }] : []),
     { id: "analyze", label: "Analyze", href: "/analyze", pages: analyzePages(params) },
     { id: "findings", label: "Optimize", href: "/findings", pages: [] },

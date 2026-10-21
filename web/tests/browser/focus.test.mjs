@@ -30,10 +30,42 @@ async function holdsFocus(page, surface, opener) {
   await page.waitForFunction(element => document.activeElement === element, await opener.elementHandle());
 }
 
+// Exercise portal focus and dismissal against both native and role-based modals.
+async function useSearchMenus(page, dialog) {
+  const options = dialog.getByRole("button", { name: /^Match options/ });
+  await press(options);
+  const optionsPopup = page.getByRole("dialog", { name: /^Match options/ });
+  await page.waitForFunction(element => element.contains(document.activeElement), await optionsPopup.elementHandle());
+  const matchCase = optionsPopup.getByRole("checkbox", { name: "Match letter case", exact: true });
+  await matchCase.check();
+  assert.equal(await matchCase.isChecked(), true);
+  await optionsPopup.getByText("Match letter case", { exact: true }).click();
+  assert.equal(await matchCase.isChecked(), false);
+  await matchCase.focus();
+  await page.keyboard.press("Space");
+  assert.equal(await matchCase.isChecked(), true);
+  await page.keyboard.press("Escape");
+  await optionsPopup.waitFor({ state: "hidden" });
+  assert.equal(await dialog.isVisible(), true);
+  await page.waitForFunction(element => document.activeElement === element, await options.elementHandle());
+
+  const add = dialog.getByRole("button", { name: "Add condition", exact: true });
+  await press(add);
+  const addPopup = page.getByRole("dialog", { name: "Add condition", exact: true });
+  await page.waitForFunction(element => element.contains(document.activeElement), await addPopup.elementHandle());
+  await page.keyboard.press("Tab");
+  assert.ok(await addPopup.evaluate(element => element.contains(document.activeElement)), "keyboard focus left the condition menu");
+  await page.keyboard.press("Escape");
+  await addPopup.waitFor({ state: "hidden" });
+  assert.equal(await dialog.isVisible(), true);
+  await page.waitForFunction(element => document.activeElement === element, await add.elementHandle());
+}
+
 test("quick search takes focus from the header button and from the keyboard shortcut, and returns it", { skip }, async t => {
   const { page } = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row" });
   const dialog = page.locator("#searchDialog"), button = page.locator("#searchToggle");
   await press(button);
+  await useSearchMenus(page, dialog);
   await holdsFocus(page, dialog, button);
   const tab = page.getByRole('navigation', { name: 'Primary navigation', exact: true }).getByRole('button', { name: 'Analyze', exact: true });
   await press(tab, "ControlOrMeta+k");
@@ -48,7 +80,7 @@ for (const viewport of [{ width: 2133, height: 1075 }, { width: 1440, height: 90
       await button.focus();
       assert.equal(await onScreen(button), true, `${await button.textContent()} is outside the viewport`);
     }
-    await press(navigation.getByRole('button', { name: 'Library', exact: true }));
+    await press(navigation.getByRole('button', { name: 'Search', exact: true }));
     await page.locator('#queryTableLibrary .qt-row').first().waitFor();
     assert.equal(new URL(page.url()).pathname, '/library');
     await press(navigation.getByRole('button', { name: 'Analyze', exact: true }));
@@ -110,6 +142,42 @@ test('navigation keeps focus reachable when resizing between a sidebar and phone
   await page.getByRole('button', { name: 'Expand sidebar', exact: true }).waitFor();
   await press(page.getByRole('button', { name: 'Expand sidebar', exact: true }));
   await sidebar.waitFor();
+});
+
+for (const width of [1440, 390, 320]) test(`Search content search takes focus and returns it to the query builder @ ${width}`, { skip }, async t => {
+  const { page } = await open(t, { url: "/library", viewport: { width, height: 844 }, ready: "#queryTableLibrary .qt-row" });
+  const button = page.getByRole("button", { name: "Messages", exact: true });
+  await press(button);
+  const dialog = page.getByRole("dialog", { name: "Search within work", exact: true });
+  await useSearchMenus(page, dialog);
+  await holdsFocus(page, dialog, button);
+});
+
+for (const width of [1440, 390, 320]) test(`Search long query can scroll to submit @ ${width}`, { skip }, async t => {
+  const draft = {
+    editor: "visual", match: "rules", text: "", mode: "advanced", fuzzy: false, caseSensitive: false, separators: false,
+    scope: { surface: "prose", roles: [], kinds: [], repository: "", provider: "", source: "", from: "", to: "", conversation_id: "", workspace_id: "" },
+    root: { id: "long-query", kind: "group", join: "all", exclude: false,
+      children: Array.from({ length: 12 }, (_, index) => ({ id: `rule-${index}`, kind: "words", text: `condition ${index + 1}`, other: "", distance: "8", exclude: false })) },
+  };
+  const app = await open(t, { url: `/library?${new URLSearchParams({ text_builder: JSON.stringify(draft) })}`, viewport: { width, height: 600 }, ready: "#queryTableLibrary .qt-row",
+    api: { "POST /api/search/text/validate": ({ body }) => ({ where: body.where }) } });
+  const { page } = app;
+  await press(page.getByRole("button", { name: "Edit messages search", exact: true }));
+  const dialog = page.getByRole("dialog", { name: "Search within work", exact: true });
+  const heading = dialog.getByRole("heading", { name: "Search within work", exact: true });
+  const inViewport = element => { const rect = element.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= innerHeight; };
+  assert.ok(await heading.evaluate(inViewport), "the modal heading is outside the viewport");
+  const bounds = await dialog.boundingBox();
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  await page.mouse.wheel(0, 2400);
+  const submit = dialog.getByRole("button", { name: "Search messages", exact: true });
+  await page.waitForFunction(inViewport, await submit.elementHandle());
+  assert.ok(await heading.evaluate(inViewport), "scrolling hid the modal heading");
+  await app.shot("scrolled-to-submit");
+  await submit.click();
+  await dialog.waitFor({ state: "hidden" });
+  await app.settled();
 });
 
 for (const route of [
@@ -204,7 +272,7 @@ test('header navigation hides unavailable TL1 and skips it in keyboard navigatio
     await settled();
     assert.equal(await page.locator('#tl1Tab').isVisible(), false);
     const navigation = page.getByRole('navigation', { name: 'Primary navigation', exact: true });
-    const library = navigation.getByRole('button', { name: 'Library', exact: true });
+    const library = navigation.getByRole('button', { name: 'Search', exact: true });
     await library.focus();
     await page.locator('#tl1Tab').evaluate(element => element.focus());
     await page.waitForFunction(element => document.activeElement === element, await library.elementHandle());

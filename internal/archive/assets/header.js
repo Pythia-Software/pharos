@@ -214,13 +214,22 @@ function initHeaderControls(close = {}) {
   // bar into the settings column rather than stretching its individual gaps.
   const liveBar = document.querySelector('body>header .bar'), previewBar = document.querySelector('.header-preview-bar');
   const preview = previewBar.parentElement;
+  let previewWidth = 0, barWidth = 0, fitFrame = 0;
   function fitPreview() {
     if (!preview.clientWidth || !liveBar.clientWidth) return;
-    previewBar.style.width = liveBar.clientWidth + 'px';
-    previewBar.style.zoom = String(Math.min(1, preview.clientWidth / liveBar.clientWidth));
+    if (previewWidth === preview.clientWidth && barWidth === liveBar.clientWidth) return;
+    previewWidth = preview.clientWidth;
+    barWidth = liveBar.clientWidth;
+    previewBar.style.width = barWidth + 'px';
+    previewBar.style.zoom = String(Math.min(1, previewWidth / barWidth));
   }
-  new ResizeObserver(fitPreview).observe(preview);
-  new ResizeObserver(fitPreview).observe(liveBar);
+  // Zoom changes the observed preview's height. Apply it in the next frame
+  // and only when widths change, so WebKit can finish delivering resize events.
+  const previewResize = new ResizeObserver(() => {
+    if (!fitFrame) fitFrame = requestAnimationFrame(() => { fitFrame = 0; fitPreview(); });
+  });
+  previewResize.observe(preview);
+  previewResize.observe(liveBar);
   fitPreview();
   const tabs = get('headerPreviewTabs'), liveTabs = document.querySelector('body>header .tabs');
   function syncTabs() {

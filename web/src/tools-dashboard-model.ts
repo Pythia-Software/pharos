@@ -28,6 +28,8 @@ export const toolDashboardBreakdowns = {
   command_name: { label: "Command", note: "Shell commands only", where: [{ field: "tool_category", op: "=", value: "command" }] },
   mcp_server: { label: "MCP server", note: "Calls with an identified MCP server", where: [{ field: "mcp_server", op: "is_not_null", value: "" }] },
   repository_name: { label: "Repository", note: "All repositories", where: [] },
+  source_kind: { label: "App", note: "All recorded source apps", where: [] },
+  provider: { label: "Provider", note: "All providers", where: [] },
   model_family: { label: "Model", note: "All model families", where: [] },
   session_kind: { label: "Agent kind", note: "Root agents and subagents", where: [] },
 } satisfies Record<string, { label: string; note: string; where: WhereTerm[] }>;

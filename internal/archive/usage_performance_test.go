@@ -12,6 +12,11 @@
 //
 //	go test -tags probe -run TestUsagePerformanceFilteredMetrics -v ./internal/archive
 //
+// TestUsagePerformanceSQLHost needs no snapshot either. It compares complete
+// Human Words HTTP requests with host SQL reductions enabled and disabled:
+//
+//	PHAROS_TEST_PROCESSES=1 go test -tags probe -run '^TestUsagePerformanceSQLHost$' -v -count=1 ./internal/archive
+//
 // TestUsagePerformanceGroup also needs PHAROS_USAGE_REQUEST, a V3 request
 // file. TestUsagePerformanceServer serves the snapshot at
 // PHAROS_USAGE_SERVER (a loopback address) until it is interrupted;
@@ -316,6 +321,127 @@ func processCPU() time.Duration {
 	var usage syscall.Rusage
 	syscall.Getrusage(syscall.RUSAGE_SELF, &usage)
 	return time.Duration(usage.Utime.Nano() + usage.Stime.Nano())
+}
+
+// TestUsagePerformanceSQLHost measures the cost of removing the general SQL
+// bypasses, including dependency discovery, source projection, leases and HTTP
+// serialization. The synthetic authored-message projection has 50,000 rows and
+// nine integer fields; fixture preparation is outside the measured requests.
+// Writing messages uses no tool cubes. Native SQL and ordinary Query Table use
+// the same catalog, indexes, filters and authorization through the real routes.
+func TestUsagePerformanceSQLHost(t *testing.T) {
+	c, config := testCatalog(t)
+	if err := c.RebuildAuthorship(t.Context(), "probe"); err != nil {
+		t.Fatal(err)
+	}
+	tx := seedTx(t, c.DB)
+	for i := range 5 {
+		id := fmt.Sprintf("sql-probe-%d", i)
+		provider := []string{"codex", "claude"}[i%2]
+		if _, err := tx.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at)
+			VALUES(?,'codex','local',?,'SQL probe','2026-09-01T00:00:00Z')`, id, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id)
+			VALUES(?,?,?,'local',?)`, id, id, provider, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const population = 50_000
+	if _, err := tx.Exec(`WITH RECURSIVE samples(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM samples WHERE n+1<?)
+		INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,source_order,created_at)
+		SELECT 'sql-message-'||n,'sql-probe-'||(n%5),CAST(n AS TEXT),'user','message','Synthetic SQL probe','probe',n,
+		printf('2026-09-%02dT12:00:00.000Z',1+n%5) FROM samples`, population); err != nil {
+		t.Fatal(err)
+	}
+	columns := []string{"message_id", "conversation_id", "workspace_id", "sent_at", "day", "total_chars", "spans_json"}
+	values := []string{"id", "conversation_id", "conversation_id", "created_at", "substr(created_at,1,10)", "200", "'[]'"}
+	var words []string
+	for i, category := range authorshipCategories {
+		columns = append(columns, category+"_words")
+		value := fmt.Sprintf("((source_order+%d)%%7)", i)
+		values = append(values, value)
+		words = append(words, value)
+	}
+	columns, values = append(columns, "words"), append(values, strings.Join(words, "+"))
+	if _, err := tx.Exec("INSERT INTO message_authorship(" + strings.Join(columns, ",") + ") SELECT " + strings.Join(values, ",") + " FROM messages"); err != nil {
+		t.Fatal(err)
+	}
+	commitSeed(t, tx)
+	s := testServer(t, config, c)
+	override(t, &nativeMetrics, nativeMetrics)
+	measure := func(t *testing.T, path string, body any) {
+		t.Helper()
+		var expected any
+		for _, enabled := range []bool{true, false} {
+			nativeMetrics = enabled
+			var wall, cpu []time.Duration
+			for run := range 4 {
+				start, startCPU := time.Now(), processCPU()
+				response := apiCall(t, s, config.APIToken, http.MethodPost, path, body)
+				elapsed, usedCPU := time.Since(start), processCPU()-startCPU
+				if response.Code != http.StatusOK {
+					t.Fatal(response.Code, response.Body.String())
+				}
+				var result any
+				if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+					t.Fatal(err)
+				}
+				metrics, ok := result.(map[string]any)["metrics"].([]any)
+				if !ok || len(metrics) == 0 {
+					t.Fatal("missing metrics", response.Body.String())
+				}
+				for _, metric := range metrics {
+					m := metric.(map[string]any)
+					if firstString(m["error"]) != "" || len(m["buckets"].([]any)) == 0 {
+						t.Fatal("metric failed", m)
+					}
+					for _, bucket := range m["buckets"].([]any) {
+						if firstString(bucket.(map[string]any)["error"]) != "" {
+							t.Fatal("bucket failed", bucket)
+						}
+					}
+				}
+				if expected == nil {
+					expected = result
+				} else if !identical(expected, result) {
+					t.Fatalf("host and adapter responses differ: %s", response.Body.String())
+				}
+				if run > 0 {
+					wall, cpu = append(wall, elapsed), append(cpu, usedCPU)
+				}
+			}
+			t.Logf("native=%v rows=%d wall=%v cpu=%v", enabled, population,
+				medianDuration(wall).Round(10*time.Microsecond), medianDuration(cpu).Round(10*time.Microsecond))
+		}
+	}
+	for _, shape := range []struct {
+		name   string
+		groups []string
+		where  []qt.WhereTerm
+	}{
+		{"scalar", nil, nil},
+		{"grouped", []string{"day"}, nil},
+		{"filtered", []string{"day"}, []qt.WhereTerm{{Field: "provider", Op: "=", Value: "codex"}}},
+	} {
+		t.Run("v2/"+shape.name, func(t *testing.T) {
+			q := metricRequest(qt.AggSpec{ID: "messages", Op: "count", GroupBy: shape.groups},
+				qt.AggSpec{ID: "words", Op: "sum", Field: "words", GroupBy: shape.groups})
+			for _, category := range authorshipCategories {
+				q.Metrics = append(q.Metrics, qt.AggSpec{ID: category, Op: "sum", Field: category + "_words", GroupBy: shape.groups})
+			}
+			q.Where = shape.where
+			measure(t, "/api/query/writing_messages/metrics", q)
+		})
+	}
+	t.Run("v3/grouped", func(t *testing.T) {
+		q := groupRequest("day", qt.SummaryColumn{ID: "messages", Op: "count"},
+			qt.SummaryColumn{ID: "words_total", Op: "sum", Field: "words"}, qt.SummaryColumn{ID: "mean", Op: "avg", Field: "words"})
+		q.Result.OrderBy = qt.OrderBys{{Field: "day", Dir: "asc"}}
+		q.Result.Limit = 2
+		q.Metrics = []qt.AggSpec{{ID: "all_groups", Op: "count"}, {ID: "shown", Op: "sum", Field: "messages", Scope: "shownRows"}}
+		measure(t, "/api/query/writing_messages/query-v3", q)
+	})
 }
 
 func medianDuration(values []time.Duration) time.Duration {

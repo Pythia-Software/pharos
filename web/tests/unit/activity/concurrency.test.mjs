@@ -294,6 +294,12 @@ test("date presets use inclusive calendar days ending at the latest captured day
     assert.equal(range.endDay, key === "day" ? "2026-10-06" : "2026-10-08");
     assert.equal(range.bounds[1] - range.bounds[0], days * 24 * 60 * minute);
   }
+  const longHistory = { period_start: "2025-01-01", period_end: "2026-10-08", timezone: "UTC" };
+  for (const days of [30, 90, 180, 365]) {
+    const range = resolveConcurrencyRange(longHistory, normalizeConcurrencySettings({ range: `${days}d` }));
+    assert.equal(range.endDay, longHistory.period_end);
+    assert.equal(range.bounds[1] - range.bounds[0], days * 86400000);
+  }
 });
 
 test("custom ranges persist, include the final day, and constrain dates to timing coverage", () => {

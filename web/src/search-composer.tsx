@@ -55,9 +55,9 @@ export function HomeSearch({ schema }: { schema: FieldSchema }) {
       event.preventDefault(); setExpanded(false); trigger.current?.focus();
     }
   }}>
-    <button ref={trigger} type="button" className="home-search-trigger" aria-label={expanded ? "Collapse search" : "Search your library"} aria-describedby={reading.empty ? undefined : `${id}-reading`} aria-expanded={expanded} aria-controls={id} onClick={() => setExpanded(!expanded)}>
+    <button ref={trigger} type="button" className="home-search-trigger" aria-label={expanded ? "Collapse search" : "Search past work"} aria-describedby={reading.empty ? undefined : `${id}-reading`} aria-expanded={expanded} aria-controls={id} onClick={() => setExpanded(!expanded)}>
       <Icon name="search" />
-      {reading.empty && !expanded ? <span className="home-search-placeholder">Search your library…</span> : <span id={`${id}-reading`} className={reading.empty ? "home-search-placeholder" : "home-search-preview"}><SearchSentence parts={reading.parts} empty={reading.empty} /></span>}
+      {reading.empty && !expanded ? <span className="home-search-placeholder">Search past work…</span> : <span id={`${id}-reading`} className={reading.empty ? "home-search-placeholder" : "home-search-preview"}><SearchSentence parts={reading.parts} empty={reading.empty} /></span>}
       <Icon name="chevron-down" />
     </button>
     <div className="home-search-expansion" aria-hidden={!expanded}>

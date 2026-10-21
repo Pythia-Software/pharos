@@ -9,8 +9,10 @@ import { usageDetailsSchema } from "./usage-row-model";
 import { UsageRowActions, usageRowRenderers } from "./usage-row-renderers";
 import { createQueryMetadataLoader } from "./query-metadata";
 import { SearchDialog } from "./search-dialog";
-import { SearchOrder } from "./search-order";
-import { emptyTextSearch, readTextSearch, textFindParameters, textSearchSummary, withheldBatch, type TextSearchDraft } from "./text-search-model";
+import { ExploreSearch } from "./explore-search";
+import { SearchResultsDisplay } from "./search-results-view";
+import { queryForSearchResultsView, searchResultsView, type SearchResultsView } from "./search-results-view-model";
+import { emptyTextSearch, readTextSearch, textFindParameters, searchSentence, withheldBatch, type TextSearchDraft } from "./text-search-model";
 import { CarbonImpact } from "./carbon-impact";
 import { pushMachineLocation, useMachineQueryNavigation } from "./machine-location";
 import { MachineActivity } from "./machine-activity";
@@ -30,8 +32,8 @@ import { useLocationRevision } from "./nested-pages";
 import { SettingsWorkspace } from "./settings-workspace";
 import { installAppNavigation } from "./app-navigation";
 import { EMPTY_QUERY, exitGrouping, groupSourceQuery, httpComputedColumnStore, inspectBucketQuery, applyAggregations, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, toServerQuery, type ComputedColumnStore, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type AggregationResultEntry, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
-import { useQueryTable, type QueryTableApi } from "@pythia-software/query-table-react";
-import { DataTable, FilterValueProvider, MetricCard, MetricsPanel, QueryBuilder, SelectionToolbar, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
+import { useQueryTable, type QueryTableApi, type QueryFilterApi } from "@pythia-software/query-table-react";
+import { DataTable, FilterValueProvider, MetricCard, MetricsPanel, QueryBuilder, QueryFilterRow, SelectionToolbar, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
 import "@pythia-software/query-table-ui/theme.css";
 import "./pharos.css";
 import { savedRollingWindow } from "./bookmarks";
@@ -80,7 +82,7 @@ const relationships: RelationshipAdapter = {
   },
 };
 type Dataset = "library" | "usage" | "conversation_activity" | "writing" | "writing_messages" | "mcp_calls" | "tools" | "tool_calls" | "skill_usages" | "tl1_attempts" | "parallelism" | "findings";
-type LibraryView = "table" | "conversation";
+type LibraryView = SearchResultsView;
 type MessageView = "table" | "text";
 type TranscriptMessage = { role: string; text: unknown; raw_text?: unknown };
 type TurnSummary = { human: TranscriptMessage | null; response: TranscriptMessage | null };
@@ -431,7 +433,7 @@ function usageGroupFields(fields: FieldSchema<Row>["fields"], query: QueryState)
 // can follow the table's filters.
 // find, for the Library, is a keyword search that narrows the rows before the
 // pagination applies; onFind hears how it went.
-function QuerySurface({ dataset, libraryView = "table", messageView = "table", find = "", onFind, trailing, header, controls, presets, selectable = false, scopeWhere, appliedScope, namespace }: { dataset: Dataset; selectable?: boolean; libraryView?: LibraryView; messageView?: MessageView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode; scopeWhere?: WhereTerm[]; appliedScope?: React.MutableRefObject<WhereTerm[]>; namespace?: "machine_calls" }) {
+function QuerySurface({ dataset, libraryView = "table", messageView = "table", find = "", onFind, trailing, header, controls, queryContent, resultPresentation, presets, selectable = false, scopeWhere, appliedScope, namespace }: { dataset: Dataset; selectable?: boolean; libraryView?: LibraryView; messageView?: MessageView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; queryContent?: (api: QueryTableApi<Row>) => React.ReactNode; resultPresentation?: (api: QueryTableApi<Row>) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode; scopeWhere?: WhereTerm[]; appliedScope?: React.MutableRefObject<WhereTerm[]>; namespace?: "machine_calls" }) {
   const registryKey = namespace ?? dataset;
   const visible = shared || datasetIsVisible(registryKey);
   const schema = useMemo(() => namespace ? { ...schemas[dataset], name: "pharos_machine_calls", defaultSelect: [{ field: "started_at", width: 155 }, { field: "repository_name", width: 140 }, { field: "operation_name", width: 180 }, { field: "tool_name", width: 140 }, { field: "command", width: 350 }, { field: "duration_ms", width: 105 }, { field: "status", width: 85 }, { field: "duration_source", width: 120 }, { field: "title", width: 240 }] } : schemas[dataset], [dataset, namespace]);
@@ -543,6 +545,14 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
   const stableApi = useMemo(() => new Proxy({} as QueryTableApi<Row>, {
     get(_target, property) { return apiRef.current[property as keyof QueryTableApi<Row>]; },
   }), []);
+  // The source facade also changes as grouped results arrive. Keep filter
+  // metadata effects stable while resolving every intent against its stage.
+  const stableSourceFilters = useMemo(() => new Proxy({} as QueryFilterApi<Row>, {
+    get(_target, property) {
+      const current = apiRef.current;
+      return (current.query.grouping ? current.grouping!.source : current)[property as keyof QueryFilterApi<Row>];
+    },
+  }), []);
   if (!namespace || visible) tableApis.set(registryKey, api);
   useEffect(() => {
     // Work-page links may run before Library's first mount or restoration.
@@ -582,13 +592,19 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
       onReset={() => { setRecovered(false); api.setQuery(tableRecoveryQuery(schema, scopeWhere)); if (capabilityError) setCapabilityRetry(value => value + 1); }} />
     {!api.query.grouping || namespace ? header?.(api) : null}
     {presets?.(api)}
-    {api.query.grouping ? <QueryBuilder api={stableApi} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <QueryBuilder defaultCollapsed={Boolean(namespace)} api={stableApi} fields={(api.query.grouping ? api.schema!.fields : api.computed.catalogue)} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={stableApi} dataset={dataset} layout={<QueryBuilder api={stableApi} fields={(api.query.grouping ? api.schema!.fields : api.computed.catalogue)} total={api.total} running={api.loading} />} /> : <QueryBuilder api={stableApi} fields={(api.query.grouping ? api.schema!.fields : api.computed.catalogue)} total={api.total} running={api.loading} />}
+    {queryContent || resultPresentation ? <QueryBuilder api={stableApi} fields={api.query.grouping ? api.schema!.fields : api.computed.catalogue} total={api.total} running={api.loading}
+      whereRow={<>
+        {resultPresentation?.(api)}
+        <QueryFilterRow api={stableSourceFilters} fields={api.query.grouping ? api.grouping!.source.schema.fields : api.computed.catalogue} />
+        {queryContent?.(api)}
+      </>} /> : api.query.grouping ? <QueryBuilder api={stableApi} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <QueryBuilder defaultCollapsed={Boolean(namespace)} api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={stableApi} dataset={dataset} layout={<QueryBuilder api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />} /> : <QueryBuilder api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />}
+    {queryContent ? controls?.(api, null) : null}
     <MetricsPanel api={stableApi} aggregations={api.aggregations} fields={metricFields(api.query.grouping ? usageGroupFields(api.schema!.fields, api.query) : api.computed.catalogue)} renderers={metricRenderers}
       onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(records); }} />
     {capabilityError && !capabilities ? <div className="query-table-error">Could not read this table's query capabilities: {capabilityError.message}</div> : null}
     {api.error ? <div className="query-table-error">{api.error?.message}</div> : null}
     {selectable && !api.query.grouping ? <SelectionToolbar selection={api.selection} actions={ids => <ShareSelection ids={ids} api={api} transport={transport} />} /> : null}
-    {dataset === "library" && libraryView === "conversation" && !api.query.grouping ? <ConversationResults api={api} searching={Boolean(find)} />
+    {dataset === "library" && searchResultsView(api.query, libraryView) === "conversation" ? <ConversationResults api={api} searching={Boolean(find)} />
       : dataset === "writing_messages" && messageView === "text" && !api.query.grouping ? <AuthoredMessages api={api} emptyMessage={api.error ? failedMessage : emptyMessages[dataset]} /> : <DataTable
       maxHeight={100000}
       {...(selectable && !api.query.grouping ? { selection: api.selection } : {})}
@@ -805,15 +821,6 @@ function FindMatchCell({ row }: { row: Row }) {
   return <button type="button" className="library-find-cell" title={`${findHitText(hit)}\n\n${count.toLocaleString()} match${count === 1 ? "" : "es"} · ${findHitLabel(hit)}`} onClick={event => { event.stopPropagation(); openFindHit(hit); }}>Open match{count > 1 ? ` (${count.toLocaleString()})` : ""}</button>;
 }
 
-function workspaceFilterLabels(api: QueryTableApi<Row>): string[] {
-  const describe = (clause: { field: string; op: string; value: string; negated?: boolean }) => {
-    const label = api.computed.catalogue.find(field => field.name === clause.field)?.label ?? clause.field;
-    const value = filterPresentations.library.label?.(clause.field, clause.value) ?? clause.value;
-    return `${clause.negated ? "NOT " : ""}${label} ${clause.op.replaceAll("_", " ")}${value ? ` ${value}` : ""}`;
-  };
-  return api.query.where.map(term => "any" in term ? `(${term.any.map(describe).join(" OR ")})` : describe(term));
-}
-
 function UserMessageSurface({ header, messageView }: { messageView: MessageView; header: (api: QueryTableApi<Row>, searching: boolean) => React.ReactNode }) {
   if (shared) return <QuerySurface dataset="writing_messages" messageView={messageView} header={api => header(api, false)} />;
   const [initial] = useState(readMessageSearch), [value, setValue] = useState(initial.draft);
@@ -878,19 +885,26 @@ function LibraryPage() {
   const [found, setFound] = useState<FindSummary | null>(null);
   useEffect(() => { setFound(null); }, [find]);
   return <div className={`pharos-query-page${find ? " library-searching" : ""}`}>
-    <div className="view-heading library-heading"><div><h1>{shared ? "Conversations" : "Find past work"}</h1></div><div className="library-view-toggle" role="group" aria-label="Library result view"><button type="button" className={view === "table" ? "active" : ""} aria-pressed={view === "table"} onClick={() => setView("table")}>Table</button><button type="button" className={view === "conversation" ? "active" : ""} aria-pressed={view === "conversation"} onClick={() => setView("conversation")}>Conversations</button></div></div>
-    <QuerySurface dataset="library" libraryView={view} find={find} onFind={setFound} selectable={!shared && view === "table"} {...(find ? { trailing: (row: Row) => <FindMatchCell row={row} /> } : {})} controls={shared ? undefined : (api, builder) => <>
-      <TextSearchEditor value={editorValue} active={!!applied} initialError={initialError} kind={kind} onKind={next => { setKind(next); setCursor(""); }}
-        onApply={next => { if (kind === "text" && textFindParameters(next) === find) api.refresh(); setEditorValue(next); setApplied(next); setInitialError(""); setCursor(""); }} onClear={clearText}
-        file={{ text: fileDraft, caseSensitive: fileCaseDraft, active: !!fileSearch, dirty: fileDraft.trim() !== fileSearch || fileCaseDraft !== fileCase, onText: setFileDraft, onCase: setFileCaseDraft, onApply: () => { setFileSearch(fileDraft.trim()); setFileCase(fileCaseDraft); }, onClear: () => { setFileDraft(""); setFileSearch(""); } }}
-        workspaceScope={{ filters: workspaceFilterLabels(api), editor: builder }} orderControl={<SearchOrder api={api} batched={!!found?.search} />} />
+    <div className="view-heading"><div><h1>{shared ? "Conversations" : "Search"}</h1>{!shared ? <p className="muted">Find past work. Follow a conversation, compare projects, or build a view of your own.</p> : null}</div></div>
+    <QuerySurface dataset="library" libraryView={view} resultPresentation={api => <SearchResultsDisplay view={searchResultsView(api.query, view)} grouped={!!api.query.grouping}
+      onChange={next => {
+        if (next === "conversation" && api.query.grouping) api.setQuery(previous => queryForSearchResultsView(previous, next));
+        setView(next);
+      }} />} find={find} onFind={setFound} selectable={!shared && view === "table"} {...(find ? { trailing: (row: Row) => <FindMatchCell row={row} /> } : {})} queryContent={shared ? undefined : api => <ExploreSearch kind={kind} active={!!find} error={initialError}
+      summary={kind === "text" && applied ? searchSentence(applied).parts.map(part => typeof part === "string" ? part : part.value).join("") : `${fileSearch}${fileCase ? " · case sensitive" : ""}`}
+      onClear={() => { clearText(); setFileSearch(""); setFileDraft(""); }}>
+      {(close, draftKind, setDraftKind) => <TextSearchEditor compact sentence={false} value={editorValue} active={!!applied} initialError={initialError} kind={draftKind} onKind={setDraftKind}
+        onApply={next => { if (kind === "text" && textFindParameters(next) === find) api.refresh(); setKind("text"); setEditorValue(next); setApplied(next); setInitialError(""); setCursor(""); close(); }} onClear={clearText}
+        file={{ text: fileDraft, caseSensitive: fileCaseDraft, active: !!fileSearch, dirty: fileDraft.trim() !== fileSearch || fileCaseDraft !== fileCase, onText: setFileDraft, onCase: setFileCaseDraft, onApply: () => { setKind(draftKind); setCursor(""); setInitialError(""); setFileSearch(fileDraft.trim()); setFileCase(fileCaseDraft); close(); }, onClear: () => { setFileDraft(""); setFileSearch(""); } }}
+        context={<p className="explore-search-context">Search inside retained messages, file changes, or visited URLs. Use <b>where</b> in the query builder to filter workspaces.</p>}
+        workspaceScope={{ filters: [] }} orderControl={null} />}
+    </ExploreSearch>} controls={shared ? undefined : (api) => <>
     {find && found ? <div className="library-find-status muted" role="status">
       <p><strong>{found.workspaces.toLocaleString()} matching workspace{found.workspaces === 1 ? "" : "s"}{found.search ? " in this batch" : ""}.</strong>{found.search ? found.search.complete ? " All eligible messages have been checked." : found.search.next_cursor ? " More messages remain to check. Continue the search to see the next batch." : " Some messages could not be checked." : found.limited ? " Search limit reached; narrow the search." : ""}</p>
       {found.search?.stop_message ? <p>{found.search.stop_message}</p> : null}
-      {kind === "text" && applied ? <p className="library-search-summary">Results for: {textSearchSummary(applied)}</p> : null}
       {found.workspaces === 0 && found.search?.complete ? <p>No messages matched these conditions. Try switching “and” to “or”, remove a condition, or choose a broader target.</p> : null}
       {found.search?.skipped_oversize ? <p>{found.search.skipped_oversize.toLocaleString()} large messages were skipped. Missing results may still be in those messages.</p> : null}
-      {found.search ? <details><summary>Search details and coverage</summary><p>{found.search.candidates.toLocaleString()} candidates checked; {(found.search.verified_bytes / 1048576).toFixed(1)} MiB verified in {found.search.elapsed_ms} ms. {found.search.complete ? "Complete" : `Stopped: ${found.search.stop_reason.replaceAll("_", " ")}`}. Table counts and metrics describe this batch.</p><p>{found.search.coverage}</p>{found.search.expansions && Object.keys(found.search.expansions).length ? <p>Word variations: {Object.entries(found.search.expansions).map(([word, terms]) => `${word} → ${terms.join(", ")}`).join("; ")}</p> : null}</details> : null}
+      {found.search ? <details><summary>Search details and coverage</summary><p>{found.search.candidates.toLocaleString()} candidates checked; {(found.search.verified_bytes / 1048576).toFixed(1)} MiB verified in {found.search.elapsed_ms} ms. {found.search.complete ? "Complete" : `Stopped: ${found.search.stop_reason.replaceAll("_", " ")}`}. Table counts and metrics describe this batch. Ordering applies within this batch.</p><p>{found.search.coverage}</p>{found.search.expansions && Object.keys(found.search.expansions).length ? <p>Word variations: {Object.entries(found.search.expansions).map(([word, terms]) => `${word} → ${terms.join(", ")}`).join("; ")}</p> : null}</details> : null}
       {found.search?.next_cursor ? <button type="button" onClick={() => setCursor(found.search!.next_cursor)}>Continue to next batch</button> : null}
       {withheldBatch(found.search) ? <button type="button" onClick={() => api.refresh()}>Retry this batch</button> : null}
       {cursor ? <button type="button" onClick={() => setCursor("")}>Start over</button> : null}
@@ -1292,14 +1306,17 @@ function WritingPanel({ where, onFilter, status, reload, chartOnly = false, view
   const periodCount = chartPeriodCount(view);
   const cumulative = view.display === "cumulative";
   const hourly = isHourly(view.period);
-  const bounds = timeBounds(where, writingTime);
+  // Resolved timestamps are part of the series request key. Keep one clock
+  // through loading/data renders; renew it when filters change or refresh.
+  const clock = useMemo(() => Date.now(), [JSON.stringify(where), reload]);
+  const bounds = timeBounds(where, writingTime, clock);
   const window = { hourly, start: bounds.from?.toISOString(), end: bounds.to?.toISOString(), from: bounds.from ? localDay(bounds.from) : undefined, to: bounds.to ? localDay(new Date(bounds.to.getTime() - 1)) : undefined };
   const split = view.split === "kind" ? null : view.split;
   const selection = split ? readSlice(where, split) : kinds;
   const chosen = selection.values.map(value => value ?? "");
   const chartWhere = split ? where.filter(term => !isSliceTerm(term, split)) : where;
-  const requestedWhere = smoothingWhere(chartWhere, writingTime, view.period, cumulative ? 0 : view.rollingPeriods, periodCount);
-  const requestedBounds = timeBounds(requestedWhere, writingTime);
+  const requestedWhere = smoothingWhere(chartWhere, writingTime, view.period, cumulative ? 0 : view.rollingPeriods, periodCount, clock);
+  const requestedBounds = timeBounds(requestedWhere, writingTime, clock);
   const chartWindow = { hourly, start: requestedBounds.from?.toISOString(), end: requestedBounds.to?.toISOString(), from: requestedBounds.from ? localDay(requestedBounds.from) : undefined, to: requestedBounds.to ? localDay(new Date(requestedBounds.to.getTime() - 1)) : undefined };
   // Without a key filter, one request answers both the totals and the chart.
   const separate = chartWhere.length !== where.length || requestedWhere !== chartWhere;
@@ -1528,10 +1545,16 @@ function TokenUsageDashboard() {
 
 function HumanUsageDashboard() {
   const state = useUsageDashboardState<WritingChartView>(defaultWritingChart, validWritingChart, writingTime);
+  const [reload, setReload] = useState(0);
+  useEffect(() => {
+    const refresh = () => setReload(value => value + 1);
+    window.addEventListener("pharos:usage-refresh", refresh);
+    return () => window.removeEventListener("pharos:usage-refresh", refresh);
+  }, []);
   const status = useAuthorshipStatus(() => window.dispatchEvent(new Event("pharos:usage-refresh")));
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   return <>
-    <WritingPanel chartOnly where={state.where} onFilter={state.onFilter} status={status} reload={0} viewOverride={state.view} onViewChange={state.update} />
+    <WritingPanel chartOnly where={state.where} onFilter={state.onFilter} status={status} reload={reload} viewOverride={state.view} onViewChange={state.update} />
     <UsageDashboardLinks dataset="writing" groupedLabel="Open grouped conversation totals" query={{ ...EMPTY_QUERY, where: state.where, aggregations: [sum(state.view.scope === "typed" ? "typed_words" : "user_words", [state.view.split === "kind" ? "repository_name" : state.view.split], state.view.scope === "typed" ? "Typed words per conversation group" : "User input per conversation group")] }} currentURL="/analyze?analyze_view=writing" />
     <p className="usage-dashboard-note">The grouped query contains whole-conversation totals for the matching conversations. The graph restricts their writing to the selected dates.</p>
     <p className="usage-dashboard-note">Typed and dictated words are distinguished from pastes, harness instructions, and other supplied text. The full analysis includes the authorship breakdown and build status.</p>

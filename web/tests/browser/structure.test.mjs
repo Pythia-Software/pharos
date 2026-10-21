@@ -11,21 +11,32 @@ import assert from "node:assert/strict";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
 import { defaultApi, rootConversation, workID } from "./fixtures.mjs";
+import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 const work = `/work/${workID}`;
+const exploreGroupedSearch = `/library?${new URLSearchParams({ q_library: encodeQuery(withGroupingKeys({ ...EMPTY_QUERY, select: [{ field: "repository_name" }], where: [{ field: "repository_name", op: "=", value: "repo-1" }] }, ["repository_name"])), search: "cache", text_plain: "1" })}`;
 const ROUTES = [
-  ...['provisional', 'partial'].map(state => ({
-    name: `Indexing forecast (${state})`, url: '/library', ready: '#pharosDrive',
-    api: {'GET /api/library/status': {...defaultApi['GET /api/library/status'], idle: false, activities: [{id: 'index-forecast', kind: 'sync', label: 'Capture & index', started_at: '2026-10-01T00:00:00Z',
-      work: {phase: 'loading authorship inputs', done: 0, total: 0, next: 'Tools, authorship and findings'},
-      estimate: {state: 'unknown', basis: 'Loading inputs before the stage count is available'},
+  ...['provisional', 'partial'].flatMap(state => [false, true].map(expanded => ({
+    name: `Indexing forecast (${state}${expanded ? ', details' : ''})`, url: '/library', ready: '#pharosDrive',
+    api: {'GET /api/library/status': {...defaultApi['GET /api/library/status'], idle: false, activities: [{id: 'index-forecast', kind: 'sync', label: 'Capture & index', started_at: new Date(Date.now() - 120_000).toISOString(),
+      stoppable: true, stop_path: '/api/index/cancel', detail: 'Codex · 0 of 4 sources finished',
+      work: {phase: 'discovering inputs', source: 'Codex', done: 0, total: 0, next: 'Tools, authorship and findings'},
+      estimate: {state: 'unknown', basis: 'Discovering inputs before the stage count is available'},
       forecast: {state, low_seconds: state === 'provisional' ? 180 : 0, high_seconds: state === 'provisional' ? 600 : 0, predicted_steps: state === 'provisional' ? 4 : 3, remaining_steps: 4, basis: 'Remaining sources and analyses on this Mac', unknown_steps: state === 'partial' ? ['Classify authorship for retained conversations'] : []}}]}},
-    open: page => page.locator('#pharosDrive').click(), shown: '#pharosDrivePanel .pharos-activity',
-  })),
+    open: async page => {
+      await page.evaluate(() => { window.webkit = {messageHandlers: {pharosLibrary: {postMessage: async () => {}}}}; });
+      await page.locator('#pharosDrive').click();
+      if (expanded) await page.locator('#pharosDrivePanel summary').click();
+    }, shown: '#pharosDrivePanel .pharos-activity',
+  }))),
   { name: "Home", url: "/", ready: ".home-belt-row .query-card" },
   { name: "Dashboard Catalog", url: "/home?cards=library", ready: ".card-library-entry .query-card" },
-  { name: "Library table", url: "/library", ready: "#queryTableLibrary .qt-row" },
-  { name: "Library conversations", url: "/library?view=conversation", ready: ".conversation-result-card" },
+  { name: "Search table", url: "/library", ready: "#queryTableLibrary .qt-row" },
+  { name: "Search conversations", url: "/library?view=conversation", ready: ".conversation-result-card" },
+  { name: "Search display switch", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("group", { name: "Display results as" }).getByRole("button", { name: "Conversations", exact: true }).click(), shown: ".conversation-result-card" },
+  { name: "Search content editor", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("button", { name: "Messages", exact: true }).click(), shown: ".explore-search-modal" },
+  { name: "Search grouped search", url: exploreGroupedSearch, ready: "#queryTableLibrary .qt-row" },
+  { name: "Search grouped conversation display", url: exploreGroupedSearch, ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("group", { name: "Display results as" }).getByRole("button", { name: "Conversations", exact: true }).click(), shown: ".conversation-result-card" },
   { name: "TL1 overview", url: "/tl1", ready: ".tl1-tiles" },
   { name: "TL1 configurations", url: "/tl1/configurations", ready: "#tl1-matrix tbody tr" },
   { name: "TL1 follow-ups", url: "/tl1/followups", ready: "#tl1-followup-next tbody tr" },
@@ -116,7 +127,7 @@ for (const width of [1649, 2133]) test(`pages without section menus use the full
   await page.locator('.home-library-toggle').click();
   await page.locator('.card-library-entry .query-card').first().waitFor();
   await fillsWindow();
-  await primary.getByRole('button', { name: 'Library', exact: true }).click();
+  await primary.getByRole('button', { name: 'Search', exact: true }).click();
   await page.locator('#queryTableLibrary .qt-row').first().waitFor();
   await fillsWindow();
   await primary.getByRole('button', { name: /^Optimize/ }).click();
@@ -124,6 +135,44 @@ for (const width of [1649, 2133]) test(`pages without section menus use the full
   await fillsWindow();
   await page.setViewportSize({ width: width + 400, height: 1075 });
   await fillsWindow();
+});
+
+for (const [name, chart, requestCount] of [
+  ["text sources", { split: "kind" }, 1],
+  ["smoothed repositories", { split: "repository_name", rollingPeriods: 7 }, 2],
+  ["hourly", { split: "kind", period: "hour" }, 1],
+]) test(`Human Words relative dates settle across renders and renew on refresh (${name})`, { skip }, async t => {
+  const query = days => ({ ...EMPTY_QUERY, where: [
+    { field: "last_message_at", op: ">=", value: `-${days}d` },
+    { field: "first_message_at", op: "<", value: "+0s" },
+  ] });
+  const params = new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "human", analyze_filters: encodeQuery(query(7)), analyze_chart: JSON.stringify({ period: "day", ...chart }) });
+  const app = await open(t, { url: `/analyze?${params}`, ready: ".writing-panel .usage-chart" });
+  const requests = () => app.calls.filter(call => call.path === "/api/query/writing/series");
+  assert.equal(requests().length, requestCount, "loading and data renders complete without refetching");
+  const initial = requests().map(call => call.body);
+  await app.page.clock.setFixedTime(new Date(Date.now() + 86400000));
+  await app.page.getByRole("combobox", { name: "Metric", exact: true }).selectOption("all");
+  await app.page.setViewportSize({ width: 390, height: 844 });
+  await app.settled();
+  assert.equal(requests().length, requestCount, "presentation changes keep the resolved request bounds");
+
+  const refreshed = app.page.waitForResponse(response => response.url().endsWith("/api/query/writing/series"));
+  await app.page.evaluate(() => window.dispatchEvent(new Event("pharos:usage-refresh")));
+  await refreshed;
+  await app.settled();
+  assert.equal(requests().length, requestCount * 2);
+  assert.ok(requests().slice(requestCount).every(call => call.body.end > initial[0].end), "refresh renews the relative end");
+
+  const filtered = app.page.waitForResponse(response => response.url().endsWith("/api/query/writing/series"));
+  await app.page.evaluate(filters => {
+    const url = new URL(location.href); url.searchParams.set("analyze_filters", filters);
+    history.replaceState(history.state, "", url); window.dispatchEvent(new Event("pharos:route"));
+  }, encodeQuery(query(30)));
+  await filtered;
+  await app.settled();
+  assert.equal(requests().length, requestCount * 3);
+  assert.ok(requests().slice(requestCount * 2).some(call => call.body.where.some(term => term.value === "-30d")), "filter changes issue the new request");
 });
 
 describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY || 3) }, () => {
