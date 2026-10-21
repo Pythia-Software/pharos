@@ -1,7 +1,36 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as m from "../../../src/search-composer-state";
+import { withGroupingKeys } from "@pythia-software/query-table-core";
+import { queryForSearchResultsView, searchResultsView } from "../../../src/search-results-view-model";
 const schema = { name: "test", idField: "id", fields: [], defaultSort: [{ field: "activity_at", dir: "desc" }], defaultLimit: 50 };
+test("Table and Conversations display the same query without changing filters, columns or paging", () => {
+ const query = { ...m.freshSearch(schema).query,
+  where: [{ any: [{ field: "repository_name", op: "=", value: "pharos" }, { field: "repository_name", op: "=", value: "query-table" }] }],
+  select: [{ field: "title" }, { field: "total_tokens" }], offset: 100,
+ };
+ for (const view of ["table", "conversation"]) {
+  assert.equal(queryForSearchResultsView(query, view), query);
+  assert.equal(searchResultsView(query, view), view);
+ }
+});
+test("grouped results show a table and Conversations returns to the filtered source work", () => {
+ const source = { ...m.freshSearch(schema).query,
+  where: [{ field: "repository_name", op: "=", value: "pharos" }],
+  select: [{ field: "title" }, { field: "total_tokens" }],
+  orderBy: [{ field: "total_tokens", dir: "desc", nulls: "last" }],
+ };
+ const grouped = withGroupingKeys(source, ["repository_name"]);
+ assert.equal(searchResultsView(grouped, "conversation"), "table");
+ assert.equal(queryForSearchResultsView(grouped, "table"), grouped);
+ const conversations = queryForSearchResultsView(grouped, "conversation");
+ assert.equal(conversations.grouping, undefined);
+ assert.deepEqual(conversations.where, source.where);
+ assert.deepEqual(conversations.select, source.select);
+ assert.deepEqual(conversations.orderBy, source.orderBy);
+ assert.equal(searchResultsView(conversations, "conversation"), "conversation");
+ assert.ok(grouped.grouping);
+});
 test("composer carries scope, exclusions, OR filters, advanced sort and metrics without cursor", () => {
  const d = m.freshSearch(schema);
  d.text.root.children[0].text = "parser";

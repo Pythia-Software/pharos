@@ -11,8 +11,10 @@ import assert from "node:assert/strict";
 import { open, skip } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
 import { defaultApi, rootConversation, workID } from "./fixtures.mjs";
+import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 const work = `/work/${workID}`;
+const exploreGroupedSearch = `/library?${new URLSearchParams({ q_library: encodeQuery(withGroupingKeys({ ...EMPTY_QUERY, select: [{ field: "repository_name" }], where: [{ field: "repository_name", op: "=", value: "repo-1" }] }, ["repository_name"])), search: "cache", text_plain: "1" })}`;
 const ROUTES = [
   ...['provisional', 'partial'].flatMap(state => [false, true].map(expanded => ({
     name: `Indexing forecast (${state}${expanded ? ', details' : ''})`, url: '/library', ready: '#pharosDrive',
@@ -29,8 +31,12 @@ const ROUTES = [
   }))),
   { name: "Home", url: "/", ready: ".home-belt-row .query-card" },
   { name: "Dashboard Catalog", url: "/home?cards=library", ready: ".card-library-entry .query-card" },
-  { name: "Library table", url: "/library", ready: "#queryTableLibrary .qt-row" },
-  { name: "Library conversations", url: "/library?view=conversation", ready: ".conversation-result-card" },
+  { name: "Search table", url: "/library", ready: "#queryTableLibrary .qt-row" },
+  { name: "Search conversations", url: "/library?view=conversation", ready: ".conversation-result-card" },
+  { name: "Search display switch", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("group", { name: "Display results as" }).getByRole("button", { name: "Conversations", exact: true }).click(), shown: ".conversation-result-card" },
+  { name: "Search content editor", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("button", { name: "Messages", exact: true }).click(), shown: ".explore-search-modal" },
+  { name: "Search grouped search", url: exploreGroupedSearch, ready: "#queryTableLibrary .qt-row" },
+  { name: "Search grouped conversation display", url: exploreGroupedSearch, ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("group", { name: "Display results as" }).getByRole("button", { name: "Conversations", exact: true }).click(), shown: ".conversation-result-card" },
   { name: "TL1 overview", url: "/tl1", ready: ".tl1-tiles" },
   { name: "TL1 configurations", url: "/tl1/configurations", ready: "#tl1-matrix tbody tr" },
   { name: "TL1 follow-ups", url: "/tl1/followups", ready: "#tl1-followup-next tbody tr" },

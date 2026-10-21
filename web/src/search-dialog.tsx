@@ -39,7 +39,7 @@ export function SearchDialog({ schema }: { schema: FieldSchema }) {
     return () => { resolution.abort(); window.removeEventListener("pharos:open-search", show); dialog.removeEventListener("close", close); dialog.removeEventListener("click", backdrop); };
   }, [schema]);
   return <>
-    <div className="search-dialog-heading"><h2 id="searchDialogTitle">Search library</h2><button type="button" aria-label="Close library search" onClick={() => (document.getElementById("searchDialog") as HTMLDialogElement).close()}><Icon name="close" /></button></div>
+    <div className="search-dialog-heading"><h2 id="searchDialogTitle">Search past work</h2><button type="button" aria-label="Close search" onClick={() => (document.getElementById("searchDialog") as HTMLDialogElement).close()}><Icon name="close" /></button></div>
     {open ? <SearchComposer key={state.text.root.id} schema={schema} state={state} onChange={replaceSearchDraft} onSubmit={next => { (document.getElementById("searchDialog") as HTMLDialogElement).close(); window.pharosNavigate?.(searchURL(next)); }} /> : null}
   </>;
 }
