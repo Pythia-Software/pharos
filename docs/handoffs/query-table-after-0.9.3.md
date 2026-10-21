@@ -1,5 +1,15 @@
 # Query Table: replace the remaining host reducers after 0.9.3
 
+> **0.9.4 integration update (2026-10-21):** Pharos now consumes the aligned
+> published release. Ordinary V3 execution replaces the general host grouping
+> pre-reducer and its synthetic-row/request rewrites. The frontend omits legacy
+> `fetchRows`; computed previews negotiate modern rows, and Library Select all
+> uses negotiated, revision-aware V3 rows. The V2 cached SQL reducer remains enabled after
+> measuring its advantage. The transaction-policy migration remains open.
+> See [the current integration](../query-table-integration.md) for decisions and
+> measurements. The audit/request below records the earlier release baseline.
+
+
 For the Query Table team. This is a self-contained assignment against the
 published **0.9.3** release, dated **2026-10-21**.
 

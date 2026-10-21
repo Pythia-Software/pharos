@@ -5,11 +5,12 @@ import * as storageModule from '../../../src/storage';
 import * as bookmarksModule from '../../../src/bookmarks';
 import * as queryLinksModule from '../../../src/query-links';
 import { freshPageURL, tableRecoveryQuery } from '../../../src/query-recovery';
-import { core, schemas, execution } from '../helpers/recipes.mjs';
+import { core, schemas, execution, capabilities as queryCapabilities } from '../helpers/recipes.mjs';
 import { categoryForQuery } from '../../../src/query-categories';
 import { instantiateRecipe, queryRecipes } from '../../../src/curiosity-data';
 import { usageDatasets, usageWorkspaceURL } from '../../../src/usage-workspace-model';
 import { createQueryMetadataLoader } from '../../../src/query-metadata';
+import { matchingSelectionIDs } from '../../../src/query-selection';
 const m={...storageModule,...bookmarksModule,...queryLinksModule,encodeQuery,normalizeQueryState,createQueryLinkService,httpQuerySnapshotStore,QuerySnapshotHttpError};
 const prefs=new Map(),cache=new Map(),snapshots=new Map();
 let fail=false,writes=0;
@@ -27,6 +28,61 @@ globalThis.fetch=async (input,options)=>{
  return snapshots.has(key)?Response.json(snapshots.get(key)):new Response('',{status:404});
 };
 const query=m.normalizeQueryState({select:[{field:'tool_name'}],where:[{field:'status',op:'=',value:'error'}],orderBy:[],limit:25,offset:0});
+
+test('select all supports V2-only transports independently of the visible page', async () => {
+ const schema=schemas.library,where=[{field:'source_kind',op:'=',value:'codex'}];
+ const state={...EMPTY_QUERY,select:[{field:'title'}],where,limit:1,offset:2,aggregations:[{id:'n',op:'count',groupBy:[]}]};
+ let sent;
+ const ids=await matchingSelectionIDs(state,schema,execution,{fetchRowsV2:async request=>{
+  sent=request;
+  return {version:2,rows:[{id:'a'},{id:'b'}],total:2,computed:[],execution};
+ }},200);
+ assert.deepEqual(ids,['a','b']);
+ assert.equal(sent.version,2);
+ assert.deepEqual(sent.where,where);
+ assert.ok(sent.select.includes(schema.idField));
+ assert.equal(sent.limit,200);assert.equal(sent.offset,0);
+ assert.equal(state.offset,2);assert.equal(state.select[0].field,'title');
+});
+
+test('select all rejects incomplete exports and row transport failures without replacing selection', async () => {
+ const fetch=async result=>matchingSelectionIDs(EMPTY_QUERY,schemas.library,execution,{fetchRowsV2:async()=>({version:2,computed:[],execution,...result})},200);
+ for(const result of [
+  {total:201,rows:[{id:'a'}]}, {total:2,rows:[{id:'a'}]},
+  {total:1,rows:[{}]}, {total:2,rows:[{id:'a'},{id:'a'}]},
+ ]) await assert.rejects(fetch(result),/export|identit/);
+ await assert.rejects(matchingSelectionIDs(EMPTY_QUERY,schemas.library,execution,{fetchRowsV2:async()=>{throw new Error('Offline');}},200),/Offline/);
+});
+
+test('select all uses negotiated V3 for derived canonical computed filters and validates the response', async () => {
+ const name='@computed/active',schema={...schemas.library,fields:[...schemas.library.fields,{name,type:'number',source:{kind:'derived',computedId:'active'},filter:{enabled:false},sort:{enabled:false}}]};
+ const handshake={...execution,planToken:'current',resolvedRevisions:{active:'2'},fields:{[name]:{type:'number',select:true,sort:true,filter:true,measure:true,group:true}}};
+ const state={...EMPTY_QUERY,where:[{any:[{field:name,op:'>',value:'0'},{field:'source_kind',op:'=',value:'codex'}]}],orderBy:[{field:name,dir:'desc'}],limit:1,offset:1};
+ let sent,v2Calls=0;
+ const v2=async()=>{v2Calls++;throw new Error('filter_disabled: computed filtering requires host policy');};
+ const fetch=async changes=>matchingSelectionIDs(state,schema,handshake,{
+  queryCapabilities,fetchRowsV2:v2,
+  fetchQueryV3:async request=>{
+   sent=request;
+   return {version:3,now:request.now,sourceTotal:3,rows:[{id:'a'},{id:'b'}],total:2,metrics:[],schema:{name:schema.name,idField:schema.idField,fields:[{name:schema.idField,type:'text'}]},execution:handshake,...changes};
+  },
+ },200);
+ assert.deepEqual(await fetch(),['a','b']);
+ assert.equal(sent.version,3);assert.equal(sent.rows,true);assert.deepEqual(sent.diagnostics,[]);
+ assert.deepEqual(sent.result.where,state.where);assert.deepEqual(sent.result.orderBy,state.orderBy);
+ assert.deepEqual(sent.result.select,[schema.idField]);assert.equal(sent.result.limit,200);assert.equal(sent.result.offset,0);
+ assert.deepEqual({...sent.expectedRevisions},{active:'2'});assert.equal(sent.planToken,'current');
+ assert.equal(state.offset,1);assert.equal(schema.fields.at(-1).source.kind,'derived');
+ await assert.rejects(fetch({execution:{...handshake,resolvedRevisions:{active:'3'}}}),/definitions changed/i);
+ await assert.rejects(fetch({execution:{...handshake,planToken:'obsolete'}}),/mismatched/);
+ await assert.rejects(fetch({total:201}),/export/);
+ await assert.rejects(fetch({total:3}),/export/);
+ await assert.rejects(fetch({rows:[{id:'a'},{id:'a'}]}),/identit/);
+ await assert.rejects(fetch({schema:{name:schema.name,idField:schema.idField,fields:[]}}),/schema/);
+ assert.equal(v2Calls,0);
+ await assert.rejects(matchingSelectionIDs(state,schema,handshake,{fetchRowsV2:v2},200),/residual/);
+ assert.equal(v2Calls,0,'a V2-only server must not receive a query with dropped predicates');
+});
 test('collecting a dashboard card preserves its destination and durable editable query',async t=>{
  const before=[...m.readBookmarks()];
  t.after(()=>m.writeBookmarks(before));

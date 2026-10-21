@@ -323,8 +323,9 @@ func processCPU() time.Duration {
 	return time.Duration(usage.Utime.Nano() + usage.Stime.Nano())
 }
 
-// TestUsagePerformanceSQLHost measures the cost of removing the general SQL
-// bypasses, including dependency discovery, source projection, leases and HTTP
+// TestUsagePerformanceSQLHost compares the V2 SQL accelerator and ordinary
+// execution, and measures V3 after removal of the host pre-reducer. It includes
+// dependency discovery, source projection, leases and HTTP
 // serialization. The synthetic authored-message projection has 50,000 rows and
 // nine integer fields; fixture preparation is outside the measured requests.
 // Writing messages uses no tool cubes. Native SQL and ordinary Query Table use
@@ -373,7 +374,12 @@ func TestUsagePerformanceSQLHost(t *testing.T) {
 	measure := func(t *testing.T, path string, body any) {
 		t.Helper()
 		var expected any
-		for _, enabled := range []bool{true, false} {
+		variants := []bool{true, false}
+		grouped := strings.HasSuffix(path, "/query-v3")
+		if grouped {
+			variants = []bool{false} // V3 always uses ordinary Query Table execution.
+		}
+		for _, enabled := range variants {
 			nativeMetrics = enabled
 			var wall, cpu []time.Duration
 			for run := range 4 {
@@ -399,6 +405,18 @@ func TestUsagePerformanceSQLHost(t *testing.T) {
 					for _, bucket := range m["buckets"].([]any) {
 						if firstString(bucket.(map[string]any)["error"]) != "" {
 							t.Fatal("bucket failed", bucket)
+						}
+					}
+				}
+				if grouped {
+					value := result.(map[string]any)
+					if value["sourceTotal"] != float64(population) || value["total"] != float64(5) || len(value["rows"].([]any)) != 2 {
+						t.Fatal("grouping lost source membership or result paging", value)
+					}
+					for i, want := range []float64{5, 20_000} {
+						bucket := metrics[i].(map[string]any)["buckets"].([]any)[0].(map[string]any)
+						if bucket["value"] != want {
+							t.Fatal("grouped metric scope changed", metrics)
 						}
 					}
 				}
