@@ -28,6 +28,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { useLocationRevision } from "./nested-pages";
 import { SettingsWorkspace } from "./settings-workspace";
+import { installAppNavigation } from "./app-navigation";
 import { EMPTY_QUERY, exitGrouping, groupSourceQuery, httpComputedColumnStore, inspectBucketQuery, applyAggregations, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, toServerQuery, type ComputedColumnStore, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type AggregationResultEntry, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
 import { useQueryTable, type QueryTableApi } from "@pythia-software/query-table-react";
 import { DataTable, FilterValueProvider, MetricCard, MetricsPanel, QueryBuilder, SelectionToolbar, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
@@ -2044,6 +2045,8 @@ function ToolsPage() {
 if (!shared && concurrencyPrototypeEnabled && location.pathname === "/analyze" && new URLSearchParams(location.search).get("analyze_view") === "concurrency") {
   const url = new URL(location.href);url.searchParams.set("analyze_view", "tokens");url.searchParams.set("parallelism", "1");history.replaceState(null, "", url);
 }
+
+if (!shared) installAppNavigation();
 
 const mounts: Array<[string, React.ReactNode]> = [
   ["searchComposerDialog", <SearchDialog schema={schemas.library} />],

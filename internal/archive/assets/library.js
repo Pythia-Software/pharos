@@ -532,7 +532,7 @@
   }
 
   function placePanel() {
-    const anchor = chip;
+    const anchor = window.headerToolAnchor?.(chip) ?? chip;
     if (!panel || !anchor) return;
     const box = anchor.getBoundingClientRect(), header = document.querySelector('body>header')?.getBoundingClientRect();
     const top = Math.round((header?.bottom ?? box.bottom) + 8);
@@ -573,7 +573,7 @@
     if (panel && !panel.contains(event.target) && !chip?.contains(event.target)) closePanel();
   });
   document.addEventListener('keydown', event => {
-    if (panel && event.key === 'Escape') { closePanel(); chip?.focus(); }
+    if (panel && event.key === 'Escape') { closePanel(); (window.headerToolAnchor?.(chip) ?? chip)?.focus(); }
   });
   window.addEventListener('resize', placePanel);
 

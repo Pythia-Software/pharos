@@ -3,7 +3,7 @@
 // stay below the header; the annotation toolbar stays on screen.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { open, skip } from "./harness.mjs";
+import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { workID } from "./fixtures.mjs";
 
 // Focus is in `surface`, or with the browser itself (a native modal dialog
@@ -35,27 +35,212 @@ test("quick search takes focus from the header button and from the keyboard shor
   const dialog = page.locator("#searchDialog"), button = page.locator("#searchToggle");
   await press(button);
   await holdsFocus(page, dialog, button);
-  const tab = page.locator('nav.tabs button[data-view="analyze"]');
+  const tab = page.getByRole('navigation', { name: 'Primary navigation', exact: true }).getByRole('button', { name: 'Analyze', exact: true });
   await press(tab, "ControlOrMeta+k");
   await holdsFocus(page, dialog, tab);
+});
+
+for (const viewport of [{ width: 2133, height: 1075 }, { width: 1440, height: 900 }, { width: 1024, height: 768 }, { width: 700, height: 768 }]) {
+  test(`header page buttons remain reachable and navigate at ${viewport.width}px`, { skip }, async t => {
+    const { page } = await open(t, { url: '/analyze', viewport, ready: '.usage-dashboard .usage-chart' });
+    const navigation = page.getByRole('navigation', { name: 'Primary navigation', exact: true });
+    for (const button of await navigation.getByRole('button').all()) {
+      await button.focus();
+      assert.equal(await onScreen(button), true, `${await button.textContent()} is outside the viewport`);
+    }
+    await press(navigation.getByRole('button', { name: 'Library', exact: true }));
+    await page.locator('#queryTableLibrary .qt-row').first().waitFor();
+    assert.equal(new URL(page.url()).pathname, '/library');
+    await press(navigation.getByRole('button', { name: 'Analyze', exact: true }));
+    await page.locator('.usage-dashboard .usage-chart').first().waitFor();
+    assert.equal(new URL(page.url()).pathname, '/analyze');
+  });
+}
+
+for (const viewport of [{ width: 2133, height: 1075 }, { width: 1440, height: 900 }, { width: 1280, height: 720 }, { width: 1024, height: 768 }]) {
+  test(`section sidebar collapses, restores space and navigates at ${viewport.width}px`, { skip }, async t => {
+    const { page } = await open(t, { url: '/analyze', viewport, ready: '.usage-dashboard .usage-chart' });
+    const sidebar = page.getByRole('complementary', { name: 'Analyze navigation', exact: true });
+    const heading = page.getByRole('heading', { name: 'Tokens and Cost', exact: true });
+    await sidebar.waitFor();
+    const sidebarBox = await sidebar.boundingBox(), expanded = await heading.boundingBox();
+    assert.ok(expanded.x >= sidebarBox.x + sidebarBox.width, 'sidebar overlaps the page');
+    const pageBox = await page.locator('main>.view.active').boundingBox();
+    assert.ok(Math.abs(sidebarBox.x + sidebarBox.width - pageBox.x) < 1, 'sidebar stands apart from the content');
+    await press(page.getByRole('button', { name: 'Collapse sidebar', exact: true }));
+    await sidebar.waitFor({ state: 'hidden' });
+    await page.waitForFunction(left => document.querySelector('main .view.active h1').getBoundingClientRect().left < left, expanded.x);
+    const expand = page.getByRole('button', { name: 'Expand sidebar', exact: true });
+    await page.waitForFunction(element => document.activeElement === element, await expand.elementHandle());
+    const expandBox = await expand.boundingBox(), collapsedHeading = await heading.boundingBox();
+    assert.ok(expandBox.x + expandBox.width <= collapsedHeading.x, 'sidebar control overlaps the page heading');
+    if (await page.evaluate(() => { const main = document.querySelector('main'); return main.scrollHeight > main.clientHeight; })) {
+      await page.evaluate(() => document.querySelector('main').scrollTo(0, 1200));
+      await page.waitForFunction(() => document.querySelector('main').scrollTop > 0);
+    }
+    assert.equal(await onScreen(expand), true, 'sidebar control scrolls out of reach');
+    assert.ok(await expand.evaluate(element => {
+      const box = element.getBoundingClientRect();
+      return element.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+    }), 'sidebar control is covered by page content');
+    await press(expand);
+    await sidebar.waitFor();
+    await press(sidebar.getByRole('link', { name: /^Human words$/i }));
+    await page.locator('.usage-dashboard .writing-panel .usage-chart').waitFor();
+    await page.waitForFunction(() => document.activeElement?.tagName === 'H1');
+    assert.equal(await sidebar.getByRole('link', { name: /^Human words$/i }).getAttribute('aria-current'), 'page');
+  });
+}
+
+test('navigation keeps focus reachable when resizing between a sidebar and phone switcher', { skip }, async t => {
+  const { page } = await open(t, { url: '/analyze', viewport: { width: 1280, height: 720 }, ready: '.usage-dashboard .usage-chart' });
+  const sidebar = page.getByRole('complementary', { name: 'Analyze navigation', exact: true });
+  await sidebar.getByRole('link', { name: /^Human words$/i }).focus();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForFunction(() => document.activeElement === document.getElementById('appNavigationToggle'));
+  await press(page.locator('#appNavigationToggle'));
+  await page.getByRole('dialog', { name: 'Navigate Pharos' }).waitFor();
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await sidebar.waitFor();
+  await page.waitForFunction(() => document.activeElement === document.getElementById('appSidebarToggle'));
+  await press(page.getByRole('button', { name: 'Collapse sidebar', exact: true }));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('#appNavigationToggle').waitFor();
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.getByRole('button', { name: 'Expand sidebar', exact: true }).waitFor();
+  await press(page.getByRole('button', { name: 'Expand sidebar', exact: true }));
+  await sidebar.waitFor();
 });
 
 for (const route of [
   { name: "Analyze", url: "/analyze", ready: ".usage-dashboard .usage-chart", link: /^Human words$/i, destination: ".usage-dashboard .writing-panel .usage-chart" },
   { name: "Settings", url: "/settings", ready: "#healthCards .panel:not([aria-busy])", link: /^Sources$/, destination: "#sourceGrid .source-card" },
   { name: "TL1", url: "/tl1", ready: ".tl1-tiles", link: /^Configurations$/, destination: "#tl1-matrix" },
-]) test(`${route.name} sidebar navigation is usable from the keyboard on a phone`, { skip }, async t => {
+]) test(`${route.name} navigation is usable from the keyboard on a phone`, { skip }, async t => {
   const { page } = await open(t, { url: route.url, viewport: { width: 390, height: 844 }, ready: route.ready });
-  const menu = page.locator(".view.active .nested-page-mobile");
-  await press(menu.locator(":scope > summary"));
+  const menu = page.getByRole("dialog", { name: "Navigate Pharos" });
+  await press(page.locator("#appNavigationToggle"));
   const target = menu.getByRole("link", { name: route.link });
   await target.waitFor();
   await press(target);
   await page.locator(route.destination).first().waitFor();
   await page.waitForFunction(() => document.activeElement?.tagName === "H1");
-  assert.equal(await menu.getAttribute("open"), null);
+  assert.equal(await menu.isVisible(), false);
   await page.goBack();
   await page.locator(route.ready).first().waitFor();
+});
+
+for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 640 }]) {
+  test(`app navigation takes and returns focus, and reaches other app sections at ${viewport.width}px`, { skip }, async t => {
+    const { page } = await open(t, { url: '/analyze', viewport, ready: '.usage-dashboard .usage-chart' });
+    const opener = page.locator('#appNavigationToggle'), dialog = page.getByRole('dialog', { name: 'Navigate Pharos' });
+    await press(opener);
+    await holdsFocus(page, dialog, opener);
+    await press(opener);
+    await press(dialog.getByRole('button', { name: 'All pages', exact: true }));
+    await press(dialog.getByRole('button', { name: 'Settings', exact: true }));
+    await press(dialog.getByRole('link', { name: 'Sources', exact: true }));
+    await page.locator('#sourceGrid .source-card').first().waitFor();
+    await page.waitForFunction(() => document.activeElement?.tagName === 'H1');
+    assert.equal(new URL(page.url()).pathname, '/settings/sources');
+    await page.goBack();
+    await page.locator('.usage-dashboard .usage-chart').waitFor();
+    assert.equal(await opener.getAttribute('aria-expanded'), 'false');
+  });
+}
+
+for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 }]) {
+  test(`overflowed header tools remain live and restore focus at ${viewport.width}px`, { skip }, async t => {
+    const { page } = await open(t, { url: '/library', viewport, ready: '#queryTableLibrary .qt-row' });
+    const more = page.getByRole('button', { name: 'More tools', exact: true });
+    await press(more);
+    const popup = page.getByRole('dialog', { name: 'Header tools' });
+    await popup.waitFor();
+    await page.keyboard.press('Escape');
+    await popup.waitFor({ state: 'hidden' });
+    await page.waitForFunction(element => document.activeElement === element, await more.elementHandle());
+    const theme = await page.locator('html').getAttribute('data-theme');
+    await activateHeaderTool(page, 'themeToggle');
+    assert.notEqual(await page.locator('html').getAttribute('data-theme'), theme);
+    await activateHeaderTool(page, 'usageSummaryToggle');
+    await page.locator('#usageSummary').waitFor();
+    await page.keyboard.press('Escape');
+    await page.locator('#usageSummary').waitFor({ state: 'hidden' });
+    await page.waitForFunction(element => document.activeElement === element, await more.elementHandle());
+  });
+}
+
+for (const tools of [['settings'], ['back', 'sync', 'settings']]) {
+  test(`header respects saved tool visibility with ${tools.join(', ')}`, { skip }, async t => {
+    const { page, settled } = await open(t, {
+      url: '/library', ready: '#queryTableLibrary .qt-row',
+      preferences: { 'pharos-header-tools-v1': tools },
+    });
+    // Give history a previous page so an accidentally exposed Back is enabled.
+    await press(page.getByRole('navigation', { name: 'Primary navigation', exact: true }).getByRole('button', { name: 'Analyze', exact: true }));
+    await page.locator('.usage-dashboard .usage-chart').first().waitFor();
+    for (const width of [1440, 1280, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await settled();
+      if (width < 1360) await press(page.getByRole('button', { name: 'More tools', exact: true }));
+      for (const [tool, id] of [['history', 'headerHistory'], ['back', 'headerBackOnly'], ['library', 'headerLibrary'], ['sync', 'headerSyncOnly']]) {
+        assert.equal(await page.locator(`#${id}`).isVisible(), tools.includes(tool), `${tool} visibility differs from saved choices at ${width}px`);
+      }
+      const settings = page.locator('#settingsToggle');
+      await settings.focus();
+      await page.locator('#navBack').evaluate(element => element.focus());
+      await page.waitForFunction(element => document.activeElement === element, await settings.elementHandle());
+      if (width < 1360) await page.keyboard.press('Escape');
+    }
+  });
+}
+
+test('header navigation hides unavailable TL1 and skips it in keyboard navigation', { skip }, async t => {
+  const { page, settled } = await open(t, {
+    url: '/library', ready: '#queryTableLibrary .qt-row', api: { 'GET /api/tl1': { projects: [] } },
+  });
+  for (const width of [1440, 1024]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settled();
+    assert.equal(await page.locator('#tl1Tab').isVisible(), false);
+    const navigation = page.getByRole('navigation', { name: 'Primary navigation', exact: true });
+    const library = navigation.getByRole('button', { name: 'Library', exact: true });
+    await library.focus();
+    await page.locator('#tl1Tab').evaluate(element => element.focus());
+    await page.waitForFunction(element => document.activeElement === element, await library.elementHandle());
+    // Safari's next tab stop depends on its keyboard navigation preference.
+    await page.keyboard.press('Tab');
+    assert.equal(await page.locator('#tl1Tab').evaluate(element => document.activeElement === element), false);
+  }
+});
+
+test('header focus survives resizing while its tool remains inline', { skip }, async t => {
+  const { page, settled } = await open(t, { url: '/library', ready: '#queryTableLibrary .qt-row' });
+  const settings = page.locator('#settingsToggle');
+  await settings.focus();
+  await page.evaluate(() => dispatchEvent(new Event('resize')));
+  await page.waitForFunction(element => document.activeElement === element, await settings.elementHandle());
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await settled();
+  await page.waitForFunction(element => document.activeElement === element, await settings.elementHandle());
+  const search = page.locator('#searchToggle');
+  await search.focus();
+  for (const width of [1280, 390, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settled();
+    await page.waitForFunction(element => document.activeElement === element, await search.elementHandle());
+  }
+});
+
+test('header focus stays reachable when its tool moves between inline and overflow', { skip }, async t => {
+  const { page } = await open(t, { url: '/library', viewport: { width: 1440, height: 900 }, ready: '#queryTableLibrary .qt-row' });
+  await page.locator('#themeToggle').focus();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForFunction(() => document.activeElement === document.getElementById('headerMore'));
+  await press(page.locator('#headerMore'));
+  await page.locator('#themeToggle').focus();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.waitForFunction(() => document.activeElement === document.getElementById('themeToggle'));
 });
 
 test("MCP call details take focus, keep it and return it on Escape", { skip }, async t => {
@@ -135,7 +320,7 @@ test("the delegation session sheet on a phone takes focus, keeps it and returns 
 
 test("transcript rails start below the header, with the navigation bar open, after main scrolls", { skip }, async t => {
   const { page, settled } = await open(t, { url: `/work/${workID}/conversation/conv-root`, ready: ".conversation-panel .turn", preferences: { "pharos-show-nav-button": true } });
-  await page.locator("#navigatorToggle").click();
+  await activateHeaderTool(page, "navigatorToggle");
   await page.locator("#navigator.open").waitFor();
   await page.evaluate(() => document.querySelector("main").scrollTo(0, 1200));
   await page.locator(".conversation-map.visible").waitFor();
@@ -162,7 +347,7 @@ const onScreen = locator => locator.evaluate(element => new Promise(resolve => {
 
 async function annotate(t) {
   const app = await open(t, { url: "/settings", ready: "#healthCards .panel", preferences: { "pharos-show-agent-annotation-button": true } });
-  await app.page.locator("#feedbackToggle").click();
+  await activateHeaderTool(app.page, "feedbackToggle");
   await app.page.locator("#feedbackTarget").click();
   await app.page.getByRole("heading", { level: 1 }).click();
   await app.page.locator(".feedback-composer").waitFor();

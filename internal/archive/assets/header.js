@@ -14,6 +14,85 @@ const HEADER_TOOLS = [
 ];
 const HEADER_LAYOUT_KEY = 'pharos-header-tools-v1';
 
+// Saved order is retained in both places. The CSS shell supplies one shared
+// layout mode; service actions and their original DOM nodes stay intact.
+function headerToolPlacement(tools, layout) {
+  const inline = layout === 'wide' ? tools : tools.filter(id => ['library', 'sync', 'search'].includes(id));
+  return { inline, overflow: tools.filter(id => !inline.includes(id)) };
+}
+
+function headerToolAnchor(element) {
+  return element?.getClientRects().length ? element : document.getElementById('headerMore');
+}
+
+function initHeaderOverflow(readTools) {
+  const root = document.querySelector('body>header .header-icons');
+  const more = document.getElementById('headerMore'), popup = document.getElementById('headerOverflow'), list = document.getElementById('headerOverflowTools');
+  if (!root || !more || !popup || !list) return () => {};
+  const rows = new Map();
+  for (const tool of HEADER_TOOLS) {
+    const row = document.createElement('div'), label = document.createElement('span');
+    row.className = 'header-overflow-row';
+    row.hidden = true;
+    label.textContent = tool.label;
+    row.append(label);list.append(row);rows.set(tool.id, row);
+  }
+  const close = () => { if (popup.matches(':popover-open')) popup.hidePopover(); };
+  function layout(focused = document.activeElement) {
+    const ownsFocus = root.contains(focused) || list.contains(focused);
+    const mode = getComputedStyle(document.documentElement).getPropertyValue('--app-shell-layout').trim() || 'wide';
+    const placement = headerToolPlacement(readTools(), mode);
+    for (const tool of HEADER_TOOLS) {
+      const node = document.getElementById(tool.element), row = rows.get(tool.id);
+      const overflow = placement.overflow.includes(tool.id);
+      row.hidden = !overflow;
+      if (!node) continue;
+      const target = overflow ? row : root;
+      if (node.parentElement !== target) target === root ? root.insertBefore(node, more) : target.append(node);
+    }
+    // Work backwards from each list's end, leaving controls in place when
+    // their order is already correct. Reinserting a focused node blurs it.
+    let next = more;
+    for (const id of [...placement.inline].reverse()) {
+      const node = document.getElementById(HEADER_TOOLS.find(tool => tool.id === id).element);
+      if (!node) continue;
+      if (node.nextElementSibling !== next) root.insertBefore(node, next);
+      next = node;
+    }
+    next = null;
+    for (const id of [...placement.overflow].reverse()) {
+      const row = rows.get(id);
+      if (row.nextElementSibling !== next) list.insertBefore(row, next);
+      next = row;
+    }
+    more.hidden = placement.overflow.length === 0;
+    if (more.hidden) close();
+    if (popup.matches(':popover-open')) place();
+    if (ownsFocus) {
+      // A required move between inline and overflow can also blur a tool.
+      // Restore it when visible, otherwise keep focus on a reachable control.
+      const target = focused.getClientRects().length ? focused : more.hidden
+        ? [...root.querySelectorAll('button:not(:disabled)')].find(node => node.getClientRects().length) : more;
+      if (target && document.activeElement !== target) target.focus({ preventScroll: true });
+    }
+  }
+  function place() {
+    const bottom = document.querySelector('body>header').getBoundingClientRect().bottom;
+    popup.style.top = `${Math.round(bottom + 8)}px`;
+    popup.style.maxHeight = `${Math.max(0, innerHeight - bottom - 20)}px`;
+  }
+  more.setAttribute('popovertarget', 'headerOverflow');
+  more.onclick = place;
+  document.getElementById('headerOverflowClose').onclick = () => { close(); more.focus(); };
+  popup.addEventListener('toggle', () => { more.setAttribute('aria-expanded', String(popup.matches(':popover-open'))); });
+  // Close before invoking the existing handler. Dialogs and floating panels
+  // can then anchor to More and restore focus there when their tool is hidden.
+  list.addEventListener('click', event => { if (event.target.closest('button')) { close(); more.focus({ preventScroll: true }); } }, true);
+  addEventListener('resize', () => { const focused = document.activeElement; close(); layout(focused); });
+  addEventListener('pharos:route', close);
+  return layout;
+}
+
 function defaultHeaderTools(read = (_key, fallback) => fallback) {
   return HEADER_TOOLS.filter(tool => tool.required || (tool.legacy ? read(tool.legacy, tool.on) === true : tool.on)).map(tool => tool.id);
 }
@@ -93,6 +172,7 @@ function initHeaderControls(close = {}) {
   const active = document.getElementById('headerActive'), toolbox = document.getElementById('headerToolbox');
   if (!root || !active || !toolbox) return;
   let tools = normalizeHeaderTools(pharosPrefs.get(HEADER_LAYOUT_KEY, null), (key, fallback) => pharosPrefs.get(key, fallback));
+  const layoutOverflow = initHeaderOverflow(() => tools);
   let dragId = null;
   const get = id => document.getElementById(id);
   const definition = id => HEADER_TOOLS.find(tool => tool.id === id);
@@ -156,6 +236,7 @@ function initHeaderControls(close = {}) {
       node.hidden = !visible;
     }
     for (const id of tools) root.append(get(definition(id).element));
+    layoutOverflow();
     dispatchEvent(new Event('resize'));
   }
   function clearDrag(keepSource = false) {
@@ -323,5 +404,7 @@ function initHeaderControls(close = {}) {
   apply();
   render();
   new MutationObserver(syncAppearances).observe(root, { subtree: true, childList: true, attributes: true });
+  const overflow = get('headerOverflowTools');
+  if (overflow) new MutationObserver(syncAppearances).observe(overflow, { subtree: true, childList: true, attributes: true });
   new MutationObserver(syncTabs).observe(liveTabs, { subtree: true, childList: true, attributes: true });
 }
