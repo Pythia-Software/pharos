@@ -204,7 +204,7 @@ func (s *Server) authorized(r *http.Request) bool {
 // of which serves the single-page UI.
 func isUIPage(path string) bool {
 	switch path {
-	case "/", "/home", "/library", "/settings", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/preferences", "/sources", "/activity", "/usage", "/tools", "/tl1", "/tl1/configurations", "/tl1/followups", "/tl1/quality", "/tl1/runs", "/health", "/mcp", "/findings":
+	case "/", "/home", "/library", "/settings", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/header", "/settings/preferences", "/sources", "/activity", "/usage", "/tools", "/tl1", "/tl1/configurations", "/tl1/followups", "/tl1/quality", "/tl1/runs", "/health", "/mcp", "/findings":
 		return true
 	}
 	return strings.HasPrefix(path, "/work/")
@@ -220,6 +220,7 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/sync.js":          {"sync.js", "text/javascript; charset=utf-8"},
 	"/assets/carbon.js":        {"carbon.js", "text/javascript; charset=utf-8"},
 	"/assets/menu-bar.js":      {"menu-bar.js", "text/javascript; charset=utf-8"},
+	"/assets/header.js":        {"header.js", "text/javascript; charset=utf-8"},
 	"/assets/reader-model.js":  {"reader-model.js", "text/javascript; charset=utf-8"},
 }
 

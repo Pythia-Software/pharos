@@ -40,6 +40,32 @@ test("quick search takes focus from the header button and from the keyboard shor
   await holdsFocus(page, dialog, tab);
 });
 
+test('header editing keeps keyboard focus on the handle being changed', { skip }, async t => {
+  const { page } = await open(t, { url: '/settings/header', ready: '#headerActive .header-tool' });
+  const add = page.getByRole('button', { name: 'Add Navigation bar', exact: true });
+  const handle = page.getByRole('button', { name: 'Arrange Navigation bar', exact: true });
+  await press(add);
+  await page.waitForFunction(element => document.activeElement === element, await handle.elementHandle());
+  await press(handle);
+  await page.locator('#headerToolMenu:popover-open').waitFor();
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(element => document.activeElement === element, await handle.elementHandle());
+  await press(handle);
+  await press(page.getByRole('button', { name: 'Move left Navigation bar', exact: true }));
+  await page.waitForFunction(element => document.activeElement === element, await handle.elementHandle());
+  await press(handle);
+  await press(page.getByRole('button', { name: 'Remove Navigation bar', exact: true }));
+  await page.waitForFunction(element => document.activeElement === element, await add.elementHandle());
+  await press(add);
+  await press(handle, 'Alt+ArrowLeft');
+  await page.waitForFunction(element => document.activeElement === element, await handle.elementHandle());
+  await page.keyboard.press('Delete');
+  await page.waitForFunction(element => document.activeElement === element, await add.elementHandle());
+  const settings = page.getByRole('button', { name: 'Arrange Settings', exact: true });
+  await press(settings, 'Delete');
+  await page.waitForFunction(element => document.activeElement === element, await settings.elementHandle());
+});
+
 test("the card template editor takes focus, keeps it and returns it on Escape", { skip }, async t => {
   const { page } = await open(t, { url: "/home?cards=library", ready: ".card-library-entry .query-card" });
   const edit = page.locator(".card-library-entry button[aria-label^='Edit card']").first();

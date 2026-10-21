@@ -60,6 +60,25 @@ catalog, captures, staging files, and preserved data stay outside Applications.
 The example above shows how to move preserved data to a separate drive; set
 `volume_id` when you do so.
 
+## Header controls
+
+**Settings → Header** configures the tools to the right of the page tabs.
+Drag buttons from **Toolbox** into the header preview, and drag them left or
+right to reorder them using the small handles below each control. Click a
+toolbox button to add it, or click a handle for move and Remove actions. With
+a handle focused, Alt+Left/Right moves its control and Delete returns it to the
+toolbox. Settings stays available in every layout.
+
+Back/forward arrows appear first by default, followed by drive and sync status,
+search, usage summary, Settings, and theme. Navigation bar and agent annotations
+can be added from the toolbox. **Back only** replaces the back/forward combo,
+and **Sync only** replaces the drive and sync group with just Index changes.
+Clicking either variant keeps the existing position; dragging chooses its new
+position. **Reset to default** restores the default arrangement.
+Changes apply immediately and are saved with the library, including when it
+moves between Macs. Earlier button visibility preferences are kept until you
+change or reset the layout.
+
 ## Portable library
 
 A portable library keeps Pharos and everything it has indexed in one directory,

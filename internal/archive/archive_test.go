@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -1048,7 +1049,7 @@ INSERT INTO task_attempts VALUES ('attempt-1','task-1',1,'worktree-1','claude','
 func TestAppRoutesServeUIOnDirectNavigation(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
-	for _, path := range []string{"/", "/home", "/library?search=debug", "/sources", "/settings/sync", "/activity", "/health", "/work/workspace_123", "/work/workspace_123/conversation/conversation_456?message=tool_789"} {
+	for _, path := range []string{"/", "/home", "/library?search=debug", "/sources", "/settings/sync", "/settings/header", "/activity", "/health", "/work/workspace_123", "/work/workspace_123/conversation/conversation_456?message=tool_789"} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		request.Header.Set("Authorization", "Bearer test-token")
 		response := httptest.NewRecorder()
@@ -1056,6 +1057,17 @@ func TestAppRoutesServeUIOnDirectNavigation(t *testing.T) {
 		// The page is the embedded shell, served without Python.
 		if body := response.Body.String(); response.Code != http.StatusOK || !strings.HasPrefix(body, "<!doctype html>") || !strings.Contains(body, "id=\"navigator\"") {
 			t.Errorf("GET %s: status %d, missing app UI", path, response.Code)
+		}
+	}
+	// The browser fixture serves the asset directory directly. Check the live
+	// server serves every script the shell loads, including new classic scripts.
+	for _, match := range regexp.MustCompile(`<script src="([^"]+)"`).FindAllStringSubmatch(appHTML(), -1) {
+		request := httptest.NewRequest(http.MethodGet, match[1], nil)
+		request.Header.Set("Authorization", "Bearer test-token")
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || !strings.HasPrefix(response.Header().Get("Content-Type"), "text/javascript") || response.Body.Len() == 0 {
+			t.Errorf("GET %s: status %d, missing script", match[1], response.Code)
 		}
 	}
 }
