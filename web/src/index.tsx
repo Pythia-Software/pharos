@@ -15,6 +15,8 @@ import { SearchResultsDisplay } from "./search-results-view";
 import { queryForSearchResultsView, searchResultsView, type SearchResultsView } from "./search-results-view-model";
 import { emptyTextSearch, readTextSearch, textFindParameters, searchSentence, withheldBatch, type TextSearchDraft } from "./text-search-model";
 import { CarbonImpact } from "./carbon-impact";
+import { usageSummaryURL } from "./usage-summary-links";
+import { readConcurrencySettings } from "./concurrency-settings";
 import { pushMachineLocation, useMachineQueryNavigation } from "./machine-location";
 import { MachineActivity } from "./machine-activity";
 import { activityPresentation } from "./machine-activity-data";
@@ -175,6 +177,7 @@ declare global {
       refresh: (dataset: Dataset) => void;
       filterRepository: (repository: string) => void;
       filterModel: (model: string) => void;
+      summaryURL: typeof usageSummaryURL;
     };
   }
 }
@@ -2110,6 +2113,7 @@ window.addEventListener("pharos:preferences-saved", event => {
   for (const dataset of new Set(keys.flatMap(key => settingDatasets[key] ? [settingDatasets[key]] : []))) window.pharosQueryTables?.refresh(dataset);
 });
 window.pharosQueryTables = {
+  summaryURL: (metric, window, generatedAt) => usageSummaryURL(metric, window, generatedAt, readConcurrencySettings()),
   async createLink() {
     const entry = [...tableApis.entries()].find(([dataset]) => datasetIsVisible(dataset));
     if (!entry) return { url: location.href };

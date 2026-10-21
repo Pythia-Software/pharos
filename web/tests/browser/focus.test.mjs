@@ -6,6 +6,18 @@ import assert from "node:assert/strict";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { workID } from "./fixtures.mjs";
 
+test("summary value links retain keyboard focus when the summary rerenders", { skip }, async t => {
+  const { page } = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-usage-summary-links": true } });
+  await activateHeaderTool(page, "usageSummaryToggle");
+  const link = page.getByRole("link", { name: /^Tokens, 6h:/ });
+  await link.focus();
+  await page.evaluate(() => window.dispatchEvent(new Event("pharos:carbon-settings")));
+  await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label")?.startsWith("Tokens, 6h:"));
+  await page.keyboard.press("Escape");
+  await page.locator("#usageSummary").waitFor({ state: "hidden" });
+  await page.waitForFunction(() => document.activeElement?.id === "usageSummaryToggle");
+});
+
 // Focus is in `surface`, or with the browser itself (a native modal dialog
 // lets Tab leave the page past its last control), never on the page behind.
 const kept = surface => surface.evaluate(element => { const active = document.activeElement; return !active || active === document.body || element.contains(active); });
