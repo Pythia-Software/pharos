@@ -148,9 +148,11 @@ or activity bounds; their inclusive values cover only the retained subtree in
 this view. Siblings in other workspaces are not loaded by this incoming context.
 If optional ancestor-workspace reconciliation exceeds its analysis limit, the
 view retains recorded ancestry instead of rejecting the child workspace.
-The hierarchy follows recorded subagent parent edges
-recursively across workspace boundaries: Codex stores each rollout as a separate
-workspace, which must not sever the execution family. Launch placeholders link
+The hierarchy follows recorded subagent parent edges and inferred command-launch
+links recursively across workspace boundaries, including mixed-provider families.
+Codex stores each rollout as a separate workspace, which must not sever the execution family.
+Recorded transcript parents take precedence over inferred command launches.
+Launch placeholders link
 to those references; children without an acknowledgement still appear beneath
 their recorded parent. External references retain the child's conversation and
 workspace identity, show an outgoing arrow, and open its actual transcript.
