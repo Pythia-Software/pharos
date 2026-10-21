@@ -40,13 +40,16 @@
 .pharos-sub{color:var(--muted,#666);overflow-wrap:anywhere}
 .pharos-activity{padding:8px 0;border-bottom:1px solid var(--line,#ccc)}
 .pharos-activity:last-child{border-bottom:0}
-.pharos-activity-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
-.pharos-activity-row>.pharos-button{flex:none}
-.pharos-activity-info{flex:1;min-width:0}
-.pharos-activity-timing{flex:0 1 155px;min-width:100px;text-align:right;font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums}
-.pharos-stage{margin-top:4px;font-weight:550;text-transform:capitalize}
-.pharos-progress-caption,.pharos-activity-basis,.pharos-next{font-size:12px;line-height:1.5}
-@media(max-width:450px){.pharos-activity-row{flex-wrap:wrap}.pharos-activity-info{flex-basis:100%}.pharos-activity-timing{flex-basis:100%;text-align:left}}
+.pharos-activity-timing{display:flex;flex-wrap:wrap;gap:2px 12px;font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums}
+.pharos-progress-caption,.pharos-activity-details{font-size:12px;line-height:1.5}
+.pharos-activity-details{overflow-wrap:anywhere}
+.pharos-activity-details>summary{display:flex;align-items:flex-start;gap:12px;cursor:pointer;list-style:none}
+.pharos-activity-details>summary::-webkit-details-marker{display:none}
+.pharos-activity-details>summary .pharos-activity-timing{flex:1;min-width:0}
+.pharos-details-label{flex:none;margin-left:auto}
+.pharos-details-label::before{content:'▸ ';}
+.pharos-activity-details[open] .pharos-details-label::before{content:'▾ ';}
+.pharos-activity-details>div:first-of-type{margin-top:4px}
 .pharos-activity-head{display:flex;align-items:center;gap:8px;font-weight:650}
 .pharos-activity-head .pharos-button{margin-left:auto;font-weight:400}
 .pharos-activity .pharos-sub{margin-top:2px}
@@ -166,8 +169,8 @@
     if (seconds < 3600) return `${Math.ceil(seconds / 60)} min`;
     return `${(Math.ceil(seconds / 360) / 10).toFixed(1)} hr`;
   };
-  const ESTIMATE_TEXT = {partial: 'Some steps still being estimated…', provisional: 'Early forecast…', complete: 'Planned work finished', learning: 'Learning this workload…', unknown: 'Time remaining not known', stalled: 'Waiting for progress…', finishing: 'Finishing this stage…', stopping: 'Stopping safely…'};
-  // What an activity's timing column shows: whole seconds since it started
+  const ESTIMATE_TEXT = {partial: 'Total time not known yet', provisional: 'Early forecast…', complete: 'Planned work finished', learning: 'Learning this workload…', unknown: 'Time remaining not known', stalled: 'Waiting for progress…', finishing: 'Finishing this stage…', stopping: 'Stopping safely…'};
+  // What an activity's timing line shows: whole seconds since it started
   // (null if it reports no start), and either the range of time left in this
   // stage or the estimate's state. A range needs a positive low and a high no
   // lower than it; any other estimate, and every estimate while the status
@@ -187,13 +190,13 @@
     return {elapsed, state, range, scope: forecast ? 'operation' : 'stage', basis: estimate?.basis || 'This stage does not report a measurable total.'};
   }
   const completionEstimate = activity => {
-    const timing = node('div', 'pharos-sub pharos-activity-timing');
+    const timing = node('span', 'pharos-sub pharos-activity-timing');
     const {elapsed, state, range, basis, scope} = activityTiming(activity);
-    if (elapsed !== null) timing.append(node('div', '', `${elapsed < 60 ? `${elapsed} sec` : `${Math.floor(elapsed / 60)} min`} elapsed`));
-    timing.append(node('div', '', range ? `${scope === 'operation' ? 'Whole operation' : 'This stage'}: ~${range} left${state === 'provisional' ? ' (early forecast)' : ''}` : ESTIMATE_TEXT[state]));
+    if (elapsed !== null) timing.append(node('span', '', `${elapsed < 60 ? `${elapsed} sec` : `${Math.floor(elapsed / 60)} min`} elapsed`));
+    timing.append(node('span', '', range ? `${scope === 'operation' ? 'Total' : 'Stage'}: ~${range} left${state === 'provisional' ? ' (early)' : ''}` : ESTIMATE_TEXT[state]));
     if (scope === 'operation') {
       const stage = activityTiming(activity, {scope: 'stage'});
-      if (stage.range) timing.append(node('div', '', `This stage: ~${stage.range} left`));
+      if (stage.range) timing.append(node('span', '', `Stage: ~${stage.range} left`));
     }
     timing.title = basis;
     return timing;
@@ -218,35 +221,52 @@
     return work.total > 0 ? `${done} of ${total}${work.unit === 'byte' ? ' copied' : ' processed'}`
       : work.unit === 'byte' ? `${done} copied` : `${plural(work.done, work.unit)} processed`;
   };
-  function activityLine(activity) {
-    const item = node('div', 'pharos-activity'), row = node('div', 'pharos-activity-row'), info = node('div', 'pharos-activity-info'), head = node('div', 'pharos-activity-head');
-    head.append(node('span', '', activity.label));
-    if (activity.stoppable) head.append(stopButton(activity.stopping, activity.stop_path));
-    info.append(head);
-    if (activity.work?.phase) info.append(node('div', 'pharos-stage', activity.work.phase));
-    if (activity.detail) info.append(node('div', 'pharos-sub', activity.detail));
-    row.append(info, completionEstimate(activity));
-    item.append(row);
+  // Show the stage once, with its operation/source as context. Only remove
+  // exact duplicates of structured fields; retain other reported detail.
+  function activityPresentation(activity, {unavailable = Boolean(statusError)} = {}) {
+    const normalize = text => String(text || '').trim().toLowerCase();
+    const phase = activity.work?.phase;
+    const title = phase ? phase.replace(/^./, letter => letter.toUpperCase()) : activity.label;
     const work = activity.work, measured = workMeasure(work)?.total > 0;
     const progress = activityProgress(activity);
-    item.append(progressBar(progress, `${activity.label}: ${work?.phase || 'current stage'}`));
-    if (work?.unit) {
-      const percent = measured ? `${Math.min(100, Math.floor(progress * 100))}% of ${work.size?.total > 0 ? 'input data' : 'this stage'}` : '';
-      const volume = work.size?.total > 0 ? (work.size.unit === 'byte' ? `${size(work.size.done)} of ${size(work.size.total)} processed` : `${Number(work.size.done).toLocaleString()} of ${plural(work.size.total, 'message')} processed`) : '';
-      item.append(node('div', 'pharos-sub pharos-progress-caption', [workCount(work), volume, percent].filter(Boolean).join(' · ')));
-    }
+    const count = work?.done || work?.total > 0 || work?.total_known ? workCount(work) : '';
+    const volume = work?.size?.total > 0 ? (work.size.unit === 'byte' ? `${size(work.size.done)} of ${size(work.size.total)} processed` : `${Number(work.size.done).toLocaleString()} of ${plural(work.size.total, 'message')} processed`) : '';
+    const percent = measured ? `${Math.min(100, Math.floor(progress * 100))}% of ${work.size?.total > 0 ? 'input data' : 'stage'}` : '';
+    const redundant = new Set([title, count, count.replace(/ processed$/, ''), volume, volume.replace(/ processed$/, '')].map(normalize));
+    const context = [activity.label, ...(activity.detail || '').split(' · ')].filter(text => text && !redundant.has(normalize(text)));
+    if (work?.source && !context.some(text => normalize(text) === normalize(work.source))) context.push(work.source);
+    const unique = values => [...new Map(values.filter(Boolean).map(text => [normalize(text), text])).values()];
     const estimate = activity.estimate;
-    if (estimate && !statusError) {
-      const rate = estimateRate(estimate, estimate.unit || work?.unit);
-      item.append(node('div', 'pharos-sub pharos-activity-basis', [rate, activity.forecast ? `Current stage: ${estimate.basis}` : estimate.basis].filter(Boolean).join(' · ')));
-    }
-    const forecast = activity.forecast;
-    if (forecast && !statusError) {
-      const coverage = forecast.remaining_steps > 0 ? `${forecast.predicted_steps} of ${forecast.remaining_steps} remaining steps estimated` : '';
-      const unknown = forecast.unknown_steps?.length ? `Learning: ${forecast.unknown_steps.join(', ')}` : '';
-      item.append(node('div', 'pharos-sub', [forecast.basis, coverage, unknown].filter(Boolean).join(' · ')));
-    }
-    if (work?.next) item.append(node('div', 'pharos-sub pharos-next', `After this: ${work.next}`));
+    const rate = estimate && !unavailable ? estimateRate(estimate, estimate.unit || work?.unit) : '';
+    const forecast = !unavailable && activity.forecast;
+    const details = unique([
+      !unavailable && estimate?.basis && `${forecast ? 'Stage: ' : ''}${estimate.basis}`,
+      forecast?.basis,
+      forecast?.remaining_steps > 0 && `${forecast.predicted_steps} of ${forecast.remaining_steps} remaining steps estimated`,
+      forecast?.unknown_steps?.length && `Learning: ${forecast.unknown_steps.join(', ')}`,
+      work?.next && `Next: ${work.next}`,
+    ]);
+    return {title, context: unique(context).join(' · '), caption: unique([count, volume, percent, rate]).join(' · '), details};
+  }
+  const expandedActivities = new Set();
+  function activityLine(activity) {
+    const item = node('div', 'pharos-activity');
+    const view = activityPresentation(activity);
+    item.append(node('div', 'pharos-activity-head', view.title));
+    if (view.context) item.append(node('div', 'pharos-sub', view.context));
+    item.append(progressBar(activityProgress(activity), `${activity.label}: ${activity.work?.phase || 'current stage'}`));
+    if (view.caption) item.append(node('div', 'pharos-sub pharos-progress-caption', view.caption));
+    const timing = completionEstimate(activity);
+    if (view.details.length) {
+      const details = node('details', 'pharos-sub pharos-activity-details');
+      details.dataset.activity = activity.id || `${activity.kind}:${activity.label}:${activity.started_at || ''}`;
+      details.open = expandedActivities.has(details.dataset.activity);
+      const summary = node('summary');
+      summary.append(timing, node('span', 'pharos-details-label', 'details'));
+      details.append(summary);
+      for (const text of view.details) details.append(node('div', '', text));
+      item.append(details);
+    } else item.append(timing);
     return item;
   }
   const copy = async text => {
@@ -293,18 +313,24 @@
   // Stops the running index (or source sync) between records, or the Library
   // view refresh; it says when it has.
   const LIBRARY_REFRESH_STOP = '/api/library/refresh/stop';
-  async function stopWork(path = '/api/index/cancel') {
-    try {
-      const {stopped} = await post(path);
-      if (!stopped) toast(path === LIBRARY_REFRESH_STOP ? 'Library view indexing is not running.' : 'No index is running.');
-    } catch (error) {
-      toast(error.message);
+  async function stopWork(paths = '/api/index/cancel') {
+    for (const path of [paths].flat()) {
+      try {
+        const {stopped} = await post(path);
+        if (!stopped) toast(path === LIBRARY_REFRESH_STOP ? 'Library view indexing is not running.' : 'No index is running.');
+      } catch (error) {
+        toast(error.message);
+      }
     }
     await refreshStatus();
     if (document.getElementById('sourceGrid')) loadHosts().catch(() => {});
   }
   const stopButton = (stopping, path) => {
-    const stop = button(stopping ? 'Stopping…' : 'Stop', '', () => stopWork(path));
+    const stop = button(stopping ? 'Stopping…' : 'Stop', '', () => {
+      stop.disabled = true;
+      stop.textContent = 'Stopping…';
+      return stopWork(path);
+    });
     stop.disabled = stopping;
     stop.title = path === LIBRARY_REFRESH_STOP
       ? 'Stops indexing the Library view. Workspaces not yet indexed are worked out as the Library shows them, which can be slower, until you resume it or Capture & index.'
@@ -405,17 +431,33 @@
     || Boolean(activities?.some(activity => ['capture', 'capture-other', 'sync', 'index'].includes(activity.kind)))
     || Boolean(incremental) || Boolean(upgrading);
 
+  const captureIndexDisabled = state => headerBusy(state) || state.sourcesEnabled === false && !state.upgradeNeeded || Boolean(state.releasing);
+  // A single Stop reaches each independent stoppable task, even when an
+  // index and the Library view refresh run at the same time.
+  function stopTargets(activities) {
+    const targets = new Map();
+    for (const activity of activities.filter(activity => activity.stoppable)) {
+      const path = activity.stop_path || '/api/index/cancel';
+      const target = targets.get(path);
+      targets.set(path, {path, stopping: Boolean(activity.stopping) && (!target || target.stopping)});
+    }
+    return [...targets.values()];
+  }
+
   function renderHeaderAction() {
     const actions = [ensureHeaderAction(), document.getElementById('headerSyncOnly')];
-    const busy = headerBusy({activities: status?.activities, incremental: window.pharosSync?.isBusy(),
-      local: headerCaptureIndexRunning || hostsBusy, upgrading: upgradeStatus?.running});
+    const state = {activities: status?.activities, incremental: window.pharosSync?.isBusy(),
+      local: headerCaptureIndexRunning || hostsBusy, upgrading: upgradeStatus?.running,
+      sourcesEnabled: hostsData?.sources.enabled, upgradeNeeded: upgradeStatus?.needed, releasing: ejectState?.phase === 'ejecting'};
+    const busy = headerBusy(state);
     for (const action of actions) if (action) {
       action.disabled = busy;
       action.setAttribute('aria-busy', String(busy));
     }
     // Capture & index is on Settings → Capture & index and in the drive panel.
     for (const update of document.querySelectorAll('#pharosUpdateLibrary, .pharos-panel-update')) {
-      update.disabled = busy || Boolean(hostsData && !hostsData.sources.enabled && !upgradeStatus?.needed);
+      update.disabled = captureIndexDisabled(state);
+      if (update.classList.contains('pharos-panel-update')) update.hidden = update.disabled;
       update.setAttribute('aria-busy', String(busy));
     }
     const capture = document.getElementById('pharosCaptureHost');
@@ -579,6 +621,8 @@
 
   function renderPanel() {
     if (!panel) return;
+    expandedActivities.clear();
+    for (const details of panel.querySelectorAll('details[data-activity][open]')) expandedActivities.add(details.dataset.activity);
     panel.replaceChildren();
     if (!status) {
       panel.append(node('h2', '', panelMode === 'activity' ? 'Running activity' : 'Library'), node('p', 'pharos-error', statusError?.status === 503 ? 'Pharos is stopping; it has released or is releasing the library.' : `Could not read the library's status${statusError ? `: ${statusError.message}` : ''}.`));
@@ -621,7 +665,8 @@
       panel.append(attention);
     }
 
-    // Capture & index sits to the right of Running now (and Nothing is running).
+    // One action slot: Stop while work can be stopped, Capture & index only
+    // when it can run. Each activity below reports its stage and progress.
     const running = node('div', 'pharos-running-head'), runningText = node('div');
     runningText.append(node('h3', '', 'Running now'));
     running.append(runningText);
@@ -630,7 +675,13 @@
     const update = libraryUpdate(activities);
     if (!activities.length) runningText.append(node('p', 'pharos-sub', headerCaptureIndexRunning && upgradeStatus?.needed
       ? 'Preparing the library upgrade…' : upgradeStatus?.needed ? 'A library upgrade is available. Use Capture & index to run it.' : 'Nothing is running.'));
-    if (panelMode === 'drive') {
+    const targets = stopTargets(activities);
+    if (targets.length) {
+      const stop = stopButton(targets.every(target => target.stopping), targets.filter(target => !target.stopping).map(target => target.path));
+      stop.title = `Stops ${activities.filter(activity => activity.stoppable).map(activity => activity.label).join(' and ')} safely. Completed work is kept.`;
+      running.append(stop);
+    }
+    if (panelMode === 'drive' && !targets.length) {
       const updateLibrary = button('Capture & index', 'pharos-panel-update', captureAndIndex);
       updateLibrary.title = "Captures this Mac's sources, indexes captures from every Mac, and runs any pending library upgrade. Index changes, in the header, only indexes what changed.";
       running.append(updateLibrary);
@@ -672,12 +723,13 @@
 
   function ejectButton(drive, activities) {
     const ejecting = ejectState?.phase === 'ejecting';
-    const eject_ = button(ejecting ? ejectState.message : '⏏ Eject', '', () => {
+    const action = activities.length ? 'Stop and Eject' : 'Eject';
+    const eject_ = button(ejecting ? ejectState.message : `⏏ ${action}`, '', () => {
       if (activities.length) { ejectState = {phase: 'confirm'}; renderPanel(); } else eject(drive);
     });
     eject_.id = 'pharosEjectButton';
     eject_.title = ejectNote(drive);
-    eject_.setAttribute('aria-label', `Eject ${drive.name}`);
+    eject_.setAttribute('aria-label', `${action} ${drive.name}`);
     eject_.disabled = ejecting || ejectState?.phase === 'confirm';
     return eject_;
   }
@@ -687,7 +739,7 @@
     const stopping = activities.filter(activity => activity.kind !== 'capture-other').map(activity => activity.label);
     if (stopping.length) row.append(node('p', 'pharos-note', `Ejecting stops ${stopping.join(', ')} at a safe point; ${stopping.length === 1 ? 'it resumes' : 'each resumes'} the next time it runs.`));
     if (activities.some(activity => activity.kind === 'capture-other')) row.append(node('p', 'pharos-note pharos-warn', 'Pharos cannot stop a capture by another process; the drive stays busy until it finishes.'));
-    row.append(button(`Stop and eject ${drive.name}`, 'primary', () => eject(drive)), button('Cancel', '', () => { ejectState = null; renderPanel(); }));
+    row.append(button(`Stop and Eject ${drive.name}`, 'primary', () => eject(drive)), button('Cancel', '', () => { ejectState = null; renderPanel(); }));
     return row;
   }
 
@@ -1196,7 +1248,7 @@
 
   window.pharosLibrary = {closePanel, refresh: refreshStatus, status: () => status, runs, refreshSettings, refreshSyncControls: renderSyncControls, renderAlerts: () => { renderChip(); renderPanel(); }, onStatus: listener => listeners.add(listener), toggleActivityPanel: () => (panel && panelMode === 'activity' ? closePanel() : openPanel('activity')),
     // Pure helpers, for web/tests/unit/page/library.test.mjs.
-    libraryUpdate, activityTiming, activityProgress, estimateRate, workCount, headerBusy};
+    libraryUpdate, activityTiming, activityProgress, activityPresentation, estimateRate, workCount, headerBusy, captureIndexDisabled, stopTargets};
   const sheet = node('style');
   sheet.textContent = CSS;
   document.head.append(sheet);
