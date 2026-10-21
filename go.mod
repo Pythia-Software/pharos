@@ -5,7 +5,7 @@ go 1.26.0
 toolchain go1.26.8
 
 require (
-	github.com/Pythia-Software/query-table/backends/go v0.9.2
+	github.com/Pythia-Software/query-table/backends/go v0.9.3
 	golang.org/x/crypto v0.57.0
 	golang.org/x/sys v0.48.0
 	modernc.org/sqlite v1.39.1
