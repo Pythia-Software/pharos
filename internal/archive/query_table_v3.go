@@ -161,7 +161,24 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 				}
 				early, err = querytable.ResolveRelativeWhere(early, localSchema, time.UnixMilli(q.Now))
 				if err == nil {
-					rows, find, err = s.libraryRows(ctx, params, libraryFieldsFor(required...), nil, early)
+					readFields := libraryFieldsFor(required...)
+					if q.Grouping == nil && q.Rows && readFields != nil && readFields.hasAny(libraryCostFields) {
+						copy := q
+						copy.Result.Select = slices.DeleteFunc(slices.Clone(q.Result.Select), func(name string) bool { return slices.Contains(libraryCostFields, name) })
+						if !slices.Contains(copy.Result.Select, schema.IDField) {
+							copy.Result.Select = append(copy.Result.Select, schema.IDField)
+						}
+						dependencies, e := s.queryV3SourceFields(ctx, schema, copy)
+						if e != nil {
+							return qt.QueryResultV3{}, nil, e
+						}
+						for _, field := range libraryCostFields {
+							if !slices.Contains(dependencies, field) {
+								delete(readFields, field)
+							}
+						}
+					}
+					rows, find, err = s.libraryRows(ctx, params, readFields, nil, early)
 				}
 			}
 		} else if err == nil {
@@ -266,8 +283,8 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 			err = s.Catalog.attachAuthoredText(ctx, result.Rows)
 		case "library":
 			result.Rows, err = s.Catalog.libraryPage(ctx, result.Rows)
-			if find != nil {
-				find.attach(result.Rows)
+			if find != nil && err == nil {
+				err = s.Catalog.attachLibraryFind(ctx, find, result.Rows)
 			}
 		}
 	}

@@ -353,7 +353,10 @@ func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset,
 				}
 			}
 			if find != nil {
-				find.attach(result.Rows)
+				if err := s.Catalog.attachLibraryFind(r.Context(), find, result.Rows); err != nil {
+					writeError(w, err, http.StatusInternalServerError)
+					return
+				}
 				writeJSON(w, struct {
 					querytable.Result
 					Find libraryFindSummary `json:"find"`

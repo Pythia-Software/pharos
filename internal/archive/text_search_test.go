@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func textFixture(t *testing.T) *Catalog {
@@ -93,6 +94,29 @@ func TestTextSearchQueries(t *testing.T) {
 			}
 			if !slices.Equal(resultIDs(r), tc.want) || !r.Complete {
 				t.Fatalf("got %v complete=%v stop=%s; want %v", resultIDs(r), r.Complete, r.StopReason, tc.want)
+			}
+			// The workspace table establishes the same full population regardless
+			// of message pagination/work budgets, retaining one hit and an exact
+			// message count for each matching workspace.
+			options := tc.o
+			options.workspaceRows = true
+			options.Limit, options.MaxCandidates, options.MaxBytes = 1, 1, 64
+			population, err := c.SearchText(t.Context(), options)
+			want := map[string]int{}
+			for _, id := range tc.want {
+				workspace := "w"
+				if id == "o" {
+					workspace = "other"
+				}
+				want[workspace]++
+			}
+			if err != nil || !population.Complete || population.Count != len(tc.want) || len(population.Items) != len(want) {
+				t.Fatalf("workspace population: %+v err=%v; want %v", population, err, want)
+			}
+			for _, item := range population.Items {
+				if item.Count != want[item.WorkspaceID] {
+					t.Fatalf("workspace %s: %d matching messages; want %d", item.WorkspaceID, item.Count, want[item.WorkspaceID])
+				}
 			}
 		})
 	}
@@ -398,7 +422,7 @@ func TestTextSearchHTTPAndMCPParity(t *testing.T) {
 
 func TestTextSearchTrigramSupersetAndByteBudget(t *testing.T) {
 	c := textFixture(t)
-	for i, body := range []string{"ſearch quality", "Kelvin quality", "search\nquality", "abx", "abz"} {
+	for i, body := range []string{"ſearch quality", "Kelvin quality", "search\nquality", "abx", "abz", "search unrelated", "quality unrelated", "nomatch foo", "foo::bar", "SEARCH QUALITY", "needle quality", "λ search quality"} {
 		id := fmt.Sprintf("unicode%d", i)
 		if _, e := c.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash) VALUES(?,'c',?,'user','message',?,'hash')`, id, id, body); e != nil {
 			t.Fatal(e)
@@ -410,7 +434,7 @@ func TestTextSearchTrigramSupersetAndByteBudget(t *testing.T) {
 	if _, e := c.DB.Exec(`INSERT OR REPLACE INTO message_fts_rows SELECT message_id,rowid FROM messages_fts;DELETE FROM messages_trigram;INSERT INTO messages_trigram(rowid,text) SELECT f.rowid,m.text FROM messages_fts f JOIN messages m ON m.id=f.message_id WHERE m.kind IN ('message','result','delegation','delegation_result')`); e != nil {
 		t.Fatal(e)
 	}
-	for _, q := range []string{`(?s)search.*quality`, `(?i)kelvin`, `ab(x|z)`, `(?i:search)|kelvin`, `(?s)search.*quality|nomatch`} {
+	for _, q := range []string{`(?s)search.*quality`, `(?i)kelvin`, `ab(x|z)`, `(?i:search)|kelvin`, `(?s)search.*quality|nomatch`, `search.*(?:quality|inadequate)`, `(?:search|needle).*quality`, `(?:search|ab).*quality`, `(?:search.*)?quality`, `(?:search.*){0,2}quality`, `(?:search.*){1,2}quality`, `(?-i:SEARCH).*QUALITY`, `(?:foo::bar|nomatch)`, `(?:search|quality|)`, `search.*[^x]*quality`} {
 		options := TextSearchOptions{Query: q, Mode: "regex", Surface: "user"}
 		r, e := c.SearchText(t.Context(), options)
 		if e != nil {
@@ -593,12 +617,12 @@ func TestTextSearchFuzzyCaseSensitiveExpansionBoundaries(t *testing.T) {
 	}
 	node := &textQuery{Op: "term", Text: "migration", expansions: []string{"migration", "migrations"}}
 	body := "premigrations migrationsx migrations migration"
-	for _, match := range node.strictLocations(body, true, false) {
+	for _, match := range node.strictLocations(body, true, false, 0) {
 		if word := body[match[0]:match[1]]; word != "migration" && word != "migrations" {
 			t.Fatalf("non-token expansion matched: %q", word)
 		}
 	}
-	if matches := node.strictLocations(body, true, false); len(matches) != 2 {
+	if matches := node.strictLocations(body, true, false, 0); len(matches) != 2 {
 		t.Fatalf("expected exactly two whole tokens: %v", matches)
 	}
 	if start, end := lexicalExcerpt("prefix migrations suffix", node); start != 7 || end != 17 {
@@ -681,10 +705,18 @@ func TestLibraryFindMetadataIgnoresScopedCursor(t *testing.T) {
 		}
 		return recorder.Body.String()
 	}
-	// Rows and metrics must still honor the table filter and resume its cursor.
+	// Workspace rows and metrics cannot resume a message batch: a cursor would
+	// silently exclude earlier workspaces before global filtering/sorting.
 	where := `[{"field":"title","op":"=","value":"Charlie"}]`
-	request(t, http.MethodPost, "/api/query/library/rows-v2?"+params.Encode(), `{"version":2,"profile":"qt-sqlite-v1","select":["title"],"where":`+where+`,"limit":10}`)
-	request(t, http.MethodPost, "/api/query/library/metrics?"+params.Encode(), `{"version":2,"profile":"qt-sqlite-v1","where":`+where+`,"metrics":[{"id":"n","op":"count","groupBy":[]}]}`)
+	for endpoint, body := range map[string]string{
+		"rows-v2": `{"version":2,"profile":"qt-sqlite-v1","select":["title"],"where":` + where + `,"limit":10}`,
+		"metrics": `{"version":2,"profile":"qt-sqlite-v1","where":` + where + `,"metrics":[{"id":"n","op":"count","groupBy":[]}]}`,
+	} {
+		response := apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/library/"+endpoint+"?"+params.Encode(), body)
+		if response.Code != 400 || !strings.Contains(response.Body.String(), "without a message cursor") {
+			t.Fatalf("workspace search accepted a message cursor: %d %s", response.Code, response.Body.String())
+		}
+	}
 	for _, endpoint := range []string{"distinct?field=title", "field-stats?fields=title"} {
 		t.Run(endpoint, func(t *testing.T) {
 			path := "/api/query/library/" + endpoint + "&" + params.Encode()
@@ -695,5 +727,80 @@ func TestLibraryFindMetadataIgnoresScopedCursor(t *testing.T) {
 				t.Fatalf("metadata changed with cursor: got %s, want %s", got, want)
 			}
 		})
+	}
+}
+
+func TestTextSearchMetadataPlanningPreservesMatches(t *testing.T) {
+	c := textFixture(t)
+	execTx(t, c.DB,
+		`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,created_at) VALUES
+ ('offset','c','offset','user','message','cache','offset','2026-10-12T00:30:00+01:00'),
+ ('space','c','space','assistant','message','cache','space','2026-10-11 23:45:00'),
+ ('system-reasoning','c','system-reasoning','system','reasoning','cache','system','2026-10-12T00:00:00Z')`,
+		`INSERT INTO messages_fts(message_id,text) SELECT id,text FROM messages WHERE id IN ('offset','space','system-reasoning')`,
+		`INSERT OR REPLACE INTO message_fts_rows SELECT message_id,rowid FROM messages_fts`)
+	cases := []struct {
+		o    TextSearchOptions
+		want []string
+	}{
+		{TextSearchOptions{Query: "cache", From: "2100-01-01"}, []string{}},
+		{TextSearchOptions{Query: "cache", Roles: []string{"missing"}}, []string{}},
+		{TextSearchOptions{Query: "cache", Roles: []string{"system"}}, []string{"system-reasoning"}},
+		{TextSearchOptions{Query: "cache", Kinds: []string{"reasoning"}}, []string{"system-reasoning"}},
+		{TextSearchOptions{Query: "cache", From: "2026-10-11T23:00:00Z", To: "2026-10-11"}, []string{"offset", "space"}},
+		{TextSearchOptions{Query: "cache", Surface: "reasoning", To: "2026-10-12"}, []string{"system-reasoning"}},
+		{TextSearchOptions{Query: "cache", Surface: "user", Roles: []string{"assistant"}}, []string{}},
+	}
+	for _, maxRows := range []int{256, 1} {
+		override(t, &textSearchPlanMaxRows, maxRows)
+		for _, tc := range cases {
+			result, err := c.SearchText(t.Context(), tc.o)
+			if err != nil || !result.Complete || !slices.Equal(resultIDs(result), tc.want) {
+				t.Fatalf("limit=%d options=%+v ids=%v complete=%v err=%v", maxRows, tc.o, resultIDs(result), result.Complete, err)
+			}
+		}
+	}
+	// Legacy/partial mappings must still find their unmapped eligible messages.
+	execTx(t, c.DB, `DELETE FROM message_fts_rows WHERE message_id IN ('offset','space')`)
+	result, err := c.SearchText(t.Context(), cases[4].o)
+	if err != nil || !slices.Equal(resultIDs(result), cases[4].want) {
+		t.Fatalf("partial mapping: %v %v", resultIDs(result), err)
+	}
+}
+
+func TestTextSearchASCIIPrefilterIsConservative(t *testing.T) {
+	verifier, err := newTextVerifier(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer verifier.db.Close()
+	for _, query := range []string{"cache", `"foo bar"`, "foo*", "cache NOT redis", "(missing AND cache) OR retry", "timeout NEAR/8 retry", "retry PRE/8 timeout", "café", "cache café"} {
+		node, err := parseTextQuery(query, "advanced")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, body := range []string{"cache", "cache redis", "foo_bar", "foobar", "prefixcache cachex cache", "timeout retry", "retry then timeout", "cafe", "café", "cache cafe", "unrelated", "foo\x00bar"} {
+			_, _, match, err := verifier.match(t.Context(), node, body, false, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if match && !node.asciiCandidate(body) {
+				t.Fatalf("prefilter discarded %q in %q", query, body)
+			}
+		}
+	}
+}
+
+func TestSearchSnippetBoundsUnicode(t *testing.T) {
+	body := strings.Repeat("é", 200) + "needle" + strings.Repeat("🦉", 200)
+	got := searchSnippet(body, 400, 406)
+	want := "…" + strings.Repeat("é", 90) + "needle" + strings.Repeat("🦉", 130) + "…"
+	if got != want {
+		t.Fatalf("snippet changed rune boundaries: %q", got)
+	}
+	// The display truncation may land inside a multibyte character.
+	got = searchSnippet(body, 400, 409)
+	if !utf8.ValidString(got) {
+		t.Fatal("snippet split a UTF-8 rune")
 	}
 }
