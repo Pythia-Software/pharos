@@ -7,16 +7,45 @@ contains a universal macOS app (arm64 and x86_64) in a Finder disk image,
 `vX.Y.Z-Pharos-macos-universal.dmg`, whose volume is named `vX.Y.Z Pharos`,
 plus a matching `.sha256` file. The tag, GitHub release, and both bundle
 version fields use the same `X.Y.Z` version.
-Sign in to `gh` with permission to publish releases. Run the script only after
-the release commit has been merged into `master`, from a clean checkout at
-`origin/master`.
 
-By default, publish an ad hoc signed release:
+### Quick release (default)
+
+Routine publishing requests use the short path below. Code review and testing
+belong to the changes merged into `master`; publishing does not repeat those
+test suites. Do not run extra Go, JavaScript, browser, native or end-to-end
+tests, investigate unrelated test failures, or rewrite the generated release
+notes unless the user asks. The release script already installs locked
+dependencies, checks schemas, builds the frontend and universal app, verifies
+signatures and the disk image, and creates the checksum before publishing.
+
+Sign in to `gh` with permission to publish releases. From a clean workspace
+branch, fetch master, temporarily check out its exact commit, and run the
+release script with the requested version. The repository's main branch is
+`master`. There is no need to merge it into the workspace branch just to
+publish. For example, to publish the next patch after v0.7.0:
 
 ```sh
-macos/release.sh 0.3.0
+(
+    set -eu
+    release_branch=$(git branch --show-current)
+    test -n "$release_branch"
+    test -z "$(git status --porcelain)"
+    git fetch origin master --tags
+    git switch --detach origin/master
+    trap 'git switch "$release_branch"' EXIT
+    macos/release.sh 0.7.1
+)
 ```
 
+If the workspace has uncommitted work, use a separate clean release checkout
+and preserve that work. If the release command fails, address that specific
+failure and resume. On success, return the GitHub release and direct DMG
+download links. No additional publishing confirmation is needed when the user
+has requested the release.
+
+### Signing and packaging details
+
+The default is an ad hoc signed release.
 GitHub will host it, but it cannot be notarized. macOS may block the downloaded
 app on first launch. A user who trusts the download can try opening it, then
 choose **System Settings → Privacy & Security → Open Anyway**. See
@@ -37,7 +66,7 @@ For a Developer ID release:
 ```sh
 export PHAROS_CODESIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)'
 export PHAROS_NOTARY_PROFILE=pharos
-macos/release.sh 0.3.0 --developer-id
+macos/release.sh 0.7.1 --developer-id
 ```
 
 The script fetches `origin/master`, refuses a dirty or different checkout and

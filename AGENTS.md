@@ -8,6 +8,21 @@ others sit beside it). The Query Table frontend is TypeScript in `web/src`,
 bundled into the gitignored `internal/archive/assets/query-tables.{js,css}`. See
 [docs/technical-overview.md](docs/technical-overview.md) for the architecture.
 
+## Publishing releases
+
+Use the [quick release workflow](docs/releases-and-updates.md#quick-release-default)
+for routine publishing requests. Fetch `origin/master` and tags, temporarily
+check out that exact commit, run `macos/release.sh X.Y.Z`, then restore the
+workspace branch and return the download link. Use the requested version;
+default to ad hoc signing unless notarization is requested.
+
+A release-only request does not require merging master into the workspace
+branch or running test suites. The testing requirements below apply to source
+changes and PRs. Do not add Go, JavaScript, browser, native or end-to-end test
+runs, unrelated failure investigations, or custom release-note edits unless
+requested. Keep the release script's built-in build and artifact checks. If
+the release command fails, address that specific failure and resume publishing.
+
 ## Query Table dependency policy
 
 Do not add, extend, or reintroduce local Query Table patches. Required fixes
