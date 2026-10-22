@@ -42,6 +42,37 @@ async function holdsFocus(page, surface, opener) {
   await page.waitForFunction(element => document.activeElement === element, await opener.elementHandle());
 }
 
+for (const width of [1440, 390, 320]) test(`Data guide takes focus, keeps controls reachable and returns focus @ ${width}`, { skip }, async t => {
+  const app = await open(t, { url: "/analyze?analyze_mode=query&analyze_data=tool_calls&analyze_topic=tools", viewport: { width, height: 900 }, ready: ".usage-workspace-table .qt-row" });
+  const { page } = app;
+  const opener = page.locator(".usage-workspace-table .data-source-link");
+  await app.shot("from-statement");
+  await press(opener);
+  const dialog = page.getByRole("dialog", { name: "Data Guide", exact: true });
+  await dialog.waitFor();
+  await app.shot("tool-call-guide");
+  await dialog.getByRole("button", { name: "Review", exact: true }).click();
+  await press(dialog.getByRole("button", { name: /Agent sessions/ }));
+  const source = dialog.getByRole("region", { name: "Dataset row definitions", exact: true });
+  await source.waitFor({ state: "hidden" });
+  await press(dialog.getByRole("navigation", { name: "Data layers", exact: true }).getByRole("button", { name: "Tool calls", exact: true }));
+  await source.waitFor({ state: "visible" });
+  await holdsFocus(page, dialog, opener);
+  await press(opener);
+  await dialog.getByRole("button", { name: "Close data guide", exact: true }).click();
+  await page.waitForFunction(element => document.activeElement === element, await opener.elementHandle());
+  await press(page.getByRole("button", { name: "Collapse query builder", exact: true }));
+  await press(opener);
+  await holdsFocus(page, dialog, opener);
+});
+
+test("Data guide is available outside Analyze in the light theme", { skip }, async t => {
+  const app = await open(t, { url: "/library", preferences: { "pharos-theme": "light" }, ready: "#queryTableLibrary .qt-row" });
+  await press(app.page.locator("#queryTableLibrary .data-source-link"));
+  await app.page.getByRole("dialog", { name: "Data Guide", exact: true }).waitFor();
+  await app.shot("workspace-guide-light");
+});
+
 // Exercise portal focus and dismissal against both native and role-based modals.
 async function useSearchMenus(page, dialog) {
   const options = dialog.getByRole("button", { name: /^Match options/ });

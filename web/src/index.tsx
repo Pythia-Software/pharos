@@ -1,4 +1,5 @@
 import { matchingSelectionIDs } from "./query-selection";
+import { DataTaxonomyModal, SourceStatement } from "./data-taxonomy";
 import { installDelegationExplorer } from "./delegation";
 import { installWorkspaceInbox } from "./workspace-inbox";
 import { MessageTableSearch, newMessageSearch, readMessageSearch } from "./message-table-search";
@@ -580,18 +581,25 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
   // requests independently of useQueryTable's active row-fetch flag.
   if (!visible) return null;
 
+  // The published clause and collapsed-summary slots keep the source label
+  // inside Query Table's own editor, without changing query semantics.
+  const sourceDecoration = {
+    clauses: <SourceStatement dataset={dataset} />,
+    summary: <SourceStatement dataset={dataset} compact />,
+  };
+
   return <FilterValueProvider value={filterPresentations[dataset]}>
     <QueryRecovery busy={api.loading || api.restoration.status === "resolving" || (remote && !capabilities && !capabilityError)} error={capabilityError ?? api.error} recovered={recovered} identity={JSON.stringify(api.query)}
       onRetry={() => { retryLastQuery(schema.name); if (capabilityError) setCapabilityRetry(value => value + 1); else if (api.restoration.error) void api.restoreLocation(location.href).catch(() => {}); else api.refresh(); }}
       onReset={() => { setRecovered(false); api.setQuery(tableRecoveryQuery(schema, scopeWhere)); if (capabilityError) setCapabilityRetry(value => value + 1); }} />
     {!api.query.grouping || namespace ? header?.(api) : null}
     {presets?.(api)}
-    {queryContent || resultPresentation ? <QueryBuilder compact api={stableApi} fields={api.query.grouping ? api.schema!.fields : api.computed.catalogue} total={api.total} running={api.loading}
+    {queryContent || resultPresentation ? <QueryBuilder compact {...sourceDecoration} api={stableApi} fields={api.query.grouping ? api.schema!.fields : api.computed.catalogue} total={api.total} running={api.loading}
       whereRow={<>
         {resultPresentation?.(api)}
         <QueryFilterRow api={stableSourceFilters} fields={api.query.grouping ? api.grouping!.source.schema.fields : api.computed.catalogue} />
         {queryContent?.(api)}
-      </>} /> : api.query.grouping ? <QueryBuilder compact api={stableApi} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <QueryBuilder compact defaultCollapsed={Boolean(namespace)} api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={stableApi} dataset={dataset} layout={<QueryBuilder compact api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />} /> : <QueryBuilder compact api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />}
+      </>} /> : api.query.grouping ? <QueryBuilder compact {...sourceDecoration} api={stableApi} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <QueryBuilder compact {...sourceDecoration} defaultCollapsed={Boolean(namespace)} api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={stableApi} dataset={dataset} layout={<QueryBuilder compact {...sourceDecoration} api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />} /> : <QueryBuilder compact {...sourceDecoration} api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />}
     {queryContent ? controls?.(api, null) : null}
     <MetricsPanel api={stableApi} aggregations={api.aggregations} fields={metricFields(api.query.grouping ? usageGroupFields(api.schema!.fields, api.query) : api.computed.catalogue)} renderers={metricRenderers}
       onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(records); }} />
@@ -2059,6 +2067,11 @@ if (!shared && concurrencyPrototypeEnabled && location.pathname === "/analyze" &
 }
 
 if (!shared) installAppNavigation();
+
+const dataGuideHost = document.createElement("div");
+dataGuideHost.id = "dataGuideHost";
+document.body.append(dataGuideHost);
+createRoot(dataGuideHost).render(<DataTaxonomyModal />);
 
 const mounts: Array<[string, React.ReactNode]> = [
   ["searchComposerDialog", <SearchDialog schema={schemas.library} />],

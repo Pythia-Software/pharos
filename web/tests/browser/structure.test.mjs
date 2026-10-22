@@ -17,6 +17,7 @@ import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/que
 const work = `/work/${workID}`;
 const exploreGroupedSearch = `/library?${new URLSearchParams({ q_library: encodeQuery(withGroupingKeys({ ...EMPTY_QUERY, select: [{ field: "repository_name" }], where: [{ field: "repository_name", op: "=", value: "repo-1" }] }, ["repository_name"])), search: "cache", text_plain: "1" })}`;
 const ROUTES = [
+  { name: "Data guide", url: "/analyze?analyze_mode=query&analyze_data=tool_calls&analyze_topic=tools", ready: ".usage-workspace-table .qt-row", open: page => page.locator(".usage-workspace-table .data-source-link").click(), shown: ".data-guide[open]" },
   ...['provisional', 'partial'].flatMap(state => [false, true].map(expanded => ({
     name: `Indexing forecast (${state}${expanded ? ', details' : ''})`, url: '/library', ready: '#pharosDrive',
     api: {'GET /api/library/status': {...defaultApi['GET /api/library/status'], idle: false, activities: [{id: 'index-forecast', kind: 'sync', label: 'Capture & index', started_at: new Date(Date.now() - 120_000).toISOString(),

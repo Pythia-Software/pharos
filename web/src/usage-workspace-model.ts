@@ -5,7 +5,7 @@ import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, type QueryState } from "@p
 export const usageDatasets = {
   usage: { label: "Token usage", description: "Tokens, API costs, models, cache, and pricing coverage.", field: "model" },
   conversation_activity: { label: "Conversation activity", description: "Human input and recorded output across conversations.", field: "root_model_family" },
-  writing: { label: "Human words by conversation", description: "Authorship totals and categories per conversation.", field: "title" },
+  writing: { label: "Human words by workspace", description: "Authorship totals across each workspace’s conversations and folded delegated work.", field: "title" },
   writing_messages: { label: "Human messages", description: "Individual messages and their authorship evidence.", field: "text" },
   tool_calls: { label: "Tool calls", description: "Commands, results, timing, status, and context added or carried.", field: "command" },
   tools: { label: "Tool summary", description: "Tool use grouped by work, tool, and command.", field: "tool_name" },
