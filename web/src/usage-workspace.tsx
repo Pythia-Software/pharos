@@ -1,10 +1,10 @@
 import { analyzePages } from "./app-navigation-model";
 import React from "react";
-import type { QueryState } from "@pythia-software/query-table-core";
-import { groupedDashboardQuery } from "./usage-dashboard-model";
+import type { FieldSchema, QueryState } from "@pythia-software/query-table-core";
+import { dashboardQueryLinks } from "./dashboard-query-links";
 import { Icon } from "./icons";
 import { ResetPage } from "./query-recovery";
-import { readUsageWorkspace, usageAnalysisLink, usageDashboardReturn, usageDatasets, usageTopics, usageSearchQuery, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
+import { readUsageWorkspace, usageAnalysisLink, usageDashboardReturn, usageDatasets, usageTopics, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { NestedPageLayout, PageLink } from "./nested-pages";
 import { cardDetailsURL, cardSourceDataset } from "./card-exploration";
 import { instantiateRecipe, queryRecipes } from "./curiosity-data";
@@ -13,13 +13,15 @@ import "./usage-workspace.css";
 
 export const UsageWorkspaceLink = PageLink;
 
-export function UsageDashboardLinks({ dataset, query, currentURL, groupedLabel = "Open grouped query", analysisLabel = "Full current analysis" }: { dataset: UsageDataset; query: QueryState; currentURL?: string; groupedLabel?: string; analysisLabel?: string }) {
+export function UsageDashboardLinks({ dataset, query, schema, currentURL }: { dataset: UsageDataset; query: QueryState; schema: FieldSchema; currentURL?: string }) {
   const params = new URLSearchParams(location.search);
   const analysis = currentURL ? usageAnalysisLink(dataset, query, currentURL, params) : null;
   return <div className="usage-dashboard-links">
-    {query.aggregations?.length || query.grouping ? <UsageWorkspaceLink href={usageWorkspaceURL({ mode: "query", search: false, dataset, query: groupedDashboardQuery(query) }, params)}>{groupedLabel}<Icon name="arrow-right" /></UsageWorkspaceLink> : null}
-    <UsageWorkspaceLink href={usageWorkspaceURL({ mode: "query", search: false, dataset, query: usageSearchQuery(query) }, params)}>Open records<Icon name="arrow-right" /></UsageWorkspaceLink>
-    {analysis ? <UsageWorkspaceLink href={analysis.href}>{analysisLabel}{analysis.resetsFilters ? " (resets filters)" : ""}<Icon name="arrow-right" /></UsageWorkspaceLink> : null}
+    <div className="usage-query-destinations">{dashboardQueryLinks(dataset, query, schema, params).map(link => <UsageWorkspaceLink className="usage-query-destination" key={link.title} href={link.href}>
+      <span className="usage-query-destination-heading"><strong>{link.title}</strong><Icon name="arrow-right" /></span>
+      {link.sentence.length ? <span className="usage-query-sentence">{link.sentence.map(part => <React.Fragment key={part.keyword}>{part.prefix}<strong>{part.keyword}</strong>{part.text ? ` ${part.text}` : ""}</React.Fragment>)}.</span> : null}
+    </UsageWorkspaceLink>)}</div>
+    {analysis ? <UsageWorkspaceLink className="usage-legacy-link" href={analysis.href}>Legacy view{analysis.resetsFilters ? " (resets filters)" : ""}<Icon name="arrow-right" /></UsageWorkspaceLink> : null}
   </div>;
 }
 

@@ -251,6 +251,7 @@ button.usage-legend-item:hover { border-color: var(--line); color: var(--ink); }
 .writing-stack > i { display: block; height: 100%; min-width: 2px; }
 .writing-stack > i:first-child { border-radius: 4px 0 0 4px; }
 .writing-stack > i:last-child { border-radius: 0 4px 4px 0; }
+.writing-table-scroll { overflow-x: auto; }
 .writing-table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
 .writing-table td, .writing-table th { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
 .writing-table .num { text-align: right; font-variant-numeric: tabular-nums; }

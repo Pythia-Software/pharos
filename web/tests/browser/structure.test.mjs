@@ -24,6 +24,17 @@ const recordKeyword = { field: "command", draft: {
   scope: { surface: "prose", roles: [], kinds: [], repository: "", provider: "", source: "", from: "", to: "", conversation_id: "", workspace_id: "" },
 } };
 const ROUTES = [
+  ...["usage", "writing", "writing_messages", "conversation_activity", "tool_calls", "tools", "skill_usages", "mcp_calls", "parallelism"].flatMap(dataset => [false, true].map(explore => ({
+    name: `Query ideas ${explore ? "Explore " : ""}${dataset}`,
+    url: `/analyze?analyze_mode=query&analyze_data=${dataset}`,
+    ready: ".usage-workspace-table .qt-row",
+    open: async page => {
+      const chip = explore ? page.getByRole("group", { name: "Explore query ideas", exact: true }).getByRole("button").last() : page.locator(".usage-query-ideas .query-chip").first();
+      await chip.click();
+      await page.getByRole("link", { name: "Matching records", exact: true }).first().waitFor();
+    },
+    shown: ".usage-workspace-table .qt-row",
+  }))),
   ...['provisional', 'partial'].flatMap(state => [false, true].map(expanded => ({
     name: `Indexing forecast (${state}${expanded ? ', details' : ''})`, url: '/library', ready: '#pharosDrive',
     api: {'GET /api/library/status': {...defaultApi['GET /api/library/status'], idle: false, activities: [{id: 'index-forecast', kind: 'sync', label: 'Capture & index', started_at: new Date(Date.now() - 120_000).toISOString(),
@@ -59,6 +70,7 @@ const ROUTES = [
   { name: "Carbon Impact", url: "/analyze?analyze_view=carbon", ready: "#carbonSummary" },
   { name: "Analyze conversations", url: "/analyze?analyze_view=conversations", ready: "#queryTableUsage .qt-row" },
   { name: "Analyze workspace dashboards", url: "/analyze", ready: ".usage-dashboard .usage-chart" },
+  { name: "Analyze relative query previews", url: `/analyze?${new URLSearchParams({ analyze_topic: "tokens", analyze_filters: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "first_usage_at", op: ">=", value: "-30d" }, { field: "first_usage_at", op: "<", value: "+0s" }, { field: "provider", op: "=", value: "codex" }] }) })}`, ready: ".usage-query-destinations" },
   { name: "Analyze workspace cumulative", url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify({ display: "cumulative", period: "days", days: 3, split: "model_family", metric: "percent_cost" }))}`, ready: ".usage-dashboard .usage-chart-lines" },
   { name: "Analyze cumulative human", url: `/analyze?analyze_topic=human&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20}))}`, ready: ".usage-dashboard .usage-chart-lines" },
   { name: "Analyze cumulative skills", url: `/analyze?analyze_topic=skills&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20}))}`, ready: ".usage-dashboard .usage-chart-lines" },
@@ -77,7 +89,7 @@ const ROUTES = [
   { name: "Analyze workspace parallelism dashboard", concurrency: true, url: "/analyze?analyze_workspace=1&analyze_topic=parallelism", ready: ".usage-dashboard .concurrency-chart svg" },
   { name: "Analyze workspace carbon dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=carbon", ready: ".usage-dashboard #carbonSummary" },
   ...["usage", "conversation_activity", "writing", "writing_messages", "tool_calls", "tools", "mcp_calls", "skill_usages", "parallelism"].map(dataset => ({
-    name: `Analyze workspace query ${dataset}`, url: `/analyze?analyze_mode=query&analyze_data=${dataset}`, ready: ".usage-workspace-table .qt-row",
+    name: `Analyze workspace query ${dataset}`, url: `/analyze?analyze_mode=query&analyze_data=${dataset}`, ready: ".usage-workspace-table .qt-row", fitTable: true,
   })),
   { name: "Analyze record keyword editor", url: "/analyze?analyze_mode=query&analyze_data=tool_calls", ready: ".usage-workspace-table .qt-qb", open: page => page.getByRole("button", { name: /^Add keyword filter for / }).click(), shown: ".explore-search-modal" },
   { name: "Analyze record keyword condition", url: `/analyze?${new URLSearchParams({ analyze_mode:"query", analyze_data:"tool_calls", record_tool_calls:JSON.stringify(recordKeyword) })}`, ready: ".usage-workspace-table .qt-qb" },
@@ -126,7 +138,11 @@ const WIDTHS = [{ width: 1440, height: 900 }, { width: 1280, height: 720 }, { wi
 // Layout bugs found by this sweep and not fixed yet. A case whose only
 // problems match here is marked todo with the bug, so the suite stays honest;
 // any other problem still fails it.
-const KNOWN = [];
+const KNOWN = [{
+  bug: "Query Table 0.9.5 fit-to-screen can clip native Detail and JSON buttons at phone widths; docs/handoffs/query-table-fit-screen-controls.md",
+  when: (route, viewport) => route.fitTable && viewport.width < 641,
+  match: /a control is cut off where nothing scrolls: button\.qt-(?:link-btn\.qt-item-detail-button|json-preview)/,
+}];
 
 for (const width of [1440, 390, 320]) test(`Search filter suggestions stay readable and keep input focus @ ${width}`, { skip }, async t => {
   const values = ["exploration", "exploration-service", "exploration-service-v2", "gbw-utilities", "general-purpose-repository",
@@ -301,9 +317,9 @@ test("dashboard catalog stays readable while a preview is pending", { skip }, as
     await page.getByRole('button', { name: 'Refresh suggestions', exact: true }).click();
     await pending;
     await page.mouse.move(5, 5);
-    const next = page.getByRole('button', { name: 'Next five suggestions', exact: true });
+    const next = page.getByRole('button', { name: 'Next three suggestions', exact: true });
     await page.waitForFunction(() => {
-      const button = document.querySelector('button[aria-label="Next five suggestions"]');
+      const button = document.querySelector('button[aria-label="Next three suggestions"]');
       return button && !button.disabled;
     });
     const readable = async () => {
@@ -408,6 +424,12 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
           await app.page.locator(route.shown).first().waitFor();
           await app.settled();
         }
+        if (route.fitTable && viewport.width >= 1024) {
+          await app.page.waitForFunction(() => {
+            const wrap = document.querySelector('.usage-workspace-table .qt-table-wrap');
+            return wrap && wrap.scrollWidth <= wrap.clientWidth + 1;
+          });
+        }
         await app.shot("top");
         const problems = await layoutProblems(app.page);
         if (!route.open) {
@@ -417,7 +439,7 @@ describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY
           problems.push(...(await layoutProblems(app.page)).filter(problem => !problems.includes(problem)));
         }
         problems.push(...app.problems());
-        const known = KNOWN.filter(bug => problems.some(problem => bug.match.test(problem)));
+        const known = KNOWN.filter(bug => (!bug.when || bug.when(route, viewport)) && problems.some(problem => bug.match.test(problem)));
         if (problems.some(problem => !known.some(bug => bug.match.test(problem)))) assert.fail(`${name} (${route.url}):\n  ${problems.join("\n  ")}`);
         if (known.length) t.todo(known.map(bug => bug.bug).join("; "));
       });

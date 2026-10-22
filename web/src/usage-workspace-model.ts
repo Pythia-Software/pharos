@@ -95,7 +95,7 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
   if (next.report) params.set("analyze_report", next.report); else params.delete("analyze_report");
   if (mode !== "dashboards") {
     const query = change.query;
-    if (query) params.set(`q_${next.dataset}`, encodeQuery(query));
+    if (query) params.set(`q_${next.dataset}`, encodeQuery({ ...query, fitToScreen: true }));
     else if (next.dataset === previous.dataset && current.has(`q_${next.dataset}`)) params.set(`q_${next.dataset}`, current.get(`q_${next.dataset}`)!);
     if (current.get("window_dataset") === next.dataset) for (const [key, value] of current) if (key.startsWith("window_")) params.set(key, value);
   }

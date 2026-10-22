@@ -177,7 +177,10 @@ const carbon = { factors: carbonFactors, windows: [{ key: "all", tokens: carbonT
 
 const mcpCall = { id: 1, called_at: iso(3600000), tool_name: "search_conversations", arguments_json: '{"query":"parser"}', status: "ok", error_text: null, duration_ms: 18, response_bytes: 900, estimated_output_tokens: 300, result_count: 3, truncated: 0 };
 const toolsStatus = { conversations: 10, current_conversations: 10, pending_conversations: 0, tool_calls: 400, backfill: { running: false, done: 0, total: 0, error: null } };
-const writingCounts = (typed, pasted, harness) => ({ typed_words: typed, pasted_words: pasted, harness_words: harness, words: typed + pasted + harness });
+const writingCounts = (typed, pasted, harness) => ({
+  typed_words: typed, pasted_words: pasted, harness_words: harness, words: typed + pasted + harness,
+  typed_chars: typed * 5, pasted_chars: pasted * 8, harness_chars: harness * 6, total_chars: typed * 5 + pasted * 8 + harness * 6,
+});
 
 export const defaultApi = {
   // Library preferences, saved views and snapshots.
@@ -216,6 +219,7 @@ export const defaultApi = {
     })),
     coverage: { conversations: 2, mirrors_removed: 0, unexplained_waits_excluded: 0, timing: "Captured timing", catalog: "Test catalog" },
   },
+  "GET /api/usage/history": { oldest_conversation_at: iso(180 * day) },
   "GET /api/usage/summary": { generated_at: iso(0), windows: ["1h", "6h", "24h", "7d", "30d", "all"].map((key, index) => ({ key, human_words: 100 * (index + 1), tokens: 1000 * (index + 1), cost_usd: index + 1, co2e_g: { central: 10 * (index + 1) } })), carbon_factors: carbonFactors },
   "GET /api/search/text/options": { providers: ["codex", "claude"], sources: ["conductor"] },
   "POST /api/search/text/validate": ({ body }) => ({ where: body.where ?? { op: ["literal", "regex", "phrase"].includes(body.mode) ? body.mode : "term", text: body.query } }),

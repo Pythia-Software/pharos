@@ -41,6 +41,27 @@ Details use Query Table's native modal and inline expansion, property picker, pe
 
 Source links are real anchors (including modified-click behavior). Exact messages use `message` and, for multi-call envelopes, the provider `call` ID; aggregate time records use `at`, labelled as nearby activity. The reader materializes collapsed/virtualized messages, reveals the selected event, opens ancestors, scrolls and highlights it. Missing identifiers never create a broken `undefined` link. Query-to-query links use explicit identity filters and retain relevant Carbon context.
 
+Analyze's nine ordinary query tables always end with one **Drill in** column per
+destination, then native **Detail**. Human words by conversation exposes work
+and messages separately; tool calls expose call and result messages separately;
+skill evidence exposes evidence, retained body and tool-call details separately.
+Unavailable destinations show a dash in their own column. Saved data columns,
+widths and explicit sorts remain in effect. Query drilldowns specify a sort:
+time ascending within one conversation/work/unit, time descending across a
+population, with identity breaking timestamp ties. Grouped results receive an
+explicit key/summary sort; their Records drilldown also applies the appropriate
+record order. Native Detail for grouped results requires the upstream support
+described in [this handoff](handoffs/query-table-group-detail.md).
+
+Every Analyze query opens with native **Fit All to Screen**, including restored
+queries and drilldowns. The `fitToScreen: true` presentation preference travels
+in the encoded `q_<dataset>` URL parameter and adapts to the viewer's table area
+after loading. Filters, sorts and selected data columns are preserved. Manual
+column sizing can override the fit during the current visit.
+At phone widths, Query Table 0.9.5 can clip native Detail/JSON buttons when
+columns reach its minimum size; [the upstream handoff](handoffs/query-table-fit-screen-controls.md)
+records the reproduction and the scoped browser-test todos.
+
 This is host integration against the published Query Table 0.9.2 release. No dependency patches or generated-bundle edits are involved.
 
 Long tool inputs/results start with a short preview and expand in place, keeping status/timing/context visible before payloads. MCP uses the public native `JsonValueView` with its full tree/search/copy controls inside a property renderer. Nothing changes the library's component implementation. Unrepresented fields and raw payload metadata remain available through the property picker.
