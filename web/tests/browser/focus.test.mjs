@@ -441,7 +441,6 @@ for (const width of [1440, 390]) test(`Optimize pages move keyboard focus to the
   await choose('Table', '.findings-table .qt-row');
   await choose('Dashboard', '.findings-card');
   if (phone) await press(page.locator('#appNavigationToggle'));
-  await press(navigation.getByText('TL1', { exact: true }));
   await press(navigation.getByRole('link', { name: 'Configurations', exact: true }));
   await page.locator('#tl1-matrix').waitFor();
   await page.waitForFunction(() => document.activeElement?.tagName === 'H1');

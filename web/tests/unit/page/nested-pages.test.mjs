@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { localPageNavigation, nestedPageTrail } from "../../../src/nested-pages-model";
-import { appLocation, appLocationLabel, appSections, initialNavigationExpansion, optimizePages, tl1Pages, toggleNavigationSection } from "../../../src/app-navigation-model";
+import { appLocation, appLocationLabel, appSections, isNavigationSectionExpanded, optimizePages, tl1Pages, toggleNavigationSection } from "../../../src/app-navigation-model";
 
 test("the app tree resolves global, nested, and legacy destinations without changing their queries", () => {
   const params = new URLSearchParams('analyze_mode=query&analyze_data=usage&q_usage=saved&analyze_days=7');
@@ -73,27 +73,30 @@ test("navigation and breadcrumbs follow the selected page at any depth", () => {
   assert.equal(nestedPageTrail(pages, "tokens").at(-1).href, "/analyze?analyze_topic=tokens");
   assert.deepEqual(nestedPageTrail(pages, "agents").map(page => page.id), ["settings", "agents"]);
   assert.deepEqual(nestedPageTrail(pages, "missing"), []);
-  const section = { id: "test", label: "Test", href: "/", pages };
-  assert.deepEqual(initialNavigationExpansion(section, "mcp").test, ["settings", "agents"]);
-  assert.deepEqual(initialNavigationExpansion(section, "missing").test, []);
   assert.deepEqual(pages, before);
 });
 
-test("navigation expansion preserves each section's last toggle independently", () => {
-  const section = appSections([], new URLSearchParams(), false).find(section => section.id === "analyze");
-  const initial = initialNavigationExpansion(section, "dashboards:tokens");
-  assert.deepEqual(initial.analyze, ["dashboards"]);
+test("navigation groups default open and preserve each section's last toggle independently", () => {
+  const initial = {};
+  const sections = appSections([], new URLSearchParams(), true);
+  for (const section of sections) {
+    for (const page of section.pages.filter(page => page.children)) {
+      assert.equal(isNavigationSectionExpanded(initial[section.id] ?? {}, page.id), true);
+    }
+  }
 
-  const both = toggleNavigationSection(initial, "analyze", "query");
-  assert.deepEqual(both.analyze, ["dashboards", "query"]);
-  const closed = toggleNavigationSection(both, "analyze", "dashboards");
-  assert.deepEqual(closed.analyze, ["query"]);
-  const elsewhere = toggleNavigationSection(closed, "settings", "query");
-  assert.deepEqual(elsewhere.analyze, ["query"]);
-  assert.deepEqual(elsewhere.settings, ["query"]);
-  assert.deepEqual(toggleNavigationSection(elsewhere, "analyze", "query").analyze, []);
-  assert.deepEqual(toggleNavigationSection(elsewhere, "analyze", "dashboards").analyze, ["query", "dashboards"]);
-  assert.deepEqual(initial.analyze, ["dashboards"], "toggles do not mutate earlier state");
+  const closed = toggleNavigationSection(initial, "analyze", "query");
+  assert.equal(isNavigationSectionExpanded(closed.analyze, "query"), false);
+  assert.equal(isNavigationSectionExpanded(closed.analyze, "dashboards"), true);
+  const elsewhere = toggleNavigationSection(closed, "findings", "findings");
+  assert.equal(isNavigationSectionExpanded(elsewhere.analyze, "query"), false);
+  assert.equal(isNavigationSectionExpanded(elsewhere.findings, "findings"), false);
+  assert.equal(isNavigationSectionExpanded(elsewhere.findings, "tl1"), true, "groups loaded later start open");
+  const reopened = toggleNavigationSection(elsewhere, "analyze", "query");
+  assert.equal(isNavigationSectionExpanded(reopened.analyze, "query"), true);
+  assert.equal(isNavigationSectionExpanded(reopened.findings, "findings"), false);
+  assert.deepEqual(initial, {}, "toggles do not mutate earlier state");
+  assert.equal(isNavigationSectionExpanded(closed.analyze, "query"), false);
 });
 
 test("local page navigation preserves the complete destination and browser link semantics", () => {
