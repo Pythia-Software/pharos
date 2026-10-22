@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Icon } from "./icons";
 import { SearchSelect } from "./search-select";
 import { SearchInput, WrappingInput } from "./search-input";
-import { chooseScope, compileRules, newGroup, newRule, optionScope, optionsInEffect, querySyntax, scopeChoice, scopes, searchRequest, searchSentence, sourceLabel, visualFromQuery, type SentencePart, type RuleKind, type SearchIssue, type TextCondition, type TextGroup, type TextQuery, type TextScope, type TextSearchDraft } from "./text-search-model";
+import { chooseScope, compileRules, newGroup, newRule, optionScope, optionsInEffect, querySyntax, scopeChoice, scopes, searchDateValue, searchDateWindow, searchRequest, searchSentence, sourceLabel, visualFromQuery, withSearchDateComparison, withSearchDateRange, withSearchDateWindow, type SentencePart, type RuleKind, type SearchDateComparison, type SearchIssue, type TextCondition, type TextGroup, type TextQuery, type TextScope, type TextSearchDraft } from "./text-search-model";
 import "./text-search-editor.css";
 
 const EditorDOMPrefix = createContext("");
@@ -190,7 +190,6 @@ async function validate(request: Record<string, unknown>, signal: AbortSignal): 
   return result.where;
 }
 const modes = [["advanced", "Boolean query syntax"], ["terms", "All words, with operators treated as words"], ["phrase", "Whole query as a phrase"], ["literal", "Exact text, including punctuation"], ["regex", "Regular expression (Go / RE2)"]];
-const dateInputType = (value: string) => !value || /^\d{4}-\d{2}-\d{2}$/.test(value) ? "date" : /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(value) ? "datetime-local" : "text";
 const messageFields = [
   { key: "provider", label: "Provider", operator: "is", placeholder: "Provider name" },
   { key: "source", label: "Source", operator: "is", placeholder: "Source name" },
@@ -228,7 +227,8 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
   }, []);
   const dirty = JSON.stringify(draft) !== baseline;
   const patch = (change: Partial<TextSearchDraft>) => { pending.current?.abort(); setBusy(false); setError(""); setShowIssues(true); const next = { ...draft, ...change }; setDraft(next); onDraft?.(next); };
-  const scope = (change: Partial<TextScope>) => patch({ scope: { ...draft.scope, ...change } });
+  const scope = (change: Partial<TextScope>) => patch({ scope: { ...draft.scope, ...change }, ...("from" in change || "to" in change ? { dateWindow: undefined } : {}) });
+  const dateWindow = searchDateWindow(draft);
   const compiled = searchRequest(draft);
   const selectedScope = scopeChoice(draft.scope);
   const issueList = showIssues ? compiled.issues : [];
@@ -275,7 +275,12 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
   const textKind = kind === "text";
   const visualRules = textKind && draft.editor === "visual" && draft.match === "rules";
   const availableFields = recordTarget ? [] : messageFields.filter(field => !fixedContext || !["conversation_id", "workspace_id"].includes(field.key));
-  const visibleFields = availableFields.filter(field => draft.scope[field.key] || addedFields.includes(field.key));
+  const visibleFields = availableFields.filter(field => draft.scope[field.key] || field.key === "from" && dateWindow || addedFields.includes(field.key));
+  const addDateBound = (key: "from" | "to") => {
+    patch(withSearchDateRange(draft));
+    setAddedFields(fields => [...new Set<MessageField>([...fields, "from", "to"])]);
+    requestAnimationFrame(() => document.getElementById(`${filterID}-${key}`)?.focus());
+  };
   const targetDescription = textKind ? selectedScope?.description ?? `Saved message scope: ${draft.scope.surface}. Its role and message-type restrictions appear below.` : kind === "file" ? "Recorded paths and names of modified files, including old paths of renamed files. File contents are not searched." : "URLs recorded in tool activity, by URL or hostname. Page contents are not searched.";
   // The usual target needs no explanation; any other choice says what it covers.
   const defaultScope = allowedScopes?.[0] ?? "prose";
@@ -303,23 +308,32 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
   </div>;
   const filters = <div className="text-query-filters" role="group" aria-label="Additional query filters">
     {textKind ? visibleFields.map(field => {
-      const name = "menu" in field ? field.menu : field.label;
+      const relative = field.key === "from" ? dateWindow : undefined;
+      const name = relative ? "Date last" : "menu" in field ? field.menu : field.label;
       const id = `${filterID}-${field.key}`;
       const value = draft.scope[field.key];
       const options = field.key === "provider" ? choices.providers : field.key === "source" ? choices.sources : undefined;
       const date = field.key === "from" || field.key === "to";
-      const inputType = dateInputType(value);
-      const utcNote = inputType === "date" ? "Dates include the whole day in UTC." : "Timestamps use UTC.";
+      const utcNote = "Dates use UTC. Choosing a date includes the whole day.";
       return <div className="text-filter-condition" key={field.key}>
         <span className="text-join">and</span>
         <div className="text-filter-clause">
-          <label htmlFor={id}>{field.label} <span className="text-filter-operator">{field.operator}</span></label>
+          <label htmlFor={id}>{field.label} {!date ? <span className="text-filter-operator">{field.operator}</span> : null}</label>
+          {field.key === "from" || field.key === "to" ? <SearchSelect aria-label={field.key === "from" ? "Date comparison" : "End date comparison"} value={relative ? "last" : field.key} onChange={event => {
+            const comparison = event.target.value as SearchDateComparison;
+            const target = comparison === "last" ? "from" : comparison;
+            patch(withSearchDateComparison(draft, field.key, comparison));
+            setAddedFields(fields => [...fields.filter(key => key !== field.key), target]);
+            requestAnimationFrame(() => document.getElementById(`${filterID}-${target}`)?.focus());
+          }}><option value="last" disabled={!!draft.scope[field.key === "from" ? "to" : "from"]}>last</option><option value="from" disabled={field.key !== "from" && !!draft.scope.from}>on or after</option><option value="to" disabled={field.key !== "to" && !!draft.scope.to}>on or before</option></SearchSelect> : null}
           {options && !choicesError ? <SearchSelect id={id} aria-label={name} value={value} onChange={e => scope({ [field.key]: e.target.value })}>
             <option value="">Any {field.label.toLowerCase()}</option>
             {Array.from(new Set([...options, ...(value ? [value] : [])])).map(v => <option key={v} value={v}>{sourceLabel(v)}</option>)}
-          </SearchSelect> : date && inputType !== "text" ? <input id={id} aria-label={name} type={inputType} step="any" value={inputType === "datetime-local" ? value.slice(0, -1) : value} aria-invalid={issueList.some(i => i.id === "dates")} aria-describedby={`${filterID}-dates ${id}-utc`} onChange={e => scope({ [field.key]: e.target.value && inputType === "datetime-local" ? new Date(`${e.target.value}Z`).toISOString() : e.target.value })} />
+          </SearchSelect> : relative ? <WrappingInput id={id} aria-label={name} value={relative.duration} placeholder="30d, 7d, 24h" aria-invalid={issueList.some(i => i.id === "dates")} aria-describedby={`${filterID}-dates`} onValue={duration => patch(withSearchDateWindow(draft, duration))} />
+            : date ? <input id={id} aria-label={name} type="date" value={searchDateValue(value)} aria-invalid={issueList.some(i => i.id === "dates")} aria-describedby={`${filterID}-dates ${id}-utc`} onChange={e => scope({ [field.key]: e.target.value })} />
             : <WrappingInput id={id} aria-label={name} value={value} placeholder={field.placeholder} aria-invalid={date && issueList.some(i => i.id === "dates")} aria-describedby={date ? `${filterID}-dates ${id}-utc` : undefined} onValue={text => scope({ [field.key]: text })} />}
-          {date ? <span className="text-filter-note" id={`${id}-utc`} title={utcNote}>UTC<span className="sr-only">: {utcNote}</span></span> : null}
+          {date && !relative ? <span className="text-filter-note" id={`${id}-utc`} title={utcNote}>UTC<span className="sr-only">: {utcNote}</span></span> : null}
+          {date && !visibleFields.some(other => other.key === (field.key === "from" ? "to" : "from")) ? <button type="button" onClick={() => addDateBound(field.key === "from" ? "to" : "from")}><Icon name="plus" />{field.key === "from" ? "Add end date" : "Add start date"}</button> : null}
           {field.key === "from" && !draft.scope.to ? <button type="button" aria-label="Search all time" onClick={() => { scope({ from: "" }); setAddedFields(fields => fields.filter(key => key !== "from")); }}>All time<Icon name="close" /></button>
             : <RemoveButton label={`Remove ${name.toLowerCase()} filter`} onRemove={() => { scope({ [field.key]: "" }); setAddedFields(fields => fields.filter(key => key !== field.key)); }} />}
         </div>
@@ -341,7 +355,10 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
     </div> : null}
   </div>;
   const addToRoot = useAddCondition(draft.root, root => patch({ root }));
-  const addField = (key: MessageField) => { setAddedFields(fields => [...fields, key]); requestAnimationFrame(() => document.getElementById(`${filterID}-${key}`)?.focus()); };
+  const addField = (key: MessageField) => {
+    if ((key === "from" || key === "to") && visibleFields.some(field => field.key === "from" || field.key === "to")) { addDateBound(key); return; }
+    setAddedFields(fields => [...fields, key]); requestAnimationFrame(() => document.getElementById(`${filterID}-${key}`)?.focus());
+  };
   const unusedFields = textKind ? availableFields.filter(field => !visibleFields.includes(field)) : [];
   const addCondition = <SearchPopover label="Add condition" className="text-add-condition" popupClassName="text-add-popup text-filter-popup" triggerContent={<><Icon name="plus" />Add condition</>}>{close => <>
       {visualRules ? <TextChoices add={addToRoot} close={close} /> : null}

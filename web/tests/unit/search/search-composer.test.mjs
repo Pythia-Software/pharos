@@ -9,6 +9,7 @@ test("fresh and restored unused composers start with a removable 30-day message 
  for (const state of [m.freshSearch(schema), m.restoreSearch(new URLSearchParams(), schema)]) {
   assert.ok(Date.parse(state.text.scope.from) >= earliest);
   assert.ok(Date.parse(state.text.scope.from) <= Date.now() - 30 * 86400000);
+  assert.equal(state.text.dateWindow.duration, "30d");
   assert.deepEqual(state.query.where, [], "the date restricts messages rather than workspace activity");
   state.text.root.children[0].text = "cache";
   state.text.scope.from = "";
@@ -59,6 +60,7 @@ test("composer carries scope, exclusions, OR filters, advanced sort and metrics 
  const restored = m.restoreSearch(url.searchParams, schema);
  assert.deepEqual(restored.query, { ...d.query, offset: 0 });
  assert.deepEqual(restored.text.scope, d.text.scope);
+ assert.deepEqual(restored.text.dateWindow, d.text.dateWindow);
  assert.equal(restored.text.root.children[1].exclude, true);
  assert.equal(restored.text.caseSensitive, true);
 });

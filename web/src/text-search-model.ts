@@ -1,3 +1,5 @@
+import { parseRelativeDuration } from "@pythia-software/query-table-core";
+
 // The visual editor produces the engine's typed tree. Text entered into a rule
 // never becomes Boolean syntax, even when it contains AND, OR, or parentheses.
 export type TextQuery = { op: "term" | "phrase" | "prefix" | "and" | "or" | "not" | "near" | "pre" | "literal" | "regex"; text?: string; distance?: number; children?: TextQuery[] };
@@ -6,19 +8,46 @@ export type TextRule = { id: string; kind: RuleKind; text: string; other: string
 export type TextGroup = { id: string; kind: "group"; join: "all" | "any"; children: TextCondition[]; exclude: boolean };
 export type TextCondition = TextRule | TextGroup;
 export type TextScope = { surface: string; roles: string[]; kinds: string[]; repository: string; provider: string; source: string; from: string; to: string; conversation_id: string; workspace_id: string };
-export type TextSearchDraft = { editor: "visual" | "syntax"; match: "rules" | "literal" | "regex"; root: TextGroup; text: string; mode: string; scope: TextScope; fuzzy: boolean; caseSensitive: boolean; separators: boolean };
+export type TextSearchDraft = { editor: "visual" | "syntax"; match: "rules" | "literal" | "regex"; root: TextGroup; text: string; mode: string; scope: TextScope; fuzzy: boolean; caseSensitive: boolean; separators: boolean; dateWindow?: { duration: string; from: string } };
 export type SearchIssue = { id: string; message: string };
 let nextID = 0;
 export const newRule = (text = ""): TextRule => ({ id: `rule-${++nextID}`, kind: "words", text, other: "", distance: "8", exclude: false });
 export const newGroup = (): TextGroup => ({ id: `group-${++nextID}`, kind: "group", join: "all", children: [newRule()], exclude: false });
 export const emptyScope = (): TextScope => ({ surface: "prose", roles: [], kinds: [], repository: "", provider: "", source: "", from: "", to: "", conversation_id: "", workspace_id: "" });
 export const emptyTextSearch = (): TextSearchDraft => ({ editor: "visual", match: "rules", root: newGroup(), text: "", mode: "advanced", scope: emptyScope(), fuzzy: false, caseSensitive: false, separators: false });
-// Resolve the default once for a new Library search. Keeping the timestamp in
-// the draft makes saved links and subsequent cursor batches use the same scope.
+// Keep the relative expression beside its resolved bound so saved links and
+// cursor batches search the same messages while the editor reads "last 30d".
+export function searchDateWindow(draft: TextSearchDraft) {
+  return draft.dateWindow && draft.dateWindow.from === draft.scope.from && !draft.scope.to ? draft.dateWindow : undefined;
+}
+function searchDuration(duration: string): number | null {
+  const offset = parseRelativeDuration(`-${duration.trim()}`);
+  return offset !== null && offset < 0 ? offset : null;
+}
+export function withSearchDateWindow(draft: TextSearchDraft, duration: string, clock = new Date()): TextSearchDraft {
+  const offset = searchDuration(duration);
+  const instant = offset === null ? NaN : clock.getTime() + offset;
+  const from = Number.isFinite(new Date(instant).getTime()) ? new Date(instant).toISOString() : "";
+  return { ...draft, dateWindow: { duration, from }, scope: { ...draft.scope, from, to: "" } };
+}
+export function searchDateValue(value: string): string {
+  if (!value || /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const instant = new Date(value);
+  return Number.isFinite(instant.getTime()) ? instant.toISOString().slice(0, 10) : "";
+}
+export function withSearchDateRange(draft: TextSearchDraft): TextSearchDraft {
+  return { ...draft, dateWindow: undefined, scope: { ...draft.scope, from: searchDateValue(draft.scope.from), to: searchDateValue(draft.scope.to) } };
+}
+export type SearchDateComparison = "last" | "from" | "to";
+export function withSearchDateComparison(draft: TextSearchDraft, field: "from" | "to", comparison: SearchDateComparison, clock = new Date()): TextSearchDraft {
+  const other = field === "from" ? "to" : "from";
+  // A comparison changes this bound; it must not replace a second bound.
+  if (comparison !== field && draft.scope[other]) return draft;
+  if (comparison === "last") return withSearchDateWindow(draft, "30d", clock);
+  return { ...draft, dateWindow: undefined, scope: { ...draft.scope, [field]: "", [comparison]: searchDateValue(draft.scope[field]) } };
+}
 export function newKeywordSearch(clock = new Date()): TextSearchDraft {
-  const draft = emptyTextSearch();
-  draft.scope.from = new Date(clock.getTime() - 30 * 86400000).toISOString();
-  return draft;
+  return withSearchDateWindow(emptyTextSearch(), "30d", clock);
 }
 export const ruleLabels: Record<RuleKind, string> = { words: "All of these words", anyWords: "Any of these words", phrase: "This phrase", prefix: "A word beginning with", near: "Two phrases near each other", pre: "Two phrases in this order" };
 export const scopes = [
@@ -98,6 +127,8 @@ export function searchRequest(draft: TextSearchDraft): { request?: Record<string
   else if (!draft.text.trim()) issues.push({ id: "text", message: "Enter the text to find." });
   else if (draft.editor === "visual") where = { op: draft.match === "literal" ? "literal" : "regex", text: draft.text };
   if (/^\d{4}-\d{2}-\d{2}$/.test(draft.scope.from) && /^\d{4}-\d{2}-\d{2}$/.test(draft.scope.to) && draft.scope.from > draft.scope.to) issues.push({ id: "dates", message: "The end date must be on or after the start date." });
+  const window = searchDateWindow(draft);
+  if (window && (searchDuration(window.duration) === null || !window.from)) issues.push({ id: "dates", message: "Enter a duration such as 30d, 7d, or 24h." });
   if (issues.length) return { issues };
   const { roles, kinds, ...filters } = draft.scope;
   return { request: { ...(where ? { where } : { query: draft.text, mode: draft.mode }), ...filters, ...(roles.length ? { roles } : {}), ...(kinds.length ? { kinds } : {}), ...(({ fuzzy, caseSensitive, separators }) => ({ fuzzy, case_sensitive: caseSensitive, separators }))(optionsInEffect(draft)) }, issues };
@@ -132,7 +163,7 @@ export const textSearchSummary = (d: TextSearchDraft) => `${scopeChoice(d.scope)
 // A plain-English reading of a search, shown while it is composed. Values are
 // marked so the reading can set them apart from its connecting words.
 export type SentencePart = string | { value: string };
-export type SentenceContext = { kind?: "text" | "file" | "url"; file?: string; fileCase?: boolean; workspace?: (string | SentencePart[])[]; workspaceLead?: string; fixedContext?: boolean };
+export type SentenceContext = { kind?: "text" | "file" | "url"; file?: string; fileCase?: boolean; workspace?: (string | SentencePart[])[]; workspaceLead?: string; fixedContext?: boolean; hideDefaultDate?: boolean };
 export const sentenceText = (parts: SentencePart[]) => parts.map(part => typeof part === "string" ? part : part.value).join("");
 const quote = (text: string) => ({ value: `“${text.trim()}”` });
 function listParts(items: SentencePart[][], word: "and" | "or"): SentencePart[] {
@@ -168,7 +199,11 @@ export function searchSentence(d: TextSearchDraft, context: SentenceContext = {}
     if (s.provider) filters.push(["from ", { value: sourceLabel(s.provider) }]);
     if (s.source) filters.push(["recorded by ", { value: sourceLabel(s.source) }]);
     if (s.repository) filters.push(["in repositories matching ", quote(s.repository)]);
-    if (s.from && s.to) filters.push(["between ", { value: day(s.from) }, " and ", { value: day(s.to) }]);
+    const window = searchDateWindow(d);
+    if (window) {
+      if (!context.hideDefaultDate || searchDuration(window.duration) !== -30 * 86400000) filters.push(["in the last ", { value: window.duration }]);
+    }
+    else if (s.from && s.to) filters.push(["between ", { value: day(s.from) }, " and ", { value: day(s.to) }]);
     else if (s.from) filters.push(["on or after ", { value: day(s.from) }]);
     else if (s.to) filters.push(["on or before ", { value: day(s.to) }]);
     if (!context.fixedContext && s.conversation_id) filters.push(["in conversation ", { value: s.conversation_id }]);
@@ -245,6 +280,11 @@ export function readTextSearch(params: URLSearchParams, clock = new Date()): { d
       const root = restore(value.root);
       if (root.kind !== "group" || root.exclude) throw new Error();
       const restored: TextSearchDraft = { editor: value.editor, match: value.match, text: value.text, mode: value.mode, scope, root, fuzzy: value.fuzzy === true, caseSensitive: value.caseSensitive === true, separators: value.separators === true };
+      if (value.dateWindow !== undefined) {
+        if (!value.dateWindow || typeof value.dateWindow.duration !== "string" || typeof value.dateWindow.from !== "string") throw new Error();
+        restored.dateWindow = { duration: value.dateWindow.duration, from: value.dateWindow.from };
+        if (!searchDateWindow(restored)) delete restored.dateWindow;
+      }
       if (!searchRequest(restored).request) throw new Error();
       return { draft: restored, active: true, error: "" };
     } catch { return { draft, active: false, error: "This saved search could not be opened. Edit the rules below and search again. The table is currently unfiltered by text." }; }
@@ -252,7 +292,10 @@ export function readTextSearch(params: URLSearchParams, clock = new Date()): { d
   const query = params.get("search") ?? "";
   // Saved builders (including an explicitly cleared date) and legacy searches
   // keep their scope. Only an unused keyword editor gets the new default.
-  if (!query && !params.has("text_from") && !params.has("text_to")) draft.scope.from = newKeywordSearch(clock).scope.from;
+  if (!query && !params.has("text_from") && !params.has("text_to")) {
+    const fresh = newKeywordSearch(clock);
+    draft.scope.from = fresh.scope.from; draft.dateWindow = fresh.dateWindow;
+  }
   // Legacy links omitted fuzzy when it was on; only fuzzy=0 opted out.
   // Empty/new drafts still start with variations off, as do new saved rules.
   draft.fuzzy = params.has("fuzzy") ? params.get("fuzzy") !== "0" : !!query;
