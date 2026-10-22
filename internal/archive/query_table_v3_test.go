@@ -290,30 +290,27 @@ func TestQueryV3IncompleteLibrarySearchWithFormula(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			options.WorkspaceRows = true
 			options.Search.WorkspaceIDs = []string{"b", "c"}
 			encoded, _ := json.Marshal(options)
-			generation, err := catalog.catalogVersion(ctx)
+			generation, err := catalog.libraryFindVersion(ctx, options)
 			if err != nil {
 				t.Fatal(err)
 			}
 			// Reproduce both search stop conditions without generating thousands of
-			// duplicate messages: execution must retain the partial page and metadata.
+			// duplicate messages: incomplete populations must not be sorted or counted.
 			set := &libraryFindSet{matches: map[string]*libraryFindMatch{"c": {Count: 1}}, limited: scenario == "limited"}
 			if scenario == "incomplete" {
 				set.search = textSearchResult{Strategy: "indexed", Complete: false, StopReason: "candidate_limit"}
 			}
 			catalog.find.mu.Lock()
-			catalog.find.version = generation
+			set.cacheVersion = generation
 			catalog.find.entries = map[string]*libraryFindSet{string(encoded): set}
 			catalog.find.mu.Unlock()
 			q := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: true,
 				Source: qt.WireQuery{}, Result: qt.WireQuery{Select: []string{"title", "@computed/constant"}, Limit: 10}, ExpectedRevisions: map[string]string{column.ID: column.Revision}}
-			result, summary, err := server.executeQueryV3(ctx, "library", params, PharosLibrarySchema(), q)
-			if err != nil || len(result.Rows) != 1 || result.Rows[0]["@computed/constant"] != float64(2) || summary == nil {
-				t.Fatalf("result=%#v find=%#v err=%v", result, summary, err)
-			}
-			if scenario == "limited" && !summary.Limited || scenario == "incomplete" && (summary.Search == nil || summary.Search.Complete) {
-				t.Fatal(summary)
+			if _, _, err := server.executeQueryV3(ctx, "library", params, PharosLibrarySchema(), q); err == nil || !strings.Contains(err.Error(), "search is incomplete") {
+				t.Fatalf("incomplete workspace search: %v", err)
 			}
 			q.Grouping = &qt.GroupingDefinition{Keys: []string{"source_kind"}, Summaries: []qt.SummaryColumn{{ID: "records", Op: "count"}}}
 			q.Result = qt.WireQuery{Select: []string{"source_kind", "records"}, Limit: 10}

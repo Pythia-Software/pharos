@@ -44,7 +44,7 @@ func (c *searchHookConn) QueryContext(ctx context.Context, query string, args []
 			return nil, err
 		}
 	}
-	candidate := strings.Contains(query, "CASE WHEN length(CAST(m.text AS BLOB))")
+	candidate := strings.Contains(query, "AS search_body")
 	if candidate && c.hooks.query != nil {
 		if err := c.hooks.query(ctx); err != nil {
 			return nil, err
@@ -265,8 +265,10 @@ func TestTextSearchSlowGenerationCheck(t *testing.T) {
 	override(t, &textSearchCheckTimeout, 10*time.Millisecond)
 	var stall atomic.Bool
 	var reads atomic.Int64
+	var stallAt atomic.Int64
+	stallAt.Store(2)
 	hookTextSearchGeneration(t, c, func(ctx context.Context) error {
-		if reads.Add(1)%2 == 0 && stall.Load() {
+		if reads.Add(1) == stallAt.Load() && stall.Load() {
 			<-ctx.Done()
 			return ctx.Err()
 		}
@@ -286,6 +288,8 @@ func TestTextSearchSlowGenerationCheck(t *testing.T) {
 		t.Fatalf("unconfirmed page not withheld: %+v", result)
 	}
 	find := LibraryFindOptions{Query: "cache", Search: TextSearchOptions{TimeoutMS: 300}}
+	// Library's cache-generation read precedes the search's two reads.
+	stallAt.Store(reads.Load() + 3)
 	set, err := c.libraryFindMatches(t.Context(), find)
 	if err != nil || len(set.matches) != 0 || !set.limited || set.search.StopReason != "consistency_check_timeout" {
 		t.Fatalf("Library Find did not withhold the page: %+v %v", set, err)
@@ -337,5 +341,31 @@ func TestTextSearchCursorTriggerUpgrade(t *testing.T) {
 	o.Cursor, o.Limit = first.NextCursor, 50
 	if rest, err := c.SearchText(t.Context(), o); err != nil || !rest.Complete || rest.Count != 3 {
 		t.Fatalf("legacy triggers still invalidate continuation: %+v %v", rest, err)
+	}
+}
+
+func TestTextSearchSparseRolesResumeRejectedPostings(t *testing.T) {
+	c := textFixture(t)
+	options := TextSearchOptions{Query: "race", Surface: "all", Roles: []string{"assistant"}, MaxCandidates: 1}
+	first, err := c.SearchText(t.Context(), options)
+	if err != nil || len(first.Items) != 0 || first.Count != 0 || first.NextCursor == "" || first.Candidates != 1 || first.VerifiedBytes != 0 {
+		t.Fatalf("rejected role did not advance: %+v %v", first, err)
+	}
+	options.Cursor = first.NextCursor
+	ids := []string{}
+	var last textSearchResult
+	for page := 0; page < 10; page++ {
+		last, err = c.SearchText(t.Context(), options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, resultIDs(last)...)
+		if last.NextCursor == "" {
+			break
+		}
+		options.Cursor = last.NextCursor
+	}
+	if !last.Complete || last.Count != 1 || len(ids) != 1 || ids[0] != "b" {
+		t.Fatalf("role pagination lost matches: %v %+v", ids, last)
 	}
 }
