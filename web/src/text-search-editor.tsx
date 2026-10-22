@@ -9,8 +9,8 @@ import "./text-search-editor.css";
 const EditorDOMPrefix = createContext("");
 const shortRuleLabels: Record<RuleKind, string> = { words: "All words", anyWords: "Any word", phrase: "Phrase", prefix: "Word starts with", near: "Phrases near", pre: "Phrases in order" };
 const ruleHelp: Record<RuleKind, string> = {
-  words: "Each word must appear somewhere in the same message or chosen text span. Type ordinary words; AND, OR, quotes, and parentheses are not commands here.",
-  anyWords: "At least one of these words must appear in the message or chosen text span.",
+  words: "Each word must appear somewhere in the same searched text. Type ordinary words; AND, OR, quotes, and parentheses are not commands here.",
+  anyWords: "At least one of these words must appear in the searched text.",
   phrase: "These words stay together, in this order. No quotation marks needed.",
   prefix: "Matches word beginnings, such as migrat matching migration. No * symbol needed.",
   near: "Both phrases must appear within the chosen number of words, in either order.",
@@ -203,7 +203,7 @@ const messageFields = [
 type MessageField = typeof messageFields[number]["key"];
 export type LibrarySearchKind = "text" | "file" | "url";
 type FileSearch = { text: string; caseSensitive: boolean; active: boolean; dirty: boolean; onText: (text: string) => void; onCase: (checked: boolean) => void; onApply: () => void; onClear: () => void };
-export function TextSearchEditor({ value, active, initialError, onApply, onClear, kind, onKind, file, workspaceScope, orderControl, onDraft, context, textOnly = false, fixedContext = false, filterError, allowedScopes, compact = false, sentence = true }: { onDraft?: (draft: TextSearchDraft) => void; context?: React.ReactNode; textOnly?: boolean; fixedContext?: boolean; filterError?: string; allowedScopes?: string[]; compact?: boolean; sentence?: boolean; value: TextSearchDraft; active: boolean; initialError?: string; onApply: (value: TextSearchDraft) => void; onClear: () => void; kind: LibrarySearchKind; onKind: (kind: LibrarySearchKind) => void; file: FileSearch; workspaceScope: { filters: string[]; reading?: SentencePart[][]; editor?: React.ReactNode; inline?: React.ReactNode; add?: React.ReactNode; caption?: string; sentenceLead?: string }; orderControl: React.ReactNode }) {
+export function TextSearchEditor({ value, active, initialError, onApply, onClear, kind, onKind, file, workspaceScope, orderControl, onDraft, context, recordTarget, textOnly = false, fixedContext = false, filterError, allowedScopes, compact = false, sentence = true }: { onDraft?: (draft: TextSearchDraft) => void; context?: React.ReactNode; recordTarget?: React.ReactNode; textOnly?: boolean; fixedContext?: boolean; filterError?: string; allowedScopes?: string[]; compact?: boolean; sentence?: boolean; value: TextSearchDraft; active: boolean; initialError?: string; onApply: (value: TextSearchDraft) => void; onClear: () => void; kind: LibrarySearchKind; onKind: (kind: LibrarySearchKind) => void; file: FileSearch; workspaceScope: { filters: string[]; reading?: SentencePart[][]; editor?: React.ReactNode; inline?: React.ReactNode; add?: React.ReactNode; caption?: string; sentenceLead?: string }; orderControl: React.ReactNode }) {
   const domPrefix = useId();
   const [draft, setDraft] = useState(value);
   const [addedFields, setAddedFields] = useState<MessageField[]>([]);
@@ -221,6 +221,7 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
   const baseline = JSON.stringify(value);
   useEffect(() => { if (value === draft && !initialError) return; pending.current?.abort(); setBusy(false); setDraft(value); if (value.root.id !== draft.root.id) setAddedFields([]); setError(initialError ?? ""); setShowIssues(false); }, [value, initialError]);
   useEffect(() => {
+    if (recordTarget) return () => pending.current?.abort();
     const controller = new AbortController();
     fetch("/api/search/text/options", { signal: controller.signal }).then(async response => { if (!response.ok) throw new Error(); return response.json(); }).then(setChoices).catch(() => { if (!controller.signal.aborted) setChoicesError(true); });
     return () => { controller.abort(); pending.current?.abort(); };
@@ -273,17 +274,17 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
   };
   const textKind = kind === "text";
   const visualRules = textKind && draft.editor === "visual" && draft.match === "rules";
-  const availableFields = messageFields.filter(field => !fixedContext || !["conversation_id", "workspace_id"].includes(field.key));
+  const availableFields = recordTarget ? [] : messageFields.filter(field => !fixedContext || !["conversation_id", "workspace_id"].includes(field.key));
   const visibleFields = availableFields.filter(field => draft.scope[field.key] || addedFields.includes(field.key));
   const targetDescription = textKind ? selectedScope?.description ?? `Saved message scope: ${draft.scope.surface}. Its role and message-type restrictions appear below.` : kind === "file" ? "Recorded paths and names of modified files, including old paths of renamed files. File contents are not searched." : "URLs recorded in tool activity, by URL or hostname. Page contents are not searched.";
   // The usual target needs no explanation; any other choice says what it covers.
   const defaultScope = allowedScopes?.[0] ?? "prose";
   const sameSpan = textKind ? scopes.slice(8).some(s => s.id === selectedScope?.id) ? "All conditions apply within the same classified span." : "All text conditions apply within the same message." : "";
-  const targetNote = textKind && selectedScope?.id === defaultScope ? "" : `${targetDescription} ${sameSpan}`.trim();
+  const targetNote = recordTarget ? "All conditions match within the selected field of the same source record." : textKind && selectedScope?.id === defaultScope ? "" : `${targetDescription} ${sameSpan}`.trim();
   const heading = <div className="text-group-heading text-query-heading">
     <span className="text-join">Find</span>
     <span className="text-query-subject">
-      <SearchSelect aria-label="Search target" title={targetDescription} aria-describedby={`${filterID}-target`} value={textKind ? selectedScope?.id ?? "custom" : kind} onChange={event => {
+      {recordTarget ?? <SearchSelect aria-label="Search target" title={targetDescription} aria-describedby={`${filterID}-target`} value={textKind ? selectedScope?.id ?? "custom" : kind} onChange={event => {
         const target = event.target.value;
         if (target === "file" || target === "url") onKind(target);
         else { patch({ scope: chooseScope(draft.scope, target) }); onKind("text"); }
@@ -292,7 +293,7 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
         <optgroup label="Messages">{scopes.slice(0, 8).filter(s => !allowedScopes || allowedScopes.includes(s.id)).map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</optgroup>
         <optgroup label="Parts of user messages">{scopes.slice(8).filter(s => !allowedScopes || allowedScopes.includes(s.id)).map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</optgroup>
         {!textOnly ? <optgroup label="Files and links"><option value="file">Modified files</option><option value="url">Tool URLs</option></optgroup> : null}
-      </SearchSelect>
+      </SearchSelect>}
     </span>
     {textKind ? <div className="text-editor-tabs" role="group" aria-label="Search editor">
       <button type="button" aria-label="Visual editor" aria-pressed={draft.editor === "visual"} disabled={busy} onClick={() => { if (draft.editor !== "visual") void editRules(); }}>Rules</button>
@@ -359,7 +360,7 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
     <label className="text-option-mode">{draft.editor === "visual" ? <>Match using<SearchSelect value={draft.match} aria-label="Match using" onChange={e => patch({ match: e.target.value as TextSearchDraft["match"] })}><option value="rules">Words & phrases</option><option value="literal">Exact text</option><option value="regex">Regular expression</option></SearchSelect></> : <>Query format<SearchSelect aria-label="Query format" value={draft.mode} onChange={e => patch({ mode: e.target.value })}>{modes.map(([mode, label]) => <option key={mode} value={mode}>{label}</option>)}</SearchSelect></>}</label>
     <MatchOption label="Match letter case" help="Uppercase and lowercase must match, so Cache won't match cache." checked={draft.caseSensitive} change={caseSensitive => patch({ caseSensitive })} />
     <MatchOption label="Keep phrase punctuation and spacing" help="Phrases keep the punctuation and spacing between their words. Exact text and regular expressions always do." checked={draft.separators} change={separators => patch({ separators })} disabled={!applies.separators} />
-    <MatchOption label="Include word variations" help="Also match related word forms and close spellings. Applies to word rules only." checked={draft.fuzzy} change={fuzzy => patch({ fuzzy })} disabled={!applies.fuzzy} />
+    {!recordTarget ? <MatchOption label="Include word variations" help="Also match related word forms and close spellings. Applies to word rules only." checked={draft.fuzzy} change={fuzzy => patch({ fuzzy })} disabled={!applies.fuzzy} /> : null}
   </> : <MatchOption label="Match letter case" help="Uppercase and lowercase must match exactly in file paths or URLs." checked={file.caseSensitive} change={file.onCase} />}</SearchPopover>;
   const patternCaption = draft.editor === "syntax" ? `${modes.find(([mode]) => mode === draft.mode)?.[1] ?? "Query syntax"}. Choose Rules to edit a supported query as conditions.` : draft.match === "literal" ? "Exact text, kept as typed: no quotes or escaping needed" : "Regular expression (Go / RE2), checked before searching"
   const reading = searchSentence(draft, { kind, file: file.text, fileCase: file.caseSensitive, workspace: workspaceScope.reading ?? workspaceScope.filters, workspaceLead: workspaceScope.sentenceLead, fixedContext });
@@ -404,7 +405,7 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
         <div className="text-submit-actions">
           {(textKind ? dirty : file.dirty) ? <p className="text-draft-status" role="status">Changes haven't been searched yet.</p> : null}
           {(textKind ? active : file.active) ? <button type="button" onClick={() => { pending.current?.abort(); if (textKind) onClear(); else file.onClear(); }}>Clear</button> : null}
-          <button className="text-search-submit" type="submit" disabled={!!filterError || (textKind ? busy || !compiled.request : !file.text.trim())}><Icon name="search" />{textKind ? busy ? "Checking…" : "Search messages" : "Search"}</button>
+          <button className="text-search-submit" type="submit" disabled={!!filterError || (textKind ? busy || !compiled.request : !file.text.trim())}><Icon name="search" />{textKind ? busy ? "Checking…" : recordTarget ? "Apply keyword filter" : "Search messages" : "Search"}</button>
         </div>
       </div>
     </form>

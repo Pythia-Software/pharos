@@ -451,3 +451,24 @@ test("the expanded feedback panel stays inside a 360px viewport", { skip }, asyn
   const box = await onScreen(page.locator(".feedback-toolbar"));
   assert.equal(box, true, `expanded toolbar at [${box}] in 360×420`);
 });
+
+test('Analyze record keyword editor keeps focus through apply, edit and cancel', { skip }, async t => {
+  const { page, settled, shot } = await open(t, { url:'/analyze?analyze_mode=query&analyze_data=tool_calls',ready:'.usage-workspace-table .qt-qb' });
+  const opener=page.getByRole('button',{name:/^Add keyword filter for /});
+  await press(opener);
+  const dialog=page.locator('.explore-search-modal');
+  await dialog.waitFor();
+  await page.waitForFunction(element=>element.contains(document.activeElement),await dialog.elementHandle());
+  await dialog.getByRole('textbox',{name:'Text for rule 1.1',exact:true}).fill('target');
+  await shot('keyword-draft');
+  await dialog.getByRole('button',{name:'Apply keyword filter',exact:true}).click();
+  await dialog.waitFor({state:'hidden'});
+  const edit=page.getByRole('button',{name:/^Edit keyword filter for /});
+  await edit.waitFor();
+  await page.waitForFunction(element=>element===document.activeElement,await edit.elementHandle());
+  await settled();
+  await press(edit);
+  await dialog.waitFor();
+  await holdsFocus(page,dialog,edit);
+  await shot('keyword-applied');
+});

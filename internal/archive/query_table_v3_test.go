@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -319,4 +320,200 @@ func TestQueryV3IncompleteLibrarySearchWithFormula(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestQueryV3RecordKeywordsUseIndividualRecordsBeforeGrouping(t *testing.T) {
+	c, config := testCatalog(t)
+	seedToolCalls(t, c, 5)
+	commands := []string{"cache migration", "buffer migration", "cache obsolete", "migration only", "CAFÉ deploy"}
+	tx, err := c.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, command := range commands {
+		if _, err := tx.Exec("UPDATE tool_calls SET command=?,tool_name=?,status='ok',workspace_id='ws-0' WHERE id=?", command, []string{"A", "B", "C", "D", "E"}[i], fmt.Sprint("call-", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	s := testServer(t, config, c)
+	schema, _ := sqliteQuerySchema("tool_calls")
+	params := func(spec recordSearchSpec) url.Values {
+		t.Helper()
+		raw, err := json.Marshal(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return url.Values{"record_search": {string(raw)}}
+	}
+	q := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: true,
+		Result:  qt.WireQuery{Select: []string{"id", "tool_name"}, OrderBy: qt.OrderBys{{Field: "id", Dir: "asc"}}, Limit: 50},
+		Metrics: []qt.AggSpec{{ID: "n", Op: "count"}}}
+	for _, test := range []struct {
+		query string
+		want  []string
+	}{
+		{`(cache OR buffer) NOT obsolete`, []string{"call-0", "call-1"}},
+		{`cache AND migration`, []string{"call-0"}},
+		{`"cache migration"`, []string{"call-0"}},
+		{`migrat*`, []string{"call-0", "call-1", "call-3"}},
+		{`cache PRE/0 migration`, []string{"call-0"}},
+		{`migration NEAR/0 buffer`, []string{"call-1"}},
+		{`cafe`, []string{"call-4"}},
+		{`no-such-record`, []string{}},
+	} {
+		t.Run(test.query, func(t *testing.T) {
+			got, _, err := s.executeQueryV3(t.Context(), "tool_calls", params(recordSearchSpec{Field: "command", Query: test.query}), schema, q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids := []string{}
+			for _, row := range got.Rows {
+				ids = append(ids, firstString(row["id"]))
+			}
+			if !reflect.DeepEqual(ids, test.want) || got.Total != int64(len(test.want)) || got.Metrics[0].Buckets[0].Value != float64(len(test.want)) {
+				t.Fatalf("rows=%v total=%d metrics=%+v", ids, got.Total, got.Metrics)
+			}
+		})
+	}
+	search := params(recordSearchSpec{Field: "command", Query: `(cache OR buffer) NOT obsolete`})
+	q.Result.Limit = 1
+	got, _, err := s.executeQueryV3(t.Context(), "tool_calls", search, schema, q)
+	if err != nil || len(got.Rows) != 1 || got.Total != 2 || got.Metrics[0].Buckets[0].Value != float64(2) {
+		t.Fatalf("limit changed population: %+v %v", got, err)
+	}
+	grouped := groupRequest("status", qt.SummaryColumn{ID: "calls", Op: "count"})
+	grouped.Source.Where = []qt.WhereTerm{{Field: "tool_name", Op: "!=", Value: "B"}}
+	grouped.Result.Where = []qt.WhereTerm{{Field: "calls", Op: ">", Value: "0"}}
+	got, _, err = s.executeQueryV3(t.Context(), "tool_calls", search, schema, grouped)
+	if err != nil || len(got.Rows) != 1 || got.Rows[0]["calls"] != float64(1) {
+		t.Fatalf("source WHERE/grouping/HAVING: %+v %v", got, err)
+	}
+	w := apiCall(t, s, config.APIToken, http.MethodGet, "/api/query/tool_calls/distinct?field=tool_name&"+search.Encode(), nil)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"A"`) || !strings.Contains(w.Body.String(), `"B"`) || strings.Contains(w.Body.String(), `"C"`) {
+		t.Fatalf("metadata ignored search: %d %s", w.Code, w.Body.String())
+	}
+	for _, path := range []string{"/api/query/tool_calls", "/api/query/tool_calls/rows-v2", "/api/query/tool_calls/metrics"} {
+		response := apiCall(t, s, config.APIToken, http.MethodPost, path+"?"+search.Encode(), map[string]any{})
+		if response.Code != 400 || !strings.Contains(response.Body.String(), "requires query-v3") {
+			t.Fatalf("older protocol ignored keywords: %d %s", response.Code, response.Body.String())
+		}
+	}
+	for _, spec := range []recordSearchSpec{{Field: "command", Query: "[", Mode: "regex"}, {Field: "duration_ms", Query: "cache"}, {Field: "command", Query: "cache", Where: &textQuery{Op: "term", Text: "cache"}}} {
+		if _, _, err := s.executeQueryV3(t.Context(), "tool_calls", params(spec), schema, q); err == nil {
+			t.Fatalf("accepted invalid record search: %+v", spec)
+		}
+	}
+	t.Run("excluded commands do not consume regex budget", func(t *testing.T) {
+		override(t, &recordSearchMaxRegexWork, 1024)
+		tx := seedTx(t, c.DB)
+		if _, err := tx.Exec("UPDATE tool_calls SET command=?,status='error',duration_ms=0 WHERE id='call-1'", strings.Repeat("a", 256)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec("UPDATE tool_calls SET command='a0123456789cache',duration_ms=10 WHERE id='call-0'"); err != nil {
+			t.Fatal(err)
+		}
+		commitSeed(t, tx)
+		column, err := (qt.SQLiteComputedColumnStore{DB: c.DB}).Save(t.Context(), queryTableScope, schema.Name, qt.SaveComputedColumnRequest{Column: qt.ComputedColumn{
+			ID: "duration", Label: "Duration", Expression: qt.ComputedExpression{Language: "qt-expr", Version: 1, Source: "[duration_ms]"},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		search := params(recordSearchSpec{Field: "command", Query: `a.{10}cache`, Mode: "regex"})
+		for _, filter := range []struct {
+			name  string
+			where []qt.WhereTerm
+		}{
+			{"status", []qt.WhereTerm{{Field: "status", Op: "=", Value: "ok"}}},
+			{"indexed source parameters", []qt.WhereTerm{{Field: "workspace_id", Op: "=", Value: "ws-0"}, {Field: "status", Op: "=", Value: "ok"}}},
+			{"OR", []qt.WhereTerm{{Any: []qt.WhereClause{{Field: "status", Op: "=", Value: "ok"}, {Field: "tool_name", Op: "=", Value: "absent"}}}}},
+			{"negated", []qt.WhereTerm{{Field: "status", Op: "=", Value: "error", Negated: true}}},
+			{"computed", []qt.WhereTerm{{Field: "@computed/duration", Op: ">", Value: "0"}}},
+		} {
+			t.Run(filter.name, func(t *testing.T) {
+				rows := q
+				rows.Result.Where = filter.where
+				rows.ExpectedRevisions = map[string]string{column.ID: column.Revision}
+				got, _, err := s.executeQueryV3(t.Context(), "tool_calls", search, schema, rows)
+				if err != nil || got.Total != 1 || len(got.Rows) != 1 || got.Rows[0]["id"] != "call-0" || got.Metrics[0].Buckets[0].Value != float64(1) {
+					t.Fatalf("filtered rows and metrics: %+v %v", got, err)
+				}
+				rows.Rows = false
+				got, _, err = s.executeQueryV3(t.Context(), "tool_calls", search, schema, rows)
+				if err != nil || got.Total != 1 || len(got.Rows) != 0 || got.Metrics[0].Buckets[0].Value != float64(1) {
+					t.Fatalf("filtered metrics without rows: %+v %v", got, err)
+				}
+				groups := groupRequest("status", qt.SummaryColumn{ID: "calls", Op: "count"})
+				groups.Source.Where = filter.where
+				groups.ExpectedRevisions = rows.ExpectedRevisions
+				groups.Result.Where = []qt.WhereTerm{{Field: "calls", Op: ">", Value: "0"}}
+				groups.Metrics = []qt.AggSpec{{ID: "n", Op: "sum", Field: "calls"}}
+				got, _, err = s.executeQueryV3(t.Context(), "tool_calls", search, schema, groups)
+				if err != nil || got.SourceTotal != 1 || got.Total != 1 || len(got.Rows) != 1 || got.Rows[0]["calls"] != float64(1) || got.Metrics[0].Buckets[0].Value != float64(1) {
+					t.Fatalf("filtered groups and metrics: %+v %v", got, err)
+				}
+			})
+		}
+		if _, _, err := s.executeQueryV3(t.Context(), "tool_calls", search, schema, q); err == nil || !strings.Contains(err.Error(), "search work budget") {
+			t.Fatalf("included command must still enforce regex budget: %v", err)
+		}
+	})
+}
+
+func TestQueryV3RecordKeywordsOnMapRowsAndMatchingOptions(t *testing.T) {
+	c, config := testCatalog(t)
+	if _, err := c.DB.Exec(`INSERT INTO mcp_calls(called_at,tool_name,status,duration_ms,response_bytes,estimated_output_tokens) VALUES
+	 ('2026-10-01','Search_Cache','ok',0,0,0),('2026-10-01','cache migration','ok',0,0,0),('2026-10-01','cache-migration','ok',0,0,0)`); err != nil {
+		t.Fatal(err)
+	}
+	s := testServer(t, config, c)
+	v3Schema, err := sqliteQuerySchema("mcp_calls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: true, Result: qt.WireQuery{Select: []string{"tool_name"}, Limit: 50}}
+	for _, test := range []struct {
+		spec  recordSearchSpec
+		count int64
+	}{
+		{recordSearchSpec{Field: "tool_name", Query: "search_cache", Mode: "literal"}, 1},
+		{recordSearchSpec{Field: "tool_name", Query: "search_cache", Mode: "literal", CaseSensitive: true}, 0},
+		{recordSearchSpec{Field: "tool_name", Query: `cache.migration`, Mode: "regex"}, 2},
+		{recordSearchSpec{Field: "tool_name", Query: `"cache migration"`}, 2},
+		{recordSearchSpec{Field: "tool_name", Query: `"cache migration"`, Separators: true}, 1},
+	} {
+		raw, _ := json.Marshal(test.spec)
+		result, _, err := s.executeQueryV3(t.Context(), "mcp_calls", url.Values{"record_search": {string(raw)}}, v3Schema, q)
+		if err != nil || result.Total != test.count {
+			t.Fatalf("spec=%+v result=%+v err=%v", test.spec, result, err)
+		}
+	}
+	t.Run("excluded map rows do not consume text budget", func(t *testing.T) {
+		override(t, &recordSearchMaxTextBytes, 64)
+		if _, err := c.DB.Exec("INSERT INTO mcp_calls(called_at,tool_name,status,duration_ms,response_bytes,estimated_output_tokens) VALUES('2026-10-01',?,'error',0,0,0)", strings.Repeat("cache ", 16)); err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(recordSearchSpec{Field: "tool_name", Query: "cache"})
+		search := url.Values{"record_search": {string(raw)}}
+		rows := q
+		rows.Result.Where = []qt.WhereTerm{{Field: "status", Op: "=", Value: "ok"}}
+		rows.Result.Limit = 1
+		rows.Metrics = []qt.AggSpec{{ID: "n", Op: "count"}}
+		got, _, err := s.executeQueryV3(t.Context(), "mcp_calls", search, v3Schema, rows)
+		if err != nil || got.Total != 3 || len(got.Rows) != 1 || got.Metrics[0].Buckets[0].Value != float64(3) {
+			t.Fatalf("filtered map rows and metrics: %+v %v", got, err)
+		}
+		groups := groupRequest("status", qt.SummaryColumn{ID: "calls", Op: "count"})
+		groups.Source.Where = rows.Result.Where
+		got, _, err = s.executeQueryV3(t.Context(), "mcp_calls", search, v3Schema, groups)
+		if err != nil || got.SourceTotal != 3 || got.Total != 1 || len(got.Rows) != 1 || got.Rows[0]["calls"] != float64(3) {
+			t.Fatalf("filtered map groups: %+v %v", got, err)
+		}
+		if _, _, err := s.executeQueryV3(t.Context(), "mcp_calls", search, v3Schema, q); err == nil || !strings.Contains(err.Error(), "text exceeds") {
+			t.Fatalf("included map row must still enforce text budget: %v", err)
+		}
+	})
 }

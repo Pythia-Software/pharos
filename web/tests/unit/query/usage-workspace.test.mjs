@@ -484,3 +484,15 @@ test("cumulative Tools and MCP points match native aggregation of their entire c
     assert.deepEqual(query,before,"Cumulative presentation and inspection preserve the source query");
   }
 });
+
+test('Analyze record keywords remain scoped to their dataset and dashboard return names the reset', () => {
+  const current = new URLSearchParams({ analyze_mode:'query',analyze_data:'usage',analyze_topic:'tokens',q_usage:encodeQuery(EMPTY_QUERY),record_usage:'keyword-definition' });
+  const same = new URL(usageWorkspaceURL({mode:'query'},current),'http://localhost');
+  assert.equal(same.searchParams.get('record_usage'),'keyword-definition');
+  const switched = new URL(usageWorkspaceURL({dataset:'tool_calls'},current),'http://localhost');
+  assert.equal(switched.searchParams.has('record_usage'),false);
+  const back=usageDashboardReturn(current);
+  assert.equal(back.resetsFilters,true);
+  assert.match(back.label,/keyword filters/);
+  assert.equal(new URL(back.href,'http://localhost').searchParams.has('record_usage'),false);
+});

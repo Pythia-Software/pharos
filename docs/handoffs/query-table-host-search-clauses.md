@@ -1,9 +1,14 @@
 # Query Table: host search clauses in the query lifecycle
 
+For the concrete saved-search implementation contract, API proposal, Pharos
+migration points and acceptance matrix, see
+[Save the complete query, including host URL parameters](query-table-saved-host-query-state.md).
+This document retains the broader clause-composition context.
+
 ## Context
 
 Pharos's Search prototype (the `/library` route) puts the published Query
-Table 0.9.2 builder in charge of columns, row filters, grouping, HAVING,
+Table 0.9.5 builder in charge of columns, row filters, grouping, HAVING,
 ordering, paging and metrics. `web/src/explore-search.tsx` adds a **Search in**
 row for Messages, Files or URLs. Its modal uses the existing Pharos search
 editor; the applied condition appears in the builder.
@@ -73,3 +78,21 @@ a content restriction applies. Open an older table-only save with no content
 restriction. A canceled change from Messages to Files must retain the applied
 message search. Test the lifecycle in core/React units; reserve browser tests
 for layout, focus and request stability.
+
+## Analyze record-text clauses
+
+Analyze now composes a Record text row through the same public `whereRow`
+slot. Unlike Library's content search, this clause matches a chosen text field
+of each source record, with the existing parser and unicode61 verifier. Its
+field and visual/syntax draft travel in `record_<dataset>`; requests send a
+validated `record_search` source restriction. Source WHERE, grouping, HAVING,
+metrics and pagination remain native Query Table operations. A collapsed
+summary retains the keyword condition. Message scopes and corpus-based fuzzy
+expansion are excluded from the record editor.
+
+Include this host definition in the requested lifecycle extension as well:
+Save/restore, undo/redo and reset must retain or clear it atomically with the
+table query, including grouped source state. Today those native actions own
+QueryState; keyword clauses have explicit edit/remove actions and URL state.
+Do not encode a keyword tree as a fake field, patch Query Table locally, or
+silently reduce a complex keyword tree to field substring predicates.
