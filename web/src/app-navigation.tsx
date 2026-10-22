@@ -35,7 +35,7 @@ function AppNavigation({ settings, contentNavigation }: { settings: NestedPage[]
   const dialog = useRef<HTMLDialogElement>(null), trigger = useRef<HTMLButtonElement>(null);
   const navigating = useRef(false), previousURL = useRef(location.href);
   const params = new URLSearchParams(location.search), selected = appLocation(location.pathname, params);
-  const sections = appSections(settings, params, hasTL1 || selected.section === "tl1");
+  const sections = appSections(settings, params, hasTL1 || location.pathname.startsWith("/tl1"));
   const { section, page } = appLocationLabel(sections, selected);
   const [expanded, setExpanded] = useState(() => initialNavigationExpansion(section, selected.current));
   const toggle = (section: string, id: string) => setExpanded(state => toggleNavigationSection(state, section, id));
@@ -59,22 +59,24 @@ function AppNavigation({ settings, contentNavigation }: { settings: NestedPage[]
   useEffect(() => { window.dispatchEvent(new Event("resize")); }, [rail]);
   useEffect(() => {
     const sync = () => {
-      const tab = document.getElementById("tl1Tab"), count = document.getElementById("findingsBadge");
-      if (tab) setHasTL1(!tab.hidden);
+      const count = document.getElementById("findingsBadge");
       setBadge(count && !count.hidden ? count.textContent ?? "" : "");
     };
     const observer = new MutationObserver(sync);
     observer.observe(document.querySelector("body > header .tabs")!, { subtree: true, attributes: true, childList: true, characterData: true });
     sync();
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
     const controller = new AbortController();
-    void fetch("/api/tl1", { signal: controller.signal }).then(response => response.ok ? response.json() : null).then(body => {
-      if (!controller.signal.aborted && body) {
-        const visible = Boolean(body.projects?.length), tab = document.getElementById("tl1Tab");
-        if (tab) tab.hidden = !visible;
-        setHasTL1(visible);
-      }
-    }).catch(() => {});
-    return () => { observer.disconnect(); controller.abort(); };
+    const load = () => {
+      void fetch("/api/tl1", { signal: controller.signal }).then(response => response.ok ? response.json() : null).then(body => {
+        if (!controller.signal.aborted && body) setHasTL1(Boolean(body.projects?.length));
+      }).catch(() => {});
+    };
+    load();
+    window.addEventListener("pharos:route", load);
+    return () => { window.removeEventListener("pharos:route", load); controller.abort(); };
   }, []);
   useEffect(() => {
     if (previousURL.current === location.href && !navigating.current) return;
