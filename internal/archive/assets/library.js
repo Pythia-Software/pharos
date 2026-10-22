@@ -32,6 +32,7 @@
 .pharos-drive-panel h3{margin:14px 0 6px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted,#666)}
 .pharos-drive-panel p{margin:8px 0}
 .pharos-running-head{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.pharos-drive-panel>.pharos-running-head{padding-top:10px}
 .pharos-running-head>div{min-width:0}
 .pharos-running-head>.pharos-button{flex:none}
 .pharos-drive-space{display:grid;grid-template-columns:1fr auto;gap:5px 12px;margin:12px 0 2px;padding:10px 0;border-top:1px solid var(--line,#ccc);border-bottom:1px solid var(--line,#ccc)}
@@ -40,6 +41,8 @@
 .pharos-sub{color:var(--muted,#666);overflow-wrap:anywhere}
 .pharos-activity{padding:8px 0;border-bottom:1px solid var(--line,#ccc)}
 .pharos-activity:last-child{border-bottom:0}
+.pharos-drive-panel>.pharos-running-head+.pharos-update>.pharos-activity:first-child,
+.pharos-drive-panel>.pharos-running-head+.pharos-activity{padding-top:2px}
 .pharos-activity-timing{display:flex;flex-wrap:wrap;gap:2px 12px;font-size:12px;line-height:1.5;font-variant-numeric:tabular-nums}
 .pharos-progress-caption,.pharos-activity-details{font-size:12px;line-height:1.5}
 .pharos-activity-details{overflow-wrap:anywhere}
@@ -51,6 +54,7 @@
 .pharos-activity-details[open] .pharos-details-label::before{content:'▾ ';}
 .pharos-activity-details>div:first-of-type{margin-top:4px}
 .pharos-activity-head{display:flex;align-items:center;gap:8px;font-weight:650}
+.pharos-drive-panel .pharos-activity-head{font-size:14px}
 .pharos-activity-head .pharos-button{margin-left:auto;font-weight:400}
 .pharos-activity .pharos-sub{margin-top:2px}
 .pharos-last-index{padding-top:8px;border-top:1px solid var(--line,#ccc)}
@@ -58,9 +62,18 @@
 .pharos-last-index .pharos-sub{margin-top:3px}
 .pharos-bar{height:6px;margin:7px 0 4px;overflow:hidden;border-radius:6px;background:var(--line,#ccc)}
 .pharos-bar>span{display:block;height:100%;background:var(--accent,#315845);transition:width .25s}
+.pharos-progress-label{display:grid;grid-template-columns:minmax(0,1fr) auto 4.5ch;align-items:baseline;gap:8px;font-variant-numeric:tabular-nums}
+.pharos-progress-label>span:first-child{min-width:0;overflow-wrap:anywhere}
+.pharos-progress-time,.pharos-progress-value{white-space:nowrap;color:var(--muted,#666)}
+.pharos-progress-value{text-align:right}
+.pharos-progress-label.step>.pharos-progress-time,.pharos-progress-label.step>.pharos-progress-value{font-size:12px}
+.pharos-progress-label.overall{margin-top:9px}
+.pharos-activity>.pharos-bar{margin-top:3px;margin-bottom:12px}
+.pharos-bar.step{height:3px;margin-bottom:7px}
+.pharos-bar.step>span{opacity:.65}
 .pharos-bar.indeterminate>span{width:35%;animation:pharos-slide 1.6s ease-in-out infinite}
 @keyframes pharos-slide{from{margin-left:-35%}to{margin-left:100%}}
-@media(prefers-reduced-motion:reduce){.pharos-bar.indeterminate>span{animation:none;width:100%;opacity:.5}}
+@media(prefers-reduced-motion:reduce){.pharos-bar>span{transition:none}.pharos-bar.indeterminate>span{animation:none;width:100%;opacity:.5}}
 .pharos-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:12px}
 .pharos-row .pharos-note{flex:1 1 100%}
 .pharos-button{border:1px solid var(--line,#ccc);background:var(--panel,#fff);color:var(--ink,#222)}
@@ -111,6 +124,50 @@
     if (onclick) b.onclick = onclick;
     return b;
   };
+  // Reconcile the small status surfaces in place. Stable activity keys keep
+  // progress tracks, disclosure state and focused controls alive across polls.
+  // Do not detach unchanged nodes: doing so restarts CSS animations.
+  const liveKey = n => n.nodeType === 1 ? n.dataset.key || n.id || `${n.nodeName}:${n.classList[0] || ''}` : n.nodeName;
+  function updateLiveChildren(target, source) {
+    const desired = [...source.childNodes], remaining = [...target.childNodes];
+    const matches = desired.map(next => {
+      const index = remaining.findIndex(current => current.nodeType === next.nodeType && current.nodeName === next.nodeName && liveKey(current) === liveKey(next));
+      return index < 0 ? null : remaining.splice(index, 1)[0];
+    });
+    for (const obsolete of remaining) obsolete.remove();
+    let cursor = target.firstChild;
+    desired.forEach((next, index) => {
+      const current = matches[index];
+      if (!current) {
+        target.insertBefore(next, cursor);
+        return;
+      }
+      if (current !== cursor) {
+        // moveBefore preserves browser state. Older Safari needs its CSS
+        // animation phase and focused descendant restored after a move.
+        if (target.moveBefore) target.moveBefore(current, cursor);
+        else {
+          const focused = current.contains(document.activeElement) ? document.activeElement : null;
+          const animations = (current.getAnimations?.({subtree: true}) || []).filter(animation => animation.animationName).map(animation => ({
+            target: animation.effect.target, name: animation.animationName, time: animation.currentTime, paused: animation.playState === 'paused',
+          }));
+          target.insertBefore(current, cursor);
+          for (const saved of animations) {
+            const animation = saved.target.getAnimations().find(animation => animation.animationName === saved.name);
+            if (animation && saved.time != null) { animation.currentTime = saved.time; if (saved.paused) animation.pause(); }
+          }
+          if (focused && document.activeElement !== focused) focused.focus({preventScroll: true});
+        }
+      }
+      if (current.nodeType === 1) {
+        for (const attr of [...current.attributes]) if (!next.hasAttribute(attr.name)) current.removeAttribute(attr.name);
+        for (const attr of next.attributes) if (current.getAttribute(attr.name) !== attr.value) current.setAttribute(attr.name, attr.value);
+        current.onclick = next.onclick;
+        updateLiveChildren(current, next);
+      } else if (current.nodeValue !== next.nodeValue) current.nodeValue = next.nodeValue;
+      cursor = current.nextSibling;
+    });
+  }
   const call = async (path, options = {}) => {
     const response = await fetch(path, {...options, headers: {'Content-Type': 'application/json'}});
     const body = await response.json().catch(() => ({}));
@@ -209,6 +266,13 @@
     const measure = workMeasure(activity.work);
     return measure?.total > 0 ? measure.done / measure.total : activity.work?.total_known && measure?.total === 0 ? 1 : activity.work ? null : activity.progress;
   };
+  // Overall is an approximate whole-operation time fraction supplied by the
+  // forecast, never the measured fraction of the currently visible step.
+  function activityOverallProgress(activity, {unavailable = Boolean(statusError)} = {}) {
+    const forecast = activity.forecast;
+    if (unavailable || !forecast || !['estimating', 'provisional', 'complete'].includes(forecast.state) || !Number.isFinite(forecast.progress)) return null;
+    return Math.max(0, Math.min(forecast.state === 'complete' ? 1 : .99, forecast.progress));
+  }
   // An estimate's measured pace: bytes per second, or other units per minute.
   const estimateRate = (estimate, unit) => estimate.units_per_second > 0 && unit
     ? unit === 'byte' ? `${size(estimate.units_per_second)}/sec`
@@ -249,24 +313,43 @@
     return {title, context: unique(context).join(' · '), caption: unique([count, volume, percent, rate]).join(' · '), details};
   }
   const expandedActivities = new Set();
-  function activityLine(activity) {
+  function activityLine(activity, {showTitle = true} = {}) {
     const item = node('div', 'pharos-activity');
+    item.dataset.key = `activity:${activity.id || `${activity.kind}:${activity.label}`}:${activity.started_at || ''}`;
     const view = activityPresentation(activity);
-    item.append(node('div', 'pharos-activity-head', view.title));
-    if (view.context) item.append(node('div', 'pharos-sub', view.context));
-    item.append(progressBar(activityProgress(activity), `${activity.label}: ${activity.work?.phase || 'current stage'}`));
-    if (view.caption) item.append(node('div', 'pharos-sub pharos-progress-caption', view.caption));
-    const timing = completionEstimate(activity);
-    if (view.details.length) {
-      const details = node('details', 'pharos-sub pharos-activity-details');
-      details.dataset.activity = activity.id || `${activity.kind}:${activity.label}:${activity.started_at || ''}`;
-      details.open = expandedActivities.has(details.dataset.activity);
-      const summary = node('summary');
-      summary.append(timing, node('span', 'pharos-details-label', 'details'));
-      details.append(summary);
-      for (const text of view.details) details.append(node('div', '', text));
-      item.append(details);
-    } else item.append(timing);
+    if (showTitle) item.append(node('div', 'pharos-activity-head', activity.label));
+    const overall = activityOverallProgress(activity), step = activityProgress(activity), timing = activityTiming(activity), stepTiming = activityTiming(activity, {scope: 'stage'});
+    const percent = value => `${Math.max(0, Math.min(100, Math.floor(value * 100)))}%`;
+    const overallLabel = node('div', 'pharos-progress-label overall');
+    const waiting = timing.state === 'stopping' ? 'Stopping…' : 'Calculating…';
+    overallLabel.append(node('span', '', 'Overall'),
+      node('span', 'pharos-progress-time', timing.scope === 'operation' && timing.range ? `~${timing.range} left` : overall == null ? waiting : ''),
+      node('span', 'pharos-progress-value', overall == null ? '' : `${overall < 1 ? '~' : ''}${percent(overall)}`));
+    const overallBar = progressBar(overall, `${activity.label}: overall progress (estimated)`);
+    overallBar.dataset.key = 'overall-bar';
+    const source = activity.work?.source;
+    const stepLabel = node('div', 'pharos-progress-label step');
+    stepLabel.dataset.key = 'step-label';
+    stepLabel.append(node('span', '', `Step · ${view.title}${source && !view.title.toLowerCase().includes(source.toLowerCase()) ? ` · ${source}` : ''}`),
+      node('span', 'pharos-progress-time', stepTiming.range ? `~${stepTiming.range} left` : ''),
+      node('span', 'pharos-progress-value', Number.isFinite(step) ? percent(step) : ''));
+    const stepBar = progressBar(step, `${activity.label}: current step`);
+    stepBar.dataset.key = 'step-bar';
+    stepBar.classList.add('step');
+    item.append(overallLabel, overallBar, stepLabel, stepBar);
+    const details = node('details', 'pharos-sub pharos-activity-details');
+    details.dataset.activity = item.dataset.key;
+    details.open = expandedActivities.has(details.dataset.activity);
+    const summary = node('summary');
+    const elapsed = timing.elapsed;
+    summary.append(node('span', '', elapsed == null ? '' : `${elapsed < 60 ? `${elapsed} sec` : `${Math.floor(elapsed / 60)} min`} elapsed`), node('span', 'pharos-details-label', 'Details'));
+    details.append(summary);
+    const context = view.context.split(' · ').filter(text => text !== activity.label).join(' · ');
+    for (const text of [context, view.caption].filter(Boolean)) details.append(node('div', '', text));
+    details.append(completionEstimate(activity));
+    if (overall != null) details.append(node('div', '', 'Overall estimates elapsed time against the remaining sources and analyses; it adjusts as the forecast changes.'));
+    for (const text of view.details) details.append(node('div', '', text));
+    item.append(details);
     return item;
   }
   const copy = async text => {
@@ -326,9 +409,9 @@
     if (document.getElementById('sourceGrid')) loadHosts().catch(() => {});
   }
   const stopButton = (stopping, path) => {
-    const stop = button(stopping ? 'Stopping…' : 'Stop', '', () => {
-      stop.disabled = true;
-      stop.textContent = 'Stopping…';
+    const stop = button(stopping ? 'Stopping…' : 'Stop', '', event => {
+      event.currentTarget.disabled = true;
+      event.currentTarget.textContent = 'Stopping…';
       return stopWork(path);
     });
     stop.disabled = stopping;
@@ -503,16 +586,15 @@
     return activity.progress != null ? `${verb} · current stage ${Math.floor(activity.progress * 100)}%` : verb;
   }
 
-  function libraryUpdateLine(update) {
+  function libraryUpdateLine(update, options) {
     const group = node('div', 'pharos-update');
-    for (const activity of update.updating) group.append(activityLine(activity));
+    for (const activity of update.updating) group.append(activityLine(activity, options));
     return group;
   }
 
   // The chip is just the drive's name and a dot: green when nothing is
   // running, so ejecting stops nothing; brass and pulsing while work holds
   // the library, which an eject would stop first. The panel has the details.
-  const DRIVE_PULSE_MS = 1600;
   // What needs the user's attention. The chip's dot turns red and pulses;
   // the drive panel says what is wrong and offers what to do about it.
   function openCaptureAndIndex() {
@@ -557,8 +639,6 @@
       // would otherwise keep it hidden.
       if (alerts.length || activities.length) {
         dot.classList.add(alerts.length ? 'bad' : 'busy');
-        // The dot is rebuilt on every status refresh; entering mid-cycle keeps the pulse from restarting.
-        dot.style.animationDelay = `-${Date.now() % DRIVE_PULSE_MS}ms`;
       }
       const update = libraryUpdate(activities);
       state = activities.length ? [update && `${update.label}${update.progress == null ? '' : ` · current stage ${Math.min(100, Math.floor(update.progress * 100))}%`}`,
@@ -567,7 +647,9 @@
           : upgradeStatus?.needed ? 'Library upgrade available' : 'Nothing running';
       if (alerts.length) state = `Needs attention (${alerts.map(alert => alert.summary).join(', ')}). ${state}`;
     }
-    target.replaceChildren(dot, name);
+    const content = node('div');
+    content.append(dot, name);
+    updateLiveChildren(target, content);
     target.dataset.state = !status ? 'unavailable' : status.idle ? 'idle' : 'busy';
     target.title = `${name.textContent}: ${state}`;
     target.setAttribute('aria-label', `Library drive: ${target.title}`);
@@ -623,30 +705,38 @@
     if (!panel) return;
     expandedActivities.clear();
     for (const details of panel.querySelectorAll('details[data-activity][open]')) expandedActivities.add(details.dataset.activity);
-    panel.replaceChildren();
-    if (!status) {
-      panel.append(node('h2', '', panelMode === 'activity' ? 'Running activity' : 'Library'), node('p', 'pharos-error', statusError?.status === 503 ? 'Pharos is stopping; it has released or is releasing the library.' : `Could not read the library's status${statusError ? `: ${statusError.message}` : ''}.`));
+    const content = node('div');
+    const scrollTop = panel.scrollTop, scrollLeft = panel.scrollLeft;
+    const commit = () => {
+      updateLiveChildren(panel, content);
+      renderHeaderAction();
       placePanel();
+      panel.scrollTop = scrollTop;
+      panel.scrollLeft = scrollLeft;
+    };
+    if (!status) {
+      content.append(node('h2', '', panelMode === 'activity' ? 'Running activity' : 'Library'), node('p', 'pharos-error', statusError?.status === 503 ? 'Pharos is stopping; it has released or is releasing the library.' : `Could not read the library's status${statusError ? `: ${statusError.message}` : ''}.`));
+      commit();
       return;
     }
-    if (statusError) panel.append(node('p', 'pharos-error', 'Status unavailable. Showing the last reported counts; reconnecting…'));
+    if (statusError) content.append(node('p', 'pharos-error', 'Status unavailable. Showing the last reported counts; reconnecting…'));
     const drive = status.drive || {};
     if (panelMode === 'activity') {
-      panel.append(node('h2', '', 'Running activity'));
+      content.append(node('h2', '', 'Running activity'));
     } else {
       const head = node('div', 'pharos-panel-head');
       head.append(node('h2', '', drive.ejectable ? drive.name : status.portable ? 'Library' : 'This Mac'));
       if (drive.ejectable && nativeLibrary()) head.append(ejectButton(drive, status.activities || []));
-      panel.append(head);
+      content.append(head);
       const where = [{external: 'External drive', 'disk-image': 'Disk image', internal: "This Mac's internal disk"}[drive.location] || 'Drive', status.library_dir].filter(Boolean).join(' · ');
-      panel.append(node('div', 'pharos-sub', where));
+      content.append(node('div', 'pharos-sub', where));
       const space = node('dl', 'pharos-drive-space');
       const unknown = driveSpaceError || (driveSpace && driveSpace.status !== 'checking') ? 'Unavailable' : 'Checking…';
       space.append(node('dt', '', 'Free space'), node('dd', '', driveSpace?.free_bytes == null ? unknown : size(driveSpace.free_bytes)),
         node('dt', '', 'Pharos size'), node('dd', '', driveSpace?.sizes?.library_bytes == null ? unknown : size(driveSpace.sizes.library_bytes)));
-      panel.append(space);
-      if (ejectState?.phase === 'confirm') panel.append(ejectConfirm(drive, status.activities || []));
-      if (ejectState?.phase === 'error') panel.append(node('p', 'pharos-error', ejectState.message));
+      content.append(space);
+      if (ejectState?.phase === 'confirm') content.append(ejectConfirm(drive, status.activities || []));
+      if (ejectState?.phase === 'error') content.append(node('p', 'pharos-error', ejectState.message));
     }
 
     const alerts = panelMode === 'drive' ? problems() : [];
@@ -662,16 +752,16 @@
         item.append(row);
         attention.append(item);
       }
-      panel.append(attention);
+      content.append(attention);
     }
 
     // One action slot: Stop while work can be stopped, Capture & index only
     // when it can run. Each activity below reports its stage and progress.
-    const running = node('div', 'pharos-running-head'), runningText = node('div');
-    runningText.append(node('h3', '', 'Running now'));
-    running.append(runningText);
-    panel.append(running);
     const activities = status.activities || [];
+    const running = node('div', 'pharos-running-head'), runningText = node('div');
+    runningText.append(activities.length === 1 ? node('div', 'pharos-activity-head', activities[0].label) : node('h3', '', 'Running now'));
+    running.append(runningText);
+    content.append(running);
     const update = libraryUpdate(activities);
     if (!activities.length) runningText.append(node('p', 'pharos-sub', headerCaptureIndexRunning && upgradeStatus?.needed
       ? 'Preparing the library upgrade…' : upgradeStatus?.needed ? 'A library upgrade is available. Use Capture & index to run it.' : 'Nothing is running.'));
@@ -685,20 +775,19 @@
       const updateLibrary = button('Capture & index', 'pharos-panel-update', captureAndIndex);
       updateLibrary.title = "Captures this Mac's sources, indexes captures from every Mac, and runs any pending library upgrade. Index changes, in the header, only indexes what changed.";
       running.append(updateLibrary);
-      renderHeaderAction();
     }
     if (update) {
-      panel.append(libraryUpdateLine(update));
+      content.append(libraryUpdateLine(update, {showTitle: activities.length !== 1}));
     }
-    activities.filter(activity => !update?.updating.includes(activity)).forEach(activity => panel.append(activityLine(activity)));
+    activities.filter(activity => !update?.updating.includes(activity)).forEach(activity => content.append(activityLine(activity, {showTitle: activities.length !== 1})));
     if (status.library_refresh?.stopped) {
       const item = node('div', 'pharos-activity pharos-library-refresh-stopped'), head = node('div', 'pharos-activity-head');
       head.append(node('span', 'pharos-dot idle'), node('span', '', 'Library view indexing stopped'), button('Resume', '', resumeLibraryRefresh));
       item.append(head, node('div', 'pharos-sub', `${status.library_refresh.pending ? `${plural(status.library_refresh.pending, 'workspace')} left to index; the Library works them out as it shows them, which can be slower. ` : ''}Capture & index or restarting Pharos also resumes it.`));
-      panel.append(item);
+      content.append(item);
     }
     if (upgradeStatus?.needed || upgradeStatus?.running) {
-      panel.append(button('Upgrade details', '', () => window.pharosUpgrade?.open()));
+      content.append(button('Upgrade details', '', () => window.pharosUpgrade?.open()));
     }
 
     if (recentIndex && !update) {
@@ -711,10 +800,10 @@
       // A failure's errors are under Needs attention.
       const errors = failed ? [] : indexErrors(recentIndex);
       if (errors.length) last.append(node('div', 'pharos-error', errors.join(' · ')));
-      panel.append(last);
+      content.append(last);
     }
 
-    placePanel();
+    commit();
   }
 
   // Pharos runs from the drive, as do the MCP servers agents start from it, so
@@ -1248,7 +1337,7 @@
 
   window.pharosLibrary = {closePanel, refresh: refreshStatus, status: () => status, runs, refreshSettings, refreshSyncControls: renderSyncControls, renderAlerts: () => { renderChip(); renderPanel(); }, onStatus: listener => listeners.add(listener), toggleActivityPanel: () => (panel && panelMode === 'activity' ? closePanel() : openPanel('activity')),
     // Pure helpers, for web/tests/unit/page/library.test.mjs.
-    libraryUpdate, activityTiming, activityProgress, activityPresentation, estimateRate, workCount, headerBusy, captureIndexDisabled, stopTargets};
+    libraryUpdate, activityTiming, activityProgress, activityOverallProgress, activityPresentation, estimateRate, workCount, headerBusy, captureIndexDisabled, stopTargets};
   const sheet = node('style');
   sheet.textContent = CSS;
   document.head.append(sheet);
