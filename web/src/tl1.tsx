@@ -5,7 +5,7 @@ import { Icon } from "./icons";
 import { preferences } from "./preferences";
 import { NestedPageLayout, useLocationRevision } from "./nested-pages";
 
-// The TL1 tab: a project's performance by flavor and agent configuration,
+// The TL1 pages: a project's performance by flavor and agent configuration,
 // combined across the Macs that run it, and drill-downs into flavors, candidates, and individual runs.
 // Recommendations for flavors live in Findings, where they're measured after the user acts.
 
@@ -365,9 +365,7 @@ export function TL1Page({ attempts, filterAttempts, copy }: Props) {
       const body = await getJSON<{ projects?: Row[] }>("/api/tl1");
       const found = Array.isArray(body.projects) ? body.projects : [];
       setProjects(found);
-      const tab = document.getElementById("tl1Tab");
-      if (tab) tab.hidden = found.length === 0;
-    } catch { /* The tab stays hidden when TL1 data is unavailable. */ }
+    } catch { /* Keep the current project list when TL1 data is unavailable. */ }
   }, []);
   useEffect(() => {
     void loadInstallations();

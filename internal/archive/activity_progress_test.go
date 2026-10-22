@@ -554,10 +554,48 @@ func TestOperationForecastKeepsStageMeasurementSeparateAndUsesWholeCompletion(t 
 	if a.Progress != nil || a.Estimate.State != "unknown" || a.Forecast.Point != 100 || a.EstimatedCompletionAt != formatTime(at.Add(100*time.Second)) {
 		t.Fatalf("opaque measured stage should keep a whole-operation forecast: %+v", a)
 	}
+	if a.Forecast.Progress == nil || *a.Forecast.Progress != 0 {
+		t.Fatalf("new operation should begin at zero overall: %+v", a.Forecast)
+	}
+	// Two equally costly sequential steps: finishing the first is halfway
+	// through the operation even as the next step's own counter starts at zero.
+	next := step
+	next.ID, next.After = "next", []string{step.ID}
+	priorNext := prior
+	priorNext.ID = next.ID
+	op.history[0].Steps = append(op.history[0].Steps, priorNext)
+	op.steps = append(op.steps, next)
+	op.steps[0].State, op.steps[0].Started = "running", at
+	s.estimateActivities(activities, at.Add(50*time.Second))
+	if got := activities[0].Forecast.Progress; got == nil || *got != .25 {
+		t.Fatalf("half of the first step should be a quarter overall: %+v", activities[0].Forecast)
+	}
+	op.steps[0].State, op.steps[0].Seconds = "complete", 100
+	op.steps[1].State, op.steps[1].Started = "running", at.Add(100*time.Second)
+	activities[0].Work = &activityWork{Phase: "next step", Unit: "group", Total: 100}
+	s.estimateActivities(activities, at.Add(100*time.Second))
+	if a = activities[0]; a.Forecast.Progress == nil || *a.Forecast.Progress != .5 || a.Progress == nil || *a.Progress != 0 {
+		t.Fatalf("stage transition reset overall progress or reused stage progress: %+v", a)
+	}
+	op.steps[1].Inventory = false
+	s.estimateActivities(activities, at.Add(100*time.Second))
+	if activities[0].Forecast.Progress != nil {
+		t.Fatal("incomplete discovery published an overall percentage")
+	}
+	op.steps[1].Inventory = true
 	op.steps = append(op.steps, forecastStep{ID: "unknown", Label: "Unseen step", State: "pending"})
 	s.estimateActivities(activities, at)
-	if activities[0].EstimatedCompletionAt != "" {
+	if activities[0].EstimatedCompletionAt != "" || activities[0].Forecast.Progress != nil {
 		t.Fatalf("partial forecast published a complete ETA: %+v", activities[0])
+	}
+	for i := range op.steps {
+		op.steps[i].State = "complete"
+	}
+	if got := op.estimate(at.Add(200*time.Second), false); got.Progress == nil || *got.Progress != 1 {
+		t.Fatalf("finished operation did not reach 100%%: %+v", got)
+	}
+	if got := op.estimate(at, true); got.Progress != nil {
+		t.Fatalf("stopping retained an overall percentage: %+v", got)
 	}
 }
 

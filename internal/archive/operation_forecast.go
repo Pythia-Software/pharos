@@ -30,8 +30,12 @@ type forecastStep struct {
 }
 
 type operationEstimate struct {
-	State       string   `json:"state"` // learning, partial, provisional, estimating, stopping, complete
-	Basis       string   `json:"basis"`
+	State string `json:"state"` // learning, partial, provisional, estimating, stopping, complete
+	Basis string `json:"basis"`
+	// Progress estimates elapsed / (elapsed + remaining) for the entire
+	// operation. It is absent until discovery and every remaining step have
+	// a forecast; measured stage progress remains in libraryActivity.Progress.
+	Progress    *float64 `json:"progress,omitempty"`
 	LowSeconds  float64  `json:"low_seconds,omitempty"`
 	HighSeconds float64  `json:"high_seconds,omitempty"`
 	Point       float64  `json:"point_seconds,omitempty"`
@@ -504,6 +508,12 @@ func (op *operationForecast) estimateLocked(at time.Time, checkpoint string) ope
 		}
 		result.LowSeconds = max(.001, result.LowSeconds)
 		result.HighSeconds = max(result.LowSeconds, result.HighSeconds)
+	}
+	if result.State == "complete" {
+		result.Progress = fraction(1, 1)
+	} else if result.Inventory && finitePositive(result.Point) && !op.started.IsZero() {
+		elapsed := max(0, at.Sub(op.started).Seconds())
+		result.Progress = fraction(elapsed, elapsed+result.Point)
 	}
 	return result
 }
