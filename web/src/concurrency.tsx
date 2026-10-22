@@ -206,7 +206,6 @@ export function ConcurrencyPanel({ scope, activityWindow, routeParameter, onSele
   useEffect(() => {
     let active = true;
     setError(""); setData(null);
-    if (!concurrencyPrototypeEnabled) return;
     loadConcurrencyData().then(next => { if (active) setData(next); }).catch(reason => { if (active) setError(String(reason.message ?? reason)); });
     return () => { active = false; };
   }, []);
@@ -256,7 +255,6 @@ export function ConcurrencyPanel({ scope, activityWindow, routeParameter, onSele
   }, [zoom, rangeBounds, rangeSessions, modelRange, userRange]);
   const activeAt = (at: number) => Array.from(mode === "user" ? userRange : modelRange).filter(([, spans]) => spans.some(([a, b]) => a <= at && at < b)).length;
   const chooseUnit = (unit: string) => update(counting === "agent" ? { agent: selected === unit ? "" : unit, showConversations: true } : { workspace: selected === unit ? "" : unit, showConversations: true });
-  if (!concurrencyPrototypeEnabled) return <div className="machine-empty"><h3>Machine Parallelism</h3><p>No captured timing snapshot is available for this library.</p></div>;
   if (error) return <p role="alert">{error}</p>;
   if (!data) return <p className="muted" aria-busy="true">Reading captured timing…</p>;
   if (scope?.days && activityWindow && (Date.parse(activityWindow.start) >= zonedDayBounds(data.period_end, data.timezone)[1] || Date.parse(activityWindow.end) <= zonedDayBounds(data.period_start, data.timezone)[0])) return <p className="machine-empty">No captured timing overlaps this period. Snapshot coverage: {data.period_start} – {data.period_end}. Choose another period.</p>;

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"slices"
@@ -130,6 +131,46 @@ func parallelismTestCatalog(t *testing.T) (*Catalog, Config) {
 	c.now = func() time.Time { return now }
 	seedParallelism(t, c)
 	return c, config
+}
+
+func TestParallelismAPI(t *testing.T) {
+	const path = "/api/usage/parallelism"
+	t.Run("empty library", func(t *testing.T) {
+		c, config := testCatalog(t)
+		data := libraryStatusCall(t, testServer(t, config, c), path)
+		if threads, ok := data["threads"].([]any); !ok || len(threads) != 0 {
+			t.Fatalf("empty library threads: %#v", data["threads"])
+		}
+		if data["period_start"] == "" || data["period_end"] == "" || data["timezone"] == "" {
+			t.Fatalf("missing timing coverage: %v", data)
+		}
+	})
+	t.Run("captured conversations", func(t *testing.T) {
+		c, config := parallelismTestCatalog(t)
+		server := testServer(t, config, c)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("unauthenticated timing request: %d", response.Code)
+		}
+		data := libraryStatusCall(t, server, path)
+		if data["timezone"] != "America/Denver" || data["period_end"] != "2026-11-03" {
+			t.Fatalf("timing coverage: %v", data)
+		}
+		threads := data["threads"].([]any)
+		if len(threads) != 7 {
+			t.Fatalf("captured conversations: %v", threads)
+		}
+		for _, value := range threads {
+			thread := value.(map[string]any)
+			if len(thread["turns"].([]any)) == 0 || thread["workspace_id"] == "" || thread["conversation_id"] == "" || thread["work_id"] == "" {
+				t.Fatalf("incomplete chart thread: %v", thread)
+			}
+			if _, ok := thread["model_spans"].([]any); !ok {
+				t.Fatalf("model spans must be an array: %v", thread)
+			}
+		}
+	})
 }
 
 // referenceUnits and referenceLevels port concurrencySpans(threads, "user",

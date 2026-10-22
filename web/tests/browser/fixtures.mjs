@@ -207,8 +207,9 @@ export const defaultApi = {
   "GET /api/probe/status": { library: true, needs_onboarding: false, host: { id: "test-mac", label: "This Mac" } },
   "GET /api/upgrade": { running: false, needed: false, steps: [], repository_renames: {} },
   "GET /api/pricing": { unpriced_models: [], priced_tokens: 1000, unpriced_tokens: 0, confirmed_changes: 0, proposed_changes: 0 },
-  "GET /api/usage/concurrency-prototype": {
-    generated_at: iso(0), timezone: "UTC", period_start: iso(day).slice(0, 10), period_end: iso(0).slice(0, 10),
+  "GET /api/usage/concurrency-prototype": () => ({ ...defaultApi["GET /api/usage/parallelism"], timezone: "UTC" }),
+  "GET /api/usage/parallelism": {
+    generated_at: iso(0), timezone: "Local", period_start: iso(day).slice(0, 10), period_end: iso(0).slice(0, 10),
     days: [iso(day).slice(0, 10), iso(0).slice(0, 10)],
     threads: [0, 1].map(index => ({
       id: `timing-${index}`, conversation_id: rootConversation, work_id: workID,
