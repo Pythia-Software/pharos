@@ -26,6 +26,23 @@ type usageSummaryWindow struct {
 	CarbonTokens map[string]map[string]float64 `json:"carbon_tokens"`
 }
 
+// UsageHistory gives charts the library's unfiltered conversation history.
+// Keep it separate from the usage summary's more expensive ledger reads.
+func (c *Catalog) UsageHistory(ctx context.Context) (map[string]any, error) {
+	return cachedValue(ctx, c, "usage:history", func(ctx context.Context) (map[string]any, error) {
+		rows, err := queryMapsContext(ctx, c.reader(), `SELECT started_at FROM conversations
+			WHERE julianday(started_at) IS NOT NULL ORDER BY julianday(started_at),started_at LIMIT 1`)
+		if err != nil {
+			return nil, err
+		}
+		result := map[string]any{"oldest_conversation_at": nil}
+		if len(rows) > 0 {
+			result["oldest_conversation_at"] = rows[0]["started_at"]
+		}
+		return result, nil
+	})
+}
+
 // UsageSummary answers GET /api/usage/summary: words typed by a person, the
 // messages carrying them, tokens, API-equivalent cost, and carbon inputs by
 // model tier and token category over trailing windows. Human text comes from

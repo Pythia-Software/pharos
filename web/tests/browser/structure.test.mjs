@@ -52,6 +52,7 @@ const ROUTES = [
   { name: "Carbon Impact", url: "/analyze?analyze_view=carbon", ready: "#carbonSummary" },
   { name: "Analyze conversations", url: "/analyze?analyze_view=conversations", ready: "#queryTableUsage .qt-row" },
   { name: "Analyze workspace dashboards", url: "/analyze", ready: ".usage-dashboard .usage-chart" },
+  { name: "Analyze relative query previews", url: `/analyze?${new URLSearchParams({ analyze_topic: "tokens", analyze_filters: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "first_usage_at", op: ">=", value: "-30d" }, { field: "first_usage_at", op: "<", value: "+0s" }, { field: "provider", op: "=", value: "codex" }] }) })}`, ready: ".usage-query-destinations" },
   { name: "Analyze workspace cumulative", url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify({ display: "cumulative", period: "days", days: 3, split: "model_family", metric: "percent_cost" }))}`, ready: ".usage-dashboard .usage-chart-lines" },
   { name: "Analyze cumulative human", url: `/analyze?analyze_topic=human&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20}))}`, ready: ".usage-dashboard .usage-chart-lines" },
   { name: "Analyze cumulative skills", url: `/analyze?analyze_topic=skills&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20}))}`, ready: ".usage-dashboard .usage-chart-lines" },
@@ -290,9 +291,9 @@ test("dashboard catalog stays readable while a preview is pending", { skip }, as
     await page.getByRole('button', { name: 'Refresh suggestions', exact: true }).click();
     await pending;
     await page.mouse.move(5, 5);
-    const next = page.getByRole('button', { name: 'Next five suggestions', exact: true });
+    const next = page.getByRole('button', { name: 'Next three suggestions', exact: true });
     await page.waitForFunction(() => {
-      const button = document.querySelector('button[aria-label="Next five suggestions"]');
+      const button = document.querySelector('button[aria-label="Next three suggestions"]');
       return button && !button.disabled;
     });
     const readable = async () => {

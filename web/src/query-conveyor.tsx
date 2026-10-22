@@ -184,7 +184,8 @@ export function QueryConveyor({ items, previews, loading, hasErrors, active, sus
   // or one in a narrow window.
   const span = (cards: number) => cards * STRIDE - GAP;
   const count = Math.min(shown.length, layout.width >= span(5) + 2 * PEEK ? 5 : layout.frame >= span(3) ? 3 : 1);
-  const step = (direction: -1 | 1, user = true) => slide((running.current?.offset ?? 0) + direction * count, user);
+  const navigationStep = Math.floor((count + 1) / 2);
+  const step = (direction: -1 | 1, user = true) => slide((running.current?.offset ?? 0) + direction * (user ? navigationStep : count), user);
   // Mid-slide the belt covers every card between where it is now and where it
   // is going, plus enough on each side to fill the viewport.
   const at = movement ? travelled : 0;
@@ -210,8 +211,8 @@ export function QueryConveyor({ items, previews, loading, hasErrors, active, sus
       <button type="button" className="home-library-toggle" aria-expanded={libraryShown} aria-controls="home-card-library" onClick={onToggleLibrary}>{libraryShown ? "Hide all cards" : "Show all cards"}<Icon name="chevron-down" /></button>
       <CarouselCountdown held={held} paused={paused} reset={clockReset} advance={() => step(1, false)} /><div className="home-conveyor-controls">
       <button type="button" className="home-play" aria-label={paused ? "Play suggestions" : "Pause suggestions"} onClick={() => setPaused(value => !value)}>{paused ? "▶ Play" : "Ⅱ Pause"}</button>
-      <button type="button" aria-label={`Previous ${counted(count)} suggestions`} disabled={!canNavigate} onClick={() => step(-1)}><Icon name="chevron-left" /></button>
-      <button type="button" aria-label={`Next ${counted(count)} suggestions`} disabled={!canNavigate} onClick={() => step(1)}><Icon name="chevron-right" /></button>
+      <button type="button" aria-label={`Previous ${counted(navigationStep)} suggestions`} disabled={!canNavigate} onClick={() => step(-1)}><Icon name="chevron-left" /></button>
+      <button type="button" aria-label={`Next ${counted(navigationStep)} suggestions`} disabled={!canNavigate} onClick={() => step(1)}><Icon name="chevron-right" /></button>
       <button type="button" aria-label="Refresh suggestions" onClick={() => { running.current = null; pendingFocus.current = undefined; leans.current.clear(); setMovement(null); setPublished([]); setCenter(undefined); setEntering([]); lastReveal.current = 0; setClockReset(value => value + 1); onRefresh(); }}><Icon name="refresh" /></button>
     </div></div></div>
     <div className="home-belt-viewport" style={{ width: layout.width, marginLeft: -layout.overhang }}
