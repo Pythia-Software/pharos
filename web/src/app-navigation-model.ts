@@ -43,6 +43,7 @@ export function appSections(settings: readonly NestedPage[], params: URLSearchPa
 
 /** Resolve old analysis links too: opening navigation never rewrites a query. */
 export function appLocation(path: string, params: URLSearchParams) {
+  if (path === "/cards") return { section: "home", current: "/cards" };
   if (path.startsWith("/settings")) return { section: "settings", current: path };
   if (path.startsWith("/tl1")) return { section: "tl1", current: path };
   if (path === "/tools") return { section: "analyze", current: `query:${params.get("tools_view") === "summary" ? "tools" : params.get("tools_view") === "skills" ? "skill_usages" : "tool_calls"}` };
@@ -63,5 +64,5 @@ export function appLocation(path: string, params: URLSearchParams) {
 
 export function appLocationLabel(sections: readonly AppSection[], selected: ReturnType<typeof appLocation>) {
   const section = sections.find(item => item.id === selected.section) ?? sections[0];
-  return { section, page: nestedPageTrail(section.pages, selected.current).at(-1) };
+  return { section, page: selected.current === "/cards" ? { id: "/cards", label: "Card Library", href: "/cards" } : nestedPageTrail(section.pages, selected.current).at(-1) };
 }
