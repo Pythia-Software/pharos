@@ -36,7 +36,7 @@ const ROUTES = [
     shown: ".usage-workspace-table .qt-row",
   }))),
   ...['provisional', 'partial'].flatMap(state => [false, true].map(expanded => ({
-    name: `Indexing forecast (${state}${expanded ? ', details' : ''})`, url: '/library', ready: '#pharosDrive',
+    name: `Indexing forecast (${state}${expanded ? ', details' : ''})`, url: '/library', ready: '#queryTableLibrary .qt-row',
     api: {'GET /api/library/status': {...defaultApi['GET /api/library/status'], idle: false, activities: [{id: 'index-forecast', kind: 'sync', label: 'Capture & index', started_at: new Date(Date.now() - 120_000).toISOString(),
       stoppable: true, stop_path: '/api/index/cancel', detail: 'Codex · 0 of 4 sources finished',
       work: {phase: 'discovering inputs', source: 'Codex', done: 0, total: 0, next: 'Tools, authorship and findings'},
@@ -44,7 +44,7 @@ const ROUTES = [
       forecast: {state, low_seconds: state === 'provisional' ? 180 : 0, high_seconds: state === 'provisional' ? 600 : 0, predicted_steps: state === 'provisional' ? 4 : 3, remaining_steps: 4, basis: 'Remaining sources and analyses on this Mac', unknown_steps: state === 'partial' ? ['Classify authorship for retained conversations'] : []}}]}},
     open: async page => {
       await page.evaluate(() => { window.webkit = {messageHandlers: {pharosLibrary: {postMessage: async () => {}}}}; });
-      await page.locator('#pharosDrive').click();
+      await activateHeaderTool(page, 'pharosDrive');
       if (expanded) await page.locator('#pharosDrivePanel summary').click();
     }, shown: '#pharosDrivePanel .pharos-activity',
   }))),
@@ -181,34 +181,48 @@ for (const width of [1440, 390, 320]) test(`Search filter suggestions stay reada
   assert.ok(await input.evaluate(element => document.activeElement === element));
 });
 
-test('header tools use available space and primary navigation stays centered while resizing', { skip }, async t => {
+test('header centers navigation and collects actions before adding a dropdown row', { skip }, async t => {
   const { page, settled, shot } = await open(t, { url: '/library', ready: '#queryTableLibrary .qt-row' });
+  const desktopButton = await page.locator('#themeToggle').boundingBox();
   const more = page.getByRole('button', { name: 'More tools', exact: true });
-  for (const width of [1440, 1350, 1280, 1180, 1050, 1024, 1001, 1000, 900, 760, 700, 390, 320, 1280]) {
+  for (const width of [1440, 1350, 1280, 1180, 1050, 1024, 1001, 1000, 900, 760, 700, 620, 560, 520, 480, 390, 320, 1280]) {
     await page.setViewportSize({ width, height: 900 });
     await settled();
     if (width === 1280 || width === 1350) assert.equal(await more.isVisible(), false, `tools still fit at ${width}px`);
     const bounds = await page.evaluate(() => {
-      const bar = document.querySelector('body > header .bar'), style = getComputedStyle(bar);
-      const box = bar.getBoundingClientRect();
       const tabs = document.querySelector('body > header .tabs');
+      const bar = document.querySelector('body > header .bar'), style = getComputedStyle(bar), box = bar.getBoundingClientRect();
       return {
-        center: (box.left + parseFloat(style.paddingLeft) + box.right - parseFloat(style.paddingRight)) / 2,
+        left: box.left + parseFloat(style.paddingLeft), right: box.right - parseFloat(style.paddingRight), gap: parseFloat(style.columnGap),
+        switcher: document.querySelector('#appNavigationToggle')?.checkVisibility() ? document.querySelector('#appNavigationToggle').getBoundingClientRect().toJSON() : null,
         tabs: tabs.getClientRects().length ? tabs.getBoundingClientRect().toJSON() : null,
         brand: document.querySelector('body > header .brand').getBoundingClientRect().toJSON(),
         tools: document.querySelector('body > header .header-icons').getBoundingClientRect().toJSON(),
       };
     });
-    const { tabs, brand, tools } = bounds;
-    assert.ok(brand.right <= tools.left, `brand and tools stay apart at ${width}px`);
+    const { tabs, brand, tools, switcher, left, right, gap } = bounds;
+    assert.ok(tabs ?? switcher, `navigation stays reachable at ${width}px`);
+    assert.ok(brand.right <= tools.left, `brand and actions stay apart at ${width}px`);
+    const center = rect => (rect.top + rect.bottom) / 2;
+    assert.ok(Math.abs(center(brand) - center(tools)) < 1, `brand and actions share the first row at ${width}px`);
     if (tabs) {
-      assert.ok(Math.abs((tabs.left + tabs.right) / 2 - bounds.center) < 1, `navigation is centered at ${width}px`);
-      if (tabs.top < brand.bottom) {
-        assert.ok(brand.right <= tabs.left && tabs.right <= tools.left, `navigation and tools stay apart at ${width}px`);
-      }
-      const buttons = await page.getByRole('navigation', { name: 'Primary navigation', exact: true }).getByRole('button').all();
-      const first = await buttons[0].boundingBox(), last = await buttons.at(-1).boundingBox();
-      assert.ok(Math.abs((first.x + last.x + last.width) / 2 - bounds.center) < 1, `navigation buttons are centered at ${width}px`);
+      assert.ok(brand.right <= tabs.left && tabs.right <= tools.left, `navigation fits between the edges at ${width}px`);
+      assert.ok(Math.abs(center(brand) - center(tabs)) < 1, `tabs stay on the first row at ${width}px`);
+      const side = (right - left - tabs.width) / 2 - gap;
+      if (brand.width <= side && tools.width <= side) assert.ok(Math.abs((tabs.left + tabs.right - left - right) / 2) < 1, `navigation is centered on wide screens at ${width}px`);
+    } else {
+      assert.ok(switcher.top >= Math.max(brand.bottom, tools.bottom), `dropdown gets a second row at ${width}px`);
+      assert.ok(switcher.left >= left && switcher.right <= right, `dropdown stays within the header at ${width}px`);
+    }
+    assert.equal(await page.locator('body > header .brand > .brand-words .brand-tagline').isVisible(), true, 'the motto remains visible');
+    const button = await page.locator('#themeToggle').boundingBox();
+    if (button) {
+      assert.equal(button.width, desktopButton.width, 'actions keep their desktop width');
+      assert.equal(button.height, desktopButton.height, 'actions keep their desktop height');
+    }
+    if (await more.isVisible()) {
+      const moreBox = await more.boundingBox();
+      assert.ok(moreBox.x < (button?.x ?? Infinity), 'More sits to the left of retained actions');
     }
     assert.deepEqual(await layoutProblems(page), []);
     await shot(`header-${width}`);
@@ -217,12 +231,19 @@ test('header tools use available space and primary navigation stays centered whi
 
 test('header fit responds to tool choices and label changes without resizing', { skip }, async t => {
   const { page, settled } = await open(t, {
-    url: '/settings/header', viewport: { width: 1180, height: 900 }, ready: '#headerActive .header-tool',
+    url: '/settings/header', viewport: { width: 1440, height: 900 }, ready: '#headerActive .header-tool',
     preferences: { 'pharos-header-tools-v1': ['library', 'search', 'summary', 'settings', 'theme'] },
   });
+  const width = await page.evaluate(() => {
+    const bar = document.querySelector('body > header .bar'), style = getComputedStyle(bar);
+    return Math.ceil([...bar.querySelectorAll(':scope > .brand, :scope > .tabs, :scope > .header-icons')].reduce((total, element) => total + element.getBoundingClientRect().width, 0)
+      + 2 * parseFloat(style.columnGap) + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) + document.querySelector('#themeToggle').getBoundingClientRect().width / 2);
+  });
+  await page.setViewportSize({ width, height: 900 });
+  await settled();
   const more = page.getByRole('button', { name: 'More tools', exact: true });
   assert.equal(await more.isVisible(), false, 'a smaller tool selection fits');
-  const name = page.locator('body > header .pharos-drive-name');
+  const name = page.locator('#headerLibrary .pharos-drive-name');
   const original = await name.textContent();
   await name.evaluate(element => { element.textContent = 'A library with a much longer drive label'; });
   await more.waitFor();
@@ -234,6 +255,13 @@ test('header fit responds to tool choices and label changes without resizing', {
   await page.getByRole('button', { name: 'Arrange Back / forward', exact: true }).focus();
   await page.keyboard.press('Delete');
   await more.waitFor({ state: 'hidden' });
+  const navigation = page.getByRole('navigation', { name: 'Primary navigation', exact: true });
+  const tab = page.locator('body > header .tabs button[data-view="library"]'), label = await tab.textContent();
+  await tab.evaluate(button => { button.textContent = button.textContent.repeat(10); });
+  await page.locator('#appNavigationToggle').waitFor();
+  assert.deepEqual(await layoutProblems(page), [], 'renamed navigation can switch rows without resizing');
+  await tab.evaluate((button, label) => { button.textContent = label; }, label);
+  await navigation.waitFor();
   await settled();
 });
 
@@ -255,10 +283,12 @@ test("macOS window controls stay clear of the lighthouse when resizing", { skip 
     }
     document.body.append(controls);
   });
-  for (const width of [1180, 1440, 2133, 800, 620, 1180]) {
+  for (const width of [1180, 1440, 2133, 800, 620, 390, 320, 1180]) {
     await page.setViewportSize({ width, height: 900 });
     await settled();
     const brand = page.locator('body > header .brand');
+    assert.equal(await brand.locator('.brand-mark').isVisible(), true, 'lighthouse stays visible');
+    assert.equal(await brand.locator(':scope > .brand-words .brand-tagline').isVisible(), true, 'motto stays visible in the native app');
     const controls = await page.locator('#nativeWindowControls').boundingBox();
     const windowed = await brand.boundingBox();
     assert.ok(windowed.x >= controls.x + controls.width, `lighthouse clears window controls at ${width}px`);

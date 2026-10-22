@@ -229,9 +229,11 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 640 }
   });
 }
 
-for (const viewport of [{ width: 1024, height: 720 }, { width: 390, height: 844 }]) {
+for (const viewport of [{ width: 850, height: 720 }, { width: 390, height: 844 }]) {
   test(`overflowed header tools remain live and restore focus at ${viewport.width}px`, { skip }, async t => {
-    const { page } = await open(t, { url: '/library', viewport, ready: '#queryTableLibrary .qt-row' });
+    const { page } = await open(t, { url: '/library', viewport, ready: '#queryTableLibrary .qt-row',
+      preferences: { 'pharos-header-tools-v1': ['summary', 'theme', 'history', 'library', 'search', 'settings'] },
+    });
     const more = page.getByRole('button', { name: 'More tools', exact: true });
     await press(more);
     const popup = page.getByRole('dialog', { name: 'Header tools' });
@@ -304,24 +306,24 @@ test('header focus survives resizing while its tool remains inline', { skip }, a
   await page.setViewportSize({ width: 1600, height: 900 });
   await settled();
   await page.waitForFunction(element => document.activeElement === element, await settings.elementHandle());
-  const search = page.locator('#searchToggle');
-  await search.focus();
+  const theme = page.locator('#themeToggle');
+  await theme.focus();
   for (const width of [1280, 390, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     await settled();
-    await page.waitForFunction(element => document.activeElement === element, await search.elementHandle());
+    await page.waitForFunction(element => document.activeElement === element, await theme.elementHandle());
   }
 });
 
 test('header focus stays reachable when its tool moves between inline and overflow', { skip }, async t => {
   const { page } = await open(t, { url: '/library', viewport: { width: 1440, height: 900 }, ready: '#queryTableLibrary .qt-row' });
-  await page.locator('#themeToggle').focus();
+  await page.locator('#searchToggle').focus();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForFunction(() => document.activeElement === document.getElementById('headerMore'));
   await press(page.locator('#headerMore'));
-  await page.locator('#themeToggle').focus();
+  await page.locator('#searchToggle').focus();
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.waitForFunction(() => document.activeElement === document.getElementById('themeToggle'));
+  await page.waitForFunction(() => document.activeElement === document.getElementById('searchToggle'));
 });
 
 test("MCP call details take focus, keep it and return it on Escape", { skip }, async t => {
