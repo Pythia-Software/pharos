@@ -17,6 +17,17 @@ import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/que
 const work = `/work/${workID}`;
 const exploreGroupedSearch = `/library?${new URLSearchParams({ q_library: encodeQuery(withGroupingKeys({ ...EMPTY_QUERY, select: [{ field: "repository_name" }], where: [{ field: "repository_name", op: "=", value: "repo-1" }] }, ["repository_name"])), search: "cache", text_plain: "1" })}`;
 const ROUTES = [
+  ...["usage", "writing", "writing_messages", "conversation_activity", "tool_calls", "tools", "skill_usages", "mcp_calls", "parallelism"].flatMap(dataset => [false, true].map(explore => ({
+    name: `Query ideas ${explore ? "Explore " : ""}${dataset}`,
+    url: `/analyze?analyze_mode=query&analyze_data=${dataset}`,
+    ready: ".usage-workspace-table .qt-row",
+    open: async page => {
+      const chip = explore ? page.getByRole("group", { name: "Explore query ideas", exact: true }).getByRole("button").last() : page.locator(".usage-query-ideas .query-chip").first();
+      await chip.click();
+      await page.getByRole("link", { name: "Matching records", exact: true }).first().waitFor();
+    },
+    shown: ".usage-workspace-table .qt-row",
+  }))),
   ...['provisional', 'partial'].flatMap(state => [false, true].map(expanded => ({
     name: `Indexing forecast (${state}${expanded ? ', details' : ''})`, url: '/library', ready: '#pharosDrive',
     api: {'GET /api/library/status': {...defaultApi['GET /api/library/status'], idle: false, activities: [{id: 'index-forecast', kind: 'sync', label: 'Capture & index', started_at: new Date(Date.now() - 120_000).toISOString(),

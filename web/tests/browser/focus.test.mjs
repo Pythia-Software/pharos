@@ -451,3 +451,26 @@ test("the expanded feedback panel stays inside a 360px viewport", { skip }, asyn
   const box = await onScreen(page.locator(".feedback-toolbar"));
   assert.equal(box, true, `expanded toolbar at [${box}] in 360×420`);
 });
+
+test("Query ideas disclosure supports keyboard toggles and restores the saved preference", { skip }, async t => {
+  const app = await open(t, { url: "/analyze?analyze_mode=query&analyze_data=tool_calls", ready: ".usage-workspace-table .qt-row" });
+  const { page } = app;
+  const summary = page.locator(".usage-query-ideas > summary");
+  const chip = page.locator(".usage-query-ideas .query-chip").first();
+  await chip.waitFor();
+  const saved = page.waitForResponse(response => response.url().endsWith("/api/preferences") && response.request().method() === "POST");
+  await summary.focus();
+  await page.keyboard.press("Enter");
+  await chip.waitFor({ state: "hidden" });
+  await saved;
+  assert.equal(await summary.evaluate(element => element === document.activeElement), true);
+  await page.reload();
+  await page.locator(".usage-workspace-table .qt-row").first().waitFor();
+  await chip.waitFor({ state: "hidden" });
+  await summary.focus();
+  await page.keyboard.press("Enter");
+  await chip.waitFor();
+  assert.equal(await summary.evaluate(element => element === document.activeElement), true);
+  await app.settled();
+  await app.shot("query-ideas-keyboard");
+});
