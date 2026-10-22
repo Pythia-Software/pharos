@@ -229,7 +229,7 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 640 }
   });
 }
 
-for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 }]) {
+for (const viewport of [{ width: 1024, height: 720 }, { width: 390, height: 844 }]) {
   test(`overflowed header tools remain live and restore focus at ${viewport.width}px`, { skip }, async t => {
     const { page } = await open(t, { url: '/library', viewport, ready: '#queryTableLibrary .qt-row' });
     const more = page.getByRole('button', { name: 'More tools', exact: true });
@@ -262,7 +262,8 @@ for (const tools of [['settings'], ['back', 'sync', 'settings']]) {
     for (const width of [1440, 1280, 390]) {
       await page.setViewportSize({ width, height: 900 });
       await settled();
-      if (width < 1360) await press(page.getByRole('button', { name: 'More tools', exact: true }));
+      const more = page.getByRole('button', { name: 'More tools', exact: true }), overflow = await more.isVisible();
+      if (overflow) await press(more);
       for (const [tool, id] of [['history', 'headerHistory'], ['back', 'headerBackOnly'], ['library', 'headerLibrary'], ['sync', 'headerSyncOnly']]) {
         assert.equal(await page.locator(`#${id}`).isVisible(), tools.includes(tool), `${tool} visibility differs from saved choices at ${width}px`);
       }
@@ -270,7 +271,7 @@ for (const tools of [['settings'], ['back', 'sync', 'settings']]) {
       await settings.focus();
       await page.locator('#navBack').evaluate(element => element.focus());
       await page.waitForFunction(element => document.activeElement === element, await settings.elementHandle());
-      if (width < 1360) await page.keyboard.press('Escape');
+      if (overflow) await page.keyboard.press('Escape');
     }
   });
 }

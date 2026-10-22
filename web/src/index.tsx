@@ -843,21 +843,20 @@ function LibraryPage() {
   const [editorValue, setEditorValue] = useState(initial.draft);
   const [applied, setApplied] = useState<TextSearchDraft | null>(initial.active ? initial.draft : null);
   const [initialError, setInitialError] = useState(initial.error);
-  const [cursor, setCursor] = useState(() => new URLSearchParams(location.search).get("text_cursor") ?? "");
   const [kind, setKind] = useState<FindKind>(() => (new URLSearchParams(location.search).get("kind") as FindKind) || "text");
   const [fileDraft, setFileDraft] = useState(() => new URLSearchParams(location.search).get("search") ?? "");
   const [fileSearch, setFileSearch] = useState(fileDraft);
   const [fileCase, setFileCase] = useState(() => new URLSearchParams(location.search).get("case") === "1");
   const [fileCaseDraft, setFileCaseDraft] = useState(fileCase);
   const [view, setView] = useState<LibraryView>(() => new URLSearchParams(location.search).get("view") === "conversation" ? "conversation" : "table");
-  const clearText = () => { const empty = newKeywordSearch(); setEditorValue(empty); setApplied(null); setCursor(""); setInitialError(""); };
+  const clearText = () => { const empty = newKeywordSearch(); setEditorValue(empty); setApplied(null); setInitialError(""); };
   useEffect(() => { clearLibrarySearch = () => { clearText(); setFileSearch(""); setFileDraft(""); }; return () => { clearLibrarySearch = undefined; }; }, []);
   useEffect(() => {
     const restore = () => {
       if (!shared && location.pathname !== "/library") return;
       const params = new URLSearchParams(location.search), next = readTextSearch(params);
       setEditorValue(next.draft); setApplied(next.active ? next.draft : null); setInitialError(next.error);
-      setKind((params.get("kind") as FindKind) || "text"); setCursor(params.get("text_cursor") ?? "");
+      setKind((params.get("kind") as FindKind) || "text");
       setFileDraft(params.get("search") ?? ""); setFileSearch(params.get("search") ?? "");
       setFileCase(params.get("case") === "1"); setFileCaseDraft(params.get("case") === "1");
       setView(params.get("view") === "conversation" ? "conversation" : "table");
@@ -871,14 +870,13 @@ function LibraryPage() {
     for (const key of [...url.searchParams.keys()]) if (key.startsWith("text_") || ["search", "fuzzy", "case", "separators", "kind"].includes(key)) url.searchParams.delete(key);
     if (kind === "text") {
       if (applied) url.searchParams.set("text_builder", JSON.stringify(applied));
-      if (cursor) url.searchParams.set("text_cursor", cursor);
     } else { url.searchParams.set("kind", kind); if (fileSearch) url.searchParams.set("search", fileSearch); if (fileCase) url.searchParams.set("case", "1"); }
     if (view === "conversation") url.searchParams.set("view", view); else url.searchParams.delete("view");
     if (url.href !== location.href) { history.replaceState(null, "", url); window.dispatchEvent(new Event("pharos:uri-changed")); }
-  }, [locationRevision, applied, kind, cursor, view, fileSearch, fileCase, initialError]);
+  }, [locationRevision, applied, kind, view, fileSearch, fileCase, initialError]);
   const fileParams = new URLSearchParams({ find: fileSearch, find_kind: kind });
   if (fileCase) fileParams.set("find_case", "1");
-  const find = shared ? "" : kind === "text" ? applied ? textFindParameters(applied, cursor) : "" : fileSearch ? fileParams.toString() : "";
+  const find = shared ? "" : kind === "text" ? applied ? textFindParameters(applied) : "" : fileSearch ? fileParams.toString() : "";
   const [found, setFound] = useState<FindSummary | null>(null);
   useEffect(() => { setFound(null); }, [find]);
   return <div className={`pharos-query-page${find ? " library-searching" : ""}`}>
@@ -891,22 +889,16 @@ function LibraryPage() {
       summary={kind === "text" && applied ? searchSentence(applied).parts.map(part => typeof part === "string" ? part : part.value).join("") : `${fileSearch}${fileCase ? " · case sensitive" : ""}`}
       onClear={() => { clearText(); setFileSearch(""); setFileDraft(""); }}>
       {(close, draftKind, setDraftKind) => <TextSearchEditor compact sentence={false} value={editorValue} active={!!applied} initialError={initialError} kind={draftKind} onKind={setDraftKind}
-        onApply={next => { if (kind === "text" && textFindParameters(next) === find) api.refresh(); setKind("text"); setEditorValue(next); setApplied(next); setInitialError(""); setCursor(""); close(); }} onClear={clearText}
-        file={{ text: fileDraft, caseSensitive: fileCaseDraft, active: !!fileSearch, dirty: fileDraft.trim() !== fileSearch || fileCaseDraft !== fileCase, onText: setFileDraft, onCase: setFileCaseDraft, onApply: () => { setKind(draftKind); setCursor(""); setInitialError(""); setFileSearch(fileDraft.trim()); setFileCase(fileCaseDraft); close(); }, onClear: () => { setFileDraft(""); setFileSearch(""); } }}
+        onApply={next => { if (kind === "text" && textFindParameters(next) === find) api.refresh(); setKind("text"); setEditorValue(next); setApplied(next); setInitialError(""); close(); }} onClear={clearText}
+        file={{ text: fileDraft, caseSensitive: fileCaseDraft, active: !!fileSearch, dirty: fileDraft.trim() !== fileSearch || fileCaseDraft !== fileCase, onText: setFileDraft, onCase: setFileCaseDraft, onApply: () => { setKind(draftKind); setInitialError(""); setFileSearch(fileDraft.trim()); setFileCase(fileCaseDraft); close(); }, onClear: () => { setFileDraft(""); setFileSearch(""); } }}
         context={<p className="explore-search-context">Search inside retained messages, file changes, or visited URLs. Use <b>where</b> in the query builder to filter workspaces.</p>}
         workspaceScope={{ filters: [] }} orderControl={null} />}
-    </ExploreSearch>} controls={shared ? undefined : (api) => <>
+    </ExploreSearch>} controls={shared ? undefined : () => <>
     {find && found ? <div className="library-find-status muted" role="status">
-      <p><strong>{found.workspaces.toLocaleString()} matching workspace{found.workspaces === 1 ? "" : "s"}{found.search ? " in this batch" : ""}.</strong>{found.search ? found.search.complete ? " All eligible messages have been checked." : found.search.next_cursor ? " More messages remain to check. Continue the search to see the next batch." : " Some messages could not be checked." : found.limited ? " Search limit reached; narrow the search." : ""}</p>
-      {found.search?.stop_message ? <p>{found.search.stop_message}</p> : null}
-      {found.workspaces === 0 && found.search?.complete ? <p>No messages matched these conditions. Try switching “and” to “or”, remove a condition, or choose a broader target.</p> : null}
-      {found.search?.skipped_oversize ? <p>{found.search.skipped_oversize.toLocaleString()} large messages were skipped. Missing results may still be in those messages.</p> : null}
-      {found.search ? <details><summary>Search details and coverage</summary><p>{found.search.candidates.toLocaleString()} candidates checked; {(found.search.verified_bytes / 1048576).toFixed(1)} MiB verified in {found.search.elapsed_ms} ms. {found.search.complete ? "Complete" : `Stopped: ${found.search.stop_reason.replaceAll("_", " ")}`}. Table counts and metrics describe this batch. Ordering applies within this batch.</p><p>{found.search.coverage}</p>{found.search.expansions && Object.keys(found.search.expansions).length ? <p>Word variations: {Object.entries(found.search.expansions).map(([word, terms]) => `${word} → ${terms.join(", ")}`).join("; ")}</p> : null}</details> : null}
-      {found.search?.next_cursor ? <button type="button" onClick={() => setCursor(found.search!.next_cursor)}>Continue to next batch</button> : null}
-      {withheldBatch(found.search) ? <button type="button" onClick={() => api.refresh()}>Retry this batch</button> : null}
-      {cursor ? <button type="button" onClick={() => setCursor("")}>Start over</button> : null}
+      <p>Limit controls workspace rows after filtering and sorting. Counts and metrics include the full matching population.</p>
+      {found.workspaces === 0 ? <p>No messages matched these conditions. Try switching “and” to “or”, remove a condition, or choose a broader target.</p> : null}
+      {found.search ? <details><summary>Search details</summary><p>{found.search.count.toLocaleString()} matching messages; {found.search.elapsed_ms} ms. All eligible messages checked.</p><p>{found.search.coverage}</p>{found.search.expansions && Object.keys(found.search.expansions).length ? <p>Word variations: {Object.entries(found.search.expansions).map(([word, terms]) => `${word} → ${terms.join(", ")}`).join("; ")}</p> : null}</details> : null}
     </div> : null}
-    {cursor && !found ? <button type="button" onClick={() => setCursor("")}>Restart search from the beginning</button> : null}
     </>} />
   </div>;
 }

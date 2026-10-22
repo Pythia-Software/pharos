@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // LibraryFind searches the evidence itself. Text results are grouped by the
@@ -16,29 +17,33 @@ type LibraryFindOptions struct {
 	Kind, Query                      string
 	Fuzzy, CaseSensitive, Separators bool
 	Limit, Offset                    int
-	limited                          *bool
-	Search                           TextSearchOptions
-	searchResult                     *textSearchResult
+	// WorkspaceRows establishes the complete keyword population for the table.
+	// Its Limit/offset are applied later, to filtered and sorted workspace rows.
+	WorkspaceRows bool `json:"workspace_rows,omitempty"`
+	limited       *bool
+	Search        TextSearchOptions
+	searchResult  *textSearchResult
 }
 
 type libraryHit struct {
-	WorkspaceID    string `json:"workspace_id"`
-	ConversationID string `json:"conversation_id,omitempty"`
-	Title          string `json:"title"`
-	Provider       string `json:"provider,omitempty"`
-	StartedAt      string `json:"started_at,omitempty"`
-	MessageID      string `json:"message_id,omitempty"`
-	Role           string `json:"role,omitempty"`
-	MessageKind    string `json:"message_kind,omitempty"`
-	Snippet        string `json:"snippet,omitempty"`
-	Path           string `json:"path,omitempty"`
-	OldPath        string `json:"old_path,omitempty"`
-	URL            string `json:"url,omitempty"`
-	URLSource      string `json:"url_source,omitempty"`
-	ToolName       string `json:"tool_name,omitempty"`
-	ToolCallID     string `json:"tool_call_id,omitempty"`
-	Attribution    string `json:"attribution,omitempty"`
-	Count          int    `json:"count"`
+	deferredEvidence bool
+	WorkspaceID      string `json:"workspace_id"`
+	ConversationID   string `json:"conversation_id,omitempty"`
+	Title            string `json:"title"`
+	Provider         string `json:"provider,omitempty"`
+	StartedAt        string `json:"started_at,omitempty"`
+	MessageID        string `json:"message_id,omitempty"`
+	Role             string `json:"role,omitempty"`
+	MessageKind      string `json:"message_kind,omitempty"`
+	Snippet          string `json:"snippet,omitempty"`
+	Path             string `json:"path,omitempty"`
+	OldPath          string `json:"old_path,omitempty"`
+	URL              string `json:"url,omitempty"`
+	URLSource        string `json:"url_source,omitempty"`
+	ToolName         string `json:"tool_name,omitempty"`
+	ToolCallID       string `json:"tool_call_id,omitempty"`
+	Attribution      string `json:"attribution,omitempty"`
+	Count            int    `json:"count"`
 }
 
 var libraryWords = regexp.MustCompile(`[\pL\pN]+`)
@@ -63,9 +68,8 @@ func (c *Catalog) LibraryFind(ctx context.Context, o LibraryFindOptions) (map[st
 	return map[string]any{"items": hits[offset:end], "total": total, "limit": limit, "offset": offset, "limited": limited, "search": searchResult}, nil
 }
 
-// libraryFindHits returns a bounded batch and whether more work remains.
-// Text uses reverse index order and execution budgets; files and URLs retain
-// their existing ordering and 5,000-record cap.
+// libraryFindHits returns keyword evidence. WorkspaceRows requests the full
+// population; standalone searches retain message batching or file/URL caps.
 func (c *Catalog) libraryFindHits(ctx context.Context, o LibraryFindOptions) ([]libraryHit, bool, error) {
 	o.Query = strings.TrimSpace(o.Query)
 	if o.Query == "" && o.Search.Where == nil {
@@ -227,9 +231,10 @@ func (c *Catalog) fuzzyTermsWith(ctx context.Context, word string, prefixLength,
 	return terms, nil
 }
 
-// libraryFindTextLimit bounds the messages a Library text find reads. Tests
-// lower it.
+// Only standalone message/conversation search is paged by matching messages.
+// Workspace table searches do not use this bound.
 var libraryFindTextLimit = 5000
+var libraryFindWorkspaceTimeout = queryTableDeadline
 
 func (c *Catalog) findText(ctx context.Context, o LibraryFindOptions) ([]libraryHit, error) {
 	options := o.Search
@@ -238,7 +243,18 @@ func (c *Catalog) findText(ctx context.Context, o LibraryFindOptions) ([]library
 	options.CaseSensitive = o.CaseSensitive
 	options.Separators = o.Separators
 	options.SelectedOnly = true
+	options.workspaceRows = o.WorkspaceRows
 	options.Limit = libraryFindTextLimit
+	if options.TimeoutMS == 0 {
+		if o.WorkspaceRows {
+			options.TimeoutMS = int(libraryFindWorkspaceTimeout.Milliseconds())
+		} else {
+			options.TimeoutMS = 700
+		}
+	}
+	if o.WorkspaceRows && options.Cursor != "" {
+		return nil, fmt.Errorf("workspace searches use the table's Limit and offset; restart without a message cursor")
+	}
 	result, err := c.SearchText(ctx, options)
 	if err != nil {
 		return nil, err
@@ -253,7 +269,7 @@ func (c *Catalog) findText(ctx context.Context, o LibraryFindOptions) ([]library
 	hits := []libraryHit{}
 	for _, item := range result.Items {
 		if i, ok := groups[item.ConversationID]; ok {
-			hits[i].Count++
+			hits[i].Count += item.Count
 			continue
 		}
 		groups[item.ConversationID] = len(hits)
@@ -263,15 +279,28 @@ func (c *Catalog) findText(ctx context.Context, o LibraryFindOptions) ([]library
 }
 
 func searchSnippet(body string, start, end int) string {
-	runes := []rune(body)
-	start = len([]rune(body[:min(max(start, 0), len(body))]))
-	end = len([]rune(body[:min(max(end, 0), len(body))]))
-	lo, hi := max(0, start-90), min(len(runes), end+130)
-	text := strings.TrimSpace(string(runes[lo:hi]))
+	start = min(max(start, 0), len(body))
+	end = min(max(end, start), len(body))
+	for start > 0 && start < len(body) && !utf8.RuneStart(body[start]) {
+		start--
+	}
+	for end < len(body) && !utf8.RuneStart(body[end]) {
+		end++
+	}
+	lo, hi := start, end
+	for i := 0; i < 90 && lo > 0; i++ {
+		_, size := utf8.DecodeLastRuneInString(body[:lo])
+		lo -= size
+	}
+	for i := 0; i < 130 && hi < len(body); i++ {
+		_, size := utf8.DecodeRuneInString(body[hi:])
+		hi += size
+	}
+	text := strings.TrimSpace(body[lo:hi])
 	if lo > 0 {
 		text = "…" + text
 	}
-	if hi < len(runes) {
+	if hi < len(body) {
 		text += "…"
 	}
 	return text
@@ -283,17 +312,22 @@ func (c *Catalog) findFiles(ctx context.Context, o LibraryFindOptions) ([]librar
 		comparison = "instr(cf.path,?)>0 OR instr(COALESCE(cf.old_path,''),?)>0"
 	}
 	scope := ""
+	capSQL := " LIMIT 5001"
+	if o.WorkspaceRows {
+		capSQL = ""
+	}
 	args := []any{o.Query, o.Query}
 	if o.Search.WorkspaceIDs != nil {
 		scope = " AND cs.workspace_id IN (SELECT value FROM json_each(?))"
 		args = append(args, jsonText(o.Search.WorkspaceIDs))
 	}
 	rows, err := queryMapsContext(ctx, c.reader(), `WITH matching_changes AS (
-		SELECT cf.path,cf.old_path,cs.id change_set_id,cs.workspace_id,cs.created_at,cs.attempt_id
+		SELECT cf.path,cf.old_path,cs.id change_set_id,cs.workspace_id,cs.created_at,cs.attempt_id,ta.work_item_id attempt_work_item_id
 		FROM change_files cf JOIN change_sets cs ON cs.id=cf.change_set_id
+		LEFT JOIN task_attempts ta ON ta.id=cs.attempt_id
 		WHERE (`+comparison+`)`+scope+`
-		ORDER BY cs.created_at DESC LIMIT 5001
-	) SELECT cf.path,cf.old_path,cf.change_set_id,cf.workspace_id,cf.created_at,cf.attempt_id,w.title,
+		ORDER BY cs.created_at DESC`+capSQL+`
+	) SELECT cf.path,cf.old_path,cf.change_set_id,cf.workspace_id,cf.created_at,cf.attempt_id,cf.attempt_work_item_id,w.title,
 		c.id conversation_id,c.provider,c.started_at,c.ended_at,c.work_item_id
 		FROM matching_changes cf JOIN workspaces w ON w.id=cf.workspace_id
 		LEFT JOIN conversations c ON c.workspace_id=w.id`, args...)
@@ -307,7 +341,7 @@ func (c *Catalog) findFiles(ctx context.Context, o LibraryFindOptions) ([]librar
 		key := firstString(row["change_set_id"]) + "\x00" + firstString(row["path"])
 		byWork[key] = append(byWork[key], row)
 	}
-	if len(byWork) > 5000 {
+	if !o.WorkspaceRows && len(byWork) > 5000 {
 		*o.limited = true
 	}
 	hits := []libraryHit{}
@@ -318,8 +352,7 @@ func (c *Catalog) findFiles(ctx context.Context, o LibraryFindOptions) ([]librar
 			chosen = group
 		}
 		if len(chosen) == 0 && firstString(row["attempt_id"]) != "" {
-			var workItem string
-			_ = c.reader().QueryRowContext(ctx, `SELECT work_item_id FROM task_attempts WHERE id=?`, row["attempt_id"]).Scan(&workItem)
+			workItem := firstString(row["attempt_work_item_id"])
 			for _, candidate := range group {
 				if workItem != "" && firstString(candidate["work_item_id"]) == workItem {
 					chosen = append(chosen, candidate)
@@ -386,19 +419,25 @@ func (c *Catalog) findURLs(ctx context.Context, o LibraryFindOptions) ([]library
 		comparison = "instr(u.url,?)>0 OR instr(COALESCE(u.host,''),?)>0"
 	}
 	scope := ""
+	capSQL := " LIMIT 5001"
+	if o.WorkspaceRows {
+		capSQL = ""
+	}
 	args := []any{needle, needle}
 	if o.Search.WorkspaceIDs != nil {
 		scope = " AND t.workspace_id IN (SELECT value FROM json_each(?))"
 		args = append(args, jsonText(o.Search.WorkspaceIDs))
 	}
+	// Start with the small URL ledger. Letting SQLite drive this join from
+	// tool_calls' date index makes a missing URL walk millions of calls.
 	rows, err := queryMapsContext(ctx, c.reader(), `SELECT u.url,u.source,t.id tool_call_id,t.tool_name,t.call_message_id,t.conversation_id,
-		t.workspace_id,w.title,c.provider,c.started_at FROM tool_urls u JOIN tool_calls t ON t.id=u.tool_call_id
+		t.workspace_id,w.title,c.provider,c.started_at FROM tool_urls u CROSS JOIN tool_calls t ON t.id=u.tool_call_id
 		JOIN conversations c ON c.id=t.conversation_id JOIN workspaces w ON w.id=t.workspace_id
-		WHERE u.source<>'search_result' AND (`+comparison+`)`+scope+` ORDER BY t.started_at DESC LIMIT 5001`, args...)
+		WHERE u.source<>'search_result' AND (`+comparison+`)`+scope+` ORDER BY t.started_at DESC`+capSQL, args...)
 	if err != nil {
 		return nil, err
 	}
-	if len(rows) > 5000 {
+	if !o.WorkspaceRows && len(rows) > 5000 {
 		*o.limited = true
 		rows = rows[:5000]
 	}

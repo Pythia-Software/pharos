@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-	"unicode/utf8"
 )
 
 // TextSearchOptions is shared by HTTP, Library Find, and MCP search_text.
@@ -50,6 +49,10 @@ type TextSearchOptions struct {
 	MaxCandidates      int        `json:"max_candidates,omitempty"`
 	MaxBytes           int        `json:"max_bytes,omitempty"`
 	TimeoutMS          int        `json:"timeout_ms,omitempty"`
+	// Internal Library table execution: collect the whole workspace population,
+	// with one evidence item and an exact message count per workspace. Public
+	// message search retains its cursor, byte and candidate budgets.
+	workspaceRows bool
 }
 
 type textCapture struct {
@@ -214,7 +217,11 @@ func normalizeTextOptions(o *TextSearchOptions) error {
 	if o.TimeoutMS == 0 {
 		o.TimeoutMS = 1500
 	}
-	o.TimeoutMS = clamp(o.TimeoutMS, 1, 5000)
+	maxTimeout := 5000
+	if o.workspaceRows {
+		maxTimeout = int(queryTableDeadline.Milliseconds())
+	}
+	o.TimeoutMS = clamp(o.TimeoutMS, 1, maxTimeout)
 	switch o.Surface {
 	case "prose", "user", "assistant", "reasoning", "tools", "all", "typed", "pasted", "quoted", "resent", "template", "harness", "automated", "attachment":
 	default:
@@ -363,11 +370,16 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	strict := o.CaseSensitive || o.Separators
 	ordered := node.needsOrderedVerifier()
 	result.Strategy = "word_index"
-	from := `messages_fts f CROSS JOIN messages m ON m.id=f.message_id`
+	// Read IDs from the compact mapping. Fetching f.message_id makes FTS5
+	// read its stored content row, including large tool output. COALESCE
+	// keeps older/partially populated mappings usable without that read on
+	// the normal indexed path.
+	from := `messages_fts f LEFT JOIN message_fts_rows fr ON fr.fts_rowid=f.rowid CROSS JOIN messages m ON m.id=COALESCE(fr.message_id,f.message_id)`
 	ready, e := c.textSearchReady(ctx)
 	if e != nil {
 		return result, e
 	}
+	emptySurface := false
 	if o.Surface == "reasoning" && ready {
 		var n int
 		e = c.reader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM text_search_documents WHERE surface='reasoning')`).Scan(&n)
@@ -375,12 +387,14 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 			return result, e
 		}
 		if n == 0 {
+			emptySurface = true
 			result.Coverage = "No explicit thinking/reasoning/analysis messages are retained in this catalog. Embedded or discarded reasoning is not indexed as this surface."
 		}
 	}
 	small := o.Surface == "prose" || o.Surface == "user" || o.Surface == "assistant" || o.Surface == "reasoning" || span
-	if !scan && ready && small {
-		from = `messages_fts f CROSS JOIN text_search_documents d ON d.message_id=f.message_id CROSS JOIN messages m ON m.rowid=d.message_rowid`
+	hasDocuments := !scan && ready && small
+	if hasDocuments {
+		from = `messages_fts f LEFT JOIN message_fts_rows fr ON fr.fts_rowid=f.rowid CROSS JOIN text_search_documents d ON d.message_id=COALESCE(fr.message_id,f.message_id) CROSS JOIN messages m ON m.rowid=d.message_rowid`
 	}
 	key := "f.rowid"
 	match := "messages_fts MATCH ?"
@@ -388,6 +402,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	if scan {
 		result.Strategy = "scoped_scan"
 		from = "messages m"
+		hasDocuments = false
 		key = "m.rowid"
 		match = "1=1"
 		arguments = nil
@@ -401,6 +416,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 			return result, fmt.Errorf("this scan needs a conversation or workspace filter (or a ready small-surface index); token searches can cover the full archive")
 		}
 		if ready && small {
+			hasDocuments = true
 			result.Strategy = "surface_scan"
 			from = "text_search_documents d CROSS JOIN messages m ON m.rowid=d.message_rowid"
 			key = "d.message_rowid"
@@ -414,38 +430,36 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 			}
 		}
 		// Trigrams cover messages, not reasoning or arbitrary tool output. Use only
-		// mandatory case-sensitive ASCII literals, and only once backfill is complete.
+		// mandatory ASCII literals with safe case folding, once backfill completes.
 		if o.Surface == "user" || o.Surface == "assistant" || span {
-			literal := node.Text
+			var candidate string
 			if node.Op == "regex" {
 				expr, _ := syntax.Parse(verify.String(), syntax.Perl)
-				literal = textRegexRequiredLiteral(expr)
+				candidate = textRegexTrigrams(expr)
+			} else {
+				candidate = textLiteralTrigram(node.Text, !o.CaseSensitive)
 			}
-			if !o.CaseSensitive {
-				literal = asciiFoldLiteral(literal)
-			}
-			ascii := true
-			for _, r := range literal {
-				if r > 127 {
-					ascii = false
+			if candidate != "" {
+				progress, e := c.substringIndexProgress(ctx)
+				if e != nil {
+					return result, e
 				}
-			}
-			progress, e := c.substringIndexProgress(ctx)
-			if e != nil {
-				return result, e
-			}
-			if ascii && utf8.RuneCountInString(literal) >= 3 && progress.Ready {
-				result.Strategy = "trigram_verify"
-				from = "messages_trigram f CROSS JOIN message_fts_rows fr ON fr.fts_rowid=f.rowid CROSS JOIN messages m ON m.id=fr.message_id"
-				key = "f.rowid"
-				match = "messages_trigram MATCH ?"
-				arguments = []any{quoteFTS(literal)}
+				if progress.Ready {
+					result.Strategy = "trigram_verify"
+					from = "messages_trigram f CROSS JOIN message_fts_rows fr ON fr.fts_rowid=f.rowid CROSS JOIN messages m ON m.id=fr.message_id"
+					if ready {
+						from = "messages_trigram f CROSS JOIN message_fts_rows fr ON fr.fts_rowid=f.rowid CROSS JOIN text_search_documents d ON d.message_id=fr.message_id CROSS JOIN messages m ON m.rowid=d.message_rowid"
+					}
+					key = "f.rowid"
+					match = "messages_trigram MATCH ?"
+					arguments = []any{candidate}
+				}
 			}
 		}
 	}
-	// Classified spans are a genuinely small corpus. On the replica, seeking
-	// the global FTS index once per authored message took >5s; streaming the
-	// existing surface index and tokenizing bounded spans avoids that plan.
+	// Sparse classified spans are cheaper to stream by user-message order than
+	// to reject tool postings in the global word index. A cheap ASCII prefilter
+	// below avoids tokenizing spans that cannot contain the positive words.
 	if span && !scan && ready {
 		result.Strategy = "span_scan"
 		from = "text_search_documents d CROSS JOIN messages m ON m.rowid=d.message_rowid"
@@ -480,7 +494,10 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	pageStart := cursor
 	pageBefore := cursor.Before
 	clauses := []string{match, key + "<?", textSurfacePredicate(o.Surface)}
-	if !scan && ready && small && o.Surface != "prose" {
+	if emptySurface || (o.WorkspaceIDs != nil && len(o.WorkspaceIDs) == 0) {
+		clauses = append(clauses, "0=1")
+	}
+	if ready && hasDocuments && o.Surface != "prose" {
 		surface := o.Surface
 		if span {
 			surface = "user"
@@ -488,7 +505,20 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 		clauses = append(clauses, "d.surface="+quoteSQLText(surface))
 	}
 	arguments = append(arguments, cursor.Before)
-	filters, values, e := messageFilters(textFilterArgs(o), "m.", false)
+	// Sparse instruction roles can reject millions of global postings inside
+	// one SQL Next call. Yield their positions before rejecting the role so
+	// deadlines and candidate limits always leave resumable progress.
+	eligibleSQL := "1"
+	filterOptions := textFilterArgs(o)
+	if !scan && o.Surface == "all" && len(o.Roles) > 0 {
+		roles := make([]string, len(o.Roles))
+		for i, role := range o.Roles {
+			roles[i] = quoteSQLText(role)
+		}
+		eligibleSQL = "m.role IN (" + strings.Join(roles, ",") + ")"
+		delete(filterOptions, "roles")
+	}
+	filters, values, e := messageFilters(filterOptions, "m.", false)
 	if e != nil {
 		return result, e
 	}
@@ -520,8 +550,32 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 		arguments = append(arguments, timeBound(o.To, true))
 	}
 	if span {
-		clauses = append(clauses, "EXISTS(SELECT 1 FROM message_authorship_spans a WHERE a.message_id=m.id AND a.category=?)")
+		messageID := "m.id"
+		if ready && hasDocuments {
+			messageID = "d.message_id"
+		}
+		clauses = append(clauses, "EXISTS(SELECT 1 FROM message_authorship_spans a WHERE a.message_id="+messageID+" AND a.category=?)")
 		arguments = append(arguments, o.Surface)
+	}
+	if key == "f.rowid" && ready && small && (len(o.Roles) > 0 || len(o.Kinds) > 0 || o.From != "" || o.To != "") {
+		ids, err := c.textSearchFilteredRows(ctx, o)
+		if err != nil {
+			return result, err
+		}
+		if ids != nil {
+			// A legacy mapping can be incomplete. Restrict FTS positions only
+			// when every eligible message has a mapping (or none are eligible).
+			var total, mapped int
+			var positions string
+			err = c.reader().QueryRowContext(ctx, `SELECT count(*),count(fr.fts_rowid),COALESCE(json_group_array(fr.fts_rowid),'[]') FROM messages m LEFT JOIN message_fts_rows fr ON fr.message_id=m.id WHERE m.rowid IN (SELECT value FROM json_each(?))`, jsonText(ids)).Scan(&total, &mapped, &positions)
+			if err != nil {
+				return result, err
+			}
+			if total == mapped {
+				clauses = append(clauses, "f.rowid IN (SELECT value FROM json_each(?))")
+				arguments = append(arguments, positions)
+			}
+		}
 	}
 	if key == "f.rowid" && (o.ConversationID != "" || o.WorkspaceID != "" || (o.WorkspaceIDs != nil && len(o.WorkspaceIDs) <= 100)) {
 		scope, args := "", []any{}
@@ -553,10 +607,35 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	// A record that cannot fit even on an empty page must be skipped, not
 	// deferred forever at the same cursor. Keep the byte cap strict and avoid
 	// loading its body; the existing oversize accounting makes the gap explicit.
-	maxMessage := min(1<<20, (8<<20)/regexInstructions, o.MaxBytes)
-	selectSQL := fmt.Sprintf(`SELECT %s,m.id,m.conversation_id,c.workspace_id,w.title,c.provider,COALESCE(c.started_at,''),m.role,m.kind,COALESCE(m.created_at,''),m.content_hash,COALESCE(m.evidence_locator,''),length(CAST(m.text AS BLOB)),CASE WHEN length(CAST(m.text AS BLOB))<=%d THEN m.text ELSE '' END
- FROM %s JOIN conversations c ON c.id=m.conversation_id JOIN workspaces w ON w.id=c.workspace_id WHERE %s ORDER BY %s DESC LIMIT ?`, key, maxMessage, from, strings.Join(clauses, " AND "), key)
-	arguments = append(arguments, o.MaxCandidates+1)
+	maxMessage := min(1<<20, (8<<20)/regexInstructions)
+	if !o.workspaceRows {
+		maxMessage = min(maxMessage, o.MaxBytes)
+	}
+	sizeSQL := "length(CAST(m.text AS BLOB))"
+	if hasDocuments {
+		sizeSQL = "d.byte_length"
+	}
+	countSQL, limitSQL := "", " LIMIT ?"
+	if o.workspaceRows {
+		countSQL, limitSQL = ",1", ""
+	} else {
+		arguments = append(arguments, o.MaxCandidates+1)
+	}
+	selectSQL := fmt.Sprintf(`SELECT %s,m.id,m.conversation_id,c.workspace_id,w.title,c.provider,COALESCE(c.started_at,''),m.role,m.kind,COALESCE(m.created_at,''),m.content_hash,COALESCE(m.evidence_locator,''),CASE WHEN (%s) THEN %s ELSE 0 END,CASE WHEN (%s) AND %s<=%d THEN m.text ELSE '' END AS search_body,%s%s
+ FROM %s JOIN conversations c ON c.id=m.conversation_id JOIN workspaces w ON w.id=c.workspace_id WHERE %s ORDER BY %s DESC%s`, key, eligibleSQL, sizeSQL, eligibleSQL, sizeSQL, maxMessage, eligibleSQL, countSQL, from, strings.Join(clauses, " AND "), key, limitSQL)
+	indexedWorkspaces := o.workspaceRows && !scan && !span && !strict && !ordered
+	if o.workspaceRows {
+		// There is no message/candidate/byte batch controlling workspace
+		// membership. Let the request deadline bound execution, and withhold an
+		// unfinished population before the table can sort or count it.
+		if indexedWorkspaces {
+			// FTS already proves these token/phrase/Boolean matches. Count them
+			// without copying and tokenizing every matching body. SQLite's MAX
+			// aggregate selects the evidence columns from the newest matching row.
+			selectSQL = fmt.Sprintf(`SELECT MAX(%s),m.id,m.conversation_id,c.workspace_id,'','','','','','','','',0,'' AS search_body,1,count(*)
+ FROM %s JOIN conversations c ON c.id=m.conversation_id JOIN workspaces w ON w.id=c.workspace_id WHERE %s AND (%s) GROUP BY c.workspace_id`, key, from, strings.Join(clauses, " AND "), eligibleSQL)
+		}
+	}
 	// Spans need their original byte ranges and an independent tokenizer. This
 	// connection is never the catalog, so search cannot write library content.
 	var verifier *textVerifier
@@ -577,23 +656,30 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 		return result, e
 	}
 	defer rows.Close()
+	workspaceGroups := map[string]int{}
 	for rows.Next() {
 		var position int64
 		var item textSearchItem
 		var body string
 		var size int
-		if e = rows.Scan(&position, &item.MessageID, &item.ConversationID, &item.WorkspaceID, &item.Title, &item.Provider, &item.StartedAt, &item.Role, &item.MessageKind, &item.CreatedAt, &item.ContentHash, &item.EvidenceLocator, &size, &body); e != nil {
+		var eligible bool
+		count := 1
+		columns := []any{&position, &item.MessageID, &item.ConversationID, &item.WorkspaceID, &item.Title, &item.Provider, &item.StartedAt, &item.Role, &item.MessageKind, &item.CreatedAt, &item.ContentHash, &item.EvidenceLocator, &size, &body, &eligible}
+		if o.workspaceRows {
+			columns = append(columns, &count)
+		}
+		if e = rows.Scan(columns...); e != nil {
 			if ctx.Err() != nil && parent.Err() == nil {
 				result.StopReason = "time_budget"
 				break
 			}
 			return result, e
 		}
-		if result.Candidates >= o.MaxCandidates {
+		if !o.workspaceRows && result.Candidates >= o.MaxCandidates {
 			result.StopReason = "candidate_budget"
 			break
 		}
-		if size <= maxMessage && result.VerifiedBytes+size > o.MaxBytes {
+		if !o.workspaceRows && eligible && size <= maxMessage && result.VerifiedBytes+size > o.MaxBytes {
 			result.StopReason = "byte_budget"
 			break
 		}
@@ -601,8 +687,11 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 			result.StopReason = "time_budget"
 			break
 		}
-		result.Candidates++
+		result.Candidates += count
 		cursor.Before = position
+		if !eligible {
+			continue
+		}
 		if size > maxMessage {
 			result.SkippedOversize++
 			cursor.Skipped++
@@ -628,6 +717,9 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 				}
 				return result, e
 			}
+		}
+		if span && !scan && !node.asciiCandidate(body) {
+			continue
 		}
 		if span {
 			// Defer strict/NOT verification until the selected span: an excluded word
@@ -689,12 +781,18 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 			item.RangeKind = "match"
 		}
 		item.Snippet = searchSnippet(snippetBody, lo-snippetBase, min(hi-snippetBase, lo-snippetBase+240))
-		item.Count = 1
-		result.Count++
+		item.Count = count
+		item.deferredEvidence = indexedWorkspaces
+		result.Count += count
 		cursor.Count = result.Count
 		item.cursor = encodeTextCursor(cursor)
-		result.Items = append(result.Items, item)
-		if len(result.Items) >= o.Limit {
+		if i, exists := workspaceGroups[item.WorkspaceID]; o.workspaceRows && exists {
+			result.Items[i].Count += item.Count
+		} else {
+			workspaceGroups[item.WorkspaceID] = len(result.Items)
+			result.Items = append(result.Items, item)
+		}
+		if !o.workspaceRows && len(result.Items) >= o.Limit {
 			result.StopReason = "page_limit"
 			break
 		}
@@ -799,7 +897,7 @@ func lexicalLocation(body string, node *textQuery) (int, int, bool) {
 		}
 		return 0, 0, false
 	}
-	loc := node.strictLocations(body, false, false)
+	loc := node.strictLocations(body, false, false, 1)
 	if len(loc) > 0 {
 		return loc[0][0], loc[0][1], true
 	}
@@ -830,31 +928,56 @@ func asciiFoldLiteral(value string) string {
 	}
 	return best
 }
-func textRegexRequiredLiteral(n *syntax.Regexp) string {
+
+// Candidate expressions must be supersets of the regexp: concatenation
+// requires every usable child; alternatives are usable only if every branch
+// has a constraint. Optional/repeated-zero and non-ASCII literals add none.
+// The original regexp still decides whether a candidate actually matches.
+func textRegexTrigrams(n *syntax.Regexp) string {
 	switch n.Op {
 	case syntax.OpLiteral:
-		value := string(n.Rune)
-		if n.Flags&syntax.FoldCase != 0 {
-			return asciiFoldLiteral(value)
-		}
-		return value
+		return textLiteralTrigram(string(n.Rune), n.Flags&syntax.FoldCase != 0)
 	case syntax.OpCapture, syntax.OpPlus:
-		return textRegexRequiredLiteral(n.Sub[0])
+		return textRegexTrigrams(n.Sub[0])
 	case syntax.OpRepeat:
 		if n.Min > 0 {
-			return textRegexRequiredLiteral(n.Sub[0])
+			return textRegexTrigrams(n.Sub[0])
 		}
-	case syntax.OpConcat:
-		best := ""
+	case syntax.OpConcat, syntax.OpAlternate:
+		parts := []string{}
 		for _, child := range n.Sub {
-			value := textRegexRequiredLiteral(child)
-			if len(value) > len(best) {
-				best = value
+			part := textRegexTrigrams(child)
+			if part == "" && n.Op == syntax.OpAlternate {
+				return ""
+			}
+			if part != "" && !slices.Contains(parts, part) {
+				parts = append(parts, part)
 			}
 		}
-		return best
+		if len(parts) > 0 {
+			join := " AND "
+			if n.Op == syntax.OpAlternate {
+				join = " OR "
+			}
+			return "(" + strings.Join(parts, join) + ")"
+		}
 	}
 	return ""
+}
+
+func textLiteralTrigram(literal string, fold bool) string {
+	if fold {
+		literal = asciiFoldLiteral(literal)
+	}
+	for _, r := range literal {
+		if r > 127 {
+			return ""
+		}
+	}
+	if len(literal) < 3 {
+		return ""
+	}
+	return quoteFTS(literal)
 }
 
 func textCaptures(pattern *regexp.Regexp, locations []int, offset int) ([]textCapture, bool) {

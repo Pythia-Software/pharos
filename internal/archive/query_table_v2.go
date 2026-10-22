@@ -867,7 +867,27 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 					early = append(early, term)
 				}
 			}
-			sourceRows, find, err = s.libraryRows(ctx, params, libraryFieldsFor(sourceNames...), &evidence, early)
+			readFields := libraryFieldsFor(sourceNames...)
+			if rowRequest != nil && readFields != nil && readFields.hasAny(libraryCostFields) {
+				// Direct cost columns are completed by libraryPage after Limit.
+				// Keep pricing the population when filtering, ordering, a formula
+				// or a metric actually depends on a cost.
+				copy := *rowRequest
+				copy.Select = slices.DeleteFunc(slices.Clone(copy.Select), func(name string) bool { return slices.Contains(libraryCostFields, name) })
+				if !slices.Contains(copy.Select, schema.IDField) {
+					copy.Select = append(copy.Select, schema.IDField)
+				}
+				dependencies, e := queryV2SourceFields(ctx, s.Catalog.reader(), schema, &copy, metrics, clock)
+				if e != nil {
+					return queryV2ExecutionResult{}, e
+				}
+				for _, field := range libraryCostFields {
+					if !slices.Contains(dependencies, field) {
+						delete(readFields, field)
+					}
+				}
+			}
+			sourceRows, find, err = s.libraryRows(ctx, params, readFields, &evidence, early)
 		} else {
 			var where []querytable.WhereTerm
 			if rowRequest != nil && metrics == nil {
@@ -961,8 +981,8 @@ func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.
 			if err == nil && params.Get("explain") == "1" && len(evidence) > 0 {
 				err = s.Catalog.explainLibraryRows(ctx, result.Rows.Rows, params.Get("search"), evidence)
 			}
-			if find != nil {
-				find.attach(result.Rows.Rows)
+			if find != nil && err == nil {
+				err = s.Catalog.attachLibraryFind(ctx, find, result.Rows.Rows)
 				summary := find.summary()
 				result.Find = &summary
 			}
