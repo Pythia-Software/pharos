@@ -7,7 +7,9 @@ import { TextSearchEditor, type LibrarySearchKind as FindKind } from "./text-sea
 import { SearchHelp } from "./search-help";
 import { RecordSearchEditor, recordSearchTargets } from "./record-search-editor";
 import { usageDetailsSchema } from "./usage-row-model";
-import { UsageRowActions, usageRowRenderers } from "./usage-row-renderers";
+import { usageActionQuery, usageQuerySchema } from "./usage-query-columns";
+import { orderedUsageQuery } from "./usage-query-order";
+import { usageRowRenderers } from "./usage-row-renderers";
 import { createQueryMetadataLoader } from "./query-metadata";
 import { SearchDialog } from "./search-dialog";
 import { ExploreSearch } from "./explore-search";
@@ -427,10 +429,10 @@ function usageGroupFields(fields: FieldSchema<Row>["fields"], query: QueryState)
 // can follow the table's filters.
 // find, for the Library, is a keyword search that narrows the rows before the
 // pagination applies; onFind hears how it went.
-function QuerySurface({ dataset, libraryView = "table", messageView = "table", find = "", onFind, trailing, header, controls, queryContent, resultPresentation, presets, selectable = false, scopeWhere, appliedScope, namespace }: { dataset: Dataset; selectable?: boolean; libraryView?: LibraryView; messageView?: MessageView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; queryContent?: (api: QueryTableApi<Row>) => React.ReactNode; resultPresentation?: (api: QueryTableApi<Row>) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode; scopeWhere?: WhereTerm[]; appliedScope?: React.MutableRefObject<WhereTerm[]>; namespace?: "machine_calls" }) {
+function QuerySurface({ dataset, usageActions = false, libraryView = "table", messageView = "table", find = "", onFind, trailing, header, controls, queryContent, resultPresentation, presets, selectable = false, scopeWhere, appliedScope, namespace }: { dataset: Dataset; usageActions?: boolean; selectable?: boolean; libraryView?: LibraryView; messageView?: MessageView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; queryContent?: (api: QueryTableApi<Row>) => React.ReactNode; resultPresentation?: (api: QueryTableApi<Row>) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode; scopeWhere?: WhereTerm[]; appliedScope?: React.MutableRefObject<WhereTerm[]>; namespace?: "machine_calls" }) {
   const registryKey = namespace ?? dataset;
   const visible = shared || datasetIsVisible(registryKey);
-  const schema = useMemo(() => namespace ? { ...schemas[dataset], name: "pharos_machine_calls", defaultSelect: [{ field: "started_at", width: 155 }, { field: "repository_name", width: 140 }, { field: "operation_name", width: 180 }, { field: "tool_name", width: 140 }, { field: "command", width: 350 }, { field: "duration_ms", width: 105 }, { field: "status", width: 85 }, { field: "duration_source", width: 120 }, { field: "title", width: 240 }] } : schemas[dataset], [dataset, namespace]);
+  const schema = useMemo(() => namespace ? { ...schemas[dataset], name: "pharos_machine_calls", defaultSelect: [{ field: "started_at", width: 155 }, { field: "repository_name", width: 140 }, { field: "operation_name", width: 180 }, { field: "tool_name", width: 140 }, { field: "command", width: 350 }, { field: "duration_ms", width: 105 }, { field: "status", width: 85 }, { field: "duration_source", width: 120 }, { field: "title", width: 240 }] } : usageActions ? usageQuerySchema(schemas[dataset], dataset as UsageDataset) : schemas[dataset], [dataset, namespace, usageActions]);
   const locationRevision = useLocationRevision();
   const usageRenderers = useMemo(() => Object.hasOwn(usageDatasets, dataset) ? { ...renderers, ...usageRowRenderers(dataset as UsageDataset, Boolean(shared)) } : renderers, [dataset]);
   const tableRenderers = useUsageTableRenderers(usageRenderers);
@@ -485,12 +487,13 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
   const canonicalizeQuery = useMemo(() => (query: QueryState) => {
     const rolling = readRollingWindow(new URLSearchParams(location.search), dataset);
     const resolved = rolling && rollingQueryMatches(query, rolling) ? resolveRollingQuery(query, rolling) : query;
-    if (!scopeWhere) return resolved;
-    const source = resolved.grouping?.source ?? resolved;
+    const presented = usageActions ? usageActionQuery(orderedUsageQuery(dataset as UsageDataset, resolved), schema, dataset as UsageDataset) : resolved;
+    if (!scopeWhere) return presented;
+    const source = presented.grouping?.source ?? presented;
     const where = [...source.where.filter(term => !scopeRemovals.has(termKey(term))), ...scopeWhere];
-    if (JSON.stringify(where) === JSON.stringify(source.where)) return resolved;
-    return resolved.grouping ? { ...resolved, grouping: { ...resolved.grouping, source: { ...source, where } } } : { ...resolved, where };
-  }, [dataset, locationRevision, scopeSignature, scopeRemovals]);
+    if (JSON.stringify(where) === JSON.stringify(source.where)) return presented;
+    return presented.grouping ? { ...presented, grouping: { ...presented.grouping, source: { ...source, where } } } : { ...presented, where };
+  }, [dataset, locationRevision, scopeSignature, scopeRemovals, usageActions, schema]);
   const api = useQueryTable<Row>({ schema, transport,
     computedColumnStore, computedExecution: capabilities?.computedExecution,
     clientRows: shared?.datasets[dataset], active: Boolean(visible) && (!remote || Boolean(capabilities || capabilityError)),
@@ -504,6 +507,15 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
       } },
     onRefresh: () => { if (namespace) window.dispatchEvent(new Event("pharos:machine-refresh")); },
   });
+  // Apply the opening layout after URL/saved-query restoration, preserving the
+  // restored analysis. Native URL sync persists the flag; subsequent manual
+  // sizing choices remain available for the rest of this visit.
+  const fittedOnOpen = useRef(false);
+  useEffect(() => {
+    if (!usageActions || !visible || !api.restoration.ready || api.error || fittedOnOpen.current) return;
+    fittedOnOpen.current = true;
+    if (!api.query.fitToScreen) api.setQuery(previous => ({ ...previous, fitToScreen: true }));
+  }, [usageActions, visible, api.restoration.ready, api.error, api.query.fitToScreen]);
   const lastFailure = useRef<Error | null>(null);
   useEffect(() => {
     if (!visible || !api.error || api.error === lastFailure.current) return;
@@ -594,7 +606,7 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
       </>} /> : api.query.grouping ? <QueryBuilder compact api={stableApi} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <QueryBuilder compact defaultCollapsed={Boolean(namespace)} api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={stableApi} dataset={dataset} layout={<QueryBuilder compact api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />} /> : <QueryBuilder compact api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />}
     {queryContent ? controls?.(api, null) : null}
     <MetricsPanel api={stableApi} aggregations={api.aggregations} fields={metricFields(api.query.grouping ? usageGroupFields(api.schema!.fields, api.query) : api.computed.catalogue)} renderers={metricRenderers}
-      onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(records); }} />
+      onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, { ...records, orderBy: [], ...(usageActions ? { fitToScreen: true } : {}) }) : records); }} />
     {capabilityError && !capabilities ? <div className="query-table-error">Could not read this table's query capabilities: {capabilityError.message}</div> : null}
     {api.error ? <div className="query-table-error">{api.error?.message}</div> : null}
     {selectable && !api.query.grouping ? <SelectionToolbar selection={api.selection} actions={ids => <ShareSelection ids={ids} api={api} transport={transport} execution={capabilities?.computedExecution} />} /> : null}
@@ -619,8 +631,8 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
       {...(api.query.grouping ? { trailing: (row: Row) => {
         const complete = api.query.grouping!.keys.every(key => Object.hasOwn(row, key));
         const records = complete ? groupSourceQuery(api.query, row, sourceSchema) : null;
-        return <button type="button" className="mcp-detail-button" disabled={!records} title={records ? "Open the source records for this group, keeping source filters" : complete ? "These group keys cannot be matched exactly in the source records" : "Include all group key columns to inspect the source records"} onClick={() => { if (records) api.setQuery(records); }}>Records</button>;
-      }, trailingLabel: "Inspect" }
+        return <button type="button" className="mcp-detail-button" disabled={!records} title={records ? "Open the source records for this group, keeping source filters" : complete ? "These group keys cannot be matched exactly in the source records" : "Include all group key columns to inspect the source records"} onClick={() => { if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, { ...records, orderBy: [], ...(usageActions ? { fitToScreen: true } : {}) }) : records); }}>Records</button>;
+      }, trailingLabel: usageActions ? "Drill in" : "Inspect" }
         : trailing ? { trailing: (row: Row) => trailing(row, api), trailingLabel: dataset === "mcp_calls" || dataset === "tool_calls" ? "View" : dataset === "tools" || dataset === "writing" ? "Drill in" : dataset === "library" ? "Match" : "Actions" } : {})}
     />}
   </FilterValueProvider>;
@@ -1414,7 +1426,7 @@ function WritingUsage({ onStatus }: { onStatus: (status: AuthorshipStatus | null
   // the message table starts from the query in the URL.
   function drill(row: Row) {
     const where: WhereTerm[] = [{ field: "work_id", op: "=", value: String(row.id) }];
-    updateURI(queryParameter("writing_messages"), encodeQuery({ ...EMPTY_QUERY, limit: schemas.writing_messages.defaultLimit ?? EMPTY_QUERY.limit, where }));
+    updateURI(queryParameter("writing_messages"), encodeQuery(orderedUsageQuery("writing_messages", { ...EMPTY_QUERY, limit: schemas.writing_messages.defaultLimit ?? EMPTY_QUERY.limit, where })));
     chooseRows("messages");
   }
   function apply(dataset: Dataset, preset: UsagePreset | null) {
@@ -1598,13 +1610,12 @@ function UsagePage() {
   if (shared || location.pathname !== "/analyze" || !isUsageWorkspace()) return <LegacyUsagePage />;
   return <UsageChartColorsProvider>
     <UsageWorkspace renderDashboard={topic => <GuidedUsageDashboard topic={topic} />} renderTable={dataset => <>
-      <QuerySurface dataset={dataset}
+      <QuerySurface dataset={dataset} usageActions
         presets={api => <>
           {dataset === "mcp_calls" ? <><MCPUsageNote /><MCPQueryPresets api={api} /></> : null}
           <UsageQueryLinks dataset={dataset} api={api} />
         </>}
-        controls={(_api, builder) => builder}
-        trailing={["tool_calls", "tools", "writing", "skill_usages"].includes(dataset) ? row => <UsageRowActions dataset={dataset} row={row} compact /> : undefined} />
+        controls={(_api, builder) => builder} />
     </>} />
   </UsageChartColorsProvider>;
 }
@@ -1704,7 +1715,7 @@ function MCPUsageDashboard() {
     {cumulative ? <p className="usage-dashboard-note">Values run from the selected range start. Rates and averages use running totals and counts. Largest output is the largest response so far. Select a point to open all contributing records through that interval. Grouped queries show the original interval measures.</p> : null}
     {result.error || ranking.error ? <p className="query-table-error" role="alert">{result.error || ranking.error}</p> : <MetricCard clause={cumulative ? { ...clause, label: `Cumulative ${clause.label}`, display: { ...clause.display, kind: "line" as const, yLabel: `Cumulative ${clause.label}` } } : clause} result={metric as AggregationResultEntry | undefined} fields={schemas.mcp_calls.fields} loading={result.loading || pending} renderers={defaultRenderers} onInspect={bucket => {
       const records = inspectDashboardBucket(query, bucket, clause, schemas.mcp_calls, cumulative);
-      if (records) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset: "mcp_calls", query: records }, new URLSearchParams(location.search)));
+      if (records) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset: "mcp_calls", query: orderedUsageQuery("mcp_calls", records) }, new URLSearchParams(location.search)));
     }} />}
     {!pending && !ranking.error ? <UsageDashboardLinks schema={schemas.mcp_calls} dataset="mcp_calls" query={query} /> : null}
     <MCPUsageNote />
@@ -1850,7 +1861,7 @@ function ToolsUsageDashboard() {
     {cumulative ? <p className="usage-dashboard-note">Values run from the selected range start. Rates and averages use running totals and counts. Select a point to open all contributing records through that interval. Grouped queries show the original interval measures.</p> : null}
     {result.error || ranking.error ? <p className="query-table-error" role="alert">{result.error || ranking.error}</p> : <MetricCard clause={cumulative ? { ...clause, label: `Cumulative ${clause.label}`, display: { ...clause.display, kind: "line" as const, yLabel: `Cumulative ${clause.label}` } } : clause} result={metric as AggregationResultEntry | undefined} fields={schemas.tools.fields} loading={result.loading || pending} renderers={defaultRenderers} onInspect={bucket => {
       const records = inspectDashboardBucket(query, bucket, clause, schemas.tools, cumulative);
-      if (records) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset: "tools", query: records }, new URLSearchParams(location.search)));
+      if (records) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset: "tools", query: orderedUsageQuery("tools", records) }, new URLSearchParams(location.search)));
     }} />}
     {!pending && !ranking.error ? <UsageDashboardLinks schema={schemas.tools} dataset="tools" query={query} currentURL="/tools?tools_view=summary" /> : null}
     <p className="usage-dashboard-note">Select a bar or point to inspect its daily summaries, then follow a summary’s Calls link to individual calls and source conversations. Open the grouped query to compare the measures and their call counts. The legacy view includes failure kinds, MCP methods, and the existing command and context presets.</p>
@@ -2012,7 +2023,7 @@ function ToolsPage() {
     }));
   }
   function drill(row: Row) {
-    tableApis.get("tool_calls")?.setQuery(previous => ({ ...previous, where: drillFilters(row), aggregations: [], offset: 0 }));
+    tableApis.get("tool_calls")?.setQuery(previous => orderedUsageQuery("tool_calls", { ...previous, where: drillFilters(row), aggregations: [], orderBy: [], offset: 0 }));
     choose("calls");
   }
   return <div className="pharos-query-page tools-page">

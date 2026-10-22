@@ -3,6 +3,7 @@ import { groupedDashboardQuery } from "./usage-dashboard-model";
 import { usageDatasets, usageSearchQuery, usageWorkspaceURL, type UsageDataset } from "./usage-workspace-model";
 import { optionLabels } from "./option-labels";
 import { dashboardExplorations } from "./dashboard-query-explorations";
+import { orderedUsageQuery } from "./usage-query-order";
 
 type LinkSchema = Pick<FieldSchema, "fields">;
 export type QueryLinkDetail = { label: string; values: string[] };
@@ -107,7 +108,7 @@ export function dashboardQueryLinks(dataset: UsageDataset, query: QueryState, sc
     ...(explorations.length ? explorations : [{ title: `${usageDatasets[dataset].label} records`, query: records }]),
   ];
   return destinations.map(destination => {
-    const query = { ...destination.query, fitToScreen: true };
+    const query = { ...orderedUsageQuery(dataset, destination.query), fitToScreen: true };
     const details = dashboardQueryDetails(schema, query);
     return { ...destination, query, dataset: usageDatasets[dataset].label,
       href: usageWorkspaceURL({ mode: "query", search: true, dataset, query }, params),
