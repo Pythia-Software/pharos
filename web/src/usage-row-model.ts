@@ -1,10 +1,12 @@
 import { EMPTY_QUERY, type FieldDef, type FieldSchema, type WhereTerm } from "@pythia-software/query-table-core";
 import { usageDatasets, usageWorkspaceURL, type UsageDataset } from "./usage-workspace-model";
 import { queryURL } from "./query-links";
+import { orderedUsageQuery } from "./usage-query-order";
+import type { UsageDrilldown } from "./usage-query-columns";
 import { toolSummaryCallFilters } from "./tools-dashboard-model";
 
 type Row = Record<string, any>;
-export type UsageRowLink = { label: string; href: string };
+export type UsageRowLink = { kind?: UsageDrilldown; label: string; href: string };
 const identifier = (value: unknown) => typeof value === "string" && value.trim() ? value : undefined;
 
 // Aggregate records have time anchors, individual events have exact messages.
@@ -20,17 +22,17 @@ export function conversationRowURL(row: Row, message?: unknown, at?: unknown, ca
   return path + (params.size ? `?${params}` : "");
 }
 export function primaryUsageSource(dataset: UsageDataset, row: Row) {
-  if (dataset === "parallelism" && !identifier(row.conversation_id) && identifier(row.location)) return queryURL("library", { ...EMPTY_QUERY, where: [{ field: "location", op: "=", value: row.location }] });
+  if (dataset === "parallelism" && !identifier(row.conversation_id) && identifier(row.location)) return queryURL("library", { ...EMPTY_QUERY, orderBy: [{ field: "activity_at", dir: "desc" }], where: [{ field: "location", op: "=", value: row.location }] });
   if (dataset === "writing") return conversationRowURL({ workspace_id: row.id });
   const message = dataset === "writing_messages" ? row.id : dataset === "tool_calls" ? row.call_message_id : dataset === "skill_usages" ? row.evidence_message_id : row.message_id;
-  const at = dataset === "usage" ? row.first_usage_at : dataset === "conversation_activity" ? row.event_at : row.started_at;
+  const at = dataset === "usage" ? row.first_usage_at : dataset === "conversation_activity" ? row.event_at : dataset === "skill_usages" ? row.created_at : row.started_at;
   return conversationRowURL(row, message, at, dataset === "tool_calls" ? row.call_id : undefined);
 }
-const filtered = (dataset: UsageDataset, where: WhereTerm[], current: URLSearchParams) => usageWorkspaceURL({ mode: "query", dataset, query: { ...EMPTY_QUERY, where } }, current);
+const filtered = (dataset: UsageDataset, where: WhereTerm[], current: URLSearchParams) => usageWorkspaceURL({ mode: "query", dataset, query: orderedUsageQuery(dataset, { ...EMPTY_QUERY, where }) }, current);
 export function usageRowLinks(dataset: UsageDataset, row: Row, current = new URLSearchParams()): UsageRowLink[] {
   const links: UsageRowLink[] = [];
   const source = primaryUsageSource(dataset, row);
-  if (source) links.push({ label: source.startsWith("/library?") ? "Works at this checkout" : new URL(source, "https://pharos.invalid").searchParams.has("message") ? dataset === "tool_calls" ? "Call message" : dataset === "skill_usages" ? "Evidence message" : "Source message" : new URL(source, "https://pharos.invalid").searchParams.has("at") ? "Conversation near this time" : "Open work", href: source });
+  if (source) links.push({ kind: "source", label: source.startsWith("/library?") ? "Works at this checkout" : new URL(source, "https://pharos.invalid").searchParams.has("message") ? dataset === "tool_calls" ? "Call message" : dataset === "skill_usages" ? "Evidence message" : "Source message" : new URL(source, "https://pharos.invalid").searchParams.has("at") ? "Conversation near this time" : "Open work", href: source });
   if (dataset === "mcp_calls") {
     // These are request targets, never inferred caller identity or response data.
     try {
@@ -38,25 +40,25 @@ export function usageRowLinks(dataset: UsageDataset, row: Row, current = new URL
       if (args && typeof args === "object" && !Array.isArray(args)) {
         const message = identifier(args.message_id) ?? identifier(args.around_message_id);
         const href = conversationRowURL(args, message);
-        if (href) links.push({ label: identifier(args.conversation_id) ? message ? "Requested message" : "Requested conversation" : "Requested work", href });
+        if (href) links.push({ kind: "requested", label: identifier(args.conversation_id) ? message ? "Requested message" : "Requested conversation" : "Requested work", href });
       }
     } catch { /* Malformed retained arguments remain readable as text. */ }
   }
   if (dataset === "tool_calls" && identifier(row.result_message_id)) {
     const href = conversationRowURL(row, row.result_message_id, undefined, row.call_id);
-    if (href) links.push({ label: "Result message", href });
+    if (href) links.push({ kind: "result", label: "Result message", href });
   }
   if (dataset === "skill_usages") {
     if (identifier(row.body_message_id) && row.body_message_id !== row.evidence_message_id) {
       const href = conversationRowURL(row, row.body_message_id);
-      if (href) links.push({ label: "Retained skill body", href });
+      if (href) links.push({ kind: "body", label: "Retained skill body", href });
     }
-    if (identifier(row.tool_call_id)) links.push({ label: "Tool call details", href: usageWorkspaceURL({ mode: "query", dataset: "tool_calls", query: { ...EMPTY_QUERY, where: [{ field: "id", op: "=", value: row.tool_call_id }], itemDetails: { modes: ["modal", "expand"], active: { id: row.tool_call_id, mode: "modal" } } } }, current) });
+    if (identifier(row.tool_call_id)) links.push({ kind: "tool", label: "Tool call details", href: usageWorkspaceURL({ mode: "query", dataset: "tool_calls", query: orderedUsageQuery("tool_calls", { ...EMPTY_QUERY, where: [{ field: "id", op: "=", value: row.tool_call_id }], itemDetails: { modes: ["modal", "expand"], active: { id: row.tool_call_id, mode: "modal" } } }) }, current) });
   }
-  if (dataset === "tools") links.push({ label: "Matching calls", href: filtered("tool_calls", toolSummaryCallFilters(row), current) });
-  if (dataset === "writing" && identifier(row.id)) links.push({ label: "Messages in this work", href: filtered("writing_messages", [{ field: "work_id", op: "=", value: row.id }], current) });
-  if (dataset === "usage" && identifier(row.conversation_id)) links.push({ label: "Tool calls in this conversation", href: filtered("tool_calls", [{ field: "conversation_id", op: "=", value: row.conversation_id }], current) });
-  if (["usage", "conversation_activity"].includes(dataset) && identifier(row.root_conversation_id) && row.root_conversation_id !== row.conversation_id) links.push({ label: "Root conversation", href: `/conversation/${encodeURIComponent(row.root_conversation_id)}` });
+  if (dataset === "tools") links.push({ kind: "calls", label: "Matching calls", href: filtered("tool_calls", toolSummaryCallFilters(row), current) });
+  if (dataset === "writing" && identifier(row.id)) links.push({ kind: "messages", label: "Messages in this work", href: filtered("writing_messages", [{ field: "work_id", op: "=", value: row.id }], current) });
+  if (dataset === "usage" && identifier(row.conversation_id)) links.push({ kind: "calls", label: "Tool calls in this conversation", href: filtered("tool_calls", [{ field: "conversation_id", op: "=", value: row.conversation_id }], current) });
+  if (["usage", "conversation_activity"].includes(dataset) && identifier(row.root_conversation_id) && row.root_conversation_id !== row.conversation_id) links.push({ kind: "root", label: "Root conversation", href: `/conversation/${encodeURIComponent(row.root_conversation_id)}` });
   return links;
 }
 

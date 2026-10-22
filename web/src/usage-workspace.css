@@ -22,6 +22,7 @@
 .usage-row-code { max-height: 28rem; overflow: auto; font-size: .9em; }
 .usage-row-links { display: flex; flex-wrap: wrap; align-items: baseline; gap: .35rem .8rem; }
 .usage-row-links a { white-space: normal; }
+.usage-drilldown a { display: block; white-space: normal; overflow-wrap: anywhere; }
 .usage-source-passages { padding-left: 1rem; margin: 0; overflow-wrap: anywhere; }
 .usage-source-passages li + li { margin-top: .5rem; }
 .usage-payload-preview { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 6rem; overflow: hidden; margin: 0 0 .4rem; font-size: .9em; }

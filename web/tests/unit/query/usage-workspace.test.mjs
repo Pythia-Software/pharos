@@ -53,6 +53,10 @@ test("every Analyze dataset and dashboard topic has a reloadable route", () => {
     assert.equal(readUsageWorkspace(url.searchParams).dataset, dataset);
     assert.equal(readUsageWorkspace(url.searchParams).mode, "query");
     assert.equal(readUsageWorkspace(url.searchParams).search, mode === "search");
+    const query = { ...EMPTY_QUERY, select: [{ field: "id", width: 175 }], where: [{ field: "id", op: "=", value: "example" }], orderBy: [{ field: "id", dir: "asc" }], limit: 25 };
+    const linked = new URL(usageWorkspaceURL({ mode, dataset, query }), "http://localhost");
+    assert.deepEqual(decodeQueryStrict(linked.searchParams.get(`q_${dataset}`)), { ...query, fitToScreen: true }, `${dataset} fits to screen without changing the analysis`);
+    assert.equal(query.fitToScreen, undefined, "Link generation preserves the input query");
   }
   for (const topic of Object.keys(usageTopics)) assert.equal(readUsageWorkspace(new URL(usageWorkspaceURL({ topic }), "http://localhost").searchParams).topic, topic);
   assert.ok(currentUsageAnalyses.every(item => Object.hasOwn(usageTopics, item.topic)));
@@ -118,7 +122,7 @@ test("Query links retain complete grouped queries and Search explicitly opens so
   const source = { ...EMPTY_QUERY, offset: 50, where: [{ field: "provider", op: "=", value: "codex" }], aggregations: [{ id: "tokens", op: "sum", field: "total_tokens", groupBy: [] }] };
   const query = { ...EMPTY_QUERY, grouping: { source, keys: ["model"], summaries: [], representative: null }, where: [{ field: "sum_tokens", op: ">", value: "1000" }] };
   const params = new URL(usageWorkspaceURL({ mode: "query", dataset: "usage", query }), "http://localhost").searchParams;
-  assert.deepEqual(decodeQueryStrict(params.get("q_usage")), query);
+  assert.deepEqual(decodeQueryStrict(params.get("q_usage")), { ...query, fitToScreen: true });
   assert.deepEqual(usageSearchQuery(query), { ...source, offset: 0, aggregations: [] });
   assert.equal(query.grouping.source.offset, 50, "Link generation must not change the original query");
 });
@@ -355,8 +359,10 @@ test("Tool summary call links keep every dimension of the selected row", () => {
 
 // Row presentation is host-owned; native properties and row links must keep
 // their behaviour independently of the compact collection projection.
-import { createPropertyView, selectedFields } from "@pythia-software/query-table-core";
+import { createPropertyView, ITEM_DETAILS_COLUMN, selectedFields, toServerQuery } from "@pythia-software/query-table-core";
 import { conversationRowURL, primaryUsageSource, usageDetailsSchema, usageRowLinks } from "../../../src/usage-row-model.ts";
+import { usageActionQuery, usageDrilldownColumns, usageDrilldownField, usageQuerySchema } from "../../../src/usage-query-columns.ts";
+import { orderedUsageQuery } from "../../../src/usage-query-order.ts";
 import { authoredRenderers } from "../../../src/authored.tsx";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -376,6 +382,58 @@ test("Analyze defaults and Details cover every dataset without changing explicit
   assert.equal(usageDetailsSchema(loadSchema(usage), "library"), undefined);
   assert.ok(createPropertyView(usageDetailsSchema(loadSchema(toolCalls), "tool_calls")).properties.some(p => p.field === "result_text"));
   assert.ok(createPropertyView(usageDetailsSchema(loadSchema(mcpCalls), "mcp_calls")).properties.some(p => p.field === "arguments_json"));
+});
+
+test("Analyze keeps every drilldown after the selected data and before native Detail", () => {
+  const documents = { usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
+  for (const [dataset, document] of Object.entries(documents)) {
+    const original = loadSchema(document), schema = usageQuerySchema(original, dataset);
+    const saved = { ...EMPTY_QUERY, select: [{ field: ITEM_DETAILS_COLUMN }, { field: "id", width: 175 }] };
+    const query = usageActionQuery(orderedUsageQuery(dataset, saved), schema, dataset);
+    assert.deepEqual(query.select[0], saved.select[1], `${dataset} keeps the user's data columns and widths`);
+    assert.equal(query.select.at(-1).field, ITEM_DETAILS_COLUMN);
+    const columns = usageDrilldownColumns[dataset];
+    assert.deepEqual(query.select.slice(1, -1).map(column => column.field), columns.map(column => usageDrilldownField(column.kind)));
+    assert.strictEqual(usageActionQuery(query, schema, dataset), query, "Canonicalization must settle");
+    const server = toServerQuery(query, schema);
+    assert.ok(server.select.every(name => original.fields.some(field => field.name === name)), `${dataset} only requests backend fields`);
+    for (const column of columns) for (const dependency of column.dependencies) {
+      assert.ok(original.fields.some(field => field.name === dependency), `${dataset}: declared dependency ${dependency} exists`);
+      assert.ok(server.select.includes(dependency), `${dataset}: narrow saved projections still load ${dependency}`);
+    }
+    const request = toQueryRequestV3(query, schema, { version: 3, profile: "qt-sqlite-v1", groupedRows: true, computedSourceFilters: true });
+    assert.deepEqual(request.diagnostics ?? [], [], dataset);
+    const fresh = usageActionQuery(EMPTY_QUERY, schema, dataset);
+    assert.deepEqual(fresh.select.slice(0, original.defaultSelect.length), original.defaultSelect);
+  }
+});
+
+test("Drilldown ordering reads a conversation forward and browses populations newest first", () => {
+  const schema = loadSchema(writingMessages), where = [{ field: "work_id", op: "=", value: "work" }];
+  const rows = [
+    { id: "late", work_id: "work", sent_at: "2026-10-21T12:00:00Z" },
+    { id: "early", work_id: "work", sent_at: "2026-10-20T12:00:00Z" },
+    { id: "other", work_id: "elsewhere", sent_at: "2026-10-22T12:00:00Z" },
+  ];
+  const human = usageRowLinks("writing", { id: "work" }).find(link => link.kind === "messages");
+  const scoped = decodeQueryStrict(new URL(human.href, "http://localhost").searchParams.get("q_writing_messages"));
+  assert.deepEqual(applyQuery(rows, scoped, schema).rows.map(row => row.id), ["early", "late"]);
+  const across = orderedUsageQuery("writing_messages", EMPTY_QUERY);
+  assert.deepEqual(applyQuery(rows, across, schema).rows.map(row => row.id), ["other", "late", "early"]);
+  for (const clause of [{ any: where }, { ...where[0], negated: true }, { ...where[0], op: "contains" }]) {
+    assert.equal(orderedUsageQuery("writing_messages", { ...EMPTY_QUERY, where: [clause] }).orderBy[0].dir, "desc");
+  }
+  const custom = { ...EMPTY_QUERY, orderBy: [{ field: "typed_words", dir: "desc" }] };
+  assert.strictEqual(orderedUsageQuery("writing_messages", custom), custom);
+  for (const dataset of Object.keys(usageDatasets)) {
+    const query = orderedUsageQuery(dataset, EMPTY_QUERY);
+    assert.ok(query.orderBy.length, dataset);
+    assert.deepEqual(decodeQueryStrict(encodeQuery(query)), query, `${dataset} sort survives reload`);
+  }
+  const summary = { ...EMPTY_QUERY, grouping: { source: EMPTY_QUERY, keys: ["work_id"], summaries: [], representative: null } };
+  const grouped = orderedUsageQuery("writing_messages", summary);
+  assert.deepEqual(grouped.orderBy, [{ field: "work_id", dir: "asc" }]);
+  assert.strictEqual(orderedUsageQuery("writing_messages", grouped), grouped);
 });
 
 test("Usage source links retain exact messages, encoded identity and distinct evidence/body destinations", () => {

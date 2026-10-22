@@ -11,6 +11,7 @@ import { NestedPageLayout, PageLink } from "./nested-pages";
 import { cardDetailsURL, cardSourceDataset } from "./card-exploration";
 import { instantiateRecipe, queryRecipes } from "./curiosity-data";
 import { readRollingWindow } from "./query-links";
+import { orderedUsageQuery } from "./usage-query-order";
 import "./usage-workspace.css";
 
 export const UsageWorkspaceLink = PageLink;
@@ -37,8 +38,8 @@ export function UsageDashboardLinks({ dataset, query, currentURL, groupedLabel =
   const analysis = currentURL ? usageAnalysisLink(dataset, query, currentURL, params) : null;
   return <div className="usage-dashboard-links">
     {query.aggregations?.length || query.grouping ? <UsageWorkspaceLink href={usageWorkspaceURL({ mode: "query", search: false, dataset, query: groupedDashboardQuery(query) }, params)}>{groupedLabel}<Icon name="arrow-right" /></UsageWorkspaceLink> : null}
-    <UsageWorkspaceLink href={usageWorkspaceURL({ mode: "query", search: false, dataset, query: usageSearchQuery(query) }, params)}>Open records<Icon name="arrow-right" /></UsageWorkspaceLink>
-    <UsageWorkspaceLink href={usageWorkspaceURL({ mode: "query", search: true, dataset, query: usageSearchQuery(query) }, params)}>Search / filter records<Icon name="arrow-right" /></UsageWorkspaceLink>
+    <UsageWorkspaceLink href={usageWorkspaceURL({ mode: "query", search: false, dataset, query: orderedUsageQuery(dataset, usageSearchQuery(query)) }, params)}>Open records<Icon name="arrow-right" /></UsageWorkspaceLink>
+    <UsageWorkspaceLink href={usageWorkspaceURL({ mode: "query", search: true, dataset, query: orderedUsageQuery(dataset, usageSearchQuery(query)) }, params)}>Search / filter records<Icon name="arrow-right" /></UsageWorkspaceLink>
     {analysis ? <UsageWorkspaceLink href={analysis.href}>{analysisLabel}{analysis.resetsFilters ? " (resets filters)" : ""}<Icon name="arrow-right" /></UsageWorkspaceLink> : null}
   </div>;
 }
