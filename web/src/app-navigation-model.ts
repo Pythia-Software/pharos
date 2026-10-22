@@ -31,6 +31,18 @@ export function analyzePages(params: URLSearchParams): NestedPage[] {
 }
 
 export type AppSection = { id: string; label: string; href: string; pages: readonly NestedPage[] };
+export type NavigationExpansion = Readonly<Record<string, readonly string[]>>;
+
+/** Reveal the initial destination once; subsequent expansion belongs to the user. */
+export function initialNavigationExpansion(section: AppSection, current: string): NavigationExpansion {
+  return { [section.id]: nestedPageTrail(section.pages, current).filter(page => page.children).map(page => page.id) };
+}
+
+export function toggleNavigationSection(expansion: NavigationExpansion, section: string, page: string): NavigationExpansion {
+  const expanded = expansion[section] ?? [];
+  return { ...expansion, [section]: expanded.includes(page) ? expanded.filter(id => id !== page) : [...expanded, page] };
+}
+
 export function appSections(settings: readonly NestedPage[], params: URLSearchParams, hasTL1: boolean): AppSection[] {
   return [
     { id: "home", label: "Home", href: "/", pages: [] },
