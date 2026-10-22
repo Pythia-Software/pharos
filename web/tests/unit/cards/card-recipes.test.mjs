@@ -12,6 +12,7 @@ import { parallelismSelectionQuery, readDashboardQuery } from "../../../src/usag
 import { concurrencySettingsKey, readConcurrencySettings, resolveConcurrencyRange } from "../../../src/concurrency-settings";
 import { cardDashboardWhere, cardDetailsURL } from "../../../src/card-exploration";
 import { usageWorkspaceURL } from "../../../src/usage-workspace-model";
+import { timeBounds, usageTime, writingTime } from "../../../src/usage-chart";
 const clock = new Date(2026, 9, 13, 12);
 
 test("dashboard card windows and retained cover queries stay aligned after collection edits", t => {
@@ -29,6 +30,27 @@ test("dashboard card windows and retained cover queries stay aligned after colle
     }
   }
   assert.equal(queryFromURL("/analyze?analyze_mode=dashboards&analyze_data=usage"), undefined, "ordinary dashboards have no card cover query");
+});
+
+test("all card dashboards restore rolling range presets instead of custom timestamps", () => {
+  const fieldsFor = (topic) => topic === "human" ? writingTime : topic === "tools" ? { first: "day", last: "day" }
+    : topic === "skills" ? { first: "created_at", last: "created_at" } : topic === "time" ? { first: "started_at", last: "started_at" }
+    : topic === "mcp" ? { first: "called_at", last: "called_at" } : usageTime;
+  for (const recipe of queryRecipes.filter(recipe => recipe.destination && recipe.destination.topic !== "parallelism")) {
+    for (const days of [1, 7, 30, 90, 180, 365]) {
+      const item = instantiateRecipe(recipe, days, clock), params = new URL(item.url, "http://home.test").searchParams;
+      const { query, error } = readDashboardQuery(params, core.EMPTY_QUERY);
+      assert.equal(error, "");
+      const fields = fieldsFor(recipe.destination.topic);
+      const initial = timeBounds(query.where, fields, clock.getTime());
+      assert.equal(initial.preset, recipe.period ? undefined : days === 180 ? "6m" : days === 365 ? "1y" : `${days}d`, recipe.id);
+      if (recipe.period) continue;
+      const later = timeBounds(query.where, fields, clock.getTime() + 86400000);
+      assert.equal(later.preset, initial.preset);
+      assert.equal(later.from.getTime() - initial.from.getTime(), 86400000);
+      assert.equal(later.to.getTime() - initial.to.getTime(), 86400000);
+    }
+  }
 });
 
 test("parallelism card destinations and edited windows retain saved record settings and bound the chart", t => {

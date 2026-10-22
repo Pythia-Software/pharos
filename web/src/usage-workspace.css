@@ -1,5 +1,5 @@
 .usage-workspace-table-links a{display:inline-flex;align-items:center;gap:7px}
-.usage-card-context{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px 24px;border-block:1px solid var(--line);padding:18px 0;margin:0 0 24px}.usage-card-context>div{flex:1 1 260px;min-width:0}.usage-card-context h2{font-size:var(--fs-lg);margin:0 0 6px}.usage-card-context p{font-size:var(--fs-sm);color:var(--muted);line-height:1.6;margin:0;overflow-wrap:anywhere}.usage-card-context>a{display:inline-flex;align-items:center;gap:7px;font-size:var(--fs-md)}
+.usage-card-context{display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:6px 16px;border-bottom:1px solid var(--line);padding:7px 0;margin:0 0 12px}.usage-card-context>div{display:flex;align-items:baseline;flex-wrap:wrap;flex:1 1 260px;gap:4px 8px;min-width:0}.usage-card-context .muted{font-size:var(--fs-xs)}.usage-card-context h2{font-size:var(--fs-md);line-height:1.4;margin:0;overflow-wrap:anywhere}.usage-card-context>a{display:inline-flex;align-items:center;gap:7px;font-size:var(--fs-sm)}
 .usage-dashboard .usage-chart{padding:22px 20px 18px;margin:0 0 18px}.usage-dashboard .usage-chart-head{margin-bottom:22px;gap:18px}.usage-dashboard .usage-chart-head h3{font-size:var(--fs-lg)}.usage-dashboard .usage-chart-controls{grid-template-columns:repeat(4,minmax(0,1fr));gap:14px 18px}.usage-dashboard .usage-chart-plot,.usage-dashboard .usage-chart-plot.broken{height:360px}.usage-dashboard .usage-chart-legend{margin:0 0 20px}.usage-dashboard .usage-chart-axis{margin-top:10px}.usage-dashboard-note{font-size:var(--fs-sm);color:var(--muted);line-height:1.7}.usage-dashboard .writing-panel>.usage-chart{margin-top:0}.usage-dashboard .carbon-impact{min-width:0}
 .usage-workspace-table-links{display:flex;align-items:center;flex-wrap:wrap;gap:10px 20px;padding:12px 0;margin-bottom:15px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);font-size:var(--fs-sm)}.usage-workspace-table-links>span{color:var(--muted);margin-right:auto}.usage-workspace-table-links small{flex-basis:100%;color:var(--muted)}.usage-workspace-table{min-width:0}
 @media(max-width:900px){.usage-dashboard .usage-chart-controls{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -53,3 +53,9 @@
 @media(min-width:1700px){.usage-query-destinations{grid-template-columns:repeat(4,minmax(0,1fr))}}
 @media(max-width:700px){.usage-query-destinations{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:600px){.usage-dashboard-links .usage-query-destination{padding:9px}}
+
+/* Put Carbon’s graph and totals on the same open dashboard surface. */
+.usage-dashboard .carbon-analysis{overflow:visible;border:0;border-radius:0;background:transparent}
+.usage-dashboard .carbon-analysis>.carbon-filters{padding:0 0 14px;margin:0 0 18px}
+.usage-dashboard .carbon-analysis>.usage-chart{border:0}
+.usage-dashboard .carbon-analysis>.carbon-summary{padding:14px 0;border-block:1px solid var(--line)}
