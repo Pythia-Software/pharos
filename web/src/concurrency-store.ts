@@ -6,10 +6,15 @@ const summaryCache = new Map<string, ConcurrencyMetrics | null>();
 export function loadConcurrencyData(refresh = false): Promise<ConcurrencyData> {
   if (pending) return pending;
   if (cached && !refresh) return Promise.resolve(cached);
-  pending = fetch("/api/usage/concurrency-prototype").then(async response => {
+  // The dev UI can explicitly substitute a captured export for visual previews.
+  const prototype = typeof document !== "undefined" && document.documentElement.hasAttribute("data-concurrency-prototype");
+  pending = fetch(prototype ? "/api/usage/concurrency-prototype" : "/api/usage/parallelism").then(async response => {
     if (!response.ok) throw new Error(`Could not read the timing snapshot (${response.status})`);
     return response.json() as Promise<ConcurrencyData>;
   }).then(data => {
+    // Go names the system timezone "Local" when TZ is unset. The loopback
+    // service and browser share that timezone; Intl needs its IANA name.
+    if (data.timezone === "Local") data = { ...data, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone };
     cached = data; loadError = ""; summaryCache.clear(); return data;
   }).catch(error => { loadError = error instanceof Error ? error.message : String(error); throw error; }).finally(() => { pending = null; });
   return pending;
