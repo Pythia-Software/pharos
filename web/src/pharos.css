@@ -467,7 +467,8 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 .usage-chart-select .usage-chart-caret { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: var(--muted); pointer-events: none; }
 .usage-chart-select select, .usage-period-custom input { box-sizing: border-box; height: 30px; margin: 0; padding: 3px 7px; border: 1px solid var(--line); border-radius: 4px; background-color: var(--panel); color: var(--ink); font: inherit; font-size: var(--fs-sm); }
 .usage-chart-select select { width: 100%; min-width: 0; padding-right: 28px; cursor: pointer; }
-.usage-chart-controls .usage-chart-select select:not([multiple]) { appearance: none; background-image: none; }
+/* Every ChartSelect supplies an SVG caret, including controls outside chart toolbars. */
+:root .usage-chart-select select:not([multiple]) { appearance: none; background-image: none; }
 .usage-chart-select select:hover:not(:disabled) { border-color: var(--accent); }
 .usage-chart-select select:disabled { opacity: .55; cursor: not-allowed; }
 .usage-chart-control-note { color: var(--muted); font-size: var(--fs-xs); line-height: 1.4; }
