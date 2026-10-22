@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { QueryBuilder, type QueryBuilderProps } from "@pythia-software/query-table-ui";
 import { Icon } from "./icons";
 import { dataEntities, dataSources, describeDataSource, type DataEntity, type DataSource } from "./data-taxonomy-model";
 import { readConcurrencySettings } from "./concurrency-settings";
@@ -20,12 +21,21 @@ function useDataSource(dataset: DataSource) {
   return describeDataSource(dataset, counting);
 }
 
-export function SourceStatement({ dataset, compact = false }: { dataset: DataSource; compact?: boolean }) {
+function SourceStatement({ dataset }: { dataset: DataSource }) {
   const source = useDataSource(dataset);
-  return <span className={`data-source-statement${compact ? " data-source-statement--compact" : " qt-qb-row"}`}>
+  return <span className="data-source-statement">
     <span className="qt-qb-kw">FROM</span>
     <a className="data-source-link" href={`#data-guide-${source.entity}`} aria-haspopup="dialog" onClick={event => { event.preventDefault(); openDataTaxonomy(dataset, event.currentTarget); }}>{source.label}<Icon name="info" /></a>
   </span>;
+}
+
+// Keep decoration outside the builder’s replacement slots: `clauses` disables
+// its native grouping UI, and `summary` replaces its grouped query summary.
+export function SourceQueryBuilder<Row>({ dataset, ...props }: QueryBuilderProps<Row> & { dataset: DataSource }) {
+  return <div className="data-source-query">
+    <SourceStatement dataset={dataset} />
+    <QueryBuilder {...props} />
+  </div>;
 }
 
 export function DataTaxonomyModal() {

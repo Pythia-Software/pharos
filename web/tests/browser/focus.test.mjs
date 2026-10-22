@@ -5,6 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { workID } from "./fixtures.mjs";
+import { EMPTY_QUERY, encodeQuery } from "@pythia-software/query-table-core";
 
 test("summary value links retain keyboard focus when the summary rerenders", { skip }, async t => {
   const { page } = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-usage-summary-links": true } });
@@ -72,6 +73,48 @@ test("Data guide is available outside Analyze in the light theme", { skip }, asy
   await app.page.getByRole("dialog", { name: "Data Guide", exact: true }).waitFor();
   await app.shot("workspace-guide-light");
 });
+
+// Exercise the guide alongside native grouping, filter and aggregate editors.
+for (const [dataset, path, numeric] of [["library", "/library", "conversation_count"], ["tool_calls", "/analyze?analyze_mode=query&analyze_data=tool_calls", "duration_ms"]]) {
+  test(`Data guide preserves native grouping editors for ${dataset}`, { skip }, async t => {
+    const query = {
+      ...EMPTY_QUERY,
+      select: [{ field: "repository_name" }, { field: "total" }],
+      grouping: { source: EMPTY_QUERY, keys: ["repository_name"], summaries: [{ id: "total", op: "sum", field: numeric, label: "Total" }], representative: null },
+    };
+    const url = new URL(path, "http://localhost");
+    url.searchParams.set(`q_${dataset}`, encodeQuery(query));
+    const app = await open(t, { url: url.pathname + url.search, ready: ".qt-table .qt-row" });
+    const { page } = app;
+    const aggregate = page.getByRole("combobox", { name: /^Aggregation for/ }).first();
+    await aggregate.selectOption("avg");
+    assert.equal(await aggregate.inputValue(), "avg");
+    for (const name of ["Add filter", "Add HAVING filter", "Customize columns"]) {
+      const opener = page.getByRole("button", { name, exact: true });
+      await press(opener);
+      const editor = page.getByRole("dialog");
+      await page.waitForFunction(element => element.contains(document.activeElement), await editor.elementHandle());
+      await page.keyboard.press("Escape");
+      await editor.waitFor({ state: "hidden" });
+    }
+    const guideLink = page.locator(".data-source-link");
+    await press(guideLink);
+    await holdsFocus(page, page.getByRole("dialog", { name: "Data Guide", exact: true }), guideLink);
+    await app.shot(`${dataset}-grouping-with-source`);
+    await press(page.getByRole("button", { name: "Collapse query builder", exact: true }));
+    await press(guideLink);
+    await holdsFocus(page, page.getByRole("dialog", { name: "Data Guide", exact: true }), guideLink);
+    await press(page.getByRole("button", { name: "Expand query builder", exact: true }));
+    await press(page.getByRole("button", { name: "Remove Repository grouping", exact: true }));
+    const addGroup = page.getByRole("button", { name: "Add group by", exact: true });
+    await press(addGroup);
+    const picker = page.getByRole("dialog", { name: "Group rows by", exact: true });
+    await page.waitForFunction(element => element.contains(document.activeElement), await picker.elementHandle());
+    await page.keyboard.press("Escape");
+    await picker.waitFor({ state: "hidden" });
+    await page.waitForFunction(element => document.activeElement === element, await addGroup.elementHandle());
+  });
+}
 
 // Exercise portal focus and dismissal against both native and role-based modals.
 async function useSearchMenus(page, dialog) {
