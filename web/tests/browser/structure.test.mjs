@@ -24,6 +24,7 @@ const recordKeyword = { field: "command", draft: {
   scope: { surface: "prose", roles: [], kinds: [], repository: "", provider: "", source: "", from: "", to: "", conversation_id: "", workspace_id: "" },
 } };
 const ROUTES = [
+  { name: "Data guide", url: "/analyze?analyze_mode=query&analyze_data=tool_calls&analyze_topic=tools", ready: ".usage-workspace-table .qt-row", open: page => page.locator(".usage-workspace-table .data-source-link").click(), shown: ".data-guide[open]" },
   ...["usage", "writing", "writing_messages", "conversation_activity", "tool_calls", "tools", "skill_usages", "mcp_calls", "parallelism"].flatMap(dataset => [false, true].map(explore => ({
     name: `Query ideas ${explore ? "Explore " : ""}${dataset}`,
     url: `/analyze?analyze_mode=query&analyze_data=${dataset}`,

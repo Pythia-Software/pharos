@@ -5,6 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { defaultApi, workID } from "./fixtures.mjs";
+import { EMPTY_QUERY, encodeQuery } from "@pythia-software/query-table-core";
 
 for (const mode of ['drive', 'activity']) test(`Activity ${mode} refresh preserves scrolling, focus and animation phase`, {skip}, async t => {
   const main = {id: 'refreshing-index', kind: 'sync', label: 'Capture & index', stoppable: true,
@@ -13,7 +14,7 @@ for (const mode of ['drive', 'activity']) test(`Activity ${mode} refresh preserv
     forecast: {state: 'partial', remaining_steps: 4, predicted_steps: 3, basis: 'Learning the remaining analyses'}};
   let activities = [main, ...Array.from({length: 5}, (_, index) => ({id: `task-${index}`, kind: 'maintenance', label: `Background task ${index}`}))];
   let stopped = 0;
-  const {page, settled, shot} = await open(t, {url: '/library', ready: '#pharosDrive', viewport: {width: 390, height: 550}, api: {
+  const {page, settled, shot} = await open(t, {url: '/library', ready: '#queryTableLibrary .qt-row', viewport: {width: 390, height: 550}, api: {
     'GET /api/library/status': () => ({...defaultApi['GET /api/library/status'], idle: false, activities}),
     'POST /api/library/refresh/stop': () => {stopped++; return {stopped: true};},
   }});
@@ -113,6 +114,79 @@ async function holdsFocus(page, surface, opener) {
   await page.keyboard.press("Escape");
   await surface.waitFor({ state: "hidden" });
   await page.waitForFunction(element => document.activeElement === element, await opener.elementHandle());
+}
+
+for (const width of [1440, 390, 320]) test(`Data guide takes focus, keeps controls reachable and returns focus @ ${width}`, { skip }, async t => {
+  const app = await open(t, { url: "/analyze?analyze_mode=query&analyze_data=tool_calls&analyze_topic=tools", viewport: { width, height: 900 }, ready: ".usage-workspace-table .qt-row" });
+  const { page } = app;
+  const opener = page.locator(".usage-workspace-table .data-source-link");
+  await app.shot("from-statement");
+  await press(opener);
+  const dialog = page.getByRole("dialog", { name: "Data Guide", exact: true });
+  await dialog.waitFor();
+  await app.shot("tool-call-guide");
+  await dialog.getByRole("button", { name: "Review", exact: true }).click();
+  await press(dialog.getByRole("button", { name: /Agent sessions/ }));
+  const source = dialog.getByRole("region", { name: "Dataset row definitions", exact: true });
+  await source.waitFor({ state: "hidden" });
+  await press(dialog.getByRole("navigation", { name: "Data layers", exact: true }).getByRole("button", { name: "Tool calls", exact: true }));
+  await source.waitFor({ state: "visible" });
+  await holdsFocus(page, dialog, opener);
+  await press(opener);
+  await dialog.getByRole("button", { name: "Close data guide", exact: true }).click();
+  await page.waitForFunction(element => document.activeElement === element, await opener.elementHandle());
+  await press(page.getByRole("button", { name: "Collapse query builder", exact: true }));
+  await press(opener);
+  await holdsFocus(page, dialog, opener);
+});
+
+test("Data guide is available outside Analyze in the light theme", { skip }, async t => {
+  const app = await open(t, { url: "/library", preferences: { "pharos-theme": "light" }, ready: "#queryTableLibrary .qt-row" });
+  await press(app.page.locator("#queryTableLibrary .data-source-link"));
+  await app.page.getByRole("dialog", { name: "Data Guide", exact: true }).waitFor();
+  await app.shot("workspace-guide-light");
+});
+
+// Exercise the guide alongside native grouping, filter and aggregate editors.
+for (const [dataset, path, numeric] of [["library", "/library", "conversation_count"], ["tool_calls", "/analyze?analyze_mode=query&analyze_data=tool_calls", "duration_ms"]]) {
+  test(`Data guide preserves native grouping editors for ${dataset}`, { skip }, async t => {
+    const query = {
+      ...EMPTY_QUERY,
+      select: [{ field: "repository_name" }, { field: "total" }],
+      grouping: { source: EMPTY_QUERY, keys: ["repository_name"], summaries: [{ id: "total", op: "sum", field: numeric, label: "Total" }], representative: null },
+    };
+    const url = new URL(path, "http://localhost");
+    url.searchParams.set(`q_${dataset}`, encodeQuery(query));
+    const app = await open(t, { url: url.pathname + url.search, ready: ".qt-table .qt-row" });
+    const { page } = app;
+    const aggregate = page.getByRole("combobox", { name: /^Aggregation for/ }).first();
+    await aggregate.selectOption("avg");
+    assert.equal(await aggregate.inputValue(), "avg");
+    for (const name of ["Add filter", "Add HAVING filter", "Customize columns"]) {
+      const opener = page.getByRole("button", { name, exact: true });
+      await press(opener);
+      const editor = page.getByRole("dialog");
+      await page.waitForFunction(element => element.contains(document.activeElement), await editor.elementHandle());
+      await page.keyboard.press("Escape");
+      await editor.waitFor({ state: "hidden" });
+    }
+    const guideLink = page.locator(".data-source-link");
+    await press(guideLink);
+    await holdsFocus(page, page.getByRole("dialog", { name: "Data Guide", exact: true }), guideLink);
+    await app.shot(`${dataset}-grouping-with-source`);
+    await press(page.getByRole("button", { name: "Collapse query builder", exact: true }));
+    await press(guideLink);
+    await holdsFocus(page, page.getByRole("dialog", { name: "Data Guide", exact: true }), guideLink);
+    await press(page.getByRole("button", { name: "Expand query builder", exact: true }));
+    await press(page.getByRole("button", { name: "Remove Repository grouping", exact: true }));
+    const addGroup = page.getByRole("button", { name: "Add group by", exact: true });
+    await press(addGroup);
+    const picker = page.getByRole("dialog", { name: "Group rows by", exact: true });
+    await page.waitForFunction(element => element.contains(document.activeElement), await picker.elementHandle());
+    await page.keyboard.press("Escape");
+    await picker.waitFor({ state: "hidden" });
+    await page.waitForFunction(element => document.activeElement === element, await addGroup.elementHandle());
+  });
 }
 
 // Exercise portal focus and dismissal against both native and role-based modals.
