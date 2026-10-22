@@ -105,7 +105,7 @@ test("all eight dashboards offer four distinct native queries that retain source
   for (const [topic, dataset, metric] of configs) {
     const schema = loadSchema(documents[dataset]);
     const where = [{ field: dataset === "mcp_calls" ? "query_source" : "repository_name", op: "=", value: "pharos" }];
-    const query = { ...EMPTY_QUERY, where, aggregations: [{ ...metric, id: "chart" }] }, original = structuredClone(query);
+    const query = { ...EMPTY_QUERY, fitToScreen: false, where, aggregations: [{ ...metric, id: "chart" }] }, original = structuredClone(query);
     const links = dashboardQueryLinks(dataset, query, schema, new URLSearchParams({ analyze_topic: topic, analyze_carbon: '{"scenario":"high"}' }));
     assert.equal(links.length, 4, topic);
     assert.equal(new Set(links.map(link => link.title)).size, 4, topic);
@@ -113,6 +113,7 @@ test("all eight dashboards offer four distinct native queries that retain source
     for (const link of links) {
       const url = new URL(link.href, "http://localhost"), restored = decodeQueryStrict(url.searchParams.get(`q_${dataset}`));
       assert.deepEqual(restored, normalizeQueryState(link.query));
+      assert.equal(restored.fitToScreen, true, `${topic}: ${link.title} fits its columns to the screen`);
       assert.deepEqual(toQueryRequestV3(restored, schema, { version: 3, profile: "qt-sqlite-v1", groupedRows: true, computedSourceFilters: true }).diagnostics ?? [], [], `${topic}: ${link.title}`);
       assert.deepEqual((restored.grouping?.source ?? restored).where.slice(0, where.length), where);
       assert.equal(readUsageWorkspace(url.searchParams).topic, topic);

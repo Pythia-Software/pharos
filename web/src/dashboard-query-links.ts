@@ -107,9 +107,10 @@ export function dashboardQueryLinks(dataset: UsageDataset, query: QueryState, sc
     ...(explorations.length ? explorations : [{ title: `${usageDatasets[dataset].label} records`, query: records }]),
   ];
   return destinations.map(destination => {
-    const details = dashboardQueryDetails(schema, destination.query);
-    return { ...destination, dataset: usageDatasets[dataset].label,
-      href: usageWorkspaceURL({ mode: "query", search: true, dataset, query: destination.query }, params),
+    const query = { ...destination.query, fitToScreen: true };
+    const details = dashboardQueryDetails(schema, query);
+    return { ...destination, query, dataset: usageDatasets[dataset].label,
+      href: usageWorkspaceURL({ mode: "query", search: true, dataset, query }, params),
       details, sentence: dashboardQuerySentence(details),
     };
   });
