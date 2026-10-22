@@ -190,7 +190,7 @@ async function validate(request: Record<string, unknown>, signal: AbortSignal): 
   return result.where;
 }
 const modes = [["advanced", "Boolean query syntax"], ["terms", "All words, with operators treated as words"], ["phrase", "Whole query as a phrase"], ["literal", "Exact text, including punctuation"], ["regex", "Regular expression (Go / RE2)"]];
-const dateInputType = (value: string) => !value || /^\d{4}-\d{2}-\d{2}$/.test(value) ? "date" : "text";
+const dateInputType = (value: string) => !value || /^\d{4}-\d{2}-\d{2}$/.test(value) ? "date" : /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(value) ? "datetime-local" : "text";
 const messageFields = [
   { key: "provider", label: "Provider", operator: "is", placeholder: "Provider name" },
   { key: "source", label: "Source", operator: "is", placeholder: "Source name" },
@@ -307,6 +307,8 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
       const value = draft.scope[field.key];
       const options = field.key === "provider" ? choices.providers : field.key === "source" ? choices.sources : undefined;
       const date = field.key === "from" || field.key === "to";
+      const inputType = dateInputType(value);
+      const utcNote = inputType === "date" ? "Dates include the whole day in UTC." : "Timestamps use UTC.";
       return <div className="text-filter-condition" key={field.key}>
         <span className="text-join">and</span>
         <div className="text-filter-clause">
@@ -314,10 +316,11 @@ export function TextSearchEditor({ value, active, initialError, onApply, onClear
           {options && !choicesError ? <SearchSelect id={id} aria-label={name} value={value} onChange={e => scope({ [field.key]: e.target.value })}>
             <option value="">Any {field.label.toLowerCase()}</option>
             {Array.from(new Set([...options, ...(value ? [value] : [])])).map(v => <option key={v} value={v}>{sourceLabel(v)}</option>)}
-          </SearchSelect> : date && dateInputType(value) === "date" ? <input id={id} aria-label={name} type="date" value={value} aria-invalid={issueList.some(i => i.id === "dates")} aria-describedby={`${filterID}-dates ${id}-utc`} onChange={e => scope({ [field.key]: e.target.value })} />
+          </SearchSelect> : date && inputType !== "text" ? <input id={id} aria-label={name} type={inputType} step="any" value={inputType === "datetime-local" ? value.slice(0, -1) : value} aria-invalid={issueList.some(i => i.id === "dates")} aria-describedby={`${filterID}-dates ${id}-utc`} onChange={e => scope({ [field.key]: e.target.value && inputType === "datetime-local" ? new Date(`${e.target.value}Z`).toISOString() : e.target.value })} />
             : <WrappingInput id={id} aria-label={name} value={value} placeholder={field.placeholder} aria-invalid={date && issueList.some(i => i.id === "dates")} aria-describedby={date ? `${filterID}-dates ${id}-utc` : undefined} onValue={text => scope({ [field.key]: text })} />}
-          {date ? <span className="text-filter-note" id={`${id}-utc`} title="Dates include the whole day in UTC.">UTC<span className="sr-only">: dates include the whole day in UTC.</span></span> : null}
-          <RemoveButton label={`Remove ${name.toLowerCase()} filter`} onRemove={() => { scope({ [field.key]: "" }); setAddedFields(fields => fields.filter(key => key !== field.key)); }} />
+          {date ? <span className="text-filter-note" id={`${id}-utc`} title={utcNote}>UTC<span className="sr-only">: {utcNote}</span></span> : null}
+          {field.key === "from" && !draft.scope.to ? <button type="button" aria-label="Search all time" onClick={() => { scope({ from: "" }); setAddedFields(fields => fields.filter(key => key !== "from")); }}>All time<Icon name="close" /></button>
+            : <RemoveButton label={`Remove ${name.toLowerCase()} filter`} onRemove={() => { scope({ [field.key]: "" }); setAddedFields(fields => fields.filter(key => key !== field.key)); }} />}
         </div>
       </div>;
     }) : null}

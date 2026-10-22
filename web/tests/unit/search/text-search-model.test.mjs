@@ -3,6 +3,38 @@ import test from "node:test";
 import * as m from "../../../src/text-search-model";
 const term = text => ({ op: "term", text });
 
+test("new keyword searches cover the last 30 elapsed days and keep that bound across batches and links", () => {
+  const clock = new Date("2026-11-15T12:34:56.789Z");
+  const draft = m.newKeywordSearch(clock);
+  assert.equal(draft.scope.from, "2026-10-16T12:34:56.789Z");
+  assert.equal(draft.scope.to, "");
+  assert.equal(m.readTextSearch(new URLSearchParams(), clock).draft.scope.from, draft.scope.from);
+  draft.root.children[0].text = "migration";
+  assert.equal(m.searchRequest(draft).request.from, draft.scope.from);
+  assert.match(m.sentenceText(m.searchSentence(draft).parts), /on or after Oct 16, 2026, 12:34 PM UTC/);
+  for (const cursor of ["", "next-batch"]) {
+    assert.equal(new URLSearchParams(m.textFindParameters(draft, cursor)).get("find_from"), draft.scope.from);
+  }
+  const restored = m.readTextSearch(new URLSearchParams({ text_builder: JSON.stringify(draft) }), new Date("2027-01-01"));
+  assert.equal(restored.error, "");
+  assert.equal(restored.draft.scope.from, draft.scope.from);
+});
+
+test("clearing the keyword date searches all time and preserves that choice in saved searches", () => {
+  const draft = m.newKeywordSearch();
+  draft.root.children[0].text = "migration";
+  draft.scope.from = "";
+  const restored = m.readTextSearch(new URLSearchParams({ text_builder: JSON.stringify(draft) }));
+  assert.equal(restored.error, "");
+  assert.equal(restored.draft.scope.from, "");
+  assert.equal(new URLSearchParams(m.textFindParameters(restored.draft)).has("find_from"), false);
+  for (const params of ["search=migration", "search=migration&text_from=2026-01-01", "text_from=&text_to="]) {
+    const saved = m.readTextSearch(new URLSearchParams(params));
+    assert.equal(saved.draft.scope.from, new URLSearchParams(params).get("text_from") ?? "");
+  }
+  assert.equal(m.emptyTextSearch().scope.from, "", "conversation find remains unrestricted");
+});
+
 test("legacy searches keep their fuzzy default through restoration and request serialization", () => {
   for (const [suffix, fuzzy] of [["", true], ["&fuzzy=0", false], ["&fuzzy=1", true]]) {
     const saved = m.readTextSearch(new URLSearchParams(`search=migration${suffix}`));
