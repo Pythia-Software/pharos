@@ -286,9 +286,9 @@ test("dashboard catalog stays readable while a preview is pending", { skip }, as
     await page.getByRole('button', { name: 'Refresh suggestions', exact: true }).click();
     await pending;
     await page.mouse.move(5, 5);
-    const next = page.getByRole('button', { name: 'Next five suggestions', exact: true });
+    const next = page.getByRole('button', { name: 'Next three suggestions', exact: true });
     await page.waitForFunction(() => {
-      const button = document.querySelector('button[aria-label="Next five suggestions"]');
+      const button = document.querySelector('button[aria-label="Next three suggestions"]');
       return button && !button.disabled;
     });
     const readable = async () => {
