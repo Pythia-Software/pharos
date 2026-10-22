@@ -734,3 +734,41 @@ test('Mac menu editing preserves focus when adding, moving, and removing items',
   await focused(addSeparator);
   assert.equal(await separators.count(), before);
 });
+
+for (const width of [390, 320]) test(`Capture & index tables retain horizontal scrolling through status refreshes @ ${width}`, { skip }, async t => {
+  const { page, settled } = await open(t, { url: '/settings/sync', viewport: { width, height: 900 }, ready: '#syncHistoryTables .qt-row' });
+  await page.getByText('Performance & verification details', { exact: true }).click();
+  const labels = ['Recent run history', 'Source status', 'Measured indexing cost'];
+  const positions = [];
+  for (const label of labels) {
+    const wrap = page.getByRole('region', { name: label, exact: true }).locator('.qt-table-wrap');
+    await page.waitForFunction(element => element.scrollWidth > element.clientWidth, await wrap.elementHandle());
+    positions.push(await wrap.evaluate(element => { element.scrollLeft = 300; return element.scrollLeft; }));
+  }
+  for (let poll = 0; poll < 2; poll++) {
+    await page.evaluate(() => window.pharosSync.refresh());
+    await settled();
+    for (const [index, label] of labels.entries()) {
+      assert.equal(await page.getByRole('region', { name: label, exact: true }).locator('.qt-table-wrap').evaluate(element => element.scrollLeft), positions[index], `${label} scroll after poll ${poll + 1}`);
+    }
+  }
+});
+
+for (const width of [1440, 390]) test(`Capture & index saved query remains available after a reload @ ${width}`, { skip }, async t => {
+  const { page } = await open(t, { url: '/settings/sync', viewport: { width, height: 900 }, ready: '#syncHistoryTables .qt-row' });
+  const history = page.getByRole('region', { name: 'Recent run history', exact: true });
+  await history.getByRole('button', { name: 'Save query', exact: true }).click();
+  const name = history.getByRole('textbox');
+  await name.fill('Run history to revisit');
+  const persisted = page.waitForResponse(response => response.url().endsWith('/api/preferences') && response.request().method() === 'POST' && response.request().postDataJSON()?.set?.['query-table:saved:sync_history']);
+  await name.press('Enter');
+  await persisted;
+  await history.getByRole('button', { name: 'Run history to revisit', exact: true }).waitFor();
+  await page.reload();
+  await page.locator('#syncHistoryTables .qt-row').first().waitFor();
+  await history.getByRole('button', { name: /^Saved/ }).click();
+  const saved = page.getByRole('dialog', { name: 'Saved queries', exact: true });
+  await saved.getByRole('button', { name: /^Run history to revisit/ }).click();
+  await saved.waitFor({ state: 'hidden' });
+  await history.getByRole('button', { name: 'Run history to revisit', exact: true }).waitFor();
+});

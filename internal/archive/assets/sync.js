@@ -193,18 +193,11 @@
     const dashboard = document.getElementById('syncDashboard');
     if (!dashboard || !status?.settings || (dashboard.contains(document.activeElement) && document.activeElement.matches('input,select'))) return;
     const focused = dashboard.contains(document.activeElement) ? document.activeElement.dataset.syncFocus : null;
-    // Retain the actual hosts: their React roots, filters, paging and editor
-    // focus survive the classic controls' periodic rebuild.
-    const tableHosts = ['syncHistoryTables', 'syncSourceTables', 'syncDiagnosticTables'].map(id => document.getElementById(id));
-    const tableFocus = tableHosts.some(host => host?.contains(document.activeElement)) ? document.activeElement : null;
-    for (const host of tableHosts) host?.remove();
-    const operations = document.getElementById('syncOperations');
-    const operationFocus = operations?.contains(document.activeElement) ? document.activeElement : null;
-    operations?.remove();
-    dashboard.replaceChildren();
+    // Keep the React tables and activity panel attached. Detaching a host
+    // resets its scroll containers even when the React root is retained.
+    const retained = new Set(['syncHistoryTables', 'syncSourceTables', 'syncDiagnosticTables', 'syncOperations'].map(id => document.getElementById(id)));
+    for (const child of [...dashboard.children]) if (!retained.has(child)) child.remove();
     const settings = status.settings;
-    if (tableHosts[0]) dashboard.append(tableHosts[0]);
-    if (operations) dashboard.append(operations);
     const preferences = node('section', '', 'sync-panel');
     preferences.append(node('h3', 'Automatic indexing'));
     const controls = node('div', '', 'sync-controls');
@@ -255,11 +248,9 @@
       const sourceLabel = node('label', ''); sourceLabel.append(choice, document.createTextNode(` ${source.name}`)); sources.append(sourceLabel);
     }
     preferences.append(sources, node('p', 'Automatic indexing makes new conversations searchable without capturing them. Manual Index changes also refreshes library-wide analysis. Capture & index also keeps a copy of the source files.', 'muted'));
-    dashboard.append(preferences);
-    if (tableHosts[1]) dashboard.append(tableHosts[1]);
+    dashboard.insertBefore(preferences, document.getElementById('syncSourceTables'));
     const latest = status.history?.[0];
-    if (settings.enabled && latest?.seconds > settings.interval_seconds) dashboard.append(node('p', 'Indexing changes takes longer than the selected interval. The next run starts after this one finishes.', 'badtext'));
-    if (tableHosts[2]) dashboard.append(tableHosts[2]);
+    if (settings.enabled && latest?.seconds > settings.interval_seconds) dashboard.insertBefore(node('p', 'Indexing changes takes longer than the selected interval. The next run starts after this one finishes.', 'badtext'), document.getElementById('syncDiagnosticTables'));
     const repairs = panel('Repair & maintenance', 'repairs', status.recovery_jobs?.some(job => ['interrupted', 'failed'].includes(job.state)));
     repairs.append(node('p', 'For missing data or damaged indexes. These operations can take a long time; everyday capturing and indexing do not need them.', 'muted'));
     const actions = node('div', '', 'sync-actions');
@@ -288,8 +279,6 @@
       }), button('Full recapture & reindex…', () => recovery('full', [issue.source_name])));
       dashboard.prepend(warning);
     }
-    tableFocus?.focus({preventScroll: true});
-    operationFocus?.focus({preventScroll: true});
     if (focused) [...dashboard.querySelectorAll('[data-sync-focus]')].find(element => element.dataset.syncFocus === focused)?.focus({preventScroll: true});
   }
 

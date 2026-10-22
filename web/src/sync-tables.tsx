@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { inspectBucketQuery, memoryStorageAdapter } from "@pythia-software/query-table-core";
+import { inspectBucketQuery } from "@pythia-software/query-table-core";
 import { useQueryTable, type QueryTableApi } from "@pythia-software/query-table-react";
 import { DataTable, QueryBuilder, MetricsPanel, ModalSurface, defaultRenderers, type RenderRegistry } from "@pythia-software/query-table-ui";
+import { clientTableStorageAdapter } from "./storage";
 import { syncTables, runTables, runKey, resultLabel, operationLabels, type SyncRecord, type SyncTable } from "./sync-table-model";
 
 declare global {
@@ -29,7 +30,7 @@ const renderers: RenderRegistry<SyncRecord> = {
 };
 
 function SyncQueryTable({ table, label, onInspect }: { table: SyncTable; label: string; onInspect?: (id: string) => void }) {
-  const storage = useMemo(() => memoryStorageAdapter(), []);
+  const storage = useMemo(() => clientTableStorageAdapter(), []);
   // Each table owns its local view. The bounded status response is its entire
   // population; no extra catalog queries or table-specific polling is needed.
   const api = useQueryTable<SyncRecord>({ schema: table.schema, clientRows: table.rows, storage, syncUrl: false, onRefresh: () => { void window.pharosSync.refresh(); } });
