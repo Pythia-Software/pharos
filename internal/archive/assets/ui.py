@@ -347,13 +347,14 @@ APP_HTML = r'''<!doctype html>
     <section id="health" class="settings-section" data-settings-route="/settings" data-page-title="Library health" data-page-description="Check your library’s usage, storage, backups, and recent activity." aria-labelledby="settingsPageHeading"><div id="healthCards" class="health"></div></section>
     <section id="sources" class="settings-section" data-settings-route="/settings/sources" data-page-title="Sources" data-page-description="Choose which conversation files Pharos reads on this Mac. Capture, index, and schedule automatic indexing on the Capture &amp; index page." aria-labelledby="settingsPageHeading" hidden><div class="source-toolbar" id="sourceToolbar" aria-label="Source actions"><div id="sourceSetupAction"></div><a href="/settings/sync">Open Capture &amp; index →</a></div><div class="source-summary" id="sourceSummary"></div><div class="source-grid" id="sourceGrid"></div></section>
     <section id="syncSettings" class="settings-section" data-settings-route="/settings/sync" data-page-title="Capture &amp; index" data-page-description="Keep the library current, and see what each run indexed and what it cost." aria-labelledby="settingsPageHeading" hidden><div id="syncDashboard">
-      <div id="syncHistoryTables"></div><div id="syncSourceTables"></div><div id="syncDiagnosticTables"></div>
+      <div id="syncHistoryTables"></div>
       <section id="syncOperations" class="sync-panel" aria-label="Capture and index now">
         <div class="sync-section-head"><div><h3>Capture &amp; index</h3><p class="muted">Capture this Mac’s source files, index captures from every Mac, and finish any pending library upgrade.</p></div><div id="syncUpdateAction" class="sync-actions"></div></div>
         <div id="syncActivity" role="status" aria-live="polite"></div>
         <details class="sync-separate"><summary>Capture or index separately</summary><p class="muted">Capture only copies enabled sources from this Mac. Index only makes captured files from every Mac searchable.</p><div id="syncRunActions" class="sync-actions"></div></details>
         <p class="muted">Need to add or enable a source? <a href="/settings/sources">Manage sources →</a></p>
       </section>
+      <div id="syncSourceTables"></div><div id="syncDiagnosticTables"></div>
     </div></section>
     <section id="mcpSettings" class="settings-section" data-settings-route="/settings/mcp" data-page-title="MCP" data-page-description="Control agent access to Pharos and connect your agent clients." aria-labelledby="settingsPageHeading" hidden><div id="mcpSettingsPage"></div></section>
     <section id="headerSettings" class="settings-section" data-settings-route="/settings/header" data-page-title="Header" data-page-description="Choose your header tools and their order. Smaller windows keep extra tools in More. Changes follow your library between Macs." aria-labelledby="settingsPageHeading" hidden>
