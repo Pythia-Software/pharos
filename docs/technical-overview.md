@@ -48,7 +48,7 @@ use the shared query-table pattern: schema-driven columns, field discovery,
 filtering (including OR/NOT), multi-sort, paging, persistent saved views,
 optional aggregate metrics, column reorder, and resize.
 
-- **Home** shows saved query cards, suggestions, and a browsable Card Library. Completed covers are cached in the browser's IndexedDB, isolated by library and keyed by query, template, schema, and time zone. Revisiting the page shows saved covers immediately while current results refresh behind a small status icon; a failed refresh keeps the last cover. Snapshots expire after seven days and are capped at 400 covers or 16 MiB per library. Once foreground cards finish, Home warms the catalog's default covers, including when its section is closed. Cold requests prioritize cards near the viewport as it scrolls; grouped requests take independent queue slots rather than serializing inside a metrics batch. A first visit still computes its initial covers, and these browser snapshots do not precompute while the app is closed.
+- **Home** shows saved query cards and Dashboard Catalog suggestions. The catalog’s **All Cards** button opens the browsable Card Library at `/cards`. Completed covers are cached in the browser's IndexedDB, isolated by library and keyed by query, template, schema, and time zone. Revisiting the page shows saved covers immediately while current results refresh behind a small status icon; a failed refresh keeps the last cover. Snapshots expire after seven days and are capped at 400 covers or 16 MiB per library. Once foreground cards finish, Home warms the catalog's default covers, before the Card Library page is opened. Cold requests prioritize cards near the viewport as it scrolls; grouped requests take independent queue slots rather than serializing inside a metrics batch. A first visit still computes its initial covers, and these browser snapshots do not precompute while the app is closed.
 
 - **Library** searches conversation text, changed files, and tool URLs. Text search reads retained user messages, agent responses, and thinking from `messages_fts`, groups hits by conversation, and links to the matching message. Unquoted words use AND; fuzzy expansion reads nearby vocabulary terms, while quoted phrases match in order. Case and separator matching are optional. The UI's text search does not use workspace vectors. File search uses `change_files`; a file change has workspace scope and is attributed to a conversation only when its work item, time span, or sole-conversation workspace supports that link. URL search reads `tool_urls` and excludes unopened web-search result links. The search narrows the Library query table, whose filters then apply to the matching work; the table also offers repository, source, PR, sub-agent, compaction, cost, and other structured filters. Work detail shows evidence-linked summaries, attempted/checkpointed/integrated changes, conversations, metrics, PR associations, and receipts.
 
@@ -355,8 +355,12 @@ For new interface icons, follow the [icon drawing and usage guide](iconography.m
 
 ### Nested page layouts
 
-Analyze, Settings, and TL1 use `web/src/nested-pages.tsx` and its scoped CSS
-for their sidebar, mobile disclosure menu, breadcrumbs, and page heading.
+Analyze, Optimize, and Settings share the sidebar and mobile menu in
+`web/src/app-navigation.tsx`, driven by `app-navigation-model.ts`.
+Optimize groups the Findings dashboard, table, and settings under Findings,
+and the available TL1 pages under TL1. Findings settings uses
+`/findings?view=settings`; old `/settings/optimization` links redirect there.
+Page content can use `web/src/nested-pages.tsx` for its shared layout and heading.
 A `NestedPage` tree supplies labels, destinations, descriptions, and stable
 page IDs. The selected page's ancestry determines breadcrumbs and which menu
 branches open; the tree can nest further without adding another renderer.

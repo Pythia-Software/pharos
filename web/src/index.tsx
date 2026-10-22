@@ -1,4 +1,5 @@
 import { matchingSelectionIDs } from "./query-selection";
+import { DataTaxonomyModal, SourceQueryBuilder } from "./data-taxonomy";
 import { installDelegationExplorer } from "./delegation";
 import { installWorkspaceInbox } from "./workspace-inbox";
 import { MessageTableSearch, newMessageSearch, readMessageSearch } from "./message-table-search";
@@ -39,7 +40,7 @@ import { SettingsWorkspace } from "./settings-workspace";
 import { installAppNavigation } from "./app-navigation";
 import { EMPTY_QUERY, groupSourceQuery, httpComputedColumnStore, inspectBucketQuery, applyAggregations, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, type ComputedColumnStore, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type AggregationResultEntry, type FieldSchema, type Transport, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
 import { useQueryTable, type QueryTableApi, type QueryFilterApi } from "@pythia-software/query-table-react";
-import { DataTable, FilterValueProvider, MetricCard, MetricsPanel, QueryBuilder, QueryFilterRow, SelectionToolbar, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
+import { DataTable, FilterValueProvider, MetricCard, MetricsPanel, QueryFilterRow, SelectionToolbar, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
 import "@pythia-software/query-table-ui/theme.css";
 import "./pharos.css";
 import { savedRollingWindow } from "./bookmarks";
@@ -48,6 +49,7 @@ import { queryRequest, queryFetch, shouldSkipQueryOnRestore } from "./query-requ
 import { PageErrorBoundary, QueryRecovery, ResetPage, tableRecoveryQuery } from "./query-recovery";
 import { createMCPMonitor, type MCPStatus } from "./mcp-monitor";
 import { HomePage } from "./home";
+import { CardLibraryPage } from "./card-library";
 import { linkTargets, navigateLink } from "./query-link-targets";
 import { QueryChip } from "./query-card";
 import { readRollingWindow, resolveRollingQuery, rollingQueryMatches } from "./query-links";
@@ -70,7 +72,7 @@ import tl1AttemptsDocument from "../../schemas/tl1_attempts.schema.json";
 import parallelismDocument from "../../schemas/parallelism.schema.json";
 import findingsDocument from "../../schemas/findings.schema.json";
 import { TL1Page } from "./tl1";
-import { FindingsPage, OptimizationSettingsPage, startFindingsChrome } from "./findings";
+import { FindingsPage, startFindingsChrome } from "./findings";
 import { Icon } from "./icons";
 import { AuthoredMessages, CategoryPill, MessageMix, authoredRenderers } from "./authored";
 import { ConcurrencyModal, ConcurrencyPanel, concurrencyPrototypeEnabled, type ConcurrencySelection } from "./concurrency";
@@ -601,12 +603,12 @@ function QuerySurface({ dataset, usageActions = false, libraryView = "table", me
     {!api.query.grouping || namespace ? header?.(api) : null}
     {!shared && !namespace && Object.hasOwn(usageDatasets, dataset) ? <UsageQueryIdeas key={dataset} dataset={dataset as UsageDataset} api={api} /> : null}
     {presets?.(api)}
-    {queryContent || resultPresentation ? <QueryBuilder compact summary={querySummary?.(api)} api={stableApi} fields={api.query.grouping ? api.schema!.fields : api.computed.catalogue} total={api.total} running={api.loading}
+    {queryContent || resultPresentation ? <SourceQueryBuilder dataset={dataset} compact summary={querySummary?.(api)} api={stableApi} fields={api.query.grouping ? api.schema!.fields : api.computed.catalogue} total={api.total} running={api.loading}
       whereRow={<>
         {resultPresentation?.(api)}
         <QueryFilterRow api={stableSourceFilters} fields={api.query.grouping ? api.grouping!.source.schema.fields : api.computed.catalogue} />
         {queryContent?.(api)}
-      </>} /> : api.query.grouping ? <QueryBuilder compact api={stableApi} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <QueryBuilder compact defaultCollapsed={Boolean(namespace)} api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={stableApi} dataset={dataset} layout={<QueryBuilder compact api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />} /> : <QueryBuilder compact api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />}
+      </>} /> : api.query.grouping ? <SourceQueryBuilder dataset={dataset} compact api={stableApi} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <SourceQueryBuilder dataset={dataset} compact defaultCollapsed={Boolean(namespace)} api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={stableApi} dataset={dataset} layout={<SourceQueryBuilder dataset={dataset} compact api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />} /> : <SourceQueryBuilder dataset={dataset} compact api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />}
     {queryContent ? controls?.(api, null) : null}
     <MetricsPanel api={stableApi} aggregations={api.aggregations} fields={metricFields(api.query.grouping ? usageGroupFields(api.schema!.fields, api.query) : api.computed.catalogue)} renderers={metricRenderers}
       onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(Object.hasOwn(usageDatasets, dataset) ? orderedUsageQuery(dataset as UsageDataset, { ...records, orderBy: [], ...(usageActions ? { fitToScreen: true } : {}) }) : records); }} />
@@ -1989,16 +1991,21 @@ if (!shared && concurrencyPrototypeEnabled && location.pathname === "/analyze" &
 
 if (!shared) installAppNavigation();
 
+const dataGuideHost = document.createElement("div");
+dataGuideHost.id = "dataGuideHost";
+document.body.append(dataGuideHost);
+createRoot(dataGuideHost).render(<DataTaxonomyModal />);
+
 const mounts: Array<[string, React.ReactNode]> = [
   ["searchComposerDialog", <SearchDialog schema={schemas.library} />],
   ["homePage", <HomePage schemas={schemas} />],
+  ["cardLibraryPage", <CardLibraryPage schemas={schemas} />],
   ["settingsPage", <SettingsWorkspace content={document.getElementById("settingsContent")!} />],
   ["queryTableLibrary", <LibraryPage />],
   ["queryTableUsage", <UsagePage />],
   ["toolsPage", <ToolsPage />],
   ["mcpSettingsPage", <MCPSettings />],
   ["findingsPage", <FindingsPage copy={copyText} table={<QuerySurface dataset="findings" />} />],
-  ["optimizationSettingsPage", <OptimizationSettingsPage />],
   ["tl1Page", <TL1Page attempts={<QuerySurface dataset="tl1_attempts" />} filterAttempts={(where) => tableApis.get("tl1_attempts")?.setQuery(previous => ({ ...previous, where: where as WhereTerm[], offset: 0 }))} copy={copyText} />],
 ];
 

@@ -24,6 +24,7 @@ const recordKeyword = { field: "command", draft: {
   scope: { surface: "prose", roles: [], kinds: [], repository: "", provider: "", source: "", from: "", to: "", conversation_id: "", workspace_id: "" },
 } };
 const ROUTES = [
+  { name: "Data guide", url: "/analyze?analyze_mode=query&analyze_data=tool_calls&analyze_topic=tools", ready: ".usage-workspace-table .qt-row", open: page => page.locator(".usage-workspace-table .data-source-link").click(), shown: ".data-guide[open]" },
   ...["usage", "writing", "writing_messages", "conversation_activity", "tool_calls", "tools", "skill_usages", "mcp_calls", "parallelism"].flatMap(dataset => [false, true].map(explore => ({
     name: `Query ideas ${explore ? "Explore " : ""}${dataset}`,
     url: `/analyze?analyze_mode=query&analyze_data=${dataset}`,
@@ -39,9 +40,9 @@ const ROUTES = [
     name: `Indexing forecast (${state}${expanded ? ', details' : ''})`, url: '/library', ready: '#queryTableLibrary .qt-row',
     api: {'GET /api/library/status': {...defaultApi['GET /api/library/status'], idle: false, activities: [{id: 'index-forecast', kind: 'sync', label: 'Capture & index', started_at: new Date(Date.now() - 120_000).toISOString(),
       stoppable: true, stop_path: '/api/index/cancel', detail: 'Codex · 0 of 4 sources finished',
-      work: {phase: 'discovering inputs', source: 'Codex', done: 0, total: 0, next: 'Tools, authorship and findings'},
-      estimate: {state: 'unknown', basis: 'Discovering inputs before the stage count is available'},
-      forecast: {state, low_seconds: state === 'provisional' ? 180 : 0, high_seconds: state === 'provisional' ? 600 : 0, predicted_steps: state === 'provisional' ? 4 : 3, remaining_steps: 4, basis: 'Remaining sources and analyses on this Mac', unknown_steps: state === 'partial' ? ['Classify authorship for retained conversations'] : []}}]}},
+      work: {phase: state === 'provisional' ? 'indexing' : 'discovering inputs', source: 'Codex', unit: 'conversation group', done: state === 'provisional' ? 42 : 0, total: state === 'provisional' ? 100 : 0, next: 'Tools, authorship and findings'},
+      estimate: state === 'provisional' ? {state: 'estimating', low_seconds: 60, high_seconds: 120, basis: 'Recent pace of the current step'} : {state: 'unknown', basis: 'Discovering inputs before the stage count is available'},
+      forecast: {state, progress: state === 'provisional' ? .63 : undefined, low_seconds: state === 'provisional' ? 180 : 0, high_seconds: state === 'provisional' ? 600 : 0, predicted_steps: state === 'provisional' ? 4 : 3, remaining_steps: 4, basis: 'Remaining sources and analyses on this Mac', unknown_steps: state === 'partial' ? ['Classify authorship for retained conversations'] : []}}]}},
     open: async page => {
       await page.evaluate(() => { window.webkit = {messageHandlers: {pharosLibrary: {postMessage: async () => {}}}}; });
       await activateHeaderTool(page, 'pharosDrive');
@@ -58,8 +59,8 @@ const ROUTES = [
     await page.getByLabel("Date on or after", { exact: true }).fill("2026-10-01");
     await page.getByLabel("Date on or before", { exact: true }).fill("2026-10-22");
   }, shown: ".home-search-disclosure.is-expanded" })),
-  { name: "Dashboard Catalog", url: "/home?cards=library", ready: ".card-library-entry .query-card" },
-  { name: "Weekday distributions", url: "/home?cards=library&card_search=day%20of%20the%20week", ready: '[data-card-id="human-words-weekday"] .query-shared-box' },
+  { name: "Card Library", url: "/cards", ready: ".card-library-entry .query-card" },
+  { name: "Weekday distributions", url: "/cards?cards=library&card_search=day%20of%20the%20week", ready: '[data-card-id="human-words-weekday"] .query-shared-box' },
   { name: "Search table", url: "/library", ready: "#queryTableLibrary .qt-row" },
   { name: "Search conversations", url: "/library?view=conversation", ready: ".conversation-result-card" },
   { name: "Search display switch", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("group", { name: "Display results as" }).getByRole("button", { name: "Conversations", exact: true }).click(), shown: ".conversation-result-card" },
@@ -113,6 +114,8 @@ const ROUTES = [
   { name: "Tool summary", url: "/tools?tools_view=summary", ready: "#toolsPage .qt-row" },
   { name: "Skills", url: "/tools?tools_view=skills", ready: ".skill-usages .qt-row" },
   { name: "Findings", url: "/findings", ready: ".findings-card" },
+  { name: "Findings table", url: "/findings?view=table", ready: ".findings-table .qt-row" },
+  { name: "Findings settings", url: "/findings?view=settings", ready: ".findings-settings .findings-panel" },
   { name: "Finding detail", url: "/findings?finding=drift%3Arepo%3Arepo_tl1%3Aghi", ready: ".findings-detail svg" },
   { name: "MCP dashboard", url: "/analyze?analyze_topic=mcp", ready: ".usage-mcp-dashboard .qt-metric-bar-row" },
   { name: "MCP trends", url: `/analyze?analyze_topic=mcp&analyze_chart=${encodeURIComponent(JSON.stringify({ metric: "failure_rate", split: "tool_name", view: "trend", period: "week", rollingPeriods: 37 }))}`, ready: ".usage-mcp-dashboard .qt-metric-mark" },
@@ -122,7 +125,7 @@ const ROUTES = [
   { name: "Library health", url: "/settings", ready: "#healthCards .panel:not([aria-busy])" },
   { name: "Sources", url: "/settings/sources", ready: "#sourceGrid .source-card" },
   { name: "Capture & index", url: "/settings/sync", ready: "#syncDashboard .sync-panel table" },
-  { name: "Optimization settings", url: "/settings/optimization", ready: "#optimizationSettingsPage .findings-panel" },
+  { name: "Legacy Findings settings", url: "/settings/optimization", ready: ".findings-settings .findings-panel" },
   { name: "Header settings", url: "/settings/header", ready: "#headerActive .header-tool" },
   { name: "App preferences", url: "/settings/preferences", ready: "#optionalBehaviors .optional-behavior" },
   { name: "Workspace overview", url: work, ready: ".delegation-table tbody tr" },
@@ -401,14 +404,11 @@ for (const width of [1649, 2133]) test(`pages without section menus use the full
   await primary.getByRole('button', { name: 'Home', exact: true }).click();
   await page.locator('.home-belt-row .query-card').first().waitFor();
   await fillsWindow();
-  await page.locator('.home-library-toggle').click();
+  await page.getByRole('button', { name: 'All Cards', exact: true }).click();
   await page.locator('.card-library-entry .query-card').first().waitFor();
   await fillsWindow();
   await primary.getByRole('button', { name: 'Search', exact: true }).click();
   await page.locator('#queryTableLibrary .qt-row').first().waitFor();
-  await fillsWindow();
-  await primary.getByRole('button', { name: /^Optimize/ }).click();
-  await page.locator('.findings-card').first().waitFor();
   await fillsWindow();
   await page.setViewportSize({ width: width + 400, height: 1075 });
   await fillsWindow();
@@ -522,12 +522,12 @@ test("Usage source links reveal and highlight the exact call, result, or nearest
 
 
 // IndexedDB and painting saved charts during navigation require a real browser.
-test("Dashboard Catalog restores saved covers while fresh queries are pending", { skip }, async t => {
+test("Card Library restores saved covers while fresh queries are pending", { skip }, async t => {
   let hold = false, release;
   const gate = new Promise(resolve => { release = resolve; });
   t.after(() => release());
   const app = await open(t, {
-    url: "/home?cards=library&card_search=tool-call-share",
+    url: "/cards?cards=library&card_search=tool-call-share",
     ready: ".card-library-entry .query-card",
     api: { "* /api/query/:dataset/:operation": async call => {
       if (hold && ["metrics", "query-v3", "rows-v2"].includes(call.params.operation)) await gate;
@@ -549,7 +549,7 @@ test("Dashboard Catalog restores saved covers while fresh queries are pending", 
   hold = true;
   await app.page.reload();
   await app.page.getByRole("status", { name: "Refreshing preview", exact: true }).first().waitFor();
-  const catalog = app.page.locator("#home-card-library");
+  const catalog = app.page.locator("#card-library");
   await catalog.scrollIntoViewIfNeeded();
   assert.deepEqual(await layoutProblems(app.page), []);
   await app.shot("saved-covers-refreshing");

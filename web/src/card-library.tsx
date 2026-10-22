@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { FieldSchema, MetricDisplay } from "@pythia-software/query-table-core";
-import { instantiateRecipe, suggestionWindowLabel, type QueryPreview, type QueryRecipe, type QuerySuggestion } from "./curiosity-data";
+import { clearPreviewCache, instantiateRecipe, suggestionWindowLabel, type QueryPreview, type QueryRecipe, type QuerySuggestion } from "./curiosity-data";
 import { availableChartKinds, cardCoverGroupLimit, cardDatasets, cardTemplates, coverChoices, decodeCover, saveCardTemplate } from "./card-library-model";
 import { cardKind, defaultCardCover } from "./card-cover";
 import { cardLoadingPresentation } from "./card-loading-model";
@@ -9,19 +9,20 @@ import { queryURL, type QueryDataset } from "./query-links";
 import { QueryCard } from "./query-card";
 import { Icon } from "./icons";
 import { preferences } from "./preferences";
-import { loadCardPreviews } from "./card-previews";
+import { invalidateCardPreviews, loadCardPreviews } from "./card-previews";
 import { usePreviewReload } from "./use-preview-reload";
+import { collectDurableQuery, migrateSavedQueries, readBookmarks } from "./bookmarks";
+import { PageLink } from "./nested-pages";
 import "./card-library.css";
 
-// The library is a Home section. /home?cards=library and the card_* URL
-// parameters open it with filters; tabs, filters and edit mode otherwise
-// follow the library like other interface preferences.
+// Card Library has its own page. Legacy links retain their filter/edit layout;
+// tabs, filters and edit mode otherwise follow the library preferences.
 export const CARD_LIBRARY_VIEW_KEY = "pharos-home-card-library-v1";
-export type CardLibraryView = { shown?: boolean; topic?: string; filters?: boolean; edit?: boolean };
+export type CardLibraryView = { topic?: string; filters?: boolean; edit?: boolean };
 export const cardLibraryParams = ["card_search", "card_data", "card_topic", "card_kind", "card_sort"];
 export const isCardLibraryLink = (search = location.search) => new URLSearchParams(search).get("cards") === "library";
 export const hasCardLibraryParams = (search = location.search, keys = cardLibraryParams) => { const params = new URLSearchParams(search); return keys.some(key => params.get(key)); };
-// Any library URL state opens the section; card_topic=all marks the All tab.
+// card_topic=all marks the All tab, including on legacy links.
 export const isCardLibraryURL = (search = location.search) => isCardLibraryLink(search) || hasCardLibraryParams(search);
 export function cardLibraryView(): CardLibraryView {
   const value = preferences().get<unknown>(CARD_LIBRARY_VIEW_KEY, {});
@@ -30,12 +31,49 @@ export function cardLibraryView(): CardLibraryView {
 export function saveCardLibraryView(change: CardLibraryView) {
   preferences().set(CARD_LIBRARY_VIEW_KEY, { ...cardLibraryView(), ...change });
 }
-// Hiding the section drops its URL state, leaving a plain Home URL.
-export function clearCardLibraryURL() {
-  const url = new URL(location.href);
-  if (isCardLibraryLink(url.search)) url.searchParams.delete("cards");
-  for (const key of cardLibraryParams) url.searchParams.delete(key);
-  history.replaceState(history.state, "", `${url.pathname}${url.search}${url.hash}`);
+export function CardLibraryPage({ schemas }: { schemas: Record<QueryDataset, FieldSchema> }) {
+  const [route, setRoute] = useState(() => location.href);
+  const active = new URL(route).pathname === "/cards";
+  const [collection, setCollection] = useState(readBookmarks);
+  const [generation, setGeneration] = useState(0), [message, setMessage] = useState("");
+  const [hidden, setHidden] = useState(document.hidden);
+  const heading = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    migrateSavedQueries(); setCollection(readBookmarks());
+    const route = () => setRoute(location.href);
+    const bookmarks = () => setCollection(readBookmarks());
+    const templates = () => setGeneration(value => value + 1);
+    let stale = false;
+    const refresh = () => {
+      if (document.hidden) { stale = true; return; }
+      stale = false; clearPreviewCache(); invalidateCardPreviews(); setGeneration(value => value + 1);
+    };
+    const visibility = () => { setHidden(document.hidden); if (!document.hidden && stale) refresh(); };
+    window.addEventListener("pharos:route", route); window.addEventListener("pharos:view", route);
+    window.addEventListener("pharos:bookmarks", bookmarks); window.addEventListener("pharos:card-templates", templates);
+    window.addEventListener("pharos:data-refresh", refresh); document.addEventListener("visibilitychange", visibility);
+    return () => {
+      window.removeEventListener("pharos:route", route); window.removeEventListener("pharos:view", route);
+      window.removeEventListener("pharos:bookmarks", bookmarks); window.removeEventListener("pharos:card-templates", templates);
+      window.removeEventListener("pharos:data-refresh", refresh); document.removeEventListener("visibilitychange", visibility);
+    };
+  }, []);
+  useEffect(() => {
+    if (active) heading.current?.querySelector<HTMLHeadingElement>("h1")?.focus({ preventScroll: true });
+  }, [active, route]);
+  async function keep(item: QuerySuggestion) {
+    try {
+      await collectDurableQuery(item.dataset, item.query, item.title, { description: item.description, templateId: item.instanceId, window: item.window, cover: item.cover ?? defaultCardCover(item), url: item.url });
+      setMessage(`Collected “${item.title}”.`);
+    } catch (error) { setMessage(String(error)); }
+  }
+  if (!active) return null;
+  return <div ref={heading} className="card-library-page">
+    <PageLink className="card-library-back" href="/"><Icon name="arrow-left" />Back to Home</PageLink>
+    <CardLibrary key={route} schemas={schemas} active={active} prewarm={!hidden} generation={generation}
+      collected={new Set(collection.map(item => item.templateId?.split(":")[0]))} message={message}
+      onOpen={url => window.pharosNavigate?.(url)} onKeep={item => void keep(item)} />
+  </div>;
 }
 
 const ALL = "all";
@@ -43,12 +81,11 @@ const chartNames: Partial<Record<MetricDisplay["kind"], string>> = { auto: "Auto
 // "Card defaults" honour a template that pins a single lookback.
 const cardDays = (recipe: QueryRecipe, days: number | "default") => days !== "default" ? days : recipe.days?.length === 1 ? recipe.days[0] : 7;
 
-export function CardLibrary({ schemas, active, prewarm, generation, collected, message, onOpen, onKeep, onDragStart, onDragEnd }: {
+function CardLibrary({ schemas, active, prewarm, generation, collected, message, onOpen, onKeep }: {
   schemas: Record<QueryDataset, FieldSchema>; active: boolean; prewarm: boolean; generation: number; collected: Set<string | undefined>; message: string;
   onOpen: (url: string) => void; onKeep: (item: QuerySuggestion) => void;
-  onDragStart: (event: React.DragEvent, item: QuerySuggestion) => void; onDragEnd: () => void;
 }) {
-  // HomePage bumps generation for template edits and data refreshes.
+  // The page bumps generation for template edits and data refreshes.
   const recipes = useMemo(cardTemplates, [generation]);
   const topics = useMemo(() => (Object.keys(queryCategories) as QueryCategory[]).filter(key => recipes.some(recipe => recipe.category === key)), [recipes]);
   const [initial] = useState(() => {
@@ -56,12 +93,12 @@ export function CardLibrary({ schemas, active, prewarm, generation, collected, m
     // A topic link alone keeps the saved layout; filter links show their filters.
     const filtered = isCardLibraryLink() || hasCardLibraryParams(location.search, cardLibraryParams.filter(key => key !== "card_topic"));
     const valid = (topic?: string | null) => topic === ALL || recipes.some(recipe => recipe.category === topic) ? topic! : undefined;
-    return { params, linked, topic: valid(params.get("card_topic")) ?? (linked ? ALL : valid(saved.topic) ?? topics[0] ?? ALL), filters: filtered || saved.filters === true, edit: isCardLibraryLink() || saved.edit === true };
+    return { params, linked, topic: valid(params.get("card_topic")) ?? (linked ? ALL : valid(saved.topic) ?? ALL), filters: filtered || saved.filters === true, edit: isCardLibraryLink() || saved.edit === true };
   });
   const [search, setSearch] = useState(initial.params.get("card_search") ?? ""), [dataset, setDataset] = useState(initial.params.get("card_data") ?? ""), [kind, setKind] = useState(initial.params.get("card_kind") ?? ""), [sort, setSort] = useState(initial.params.get("card_sort") ?? "topic");
   const [chosen, setChosen] = useState(initial.topic), [days, setDays] = useState<number | "default">("default");
   const [filtersOpen, setFiltersOpen] = useState(initial.filters), [editMode, setEditMode] = useState(initial.edit);
-  // Home's URL stays clean until the library is linked or used.
+  // Preserve the plain page URL until a tab or filter is chosen.
   const [inURL, setInURL] = useState(initial.linked);
   const [previews, setPreviews] = useState<Record<string, QueryPreview>>({}), [errors, setErrors] = useState<Record<string, string>>({}), [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<QueryRecipe | null>(null), [title, setTitle] = useState(""), [description, setDescription] = useState(""), [editDays, setEditDays] = useState(7), [metric, setMetric] = useState(""), [chart, setChart] = useState<MetricDisplay["kind"]>("auto"), [error, setError] = useState("");
@@ -79,7 +116,7 @@ export function CardLibrary({ schemas, active, prewarm, generation, collected, m
   const previousJobs = useRef(new Map<string, string>());
   const job = (item: QuerySuggestion) => ({ id: item.id, priority: () => nearby.current.has(item.id) ? 0 : 1, dataset: item.dataset, query: item.query, schema: schemas[item.dataset], options: { recipe: item, cover: item.cover, window: item.window, url: item.url } });
   useEffect(() => {
-    if (!active || !inURL || !["/", "/home"].includes(location.pathname)) return;
+    if (!active || !inURL || location.pathname !== "/cards") return;
     const url = new URL(location.href);
     for (const [key, value] of Object.entries({ card_search: search, card_data: dataset, card_topic: topic, card_kind: kind, card_sort: sort === "topic" ? "" : sort })) { if (value) url.searchParams.set(key, value); else url.searchParams.delete(key); }
     history.replaceState(history.state, "", `${url.pathname}${url.search}${url.hash}`);
@@ -164,9 +201,9 @@ export function CardLibrary({ schemas, active, prewarm, generation, collected, m
   const opensDashboard = editedItem && new URL(editedItem.url, location.origin).searchParams.get("analyze_mode") === "dashboards";
   const tabKeys = [ALL, ...topics], index = tabKeys.indexOf(topic);
   const activeFilters = [search, dataset, kind].filter(Boolean).length;
-  return <section id="home-card-library" className="card-library" aria-labelledby="card-library-title">
+  return <section id="card-library" className="card-library" aria-labelledby="card-library-title">
     <div className="card-library-head">
-      <h2 id="card-library-title"><Icon name="read" />Card Library</h2>
+      <h1 id="card-library-title" tabIndex={-1}><Icon name="read" />Card Library</h1>
       <div className="card-library-actions">
         <button type="button" aria-expanded={filtersOpen} aria-controls="card-library-controls" onClick={() => { const open = !filtersOpen; setFiltersOpen(open); saveCardLibraryView({ filters: open }); }}><Icon name="search" />Filters{activeFilters ? <span className="card-library-badge">{activeFilters}</span> : null}</button>
         <button type="button" aria-pressed={editMode} onClick={() => { const edit = !editMode; setEditMode(edit); saveCardLibraryView({ edit }); }}><Icon name="edit" />Edit cards</button>
@@ -201,7 +238,7 @@ export function CardLibrary({ schemas, active, prewarm, generation, collected, m
     <p className="card-library-feedback" role="status">{message}</p>
     <div id="card-library-panel" className="card-library-grid" role="tabpanel" aria-labelledby={`card-library-tab-${topic}`} aria-busy={loading}>{cards.map(item => <div className="card-library-entry" id={`card-${item.id}`} data-card-definition={item.id} data-card-idea={item.idea} key={item.id}>
       <QueryCard discovery id={item.id} title={item.title} description={item.description} actionLabel={item.action} url={item.url} windowLabel={suggestionWindowLabel(item)} category={item.category} loadingSpec={cardLoadingPresentation(item.query, { recipe: item, cover: item.cover, days: item.window?.days })} preview={previews[item.id]} error={errors[item.id]}
-        onOpen={() => onOpen(item.url)} onKeep={() => onKeep(item)} onReload={() => reloadPreview(job(item))} onDragStart={event => onDragStart(event, item)} onDragEnd={onDragEnd} />
+        onOpen={() => onOpen(item.url)} onKeep={() => onKeep(item)} onReload={() => reloadPreview(job(item))} />
       {editMode ? <div className="card-library-meta"><code className="card-library-id" title={`Card definition: ${item.id} · Wishlist: ${item.idea}`}>ID: {item.id}</code><span>{cardDatasets[item.dataset]}</span><span>{cardKind(item)} · {new URL(item.url, location.origin).searchParams.get("analyze_mode") === "dashboards" ? "Analyze dashboard" : item.exploration ? "Grouped table" : "Records + metrics"}</span>{collected.has(item.id) ? <span className="card-library-collected"><Icon name="check" /> In your collection</span> : null}
         <button type="button" onClick={() => openEditor(item)} aria-label={`Edit card ${item.title}`}><Icon name="edit" /> Edit card</button>
       </div> : collected.has(item.id) ? <span className="card-library-collected"><Icon name="check" /> In your collection</span> : null}

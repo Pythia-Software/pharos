@@ -126,7 +126,7 @@ const findingRecipes: QueryRecipe[] = [
 ];
 
 const pricingRecipes: QueryRecipe[] = [
-  { id: "models-needing-prices", title: "Models needing prices", description: "Models whose tokens are unpriced or priced by assumption, by all-time recorded token volume.", category: "library", idea: "cost-01", dataset: "usage", field: "first_usage_at", unit: "tokens", period: "all", action: "Review model pricing",
+  { id: "models-needing-prices", title: "Models needing prices", description: "Models whose tokens are unpriced or priced by assumption, by all-time recorded token volume.", category: "cost", idea: "cost-01", dataset: "usage", field: "first_usage_at", unit: "tokens", period: "all", action: "Review model pricing",
     note: "All-time token volume. Assumed models borrow a sibling model's price; unpriced models have no retained price on their usage day. Placeholder model names are excluded.",
     where: [positive("total_tokens"), { any: [equal("price_status", "unpriced"), equal("price_status", "assumed")] }, { field: "model", op: "!=", value: "Unknown model" }, { field: "model", op: "starts_with", value: "<", negated: true }], measures: [],
     exploration: compare(["model", "price_status"], [sum("pr_tokens", "total_tokens", "Recorded tokens"), { id: "pr_last", op: "max", field: "day", label: "Last used" }, { id: "pr_providers", op: "count_distinct", field: "provider", label: "Providers" }], "tokens", "models", "Review model pricing"),

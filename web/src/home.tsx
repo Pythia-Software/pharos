@@ -9,7 +9,6 @@ import { QueryConveyor } from "./query-conveyor";
 import { Icon } from "./icons";
 import "./home.css";
 import { HomeSearch } from "./search-composer";
-import { CardLibrary, cardLibraryView, clearCardLibraryURL, isCardLibraryURL, saveCardLibraryView } from "./card-library";
 import { cardTemplates } from "./card-library-model";
 import { defaultCardCover } from "./card-cover";
 import { cardLoadingPresentation } from "./card-loading-model";
@@ -33,28 +32,20 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true), [generation, setGeneration] = useState(0);
   const [welcome] = useState(() => welcomes[Math.floor(Math.random() * welcomes.length)]);
-  const editor = useRef<HTMLDialogElement>(null);
+  const editor = useRef<HTMLDialogElement>(null), heading = useRef<HTMLHeadingElement>(null);
   const [editing, setEditing] = useState<Bookmark | null>(null), [editTitle, setEditTitle] = useState(""), [editDescription, setEditDescription] = useState("");
   const [editDays, setEditDays] = useState("");
   const [editCover, setEditCover] = useState("");
   const [editError, setEditError] = useState("");
-  // Feedback appears beside the section that caused it.
-  const [feedback, setFeedback] = useState<{ text: string; from: "home" | "library" }>({ text: "", from: "home" }), [undo, setUndo] = useState<{ item: Bookmark; index: number } | null>(null);
+  const [feedback, setMessage] = useState(""), [undo, setUndo] = useState<{ item: Bookmark; index: number } | null>(null);
   const [drag, setDrag] = useState<{ saved?: string; suggestion?: QuerySuggestion } | null>(null), [insertBefore, setInsertBefore] = useState<string | undefined>();
   const [hidden, setHidden] = useState(document.hidden);
-  const [libraryShown, setLibraryShown] = useState(() => isCardLibraryURL() || cardLibraryView().shown === true);
-  // A library URL opens the section afresh from its parameters and scrolls to it.
-  const [libraryLink, setLibraryLink] = useState(0), revealLibrary = useRef<boolean | "smooth">(isCardLibraryURL());
-  const setMessage = (text: string, from: "home" | "library" = "home") => setFeedback({ text, from });
   const reloadPreview = usePreviewReload(setPreviews, setErrors, [active, collection, pool, generation, schemas]);
 
   useEffect(() => {
     migrateSavedQueries(); setCollection(readBookmarks());
     const bookmarks = () => setCollection(readBookmarks());
-    const route = () => {
-      setActive(isHome());
-      if (isHome() && isCardLibraryURL()) { revealLibrary.current = true; setLibraryShown(true); setLibraryLink(value => value + 1); }
-    };
+    const route = () => setActive(isHome());
     const templates = () => { setPool(suggestionPool(new Date(), cardTemplates())); setGeneration(value => value + 1); };
     window.addEventListener("pharos:card-templates", templates);
     // A hidden tab notes new data and reruns its cards once it is shown.
@@ -66,14 +57,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     window.addEventListener("pharos:data-refresh", refresh); document.addEventListener("visibilitychange", visibility);
     return () => { window.removeEventListener("pharos:card-templates", templates); window.removeEventListener("pharos:bookmarks", bookmarks); window.removeEventListener("pharos:route", route); window.removeEventListener("pharos:view", route); window.removeEventListener("pharos:data-refresh", refresh); document.removeEventListener("visibilitychange", visibility); };
   }, []);
-  useEffect(() => { if (active) { setGeneration(value => value + 1); } }, [active]);
-  useEffect(() => {
-    if (!active || !libraryShown || !revealLibrary.current) return;
-    const smooth = revealLibrary.current === "smooth" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
-    revealLibrary.current = false;
-    document.getElementById("home-card-library")?.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
-  }, [active, libraryShown, libraryLink]);
-
+  useEffect(() => { if (active) { setGeneration(value => value + 1); heading.current?.focus({ preventScroll: true }); } }, [active]);
   useEffect(() => {
     if (!active) return;
     const controller = new AbortController();
@@ -92,9 +76,9 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   }, [active, collection, pool, generation, schemas]);
 
   useEffect(() => {
-    if (!active || hidden || loading || libraryShown) return;
+    if (!active || hidden || loading) return;
     const controller = new AbortController();
-    // Prepare default catalog covers even before its section is opened, without
+    // Prepare default library covers before its page is opened, without
     // mounting hundreds of offscreen charts. Foreground work finishes first.
     const items = cardTemplates().map(recipe => instantiateRecipe(recipe, recipe.days?.length === 1 ? recipe.days[0] : 7));
     void (async () => {
@@ -103,7 +87,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
       }
     })();
     return () => controller.abort();
-  }, [active, hidden, loading, libraryShown, generation, schemas]);
+  }, [active, hidden, loading, generation, schemas]);
 
   const collectedTemplates = new Set(collection.map(item => item.templateId?.split(":")[0]));
   const poolById = new Map(pool.map(item => [item.instanceId, item]));
@@ -117,13 +101,13 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     if (editing) { setEditTitle(editing.title); setEditDescription(editing.description ?? ""); setEditDays(timeWindowValue(queryFromURL(editing.url, editing.query))); const metricId = editing.coverMetricId ?? editing.cover?.metricId ?? ""; setEditCover(coverChoices.some(choice => choice.id === metricId) ? metricId : ""); setEditError(""); editor.current?.showModal(); }
   }, [editing]);
 
-  async function keep(item: QuerySuggestion, before?: string, from: "home" | "library" = "home") {
+  async function keep(item: QuerySuggestion, before?: string) {
     try {
       const saved = await collectDurableQuery(item.dataset, item.query, item.title, { description: item.description, templateId: item.instanceId, window: item.window, cover: item.cover ?? defaultCardCover(item), url: item.url });
       if (before) moveBookmark(saved.id, before);
-      setMessage(`Collected “${item.title}”.`, from); setUndo(null);
+      setMessage(`Collected “${item.title}”.`); setUndo(null);
       setPreviews(current => ({ ...current, [saved.id]: current[item.instanceId] }));
-    } catch (error) { setMessage(String(error), from); }
+    } catch (error) { setMessage(String(error)); }
   }
   function drop(event: React.DragEvent, before?: string) {
     if (!drag) return;
@@ -151,7 +135,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     ? [...editingSpec.query.grouping.summaries.filter(column => column.op !== "row").map(column => ({ id: column.id, label: `${column.label ?? column.id} · grouped rows` })), ...(editingSpec.query.grouping.source.aggregations ?? []).map(metric => ({ id: metric.id, label: `${metric.label ?? metric.id} · observations` }))]
     : editingSpec?.query.aggregations?.map(metric => ({ id: metric.id, label: metric.label ?? metric.id })) ?? [];
   return <div className="curiosity-home" data-feedback-label="Home dashboard">
-    <div className="home-intro"><h1>{welcome}</h1><HomeSearch schema={schemas.library} /></div>
+    <div className="home-intro"><h1 ref={heading} tabIndex={-1}>{welcome}</h1><HomeSearch schema={schemas.library} /></div>
     <div className={`home-collection${drag ? " accepting" : ""}`} role="region" aria-label="Your collection" onDragOver={event => { if (drag) { event.preventDefault(); const target = (event.target as Element).closest("[data-card-id]"); setInsertBefore(target?.getAttribute("data-card-id") ?? undefined); } }} onDrop={event => drop(event)}>
       {collection.map(item => {
         const spec = queryFromURL(item.url, item.query), recipe = queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]);
@@ -165,15 +149,10 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
       {!collection.length ? <div className="home-empty"><Icon name="bookmark" /><span>Make this space yours.<small>Collect cards that help you see your work from different angles</small></span></div> : null}
       {drag ? <span className="home-drop-label"><Icon name="arrow-up" />{drag.saved ? "Drop to reorder your collection" : "Drop to add to your collection"}</span> : null}
     </div>
-    <div className="home-feedback" role="status">{feedback.from === "home" ? feedback.text : ""}{undo ? <button type="button" onClick={() => { const items = readBookmarks(); items.splice(Math.min(undo.index, items.length), 0, undo.item); writeBookmarks(items); setUndo(null); setMessage("Restored to your collection."); }}>Undo</button> : null}</div>
+    <div className="home-feedback" role="status">{feedback}{undo ? <button type="button" onClick={() => { const items = readBookmarks(); items.splice(Math.min(undo.index, items.length), 0, undo.item); writeBookmarks(items); setUndo(null); setMessage("Restored to your collection."); }}>Undo</button> : null}</div>
     <QueryConveyor items={eligible} previews={previews} loading={loading} hasErrors={Object.keys(errors).length > 0} active={active} suspended={hidden || !active || Boolean(drag) || Boolean(editing)}
       onRefresh={() => { clearPreviewCache(); invalidateCardPreviews(); setGeneration(value => value + 1); setErrors({}); setPool(suggestionPool(new Date(), cardTemplates())); }} onOpen={navigate} onKeep={keep} onDragStart={(event, item) => dragStart(event, { suggestion: item }, item.url)} onDragEnd={finishDrag}
-      libraryShown={libraryShown} onToggleLibrary={() => {
-        const shown = !libraryShown; revealLibrary.current = shown && "smooth"; setLibraryShown(shown); saveCardLibraryView({ shown });
-        if (!shown) clearCardLibraryURL();
-      }} />
-    {libraryShown ? <CardLibrary key={libraryLink} schemas={schemas} active={active && libraryShown} prewarm={active && !hidden && !loading} generation={generation} collected={collectedTemplates} message={feedback.from === "library" ? feedback.text : ""} onOpen={navigate}
-      onKeep={item => void keep(item, undefined, "library")} onDragStart={(event, item) => dragStart(event, { suggestion: item }, item.url)} onDragEnd={finishDrag} /> : null}
+      onAllCards={() => navigate("/cards")} />
     <dialog ref={editor} className="home-editor" aria-labelledby="homeEditorTitle" onCancel={() => setEditing(null)} onClose={() => setEditing(null)}><form onSubmit={event => {
       event.preventDefault(); if (!editing) return;
       try {

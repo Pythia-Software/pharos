@@ -98,7 +98,7 @@
   .app-navigation-dialog .app-navigation-all{display:flex;align-items:center;gap:8px;min-height:var(--app-control-height);padding:0 12px}
   .app-navigation-dialog-head{padding:0 0 8px}
   .app-navigation-dialog-head strong{display:none}
-  .app-navigation-list a,.app-navigation-list>button,.app-navigation-list summary{min-height:44px}
+  .app-navigation-list a,.app-navigation-list>button,.app-navigation-list summary{min-height:41px}
   .app-navigation-dialog.app-navigation-root{width:calc(100vw - 16px);position:fixed}
   .app-navigation-root-close{position:absolute;top:8px;right:8px}
   .app-navigation-sections{border-right:0}

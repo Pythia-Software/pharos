@@ -4,7 +4,81 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
-import { workID } from "./fixtures.mjs";
+import { defaultApi, workID } from "./fixtures.mjs";
+import { EMPTY_QUERY, encodeQuery } from "@pythia-software/query-table-core";
+
+for (const mode of ['drive', 'activity']) test(`Activity ${mode} refresh preserves scrolling, focus and animation phase`, {skip}, async t => {
+  const main = {id: 'refreshing-index', kind: 'sync', label: 'Capture & index', stoppable: true,
+    started_at: new Date(Date.now() - 120_000).toISOString(),
+    work: {phase: 'Discovering inputs', source: 'Codex', done: 0, total: 0},
+    forecast: {state: 'partial', remaining_steps: 4, predicted_steps: 3, basis: 'Learning the remaining analyses'}};
+  let activities = [main, ...Array.from({length: 5}, (_, index) => ({id: `task-${index}`, kind: 'maintenance', label: `Background task ${index}`}))];
+  let stopped = 0;
+  const {page, settled, shot} = await open(t, {url: '/library', ready: '#queryTableLibrary .qt-row', viewport: {width: 390, height: 550}, api: {
+    'GET /api/library/status': () => ({...defaultApi['GET /api/library/status'], idle: false, activities}),
+    'POST /api/library/refresh/stop': () => {stopped++; return {stopped: true};},
+  }});
+  await page.emulateMedia({reducedMotion: 'no-preference'});
+  if (mode === 'drive') await activateHeaderTool(page, 'pharosDrive');
+  else await page.evaluate(() => window.pharosLibrary.toggleActivityPanel());
+  await settled();
+  const panel = page.getByRole('dialog', {name: mode === 'drive' ? 'Library drive' : 'Running activity', exact: true});
+  const summary = panel.locator('summary').first();
+  await summary.click();
+  await summary.focus();
+  await page.evaluate(async () => {
+    const panel = document.getElementById('pharosDrivePanel');
+    panel.scrollTop = 160;
+    const animations = [...panel.querySelector('[role="progressbar"]').getAnimations({subtree: true}),
+      ...document.getElementById('pharosDrive').getAnimations({subtree: true})];
+    if (!animations.length) throw new Error('No loading animations to exercise');
+    for (const animation of animations) {animation.pause(); await animation.ready; animation.currentTime = 750;}
+    window.activityRefreshTest = {animations, focused: document.activeElement, scrollTop: panel.scrollTop};
+    if (!panel.scrollTop) throw new Error('Activity fixture must scroll');
+  });
+  activities = [{...main, stop_path: '/api/library/refresh/stop', detail: 'Updated discovery counts'}, ...activities.slice(1)];
+  await page.evaluate(() => window.pharosLibrary.refresh());
+  assert.ok(await page.evaluate(() => {
+    const panel = document.getElementById('pharosDrivePanel'), before = window.activityRefreshTest;
+    const animations = [...panel.getAnimations({subtree: true}), ...document.getElementById('pharosDrive').getAnimations({subtree: true})];
+    return document.activeElement === before.focused && panel.scrollTop === before.scrollTop
+      && panel.querySelector('details').open
+      && before.animations.every(animation => animations.includes(animation) && animation.currentTime === 750);
+  }), 'refresh interrupted scrolling, focus, disclosure state or an in-progress animation');
+  // Removing a preceding task also keeps a later task's animation alive.
+  await page.evaluate(async () => {
+    const bar = [...document.querySelectorAll('#pharosDrivePanel [role="progressbar"]')].find(el => el.getAttribute('aria-label').startsWith('Background task 4: overall'));
+    window.laterActivityAnimation = bar.getAnimations({subtree: true})[0];
+    window.laterActivityAnimation.pause();
+    await window.laterActivityAnimation.ready;
+    window.laterActivityAnimation.currentTime = 900;
+  });
+  activities = [activities[0], ...activities.slice(2)];
+  await page.evaluate(() => window.pharosLibrary.refresh());
+  assert.ok(await panel.evaluate(element => element.getAnimations({subtree: true}).includes(window.laterActivityAnimation) && window.laterActivityAnimation.currentTime === 900));
+  // Exercise the state-preserving move fallback used by older browsers.
+  await page.evaluate(() => {Element.prototype.moveBefore = undefined;});
+  activities = [activities[0], ...activities.slice(1).reverse()];
+  await page.evaluate(() => window.pharosLibrary.refresh());
+  assert.ok(await panel.evaluate(element => {
+    const bar = [...element.querySelectorAll('[role="progressbar"]')].find(el => el.getAttribute('aria-label').startsWith('Background task 4: overall'));
+    return bar.getAnimations({subtree: true})[0].currentTime === 900;
+  }), 'reordering tasks restarted an in-progress animation');
+  const stop = panel.getByRole('button', {name: 'Stop', exact: true});
+  await stop.click();
+  await settled();
+  assert.equal(stopped, 1, 'retained Stop button did not use the latest stop target');
+  // A measured step can replace discovery without closing its details.
+  activities = [{...activities[0], work: {phase: 'Indexing', source: 'Codex', done: 42, total: 100},
+    forecast: {state: 'provisional', progress: .63, low_seconds: 120, high_seconds: 180}}, ...activities.slice(1)];
+  await page.evaluate(() => window.pharosLibrary.refresh());
+  assert.ok(await panel.locator('details').first().evaluate(element => element.open));
+  activities = [activities[0]];
+  await page.evaluate(() => window.pharosLibrary.refresh());
+  await panel.locator('summary').first().click();
+  await panel.evaluate(element => {element.scrollTop = 0;});
+  await shot('refreshed');
+});
 
 test("summary value links retain keyboard focus when the summary rerenders", { skip }, async t => {
   const { page } = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-usage-summary-links": true } });
@@ -40,6 +114,79 @@ async function holdsFocus(page, surface, opener) {
   await page.keyboard.press("Escape");
   await surface.waitFor({ state: "hidden" });
   await page.waitForFunction(element => document.activeElement === element, await opener.elementHandle());
+}
+
+for (const width of [1440, 390, 320]) test(`Data guide takes focus, keeps controls reachable and returns focus @ ${width}`, { skip }, async t => {
+  const app = await open(t, { url: "/analyze?analyze_mode=query&analyze_data=tool_calls&analyze_topic=tools", viewport: { width, height: 900 }, ready: ".usage-workspace-table .qt-row" });
+  const { page } = app;
+  const opener = page.locator(".usage-workspace-table .data-source-link");
+  await app.shot("from-statement");
+  await press(opener);
+  const dialog = page.getByRole("dialog", { name: "Data Guide", exact: true });
+  await dialog.waitFor();
+  await app.shot("tool-call-guide");
+  await dialog.getByRole("button", { name: "Review", exact: true }).click();
+  await press(dialog.getByRole("button", { name: /Agent sessions/ }));
+  const source = dialog.getByRole("region", { name: "Dataset row definitions", exact: true });
+  await source.waitFor({ state: "hidden" });
+  await press(dialog.getByRole("navigation", { name: "Data layers", exact: true }).getByRole("button", { name: "Tool calls", exact: true }));
+  await source.waitFor({ state: "visible" });
+  await holdsFocus(page, dialog, opener);
+  await press(opener);
+  await dialog.getByRole("button", { name: "Close data guide", exact: true }).click();
+  await page.waitForFunction(element => document.activeElement === element, await opener.elementHandle());
+  await press(page.getByRole("button", { name: "Collapse query builder", exact: true }));
+  await press(opener);
+  await holdsFocus(page, dialog, opener);
+});
+
+test("Data guide is available outside Analyze in the light theme", { skip }, async t => {
+  const app = await open(t, { url: "/library", preferences: { "pharos-theme": "light" }, ready: "#queryTableLibrary .qt-row" });
+  await press(app.page.locator("#queryTableLibrary .data-source-link"));
+  await app.page.getByRole("dialog", { name: "Data Guide", exact: true }).waitFor();
+  await app.shot("workspace-guide-light");
+});
+
+// Exercise the guide alongside native grouping, filter and aggregate editors.
+for (const [dataset, path, numeric] of [["library", "/library", "conversation_count"], ["tool_calls", "/analyze?analyze_mode=query&analyze_data=tool_calls", "duration_ms"]]) {
+  test(`Data guide preserves native grouping editors for ${dataset}`, { skip }, async t => {
+    const query = {
+      ...EMPTY_QUERY,
+      select: [{ field: "repository_name" }, { field: "total" }],
+      grouping: { source: EMPTY_QUERY, keys: ["repository_name"], summaries: [{ id: "total", op: "sum", field: numeric, label: "Total" }], representative: null },
+    };
+    const url = new URL(path, "http://localhost");
+    url.searchParams.set(`q_${dataset}`, encodeQuery(query));
+    const app = await open(t, { url: url.pathname + url.search, ready: ".qt-table .qt-row" });
+    const { page } = app;
+    const aggregate = page.getByRole("combobox", { name: /^Aggregation for/ }).first();
+    await aggregate.selectOption("avg");
+    assert.equal(await aggregate.inputValue(), "avg");
+    for (const name of ["Add filter", "Add HAVING filter", "Customize columns"]) {
+      const opener = page.getByRole("button", { name, exact: true });
+      await press(opener);
+      const editor = page.getByRole("dialog");
+      await page.waitForFunction(element => element.contains(document.activeElement), await editor.elementHandle());
+      await page.keyboard.press("Escape");
+      await editor.waitFor({ state: "hidden" });
+    }
+    const guideLink = page.locator(".data-source-link");
+    await press(guideLink);
+    await holdsFocus(page, page.getByRole("dialog", { name: "Data Guide", exact: true }), guideLink);
+    await app.shot(`${dataset}-grouping-with-source`);
+    await press(page.getByRole("button", { name: "Collapse query builder", exact: true }));
+    await press(guideLink);
+    await holdsFocus(page, page.getByRole("dialog", { name: "Data Guide", exact: true }), guideLink);
+    await press(page.getByRole("button", { name: "Expand query builder", exact: true }));
+    await press(page.getByRole("button", { name: "Remove Repository grouping", exact: true }));
+    const addGroup = page.getByRole("button", { name: "Add group by", exact: true });
+    await press(addGroup);
+    const picker = page.getByRole("dialog", { name: "Group rows by", exact: true });
+    await page.waitForFunction(element => element.contains(document.activeElement), await picker.elementHandle());
+    await page.keyboard.press("Escape");
+    await picker.waitFor({ state: "hidden" });
+    await page.waitForFunction(element => document.activeElement === element, await addGroup.elementHandle());
+  });
 }
 
 // Exercise portal focus and dismissal against both native and role-based modals.
@@ -278,23 +425,32 @@ for (const tools of [['settings'], ['back', 'sync', 'settings']]) {
   });
 }
 
-test('header navigation hides unavailable TL1 and skips it in keyboard navigation', { skip }, async t => {
-  const { page, settled } = await open(t, {
-    url: '/library', ready: '#queryTableLibrary .qt-row', api: { 'GET /api/tl1': { projects: [] } },
-  });
-  for (const width of [1440, 1024]) {
-    await page.setViewportSize({ width, height: 900 });
-    await settled();
-    assert.equal(await page.locator('#tl1Tab').isVisible(), false);
-    const navigation = page.getByRole('navigation', { name: 'Primary navigation', exact: true });
-    const library = navigation.getByRole('button', { name: 'Search', exact: true });
-    await library.focus();
-    await page.locator('#tl1Tab').evaluate(element => element.focus());
-    await page.waitForFunction(element => document.activeElement === element, await library.elementHandle());
-    // Safari's next tab stop depends on its keyboard navigation preference.
-    await page.keyboard.press('Tab');
-    assert.equal(await page.locator('#tl1Tab').evaluate(element => document.activeElement === element), false);
+for (const width of [1440, 390]) test(`Optimize pages move keyboard focus to their content at ${width}px`, { skip }, async t => {
+  const { page, settled, shot } = await open(t, { url: '/findings', viewport: { width, height: 900 }, ready: '.findings-card' });
+  const phone = width === 390;
+  const menu = page.getByRole('dialog', { name: 'Navigate Pharos' });
+  const navigation = phone ? menu : page.getByRole('complementary', { name: 'Optimize navigation', exact: true });
+  async function choose(name, ready) {
+    if (phone) await press(page.locator('#appNavigationToggle'));
+    await press(navigation.getByRole('link', { name, exact: true }));
+    await page.locator(ready).first().waitFor();
+    await page.waitForFunction(() => document.activeElement?.tagName === 'H1');
+    if (phone) assert.equal(await menu.isVisible(), false);
   }
+  await choose('Settings', '.findings-settings .findings-panel');
+  await choose('Table', '.findings-table .qt-row');
+  await choose('Dashboard', '.findings-card');
+  if (phone) await press(page.locator('#appNavigationToggle'));
+  await press(navigation.getByText('TL1', { exact: true }));
+  await press(navigation.getByRole('link', { name: 'Configurations', exact: true }));
+  await page.locator('#tl1-matrix').waitFor();
+  await page.waitForFunction(() => document.activeElement?.tagName === 'H1');
+  await settled();
+  await shot('optimize-tl1');
+  await page.goBack();
+  await page.locator('.findings-card').first().waitFor();
+  await settled();
+  await shot('optimize-findings');
 });
 
 test('header focus survives resizing while its tool remains inline', { skip }, async t => {
@@ -373,6 +529,25 @@ test('header editing keeps keyboard focus on the handle being changed', { skip }
   const settings = page.getByRole('button', { name: 'Arrange Settings', exact: true });
   await press(settings, 'Delete');
   await page.waitForFunction(element => document.activeElement === element, await settings.elementHandle());
+});
+
+test("All Cards opens a page with focus on its heading and browser history returns Home", { skip }, async t => {
+  const { page, settled, shot } = await open(t, { ready: ".home-belt-row .query-card", preferences: { "pharos-home-card-library-v1": { shown: true } } });
+  await press(page.getByRole("button", { name: "All Cards", exact: true }));
+  const heading = page.getByRole("heading", { name: "Card Library", exact: true });
+  await heading.waitFor();
+  await page.waitForFunction(element => document.activeElement === element, await heading.elementHandle());
+  await settled();
+  await shot("card-library");
+  await page.goBack();
+  const welcome = page.locator(".home-intro h1");
+  await welcome.waitFor();
+  await page.waitForFunction(element => document.activeElement === element, await welcome.elementHandle());
+  await page.goForward();
+  await heading.waitFor();
+  await press(page.getByRole("link", { name: "Back to Home", exact: true }));
+  await welcome.waitFor();
+  await page.waitForFunction(element => document.activeElement === element, await welcome.elementHandle());
 });
 
 test("the card template editor takes focus, keeps it and returns it on Escape", { skip }, async t => {
