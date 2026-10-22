@@ -45,10 +45,14 @@ main > #home { padding-bottom:28px; }
 .home-belt-viewport { position:relative; overflow:clip; margin:0; padding:52px 0 28px; min-height:280px; }
 .home-belt-row { position:relative; display:flex; align-items:flex-start; gap:var(--query-card-gap); width:max-content; transform:translate3d(calc(var(--belt-shift)*var(--query-card-stride)),0,0); }
 .home-belt-row.sliding { transition:--belt-shift var(--belt-duration,2040ms) cubic-bezier(.22,.61,.36,1); will-change:transform; }
+.home-belt-row:not(.sliding) { transform:none; }
 .home-belt-slot { flex:0 0 var(--query-card-width); width:var(--query-card-width); }
 .home-belt-slot.arriving { animation:home-card-arrive 300ms ease-out both; }
 @keyframes home-card-arrive { from { opacity:0; transform:translateY(9px) scale(.97); } to { opacity:1; transform:none; } }
 .home-belt-row .query-card { --query-focus:clamp(0,min(calc(var(--belt-index) + var(--belt-shift) - var(--belt-start) + 1),calc(var(--belt-end) + 1 - var(--belt-index) - var(--belt-shift))),1); background:color-mix(in srgb,var(--panel) calc(var(--query-focus)*100%),transparent); box-shadow:0 9px 15px color-mix(in srgb,#000 calc(var(--query-focus)*25%),transparent); }
+/* At rest, readability follows the card state rather than an inherited animation value. */
+.home-belt-row:not(.sliding) .query-card { --query-focus:1; }
+.home-belt-row:not(.sliding) .query-card[data-xray] { --query-focus:0; }
 .home-belt-row .query-cover { isolation:isolate; background:transparent; }
 .home-belt-row .query-cover::before { content:""; position:absolute; z-index:-1; inset:0; opacity:var(--query-focus); background:var(--query-cover-bg); pointer-events:none; }
 .home-belt-row .query-caption { border-top:1px solid var(--query-border); background:color-mix(in srgb,var(--query-caption-bg) calc(var(--query-focus)*100%),transparent); }
