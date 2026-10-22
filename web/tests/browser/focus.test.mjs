@@ -276,23 +276,32 @@ for (const tools of [['settings'], ['back', 'sync', 'settings']]) {
   });
 }
 
-test('header navigation hides unavailable TL1 and skips it in keyboard navigation', { skip }, async t => {
-  const { page, settled } = await open(t, {
-    url: '/library', ready: '#queryTableLibrary .qt-row', api: { 'GET /api/tl1': { projects: [] } },
-  });
-  for (const width of [1440, 1024]) {
-    await page.setViewportSize({ width, height: 900 });
-    await settled();
-    assert.equal(await page.locator('#tl1Tab').isVisible(), false);
-    const navigation = page.getByRole('navigation', { name: 'Primary navigation', exact: true });
-    const library = navigation.getByRole('button', { name: 'Search', exact: true });
-    await library.focus();
-    await page.locator('#tl1Tab').evaluate(element => element.focus());
-    await page.waitForFunction(element => document.activeElement === element, await library.elementHandle());
-    // Safari's next tab stop depends on its keyboard navigation preference.
-    await page.keyboard.press('Tab');
-    assert.equal(await page.locator('#tl1Tab').evaluate(element => document.activeElement === element), false);
+for (const width of [1440, 390]) test(`Optimize pages move keyboard focus to their content at ${width}px`, { skip }, async t => {
+  const { page, settled, shot } = await open(t, { url: '/findings', viewport: { width, height: 900 }, ready: '.findings-card' });
+  const phone = width === 390;
+  const menu = page.getByRole('dialog', { name: 'Navigate Pharos' });
+  const navigation = phone ? menu : page.getByRole('complementary', { name: 'Optimize navigation', exact: true });
+  async function choose(name, ready) {
+    if (phone) await press(page.locator('#appNavigationToggle'));
+    await press(navigation.getByRole('link', { name, exact: true }));
+    await page.locator(ready).first().waitFor();
+    await page.waitForFunction(() => document.activeElement?.tagName === 'H1');
+    if (phone) assert.equal(await menu.isVisible(), false);
   }
+  await choose('Settings', '.findings-settings .findings-panel');
+  await choose('Table', '.findings-table .qt-row');
+  await choose('Dashboard', '.findings-card');
+  if (phone) await press(page.locator('#appNavigationToggle'));
+  await press(navigation.getByText('TL1', { exact: true }));
+  await press(navigation.getByRole('link', { name: 'Configurations', exact: true }));
+  await page.locator('#tl1-matrix').waitFor();
+  await page.waitForFunction(() => document.activeElement?.tagName === 'H1');
+  await settled();
+  await shot('optimize-tl1');
+  await page.goBack();
+  await page.locator('.findings-card').first().waitFor();
+  await settled();
+  await shot('optimize-findings');
 });
 
 test('header focus survives resizing while its tool remains inline', { skip }, async t => {

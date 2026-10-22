@@ -78,6 +78,8 @@ const ROUTES = [
   { name: "Tool summary", url: "/tools?tools_view=summary", ready: "#toolsPage .qt-row" },
   { name: "Skills", url: "/tools?tools_view=skills", ready: ".skill-usages .qt-row" },
   { name: "Findings", url: "/findings", ready: ".findings-card" },
+  { name: "Findings table", url: "/findings?view=table", ready: ".findings-table .qt-row" },
+  { name: "Findings settings", url: "/findings?view=settings", ready: ".findings-settings .findings-panel" },
   { name: "Finding detail", url: "/findings?finding=drift%3Arepo%3Arepo_tl1%3Aghi", ready: ".findings-detail svg" },
   { name: "MCP dashboard", url: "/analyze?analyze_topic=mcp", ready: ".usage-mcp-dashboard .qt-metric-bar-row" },
   { name: "MCP trends", url: `/analyze?analyze_topic=mcp&analyze_chart=${encodeURIComponent(JSON.stringify({ metric: "failure_rate", split: "tool_name", view: "trend", period: "week", rollingPeriods: 37 }))}`, ready: ".usage-mcp-dashboard .qt-metric-mark" },
@@ -87,7 +89,7 @@ const ROUTES = [
   { name: "Library health", url: "/settings", ready: "#healthCards .panel:not([aria-busy])" },
   { name: "Sources", url: "/settings/sources", ready: "#sourceGrid .source-card" },
   { name: "Capture & index", url: "/settings/sync", ready: "#syncDashboard .sync-panel table" },
-  { name: "Optimization settings", url: "/settings/optimization", ready: "#optimizationSettingsPage .findings-panel" },
+  { name: "Legacy Findings settings", url: "/settings/optimization", ready: ".findings-settings .findings-panel" },
   { name: "Header settings", url: "/settings/header", ready: "#headerActive .header-tool" },
   { name: "App preferences", url: "/settings/preferences", ready: "#optionalBehaviors .optional-behavior" },
   { name: "Workspace overview", url: work, ready: ".delegation-table tbody tr" },
@@ -191,14 +193,26 @@ test('header tools use available space and primary navigation stays centered whi
 
 test('header fit responds to tool choices and label changes without resizing', { skip }, async t => {
   const { page, settled } = await open(t, {
-    url: '/settings/header', viewport: { width: 1180, height: 900 }, ready: '#headerActive .header-tool',
+    url: '/settings/header', viewport: { width: 1440, height: 900 }, ready: '#headerActive .header-tool',
     preferences: { 'pharos-header-tools-v1': ['library', 'search', 'summary', 'settings', 'theme'] },
   });
   const more = page.getByRole('button', { name: 'More tools', exact: true });
-  assert.equal(await more.isVisible(), false, 'a smaller tool selection fits');
   const name = page.locator('body > header .pharos-drive-name');
   const original = await name.textContent();
-  await name.evaluate(element => { element.textContent = 'A library with a much longer drive label'; });
+  const longLabel = 'A library with a much longer drive label';
+  // Find where the longer label needs overflow, independent of tab count.
+  // The changes below must then refit at that width without another resize.
+  await name.evaluate((element, label) => { element.textContent = label; }, longLabel);
+  for (let width = 1440; width >= 1020; width -= 20) {
+    await page.setViewportSize({ width, height: 900 });
+    await settled();
+    if (await more.isVisible()) break;
+  }
+  await more.waitFor();
+  await name.evaluate((element, label) => { element.textContent = label; }, original);
+  await more.waitFor({ state: 'hidden' });
+  assert.equal(await more.isVisible(), false, 'a smaller tool selection fits');
+  await name.evaluate((element, label) => { element.textContent = label; }, longLabel);
   await more.waitFor();
   assert.deepEqual(await layoutProblems(page), []);
   await name.evaluate((element, label) => { element.textContent = label; }, original);

@@ -9,6 +9,19 @@ export const tl1Pages = [
   { path: "/tl1/runs", label: "Runs", title: "Runs", description: "Explore individual attempts and filter their metrics." },
 ] as const;
 
+export const findingsPages: readonly NestedPage[] = [
+  { id: "findings:dashboard", label: "Dashboard", href: "/findings" },
+  { id: "findings:table", label: "Table", href: "/findings?view=table" },
+  { id: "findings:settings", label: "Settings", href: "/findings?view=settings" },
+];
+
+export function optimizePages(hasTL1: boolean): NestedPage[] {
+  return [
+    { id: "findings", label: "Findings", children: findingsPages },
+    ...(hasTL1 ? [{ id: "tl1", label: "TL1", children: tl1Pages.map(page => ({ ...page, id: page.path, href: page.path })) }] : []),
+  ];
+}
+
 export function analyzePages(params: URLSearchParams): NestedPage[] {
   return (["dashboards", "query"] as UsageMode[]).map(mode => ({
     id: mode, label: mode === "dashboards" ? "Dashboards" : "Query", children: mode === "dashboards"
@@ -22,17 +35,18 @@ export function appSections(settings: readonly NestedPage[], params: URLSearchPa
   return [
     { id: "home", label: "Home", href: "/", pages: [] },
     { id: "library", label: "Search", href: "/library", pages: [] },
-    ...(hasTL1 ? [{ id: "tl1", label: "TL1", href: "/tl1", pages: tl1Pages.map(page => ({ ...page, id: page.path, href: page.path })) }] : []),
     { id: "analyze", label: "Analyze", href: "/analyze", pages: analyzePages(params) },
-    { id: "findings", label: "Optimize", href: "/findings", pages: [] },
+    { id: "findings", label: "Optimize", href: "/findings", pages: optimizePages(hasTL1) },
     { id: "settings", label: "Settings", href: "/settings", pages: settings },
   ];
 }
 
 /** Resolve old analysis links too: opening navigation never rewrites a query. */
 export function appLocation(path: string, params: URLSearchParams) {
+  if (path === "/settings/optimization") return { section: "findings", current: "findings:settings" };
+  if (path.startsWith("/findings")) return { section: "findings", current: `findings:${params.get("view") === "settings" ? "settings" : params.get("view") === "table" ? "table" : "dashboard"}` };
   if (path.startsWith("/settings")) return { section: "settings", current: path };
-  if (path.startsWith("/tl1")) return { section: "tl1", current: path };
+  if (path.startsWith("/tl1")) return { section: "findings", current: path };
   if (path === "/tools") return { section: "analyze", current: `query:${params.get("tools_view") === "summary" ? "tools" : params.get("tools_view") === "skills" ? "skill_usages" : "tool_calls"}` };
   if (path === "/analyze" || path === "/mcp") {
     if (path === "/mcp") return { section: "analyze", current: "dashboards:mcp" };
@@ -46,7 +60,7 @@ export function appLocation(path: string, params: URLSearchParams) {
       : `dashboards:${view === "carbon" ? "carbon" : machine === "time" ? "time" : machine === "parallelism" ? "parallelism" : "tokens"}`;
     return { section: "analyze", current };
   }
-  return { section: path.startsWith("/findings") ? "findings" : path === "/" || path === "/home" ? "home" : "library", current: "" };
+  return { section: path === "/" || path === "/home" ? "home" : "library", current: "" };
 }
 
 export function appLocationLabel(sections: readonly AppSection[], selected: ReturnType<typeof appLocation>) {
