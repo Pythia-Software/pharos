@@ -65,22 +65,30 @@ day/week/month control. Its grouped and record links preserve that exact
 selected population. Rates are not stacked or averaged
 across daily summaries. Grouped queries include the relevant numerators and
 call-count denominators. Bars and points open matching daily summary records;
-More tool analyses keeps the existing specialized presets available.
+Legacy view keeps the existing specialized presets available.
 Parallelism reuses the original Threaded / Model activity ribbon with workspace/session counting,
 turn gap, repository, captured date selection, zoom, and conversation details.
 It uses only the real captured timing snapshot. Analyze views have no example-data source or selector; older demo links also use library data.
 Skills and Agent time retain their focused time series, with the richer Machine
-Time explorer still available through Full current analysis. Carbon reuses the
+Time explorer still available through Legacy view. Carbon reuses the
 calculator and graph. Graphs and controls sit directly on the page, without a
 central card frame.
 
 Chart settings and source filters are encoded in `analyze_chart` and
 `analyze_filters`; Parallelism uses `analyze_parallelism` for its ribbon settings.
-**Open grouped query** produces native grouped result rows with the graph’s
-source filters, dimensions and summaries. Tools includes the selected measure
-and its supporting call counts at the same grouping.
-**Open records** opens the matching source population; **Search / filter
-records** opens the same Query page with its optional panel expanded.
+Each dashboard offers four compact query previews: the current measure and
+breakdown, ranked source records, a comparison across related dimensions, and
+a focused relationship or exception query. Titles describe the concrete result,
+such as **Highest-cost token records**, **Conversation cost & cache use**, or
+**Repeated file-load attempts per conversation**. All retain the dashboard's
+source predicates; focused queries add their own explicit source or group filters.
+A muted sentence beneath each query name describes its filters, grouping,
+measures and sort order, omitting empty clauses. Bold grammatical cues such as
+**where**, **grouped by** and **sorted by** help scan the explanation without
+competing with the query name.
+Relative dates keep signed offsets such as `-30 days`; fixed dates stay fixed.
+All four open Query with search and filters expanded.
+**Legacy view** opens the older specialized analysis and labels any filter reset.
 `analyze_search=1` persists this panel, and old prototype `analyze_mode=search`
 links resolve to Query with search open. Back to dashboard retains graph state.
 
@@ -219,8 +227,8 @@ their domain names.
 
 Every cross-page action should say what it carries:
 
-- **Open grouped query** creates grouped result rows. Existing full Query links preserve grouped filters and summaries.
-- **Search / filter records** carries source predicates and opens Query with search expanded.
+- **Grouped results** creates grouped result rows. Existing full Query links preserve grouped filters and summaries.
+- **Source records** carries source predicates and opens Query with search expanded.
   Group-level HAVING conditions are not record predicates. Each grouped row's
   **Records** action uses native group-source query helpers to find the source
   population for that group, retaining source filters.

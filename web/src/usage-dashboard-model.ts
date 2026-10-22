@@ -11,7 +11,7 @@ export const recordDashboards: Record<RecordDashboardTopic, DashboardSpec> = {
   time: { dataset: "tool_calls", time: "started_at", measures: [
     { label: "Recorded tool time", op: "sum", field: "duration_ms", unit: "hours", divisor: 3_600_000 },
     { label: "Tool calls", op: "count", unit: "calls" },
-  ], splits: [["activity", "Activity"], ["tool_category", "Tool category"], ["provider", "Provider"], ["repository_name", "Repository"]], note: "Recorded durations can overlap and may include approval waits. Their sum is tool time, not elapsed wall time. Use the full analysis for command-family comparisons and timelines." },
+  ], splits: [["activity", "Activity"], ["tool_category", "Tool category"], ["provider", "Provider"], ["repository_name", "Repository"]], note: "Recorded durations can overlap and may include approval waits. Their sum is tool time, not elapsed wall time. Use the legacy view for command-family comparisons and timelines." },
   skills: { dataset: "skill_usages", time: "created_at", measures: [
     { label: "Evidence records", op: "count", unit: "records" },
     { label: "Retained body volume", op: "sum", expression: "SUM(IF([content_bytes]>0,[content_bytes],0))", unit: "bytes" },
@@ -31,7 +31,7 @@ export function readDashboardQuery(params: URLSearchParams, fallback: QueryState
     const query = decodeQueryStrict(token);
     if (query && !query.grouping) return { query, error: "" };
   } catch { /* A broken filter link must not broaden the requested population. */ }
-  return { query: fallback, error: "This dashboard link has invalid filters. Open the current analysis or choose another dashboard." };
+  return { query: fallback, error: "This dashboard link has invalid filters. Open the legacy view or choose another dashboard." };
 }
 
 // Materialize the graph's dimensions as result rows. Its filters belong to

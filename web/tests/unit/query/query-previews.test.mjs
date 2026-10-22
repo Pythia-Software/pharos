@@ -120,6 +120,63 @@ test("saved local-hour cards keep the catalog's 24 combined clock-hour buckets",
   assert.ok(requests.every(({ path }) => path.endsWith("/rows-v2")), "saved cards must use the clock-hour study instead of dated hourly metrics");
 });
 
+test("weekday previews render daily distributions and keep all-time and edited chart covers usable", async t => {
+  const now = Date.parse("2026-10-14T12:00:00Z");
+  t.mock.timers.enable({ apis: ["Date"], now });
+  let population = [{ id: "a", sent_at: "2026-10-12T12:00:00Z", typed_words: 40 }];
+  const requests = fixture(t, (path, request) => {
+    if (path.endsWith("capabilities")) return response({ metricCapabilities: { version: 2, expressions: true, distributions: true }, computedExecution: execution, queryCapabilities: { ...queryCapabilities, metricFilters: true } });
+    if (path.includes("/writing_messages/query-v3")) return response(sharedServerQuery(request, population, schemas.writing_messages));
+  });
+  const recipe = queryRecipes.find(recipe => recipe.id === "human-words-weekday"), item = instantiateRecipe(recipe, 30);
+  const preview = await loadQueryPreview(recipe.dataset, item.query, schemas.writing_messages, { recipe, window: item.window });
+  assert.equal(preview.state, "ready");
+  assert.equal(preview.metrics[0].clause.display.kind, "box");
+  assert.equal(preview.metrics[0].result.buckets.length, 7);
+  assert.equal(preview.buckets, undefined);
+  assert.equal(requests.find(request => request.path.endsWith("query-v3")).request.metrics[0].dateGrouping.interval, "day");
+  const native = await loadQueryPreview(recipe.dataset, item.query, schemas.writing_messages, { recipe, window: item.window, cover: { ...recipe.cover, kind: "line" } });
+  assert.equal(native.metrics[0].clause.display.kind, "line");
+  assert.equal(native.metrics[0].clause.distribution, undefined);
+  const allTime = { ...item.query, where: recipe.where };
+  assert.equal((await loadQueryPreview(recipe.dataset, allTime, schemas.writing_messages, { recipe })).state, "ready");
+  population = [...population, { id: "b", sent_at: "2026-10-13T12:00:00Z", typed_words: 80 }];
+  const filtered = { ...item.query, aggregations: item.query.aggregations.map(metric => ({ ...metric, where: [{ field: "sent_at", op: ">=", value: "2026-10-12T12:00:00Z" }], dateGrouping: { ...metric.dateGrouping, timeZone: "UTC" } })) };
+  const restricted = await loadQueryPreview(recipe.dataset, filtered, schemas.writing_messages, { recipe });
+  assert.equal(restricted.total, 1);
+  assert.equal(restricted.metrics[0].result.buckets.find(bucket => bucket.keys[0] === "Monday").distribution.summary, null);
+  assert.equal(restricted.metrics[0].result.buckets.find(bucket => bucket.keys[0] === "Tuesday").distribution.summary.median, 80);
+  clearPreviewCache();
+  population = [{ id: "monday", sent_at: "2026-10-05T12:00:00Z", typed_words: 40, day: "2026-10-05", week: "2026-10-05", month: "2026-10" }];
+  const calendarQuery = { ...item.query, where: [...recipe.where, { field: "sent_at", op: ">=", value: "2026-09-28T00:00:00Z" }, { field: "sent_at", op: "<", value: "2026-10-12T00:00:00Z" }],
+    aggregations: item.query.aggregations.map(metric => ({ ...metric, dateGrouping: { ...metric.dateGrouping, timeZone: "UTC" } })) };
+  for (const [field, value] of [["day", "2026-10-05"], ["date", "2026-10-05"], ["week", "2026-10-05"], ["month", "2026-10"]]) {
+    const predicate = { field, op: "=", value };
+    for (const changed of [
+      { ...calendarQuery, where: [...calendarQuery.where, predicate] },
+      { ...calendarQuery, aggregations: calendarQuery.aggregations.map(metric => ({ ...metric, where: [predicate] })) },
+    ]) {
+      const daily = await loadQueryPreview(recipe.dataset, changed, schemas.writing_messages, { recipe });
+      assert.equal(daily.metrics[0].clause.distribution, undefined, `${field} retains native daily results`);
+      assert.equal(daily.metrics[0].result.buckets.length, 1, "an excluded Monday must not become a zero sample");
+      assert.equal(daily.metrics[0].result.buckets[0].value, 40);
+    }
+  }
+  const date = { field: "sent_at", op: ">=", value: "2026-10-12T12:00:00Z" };
+  for (const predicate of [{ any: [date, { field: "repository_name", op: "=", value: "other" }] }, { ...date, negated: true }]) {
+    for (const changed of [
+      { ...item.query, where: [...item.query.where, predicate] },
+      { ...item.query, aggregations: item.query.aggregations.map(metric => ({ ...metric, where: [predicate] })) },
+    ]) {
+      const daily = await loadQueryPreview(recipe.dataset, changed, schemas.writing_messages, { recipe });
+      assert.equal(daily.metrics[0].clause.distribution, undefined, "complex date filters retain native daily results");
+      assert.equal(daily.metrics[0].clause.dateGrouping.interval, "day");
+    }
+  }
+  clearPreviewCache(); population = [];
+  assert.equal((await loadQueryPreview(recipe.dataset, item.query, schemas.writing_messages, { recipe, window: item.window })).state, "empty");
+});
+
 test("relative daily covers chart every local date their window touches, across daylight saving", async t => {
   const previousTZ = process.env.TZ;
   process.env.TZ = "America/Denver";
@@ -266,7 +323,15 @@ test("visual Library bookmarks preserve their tree, scope, cursor, and incomplet
 });
 
 test("Human Words bookmark previews preserve the bounded message search and cursor", async t => {
-  const requests = fixture(t, path => path.includes("rows-v2") ? response({ total: 0, rows: [], find: { search: { complete: false } } }) : undefined);
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-10-14T12:00:00Z") });
+  let complete = false, limited = false, population = [];
+  const requests = fixture(t, (path, request) => {
+    if (path.includes("rows-v2")) return response({ total: 0, rows: [], find: { search: { complete } } });
+    if (path.includes("/writing_messages/query-v3")) {
+      const result = sharedServerQuery(request, population, schemas.writing_messages);
+      return response({ ...result, metrics: result.metrics.map(metric => ({ ...metric, coverage: "exact" })), find: { limited, search: { complete } } });
+    }
+  });
   const draft = { editor: "visual", match: "rules", text: "", mode: "advanced", fuzzy: false, caseSensitive: false, separators: false,
     root: { kind: "group", join: "any", exclude: false, children: ["cache", "buffer"].map(text => ({ kind: "words", text, other: "", distance: "8", exclude: false })) },
     scope: { surface: "user", roles: [], kinds: [], repository: "pharos", provider: "", source: "", from: "", to: "", conversation_id: "", workspace_id: "" } };
@@ -279,6 +344,23 @@ test("Human Words bookmark previews preserve the bounded message search and curs
   assert.equal(params.get("find_cursor"), "saved-cursor");
   assert.match(preview.note, /Partial search batch/);
   assert.equal(preview.summary, "No matches in this search batch");
+  for (const id of ["human-words-weekday", "human-messages-weekday"]) {
+    const recipe = queryRecipes.find(recipe => recipe.id === id), item = instantiateRecipe(recipe, 30);
+    for (const coverage of [{ complete: false, limited: false }, { complete: true, limited: true }]) {
+      ({ complete, limited } = coverage);
+      for (const messages of [[], [{ id: "match", sent_at: "2026-10-12T12:00:00Z", typed_words: 40 }]]) {
+        population = messages; clearPreviewCache();
+        await assert.rejects(loadQueryPreview(recipe.dataset, item.query, schemas.writing_messages, { recipe, url }), /Partial search batch.*complete/i);
+      }
+    }
+    complete = true; limited = false; clearPreviewCache();
+    const finished = await loadQueryPreview(recipe.dataset, item.query, schemas.writing_messages, { recipe, url });
+    assert.equal(finished.state, "ready");
+    assert.equal(finished.metrics[0].clause.distribution.kind, "box");
+    assert.match(finished.note, /This search batch/);
+    complete = false; clearPreviewCache();
+    await assert.rejects(loadQueryPreview(recipe.dataset, item.query, schemas.writing_messages, { recipe, url }), /Partial search batch.*complete/i);
+  }
 });
 
 test("a broken visual bookmark fails visibly without unfiltering itself or other previews", async t => {

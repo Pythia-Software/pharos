@@ -104,7 +104,7 @@ test("card detail links retain durable source tokens across dashboard datasets a
   const tokenCard = instantiateRecipe(queryRecipes.find(recipe => recipe.id === "task-token-ranges"), 7);
   const records = { ...core.EMPTY_QUERY, where: [{ field: "repository_name", op: "=", value: "chosen-repo" }] };
   const drilled = new URL(usageWorkspaceURL({ mode: "query", dataset: "usage", query: records }, new URL(tokenCard.url, location.origin).searchParams), location.origin);
-  assert.deepEqual(core.decodeQueryStrict(drilled.searchParams.get("q_usage")), core.normalizeQueryState(records), "dashboard drilldowns use the newly selected records");
+  assert.deepEqual(core.decodeQueryStrict(drilled.searchParams.get("q_usage")), core.normalizeQueryState({ ...records, fitToScreen: true }), "dashboard drilldowns use the newly selected records and fit their viewport");
   assert.equal(drilled.searchParams.has("card_id"), false, "new analysis is distinct from the original card details");
 });
 
