@@ -173,12 +173,21 @@ test("whole-operation forecasts take priority while stage progress stays measure
   const stage = library.activityTiming(activity, {scope: 'stage', now: started + 10_000});
   assert.deepEqual([stage.range, stage.scope], ['30–50 sec', 'stage']);
   assert.equal(library.activityProgress(activity), .2);
+  activity.forecast.progress = .63;
+  assert.equal(library.activityOverallProgress(activity), .63);
+  assert.equal(library.activityOverallProgress({...activity, progress: .9, forecast: undefined}), null);
+  assert.equal(library.activityOverallProgress(activity, {unavailable: true}), null);
+  assert.equal(library.activityOverallProgress({...activity, forecast: {...activity.forecast, progress: 1}}), .99);
+  assert.equal(library.activityOverallProgress({...activity, forecast: {state: 'complete', progress: 1}}), 1);
+  assert.equal(library.activityOverallProgress({...activity, forecast: {state: 'estimating', progress: NaN}}), null);
   activity.forecast = {state: 'partial', predicted_steps: 3, remaining_steps: 4};
   const partial = library.activityTiming(activity, {now: started});
   assert.deepEqual([partial.range, partial.state, partial.scope], [null, 'partial', 'operation']);
   assert.equal(library.activityTiming(activity, {now: started, unavailable: true}).range, null);
+  assert.equal(library.activityOverallProgress(activity), null);
   activity.forecast = {state: 'stopping'};
   assert.equal(library.activityTiming(activity, {now: started}).state, 'stopping');
+  assert.equal(library.activityOverallProgress(activity), null);
 });
 
 test("activity summaries keep unique context and measured progress, with explanations available separately", () => {
