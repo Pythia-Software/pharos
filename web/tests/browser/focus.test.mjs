@@ -671,3 +671,29 @@ test("Query ideas disclosure supports keyboard toggles and restores the saved pr
   await app.settled();
   await app.shot("query-ideas-keyboard");
 });
+
+for (const width of [1440, 390, 320]) test(`Capture & index run details keep focus through live refresh and return it on close @ ${width}`, { skip }, async t => {
+  const { page, settled } = await open(t, { url: '/settings/sync', viewport: { width, height: 900 }, ready: '#syncHistoryTables .qt-row' });
+  const opener = page.getByRole('region', { name: 'Recent run history', exact: true }).getByRole('button', { name: 'Details', exact: true }).first();
+  await press(opener);
+  const dialog = page.getByRole('dialog', { name: 'Index run details', exact: true });
+  await dialog.waitFor();
+  await page.evaluate(() => window.pharosSync.refresh());
+  await settled();
+  await holdsFocus(page, dialog, opener);
+});
+
+test('Capture & index query editor retains focus and edits across live refreshes', { skip }, async t => {
+  const { page } = await open(t, { url: '/settings/sync', ready: '#syncHistoryTables .qt-row' });
+  const history = page.getByRole('region', { name: 'Recent run history', exact: true });
+  await history.getByRole('button', { name: 'Expand query builder', exact: true }).click();
+  const limit = history.getByRole('spinbutton');
+  await limit.fill('2');
+  await page.evaluate(() => window.pharosSync.refresh());
+  await page.waitForFunction(element => document.activeElement === element, await limit.elementHandle());
+  assert.equal(await limit.inputValue(), '2');
+  await limit.press('Tab');
+  await page.evaluate(() => window.pharosSync.refresh());
+  await limit.focus();
+  assert.equal(await limit.inputValue(), '2');
+});

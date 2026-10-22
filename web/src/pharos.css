@@ -544,3 +544,12 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 .query-exploration-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 12px 0; }
 .query-exploration-controls button { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; background: var(--bg); color: inherit; cursor: pointer; }
 .query-exploration-controls button[aria-pressed="true"] { border-color: var(--accent); }
+
+/* Capture & index uses the same query controls as the catalog tables. */
+.sync-query-table { min-width: 0; margin-top: 12px; }
+.sync-query-table .qt-table-wrap { overflow-x: auto !important; }
+#syncDiagnosticTables h3 { margin-top: 22px; }
+.sync-detail-button { padding: 5px 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--ink); font: inherit; font-size: var(--fs-sm); cursor: pointer; }
+.sync-run-dialog { width: min(1100px, calc(100vw - 32px)); }
+.sync-run-dialog h3 { margin: 22px 0 8px; }
+.sync-run-dialog p { font-size: var(--fs-sm); }

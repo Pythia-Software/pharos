@@ -6,11 +6,8 @@
   let activeRun = null;
   let runningIds = new Set();
   let openIssues = [];
-  let showAllRuns = false;
-  const recentRunLimit = 5;
   const openPanels = new Set();
   const initializedPanels = new Set();
-  const openRuns = new Set();
   const node = (tag, text, className = '') => {
     const element = document.createElement(tag);
     element.textContent = text;
@@ -64,38 +61,6 @@
     }
     return element;
   };
-  const table = (label, headings, key = label) => {
-    const wrapper = node('div', '', 'sync-table-wrap');
-    wrapper.tabIndex = 0;
-    wrapper.dataset.syncScroll = key;
-    wrapper.dataset.syncFocus = `table-${key}`;
-    wrapper.setAttribute('role', 'region');
-    wrapper.setAttribute('aria-label', label);
-    const element = node('table', '', 'sync-table');
-    element.append(node('caption', label, 'sync-sr-only'));
-    const head = node('thead', '');
-    const row = node('tr', '');
-    for (const heading of headings) {
-      const cell = node('th', heading);
-      cell.scope = 'col';
-      row.append(cell);
-    }
-    head.append(row);
-    const body = node('tbody', '');
-    element.append(head, body);
-    wrapper.append(element);
-    return {wrapper, body};
-  };
-  const cells = (body, values) => {
-    const row = node('tr', '');
-    for (const value of values) {
-      const cell = node('td', '');
-      cell.append(value instanceof Node ? value : document.createTextNode(String(value)));
-      row.append(cell);
-    }
-    body.append(row);
-    return row;
-  };
   const panel = (title, key, initiallyOpen = false) => {
     if (!initializedPanels.has(key)) {
       initializedPanels.add(key);
@@ -112,19 +77,12 @@
     };
     return element;
   };
-  const sourceNames = run => run.sources?.length ? run.sources : [...new Set([
-    ...(run.source_results || []).map(result => result.source),
-    ...(run.phases || []).filter(phase => !['audit', 'projections', 'github', 'identities', 'git', 'tools', 'authorship', 'findings'].includes(phase.name)).map(phase => phase.name)
-  ])];
-  const resultLabel = run => run.state === 'failed' ? 'Failed' : run.state === 'interrupted' ? 'Stopped'
-    : run.audit?.outcome === 'mismatch' ? 'Needs attention' : run.state && run.state !== 'complete' ? run.state
-    : run.audit?.outcome && run.audit.outcome !== 'passed' ? 'Check deferred' : run.changed_groups > 0 || run.conversations > 0 ? 'Indexed' : 'No changes';
   const style = node('style', `
-    #syncDashboard{display:grid;gap:18px;min-width:0}
+    #syncDashboard{display:grid;grid-template-columns:minmax(0,1fr);gap:18px;min-width:0}
     #syncDashboard h3{margin:0;font-size:var(--fs-lg)}
     #syncDashboard p{margin:8px 0;font-size:var(--fs-sm)}
-    #syncDashboard button:not(.pharos-button):not(.sync-run-toggle),.sync-dialog button{padding:7px 14px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);font:inherit;font-size:var(--fs-sm);font-weight:600;cursor:pointer}
-    #syncDashboard button:hover:not(:disabled),.sync-dialog button:hover:not(:disabled){border-color:var(--accent)}
+    #syncDashboard :is(.sync-controls,.sync-actions,.sync-warning)>button,#syncDashboard .sync-disclosure>p>button,.sync-dialog button{padding:7px 14px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);font:inherit;font-size:var(--fs-sm);font-weight:600;cursor:pointer}
+    #syncDashboard .sync-detail-button:hover:not(:disabled),.sync-dialog button:hover:not(:disabled){border-color:var(--accent)}
     #syncDashboard button:disabled,.sync-dialog button:disabled{opacity:.55;cursor:default}
     .sync-panel{border:1px solid var(--line);border-radius:8px;padding:18px;background:var(--panel);min-width:0}
     .sync-section-head,.sync-controls,.sync-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
@@ -138,20 +96,6 @@
     .sync-metric{background:var(--panel);padding:14px 16px;min-width:0}
     .sync-metric span{display:block;color:var(--muted);font-size:var(--fs-sm)}
     .sync-metric strong{display:block;font-size:var(--fs-2xl);font-weight:600;margin-top:4px;font-variant-numeric:tabular-nums}
-    .sync-table-wrap{overflow-x:auto;max-width:100%}
-    .sync-table{border-collapse:collapse;width:100%;font-size:var(--fs-sm);font-variant-numeric:tabular-nums}
-    .sync-table th,.sync-table td{text-align:left;padding:12px 10px;border-bottom:1px solid var(--line);vertical-align:top}
-    .sync-table th{color:var(--muted);font-weight:500;white-space:nowrap}
-    .sync-table td{white-space:nowrap}
-    .sync-history>.sync-table th:nth-child(n+4),.sync-history>.sync-table>tbody>tr>td:nth-child(n+4){text-align:right}
-    .sync-table tbody tr:last-child td{border-bottom:0}
-    .sync-table tbody tr:hover{background:color-mix(in srgb,var(--bg) 45%,transparent)}
-    .sync-table .sync-source-list{white-space:normal;min-width:150px;overflow-wrap:anywhere}
-    .sync-source-list span{display:block;margin-bottom:3px}
-    .sync-table .sync-run-detail{white-space:normal;padding:16px;background:var(--bg)}
-    .sync-run-detail h4{margin:0 0 8px}
-    .sync-run-detail .sync-table{margin-bottom:16px}
-    .sync-run-toggle{display:block;margin-top:5px;padding:0;border:0;background:transparent;color:var(--accent);font-size:var(--fs-xs);text-decoration:underline}
     .sync-result{display:inline-block;padding:2px 7px;border:1px solid var(--line);border-radius:4px;font-size:var(--fs-xs)}
     .sync-result.attention{color:var(--warn);border-color:var(--warn)}
     .sync-disclosure>summary{cursor:pointer;font-weight:600;font-size:var(--fs-md)}
@@ -160,16 +104,13 @@
     .sync-separate>summary{cursor:pointer;font-size:var(--fs-sm);color:var(--muted)}
     #syncDashboard fieldset{border:0;padding:0;margin:14px 0 0}
     #syncDashboard legend{font-size:var(--fs-sm);color:var(--muted);margin-bottom:8px}
-    .sync-source-note{display:block;white-space:normal;max-width:320px;margin-top:5px;font-size:var(--fs-xs)}
     .sync-warning{border:1px solid var(--warn);padding:14px;border-radius:6px}
-    .sync-empty{text-align:center;padding:24px;color:var(--muted)}
     .sync-dialog{max-width:620px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:24px}
     .sync-dialog::backdrop{background:#0008}
-    .sync-sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
     .header-sync[aria-busy=true] svg{animation:sync-spin 1.5s linear infinite}
     #syncDashboard [hidden]{display:none}
+    @media(max-width:760px){.sync-panel{padding:14px}.sync-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.sync-metric{padding:12px}}
     @keyframes sync-spin{to{transform:rotate(360deg)}}
-    @media(max-width:760px){.sync-panel{padding:14px}.sync-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.sync-metric{padding:12px}.sync-table th,.sync-table td{padding:10px 8px}}
   `);
   document.head.append(style);
 
@@ -248,189 +189,21 @@
     window.pharosLibrary?.refreshSyncControls?.();
   }
 
-  const stageWork = work => {
-    if (!work.unit) return '—';
-    const amount = value => work.unit === 'byte' ? memory(value) : number(value);
-    const known = work.total_known || work.total > 0;
-    return `${amount(work.done)}${known ? ` / ${amount(work.total)}` : ''} ${work.unit === 'byte' ? '' : work.unit}`.trim();
-  };
-  const workloadInputs = features => [features?.conversations ? `${number(features.conversations)} conversations` : features?.groups ? `${number(features.groups)} groups` : '', features?.bytes ? `${memory(features.bytes)}${features.bytes_basis === 'message_text' ? ' of message text' : ''}` : '', features?.messages ? `${number(features.messages)} messages` : ''].filter(Boolean).join(' · ') || '—';
-
-  const forecastError = snapshot => {
-    const predicted = snapshot.estimate?.point_seconds;
-    if (!(predicted > 0)) return 'Not available';
-    if (!Number.isFinite(snapshot.actual_remaining_seconds)) return 'Not evaluated';
-    const difference = predicted - snapshot.actual_remaining_seconds;
-    return `${seconds(Math.abs(difference))} ${difference >= 0 ? 'over' : 'under'}`;
-  };
-  function forecastTable(snapshots, key) {
-    const forecasts = table('Forecast accuracy', ['When predicted', 'Estimated remaining', 'Actual remaining', 'Error'], `forecasts-${key}`);
-    for (const snapshot of snapshots || []) {
-      const estimate = snapshot.estimate || {};
-      const predicted = estimate.point_seconds > 0 ? `${seconds(estimate.low_seconds)}–${seconds(estimate.high_seconds)}` : `${estimate.predicted_steps || 0} of ${estimate.remaining_steps || 0} steps estimated`;
-      cells(forecasts.body, [snapshot.reason === 'launch' ? 'At launch' : snapshot.reason === 'discovered' ? 'After discovery' : `${seconds(snapshot.elapsed_seconds)} into run`, predicted, Number.isFinite(snapshot.actual_remaining_seconds) ? seconds(snapshot.actual_remaining_seconds) : '—', forecastError(snapshot)]);
-    }
-    return forecasts.wrapper;
-  }
-  function renderRunDetails(element, run) {
-    element.replaceChildren();
-    if (run.source_results?.length) {
-      element.append(node('h4', 'Indexed by source'));
-      const sources = table('Source breakdown', ['Source', 'Conversations', 'Messages', 'Changed groups', 'Status'], `sources-${run.run_id || run.finished_at}`);
-      for (const result of run.source_results) cells(sources.body, [result.source, number(result.conversations), number(result.messages), number(result.workspaces), result.error ? 'Failed' : result.yielded ? 'Partial' : 'Complete']);
-      element.append(sources.wrapper);
-    } else {
-      element.append(node('p', 'Per-source counts were not recorded for this older run.', 'muted'));
-    }
-    if (run.phases?.length) {
-      const phases = table('Time by phase', ['Phase', 'Elapsed', 'CPU time'], `phases-${run.run_id || run.finished_at}`);
-      for (const phase of run.phases) cells(phases.body, [phase.name === 'audit' ? 'Verification' : phase.name === 'projections' ? 'Library view' : phase.name, seconds(phase.seconds), seconds(phase.cpu_seconds)]);
-      element.append(phases.wrapper);
-      const measured = run.phases.flatMap(phase => (phase.work || []).map(work => ({...work, parent: phase.name})));
-      if (measured.length) {
-        const stages = table('Stage measurements', ['Stage', 'Work', 'Elapsed', 'Input', 'Since prior index', 'Load (1 min)'], `work-${run.run_id || run.finished_at}`);
-        for (const work of measured) cells(stages.body, [`${work.parent}: ${work.phase}`, stageWork(work), seconds(work.seconds), workloadInputs(work.features), work.features?.since_last_index_seconds > 0 ? seconds(work.features.since_last_index_seconds) : '—', Number.isFinite(work.features?.load_one_minute) ? work.features.load_one_minute.toFixed(1) : '—']);
-        element.append(stages.wrapper);
-      }
-    }
-    if (run.forecasts?.length) element.append(forecastTable(run.forecasts, run.run_id || run.finished_at));
-    const audit = run.audit;
-    if (run.trigger) element.append(node('p', run.trigger === 'manual' ? 'Manual sync · includes analysis refreshes' : 'Automatic indexing · analyses deferred', 'muted'));
-    if (audit) element.append(node('p', `Verification: ${audit.outcome || 'Unknown'} · ${number(audit.discovered_units)} discoverable units · ${number(audit.deferred_units)} deferred. ${audit.detail || ''}`));
-    element.append(node('p', `CPU: ${percent(run.cpu_percent_one_core)} of one core · RAM at start: ${memory(run.rss_baseline_bytes)} · Allocated: ${memory(run.allocated_bytes)}`, 'muted'));
-    if (run.finished_at) element.append(node('p', `Finished ${new Date(run.finished_at).toLocaleString()}`, 'muted'));
-  }
-
-  function renderRecentRuns(dashboard) {
-    const history = status.history || [];
-    const latest = history[0];
-    const section = node('section', '', 'sync-panel');
-    section.setAttribute('aria-label', 'Recent runs');
-    const heading = node('div', '', 'sync-section-head');
-    const title = node('div', '');
-    title.append(node('h3', 'Recent runs'));
-    const subtitle = node('p', latest ? 'Index changes · Last run ' : 'Index changes on this Mac', 'muted');
-    if (latest) subtitle.append(time(latest.finished_at), document.createTextNode(` · ${resultLabel(latest)}`));
-    title.append(subtitle);
-    heading.append(title);
-    if (status.busy) heading.append(node('span', status.pause_reason || 'Indexing in progress', 'sync-result'));
-    section.append(heading);
-    if (!latest) {
-      section.append(node('p', 'No runs yet. Use Index changes now to index your selected sources.', 'sync-empty'));
-      dashboard.append(section);
-      return;
-    }
-    const summary = node('div', '', 'sync-summary');
-    summary.setAttribute('aria-label', 'Last run cost');
-    for (const [label, value] of [['Conversations indexed', number(latest.conversations)], ['Elapsed time', seconds(latest.seconds)], ['CPU time', seconds(latest.cpu_seconds)], ['RAM peak', memory(latest.rss_observed_peak_bytes)]]) {
-      const metric = node('div', '', 'sync-metric');
-      metric.append(node('span', label), node('strong', value));
-      summary.append(metric);
-    }
-    section.append(summary);
-    const runs = table('Recent run history', ['When', 'Result', 'Sources', 'Conversations', 'Messages', 'Elapsed', 'CPU time', 'RAM peak']);
-    runs.wrapper.classList.add('sync-history');
-    for (const run of showAllRuns ? history : history.slice(0, recentRunLimit)) {
-      const key = run.run_id || run.finished_at;
-      const timestamp = node('div', '');
-      timestamp.append(time(run.finished_at));
-      const toggle = node('button', openRuns.has(key) ? 'Hide details' : 'Details', 'sync-run-toggle');
-      toggle.type = 'button';
-      toggle.dataset.syncFocus = `run-${key}`;
-      toggle.setAttribute('aria-label', `Details for run ${when(run.finished_at)}`);
-      toggle.setAttribute('aria-expanded', String(openRuns.has(key)));
-      timestamp.append(toggle);
-      const sources = node('div', '', 'sync-source-list');
-      for (const name of sourceNames(run)) {
-        const result = run.source_results?.find(item => item.source === name);
-        const text = result ? `${name} · ${number(result.conversations)} conv.` : name;
-        const source = node('span', text);
-        if (result) source.title = `${number(result.messages)} messages in indexed conversations${result.error ? ' · Failed' : result.yielded ? ' · Partial' : ''}`;
-        sources.append(source);
-      }
-      if (!sources.childElementCount) sources.append(node('span', 'Not recorded', 'muted'));
-      const result = resultLabel(run);
-      cells(runs.body, [timestamp, node('span', result, `sync-result${['Failed', 'Stopped', 'Needs attention', 'Check deferred'].includes(result) ? ' attention' : ''}`), sources, number(run.conversations), number(run.messages_in_changed_groups), seconds(run.seconds), seconds(run.cpu_seconds), memory(run.rss_observed_peak_bytes)]);
-      const detailsRow = node('tr', '');
-      detailsRow.hidden = !openRuns.has(key);
-      const detailsCell = node('td', '', 'sync-run-detail');
-      detailsCell.colSpan = 8;
-      detailsRow.append(detailsCell);
-      runs.body.append(detailsRow);
-      if (!detailsRow.hidden) renderRunDetails(detailsCell, run);
-      toggle.onclick = () => {
-        detailsRow.hidden = !detailsRow.hidden;
-        if (detailsRow.hidden) openRuns.delete(key); else {
-          openRuns.add(key);
-          renderRunDetails(detailsCell, run);
-        }
-        toggle.textContent = detailsRow.hidden ? 'Details' : 'Hide details';
-        toggle.setAttribute('aria-expanded', String(!detailsRow.hidden));
-      };
-    }
-    section.append(runs.wrapper);
-    if (history.length > recentRunLimit) {
-      const more = node('button', showAllRuns ? `Show latest ${recentRunLimit}` : `Show all ${number(history.length)} runs`);
-      more.type = 'button';
-      more.dataset.syncFocus = 'history-size';
-      more.onclick = () => { showAllRuns = !showAllRuns; renderDashboard(); };
-      section.append(more);
-    }
-    section.append(node('p', 'Counts cover whole indexed conversations, not just newly added messages. CPU and RAM reflect the whole Pharos process, including other work.', 'muted'));
-    dashboard.append(section);
-  }
-
-  function renderDiagnostics(dashboard) {
-    const diagnostics = panel('Performance & verification details', 'diagnostics');
-    diagnostics.append(node('p', 'Measured cost by workload, across the last 200 runs. Median is the typical run; p95 covers 95% of runs.', 'muted'));
-    const costs = table('Measured indexing cost', ['Workload', 'Runs', 'Elapsed median / p95', 'CPU median / p95', 'Last RAM peak', 'Estimated CPU duty']);
-    for (const [classification, stats] of Object.entries(status.statistics || {})) {
-      const distribution = values => `${seconds(values?.median)} / ${seconds(values?.p95)}`;
-      cells(costs.body, [classification.replaceAll('_', ' '), number(stats.samples), distribution(stats.elapsed_seconds), distribution(stats.cpu_seconds), memory(stats.rss_observed_peak_bytes?.last), `${percent(stats.estimated_cpu_duty_percent_one_core)} of one core`]);
-    }
-    if (costs.body.childElementCount) diagnostics.append(costs.wrapper);
-    else diagnostics.append(node('p', 'Performance measurements will appear after the first run.', 'muted'));
-    const operationLabels = {'automatic-sync': 'Automatic changes', 'manual-sync': 'Manual changes', 'capture-index': 'Index captures', 'library-update:update': 'Capture & index', 'library-update:full': 'Full rebuild', 'library-update:retained': 'Retained repair'};
-    const forecastAccuracy = table('Operation forecast accuracy', ['Operation / checkpoint', 'Available', 'Evaluated', 'Median error', 'Within range', 'Median range width']);
-    for (const [model, checkpoints] of Object.entries(status.forecast_accuracy || {})) {
-      for (const [checkpoint, stats] of Object.entries(checkpoints)) {
-        if (!stats.attempts) continue;
-        cells(forecastAccuracy.body, [`${operationLabels[model] || model} · ${checkpoint === 'discovered' ? 'after discovery' : checkpoint}`, `${number(stats.predicted)} / ${number(stats.attempts)}`, number(stats.evaluated), stats.evaluated ? `${seconds(stats.median_absolute_error_seconds)} (${percent(stats.median_relative_error * 100)})` : '—', stats.evaluated ? `${number(stats.covered)} / ${number(stats.evaluated)}` : '—', stats.evaluated ? seconds(stats.median_interval_width_seconds) : '—']);
-      }
-    }
-    if (forecastAccuracy.body.childElementCount) {
-      diagnostics.append(node('h3', 'Forecast accuracy'), forecastAccuracy.wrapper, node('p', 'Availability includes runs without an estimate. Errors and range coverage use completed runs only, with one prediction per run at each checkpoint. Ranges widen using previous errors; coverage is measured rather than guaranteed.', 'muted'));
-    }
-    for (const run of (status.forecast_runs || []).filter(run => run.model?.startsWith('library-update:') || run.model === 'capture-index').slice(0, 5)) {
-      const detail = document.createElement('details');
-      detail.append(node('summary', `${operationLabels[run.model] || run.model} · ${when(run.finished_at)} · ${run.state}`), forecastTable(run.forecasts, run.run_id));
-      diagnostics.append(detail);
-    }
-    if (status.measurement_limits) diagnostics.append(node('p', status.measurement_limits, 'muted'));
-    if (status.coverage?.length) {
-      const coverage = table('Verification coverage', ['Source', 'Units', 'Result', 'Last verified']);
-      for (const item of status.coverage) cells(coverage.body, [item.source_name, number(item.units), item.outcome, time(item.last_verification)]);
-      diagnostics.append(coverage.wrapper, node('p', 'Sampling does not verify the entire library.', 'muted'));
-    }
-    if (status.deferred?.length) {
-      const deferred = table('Pending library-wide work', ['Work', 'Changed', 'Last completed']);
-      for (const item of status.deferred) cells(deferred.body, [item.name, time(item.changed_at), time(item.completed_at)]);
-      diagnostics.append(node('h3', 'Pending library-wide work'), deferred.wrapper);
-    }
-    dashboard.append(diagnostics);
-  }
-
   function renderDashboard() {
     const dashboard = document.getElementById('syncDashboard');
     if (!dashboard || !status?.settings || (dashboard.contains(document.activeElement) && document.activeElement.matches('input,select'))) return;
     const focused = dashboard.contains(document.activeElement) ? document.activeElement.dataset.syncFocus : null;
-    const scrollPositions = new Map([...dashboard.querySelectorAll('.sync-table-wrap')].map(element => [element.dataset.syncScroll, element.scrollLeft]));
+    // Retain the actual hosts: their React roots, filters, paging and editor
+    // focus survive the classic controls' periodic rebuild.
+    const tableHosts = ['syncHistoryTables', 'syncSourceTables', 'syncDiagnosticTables'].map(id => document.getElementById(id));
+    const tableFocus = tableHosts.some(host => host?.contains(document.activeElement)) ? document.activeElement : null;
+    for (const host of tableHosts) host?.remove();
     const operations = document.getElementById('syncOperations');
     const operationFocus = operations?.contains(document.activeElement) ? document.activeElement : null;
     operations?.remove();
     dashboard.replaceChildren();
     const settings = status.settings;
-    renderRecentRuns(dashboard);
+    if (tableHosts[0]) dashboard.append(tableHosts[0]);
     if (operations) dashboard.append(operations);
     const preferences = node('section', '', 'sync-panel');
     preferences.append(node('h3', 'Automatic indexing'));
@@ -483,21 +256,10 @@
     }
     preferences.append(sources, node('p', 'Automatic indexing makes new conversations searchable without capturing them. Manual Index changes also refreshes library-wide analysis. Capture & index also keeps a copy of the source files.', 'muted'));
     dashboard.append(preferences);
-    const sourceStatus = node('section', '', 'sync-panel');
-    sourceStatus.append(node('h3', 'Source status'));
-    const states = table('Source status', ['Source', 'Last checked', 'Last success', 'Last captured', 'Status']);
-    for (const source of status.source_states || []) {
-      const state = node('div', source.error ? 'Error' : source.pending_preservation ? 'Needs capture' : 'Up to date');
-      if (source.pending_preservation) state.append(node('span', 'Indexed, but not captured yet.', 'muted sync-source-note'));
-      if (source.error) state.append(node('span', source.error, 'badtext sync-source-note'));
-      cells(states.body, [source.source_name, time(source.attempted_at), time(source.succeeded_at), time(source.last_capture_at), state]);
-    }
-    if (states.body.childElementCount) sourceStatus.append(states.wrapper);
-    else sourceStatus.append(node('p', 'Source status will appear after the first run.', 'muted'));
-    dashboard.append(sourceStatus);
+    if (tableHosts[1]) dashboard.append(tableHosts[1]);
     const latest = status.history?.[0];
     if (settings.enabled && latest?.seconds > settings.interval_seconds) dashboard.append(node('p', 'Indexing changes takes longer than the selected interval. The next run starts after this one finishes.', 'badtext'));
-    renderDiagnostics(dashboard);
+    if (tableHosts[2]) dashboard.append(tableHosts[2]);
     const repairs = panel('Repair & maintenance', 'repairs', status.recovery_jobs?.some(job => ['interrupted', 'failed'].includes(job.state)));
     repairs.append(node('p', 'For missing data or damaged indexes. These operations can take a long time; everyday capturing and indexing do not need them.', 'muted'));
     const actions = node('div', '', 'sync-actions');
@@ -526,7 +288,7 @@
       }), button('Full recapture & reindex…', () => recovery('full', [issue.source_name])));
       dashboard.prepend(warning);
     }
-    for (const element of dashboard.querySelectorAll('.sync-table-wrap')) element.scrollLeft = scrollPositions.get(element.dataset.syncScroll) || 0;
+    tableFocus?.focus({preventScroll: true});
     operationFocus?.focus({preventScroll: true});
     if (focused) [...dashboard.querySelectorAll('[data-sync-focus]')].find(element => element.dataset.syncFocus === focused)?.focus({preventScroll: true});
   }
@@ -541,6 +303,7 @@
       if (document.getElementById('settings')?.classList.contains('active') || !status) {
         status = await call('/api/sync/status');
         renderDashboard();
+        window.dispatchEvent(new Event('pharos:sync-status'));
       }
       // Open mismatches turn the drive chip's dot red; the drive panel lists them.
       const issues = await call('/api/sync/issues');
@@ -553,8 +316,8 @@
     finally { busy = false; clearTimeout(timer); timer = setTimeout(refresh, 3000); }
   }
   window.addEventListener('pharos:route', refresh);
-  window.pharosSync = {forecastError, refresh, recovery, isBusy: () => Boolean(activeRun), issues: () => openIssues,
+  window.pharosSync = {status: () => status, refresh, recovery, isBusy: () => Boolean(activeRun), issues: () => openIssues,
     // Pure helpers, for web/tests/unit/page/sync.test.mjs.
-    finishedRunsChanged, runningRun, sourceNames, stageWork, format: {seconds, memory, when}};
+    finishedRunsChanged, runningRun, format: {seconds, memory, when, number, percent}};
   refresh();
 })();
