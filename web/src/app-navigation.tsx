@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
-import { appLocation, appLocationLabel, appSections, initialNavigationExpansion, toggleNavigationSection, type AppSection } from "./app-navigation-model";
+import { appLocation, appLocationLabel, appSections, isNavigationSectionExpanded, toggleNavigationSection, type AppSection, type NavigationExpansion } from "./app-navigation-model";
 import { localPageNavigation, type NestedPage } from "./nested-pages-model";
 import { PageLink, useLocationRevision } from "./nested-pages";
 import { Icon } from "./icons";
@@ -12,9 +12,9 @@ type Layout = "wide" | "compact" | "phone";
 const readLayout = () => getComputedStyle(document.documentElement).getPropertyValue("--app-shell-layout").trim() as Layout || "wide";
 
 function NavigationItems({ pages, current, navigate, expanded, toggle }: {
-  pages: readonly NestedPage[]; current: string; navigate: () => void; expanded: readonly string[]; toggle: (id: string) => void;
+  pages: readonly NestedPage[]; current: string; navigate: () => void; expanded: NavigationExpansion[string]; toggle: (id: string) => void;
 }) {
-  return <>{pages.map(page => page.children ? <details key={page.id} open={expanded.includes(page.id)}>
+  return <>{pages.map(page => page.children ? <details key={page.id} open={isNavigationSectionExpanded(expanded, page.id)}>
     <summary onClick={event => { event.preventDefault(); toggle(page.id); }}>{page.label}<Icon name="chevron-down" /></summary>
     <div className="app-navigation-children"><NavigationItems pages={page.children} current={current} navigate={navigate} expanded={expanded} toggle={toggle} /></div>
   </details> : <NavigationLink key={page.id} href={page.href} current={page.id === current} navigate={navigate}>{page.label}</NavigationLink>)}</>;
@@ -37,7 +37,7 @@ function AppNavigation({ settings, contentNavigation }: { settings: NestedPage[]
   const params = new URLSearchParams(location.search), selected = appLocation(location.pathname, params);
   const sections = appSections(settings, params, hasTL1 || location.pathname.startsWith("/tl1"));
   const { section, page } = appLocationLabel(sections, selected);
-  const [expanded, setExpanded] = useState(() => initialNavigationExpansion(section, selected.current));
+  const [expanded, setExpanded] = useState<NavigationExpansion>({});
   const toggle = (section: string, id: string) => setExpanded(state => toggleNavigationSection(state, section, id));
   const activeBranch = sections.find(item => item.id === branch) ?? section;
   const hasSidebar = layout !== "phone" && section.pages.length > 0;
@@ -124,7 +124,7 @@ function AppNavigation({ settings, contentNavigation }: { settings: NestedPage[]
     <button ref={layout === "phone" ? trigger : undefined} id="appNavigationToggle" className="app-location-switcher" type="button" aria-haspopup="dialog" aria-controls="appNavigationDialog" aria-expanded={open} onClick={show}>{path}<Icon name="chevron-down" /></button>
     {createPortal(<>{hasSidebar ? <button ref={trigger} id="appSidebarToggle" className="app-sidebar-toggle" type="button" aria-label={rail ? "Collapse sidebar" : "Expand sidebar"} title={rail ? "Collapse sidebar" : "Expand sidebar"} aria-controls="appNavigationRail" aria-expanded={rail} onClick={toggleSidebar}><Icon name="sidebar" /></button> : null}
       <aside id="appNavigationRail" className="app-navigation-rail" aria-label={`${section.label} navigation`} hidden={!rail}><div className="app-navigation-rail-head"><h2 className="app-navigation-rail-title">{section.label}</h2></div><nav className="app-navigation-list" aria-label={`${section.label} pages`}>
-      <NavigationItems pages={section.pages} current={selected.current} navigate={navigate} expanded={expanded[section.id] ?? []} toggle={id => toggle(section.id, id)} />
+      <NavigationItems pages={section.pages} current={selected.current} navigate={navigate} expanded={expanded[section.id] ?? {}} toggle={id => toggle(section.id, id)} />
     </nav></aside></>, contentNavigation)}
     {createPortal(<dialog ref={dialog} id="appNavigationDialog" className={`app-navigation-dialog ${branch === "root" ? "app-navigation-root" : ""}`} aria-label="Navigate Pharos" onClose={() => { setOpen(false); if (!navigating.current) trigger.current?.focus({ preventScroll: true }); }} onClick={event => {
       if (event.target !== dialog.current) return;
@@ -132,7 +132,7 @@ function AppNavigation({ settings, contentNavigation }: { settings: NestedPage[]
       if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) close();
     }}>
       <div className="app-navigation-sections"><div className="app-navigation-dialog-title">Pharos</div><nav className="app-navigation-list" aria-label="All pages">{pickerSections}</nav></div>
-      <div className="app-navigation-pages"><div className="app-navigation-dialog-head"><button className="app-navigation-all" type="button" onClick={() => setBranch("root")}><Icon name="arrow-left" />All pages</button><strong>{activeBranch.label}</strong><button className="app-navigation-close" type="button" aria-label="Close navigation" onClick={close}><Icon name="close" /></button></div><nav className="app-navigation-list" aria-label={`${activeBranch.label} pages`}><NavigationItems pages={activeBranch.pages} current={activeBranch.id === section.id ? selected.current : ""} navigate={navigate} expanded={expanded[activeBranch.id] ?? []} toggle={id => toggle(activeBranch.id, id)} /></nav></div>
+      <div className="app-navigation-pages"><div className="app-navigation-dialog-head"><button className="app-navigation-all" type="button" onClick={() => setBranch("root")}><Icon name="arrow-left" />All pages</button><strong>{activeBranch.label}</strong><button className="app-navigation-close" type="button" aria-label="Close navigation" onClick={close}><Icon name="close" /></button></div><nav className="app-navigation-list" aria-label={`${activeBranch.label} pages`}><NavigationItems pages={activeBranch.pages} current={activeBranch.id === section.id ? selected.current : ""} navigate={navigate} expanded={expanded[activeBranch.id] ?? {}} toggle={id => toggle(activeBranch.id, id)} /></nav></div>
       {branch === "root" ? <button className="app-navigation-root-close app-navigation-close" type="button" aria-label="Close navigation" onClick={close}><Icon name="close" /></button> : null}
     </dialog>, document.body)}
   </>;
