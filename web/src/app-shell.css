@@ -95,13 +95,14 @@
   .app-shell body>header .pharos-drive-name{display:none}
 }
 @media(max-width:699px){
-  :root.app-shell{--app-shell-layout:phone;--app-page-gutter:16px;--app-control-height:44px;--app-brand-width:28px;--app-brand-height:32px;--app-brand-gap:6px}
+  /* Half the extra target height: 36px desktop controls become 40px on phones. */
+  :root.app-shell{--app-shell-layout:phone;--app-page-gutter:16px;--app-control-height:40px;--app-brand-width:28px;--app-brand-height:32px;--app-brand-gap:6px}
   .app-shell body>header .bar{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 6px;padding:8px 14px 4px}
   .app-shell body>header .brand{grid-column:1;grid-row:1;width:max-content}
   .app-shell body>header .header-icons{grid-column:2;grid-row:1;gap:4px}
   .app-shell body>header .tabs{display:none}
   .app-shell #appLocation{grid-column:1/-1;grid-row:2;border-top:1px solid var(--mast-border);padding-top:4px}
-  .app-shell .app-location-switcher{width:100%;justify-content:space-between;min-height:var(--app-control-height);padding:0 2px}
+  .app-shell .app-location-switcher{width:100%;justify-content:space-between;min-height:42px;padding:0 2px}
   .app-shell body>header .combo-button>.pharos-drive{width:var(--app-control-height);padding:0}
   .app-shell main>.view{padding:22px var(--app-page-gutter) 50px}
   .app-shell #sourceToolbar{align-items:stretch;gap:8px}
@@ -113,9 +114,9 @@
   .app-navigation-dialog .app-navigation-all{display:flex;align-items:center;gap:8px;min-height:var(--app-control-height);padding:0 12px}
   .app-navigation-dialog-head{padding:0 0 8px}
   .app-navigation-dialog-head strong{display:none}
-  .app-navigation-list a,.app-navigation-list>button,.app-navigation-list summary{min-height:44px}
+  .app-navigation-list a,.app-navigation-list>button,.app-navigation-list summary{min-height:41px}
   .app-navigation-dialog.app-navigation-root{width:calc(100vw - 16px);position:fixed}
   .app-navigation-root-close{position:absolute;top:8px;right:8px}
   .app-navigation-sections{border-right:0}
 }
-@media(pointer:coarse){.app-navigation-close,.header-overflow-row .header-icon{min-width:44px;min-height:44px}}
+@media(pointer:coarse){.app-navigation-close,.header-overflow-row .header-icon{min-width:40px;min-height:40px}}
