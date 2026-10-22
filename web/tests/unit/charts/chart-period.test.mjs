@@ -1,6 +1,106 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { periodStart, periodKey, nextPeriod, periodBuckets, earliestKey, periodIndex, shiftPeriod, validPeriodCount } from '../../../src/chart-period';
+import { calendarPresetPeriod, chartPeriodCount, presetPeriod, selectChartRange } from '../../../src/usage-chart';
+import { loadUsageHistory, sharedUsageHistory } from '../../../src/usage-history';
+
+test('range presets reset the time bucket while custom dates preserve it', () => {
+  let view = { period: 'month', hours: 12, days: 10 }, bounds, changes = 0;
+  const onChange = (from, to) => { bounds = { from, to }; changes++; };
+  const onPreset = range => { view = { ...view, ...presetPeriod(range) }; };
+  for (const [range, period, count] of [['1y', 'week', 1], ['1d', 'hour', 1], ['7d', 'hours', 4], ['30d', 'day', 1], ['90d', 'day', 1], ['6m', 'week', 1]]) {
+    selectChartRange(range, onChange, onPreset);
+    assert.equal(view.period, period, range);
+    assert.equal(chartPeriodCount(view), count, range);
+    assert.equal(bounds.from.getHours(), 0);
+    assert.equal(bounds.to, undefined);
+  }
+  view = { period: 'hours', hours: 8, days: 5 };
+  const before = bounds, previousChanges = changes;
+  selectChartRange('custom', onChange, onPreset);
+  assert.deepEqual(view, { period: 'hours', hours: 8, days: 5 });
+  assert.equal(bounds, before);
+  assert.equal(changes, previousChanges);
+  selectChartRange('7d', onChange, onPreset);
+  assert.equal(view.hours, 4, 'a preset overrides a previously chosen custom bucket');
+  view.hours = 12;
+  selectChartRange('7d', onChange, onPreset);
+  assert.equal(view.hours, 4, 'reselecting the same preset resets its bucket');
+  selectChartRange('all', onChange, onPreset);
+  assert.equal(view.period, 'week');
+  assert.deepEqual(bounds, { from: undefined, to: undefined });
+});
+
+test('bounded range presets use readable intervals with daily detail for 90 days', () => {
+  for (const [range, days] of [['1d', 1], ['7d', 7], ['30d', 30], ['90d', 90], ['6m', 183], ['1y', 365]]) {
+    const view = { hours: 6, days: 3, ...presetPeriod(range) };
+    const end = new Date(2026, 9, 22), start = new Date(end);
+    start.setDate(start.getDate() - days);
+    const count = periodBuckets(view.period, start, new Date(end.getTime() - 1), chartPeriodCount(view)).length;
+    if (range === '90d') assert.equal(count, 90);
+    else assert.ok(count >= 20 && count <= 54, `${range}: ${count} intervals`);
+  }
+});
+
+test('calendar-only dashboards choose supported preset intervals', () => {
+  for (const range of ['1d', '7d', '30d', '90d']) assert.equal(calendarPresetPeriod(range), 'day');
+  for (const range of ['6m', '1y']) assert.equal(calendarPresetPeriod(range), 'week');
+  assert.equal(calendarPresetPeriod('all'), 'week');
+});
+
+test('All Time uses months only for conversations strictly older than 20 calendar months', () => {
+  const now = new Date(2026, 9, 22, 12, 34, 56, 789), cutoff = new Date(2025, 1, 22, 12, 34, 56, 789);
+  for (const [oldest, expected] of [
+    [new Date(cutoff.getTime() - 1), 'month'], [cutoff, 'week'], [new Date(cutoff.getTime() + 1), 'week'],
+    [now, 'week'], [undefined, 'week'], [new Date(NaN), 'week'],
+  ]) {
+    assert.equal(presetPeriod('all', oldest, now).period, expected);
+    assert.equal(calendarPresetPeriod('all', oldest, now), expected);
+  }
+});
+
+test('All Time clamps its 20-month cutoff to the end of February', () => {
+  for (const [year, lastDay] of [[2026, 28], [2025, 29]]) {
+    const now = new Date(year, 9, 31, 12), cutoff = new Date(year - 1, 1, lastDay, 12);
+    assert.equal(presetPeriod('all', cutoff, now).period, 'week');
+    assert.equal(presetPeriod('all', new Date(cutoff.getTime() - 1), now).period, 'month');
+  }
+});
+
+test('shared conversation history ignores missing/invalid dates and compares actual instants', () => {
+  assert.deepEqual(sharedUsageHistory([]), { oldest_conversation_at: null });
+  assert.deepEqual(sharedUsageHistory([
+    {}, { conversations: [{}, { started_at: '' }, { started_at: 'unknown' }] },
+    { conversations: [{ started_at: '2025-02-21T23:45:00Z' }, { started_at: '2025-02-22T01:30:00+02:00' }] },
+  ]), { oldest_conversation_at: '2025-02-22T01:30:00+02:00' });
+});
+
+test('charts share history reads, refresh imports, retry failures and support offline exports', async t => {
+  const previousWindow = globalThis.window;
+  globalThis.window = {};
+  t.after(() => { if (previousWindow === undefined) delete globalThis.window; else globalThis.window = previousWindow; });
+  let reads = 0, oldest = '2026-01-01T00:00:00Z', fail = false;
+  t.mock.method(globalThis, 'fetch', async url => {
+    assert.equal(url, '/api/usage/history');
+    reads++;
+    return new Response(JSON.stringify(fail ? { error: 'unavailable' } : { oldest_conversation_at: oldest }), { status: fail ? 500 : 200 });
+  });
+  const first = loadUsageHistory(true);
+  assert.equal(loadUsageHistory(true), first);
+  assert.deepEqual(await first, { oldest_conversation_at: oldest });
+  await loadUsageHistory();
+  assert.equal(reads, 1);
+  oldest = '2023-01-01T00:00:00Z';
+  assert.deepEqual(await loadUsageHistory(true), { oldest_conversation_at: oldest });
+  fail = true;
+  await assert.rejects(loadUsageHistory(true), /unavailable/);
+  fail = false;
+  await loadUsageHistory(true);
+  assert.equal(reads, 4);
+  window.pharosShare = { works: [{ conversations: [{ started_at: '2024-01-01T00:00:00Z' }] }] };
+  assert.deepEqual(await loadUsageHistory(true), { oldest_conversation_at: '2024-01-01T00:00:00Z' });
+  assert.equal(reads, 4, 'shared exports use their own history without contacting the server');
+});
 
 test('smoothing history shifts and counts calendar/custom intervals across DST', () => {
   const previous = process.env.TZ; process.env.TZ = 'America/Denver';

@@ -9,6 +9,36 @@ import (
 	"time"
 )
 
+func TestUsageHistory(t *testing.T) {
+	catalog, config := testCatalog(t)
+	server := testServer(t, config, catalog)
+	read := func() any { return libraryStatusCall(t, server, "/api/usage/history")["oldest_conversation_at"] }
+	if got := read(); got != nil {
+		t.Fatalf("empty history: %v", got)
+	}
+	execTx(t, catalog.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w-history','codex','local','history','History','2026-10-22')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,started_at) VALUES
+			('recent','w-history','codex','local','recent','2026-10-01T00:00:00Z'),
+			('missing','w-history','codex','local','missing',NULL),
+			('invalid','w-history','codex','local','invalid','unknown'),
+			('blank','w-history','codex','local','blank',''),
+			('utc','w-history','codex','local','utc','2025-02-21T23:45:00Z'),
+			('offset','w-history','codex','local','offset','2025-02-22T01:30:00+02:00')`)
+	if got := read(); got != "2025-02-22T01:30:00+02:00" {
+		t.Fatalf("oldest conversation: %v", got)
+	}
+	execTx(t, catalog.DB, `UPDATE conversations SET started_at='2023-01-01T00:00:00Z' WHERE id='recent'`)
+	if got := read(); got != "2023-01-01T00:00:00Z" {
+		t.Fatalf("history after older import: %v", got)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := catalog.UsageHistory(ctx); err != context.Canceled {
+		t.Fatalf("canceled history: %v", err)
+	}
+}
+
 func TestUsageSummaryWindows(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	// Usage lands in the 23:00 hour (1020 tokens) and the 01:00 hour (2030).

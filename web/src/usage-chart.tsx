@@ -7,16 +7,42 @@ import { ColumnMarks } from "./column-marks";
 import { ChartLegendChip } from "./chart-legend-chip";
 import { type LegendAction } from "./chart-selection";
 import { Icon } from "./icons";
+import { loadUsageHistory } from "./usage-history";
 
-type ChartRange = "1d" | "7d" | "30d" | "90d" | "6m" | "1y";
+export type ChartRange = "1d" | "7d" | "30d" | "90d" | "6m" | "1y";
 export type FilterChange = (change: (where: WhereTerm[]) => WhereTerm[]) => void;
 
 // Stacked column charts by day, week (Monday), or month over the table's time
 // filter, or all time. Keys match the usage dataset's day, week, and month
 // fields.
-const chartRanges: Array<[ChartRange, string]> = [["30d", "30 days"], ["90d", "90 days"], ["6m", "6 months"], ["1y", "1 year"]];
+const chartRanges: Array<[ChartRange, string]> = [["1d", "1 day"], ["7d", "7 days"], ["30d", "30 days"], ["90d", "90 days"], ["6m", "6 months"], ["1y", "1 year"]];
 const pad2 = (value: number) => String(value).padStart(2, "0");
 export const chartPeriodCount = (view: { period: ChartPeriod; hours: number; days: number }) => view.period === "hours" ? view.hours : view.period === "days" ? view.days : 1;
+
+// Preset changes reset manual bucket choices to a readable calendar grid.
+// Keep daily detail for 90 days; longer bounded ranges use weeks.
+export function presetPeriod(range: ChartRange | "all", oldestConversation?: Date, now = new Date()): Partial<PeriodView> & { period: ChartPeriod } {
+  switch (range) {
+    case "1d": return { period: "hour" };
+    case "7d": return { period: "hours", hours: 4 };
+    case "30d": case "90d": return { period: "day" };
+    case "6m": case "1y": return { period: "week" };
+    case "all": {
+      // Clamp the calendar cutoff for dates such as October 31 → February 28.
+      const cutoff = new Date(now), day = cutoff.getDate();
+      cutoff.setDate(1);
+      cutoff.setMonth(cutoff.getMonth() - 20);
+      cutoff.setDate(Math.min(day, new Date(cutoff.getFullYear(), cutoff.getMonth() + 1, 0).getDate()));
+      return { period: oldestConversation && oldestConversation < cutoff ? "month" : "week" };
+    }
+  }
+}
+
+// Record dashboards currently offer calendar day/week/month groupings only.
+export function calendarPresetPeriod(range: ChartRange | "all", oldestConversation?: Date, now = new Date()): "day" | "week" | "month" {
+  const { period } = presetPeriod(range, oldestConversation, now);
+  return period === "hour" || period === "hours" ? "day" : period === "days" ? "week" : period;
+}
 
 // rangeStart is the local midnight a range preset starts from.
 function rangeStart(range: ChartRange): Date {
@@ -26,6 +52,12 @@ function rangeStart(range: ChartRange): Date {
   else if (range === "6m") { start.setMonth(start.getMonth() - 6); start.setDate(start.getDate() + 1); }
   else { start.setFullYear(start.getFullYear() - 1); start.setDate(start.getDate() + 1); }
   return start;
+}
+
+export function selectChartRange(range: ChartRange | "all" | "custom", onChange: (from?: Date, to?: Date) => void, onPresetChange?: (range: ChartRange | "all") => void) {
+  if (range === "custom") return;
+  onPresetChange?.(range);
+  onChange(range === "all" ? undefined : rangeStart(range));
 }
 
 // The charts and the table share one time filter: a row matches when its
@@ -136,15 +168,29 @@ export function rangeLabel(bounds: TimeBounds): string {
 }
 
 // A date selection from the chart or table remains visible alongside presets.
-export function RangeControl({ bounds, onChange, editable = true, includeTime = false, shortRanges = false }: { bounds: TimeBounds; onChange: (from?: Date, to?: Date) => void; editable?: boolean; includeTime?: boolean; shortRanges?: boolean }) {
-  const ranges: Array<[ChartRange, string]> = shortRanges ? [["1d", "1 day"], ["7d", "7 days"], ...chartRanges] : chartRanges;
-  const active = !bounds.from && !bounds.to ? "all" : bounds.from && !bounds.to ? ranges.find(([range]) => rangeStart(range).getTime() === bounds.from!.getTime())?.[0] : undefined;
+export function RangeControl({ bounds, onChange, onPresetChange, editable = true, includeTime = false }: { bounds: TimeBounds; onChange: (from?: Date, to?: Date) => void; onPresetChange?: (range: ChartRange | "all", oldestConversation?: Date) => void; editable?: boolean; includeTime?: boolean }) {
+  const needsHistory = Boolean(onPresetChange);
+  const [history, setHistory] = useState<{ ready: boolean; oldest?: Date }>({ ready: !needsHistory });
+  useEffect(() => {
+    if (!needsHistory) return;
+    let mounted = true;
+    const load = () => {
+      setHistory(previous => ({ ...previous, ready: false }));
+      void loadUsageHistory(true).then(data => {
+        if (mounted) setHistory({ ready: true, oldest: data.oldest_conversation_at ? new Date(data.oldest_conversation_at) : undefined });
+      }, () => { if (mounted) setHistory({ ready: true }); });
+    };
+    load();
+    window.addEventListener("pharos:usage-refresh", load);
+    return () => { mounted = false; window.removeEventListener("pharos:usage-refresh", load); };
+  }, [needsHistory]);
+  const active = !bounds.from && !bounds.to ? "all" : bounds.from && !bounds.to ? chartRanges.find(([range]) => rangeStart(range).getTime() === bounds.from!.getTime())?.[0] : undefined;
   const [custom, setCustom] = useState(false);
   useEffect(() => { if (!bounds.from && !bounds.to) setCustom(false); }, [bounds.from?.getTime(), bounds.to?.getTime()]);
   const picker = <ChartSelect label="Range" value={custom || !active ? "custom" : active}
-    options={[...ranges.map(([range, text]): [string, string] => [range, `Last ${text}`]), ...(editable ? [["custom", "Custom dates…"] as [string, string]] : active ? [] : [["custom", rangeLabel(bounds), "Dates selected in the chart or table"] as [string, string, string]]), ["all", "All time"]]}
+    options={[...chartRanges.map(([range, text]): [string, string] => [range, `Last ${text}`]), ...(editable ? [["custom", "Custom dates…"] as [string, string]] : active ? [] : [["custom", rangeLabel(bounds), "Dates selected in the chart or table"] as [string, string, string]]), ["all", "All time", history.ready ? undefined : "Loading conversation history…"]]}
     title="Dates included in this usage view. Choose All time to clear the date filter."
-    onChange={range => { setCustom(range === "custom"); if (range !== "custom") onChange(range === "all" ? undefined : rangeStart(range as ChartRange)); }} />;
+    onChange={range => { setCustom(range === "custom"); selectChartRange(range as ChartRange | "all" | "custom", onChange, preset => onPresetChange?.(preset, history.oldest)); }} />;
   return editable ? <div className={`usage-date-range${custom || !active ? " custom" : ""}`}>{picker}{custom || !active ? <CustomDates key={includeTime ? "time" : "date"} bounds={bounds} onChange={onChange} includeTime={includeTime} /> : null}</div> : picker;
 }
 
