@@ -44,6 +44,8 @@ type operationEstimate struct {
 	Unknown     []string `json:"unknown_steps,omitempty"`
 	Inventory   bool     `json:"inventory_known"`
 	Modeled     int      `json:"feature_model_steps,omitempty"`
+	CurrentStep int      `json:"current_step,omitempty"`
+	TotalSteps  int      `json:"total_steps,omitempty"`
 }
 
 type forecastSnapshot struct {
@@ -380,14 +382,34 @@ func (op *operationForecast) estimate(at time.Time, stopping bool) *operationEst
 	op.mu.Lock()
 	defer op.mu.Unlock()
 	if stopping {
-		return &operationEstimate{State: "stopping", Basis: "Stopping after committed work is safe"}
+		current, total := op.stepPositionLocked()
+		return &operationEstimate{State: "stopping", Basis: "Stopping after committed work is safe", CurrentStep: current, TotalSteps: total}
 	}
 	value := op.estimateLocked(at, "")
 	return &value
 }
 
+// Use the planned order, including skipped steps, so numbering stays stable
+// as cached work is skipped. A step can contain several measured substeps.
+func (op *operationForecast) stepPositionLocked() (current, total int) {
+	total = len(op.steps)
+	for i, step := range op.steps {
+		if step.State == "running" {
+			return i + 1, total
+		}
+		if current == 0 && step.State != "complete" && step.State != "skipped" {
+			current = i + 1
+		}
+	}
+	if current == 0 {
+		current = total
+	}
+	return current, total
+}
+
 func (op *operationForecast) estimateLocked(at time.Time, checkpoint string) operationEstimate {
 	result := operationEstimate{State: "learning", Inventory: true, Basis: "Learning durations for the remaining sources and analyses on this Mac"}
+	result.CurrentStep, result.TotalSteps = op.stepPositionLocked()
 	paths := map[string][3]float64{}
 	provisional := false
 	for _, step := range op.steps {

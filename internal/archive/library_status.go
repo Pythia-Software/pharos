@@ -238,16 +238,10 @@ func (s *Server) libraryActivities() []libraryActivity {
 			OnEject: "Stops between workspaces; the next index resumes it.", Stoppable: true, StopPath: "/api/index/cancel", Stopping: run.StopRequested}
 		if run.Kind == automaticRunKind {
 			activity.Automatic = true
-			activity.Label = "Indexing changes: checking for changes"
-			if run.Phase == "indexing" {
-				activity.Label = fmt.Sprintf("Indexing changes: %s", plural(run.Conversations, "conversation"))
-			}
-			if run.Phase == "verifying" {
-				activity.Label = "Indexing changes: verifying a conversation"
-			}
+			activity.Label = "Automatic sync in progress"
 		}
 		if run.Kind == manualSyncRunKind {
-			activity.Label = "Manual sync: " + run.Phase
+			activity.Label = "Manual sync in progress"
 		}
 		if run.Kind == "library-update" {
 			activity.Label = "Capture & index"
@@ -291,6 +285,8 @@ func (s *Server) libraryActivities() []libraryActivity {
 			work := cloneWork(*run.Work) // snapshots must not share mutable counters
 			activity.Work = &work
 			activity.Detail = strings.Join(nonemptyParts(work.Source, sourceSummary), " · ")
+		} else if run.Kind == automaticRunKind || run.Kind == manualSyncRunKind {
+			activity.Work = &activityWork{Phase: run.Phase, Source: firstString(run.CurrentSource)}
 		} else if run.Phase != "starting" && run.Phase != "counting" {
 			activity.Detail = strings.Join(nonemptyParts(firstString(run.CurrentSource), run.Phase, sourceSummary), " · ")
 		}
@@ -366,12 +362,24 @@ func (s *Server) libraryActivities() []libraryActivity {
 			Detail: fmt.Sprintf("%d of %d conversations", tools.done, tools.total), Progress: fraction(float64(tools.done), float64(tools.total)),
 			Writes: true, OnEject: "Stops between conversations; building the ledger again resumes it."})
 	}
-	if running, phase := s.Catalog.findingsRunning(); running {
+	// Coordinated analyses report through their run's step progress. Keep
+	// standalone analyses visible when no run is reporting that work.
+	runReports := func(phases ...string) bool {
+		return slices.ContainsFunc(activities, func(activity libraryActivity) bool {
+			return activity.Work != nil && slices.Contains(phases, activity.Work.Phase)
+		})
+	}
+	if running, phase := s.Catalog.findingsRunning(); running && !runReports(
+		"refreshing findings", "reading findings inputs", "evaluating findings",
+		"backtesting findings", "saving findings", "measuring findings results",
+	) {
 		activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Updating findings",
 			Detail: "Looking for recurring patterns and measuring the ones you're watching (" + phase + ")", Writes: true,
 			OnEject: "Stops; it runs again after the next index."})
 	}
-	if s.Catalog.authorshipRunning() {
+	if s.Catalog.authorshipRunning() && !runReports(
+		"refreshing authorship", "reading authorship inputs", "classifying authorship", "saving authorship",
+	) {
 		activities = append(activities, libraryActivity{Kind: "maintenance", Label: "Classifying your writing",
 			Detail: "Rebuilding human authorship for Usage", Writes: true,
 			OnEject: "Stops; it runs again after the next index."})

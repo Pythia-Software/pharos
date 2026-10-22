@@ -137,6 +137,41 @@ test("the page's own upgrade status decides whether the Tools ledger is part of 
   assert.deepEqual(labels(window.pharosLibrary.libraryUpdate([tools])), ["Building the Tools ledger"]);
 });
 
+test("the overview groups background work under sync and keeps the current step's progress", () => {
+  const refresh = {kind: 'maintenance', label: 'Indexing the Library view', detail: '2 workspaces to index',
+    progress: .4, stoppable: true, stop_path: '/api/library/refresh/stop'};
+  const findings = {kind: 'maintenance', label: 'Updating findings', detail: 'Measuring watched findings'};
+  const git = {kind: 'git', label: 'Looking up merges in Git'};
+  const backup = {kind: 'backup', label: 'Backing up'};
+  const upgrade = {kind: 'maintenance', label: 'Upgrading the library'};
+  const background = library.overviewActivities([refresh, findings, git, backup, upgrade]);
+  assert.equal(background.length, 3);
+  assert.equal(background[0].label, 'Automatic sync in progress');
+  assert.equal(library.activityPresentation(background[0]).title, refresh.label);
+  assert.equal(library.activityProgress(background[0]), .4);
+  assert.equal(library.activityOverallProgress(background[0]), null);
+  assert.equal(background[1], backup);
+  assert.equal(background[2], upgrade);
+  assert.match(library.activityPresentation(background[0]).details.join('\n'), /Updating findings.*Measuring watched findings/);
+  assert.ok(library.activityPresentation(background[0]).details.includes(git.label));
+
+  const sync = {kind: 'sync', label: 'Manual sync in progress', work: {phase: 'indexing', unit: 'conversation', done: 3, total: 4},
+    forecast: {state: 'provisional', current_step: 4, total_steps: 8, progress: .6}, stoppable: true, stop_path: '/api/index/cancel'};
+  const activities = [refresh, sync, findings];
+  const grouped = library.overviewActivities(activities);
+  assert.equal(grouped.length, 1);
+  assert.equal(grouped[0].label, sync.label);
+  assert.equal(library.activityPresentation(grouped[0]).title, 'Indexing');
+  assert.equal(library.activityPresentation(grouped[0]).stepLabel, 'Step 4/8');
+  assert.equal(library.activityProgress(grouped[0]), .75);
+  assert.equal(library.activityOverallProgress(grouped[0]), .6);
+  assert.match(library.activityPresentation(grouped[0]).details.join('\n'), /Indexing the Library view.*2 workspaces to index/);
+  assert.equal(activities.length, 3);
+  assert.equal(refresh.label, 'Indexing the Library view');
+  assert.equal(library.stopTargets(activities).length, 2);
+  assert.equal(library.overviewActivities([]).length, 0);
+});
+
 test("Index changes is busy while a capture or index holds the library, or other work this page follows runs", () => {
   const cases = [
     [{ activities: [{ kind: "capture" }] }, true],
@@ -197,6 +232,11 @@ test("activity summaries keep unique context and measured progress, with explana
     forecast: {state: 'partial', predicted_steps: 3, remaining_steps: 4, basis: 'Some remaining steps have no comparable history yet', unknown_steps: ['Classify authorship']}};
   const discovery = library.activityPresentation(activity);
   assert.equal(discovery.title, 'Discovering inputs');
+  assert.equal(discovery.stepLabel, 'Step');
+  for (const state of ['partial', 'provisional', 'stopping']) {
+    const numbered = library.activityPresentation({...activity, forecast: {state, current_step: 4, total_steps: 8}});
+    assert.equal(numbered.stepLabel, 'Step 4/8');
+  }
   assert.equal(discovery.context, 'Capture & index · Codex · 0 of 4 sources finished');
   assert.equal(discovery.caption, ''); // Discovery has no measurable progress yet.
   const explanations = discovery.details.join('\n');

@@ -32,7 +32,7 @@
 .pharos-drive-panel h3{margin:14px 0 6px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted,#666)}
 .pharos-drive-panel p{margin:8px 0}
 .pharos-running-head{display:flex;justify-content:space-between;align-items:center;gap:12px}
-.pharos-drive-panel>.pharos-running-head{padding-top:10px}
+.pharos-drive-panel>.pharos-running-head{margin-top:8px}
 .pharos-running-head>div{min-width:0}
 .pharos-running-head>.pharos-button{flex:none}
 .pharos-drive-space{display:grid;grid-template-columns:1fr auto;gap:5px 12px;margin:12px 0 2px;padding:10px 0;border-top:1px solid var(--line,#ccc);border-bottom:1px solid var(--line,#ccc)}
@@ -289,7 +289,7 @@
   // exact duplicates of structured fields; retain other reported detail.
   function activityPresentation(activity, {unavailable = Boolean(statusError)} = {}) {
     const normalize = text => String(text || '').trim().toLowerCase();
-    const phase = activity.work?.phase;
+    const phase = activity.work?.phase || activity.stepTitle;
     const title = phase ? phase.replace(/^./, letter => letter.toUpperCase()) : activity.label;
     const work = activity.work, measured = workMeasure(work)?.total > 0;
     const progress = activityProgress(activity);
@@ -309,8 +309,11 @@
       forecast?.remaining_steps > 0 && `${forecast.predicted_steps} of ${forecast.remaining_steps} remaining steps estimated`,
       forecast?.unknown_steps?.length && `Learning: ${forecast.unknown_steps.join(', ')}`,
       work?.next && `Next: ${work.next}`,
+      ...(activity.relatedActivities || []).map(related => [related.label, workCount(related.work), related.detail].filter(Boolean).join(' · ')),
     ]);
-    return {title, context: unique(context).join(' · '), caption: unique([count, volume, percent, rate]).join(' · '), details};
+    const stepLabel = activity.forecast?.current_step > 0 && activity.forecast.total_steps >= activity.forecast.current_step
+      ? `Step ${activity.forecast.current_step}/${activity.forecast.total_steps}` : 'Step';
+    return {title, stepLabel, context: unique(context).join(' · '), caption: unique([count, volume, percent, rate]).join(' · '), details};
   }
   const expandedActivities = new Set();
   function activityLine(activity, {showTitle = true} = {}) {
@@ -330,7 +333,7 @@
     const source = activity.work?.source;
     const stepLabel = node('div', 'pharos-progress-label step');
     stepLabel.dataset.key = 'step-label';
-    stepLabel.append(node('span', '', `Step · ${view.title}${source && !view.title.toLowerCase().includes(source.toLowerCase()) ? ` · ${source}` : ''}`),
+    stepLabel.append(node('span', '', `${view.stepLabel} · ${view.title}${source && !view.title.toLowerCase().includes(source.toLowerCase()) ? ` · ${source}` : ''}`),
       node('span', 'pharos-progress-time', stepTiming.range ? `~${stepTiming.range} left` : ''),
       node('span', 'pharos-progress-value', Number.isFinite(step) ? percent(step) : ''));
     const stepBar = progressBar(step, `${activity.label}: current step`);
@@ -581,6 +584,20 @@
     return {updating, indexing, capturing, label, progress};
   }
 
+  // Background writers are steps of the general sync display, including
+  // catch-up work that outlives a foreground run. Keep the original activities
+  // for Stop/Eject; grouping changes only the overview's presentation.
+  function overviewActivities(activities) {
+    const background = activities.filter(activity => activity.kind === 'git'
+      || (activity.kind === 'maintenance' && activity.label !== 'Upgrading the library'));
+    if (!background.length) return activities;
+    const sync = activities.find(activity => ['sync', 'index'].includes(activity.kind));
+    const primary = sync || background[0];
+    const grouped = {...primary, label: sync ? primary.label : 'Automatic sync in progress',
+      stepTitle: primary.stepTitle || primary.label, relatedActivities: background.filter(activity => activity !== primary)};
+    return activities.flatMap(activity => activity === primary ? [grouped] : background.includes(activity) ? [] : [activity]);
+  }
+
   function activitySummary(activity) {
     const verb = {sync: 'Indexing', index: 'Indexing', capture: 'Capturing', 'capture-other': 'Capturing', backup: 'Backing up'}[activity.kind] || activity.label;
     return activity.progress != null ? `${verb} · current stage ${Math.floor(activity.progress * 100)}%` : verb;
@@ -757,18 +774,20 @@
 
     // One action slot: Stop while work can be stopped, Capture & index only
     // when it can run. Each activity below reports its stage and progress.
-    const activities = status.activities || [];
+    const runningActivities = status.activities || [];
+    const activities = overviewActivities(runningActivities);
+    const update = libraryUpdate(activities);
+    const firstActivity = update?.updating[0] || activities[0];
     const running = node('div', 'pharos-running-head'), runningText = node('div');
-    runningText.append(activities.length === 1 ? node('div', 'pharos-activity-head', activities[0].label) : node('h3', '', 'Running now'));
+    if (firstActivity) runningText.append(node('div', 'pharos-activity-head', firstActivity.label));
     running.append(runningText);
     content.append(running);
-    const update = libraryUpdate(activities);
-    if (!activities.length) runningText.append(node('p', 'pharos-sub', headerCaptureIndexRunning && upgradeStatus?.needed
+    if (!activities.length) runningText.append(node('div', 'pharos-sub', headerCaptureIndexRunning && upgradeStatus?.needed
       ? 'Preparing the library upgrade…' : upgradeStatus?.needed ? 'A library upgrade is available. Use Capture & index to run it.' : 'Nothing is running.'));
-    const targets = stopTargets(activities);
+    const targets = stopTargets(runningActivities);
     if (targets.length) {
       const stop = stopButton(targets.every(target => target.stopping), targets.filter(target => !target.stopping).map(target => target.path));
-      stop.title = `Stops ${activities.filter(activity => activity.stoppable).map(activity => activity.label).join(' and ')} safely. Completed work is kept.`;
+      stop.title = `Stops ${runningActivities.filter(activity => activity.stoppable).map(activity => activity.label).join(' and ')} safely. Completed work is kept.`;
       running.append(stop);
     }
     if (panelMode === 'drive' && !targets.length) {
@@ -777,9 +796,11 @@
       running.append(updateLibrary);
     }
     if (update) {
-      content.append(libraryUpdateLine(update, {showTitle: activities.length !== 1}));
+      const group = node('div', 'pharos-update');
+      for (const activity of update.updating) group.append(activityLine(activity, {showTitle: activity !== firstActivity}));
+      content.append(group);
     }
-    activities.filter(activity => !update?.updating.includes(activity)).forEach(activity => content.append(activityLine(activity, {showTitle: activities.length !== 1})));
+    activities.filter(activity => !update?.updating.includes(activity)).forEach(activity => content.append(activityLine(activity, {showTitle: activity !== firstActivity})));
     if (status.library_refresh?.stopped) {
       const item = node('div', 'pharos-activity pharos-library-refresh-stopped'), head = node('div', 'pharos-activity-head');
       head.append(node('span', 'pharos-dot idle'), node('span', '', 'Library view indexing stopped'), button('Resume', '', resumeLibraryRefresh));
@@ -1337,7 +1358,7 @@
 
   window.pharosLibrary = {closePanel, refresh: refreshStatus, status: () => status, runs, refreshSettings, refreshSyncControls: renderSyncControls, renderAlerts: () => { renderChip(); renderPanel(); }, onStatus: listener => listeners.add(listener), toggleActivityPanel: () => (panel && panelMode === 'activity' ? closePanel() : openPanel('activity')),
     // Pure helpers, for web/tests/unit/page/library.test.mjs.
-    libraryUpdate, activityTiming, activityProgress, activityOverallProgress, activityPresentation, estimateRate, workCount, headerBusy, captureIndexDisabled, stopTargets};
+    libraryUpdate, overviewActivities, activityTiming, activityProgress, activityOverallProgress, activityPresentation, estimateRate, workCount, headerBusy, captureIndexDisabled, stopTargets};
   const sheet = node('style');
   sheet.textContent = CSS;
   document.head.append(sheet);
