@@ -3,7 +3,7 @@ import { suggestionWindowLabel, type QueryPreview, type QuerySuggestion } from "
 import { QueryCard } from "./query-card";
 import { cardLoadingPresentation } from "./card-loading-model";
 import { Icon } from "./icons";
-import { SPACING, chooseNext, fitsBeside, leanBeside, previewKind } from "./conveyor-deck";
+import { SPACING, beltSlots, growBelt, chooseNext, leanBeside, previewKind } from "./conveyor-deck";
 
 // The timed advance drifts past; a move someone asks for answers in half the time.
 const AUTO_SLIDE_MS = 2040, USER_SLIDE_MS = 1020;
@@ -130,24 +130,23 @@ export function QueryConveyor({ items, previews, loading, hasErrors, active, sus
       setPublished([first]); setCenter(first.instanceId); setEntering([first.instanceId]); lastReveal.current = performance.now();
       return;
     }
-    if (interacting || movement || pending.length < 2 && loading) return;
+    if (interacting || movement) return;
     // The middle stays fixed: each ready pair extends the real belt by one
     // card to the left and one to the right. Each end takes the waiting card
-    // least like its neighbors. A final unpaired card waits for loading to
-    // finish, then joins at the outer end without moving its peers.
+    // least like its neighbors. An unpaired card fills the shorter side
+    // without moving its peers or waiting for another preview to finish.
     const tail = published.slice(-SPACING).reverse(), head = published.slice(0, SPACING);
     const kinds = new Map([...pending, ...tail, ...head].map(item => [item, previewKind(item, previews[item.instanceId])]));
     const kindOf = (item: QuerySuggestion) => kinds.get(item)!;
     const right = chooseNext(pending, tail, kindOf)!, left = pending.length > 1 ? chooseNext(pending.filter(item => item !== right), head, kindOf) : undefined;
-    // While more cards are loading, a short queue can wait for a better fit.
-    if (loading && pending.length < 4 && (!fitsBeside(right, tail, kindOf) || left && !fitsBeside(left, head, kindOf))) return;
+    const growth = growBelt(published, Math.max(0, published.findIndex(item => item.instanceId === center)), right, left);
     const timer = setTimeout(() => {
-      lean(right, tail); if (left) lean(left, head);
-      setPublished(current => left ? [left, ...current, right] : [...current, right]);
-      setEntering([right, ...left ? [left] : []].map(item => item.instanceId)); lastReveal.current = performance.now();
+      if (growth.right) lean(growth.right, tail); if (growth.left) lean(growth.left, head);
+      setPublished(growth.items);
+      setEntering([growth.right, growth.left].flatMap(item => item ? [item.instanceId] : [])); lastReveal.current = performance.now();
     }, Math.max(0, lastReveal.current + REVEAL_MS - performance.now()));
     return () => clearTimeout(timer);
-  }, [items, published, center, loading, active, suspended, interacting, movement]);
+  }, [items, published, center, active, suspended, interacting, movement]);
   useEffect(() => {
     if (!entering.length) return;
     const timer = setTimeout(() => setEntering([]), REVEAL_MS - 20);
@@ -186,13 +185,11 @@ export function QueryConveyor({ items, previews, loading, hasErrors, active, sus
   const span = (cards: number) => cards * STRIDE - GAP;
   const count = Math.min(shown.length, layout.width >= span(5) + 2 * PEEK ? 5 : layout.frame >= span(3) ? 3 : 1);
   const step = (direction: -1 | 1, user = true) => slide((running.current?.offset ?? 0) + direction * count, user);
-  const first = -Math.floor((count - 1) / 2), last = Math.ceil((count - 1) / 2);
-  const cycling = Boolean(movement) || !populating && shown.length > count;
   // Mid-slide the belt covers every card between where it is now and where it
   // is going, plus enough on each side to fill the viewport.
-  const at = movement ? travelled : 0, from = Math.min(at, movement?.offset ?? 0), to = Math.max(at, movement?.offset ?? 0);
+  const at = movement ? travelled : 0;
   const overscan = Math.ceil(Math.max(0, layout.width - (count * STRIDE - GAP)) / (2 * STRIDE)) + 3;
-  const positions = !shown.length ? [] : cycling ? Array.from({ length: to - from + count + 2 * overscan }, (_, index) => from + first - overscan + index) : shown.map((_, index) => index - start);
+  const { first, last, positions } = beltSlots(shown.length, start, count, overscan, movement ? { at, offset: movement.offset } : undefined);
   const slots = positions.map(position => {
     const index = start + position, itemIndex = wrap(index, shown.length), seen = position - at, left = (layout.width - CARD_WIDTH) / 2 + seen * STRIDE;
     const item = shown[itemIndex];
@@ -200,7 +197,8 @@ export function QueryConveyor({ items, previews, loading, hasErrors, active, sus
   });
   const canNavigate = published.length > count;
   actions.current = { open: onOpen, keep: onKeep, reveal: (index: number) => slide(index - start, true, true), dragStart: onDragStart, dragEnd: onDragEnd };
-  const held = paused || interacting || suspended || Boolean(movement) || populating || !canNavigate;
+  // A slow preview must not hold the cards that are already ready to browse.
+  const held = paused || interacting || suspended || Boolean(movement) || !canNavigate;
   return <section ref={section} className="home-conveyor" aria-label="Dashboard Catalog" aria-busy={populating} tabIndex={-1}
     style={{ "--belt-viewport-width": `${layout.width}px`, "--conveyor-edge": `${layout.edge}px`, "--query-card-stride": `${STRIDE}px` } as React.CSSProperties}
     onKeyDown={event => {

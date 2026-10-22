@@ -6,6 +6,24 @@ import { compactMetricPresentation } from "./card-presentation";
 // SPACING places of another, where the mix allows it.
 export const SPACING = 3;
 
+// Keep the anchor in place as previews arrive. A singleton fills the shorter
+// side; ties go right, matching the extra reading slot in an even-sized deck.
+export function growBelt<T>(items: T[], center: number, right: T, left?: T): { items: T[]; left?: T; right?: T } {
+  if (left === undefined && center < items.length - center - 1) return { items: [right, ...items], left: right };
+  return { items: left === undefined ? [...items, right] : [left, ...items, right], left, right };
+}
+
+// Render only the reading area, its neighbors and the path of a slide. The
+// ready deck can already cycle while the remaining previews are still loading.
+export function beltSlots(size: number, center: number, count: number, overscan: number, movement?: { at: number; offset: number }): { first: number; last: number; positions: number[] } {
+  const first = -Math.floor((count - 1) / 2), last = Math.ceil((count - 1) / 2);
+  const from = Math.min(movement?.at ?? 0, movement?.offset ?? 0), to = Math.max(movement?.at ?? 0, movement?.offset ?? 0);
+  const positions = !size ? [] : movement || size > count
+    ? Array.from({ length: to - from + count + 2 * overscan }, (_, index) => from + first - overscan + index)
+    : Array.from({ length: size }, (_, index) => index - center);
+  return { first, last, positions };
+}
+
 // The library's kind names the question; recipes without a source measure
 // still draw a cover, so name them by that cover's shape.
 export function beltKind(recipe: QueryRecipe): string {
@@ -45,9 +63,6 @@ export function chooseNext<T extends QueryRecipe>(pending: T[], neighbors: T[], 
   }
   return best?.item;
 }
-
-// Whether a card shares its kind with none of its nearest neighbors.
-export const fitsBeside = <T extends QueryRecipe>(item: T, neighbors: T[], kindOf: (item: T) => string = beltKind) => !neighbors.slice(0, SPACING).some(neighbor => kindOf(neighbor) === kindOf(item));
 
 // Orders a whole deck at once, as one side of the belt would if every card
 // were ready.

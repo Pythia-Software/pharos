@@ -233,6 +233,52 @@ test("dashboard collection wraps after four bookmarked cards", { skip }, async t
   }
 });
 
+test("dashboard catalog stays readable while a preview is pending", { skip }, async t => {
+  const { page, settled, shot } = await open(t, { url: '/', ready: '.home-belt-row .query-card', viewport: { width: 1875, height: 1075 } });
+  let release, requested;
+  const response = new Promise(resolve => { release = resolve; });
+  const pending = new Promise(resolve => { requested = resolve; });
+  const hold = async route => {
+    if (route.request().method() === 'POST') { requested(); await response; }
+    await route.continue();
+  };
+  await page.route('**/api/query/tl1_attempts/*', hold);
+  t.after(release);
+  try {
+    await page.getByRole('button', { name: 'Refresh suggestions', exact: true }).click();
+    await pending;
+    await page.mouse.move(5, 5);
+    const next = page.getByRole('button', { name: 'Next five suggestions', exact: true });
+    await page.waitForFunction(() => {
+      const button = document.querySelector('button[aria-label="Next five suggestions"]');
+      return button && !button.disabled;
+    });
+    const readable = async () => {
+      await page.waitForFunction(() => {
+        const titles = [...document.querySelectorAll('.home-belt-row .query-card:not([data-xray]) .query-title')];
+        return titles.length && titles.every(title => {
+          const box = title.getBoundingClientRect();
+          return title.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && box.left >= 0 && box.right <= innerWidth;
+        });
+      });
+      assert.deepEqual(await layoutProblems(page), []);
+    };
+    await readable();
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await next.click();
+    await page.waitForFunction(() => document.querySelector('.home-belt-row').getAttribute('aria-busy') === 'false');
+    await readable();
+    // A stale animation value must not move or hide the resting reading area.
+    await page.locator('.home-belt-row').evaluate(row => row.style.setProperty('--belt-shift', '-20'));
+    await readable();
+    await shot('pending-preview');
+  } finally {
+    release();
+    await settled();
+    await page.unroute('**/api/query/tl1_attempts/*', hold);
+  }
+});
+
 for (const width of [1649, 2133]) test(`pages without section menus use the full window at ${width}px`, { skip }, async t => {
   const { page } = await open(t, { url: '/analyze', viewport: { width, height: 1075 }, ready: '.usage-dashboard .usage-chart' });
   const primary = page.getByRole('navigation', { name: 'Primary navigation', exact: true });
