@@ -356,3 +356,38 @@ test('computed query links enable automatic fitting for every target without cha
   }
   assert.equal(source.fitToScreen, false);
 });
+
+test('client table named queries and defaults survive remounting independently for each schema', async () => {
+ const history='sync_history',sources='sync_sources',storage=m.clientTableStorageAdapter();
+ const saved=await storage.saveNamed(history,' Slow runs ',query,10);
+ const sourceSaved=await storage.saveNamed(sources,'Slow runs',{...query,limit:5},20);
+ await storage.setDefaultSaved(history,saved.id);
+ await storage.saveLast(history,{...query,offset:25});
+ // Preferences are loaded as JSON from the library on the next page load.
+ for(const [key,value] of prefs)if(key.includes('sync_'))prefs.set(key,JSON.parse(JSON.stringify(value)));
+ const reloaded=m.clientTableStorageAdapter();
+ assert.deepEqual(await reloaded.listSaved(history),[saved]);
+ assert.deepEqual(await reloaded.listSaved(sources),[sourceSaved]);
+ assert.deepEqual(await reloaded.loadDefaultSaved(history),saved);
+ assert.equal(await reloaded.loadDefaultSaved(sources),null);
+ assert.equal((await reloaded.loadLast(history)).offset,25);
+ const updated=await reloaded.updateNamed(history,saved.id,{...query,limit:75},30);
+ assert.equal(updated.id,saved.id);assert.equal(updated.name,'Slow runs');
+ assert.equal((await m.clientTableStorageAdapter().loadDefaultSaved(history)).query.limit,75);
+ await reloaded.deleteSaved(history,saved.id);
+ assert.deepEqual(await m.clientTableStorageAdapter().listSaved(history),[]);
+ assert.equal(await m.clientTableStorageAdapter().loadDefaultSaved(history),null);
+ assert.deepEqual(await reloaded.listSaved(sources),[sourceSaved]);
+ await reloaded.deleteSaved(sources,sourceSaved.id);
+});
+
+test('client table rejected saves preserve the existing named query', async () => {
+ const key='sync_phases',storage=m.clientTableStorageAdapter();
+ const saved=await storage.saveNamed(key,'By phase',query,1);
+ await assert.rejects(storage.saveNamed(key,' By phase ',{...query,limit:5},2),/already exists/);
+ await assert.rejects(storage.saveNamed(key,' ',query,2),/between 1 and/);
+ await assert.rejects(storage.updateNamed(key,'missing',query,2),/does not exist/);
+ await assert.rejects(storage.setDefaultSaved(key,'missing'),/does not exist/);
+ assert.deepEqual(await m.clientTableStorageAdapter().listSaved(key),[saved]);
+ await storage.deleteSaved(key,saved.id);
+});
