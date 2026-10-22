@@ -11,13 +11,134 @@ test("new keyword searches cover the last 30 elapsed days and keep that bound ac
   assert.equal(m.readTextSearch(new URLSearchParams(), clock).draft.scope.from, draft.scope.from);
   draft.root.children[0].text = "migration";
   assert.equal(m.searchRequest(draft).request.from, draft.scope.from);
-  assert.match(m.sentenceText(m.searchSentence(draft).parts), /on or after Oct 16, 2026, 12:34 PM UTC/);
+  assert.match(m.sentenceText(m.searchSentence(draft).parts), /in the last 30d/);
   for (const cursor of ["", "next-batch"]) {
     assert.equal(new URLSearchParams(m.textFindParameters(draft, cursor)).get("find_from"), draft.scope.from);
   }
   const restored = m.readTextSearch(new URLSearchParams({ text_builder: JSON.stringify(draft) }), new Date("2027-01-01"));
   assert.equal(restored.error, "");
   assert.equal(restored.draft.scope.from, draft.scope.from);
+  assert.deepEqual(m.searchDateWindow(restored.draft), m.searchDateWindow(draft));
+  assert.match(m.sentenceText(m.searchSentence(restored.draft).parts), /in the last 30d/);
+});
+
+test("collapsed readings omit only the default date and retain custom conditions", () => {
+  const draft = m.newKeywordSearch(new Date("2026-11-15T12:34:56.789Z"));
+  const collapsed = draft => m.searchSentence(draft, { hideDefaultDate: true });
+  assert.equal(collapsed(draft).empty, true);
+  assert.equal(m.searchSentence(draft).empty, false, "expanded readings show the default");
+  draft.root.children[0].text = "migration";
+  draft.scope.provider = "claude";
+  assert.equal(m.sentenceText(collapsed(draft).parts), "Find conversation messages from Claude, with the word “migration”");
+  assert.equal(m.searchRequest(draft).request.from, "2026-10-16T12:34:56.789Z", "hiding the date preserves its restriction");
+
+  const custom = m.withSearchDateWindow(draft, "7d");
+  assert.match(m.sentenceText(collapsed(custom).parts), /in the last 7d/);
+  draft.scope.from = "2026-10-01";
+  assert.match(m.sentenceText(collapsed(draft).parts), /on or after Oct 1, 2026/);
+  assert.equal(m.searchDateWindow(draft), undefined, "a manually edited date is explicit");
+  draft.scope.from = "2026-10-16T12:34:56.789Z"; draft.scope.to = "2026-11-01";
+  assert.match(m.sentenceText(collapsed(draft).parts), /between .* and Nov 1, 2026/);
+});
+
+test("relative date edits use duration syntax and preserve their resolved scope", () => {
+  const clock = new Date("2026-11-15T12:34:56.789Z");
+  let draft = m.newKeywordSearch(clock);
+  draft.root.children[0].text = "migration";
+  draft.scope.to = "2026-11-01";
+  for (const [duration, from] of [["7d", "2026-11-08T12:34:56.789Z"], ["24h", "2026-11-14T12:34:56.789Z"], ["1d2h", "2026-11-14T10:34:56.789Z"]]) {
+    const edited = m.withSearchDateWindow(draft, duration, clock);
+    assert.equal(edited.scope.from, from);
+    assert.equal(edited.scope.to, "");
+    const restored = m.readTextSearch(new URLSearchParams({ text_builder: JSON.stringify(edited) }), new Date("2027-01-01"));
+    assert.equal(restored.error, "");
+    assert.equal(m.searchRequest(restored.draft).request.from, from);
+    assert.equal(m.searchDateWindow(restored.draft).duration, duration);
+  }
+  for (const duration of ["", "garbage", "0d", "-7d", "+7d", "999999999999999999d"]) {
+    const edited = m.withSearchDateWindow(draft, duration, clock);
+    assert.equal(m.searchRequest(edited).request, undefined, duration);
+    assert.equal(m.searchRequest(edited).issues[0].id, "dates", duration);
+  }
+  draft.dateWindow = { duration: 30, from: draft.scope.from };
+  assert.ok(m.readTextSearch(new URLSearchParams({ text_builder: JSON.stringify(draft) })).error);
+});
+
+test("date comparisons switch between last, on or after, and on or before using calendar dates", () => {
+  const clock = new Date("2026-11-15T12:34:56.789Z");
+  const draft = m.newKeywordSearch(clock);
+  draft.root.children[0].text = "migration";
+  const before = m.withSearchDateComparison(draft, "from", "to", clock);
+  assert.equal(before.scope.from, "");
+  assert.equal(before.scope.to, "2026-10-16");
+  assert.equal(m.searchDateWindow(before), undefined);
+  const request = m.searchRequest(before).request;
+  assert.equal(request.from, ""); assert.equal(request.to, "2026-10-16");
+  assert.match(m.sentenceText(m.searchSentence(before, { hideDefaultDate: true }).parts), /on or before Oct 16, 2026/);
+  const params = new URLSearchParams(m.textFindParameters(before));
+  assert.equal(params.has("find_from"), false); assert.equal(params.get("find_to"), "2026-10-16");
+  const restored = m.readTextSearch(new URLSearchParams({ text_builder: JSON.stringify(before) }));
+  assert.equal(restored.error, ""); assert.equal(restored.draft.scope.to, "2026-10-16");
+
+  const after = m.withSearchDateComparison(before, "to", "from", clock);
+  assert.equal(after.scope.from, "2026-10-16"); assert.equal(after.scope.to, "");
+  assert.equal(m.searchDateWindow(after), undefined, "explicit dates stay visible in collapsed summaries");
+  const absolute = m.withSearchDateComparison(draft, "from", "from", clock);
+  assert.equal(absolute.scope.from, "2026-10-16"); assert.equal(m.searchDateWindow(absolute), undefined);
+  const relative = m.withSearchDateComparison(before, "to", "last", clock);
+  assert.equal(relative.scope.from, draft.scope.from); assert.equal(relative.scope.to, "");
+  assert.equal(m.searchDateWindow(relative).duration, "30d");
+});
+
+test("date comparison edits preserve both bounds of an explicit range", () => {
+  const draft = m.emptyTextSearch();
+  draft.root.children[0].text = "migration";
+  draft.scope.from = "2026-10-01"; draft.scope.to = "2026-10-15";
+  for (const field of ["from", "to"]) {
+    for (const comparison of ["last", "from", "to"]) {
+      assert.deepEqual(m.withSearchDateComparison(draft, field, comparison).scope, draft.scope);
+    }
+  }
+  assert.equal(m.searchRequest(draft).request.from, "2026-10-01");
+  assert.equal(m.searchRequest(draft).request.to, "2026-10-15");
+});
+
+test("adding either date bound keeps the other and produces a saved calendar range", () => {
+  const draft = m.newKeywordSearch(new Date("2026-11-15T12:34:56.789Z"));
+  draft.root.children[0].text = "migration";
+  draft.scope.provider = "claude";
+  const range = m.withSearchDateRange(draft);
+  assert.equal(range.scope.from, "2026-10-16");
+  assert.equal(m.searchDateWindow(range), undefined);
+  range.scope.to = "2026-11-01";
+  assert.equal(m.searchRequest(range).request.from, "2026-10-16");
+  assert.equal(m.searchRequest(range).request.to, "2026-11-01");
+  assert.equal(range.scope.provider, "claude");
+  const params = new URLSearchParams(m.textFindParameters(range));
+  assert.equal(params.get("find_from"), "2026-10-16"); assert.equal(params.get("find_to"), "2026-11-01");
+  const restored = m.readTextSearch(new URLSearchParams({ text_builder: JSON.stringify(range) }));
+  assert.equal(restored.error, ""); assert.deepEqual(restored.draft.scope, range.scope);
+  assert.match(m.sentenceText(m.searchSentence(range, { hideDefaultDate: true }).parts), /between Oct 16, 2026 and Nov 1, 2026/);
+
+  const before = m.withSearchDateComparison(draft, "from", "to");
+  const beforeRange = m.withSearchDateRange(before);
+  assert.equal(beforeRange.scope.from, ""); assert.equal(beforeRange.scope.to, "2026-10-16");
+  beforeRange.scope.from = "2026-10-01";
+  assert.equal(m.searchRequest(beforeRange).request.from, "2026-10-01");
+  assert.equal(m.searchRequest(beforeRange).request.to, "2026-10-16");
+  beforeRange.scope.from = "2026-10-17";
+  assert.equal(m.searchRequest(beforeRange).request, undefined, "reversed ranges cannot be applied");
+});
+
+test("date inputs show UTC calendar dates while saved precise bounds retain their scope until edited", () => {
+  for (const [value, date] of [["", ""], ["2026-10-16", "2026-10-16"], ["2026-10-16T12:34:56.789Z", "2026-10-16"], ["2026-10-15T23:59:59.999-07:00", "2026-10-16"]]) {
+    assert.equal(m.searchDateValue(value), date);
+  }
+  const draft = m.emptyTextSearch(); draft.root.children[0].text = "migration";
+  draft.scope.from = "2026-10-16T12:34:56.789Z";
+  const restored = m.readTextSearch(new URLSearchParams({ text_builder: JSON.stringify(draft) }));
+  assert.equal(m.searchDateValue(restored.draft.scope.from), "2026-10-16");
+  assert.equal(m.searchRequest(restored.draft).request.from, draft.scope.from);
 });
 
 test("clearing the keyword date searches all time and preserves that choice in saved searches", () => {
@@ -27,6 +148,7 @@ test("clearing the keyword date searches all time and preserves that choice in s
   const restored = m.readTextSearch(new URLSearchParams({ text_builder: JSON.stringify(draft) }));
   assert.equal(restored.error, "");
   assert.equal(restored.draft.scope.from, "");
+  assert.equal(m.searchDateWindow(restored.draft), undefined);
   assert.equal(new URLSearchParams(m.textFindParameters(restored.draft)).has("find_from"), false);
   for (const params of ["search=migration", "search=migration&text_from=2026-01-01", "text_from=&text_to="]) {
     const saved = m.readTextSearch(new URLSearchParams(params));

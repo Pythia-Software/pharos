@@ -49,6 +49,15 @@ const ROUTES = [
     }, shown: '#pharosDrivePanel .pharos-activity',
   }))),
   { name: "Home", url: "/", ready: ".home-belt-row .query-card" },
+  { name: "Home search composer", url: "/", ready: ".home-search-trigger", open: page => page.getByRole("button", { name: "Search past work", exact: true }).click(), shown: ".home-search-disclosure.is-expanded" },
+  { name: "Home search before date", url: "/", ready: ".home-search-trigger", open: async page => { await page.getByRole("button", { name: "Search past work", exact: true }).click(); await page.getByRole("combobox", { name: "Date comparison", exact: true }).selectOption("to"); }, shown: ".home-search-disclosure.is-expanded" },
+  ...["start", "end"].map(bound => ({ name: `Home search date range adding ${bound}`, url: "/", ready: ".home-search-trigger", open: async page => {
+    await page.getByRole("button", { name: "Search past work", exact: true }).click();
+    if (bound === "start") await page.getByRole("combobox", { name: "Date comparison", exact: true }).selectOption("to");
+    await page.getByRole("button", { name: `Add ${bound} date`, exact: true }).click();
+    await page.getByLabel("Date on or after", { exact: true }).fill("2026-10-01");
+    await page.getByLabel("Date on or before", { exact: true }).fill("2026-10-22");
+  }, shown: ".home-search-disclosure.is-expanded" })),
   { name: "Dashboard Catalog", url: "/home?cards=library", ready: ".card-library-entry .query-card" },
   { name: "Weekday distributions", url: "/home?cards=library&card_search=day%20of%20the%20week", ready: '[data-card-id="human-words-weekday"] .query-shared-box' },
   { name: "Search table", url: "/library", ready: "#queryTableLibrary .qt-row" },

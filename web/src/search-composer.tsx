@@ -49,7 +49,7 @@ export function HomeSearch({ schema }: { schema: FieldSchema }) {
     return () => cancelAnimationFrame(frame);
   }, [expanded]);
   // The box reads the search back in English as it is composed.
-  const reading = searchSentence(state.text, { kind: state.kind, file: state.file, fileCase: state.fileCase, workspace: describeWhere(schema.fields, state.query.where) });
+  const reading = searchSentence(state.text, { kind: state.kind, file: state.file, fileCase: state.fileCase, workspace: describeWhere(schema.fields, state.query.where), hideDefaultDate: !expanded });
   return <div className={`home-search-disclosure${expanded ? " is-expanded" : ""}`} onKeyDown={event => {
     if (event.key === "Escape" && expanded && !event.defaultPrevented && !document.querySelector(".text-condition-popup, .search-help-bubble")) {
       event.preventDefault(); setExpanded(false); trigger.current?.focus();
