@@ -557,6 +557,9 @@ func TestOperationForecastKeepsStageMeasurementSeparateAndUsesWholeCompletion(t 
 	if a.Forecast.Progress == nil || *a.Forecast.Progress != 0 {
 		t.Fatalf("new operation should begin at zero overall: %+v", a.Forecast)
 	}
+	if a.Forecast.CurrentStep != 1 || a.Forecast.TotalSteps != 1 {
+		t.Fatalf("first planned step: %+v", a.Forecast)
+	}
 	// Two equally costly sequential steps: finishing the first is halfway
 	// through the operation even as the next step's own counter starts at zero.
 	next := step
@@ -577,6 +580,14 @@ func TestOperationForecastKeepsStageMeasurementSeparateAndUsesWholeCompletion(t 
 	if a = activities[0]; a.Forecast.Progress == nil || *a.Forecast.Progress != .5 || a.Progress == nil || *a.Progress != 0 {
 		t.Fatalf("stage transition reset overall progress or reused stage progress: %+v", a)
 	}
+	if a.Forecast.CurrentStep != 2 || a.Forecast.TotalSteps != 2 {
+		t.Fatalf("step number did not advance: %+v", a.Forecast)
+	}
+	op.steps[0].State = "skipped"
+	if got := op.estimate(at, true); got.CurrentStep != 2 || got.TotalSteps != 2 {
+		t.Fatalf("skipped work or stopping changed step numbering: %+v", got)
+	}
+	op.steps[0].State = "complete"
 	op.steps[1].Inventory = false
 	s.estimateActivities(activities, at.Add(100*time.Second))
 	if activities[0].Forecast.Progress != nil {

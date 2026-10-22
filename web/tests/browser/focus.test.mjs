@@ -441,7 +441,6 @@ for (const width of [1440, 390]) test(`Optimize pages move keyboard focus to the
   await choose('Table', '.findings-table .qt-row');
   await choose('Dashboard', '.findings-card');
   if (phone) await press(page.locator('#appNavigationToggle'));
-  await press(navigation.getByText('TL1', { exact: true }));
   await press(navigation.getByRole('link', { name: 'Configurations', exact: true }));
   await page.locator('#tl1-matrix').waitFor();
   await page.waitForFunction(() => document.activeElement?.tagName === 'H1');
@@ -671,4 +670,67 @@ test("Query ideas disclosure supports keyboard toggles and restores the saved pr
   assert.equal(await summary.evaluate(element => element === document.activeElement), true);
   await app.settled();
   await app.shot("query-ideas-keyboard");
+});
+
+for (const width of [1440, 390, 320]) test(`Capture & index run details keep focus through live refresh and return it on close @ ${width}`, { skip }, async t => {
+  const { page, settled } = await open(t, { url: '/settings/sync', viewport: { width, height: 900 }, ready: '#syncHistoryTables .qt-row' });
+  const opener = page.getByRole('region', { name: 'Recent run history', exact: true }).getByRole('button', { name: 'Details', exact: true }).first();
+  await press(opener);
+  const dialog = page.getByRole('dialog', { name: 'Index run details', exact: true });
+  await dialog.waitFor();
+  await page.evaluate(() => window.pharosSync.refresh());
+  await settled();
+  await holdsFocus(page, dialog, opener);
+});
+
+test('Capture & index query editor retains focus and edits across live refreshes', { skip }, async t => {
+  const { page } = await open(t, { url: '/settings/sync', ready: '#syncHistoryTables .qt-row' });
+  const history = page.getByRole('region', { name: 'Recent run history', exact: true });
+  await history.getByRole('button', { name: 'Expand query builder', exact: true }).click();
+  const limit = history.getByRole('spinbutton');
+  await limit.fill('2');
+  await page.evaluate(() => window.pharosSync.refresh());
+  await page.waitForFunction(element => document.activeElement === element, await limit.elementHandle());
+  assert.equal(await limit.inputValue(), '2');
+  await limit.press('Tab');
+  await page.evaluate(() => window.pharosSync.refresh());
+  await limit.focus();
+  assert.equal(await limit.inputValue(), '2');
+});
+
+test('Mac menu editing preserves focus when adding, moving, and removing items', { skip }, async t => {
+  const { page, shot } = await open(t, { url: '/settings/preferences', ready: '#menuBarActive button' });
+  const add = page.getByRole('button', { name: 'Add Estimated API cost', exact: true });
+  const handle = page.getByRole('button', { name: 'Arrange Estimated API cost', exact: true });
+  const focused = async locator => page.waitForFunction(element => document.activeElement === element, await locator.elementHandle());
+  await press(add);
+  await focused(handle);
+  await press(handle);
+  await page.locator('#menuBarToolMenu:popover-open').waitFor();
+  await page.keyboard.press('Escape');
+  await focused(handle);
+  await press(handle);
+  await press(page.getByRole('button', { name: 'Move up', exact: true }));
+  await focused(handle);
+  await press(handle, 'Alt+ArrowUp');
+  await focused(handle);
+  await shot('arranged');
+  await page.keyboard.press('Delete');
+  await focused(add);
+  const status = page.getByRole('button', { name: 'Arrange Pharos status', exact: true });
+  await press(status, 'Delete');
+  await focused(status);
+  const addSeparator = page.getByRole('button', { name: 'Add Separator', exact: true });
+  const separators = page.getByRole('button', { name: /^Arrange Separator / });
+  const before = await separators.count();
+  await press(addSeparator);
+  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label')?.startsWith('Arrange Separator '));
+  const added = page.locator('#menuBarActive button:focus');
+  const label = await added.getAttribute('aria-label');
+  await page.keyboard.press('Alt+ArrowUp');
+  await page.waitForFunction(label => document.activeElement?.getAttribute('aria-label') === label, label);
+  assert.equal(await separators.count(), before + 1);
+  await page.keyboard.press('Delete');
+  await focused(addSeparator);
+  assert.equal(await separators.count(), before);
 });

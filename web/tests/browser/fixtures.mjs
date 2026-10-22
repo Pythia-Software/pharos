@@ -163,10 +163,14 @@ const syncHistory = Array.from({ length: 6 }, (_, index) => ({ run_id: `run-${in
   seconds: 22.1, cpu_seconds: 8.7, cpu_percent_one_core: 39.4, rss_baseline_bytes: 100 * 1048576, rss_observed_peak_bytes: 129 * 1048576, allocated_bytes: 50 * 1048576, sources: ["codex", "claude"],
   source_results: [{ source: "codex", workspaces: 1, conversations: 8, messages: 130, ...(index === 2 ? { error: "Source unavailable" } : {}) }, { source: "claude", workspaces: 1, conversations: 4, messages: 210 }],
   phases: [{ name: "codex", seconds: 10.7, cpu_seconds: 4.9 }, { name: "claude", seconds: 9, cpu_seconds: 3 }, { name: "audit", seconds: 2.4, cpu_seconds: 0.8 }], audit: { outcome: "passed", discovered_units: 10, deferred_units: 1 } }));
+syncHistory[0].phases[0].work = [{ phase: "read", unit: "group", done: 2, total: 2, total_known: true, seconds: 4, features: { conversations: 8, messages: 130, bytes: 4096, bytes_basis: "message_text", since_last_index_seconds: 300, load_one_minute: 1.2 } }];
+syncHistory[0].forecasts = [{ reason: "launch", elapsed_seconds: 0, estimate: { point_seconds: 20, low_seconds: 10, high_seconds: 30, predicted_steps: 3, remaining_steps: 3 }, actual_remaining_seconds: 22.1 }];
 const syncSettings = { enabled: true, interval_seconds: 300, sources: [], next_at: new Date(now + 180000).toISOString() };
 const syncStatus = { settings: syncSettings, busy: false, available_sources: [{ name: "codex" }, { name: "claude" }], sources: [{ name: "codex" }, { name: "claude" }], history: syncHistory,
   source_states: [{ source_name: "codex", attempted_at: syncHistory[0].finished_at, succeeded_at: syncHistory[0].finished_at, pending_preservation: true, last_capture_at: iso(3 * 3600000) }, { source_name: "claude", attempted_at: syncHistory[0].finished_at, succeeded_at: syncHistory[0].finished_at, last_capture_at: iso(3600000) }],
   statistics: { changes: { samples: 10, elapsed_seconds: { median: 22.1, p95: 61.8 }, cpu_seconds: { median: 8.7, p95: 11 }, rss_observed_peak_bytes: { last: 129 * 1048576 }, estimated_cpu_duty_percent_one_core: 2.9 } },
+  forecast_accuracy: { 'automatic-sync': { launch: { attempts: 6, predicted: 5, evaluated: 4, covered: 3, median_absolute_error_seconds: 2.1, median_relative_error: 0.1, median_interval_width_seconds: 20 } } },
+  forecast_runs: [{ run_id: 'capture-forecast', model: 'capture-index', finished_at: syncHistory[0].finished_at, state: 'complete', forecasts: syncHistory[0].forecasts }],
   coverage: [{ source_name: "codex", outcome: "passed", units: 2, last_verification: syncHistory[0].finished_at }], deferred: [{ name: "tools", changed_at: syncHistory[0].finished_at }], recovery_jobs: [], issues: [], measurement_limits: "CPU is process-wide." };
 
 const carbonFactors = JSON.parse(readFileSync(join(repo, "carbon", "co2_factors.json"), "utf8"));
@@ -207,8 +211,9 @@ export const defaultApi = {
   "GET /api/probe/status": { library: true, needs_onboarding: false, host: { id: "test-mac", label: "This Mac" } },
   "GET /api/upgrade": { running: false, needed: false, steps: [], repository_renames: {} },
   "GET /api/pricing": { unpriced_models: [], priced_tokens: 1000, unpriced_tokens: 0, confirmed_changes: 0, proposed_changes: 0 },
-  "GET /api/usage/concurrency-prototype": {
-    generated_at: iso(0), timezone: "UTC", period_start: iso(day).slice(0, 10), period_end: iso(0).slice(0, 10),
+  "GET /api/usage/concurrency-prototype": () => ({ ...defaultApi["GET /api/usage/parallelism"], timezone: "UTC" }),
+  "GET /api/usage/parallelism": {
+    generated_at: iso(0), timezone: "Local", period_start: iso(day).slice(0, 10), period_end: iso(0).slice(0, 10),
     days: [iso(day).slice(0, 10), iso(0).slice(0, 10)],
     threads: [0, 1].map(index => ({
       id: `timing-${index}`, conversation_id: rootConversation, work_id: workID,
@@ -225,7 +230,8 @@ export const defaultApi = {
   "POST /api/search/text/validate": ({ body }) => ({ where: body.where ?? { op: ["literal", "regex", "phrase"].includes(body.mode) ? body.mode : "term", text: body.query } }),
   "GET /api/search/text/capabilities": { fuzzy: true, regex: true, case_sensitive: true },
   "GET /api/tools/status": toolsStatus,
-  "GET /api/menu-bar/status": { state: "idle" },
+  "GET /api/menu-bar/status": { error: "", indexed_at: iso(60000), library: { library_dir: "/Volumes/Pharos SSD/Pharos", activities: [], drive: { name: "Pharos SSD", ejectable: true } } },
+  "GET /api/menu-bar/usage": { human_words: 3240, tokens: 1200000, cost_usd: 8.42, co2e_g: 18.25 },
 
   // Settings.
   "GET /api/health/counts": { workspaces: 1964, conversations: 2400, messages: 311120 },

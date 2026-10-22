@@ -36,6 +36,7 @@ import { defaultChartScale, validChartScale } from "./chart-scale";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { useLocationRevision } from "./nested-pages";
+import { SyncTables } from "./sync-tables";
 import { SettingsWorkspace } from "./settings-workspace";
 import { installAppNavigation } from "./app-navigation";
 import { EMPTY_QUERY, groupSourceQuery, httpComputedColumnStore, inspectBucketQuery, applyAggregations, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, type ComputedColumnStore, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type AggregationResultEntry, type FieldSchema, type Transport, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
@@ -1143,7 +1144,7 @@ function TokenChart({ where, onFilter, onTimeFilter = onFilter, view, onChange }
     <ChartSelect label="Breakdown" value={split} options={tokenSplits.map(([value, text]) => [value, text, value === "type" && cost ? "Cost is priced per request, not per token type" : undefined])}
       title={cost ? "Token type is only available for token metrics; cost is priced per request." : "How each chart column is divided"} onChange={next => onChange({ split: next, seriesLimit: 15, selection: { values: [], excluded: false } })} />
     <DisplayControl value={view.display} onChange={display => onChange({ display })} />
-    <RangeControl bounds={bounds} includeTime={isHourly(view.period)} onPresetChange={(range, oldest) => onChange(presetPeriod(range, oldest))} onChange={(from, to) => onTimeFilter(current => withTimeRange(current, usageTime, from, to))} />
+    <RangeControl bounds={bounds} onPresetChange={(range, oldest) => onChange(presetPeriod(range, oldest))} onChange={(from, to, preset) => onTimeFilter(current => withTimeRange(current, usageTime, from, to, preset))} />
     <ScaleControl value={view.scale} onChange={scale => onChange({ scale })} percent={percent} />
     <PeriodControl view={view} onChange={onChange} />
     <RollingControl value={cumulative ? 0 : view.rollingPeriods} period={view.period} count={periodCount} disabled={cumulative} note={cumulative ? "Cumulative totals use original amounts. Smoothing applies per interval." : undefined} onChange={rollingPeriods => onChange({ rollingPeriods })} />
@@ -1362,6 +1363,29 @@ function WritingPanel({ where, onFilter, status, reload, dashboard = false, view
   const allChars = writingGroups.reduce((sum, group) => sum + groupTotal(totals, group, "chars"), 0);
   return <section className="writing-panel" aria-label="Human Words">
     {data.error ? <div className="query-table-error">{data.error}</div> : null}
+    {!dashboard ? <div className="mcp-metrics usage-cards">
+      {building ? card("Words you wrote", "Building…", "Classifying every retained user message") : <>
+        {card("Words you wrote", compactNumber(typed), `Up to ${compactNumber(typed + pasted)} including text that only looks pasted${totals.first_day ? ` · since ${totals.first_day}` : ""}`)}
+        {card("Last 30 days", compactNumber(recentTyped), `${recentMessages.toLocaleString()} messages with typed text`)}
+        {card("Messages with typed text", typedMessages.toLocaleString(), `of ${(Number(totals.messages) || 0).toLocaleString()} user turns in ${(series?.works ?? 0).toLocaleString()} conversations`)}
+        {card("Words per message", typedMessages ? Math.round(typed / typedMessages).toLocaleString() : "—", "average typed words, where any were typed")}
+        {card("Novels", (typed / 90000).toFixed(1), "at 90,000 words each")}
+      </>}
+    </div> : null}
+    <StackedColumns title={`${cumulative ? "Cumulative " : ""}${view.scope === "typed" ? "Typed words" : "Words of user input"}${cumulative ? "" : ` per ${unit}`}${split ? ` by ${writingSplits.find(([value]) => value === split)?.[1].toLowerCase()}` : ""}`}
+      controls={<>
+        <ChartSelect label="Metric" value={view.scope} options={[["typed", "Typed words"], ["all", "All user input"]]} onChange={scope => update({ scope })} />
+        <ChartSelect label="Breakdown" value={view.split} options={writingSplits.map(([value, text]) => [value, value === "kind" ? "Text source" : text])}
+          title="How each chart column is divided" onChange={next => update({ split: next, seriesLimit: 15, selection: { values: [], excluded: false } })} />
+        <DisplayControl value={view.display} onChange={display => update({ display })} />
+        <RangeControl bounds={bounds} onPresetChange={(range, oldest) => update(presetPeriod(range, oldest))} onChange={(from, to, preset) => onFilter(current => withTimeRange(current, writingTime, from, to, preset))} />
+        <ScaleControl value={view.scale} onChange={scale => update({ scale })} />
+        <PeriodControl view={view} onChange={update} />
+        <RollingControl value={view.rollingPeriods} display={view.display} period={view.period} count={periodCount} onChange={rollingPeriods => update({ rollingPeriods })} />
+      </>}
+      series={chartSeries} buckets={buckets} period={view.period} periodCount={periodCount} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={cumulativeStart} scale={view.scale} legend={chartSeries.length > 0}
+      format={value => value.toLocaleString()} tickFormat={compactNumber} noun="words" loading={chartData.loading} error={chartData.error}
+      selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => update({ seriesLimit: Math.min(1000, seriesLimit + 5) })} onRange={pickRange(onFilter, writingTime, view.period, periodCount, period => update({ period }))} />
     {dashboard ? <>
       <div className="mcp-metrics dashboard-stats" aria-label="Human Words summary" aria-busy={data.loading}>
         {card("Words you wrote", amount(compactNumber(typed)), "typed or dictated in the selected period")}
@@ -1370,29 +1394,7 @@ function WritingPanel({ where, onFilter, status, reload, dashboard = false, view
         {card("Works with input", amount((series?.works ?? 0).toLocaleString()), "matching works with classified input in this period")}
       </div>
       {status ? <p className="usage-dashboard-note" role="status">{status.error ? `Classification update failed: ${status.error}` : status.running ? "Updating text classifications…" : status.stale ? "Text classifications need an update." : status.built_at ? `Text classified ${new Date(status.built_at).toLocaleString()}` : "Waiting for text classification."}</p> : null}
-    </> : <div className="mcp-metrics usage-cards">
-      {building ? card("Words you wrote", "Building…", "Classifying every retained user message") : <>
-        {card("Words you wrote", compactNumber(typed), `Up to ${compactNumber(typed + pasted)} including text that only looks pasted${totals.first_day ? ` · since ${totals.first_day}` : ""}`)}
-        {card("Last 30 days", compactNumber(recentTyped), `${recentMessages.toLocaleString()} messages with typed text`)}
-        {card("Messages with typed text", typedMessages.toLocaleString(), `of ${(Number(totals.messages) || 0).toLocaleString()} user turns in ${(series?.works ?? 0).toLocaleString()} conversations`)}
-        {card("Words per message", typedMessages ? Math.round(typed / typedMessages).toLocaleString() : "—", "average typed words, where any were typed")}
-        {card("Novels", (typed / 90000).toFixed(1), "at 90,000 words each")}
-      </>}
-    </div>}
-    <StackedColumns title={`${cumulative ? "Cumulative " : ""}${view.scope === "typed" ? "Typed words" : "Words of user input"}${cumulative ? "" : ` per ${unit}`}${split ? ` by ${writingSplits.find(([value]) => value === split)?.[1].toLowerCase()}` : ""}`}
-      controls={<>
-        <ChartSelect label="Metric" value={view.scope} options={[["typed", "Typed words"], ["all", "All user input"]]} onChange={scope => update({ scope })} />
-        <ChartSelect label="Breakdown" value={view.split} options={writingSplits.map(([value, text]) => [value, value === "kind" ? "Text source" : text])}
-          title="How each chart column is divided" onChange={next => update({ split: next, seriesLimit: 15, selection: { values: [], excluded: false } })} />
-        <DisplayControl value={view.display} onChange={display => update({ display })} />
-        <RangeControl bounds={bounds} includeTime={isHourly(view.period)} onPresetChange={(range, oldest) => update(presetPeriod(range, oldest))} onChange={(from, to) => onFilter(current => withTimeRange(current, writingTime, from, to))} />
-        <ScaleControl value={view.scale} onChange={scale => update({ scale })} />
-        <PeriodControl view={view} onChange={update} />
-        <RollingControl value={view.rollingPeriods} display={view.display} period={view.period} count={periodCount} onChange={rollingPeriods => update({ rollingPeriods })} />
-      </>}
-      series={chartSeries} buckets={buckets} period={view.period} periodCount={periodCount} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={cumulativeStart} scale={view.scale} legend={chartSeries.length > 0}
-      format={value => value.toLocaleString()} tickFormat={compactNumber} noun="words" loading={chartData.loading} error={chartData.error}
-      selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => update({ seriesLimit: Math.min(1000, seriesLimit + 5) })} onRange={pickRange(onFilter, writingTime, view.period, periodCount, period => update({ period }))} />
+    </> : null}
     <div className="writing-mix">
       <h3>Where user-turn text came from</h3>
       <p className="muted">All classified user-turn text in the selected dates and conversation filters. Shares use characters.</p>
@@ -1539,8 +1541,8 @@ function TokenUsageDashboard() {
   const state = useUsageDashboardState({ ...defaultTokenChart, period: "day" as ChartPeriod }, view => ["tokens", "cost", "percent", "percent_cost"].includes(view.metric) && tokenSplits.some(([key]) => key === view.split) && Object.hasOwn(chartPeriods, view.period) && validPeriodCount(view.hours) && validPeriodCount(view.days) && validRollingPeriods(view.rollingPeriods) && validChartScale(view.scale) && validChartDisplay(view.display) && validChartPresentation(view), usageTime);
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   return <>
-    <TokenSummary where={state.where} />
     <TokenChart where={state.where} onFilter={state.onFilter} view={state.view} onChange={state.update} />
+    <TokenSummary where={state.where} />
     <UsageDashboardLinks schema={schemas.usage} dataset="usage" query={{ ...EMPTY_QUERY, where: state.where, aggregations: tokenChartMetrics(state.view).map(clause => ({ ...clause, label: clause.label === "chart" ? costMetric(state.view) ? "API cost (USD)" : "Tokens" : clause.label })) }} currentURL="/analyze?analyze_view=tokens&machine_view=tokens" />
     <p className="usage-dashboard-note">Drag across the graph to zoom into a period. Select legend entries to compare or exclude series. Cumulative lines total each series from the range start; click a point to select the range contributing to it. Grouped rows expose the underlying interval amounts before percentages, smoothing, accumulation, or folded series. API cost is the list-price equivalent; subscriptions and long-context premiums are excluded. ≈ marks assumed prices.</p>
   </>;
@@ -1590,12 +1592,11 @@ function RecordUsageDashboard({ topic }: { topic: RecordDashboardTopic }) {
   }, [result.metrics, view.period, view.split, view.metric, bounds.from?.getTime(), bounds.to?.getTime(), chosen.join("\u0000"), limit, view.rollingPeriods, cumulative]);
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   return <>
-    {topic === "time" ? <AgentTimeSummary where={where} /> : null}
     <StackedColumns title={`${cumulative ? "Cumulative " : ""}${measure.label}${cumulative ? "" : ` per ${view.period}`} by ${spec.splits.find(([key]) => key === view.split)?.[1].toLowerCase()}`} controls={<>
       <ChartSelect label="Metric" value={String(view.metric)} options={spec.measures.map((item, index) => [String(index), item.label])} onChange={metric => state.update({ metric: Number(metric) })} />
       <ChartSelect label="Breakdown" value={view.split} options={spec.splits} onChange={split => state.update({ split, seriesLimit: 15 })} />
       <DisplayControl value={view.display} onChange={display => state.update({ display })} />
-      <RangeControl bounds={bounds} onPresetChange={(range, oldest) => state.update({ period: calendarPresetPeriod(range, oldest) })} onChange={(from, to) => onFilter(current => withTimeRange(current, { first: spec.time, last: spec.time }, from, to))} />
+      <RangeControl bounds={bounds} onPresetChange={(range, oldest) => state.update({ period: calendarPresetPeriod(range, oldest) })} onChange={(from, to, preset) => onFilter(current => withTimeRange(current, { first: spec.time, last: spec.time }, from, to, preset))} />
       <ScaleControl value={view.scale} onChange={scale => state.update({ scale })} />
       <ChartSelect label="Time Bucket" value={view.period} options={[["day", "Day"], ["week", "Week"], ["month", "Month"]]} onChange={period => state.update({ period })} />
       <RollingControl value={view.rollingPeriods} display={view.display} period={view.period} onChange={rollingPeriods => state.update({ rollingPeriods })} />
@@ -1603,6 +1604,7 @@ function RecordUsageDashboard({ topic }: { topic: RecordDashboardTopic }) {
       selected={series.filter(item => chosen.includes(String(item.value ?? ""))).map(item => item.key)} excluded={selection.excluded}
       onSelect={(key, action) => onFilter(current => withSlice(current, view.split, updateSlice(readSlice(current, view.split), key === null ? null : String(series.find(item => item.key === key)?.value ?? "") || null, action)))}
       onExpand={() => state.update({ seriesLimit: Math.min(1000, limit + 5) })} onRange={pickRange(onFilter, { first: spec.time, last: spec.time }, view.period, 1, period => state.update({ period: period === "month" || period === "week" ? period : "day" }))} />
+    {topic === "time" ? <AgentTimeSummary where={where} /> : null}
     <UsageDashboardLinks schema={schemas[spec.dataset]} dataset={spec.dataset} query={{ ...EMPTY_QUERY, where, aggregations: [clause] }} currentURL={currentUsageAnalyses.find(item => item.topic === topic)!.url} />
     <p className="usage-dashboard-note">{spec.note}</p>
   </>;
@@ -1705,7 +1707,7 @@ function MCPUsageDashboard() {
       <ChartSelect label="Metric" value={view.metric} options={Object.entries(mcpDashboardMeasures).map(([key, item]) => [key as typeof view.metric, item.label])} onChange={metric => state.update({ metric })} />
       <ChartSelect label="Breakdown" value={view.split} options={Object.entries(mcpDashboardBreakdowns).map(([key, label]) => [key as typeof view.split, label])} onChange={split => state.update({ split })} />
       <ChartSelect label="Display" value={view.view === "compare" ? "compare" : view.display ?? "interval"} options={[["compare", "Compare groups"], ["interval", "Per interval"], ["cumulative", "Cumulative"]]} onChange={display => state.update(display === "compare" ? { view: "compare" } : { view: "trend", display })} />
-      <RangeControl editable bounds={timeBounds(state.where, { first: "called_at", last: "called_at" })} onPresetChange={(range, oldest) => state.update({ period: calendarPresetPeriod(range, oldest) })} onChange={(from, to) => state.onFilter(current => withTimeRange(current, { first: "called_at", last: "called_at" }, from, to))} />
+      <RangeControl editable bounds={timeBounds(state.where, { first: "called_at", last: "called_at" })} onPresetChange={(range, oldest) => state.update({ period: calendarPresetPeriod(range, oldest) })} onChange={(from, to, preset) => state.onFilter(current => withTimeRange(current, { first: "called_at", last: "called_at" }, from, to, preset))} />
       {view.view === "trend" ? <ChartSelect label="Time Bucket" value={view.period} options={[["day", "Day"], ["week", "Week"], ["month", "Month"]]} onChange={period => state.update({ period })} /> : null}
       <RollingControl value={view.rollingPeriods ?? 0} display={cumulative ? "cumulative" : "interval"} period={view.period} disabled={view.view !== "trend"} note={view.view !== "trend" ? "Choose Per interval to smooth time buckets." : undefined} onChange={rollingPeriods => state.update({ rollingPeriods })} />
     </div>
@@ -1816,7 +1818,7 @@ function ToolsUsageDashboard() {
       <ChartSelect label="Metric" value={view.metric} options={Object.entries(toolDashboardMeasures).map(([key, item]) => [key as typeof view.metric, item.label])} onChange={metric => state.update({ metric })} />
       <ChartSelect label="Breakdown" value={view.split} options={Object.entries(toolDashboardBreakdowns).map(([key, item]) => [key as typeof view.split, item.label])} onChange={split => state.update({ split })} />
       <ChartSelect label="Display" value={view.view === "compare" ? "compare" : view.display ?? "interval"} options={[["compare", "Compare groups"], ["interval", "Per interval"], ["cumulative", "Cumulative"]]} onChange={display => state.update(display === "compare" ? { view: "compare" } : { view: "trend", display })} />
-      <RangeControl bounds={bounds} onPresetChange={(range, oldest) => state.update({ period: calendarPresetPeriod(range, oldest) })} onChange={(from, to) => state.onFilter(current => withTimeRange(current, { first: "day", last: "day" }, from, to))} />
+      <RangeControl bounds={bounds} onPresetChange={(range, oldest) => state.update({ period: calendarPresetPeriod(range, oldest) })} onChange={(from, to, preset) => state.onFilter(current => withTimeRange(current, { first: "day", last: "day" }, from, to, preset))} />
       {view.view === "trend" ? <ChartSelect label="Time Bucket" value={view.period} options={[["day", "Day"], ["week", "Week"], ["month", "Month"]]} onChange={period => state.update({ period })} /> : null}
       <RollingControl value={view.rollingPeriods ?? 0} display={cumulative ? "cumulative" : "interval"} period={view.period} disabled={view.view !== "trend"} note={view.view !== "trend" ? "Choose Per interval to smooth time buckets." : undefined} onChange={rollingPeriods => state.update({ rollingPeriods })} />
     </div>
@@ -2000,6 +2002,7 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["searchComposerDialog", <SearchDialog schema={schemas.library} />],
   ["homePage", <HomePage schemas={schemas} />],
   ["cardLibraryPage", <CardLibraryPage schemas={schemas} />],
+  ["syncHistoryTables", <SyncTables />],
   ["settingsPage", <SettingsWorkspace content={document.getElementById("settingsContent")!} />],
   ["queryTableLibrary", <LibraryPage />],
   ["queryTableUsage", <UsagePage />],

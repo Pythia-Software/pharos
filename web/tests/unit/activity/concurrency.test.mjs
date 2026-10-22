@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mergeIntervals, workspaceSpans, concurrencyAverage, concurrencySpans, concurrencyUnit, conversationTimings, formatConcurrencyDuration, clipIntervals, workSessions, concurrencyMetrics, stackSegments, zonedDayBounds } from "../../../src/concurrency-data";
-import { threadedSummaryWindow, openConcurrencyModal, closeConcurrencyModal } from "../../../src/concurrency-store";
+import { loadConcurrencyData, threadedSummaryWindow, openConcurrencyModal, closeConcurrencyModal } from "../../../src/concurrency-store";
 import { normalizeConcurrencySettings, resolveConcurrencyRange } from "../../../src/concurrency-settings";
 import { describeDataSource } from "../../../src/data-taxonomy-model";
 
@@ -9,6 +9,33 @@ const minute = 60_000;
 const thread = (id, workspace_id, turns, model_spans = turns, agent_depth = 0) => ({ id, workspace_id, turns, model_spans, agent_depth });
 const repoThread = (workspace, repository, spans) => ({ ...thread(workspace, workspace, spans), repository });
 const rowsAt = (segments, time) => Object.fromEntries(segments.filter(s => s.start <= time && time < s.end).map(s => [s.workspace, s.bottom]));
+
+test("timing data loads from the library, retries failures, and preserves explicit prototype previews", async t => {
+  const captured = { timezone: "America/Denver", threads: [thread("captured", "workspace", [[0, minute]])] };
+  const requests = [];
+  t.mock.method(globalThis, "fetch", async url => {
+    requests.push(url);
+    return requests.length === 1 ? new Response(null, { status: 503 }) : Response.json(captured);
+  });
+  await assert.rejects(loadConcurrencyData(), /503/);
+  const first = loadConcurrencyData(), second = loadConcurrencyData();
+  assert.equal(first, second);
+  assert.deepEqual(await first, captured);
+  assert.deepEqual(await loadConcurrencyData(), captured);
+  assert.deepEqual(requests, ["/api/usage/parallelism", "/api/usage/parallelism"]);
+  await loadConcurrencyData(true);
+  assert.equal(requests.length, 3);
+  captured.timezone = "Local";
+  const local = await loadConcurrencyData(true);
+  assert.equal(local.timezone, Intl.DateTimeFormat().resolvedOptions().timeZone);
+  assert.ok(Number.isFinite(zonedDayBounds("2026-11-01", local.timezone)[0]));
+  captured.timezone = "UTC";
+  const previousDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+  t.after(() => { if (previousDocument) Object.defineProperty(globalThis, "document", previousDocument); else delete globalThis.document; });
+  globalThis.document = { documentElement: { hasAttribute: name => name === "data-concurrency-prototype" } };
+  assert.equal((await loadConcurrencyData(true)).timezone, "UTC");
+  assert.equal(requests.at(-1), "/api/usage/concurrency-prototype");
+});
 
 test("duration rounding carries minutes into the next hour", () => {
   for (const [seconds, expected] of [[0, "0s"], [12.4, "12s"], [60, "1m"], [3590, "1h 0m"], [3580, "1h 0m"], [3540, "59m"], [7180, "2h 0m"], [7140, "1h 59m"], [7200, "2h 0m"]]) {

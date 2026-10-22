@@ -184,6 +184,51 @@ func TestLibraryStatusListsEverythingHoldingTheLibrary(t *testing.T) {
 	}
 	expect()
 
+	// Coordinated analyses are sync substeps; standalone analyses must
+	// still hold the drive busy when the sync has finished.
+	for _, analysis := range []struct {
+		label      string
+		phases     []string
+		setRunning func(bool)
+	}{
+		{"Classifying your writing", []string{"refreshing authorship", "reading authorship inputs", "classifying authorship", "saving authorship"}, func(running bool) {
+			catalog.authorship.mu.Lock()
+			catalog.authorship.running = running
+			catalog.authorship.mu.Unlock()
+		}},
+		{"Updating findings", []string{"refreshing findings", "reading findings inputs", "evaluating findings", "backtesting findings", "saving findings", "measuring findings results"}, func(running bool) {
+			catalog.findings.mu.Lock()
+			catalog.findings.running = running
+			catalog.findings.mu.Unlock()
+		}},
+	} {
+		analysis.setRunning(true)
+		for _, kind := range []string{manualSyncRunKind, automaticRunKind} {
+			run := server.startRunNamed(kind, []string{"claude"})
+			for _, phase := range analysis.phases {
+				server.updateRun(run.ID, func(run *SyncRun) {
+					run.Phase, run.Work = phase, &activityWork{Phase: phase, Unit: "item", Done: 3, Total: 4}
+				})
+				status = expect("sync")
+				activity = status["activities"].([]any)[0].(map[string]any)
+				wantLabel := "Manual sync in progress"
+				if kind == automaticRunKind {
+					wantLabel = "Automatic sync in progress"
+				}
+				if activity["label"] != wantLabel || activity["work"].(map[string]any)["phase"] != phase || activity["progress"] != 0.75 {
+					t.Fatalf("analysis substep: %#v", activity)
+				}
+			}
+			server.updateRun(run.ID, func(run *SyncRun) { run.State = "complete" })
+		}
+		status = expect("maintenance")
+		if activity := status["activities"].([]any)[0].(map[string]any); activity["label"] != analysis.label {
+			t.Fatalf("standalone analysis: %#v", activity)
+		}
+		analysis.setRunning(false)
+		expect()
+	}
+
 	// A backup reads the library; it does not write to it.
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()

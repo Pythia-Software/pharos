@@ -70,6 +70,7 @@ const dashboards: Record<string, CardDashboard> = {
   "model-cost-share": tokens("percent_cost", "model_family"),
   "repository-cost-share": tokens("percent_cost", "repository_name"),
   "human-example-phrases": { topic: "human", chart: { ...daily, scope: "all", split: "kind", hours: 6, days: 3 } },
+  "human-repository-words-trend": { topic: "human", chart: { ...daily, scope: "typed", split: "repository_name", rollingPeriods: 7, hours: 6, days: 3 } },
   "session-human-output": { topic: "human", chart: { ...daily, scope: "all", split: "providers", hours: 6, days: 3 } },
 };
 

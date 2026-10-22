@@ -520,8 +520,11 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 .carbon-analysis .usage-legend-group[role="group"] { gap: 2px; margin-right: 8px; padding-right: 10px; }
 .carbon-analysis .usage-legend-provider { padding-right: 2px; }
 .usage-page:has(.carbon-impact) .usage-heading p { margin: 6px 0 0; }
-.usage-date-range { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.usage-custom-dates { display: flex; flex-wrap: wrap; gap: 6px 10px; }
+.usage-date-range { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 8px 10px; min-width: 0; }
+.usage-date-range > .usage-chart-picker { flex: 1; }
+:is(.usage-chart-controls, .usage-tools-controls, .concurrency-controls) > .usage-date-range.custom { grid-column: 1 / -1; }
+.usage-date-range.custom > .usage-chart-picker { flex: 1 1 160px; }
+.usage-custom-dates { display: flex; flex: 2 1 320px; flex-wrap: wrap; gap: 6px 10px; min-width: 0; }
 .usage-custom-dates label { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 120px; font-size: var(--fs-xs); color: var(--muted); }
 .usage-custom-dates input { box-sizing: border-box; width: 100%; min-width: 0; height: 30px; padding: 3px 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); font: inherit; }
 .usage-custom-dates input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -544,3 +547,12 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 .query-exploration-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 12px 0; }
 .query-exploration-controls button { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; background: var(--bg); color: inherit; cursor: pointer; }
 .query-exploration-controls button[aria-pressed="true"] { border-color: var(--accent); }
+
+/* Capture & index uses the same query controls as the catalog tables. */
+.sync-query-table { min-width: 0; margin-top: 12px; }
+.sync-query-table .qt-table-wrap { overflow-x: auto !important; }
+#syncDiagnosticTables h3 { margin-top: 22px; }
+.sync-detail-button { padding: 5px 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--ink); font: inherit; font-size: var(--fs-sm); cursor: pointer; }
+.sync-run-dialog { width: min(1100px, calc(100vw - 32px)); }
+.sync-run-dialog h3 { margin: 22px 0 8px; }
+.sync-run-dialog p { font-size: var(--fs-sm); }

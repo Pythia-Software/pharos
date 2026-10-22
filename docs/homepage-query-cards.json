@@ -9274,7 +9274,7 @@
       "idea": "rhythm-01",
       "category": "human",
       "title": "When you work",
-      "description": "Human-written words by local clock hour over the last {days} days; includes all dates combined.",
+      "description": "Human-written words by local clock hour across all time; includes all dates combined.",
       "unit": "words",
       "days": [
         7
@@ -9319,10 +9319,12 @@
               "style": "custom",
               "pattern": "DD HH:mm"
             }
-          }
+          },
+          "groupLimit": 10000
         }
       ],
       "note": "Uses the device’s timezone. All dates are combined into 24 clock-hour buckets. Inspect source messages for the full window.",
+      "period": "all",
       "humanStudy": "hours",
       "action": "Explore Human Words",
       "destination": {
@@ -9441,6 +9443,115 @@
         },
         "dataset": "writing",
         "detailAction": "Explore daily writing trends"
+      }
+    },
+    {
+      "dataset": "writing_messages",
+      "field": "sent_at",
+      "category": "human",
+      "idea": "human-01",
+      "unit": "words",
+      "where": [
+        {
+          "field": "typed_words",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "id": "human-repository-words-trend",
+      "title": "Daily words per repository",
+      "description": "Human-written words per day by repository over the last {days} days, averaged over each trailing 7 days.",
+      "days": [
+        30
+      ],
+      "scope": "repository_name",
+      "action": "Explore Human Words",
+      "measures": [
+        {
+          "id": "human_daily_repository_words",
+          "op": "sum",
+          "field": "typed_words",
+          "groupBy": [
+            "day",
+            "repository_name"
+          ],
+          "groupLimit": 10000,
+          "label": "Daily words per repository",
+          "display": {
+            "kind": "auto",
+            "xLabel": "Day sent",
+            "yLabel": "Words per day · 7d average"
+          }
+        }
+      ],
+      "cover": {
+        "mode": "source",
+        "metricId": "human_daily_repository_words",
+        "kind": "auto",
+        "maxGroups": 7,
+        "showOther": true,
+        "showLegend": true,
+        "showHeadline": false,
+        "height": 300,
+        "timeline": {
+          "rollingPeriods": 7
+        }
+      },
+      "note": "Sum words by local sent day and repository, then average each repository's daily totals over seven trailing calendar days, including idle days as zero. The first visible day includes six preceding days of smoothing history; totals and destination filters retain the selected window. Other combines repositories beyond the seven named. Only messages containing words classified as typed or dictated contribute. Pasted and automated words are excluded. Counts describe writing, not time or quality.",
+      "exploration": {
+        "keys": [
+          "day",
+          "repository_name"
+        ],
+        "summaries": [
+          {
+            "id": "card_typed_words",
+            "op": "sum",
+            "field": "typed_words",
+            "label": "Daily words per repository"
+          },
+          {
+            "id": "card_count",
+            "op": "count",
+            "label": "Messages"
+          }
+        ],
+        "valueField": "card_typed_words",
+        "subjects": "daily groups",
+        "action": "Explore daily comparison",
+        "unit": "words",
+        "coverMetric": {
+          "id": "human_daily_repository_words",
+          "op": "sum",
+          "field": "card_typed_words",
+          "groupBy": [
+            "day",
+            "repository_name"
+          ],
+          "groupLimit": 10000,
+          "label": "Daily words per repository",
+          "display": {
+            "kind": "auto",
+            "xLabel": "Day sent",
+            "yLabel": "Words per day · 7d average"
+          }
+        }
+      },
+      "destination": {
+        "topic": "human",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 7,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "scope": "typed",
+          "split": "repository_name",
+          "hours": 6,
+          "days": 3
+        },
+        "dataset": "writing",
+        "detailAction": "Explore daily repository writing"
       }
     },
     {

@@ -7,16 +7,53 @@ struct MenuBarPreferences {
     static let defaults: [String: Bool] = [
         "enabled": true, "indexed": true, "words": true, "tokens": true, "carbon": true,
         "cost": false, "backup": false, "space": false, "index": false, "eject": false,
+        "open": true, "status": true, "settings": true, "quit": true,
+        "search": false, "analyze": false, "optimize": false, "capture": false, "health": false, "sources": false, "finder": false,
     ]
+    static let defaultOrder = ["open", "status", "indexed", "index", "words", "tokens", "cost", "carbon", "backup", "space", "search", "analyze", "optimize", "capture", "health", "sources", "finder", "settings", "eject", "quit"]
+    static let required = ["open", "status", "settings", "quit"]
+    static func isSeparator(_ id: String) -> Bool {
+        id.range(of: "^separator:[1-9][0-9]*$", options: .regularExpression) != nil
+    }
+    static func group(_ id: String) -> String {
+        switch id {
+        case "status", "indexed", "index": return "status"
+        case "words", "tokens", "cost", "carbon": return "usage"
+        case "backup", "space": return "library"
+        case "search", "analyze", "optimize": return "navigation"
+        case "capture", "health", "sources", "finder": return "manage"
+        case "eject", "quit": return "quit"
+        default: return id
+        }
+    }
     var values: [String: Bool]
+    var order: [String]
+    var saved: [String: Any] { values.reduce(into: ["order": order, "layoutVersion": 2] as [String: Any]) { $0[$1.key] = $1.value } }
 
     init(_ saved: [String: Any] = [:]) {
         values = Self.defaults
+        order = []
         for key in values.keys {
             // JSON booleans only; a numeric or corrupt preference uses its default.
             if let value = saved[key] as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID() {
                 values[key] = value.boolValue
             }
+        }
+        let candidates = saved["order"] as? [Any] ?? Self.defaultOrder.filter { Self.required.contains($0) || values[$0] == true }
+        for case let id as String in candidates where (Self.defaultOrder.contains(id) || Self.isSeparator(id)) && !order.contains(id) { order.append(id) }
+        for id in Self.required where !order.contains(id) { order.append(id) }
+        for id in Self.defaultOrder { values[id] = order.contains(id) }
+        if (saved["layoutVersion"] as? NSNumber)?.doubleValue != 2 && !order.contains(where: Self.isSeparator) {
+            var layout: [String] = []
+            var previous: String?
+            var separator = 0
+            for id in order {
+                let group = Self.group(id)
+                if let previous, previous != group { separator += 1; layout.append("separator:\(separator)") }
+                layout.append(id)
+                previous = group
+            }
+            order = layout
         }
     }
     subscript(_ key: String) -> Bool { values[key] == true }
@@ -108,12 +145,16 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     weak var webView: ArchiveWKWebView?
     weak var window: NSWindow?
     var openWindow: (() -> Void)?
+    var revealInFinder: (URL) -> Void = { NSWorkspace.shared.activateFileViewerSelecting([$0]) }
     private var pendingPath: String?
     private var item: NSStatusItem?
     private let dot = MenuBarDot(frame: NSRect(x: 25, y: 7, width: 8, height: 8))
     private let menu = NSMenu()
     private var rows: [String: NSMenuItem] = [:]
+    private var arrangedOrder: [String] = []
     private var metricText: [String: (label: String, value: String)] = [:]
+    private var rowTitles: [String: String] = [:]
+    private lazy var titleInsets = Self.menuTitleInsets(font: menu.font ?? NSFont.menuFont(ofSize: 13))
     private var preferences: MenuBarPreferences
     private var snapshot: [String: Any] = [:]
     private var usage: [String: Any]?
@@ -140,6 +181,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         super.init()
         menu.delegate = self
         menu.autoenablesItems = false
+        menu.font = NSFont.menuFont(ofSize: 13)
         makeMenu()
         update()
         observation = service.objectWillChange.sink { [weak self] _ in
@@ -156,7 +198,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         if fromServer && Date().timeIntervalSince(preferencesChangedAt) < 2 { return }
         if !fromServer { preferencesChangedAt = Date() }
         preferences = MenuBarPreferences(saved)
-        defaults.set(preferences.values, forKey: cacheKey)
+        defaults.set(preferences.saved, forKey: cacheKey)
+        arrangeMenu()
         update()
         if !fromServer { refresh() }
     }
@@ -167,39 +210,72 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             row.target = self
             row.representedObject = path
             row.isEnabled = path != nil
-            menu.addItem(row)
             rows[key] = row
         }
-        func separator(_ key: String) { let row = NSMenuItem.separator(); menu.addItem(row); rows[key] = row }
         row("open", "Open Pharos", path: "")
-        separator("status-rule")
         row("status", "Pharos · Starting")
         row("detail", "Starting local archive…")
         row("indexed", "Not indexed yet")
         let index = NSMenuItem(title: "Index changes now", action: #selector(indexNow), keyEquivalent: "")
-        index.target = self; menu.addItem(index); rows["index"] = index
+        index.target = self; rows["index"] = index
         row("error", "View error…", path: "/settings/sync")
-        separator("usage-rule")
-        row("usage-heading", "Last 24 hours")
         row("words", "Words typed", path: "/analyze?analyze_topic=human")
         row("tokens", "Tokens used", path: "/analyze?analyze_topic=tokens")
         row("cost", "Estimated API cost", path: "/analyze?analyze_topic=tokens")
         row("carbon", "Estimated CO₂e", path: "/analyze?analyze_topic=carbon")
         row("usage-note", "Loading usage…")
-        separator("library-rule")
-        row("library-heading", "Library")
         row("backup", "Last backup", path: "/settings")
         row("space", "Library size", path: "/settings")
         row("free", "Calculating free space…")
-        separator("settings-rule")
+        row("search", "Search conversations…", path: "/library")
+        row("analyze", "Analyze usage…", path: "/analyze")
+        row("optimize", "Optimize…", path: "/findings")
+        row("capture", "Capture & index…", path: "/settings/sync")
+        row("health", "Library health & backups…", path: "/settings")
+        row("sources", "Manage sources…", path: "/settings/sources")
+        let finder = NSMenuItem(title: "Show library in Finder", action: #selector(showLibraryInFinder), keyEquivalent: "")
+        finder.target = self; rows["finder"] = finder
         row("settings", "Settings…", path: "/settings/preferences")
-        separator("quit-rule")
         let eject = NSMenuItem(title: "Eject library…", action: #selector(ejectLibrary), keyEquivalent: "")
-        eject.target = self; menu.addItem(eject); rows["eject"] = eject
+        eject.target = self; rows["eject"] = eject
         // Cmd-Q remains in the app's standard menu. Repeating it here makes
         // AppKit reserve a shortcut column beside every status-menu row.
         let quit = NSMenuItem(title: "Quit Pharos", action: #selector(quitApp), keyEquivalent: "")
-        quit.target = self; menu.addItem(quit)
+        quit.target = self; rows["quit"] = quit
+        rowTitles = rows.mapValues(\.title)
+        arrangeMenu()
+    }
+
+    private func arrangeMenu() {
+        let drive = (snapshot["library"] as? [String: Any])?["drive"] as? [String: Any] ?? [:]
+        var order: [String] = []
+        for id in preferences.order {
+            if id == "eject" && drive["ejectable"] as? Bool != true { continue }
+            if MenuBarPreferences.isSeparator(id) && (order.isEmpty || MenuBarPreferences.isSeparator(order.last!)) { continue }
+            order.append(id)
+        }
+        if let last = order.last, MenuBarPreferences.isSeparator(last) { order.removeLast() }
+        guard arrangedOrder != order else { return }
+        arrangedOrder = order
+        menu.removeAllItems()
+        var previousGroup: String?
+        let lastUsage = order.last { MenuBarPreferences.group($0) == "usage" }
+        for id in order {
+            if MenuBarPreferences.isSeparator(id) { menu.addItem(.separator()); continue }
+            let group = MenuBarPreferences.group(id)
+            if previousGroup != group && ["usage", "library"].contains(group) {
+                let heading = NSMenuItem(title: group == "usage" ? "Last 24 hours" : "Library", action: nil, keyEquivalent: "")
+                heading.isEnabled = false
+                menu.addItem(heading)
+            }
+            if let row = rows[id] { menu.addItem(row) }
+            if id == "status" {
+                for key in ["detail", "error"] { if let row = rows[key] { menu.addItem(row) } }
+            }
+            if id == "space", let free = rows["free"] { menu.addItem(free) }
+            if id == lastUsage, let note = rows["usage-note"] { menu.addItem(note) }
+            previousGroup = group
+        }
     }
 
     func refresh() {
@@ -273,6 +349,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     private func update() {
         guard let service else { return }
+        arrangeMenu()
         if preferences["enabled"] && item == nil {
             let item = NSStatusBar.system.statusItem(withLength: 38)
             item.menu = menu
@@ -320,15 +397,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             detail = ""
             dot.color = .systemGreen
         }
-        rows["status"]?.title = title
-        rows["detail"]?.title = detail.count > 75 ? String(detail.prefix(72)) + "…" : detail
+        setRowTitle("status", title)
+        setRowTitle("detail", detail)
         rows["detail"]?.isHidden = detail.isEmpty
-        rows["detail"]?.toolTip = detail
+        rows["detail"]?.toolTip = problem ?? detail
         item?.button?.toolTip = detail.isEmpty ? title : "\(title) — \(detail)"
         item?.button?.setAccessibilityLabel(detail.isEmpty ? title : "\(title). \(detail)")
         rows["error"]?.isHidden = problem == nil
         rows["error"]?.representedObject = snapshot["error_path"] as? String ?? "/settings/sync"
-        rows["indexed"]?.title = Self.date(snapshot["indexed_at"]).map { "Indexed \(Self.ago($0))" } ?? "Not indexed yet"
+        setRowTitle("indexed", Self.date(snapshot["indexed_at"]).map { "Indexed \(Self.ago($0))" } ?? "Not indexed yet")
         for key in ["indexed", "words", "tokens", "carbon", "cost", "backup", "space", "index", "eject"] {
             rows[key]?.isHidden = !preferences[key]
         }
@@ -340,40 +417,90 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let storage = snapshot["storage"] as? [String: Any] ?? [:]
         let sizes = storage["sizes"] as? [String: Any] ?? [:]
         metric("space", "Library size", (sizes["library_bytes"] as? NSNumber).map { Self.bytes($0.int64Value) } ?? "Calculating…")
-        layoutMetrics()
-        rows["free"]?.title = (storage["free_bytes"] as? NSNumber).map { "\(Self.bytes($0.int64Value)) free on \(drive["name"] as? String ?? "library drive")" } ?? "Checking free space…"
+        setRowTitle("free", (storage["free_bytes"] as? NSNumber).map { "\(Self.bytes($0.int64Value)) free on \(drive["name"] as? String ?? "library drive")" } ?? "Checking free space…")
         rows["free"]?.isHidden = !preferences["space"]
         let hasUsage = ["words", "tokens", "carbon", "cost"].contains { preferences[$0] }
-        rows["usage-heading"]?.isHidden = !hasUsage; rows["usage-rule"]?.isHidden = !hasUsage
-        rows["usage-note"]?.title = usageError == nil ? "Loading usage…" : "Usage unavailable"
+        setRowTitle("usage-note", usageError == nil ? "Loading usage…" : "Usage unavailable")
         rows["usage-note"]?.isHidden = !hasUsage || usage != nil
         rows["usage-note"]?.toolTip = usageError
-        let hasLibrary = preferences["backup"] || preferences["space"]
-        rows["library-heading"]?.isHidden = !hasLibrary; rows["library-rule"]?.isHidden = !hasLibrary
         let ejectable = drive["ejectable"] as? Bool == true
         rows["eject"]?.isHidden = !preferences["eject"] || !ejectable
-        rows["eject"]?.title = "Eject \(drive["name"] as? String ?? "library")…"
+        setRowTitle("eject", "Eject \(drive["name"] as? String ?? "library")…")
         rows["eject"]?.isEnabled = ejectable && !service.ejecting && service.url != nil
+        rows["finder"]?.isEnabled = libraryDirectory != nil
         rows["index"]?.isEnabled = service.url != nil && !service.ejecting && !indexing && !activities.contains { ["sync", "index", "capture", "capture-other", "maintenance"].contains($0["kind"] as? String ?? "") }
         for key in ["words", "tokens", "carbon", "cost", "backup", "space"] { rows[key]?.isEnabled = service.url != nil }
+        layoutMenuText()
         menu.update()
+    }
+
+    private func setRowTitle(_ key: String, _ title: String) {
+        // attributedTitle also changes title; retain the unwrapped source for
+        // later reflow and for status updates while the menu is open.
+        rowTitles[key] = title
+        rows[key]?.title = title
     }
 
     private func metric(_ key: String, _ label: String, _ value: String?) {
         metricText[key] = (label, value ?? (usageError == nil ? "…" : "—"))
     }
 
-    private func layoutMetrics() {
-        let font = NSFont.menuFont(ofSize: 13)
+    // Measure AppKit's own title margins instead of assuming a particular OS
+    // menu gutter. The metrics retain native highlighting, actions and VoiceOver.
+    static func menuTitleInsets(font: NSFont) -> CGFloat {
+        let probe = NSMenu()
+        probe.font = font
+        let title = NSAttributedString(string: String(repeating: "M", count: 24), attributes: [.font: font])
+        let row = NSMenuItem()
+        row.attributedTitle = title
+        probe.addItem(row)
+        return probe.size.width - ceil(title.size().width)
+    }
+
+    static func wrappedMenuTitle(_ text: String, width: CGFloat, font: NSFont) -> NSAttributedString {
         let attributes: [NSAttributedString.Key: Any] = [.font: font]
-        let visible = metricText.filter { preferences[$0.key] }.map(\.value)
+        let storage = NSTextStorage(string: text, attributes: attributes)
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: max(1, width), height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        container.lineBreakMode = .byWordWrapping
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
+        let source = text as NSString
+        var lines: [String] = []
+        layout.enumerateLineFragments(forGlyphRange: layout.glyphRange(for: container)) { _, _, _, glyphs, _ in
+            let characters = layout.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+            lines.append(source.substring(with: characters).trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        // Explicit line breaks let a standard NSMenuItem grow vertically.
+        return NSAttributedString(string: lines.joined(separator: "\n"), attributes: attributes)
+    }
+
+    private func layoutMenuText() {
+        let font = menu.font ?? NSFont.menuFont(ofSize: 13)
+        let attributes: [NSAttributedString.Key: Any] = [.font: font]
+        let visible = metricText.filter { rows[$0.key]?.menu === menu && rows[$0.key]?.isHidden == false }.map(\.value)
         let labelWidth = visible.map { ($0.label as NSString).size(withAttributes: attributes).width }.max() ?? 0
         let valueWidth = visible.map { ($0.value as NSString).size(withAttributes: attributes).width }.max() ?? 0
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.tabStops = [NSTextTab(textAlignment: .right, location: ceil(labelWidth + 22 + valueWidth))]
-        for (key, text) in metricText {
-            rows[key]?.attributedTitle = NSAttributedString(string: "\(text.label)\t\(text.value)", attributes: [.paragraphStyle: paragraph, .font: font])
+        let metricsWidth = ceil(labelWidth + 22 + valueWidth)
+        let screenWidth = (item?.button?.window?.screen ?? NSScreen.main)?.visibleFrame.width ?? 1024
+        let availableWidth = max(1, screenWidth - 24)
+        menu.minimumWidth = min(availableWidth, max(300, metricsWidth + titleInsets))
+        let textWidth = max(1, menu.minimumWidth - titleInsets)
+        for (key, row) in rows where metricText[key] == nil {
+            row.attributedTitle = Self.wrappedMenuTitle(rowTitles[key] ?? row.title, width: textWidth, font: font)
         }
+        func alignMetrics(to width: CGFloat) {
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.tabStops = [NSTextTab(textAlignment: .right, location: width)]
+            for (key, text) in metricText {
+                rows[key]?.attributedTitle = NSAttributedString(string: "\(text.label)\t\(text.value)", attributes: [.paragraphStyle: paragraph, .font: font])
+            }
+        }
+        // Clear the last layout's width first, so a menu can shrink again.
+        alignMetrics(to: metricsWidth)
+        menu.update()
+        alignMetrics(to: max(metricsWidth, menu.size.width - titleInsets))
     }
 
     func menuWillOpen(_ menu: NSMenu) { refresh() }
@@ -415,6 +542,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             if case .failure(let error) = result { self.actionError = error.localizedDescription }
             self.refresh()
         }
+    }
+
+    private var libraryDirectory: URL? {
+        guard let service, service.url != nil, !service.ejecting, service.disconnected == nil,
+              let library = snapshot["library"] as? [String: Any],
+              let path = library["library_dir"] as? String, path.hasPrefix("/") else { return nil }
+        return URL(fileURLWithPath: path, isDirectory: true)
+    }
+
+    @objc private func showLibraryInFinder() {
+        guard let directory = libraryDirectory else { return }
+        revealInFinder(directory)
     }
 
     @objc private func ejectLibrary() {

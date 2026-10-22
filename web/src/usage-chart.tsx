@@ -10,6 +10,7 @@ import { Icon } from "./icons";
 import { loadUsageHistory } from "./usage-history";
 
 export type ChartRange = "1d" | "7d" | "30d" | "90d" | "6m" | "1y";
+type RangeChange = (from?: Date, to?: Date, preset?: ChartRange | "all") => void;
 export type FilterChange = (change: (where: WhereTerm[]) => WhereTerm[]) => void;
 
 // Stacked column charts by day, week (Monday), or month over the table's time
@@ -54,10 +55,10 @@ function rangeStart(range: ChartRange): Date {
   return start;
 }
 
-export function selectChartRange(range: ChartRange | "all" | "custom", onChange: (from?: Date, to?: Date) => void, onPresetChange?: (range: ChartRange | "all") => void) {
-  if (range === "custom") return;
+export function selectChartRange(range: ChartRange | "all" | "custom" | "custom-times", onChange: RangeChange, onPresetChange?: (range: ChartRange | "all") => void) {
+  if (range === "custom" || range === "custom-times") return;
   onPresetChange?.(range);
-  onChange(range === "all" ? undefined : rangeStart(range));
+  onChange(range === "all" ? undefined : rangeStart(range), undefined, range);
 }
 
 // The charts and the table share one time filter: a row matches when its
@@ -67,7 +68,8 @@ export type TimeFields = { first: string; last: string };
 export const usageTime: TimeFields = { first: "first_usage_at", last: "last_usage_at" };
 export const writingTime: TimeFields = { first: "first_message_at", last: "last_message_at" };
 // to is exclusive.
-export type TimeBounds = { from?: Date; to?: Date };
+export type TimeBounds = { from?: Date; to?: Date; preset?: ChartRange };
+const rangeDays = (range: ChartRange) => range === "6m" ? 180 : range === "1y" ? 365 : parseInt(range);
 
 // parseStamp reads a datetime filter value as the service does: RFC 3339, or a
 // zone-less date or time as UTC.
@@ -104,11 +106,20 @@ export function timeBounds(where: WhereTerm[], fields: TimeFields, now = Date.no
       if (!bounds.to || end < bounds.to) bounds.to = end;
     }
   }
+  // Keep the saved relative intent alongside its resolved plotting bounds.
+  // Only exact preset pairs qualify; extra time predicates remain custom.
+  const terms = where.filter(term => isTimeTerm(term, fields));
+  if (terms.length === 2 && terms.some(term => term.op === "<" && term.value === "+0s")) {
+    const preset = chartRanges.find(([range]) => terms.some(term => term.op === ">=" && term.value === `-${rangeDays(range)}d`))?.[0];
+    if (preset) bounds.preset = preset;
+  }
   return bounds;
 }
 
-export function withTimeRange(where: WhereTerm[], fields: TimeFields, from?: Date, to?: Date): WhereTerm[] {
+export function withTimeRange(where: WhereTerm[], fields: TimeFields, from?: Date, to?: Date, preset?: ChartRange | "all"): WhereTerm[] {
   const kept = where.filter(term => !isTimeTerm(term, fields));
+  if (preset === "all") return kept;
+  if (preset) return [...kept, { field: fields.last, op: ">=", value: `-${rangeDays(preset)}d` }, { field: fields.first, op: "<", value: "+0s" }];
   if (from) kept.push({ field: fields.last, op: ">=", value: localStamp(from) });
   if (to) kept.push({ field: fields.first, op: "<", value: localStamp(to) });
   return kept;
@@ -167,8 +178,17 @@ export function rangeLabel(bounds: TimeBounds): string {
   return bounds.from ? `Since ${day(bounds.from)}` : last ? `Through ${day(last)}` : "";
 }
 
+// Calendar dates include the whole last day, even when switching from times.
+export function customDateBounds(bounds: TimeBounds): TimeBounds {
+  const from = bounds.from ? new Date(bounds.from) : undefined;
+  const to = bounds.to ? new Date(bounds.to.getTime() - 1) : undefined;
+  from?.setHours(0, 0, 0, 0);
+  if (to) { to.setHours(0, 0, 0, 0); to.setDate(to.getDate() + 1); }
+  return { from, to };
+}
+
 // A date selection from the chart or table remains visible alongside presets.
-export function RangeControl({ bounds, onChange, onPresetChange, editable = true, includeTime = false }: { bounds: TimeBounds; onChange: (from?: Date, to?: Date) => void; onPresetChange?: (range: ChartRange | "all", oldestConversation?: Date) => void; editable?: boolean; includeTime?: boolean }) {
+export function RangeControl({ bounds, onChange, onPresetChange, editable = true }: { bounds: TimeBounds; onChange: RangeChange; onPresetChange?: (range: ChartRange | "all", oldestConversation?: Date) => void; editable?: boolean }) {
   const needsHistory = Boolean(onPresetChange);
   const [history, setHistory] = useState<{ ready: boolean; oldest?: Date }>({ ready: !needsHistory });
   useEffect(() => {
@@ -184,14 +204,25 @@ export function RangeControl({ bounds, onChange, onPresetChange, editable = true
     window.addEventListener("pharos:usage-refresh", load);
     return () => { mounted = false; window.removeEventListener("pharos:usage-refresh", load); };
   }, [needsHistory]);
-  const active = !bounds.from && !bounds.to ? "all" : bounds.from && !bounds.to ? chartRanges.find(([range]) => rangeStart(range).getTime() === bounds.from!.getTime())?.[0] : undefined;
-  const [custom, setCustom] = useState(false);
-  useEffect(() => { if (!bounds.from && !bounds.to) setCustom(false); }, [bounds.from?.getTime(), bounds.to?.getTime()]);
-  const picker = <ChartSelect label="Range" value={custom || !active ? "custom" : active}
-    options={[...chartRanges.map(([range, text]): [string, string] => [range, `Last ${text}`]), ...(editable ? [["custom", "Custom dates…"] as [string, string]] : active ? [] : [["custom", rangeLabel(bounds), "Dates selected in the chart or table"] as [string, string, string]]), ["all", "All time", history.ready ? undefined : "Loading conversation history…"]]}
+  const active = bounds.preset ?? (!bounds.from && !bounds.to ? "all" : bounds.from && !bounds.to ? chartRanges.find(([range]) => rangeStart(range).getTime() === bounds.from!.getTime())?.[0] : undefined);
+  const [custom, setCustom] = useState<"custom" | "custom-times" | null>(null);
+  useEffect(() => { if (bounds.preset || !bounds.from && !bounds.to) setCustom(null); }, [bounds.preset, bounds.from?.getTime(), bounds.to?.getTime()]);
+  const timed = [bounds.from, bounds.to].some(date => date && (date.getHours() || date.getMinutes() || date.getSeconds() || date.getMilliseconds()));
+  const mode = custom ?? (active ? null : timed ? "custom-times" : "custom");
+  const picker = <ChartSelect label="Range" value={mode ?? active!}
+    options={[...chartRanges.map(([range, text]): [string, string] => [range, `Last ${text}`]), ...(editable ? [["custom", "Custom dates…"], ["custom-times", "Custom times…"]] as Array<[string, string]> : active ? [] : [["custom", rangeLabel(bounds), "Dates selected in the chart or table"] as [string, string, string]]), ["all", "All time", history.ready ? undefined : "Loading conversation history…"]]}
     title="Dates included in this usage view. Choose All time to clear the date filter."
-    onChange={range => { setCustom(range === "custom"); selectChartRange(range as ChartRange | "all" | "custom", onChange, preset => onPresetChange?.(preset, history.oldest)); }} />;
-  return editable ? <div className={`usage-date-range${custom || !active ? " custom" : ""}`}>{picker}{custom || !active ? <CustomDates key={includeTime ? "time" : "date"} bounds={bounds} onChange={onChange} includeTime={includeTime} /> : null}</div> : picker;
+    onChange={range => {
+      if (range === "custom" || range === "custom-times") {
+        setCustom(range);
+        const fixed = range === "custom" ? customDateBounds(bounds) : bounds;
+        onChange(fixed.from, fixed.to);
+      } else {
+        setCustom(null);
+        selectChartRange(range as ChartRange | "all", onChange, preset => onPresetChange?.(preset, history.oldest));
+      }
+    }} />;
+  return editable ? <div className={`usage-date-range${mode ? " custom" : ""}`}>{picker}{mode ? <CustomDates key={mode} bounds={bounds} onChange={onChange} includeTime={mode === "custom-times"} /> : null}</div> : picker;
 }
 
 function CustomDates({ bounds, onChange, includeTime }: { bounds: TimeBounds; onChange: (from?: Date, to?: Date) => void; includeTime: boolean }) {

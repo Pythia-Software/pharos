@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { periodStart, periodKey, nextPeriod, periodBuckets, earliestKey, periodIndex, shiftPeriod, validPeriodCount } from '../../../src/chart-period';
-import { calendarPresetPeriod, chartPeriodCount, presetPeriod, selectChartRange } from '../../../src/usage-chart';
+import { calendarPresetPeriod, chartPeriodCount, presetPeriod, selectChartRange, customDateBounds, timeBounds, usageTime, withTimeRange } from '../../../src/usage-chart';
 import { loadUsageHistory, sharedUsageHistory } from '../../../src/usage-history';
 
 test('range presets reset the time bucket while custom dates preserve it', () => {
@@ -29,6 +29,40 @@ test('range presets reset the time bucket while custom dates preserve it', () =>
   selectChartRange('all', onChange, onPreset);
   assert.equal(view.period, 'week');
   assert.deepEqual(bounds, { from: undefined, to: undefined });
+});
+
+test('range choices persist relative filters and restore the preset after time advances', () => {
+  const provider = { field: 'provider', op: '=', value: 'codex' };
+  const now = new Date(2026, 9, 22, 12, 34).getTime();
+  let where = withTimeRange([provider], usageTime, new Date(2025, 1, 1), new Date(2025, 1, 3));
+  for (const [range, days] of [['1d', 1], ['7d', 7], ['30d', 30], ['90d', 90], ['6m', 180], ['1y', 365]]) {
+    selectChartRange(range, (from, to, preset) => { where = withTimeRange(where, usageTime, from, to, preset); });
+    for (const clock of [now, now + 86400000]) {
+      const bounds = timeBounds(where, usageTime, clock);
+      assert.equal(bounds.preset, range);
+      assert.equal(bounds.from.getTime(), clock - days * 86400000);
+      assert.equal(bounds.to.getTime(), clock);
+    }
+    assert.deepEqual(where[0], provider);
+    assert.equal(timeBounds([...where, { field: 'first_usage_at', op: '<', value: '2026-01-01' }], usageTime, now).preset, undefined);
+  }
+  for (const mode of ['custom', 'custom-times']) selectChartRange(mode, () => assert.fail('custom modes preserve the current bucket and bounds'));
+  selectChartRange('all', (from, to, preset) => { where = withTimeRange(where, usageTime, from, to, preset); });
+  assert.deepEqual(where, [provider]);
+});
+
+test('date-only custom ranges cover full local dates and retain an exclusive upper boundary', () => {
+  for (const [from, to, expectedFrom, expectedTo] of [
+    [new Date(2026, 9, 1, 12, 34), new Date(2026, 9, 7, 15, 10), new Date(2026, 9, 1), new Date(2026, 9, 8)],
+    [new Date(2026, 9, 1), new Date(2026, 9, 8), new Date(2026, 9, 1), new Date(2026, 9, 8)],
+    [undefined, new Date(2026, 2, 8, 15), undefined, new Date(2026, 2, 9)],
+    [new Date(2026, 10, 1, 15), undefined, new Date(2026, 10, 1), undefined],
+    [undefined, undefined, undefined, undefined],
+  ]) {
+    const original = { from, to }, before = structuredClone(original);
+    assert.deepEqual(customDateBounds(original), { from: expectedFrom, to: expectedTo });
+    assert.deepEqual(original, before);
+  }
 });
 
 test('bounded range presets use readable intervals with daily detail for 90 days', () => {
