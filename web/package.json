@@ -31,16 +31,16 @@
     "watch:local": "node ../tools/watch-query-table.mjs"
   },
   "dependencies": {
-    "@pythia-software/query-table-core": "0.9.3",
-    "@pythia-software/query-table-react": "0.9.3",
-    "@pythia-software/query-table-ui": "0.9.3",
+    "@pythia-software/query-table-core": "0.9.5",
+    "@pythia-software/query-table-react": "0.9.5",
+    "@pythia-software/query-table-ui": "0.9.5",
     "@types/markdown-it": "14.1.2",
     "markdown-it": "15.0.2",
     "react": "18.3.1",
     "react-dom": "18.3.1"
   },
   "devDependencies": {
-    "@pythia-software/query-table-codegen": "0.9.3",
+    "@pythia-software/query-table-codegen": "0.9.5",
     "@types/react": "18.3.28",
     "@types/react-dom": "18.3.7",
     "esbuild": "0.27.2",

@@ -1,16 +1,29 @@
-# Query Table 0.9.3 in Pharos
+# Query Table 0.9.5 in Pharos
 
-Pharos pins core, React, UI and codegen to the published npm **0.9.3** packages,
-and the Go adapter to the published **v0.9.3** module, with no replacement or
+Pharos pins core, React, UI and codegen to the published npm **0.9.5** packages,
+and the Go adapter to the published **v0.9.5** module, with no replacement or
 local copy. The npm lockfile records registry URLs and integrities; `go.sum`
 records the released Go module. Clean builds use these pinned sources without
 another Query Table checkout.
 
-The [upstream migration guide](https://github.com/Pythia-Software/query-table/blob/v0.9.3/docs/host-integration-next-release.md)
-and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.9.3/CHANGELOG.md)
+The [upstream migration guide](https://github.com/Pythia-Software/query-table/blob/v0.9.5/docs/host-integration-next-release.md)
+and [release notes](https://github.com/Pythia-Software/query-table/blob/v0.9.5/CHANGELOG.md)
 define the release contract. Optional worktree linking is described in
 [local development](query-table-local-development.md). The earlier
 [next-release handoff](query-table-next-release-handoff.md) is a historical record.
+
+## 0.9.5 changes
+
+Distinct filter values now open in a content-sized combobox menu independently
+of the compact filter input. Long names wrap and long lists scroll within the
+viewport, including in mobile filter dialogs. Freeform entry, pointer/keyboard
+selection and input focus are preserved, and stale suggestions are discarded.
+This resolves the [filter value menu handoff](handoffs/query-table-filter-value-menu.md).
+
+The upgrade also includes 0.9.4's guarded direct SQLite V3 reductions and modern
+computed-preview transports. `Transport.fetchRows` is now optional; Pharos's
+Share selection action checks for it before offering or fetching all results.
+Pharos's existing host reducers and transaction policy remain in place.
 
 ## 0.9.3 changes
 

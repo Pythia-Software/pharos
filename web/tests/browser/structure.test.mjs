@@ -110,6 +110,43 @@ const WIDTHS = [{ width: 1440, height: 900 }, { width: 1280, height: 720 }, { wi
 // any other problem still fails it.
 const KNOWN = [];
 
+for (const width of [1440, 390, 320]) test(`Search filter suggestions stay readable and keep input focus @ ${width}`, { skip }, async t => {
+  const values = ["exploration", "exploration-service", "exploration-service-v2", "gbw-utilities", "general-purpose-repository",
+    "go-query-table-integration-with-a-long-unbroken-suffix-abcdefghijklmnopqrstuvwxyz"];
+  const query = { ...EMPTY_QUERY, where: [{ field: "repository_name", op: "=", value: "" }] };
+  const app = await open(t, {
+    url: `/library?${new URLSearchParams({ q_library: encodeQuery(query) })}`,
+    viewport: { width, height: 844 }, ready: "#queryTableLibrary .qt-qb",
+    api: { "GET /api/query/library/distinct": ({ query }) => ({ values: values.filter(value => value.includes(query.get("q") ?? "")), hasMore: false }) },
+  });
+  const { page } = app;
+  const edit = page.getByRole("button", { name: /^Edit filter: Repository/ });
+  if (width < 641) await edit.click();
+  const input = page.getByRole("combobox", { name: "Value for Repository", exact: true });
+  await input.focus();
+  const suggestions = page.getByRole("listbox", { name: "Suggestions for Repository", exact: true });
+  const longest = suggestions.getByRole("option", { name: values.at(-1), exact: true });
+  await longest.waitFor();
+  await app.settled();
+  assert.ok((await suggestions.boundingBox()).width > (await input.boundingBox()).width, "suggestions are squeezed to the input width");
+  assert.deepEqual(await layoutProblems(page), []);
+  for (const option of await suggestions.getByRole("option").all()) {
+    assert.ok(await option.evaluate(element => {
+      const box = element.getBoundingClientRect();
+      return box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight &&
+        element.scrollWidth <= element.clientWidth && element.scrollHeight <= element.clientHeight;
+    }), `suggestion is clipped: ${await option.textContent()}`);
+  }
+  await app.shot("menu");
+  await input.press("Escape");
+  await suggestions.waitFor({ state: "hidden" });
+  assert.ok(await input.evaluate(element => document.activeElement === element));
+  await input.press("ArrowDown");
+  await suggestions.getByRole("option", { name: values[2], exact: true }).click();
+  assert.equal(await input.inputValue(), values[2]);
+  assert.ok(await input.evaluate(element => document.activeElement === element));
+});
+
 for (const width of [1649, 2133]) test(`pages without section menus use the full window at ${width}px`, { skip }, async t => {
   const { page } = await open(t, { url: '/analyze', viewport: { width, height: 1075 }, ready: '.usage-dashboard .usage-chart' });
   const primary = page.getByRole('navigation', { name: 'Primary navigation', exact: true });

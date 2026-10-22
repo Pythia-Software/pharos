@@ -643,9 +643,9 @@ function ShareSelection({ ids, api, transport }: { ids: unknown[]; api: QueryTab
   const [error, setError] = useState("");
   const tooMany = ids.length > shareWorkLimit;
   const total = api.total ?? 0;
-  const canSelectAll = Boolean(transport) && total > ids.length && total <= shareWorkLimit;
+  const canSelectAll = Boolean(transport?.fetchRows) && total > ids.length && total <= shareWorkLimit;
   async function selectAll() {
-    if (!transport) return;
+    if (!transport?.fetchRows) return;
     setBusy(true);
     try {
       const result = await transport.fetchRows({ ...toServerQuery(api.query, schemas.library), limit: shareWorkLimit, offset: 0 });

@@ -1,7 +1,7 @@
 # Query Table release builds and local development
 
-Pharos uses published Query Table **0.9.3** npm packages (core, React, UI and
-codegen) and the published **v0.9.3** Go module, unpatched. Production builds
+Pharos uses published Query Table **0.9.5** npm packages (core, React, UI and
+codegen) and the published **v0.9.5** Go module, unpatched. Production builds
 do not depend on a Query Table worktree or source archives. See
 [the integration guide](query-table-integration.md) for feature coverage,
 contracts and execution limits.
