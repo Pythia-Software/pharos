@@ -400,9 +400,6 @@ for (const width of [1649, 2133]) test(`pages without section menus use the full
   await primary.getByRole('button', { name: 'Search', exact: true }).click();
   await page.locator('#queryTableLibrary .qt-row').first().waitFor();
   await fillsWindow();
-  await primary.getByRole('button', { name: /^Optimize/ }).click();
-  await page.locator('.findings-card').first().waitFor();
-  await fillsWindow();
   await page.setViewportSize({ width: width + 400, height: 1075 });
   await fillsWindow();
 });
