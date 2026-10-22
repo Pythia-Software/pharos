@@ -20,7 +20,7 @@
 <p align="center">
   <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-2b5241">
   <img alt="Go 1.26" src="https://img.shields.io/badge/Go-1.26-2b5241">
-  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-d4a857"></a>
+  <a href="LICENSE"><img alt="PolyForm Shield License 1.0.0" src="https://img.shields.io/badge/license-PolyForm_Shield_1.0.0-d4a857"></a>
 </p>
 
 ---
@@ -251,7 +251,9 @@ between Macs.
 
 Pharos is built around one person's workflow: the agents I use, the questions
 I ask about my own work, and the way I move between Macs. Your setup is
-different, so **please fork it** and bend it to fit. Some starting points:
+different, so **please fork it for personal or internal company use** and bend
+it to fit, under the [license](#license). Contributions are welcome. Some starting
+points:
 
 - **Add a source.** Adapters live in `internal/archive/adapters.go`,
   `adapter_conductor.go`, and `adapter_exports.go`, and the places Pharos looks
@@ -282,4 +284,18 @@ fork. You can also find me at [grady.dev](https://grady.dev).
 
 ## License
 
-[MIT](LICENSE) © 2026 Grady Berry Ward
+[PolyForm Shield License 1.0.0](LICENSE) © 2026 Grady Berry Ward
+
+Pharos is source-available. Personal use and internal company use are permitted,
+including using and modifying Pharos to analyze and optimize AI usage and
+spending at work. Contributions are welcome.
+
+You may not use Pharos or modified versions of it to provide a competing product
+or service, including a hosted Pharos service for customers or a rebranded
+competing fork, whether paid or free. This is a summary; the full [license](LICENSE)
+governs.
+
+Earlier versions distributed under the MIT license retain their MIT license
+grants; this change does not revoke those permissions. Third-party components
+retain their own licenses and notices, including the separate
+[Query Table MIT license](internal/querytable/LICENSE).
