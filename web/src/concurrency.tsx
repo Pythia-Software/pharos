@@ -206,7 +206,6 @@ export function ConcurrencyPanel({ scope, activityWindow, routeParameter, onSele
   useEffect(() => {
     let active = true;
     setError(""); setData(null);
-    if (!concurrencyPrototypeEnabled) return;
     loadConcurrencyData().then(next => { if (active) setData(next); }).catch(reason => { if (active) setError(String(reason.message ?? reason)); });
     return () => { active = false; };
   }, []);
@@ -256,7 +255,6 @@ export function ConcurrencyPanel({ scope, activityWindow, routeParameter, onSele
   }, [zoom, rangeBounds, rangeSessions, modelRange, userRange]);
   const activeAt = (at: number) => Array.from(mode === "user" ? userRange : modelRange).filter(([, spans]) => spans.some(([a, b]) => a <= at && at < b)).length;
   const chooseUnit = (unit: string) => update(counting === "agent" ? { agent: selected === unit ? "" : unit, showConversations: true } : { workspace: selected === unit ? "" : unit, showConversations: true });
-  if (!concurrencyPrototypeEnabled) return <div className="machine-empty"><h3>Machine Parallelism</h3><p>No captured timing snapshot is available for this library.</p></div>;
   if (error) return <p role="alert">{error}</p>;
   if (!data) return <p className="muted" aria-busy="true">Reading captured timing…</p>;
   if (scope?.days && activityWindow && (Date.parse(activityWindow.start) >= zonedDayBounds(data.period_end, data.timezone)[1] || Date.parse(activityWindow.end) <= zonedDayBounds(data.period_start, data.timezone)[0])) return <p className="machine-empty">No captured timing overlaps this period. Snapshot coverage: {data.period_start} – {data.period_end}. Choose another period.</p>;
@@ -267,27 +265,28 @@ export function ConcurrencyPanel({ scope, activityWindow, routeParameter, onSele
     <div className="concurrency-controls">
       <div className="concurrency-control"><div className="concurrency-control-label"><label htmlFor="parallelism-view">View</label><button type="button" className="concurrency-info-button" aria-label="About parallelism views" aria-haspopup="dialog" aria-controls="parallelism-calculation" title="How parallelism is calculated" onClick={() => setShowInfo(true)}><Icon name="info" /></button></div><select id="parallelism-view" aria-label="View" value={mode} onChange={event => update({ mode: event.target.value as ConcurrencyMode })}><option value="user">Threaded</option><option value="model">Model activity</option></select></div>
       <label>Count by<select aria-label="Count by" value={counting} onChange={event => update({ counting: event.target.value as ConcurrencyCounting, workspace: "", agent: "" })}><option value="workspace">Workspaces</option><option value="agent">Sessions</option></select></label>
-      {!scope ? <label>Range<select aria-label="Range" value={settings.range === "day" ? range.startDay : settings.range} title={`Presets end at the latest captured day, ${data.period_end}`} onChange={event => chooseRange(event.target.value)}>
+      {!scope ? <div className={`usage-date-range${settings.range === "custom" ? " custom" : ""}`}><label className="concurrency-control usage-chart-picker">Range<select aria-label="Range" value={settings.range === "day" ? range.startDay : settings.range} title={`Presets end at the latest captured day, ${data.period_end}`} onChange={event => chooseRange(event.target.value)}>
         {concurrencyRangePresets.map(([key, , label]) => <option key={key} value={key}>{label}</option>)}
-        <option value="custom">Custom range…</option>
+        <option value="custom">Custom dates…</option>
         <optgroup label="Individual days">{data.days.slice().sort().map(date => <option key={date}>{date}</option>)}</optgroup>
         <option value="all">All captured time</option>
-      </select></label> : null}
+      </select></label>
+        {settings.range === "custom" ? <div className="usage-custom-dates">
+          <label><span>From</span><input aria-label="From date" type="date" min={data.period_start} max={range.endDay} value={range.startDay} onChange={event => { if (event.target.value && event.currentTarget.validity.valid) update({ startDay: event.target.value, workspace: "", agent: "", zoom: null }); }} /></label>
+          <label><span>Through</span><input aria-label="Through date" type="date" min={range.startDay} max={data.period_end} value={range.endDay} onChange={event => { if (event.target.value && event.currentTarget.validity.valid) update({ endDay: event.target.value, workspace: "", agent: "", zoom: null }); }} /></label>
+          <span className="muted concurrency-range-note">Both dates included · {data.timezone}</span>
+        </div> : null}
+      </div> : null}
       <label>Turn gap<select aria-label="Turn gap" value={gap} disabled={mode === "model"} onChange={event => update({ gap: Number(event.target.value) })}>{[0, 15, 30, 60].map(value => <option key={value} value={value}>{value === 0 ? "No bridging" : `${value} minutes`}</option>)}</select></label>
       {!scope ? <label>Repository<select aria-label="Repository" value={repository} onChange={event => update({ repository: event.target.value, workspace: "", agent: "", zoom: null })}><option value="">All repositories</option>{repositories.map(repo => <option key={repo}>{repo}</option>)}</select></label> : null}
       <SmoothingControl value={settings.smoothingMinutes} unit="minutes" onChange={smoothingMinutes => update({ smoothingMinutes })} note="Average occupancy line" />
     </div>
-    {!scope && settings.range === "custom" ? <div className="concurrency-custom-range">
-      <label>From<input type="date" min={data.period_start} max={range.endDay} value={range.startDay} onChange={event => { if (event.target.value && event.currentTarget.validity.valid) update({ startDay: event.target.value, workspace: "", agent: "", zoom: null }); }} /></label>
-      <label>Through<input type="date" min={range.startDay} max={data.period_end} value={range.endDay} onChange={event => { if (event.target.value && event.currentTarget.validity.valid) update({ endDay: event.target.value, workspace: "", agent: "", zoom: null }); }} /></label>
-      <span className="muted">Both dates included · {data.timezone}</span>
-    </div> : null}
     <ZoomNavigation canBack={navigation.canBack} zoomed={Boolean(zoom || selected)} onBack={() => navigation.back(snapshot => update(snapshot))} onReset={() => update({ zoom: null, workspace: "", agent: "" })}>
       <span className="machine-zoom-status" aria-live="polite">{zoom ? `${clock.format(bounds[0])} – ${clock.format(bounds[1])}` : "Full time range"}{selected ? " · Selected conversations" : ""}</span>
     </ZoomNavigation>
-    <div className="concurrency-plot-summary"><Metrics value={visibleMetrics[mode]} daily={singleDay && !zoom} counting={counting} /><div className="concurrency-working-summary muted"><span>{duration(visibleMetrics[mode].working)} working time</span><span className="concurrency-view-note">{mode === "user" ? "Pale = gap between turns" : "Estimated timing; tool waits excluded"}</span></div></div>
     {settings.smoothingMinutes ? <p className="usage-dashboard-note">The line shows a {settings.smoothingMinutes}-minute trailing average. Ribbons, hover counts, summary metrics, and linked records retain actual activity.</p> : null}
     <ConcurrencyChart key={counting} mode={mode} counting={counting} threads={rangeThreads} historyThreads={threads} historyStart={zonedDayBounds(data.period_start, data.timezone)[0]} gap={gap} order={order} bounds={bounds} ceiling={Math.max(2, visibleMetrics[mode].peak)} colors={colors} selected={highlighted} hover={hover} onHover={setHover} onSelect={chooseUnit} onZoom={value => update({ zoom: value })} timezone={data.timezone} smoothingMinutes={settings.smoothingMinutes}/>
+    <div className="concurrency-plot-summary" role="group" aria-label="Parallelism summary"><Metrics value={visibleMetrics[mode]} daily={singleDay && !zoom} counting={counting} /><div className="concurrency-working-summary muted"><span>{duration(visibleMetrics[mode].working)} working time</span><span className="concurrency-view-note">{mode === "user" ? "Pale = gap between turns" : "Estimated timing; tool waits excluded"}</span></div></div>
     <div className="concurrency-hover-detail" aria-live="polite">{hover ? <><strong>{clock.format(hover.time)}</strong> · {activeAt(hover.time)} concurrent {counting === "agent" ? "sessions" : "workspaces"}{focusedThreads[0] ? <span> · {focusedThreads[0].repository} / {focusedThreads[0].workspace_name} · {focusedThreads[0].title}</span> : null}</> : selected && focusedThreads[0] ? <>{focusedThreads[0].repository} / {focusedThreads[0].workspace_name} · {focusedThreads.length} conversation{focusedThreads.length === 1 ? "" : "s"}</> : "Select a ribbon to follow its conversations. Drag across the chart to zoom."}</div>
     <div className="concurrency-chart-footer"><div className="concurrency-repositories">{repositories.filter(repo => rangeThreads.some(thread => thread.repository === repo)).map(repo => <span key={repo}><i style={{ background: palette[repositories.indexOf(repo) % palette.length] }}/>{repo}</span>)}</div></div>
     <details className="concurrency-conversations" open={settings.showConversations} onToggle={event => { if (event.currentTarget.open !== settings.showConversations) update({ showConversations: event.currentTarget.open }); }}><summary>{scopedRows.length} conversations{selected ? (counting === "agent" ? " for selected session" : ` in ${unitInfo.get(selected)?.workspace_name}`) : " in this range"}</summary>

@@ -2,12 +2,50 @@ package archive
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"reflect"
 	"testing"
 	"time"
 )
+
+func TestMenuBarPreferenceLayouts(t *testing.T) {
+	data, err := os.ReadFile("../../testdata/menu-bar-layout.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct {
+		Name    string          `json:"name"`
+		Saved   json.RawMessage `json:"saved"`
+		Order   []string        `json:"order"`
+		Enabled bool            `json:"enabled"`
+	}
+	if err := json.Unmarshal(data, &cases); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range cases {
+		t.Run(tc.Name, func(t *testing.T) {
+			values := map[string]json.RawMessage{menuBarPreferenceKey: tc.Saved}
+			settings := menuBarSettings(values)
+			order := menuBarOrder(values, settings)
+			if !reflect.DeepEqual(order, tc.Order) || settings["enabled"] != tc.Enabled {
+				t.Fatalf("layout: %v, enabled: %v; want %v, %v", order, settings["enabled"], tc.Order, tc.Enabled)
+			}
+			for _, id := range menuBarDefaultOrder {
+				present := false
+				for _, item := range order {
+					present = present || item == id
+				}
+				if settings[id] != present {
+					t.Fatalf("visibility of %s disagrees with order", id)
+				}
+			}
+		})
+	}
+}
 
 func TestMenuBarSourceFailureClearsAfterNewerSuccessfulIndex(t *testing.T) {
 	useHost(t, "menu-mac")
@@ -143,6 +181,24 @@ func TestMenuBarOffAndAuthentication(t *testing.T) {
 	if settings["enabled"] != false || settings["words"] != false || settings["cost"] != true || settings["tokens"] != true || status["library"] != nil {
 		t.Fatalf("off preferences: %v", status)
 	}
+	response = preferencesCall(t, server, http.MethodPost, "/api/preferences", `{"set":{"pharos-menu-bar":{"enabled":false,"layoutVersion":2,"cost":false,"words":true,"order":["cost","quit","status","open","settings"]}}}`)
+	if response.Code != http.StatusOK {
+		t.Fatal(response.Body.String())
+	}
+	settings = libraryStatusCall(t, server, "/api/menu-bar/status")["settings"].(map[string]any)
+	if !reflect.DeepEqual(settings["order"], []any{"cost", "quit", "status", "open", "settings"}) || settings["cost"] != true || settings["words"] != false {
+		t.Fatalf("saved menu order and visibility: %v", settings)
+	}
+
+	response = preferencesCall(t, server, http.MethodPost, "/api/preferences", `{"set":{"pharos-menu-bar":{"enabled":false,"layoutVersion":2,"order":["open","separator:4","status","separator:1","settings","quit"]}}}`)
+	if response.Code != http.StatusOK {
+		t.Fatal(response.Body.String())
+	}
+	settings = libraryStatusCall(t, server, "/api/menu-bar/status")["settings"].(map[string]any)
+	if settings["layoutVersion"] != float64(2) || !reflect.DeepEqual(settings["order"], []any{"open", "separator:4", "status", "separator:1", "settings", "quit"}) {
+		t.Fatalf("saved separators: %v", settings)
+	}
+
 	for _, path := range []string{"/api/menu-bar/status", "/api/menu-bar/usage"} {
 		recorder := httptest.NewRecorder()
 		server.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))

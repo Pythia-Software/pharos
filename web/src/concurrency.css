@@ -18,11 +18,9 @@
 .concurrency-info-dialog p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
 .concurrency-controls select { width: 100%; min-width: 0; padding: 6px 24px 6px 8px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink); background-color: var(--panel); font: 13px var(--sans); }
 .concurrency-controls select:disabled { opacity: .55; }
-.concurrency-custom-range { display: flex; flex-wrap: wrap; align-items: end; gap: 10px 16px; margin: -4px 0 16px; font-size: 12px; }
-.concurrency-custom-range label { display: flex; flex-direction: column; gap: 5px; color: var(--muted); }
-.concurrency-custom-range input { box-sizing: border-box; min-height: 30px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); font: 13px var(--sans); }
-.concurrency-custom-range>span { padding-bottom: 7px; }
-.concurrency-plot-summary { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; margin-bottom: 10px; }
+.concurrency-controls .usage-custom-dates label { gap: 5px; line-height: 20px; }
+.concurrency-range-note { flex-basis: 100%; font-size: 12px; color: var(--muted); }
+.concurrency-plot-summary { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; margin: 12px 0 10px; }
 .concurrency-metrics { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .concurrency-metrics strong { font-weight: 500; color: var(--ink); }
 .concurrency-working-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; font-size: 12px; }

@@ -60,6 +60,8 @@ const ROUTES = [
     await page.getByLabel("Date on or before", { exact: true }).fill("2026-10-22");
   }, shown: ".home-search-disclosure.is-expanded" })),
   { name: "Card Library", url: "/cards", ready: ".card-library-entry .query-card" },
+  { name: "All-time writing hours", url: "/cards?cards=library&card_search=writing-hours", ready: '[data-card-id="writing-hours"] .human-study-hour-bars' },
+  { name: "Daily repository writing", url: "/cards?cards=library&card_search=human-repository-words-trend", ready: '[data-card-id="human-repository-words-trend"] .query-cover-columns' },
   { name: "Weekday distributions", url: "/cards?cards=library&card_search=day%20of%20the%20week", ready: '[data-card-id="human-words-weekday"] .query-shared-box' },
   { name: "Search table", url: "/library", ready: "#queryTableLibrary .qt-row" },
   { name: "Search conversations", url: "/library?view=conversation", ready: ".conversation-result-card" },
@@ -74,7 +76,8 @@ const ROUTES = [
   { name: "TL1 runs", url: "/tl1/runs", ready: "#tl1Page .qt-row" },
   { name: "Analyze tokens", url: "/analyze?analyze_view=tokens&machine_view=tokens", ready: "#queryTableUsage .usage-chart" },
   { name: "Analyze machine time", url: "/analyze?analyze_view=tokens&machine_view=time", ready: ".machine-call-surface .qt-row" },
-  { name: "Analyze parallelism", concurrency: true, url: "/analyze?analyze_view=tokens&machine_view=parallelism", ready: ".concurrency-chart svg" },
+  { name: "Analyze parallelism", url: "/analyze?analyze_view=tokens&machine_view=parallelism", ready: ".concurrency-chart svg" },
+  { name: "Analyze parallelism prototype", concurrency: true, url: "/analyze?analyze_view=tokens&machine_view=parallelism", ready: ".concurrency-chart svg" },
   { name: "Human Words", url: "/analyze?analyze_view=writing", ready: ".writing-panel .usage-chart" },
   { name: "Human Words messages", url: "/analyze?analyze_view=writing&writing=messages", ready: "#queryTableUsage .qt-row" },
   { name: "Carbon Impact", url: "/analyze?analyze_view=carbon", ready: "#carbonSummary" },
@@ -96,7 +99,7 @@ const ROUTES = [
   { name: "Analyze workspace tools trends", url: `/analyze?analyze_workspace=1&analyze_topic=tools&analyze_chart=${encodeURIComponent(JSON.stringify({ metric: "failure_rate", split: "tool_category", view: "trend", period: "week", rollingPeriods: 7 }))}`, ready: ".usage-tools-dashboard .qt-metric-mark" },
   { name: "Analyze workspace skills dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=skills", ready: ".usage-dashboard .usage-chart" },
   { name: "Analyze workspace time dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=time", ready: ".usage-dashboard .usage-chart" },
-  { name: "Analyze workspace parallelism dashboard", concurrency: true, url: "/analyze?analyze_workspace=1&analyze_topic=parallelism", ready: ".usage-dashboard .concurrency-chart svg" },
+  { name: "Analyze workspace parallelism dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=parallelism", ready: ".usage-dashboard .concurrency-chart svg" },
   { name: "Analyze workspace carbon dashboard", url: "/analyze?analyze_workspace=1&analyze_topic=carbon", ready: ".usage-dashboard #carbonSummary" },
   ...["usage", "conversation_activity", "writing", "writing_messages", "tool_calls", "tools", "mcp_calls", "skill_usages", "parallelism"].map(dataset => ({
     name: `Analyze workspace query ${dataset}`, url: `/analyze?analyze_mode=query&analyze_data=${dataset}`, ready: ".usage-workspace-table .qt-row", fitTable: true,
@@ -131,6 +134,10 @@ const ROUTES = [
   { name: "Legacy Findings settings", url: "/settings/optimization", ready: ".findings-settings .findings-panel" },
   { name: "Header settings", url: "/settings/header", ready: "#headerActive .header-tool" },
   { name: "App preferences", url: "/settings/preferences", ready: "#optionalBehaviors .optional-behavior" },
+  { name: "Mac menu syncing", url: "/settings/preferences", ready: "#menuBarActive .menu-bar-detail", api: {
+    'GET /api/menu-bar/status': {...defaultApi['GET /api/menu-bar/status'], library: {activities: [{label: 'Manual sync: evaluating findings while checking every captured conversation and its retained tool results', progress: .22, estimated_completion_at: new Date(Date.now() + 60000).toISOString()}]}},
+  } },
+  { name: "Mac menu with all items", url: "/settings/preferences", ready: "#menuBarActive button", preferences: { 'pharos-menu-bar': { cost: true, backup: true, space: true, index: true, eject: true, search: true, analyze: true, optimize: true, capture: true, health: true, sources: true, finder: true } } },
   { name: "Workspace overview", url: work, ready: ".delegation-table tbody tr" },
   { name: "Workspace parallel activity", url: `${work}?explorer=parallel`, ready: ".delegation-parallel" },
   { name: "Long transcript", url: `${work}/conversation/${rootConversation}`, ready: ".conversation-panel .turn" },
@@ -415,6 +422,75 @@ for (const width of [1649, 2133]) test(`pages without section menus use the full
   await fillsWindow();
   await page.setViewportSize({ width: width + 400, height: 1075 });
   await fillsWindow();
+});
+
+for (const dashboard of [
+  { name: "Human Words", topic: "human", card: "human-words", dataset: "writing_messages", field: "sent_at", first: "first_message_at", last: "last_message_at", summary: "Human Words summary", chart: { period: "day" } },
+  { name: "Tokens and Cost", topic: "tokens", card: "cost-repos", dataset: "usage", field: "first_usage_at", first: "first_usage_at", last: "first_usage_at", summary: "Machine token summary", chart: { period: "day", metric: "cost", split: "repository_name" } },
+  { name: "Agent Time", topic: "time", card: "machine-time", dataset: "tool_calls", field: "started_at", first: "started_at", last: "started_at", summary: "Agent Time summary", chart: { period: "day", metric: 0, split: "activity" } },
+  { name: "Skills", topic: "skills", card: "skill-evidence", dataset: "skill_usages", field: "created_at", first: "created_at", last: "created_at", chart: { period: "day", metric: 0, split: "skill_name" } },
+  { name: "Tools", topic: "tools", card: "tool-failure-rates", dataset: "tool_calls", field: "started_at", first: "day", last: "day", graph: ".usage-tools-dashboard > .qt-metric", chart: { period: "day", metric: "calls", split: "tool_name", view: "compare" } },
+  { name: "Pharos MCP", topic: "mcp", card: "mcp-response-size", dataset: "mcp_calls", field: "called_at", first: "called_at", last: "called_at", graph: ".usage-mcp-dashboard > .qt-metric", chart: { period: "day", metric: "calls", split: "tool_name", view: "compare" } },
+  { name: "Carbon Impact", topic: "carbon", card: "carbon-trend", dataset: "usage", field: "first_usage_at", first: "first_usage_at", last: "first_usage_at", summary: "Filtered carbon estimate", chart: { period: "day", metric: "co2", split: "type" } },
+]) for (const width of [1504, 390, 320]) test(`${dashboard.name} card exploration and inline ranges fit at ${width}px`, { skip }, async t => {
+  const where = [{ field: dashboard.last, op: ">=", value: "-7d" }, { field: dashboard.first, op: "<", value: "+0s" }];
+  const sourceWhere = where.map(term => ({ ...term, field: dashboard.field }));
+  const params = new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: dashboard.topic, card_id: dashboard.card, card_query: dashboard.dataset,
+    [`q_${dashboard.dataset}`]: encodeQuery({ ...EMPTY_QUERY, where: sourceWhere }), window_mode: "relative", window_days: "7", window_field: dashboard.field, window_dataset: dashboard.dataset,
+    analyze_filters: encodeQuery({ ...EMPTY_QUERY, where }), analyze_chart: JSON.stringify(dashboard.chart) });
+  const app = await open(t, { url: `/analyze?${params}`, viewport: { width, height: 933 }, ready: dashboard.graph ?? ".usage-dashboard .usage-chart" });
+  const { page } = app;
+  const chart = await page.locator(dashboard.graph ?? '.usage-dashboard .usage-chart').boundingBox();
+  if (dashboard.summary) {
+    const stats = await page.getByLabel(dashboard.summary, { exact: true }).boundingBox();
+    assert.ok(stats.y >= chart.y + chart.height, 'summary statistics follow the graph');
+  }
+  if (dashboard.topic === 'carbon') {
+    const assumptions = await page.getByRole('region', { name: 'Estimate assumptions', exact: true }).boundingBox();
+    assert.ok(assumptions.y >= chart.y + chart.height, 'carbon assumptions follow the graph');
+  }
+  assert.deepEqual(await layoutProblems(page), []);
+  await app.shot('relative-card-range');
+  if (dashboard.topic === 'tools' || dashboard.topic === 'mcp') await page.getByRole('combobox', { name: 'Display', exact: true }).selectOption('interval');
+  await page.getByRole('combobox', { name: 'Time Bucket', exact: true }).selectOption(['time', 'skills', 'tools', 'mcp'].includes(dashboard.topic) ? 'week' : 'hour');
+  const range = page.getByRole('combobox', { name: 'Range', exact: true });
+  for (const [mode, label] of [['custom', 'From date'], ['custom-times', 'From date and time']]) {
+    await range.selectOption(mode);
+    const from = page.getByLabel(label, { exact: true });
+    await from.waitFor();
+    await app.settled();
+    assert.deepEqual(await layoutProblems(page), []);
+    if (width === 1504) {
+      const picker = await range.boundingBox(), dates = await from.boundingBox();
+      assert.ok(dates.x >= picker.x + picker.width && dates.y < picker.y + picker.height && picker.y < dates.y + dates.height, 'custom inputs sit beside the range selector');
+    }
+    await app.shot(mode);
+  }
+});
+
+for (const width of [1504, 390, 320]) test(`Parallelism card exploration and inline ranges fit at ${width}px`, { skip }, async t => {
+  const where = [{ field: 'started_at', op: '>=', value: '-7d' }, { field: 'started_at', op: '<', value: '+0s' }];
+  const params = new URLSearchParams({ analyze_mode: 'dashboards', analyze_topic: 'parallelism', card_id: 'parallel-days', card_query: 'parallelism',
+    q_parallelism: encodeQuery({ ...EMPTY_QUERY, where }), window_mode: 'relative', window_days: '7', window_field: 'started_at', window_dataset: 'parallelism',
+    analyze_parallelism: JSON.stringify({ range: '7d' }) });
+  const app = await open(t, { url: `/analyze?${params}`, viewport: { width, height: 933 }, concurrency: true, ready: '.usage-dashboard .concurrency-chart svg' });
+  const { page } = app;
+  const chart = await page.locator('.concurrency-chart').boundingBox();
+  const stats = await page.getByRole('group', { name: 'Parallelism summary', exact: true }).boundingBox();
+  assert.ok(stats.y >= chart.y + chart.height, 'summary statistics follow the graph');
+  assert.deepEqual(await layoutProblems(page), []);
+  await app.shot('relative-card-range');
+  const range = page.getByRole('combobox', { name: 'Range', exact: true });
+  await range.selectOption('custom');
+  const from = page.getByLabel('From date', { exact: true });
+  await from.waitFor();
+  await app.settled();
+  assert.deepEqual(await layoutProblems(page), []);
+  if (width === 1504) {
+    const picker = await range.boundingBox(), dates = await from.boundingBox();
+    assert.ok(dates.x >= picker.x + picker.width && dates.y < picker.y + picker.height && picker.y < dates.y + dates.height, 'custom inputs sit beside the range selector');
+  }
+  await app.shot('custom-dates');
 });
 
 for (const [name, chart, requestCount] of [

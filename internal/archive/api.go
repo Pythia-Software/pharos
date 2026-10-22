@@ -412,6 +412,9 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/usage/history":
 		value, err := s.Catalog.UsageHistory(r.Context())
 		writeResult(w, value, err)
+	case path == "/api/usage/parallelism":
+		value, err := s.Catalog.parallelismData(r.Context())
+		writeResult(w, value, err)
 	case path == "/api/usage/summary":
 		value, err := s.Catalog.UsageSummary(r.Context())
 		writeResult(w, value, err)
