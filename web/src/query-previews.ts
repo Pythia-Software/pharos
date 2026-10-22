@@ -174,6 +174,23 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   const selected = metrics.find(item => item.clause.id === options.coverMetricId) ?? metrics[0];
   const { clause, result } = selected;
   if (result.error) throw new Error(result.error);
+  // All-time clock-hour covers fold native hourly totals rather than loading
+  // every message's text into the bounded contribution study.
+  const hourly = recipe?.measures.find(metric => metric.id === clause.id);
+  if (recipe?.humanStudy === "hours" && !options.window && humanStudyCoverMatches(recipe, options.cover, options.coverMetricId)
+    && clause.op === "sum" && clause.field === "typed_words" && !clause.expression && !clause.distribution && !clause.expressionY
+    && JSON.stringify(clause.groupBy) === JSON.stringify(hourly?.groupBy) && clause.dateGrouping?.interval === "hour") {
+    if (payload.find?.limited || payload.find?.search?.complete === false || result.coverage === "partial" || result.hiddenGroups || (result.groupCount ?? 0) > result.buckets.length || result.buckets.some(bucket => bucket.error || bucket.yError || typeof bucket.value !== "number")) throw new Error("Complete hourly totals are required for the clock-hour view.");
+    const timeZone = clause.dateGrouping.timeZone ?? "UTC", format = new Intl.DateTimeFormat("en-US", { hour: "2-digit", hourCycle: "h23", timeZone });
+    const hours = Array.from({ length: 24 }, (_, hour) => ({ label: `${String(hour).padStart(2, "0")}:00`, value: 0 }));
+    for (const bucket of result.buckets) {
+      const hour = Number(format.format(new Date(String(bucket.keys[0]))));
+      hours[hour].value += Number(bucket.value);
+    }
+    const total = hours.reduce((sum, hour) => sum + hour.value, 0), count = result.buckets.reduce((sum, bucket) => sum + bucket.count, 0);
+    const study: HumanStudyPreview = { kind: "hours", timeZone, valueLabel: "Words by local hour", rows: hours, sampleLabel: `${count.toLocaleString()} written messages · ${timeZone}`, detail: "All dates are combined by local hour of day. Empty hours are zero. Repeated daylight-saving hours contribute to the same clock hour." };
+    return { state: total > 0 ? "ready" : "empty", total, summary: study.sampleLabel, note: [recipe.note, study.detail].filter(Boolean).join(" · "), action: recipe.action, coverHeight: (options.cover ?? recipe.cover)?.height, study };
+  }
   if (usesWeekdayCover(recipe, clause, options.cover ?? recipe?.cover, query)) {
     // Exact metric coverage can describe only the current search batch. Its
     // unchecked dates must never be filled as idle-day observations.

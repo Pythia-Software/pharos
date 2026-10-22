@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { capabilities, core, execution, schemas } from "../helpers/recipes.mjs";
 import tracker from "../../../../docs/homepage-query-cards.json";
-import { queryRecipes, instantiateRecipe, loadQueryPreview, clearPreviewCache } from "../../../src/curiosity-data";
+import { queryRecipes, instantiateRecipe, loadQueryPreview, clearPreviewCache, suggestionWindowLabel } from "../../../src/curiosity-data";
 import { queryFromURL, queryHasTimeFilter, queryURL, resolveRollingQuery } from "../../../src/query-links";
 import { migrateSavedQueries, readBookmarks, removeBookmark, savedQueries, updateBookmark, replaceSavedQuery } from "../../../src/bookmarks";
 import { cardCoverQuery, defaultCardCover } from "../../../src/card-cover";
@@ -339,6 +339,9 @@ const recentMessage = { sent_at: clock.getTime() - 1000, repository_name: "one",
 test("writing hours capture the device timezone in durable URLs and retain DST offsets", () => {
   const recipe = queryRecipes.find(recipe => recipe.id === "writing-hours");
   const suggestion = instantiateRecipe(recipe, 7, clock);
+  assert.equal(suggestionWindowLabel(suggestion), "All time");
+  assert.equal(suggestion.window, undefined);
+  assert.equal(queryHasTimeFilter(suggestion.query, "sent_at"), false);
   assert.equal(suggestion.query.aggregations[0].dateGrouping.timeZone, Intl.DateTimeFormat().resolvedOptions().timeZone);
   const restored = core.decodeQueryStrict(new URL(suggestion.url, "http://home.test").searchParams.get("q_writing_messages"));
   assert.deepEqual(restored.aggregations[0].dateGrouping, suggestion.query.aggregations[0].dateGrouping);

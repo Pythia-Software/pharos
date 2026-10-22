@@ -3,6 +3,7 @@ import test from "node:test";
 import { core, execution, schemas } from "../helpers/recipes.mjs";
 import { queryCapabilities, serverQuery as sharedServerQuery } from "../../support/query-server.mjs";
 import { queryRecipes, instantiateRecipe, loadQueryPreviews, loadQueryPreview, clearPreviewCache } from "../../../src/curiosity-data";
+import { compactTimelineBuckets } from "../../../src/column-marks";
 
 const rows = Array.from({ length: 10 }, (_, i) => ({ id: String(i), call_count: 1, error_count: i < 2 ? 1 : 0, tool_name: "Bash", command_name: "go test", duration_ms: (i + 1) * 100, result_tokens: i * 10, result_tokens_source: i % 2 ? "estimated" : "measured", repository_name: i % 2 ? "one" : "two", conversation_id: String(i), started_at: Date.now() }));
 function query(aggregations, extra = {}) { return { ...core.EMPTY_QUERY, aggregations, ...extra }; }
@@ -101,6 +102,7 @@ test("saved local-hour cards keep the catalog's 24 combined clock-hour buckets",
   const population = [message("first", 1, 9, 100), message("second", 3, 9, 50), message("evening", 2, 17, 25), message("outside", 40, 9, 1000)];
   const requests = fixture(t, (path, request) => {
     if (path.includes("/writing_messages/rows-v2")) return response(core.applyQuery(population, request, schemas.writing_messages));
+    if (path.includes("/writing_messages/query-v3")) return response(sharedServerQuery(request, population, schemas.writing_messages));
   });
   const recipe = queryRecipes.find(recipe => recipe.id === "writing-hours");
   assert.equal(recipe.cover, undefined, "this recipe relies on an inferred default cover");
@@ -113,11 +115,12 @@ test("saved local-hour cards keep the catalog's 24 combined clock-hour buckets",
       assert.equal(saved.study?.kind, "hours");
       assert.deepEqual(saved.study, catalog.study);
       assert.equal(saved.study.rows.length, 24);
-      assert.deepEqual(saved.study.rows.filter(row => row.value), [{ label: "09:00", value: 150 }, { label: "17:00", value: 25 }]);
+      assert.deepEqual(saved.study.rows.filter(row => row.value), [{ label: "09:00", value: 1150 }, { label: "17:00", value: 25 }]);
       assert.equal(saved.study.timeZone, "America/Denver");
     }
   }
-  assert.ok(requests.every(({ path }) => path.endsWith("/rows-v2")), "saved cards must use the clock-hour study instead of dated hourly metrics");
+  assert.ok(requests.some(({ path }) => path.endsWith("/query-v3")), "all-time covers fold native hourly reductions");
+  assert.ok(requests.every(({ path }) => !path.endsWith("/rows-v2")), "all-time covers do not load message text");
 });
 
 test("weekday previews render daily distributions and keep all-time and edited chart covers usable", async t => {
@@ -435,6 +438,58 @@ test("calendar previews execute on the server and preserve server failures", asy
  complete=false;clearPreviewCache();
  await assert.rejects(loadQueryPreview('tool_calls',q,schemas.tool_calls),/incomplete/);
  assert.equal(requests.filter(r=>r.path.endsWith('/metrics')||r.path.includes('/population')).length,0);
+});
+
+test("all-time writing hours combine older dates and repeated DST hours into the clock-hour cover", async t => {
+  const schema = schemas.writing_messages;
+  const population = [
+    { id: "old", sent_at: "2025-01-01T08:30:00Z", typed_words: 40 },
+    { id: "first", sent_at: "2026-11-01T07:30:00Z", typed_words: 10 },
+    { id: "second", sent_at: "2026-11-01T08:30:00Z", typed_words: 20 },
+    { id: "automated", sent_at: "2026-11-01T08:30:00Z", typed_words: 0 },
+  ];
+  let partial = false;
+  fixture(t, (path, request) => {
+    if (!path.includes("/writing_messages/query-v3")) return;
+    const result = sharedServerQuery(request, population, schema);
+    if (partial) result.metrics[0].coverage = "partial";
+    return response(result);
+  });
+  const recipe = queryRecipes.find(recipe => recipe.id === "writing-hours"), item = instantiateRecipe(recipe, 7);
+  item.query.aggregations[0].dateGrouping.timeZone = "America/Denver";
+  const preview = await loadQueryPreview(item.dataset, item.query, schema, { recipe, cover: item.cover, url: item.url });
+  assert.equal(preview.state, "ready");
+  assert.equal(preview.total, 70);
+  assert.equal(preview.study.rows.length, 24);
+  assert.equal(preview.study.rows[1].value, 70, "both DST offsets and the prior year contribute to 01:00");
+  assert.match(preview.study.sampleLabel, /^3 written messages/);
+  partial = true; clearPreviewCache();
+  await assert.rejects(loadQueryPreview(item.dataset, item.query, schema, { recipe }), /Complete hourly totals/);
+});
+
+test("daily repository words average seven calendar days with history before the 30-day window", async t => {
+  const now = new Date(2026, 9, 15, 12).getTime();
+  t.mock.timers.enable({ apis: ["Date"], now });
+  const recipe = queryRecipes.find(recipe => recipe.id === "human-repository-words-trend"), item = instantiateRecipe(recipe, recipe.days[0]);
+  const schema = schemas.writing_messages;
+  const dated = (id, date, typed_words, repository_name) => ({ id, sent_at: new Date(date).toISOString(), day: new Date(date).toLocaleDateString("en-CA"), typed_words, repository_name });
+  const first = new Date(now); first.setDate(first.getDate() - 30);
+  const history = new Date(first); history.setDate(history.getDate() - 1);
+  const population = [dated("history", history, 70, "one"), dated("first", first, 140, "one"), dated("other-repo", first, 35, "two"), dated("automated", first, 0, "one")];
+  fixture(t, (path, request) => {
+    if (path.includes("/writing_messages/metrics")) return response(core.evaluateMetrics(population, query(request.metrics, request), schema, { now }));
+  });
+  const preview = await loadQueryPreview(item.dataset, item.query, schema, { recipe, window: item.window, cover: item.cover, url: item.url });
+  assert.equal(preview.state, "ready");
+  assert.equal(preview.total, 175, "smoothing history does not inflate the selected-window total");
+  const buckets = compactTimelineBuckets(preview.buckets, preview.timeline);
+  assert.equal(buckets[0].values["s:one"], 30, "(70 historical + 140 current) / 7, including five idle days");
+  assert.equal(buckets[0].values["s:two"], 5);
+  assert.equal(buckets[7].values["s:one"] ?? 0, 0, "old writing rolls out of the trailing window");
+  const url = new URL(item.url, "http://preview.test"), chart = JSON.parse(url.searchParams.get("analyze_chart"));
+  assert.equal(url.searchParams.get("analyze_days"), "30");
+  assert.equal(chart.split, "repository_name");
+  assert.equal(chart.rollingPeriods, 7);
 });
 
 test("headline numbers represent complete additive measures with their units", async t => {

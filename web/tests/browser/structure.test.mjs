@@ -60,6 +60,8 @@ const ROUTES = [
     await page.getByLabel("Date on or before", { exact: true }).fill("2026-10-22");
   }, shown: ".home-search-disclosure.is-expanded" })),
   { name: "Card Library", url: "/cards", ready: ".card-library-entry .query-card" },
+  { name: "All-time writing hours", url: "/cards?cards=library&card_search=writing-hours", ready: '[data-card-id="writing-hours"] .human-study-hour-bars' },
+  { name: "Daily repository writing", url: "/cards?cards=library&card_search=human-repository-words-trend", ready: '[data-card-id="human-repository-words-trend"] .query-cover-columns' },
   { name: "Weekday distributions", url: "/cards?cards=library&card_search=day%20of%20the%20week", ready: '[data-card-id="human-words-weekday"] .query-shared-box' },
   { name: "Search table", url: "/library", ready: "#queryTableLibrary .qt-row" },
   { name: "Search conversations", url: "/library?view=conversation", ready: ".conversation-result-card" },
