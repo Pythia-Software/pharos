@@ -64,6 +64,7 @@ export function cardCoverQuery(query: QueryState, recipe: QueryRecipe, requested
 }
 
 export function cardKind(recipe: QueryRecipe): string {
+  if (recipe.weekday && (!recipe.cover?.kind || recipe.cover.kind === "auto")) return "Distribution";
   if (recipe.humanStudy) return recipe.humanStudy === "conversation-lengths" ? "Distribution" : ["contribution-patterns", "examples"].includes(recipe.humanStudy) ? "Composition" : recipe.humanStudy === "specific-feedback" ? "Rate" : "Timeline";
   const metric = recipe.exploration?.coverMetric ?? recipe.measures[0];
   return !metric ? "Text" : ["pie", "donut"].includes(recipe.cover?.kind ?? metric.display?.kind ?? "") ? "Composition" : metric.distribution?.kind === "box" ? "Distribution" : metric.distribution?.kind === "histogram" ? "Histogram" : metric.expressionY ? "Relationship" : (metric.dateGrouping || metric.groupBy[0] === "day" || metric.groupBy[0] === "hour_of_day") ? "Timeline" : metric.display?.format?.kind === "percent" || recipe.exploration?.unit === "percent" ? "Rate" : "Ranking";

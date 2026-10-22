@@ -20,6 +20,7 @@ import type { HumanStudy } from "./human-study";
 import type { CardTrend } from "./card-trend";
 import { coverageRecipes } from "./coverage-recipes";
 import { dashboardCardRecipes } from "./dashboard-card-recipes";
+import { weekdayRecipes } from "./weekday-recipes";
 import { cardDestination, refineCardDestination, type CardDestination } from "./card-destinations";
 export { clearPreviewCache, loadQueryPreview, loadQueryPreviews, formatPreviewValue } from "./query-previews";
 export type { QueryPreview } from "./query-previews";
@@ -38,6 +39,7 @@ export type QueryRecipe = {
   // Current-state and all-time cards carry no rolling lookback.
   period?: "current" | "all";
   trend?: CardTrend;
+  weekday?: { metricId: string; unit: string };
   destination?: CardDestination;
 };
 export type QuerySuggestion = QueryRecipe & { query: QueryState; window?: RollingWindow; url: string; instanceId: string };
@@ -94,6 +96,7 @@ const baseRecipes: QueryRecipe[] = [
   ...steeringRecipes,
   ...coverageRecipes,
   ...dashboardCardRecipes,
+  ...weekdayRecipes,
 ];
 export const queryRecipes = baseRecipes.map(enrichCardRecipe).map(refineHumanRecipe).map(applyHumanCardCopy).map(refineModelChoiceRecipe).map(refineContextCachingRecipe).map(refineErrorPatternRecipe).map(refineToolFlowRecipe).map(refineSkillsInstructionsRecipe).map(refineResearchRecipe).map(refineApiCostRecipe).map(refineTokenUsageRecipe).map(refineDelegationRecipe).map(refineSteeringRecipe).map(recipe => recipe.humanStudy ? { ...recipe, days: [7] } : recipe).map(refineCardDestination);
 

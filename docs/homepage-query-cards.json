@@ -2500,7 +2500,9 @@
       "exploration_value": "Reveals the rhythm of the user's participation.",
       "implementation_status": "Partial implementation",
       "implemented_recipes": [
-        "writing-hours"
+        "writing-hours",
+        "human-words-weekday",
+        "human-messages-weekday"
       ],
       "current_preview": "When you work. Human-written words by local clock hour over the last 30 days; includes all dates combined.",
       "blocked_on_query_table": [
@@ -2562,7 +2564,9 @@
         "parallel-days",
         "parallel-trend",
         "parallel-hours",
-        "parallel-repositories"
+        "parallel-repositories",
+        "parallel-active-weekday",
+        "parallel-weekday"
       ],
       "current_preview": "",
       "blocked_on_query_table": [
@@ -19996,6 +20000,298 @@
         },
         "dataset": "mcp_calls",
         "detailAction": "Explore Pharos request trends"
+      }
+    },
+    {
+      "id": "human-words-weekday",
+      "title": "Words by day of the week",
+      "description": "Daily human-written word totals by weekday over the last {days} days, including idle days.",
+      "dataset": "writing_messages",
+      "field": "sent_at",
+      "category": "human",
+      "idea": "rhythm-01",
+      "unit": "words / day",
+      "days": [
+        90
+      ],
+      "calendarTimezone": "local",
+      "where": [
+        {
+          "field": "typed_words",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [
+        {
+          "id": "weekday_words",
+          "op": "sum",
+          "field": "typed_words",
+          "groupBy": [
+            "sent_at"
+          ],
+          "label": "Daily human-written words",
+          "groupLimit": 10000,
+          "sort": [
+            {
+              "key": "group0",
+              "dir": "asc"
+            }
+          ],
+          "dateGrouping": {
+            "field": "sent_at",
+            "interval": "day",
+            "timeZone": "UTC",
+            "range": "observed",
+            "includeEmpty": true
+          },
+          "display": {
+            "kind": "bar-vertical",
+            "xLabel": "Local day",
+            "yLabel": "words / day"
+          }
+        }
+      ],
+      "weekday": {
+        "metricId": "weekday_words",
+        "unit": "words / day"
+      },
+      "cover": {
+        "mode": "source",
+        "metricId": "weekday_words",
+        "kind": "auto",
+        "maxGroups": 7,
+        "showHeadline": false,
+        "density": "compact"
+      },
+      "action": "Explore Human Words",
+      "note": "Each box compares complete local days of the same weekday, Monday through Sunday. The first partial day and today are excluded. Uses the device timezone captured in the query. Boxes show the middle 50%, median, Tukey whiskers and outliers; hover includes the mean and number of days. Values describe recorded activity; capture coverage may be incomplete. Only typed or dictated words contribute; pasted and automated text are excluded. Days without recorded writing count as zero.",
+      "destination": {
+        "topic": "human",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "scope": "typed",
+          "split": "kind",
+          "hours": 6,
+          "days": 3
+        },
+        "dataset": "writing",
+        "detailAction": "Inspect daily totals"
+      }
+    },
+    {
+      "id": "human-messages-weekday",
+      "title": "Messages by day of the week",
+      "description": "Daily counts of messages containing your words by weekday over the last {days} days, including idle days.",
+      "dataset": "writing_messages",
+      "field": "sent_at",
+      "category": "human",
+      "idea": "rhythm-01",
+      "unit": "messages / day",
+      "days": [
+        90
+      ],
+      "calendarTimezone": "local",
+      "where": [
+        {
+          "field": "typed_words",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [
+        {
+          "id": "weekday_messages",
+          "op": "count",
+          "groupBy": [
+            "sent_at"
+          ],
+          "label": "Daily messages with your words",
+          "groupLimit": 10000,
+          "sort": [
+            {
+              "key": "group0",
+              "dir": "asc"
+            }
+          ],
+          "dateGrouping": {
+            "field": "sent_at",
+            "interval": "day",
+            "timeZone": "UTC",
+            "range": "observed",
+            "includeEmpty": true
+          },
+          "display": {
+            "kind": "bar-vertical",
+            "xLabel": "Local day",
+            "yLabel": "messages / day"
+          }
+        }
+      ],
+      "weekday": {
+        "metricId": "weekday_messages",
+        "unit": "messages / day"
+      },
+      "cover": {
+        "mode": "source",
+        "metricId": "weekday_messages",
+        "kind": "auto",
+        "maxGroups": 7,
+        "showHeadline": false,
+        "density": "compact"
+      },
+      "action": "Explore Human Words",
+      "note": "Each box compares complete local days of the same weekday, Monday through Sunday. The first partial day and today are excluded. Uses the device timezone captured in the query. Boxes show the middle 50%, median, Tukey whiskers and outliers; hover includes the mean and number of days. Values describe recorded activity; capture coverage may be incomplete. Counts messages containing at least one typed or dictated word, matching Messages per day. Days without recorded writing count as zero.",
+      "destination": {
+        "topic": "human",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "scope": "typed",
+          "split": "kind",
+          "hours": 6,
+          "days": 3
+        },
+        "dataset": "writing",
+        "detailAction": "Inspect daily totals"
+      }
+    },
+    {
+      "id": "parallel-active-weekday",
+      "title": "Active hours by day of the week",
+      "description": "Daily hours with any agent active by weekday over the last {days} days, including idle days.",
+      "dataset": "parallelism",
+      "field": "started_at",
+      "category": "machines",
+      "idea": "rhythm-03",
+      "unit": "active hours / day",
+      "days": [
+        90
+      ],
+      "calendarTimezone": "local",
+      "where": [],
+      "measures": [
+        {
+          "id": "weekday_active",
+          "op": "sum",
+          "field": "elapsed_hours",
+          "groupBy": [
+            "started_at"
+          ],
+          "label": "Daily hours with any active",
+          "groupLimit": 10000,
+          "sort": [
+            {
+              "key": "group0",
+              "dir": "asc"
+            }
+          ],
+          "dateGrouping": {
+            "field": "started_at",
+            "interval": "day",
+            "timeZone": "UTC",
+            "range": "observed",
+            "includeEmpty": true
+          },
+          "display": {
+            "kind": "bar-vertical",
+            "xLabel": "Local day",
+            "yLabel": "active hours / day"
+          }
+        }
+      ],
+      "weekday": {
+        "metricId": "weekday_active",
+        "unit": "active hours / day"
+      },
+      "cover": {
+        "mode": "source",
+        "metricId": "weekday_active",
+        "kind": "auto",
+        "maxGroups": 7,
+        "showHeadline": false,
+        "density": "compact"
+      },
+      "action": "Explore Parallelism",
+      "note": "Each box compares complete local days of the same weekday, Monday through Sunday. The first partial day and today are excluded. Uses the device timezone captured in the query. Boxes show the middle 50%, median, Tukey whiskers and outliers; hover includes the mean and number of days. Values describe recorded activity; capture coverage may be incomplete. Follows the saved Parallelism counting and gap settings. Timing is estimated from transcript turns, with delegated work folded into its root unit. Daily placement uses hourly fact starts without prorating. Overlapping units count wall time once. Days without recorded activity count as zero.",
+      "destination": {
+        "topic": "parallelism",
+        "chart": null,
+        "dataset": "parallelism",
+        "detailAction": "Inspect daily totals"
+      }
+    },
+    {
+      "id": "parallel-weekday",
+      "title": "Parallelism by day of the week",
+      "description": "Daily time-weighted agents at once while active by weekday over the last {days} days; active days only.",
+      "dataset": "parallelism",
+      "field": "started_at",
+      "category": "machines",
+      "idea": "rhythm-03",
+      "unit": "agents at once while active",
+      "days": [
+        90
+      ],
+      "calendarTimezone": "local",
+      "where": [],
+      "measures": [
+        {
+          "id": "weekday_parallelism",
+          "op": "sum",
+          "field": "unit_ms",
+          "expression": "SUM([unit_ms])/NULLIF(SUM([elapsed_ms]),0)",
+          "groupBy": [
+            "started_at"
+          ],
+          "label": "Daily agents at once while active",
+          "groupLimit": 10000,
+          "sort": [
+            {
+              "key": "group0",
+              "dir": "asc"
+            }
+          ],
+          "dateGrouping": {
+            "field": "started_at",
+            "interval": "day",
+            "timeZone": "UTC",
+            "range": "observed",
+            "includeEmpty": true
+          },
+          "display": {
+            "kind": "bar-vertical",
+            "xLabel": "Local day",
+            "yLabel": "agents at once while active"
+          }
+        }
+      ],
+      "weekday": {
+        "metricId": "weekday_parallelism",
+        "unit": "agents at once while active"
+      },
+      "cover": {
+        "mode": "source",
+        "metricId": "weekday_parallelism",
+        "kind": "auto",
+        "maxGroups": 7,
+        "showHeadline": false,
+        "density": "compact"
+      },
+      "action": "Explore Parallelism",
+      "note": "Each box compares complete local days of the same weekday, Monday through Sunday. The first partial day and today are excluded. Uses the device timezone captured in the query. Boxes show the middle 50%, median, Tukey whiskers and outliers; hover includes the mean and number of days. Values describe recorded activity; capture coverage may be incomplete. Follows the saved Parallelism counting and gap settings. Timing is estimated from transcript turns, with delegated work folded into its root unit. Daily placement uses hourly fact starts without prorating. Each daily observation is unit time ÷ wall time with any unit active. Idle days have no ratio and are excluded; each active day has equal weight in its weekday box.",
+      "destination": {
+        "topic": "parallelism",
+        "chart": null,
+        "dataset": "parallelism",
+        "detailAction": "Inspect daily totals"
       }
     }
   ],

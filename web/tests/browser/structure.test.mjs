@@ -32,6 +32,7 @@ const ROUTES = [
   }))),
   { name: "Home", url: "/", ready: ".home-belt-row .query-card" },
   { name: "Dashboard Catalog", url: "/home?cards=library", ready: ".card-library-entry .query-card" },
+  { name: "Weekday distributions", url: "/home?cards=library&card_search=day%20of%20the%20week", ready: '[data-card-id="human-words-weekday"] .query-shared-box' },
   { name: "Search table", url: "/library", ready: "#queryTableLibrary .qt-row" },
   { name: "Search conversations", url: "/library?view=conversation", ready: ".conversation-result-card" },
   { name: "Search display switch", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("group", { name: "Display results as" }).getByRole("button", { name: "Conversations", exact: true }).click(), shown: ".conversation-result-card" },
