@@ -1049,7 +1049,7 @@ INSERT INTO task_attempts VALUES ('attempt-1','task-1',1,'worktree-1','claude','
 func TestAppRoutesServeUIOnDirectNavigation(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
-	for _, path := range []string{"/", "/home", "/library?search=debug", "/sources", "/settings/sync", "/settings/header", "/settings/mcp", "/analyze", "/mcp", "/activity", "/health", "/work/workspace_123", "/work/workspace_123/conversation/conversation_456?message=tool_789"} {
+	for _, path := range []string{"/", "/home", "/cards?card_topic=cost", "/library?search=debug", "/sources", "/settings/sync", "/settings/header", "/settings/mcp", "/analyze", "/mcp", "/activity", "/health", "/work/workspace_123", "/work/workspace_123/conversation/conversation_456?message=tool_789"} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		request.Header.Set("Authorization", "Bearer test-token")
 		response := httptest.NewRecorder()

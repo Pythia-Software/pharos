@@ -1,7 +1,10 @@
-.card-library { margin-top:34px; scroll-margin-top:18px; }
+.card-library-page { padding:28px 6px; }
+.card-library-back { display:inline-flex; align-items:center; gap:6px; margin-bottom:20px; color:var(--muted); font-size:12px; text-decoration:none; }
+.card-library-back:hover { color:var(--ink); }
+.card-library-back svg { width:14px; height:14px; }
 .card-library-head { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
-.card-library h2 { display:flex; align-items:center; gap:9px; margin:0; font:400 22px/1.2 Charter,Georgia,serif; color:var(--ink); }
-.card-library h2 svg { width:17px; height:17px; color:var(--gold); }
+.card-library h1 { display:flex; align-items:center; gap:9px; margin:0; font:400 28px/1.2 Charter,Georgia,serif; color:var(--ink); }
+.card-library h1 svg { width:17px; height:17px; color:var(--gold); }
 .card-library-actions { display:flex; gap:6px; margin-left:auto; }
 .card-library-actions button { display:flex; align-items:center; gap:6px; height:29px; min-height:0; padding:5px 10px; border:1px solid var(--line); border-radius:5px; background:var(--panel); color:var(--ink); font-size:11px; white-space:nowrap; }
 .card-library-actions button:is([aria-expanded="true"],[aria-pressed="true"]) { border-color:color-mix(in srgb,var(--gold) 55%,var(--line)); color:var(--gold); }
@@ -19,10 +22,10 @@
 .card-library-controls { display:flex; flex-wrap:wrap; gap:12px; align-items:end; padding:16px; border:1px solid var(--line); border-radius:8px; background:var(--panel); }
 .card-library-controls label { display:flex; flex-direction:column; gap:6px; color:var(--muted); font-size:11px; flex:1 1 130px; }
 .card-library-controls .card-library-search { flex:2 1 210px; }
-.card-library-controls :is(input,select) { min-width:0; width:100%; padding:8px 9px; background:var(--bg); border:1px solid var(--line); border-radius:5px; color:var(--ink); font:inherit; font-size:12px; }
-:root .card-library .card-library-controls select:not([multiple]),:root .home-editor.card-template-editor select:not([multiple]) { appearance:auto; background-image:none; background-repeat:no-repeat; }
+.card-library-controls :is(input,select) { min-width:0; width:100%; padding:8px 9px; background-color:var(--bg); border:1px solid var(--line); border-radius:5px; color:var(--ink); font:inherit; font-size:12px; }
 .card-library-count { display:flex; justify-content:space-between; gap:10px; color:var(--muted); font-size:12px; margin:0 0 16px; }
-.card-library-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,var(--query-card-width)),1fr)); align-items:start; gap:26px var(--query-card-gap); }
+.card-library-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,var(--query-card-width)),1fr)); align-items:stretch; gap:26px var(--query-card-gap); }
+.card-library-entry { display:grid; grid-template-rows:subgrid; grid-row:span 2; row-gap:0; }
 .card-library-entry .query-card { width:100%; }
 .card-library-entry .query-drag-tip { display:none; }
 .card-library-meta { display:flex; flex-direction:column; gap:5px; padding:10px 4px; font-size:10px; color:var(--muted); }

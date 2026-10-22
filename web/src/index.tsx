@@ -48,6 +48,7 @@ import { queryRequest, queryFetch, shouldSkipQueryOnRestore } from "./query-requ
 import { PageErrorBoundary, QueryRecovery, ResetPage, tableRecoveryQuery } from "./query-recovery";
 import { createMCPMonitor, type MCPStatus } from "./mcp-monitor";
 import { HomePage } from "./home";
+import { CardLibraryPage } from "./card-library";
 import { linkTargets, navigateLink } from "./query-link-targets";
 import { QueryChip } from "./query-card";
 import { readRollingWindow, resolveRollingQuery, rollingQueryMatches } from "./query-links";
@@ -1992,6 +1993,7 @@ if (!shared) installAppNavigation();
 const mounts: Array<[string, React.ReactNode]> = [
   ["searchComposerDialog", <SearchDialog schema={schemas.library} />],
   ["homePage", <HomePage schemas={schemas} />],
+  ["cardLibraryPage", <CardLibraryPage schemas={schemas} />],
   ["settingsPage", <SettingsWorkspace content={document.getElementById("settingsContent")!} />],
   ["queryTableLibrary", <LibraryPage />],
   ["queryTableUsage", <UsagePage />],

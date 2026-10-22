@@ -15,6 +15,10 @@ test("the app tree resolves global, nested, and legacy destinations without chan
   assert.equal(params.toString(), before, 'building navigation never mutates the current URL');
   assert.equal(appLocationLabel(sections, appLocation('/settings/sources', params)).page.label, 'Sources');
   assert.equal(appLocation('/work/work-1/conversation/conv-1', params).section, 'library');
+  const cards = appLocationLabel(sections, appLocation('/cards', new URLSearchParams('card_topic=human')));
+  assert.equal(cards.section.id, 'home');
+  assert.equal(cards.page.label, 'Card Library');
+  assert.deepEqual(cards.section.pages, [], 'the library is reached through the catalog, without adding a Home sidebar');
   for (const [path, query, current] of [
     ['/analyze', 'analyze_view=writing', 'dashboards:human'],
     ['/analyze', 'analyze_view=writing&writing=messages', 'query:writing_messages'],

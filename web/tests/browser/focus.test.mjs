@@ -457,6 +457,25 @@ test('header editing keeps keyboard focus on the handle being changed', { skip }
   await page.waitForFunction(element => document.activeElement === element, await settings.elementHandle());
 });
 
+test("All Cards opens a page with focus on its heading and browser history returns Home", { skip }, async t => {
+  const { page, settled, shot } = await open(t, { ready: ".home-belt-row .query-card", preferences: { "pharos-home-card-library-v1": { shown: true } } });
+  await press(page.getByRole("button", { name: "All Cards", exact: true }));
+  const heading = page.getByRole("heading", { name: "Card Library", exact: true });
+  await heading.waitFor();
+  await page.waitForFunction(element => document.activeElement === element, await heading.elementHandle());
+  await settled();
+  await shot("card-library");
+  await page.goBack();
+  const welcome = page.locator(".home-intro h1");
+  await welcome.waitFor();
+  await page.waitForFunction(element => document.activeElement === element, await welcome.elementHandle());
+  await page.goForward();
+  await heading.waitFor();
+  await press(page.getByRole("link", { name: "Back to Home", exact: true }));
+  await welcome.waitFor();
+  await page.waitForFunction(element => document.activeElement === element, await welcome.elementHandle());
+});
+
 test("the card template editor takes focus, keeps it and returns it on Escape", { skip }, async t => {
   const { page } = await open(t, { url: "/home?cards=library", ready: ".card-library-entry .query-card" });
   const edit = page.locator(".card-library-entry button[aria-label^='Edit card']").first();

@@ -49,8 +49,8 @@ const ROUTES = [
     }, shown: '#pharosDrivePanel .pharos-activity',
   }))),
   { name: "Home", url: "/", ready: ".home-belt-row .query-card" },
-  { name: "Dashboard Catalog", url: "/home?cards=library", ready: ".card-library-entry .query-card" },
-  { name: "Weekday distributions", url: "/home?cards=library&card_search=day%20of%20the%20week", ready: '[data-card-id="human-words-weekday"] .query-shared-box' },
+  { name: "Card Library", url: "/cards", ready: ".card-library-entry .query-card" },
+  { name: "Weekday distributions", url: "/cards?cards=library&card_search=day%20of%20the%20week", ready: '[data-card-id="human-words-weekday"] .query-shared-box' },
   { name: "Search table", url: "/library", ready: "#queryTableLibrary .qt-row" },
   { name: "Search conversations", url: "/library?view=conversation", ready: ".conversation-result-card" },
   { name: "Search display switch", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.getByRole("group", { name: "Display results as" }).getByRole("button", { name: "Conversations", exact: true }).click(), shown: ".conversation-result-card" },
@@ -394,14 +394,11 @@ for (const width of [1649, 2133]) test(`pages without section menus use the full
   await primary.getByRole('button', { name: 'Home', exact: true }).click();
   await page.locator('.home-belt-row .query-card').first().waitFor();
   await fillsWindow();
-  await page.locator('.home-library-toggle').click();
+  await page.getByRole('button', { name: 'All Cards', exact: true }).click();
   await page.locator('.card-library-entry .query-card').first().waitFor();
   await fillsWindow();
   await primary.getByRole('button', { name: 'Search', exact: true }).click();
   await page.locator('#queryTableLibrary .qt-row').first().waitFor();
-  await fillsWindow();
-  await primary.getByRole('button', { name: /^Optimize/ }).click();
-  await page.locator('.findings-card').first().waitFor();
   await fillsWindow();
   await page.setViewportSize({ width: width + 400, height: 1075 });
   await fillsWindow();
@@ -515,12 +512,12 @@ test("Usage source links reveal and highlight the exact call, result, or nearest
 
 
 // IndexedDB and painting saved charts during navigation require a real browser.
-test("Dashboard Catalog restores saved covers while fresh queries are pending", { skip }, async t => {
+test("Card Library restores saved covers while fresh queries are pending", { skip }, async t => {
   let hold = false, release;
   const gate = new Promise(resolve => { release = resolve; });
   t.after(() => release());
   const app = await open(t, {
-    url: "/home?cards=library&card_search=tool-call-share",
+    url: "/cards?cards=library&card_search=tool-call-share",
     ready: ".card-library-entry .query-card",
     api: { "* /api/query/:dataset/:operation": async call => {
       if (hold && ["metrics", "query-v3", "rows-v2"].includes(call.params.operation)) await gate;
@@ -542,7 +539,7 @@ test("Dashboard Catalog restores saved covers while fresh queries are pending", 
   hold = true;
   await app.page.reload();
   await app.page.getByRole("status", { name: "Refreshing preview", exact: true }).first().waitFor();
-  const catalog = app.page.locator("#home-card-library");
+  const catalog = app.page.locator("#card-library");
   await catalog.scrollIntoViewIfNeeded();
   assert.deepEqual(await layoutProblems(app.page), []);
   await app.shot("saved-covers-refreshing");

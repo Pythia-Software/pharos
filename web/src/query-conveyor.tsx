@@ -46,11 +46,11 @@ const BeltCard = memo(function BeltCard({ item, preview, xray, lean, index, reve
     onOpen={() => actions.current!.open(item.url)} onKeep={() => actions.current!.keep(item)} onDragStart={event => actions.current!.dragStart(event, item)} onDragEnd={() => actions.current!.dragEnd()} />;
 });
 
-export function QueryConveyor({ items, previews, loading, hasErrors, active, suspended, libraryShown, onToggleLibrary, onRefresh, onOpen, onKeep, onDragStart, onDragEnd }: {
+export function QueryConveyor({ items, previews, loading, hasErrors, active, suspended, onAllCards, onRefresh, onOpen, onKeep, onDragStart, onDragEnd }: {
   items: QuerySuggestion[]; previews: Record<string, QueryPreview>; loading: boolean; hasErrors: boolean;
   active: boolean; suspended: boolean; onRefresh: () => void; onOpen: (url: string) => void; onKeep: (item: QuerySuggestion) => void;
   onDragStart: (event: React.DragEvent, item: QuerySuggestion) => void; onDragEnd: () => void;
-  libraryShown: boolean; onToggleLibrary: () => void;
+  onAllCards: () => void;
 }) {
   const section = useRef<HTMLElement>(null), heading = useRef<HTMLDivElement>(null), row = useRef<HTMLDivElement>(null);
   const [layout, setLayout] = useState({ width: innerWidth, frame: Math.min(1124, innerWidth - 56), overhang: 28, edge: 0, cardWidth: 240, gap: 18 });
@@ -208,7 +208,7 @@ export function QueryConveyor({ items, previews, loading, hasErrors, active, sus
       }
     }}>
     <div ref={heading} className="home-conveyor-head"><h2><Icon name="compass" />Dashboard Catalog</h2><div className="home-conveyor-actions">
-      <button type="button" className="home-library-toggle" aria-expanded={libraryShown} aria-controls="home-card-library" onClick={onToggleLibrary}>{libraryShown ? "Hide all cards" : "Show all cards"}<Icon name="chevron-down" /></button>
+      <button type="button" className="home-all-cards" onClick={onAllCards}>All Cards<Icon name="arrow-right" /></button>
       <CarouselCountdown held={held} paused={paused} reset={clockReset} advance={() => step(1, false)} /><div className="home-conveyor-controls">
       <button type="button" className="home-play" aria-label={paused ? "Play suggestions" : "Pause suggestions"} onClick={() => setPaused(value => !value)}>{paused ? "▶ Play" : "Ⅱ Pause"}</button>
       <button type="button" aria-label={`Previous ${counted(navigationStep)} suggestions`} disabled={!canNavigate} onClick={() => step(-1)}><Icon name="chevron-left" /></button>
