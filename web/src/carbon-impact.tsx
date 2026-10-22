@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { EMPTY_QUERY, decodeQuery, encodeQuery, type WhereTerm } from "@pythia-software/query-table-core";
-import { ChartSelect, DisplayControl, PeriodControl, RangeControl, RollingControl, StackedColumns, chartPeriodCount, chartSpan, pickRange, presetPeriod, rangeLabel, smoothingWhere, timeBounds, usageTime, withTimeRange, type FilterChange, type PeriodView } from "./usage-chart";
+import { ChartSelect, DisplayControl, PeriodControl, RangeControl, RollingControl, StackedColumns, chartPeriodCount, chartSpan, pickRange, presetPeriod, rangeLabel, smoothingWhere, timeBounds, usageTime, withTimeRange, type ChartRange, type FilterChange, type PeriodView } from "./usage-chart";
 import { chartPeriods, earliestKey, isHourly, parseDay, periodLabel, validPeriodCount } from "./chart-period";
 import { chartBucketsWithHistory, foldSeries, plottedBucketKey, validChartDisplay, validRollingPeriods, type ChartDisplay, type ChartSeries } from "./chart-series";
 import { readSlice, withSlice } from "./chart-selection";
@@ -152,8 +152,8 @@ export function CarbonImpact({ queryLinks }: { queryLinks?: (state: { where: Whe
   };
   const scope = `${scopeValue("repository_name")} · ${scopeValue("provider")} · ${bounds.from || bounds.to ? `${bounds.from?.toLocaleString() ?? "Start of history"} → ${bounds.to?.toLocaleString() ?? "Present"}${bounds.to ? " (end exclusive)" : ""}` : "All time"}`;
   const label = `${scopeValue("repository_name")} · ${scopeValue("provider")} · ${rangeLabel(bounds) || "All time"}`;
-  const onDateRange = (from?: Date, to?: Date) => {
-    onFilter(current => withTimeRange(current, usageTime, from, to));
+  const onDateRange = (from?: Date, to?: Date, preset?: ChartRange | "all") => {
+    onFilter(current => withTimeRange(current, usageTime, from, to, preset));
   };
   useLayoutEffect(() => {
     if (data) calculator?.show(data, label, scope);
@@ -185,7 +185,6 @@ export function CarbonImpact({ queryLinks }: { queryLinks?: (state: { where: Whe
   const title = `${cumulative ? "Cumulative estimated" : "Estimated"} ${view.metric === "co2" ? "CO₂e" : "electricity"}${cumulative ? "" : ` per ${periodLabel(view.period, count)}`} by ${splits.find(([key]) => key === view.split)?.[1].toLowerCase()}`;
   const choices = state.data?.choices ?? {};
   return <section className="carbon-impact" aria-label="Carbon Impact" data-feedback-label="Carbon Impact">
-    <div id="carbonAssumptions" className="carbon-card carbon-assumptions-card" />
     <section className="carbon-analysis" aria-label="Carbon usage analysis">
     <section className="carbon-filters" aria-label="Usage filters">
       <div className="carbon-filter-heading"><h3>Usage filters</h3>{where.length ? <button type="button" onClick={() => onFilter(() => [])}>Clear filters</button> : null}</div>
@@ -194,22 +193,23 @@ export function CarbonImpact({ queryLinks }: { queryLinks?: (state: { where: Whe
         <CarbonFilter field="provider" choices={choices.provider ?? []} where={where} onFilter={onFilter} />
       </div>
     </section>
-    <div id="carbonSummary" className="carbon-card carbon-summary" aria-label="Filtered carbon estimate" />
     {data && !data.windows.some(window => Object.values(window.tokens).some(counts => Object.values(counts).some(value => value > 0))) ? <p className="muted" role="status">No reported token usage matches these filters.</p> : null}
     {error ? <button type="button" onClick={() => setRefresh(value => value + 1)}>Retry carbon usage</button> : null}
     <StackedColumns title={title} controls={<>
       <ChartSelect label="Metric" value={view.metric} options={[["co2", "CO₂e"], ["energy", "Electricity"]]} onChange={metric => update({ metric })} />
       <ChartSelect label="Breakdown" value={view.split} options={splits} onChange={split => update({ split, seriesLimit: 15 })} />
       <DisplayControl value={view.display} onChange={display => update({ display })} />
-      <RangeControl bounds={bounds} editable includeTime={isHourly(view.period)} onPresetChange={(range, oldest) => update(presetPeriod(range, oldest))} onChange={onDateRange} />
+      <RangeControl bounds={bounds} editable onPresetChange={(range, oldest) => update(presetPeriod(range, oldest))} onChange={onDateRange} />
       <PeriodControl view={view} onChange={update} />
       <RollingControl value={view.rollingPeriods} display={view.display} period={view.period} count={count} onChange={rollingPeriods => update({ rollingPeriods })} />
     </>} series={series} buckets={buckets} period={view.period} periodCount={count} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={cumulativeStart} scale="linear"
       format={format ?? (value => String(value))} noun="" loading={loading} error={error} legend={series.length > 0} onExpand={() => update({ seriesLimit: Math.min(1000, limit + 5) })}
       onRange={pickRange(onFilter, usageTime, view.period, count, period => update({ period }))} />
+    <div id="carbonSummary" className="carbon-card carbon-summary" aria-label="Filtered carbon estimate" />
     {data?.undated_tokens ? <p className="muted">{data.undated_tokens.toLocaleString()} tokens have no usage date. They are included in the total but cannot be placed on the chart.</p> : null}
     {queryLinks?.({ where, view })}
     </section>
+    <div id="carbonAssumptions" className="carbon-card carbon-assumptions-card" />
     <div id="carbonCard" className={data ? "carbon-card" : ""} />
   </section>;
 }

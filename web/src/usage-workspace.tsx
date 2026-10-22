@@ -38,7 +38,7 @@ export function UsageWorkspace({ renderDashboard, renderTable }: { renderDashboa
     description={mode === "dashboards" ? usageTopics[topic].description : "Build your own analysis. Filter record fields with where, or search record text for words and phrases. Group the matches and use having to filter grouped results."}
     actions={<><ResetPage />{mode !== "dashboards" ? <UsageWorkspaceLink href={back.href}>{back.label}<Icon name="arrow-right" /></UsageWorkspaceLink> : null}</>}>
     {mode === "dashboards" ? <div className="usage-dashboard" key={topic}>
-      {card && details ? <section className="usage-card-context" aria-label="Card exploration"><div><span className="muted">Your starting point</span><h2>{card.title}</h2><p>{card.description}</p></div><UsageWorkspaceLink href={details}>View card details<Icon name="arrow-right" /></UsageWorkspaceLink></section> : null}
+      {card && details ? <section className="usage-card-context" aria-label="Card exploration"><div><span className="muted">From card:</span><h2 title={card.description}>{card.title}</h2></div><UsageWorkspaceLink href={details}>View card details<Icon name="arrow-right" /></UsageWorkspaceLink></section> : null}
       {renderDashboard(topic)}</div>
       : <div className="usage-workspace-table" key={dataset}>{renderTable(dataset)}</div>}
   </NestedPageLayout>;
