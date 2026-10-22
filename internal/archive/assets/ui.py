@@ -726,7 +726,8 @@ function tokenLevel(total){return total>=100000?'high':total>=10000?'medium':'lo
 // Continuous sea → indigo → magenta → coral scale, log-spaced from 1K to 1M tokens.
 function tokenHeat(total){const t=Math.min(1,Math.max(0,Math.log10(Math.max(total,1)/1000)/3))*3,segment=Math.min(2,Math.floor(t));return `color-mix(in oklch,var(--heat-${segment}),var(--heat-${segment+1}) ${((t-segment)*100).toFixed(1)}%)`}
 function compactionLabel(trigger){return trigger==='manual'?'Manual Compaction':trigger==='auto'?'Auto Compaction':'Compaction'}
-function tokenCount(total){return new Intl.NumberFormat('en',{notation:'compact',maximumFractionDigits:1}).format(total)}
+const tokenNumberFormat=new Intl.NumberFormat('en',{notation:'compact',maximumFractionDigits:1});
+function tokenCount(total){return tokenNumberFormat.format(total)}
 function tokenText(total){return tokenCount(total)+' tokens'}
 // Fixed-width trailing column so row content and Details stay put regardless of badge width.
 function tokenColumn(target){let column=target.querySelector(':scope > .token-column');if(!column){column=node('span','token-column');target.append(column)}return column}
@@ -918,7 +919,8 @@ function transcriptFilterControl(panel,paths){
 // Long sequences render a page at a time. The rest follows when its control
 // nears the viewport or is clicked, or when search, failure navigation, or a
 // message link needs an event in it (pager.reveal).
-const SEQUENCE_PAGE=150;
+const SEQUENCE_PAGE=150,SEQUENCE_INITIAL_PAGE=50;
+function transcriptMaterialized(target,roots=[target]){target.dispatchEvent(new CustomEvent('transcript-materialized',{bubbles:true,detail:{roots}}))}
 function renderSequence(messages,context){
   const fragment=document.createDocumentFragment(),visible=messages.filter(message=>!context.consumed.has(message.native_id)&&!context.ancestors?.has(message.native_id));
   let index=0,stop=visible.length;
@@ -932,7 +934,7 @@ function renderSequence(messages,context){
       summary.append(summaryText,stats);
       attachTokenBadge(summary,[message,...results],true);
       run.owned=ownedMessages([message],context);run.spendOwned=run.owned.filter(item=>item!==message&&!results.includes(item));
-      run.materialize=()=>{if(run.classList.contains('materialized'))return;run.classList.add('materialized');body.append(toolEvent(message,results,context.turnStart).querySelector('.event-body'),renderSequence(children,{...context,ancestors:new Set([...(context.ancestors||[]),message.native_id])}));body.dispatchEvent(new Event('transcript-materialized',{bubbles:true}))};
+      run.materialize=()=>{if(run.classList.contains('materialized'))return;run.classList.add('materialized');body.append(toolEvent(message,results,context.turnStart).querySelector('.event-body'),renderSequence(children,{...context,ancestors:new Set([...(context.ancestors||[]),message.native_id])}));transcriptMaterialized(body)};
       summary.addEventListener('click',()=>{if(!run.open)run.materialize()});run.addEventListener('toggle',()=>{if(run.open)run.materialize()});
       run.append(summary,body);entry=timelineEntry(run,message,context.turnStart,'subagent-entry');
     }else if(message.kind==='message'){entry=narrativeEvent(message,context.turnStart)}
@@ -940,12 +942,13 @@ function renderSequence(messages,context){
     entry.dataset.show=transcriptCategory(message,context);target.append(entry);index++;
   };
   const page=(target,start,end)=>{index=start;stop=end;while(index<stop)renderNext(target)};
-  page(fragment,0,Math.min(SEQUENCE_PAGE,visible.length));
+  page(fragment,0,Math.min(SEQUENCE_INITIAL_PAGE,visible.length));
   const firstEnd=index;
   if(firstEnd<visible.length){
     const gaps=new Set();
-    const near=gap=>{if(!gaps.has(gap)||!gap.button.isConnected)return false;const rect=gap.button.getBoundingClientRect();return rect.height>0&&rect.top<innerHeight+600&&rect.bottom>-600};
-    const follow=gap=>{if(!gaps.has(gap))return;const next=pager.expand(gap);requestAnimationFrame(()=>{if(next&&near(next))follow(next)})};
+    // Re-observe the remaining gap after a page. IntersectionObserver measures
+    // it after layout, without a synchronous geometry read after rail writes.
+    const follow=gap=>{if(!gaps.has(gap))return;const next=pager.expand(gap);if(next&&!next.earlier){observer.unobserve(next.button);requestAnimationFrame(()=>{if(gaps.has(next)&&next.button.isConnected)observer.observe(next.button)})}};
     const observer=new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting)follow(entry.target.sequenceGap)},{rootMargin:'600px'});
     conversationMapCleanups.push(()=>observer.disconnect());
     const label=gap=>{const left=gap.end-gap.start;gap.button.textContent=`Show ${Math.min(SEQUENCE_PAGE,left).toLocaleString()} ${gap.earlier?'earlier':'more'} · ${left.toLocaleString()} events not shown`};
@@ -962,14 +965,14 @@ function renderSequence(messages,context){
       if(!gaps.has(gap))return null;
       const parent=gap.button.parentElement,next=document.createDocumentFragment();let cursor=gap.start,following=null;
       if(ranges.length===1&&ranges[0][0]===gap.start&&ranges[0][1]<gap.end){
-        page(next,...ranges[0]);gap.start=index;gap.button.before(next);label(gap);
-        parent?.dispatchEvent(new Event('transcript-materialized',{bubbles:true}));return gap;
+        page(next,...ranges[0]);const roots=[...next.children];gap.start=index;gap.button.before(next);label(gap);
+        if(parent)transcriptMaterialized(parent,roots);return gap;
       }
       for(const [start,end]of ranges){if(cursor<start)next.append(gapControl(cursor,start,true).button);page(next,start,end);cursor=index}
       if(cursor<gap.end){following=gapControl(cursor,gap.end,gap.earlier);next.append(following.button)}
-      observer.unobserve(gap.button);gaps.delete(gap);gap.button.replaceWith(next);
+      const roots=[...next.children];observer.unobserve(gap.button);gaps.delete(gap);gap.button.replaceWith(next);
       if(!gaps.size){observer.disconnect();context.pagers?.delete(pager)}
-      parent?.dispatchEvent(new Event('transcript-materialized',{bubbles:true}));return following;
+      if(parent)transcriptMaterialized(parent,roots);return following;
     };
     const pager={
       expand(gap){return gap.earlier?materialize(gap,[[Math.max(gap.start,gap.end-SEQUENCE_PAGE),gap.end]]):materialize(gap,[[gap.start,Math.min(gap.end,gap.start+SEQUENCE_PAGE)]])},
@@ -989,10 +992,29 @@ function renderSequence(messages,context){
   return fragment;
 }
 const conversationMapCleanups=[];
+// Both rails read geometry before either writes styles. Even scrollTop can
+// flush layout when the other rail has just changed thousands of markers.
+const conversationFrameReads=new Set();
+let conversationFrame=0;
+function scheduleConversationFrame(read){
+  conversationFrameReads.add(read);
+  if(!conversationFrame)conversationFrame=requestAnimationFrame(()=>{
+    conversationFrame=0;const reads=[...conversationFrameReads];conversationFrameReads.clear();
+    const writes=reads.map(read=>read());for(const write of writes)write?.();
+  });
+}
 function conversationRailMetrics(list){
   const rect=list.getBoundingClientRect(),scroller=conversationScroller(list);return{rect,scroller,top:rect.top+scroller.scrollTop,total:Math.max(1,list.scrollHeight)};
 }
 function conversationScroller(panel){return panel.closest('.workspace-reader-content')||document.querySelector('#detail .workspace-reader-content')||pageScroller}
+function observeConversationLayout(observer,panel){
+  const scroller=conversationScroller(panel);
+  for(let element=panel;element&&element!==scroller;element=element.parentElement)observer.observe(element);
+  observer.observe(scroller);
+  // A preceding overview can move the transcript without changing its size
+  // or the scrollport's. Observe that content too, including Archive details.
+  for(const child of scroller.children)observer.observe(child);
+}
 function conversationRailFraction(metrics,target){
   return Math.max(0,Math.min(1,(target.getBoundingClientRect().top+metrics.scroller.scrollTop-metrics.top)/metrics.total));
 }
@@ -1004,22 +1026,30 @@ function setupConversationMap(panel,list){
   map.append(track,node('span','conversation-map-label','Turns'));document.body.append(map,windowOverlay);let disposed=false;
   // Turn spans are offsets within the list and change only when it resizes
   // (stale); scrolling moves just the viewport and the current turn.
-  let stale=true,spans=[];
+  let stale=true,spans=[],geometry;
   const update=()=>{
     if(disposed||!panel.isConnected)return;
-    const panelRect=panel.getBoundingClientRect(),active=document.querySelector('#detail.active')&&panelRect.top<innerHeight/2&&panelRect.bottom>innerHeight/2,metrics=conversationRailMetrics(list),scrollerTop=scroller.getBoundingClientRect().top,relaid=stale;
-    if(stale){stale=false;spans=turns.map(turn=>{const rect=turn.getBoundingClientRect();return{top:rect.top-metrics.rect.top,bottom:rect.bottom-metrics.rect.top}})}
-    map.classList.toggle('visible',Boolean(active&&metrics.total>innerHeight*.75));windowOverlay.classList.toggle('visible',map.classList.contains('visible'));
-    windowOverlay.style.width=document.querySelector('.conversation-find-rail.visible')?'108px':panel.querySelector('.token-map.visible')?'84px':'30px';
-    const windowHeight=Math.max(.06,Math.min(1,scroller.clientHeight/metrics.total));
-    viewport.style.top=`${Math.max(0,Math.min(1-windowHeight,(scrollerTop-metrics.rect.top)/metrics.total))*100}%`;
-    viewport.style.height=`${windowHeight*100}%`;
-    const middle=innerHeight/2-metrics.rect.top;
-    spans.forEach(({top,bottom},index)=>{const marker=track.children[index];if(relaid){marker.style.top=`${Math.max(0,Math.min(1,top/metrics.total))*100}%`;marker.style.height=`${Math.max(.018,(bottom-top)/metrics.total)*100}%`}marker.classList.toggle('current',top<=middle&&bottom>=middle)});
+    const relaid=stale;
+    if(stale){
+      stale=false;const metrics=conversationRailMetrics(list);
+      geometry={metrics,panel:panel.getBoundingClientRect(),scroll:scroller.scrollTop,scrollerTop:scroller.getBoundingClientRect().top,scrollerHeight:scroller.clientHeight};
+      spans=turns.map(turn=>{const rect=turn.getBoundingClientRect();return{top:rect.top-metrics.rect.top,bottom:rect.bottom-metrics.rect.top}});
+    }
+    const delta=scroller.scrollTop-geometry.scroll,listTop=geometry.metrics.rect.top-delta,{total}=geometry.metrics,{scrollerTop,scrollerHeight}=geometry,active=document.querySelector('#detail.active')&&geometry.panel.top-delta<innerHeight/2&&geometry.panel.bottom-delta>innerHeight/2;
+    const windowWidth=document.querySelector('.conversation-find-rail.visible')?'108px':panel.querySelector('.token-map.visible')?'84px':'30px';
+    return()=>{
+      map.classList.toggle('visible',Boolean(active&&total>innerHeight*.75));windowOverlay.classList.toggle('visible',map.classList.contains('visible'));
+      windowOverlay.style.width=windowWidth;
+      const windowHeight=Math.max(.06,Math.min(1,scrollerHeight/total));
+      viewport.style.top=`${Math.max(0,Math.min(1-windowHeight,(scrollerTop-listTop)/total))*100}%`;
+      viewport.style.height=`${windowHeight*100}%`;
+      const middle=innerHeight/2-listTop;
+      spans.forEach(({top,bottom},index)=>{const marker=track.children[index];if(relaid){marker.style.top=`${Math.max(0,Math.min(1,top/total))*100}%`;marker.style.height=`${Math.max(.018,(bottom-top)/total)*100}%`}marker.classList.toggle('current',top<=middle&&bottom>=middle)});
+    };
   };
-  let scheduled=false;const schedule=()=>{if(!scheduled){scheduled=true;requestAnimationFrame(()=>{scheduled=false;update()})}},relayout=()=>{stale=true;schedule()};
+  let scheduled=false;const schedule=()=>{if(!scheduled){scheduled=true;scheduleConversationFrame(()=>{scheduled=false;return update()})}},relayout=()=>{stale=true;schedule()};
   track.onclick=event=>{if(event.target!==track)return;const ratio=Math.max(0,Math.min(1,(event.clientY-track.getBoundingClientRect().top)/track.clientHeight));scroller.scrollBy({top:list.getBoundingClientRect().top+ratio*list.scrollHeight-scroller.getBoundingClientRect().top-scroller.clientHeight/2,behavior:'smooth'})};
-  scroller.addEventListener('scroll',schedule,{passive:true});addEventListener('resize',relayout);const observer=new ResizeObserver(relayout),railObserver=new MutationObserver(update);observer.observe(list);
+  scroller.addEventListener('scroll',schedule,{passive:true});addEventListener('resize',relayout);const observer=new ResizeObserver(relayout),railObserver=new MutationObserver(schedule);observer.observe(list);observeConversationLayout(observer,panel);
   for(const rail of [panel.querySelector('.token-map'),document.querySelector('.conversation-find-rail')])if(rail)railObserver.observe(rail,{attributes:true,attributeFilter:['class']});
   schedule();conversationMapCleanups.push(()=>{disposed=true;scroller.removeEventListener('scroll',schedule);removeEventListener('resize',relayout);observer.disconnect();railObserver.disconnect();map.remove();windowOverlay.remove()});
 }
@@ -1034,7 +1064,7 @@ function workPullRequests(work){
 }
 function mainIntegrationLink(work){const label=`${work.main_merge_method==='merge'?'Merged':'On main'}: ${work.main_merge_title||String(work.main_merge_commit).slice(0,12)}`,url=/^https:\/\/github\.com\//i.test(work.main_merge_url||'')?work.main_merge_url:'';const link=node(url?'a':'span','chip',label);link.title=work.main_merge_commit||'';if(url){link.href=url;link.target='_blank';link.rel='noopener noreferrer'}return link}
 function toolUseSummary(messages){const calls=messages.filter(message=>message.kind==='tool_call'),results=new Map();for(const message of messages)if(['tool_result','error'].includes(message.kind)&&message.call_id){if(!results.has(message.call_id))results.set(message.call_id,[]);results.get(message.call_id).push(message)}const counts=new Map();for(const message of calls){const payload=toolPayload(message),name=payload.name||'Unknown tool',entry=counts.get(name)||{calls:0,failures:0};entry.calls++;if(payload.raw?.is_error||(results.get(message.call_id)||[]).some(result=>result.kind==='error'||toolPayload(result).raw?.is_error||Number(toolPayload(result).raw?.exit_code)>0))entry.failures++;counts.set(name,entry)}return [...counts].sort((a,b)=>a[0].localeCompare(b[0]))}
-function renderConversation(conversation,repoRoot=''){const panel=node('section','panel conversation-panel'),head=node('div','conversation-head'),titleRow=node('div','conversation-title-row'),title=node('div','conversation-title-content'),messages=conversationMessages(conversation),humanCount=messages.filter(m=>m.role==='user'&&m.kind==='message').length,toolCount=messages.filter(m=>m.kind==='tool_call').length,delegationCount=messages.filter(m=>m.kind==='delegation').length,provider=conversation.provider||'agent';{const line=node('div','conversation-title-line'),name=conversation.title||shortText(displayText({role:'user',text:conversation.first_prompt||''}),120);line.append(node('h2','',`${provider} conversation`),copyValues(name?copyValueButton('Name',name,'conversation name'):null,conversation.id?copyValueButton('ID',conversation.id,'conversation ID'):null));title.append(line)}const chips=node('div','chips'),toolTrigger=node('button','chip tool-summary-trigger',`${toolCount} tool call${toolCount===1?'':'s'}`),toolSummary=node('section','tool-summary');toolTrigger.type='button';toolTrigger.setAttribute('aria-expanded','false');toolTrigger.setAttribute('aria-controls','tool-use-summary');toolSummary.id='tool-use-summary';toolSummary.hidden=true;toolSummary.setAttribute('aria-label','Tool use summary');toolSummary.append(node('h3','','Tool use summary'));const toolTable=node('table','tool-summary-table'),toolHead=node('thead',''),toolHeader=node('tr','');for(const label of ['Tool','Calls','Failures'])toolHeader.append(node('th','',label));toolHead.append(toolHeader);const toolBody=node('tbody','');for(const [name,data]of toolUseSummary(messages)){const row=node('tr','');row.append(node('td','',name),node('td','',String(data.calls)),node('td','',String(data.failures)));toolBody.append(row)}toolTable.append(toolHead,toolBody);toolSummary.append(toolTable);toolTrigger.onclick=()=>{const open=toolSummary.hidden;toolSummary.hidden=!open;toolTrigger.setAttribute('aria-expanded',String(open))};if(conversation.harness_version_last){const version=conversation.harness_version_first&&conversation.harness_version_first!==conversation.harness_version_last?`${conversation.harness_version_first} → ${conversation.harness_version_last}`:conversation.harness_version_last;chips.append(node('span','chip',`${conversation.harness||'Harness'} ${version}`))}if(conversation.model&&SHARE)chips.append(node('span','chip',conversation.model));else if(conversation.model){const model=node('button','chip model-search',conversation.model);model.type='button';model.title=`Search library for ${conversation.model}`;model.onclick=()=>{history.pushState(null,'','/library');show('library',true);window.pharosQueryTables?.filterModel(conversation.model)};chips.append(model)}if(conversation.effort)chips.append(node('span','chip',`Effort: ${conversation.effort}`));chips.append(node('span','chip',`${humanCount} turn${humanCount===1?'':'s'}`),toolTrigger);if(delegationCount)chips.append(node('span','chip',`${delegationCount} sub-agent${delegationCount===1?'':'s'}`));title.append(chips,toolSummary);titleRow.append(node('span','provider-mark',provider.slice(0,2)),title);const source=node('details','source-details'),sourceSummary=node('summary','','Source details'),facts=node('dl','');for(const [key,value]of[['Harness',conversation.harness],['Harness version first',conversation.harness_version_first],['Harness version last',conversation.harness_version_last],['Version source',conversation.harness_version_source],['Effort',conversation.effort],['Coverage',conversation.coverage],['Native ID',conversation.native_id],['Origin',conversation.origin]])if(value)facts.append(node('dt','',key),node('dd','',value));source.append(sourceSummary,facts);chips.append(source);const toolbar=node('div','conversation-toolbar'),filter=node('input','');filter.type='search';filter.placeholder='Search prompts, replies, tools, and files…';filter.setAttribute('aria-label','Search this conversation');filter.hidden=true;const find=node('button','button-with-icon','Find'),expand=node('button','button-with-icon','Expand all'),collapse=node('button','button-with-icon','Collapse all');find.type='button';find.title='Find in conversation (Ctrl+F)';find.onclick=()=>panel.openConversationSearch?.('');toolbar.append(find,filter,expand,collapse);titleRow.append(toolbar);head.append(titleRow);const list=node('div','turn-list'),{childrenByParent,delegationResultsByCall,toolResultsByCall,consumed,turns}=conversationGraph(messages),baseContext={repoRoot:conversationRoots(conversation,repoRoot),childrenByParent,delegationResultsByCall,toolResultsByCall,consumed};describeTodoChanges(messages,baseContext);panel.transcript=transcriptStructure(messages);baseContext.finalReplies=panel.transcript.finalReplies;const lazy=turns.length>40||messages.length>300;panel.dataset.deferred=String(lazy);panel.hasFailures=messages.some(messageFailed);{const visited=new Set();turns.forEach(turn=>{turn.owned=ownedMessages([turn.human,...turn.events],baseContext,visited)})}panel.tokenModel={messages,turns,childrenByParent,delegationResultsByCall,toolResultsByCall};const renderers=[],turnPagers=[];turns.forEach((turn,index)=>{const details=node('details','turn');details.open=turns.length===1||!lazy||index<2&&turn.events.length<=100;const summary=node('summary',''),summaryText=node('div','turn-summary-text'),stats=node('div','turn-summary-stats'),prompt=shortText(messageSummary(turn.human)||'Session setup',130),agentMessages=turn.events.filter(m=>m.kind==='message'),activities=turn.events.filter(m=>m.kind!=='message'),outcome=agentMessages.length?shortText(messageSummary(agentMessages[agentMessages.length-1]),120):'',turnStart=turn.human?.created_at||turn.events[0]?.created_at;details.dataset.human=String(Boolean(turn.human));details.dataset.prompt=prompt;const turnNumber=node('span','turn-number',`Turn ${index+1}${turn.human?' · You':''}`),age=relativeAgeLabel(turnStart);if(age)turnNumber.append(' · ',age);summaryText.append(turnNumber,node('div','turn-summary-prompt',prompt),node('div','turn-summary-outcome',outcome||timeLabel(turnStart)));for(const effort of [...new Set(turn.owned.map(message=>message.effort).filter(Boolean))])stats.append(node('span','mini-count',`Effort: ${effort}`));if(agentMessages.length)stats.append(node('span','mini-count',`${agentMessages.length} repl${agentMessages.length===1?'y':'ies'}`));if(activities.length)stats.append(node('span','mini-count',`${activities.length} activit${activities.length===1?'y':'ies'}`));summary.append(summaryText,stats);tokenColumn(summary);const body=node('div','turn-body'),pagers=new Set(),context={...baseContext,turnStart,pagers};turnPagers.push(pagers);let rendered=false;const renderBody=()=>{if(rendered)return;rendered=true;if(turn.human){const human=narrativeEvent(turn.human,turnStart);human.dataset.show='prompts';body.append(human)}body.append(renderSequence(turn.events,context));body.dispatchEvent(new Event('transcript-materialized',{bubbles:true}))};renderers.push(renderBody);if(details.open)renderBody();else{summary.addEventListener('click',()=>{if(!details.open)renderBody()});details.addEventListener('toggle',()=>{if(details.open)renderBody()},{once:true})}details.append(summary,body);list.append(details)});const turnMatches=(index,test)=>turns[index].owned.some(test);const revealTurn=(index,predicate)=>{renderers[index]();const element=list.children[index],done=new Set();let changed=true;while(changed){changed=false;for(const pager of [...turnPagers[index]])if(!done.has(pager)){done.add(pager);pager.reveal(predicate);changed=true}for(const run of element.querySelectorAll('.subagent-run:not(.materialized)'))if(run.owned.some(predicate)){run.materialize();changed=true}}for(const detail of element.querySelectorAll('.tool-event'))if(detail.sourceMessages?.some(predicate))detail.materialize?.()};panel.reveal=predicate=>{const found=[];turns.forEach((turn,index)=>{if(turnMatches(index,predicate)){revealTurn(index,predicate);found.push(index)}});return found};panel.materializeTurn=index=>renderers[index]?.();panel.materializeAllTurns=()=>renderers.forEach(render=>render());let failureTargets=null;panel.revealFailure=cursor=>{if(!failureTargets){panel.reveal(messageFailed);failureTargets=[...list.querySelectorAll('.tool-event.error')]}const target=failureTargets[cursor%failureTargets.length];if(!target)return null;exemptFromTranscriptFilter(panel,target);for(let el=target;el&&el!==panel;el=el.parentElement)if(el.tagName==='DETAILS'){el.materialize?.();el.open=true}return target};filter.oninput=()=>{const query=filter.value.trim().toLowerCase(),test=message=>searchText(message).includes(query);list.querySelectorAll('.turn').forEach((turn,index)=>{turn.hidden=Boolean(query&&!turnMatches(index,test));if(query&&!turn.hidden){revealTurn(index,test);turn.open=true;turn.querySelectorAll('.subagent-run').forEach(run=>{if(run.owned?.some(test)){run.materialize();run.open=true}});turn.querySelectorAll('.tool-event').forEach(event=>{const open=Boolean(event.dataset.searchEntry?.includes(query));if(open)event.materialize?.();event.open=open});turn.querySelectorAll('.prose-truncated').forEach(prose=>{if(prose.textContent.toLowerCase().includes(query)){prose.classList.remove('prose-truncated');const toggle=prose.parentElement.querySelector('.message-toggle');if(toggle){toggle.textContent='Show less';toggle.setAttribute('aria-expanded','true')}}})}})};expand.textContent='Open turns';collapse.textContent='Close turns';expand.onclick=()=>list.querySelectorAll('.turn').forEach((item,index)=>{renderers[index]();item.open=true});collapse.onclick=()=>list.querySelectorAll('.turn').forEach(item=>item.open=false);title.append(transcriptFilterControl(panel,messages.filter(message=>!panel.transcript.consumed.has(message)).map(message=>panel.transcript.pathOf(message))));panel.append(head,list);requestAnimationFrame(()=>setupConversationMap(panel,list));return panel}
+function renderConversation(conversation,repoRoot=''){const panel=node('section','panel conversation-panel'),head=node('div','conversation-head'),titleRow=node('div','conversation-title-row'),title=node('div','conversation-title-content'),messages=conversationMessages(conversation),humanCount=messages.filter(m=>m.role==='user'&&m.kind==='message').length,toolCount=messages.filter(m=>m.kind==='tool_call').length,delegationCount=messages.filter(m=>m.kind==='delegation').length,provider=conversation.provider||'agent';{const line=node('div','conversation-title-line'),name=conversation.title||shortText(displayText({role:'user',text:conversation.first_prompt||''}),120);line.append(node('h2','',`${provider} conversation`),copyValues(name?copyValueButton('Name',name,'conversation name'):null,conversation.id?copyValueButton('ID',conversation.id,'conversation ID'):null));title.append(line)}const chips=node('div','chips'),toolTrigger=node('button','chip tool-summary-trigger',`${toolCount} tool call${toolCount===1?'':'s'}`),toolSummary=node('section','tool-summary');toolTrigger.type='button';toolTrigger.setAttribute('aria-expanded','false');toolTrigger.setAttribute('aria-controls','tool-use-summary');toolSummary.id='tool-use-summary';toolSummary.hidden=true;toolSummary.setAttribute('aria-label','Tool use summary');toolSummary.append(node('h3','','Tool use summary'));const toolTable=node('table','tool-summary-table'),toolHead=node('thead',''),toolHeader=node('tr','');for(const label of ['Tool','Calls','Failures'])toolHeader.append(node('th','',label));toolHead.append(toolHeader);const toolBody=node('tbody','');for(const [name,data]of toolUseSummary(messages)){const row=node('tr','');row.append(node('td','',name),node('td','',String(data.calls)),node('td','',String(data.failures)));toolBody.append(row)}toolTable.append(toolHead,toolBody);toolSummary.append(toolTable);toolTrigger.onclick=()=>{const open=toolSummary.hidden;toolSummary.hidden=!open;toolTrigger.setAttribute('aria-expanded',String(open))};if(conversation.harness_version_last){const version=conversation.harness_version_first&&conversation.harness_version_first!==conversation.harness_version_last?`${conversation.harness_version_first} → ${conversation.harness_version_last}`:conversation.harness_version_last;chips.append(node('span','chip',`${conversation.harness||'Harness'} ${version}`))}if(conversation.model&&SHARE)chips.append(node('span','chip',conversation.model));else if(conversation.model){const model=node('button','chip model-search',conversation.model);model.type='button';model.title=`Search library for ${conversation.model}`;model.onclick=()=>{history.pushState(null,'','/library');show('library',true);window.pharosQueryTables?.filterModel(conversation.model)};chips.append(model)}if(conversation.effort)chips.append(node('span','chip',`Effort: ${conversation.effort}`));chips.append(node('span','chip',`${humanCount} turn${humanCount===1?'':'s'}`),toolTrigger);if(delegationCount)chips.append(node('span','chip',`${delegationCount} sub-agent${delegationCount===1?'':'s'}`));title.append(chips,toolSummary);titleRow.append(node('span','provider-mark',provider.slice(0,2)),title);const source=node('details','source-details'),sourceSummary=node('summary','','Source details'),facts=node('dl','');for(const [key,value]of[['Harness',conversation.harness],['Harness version first',conversation.harness_version_first],['Harness version last',conversation.harness_version_last],['Version source',conversation.harness_version_source],['Effort',conversation.effort],['Coverage',conversation.coverage],['Native ID',conversation.native_id],['Origin',conversation.origin]])if(value)facts.append(node('dt','',key),node('dd','',value));source.append(sourceSummary,facts);chips.append(source);const toolbar=node('div','conversation-toolbar'),filter=node('input','');filter.type='search';filter.placeholder='Search prompts, replies, tools, and files…';filter.setAttribute('aria-label','Search this conversation');filter.hidden=true;const find=node('button','button-with-icon','Find'),expand=node('button','button-with-icon','Expand all'),collapse=node('button','button-with-icon','Collapse all');find.type='button';find.title='Find in conversation (Ctrl+F)';find.onclick=()=>panel.openConversationSearch?.('');toolbar.append(find,filter,expand,collapse);titleRow.append(toolbar);head.append(titleRow);const list=node('div','turn-list'),{childrenByParent,delegationResultsByCall,toolResultsByCall,consumed,turns}=conversationGraph(messages),baseContext={repoRoot:conversationRoots(conversation,repoRoot),childrenByParent,delegationResultsByCall,toolResultsByCall,consumed};describeTodoChanges(messages,baseContext);panel.transcript=transcriptStructure(messages);baseContext.finalReplies=panel.transcript.finalReplies;const lazy=turns.length>40||messages.length>300;panel.dataset.deferred=String(lazy);panel.hasFailures=messages.some(messageFailed);{const visited=new Set();turns.forEach(turn=>{turn.owned=ownedMessages([turn.human,...turn.events],baseContext,visited)})}panel.tokenModel={messages,turns,childrenByParent,delegationResultsByCall,toolResultsByCall};const renderers=[],turnPagers=[];turns.forEach((turn,index)=>{const details=node('details','turn');details.open=turns.length===1||!lazy||index<2&&turn.events.length<=100;const summary=node('summary',''),summaryText=node('div','turn-summary-text'),stats=node('div','turn-summary-stats'),prompt=shortText(messageSummary(turn.human)||'Session setup',130),agentMessages=turn.events.filter(m=>m.kind==='message'),activities=turn.events.filter(m=>m.kind!=='message'),outcome=agentMessages.length?shortText(messageSummary(agentMessages[agentMessages.length-1]),120):'',turnStart=turn.human?.created_at||turn.events[0]?.created_at;details.dataset.human=String(Boolean(turn.human));details.dataset.prompt=prompt;const turnNumber=node('span','turn-number',`Turn ${index+1}${turn.human?' · You':''}`),age=relativeAgeLabel(turnStart);if(age)turnNumber.append(' · ',age);summaryText.append(turnNumber,node('div','turn-summary-prompt',prompt),node('div','turn-summary-outcome',outcome||timeLabel(turnStart)));for(const effort of [...new Set(turn.owned.map(message=>message.effort).filter(Boolean))])stats.append(node('span','mini-count',`Effort: ${effort}`));if(agentMessages.length)stats.append(node('span','mini-count',`${agentMessages.length} repl${agentMessages.length===1?'y':'ies'}`));if(activities.length)stats.append(node('span','mini-count',`${activities.length} activit${activities.length===1?'y':'ies'}`));summary.append(summaryText,stats);tokenColumn(summary);const body=node('div','turn-body'),pagers=new Set(),context={...baseContext,turnStart,pagers};turnPagers.push(pagers);let rendered=false;const renderBody=()=>{if(rendered)return;rendered=true;if(turn.human){const human=narrativeEvent(turn.human,turnStart);human.dataset.show='prompts';body.append(human)}body.append(renderSequence(turn.events,context));transcriptMaterialized(body)};renderers.push(renderBody);if(details.open)renderBody();else{summary.addEventListener('click',()=>{if(!details.open)renderBody()});details.addEventListener('toggle',()=>{if(details.open)renderBody()},{once:true})}details.append(summary,body);list.append(details)});const turnMatches=(index,test)=>turns[index].owned.some(test);const revealTurn=(index,predicate)=>{renderers[index]();const element=list.children[index],done=new Set();let changed=true;while(changed){changed=false;for(const pager of [...turnPagers[index]])if(!done.has(pager)){done.add(pager);pager.reveal(predicate);changed=true}for(const run of element.querySelectorAll('.subagent-run:not(.materialized)'))if(run.owned.some(predicate)){run.materialize();changed=true}}for(const detail of element.querySelectorAll('.tool-event'))if(detail.sourceMessages?.some(predicate))detail.materialize?.()};panel.reveal=predicate=>{const found=[];turns.forEach((turn,index)=>{if(turnMatches(index,predicate)){revealTurn(index,predicate);found.push(index)}});return found};panel.materializeTurn=index=>renderers[index]?.();panel.materializeAllTurns=()=>renderers.forEach(render=>render());let failureTargets=null;panel.revealFailure=cursor=>{if(!failureTargets){panel.reveal(messageFailed);failureTargets=[...list.querySelectorAll('.tool-event.error')]}const target=failureTargets[cursor%failureTargets.length];if(!target)return null;exemptFromTranscriptFilter(panel,target);for(let el=target;el&&el!==panel;el=el.parentElement)if(el.tagName==='DETAILS'){el.materialize?.();el.open=true}return target};filter.oninput=()=>{const query=filter.value.trim().toLowerCase(),test=message=>searchText(message).includes(query);list.querySelectorAll('.turn').forEach((turn,index)=>{turn.hidden=Boolean(query&&!turnMatches(index,test));if(query&&!turn.hidden){revealTurn(index,test);turn.open=true;turn.querySelectorAll('.subagent-run').forEach(run=>{if(run.owned?.some(test)){run.materialize();run.open=true}});turn.querySelectorAll('.tool-event').forEach(event=>{const open=Boolean(event.dataset.searchEntry?.includes(query));if(open)event.materialize?.();event.open=open});turn.querySelectorAll('.prose-truncated').forEach(prose=>{if(prose.textContent.toLowerCase().includes(query)){prose.classList.remove('prose-truncated');const toggle=prose.parentElement.querySelector('.message-toggle');if(toggle){toggle.textContent='Show less';toggle.setAttribute('aria-expanded','true')}}})}})};expand.textContent='Open turns';collapse.textContent='Close turns';expand.onclick=()=>list.querySelectorAll('.turn').forEach((item,index)=>{renderers[index]();item.open=true});collapse.onclick=()=>list.querySelectorAll('.turn').forEach(item=>item.open=false);title.append(transcriptFilterControl(panel,messages.filter(message=>!panel.transcript.consumed.has(message)).map(message=>panel.transcript.pathOf(message))));panel.append(head,list);requestAnimationFrame(()=>setupConversationMap(panel,list));return panel}
 function turnSummaryData(conversation){
   const messages=conversationMessages(conversation),delegationCalls=new Set(messages.filter(message=>message.kind==='delegation').map(message=>message.call_id).filter(Boolean)),toolCalls=new Set(messages.filter(message=>message.kind==='tool_call').map(message=>message.call_id).filter(Boolean)),consumed=new Set(),parentIds=new Set(messages.filter(message=>message.kind==='delegation').flatMap(message=>[message.native_id,message.call_id]).filter(Boolean)),turns=[];let current=null;
   messages.filter(message=>message.call_id&&['delegation_result','tool_result','error'].includes(message.kind)).forEach(message=>{if(delegationCalls.has(message.call_id)||((message.kind==='tool_result'||message.kind==='error')&&toolCalls.has(message.call_id)))consumed.add(message.native_id)});
@@ -1186,12 +1216,16 @@ function setupTokenOverview(panel,conversation={}){
     for(const message of owned){const sample=message.tokenReport?.contextSample;if(sample)entries.push({sample,message,target:turn,turn,index,order:order.get(message),label:`Turn ${index+1}`})}
   });
   entries.sort((a,b)=>a.index-b.index||a.order-b.order);
-  const refreshTargets=()=>{
-    const targets=new Map();
-    for(const holder of panel.querySelectorAll('.context-evidence'))for(const sample of holder.contextSamples)targets.set(sample,holder.closest('.timeline-entry')||holder);
-    for(const entry of entries)entry.target=targets.get(entry.sample)||entry.turn;
-    // From the model, since a sub-agent's later events may not be rendered yet.
-    for(const agent of panel.querySelectorAll('.subagent-run:not(.spend-shown)')){agent.classList.add('spend-shown');spendBadge(agent.querySelector(':scope > summary'),spend(agent.spendOwned||[]),'Subagent (including nested agents)')}
+  const entryBySample=new Map();
+  for(const entry of entries){if(!entryBySample.has(entry.sample))entryBySample.set(entry.sample,[]);entryBySample.get(entry.sample).push(entry)}
+  const refreshTargets=(roots=[panel])=>{
+    for(const root of roots){
+      const holders=[...(root.matches('.context-evidence')?[root]:[]),...root.querySelectorAll('.context-evidence')];
+      for(const holder of holders)for(const sample of holder.contextSamples)for(const entry of entryBySample.get(sample)||[])entry.target=holder.closest('.timeline-entry')||holder;
+      // Only new sub-agents need accounting; earlier pages keep their badges.
+      const agents=[...(root.matches('.subagent-run:not(.spend-shown)')?[root]:[]),...root.querySelectorAll('.subagent-run:not(.spend-shown)')];
+      for(const agent of agents){agent.classList.add('spend-shown');spendBadge(agent.querySelector(':scope > summary'),spend(agent.spendOwned||[]),'Subagent (including nested agents)')}
+    }
   };
   refreshTargets();
   const total=conversation.token_usage?.total_tokens??(turnEntries.some(e=>e.total!==null)?turnEntries.reduce((n,e)=>n+(e.total||0),0):null);
@@ -1201,7 +1235,7 @@ function setupTokenOverview(panel,conversation={}){
   legend.title='Reported token usage and context changes across the conversation.';
   const jump=entry=>{const filter=panel.querySelector('input[type=search]');if(filter.value){filter.value='';filter.oninput()}panel.reveal(message=>message===entry.message);refreshTargets();exemptFromTranscriptFilter(panel,entry.target);for(let e=entry.target;e&&e!==panel;e=e.parentElement)if(e.tagName==='DETAILS')e.open=true;entry.target.scrollIntoView({behavior:'smooth',block:'center'});entry.target.classList.remove('token-highlight');requestAnimationFrame(()=>entry.target.classList.add('token-highlight'))};
   panel.querySelector('.conversation-head .chips').append(legend);
-  const materialized=()=>{refreshTargets();panel.dispatchEvent(new Event('input'))};
+  const materialized=event=>{refreshTargets(event.detail?.roots||[event.target]);panel.dispatchEvent(new Event('input'))};
   panel.addEventListener('transcript-materialized',materialized);
   conversationMapCleanups.push(()=>panel.removeEventListener('transcript-materialized',materialized));
   if(!entries.length)return;
@@ -1209,7 +1243,7 @@ function setupTokenOverview(panel,conversation={}){
   // Widths are shares of each stream's context window; without a known window,
   // fall back to the largest context observed in the conversation.
   const {streams,windows,scale}=contextScale(entries.map(e=>e.sample)),colors=['#43877e','#b07a18','#557ed0','#c06c91','#8a79be'];
-  const short=n=>new Intl.NumberFormat('en',{notation:'compact',maximumFractionDigits:1}).format(n);
+  const short=tokenCount;
   const mainWindow=windows.get('main')||windows.get(streams[0]);
   rail.title=mainWindow?`Width is the share of the ${short(mainWindow)}-token context window in use.`:'Width is relative to the largest context observed; the context window is unknown.';
   for(const entry of entries){
@@ -1222,14 +1256,15 @@ function setupTokenOverview(panel,conversation={}){
   // Marker positions are offsets within the transcript, so scrolling changes
   // only which groups are in view. Placing markers measures every target, so
   // it waits for a change in content, size, or filters (stale).
-  let scheduled=false,stale=true,disposed=false,ordered=[];
+  let scheduled=false,stale=true,disposed=false,ordered=[],geometry;
   const update=()=>{
     scheduled=false;if(disposed||!panel.isConnected)return;
     // Measure everything before writing: a measurement after a style write
     // forces a layout, and one per marker froze long conversations.
-    const rect=panel.getBoundingClientRect(),list=panel.querySelector('.turn-list'),metrics=conversationRailMetrics(list);
+    const relaid=stale;
     if(stale){
-      stale=false;const trackHeight=track.clientHeight,groups=new Map();
+      stale=false;const metrics=conversationRailMetrics(panel.querySelector('.turn-list')),trackHeight=track.clientHeight,groups=new Map();
+      geometry={panel:panel.getBoundingClientRect(),listTop:metrics.rect.top,scroll:scroller.scrollTop};
       for(const entry of entries){
         if(entry.turn.hidden)continue;
         let target=entry.target,collapsed=false;
@@ -1237,27 +1272,34 @@ function setupTokenOverview(panel,conversation={}){
         if(!groups.has(target)){const bounds=target.getBoundingClientRect();groups.set(target,{target,collapsed,entries:[],pixel:Math.max(0,Math.min(1,(bounds.top+scroller.scrollTop-metrics.top)/metrics.total))*trackHeight,top:bounds.top-metrics.rect.top,bottom:bounds.bottom-metrics.rect.top,inView:null})}
         groups.get(target).entries.push(entry);
       }
-      for(const entry of entries)entry.marker.hidden=true;
       ordered=[...groups.values()].sort((a,b)=>a.pixel-b.pixel);
-      ordered.forEach((group,index)=>{
-        const end=ordered[index+1]?.pixel??trackHeight,height=Math.max(2,end-group.pixel);
-        // Preserve all samples, even in a collapsed group, as a compressed profile.
-        group.entries.forEach((entry,i)=>{
-          const {sample,marker}=entry,h=Math.max(.5,height/group.entries.length),{from,width}=contextProfile(sample,scale);
-          marker.hidden=false;marker.style.top=`${group.pixel+i*height/group.entries.length}px`;marker.style.height=`${sample.compact?2:h}px`;marker.style.width='100%';marker.style.setProperty('--context-profile',sample.compact?'none':`polygon(0 0,${from}% 0,${width}% 100%,0 100%)`);
-          marker.classList.toggle('collapsed-context',group.collapsed);marker.classList.toggle('agent-context',sample.stream!=='main');
+      geometry.trackHeight=trackHeight;
+    }
+    const delta=scroller.scrollTop-geometry.scroll,listTop=geometry.listTop-delta;
+    return()=>{
+      if(relaid){
+        const trackHeight=geometry.trackHeight;
+        for(const entry of entries)entry.marker.hidden=true;
+        ordered.forEach((group,index)=>{
+          const end=ordered[index+1]?.pixel??trackHeight,height=Math.max(2,end-group.pixel);
+          // Preserve all samples, even in a collapsed group, as a compressed profile.
+          group.entries.forEach((entry,i)=>{
+            const {sample,marker}=entry,h=Math.max(.5,height/group.entries.length),{from,width}=contextProfile(sample,scale);
+            marker.hidden=false;marker.style.top=`${group.pixel+i*height/group.entries.length}px`;marker.style.height=`${sample.compact?2:h}px`;marker.style.width='100%';marker.style.setProperty('--context-profile',sample.compact?'none':`polygon(0 0,${from}% 0,${width}% 100%,0 100%)`);
+            marker.classList.toggle('collapsed-context',group.collapsed);marker.classList.toggle('agent-context',sample.stream!=='main');
+          });
         });
-      });
-    }
-    rail.classList.toggle('visible',rect.top<innerHeight&&rect.bottom>0);
-    for(const group of ordered){
-      const inView=metrics.rect.top+group.bottom>0&&metrics.rect.top+group.top<innerHeight;
-      if(inView!==group.inView){group.inView=inView;for(const entry of group.entries)entry.marker.classList.toggle('in-view',inView)}
-    }
+      }
+      rail.classList.toggle('visible',geometry.panel.top-delta<innerHeight&&geometry.panel.bottom-delta>0);
+      for(const group of ordered){
+        const inView=listTop+group.bottom>0&&listTop+group.top<innerHeight;
+        if(inView!==group.inView){group.inView=inView;for(const entry of group.entries)entry.marker.classList.toggle('in-view',inView)}
+      }
+    };
   };
-  const schedule=()=>{if(!scheduled){scheduled=true;requestAnimationFrame(update)}},relayout=()=>{stale=true;schedule()};
-  const observer=new ResizeObserver(relayout);observer.observe(panel);
-  scroller.addEventListener('scroll',schedule,{passive:true});addEventListener('resize',relayout);panel.addEventListener('toggle',relayout,true);panel.addEventListener('input',relayout);panel.addEventListener('transcript-filter',relayout);requestAnimationFrame(update);
+  const schedule=()=>{if(!scheduled){scheduled=true;scheduleConversationFrame(update)}},relayout=()=>{stale=true;schedule()};
+  const observer=new ResizeObserver(relayout);observeConversationLayout(observer,panel);observer.observe(track);
+  scroller.addEventListener('scroll',schedule,{passive:true});addEventListener('resize',relayout);panel.addEventListener('toggle',relayout,true);panel.addEventListener('input',relayout);panel.addEventListener('transcript-filter',relayout);scheduleConversationFrame(update);
   conversationMapCleanups.push(()=>{disposed=true;observer.disconnect();scroller.removeEventListener('scroll',schedule);removeEventListener('resize',relayout);panel.removeEventListener('toggle',relayout,true);panel.removeEventListener('input',relayout);panel.removeEventListener('transcript-filter',relayout);rail.remove()});
 }
 
@@ -1362,7 +1404,8 @@ workspaceInbox=window.pharosInbox.mount({root,workspace:id,title:w.title,overvie
 // later; if they nest after all, the reader keeps the conversation open
 // beside the workspace sessions.
 const inbox=workspaceInbox;inbox.setMerged(conversations.length===1&&!conversations[0].parent_id);
-delegationExplorer=window.pharosDelegation.mount(explorer,{workspace:id,conversation:conversations[activeIndex]?.id||'',contextHost:null,headingHost:workspaceInbox.heading,statsHost:workspaceStats,openConversation:async(conversation,message,session)=>selectConversation(conversations.findIndex(c=>c.id===conversation),{message,session}),onHierarchy:hierarchical=>{if(hierarchical&&inbox===workspaceInbox&&inbox.merged){inbox.setMerged(false)}}});
+const readerIndex=activeIndex>=0?activeIndex:focusIndex>=0||matchedIndex>=0||inbox.merged?initialIndex:-1;
+delegationExplorer=window.pharosDelegation.mount(explorer,{workspace:id,conversation:conversations[readerIndex]?.id||'',contextHost:null,headingHost:workspaceInbox.heading,statsHost:workspaceStats,openConversation:async(conversation,message,session)=>selectConversation(conversations.findIndex(c=>c.id===conversation),{message,session}),onHierarchy:hierarchical=>{if(hierarchical&&inbox===workspaceInbox&&inbox.merged){inbox.setMerged(false)}}});
 // The bundle can arrive after an initial deep-linked reader. Rebuild that
 // reader inside the new scroll container so its rails and search use the pane.
 if(activeIndex>=0&&routeConversation()){

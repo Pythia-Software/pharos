@@ -707,38 +707,48 @@ export function DelegationExplorer({
     const panel = contextHost.closest(".conversation-panel");
     if (!panel) return;
     const added: HTMLElement[] = [];
-    function decorate() {
-      for (const n of childSessions) {
-        const hasTranscript = n.external_child || n.conversation_id !== conversation ||
-          n.self.messages?.value || n.self.requests?.value || n.self.calls?.value;
-        if (!n.message_id || !hasTranscript) continue;
-        const target = panel!.querySelector<HTMLElement>(
-          `[data-message-id="${CSS.escape(n.message_id)}"]`,
-        );
-        const summary = target?.querySelector(
-          ".subagent-summary-stats, .action-summary",
-        );
-        if (
-          !summary ||
-          summary.querySelector(
-            `[data-delegation-session="${CSS.escape(n.id)}"]`,
-          )
-        )
-          continue;
-        const link = document.createElement("button");
-        link.type = "button";
-        link.className = "delegation-transcript-link";
-        link.dataset.delegationSession = n.id;
-        link.textContent = n.external_child
-          ? `${n.external_child.provider} · Open child ↗`
-          : `${n.provider} · ${formatted(n.self.clock?.value, "ms")} · Open child`;
-        link.onclick = (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          openNode(n);
-        };
-        summary.append(link);
-        added.push(link);
+    const pending = new Map<string, Session[]>();
+    for (const n of childSessions) {
+      const hasTranscript = n.external_child || n.conversation_id !== conversation ||
+        n.self.messages?.value || n.self.requests?.value || n.self.calls?.value;
+      if (!n.message_id || !hasTranscript) continue;
+      const sessions = pending.get(n.message_id) || [];
+      sessions.push(n);
+      pending.set(n.message_id, sessions);
+    }
+    function decorate(event?: Event) {
+      if (!pending.size) return;
+      const roots = (event as CustomEvent<{ roots?: Element[] }> | undefined)?.detail?.roots || [panel!];
+      for (const root of roots) {
+        const targets = [
+          ...(root.matches("[data-message-id]") ? [root as HTMLElement] : []),
+          ...root.querySelectorAll<HTMLElement>("[data-message-id]"),
+        ];
+        for (const target of targets) {
+          const id = target.dataset.messageId!;
+          const sessions = pending.get(id);
+          if (!sessions) continue;
+          const summary = target.querySelector(".subagent-summary-stats, .action-summary");
+          if (!summary) continue;
+          for (const n of sessions) {
+            if (summary.querySelector(`[data-delegation-session="${CSS.escape(n.id)}"]`)) continue;
+            const link = document.createElement("button");
+            link.type = "button";
+            link.className = "delegation-transcript-link";
+            link.dataset.delegationSession = n.id;
+            link.textContent = n.external_child
+              ? `${n.external_child.provider} · Open child ↗`
+              : `${n.provider} · ${formatted(n.self.clock?.value, "ms")} · Open child`;
+            link.onclick = (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              openNode(n);
+            };
+            summary.append(link);
+            added.push(link);
+          }
+          pending.delete(id);
+        }
       }
     }
     decorate();

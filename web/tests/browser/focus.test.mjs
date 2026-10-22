@@ -575,8 +575,18 @@ test("the delegation session sheet on a phone takes focus, keeps it and returns 
   await holdsFocus(page, sheet, show);
 });
 
-test("transcript rails start below the header, with the navigation bar open, after main scrolls", { skip }, async t => {
-  const { page, settled } = await open(t, { url: `/work/${workID}/conversation/conv-root`, ready: ".conversation-panel .turn", preferences: { "pharos-show-nav-button": true } });
+for (const merged of [false, true]) test(`transcript rails follow layout changes in ${merged ? "merged" : "split"} workspaces`, { skip }, async t => {
+  const api = merged ? {
+    "GET /api/work/:id": call => {
+      const work = defaultApi["GET /api/work/:id"](call);
+      return { ...work, conversations: work.conversations.slice(0, 1), attempts: [{ attempt_no: 1, result: "Retained archive evidence\n".repeat(40) }] };
+    },
+    "GET /api/work/:id/delegation": call => {
+      const data = defaultApi["GET /api/work/:id/delegation"](call);
+      return { ...data, rows: data.rows.slice(0, 1), focus: data.focus.slice(0, 1), session_count: 1, total: 1 };
+    },
+  } : {};
+  const { page, settled } = await open(t, { url: `/work/${workID}/conversation/conv-root`, ready: ".conversation-panel .turn", api, preferences: { "pharos-show-nav-button": true } });
   await activateHeaderTool(page, "navigatorToggle");
   await page.locator("#navigator.open").waitFor();
   await page.evaluate(() => document.querySelector("main").scrollTo(0, 1200));
@@ -588,6 +598,69 @@ test("transcript rails start below the header, with the navigation bar open, aft
   });
   assert.ok(tops.rails.length, "the rails are shown");
   for (const [name, top] of tops.rails) assert.ok(top >= tops.header - 1, `${name} starts at ${top}, above the header's bottom at ${tops.header}`);
+
+  // Rail geometry must stay useful after disclosures and a viewport change.
+  // A context jump must still reach its event, including a deferred turn.
+  await page.getByRole("button", { name: "Close turns", exact: true }).click();
+  await page.getByRole("button", { name: "Open turns", exact: true }).click();
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await settled();
+  await page.locator(".token-marker").last().evaluate(marker => marker.click());
+  await page.waitForFunction(() => {
+    const target = document.querySelector(".token-highlight");
+    if (!target) return false;
+    const bounds = target.getBoundingClientRect();
+    return bounds.height > 0 && bounds.bottom > document.querySelector("body > header").getBoundingClientRect().bottom && bounds.top < innerHeight;
+  });
+  if (merged) {
+    // The overview grows without resizing the transcript or its scrollport.
+    // The selected turn and the progress band must still describe the viewport.
+    for (const expanded of [true, false]) {
+      await page.getByText("Archive details", { exact: true }).click();
+      assert.equal(await page.locator(".archive-details").evaluate(details => details.open), expanded);
+      await settled();
+      await page.locator(".turn").nth(6).evaluate(turn => turn.scrollIntoView({ block: "center", behavior: "instant" }));
+      await page.waitForFunction(() => {
+        const turns = [...document.querySelectorAll(".conversation-map-turn")];
+        const marker = turns[6], band = document.querySelector(".conversation-map-viewport");
+        if (!marker.classList.contains("current")) return false;
+        const bounds = marker.getBoundingClientRect(), viewport = band.getBoundingClientRect(), middle = (bounds.top + bounds.bottom) / 2;
+        return middle >= viewport.top && middle <= viewport.bottom;
+      });
+    }
+  }
+});
+
+for (const trigger of ["context jump", "scroll"]) test(`a ${trigger} reaches a paginated event and its child conversation link`, { skip }, async t => {
+  const { page, settled, calls } = await open(t, {
+    url: `/work/${workID}/conversation/conv-root`, ready: ".conversation-panel .turn",
+    api: { "GET /api/work/:id/conversations/:conversation": call => {
+      const body = defaultApi["GET /api/work/:id/conversations/:conversation"](call);
+      if (call.params.conversation !== "conv-root") return body;
+      const event = (id, kind, text, extra = {}) => ({ id, native_id: id, kind, role: "assistant", text: typeof text === "string" ? text : JSON.stringify(text), created_at: "2026-10-01T00:00:00Z", ...extra });
+      return { ...body, messages: [
+        event("prompt", "message", "Review the changes", { role: "user" }),
+        ...Array.from({ length: 52 }, (_, i) => event(`call-${i}`, "tool_call", { name: "Bash", input: { command: `check ${i}` } }, { call_id: `call-${i}` })),
+        event("m-15", "delegation", { name: "Task", input: { description: "Review implementation", subagent_type: "Reviewer" } }, { call_id: "child" }),
+        event("context", "metadata", { type: "token_count", info: { total_token_usage: { total_tokens: 40000 }, last_token_usage: { input_tokens: 30000, output_tokens: 500 } } }),
+      ] };
+    } },
+  });
+  assert.equal(calls.filter(call => call.path.endsWith("/delegation")).length, 1, "the deep link loads delegation analysis once for the selected conversation");
+  if (trigger === "scroll") {
+    await page.evaluate(() => { const scroller = document.querySelector(".workspace-reader-content"); scroller.scrollTop = scroller.scrollHeight; });
+    await page.getByRole("button", { name: /codex.*Open child/ }).waitFor();
+  }
+  await page.locator(".token-marker").last().evaluate(marker => marker.click());
+  await page.waitForFunction(() => {
+    const target = document.querySelector(".token-highlight");
+    const bounds = target?.getBoundingClientRect();
+    return bounds?.height > 0 && bounds.bottom > 0 && bounds.top < innerHeight;
+  });
+  const child = page.getByRole("button", { name: /codex.*Open child/ });
+  await child.click();
+  await settled();
+  assert.ok(await page.getByRole("article", { name: "User message", exact: true }).getByText("Review the change (conv-child)", { exact: true }).isVisible());
 });
 
 // The toolbar repositions itself after a resize; waits for it to settle and
