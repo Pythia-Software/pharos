@@ -12,6 +12,7 @@ import { filterBoxSamples } from "./compact-box-model";
 import { createHumanStudyLoader, clearHumanStudyCache, type HumanStudyPreview } from "./human-study";
 import { activityPresentation } from "./machine-activity-data";
 import { buildCardTrend, cardTrendDays, cardTrendQueries, trendSchemas, usesCardTrend } from "./card-trend";
+import { usesWeekdayCover, weekdayMetric } from "./weekday-cover";
 
 export type PreviewMetric = { clause: AggregationClause; result: AggregationResultEntry };
 export type QueryPreview = {
@@ -32,7 +33,7 @@ export type QueryPreview = {
 type PreviewOptions = { window?: RollingWindow; recipe?: QueryRecipe; url?: string; coverMetricId?: string; cover?: CardCover; suggested?: boolean; sourceCover?: boolean };
 export type PreviewJob = { priority?: () => number; id: string; dataset: QueryDataset; query: QueryState; schema: FieldSchema; options?: PreviewOptions };
 type Context = { schema: FieldSchema; execution: ComputedExecution; capabilities: MetricCapabilities; queryCapabilities?: QueryCapabilitiesV3 };
-type Payload = { now?: number; metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number; sourceTotal?: number; find?: { search?: { complete: boolean } } };
+type Payload = { now?: number; metrics?: AggregationResult["metrics"]; rows?: Record<string, unknown>[]; total?: number; sourceTotal?: number; find?: { limited?: boolean; search?: { complete: boolean } } };
 type Cached = { at: number; payload: Payload; schema: FieldSchema };
 const cache = new Map<string, Cached>();
 export function clearPreviewCache() { cache.clear(); clearHumanStudyCache(); }
@@ -173,6 +174,18 @@ function previewOf(job: PreviewJob, query: QueryState, payload: Payload, schema:
   const selected = metrics.find(item => item.clause.id === options.coverMetricId) ?? metrics[0];
   const { clause, result } = selected;
   if (result.error) throw new Error(result.error);
+  if (usesWeekdayCover(recipe, clause, options.cover ?? recipe?.cover, query)) {
+    // Exact metric coverage can describe only the current search batch. Its
+    // unchecked dates must never be filled as idle-day observations.
+    if (payload.find?.limited || payload.find?.search?.complete === false) throw new Error("Partial search batch; open the search to complete it before viewing weekday distributions.");
+    const weekday = weekdayMetric(clause, result, query, payload.now ?? Date.now(), recipe!.weekday!.unit);
+    const cover = options.cover ?? recipe?.cover;
+    const ready = weekday.days > 0 && weekday.observations > 0;
+    weekday.metric.display = { ...weekday.metric.display, kind: "box", maxGroups: cover?.maxGroups ?? 7 };
+    return { state: ready ? "ready" : "empty", total: weekday.days, emptyLabel: "No complete days with recorded activity", summary: `${weekday.days} complete local days · ${weekday.zone}`, note: [recipe?.note, searchNote].filter(Boolean).join(" · ") || undefined, action: recipe?.action,
+      density: cover?.density, coverHeight: cover?.height,
+      metrics: [{ clause: weekday.metric, result: weekday.result }], fields: [...schema.fields, { name: "weekday", label: "Weekday", type: "text", source: { kind: "derived" } }], coverMetricId: clause.id };
+  }
   const values = result.buckets.filter(bucket => !bucket.error && !bucket.yError && bucket.value !== null && bucket.count !== 0 && (!bucket.distribution || (bucket.distribution.kind === "histogram" ? bucket.distribution.n > 0 : (bucket.distribution.summary?.n ?? 0) > 0)));
   if (!values.length && result.buckets.some(bucket => bucket.error || bucket.yError)) throw new Error(result.buckets.find(bucket => bucket.error || bucket.yError)!.error ?? result.buckets.find(bucket => bucket.yError)!.yError!);
   const numeric = values.filter(bucket => typeof bucket.value === "number" && Number.isFinite(bucket.value));

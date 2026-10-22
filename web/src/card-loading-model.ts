@@ -2,6 +2,7 @@ import type { AggregationClause, QueryState } from "@pythia-software/query-table
 import { cardCoverQuery, humanStudyCoverMatches, type CardCover } from "./card-cover";
 import { boxCoverHeight } from "./compact-box-model";
 import type { QueryRecipe } from "./curiosity-data";
+import { usesWeekdayCover } from "./weekday-cover";
 
 export type CardLoadingKind = "value" | "columns" | "list" | "scatter" | "line" | "box" | "pie" | "donut" | "table" | "text";
 export type CardLoadingSpec = { kind: CardLoadingKind; count: number; headline?: boolean; belowLabels?: boolean; height?: number };
@@ -23,6 +24,11 @@ export function cardLoadingPresentation(query: QueryState, options: { recipe?: Q
   const metrics = projected.aggregations ?? [];
   const metric = metrics.find(metric => metric.id === metricId) ?? metrics[0];
   if (!metric) return { kind: projected.grouping ? "table" : "text", count: 3 };
+  const cover = options.cover ?? options.recipe?.cover;
+  if (usesWeekdayCover(options.recipe, metric, cover, projected)) {
+    const count = Math.min(7, cover?.maxGroups ?? 7);
+    return { kind: "box", count, height: cover?.height ?? boxCoverHeight(count, cover?.density === "compact") };
+  }
   const requested = options.cover?.maxGroups ?? metric.display?.maxGroups;
   const limit = typeof requested === "number" && Number.isSafeInteger(requested) && requested > 0 ? Math.min(100, requested) : undefined;
   const display = options.cover?.kind ?? metric.display?.kind ?? "auto";
