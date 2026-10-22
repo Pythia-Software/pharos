@@ -1507,7 +1507,7 @@ function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if (topic === "tools") return <ToolsUsageDashboard />;
   if (topic === "mcp") return <MCPUsageDashboard />;
   if (topic === "carbon") return <CarbonImpact queryLinks={({ where, view }) => <>
-    <UsageDashboardLinks dataset="usage" query={{ ...EMPTY_QUERY, where, aggregations: [sum(view.metric === "energy" ? "energy_wh" : "co2e_g", [isHourly(view.period) ? "hour" : view.period === "days" ? "day" : view.period, ...(view.split === "type" ? [] : [view.split === "tier" ? "carbon_tier" : view.split])], view.metric === "energy" ? "Estimated Wh" : "Estimated CO₂e (g)")] }} currentURL="/analyze?analyze_view=carbon" />
+    <UsageDashboardLinks schema={schemas.usage} dataset="usage" query={{ ...EMPTY_QUERY, where, aggregations: [sum(view.metric === "energy" ? "energy_wh" : "co2e_g", [isHourly(view.period) ? "hour" : view.period === "days" ? "day" : view.period, ...(view.split === "type" ? [] : [view.split === "tier" ? "carbon_tier" : view.split])], view.metric === "energy" ? "Estimated Wh" : "Estimated CO₂e (g)")] }} currentURL="/analyze?analyze_view=carbon" />
     <p className="usage-dashboard-note">Grouped rows show total estimates with your current Carbon assumptions. Token-type components are combined; the chart keeps their breakdown.</p>
   </>} />;
   return <RecordUsageDashboard topic={topic} />;
@@ -1517,7 +1517,7 @@ function ParallelismUsageDashboard() {
   const [selection, setSelection] = useState<ConcurrencySelection | null>(null);
   return <>
     <ConcurrencyPanel routeParameter="analyze_parallelism" onSelection={setSelection} />
-    {selection ? <UsageDashboardLinks dataset="parallelism" query={parallelismSelectionQuery(selection)} currentURL="/analyze?analyze_view=tokens&machine_view=parallelism" /> : null}
+    {selection ? <UsageDashboardLinks schema={schemas.parallelism} dataset="parallelism" query={parallelismSelectionQuery(selection)} currentURL="/analyze?analyze_view=tokens&machine_view=parallelism" /> : null}
     <p className="usage-dashboard-note">The query view contains the hourly occupancy records touching the selected range, with the same repository, counting, gap, and ribbon selection. Those records describe threaded activity; model-only timing remains in the chart.</p>
   </>;
 }
@@ -1527,7 +1527,7 @@ function TokenUsageDashboard() {
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   return <>
     <TokenChart where={state.where} onFilter={state.onFilter} view={state.view} onChange={state.update} />
-    <UsageDashboardLinks dataset="usage" query={{ ...EMPTY_QUERY, where: state.where, aggregations: tokenChartMetrics(state.view).map(clause => ({ ...clause, label: clause.label === "chart" ? costMetric(state.view) ? "API cost (USD)" : "Tokens" : clause.label })) }} currentURL="/analyze?analyze_view=tokens&machine_view=tokens" />
+    <UsageDashboardLinks schema={schemas.usage} dataset="usage" query={{ ...EMPTY_QUERY, where: state.where, aggregations: tokenChartMetrics(state.view).map(clause => ({ ...clause, label: clause.label === "chart" ? costMetric(state.view) ? "API cost (USD)" : "Tokens" : clause.label })) }} currentURL="/analyze?analyze_view=tokens&machine_view=tokens" />
     <p className="usage-dashboard-note">Drag across the graph to zoom into a period. Select legend entries to compare or exclude series. Cumulative lines total each series from the range start; click a point to select the range contributing to it. Grouped rows expose the underlying interval amounts before percentages, smoothing, accumulation, or folded series. API cost is the list-price equivalent; subscriptions and long-context premiums are excluded. ≈ marks assumed prices.</p>
   </>;
 }
@@ -1544,9 +1544,9 @@ function HumanUsageDashboard() {
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   return <>
     <WritingPanel chartOnly where={state.where} onFilter={state.onFilter} status={status} reload={reload} viewOverride={state.view} onViewChange={state.update} />
-    <UsageDashboardLinks dataset="writing" groupedLabel="Open grouped conversation totals" query={{ ...EMPTY_QUERY, where: state.where, aggregations: [sum(state.view.scope === "typed" ? "typed_words" : "user_words", [state.view.split === "kind" ? "repository_name" : state.view.split], state.view.scope === "typed" ? "Typed words per conversation group" : "User input per conversation group")] }} currentURL="/analyze?analyze_view=writing" />
+    <UsageDashboardLinks schema={schemas.writing} dataset="writing" query={{ ...EMPTY_QUERY, where: state.where, aggregations: [sum(state.view.scope === "typed" ? "typed_words" : "user_words", [state.view.split === "kind" ? "repository_name" : state.view.split], state.view.scope === "typed" ? "Typed words per conversation group" : "User input per conversation group")] }} currentURL="/analyze?analyze_view=writing" />
     <p className="usage-dashboard-note">The grouped query contains whole-conversation totals for the matching conversations. The graph restricts their writing to the selected dates.</p>
-    <p className="usage-dashboard-note">Typed and dictated words are distinguished from pastes, harness instructions, and other supplied text. The full analysis includes the authorship breakdown and build status.</p>
+    <p className="usage-dashboard-note">Typed and dictated words are distinguished from pastes, harness instructions, and other supplied text. The legacy view includes the authorship breakdown and build status.</p>
   </>;
 }
 
@@ -1588,7 +1588,7 @@ function RecordUsageDashboard({ topic }: { topic: RecordDashboardTopic }) {
       selected={series.filter(item => chosen.includes(String(item.value ?? ""))).map(item => item.key)} excluded={selection.excluded}
       onSelect={(key, action) => onFilter(current => withSlice(current, view.split, updateSlice(readSlice(current, view.split), key === null ? null : String(series.find(item => item.key === key)?.value ?? "") || null, action)))}
       onExpand={() => state.update({ seriesLimit: Math.min(1000, limit + 5) })} onRange={pickRange(onFilter, { first: spec.time, last: spec.time }, view.period, 1, period => state.update({ period: period === "month" || period === "week" ? period : "day" }))} />
-    <UsageDashboardLinks dataset={spec.dataset} query={{ ...EMPTY_QUERY, where, aggregations: [clause] }} currentURL={currentUsageAnalyses.find(item => item.topic === topic)!.url} />
+    <UsageDashboardLinks schema={schemas[spec.dataset]} dataset={spec.dataset} query={{ ...EMPTY_QUERY, where, aggregations: [clause] }} currentURL={currentUsageAnalyses.find(item => item.topic === topic)!.url} />
     <p className="usage-dashboard-note">{spec.note}</p>
   </>;
 }
@@ -1706,7 +1706,7 @@ function MCPUsageDashboard() {
       const records = inspectDashboardBucket(query, bucket, clause, schemas.mcp_calls, cumulative);
       if (records) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset: "mcp_calls", query: records }, new URLSearchParams(location.search)));
     }} />}
-    {!pending && !ranking.error ? <UsageDashboardLinks dataset="mcp_calls" query={query} /> : null}
+    {!pending && !ranking.error ? <UsageDashboardLinks schema={schemas.mcp_calls} dataset="mcp_calls" query={query} /> : null}
     <MCPUsageNote />
   </section>;
 }
@@ -1852,8 +1852,8 @@ function ToolsUsageDashboard() {
       const records = inspectDashboardBucket(query, bucket, clause, schemas.tools, cumulative);
       if (records) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset: "tools", query: records }, new URLSearchParams(location.search)));
     }} />}
-    {!pending && !ranking.error ? <UsageDashboardLinks dataset="tools" query={query} currentURL="/tools?tools_view=summary" analysisLabel="More tool analyses" /> : null}
-    <p className="usage-dashboard-note">Select a bar or point to inspect its daily summaries, then follow a summary’s Calls link to individual calls and source conversations. Open the grouped query to compare the measures and their call counts. More tool analyses includes failure kinds, MCP methods, and the existing command and context presets.</p>
+    {!pending && !ranking.error ? <UsageDashboardLinks schema={schemas.tools} dataset="tools" query={query} currentURL="/tools?tools_view=summary" /> : null}
+    <p className="usage-dashboard-note">Select a bar or point to inspect its daily summaries, then follow a summary’s Calls link to individual calls and source conversations. Open the grouped query to compare the measures and their call counts. The legacy view includes failure kinds, MCP methods, and the existing command and context presets.</p>
   </section>;
 }
 
