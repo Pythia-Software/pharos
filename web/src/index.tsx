@@ -13,6 +13,8 @@ import { usageRowRenderers } from "./usage-row-renderers";
 import { createQueryMetadataLoader } from "./query-metadata";
 import { SearchDialog } from "./search-dialog";
 import { ExploreSearch } from "./explore-search";
+import { recordKeywordSummary, RecordKeywordClause } from "./record-keyword-clause";
+import { readRecordKeywordSearch, recordKeywordParameter, recordKeywordRequest } from "./record-keyword-model";
 import { SearchResultsDisplay } from "./search-results-view";
 import { queryForSearchResultsView, searchResultsView, type SearchResultsView } from "./search-results-view-model";
 import { newKeywordSearch, readTextSearch, textFindParameters, searchSentence, withheldBatch, type TextSearchDraft } from "./text-search-model";
@@ -75,7 +77,7 @@ import { ConcurrencyModal, ConcurrencyPanel, concurrencyPrototypeEnabled, type C
 import { openConcurrencyModal, startConcurrencySummary } from "./concurrency-store";
 import { currentUsageAnalyses, isUsageWorkspace, readUsageWorkspace, usageDatasets, usageWorkspaceURL, type UsageDataset, type UsageTopic } from "./usage-workspace-model";
 import { defaultMCPDashboard, validMCPDashboard, cumulativeMCPTrend, mcpDashboardMeasures, mcpDashboardBreakdowns, mcpDashboardQuery, mcpTrendRanking, withMCPTrendGroups, mcpTrendGroups } from "./mcp-dashboard-model";
-import { UsageWorkspace, UsageQueryLinks, UsageDashboardLinks, UsageWorkspaceLink } from "./usage-workspace";
+import { UsageWorkspace, UsageDashboardLinks, UsageWorkspaceLink } from "./usage-workspace";
 import { UsageQueryIdeas } from "./usage-query-ideas";
 import { toolSummaryCallFilters, defaultToolDashboard, validToolDashboard, cumulativeToolTrend, toolDashboardMeasures, toolDashboardBreakdowns, toolDashboardQuery, toolTrendRanking, withToolTrendGroups, toolTrendGroups } from "./tools-dashboard-model";
 import { readDashboardQuery, inspectDashboardBucket, recordDashboardMetric, recordDashboards, parallelismSelectionQuery, toolDashboardWhere, type RecordDashboardTopic } from "./usage-dashboard-model";
@@ -427,9 +429,9 @@ function usageGroupFields(fields: FieldSchema<Row>["fields"], query: QueryState)
 
 // header renders between the filters and the metric panels, so a chart there
 // can follow the table's filters.
-// find, for the Library, is a keyword search that narrows the rows before the
-// pagination applies; onFind hears how it went.
-function QuerySurface({ dataset, usageActions = false, libraryView = "table", messageView = "table", find = "", onFind, trailing, header, controls, queryContent, resultPresentation, presets, selectable = false, scopeWhere, appliedScope, namespace }: { dataset: Dataset; usageActions?: boolean; selectable?: boolean; libraryView?: LibraryView; messageView?: MessageView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; queryContent?: (api: QueryTableApi<Row>) => React.ReactNode; resultPresentation?: (api: QueryTableApi<Row>) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode; scopeWhere?: WhereTerm[]; appliedScope?: React.MutableRefObject<WhereTerm[]>; namespace?: "machine_calls" }) {
+// find carries host-owned keyword restrictions before grouping and paging;
+// onFind receives Library message-search coverage when present.
+function QuerySurface({ dataset, usageActions = false, libraryView = "table", messageView = "table", find = "", onFind, trailing, header, controls, queryContent, querySummary, resultPresentation, presets, selectable = false, scopeWhere, appliedScope, namespace }: { dataset: Dataset; usageActions?: boolean; selectable?: boolean; libraryView?: LibraryView; messageView?: MessageView; find?: string; onFind?: (find: FindSummary | null) => void; trailing?: (row: Row, api: QueryTableApi<Row>) => React.ReactNode; header?: (api: QueryTableApi<Row>) => React.ReactNode; controls?: (api: QueryTableApi<Row>, builder: React.ReactNode) => React.ReactNode; queryContent?: (api: QueryTableApi<Row>) => React.ReactNode; querySummary?: (api: QueryTableApi<Row>) => React.ReactNode; resultPresentation?: (api: QueryTableApi<Row>) => React.ReactNode; presets?: (api: QueryTableApi<Row>) => React.ReactNode; scopeWhere?: WhereTerm[]; appliedScope?: React.MutableRefObject<WhereTerm[]>; namespace?: "machine_calls" }) {
   const registryKey = namespace ?? dataset;
   const visible = shared || datasetIsVisible(registryKey);
   const schema = useMemo(() => namespace ? { ...schemas[dataset], name: "pharos_machine_calls", defaultSelect: [{ field: "started_at", width: 155 }, { field: "repository_name", width: 140 }, { field: "operation_name", width: 180 }, { field: "tool_name", width: 140 }, { field: "command", width: 350 }, { field: "duration_ms", width: 105 }, { field: "status", width: 85 }, { field: "duration_source", width: 120 }, { field: "title", width: 240 }] } : usageActions ? usageQuerySchema(schemas[dataset], dataset as UsageDataset) : schemas[dataset], [dataset, namespace, usageActions]);
@@ -522,7 +524,7 @@ function QuerySurface({ dataset, usageActions = false, libraryView = "table", me
     lastFailure.current = api.error;
     // Only query rejection or a bounded timeout implicates the restored state.
     // Offline, authentication and service failures must not discard preferences.
-    if (shouldSkipQueryOnRestore(api.error)) {
+    if (shouldSkipQueryOnRestore(api.error) && !new URLSearchParams(find).has("record_search")) {
       rejectLastQuery(schema.name, api.query, { defaults: api.defaults, canonicalize: canonicalizeQuery });
     }
   }, [visible, api.error, api.query, schema.name]);
@@ -599,7 +601,7 @@ function QuerySurface({ dataset, usageActions = false, libraryView = "table", me
     {!api.query.grouping || namespace ? header?.(api) : null}
     {!shared && !namespace && Object.hasOwn(usageDatasets, dataset) ? <UsageQueryIdeas key={dataset} dataset={dataset as UsageDataset} api={api} /> : null}
     {presets?.(api)}
-    {queryContent || resultPresentation ? <QueryBuilder compact api={stableApi} fields={api.query.grouping ? api.schema!.fields : api.computed.catalogue} total={api.total} running={api.loading}
+    {queryContent || resultPresentation ? <QueryBuilder compact summary={querySummary?.(api)} api={stableApi} fields={api.query.grouping ? api.schema!.fields : api.computed.catalogue} total={api.total} running={api.loading}
       whereRow={<>
         {resultPresentation?.(api)}
         <QueryFilterRow api={stableSourceFilters} fields={api.query.grouping ? api.grouping!.source.schema.fields : api.computed.catalogue} />
@@ -1608,15 +1610,25 @@ function UsagePage() {
   useLocationRevision();
   if (shared || location.pathname !== "/analyze" || !isUsageWorkspace()) return <LegacyUsagePage />;
   return <UsageChartColorsProvider>
-    <UsageWorkspace renderDashboard={topic => <GuidedUsageDashboard topic={topic} />} renderTable={dataset => <>
-      <QuerySurface dataset={dataset} usageActions
-        presets={api => <>
-          {dataset === "mcp_calls" ? <MCPUsageNote /> : null}
-          <UsageQueryLinks dataset={dataset} api={api} />
-        </>}
-        controls={(_api, builder) => builder} />
-    </>} />
+    <UsageWorkspace renderDashboard={topic => <GuidedUsageDashboard topic={topic} />} renderTable={dataset => <AnalyzeQueryTable key={dataset} dataset={dataset} />} />
   </UsageChartColorsProvider>;
+}
+
+function AnalyzeQueryTable({ dataset }: { dataset: UsageDataset }) {
+  useLocationRevision();
+  const parameter = recordKeywordParameter(dataset), token = new URLSearchParams(location.search).get(parameter);
+  const restored = useMemo(() => readRecordKeywordSearch(token, schemas[dataset].fields), [token, dataset]);
+  const find = restored.error ? new URLSearchParams({ record_search: "invalid" }).toString() : restored.value ? new URLSearchParams({ record_search: recordKeywordRequest(restored.value) }).toString() : "";
+  return <>
+    {/* Keep record predicates and grouped HAVING in the native builder,
+        including datasets whose older pages use RecordSearchEditor. */}
+    <QuerySurface dataset={dataset} usageActions
+      find={find}
+      querySummary={restored.value || restored.error ? api => <span>{(api.query.grouping?.source ?? api.query).where.length} source filters{api.query.grouping ? ` · ${api.query.where.length} group filters` : ""} · {restored.value ? recordKeywordSummary(restored.value, schemas[dataset].fields, usageDatasets[dataset]) : "Keyword filter needs attention"}</span> : undefined}
+      queryContent={api => <RecordKeywordClause fields={schemas[dataset].fields} context={usageDatasets[dataset]} value={restored.value} error={restored.error}
+        onChange={next => { const request = next ? recordKeywordRequest(next) : ""; updateURI(parameter, next ? JSON.stringify(next) : ""); api.setQuery(previous => ({ ...previous, offset: 0 })); if (request === (restored.value ? recordKeywordRequest(restored.value) : "")) api.refresh(); }} />}
+      presets={dataset === "mcp_calls" ? () => <MCPUsageNote /> : undefined} />
+  </>;
 }
 
 function LegacyUsagePage() {

@@ -2,6 +2,29 @@
 
 Each query keeps its full column catalogue, filters, grouping and saved URLs. Fresh defaults emphasize the row's grain and a few comparable measures. Explicit saved columns and native saved property layouts take precedence.
 
+Analyze uses Query Table's native WHERE controls alongside columns, grouping,
+ordering and metrics. Grouped queries keep source WHERE and result HAVING
+separate. The former optional field-filter form is no longer needed.
+Older `analyze_mode=search` and `analyze_search=1` links still open the query.
+Dashboard links open records directly, where the same inline controls apply.
+
+The embedded **Search in** chip names its text source, such as **Conversation
+Message Text** or **Workspace Tool Command Text**. It applies keyword conditions
+to one selected text field in each source record. It reuses the homepage's visual
+rules and syntax editor: Boolean groups, exclusions, words, phrases, prefixes,
+proximity, literal text, regex, case and phrase-spacing controls. Message scopes
+and corpus-based word variations do not apply to record fields. Searches use
+the same unicode61 verifier as message search and never select parent workspaces.
+The restriction runs before grouping, metrics, sorting and pagination. Query-v3
+executes it; older row/metric protocols reject it instead of ignoring it.
+
+Record keyword definitions travel in the per-dataset `record_*` URL parameter.
+Invalid saved conditions fail closed. Table Saved/Undo/Reset controls still own
+QueryState; keyword clauses have their own edit/remove controls, like Library's
+content clause. Their unified lifecycle remains an upstream request in
+[the concrete saved-host-state handoff](handoffs/query-table-saved-host-query-state.md). Returning to a dashboard
+explicitly resets keyword conditions, and switching datasets drops them.
+
 | Query | Compact rows | Native Details focus | Drilldown |
 | --- | --- | --- | --- |
 | Token usage | Day, conversation, repository, model + effort, tokens, cost, output, cache share | Token breakdown, pricing coverage, attribution, Carbon estimates and exact time bounds | Source conversation near the first recorded usage; root conversation separately |
