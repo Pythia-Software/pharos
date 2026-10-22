@@ -8,7 +8,7 @@ Tool summary, and Skill evidence live within this sidebar.
 
 | Area | Purpose | Page shape | Controls |
 | --- | --- | --- | --- |
-| **Dashboards** | Explore one known analysis | One large interactive graph per page, with a small set of controls and links to its query and records | Metric, breakdown, time bucket, range, scale, smoothing where applicable; graph zoom and legend selection |
+| **Dashboards** | Explore one known analysis | A main interactive graph with compact supporting summaries, simple controls and links to its query and records | Metric, breakdown, time bucket, range, scale, smoothing where applicable; graph zoom and legend selection |
 | **Query** | Build or change an analysis, or find records | Dataset → full standard Query Table editor, metrics, and results, with an optional Search and filters panel | All supported filters, groups, summaries, formulas, computed columns, charts, sorting, columns, saved queries, exports, and structured record search |
 
 Dashboard pages are ordered **Human Words**, **Tokens and Cost**, **Skills**,
@@ -47,7 +47,13 @@ Metric choices are API Cost, Token Count,
 % API Cost, and % Token Count. This page reuses the original large Usage chart with metric,
 breakdown, bucket, range, scale, and smoothing controls. Its interactive legend
 and drag selection remain available. The Human words dashboard reuses the
-existing writing graph without the conversation table or the breakdown table.
+existing writing graph and the compact **Where user-turn text came from**
+breakdown, without the conversation query table. The breakdown shares the
+graph's selected-date totals request and conversation filters. Its five source
+groups show words, characters, and character-based shares, regardless of the
+graph's typed/all-input metric or text-source legend selection. Smoothing
+history does not enter these totals. The breakdown scrolls locally on narrow
+screens.
 Tools is a new dashboard for understanding workload and overhead. It defaults
 to call volume by tool category, a view supported even when timing is missing.
 Metric and Breakdown controls cover calls, failed calls, weighted failure rate,
@@ -59,22 +65,30 @@ day/week/month control. Its grouped and record links preserve that exact
 selected population. Rates are not stacked or averaged
 across daily summaries. Grouped queries include the relevant numerators and
 call-count denominators. Bars and points open matching daily summary records;
-More tool analyses keeps the existing specialized presets available.
+Legacy view keeps the existing specialized presets available.
 Parallelism reuses the original Threaded / Model activity ribbon with workspace/session counting,
 turn gap, repository, captured date selection, zoom, and conversation details.
 It uses only the real captured timing snapshot. Analyze views have no example-data source or selector; older demo links also use library data.
 Skills and Agent time retain their focused time series, with the richer Machine
-Time explorer still available through Full current analysis. Carbon reuses the
+Time explorer still available through Legacy view. Carbon reuses the
 calculator and graph. Graphs and controls sit directly on the page, without a
 central card frame.
 
 Chart settings and source filters are encoded in `analyze_chart` and
 `analyze_filters`; Parallelism uses `analyze_parallelism` for its ribbon settings.
-**Open grouped query** produces native grouped result rows with the graph’s
-source filters, dimensions and summaries. Tools includes the selected measure
-and its supporting call counts at the same grouping.
-**Open records** opens the matching source population; **Search / filter
-records** opens the same Query page with its optional panel expanded.
+Each dashboard offers four compact query previews: the current measure and
+breakdown, ranked source records, a comparison across related dimensions, and
+a focused relationship or exception query. Titles describe the concrete result,
+such as **Highest-cost token records**, **Conversation cost & cache use**, or
+**Repeated file-load attempts per conversation**. All retain the dashboard's
+source predicates; focused queries add their own explicit source or group filters.
+A muted sentence beneath each query name describes its filters, grouping,
+measures and sort order, omitting empty clauses. Bold grammatical cues such as
+**where**, **grouped by** and **sorted by** help scan the explanation without
+competing with the query name.
+Relative dates keep signed offsets such as `-30 days`; fixed dates stay fixed.
+All four open Query with search and filters expanded.
+**Legacy view** opens the older specialized analysis and labels any filter reset.
 `analyze_search=1` persists this panel, and old prototype `analyze_mode=search`
 links resolve to Query with search open. Back to dashboard retains graph state.
 
@@ -213,8 +227,8 @@ their domain names.
 
 Every cross-page action should say what it carries:
 
-- **Open grouped query** creates grouped result rows. Existing full Query links preserve grouped filters and summaries.
-- **Search / filter records** carries source predicates and opens Query with search expanded.
+- **Grouped results** creates grouped result rows. Existing full Query links preserve grouped filters and summaries.
+- **Source records** carries source predicates and opens Query with search expanded.
   Group-level HAVING conditions are not record predicates. Each grouped row's
   **Records** action uses native group-source query helpers to find the source
   population for that group, retaining source filters.
@@ -288,3 +302,76 @@ Tools and Pharos MCP put Compare groups, Per interval and Cumulative into one
 Display control, retaining the existing view/display URL settings. Carbon keeps
 Repository and Provider in its filter section and places Range with the chart
 controls. Parallelism retains its context-specific controls in a four-column grid.
+
+## Restored dashboard summaries and Query ideas
+
+Human Words now includes selected-period totals for typed/dictated words,
+messages with writing, words per written message, and contributing works,
+plus classification freshness and build/error status. Works are the existing
+Library conversation groups, not a count of individual agent threads. The
+text-source breakdown remains below the graph. Token and Cost restores total
+tokens, API price equivalent, weighted cache-hit rate, output tokens and
+agent sessions. Agent Time restores total recorded tool time, call volume,
+mean time per timed run and timing coverage. Zero-duration calls count as
+measured; missing durations do not enter the mean. All summaries follow the
+same source filters and selected period as their graph, excluding smoothing
+history. Unpriced token usage is retained without inventing a zero price.
+
+All nine Analyze Query datasets, including their legacy table surfaces, have
+one **Query ideas** disclosure above their editor and results. It starts open
+and stores an independent boolean preference per dataset through the Library
+preferences API. The initial render does not save a preference. Collapsing
+ideas leaves the active query and its results intact; the native summary
+supports keyboard toggles and retains focus. Search and filters remains a
+separate optional panel. Query ideas itself contains only its disclosure
+header and compact chip rows, with explanations kept in chip tooltips.
+
+Three independent read-only agent reviews informed the curated suggestions:
+Human Words/activity, tokens/cost/parallelism, and tools/time/skills/MCP.
+The 82 starting points include:
+
+| Dataset | Examples |
+| --- | --- |
+| Token usage | Repository/model/effort/session summaries, weighted cache efficiency/churn, price changes/coverage, top-level conversations, delegation by root model, agent sessions and costly conversations |
+| Human words by conversation | Writing by repository, source app and provider set; deepest/hands-on works, pasted/copied context; pricing coverage |
+| Human messages | Message-date weekly writing, text sources, app/provider comparisons, conversation writing, longest and most-pasted messages |
+| Conversation activity | Human input and output by repository, root model/effort, event kind, conversation, top-level threads and recent individual events |
+| Tool calls | Command-family timing, weighted failure rates and recurring signatures, individual slow calls, context-heavy results, sites and repeated operations |
+| Tool summary | Weighted failure/timing comparisons, shell programs, external MCP methods, interruptions, context/cost, root agents vs subagents, longest individual runs and context-heavy commands |
+| Skill evidence | Observations by skill, evidence type, repository, status, conversation, latest evidence and large retained bodies |
+| Pharos MCP | Tool requests, daily activity, failures, response volume/truncation and requested archive sources, slow requests and large responses |
+| Parallel activity | Additive unit-hours by repository, week, concurrency band and conversation, busy units and checkout directories, retaining counting/gap assumptions |
+
+Each suggestion is an editable native grouped query, with native summary
+metrics and a compact result chart where useful. Applying one preserves the
+source query and its filters, resets result-stage HAVING/paging/metrics, and
+selects its new grouping and result layout. Leaving the native grouping
+stage restores the original record query. Rates are computed from their numerators and
+denominators across matching records, rather than averaging stored ratios.
+Small samples remain visible as counts; no quality/productivity score is
+inferred from writing volume or input/output ratios.
+
+Every suggestion ends with computed native `op: "link"` columns. **Drill In**
+opens matching records in the same dataset, retaining source filters and exact
+group-key predicates (including null keys). Every suggested query view and
+computed query-link destination sets `fitToScreen: true`, so columns refit to
+the viewer’s table viewport after loading. Query Table 0.9.5 clips some fitted
+link controls at narrow widths; the [upstream handoff](handoffs/query-table-fit-link-clipping.md)
+records reproduction and acceptance criteria. Work/conversation suggestions also
+link directly to their source. Message writing, command-family timing and
+skill evidence demonstrate coherent representative-row message links: the
+latest message, the call with the longest recorded duration when available,
+or latest observed evidence. Native links encode identifiers and leave unresolved identities unavailable. Helper
+IDs remain available to the link without crowding the visible columns.
+Template links open an individual item; their paired Matching records link
+retains the filtered population. Normal modified-click behavior supports new
+tabs.
+
+Cross-dataset group drill-downs are deliberately avoided where field names or
+filter populations differ. After opening source rows, existing detail links
+lead to their exact call, message, evidence, conversation or work. Pharos MCP
+links never invent caller identity. Parallel activity does not sum repeated
+elapsed occupancy, and distinct counts are not described as additive.
+
+The integration uses only the published Query Table release. It introduces
+no local dependency patches, schema changes or generated bundle commits.

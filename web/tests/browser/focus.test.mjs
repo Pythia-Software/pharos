@@ -260,9 +260,11 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 640 }
   });
 }
 
-for (const viewport of [{ width: 1024, height: 720 }, { width: 390, height: 844 }]) {
+for (const viewport of [{ width: 850, height: 720 }, { width: 390, height: 844 }]) {
   test(`overflowed header tools remain live and restore focus at ${viewport.width}px`, { skip }, async t => {
-    const { page } = await open(t, { url: '/library', viewport, ready: '#queryTableLibrary .qt-row' });
+    const { page } = await open(t, { url: '/library', viewport, ready: '#queryTableLibrary .qt-row',
+      preferences: { 'pharos-header-tools-v1': ['summary', 'theme', 'history', 'library', 'search', 'settings'] },
+    });
     const more = page.getByRole('button', { name: 'More tools', exact: true });
     await press(more);
     const popup = page.getByRole('dialog', { name: 'Header tools' });
@@ -335,24 +337,24 @@ test('header focus survives resizing while its tool remains inline', { skip }, a
   await page.setViewportSize({ width: 1600, height: 900 });
   await settled();
   await page.waitForFunction(element => document.activeElement === element, await settings.elementHandle());
-  const search = page.locator('#searchToggle');
-  await search.focus();
+  const theme = page.locator('#themeToggle');
+  await theme.focus();
   for (const width of [1280, 390, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     await settled();
-    await page.waitForFunction(element => document.activeElement === element, await search.elementHandle());
+    await page.waitForFunction(element => document.activeElement === element, await theme.elementHandle());
   }
 });
 
 test('header focus stays reachable when its tool moves between inline and overflow', { skip }, async t => {
   const { page } = await open(t, { url: '/library', viewport: { width: 1440, height: 900 }, ready: '#queryTableLibrary .qt-row' });
-  await page.locator('#themeToggle').focus();
+  await page.locator('#searchToggle').focus();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForFunction(() => document.activeElement === document.getElementById('headerMore'));
   await press(page.locator('#headerMore'));
-  await page.locator('#themeToggle').focus();
+  await page.locator('#searchToggle').focus();
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.waitForFunction(() => document.activeElement === document.getElementById('themeToggle'));
+  await page.waitForFunction(() => document.activeElement === document.getElementById('searchToggle'));
 });
 
 test("MCP call details take focus, keep it and return it on Escape", { skip }, async t => {
@@ -481,4 +483,48 @@ test("the expanded feedback panel stays inside a 360px viewport", { skip }, asyn
   await page.setViewportSize({ width: 360, height: 420 });
   const box = await onScreen(page.locator(".feedback-toolbar"));
   assert.equal(box, true, `expanded toolbar at [${box}] in 360×420`);
+});
+
+test('Analyze record keyword editor keeps focus through apply, edit and cancel', { skip }, async t => {
+  const { page, settled, shot } = await open(t, { url:'/analyze?analyze_mode=query&analyze_data=tool_calls',ready:'.usage-workspace-table .qt-qb' });
+  const opener=page.getByRole('button',{name:/^Add keyword filter for /});
+  await press(opener);
+  const dialog=page.locator('.explore-search-modal');
+  await dialog.waitFor();
+  await page.waitForFunction(element=>element.contains(document.activeElement),await dialog.elementHandle());
+  await dialog.getByRole('textbox',{name:'Text for rule 1.1',exact:true}).fill('target');
+  await shot('keyword-draft');
+  await dialog.getByRole('button',{name:'Apply keyword filter',exact:true}).click();
+  await dialog.waitFor({state:'hidden'});
+  const edit=page.getByRole('button',{name:/^Edit keyword filter for /});
+  await edit.waitFor();
+  await page.waitForFunction(element=>element===document.activeElement,await edit.elementHandle());
+  await settled();
+  await press(edit);
+  await dialog.waitFor();
+  await holdsFocus(page,dialog,edit);
+  await shot('keyword-applied');
+});
+
+test("Query ideas disclosure supports keyboard toggles and restores the saved preference", { skip }, async t => {
+  const app = await open(t, { url: "/analyze?analyze_mode=query&analyze_data=tool_calls", ready: ".usage-workspace-table .qt-row" });
+  const { page } = app;
+  const summary = page.locator(".usage-query-ideas > summary");
+  const chip = page.locator(".usage-query-ideas .query-chip").first();
+  await chip.waitFor();
+  const saved = page.waitForResponse(response => response.url().endsWith("/api/preferences") && response.request().method() === "POST");
+  await summary.focus();
+  await page.keyboard.press("Enter");
+  await chip.waitFor({ state: "hidden" });
+  await saved;
+  assert.equal(await summary.evaluate(element => element === document.activeElement), true);
+  await page.reload();
+  await page.locator(".usage-workspace-table .qt-row").first().waitFor();
+  await chip.waitFor({ state: "hidden" });
+  await summary.focus();
+  await page.keyboard.press("Enter");
+  await chip.waitFor();
+  assert.equal(await summary.evaluate(element => element === document.activeElement), true);
+  await app.settled();
+  await app.shot("query-ideas-keyboard");
 });

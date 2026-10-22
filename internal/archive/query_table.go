@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -34,6 +35,36 @@ func librarySearch(ctx context.Context, values url.Values) SearchOptions {
 // queryTableRows returns a dataset's rows. Library rows carry at least fields,
 // the ones the request filters, sorts, or groups on (see libraryFields).
 func (s *Server) queryTableRows(ctx context.Context, dataset string, values url.Values, fields libraryFields, where ...[]querytable.WhereTerm) ([]map[string]any, error) {
+	record, err := s.recordSearch(ctx, dataset, values)
+	if err != nil {
+		return nil, err
+	}
+	defer record.close()
+	if record != nil && fields != nil {
+		fields = maps.Clone(fields)
+		fields[record.field] = true
+	}
+	rows, err := s.queryTableSourceRows(ctx, dataset, values, fields, where...)
+	if record == nil || err != nil {
+		return rows, err
+	}
+	filtered := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		if row[record.field] == nil {
+			continue
+		}
+		matched, e := record.matches(ctx, firstString(row[record.field]))
+		if e != nil {
+			return nil, e
+		}
+		if matched {
+			filtered = append(filtered, row)
+		}
+	}
+	return filtered, nil
+}
+
+func (s *Server) queryTableSourceRows(ctx context.Context, dataset string, values url.Values, fields libraryFields, where ...[]querytable.WhereTerm) ([]map[string]any, error) {
 	switch dataset {
 	case "library":
 		rows, _, err := s.libraryRows(ctx, values, fields, nil, where...)
@@ -160,6 +191,17 @@ func (s *Server) getQueryTable(w http.ResponseWriter, r *http.Request, dataset, 
 		}
 	}
 	if table, ok := sqlDatasetFor(dataset); ok {
+		record, e := s.recordSearch(r.Context(), dataset, r.URL.Query())
+		if e != nil {
+			writeError(w, e, http.StatusBadRequest)
+			return
+		}
+		defer record.close()
+		table, e = record.table(table)
+		if e != nil {
+			writeError(w, e, http.StatusBadRequest)
+			return
+		}
 		if err := s.Catalog.prepareSQLDataset(r.Context(), dataset); err != nil {
 			writeError(w, err, http.StatusInternalServerError)
 			return
@@ -215,6 +257,17 @@ func (s *Server) getFieldStats(w http.ResponseWriter, r *http.Request, dataset s
 	}
 	var result map[string]querytable.FieldStat
 	if table, ok := sqlDatasetFor(dataset); ok {
+		record, e := s.recordSearch(r.Context(), dataset, r.URL.Query())
+		if e != nil {
+			writeError(w, e, http.StatusBadRequest)
+			return
+		}
+		defer record.close()
+		table, e = record.table(table)
+		if e != nil {
+			writeError(w, e, http.StatusBadRequest)
+			return
+		}
 		if err := s.Catalog.prepareSQLDataset(r.Context(), dataset); err != nil {
 			writeError(w, err, http.StatusInternalServerError)
 			return
@@ -245,6 +298,10 @@ func (s *Server) getFieldStats(w http.ResponseWriter, r *http.Request, dataset s
 func (s *Server) postQueryTable(w http.ResponseWriter, r *http.Request, dataset, operation string) {
 	if operation == "query-v3" {
 		s.postQueryV3(w, r, dataset)
+		return
+	}
+	if r.URL.Query().Get("record_search") != "" {
+		writeError(w, fmt.Errorf("record keyword search requires query-v3"), http.StatusBadRequest)
 		return
 	}
 	if operation == "population" {

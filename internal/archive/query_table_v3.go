@@ -96,6 +96,11 @@ func (s *Server) queryV3SourceFields(ctx context.Context, schema qt.Schema, q qt
 }
 
 func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.Values, schema qt.Schema, q qt.QueryRequestV3) (qt.QueryResultV3, *libraryFindSummary, error) {
+	record, recordErr := s.recordSearch(ctx, dataset, params)
+	if recordErr != nil {
+		return qt.QueryResultV3{}, nil, recordErr
+	}
+	defer record.close()
 	if dataset == "usage" {
 		var err error
 		ctx, err = withCarbonPreferences(ctx, params.Get("carbon_settings"))
@@ -132,6 +137,9 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 		}
 		if err == nil {
 			required, err = s.queryV3SourceFields(ctx, schema, q)
+			if record != nil && !slices.Contains(required, record.field) {
+				required = append(required, record.field)
+			}
 		}
 		if err == nil {
 			var bounds map[string][2]string
@@ -143,6 +151,9 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 		}
 	} else {
 		required, err = s.queryV3SourceFields(ctx, schema, q)
+		if record != nil && !slices.Contains(required, record.field) {
+			required = append(required, record.field)
+		}
 		if err == nil && dataset == "library" {
 			localSchema, e := s.queryTableSchema(dataset)
 			err = e
@@ -182,7 +193,7 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 				}
 			}
 		} else if err == nil {
-			rows, err = s.queryTableRows(ctx, dataset, params, queryFieldsFor(dataset, required...), s.mapRowsWhere(dataset, where, time.UnixMilli(q.Now))...)
+			rows, err = s.queryTableSourceRows(ctx, dataset, params, queryFieldsFor(dataset, required...), s.mapRowsWhere(dataset, where, time.UnixMilli(q.Now))...)
 		}
 	}
 	if err != nil {
@@ -248,6 +259,9 @@ func (s *Server) executeQueryV3(ctx context.Context, dataset string, params url.
 		if err != nil {
 			return qt.QueryResultV3{}, nil, err
 		}
+	}
+	if err = record.restrictSource(ctx, tx, &d, q); err != nil {
+		return qt.QueryResultV3{}, nil, err
 	}
 	result, err := d.ExecuteIn(ctx, tx, q, qt.PlanOptions{Identity: queryTableScope + ":" + schema.Name})
 	if err != nil {

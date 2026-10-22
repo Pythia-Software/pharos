@@ -3,15 +3,15 @@ import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, type QueryState } from "@p
 // Analyze owns guided dashboards and the full query surfaces. Explicit older
 // analysis URLs remain available while their specialized controls migrate.
 export const usageDatasets = {
-  usage: { label: "Token usage", description: "Tokens, API costs, models, cache, and pricing coverage.", field: "model" },
-  conversation_activity: { label: "Conversation activity", description: "Human input and recorded output across conversations.", field: "root_model_family" },
-  writing: { label: "Human words by workspace", description: "Authorship totals across each workspace’s conversations and folded delegated work.", field: "title" },
-  writing_messages: { label: "Human messages", description: "Individual messages and their authorship evidence.", field: "text" },
-  tool_calls: { label: "Tool calls", description: "Commands, results, timing, status, and context added or carried.", field: "command" },
-  tools: { label: "Tool summary", description: "Tool use grouped by work, tool, and command.", field: "tool_name" },
-  mcp_calls: { label: "MCP calls", description: "Calls to Pharos's MCP server, sanitized arguments, output estimates, and timing.", field: "arguments_json" },
-  skill_usages: { label: "Skill evidence", description: "Invocations, file loads, retained bodies, and source evidence.", field: "skill_name" },
-  parallelism: { label: "Parallel activity", description: "Hour-by-agent records with the existing counting assumptions.", field: "model" },
+  usage: { label: "Token usage", description: "Tokens, API costs, models, cache, and pricing coverage.", field: "model", searchLabel: "Token Usage Model Names" },
+  conversation_activity: { label: "Conversation activity", description: "Human input and recorded output across conversations.", field: "root_model_family", searchLabel: "Top-level Conversation Model Names" },
+  writing: { label: "Human words by workspace", description: "Authorship totals across each workspace’s conversations and folded delegated work.", field: "title", searchLabel: "Workspace Titles" },
+  writing_messages: { label: "Human messages", description: "Individual messages and their authorship evidence.", field: "text", searchLabel: "Conversation Message Text" },
+  tool_calls: { label: "Tool calls", description: "Commands, results, timing, status, and context added or carried.", field: "command", searchLabel: "Workspace Tool Command Text" },
+  tools: { label: "Tool summary", description: "Tool use grouped by work, tool, and command.", field: "tool_name", searchLabel: "Workspace Tool Names" },
+  mcp_calls: { label: "MCP calls", description: "Calls to Pharos's MCP server, sanitized arguments, output estimates, and timing.", field: "arguments_json", searchLabel: "MCP Call Arguments" },
+  skill_usages: { label: "Skill evidence", description: "Invocations, file loads, retained bodies, and source evidence.", field: "skill_name", searchLabel: "Skill Names" },
+  parallelism: { label: "Parallel activity", description: "Hour-by-agent records with the existing counting assumptions.", field: "model", searchLabel: "Parallel Activity Model Names" },
 } as const;
 export type UsageDataset = keyof typeof usageDatasets;
 export type UsageMode = "dashboards" | "query";
@@ -36,7 +36,8 @@ export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
 
 export function usageDashboardReturn(current: URLSearchParams) {
   const state = readUsageWorkspace(current), dataset = usageTopicDatasets[state.topic];
-  if (current.get("card_id") && current.get("card_query") === state.dataset && current.has(`q_${state.dataset}`)) return {
+  const keywords = current.has(`record_${state.dataset}`);
+  if (!keywords && current.get("card_id") && current.get("card_query") === state.dataset && current.has(`q_${state.dataset}`)) return {
     href: usageWorkspaceURL({ mode: "dashboards", dataset, search: false }, current), label: "Back to dashboard", resetsFilters: false,
   };
   let query: QueryState | undefined;
@@ -46,8 +47,8 @@ export function usageDashboardReturn(current: URLSearchParams) {
   params.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where: compatible ? (query!.grouping?.source ?? query!).where : [] }));
   return {
     href: usageWorkspaceURL({ mode: "dashboards", dataset, search: false }, params),
-    label: !compatible ? "Back to dashboard (resets query filters)" : query!.grouping && query!.where.length ? "Back to dashboard (resets group filters)" : "Back to dashboard",
-    resetsFilters: !compatible || Boolean(query?.grouping && query.where.length),
+    label: !compatible ? "Back to dashboard (resets query filters)" : keywords ? "Back to dashboard (resets keyword filters)" : query!.grouping && query!.where.length ? "Back to dashboard (resets group filters)" : "Back to dashboard",
+    resetsFilters: !compatible || keywords || Boolean(query?.grouping && query.where.length),
   };
 }
 
@@ -80,20 +81,21 @@ export function readUsageWorkspace(params: URLSearchParams) {
 
 export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?: boolean; dataset?: UsageDataset; topic?: UsageTopic; report?: string; days?: number; query?: QueryState }, current = new URLSearchParams()) {
   const previous = readUsageWorkspace(current), next = { ...previous, ...change };
+  const mode = next.mode === "search" ? "query" : next.mode;
   const params = new URLSearchParams(current);
   if (next.topic !== previous.topic) { params.delete("analyze_filters"); params.delete("analyze_chart"); params.delete("analyze_parallelism"); }
   for (const key of [...params.keys()]) {
+    if (key.startsWith("record_") && (key !== `record_${next.dataset}` || next.dataset !== previous.dataset || mode === "dashboards")) params.delete(key);
     // A different dataset must never inherit another table's query/window.
     if (key.startsWith("q_") || key.startsWith("window_") || ["card_query", "analyze_workspace", "analyze_view", "writing", "machine_view", "activity_days", "activity_repo", "activity_provider", "activity_model", "machine_demo", "tools_view"].includes(key)) params.delete(key);
   }
-  const mode = next.mode === "search" ? "query" : next.mode;
   params.set("analyze_mode", mode);
   if (next.mode === "search" || next.search) params.set("analyze_search", "1"); else params.delete("analyze_search");
   params.set("analyze_data", next.dataset); params.set("analyze_topic", next.topic); params.set("analyze_days", String(next.days));
   if (next.report) params.set("analyze_report", next.report); else params.delete("analyze_report");
   if (mode !== "dashboards") {
     const query = change.query;
-    if (query) params.set(`q_${next.dataset}`, encodeQuery(query));
+    if (query) params.set(`q_${next.dataset}`, encodeQuery({ ...query, fitToScreen: true }));
     else if (next.dataset === previous.dataset && current.has(`q_${next.dataset}`)) params.set(`q_${next.dataset}`, current.get(`q_${next.dataset}`)!);
     if (current.get("window_dataset") === next.dataset) for (const [key, value] of current) if (key.startsWith("window_")) params.set(key, value);
   }

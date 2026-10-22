@@ -1,27 +1,28 @@
-/* Navigation width modes; header tools measure their own available space. */
+/* Collect actions before moving navigation to its own dropdown row. */
 :root.app-shell{--app-shell-layout:wide;--app-rail-width:220px;--app-header-height:68px;--app-page-gutter:32px;--app-control-height:36px;--app-brand-width:37px;--app-brand-height:42px;--app-brand-gap:11px}
 .app-shell body>header{overflow:hidden;z-index:20}
-.app-shell body>header .bar{max-width:none;flex-wrap:nowrap;gap:16px;padding:10px 24px;min-height:64px}
-.app-shell body>header .brand{flex:none}.app-shell body>header .brand-tagline{display:none}
+.app-shell body>header .bar{display:grid;grid-template-columns:minmax(max-content,1fr) auto minmax(max-content,1fr);width:100%;max-width:none;gap:16px;padding:10px 24px;min-height:64px}
+.app-shell body>header .brand{flex:none;min-width:0;max-width:100%;grid-column:1;grid-row:1;justify-self:start}.app-shell body>header .brand-tagline{display:block;white-space:normal}.app-shell body>header .brand-words{min-width:0}
 .app-shell body>header .brand,.app-shell body>header .brand-lit{gap:var(--app-brand-gap)}
+.app-shell body>header .brand-lit{width:100%}
 .app-shell body>header .brand-mark,.app-shell body>header .brand-lit-spacer{width:var(--app-brand-width);height:var(--app-brand-height)}
 .app-shell body>header .brand{order:0}
-.app-shell body>header .tabs{display:flex;order:2;flex:none;min-width:0;margin:0;gap:4px}
+.app-shell body>header .tabs{display:flex;grid-column:2;grid-row:1;justify-self:center;order:2;flex:none;min-width:0;margin:0;gap:4px}
 .app-shell body>header .tabs button:not([hidden]){display:inline-flex;align-items:center;justify-content:center;gap:6px;flex:none;min-height:var(--app-control-height);padding:6px 10px;white-space:nowrap}
 .app-shell body>header .tabs .findings-badge{margin-left:0}
-.app-shell #appLocation{order:1;min-width:0;flex:none}
+.app-shell #appLocation{display:none;order:2;min-width:0}
 .app-shell #appLocation:empty{display:none}
-.app-shell body>header .header-icons{order:3;margin:0 0 0 auto;flex:none;flex-wrap:nowrap;align-items:center;gap:6px}
+.app-shell body>header .header-icons{grid-column:3;grid-row:1;justify-self:end;order:3;margin:0;flex:none;flex-wrap:nowrap;align-items:center;gap:6px}
 .app-shell body>header .header-icon{width:var(--app-control-height);height:var(--app-control-height);min-width:var(--app-control-height);border-color:var(--mast-border);background:var(--mast-field)}
-.app-shell body>header .combo-button:not([hidden]){--combo-height:var(--app-control-height);--combo-icon:18px;--combo-radius:4px;display:flex;align-items:center}
-.app-shell body>header .combo-button>button{height:var(--app-control-height);min-height:var(--app-control-height)}
-.app-shell body>header .combo-button>.combo-icon{width:var(--app-control-height);min-width:var(--app-control-height);padding:0}
-.app-shell body>header .combo-button>.pharos-drive{min-width:var(--app-control-height);padding:0 10px}
+.app-shell :is(body>header,.header-overflow) .combo-button:not([hidden]){--combo-height:var(--app-control-height);--combo-icon:18px;--combo-radius:4px;display:flex;align-items:center}
+.app-shell :is(body>header,.header-overflow) .combo-button>button{height:var(--app-control-height);min-height:var(--app-control-height)}
+.app-shell :is(body>header,.header-overflow) .combo-button>.combo-icon{width:var(--app-control-height);min-width:var(--app-control-height);padding:0}
+.app-shell :is(body>header,.header-overflow) .combo-button>.pharos-drive{min-width:var(--app-control-height);padding:0 10px}
 .app-shell .app-location-path{display:flex;align-items:baseline;gap:9px;min-width:0;font-size:var(--fs-md);color:var(--mast-muted);text-align:left;white-space:nowrap}
 .app-shell .app-location-path>span{flex:none}
 .app-shell .app-location-path strong{min-width:0;overflow:hidden;text-overflow:ellipsis;font-weight:600;color:var(--mast-ink)}
 .app-shell .app-location-separator{opacity:.6}
-.app-shell .app-location-switcher{display:flex;align-items:center;gap:12px;min-height:40px;padding:6px 8px;max-width:100%;color:var(--mast-ink)}
+.app-shell .app-location-switcher{display:flex;align-items:center;gap:12px;min-height:var(--app-control-height);padding:6px 8px;max-width:100%;color:var(--mast-ink)}
 .app-shell .app-location-switcher:hover{background:var(--mast-field)}
 .app-sidebar-toggle{position:fixed;z-index:11;top:calc(var(--app-header-height) + 24px);left:calc(var(--app-rail-width) - 48px);display:grid;place-items:center;padding:0;width:36px;height:36px;color:var(--muted);border:1px solid transparent;background:transparent;border-radius:5px}
 .app-sidebar-toggle:hover{color:var(--ink);background:var(--panel);border-color:var(--line)}
@@ -75,34 +76,18 @@
 .app-shell #sourceToolbar{align-items:center;justify-content:space-between;gap:12px}
 .app-shell #sourceToolbar button,.app-shell #sourceToolbar>a{display:inline-flex;align-items:center;justify-content:center;min-height:var(--app-control-height);margin:0;padding:6px 12px;line-height:1.5;border-radius:4px}
 .app-shell #sourceToolbar>a{border:1px solid transparent}
-@media(min-width:1001px){
-  .app-shell body>header .bar{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);width:100%}
-  .app-shell body>header .brand{grid-column:1;justify-self:start}
-  .app-shell body>header .tabs{grid-column:2;justify-self:center}
-  .app-shell body>header .header-icons{grid-column:3;justify-self:end;margin:0}
-}
-@media(min-width:1360px){.app-shell body>header .brand-tagline{display:block}}
+:root.app-shell.app-header-phone{--app-shell-layout:phone}
+.app-shell.app-header-phone body>header .bar{grid-template-columns:minmax(0,1fr) auto}
+.app-shell.app-header-phone body>header .tabs{display:none}
+.app-shell.app-header-phone body>header .header-icons{grid-column:2}
+.app-shell.app-header-phone #appLocation{display:block;grid-column:1/-1;grid-row:2;border-top:1px solid var(--mast-border);padding-top:4px}
+.app-shell.app-header-phone .app-location-switcher{width:100%;justify-content:space-between}
 @media(max-width:1359px){
   :root.app-shell{--app-shell-layout:compact;--app-rail-width:200px;--app-page-gutter:24px;--app-brand-width:30px;--app-brand-height:34px}
 }
-@media(min-width:700px) and (max-width:1000px){
-  .app-shell body>header .bar{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px 12px;padding:8px 16px}
-  .app-shell body>header .brand{grid-column:1;grid-row:1}
-  .app-shell body>header .header-icons{grid-column:2;grid-row:1}
-  .app-shell body>header .tabs{grid-column:1/-1;grid-row:2;justify-content:center;border-top:1px solid var(--mast-border);padding-top:4px}
-}
-@media(max-width:1000px){
-  .app-shell body>header .pharos-drive-name{display:none}
-}
 @media(max-width:699px){
-  :root.app-shell{--app-shell-layout:phone;--app-page-gutter:16px;--app-control-height:44px;--app-brand-width:28px;--app-brand-height:32px;--app-brand-gap:6px}
-  .app-shell body>header .bar{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 6px;padding:8px 14px 4px}
-  .app-shell body>header .brand{grid-column:1;grid-row:1;width:max-content}
-  .app-shell body>header .header-icons{grid-column:2;grid-row:1;gap:4px}
-  .app-shell body>header .tabs{display:none}
-  .app-shell #appLocation{grid-column:1/-1;grid-row:2;border-top:1px solid var(--mast-border);padding-top:4px}
-  .app-shell .app-location-switcher{width:100%;justify-content:space-between;min-height:var(--app-control-height);padding:0 2px}
-  .app-shell body>header .combo-button>.pharos-drive{width:var(--app-control-height);padding:0}
+  :root.app-shell{--app-page-gutter:16px;--app-brand-width:28px;--app-brand-height:32px;--app-brand-gap:6px}
+  .app-shell body>header .bar{gap:6px;padding:8px 14px}
   .app-shell main>.view{padding:22px var(--app-page-gutter) 50px}
   .app-shell #sourceToolbar{align-items:stretch;gap:8px}
   .app-shell #sourceToolbar>div,.app-shell #sourceToolbar button,.app-shell #sourceToolbar>a{width:100%}
@@ -113,9 +98,8 @@
   .app-navigation-dialog .app-navigation-all{display:flex;align-items:center;gap:8px;min-height:var(--app-control-height);padding:0 12px}
   .app-navigation-dialog-head{padding:0 0 8px}
   .app-navigation-dialog-head strong{display:none}
-  .app-navigation-list a,.app-navigation-list>button,.app-navigation-list summary{min-height:44px}
+  .app-navigation-list a,.app-navigation-list>button,.app-navigation-list summary{min-height:41px}
   .app-navigation-dialog.app-navigation-root{width:calc(100vw - 16px);position:fixed}
   .app-navigation-root-close{position:absolute;top:8px;right:8px}
   .app-navigation-sections{border-right:0}
 }
-@media(pointer:coarse){.app-navigation-close,.header-overflow-row .header-icon{min-width:44px;min-height:44px}}

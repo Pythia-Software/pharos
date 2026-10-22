@@ -331,3 +331,28 @@ test('failed defaults are recognized after schema normalization and machine scop
  assert.equal(await storage.loadDefaultSaved(key),null);
  m.retryLastQuery(key);
 });
+
+test('computed source links use native conversation redirects and internal query links stay in the app', async t => {
+  const { navigateLink } = await import('../../../src/query-link-targets');
+  const previous = globalThis.window, opened = [];
+  globalThis.window = { location: new URL('http://localhost/analyze'), pharosNavigate: href => opened.push(href) };
+  t.after(() => { globalThis.window = previous; });
+  assert.equal(navigateLink('/conversation/conv%20one?message=message%20one'), false);
+  assert.equal(navigateLink('https://example.test/explore'), false);
+  assert.deepEqual(opened, []);
+  assert.equal(navigateLink('/analyze?analyze_mode=query&analyze_data=writing_messages'), true);
+  assert.equal(opened.length, 1);
+});
+
+test('computed query links enable automatic fitting for every target without changing the source layout', async () => {
+  const { linkTargets } = await import('../../../src/query-link-targets');
+  const source = { ...EMPTY_QUERY, fitToScreen: false, select: [{ field: 'id', width: 900 }], where: [{ field: 'id', op: '=', value: 'one' }] };
+  for (const [dataset, target] of Object.entries(linkTargets)) {
+    const url = new URL(target(source, {}), 'http://localhost');
+    const restored = core.decodeQueryStrict(url.searchParams.get(`q_${dataset}`));
+    assert.equal(restored.fitToScreen, true, dataset);
+    assert.deepEqual(restored.where, source.where, dataset);
+    assert.deepEqual(restored.select, source.select, dataset);
+  }
+  assert.equal(source.fitToScreen, false);
+});

@@ -2,6 +2,7 @@ import React from "react";
 import { JsonValueView, type RenderRegistry } from "@pythia-software/query-table-ui";
 import { conversationRowURL, primaryUsageSource, usageRowLinks, type UsageRowLink } from "./usage-row-model";
 import type { UsageDataset } from "./usage-workspace-model";
+import { usageDrilldownColumns, usageDrilldownField } from "./usage-query-columns";
 import { navigateLink } from "./query-link-targets";
 
 export function UsageSourceLink({ link, children }: { link: UsageRowLink; children?: React.ReactNode }) {
@@ -11,12 +12,16 @@ export function UsageSourceLink({ link, children }: { link: UsageRowLink; childr
     if (navigateLink(link.href)) event.preventDefault();
   }}>{children ?? link.label}</a>;
 }
-export function UsageRowActions({ dataset, row, compact = false }: { dataset: UsageDataset; row: Record<string, any>; compact?: boolean }) {
-  const links = usageRowLinks(dataset, row, new URLSearchParams(location.search)).filter(link => !compact || ["tools", "writing", "skill_usages"].includes(dataset) || link.label === "Result message");
-  return links.length ? <span className="usage-row-links">{links.map(link => <UsageSourceLink key={link.label} link={link} />)}</span> : !compact && dataset === "mcp_calls" ? <span className="muted">No direct archive target in the recorded arguments.</span> : null;
+export function UsageRowActions({ dataset, row }: { dataset: UsageDataset; row: Record<string, any> }) {
+  const links = usageRowLinks(dataset, row, new URLSearchParams(location.search));
+  return links.length ? <span className="usage-row-links">{links.map(link => <UsageSourceLink key={link.label} link={link} />)}</span> : dataset === "mcp_calls" ? <span className="muted">No direct archive target in the recorded arguments.</span> : null;
 }
 export function usageRowRenderers(dataset: UsageDataset, shared = false): RenderRegistry<Record<string, any>> {
   return {
+    ...Object.fromEntries(usageDrilldownColumns[dataset].map(column => [usageDrilldownField(column.kind), ({ row }: { row: Record<string, any> }) => {
+      const link = !shared && usageRowLinks(dataset, row, new URLSearchParams(location.search)).find(link => link.kind === column.kind);
+      return link ? <span className="usage-drilldown"><UsageSourceLink link={link}>{column.label}</UsageSourceLink></span> : <span className="muted">—</span>;
+    }])),
     usage_conversation: ({ row, value }) => {
       const text = String(value || row.conversation_id || "Untitled conversation");
       const href = !shared && primaryUsageSource(dataset, row);

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { EMPTY_QUERY, applyQuery, applyAggregations, decodeQueryStrict, encodeQuery, loadSchema, toMetricQuery, toQueryRequestV3 } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, applyQuery, applyAggregations, decodeQueryStrict, encodeQuery, loadSchema, normalizeQueryState, toMetricQuery, toQueryRequestV3 } from "@pythia-software/query-table-core";
 import { queryCases, dashboardCases, dashboardControlCases } from "../../../../tools/usage-audit-cases.ts";
 import usage from "../../../../schemas/usage.schema.json";
 import conversationActivity from "../../../../schemas/conversation_activity.schema.json";
@@ -16,6 +16,135 @@ import { defaultMCPDashboard, validMCPDashboard, cumulativeMCPTrend, mcpDashboar
 import { toolSummaryCallFilters, defaultToolDashboard, validToolDashboard, cumulativeToolTrend, toolDashboardMeasures, toolDashboardBreakdowns, toolDashboardQuery, toolTrendRanking, withToolTrendGroups, toolTrendGroups } from "../../../src/tools-dashboard-model.ts";
 import { readDashboardQuery, inspectDashboardBucket, recordDashboardMetric, recordDashboards, groupedDashboardQuery, parallelismSelectionQuery, toolDashboardWhere } from "../../../src/usage-dashboard-model.ts";
 import { timeBounds, usageTime, withTimeRange } from "../../../src/usage-chart.tsx";
+import { dashboardQueryDetails, dashboardQueryLinks, dashboardQuerySentence } from "../../../src/dashboard-query-links.ts";
+
+test("dashboard destinations describe their encoded query and consolidate record search", () => {
+  const schema = loadSchema(usage);
+  const query = { ...EMPTY_QUERY, where: [
+    { field: "provider", op: "=", value: "codex" },
+    { field: "first_usage_at", op: ">=", value: "-30d" },
+    { field: "first_usage_at", op: "<", value: "+0s" },
+  ], aggregations: [{ id: "tokens", op: "sum", field: "total_tokens", groupBy: ["day", "model_family"], label: "Tokens", sort: [{ key: "value", dir: "desc" }] }] };
+  const original = structuredClone(query);
+  const links = dashboardQueryLinks("usage", query, schema, new URLSearchParams({ analyze_topic: "tokens" }));
+  assert.equal(links.length, 4);
+  for (const link of links) {
+    const params = new URL(link.href, "http://localhost").searchParams;
+    assert.deepEqual(decodeQueryStrict(params.get("q_usage")), normalizeQueryState(link.query));
+    assert.equal(readUsageWorkspace(params).search, true);
+    assert.deepEqual(link.details, dashboardQueryDetails(schema, decodeQueryStrict(params.get("q_usage"))));
+    assert.deepEqual(link.details.find(detail => detail.label === "Filters").values, ["Provider is Codex", "First usage is on or after -30 days", "First usage is before now"]);
+  }
+  const grouped = links.find(link => link.query.grouping), records = links.find(link => !link.query.grouping);
+  assert.deepEqual(grouped.details.find(detail => detail.label === "Group by").values, ["Day", "Model"]);
+  assert.deepEqual(grouped.details.find(detail => detail.label === "Measures").values, ["Tokens"]);
+  assert.deepEqual(grouped.details.find(detail => detail.label === "Sort").values, ["Tokens descending", "Day ascending", "Model ascending"]);
+  assert.deepEqual(records.details.find(detail => detail.label === "Sort").values, ["Cost (API $) descending"]);
+  assert.deepEqual(records.query.where, usageSearchQuery(query).where);
+  assert.deepEqual(query, original);
+});
+
+test("dashboard filter descriptions preserve alternatives, negations, empties and date gaps", () => {
+  const schema = loadSchema(usage);
+  const query = { ...EMPTY_QUERY, where: [
+    { any: [{ field: "provider", op: "=", value: "codex" }, { field: "provider", op: "=", value: "claude" }] },
+    { any: [{ field: "repository_name", op: "contains", value: "pharos", negated: true }, { field: "provider", op: "is_null", value: "" }] },
+    { any: ["2026-10-02", "2026-10-01", "2026-10-03"].map(value => ({ field: "day", op: "=", value })) },
+    { any: ["2026-10-01", "2026-10-03"].map(value => ({ field: "day", op: "=", value })) },
+    { field: "provider", op: "!=", value: "claude" },
+    { field: "first_usage_at", op: "<", value: "2026-10-21T12:00:00.000Z" },
+    { field: "last_usage_at", op: ">", value: "2026-10-21T12:34:56.123-06:00" },
+    { any: [] },
+  ] };
+  assert.deepEqual(dashboardQueryDetails(schema, query)[0].values, [
+    "(Provider is Codex or Claude)", "(not (Repository contains pharos) or Provider is empty)",
+    "Day from 2026-10-01 to 2026-10-03", "(Day is 2026-10-01 or 2026-10-03)", "Provider is not Claude",
+    "First usage is before 2026-10-21 12:00 UTC", "Last usage is after 2026-10-21 12:34:56.123 -06:00", "No matching records",
+  ]);
+});
+
+test("dashboard previews distinguish source and group filters and retain custom sorts", () => {
+  const schema = loadSchema(usage), source = { ...EMPTY_QUERY, orderBy: [{ field: "total_tokens", dir: "asc" }], where: [{ field: "repository_name", op: "=", value: "pharos" }] };
+  const query = { ...EMPTY_QUERY, grouping: { source, keys: [], summaries: [{ id: "total", label: "Total tokens", op: "sum", field: "total_tokens" }], representative: null }, where: [{ field: "total", op: ">", value: "1000" }], orderBy: [{ field: "total", dir: "desc" }] };
+  const links = dashboardQueryLinks("usage", query, schema, new URLSearchParams());
+  const details = Object.fromEntries(links[0].details.map(detail => [detail.label, detail.values]));
+  assert.deepEqual(details.Filters, ["Repository is pharos"]);
+  assert.deepEqual(details["Group filters"], ["Total tokens is greater than 1000"]);
+  assert.equal(details["Group by"], undefined);
+  assert.deepEqual(details.Sort, ["Total tokens descending"]);
+  const sentence = dashboardQuerySentence(links[0].details);
+  assert.deepEqual(sentence.map(part => part.keyword), ["Show", "where", "keeping groups where", "sorted by"]);
+  assert.equal(sentence.map(part => `${part.prefix}${part.keyword}${part.text ? ` ${part.text}` : ""}`).join(""), "Show Total tokens where Repository is pharos, keeping groups where Total tokens is greater than 1000, sorted by Total tokens descending");
+  assert.deepEqual(links[1].details.find(detail => detail.label === "Sort").values, ["Cost (API $) descending"]);
+  assert.deepEqual(links[1].query.where, source.where);
+  const ungrouped = dashboardQueryLinks("usage", EMPTY_QUERY, schema, new URLSearchParams());
+  assert.ok(ungrouped.every(link => !link.details.some(detail => detail.label === "Filters")));
+  assert.deepEqual(dashboardQueryDetails(schema, EMPTY_QUERY), [], "empty filters, grouping and sorting have no row, including implicit schema defaults");
+  assert.deepEqual(dashboardQueryDetails(schema, { ...EMPTY_QUERY, aggregations: [] }), []);
+  assert.deepEqual(dashboardQuerySentence([]), []);
+  assert.deepEqual(dashboardQuerySentence([{ label: "Sort", values: ["Cost descending", "Day ascending"] }]), [
+    { prefix: "", keyword: "Show", text: "records" },
+    { prefix: ", ", keyword: "sorted by", text: "Cost descending, then Day ascending" },
+  ]);
+  const extracted = { ...source, orderBy: [{ field: "model", dir: "asc", nulls: "first", extract: { regex: "([0-9]+)" } }] };
+  assert.deepEqual(dashboardQueryDetails(schema, extracted).find(detail => detail.label === "Sort").values, ["Reported model matching /([0-9]+)/ ascending (empty first)"]);
+});
+
+test("all eight dashboards offer four distinct native queries that retain source scope", () => {
+  const documents = { usage, writing, tools, tool_calls: toolCalls, skill_usages: skillUsages, parallelism, mcp_calls: mcpCalls };
+  const configs = [
+    ["tokens", "usage", { op: "sum", field: "total_tokens", groupBy: ["day", "model_family"], label: "Tokens" }],
+    ["carbon", "usage", { op: "sum", field: "co2e_g", groupBy: ["day", "carbon_tier"], label: "Estimated CO₂e" }],
+    ["human", "writing", { op: "sum", field: "typed_words", groupBy: ["repository_name"], label: "Typed words" }],
+    ["skills", "skill_usages", recordDashboardMetric("skills", 0, "day", "skill_name")],
+    ["time", "tool_calls", recordDashboardMetric("time", 0, "day", "activity")],
+    ["parallelism", "parallelism", { op: "sum", field: "unit_hours", groupBy: ["repository_name"], label: "Active unit hours" }],
+    ["tools", "tools", toolDashboardQuery(defaultToolDashboard, []).aggregations[0]],
+    ["mcp", "mcp_calls", mcpDashboardQuery(defaultMCPDashboard, []).aggregations[0]],
+  ];
+  for (const [topic, dataset, metric] of configs) {
+    const schema = loadSchema(documents[dataset]);
+    const where = [{ field: dataset === "mcp_calls" ? "query_source" : "repository_name", op: "=", value: "pharos" }];
+    const query = { ...EMPTY_QUERY, fitToScreen: false, where, aggregations: [{ ...metric, id: "chart" }] }, original = structuredClone(query);
+    const links = dashboardQueryLinks(dataset, query, schema, new URLSearchParams({ analyze_topic: topic, analyze_carbon: '{"scenario":"high"}' }));
+    assert.equal(links.length, 4, topic);
+    assert.equal(new Set(links.map(link => link.title)).size, 4, topic);
+    assert.equal(new Set(links.map(link => encodeQuery(link.query))).size, 4, topic);
+    for (const link of links) {
+      const url = new URL(link.href, "http://localhost"), restored = decodeQueryStrict(url.searchParams.get(`q_${dataset}`));
+      assert.deepEqual(restored, normalizeQueryState(link.query));
+      assert.equal(restored.fitToScreen, true, `${topic}: ${link.title} fits its columns to the screen`);
+      assert.deepEqual(toQueryRequestV3(restored, schema, { version: 3, profile: "qt-sqlite-v1", groupedRows: true, computedSourceFilters: true }).diagnostics ?? [], [], `${topic}: ${link.title}`);
+      assert.deepEqual((restored.grouping?.source ?? restored).where.slice(0, where.length), where);
+      assert.equal(readUsageWorkspace(url.searchParams).topic, topic);
+      if (topic === "carbon") assert.equal(url.searchParams.get("analyze_carbon"), '{"scenario":"high"}');
+      assert.ok(link.details.every(detail => detail.values.length));
+    }
+    assert.deepEqual(query, original);
+  }
+});
+
+test("focused dashboard queries execute group thresholds and weighted measures", () => {
+  const skillLinks = dashboardQueryLinks("skill_usages", { ...EMPTY_QUERY, aggregations: [recordDashboardMetric("skills", 0, "day", "skill_name")] }, loadSchema(skillUsages), new URLSearchParams());
+  const repeats = skillLinks.find(link => link.query.grouping?.summaries.some(column => column.id === "explore_body_bytes"));
+  const evidence = [
+    { id: "1", skill_name: "review", conversation_id: "a", title: "First", evidence_type: "file_load", content_bytes: 100, created_at: "2026-10-01T00:00:00Z" },
+    { id: "2", skill_name: "review", conversation_id: "a", title: "Latest", evidence_type: "file_load", content_bytes: -1, created_at: "2026-10-02T00:00:00Z" },
+    { id: "3", skill_name: "review", conversation_id: "b", evidence_type: "file_load", content_bytes: 200 },
+    { id: "4", skill_name: "review", conversation_id: "b", evidence_type: "explicit_invocation", content_bytes: 200 },
+  ];
+  const rows = applyQuery(evidence, repeats.query, loadSchema(skillUsages)).rows;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].conversation_id, "a");
+  assert.equal(rows[0].explore_count, 2);
+  assert.equal(rows[0].explore_body_bytes, 100);
+  assert.equal(rows[0].explore_name, "Latest");
+
+  const toolLinks = dashboardQueryLinks("tools", toolDashboardQuery(defaultToolDashboard, []), loadSchema(tools), new URLSearchParams());
+  const failures = toolLinks.find(link => link.query.grouping?.summaries.some(column => column.id === "explore_error_rate"));
+  const rates = applyQuery([{ id: "1", tool_name: "shell", provider: "codex", call_count: 10, error_count: 1 }, { id: "2", tool_name: "shell", provider: "codex", call_count: 90, error_count: 0 }], failures.query, loadSchema(tools)).rows;
+  assert.equal(rates[0].explore_error_rate, 0.01);
+});
 
 test("the live audit provides 25 valid, distinct queries per dataset and dashboard", () => {
   const documents = { usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
@@ -53,6 +182,10 @@ test("every Analyze dataset and dashboard topic has a reloadable route", () => {
     assert.equal(readUsageWorkspace(url.searchParams).dataset, dataset);
     assert.equal(readUsageWorkspace(url.searchParams).mode, "query");
     assert.equal(readUsageWorkspace(url.searchParams).search, mode === "search");
+    const query = { ...EMPTY_QUERY, select: [{ field: "id", width: 175 }], where: [{ field: "id", op: "=", value: "example" }], orderBy: [{ field: "id", dir: "asc" }], limit: 25 };
+    const linked = new URL(usageWorkspaceURL({ mode, dataset, query }), "http://localhost");
+    assert.deepEqual(decodeQueryStrict(linked.searchParams.get(`q_${dataset}`)), { ...query, fitToScreen: true }, `${dataset} fits to screen without changing the analysis`);
+    assert.equal(query.fitToScreen, undefined, "Link generation preserves the input query");
   }
   for (const topic of Object.keys(usageTopics)) assert.equal(readUsageWorkspace(new URL(usageWorkspaceURL({ topic }), "http://localhost").searchParams).topic, topic);
   assert.ok(currentUsageAnalyses.every(item => Object.hasOwn(usageTopics, item.topic)));
@@ -118,7 +251,7 @@ test("Query links retain complete grouped queries and Search explicitly opens so
   const source = { ...EMPTY_QUERY, offset: 50, where: [{ field: "provider", op: "=", value: "codex" }], aggregations: [{ id: "tokens", op: "sum", field: "total_tokens", groupBy: [] }] };
   const query = { ...EMPTY_QUERY, grouping: { source, keys: ["model"], summaries: [], representative: null }, where: [{ field: "sum_tokens", op: ">", value: "1000" }] };
   const params = new URL(usageWorkspaceURL({ mode: "query", dataset: "usage", query }), "http://localhost").searchParams;
-  assert.deepEqual(decodeQueryStrict(params.get("q_usage")), query);
+  assert.deepEqual(decodeQueryStrict(params.get("q_usage")), { ...query, fitToScreen: true });
   assert.deepEqual(usageSearchQuery(query), { ...source, offset: 0, aggregations: [] });
   assert.equal(query.grouping.source.offset, 50, "Link generation must not change the original query");
 });
@@ -355,8 +488,10 @@ test("Tool summary call links keep every dimension of the selected row", () => {
 
 // Row presentation is host-owned; native properties and row links must keep
 // their behaviour independently of the compact collection projection.
-import { createPropertyView, selectedFields } from "@pythia-software/query-table-core";
+import { createPropertyView, ITEM_DETAILS_COLUMN, selectedFields, toServerQuery } from "@pythia-software/query-table-core";
 import { conversationRowURL, primaryUsageSource, usageDetailsSchema, usageRowLinks } from "../../../src/usage-row-model.ts";
+import { usageActionQuery, usageDrilldownColumns, usageDrilldownField, usageQuerySchema } from "../../../src/usage-query-columns.ts";
+import { orderedUsageQuery } from "../../../src/usage-query-order.ts";
 import { authoredRenderers } from "../../../src/authored.tsx";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -376,6 +511,61 @@ test("Analyze defaults and Details cover every dataset without changing explicit
   assert.equal(usageDetailsSchema(loadSchema(usage), "library"), undefined);
   assert.ok(createPropertyView(usageDetailsSchema(loadSchema(toolCalls), "tool_calls")).properties.some(p => p.field === "result_text"));
   assert.ok(createPropertyView(usageDetailsSchema(loadSchema(mcpCalls), "mcp_calls")).properties.some(p => p.field === "arguments_json"));
+});
+
+test("Analyze keeps every drilldown after the selected data and before native Detail", () => {
+  const documents = { usage, conversation_activity: conversationActivity, writing, writing_messages: writingMessages, tools, tool_calls: toolCalls, mcp_calls: mcpCalls, skill_usages: skillUsages, parallelism };
+  for (const [dataset, document] of Object.entries(documents)) {
+    const original = loadSchema(document), schema = usageQuerySchema(original, dataset);
+    const saved = { ...EMPTY_QUERY, select: [{ field: ITEM_DETAILS_COLUMN }, { field: "id", width: 175 }] };
+    const query = usageActionQuery(orderedUsageQuery(dataset, saved), schema, dataset);
+    assert.deepEqual(query.select[0], saved.select[1], `${dataset} keeps the user's data columns and widths`);
+    assert.equal(query.select.at(-1).field, ITEM_DETAILS_COLUMN);
+    const columns = usageDrilldownColumns[dataset];
+    assert.deepEqual(query.select.slice(1, -1).map(column => column.field), columns.map(column => usageDrilldownField(column.kind)));
+    assert.strictEqual(usageActionQuery(query, schema, dataset), query, "Canonicalization must settle");
+    const server = toServerQuery(query, schema);
+    assert.ok(server.select.every(name => original.fields.some(field => field.name === name)), `${dataset} only requests backend fields`);
+    for (const column of columns) for (const dependency of column.dependencies) {
+      assert.ok(original.fields.some(field => field.name === dependency), `${dataset}: declared dependency ${dependency} exists`);
+      assert.ok(server.select.includes(dependency), `${dataset}: narrow saved projections still load ${dependency}`);
+    }
+    const request = toQueryRequestV3(query, schema, { version: 3, profile: "qt-sqlite-v1", groupedRows: true, computedSourceFilters: true });
+    assert.deepEqual(request.diagnostics ?? [], [], dataset);
+    const fresh = usageActionQuery(EMPTY_QUERY, schema, dataset);
+    assert.deepEqual(fresh.select.slice(0, original.defaultSelect.length), original.defaultSelect);
+  }
+});
+
+test("Drilldown ordering reads a conversation forward and browses populations newest first", () => {
+  const schema = loadSchema(writingMessages), where = [{ field: "work_id", op: "=", value: "work" }];
+  const rows = [
+    { id: "late", work_id: "work", sent_at: "2026-10-21T12:00:00Z" },
+    { id: "early", work_id: "work", sent_at: "2026-10-20T12:00:00Z" },
+    { id: "other", work_id: "elsewhere", sent_at: "2026-10-22T12:00:00Z" },
+  ];
+  const human = usageRowLinks("writing", { id: "work" }).find(link => link.kind === "messages");
+  const scoped = decodeQueryStrict(new URL(human.href, "http://localhost").searchParams.get("q_writing_messages"));
+  assert.deepEqual(applyQuery(rows, scoped, schema).rows.map(row => row.id), ["early", "late"]);
+  const [dashboard] = dashboardQueryLinks("writing_messages", { ...EMPTY_QUERY, where }, schema, new URLSearchParams());
+  assert.deepEqual(applyQuery(rows, dashboard.query, schema).rows.map(row => row.id), ["early", "late"]);
+  assert.equal(dashboard.query.fitToScreen, true);
+  const across = orderedUsageQuery("writing_messages", EMPTY_QUERY);
+  assert.deepEqual(applyQuery(rows, across, schema).rows.map(row => row.id), ["other", "late", "early"]);
+  for (const clause of [{ any: where }, { ...where[0], negated: true }, { ...where[0], op: "contains" }]) {
+    assert.equal(orderedUsageQuery("writing_messages", { ...EMPTY_QUERY, where: [clause] }).orderBy[0].dir, "desc");
+  }
+  const custom = { ...EMPTY_QUERY, orderBy: [{ field: "typed_words", dir: "desc" }] };
+  assert.strictEqual(orderedUsageQuery("writing_messages", custom), custom);
+  for (const dataset of Object.keys(usageDatasets)) {
+    const query = orderedUsageQuery(dataset, EMPTY_QUERY);
+    assert.ok(query.orderBy.length, dataset);
+    assert.deepEqual(decodeQueryStrict(encodeQuery(query)), query, `${dataset} sort survives reload`);
+  }
+  const summary = { ...EMPTY_QUERY, grouping: { source: EMPTY_QUERY, keys: ["work_id"], summaries: [], representative: null } };
+  const grouped = orderedUsageQuery("writing_messages", summary);
+  assert.deepEqual(grouped.orderBy, [{ field: "work_id", dir: "asc" }]);
+  assert.strictEqual(orderedUsageQuery("writing_messages", grouped), grouped);
 });
 
 test("Usage source links retain exact messages, encoded identity and distinct evidence/body destinations", () => {
@@ -483,4 +673,16 @@ test("cumulative Tools and MCP points match native aggregation of their entire c
     }
     assert.deepEqual(query,before,"Cumulative presentation and inspection preserve the source query");
   }
+});
+
+test('Analyze record keywords remain scoped to their dataset and dashboard return names the reset', () => {
+  const current = new URLSearchParams({ analyze_mode:'query',analyze_data:'usage',analyze_topic:'tokens',q_usage:encodeQuery(EMPTY_QUERY),record_usage:'keyword-definition' });
+  const same = new URL(usageWorkspaceURL({mode:'query'},current),'http://localhost');
+  assert.equal(same.searchParams.get('record_usage'),'keyword-definition');
+  const switched = new URL(usageWorkspaceURL({dataset:'tool_calls'},current),'http://localhost');
+  assert.equal(switched.searchParams.has('record_usage'),false);
+  const back=usageDashboardReturn(current);
+  assert.equal(back.resetsFilters,true);
+  assert.match(back.label,/keyword filters/);
+  assert.equal(new URL(back.href,'http://localhost').searchParams.has('record_usage'),false);
 });

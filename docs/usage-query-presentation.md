@@ -2,6 +2,29 @@
 
 Each query keeps its full column catalogue, filters, grouping and saved URLs. Fresh defaults emphasize the row's grain and a few comparable measures. Explicit saved columns and native saved property layouts take precedence.
 
+Analyze uses Query Table's native WHERE controls alongside columns, grouping,
+ordering and metrics. Grouped queries keep source WHERE and result HAVING
+separate. The former optional field-filter form is no longer needed.
+Older `analyze_mode=search` and `analyze_search=1` links still open the query.
+Dashboard links open records directly, where the same inline controls apply.
+
+The embedded **Search in** chip names its text source, such as **Conversation
+Message Text** or **Workspace Tool Command Text**. It applies keyword conditions
+to one selected text field in each source record. It reuses the homepage's visual
+rules and syntax editor: Boolean groups, exclusions, words, phrases, prefixes,
+proximity, literal text, regex, case and phrase-spacing controls. Message scopes
+and corpus-based word variations do not apply to record fields. Searches use
+the same unicode61 verifier as message search and never select parent workspaces.
+The restriction runs before grouping, metrics, sorting and pagination. Query-v3
+executes it; older row/metric protocols reject it instead of ignoring it.
+
+Record keyword definitions travel in the per-dataset `record_*` URL parameter.
+Invalid saved conditions fail closed. Table Saved/Undo/Reset controls still own
+QueryState; keyword clauses have their own edit/remove controls, like Library's
+content clause. Their unified lifecycle remains an upstream request in
+[the concrete saved-host-state handoff](handoffs/query-table-saved-host-query-state.md). Returning to a dashboard
+explicitly resets keyword conditions, and switching datasets drops them.
+
 | Query | Compact rows | Native Details focus | Drilldown |
 | --- | --- | --- | --- |
 | Token usage | Day, conversation, repository, model + effort, tokens, cost, output, cache share | Token breakdown, pricing coverage, attribution, Carbon estimates and exact time bounds | Source conversation near the first recorded usage; root conversation separately |
@@ -17,6 +40,27 @@ Each query keeps its full column catalogue, filters, grouping and saved URLs. Fr
 Details use Query Table's native modal and inline expansion, property picker, per-mode saved layouts and shareable active-row state. All remaining fields stay selectable. Property payloads are fetched by item identity on demand, independently of collection filters; no transcript payload is added to list requests. Existing relationships remain available.
 
 Source links are real anchors (including modified-click behavior). Exact messages use `message` and, for multi-call envelopes, the provider `call` ID; aggregate time records use `at`, labelled as nearby activity. The reader materializes collapsed/virtualized messages, reveals the selected event, opens ancestors, scrolls and highlights it. Missing identifiers never create a broken `undefined` link. Query-to-query links use explicit identity filters and retain relevant Carbon context.
+
+Analyze's nine ordinary query tables always end with one **Drill in** column per
+destination, then native **Detail**. Human words by conversation exposes work
+and messages separately; tool calls expose call and result messages separately;
+skill evidence exposes evidence, retained body and tool-call details separately.
+Unavailable destinations show a dash in their own column. Saved data columns,
+widths and explicit sorts remain in effect. Query drilldowns specify a sort:
+time ascending within one conversation/work/unit, time descending across a
+population, with identity breaking timestamp ties. Grouped results receive an
+explicit key/summary sort; their Records drilldown also applies the appropriate
+record order. Native Detail for grouped results requires the upstream support
+described in [this handoff](handoffs/query-table-group-detail.md).
+
+Every Analyze query opens with native **Fit All to Screen**, including restored
+queries and drilldowns. The `fitToScreen: true` presentation preference travels
+in the encoded `q_<dataset>` URL parameter and adapts to the viewer's table area
+after loading. Filters, sorts and selected data columns are preserved. Manual
+column sizing can override the fit during the current visit.
+At phone widths, Query Table 0.9.5 can clip native Detail/JSON buttons when
+columns reach its minimum size; [the upstream handoff](handoffs/query-table-fit-screen-controls.md)
+records the reproduction and the scoped browser-test todos.
 
 This is host integration against the published Query Table 0.9.2 release. No dependency patches or generated-bundle edits are involved.
 
