@@ -8,16 +8,35 @@ test('headers overflow only tools that do not fit and retain saved order', () =>
   const widths = { theme: 36, library: 120, history: 71, settings: 36, search: 36, sync: 36 };
   const place = (tools, available) => plain(header.headerToolPlacement(tools, available, widths, 6, 36));
   assert.deepEqual(place(saved, 323), { inline: saved, overflow: [] }, 'all tools stay inline at the exact fit');
-  assert.deepEqual(place(saved, 322), { inline: ['theme', 'library', 'search'], overflow: ['history', 'settings'] }, 'overflow includes room for More');
-  assert.deepEqual(place(saved, 246), { inline: ['theme', 'library', 'search'], overflow: ['history', 'settings'] });
-  assert.deepEqual(place(saved, 245), { inline: ['library', 'search'], overflow: ['theme', 'history', 'settings'] });
+  assert.deepEqual(place(saved, 322), { inline: ['history', 'settings', 'search'], overflow: ['theme', 'library'] }, 'More replaces the leftmost actions and keeps its own space');
+  assert.deepEqual(place(saved, 197), { inline: ['history', 'settings', 'search'], overflow: ['theme', 'library'] });
+  assert.deepEqual(place(saved, 196), { inline: ['settings', 'search'], overflow: ['theme', 'library', 'history'] });
   assert.deepEqual(place(['settings', 'sync'], 78), { inline: ['settings', 'sync'], overflow: [] });
   assert.deepEqual(place(['settings'], 36), { inline: ['settings'], overflow: [] }, 'a minimal layout does not need More');
-  assert.deepEqual(place(saved, 170), { inline: ['library'], overflow: ['theme', 'history', 'settings', 'search'] }, 'even priority controls overflow if necessary');
+  assert.deepEqual(place(saved, 78), { inline: ['search'], overflow: ['theme', 'library', 'history', 'settings'] });
+  assert.deepEqual(place(saved, 77), { inline: [], overflow: saved });
   assert.deepEqual(place(saved, 40), { inline: [], overflow: saved });
   assert.deepEqual(place([], 40), { inline: [], overflow: [] });
   assert.deepEqual(place(saved, 323), { inline: saved, overflow: [] }, 'tools return as soon as there is room');
   assert.deepEqual(saved, ['theme', 'library', 'history', 'settings', 'search']);
+});
+
+test('navigation switches only after all actions collect, then restores actions above its dropdown row', () => {
+  const header = loadClassicScript('header.js');
+  const tools = ['history', 'search', 'settings', 'theme'];
+  const dimensions = { brandWidth: 120, tabsWidth: 300, widths: { history: 71, search: 36, settings: 36, theme: 36 }, gap: 6, moreWidth: 36, barGap: 16 };
+  const place = (width, changes = {}) => plain(header.headerNavigationPlacement(tools, { ...dimensions, width, ...changes }));
+  assert.deepEqual(place(649), { phone: false, inline: tools, overflow: [] });
+  assert.deepEqual(place(488), { phone: false, inline: [], overflow: tools }, 'tabs and More fit exactly');
+  assert.deepEqual(place(487), { phone: true, inline: tools, overflow: [] }, 'the second row frees room for every action');
+  assert.deepEqual(place(256), { phone: true, inline: ['settings', 'theme'], overflow: ['history', 'search'] });
+  assert.deepEqual(place(172), { phone: true, inline: [], overflow: tools });
+  assert.deepEqual(place(488), { phone: false, inline: [], overflow: tools }, 'growing the window restores the tabs without hysteresis');
+  assert.equal(place(488, { tabsWidth: 301 }).phone, true, 'renaming a tab changes the measured transition');
+  assert.equal(place(488, { brandWidth: 121 }).phone, true, 'brand size is included');
+  assert.equal(place(488, { barGap: 17 }).phone, true, 'header spacing is included');
+  assert.equal(place(488, { moreWidth: 37 }).phone, true, 'More uses its measured size');
+  assert.deepEqual(place(256, { widths: { ...dimensions.widths, theme: 120 } }), { phone: true, inline: [], overflow: tools }, 'wider action labels change what fits');
 });
 
 test('header defaults start with navigation and preserve previous visibility choices', () => {

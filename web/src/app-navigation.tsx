@@ -48,8 +48,9 @@ function AppNavigation({ settings, contentNavigation }: { settings: NestedPage[]
     const observer = new ResizeObserver(resize);
     observer.observe(header);
     window.addEventListener("resize", resize);
+    window.addEventListener("pharos:header-layout", resize);
     resize();
-    return () => { observer.disconnect(); window.removeEventListener("resize", resize); };
+    return () => { observer.disconnect(); window.removeEventListener("resize", resize); window.removeEventListener("pharos:header-layout", resize); };
   }, []);
   useEffect(() => { window.dispatchEvent(new Event("resize")); }, [rail]);
   useEffect(() => {
@@ -88,7 +89,10 @@ function AppNavigation({ settings, contentNavigation }: { settings: NestedPage[]
   useEffect(() => {
     if (layout !== "phone" && open) { dialog.current?.close(); setOpen(false); }
     const focused = document.activeElement as HTMLElement | null;
-    if (focused && !focused.getClientRects().length && focused.closest("#appNavigationRail, body > header .tabs")) trigger.current?.focus({ preventScroll: true });
+    if (focused && !focused.getClientRects().length && focused.closest("#appNavigationRail, #appLocation, body > header .tabs")) {
+      const fallback = trigger.current ?? document.querySelector<HTMLElement>("body > header .tabs button.active");
+      fallback?.focus({ preventScroll: true });
+    }
   }, [layout, open]);
   const navigate = () => { navigating.current = true; dialog.current?.close(); setOpen(false); };
   const close = () => { dialog.current?.close(); setOpen(false); };
@@ -111,7 +115,7 @@ function AppNavigation({ settings, contentNavigation }: { settings: NestedPage[]
     : <NavigationLink key={item.id} href={item.href} current={item.id === section.id} navigate={navigate}>{sectionLabel(item)}</NavigationLink>);
   const path = <span className="app-location-path"><span>{section.label}</span>{page ? <><span className="app-location-separator">/</span><strong>{page.label}</strong></> : selected.section === "library" && location.pathname.startsWith("/work/") ? <><span className="app-location-separator">/</span><strong>{location.pathname.includes("/conversation/") ? "Conversation" : "Workspace"}</strong></> : null}</span>;
   return <>
-    {layout === "phone" ? <button ref={trigger} id="appNavigationToggle" className="app-location-switcher" type="button" aria-haspopup="dialog" aria-controls="appNavigationDialog" aria-expanded={open} onClick={show}>{path}<Icon name="chevron-down" /></button> : null}
+    <button ref={layout === "phone" ? trigger : undefined} id="appNavigationToggle" className="app-location-switcher" type="button" aria-haspopup="dialog" aria-controls="appNavigationDialog" aria-expanded={open} onClick={show}>{path}<Icon name="chevron-down" /></button>
     {createPortal(<>{hasSidebar ? <button ref={trigger} id="appSidebarToggle" className="app-sidebar-toggle" type="button" aria-label={rail ? "Collapse sidebar" : "Expand sidebar"} title={rail ? "Collapse sidebar" : "Expand sidebar"} aria-controls="appNavigationRail" aria-expanded={rail} onClick={toggleSidebar}><Icon name="sidebar" /></button> : null}
       <aside id="appNavigationRail" className="app-navigation-rail" aria-label={`${section.label} navigation`} hidden={!rail}><div className="app-navigation-rail-head"><h2 className="app-navigation-rail-title">{section.label}</h2></div><nav className="app-navigation-list" aria-label={`${section.label} pages`}>
       <NavigationItems pages={section.pages} current={selected.current} navigate={navigate} />

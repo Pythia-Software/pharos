@@ -14,19 +14,27 @@ const HEADER_TOOLS = [
 ];
 const HEADER_LAYOUT_KEY = 'pharos-header-tools-v1';
 
-// Keep tools inline until they run out of room, retaining drive and search
-// longest. Reserve More's own width as soon as anything overflows.
+// Collect tools from the left, reserving More's width as soon as one moves.
 function headerToolPlacement(tools, available, widths, gap, moreWidth) {
-  const inline = [...tools];
-  const used = () => inline.reduce((sum, id) => sum + widths[id], 0)
-    + (inline.length < tools.length ? moreWidth + gap * inline.length : gap * Math.max(0, inline.length - 1));
-  const priority = id => ['library', 'sync', 'search'].includes(id);
-  const candidates = [...tools].reverse();
-  for (const id of [...candidates.filter(id => !priority(id)), ...candidates.filter(priority)]) {
-    if (used() <= available) break;
-    inline.splice(inline.indexOf(id), 1);
+  let first = 0;
+  let used = tools.reduce((sum, id) => sum + widths[id], 0) + gap * Math.max(0, tools.length - 1);
+  while (first < tools.length && used > available) {
+    used -= widths[tools[first]] + (first ? gap : 0);
+    if (!first) used += moreWidth;
+    first++;
   }
-  return { inline, overflow: tools.filter(id => !inline.includes(id)) };
+  return { inline: tools.slice(first), overflow: tools.slice(0, first) };
+}
+
+// Keep the tabs until even the fully collected desktop toolbar cannot fit.
+// The dropdown then gets its own row, freeing the first row for tools again.
+// All dimensions come from the rendered controls and computed header styles.
+function headerNavigationPlacement(tools, { width, brandWidth, tabsWidth, widths, gap, moreWidth, barGap }) {
+  const toolbarGap = tools.length ? barGap : 0;
+  const desktopAvailable = width - brandWidth - tabsWidth - barGap - toolbarGap;
+  const phone = desktopAvailable < (tools.length ? moreWidth : 0);
+  const available = phone ? width - brandWidth - toolbarGap : desktopAvailable;
+  return { phone, ...headerToolPlacement(tools, available, widths, gap, moreWidth) };
 }
 
 function headerToolAnchor(element) {
@@ -37,7 +45,7 @@ function initHeaderOverflow(readTools) {
   const root = document.querySelector('body>header .header-icons');
   const more = document.getElementById('headerMore'), popup = document.getElementById('headerOverflow'), list = document.getElementById('headerOverflowTools');
   if (!root || !more || !popup || !list) return () => {};
-  const bar = root.parentElement, brand = bar.querySelector('.brand'), tabs = bar.querySelector('.tabs');
+  const bar = root.parentElement, brand = bar.querySelector('.brand'), tabs = bar.querySelector('.tabs'), location = document.getElementById('appLocation');
   const rows = new Map();
   for (const tool of HEADER_TOOLS) {
     const row = document.createElement('div'), label = document.createElement('span');
@@ -50,11 +58,6 @@ function initHeaderOverflow(readTools) {
   function placement() {
     const tools = readTools(), style = getComputedStyle(bar), gap = parseFloat(style.columnGap) || 0;
     const width = bar.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
-    const brandBox = brand.getBoundingClientRect(), tabsBox = tabs.getBoundingClientRect();
-    const sharedRow = tabs.getClientRects().length && tabsBox.top < brandBox.bottom;
-    const available = sharedRow
-      ? Math.min(width - brandBox.width - tabsBox.width - 2 * gap, (width - tabsBox.width) / 2 - gap)
-      : width - brandBox.width - gap;
     // Measure inert copies in the inline context, including tools currently
     // inside the closed popover. Never move live controls just to measure them:
     // doing so would blur keyboard focus and reset their popovers.
@@ -75,11 +78,30 @@ function initHeaderOverflow(readTools) {
     const widths = Object.fromEntries(ids.map((id, index) => [id, probe.children[index].getBoundingClientRect().width]));
     const controlGap = parseFloat(getComputedStyle(probe).columnGap) || 0;
     probe.remove();
-    return headerToolPlacement(tools, available, widths, controlGap, widths.more);
+    const measure = source => {
+      const copy = source.cloneNode(true);
+      for (const node of [copy, ...copy.querySelectorAll('[id]')]) node.removeAttribute('id');
+      copy.inert = true;
+      copy.setAttribute('aria-hidden', 'true');
+      copy.style.cssText = 'position:absolute;visibility:hidden;display:flex;width:max-content;max-width:none;left:0;top:0';
+      bar.append(copy);
+      const width = copy.getBoundingClientRect().width;
+      copy.remove();
+      return width;
+    };
+    return headerNavigationPlacement(tools, {
+      width, brandWidth: measure(brand), tabsWidth: measure(tabs), widths,
+      gap: controlGap, moreWidth: widths.more, barGap: gap,
+    });
   }
   function layout(focused = document.activeElement) {
     const ownsFocus = root.contains(focused) || list.contains(focused);
-    const { inline, overflow } = placement();
+    const { phone, inline, overflow } = placement();
+    const html = document.documentElement;
+    if (html.classList.contains('app-header-phone') !== phone) {
+      html.classList.toggle('app-header-phone', phone);
+      dispatchEvent(new Event('pharos:header-layout'));
+    }
     for (const tool of HEADER_TOOLS) {
       const node = document.getElementById(tool.element), row = rows.get(tool.id);
       const overflows = overflow.includes(tool.id);
@@ -90,13 +112,14 @@ function initHeaderOverflow(readTools) {
     }
     // Work backwards from each list's end, leaving controls in place when
     // their order is already correct. Reinserting a focused node blurs it.
-    let next = more;
+    let next = null;
     for (const id of [...inline].reverse()) {
       const node = document.getElementById(HEADER_TOOLS.find(tool => tool.id === id).element);
       if (!node) continue;
       if (node.nextElementSibling !== next) root.insertBefore(node, next);
       next = node;
     }
+    if (root.firstElementChild !== more) root.insertBefore(more, root.firstElementChild);
     next = null;
     for (const id of [...overflow].reverse()) {
       const row = rows.get(id);
@@ -135,9 +158,9 @@ function initHeaderOverflow(readTools) {
   // Font loading, drive labels, tab visibility, preferences, and native window
   // padding can change the fit without a window resize.
   const resize = new ResizeObserver(schedule);
-  for (const node of [bar, brand, tabs, root]) resize.observe(node);
+  for (const node of [bar, brand, tabs, root, location].filter(Boolean)) resize.observe(node);
   const changes = new MutationObserver(schedule);
-  for (const node of [tabs, root, list]) changes.observe(node, { subtree: true, childList: true, characterData: true, attributes: true });
+  for (const node of [tabs, root, list, location].filter(Boolean)) changes.observe(node, { subtree: true, childList: true, characterData: true, attributes: true });
   document.fonts?.ready.then(schedule);
   return layout;
 }
