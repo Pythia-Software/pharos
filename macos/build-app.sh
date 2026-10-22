@@ -87,6 +87,10 @@ done
 
 # Regenerate with macos/make-icon.sh after editing macos/AppIcon.svg.
 cp "$ROOT/macos/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+# Keep license terms and the separately licensed Query Table notice with the app.
+cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
+mkdir -p "$APP/Contents/Resources/licenses"
+cp "$ROOT/internal/querytable/LICENSE" "$APP/Contents/Resources/licenses/query-table-LICENSE"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
