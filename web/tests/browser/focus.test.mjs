@@ -4,7 +4,80 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
-import { workID } from "./fixtures.mjs";
+import { defaultApi, workID } from "./fixtures.mjs";
+
+for (const mode of ['drive', 'activity']) test(`Activity ${mode} refresh preserves scrolling, focus and animation phase`, {skip}, async t => {
+  const main = {id: 'refreshing-index', kind: 'sync', label: 'Capture & index', stoppable: true,
+    started_at: new Date(Date.now() - 120_000).toISOString(),
+    work: {phase: 'Discovering inputs', source: 'Codex', done: 0, total: 0},
+    forecast: {state: 'partial', remaining_steps: 4, predicted_steps: 3, basis: 'Learning the remaining analyses'}};
+  let activities = [main, ...Array.from({length: 5}, (_, index) => ({id: `task-${index}`, kind: 'maintenance', label: `Background task ${index}`}))];
+  let stopped = 0;
+  const {page, settled, shot} = await open(t, {url: '/library', ready: '#pharosDrive', viewport: {width: 390, height: 550}, api: {
+    'GET /api/library/status': () => ({...defaultApi['GET /api/library/status'], idle: false, activities}),
+    'POST /api/library/refresh/stop': () => {stopped++; return {stopped: true};},
+  }});
+  await page.emulateMedia({reducedMotion: 'no-preference'});
+  if (mode === 'drive') await activateHeaderTool(page, 'pharosDrive');
+  else await page.evaluate(() => window.pharosLibrary.toggleActivityPanel());
+  await settled();
+  const panel = page.getByRole('dialog', {name: mode === 'drive' ? 'Library drive' : 'Running activity', exact: true});
+  const summary = panel.locator('summary').first();
+  await summary.click();
+  await summary.focus();
+  await page.evaluate(async () => {
+    const panel = document.getElementById('pharosDrivePanel');
+    panel.scrollTop = 160;
+    const animations = [...panel.querySelector('[role="progressbar"]').getAnimations({subtree: true}),
+      ...document.getElementById('pharosDrive').getAnimations({subtree: true})];
+    if (!animations.length) throw new Error('No loading animations to exercise');
+    for (const animation of animations) {animation.pause(); await animation.ready; animation.currentTime = 750;}
+    window.activityRefreshTest = {animations, focused: document.activeElement, scrollTop: panel.scrollTop};
+    if (!panel.scrollTop) throw new Error('Activity fixture must scroll');
+  });
+  activities = [{...main, stop_path: '/api/library/refresh/stop', detail: 'Updated discovery counts'}, ...activities.slice(1)];
+  await page.evaluate(() => window.pharosLibrary.refresh());
+  assert.ok(await page.evaluate(() => {
+    const panel = document.getElementById('pharosDrivePanel'), before = window.activityRefreshTest;
+    const animations = [...panel.getAnimations({subtree: true}), ...document.getElementById('pharosDrive').getAnimations({subtree: true})];
+    return document.activeElement === before.focused && panel.scrollTop === before.scrollTop
+      && panel.querySelector('details').open
+      && before.animations.every(animation => animations.includes(animation) && animation.currentTime === 750);
+  }), 'refresh interrupted scrolling, focus, disclosure state or an in-progress animation');
+  // Removing a preceding task also keeps a later task's animation alive.
+  await page.evaluate(async () => {
+    const bar = [...document.querySelectorAll('#pharosDrivePanel [role="progressbar"]')].find(el => el.getAttribute('aria-label').startsWith('Background task 4: overall'));
+    window.laterActivityAnimation = bar.getAnimations({subtree: true})[0];
+    window.laterActivityAnimation.pause();
+    await window.laterActivityAnimation.ready;
+    window.laterActivityAnimation.currentTime = 900;
+  });
+  activities = [activities[0], ...activities.slice(2)];
+  await page.evaluate(() => window.pharosLibrary.refresh());
+  assert.ok(await panel.evaluate(element => element.getAnimations({subtree: true}).includes(window.laterActivityAnimation) && window.laterActivityAnimation.currentTime === 900));
+  // Exercise the state-preserving move fallback used by older browsers.
+  await page.evaluate(() => {Element.prototype.moveBefore = undefined;});
+  activities = [activities[0], ...activities.slice(1).reverse()];
+  await page.evaluate(() => window.pharosLibrary.refresh());
+  assert.ok(await panel.evaluate(element => {
+    const bar = [...element.querySelectorAll('[role="progressbar"]')].find(el => el.getAttribute('aria-label').startsWith('Background task 4: overall'));
+    return bar.getAnimations({subtree: true})[0].currentTime === 900;
+  }), 'reordering tasks restarted an in-progress animation');
+  const stop = panel.getByRole('button', {name: 'Stop', exact: true});
+  await stop.click();
+  await settled();
+  assert.equal(stopped, 1, 'retained Stop button did not use the latest stop target');
+  // A measured step can replace discovery without closing its details.
+  activities = [{...activities[0], work: {phase: 'Indexing', source: 'Codex', done: 42, total: 100},
+    forecast: {state: 'provisional', progress: .63, low_seconds: 120, high_seconds: 180}}, ...activities.slice(1)];
+  await page.evaluate(() => window.pharosLibrary.refresh());
+  assert.ok(await panel.locator('details').first().evaluate(element => element.open));
+  activities = [activities[0]];
+  await page.evaluate(() => window.pharosLibrary.refresh());
+  await panel.locator('summary').first().click();
+  await panel.evaluate(element => {element.scrollTop = 0;});
+  await shot('refreshed');
+});
 
 test("summary value links retain keyboard focus when the summary rerenders", { skip }, async t => {
   const { page } = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-usage-summary-links": true } });
@@ -278,23 +351,32 @@ for (const tools of [['settings'], ['back', 'sync', 'settings']]) {
   });
 }
 
-test('header navigation hides unavailable TL1 and skips it in keyboard navigation', { skip }, async t => {
-  const { page, settled } = await open(t, {
-    url: '/library', ready: '#queryTableLibrary .qt-row', api: { 'GET /api/tl1': { projects: [] } },
-  });
-  for (const width of [1440, 1024]) {
-    await page.setViewportSize({ width, height: 900 });
-    await settled();
-    assert.equal(await page.locator('#tl1Tab').isVisible(), false);
-    const navigation = page.getByRole('navigation', { name: 'Primary navigation', exact: true });
-    const library = navigation.getByRole('button', { name: 'Search', exact: true });
-    await library.focus();
-    await page.locator('#tl1Tab').evaluate(element => element.focus());
-    await page.waitForFunction(element => document.activeElement === element, await library.elementHandle());
-    // Safari's next tab stop depends on its keyboard navigation preference.
-    await page.keyboard.press('Tab');
-    assert.equal(await page.locator('#tl1Tab').evaluate(element => document.activeElement === element), false);
+for (const width of [1440, 390]) test(`Optimize pages move keyboard focus to their content at ${width}px`, { skip }, async t => {
+  const { page, settled, shot } = await open(t, { url: '/findings', viewport: { width, height: 900 }, ready: '.findings-card' });
+  const phone = width === 390;
+  const menu = page.getByRole('dialog', { name: 'Navigate Pharos' });
+  const navigation = phone ? menu : page.getByRole('complementary', { name: 'Optimize navigation', exact: true });
+  async function choose(name, ready) {
+    if (phone) await press(page.locator('#appNavigationToggle'));
+    await press(navigation.getByRole('link', { name, exact: true }));
+    await page.locator(ready).first().waitFor();
+    await page.waitForFunction(() => document.activeElement?.tagName === 'H1');
+    if (phone) assert.equal(await menu.isVisible(), false);
   }
+  await choose('Settings', '.findings-settings .findings-panel');
+  await choose('Table', '.findings-table .qt-row');
+  await choose('Dashboard', '.findings-card');
+  if (phone) await press(page.locator('#appNavigationToggle'));
+  await press(navigation.getByText('TL1', { exact: true }));
+  await press(navigation.getByRole('link', { name: 'Configurations', exact: true }));
+  await page.locator('#tl1-matrix').waitFor();
+  await page.waitForFunction(() => document.activeElement?.tagName === 'H1');
+  await settled();
+  await shot('optimize-tl1');
+  await page.goBack();
+  await page.locator('.findings-card').first().waitFor();
+  await settled();
+  await shot('optimize-findings');
 });
 
 test('header focus survives resizing while its tool remains inline', { skip }, async t => {

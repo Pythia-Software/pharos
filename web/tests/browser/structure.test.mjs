@@ -39,9 +39,9 @@ const ROUTES = [
     name: `Indexing forecast (${state}${expanded ? ', details' : ''})`, url: '/library', ready: '#queryTableLibrary .qt-row',
     api: {'GET /api/library/status': {...defaultApi['GET /api/library/status'], idle: false, activities: [{id: 'index-forecast', kind: 'sync', label: 'Capture & index', started_at: new Date(Date.now() - 120_000).toISOString(),
       stoppable: true, stop_path: '/api/index/cancel', detail: 'Codex · 0 of 4 sources finished',
-      work: {phase: 'discovering inputs', source: 'Codex', done: 0, total: 0, next: 'Tools, authorship and findings'},
-      estimate: {state: 'unknown', basis: 'Discovering inputs before the stage count is available'},
-      forecast: {state, low_seconds: state === 'provisional' ? 180 : 0, high_seconds: state === 'provisional' ? 600 : 0, predicted_steps: state === 'provisional' ? 4 : 3, remaining_steps: 4, basis: 'Remaining sources and analyses on this Mac', unknown_steps: state === 'partial' ? ['Classify authorship for retained conversations'] : []}}]}},
+      work: {phase: state === 'provisional' ? 'indexing' : 'discovering inputs', source: 'Codex', unit: 'conversation group', done: state === 'provisional' ? 42 : 0, total: state === 'provisional' ? 100 : 0, next: 'Tools, authorship and findings'},
+      estimate: state === 'provisional' ? {state: 'estimating', low_seconds: 60, high_seconds: 120, basis: 'Recent pace of the current step'} : {state: 'unknown', basis: 'Discovering inputs before the stage count is available'},
+      forecast: {state, progress: state === 'provisional' ? .63 : undefined, low_seconds: state === 'provisional' ? 180 : 0, high_seconds: state === 'provisional' ? 600 : 0, predicted_steps: state === 'provisional' ? 4 : 3, remaining_steps: 4, basis: 'Remaining sources and analyses on this Mac', unknown_steps: state === 'partial' ? ['Classify authorship for retained conversations'] : []}}]}},
     open: async page => {
       await page.evaluate(() => { window.webkit = {messageHandlers: {pharosLibrary: {postMessage: async () => {}}}}; });
       await activateHeaderTool(page, 'pharosDrive');
@@ -104,6 +104,8 @@ const ROUTES = [
   { name: "Tool summary", url: "/tools?tools_view=summary", ready: "#toolsPage .qt-row" },
   { name: "Skills", url: "/tools?tools_view=skills", ready: ".skill-usages .qt-row" },
   { name: "Findings", url: "/findings", ready: ".findings-card" },
+  { name: "Findings table", url: "/findings?view=table", ready: ".findings-table .qt-row" },
+  { name: "Findings settings", url: "/findings?view=settings", ready: ".findings-settings .findings-panel" },
   { name: "Finding detail", url: "/findings?finding=drift%3Arepo%3Arepo_tl1%3Aghi", ready: ".findings-detail svg" },
   { name: "MCP dashboard", url: "/analyze?analyze_topic=mcp", ready: ".usage-mcp-dashboard .qt-metric-bar-row" },
   { name: "MCP trends", url: `/analyze?analyze_topic=mcp&analyze_chart=${encodeURIComponent(JSON.stringify({ metric: "failure_rate", split: "tool_name", view: "trend", period: "week", rollingPeriods: 37 }))}`, ready: ".usage-mcp-dashboard .qt-metric-mark" },
@@ -113,7 +115,7 @@ const ROUTES = [
   { name: "Library health", url: "/settings", ready: "#healthCards .panel:not([aria-busy])" },
   { name: "Sources", url: "/settings/sources", ready: "#sourceGrid .source-card" },
   { name: "Capture & index", url: "/settings/sync", ready: "#syncDashboard .sync-panel table" },
-  { name: "Optimization settings", url: "/settings/optimization", ready: "#optimizationSettingsPage .findings-panel" },
+  { name: "Legacy Findings settings", url: "/settings/optimization", ready: ".findings-settings .findings-panel" },
   { name: "Header settings", url: "/settings/header", ready: "#headerActive .header-tool" },
   { name: "App preferences", url: "/settings/preferences", ready: "#optionalBehaviors .optional-behavior" },
   { name: "Workspace overview", url: work, ready: ".delegation-table tbody tr" },

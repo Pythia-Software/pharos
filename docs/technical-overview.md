@@ -355,8 +355,12 @@ For new interface icons, follow the [icon drawing and usage guide](iconography.m
 
 ### Nested page layouts
 
-Analyze, Settings, and TL1 use `web/src/nested-pages.tsx` and its scoped CSS
-for their sidebar, mobile disclosure menu, breadcrumbs, and page heading.
+Analyze, Optimize, and Settings share the sidebar and mobile menu in
+`web/src/app-navigation.tsx`, driven by `app-navigation-model.ts`.
+Optimize groups the Findings dashboard, table, and settings under Findings,
+and the available TL1 pages under TL1. Findings settings uses
+`/findings?view=settings`; old `/settings/optimization` links redirect there.
+Page content can use `web/src/nested-pages.tsx` for its shared layout and heading.
 A `NestedPage` tree supplies labels, destinations, descriptions, and stable
 page IDs. The selected page's ancestry determines breadcrumbs and which menu
 branches open; the tree can nest further without adding another renderer.
