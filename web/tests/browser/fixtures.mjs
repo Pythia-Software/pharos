@@ -225,7 +225,8 @@ export const defaultApi = {
   "POST /api/search/text/validate": ({ body }) => ({ where: body.where ?? { op: ["literal", "regex", "phrase"].includes(body.mode) ? body.mode : "term", text: body.query } }),
   "GET /api/search/text/capabilities": { fuzzy: true, regex: true, case_sensitive: true },
   "GET /api/tools/status": toolsStatus,
-  "GET /api/menu-bar/status": { state: "idle" },
+  "GET /api/menu-bar/status": { error: "", indexed_at: iso(60000), library: { library_dir: "/Volumes/Pharos SSD/Pharos", activities: [], drive: { name: "Pharos SSD", ejectable: true } } },
+  "GET /api/menu-bar/usage": { human_words: 3240, tokens: 1200000, cost_usd: 8.42, co2e_g: 18.25 },
 
   // Settings.
   "GET /api/health/counts": { workspaces: 1964, conversations: 2400, messages: 311120 },

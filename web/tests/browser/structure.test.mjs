@@ -118,6 +118,10 @@ const ROUTES = [
   { name: "Legacy Findings settings", url: "/settings/optimization", ready: ".findings-settings .findings-panel" },
   { name: "Header settings", url: "/settings/header", ready: "#headerActive .header-tool" },
   { name: "App preferences", url: "/settings/preferences", ready: "#optionalBehaviors .optional-behavior" },
+  { name: "Mac menu syncing", url: "/settings/preferences", ready: "#menuBarActive .menu-bar-detail", api: {
+    'GET /api/menu-bar/status': {...defaultApi['GET /api/menu-bar/status'], library: {activities: [{label: 'Manual sync: evaluating findings while checking every captured conversation and its retained tool results', progress: .22, estimated_completion_at: new Date(Date.now() + 60000).toISOString()}]}},
+  } },
+  { name: "Mac menu with all items", url: "/settings/preferences", ready: "#menuBarActive button", preferences: { 'pharos-menu-bar': { cost: true, backup: true, space: true, index: true, eject: true, search: true, analyze: true, optimize: true, capture: true, health: true, sources: true, finder: true } } },
   { name: "Workspace overview", url: work, ready: ".delegation-table tbody tr" },
   { name: "Workspace parallel activity", url: `${work}?explorer=parallel`, ready: ".delegation-parallel" },
   { name: "Long transcript", url: `${work}/conversation/${rootConversation}`, ready: ".conversation-panel .turn" },
