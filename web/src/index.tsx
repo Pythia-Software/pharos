@@ -1,3 +1,4 @@
+import { matchingSelectionIDs } from "./query-selection";
 import { installDelegationExplorer } from "./delegation";
 import { installWorkspaceInbox } from "./workspace-inbox";
 import { MessageTableSearch, newMessageSearch, readMessageSearch } from "./message-table-search";
@@ -12,8 +13,10 @@ import { SearchDialog } from "./search-dialog";
 import { ExploreSearch } from "./explore-search";
 import { SearchResultsDisplay } from "./search-results-view";
 import { queryForSearchResultsView, searchResultsView, type SearchResultsView } from "./search-results-view-model";
-import { emptyTextSearch, readTextSearch, textFindParameters, searchSentence, withheldBatch, type TextSearchDraft } from "./text-search-model";
+import { newKeywordSearch, readTextSearch, textFindParameters, searchSentence, withheldBatch, type TextSearchDraft } from "./text-search-model";
 import { CarbonImpact } from "./carbon-impact";
+import { usageSummaryURL } from "./usage-summary-links";
+import { readConcurrencySettings } from "./concurrency-settings";
 import { pushMachineLocation, useMachineQueryNavigation } from "./machine-location";
 import { MachineActivity } from "./machine-activity";
 import { activityPresentation } from "./machine-activity-data";
@@ -31,7 +34,7 @@ import { createRoot } from "react-dom/client";
 import { useLocationRevision } from "./nested-pages";
 import { SettingsWorkspace } from "./settings-workspace";
 import { installAppNavigation } from "./app-navigation";
-import { EMPTY_QUERY, exitGrouping, groupSourceQuery, httpComputedColumnStore, inspectBucketQuery, applyAggregations, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, toServerQuery, type ComputedColumnStore, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type AggregationResultEntry, type FieldSchema, type OrderByClause, type ServerQuery, type Transport, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, exitGrouping, groupSourceQuery, httpComputedColumnStore, inspectBucketQuery, applyAggregations, encodeQuery, loadSchema, memoryStorageAdapter, toAggregationQuery, type ComputedColumnStore, type QueryCapabilitiesV3, type QueryResultV3, type FetchRowsResultV2, type ComputedExecution, type MetricCapabilities, type AggregationClause, type AggregationResultEntry, type FieldSchema, type OrderByClause, type Transport, type WhereTerm, type QueryState, type RelationshipAdapter, jsonPropertyViewStorage } from "@pythia-software/query-table-core";
 import { useQueryTable, type QueryTableApi, type QueryFilterApi } from "@pythia-software/query-table-react";
 import { DataTable, FilterValueProvider, MetricCard, MetricsPanel, QueryBuilder, QueryFilterRow, SelectionToolbar, defaultRenderers, type CellContext, type FilterValuePresentation, type RenderRegistry } from "@pythia-software/query-table-ui";
 import "@pythia-software/query-table-ui/theme.css";
@@ -174,6 +177,7 @@ declare global {
       refresh: (dataset: Dataset) => void;
       filterRepository: (repository: string) => void;
       filterModel: (model: string) => void;
+      summaryURL: typeof usageSummaryURL;
     };
   }
 }
@@ -259,16 +263,6 @@ function makeTransport(dataset: Dataset, extra = "", onFind?: (find: FindSummary
       return queryRequest(endpoint("/metrics", recordBudget(dataset, query.where)), {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query), signal,
       });
-    },
-    async fetchRows(query: ServerQuery, signal?: AbortSignal) {
-      const result = await queryRequest<{ rows: Row[]; total: number; find?: FindSummary }>(endpoint(), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(query),
-        signal,
-      });
-      onFind?.(result.find ?? null);
-      return result;
     },
     async fetchDistinctValues(query, signal) {
       const params = new URLSearchParams({ field: query.field, q: query.search });
@@ -592,18 +586,18 @@ function QuerySurface({ dataset, libraryView = "table", messageView = "table", f
       onReset={() => { setRecovered(false); api.setQuery(tableRecoveryQuery(schema, scopeWhere)); if (capabilityError) setCapabilityRetry(value => value + 1); }} />
     {!api.query.grouping || namespace ? header?.(api) : null}
     {presets?.(api)}
-    {queryContent || resultPresentation ? <QueryBuilder api={stableApi} fields={api.query.grouping ? api.schema!.fields : api.computed.catalogue} total={api.total} running={api.loading}
+    {queryContent || resultPresentation ? <QueryBuilder compact api={stableApi} fields={api.query.grouping ? api.schema!.fields : api.computed.catalogue} total={api.total} running={api.loading}
       whereRow={<>
         {resultPresentation?.(api)}
         <QueryFilterRow api={stableSourceFilters} fields={api.query.grouping ? api.grouping!.source.schema.fields : api.computed.catalogue} />
         {queryContent?.(api)}
-      </>} /> : api.query.grouping ? <QueryBuilder api={stableApi} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <QueryBuilder defaultCollapsed={Boolean(namespace)} api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={stableApi} dataset={dataset} layout={<QueryBuilder api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />} /> : <QueryBuilder api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />}
+      </>} /> : api.query.grouping ? <QueryBuilder compact api={stableApi} fields={api.schema!.fields} total={api.total} running={api.loading} /> : controls ? controls(api, <QueryBuilder compact defaultCollapsed={Boolean(namespace)} api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />) : recordSearchTargets[dataset] ? <RecordSearchEditor api={stableApi} dataset={dataset} layout={<QueryBuilder compact api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />} /> : <QueryBuilder compact api={stableApi} fields={api.computed.catalogue} total={api.total} running={api.loading} />}
     {queryContent ? controls?.(api, null) : null}
     <MetricsPanel api={stableApi} aggregations={api.aggregations} fields={metricFields(api.query.grouping ? usageGroupFields(api.schema!.fields, api.query) : api.computed.catalogue)} renderers={metricRenderers}
       onInspect={(bucket, clause) => { const records = inspectBucketQuery(api.query, bucket, clause, sourceSchema); if (records) api.setQuery(records); }} />
     {capabilityError && !capabilities ? <div className="query-table-error">Could not read this table's query capabilities: {capabilityError.message}</div> : null}
     {api.error ? <div className="query-table-error">{api.error?.message}</div> : null}
-    {selectable && !api.query.grouping ? <SelectionToolbar selection={api.selection} actions={ids => <ShareSelection ids={ids} api={api} transport={transport} />} /> : null}
+    {selectable && !api.query.grouping ? <SelectionToolbar selection={api.selection} actions={ids => <ShareSelection ids={ids} api={api} transport={transport} execution={capabilities?.computedExecution} />} /> : null}
     {dataset === "library" && searchResultsView(api.query, libraryView) === "conversation" ? <ConversationResults api={api} searching={Boolean(find)} />
       : dataset === "writing_messages" && messageView === "text" && !api.query.grouping ? <AuthoredMessages api={api} emptyMessage={api.error ? failedMessage : emptyMessages[dataset]} /> : <DataTable
       maxHeight={100000}
@@ -638,18 +632,21 @@ const shareWorkLimit = 200;
 // Share, for the works checked in the Library: one standalone HTML file with
 // their conversations and tables. It can also check every work the current
 // filters match, when they fit in one export.
-function ShareSelection({ ids, api, transport }: { ids: unknown[]; api: QueryTableApi<Row>; transport?: Transport<Row> }) {
+function ShareSelection({ ids, api, transport, execution }: { ids: unknown[]; api: QueryTableApi<Row>; transport?: Transport<Row>; execution?: ComputedExecution }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const tooMany = ids.length > shareWorkLimit;
   const total = api.total ?? 0;
-  const canSelectAll = Boolean(transport?.fetchRows) && total > ids.length && total <= shareWorkLimit;
+  const canFetchRows = Boolean((transport?.queryCapabilities?.version === 3 && transport.fetchQueryV3) || transport?.fetchRowsV2);
+  const canSelectAll = Boolean(execution) && canFetchRows && total > ids.length && total <= shareWorkLimit;
   async function selectAll() {
-    if (!transport?.fetchRows) return;
+    if (!transport || !execution) return;
     setBusy(true);
+    setError("");
     try {
-      const result = await transport.fetchRows({ ...toServerQuery(api.query, schemas.library), limit: shareWorkLimit, offset: 0 });
-      api.selection.replace(result.rows.map(row => api.rowId(row)).filter((id): id is NonNullable<typeof id> => id !== null));
+      api.selection.replace(await matchingSelectionIDs(api.query, api.schema ?? schemas.library, execution, transport, shareWorkLimit));
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Could not select the matching works");
     } finally { setBusy(false); }
   }
   return <>
@@ -846,21 +843,20 @@ function LibraryPage() {
   const [editorValue, setEditorValue] = useState(initial.draft);
   const [applied, setApplied] = useState<TextSearchDraft | null>(initial.active ? initial.draft : null);
   const [initialError, setInitialError] = useState(initial.error);
-  const [cursor, setCursor] = useState(() => new URLSearchParams(location.search).get("text_cursor") ?? "");
   const [kind, setKind] = useState<FindKind>(() => (new URLSearchParams(location.search).get("kind") as FindKind) || "text");
   const [fileDraft, setFileDraft] = useState(() => new URLSearchParams(location.search).get("search") ?? "");
   const [fileSearch, setFileSearch] = useState(fileDraft);
   const [fileCase, setFileCase] = useState(() => new URLSearchParams(location.search).get("case") === "1");
   const [fileCaseDraft, setFileCaseDraft] = useState(fileCase);
   const [view, setView] = useState<LibraryView>(() => new URLSearchParams(location.search).get("view") === "conversation" ? "conversation" : "table");
-  const clearText = () => { const empty = emptyTextSearch(); setEditorValue(empty); setApplied(null); setCursor(""); setInitialError(""); };
+  const clearText = () => { const empty = newKeywordSearch(); setEditorValue(empty); setApplied(null); setInitialError(""); };
   useEffect(() => { clearLibrarySearch = () => { clearText(); setFileSearch(""); setFileDraft(""); }; return () => { clearLibrarySearch = undefined; }; }, []);
   useEffect(() => {
     const restore = () => {
       if (!shared && location.pathname !== "/library") return;
       const params = new URLSearchParams(location.search), next = readTextSearch(params);
       setEditorValue(next.draft); setApplied(next.active ? next.draft : null); setInitialError(next.error);
-      setKind((params.get("kind") as FindKind) || "text"); setCursor(params.get("text_cursor") ?? "");
+      setKind((params.get("kind") as FindKind) || "text");
       setFileDraft(params.get("search") ?? ""); setFileSearch(params.get("search") ?? "");
       setFileCase(params.get("case") === "1"); setFileCaseDraft(params.get("case") === "1");
       setView(params.get("view") === "conversation" ? "conversation" : "table");
@@ -874,14 +870,13 @@ function LibraryPage() {
     for (const key of [...url.searchParams.keys()]) if (key.startsWith("text_") || ["search", "fuzzy", "case", "separators", "kind"].includes(key)) url.searchParams.delete(key);
     if (kind === "text") {
       if (applied) url.searchParams.set("text_builder", JSON.stringify(applied));
-      if (cursor) url.searchParams.set("text_cursor", cursor);
     } else { url.searchParams.set("kind", kind); if (fileSearch) url.searchParams.set("search", fileSearch); if (fileCase) url.searchParams.set("case", "1"); }
     if (view === "conversation") url.searchParams.set("view", view); else url.searchParams.delete("view");
     if (url.href !== location.href) { history.replaceState(null, "", url); window.dispatchEvent(new Event("pharos:uri-changed")); }
-  }, [locationRevision, applied, kind, cursor, view, fileSearch, fileCase, initialError]);
+  }, [locationRevision, applied, kind, view, fileSearch, fileCase, initialError]);
   const fileParams = new URLSearchParams({ find: fileSearch, find_kind: kind });
   if (fileCase) fileParams.set("find_case", "1");
-  const find = shared ? "" : kind === "text" ? applied ? textFindParameters(applied, cursor) : "" : fileSearch ? fileParams.toString() : "";
+  const find = shared ? "" : kind === "text" ? applied ? textFindParameters(applied) : "" : fileSearch ? fileParams.toString() : "";
   const [found, setFound] = useState<FindSummary | null>(null);
   useEffect(() => { setFound(null); }, [find]);
   return <div className={`pharos-query-page${find ? " library-searching" : ""}`}>
@@ -894,22 +889,16 @@ function LibraryPage() {
       summary={kind === "text" && applied ? searchSentence(applied).parts.map(part => typeof part === "string" ? part : part.value).join("") : `${fileSearch}${fileCase ? " · case sensitive" : ""}`}
       onClear={() => { clearText(); setFileSearch(""); setFileDraft(""); }}>
       {(close, draftKind, setDraftKind) => <TextSearchEditor compact sentence={false} value={editorValue} active={!!applied} initialError={initialError} kind={draftKind} onKind={setDraftKind}
-        onApply={next => { if (kind === "text" && textFindParameters(next) === find) api.refresh(); setKind("text"); setEditorValue(next); setApplied(next); setInitialError(""); setCursor(""); close(); }} onClear={clearText}
-        file={{ text: fileDraft, caseSensitive: fileCaseDraft, active: !!fileSearch, dirty: fileDraft.trim() !== fileSearch || fileCaseDraft !== fileCase, onText: setFileDraft, onCase: setFileCaseDraft, onApply: () => { setKind(draftKind); setCursor(""); setInitialError(""); setFileSearch(fileDraft.trim()); setFileCase(fileCaseDraft); close(); }, onClear: () => { setFileDraft(""); setFileSearch(""); } }}
+        onApply={next => { if (kind === "text" && textFindParameters(next) === find) api.refresh(); setKind("text"); setEditorValue(next); setApplied(next); setInitialError(""); close(); }} onClear={clearText}
+        file={{ text: fileDraft, caseSensitive: fileCaseDraft, active: !!fileSearch, dirty: fileDraft.trim() !== fileSearch || fileCaseDraft !== fileCase, onText: setFileDraft, onCase: setFileCaseDraft, onApply: () => { setKind(draftKind); setInitialError(""); setFileSearch(fileDraft.trim()); setFileCase(fileCaseDraft); close(); }, onClear: () => { setFileDraft(""); setFileSearch(""); } }}
         context={<p className="explore-search-context">Search inside retained messages, file changes, or visited URLs. Use <b>where</b> in the query builder to filter workspaces.</p>}
         workspaceScope={{ filters: [] }} orderControl={null} />}
-    </ExploreSearch>} controls={shared ? undefined : (api) => <>
+    </ExploreSearch>} controls={shared ? undefined : () => <>
     {find && found ? <div className="library-find-status muted" role="status">
-      <p><strong>{found.workspaces.toLocaleString()} matching workspace{found.workspaces === 1 ? "" : "s"}{found.search ? " in this batch" : ""}.</strong>{found.search ? found.search.complete ? " All eligible messages have been checked." : found.search.next_cursor ? " More messages remain to check. Continue the search to see the next batch." : " Some messages could not be checked." : found.limited ? " Search limit reached; narrow the search." : ""}</p>
-      {found.search?.stop_message ? <p>{found.search.stop_message}</p> : null}
-      {found.workspaces === 0 && found.search?.complete ? <p>No messages matched these conditions. Try switching “and” to “or”, remove a condition, or choose a broader target.</p> : null}
-      {found.search?.skipped_oversize ? <p>{found.search.skipped_oversize.toLocaleString()} large messages were skipped. Missing results may still be in those messages.</p> : null}
-      {found.search ? <details><summary>Search details and coverage</summary><p>{found.search.candidates.toLocaleString()} candidates checked; {(found.search.verified_bytes / 1048576).toFixed(1)} MiB verified in {found.search.elapsed_ms} ms. {found.search.complete ? "Complete" : `Stopped: ${found.search.stop_reason.replaceAll("_", " ")}`}. Table counts and metrics describe this batch. Ordering applies within this batch.</p><p>{found.search.coverage}</p>{found.search.expansions && Object.keys(found.search.expansions).length ? <p>Word variations: {Object.entries(found.search.expansions).map(([word, terms]) => `${word} → ${terms.join(", ")}`).join("; ")}</p> : null}</details> : null}
-      {found.search?.next_cursor ? <button type="button" onClick={() => setCursor(found.search!.next_cursor)}>Continue to next batch</button> : null}
-      {withheldBatch(found.search) ? <button type="button" onClick={() => api.refresh()}>Retry this batch</button> : null}
-      {cursor ? <button type="button" onClick={() => setCursor("")}>Start over</button> : null}
+      <p>Limit controls workspace rows after filtering and sorting. Counts and metrics include the full matching population.</p>
+      {found.workspaces === 0 ? <p>No messages matched these conditions. Try switching “and” to “or”, remove a condition, or choose a broader target.</p> : null}
+      {found.search ? <details><summary>Search details</summary><p>{found.search.count.toLocaleString()} matching messages; {found.search.elapsed_ms} ms. All eligible messages checked.</p><p>{found.search.coverage}</p>{found.search.expansions && Object.keys(found.search.expansions).length ? <p>Word variations: {Object.entries(found.search.expansions).map(([word, terms]) => `${word} → ${terms.join(", ")}`).join("; ")}</p> : null}</details> : null}
     </div> : null}
-    {cursor && !found ? <button type="button" onClick={() => setCursor("")}>Restart search from the beginning</button> : null}
     </>} />
   </div>;
 }
@@ -2116,6 +2105,7 @@ window.addEventListener("pharos:preferences-saved", event => {
   for (const dataset of new Set(keys.flatMap(key => settingDatasets[key] ? [settingDatasets[key]] : []))) window.pharosQueryTables?.refresh(dataset);
 });
 window.pharosQueryTables = {
+  summaryURL: (metric, window, generatedAt) => usageSummaryURL(metric, window, generatedAt, readConcurrencySettings()),
   async createLink() {
     const entry = [...tableApis.entries()].find(([dataset]) => datasetIsVisible(dataset));
     if (!entry) return { url: location.href };

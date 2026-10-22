@@ -568,8 +568,9 @@ struct ArchiveWebView: NSViewRepresentable {
     // own <header>s, such as a workspace's heading and the drawers' and
     // panels' heads, are content, so pressing them never moves the window.
     // The header is trimmed to `WindowChrome.titlebarHeight` so the traffic
-    // lights sit centered in it, and its left edge clears them except in
-    // full screen, where macOS hides them. The page also reports its
+    // lights sit centered in it. Reserve their space from the window's left
+    // edge at every width; the web header spans the full window. In full
+    // screen macOS hides them, so the gap is removed. The page also reports its
     // background whenever the theme changes, so the area revealed by
     // rubber-band scrolling past either end matches it instead of showing
     // black.
@@ -577,8 +578,8 @@ struct ArchiveWebView: NSViewRepresentable {
     (() => {
       const style = document.createElement('style');
       style.textContent = `
-        html.pharos-window header .bar{padding:5px 22px;padding-left:max(22px,calc(84px - max(0px,(100vw - 1180px)/2)))}
-        html.pharos-window.pharos-fullscreen header .bar{padding-left:22px}`;
+        html.pharos-window body>header .bar{padding:5px 22px;padding-left:84px}
+        html.pharos-window.pharos-fullscreen body>header .bar{padding-left:22px}`;
       document.head.append(style);
       document.documentElement.classList.add('pharos-window');
       const interactive = 'a,button,input,textarea,select,label,summary,[role=button],[contenteditable],[tabindex]';

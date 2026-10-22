@@ -6,6 +6,18 @@ import assert from "node:assert/strict";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { workID } from "./fixtures.mjs";
 
+test("summary value links retain keyboard focus when the summary rerenders", { skip }, async t => {
+  const { page } = await open(t, { url: "/library", ready: "#queryTableLibrary .qt-row", preferences: { "pharos-usage-summary-links": true } });
+  await activateHeaderTool(page, "usageSummaryToggle");
+  const link = page.getByRole("link", { name: /^Tokens, 6h:/ });
+  await link.focus();
+  await page.evaluate(() => window.dispatchEvent(new Event("pharos:carbon-settings")));
+  await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label")?.startsWith("Tokens, 6h:"));
+  await page.keyboard.press("Escape");
+  await page.locator("#usageSummary").waitFor({ state: "hidden" });
+  await page.waitForFunction(() => document.activeElement?.id === "usageSummaryToggle");
+});
+
 // Focus is in `surface`, or with the browser itself (a native modal dialog
 // lets Tab leave the page past its last control), never on the page behind.
 const kept = surface => surface.evaluate(element => { const active = document.activeElement; return !active || active === document.body || element.contains(active); });
@@ -217,7 +229,7 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 640 }
   });
 }
 
-for (const viewport of [{ width: 1280, height: 720 }, { width: 390, height: 844 }]) {
+for (const viewport of [{ width: 1024, height: 720 }, { width: 390, height: 844 }]) {
   test(`overflowed header tools remain live and restore focus at ${viewport.width}px`, { skip }, async t => {
     const { page } = await open(t, { url: '/library', viewport, ready: '#queryTableLibrary .qt-row' });
     const more = page.getByRole('button', { name: 'More tools', exact: true });
@@ -250,7 +262,8 @@ for (const tools of [['settings'], ['back', 'sync', 'settings']]) {
     for (const width of [1440, 1280, 390]) {
       await page.setViewportSize({ width, height: 900 });
       await settled();
-      if (width < 1360) await press(page.getByRole('button', { name: 'More tools', exact: true }));
+      const more = page.getByRole('button', { name: 'More tools', exact: true }), overflow = await more.isVisible();
+      if (overflow) await press(more);
       for (const [tool, id] of [['history', 'headerHistory'], ['back', 'headerBackOnly'], ['library', 'headerLibrary'], ['sync', 'headerSyncOnly']]) {
         assert.equal(await page.locator(`#${id}`).isVisible(), tools.includes(tool), `${tool} visibility differs from saved choices at ${width}px`);
       }
@@ -258,7 +271,7 @@ for (const tools of [['settings'], ['back', 'sync', 'settings']]) {
       await settings.focus();
       await page.locator('#navBack').evaluate(element => element.focus());
       await page.waitForFunction(element => document.activeElement === element, await settings.elementHandle());
-      if (width < 1360) await page.keyboard.press('Escape');
+      if (overflow) await page.keyboard.press('Escape');
     }
   });
 }

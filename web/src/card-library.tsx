@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { FieldSchema, MetricDisplay } from "@pythia-software/query-table-core";
-import { instantiateRecipe, loadQueryPreviews, suggestionWindowLabel, type QueryPreview, type QueryRecipe, type QuerySuggestion } from "./curiosity-data";
+import { instantiateRecipe, suggestionWindowLabel, type QueryPreview, type QueryRecipe, type QuerySuggestion } from "./curiosity-data";
 import { availableChartKinds, cardCoverGroupLimit, cardDatasets, cardTemplates, coverChoices, decodeCover, saveCardTemplate } from "./card-library-model";
 import { cardKind, defaultCardCover } from "./card-cover";
 import { cardLoadingPresentation } from "./card-loading-model";
@@ -9,6 +9,7 @@ import { queryURL, type QueryDataset } from "./query-links";
 import { QueryCard } from "./query-card";
 import { Icon } from "./icons";
 import { preferences } from "./preferences";
+import { loadCardPreviews } from "./card-previews";
 import { usePreviewReload } from "./use-preview-reload";
 import "./card-library.css";
 
@@ -42,8 +43,8 @@ const chartNames: Partial<Record<MetricDisplay["kind"], string>> = { auto: "Auto
 // "Card defaults" honour a template that pins a single lookback.
 const cardDays = (recipe: QueryRecipe, days: number | "default") => days !== "default" ? days : recipe.days?.length === 1 ? recipe.days[0] : 7;
 
-export function CardLibrary({ schemas, active, generation, collected, message, onOpen, onKeep, onDragStart, onDragEnd }: {
-  schemas: Record<QueryDataset, FieldSchema>; active: boolean; generation: number; collected: Set<string | undefined>; message: string;
+export function CardLibrary({ schemas, active, prewarm, generation, collected, message, onOpen, onKeep, onDragStart, onDragEnd }: {
+  schemas: Record<QueryDataset, FieldSchema>; active: boolean; prewarm: boolean; generation: number; collected: Set<string | undefined>; message: string;
   onOpen: (url: string) => void; onKeep: (item: QuerySuggestion) => void;
   onDragStart: (event: React.DragEvent, item: QuerySuggestion) => void; onDragEnd: () => void;
 }) {
@@ -74,25 +75,54 @@ export function CardLibrary({ schemas, active, generation, collected, message, o
   }), [matching, topic, sort]);
   const cards = useMemo(() => visible.map(recipe => instantiateRecipe(recipe, cardDays(recipe, days))), [visible, days]);
   const reloadPreview = usePreviewReload(setPreviews, setErrors, [cards, schemas, active]);
-  const job = (item: QuerySuggestion) => ({ id: item.id, dataset: item.dataset, query: item.query, schema: schemas[item.dataset], options: { recipe: item, cover: item.cover, window: item.window, url: item.url } });
+  const nearby = useRef(new Set<string>());
+  const previousJobs = useRef(new Map<string, string>());
+  const job = (item: QuerySuggestion) => ({ id: item.id, priority: () => nearby.current.has(item.id) ? 0 : 1, dataset: item.dataset, query: item.query, schema: schemas[item.dataset], options: { recipe: item, cover: item.cover, window: item.window, url: item.url } });
   useEffect(() => {
-    if (!inURL || !["/", "/home"].includes(location.pathname)) return;
+    if (!active || !inURL || !["/", "/home"].includes(location.pathname)) return;
     const url = new URL(location.href);
     for (const [key, value] of Object.entries({ card_search: search, card_data: dataset, card_topic: topic, card_kind: kind, card_sort: sort === "topic" ? "" : sort })) { if (value) url.searchParams.set(key, value); else url.searchParams.delete(key); }
     history.replaceState(history.state, "", `${url.pathname}${url.search}${url.hash}`);
-  }, [inURL, search, dataset, topic, kind, sort]);
+  }, [active, inURL, search, dataset, topic, kind, sort]);
   useEffect(() => {
+    nearby.current.clear();
     if (!active) return;
-    // Only the open tab runs its queries; the preview cache makes returning
-    // to an earlier tab immediate.
-    const controller = new AbortController(); setLoading(true); setPreviews({}); setErrors({});
-    void loadQueryPreviews(cards.map(job), (id, preview, error) => {
+    const observer = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        const id = (entry.target as HTMLElement).dataset.cardDefinition!;
+        if (entry.isIntersecting) nearby.current.add(id); else nearby.current.delete(id);
+      }
+    }, { root: document.querySelector("main"), rootMargin: "600px 0px" });
+    document.querySelectorAll(".card-library-entry").forEach(element => observer.observe(element));
+    return () => observer.disconnect();
+  }, [active, cards]);
+  useEffect(() => {
+    if (!active) { setLoading(false); return; }
+    const controller = new AbortController(); setLoading(true); setErrors({});
+    const jobs = cards.map(job), definitions = new Map(jobs.map(job => [job.id, JSON.stringify(job)]));
+    const retained = new Set([...definitions].filter(([id, definition]) => previousJobs.current.get(id) === definition).map(([id]) => id));
+    previousJobs.current = definitions;
+    setPreviews(current => Object.fromEntries(Object.entries(current).filter(([id]) => retained.has(id))));
+    void loadCardPreviews(jobs, (id, preview, error) => {
       if (controller.signal.aborted) return;
-      if (preview) setPreviews(current => ({ ...current, [id]: preview }));
+      if (preview) { setPreviews(current => ({ ...current, [id]: preview })); setErrors(current => { const next = { ...current }; delete next[id]; return next; }); }
       if (error) setErrors(current => ({ ...current, [id]: String(error) }));
     }, controller.signal).then(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [active, cards, schemas]);
+  }, [active, cards, schemas, generation]);
+  useEffect(() => {
+    if (!prewarm || loading) return;
+    const controller = new AbortController();
+    // Warm the rest of the catalog after foreground cards. Small batches yield
+    // between topics and are cancelled when the view or data changes.
+    const items = recipes.map(recipe => instantiateRecipe(recipe, cardDays(recipe, days)));
+    void (async () => {
+      for (let at = 0; at < items.length && !controller.signal.aborted; at += 8) {
+        await loadCardPreviews(items.slice(at, at + 8).map(job), () => {}, controller.signal);
+      }
+    })();
+    return () => controller.abort();
+  }, [prewarm, loading, active, cards, schemas, generation, recipes, days]);
   useEffect(() => {
     if (editing) dialog.current?.showModal();
   }, [editing]);
@@ -166,7 +196,7 @@ export function CardLibrary({ schemas, active, generation, collected, message, o
         </button>;
       })}
     </div>
-    {filtersOpen ? <p className="card-library-count" role="status">{cards.length} of {recipes.length} cards{loading ? ` · Loading charts… ${completed}/${cards.length}` : ""}<span>Empty views stay visible here.</span></p> : null}
+    {filtersOpen ? <p className="card-library-count" role="status">{cards.length} of {recipes.length} cards{loading ? ` · ${completed === cards.length ? "Refreshing charts…" : `Loading charts… ${completed}/${cards.length}`}` : ""}<span>Empty views stay visible here.</span></p> : null}
     {editMode ? <p className="card-library-edit-note">Edits change the template for new suggestions and collections.</p> : null}
     <p className="card-library-feedback" role="status">{message}</p>
     <div id="card-library-panel" className="card-library-grid" role="tabpanel" aria-labelledby={`card-library-tab-${topic}`} aria-busy={loading}>{cards.map(item => <div className="card-library-entry" id={`card-${item.id}`} data-card-definition={item.id} data-card-idea={item.idea} key={item.id}>

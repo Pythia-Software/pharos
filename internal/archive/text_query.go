@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strconv"
@@ -19,7 +20,24 @@ type textQuery struct {
 	Distance   int          `json:"distance,omitempty"`
 	Children   []*textQuery `json:"children,omitempty"`
 	expansions []string
+	patterns   map[uint8]*regexp.Regexp
 }
+
+// Cached search populations are shared between page requests. Verification
+// lazily compiles patterns, so each page needs its own writable pattern maps.
+func (n *textQuery) verificationCopy() *textQuery {
+	if n == nil {
+		return nil
+	}
+	copy := *n
+	copy.patterns = maps.Clone(n.patterns)
+	copy.Children = make([]*textQuery, len(n.Children))
+	for i, child := range n.Children {
+		copy.Children[i] = child.verificationCopy()
+	}
+	return &copy
+}
+
 type textLexeme struct {
 	text   string
 	at     int
@@ -364,8 +382,8 @@ func (n *textQuery) strictMatch(body string, caseSensitive, separators bool) (in
 		}
 		return start, end, ok
 	case "near", "pre":
-		a := n.Children[0].strictLocations(body, caseSensitive, separators)
-		b := n.Children[1].strictLocations(body, caseSensitive, separators)
+		a := n.Children[0].strictLocations(body, caseSensitive, separators, 0)
+		b := n.Children[1].strictLocations(body, caseSensitive, separators, 0)
 		for i, j := 0, 0; i < len(a) && j < len(b); {
 			x, y := a[i], b[j]
 			lo, hi := min(x[1], y[1]), max(x[0], y[0])
@@ -386,14 +404,24 @@ func (n *textQuery) strictMatch(body string, caseSensitive, separators bool) (in
 		}
 		return 0, 0, false
 	default:
-		loc := n.strictLocations(body, caseSensitive, separators)
+		loc := n.strictLocations(body, caseSensitive, separators, 1)
 		if len(loc) == 0 {
 			return 0, 0, false
 		}
 		return loc[0][0], loc[0][1], true
 	}
 }
-func (n *textQuery) strictLocations(body string, caseSensitive, separators bool) [][2]int {
+func (n *textQuery) strictPattern(caseSensitive, separators bool) *regexp.Regexp {
+	key := uint8(0)
+	if caseSensitive {
+		key |= 1
+	}
+	if separators {
+		key |= 2
+	}
+	if re := n.patterns[key]; re != nil {
+		return re
+	}
 	words := libraryWords.FindAllString(n.Text, -1)
 	parts := make([]string, len(words))
 	for i, w := range words {
@@ -425,8 +453,27 @@ func (n *textQuery) strictLocations(body string, caseSensitive, separators bool)
 		return nil
 	}
 	re := regexp.MustCompile(pattern)
+	if n.patterns == nil {
+		n.patterns = map[uint8]*regexp.Regexp{}
+	}
+	n.patterns[key] = re
+	return re
+}
+
+func (n *textQuery) strictLocations(body string, caseSensitive, separators bool, limit int) [][2]int {
+	re := n.strictPattern(caseSensitive, separators)
+	if re == nil {
+		return nil
+	}
 	result := [][2]int{}
-	for _, m := range re.FindAllStringIndex(body, -1) {
+	for offset := 0; offset < len(body); {
+		m := re.FindStringIndex(body[offset:])
+		if m == nil {
+			break
+		}
+		m[0] += offset
+		m[1] += offset
+		offset = m[1]
 		// Token phrases and words require token boundaries. A prefix omits only
 		// the right boundary; punctuation-sensitive quoted strings stay verbatim.
 		literal := n.Op == "phrase" && separators
@@ -436,6 +483,51 @@ func (n *textQuery) strictLocations(body string, caseSensitive, separators bool)
 			continue
 		}
 		result = append(result, [2]int{m[0], m[1]})
+		if limit > 0 && len(result) >= limit {
+			break
+		}
 	}
 	return result
+}
+
+// Reject only demonstrably impossible ASCII candidates. For non-ASCII text
+// or query words, leave normalization to the exact unicode61 verifier. NOT
+// supplies no negative pruning: its excluded text can live outside this span.
+func (n *textQuery) asciiCandidate(body string) bool {
+	for i := 0; i < len(body); i++ {
+		if body[i] >= 128 {
+			return true
+		}
+	}
+	return n.asciiPositive(body)
+}
+
+func (n *textQuery) asciiPositive(body string) bool {
+	switch n.Op {
+	case "and", "near", "pre":
+		for _, child := range n.Children {
+			if !child.asciiPositive(body) {
+				return false
+			}
+		}
+		return true
+	case "or":
+		for _, child := range n.Children {
+			if child.asciiPositive(body) {
+				return true
+			}
+		}
+		return false
+	case "not":
+		return n.Children[0].asciiPositive(body)
+	default:
+		for _, term := range append([]string{n.Text}, n.expansions...) {
+			for i := 0; i < len(term); i++ {
+				if term[i] >= 128 {
+					return true
+				}
+			}
+		}
+		return len(n.strictLocations(body, false, false, 1)) > 0
+	}
 }

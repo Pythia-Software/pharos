@@ -1,4 +1,4 @@
-/* One shell owns the width modes for both navigation and header tool placement. */
+/* Navigation width modes; header tools measure their own available space. */
 :root.app-shell{--app-shell-layout:wide;--app-rail-width:220px;--app-header-height:68px;--app-page-gutter:32px;--app-control-height:36px;--app-brand-width:37px;--app-brand-height:42px;--app-brand-gap:11px}
 .app-shell body>header{overflow:hidden;z-index:20}
 .app-shell body>header .bar{max-width:none;flex-wrap:nowrap;gap:16px;padding:10px 24px;min-height:64px}
@@ -75,13 +75,13 @@
 .app-shell #sourceToolbar{align-items:center;justify-content:space-between;gap:12px}
 .app-shell #sourceToolbar button,.app-shell #sourceToolbar>a{display:inline-flex;align-items:center;justify-content:center;min-height:var(--app-control-height);margin:0;padding:6px 12px;line-height:1.5;border-radius:4px}
 .app-shell #sourceToolbar>a{border:1px solid transparent}
-@media(min-width:1360px){
-  .app-shell body>header .bar{display:grid;grid-template-columns:minmax(max-content,1fr) auto minmax(max-content,1fr);width:100%}
+@media(min-width:1001px){
+  .app-shell body>header .bar{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);width:100%}
   .app-shell body>header .brand{grid-column:1;justify-self:start}
-  .app-shell body>header .brand-tagline{display:block}
   .app-shell body>header .tabs{grid-column:2;justify-self:center}
   .app-shell body>header .header-icons{grid-column:3;justify-self:end;margin:0}
 }
+@media(min-width:1360px){.app-shell body>header .brand-tagline{display:block}}
 @media(max-width:1359px){
   :root.app-shell{--app-shell-layout:compact;--app-rail-width:200px;--app-page-gutter:24px;--app-brand-width:30px;--app-brand-height:34px}
 }
@@ -89,7 +89,7 @@
   .app-shell body>header .bar{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px 12px;padding:8px 16px}
   .app-shell body>header .brand{grid-column:1;grid-row:1}
   .app-shell body>header .header-icons{grid-column:2;grid-row:1}
-  .app-shell body>header .tabs{grid-column:1/-1;grid-row:2;border-top:1px solid var(--mast-border);padding-top:4px}
+  .app-shell body>header .tabs{grid-column:1/-1;grid-row:2;justify-content:center;border-top:1px solid var(--mast-border);padding-top:4px}
 }
 @media(max-width:1000px){
   .app-shell body>header .pharos-drive-name{display:none}

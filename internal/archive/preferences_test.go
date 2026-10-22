@@ -21,7 +21,7 @@ func TestPreferencesFollowTheLibrary(t *testing.T) {
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
 
-	if response := preferencesCall(t, server, http.MethodGet, "/assets/preferences.js", ""); response.Code != http.StatusOK || response.Body.String() != "window.pharosPreferenceValues={};" {
+	if response := preferencesCall(t, server, http.MethodGet, "/assets/preferences.js", ""); response.Code != http.StatusOK || !strings.HasPrefix(response.Body.String(), "window.pharosPreferenceValues={};window.pharosPreviewScope=\"") {
 		t.Fatalf("empty library: %d %q", response.Code, response.Body.String())
 	}
 	body := `{"set":{"pharos-theme":"light","pharos-show-nav-button":true,"pharos-bookmarks-v1":[{"id":"a","url":"/x</script>","title":"T"}]}}`
@@ -39,6 +39,24 @@ func TestPreferencesFollowTheLibrary(t *testing.T) {
 		!strings.Contains(script, `"pharos-theme":"dark"`) || strings.Contains(script, "pharos-show-nav-button") ||
 		!strings.Contains(script, `"pharos-bookmarks-v1":[{`) {
 		t.Fatalf("script: %q", script)
+	}
+	// The preview cache scope survives requests/restarts and separates catalogs
+	// served on the same loopback origin. It exposes neither path nor token.
+	previewScope := func(server *Server) string {
+		response := preferencesCall(t, server, http.MethodGet, "/assets/preferences.js", "")
+		_, scope, ok := strings.Cut(response.Body.String(), "window.pharosPreviewScope=")
+		if !ok || len(strings.Trim(scope, "\";")) != 64 {
+			t.Fatalf("missing opaque preview scope: %s", response.Body.String())
+		}
+		return scope
+	}
+	scope := previewScope(server)
+	if scope != previewScope(testServer(t, config, catalog)) {
+		t.Fatal("preview cache scope changed for the same library")
+	}
+	other, otherConfig := testCatalog(t)
+	if scope == previewScope(testServer(t, otherConfig, other)) {
+		t.Fatal("different libraries share preview snapshots")
 	}
 	values := libraryStatusCall(t, server, "/api/preferences")["values"].(map[string]any)
 	if values["pharos-theme"] != "dark" || len(values) != 2 {

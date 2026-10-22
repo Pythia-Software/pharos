@@ -13,6 +13,13 @@ export const newRule = (text = ""): TextRule => ({ id: `rule-${++nextID}`, kind:
 export const newGroup = (): TextGroup => ({ id: `group-${++nextID}`, kind: "group", join: "all", children: [newRule()], exclude: false });
 export const emptyScope = (): TextScope => ({ surface: "prose", roles: [], kinds: [], repository: "", provider: "", source: "", from: "", to: "", conversation_id: "", workspace_id: "" });
 export const emptyTextSearch = (): TextSearchDraft => ({ editor: "visual", match: "rules", root: newGroup(), text: "", mode: "advanced", scope: emptyScope(), fuzzy: false, caseSensitive: false, separators: false });
+// Resolve the default once for a new Library search. Keeping the timestamp in
+// the draft makes saved links and subsequent cursor batches use the same scope.
+export function newKeywordSearch(clock = new Date()): TextSearchDraft {
+  const draft = emptyTextSearch();
+  draft.scope.from = new Date(clock.getTime() - 30 * 86400000).toISOString();
+  return draft;
+}
 export const ruleLabels: Record<RuleKind, string> = { words: "All of these words", anyWords: "Any of these words", phrase: "This phrase", prefix: "A word beginning with", near: "Two phrases near each other", pre: "Two phrases in this order" };
 export const scopes = [
   { id: "prose", label: "Conversation messages", description: "User messages, agent replies, and any saved agent reasoning.", surface: "prose" },
@@ -151,7 +158,8 @@ function conditionParts(condition: TextCondition, nested: boolean): SentencePart
   return nested && positive.length + negative.length > 1 ? ["(", ...parts, ")"] : parts;
 }
 export const lowerLabel = (label: string) => label.replace(/^\p{Lu}(?=\p{Ll})/u, letter => letter.toLowerCase());
-const day = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }) : value;
+const day = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })
+  : /^\d{4}-\d{2}-\d{2}T/.test(value) && Number.isFinite(Date.parse(value)) ? `${new Date(value).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" })} UTC` : value;
 export function searchSentence(d: TextSearchDraft, context: SentenceContext = {}): { parts: SentencePart[]; empty: boolean } {
   const kind = context.kind ?? "text";
   const subject = kind === "file" ? "modified files" : kind === "url" ? "tool URLs" : scopeChoice(d.scope)?.label.toLowerCase() ?? "messages in a saved scope";
@@ -210,7 +218,7 @@ export function visualFromQuery(q: TextQuery, separators = false): Pick<TextSear
   if (result.issues.length) throw new Error("This query is too complex for the visual editor. You can continue editing its syntax.");
   return { editor: "visual", root, match: "rules", text: "" };
 }
-export function readTextSearch(params: URLSearchParams): { draft: TextSearchDraft; active: boolean; error: string } {
+export function readTextSearch(params: URLSearchParams, clock = new Date()): { draft: TextSearchDraft; active: boolean; error: string } {
   const draft = emptyTextSearch();
   const stored = params.get("text_builder");
   if (stored !== null) {
@@ -242,6 +250,9 @@ export function readTextSearch(params: URLSearchParams): { draft: TextSearchDraf
     } catch { return { draft, active: false, error: "This saved search could not be opened. Edit the rules below and search again. The table is currently unfiltered by text." }; }
   }
   const query = params.get("search") ?? "";
+  // Saved builders (including an explicitly cleared date) and legacy searches
+  // keep their scope. Only an unused keyword editor gets the new default.
+  if (!query && !params.has("text_from") && !params.has("text_to")) draft.scope.from = newKeywordSearch(clock).scope.from;
   // Legacy links omitted fuzzy when it was on; only fuzzy=0 opted out.
   // Empty/new drafts still start with variations off, as do new saved rules.
   draft.fuzzy = params.has("fuzzy") ? params.get("fuzzy") !== "0" : !!query;

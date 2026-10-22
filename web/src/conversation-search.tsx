@@ -25,7 +25,7 @@ function ConversationSearch({ options, host, register }: { options: Options; hos
     const controller = new AbortController(); pending.current?.abort(); pending.current = controller; setBusy(true); setError("");
     try {
       const response = await fetch("/api/search/text", { method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
-        body: JSON.stringify({ ...request, workspace_id: options.workspaceID, conversation_id: options.conversationID, cursor, limit: 50, timeout_ms: 1500 }) });
+        body: JSON.stringify({ ...request, workspace_id: options.workspaceID, conversation_id: options.conversationID, cursor, limit: 50, timeout_ms: 700 }) });
       const batch = await response.json(); if (!response.ok) throw new Error(batch.error ?? "Search failed");
       if (!controller.signal.aborted) { setResult({ ...batch, cursor }); setApplied(value); setActive(-1); options.reveal(null); }
     } catch (cause) { if (!controller.signal.aborted) setError(String(cause instanceof Error ? cause.message : cause)); }

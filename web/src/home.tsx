@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { FieldSchema } from "@pythia-software/query-table-core";
 import { collectDurableQuery, migrateSavedQueries, moveBookmark, readBookmarks, removeBookmark, updateBookmark, writeBookmarks, type Bookmark } from "./bookmarks";
-import { clearPreviewCache, instantiateRecipe, loadQueryPreviews, queryRecipes, suggestionPool, suggestionWindowLabel, type QueryPreview, type QuerySuggestion } from "./curiosity-data";
+import { clearPreviewCache, instantiateRecipe, queryRecipes, suggestionPool, suggestionWindowLabel, type QueryPreview, type QuerySuggestion } from "./curiosity-data";
 import { queryFromURL, queryHasTimeFilter, rollingWindowDays, rollingWindowField, type QueryDataset } from "./query-links";
 import { categoryForQuery } from "./query-categories";
 import { QueryCard } from "./query-card";
@@ -13,6 +13,7 @@ import { CardLibrary, cardLibraryView, clearCardLibraryURL, isCardLibraryURL, sa
 import { cardTemplates } from "./card-library-model";
 import { defaultCardCover } from "./card-cover";
 import { cardLoadingPresentation } from "./card-loading-model";
+import { loadCardPreviews, invalidateCardPreviews } from "./card-previews";
 import { usePreviewReload } from "./use-preview-reload";
 
 const welcomes = ["What will you discover in your work?", "How will you be more efficient today?", "What could your past work teach you?", "Which pattern is worth a closer look?", "Where will curiosity take you today?"];
@@ -58,7 +59,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     window.addEventListener("pharos:card-templates", templates);
     // A hidden tab notes new data and reruns its cards once it is shown.
     let stale = false;
-    const refresh = () => { if (document.hidden) { stale = true; return; } stale = false; clearPreviewCache(); setGeneration(value => value + 1); };
+    const refresh = () => { if (document.hidden) { stale = true; return; } stale = false; clearPreviewCache(); invalidateCardPreviews(); setGeneration(value => value + 1); };
     const visibility = () => { setHidden(document.hidden); if (!document.hidden && stale) refresh(); };
     window.addEventListener("pharos:bookmarks", bookmarks); window.addEventListener("pharos:route", route);
     window.addEventListener("pharos:view", route);
@@ -82,13 +83,27 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
       ...collection.map(item => ({ id: item.id, spec: queryFromURL(item.url, item.query), options: { recipe: queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]), url: item.url, coverMetricId: item.coverMetricId, cover: item.cover } })),
       ...pool.filter(item => ![...saved].some(id => id!.split(":")[0] === item.id)).map(item => ({ id: item.instanceId, spec: { dataset: item.dataset, query: item.query, window: item.window }, options: { recipe: item, cover: item.cover, url: item.url, suggested: true } })),
     ];
-    void loadQueryPreviews(jobs.flatMap(job => job.spec ? [{ id: job.id, dataset: job.spec.dataset, query: job.spec.query, schema: schemas[job.spec.dataset], options: { ...job.options, window: job.spec.window } }] : []), (id, preview, error) => {
+    void loadCardPreviews(jobs.flatMap(job => job.spec ? [{ id: job.id, dataset: job.spec.dataset, query: job.spec.query, schema: schemas[job.spec.dataset], options: { ...job.options, window: job.spec.window } }] : []), (id, preview, error) => {
       if (controller.signal.aborted) return;
       if (preview) { setPreviews(current => ({ ...current, [id]: preview })); setErrors(current => { const next = { ...current }; delete next[id]; return next; }); }
       else { setErrors(current => ({ ...current, [id]: String(error) })); setPreviews(current => { const next = { ...current }; delete next[id]; return next; }); }
     }, controller.signal).then(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [active, collection, pool, generation, schemas]);
+
+  useEffect(() => {
+    if (!active || hidden || loading || libraryShown) return;
+    const controller = new AbortController();
+    // Prepare default catalog covers even before its section is opened, without
+    // mounting hundreds of offscreen charts. Foreground work finishes first.
+    const items = cardTemplates().map(recipe => instantiateRecipe(recipe, recipe.days?.length === 1 ? recipe.days[0] : 7));
+    void (async () => {
+      for (let at = 0; at < items.length && !controller.signal.aborted; at += 8) {
+        await loadCardPreviews(items.slice(at, at + 8).map(item => ({ id: item.id, dataset: item.dataset, query: item.query, schema: schemas[item.dataset], options: { recipe: item, cover: item.cover, window: item.window, url: item.url } })), () => {}, controller.signal);
+      }
+    })();
+    return () => controller.abort();
+  }, [active, hidden, loading, libraryShown, generation, schemas]);
 
   const collectedTemplates = new Set(collection.map(item => item.templateId?.split(":")[0]));
   const poolById = new Map(pool.map(item => [item.instanceId, item]));
@@ -152,12 +167,12 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     </div>
     <div className="home-feedback" role="status">{feedback.from === "home" ? feedback.text : ""}{undo ? <button type="button" onClick={() => { const items = readBookmarks(); items.splice(Math.min(undo.index, items.length), 0, undo.item); writeBookmarks(items); setUndo(null); setMessage("Restored to your collection."); }}>Undo</button> : null}</div>
     <QueryConveyor items={eligible} previews={previews} loading={loading} hasErrors={Object.keys(errors).length > 0} active={active} suspended={hidden || !active || Boolean(drag) || Boolean(editing)}
-      onRefresh={() => { clearPreviewCache(); setPreviews({}); setErrors({}); setPool(suggestionPool(new Date(), cardTemplates())); }} onOpen={navigate} onKeep={keep} onDragStart={(event, item) => dragStart(event, { suggestion: item }, item.url)} onDragEnd={finishDrag}
+      onRefresh={() => { clearPreviewCache(); invalidateCardPreviews(); setGeneration(value => value + 1); setErrors({}); setPool(suggestionPool(new Date(), cardTemplates())); }} onOpen={navigate} onKeep={keep} onDragStart={(event, item) => dragStart(event, { suggestion: item }, item.url)} onDragEnd={finishDrag}
       libraryShown={libraryShown} onToggleLibrary={() => {
         const shown = !libraryShown; revealLibrary.current = shown && "smooth"; setLibraryShown(shown); saveCardLibraryView({ shown });
         if (!shown) clearCardLibraryURL();
       }} />
-    {libraryShown ? <CardLibrary key={libraryLink} schemas={schemas} active={active} generation={generation} collected={collectedTemplates} message={feedback.from === "library" ? feedback.text : ""} onOpen={navigate}
+    {libraryShown ? <CardLibrary key={libraryLink} schemas={schemas} active={active && libraryShown} prewarm={active && !hidden && !loading} generation={generation} collected={collectedTemplates} message={feedback.from === "library" ? feedback.text : ""} onOpen={navigate}
       onKeep={item => void keep(item, undefined, "library")} onDragStart={(event, item) => dragStart(event, { suggestion: item }, item.url)} onDragEnd={finishDrag} /> : null}
     <dialog ref={editor} className="home-editor" aria-labelledby="homeEditorTitle" onCancel={() => setEditing(null)} onClose={() => setEditing(null)}><form onSubmit={event => {
       event.preventDefault(); if (!editing) return;

@@ -8,6 +8,7 @@
 // reached by a click rather than a URL.
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
 import { defaultApi, rootConversation, workID } from "./fixtures.mjs";
@@ -93,6 +94,7 @@ const ROUTES = [
   { name: "Child transcript", url: `${work}/conversation/conv-nested`, ready: ".conversation-panel .turn" },
   { name: "Quick search", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => page.keyboard.press("ControlOrMeta+k"), shown: "#searchDialog[open]" },
   { name: "Analyze summary", url: "/library", ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page, "usageSummaryToggle"), shown: "#usageSummary" },
+  { name: "Clickable Analyze summary", url: "/library", preferences: { "pharos-usage-summary-links": true }, ready: "#queryTableLibrary .qt-row", open: page => activateHeaderTool(page, "usageSummaryToggle"), shown: "#usageSummary" },
   { name: "App navigation", url: "/analyze", ready: ".usage-dashboard .usage-chart", open: async page => {
     if (await page.locator('#appNavigationToggle').isVisible()) await page.locator('#appNavigationToggle').click();
     else {
@@ -145,6 +147,127 @@ for (const width of [1440, 390, 320]) test(`Search filter suggestions stay reada
   await suggestions.getByRole("option", { name: values[2], exact: true }).click();
   assert.equal(await input.inputValue(), values[2]);
   assert.ok(await input.evaluate(element => document.activeElement === element));
+});
+
+test('header tools use available space and primary navigation stays centered while resizing', { skip }, async t => {
+  const { page, settled, shot } = await open(t, { url: '/library', ready: '#queryTableLibrary .qt-row' });
+  const more = page.getByRole('button', { name: 'More tools', exact: true });
+  for (const width of [1440, 1350, 1280, 1180, 1050, 1024, 1001, 1000, 900, 760, 700, 390, 320, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settled();
+    if (width === 1280 || width === 1350) assert.equal(await more.isVisible(), false, `tools still fit at ${width}px`);
+    const bounds = await page.evaluate(() => {
+      const bar = document.querySelector('body > header .bar'), style = getComputedStyle(bar);
+      const box = bar.getBoundingClientRect();
+      const tabs = document.querySelector('body > header .tabs');
+      return {
+        center: (box.left + parseFloat(style.paddingLeft) + box.right - parseFloat(style.paddingRight)) / 2,
+        tabs: tabs.getClientRects().length ? tabs.getBoundingClientRect().toJSON() : null,
+        brand: document.querySelector('body > header .brand').getBoundingClientRect().toJSON(),
+        tools: document.querySelector('body > header .header-icons').getBoundingClientRect().toJSON(),
+      };
+    });
+    const { tabs, brand, tools } = bounds;
+    assert.ok(brand.right <= tools.left, `brand and tools stay apart at ${width}px`);
+    if (tabs) {
+      assert.ok(Math.abs((tabs.left + tabs.right) / 2 - bounds.center) < 1, `navigation is centered at ${width}px`);
+      if (tabs.top < brand.bottom) {
+        assert.ok(brand.right <= tabs.left && tabs.right <= tools.left, `navigation and tools stay apart at ${width}px`);
+      }
+      const buttons = await page.getByRole('navigation', { name: 'Primary navigation', exact: true }).getByRole('button').all();
+      const first = await buttons[0].boundingBox(), last = await buttons.at(-1).boundingBox();
+      assert.ok(Math.abs((first.x + last.x + last.width) / 2 - bounds.center) < 1, `navigation buttons are centered at ${width}px`);
+    }
+    assert.deepEqual(await layoutProblems(page), []);
+    await shot(`header-${width}`);
+  }
+});
+
+test('header fit responds to tool choices and label changes without resizing', { skip }, async t => {
+  const { page, settled } = await open(t, {
+    url: '/settings/header', viewport: { width: 1180, height: 900 }, ready: '#headerActive .header-tool',
+    preferences: { 'pharos-header-tools-v1': ['library', 'search', 'summary', 'settings', 'theme'] },
+  });
+  const more = page.getByRole('button', { name: 'More tools', exact: true });
+  assert.equal(await more.isVisible(), false, 'a smaller tool selection fits');
+  const name = page.locator('body > header .pharos-drive-name');
+  const original = await name.textContent();
+  await name.evaluate(element => { element.textContent = 'A library with a much longer drive label'; });
+  await more.waitFor();
+  assert.deepEqual(await layoutProblems(page), []);
+  await name.evaluate((element, label) => { element.textContent = label; }, original);
+  await more.waitFor({ state: 'hidden' });
+  await page.getByRole('button', { name: 'Add Back / forward', exact: true }).click();
+  await more.waitFor();
+  await page.getByRole('button', { name: 'Arrange Back / forward', exact: true }).focus();
+  await page.keyboard.press('Delete');
+  await more.waitFor({ state: 'hidden' });
+  await settled();
+});
+
+test("macOS window controls stay clear of the lighthouse when resizing", { skip }, async t => {
+  const source = readFileSync(new URL("../../../macos/PharosApp.swift", import.meta.url), "utf8");
+  const chromeCSS = source.match(/static let windowChromeScript = """[\s\S]*?style.textContent = `([\s\S]*?)`;/)[1];
+  const { page, settled, shot } = await open(t, { url: '/library', ready: '#queryTableLibrary .qt-row' });
+  await page.addStyleTag({ content: chromeCSS });
+  await page.evaluate(() => {
+    document.documentElement.classList.add('pharos-window');
+    // AppKit places three 14 pt buttons at x=19, 39 and 59 in a 52 pt bar.
+    const controls = document.createElement('div');
+    controls.id = 'nativeWindowControls';
+    controls.style.cssText = 'position:fixed;left:19px;top:19px;display:flex;gap:6px;z-index:100';
+    for (const color of ['#ff5f57', '#febc2e', '#28c840']) {
+      const button = document.createElement('span');
+      button.style.cssText = `width:14px;height:14px;border-radius:50%;background:${color}`;
+      controls.append(button);
+    }
+    document.body.append(controls);
+  });
+  for (const width of [1180, 1440, 2133, 800, 620, 1180]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settled();
+    const brand = page.locator('body > header .brand');
+    const controls = await page.locator('#nativeWindowControls').boundingBox();
+    const windowed = await brand.boundingBox();
+    assert.ok(windowed.x >= controls.x + controls.width, `lighthouse clears window controls at ${width}px`);
+    assert.deepEqual(await layoutProblems(page), []);
+    await shot(`windowed-${width}`);
+
+    await page.evaluate(() => {
+      document.documentElement.classList.add('pharos-fullscreen');
+      document.querySelector('#nativeWindowControls').hidden = true;
+    });
+    await settled();
+    assert.ok((await brand.boundingBox()).x < windowed.x, 'fullscreen reclaims the hidden controls’ space');
+    assert.deepEqual(await layoutProblems(page), []);
+    await page.evaluate(() => {
+      document.documentElement.classList.remove('pharos-fullscreen');
+      document.querySelector('#nativeWindowControls').hidden = false;
+    });
+    await settled();
+    assert.ok((await brand.boundingBox()).x >= controls.x + controls.width, 'leaving fullscreen restores clearance');
+  }
+});
+
+test("dashboard collection wraps after four bookmarked cards", { skip }, async t => {
+  const bookmarks = Array.from({ length: 9 }, (_, index) => ({ id: `card-${index}`, title: `Saved view ${index + 1}`, url: `/settings/preferences?card=${index}` }));
+  const { page, settled, shot } = await open(t, { url: '/', ready: '.home-collection .query-card', preferences: { 'pharos-bookmarks-v1': bookmarks } });
+  const collection = page.getByRole('region', { name: 'Your collection', exact: true });
+  for (const width of [2133, 3000, 1180, 800, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settled();
+    const cards = await collection.locator('.query-card').evaluateAll(cards => cards.map(card => {
+      const { top, left, right } = card.getBoundingClientRect();
+      return { top, left, right };
+    }));
+    assert.equal(cards.length, bookmarks.length, 'all bookmarked cards remain visible');
+    const rows = Map.groupBy(cards, card => Math.round(card.top));
+    assert.ok([...rows.values()].every(row => row.length <= 4), `at most four cards per row at ${width}px`);
+    if (width >= 1180) assert.equal(rows.values().next().value.length, 4, 'wide windows fit four cards before wrapping');
+    assert.ok(cards.every(card => card.left >= 0 && card.right <= width), 'cards stay inside narrow windows');
+    assert.deepEqual(await layoutProblems(page), []);
+    await shot(`collection-${width}`);
+  }
 });
 
 for (const width of [1649, 2133]) test(`pages without section menus use the full window at ${width}px`, { skip }, async t => {
@@ -272,4 +395,42 @@ test("Usage source links reveal and highlight the exact call, result, or nearest
   await page.evaluate(href => window.pharosNavigate(href), `${work}/conversation/${rootConversation}?at=2026-10-21T10%3A00%3A20Z`);
   await page.locator('.authorship-target[data-message-id="result-one"]').waitFor({ state: "visible" });
   assert.equal(new URL(page.url()).searchParams.get("at"), "2026-10-21T10:00:20Z");
+});
+
+
+// IndexedDB and painting saved charts during navigation require a real browser.
+test("Dashboard Catalog restores saved covers while fresh queries are pending", { skip }, async t => {
+  let hold = false, release;
+  const gate = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  const app = await open(t, {
+    url: "/home?cards=library&card_search=tool-call-share",
+    ready: ".card-library-entry .query-card",
+    api: { "* /api/query/:dataset/:operation": async call => {
+      if (hold && ["metrics", "query-v3", "rows-v2"].includes(call.params.operation)) await gate;
+      return defaultApi["* /api/query/:dataset/:operation"](call);
+    } },
+  });
+  // Confirm the browser has committed the snapshot before reloading its page.
+  await app.page.waitForFunction(async () => {
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open("pharos-card-previews-v1", 1);
+      request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+    });
+    const entries = await new Promise((resolve, reject) => {
+      const request = db.transaction("libraries").objectStore("libraries").get("browser-fixture");
+      request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+    });
+    db.close(); return entries?.length > 0;
+  });
+  hold = true;
+  await app.page.reload();
+  await app.page.getByRole("status", { name: "Refreshing preview", exact: true }).first().waitFor();
+  const catalog = app.page.locator("#home-card-library");
+  await catalog.scrollIntoViewIfNeeded();
+  assert.deepEqual(await layoutProblems(app.page), []);
+  await app.shot("saved-covers-refreshing");
+  release(); await app.settled();
+  await app.page.getByRole("status", { name: "Refreshing preview", exact: true }).first().waitFor({ state: "hidden" });
+  assert.deepEqual(app.problems(), []);
 });

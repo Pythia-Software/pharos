@@ -38,6 +38,8 @@ The unit is one message, or one classified span. Returning a conversation hit in
 
 ## Visual search editor
 
+New keyword searches from Home, quick search, and Library start with a message-date lower bound 30 elapsed days ago. Choose **All time** beside that date to remove the restriction. The bound is saved with the search so links and later batches retain the same scope; existing searches keep their saved dates. Find within a conversation searches the whole conversation by default.
+
 Library opens a visual editor that reads as one sentence down a narrow left column of grammar words: **Find** *target* **with** *condition*, then **and**, **or**, or **not** before each later row. Text rules and message or workspace filters are different engine concepts, but the editor presents them all as conditions: each is one full-width row holding its choices, a value box that wraps long text onto more lines (Enter searches; pasted line breaks become spaces), and **×** to remove it. A single **Add condition** menu offers words or a phrase, words to exclude, each message property, groups, and workspace properties. Above the rows, the search is read back in plain English as it is composed, with chosen values set apart from the connecting words; on Home this reading fills the search box itself and wraps rather than truncating. Home keeps the search at a hero measure of about 800 px. Elsewhere the editor responds to its own width: once it is wider than about 980 px (Library, the search dialog, Writing, and Tools on a desktop window), the conditions keep a comfortable measure and the reading moves into a panel beside them; narrower editors show it above. On phones, each text box takes its own line under its row's choices, and the footer settles into ordering, then options and the action. The second row's joining word is a menu that switches its group between all (**and**) and any (**or**). A rail along the left edge marks implicit brackets: OR alternatives that sit beside AND filters, and multiple AND NOT siblings, which are joined with OR inside that rail. A nested AND NOT only rejects its enclosing group, so it does not reject another matching alternative. Explicit nested groups are the only boxed containers, with their own **Add condition**, options, and **×**. There is no separate “Exclude messages” panel. Typed values use the interface font; query syntax, exact text, and regular expressions use monospace. A text condition's **⋯** menu contains its explanation and switching between Match and AND NOT; removing the last positive condition leaves an empty one to type into. Word, phrase, word-beginning, and ordered/unordered proximity controls produce typed query trees directly. Entering `AND`, quotes, or parentheses into a rule cannot introduce operators. Every group needs a positive rule; blank rules, incomplete proximity pairs, and reversed dates are shown as validation issues rather than silently omitted. Menus support keyboard navigation, and Escape dismisses them.
 
 The target after **Find** replaces the separate **Search in** section. Besides conversation messages, it offers agent replies, saved reasoning, system/developer instructions, tool activity, classified portions of messages, modified files, and tool URLs. System/developer presets choose compatible underlying surfaces automatically. Any target other than the default shows one line describing what it covers. The same **Add condition** menu adds inline message provider/source, repository, UTC date, conversation/workspace ID, or workspace-property clauses. They stay directly editable and removable, including custom role/type restrictions from saved searches. These are global **AND** clauses outside the text group's all/any boundary: `(text A OR text B) AND message provider = Claude`. Workspace predicates appear as `and Workspace matches (…)`, including the original AND/OR grouping, with the existing table query editor available from that clause or **Result layout**. Workspace filters select containers and update immediately; message filters constrain the individual match and apply with Search. Exact text and regular expressions are separate match styles in **Options**, beside letter case, phrase punctuation, and word variations; each option explains itself there, and the trigger counts the settings that differ from the defaults.
@@ -164,3 +166,132 @@ On the read-only Euclid scratch replica, two passes returned 50-hit pages in **4
 The read-only replica reproduced SQL exhausting its budget before yielding any candidate: `test` with a future date bound took **1,501 / 1,504 ms**, and `test` with a nonexistent role took **1,502 / 1,502 ms**. All four pages returned `complete=false`, `time_budget_no_progress`, and no continuation cursor. This prevents retry loops but does not make those restrictive queries complete within the default budget. Other bounded cases stayed within the harness's 2.5-second assertion. Timing output is retained in `.context/search-performance/cursor-review-replica.txt`.
 
 Deterministic SQLite driver hooks test timeouts before the candidate query, before its first row, and after an advancing row, on both initial and resumed pages. Regression tests also cover appends during an active page, unchanged ingest upserts, message edits/deletes/replacements, FTS remapping, classification changes, fuzzy vocabulary changes, and upgrading the original generation triggers. The focused race suite and `go test ./internal/... -skip '^TestFindingSnoozeUntilWorseStaysWoken$' -count=1` pass, as do build, vet, TypeScript, all 34 search/composer/preview frontend tests, and bundle checks. New trigger behavior is validated on synthetic catalogs; the replica remained read-only with its earlier schema.
+
+## Interactive search pruning, 2026-10-21
+
+The Search page's **Limit controls final workspace rows, after keyword matching,
+workspace filters, computed filters, and sorting**. Offset pages that same
+population. Counts and metrics describe the full filtered population; grouping
+also receives the full source population before limiting group rows.
+
+The earlier experiment used a separate 200-message / 700-ms batch, producing
+80 sub-second HTTP responses but incomplete workspace populations. Those
+measurements do not establish globally correct sorted pages. That experiment
+has been replaced: workspace searches have no message, candidate, or total-byte
+batch cutoff, and file/URL searches no longer apply their standalone 5,000-hit
+cap to workspace-table membership. Message/conversation APIs retain their
+independent cursor pagination and execution budgets. A message cursor is
+rejected on workspace row/metric requests; old page URLs discard it.
+
+Ordinary token, phrase, prefix, Boolean and unordered-proximity searches can
+establish workspace membership and exact message counts directly from the word
+index. They do not copy every matching message body into Go. SQLite selects a
+representative message per workspace; the host loads its excerpt only for the
+final page, after table filtering, sorting, Limit and offset. Strict spelling,
+ordered proximity, literals, regexes and classified spans still use their exact
+original-text verifiers, aggregating all matching messages into workspaces.
+Display-only cost columns are likewise priced on the final page. Filters,
+ordering, computed expressions and metrics that depend on cost still price the
+population before execution.
+
+A workspace search must finish before returning table rows, totals, metrics or
+groups. Deadlines, unconfirmed generations and per-record verification safety
+limits produce an explicit error, never an apparently exact partial table.
+Unfinished populations are not cached. The ordinary query deadline is 30 s;
+removing a batch cutoff does not make broad scans complete in under a second.
+
+### Measurement
+
+`TestSearchPageReplica` exercises the actual HTTP handler, the schema's nine
+default columns, activity ordering and a 50-workspace Limit. It includes
+validation, matching, workspace preparation, pricing, enrichment and JSON
+serialization, excluding browser rendering/network time. Two passes cover 40
+cases: every target, words/phrases/Boolean/prefix/proximity, case/separators/fuzzy,
+literal/regex, scope filters, files and URLs. The probe requires complete
+successful populations and checks a one-second response target. Its enclosing
+five-second deadline is deliberately shorter than the service's 30 seconds.
+
+The existing current-schema scratch backup was opened read-only:
+`/Volumes/euclid/pharos-dev-riyadh-v18/catalog/catalog.sqlite3`, 5,902,704 messages
+in approximately 82 GiB. No production writes, maintenance, migrations or
+installed-app replacement ran. Other work used the Mac's CPU/disk; these are
+development observations, not cold-cache or percentile guarantees.
+
+After moving display-only pricing to the final page, a focused phrase run gave:
+
+| Complete HTTP query | First request | Repeat | Matching messages |
+|---|---:|---:|---:|
+| `"race condition"` | 673 ms | 66 ms | 103 |
+| `"go test"` | 776 ms | 96 ms | 3,332 |
+| Absent phrase | 44 ms | 119 ms | 0 |
+
+These repeats reused the matching-population cache. The broader sweep exceeds
+its eight-entry capacity, so its second pass generally searches again.
+
+**The full one-second goal remains unmet.** In the complete-population sweep,
+53/80 requests returned complete results under one second, 13 completed more
+slowly, and 14 failed the probe's deadline or original-text size protection.
+The common word took 3,028–4,794 ms; a user-surface word took 2,130–2,538 ms;
+a case-sensitive word took 1,493–1,894 ms. Tools/all-message/instruction-role
+queries, an unpruned regex scan and one broad classified-span target exceeded
+the probe's five-second deadline. One trigram-pruned regex reported oversized
+messages and therefore withheld its workspace population. This run is a
+**failing performance probe**, not proof that every Search query is fast.
+
+The remaining broad lexical bottleneck is enumerating postings and resolving
+message/scope metadata across the large catalog. Restrictive filters, phrases,
+fuzzy/proximity queries, most classified targets, file/URL searches and absent
+matches are substantially faster. Future work must improve that complete
+membership path; reducing message batches cannot satisfy workspace Limit
+semantics.
+
+### Other retained optimizations
+
+1. FTS reads IDs through the compact `message_fts_rows` mapping, avoiding the
+   stored-content read that also loads large tool output. A lazy fallback
+   supports older/incomplete mappings.
+2. A bounded metadata planner uses the existing role/time index before global
+   postings when at most 256 eligible positions can narrow the search. Planning
+   stops after 100 ms and falls back safely. Conservative ISO bounds permit
+   index seeks; exact Julian-date comparisons retain offset/day semantics.
+   Empty surfaces and workspace scopes short-circuit global scans.
+3. Standalone message batches yield sparse role-rejected postings as resumable
+   progress, without loading their bodies or counting them as matches/omissions.
+4. Small surfaces use stored byte lengths. Regex trigram pruning composes safe
+   required literals with AND/OR, preserving optional and Unicode semantics.
+   ASCII prefilters reject impossible span positives; the exact Unicode61
+   verifier still decides matches. Strict patterns are compiled once per
+   request, localization stops at its first match, and UTF-8 snippets read
+   only their surrounding characters.
+5. URL searches start with the URL ledger instead of scanning millions of tool
+   calls by date. File attribution retrieves the attempt's work item in one
+   join instead of per hit.
+6. Text-population caches watch message/scope generations, appends, relevant
+   span changes and index readiness instead of unrelated projection commits.
+   Actual edits/appends invalidate an initial search, and a deadline without
+   progress can be retried.
+
+Reproduce against a **current-schema scratch backup**:
+
+```sh
+go test -c -tags probe ./internal/archive -o .context/search-performance/archive.test
+PHAROS_SEARCH_REPLICA=/path/to/current/scratch/catalog.sqlite3 \
+  .context/search-performance/archive.test -test.run '^TestSearchPageReplica$' -test.v
+```
+
+`PHAROS_SEARCH_CASE=phrase` narrows the sweep. The old October 12 replica lacks
+`workspace_library.efforts` and cannot run the current page handler. The older
+engine/record probe remains `TestTextSearchReplica`; `PHAROS_SEARCH_ONLY=1`
+skips its historical comparisons.
+
+Correctness checks cover final workspace Limit/offset despite many newer
+messages in one workspace; computed filtering/sorting; complete metrics and
+grouping; exact per-workspace message counts across search operators; withholding
+unfinished results and retrying; pricing/formula dependencies; metadata-planner
+fallback and legacy mappings; offsets and UTC day boundaries; conservative
+regex/ASCII pruning; span boundaries; UTF-8 snippets; rejected-role pagination;
+cache invalidation during unrelated maintenance versus real edits; and concurrent
+page localization with independent verification caches. Logs
+are retained under `.context/search-performance/` (`workspace-phrase-final.txt`,
+`workspace-complete-http.txt`, `go-limit-full-final.txt`,
+`go-limit-cache-race.txt`, `web-limit-check-final.txt` and `web-limit-full.txt`).

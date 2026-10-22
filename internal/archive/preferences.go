@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -111,6 +112,11 @@ func (s *Server) getPreferences(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(append(append([]byte("window.pharosPreferenceValues="), payload...), ';'))
+	// Browser preview snapshots must never cross libraries on the same local
+	// origin. The opaque scope is stable across restarts, without exposing a
+	// catalog path or API token to the page.
+	scope := sha256.Sum256([]byte(s.Catalog.Path + "\x00" + s.config.APIToken))
+	_, _ = fmt.Fprintf(w, "window.pharosPreviewScope=%q;", fmt.Sprintf("%x", scope))
 }
 
 func (s *Server) postPreferences(w http.ResponseWriter, r *http.Request, body map[string]any) {

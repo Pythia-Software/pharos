@@ -1,9 +1,9 @@
 import { decodeQueryStrict, localQuerySnapshotCache, EMPTY_QUERY, encodeQuery, type FieldSchema, type QueryState } from "@pythia-software/query-table-core";
-import { emptyTextSearch, readTextSearch, type TextSearchDraft } from "./text-search-model";
+import { newKeywordSearch, readTextSearch, type TextSearchDraft } from "./text-search-model";
 import { readRollingWindow, resolveRollingQuery, rollingQueryMatches, type RollingWindow } from "./query-links";
 export type SearchComposerState = { text: TextSearchDraft; kind: "text" | "file" | "url"; file: string; fileCase: boolean; query: QueryState; window?: RollingWindow; error?: string };
 export function freshSearch(schema: FieldSchema): SearchComposerState {
-  return { text: emptyTextSearch(), kind: "text", file: "", fileCase: false, query: { ...EMPTY_QUERY, where: [], orderBy: schema.defaultSort ?? [], select: schema.defaultSelect ?? [], limit: schema.defaultLimit ?? 50 } };
+  return { text: newKeywordSearch(), kind: "text", file: "", fileCase: false, query: { ...EMPTY_QUERY, where: [], orderBy: schema.defaultSort ?? [], select: schema.defaultSelect ?? [], limit: schema.defaultLimit ?? 50 } };
 }
 export function restoreSearch(params: URLSearchParams, schema: FieldSchema): SearchComposerState {
   const state = freshSearch(schema), text = readTextSearch(params);

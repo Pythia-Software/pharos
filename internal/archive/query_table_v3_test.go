@@ -58,7 +58,7 @@ func TestQueryV3LargeSourceHavingMetricsAndPaging(t *testing.T) {
 	}
 }
 
-func TestQueryV3NativeGroupsMatchGeneralExecution(t *testing.T) {
+func TestQueryV3GroupsMatchWithoutToolProjection(t *testing.T) {
 	c, config := testCatalog(t)
 	seedToolCalls(t, c, 40)
 	if _, err := c.DB.Exec("UPDATE tool_calls SET started_at=NULL WHERE id='call-0'; UPDATE tool_calls SET started_at='invalid' WHERE id='call-1'"); err != nil {
@@ -69,39 +69,37 @@ func TestQueryV3NativeGroupsMatchGeneralExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := testServer(t, config, c)
-	for _, dataset := range []string{"tool_calls", "tools"} {
-		field := "duration_ms"
-		if dataset == "tools" {
-			field = "total_duration_ms"
-		}
-		for _, key := range []string{"provider", "tool_name", "repository_name", "day"} {
-			wheres := [][]qt.WhereTerm{nil, {{Field: "provider", Op: "=", Value: "codex"}}, {{Field: "tool_name", Op: "contains", Value: "absent"}}}
-			if dataset == "tool_calls" {
-				wheres = append(wheres, []qt.WhereTerm{{Field: "command", Op: "contains", Value: "test", Negated: true}},
-					[]qt.WhereTerm{{Field: "command", Op: "contains", Value: "absent", Negated: true}, {Field: "command", Op: "contains", Value: "git", Negated: true}},
-					[]qt.WhereTerm{{Field: "day", Op: "is_null"}})
+	// Grouping must agree on the stored projection and its live-join fallback.
+	dataset, field := "tool_calls", "duration_ms"
+	for _, key := range []string{"provider", "tool_name", "repository_name", "day"} {
+		wheres := [][]qt.WhereTerm{nil, {{Field: "provider", Op: "=", Value: "codex"}}, {{Field: "tool_name", Op: "contains", Value: "absent"}}}
+		wheres = append(wheres, []qt.WhereTerm{{Field: "command", Op: "contains", Value: "test", Negated: true}},
+			[]qt.WhereTerm{{Field: "command", Op: "contains", Value: "absent", Negated: true}, {Field: "command", Op: "contains", Value: "git", Negated: true}},
+			[]qt.WhereTerm{{Field: "day", Op: "is_null"}})
+		for _, where := range wheres {
+			q := groupRequest(key,
+				qt.SummaryColumn{ID: "n", Op: "count"},
+				qt.SummaryColumn{ID: "total", Op: "sum", Field: field},
+				qt.SummaryColumn{ID: "mean", Op: "avg", Field: field},
+				qt.SummaryColumn{ID: "known", Op: "count", Field: field},
+				qt.SummaryColumn{ID: "min", Op: "min", Field: field},
+				qt.SummaryColumn{ID: "max", Op: "max", Field: field},
+				qt.SummaryColumn{ID: "distinct", Op: "count_distinct", Field: field})
+			q.Source.Where = where
+			q.Result.OrderBy = qt.OrderBys{{Field: "n", Dir: "desc"}, {Field: key, Dir: "asc"}}
+			q.Result.Limit = 2
+			q.Metrics = []qt.AggSpec{{ID: "groups", Op: "count"}, {ID: "shown", Op: "sum", Field: "n", Scope: "shownRows"}}
+			schema, _ := sqliteQuerySchema(dataset)
+			got, _, err := server.executeQueryV3(t.Context(), dataset, nil, schema, q)
+			if _, e := c.DB.Exec("DELETE FROM meta WHERE key='tool_query_facts_ready'"); e != nil {
+				t.Fatal(e)
 			}
-			for _, where := range wheres {
-				q := groupRequest(key, qt.SummaryColumn{ID: "n", Op: "count"}, qt.SummaryColumn{ID: "total", Op: "sum", Field: field}, qt.SummaryColumn{ID: "mean", Op: "avg", Field: field}, qt.SummaryColumn{ID: "known", Op: "count", Field: field})
-				q.Source.Where = where
-				q.Result.OrderBy = qt.OrderBys{{Field: "n", Dir: "desc"}, {Field: key, Dir: "asc"}}
-				q.Result.Limit = 2
-				q.Metrics = []qt.AggSpec{{ID: "groups", Op: "count"}, {ID: "shown", Op: "sum", Field: "n", Scope: "shownRows"}}
-				schema, _ := sqliteQuerySchema(dataset)
-				nativeMetrics = true
-				got, _, err := server.executeQueryV3(t.Context(), dataset, nil, schema, q)
-				nativeMetrics = false
-				if _, e := c.DB.Exec("DELETE FROM meta WHERE key='tool_query_facts_ready'"); e != nil {
-					t.Fatal(e)
-				}
-				want, _, e := server.executeQueryV3(t.Context(), dataset, nil, schema, q)
-				if _, e := c.DB.Exec("INSERT INTO meta(key,value) VALUES('tool_query_facts_ready',?)", toolQueryFacts.version()); e != nil {
-					t.Fatal(e)
-				}
-				nativeMetrics = true
-				if err != nil || e != nil || !reflect.DeepEqual(got, want) {
-					t.Fatalf("%s/%s/%v: native=%+v general=%+v errors=%v/%v", dataset, key, where, got, want, err, e)
-				}
+			want, _, e := server.executeQueryV3(t.Context(), dataset, nil, schema, q)
+			if _, e := c.DB.Exec("INSERT INTO meta(key,value) VALUES('tool_query_facts_ready',?)", toolQueryFacts.version()); e != nil {
+				t.Fatal(e)
+			}
+			if err != nil || e != nil || !reflect.DeepEqual(got, want) {
+				t.Fatalf("%s/%s/%v: projected=%+v joined=%+v errors=%v/%v", dataset, key, where, got, want, err, e)
 			}
 		}
 	}
@@ -214,6 +212,62 @@ func TestQueryV3ComputedSourceAndRepresentative(t *testing.T) {
 	if w.Code != 400 || !strings.Contains(w.Body.String(), "definition_changed") {
 		t.Fatal(w.Code, w.Body.String())
 	}
+
+	t.Run("Library selection through a computed filter", func(t *testing.T) {
+		catalog, config := libraryFixture(t)
+		execTx(t, catalog.DB,
+			`INSERT INTO metrics(workspace_id,name,value,unit,status,extractor_version,observed_at) VALUES('b','total_tokens',900,'tokens','observed','test','x')`,
+			`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('d','canonical','local','d','Small work','x')`,
+			`INSERT INTO metrics(workspace_id,name,value,unit,status,extractor_version,observed_at) VALUES('d','total_tokens',100,'tokens','observed','test','x')`)
+		if err := catalog.refreshAllLibrary(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		column, err := (qt.SQLiteComputedColumnStore{DB: catalog.DB}).Save(t.Context(), queryTableScope, "pharos_library", qt.SaveComputedColumnRequest{Column: qt.ComputedColumn{
+			ID: "tokens", Label: "Tokens", Expression: qt.ComputedExpression{Language: "qt-expr", Version: 1, Source: "[token_count]"},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		server := testServer(t, config, catalog)
+		w := apiCall(t, server, config.APIToken, http.MethodGet, "/api/query/library/capabilities", nil)
+		var capabilities struct {
+			Execution qt.SQLiteComputedExecution `json:"computedExecution"`
+			Query     qt.QueryCapabilitiesV3     `json:"queryCapabilities"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &capabilities) != nil || capabilities.Query.Version != 3 || !capabilities.Execution.Fields["@computed/tokens"].Filter {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		q := qt.QueryRequestV3{Version: 3, Profile: capabilities.Execution.Profile, Now: time.Now().UnixMilli(), Rows: true,
+			ExpectedRevisions: capabilities.Execution.ResolvedRevisions, PlanToken: capabilities.Execution.PlanToken,
+			Result: qt.WireQuery{Select: []string{"id"}, Where: []qt.WhereTerm{{Field: "@computed/tokens", Op: ">", Value: "200"}},
+				OrderBy: qt.OrderBys{{Field: "@computed/tokens", Dir: "desc"}}, Limit: 1, Offset: 1}}
+		for _, selection := range []bool{false, true} {
+			if selection {
+				q.Result.Limit, q.Result.Offset = 200, 0
+			}
+			w = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/library/query-v3", q)
+			var result qt.QueryResultV3
+			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result.Total != 2 {
+				t.Fatal(w.Code, w.Body.String())
+			}
+			ids := []any{}
+			for _, row := range result.Rows {
+				ids = append(ids, row["id"])
+			}
+			want := []any{"c"}
+			if selection {
+				want = []any{"b", "c"}
+			}
+			if !reflect.DeepEqual(ids, want) || result.Execution.ResolvedRevisions[column.ID] != column.Revision {
+				t.Fatalf("selection=%v: rows=%v execution=%+v", selection, result.Rows, result.Execution)
+			}
+		}
+		q.ExpectedRevisions[column.ID] = "stale"
+		w = apiCall(t, server, config.APIToken, http.MethodPost, "/api/query/library/query-v3", q)
+		if w.Code != 400 || !strings.Contains(w.Body.String(), "definition_changed") {
+			t.Fatal(w.Code, w.Body.String())
+		}
+	})
 }
 
 func TestQueryV3IncompleteLibrarySearchWithFormula(t *testing.T) {
@@ -236,30 +290,27 @@ func TestQueryV3IncompleteLibrarySearchWithFormula(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			options.WorkspaceRows = true
 			options.Search.WorkspaceIDs = []string{"b", "c"}
 			encoded, _ := json.Marshal(options)
-			generation, err := catalog.catalogVersion(ctx)
+			generation, err := catalog.libraryFindVersion(ctx, options)
 			if err != nil {
 				t.Fatal(err)
 			}
 			// Reproduce both search stop conditions without generating thousands of
-			// duplicate messages: execution must retain the partial page and metadata.
+			// duplicate messages: incomplete populations must not be sorted or counted.
 			set := &libraryFindSet{matches: map[string]*libraryFindMatch{"c": {Count: 1}}, limited: scenario == "limited"}
 			if scenario == "incomplete" {
 				set.search = textSearchResult{Strategy: "indexed", Complete: false, StopReason: "candidate_limit"}
 			}
 			catalog.find.mu.Lock()
-			catalog.find.version = generation
+			set.cacheVersion = generation
 			catalog.find.entries = map[string]*libraryFindSet{string(encoded): set}
 			catalog.find.mu.Unlock()
 			q := qt.QueryRequestV3{Version: 3, Profile: qt.SQLiteExpressionProfile, Now: time.Now().UnixMilli(), Rows: true,
 				Source: qt.WireQuery{}, Result: qt.WireQuery{Select: []string{"title", "@computed/constant"}, Limit: 10}, ExpectedRevisions: map[string]string{column.ID: column.Revision}}
-			result, summary, err := server.executeQueryV3(ctx, "library", params, PharosLibrarySchema(), q)
-			if err != nil || len(result.Rows) != 1 || result.Rows[0]["@computed/constant"] != float64(2) || summary == nil {
-				t.Fatalf("result=%#v find=%#v err=%v", result, summary, err)
-			}
-			if scenario == "limited" && !summary.Limited || scenario == "incomplete" && (summary.Search == nil || summary.Search.Complete) {
-				t.Fatal(summary)
+			if _, _, err := server.executeQueryV3(ctx, "library", params, PharosLibrarySchema(), q); err == nil || !strings.Contains(err.Error(), "search is incomplete") {
+				t.Fatalf("incomplete workspace search: %v", err)
 			}
 			q.Grouping = &qt.GroupingDefinition{Keys: []string{"source_kind"}, Summaries: []qt.SummaryColumn{{ID: "records", Op: "count"}}}
 			q.Result = qt.WireQuery{Select: []string{"source_kind", "records"}, Limit: 10}

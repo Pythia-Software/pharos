@@ -68,7 +68,7 @@ export function MachineAnalyticsTable({ current, previous, grouping, compared, f
     machine_change: ({ value, row }) => value == null ? <span className="muted">{row.compared ? "No timed baseline" : "Select a period"}</span> : `${Number(value) > 0 ? "+" : ""}${Number(value).toFixed(1)}%`,
   };
   return <section className="machine-analysis" aria-label="Tool analytics table">
-    <QueryBuilder api={stableApi} fields={api.query.grouping ? api.schema!.fields : api.computed.catalogue} total={api.total} running={api.loading} defaultCollapsed />
+    <QueryBuilder compact api={stableApi} fields={api.query.grouping ? api.schema!.fields : api.computed.catalogue} total={api.total} running={api.loading} defaultCollapsed />
     <MetricsPanel api={stableApi} aggregations={api.aggregations} fields={api.query.grouping ? api.schema!.fields : api.computed.catalogue} renderers={renderers}
       onInspect={(bucket, clause) => { const rows = inspectBucketQuery(api.query, bucket, clause, schema); if (rows) api.setQuery(rows); }} />
     <DataTable fields={api.visibleFields} rows={api.rows} query={api.query} onQueryChange={api.setQuery} renderers={renderers} rowId={api.rowId} columnDrag={api.columnDrag} total={api.total} loading={api.loading}
