@@ -14,7 +14,7 @@ for (const mode of ['drive', 'activity']) test(`Activity ${mode} refresh preserv
     forecast: {state: 'partial', remaining_steps: 4, predicted_steps: 3, basis: 'Learning the remaining analyses'}};
   let activities = [main, ...Array.from({length: 5}, (_, index) => ({id: `task-${index}`, kind: 'maintenance', label: `Background task ${index}`}))];
   let stopped = 0;
-  const {page, settled, shot} = await open(t, {url: '/library', ready: '#pharosDrive', viewport: {width: 390, height: 550}, api: {
+  const {page, settled, shot} = await open(t, {url: '/library', ready: '#queryTableLibrary .qt-row', viewport: {width: 390, height: 550}, api: {
     'GET /api/library/status': () => ({...defaultApi['GET /api/library/status'], idle: false, activities}),
     'POST /api/library/refresh/stop': () => {stopped++; return {stopped: true};},
   }});
