@@ -409,6 +409,9 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeResult(w, value, err)
 	case path == "/api/pricing":
 		writeJSON(w, s.Catalog.pricingStatus(), 200)
+	case path == "/api/usage/history":
+		value, err := s.Catalog.UsageHistory(r.Context())
+		writeResult(w, value, err)
 	case path == "/api/usage/summary":
 		value, err := s.Catalog.UsageSummary(r.Context())
 		writeResult(w, value, err)

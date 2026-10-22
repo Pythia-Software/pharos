@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { EMPTY_QUERY, decodeQuery, encodeQuery, type WhereTerm } from "@pythia-software/query-table-core";
-import { ChartSelect, DisplayControl, PeriodControl, RangeControl, RollingControl, StackedColumns, chartPeriodCount, chartSpan, pickRange, rangeLabel, smoothingWhere, timeBounds, usageTime, withTimeRange, type FilterChange, type PeriodView } from "./usage-chart";
+import { ChartSelect, DisplayControl, PeriodControl, RangeControl, RollingControl, StackedColumns, chartPeriodCount, chartSpan, pickRange, presetPeriod, rangeLabel, smoothingWhere, timeBounds, usageTime, withTimeRange, type FilterChange, type PeriodView } from "./usage-chart";
 import { chartPeriods, earliestKey, isHourly, parseDay, periodLabel, validPeriodCount } from "./chart-period";
 import { chartBucketsWithHistory, foldSeries, plottedBucketKey, validChartDisplay, validRollingPeriods, type ChartDisplay, type ChartSeries } from "./chart-series";
 import { readSlice, withSlice } from "./chart-selection";
@@ -201,7 +201,7 @@ export function CarbonImpact({ queryLinks }: { queryLinks?: (state: { where: Whe
       <ChartSelect label="Metric" value={view.metric} options={[["co2", "CO₂e"], ["energy", "Electricity"]]} onChange={metric => update({ metric })} />
       <ChartSelect label="Breakdown" value={view.split} options={splits} onChange={split => update({ split, seriesLimit: 15 })} />
       <DisplayControl value={view.display} onChange={display => update({ display })} />
-      <RangeControl bounds={bounds} editable includeTime={isHourly(view.period)} onChange={onDateRange} />
+      <RangeControl bounds={bounds} editable includeTime={isHourly(view.period)} onPresetChange={(range, oldest) => update(presetPeriod(range, oldest))} onChange={onDateRange} />
       <PeriodControl view={view} onChange={update} />
       <RollingControl value={view.rollingPeriods} display={view.display} period={view.period} count={count} onChange={rollingPeriods => update({ rollingPeriods })} />
     </>} series={series} buckets={buckets} period={view.period} periodCount={count} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={cumulativeStart} scale="linear"
