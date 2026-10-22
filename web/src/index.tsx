@@ -13,7 +13,7 @@ import { SearchDialog } from "./search-dialog";
 import { ExploreSearch } from "./explore-search";
 import { SearchResultsDisplay } from "./search-results-view";
 import { queryForSearchResultsView, searchResultsView, type SearchResultsView } from "./search-results-view-model";
-import { emptyTextSearch, readTextSearch, textFindParameters, searchSentence, withheldBatch, type TextSearchDraft } from "./text-search-model";
+import { newKeywordSearch, readTextSearch, textFindParameters, searchSentence, withheldBatch, type TextSearchDraft } from "./text-search-model";
 import { CarbonImpact } from "./carbon-impact";
 import { usageSummaryURL } from "./usage-summary-links";
 import { readConcurrencySettings } from "./concurrency-settings";
@@ -849,7 +849,7 @@ function LibraryPage() {
   const [fileCase, setFileCase] = useState(() => new URLSearchParams(location.search).get("case") === "1");
   const [fileCaseDraft, setFileCaseDraft] = useState(fileCase);
   const [view, setView] = useState<LibraryView>(() => new URLSearchParams(location.search).get("view") === "conversation" ? "conversation" : "table");
-  const clearText = () => { const empty = emptyTextSearch(); setEditorValue(empty); setApplied(null); setInitialError(""); };
+  const clearText = () => { const empty = newKeywordSearch(); setEditorValue(empty); setApplied(null); setInitialError(""); };
   useEffect(() => { clearLibrarySearch = () => { clearText(); setFileSearch(""); setFileDraft(""); }; return () => { clearLibrarySearch = undefined; }; }, []);
   useEffect(() => {
     const restore = () => {

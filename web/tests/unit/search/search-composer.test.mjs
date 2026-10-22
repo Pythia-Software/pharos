@@ -4,6 +4,18 @@ import * as m from "../../../src/search-composer-state";
 import { withGroupingKeys } from "@pythia-software/query-table-core";
 import { queryForSearchResultsView, searchResultsView } from "../../../src/search-results-view-model";
 const schema = { name: "test", idField: "id", fields: [], defaultSort: [{ field: "activity_at", dir: "desc" }], defaultLimit: 50 };
+test("fresh and restored unused composers start with a removable 30-day message restriction", () => {
+ const earliest = Date.now() - 30 * 86400000;
+ for (const state of [m.freshSearch(schema), m.restoreSearch(new URLSearchParams(), schema)]) {
+  assert.ok(Date.parse(state.text.scope.from) >= earliest);
+  assert.ok(Date.parse(state.text.scope.from) <= Date.now() - 30 * 86400000);
+  assert.deepEqual(state.query.where, [], "the date restricts messages rather than workspace activity");
+  state.text.root.children[0].text = "cache";
+  state.text.scope.from = "";
+  const restored = m.restoreSearch(new URL(m.searchURL(state), "http://localhost").searchParams, schema);
+  assert.equal(restored.text.scope.from, "");
+ }
+});
 test("Table and Conversations display the same query without changing filters, columns or paging", () => {
  const query = { ...m.freshSearch(schema).query,
   where: [{ any: [{ field: "repository_name", op: "=", value: "pharos" }, { field: "repository_name", op: "=", value: "query-table" }] }],
