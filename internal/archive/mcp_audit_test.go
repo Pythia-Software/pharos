@@ -112,6 +112,30 @@ func TestMCPSearchMessagesPhrasesAndFilters(t *testing.T) {
 			t.Errorf("accepted invalid arguments: %#v", args)
 		}
 	}
+	// A literal repository name may contain both SQL wildcard characters.
+	// Neither character may broaden a filter to the ordinary audit repository.
+	for _, statement := range []string{
+		`INSERT INTO repositories(id,display_name,canonical_remote,created_at,updated_at) VALUES('literal','audit_100%','https://github.com/acme/audit_100%.git','t','t')`,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,repository_id,title,indexed_at) VALUES('literal-work','codex','local','literal-work','literal','Literal repository','2026-10-06')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('literal-conversation','literal-work','codex','local','literal-conversation')`,
+	} {
+		if _, err := catalog.DB.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	addAuditMessage(t, catalog, "literal-message", "literal-conversation", "user", "message", "AWS literal repository", 1, nil)
+	for _, repository := range []string{"audit_100%", "_100%", "100%"} {
+		result := auditCall(t, catalog, "search_messages", map[string]any{"query": "AWS", "repository": repository})
+		items := result["items"].([]map[string]any)
+		if integer(result["total"]) != 1 || len(items) != 1 || items[0]["message_id"] != "literal-message" {
+			t.Fatalf("literal repository %q: %#v", repository, result)
+		}
+	}
+	for _, repository := range []string{"audit_100X", "audit%100", "aud_t"} {
+		if _, err := callMCP(catalog, "search_messages", map[string]any{"query": "AWS", "repository": repository}); err == nil {
+			t.Errorf("accepted wildcard lookalike %q", repository)
+		}
+	}
 }
 
 func TestMCPSearchMessagesPunctuation(t *testing.T) {

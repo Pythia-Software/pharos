@@ -273,7 +273,9 @@ func (c *Catalog) attachLibraryFind(ctx context.Context, set *libraryFindSet, ro
 		query := set.search.Query.verificationCopy()
 		for _, message := range messages {
 			body := firstString(message["body"])
-			lo, hi := lexicalExcerpt(body, query)
+			projection := projectMessageLexicalText(firstString(message["kind"]), body)
+			lo, hi := lexicalExcerpt(projection.text, query)
+			lo, hi = projection.sourceOffset(lo), projection.sourceOffset(hi)
 			evidence[firstString(message["id"])] = libraryHit{Title: firstString(message["title"]), Provider: firstString(message["provider"]), StartedAt: firstString(message["started_at"]), Role: firstString(message["role"]), MessageKind: firstString(message["kind"]), Snippet: searchSnippet(body, lo, hi)}
 		}
 	}

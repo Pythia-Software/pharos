@@ -204,7 +204,7 @@ func TestMCPTraceWorktreeRepositoryFilteringAndPagination(t *testing.T) {
 		total      int
 	}{
 		{"audit", 3}, {"AUDIT", 3}, {"github.com/acme/audit", 3},
-		{"_udit", 3}, {"audit%", 3}, {"remote-only", 1}, {"other", 1}, {"", 5},
+		{"remote-only", 1}, {"other", 1}, {"", 5},
 	} {
 		t.Run(test.repository, func(t *testing.T) {
 			result := auditCall(t, catalog, "trace_worktree", map[string]any{"query": "shared-agent", "repository": test.repository, "limit": 100, "max_output_tokens": 4000})
@@ -212,6 +212,11 @@ func TestMCPTraceWorktreeRepositoryFilteringAndPagination(t *testing.T) {
 				t.Fatalf("wrong repository matches: %s", jsonText(result))
 			}
 		})
+	}
+	for _, repository := range []string{"_udit", "audit%"} {
+		if _, err := callMCP(catalog, "trace_worktree", map[string]any{"query": "shared-agent", "repository": repository}); err == nil {
+			t.Fatalf("wildcard repository %q matched a literal name", repository)
+		}
 	}
 	seen := map[string]bool{}
 	for offset := 0; offset < 3; offset++ {

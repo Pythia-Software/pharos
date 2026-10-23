@@ -51,9 +51,14 @@ predicates and unsupported names fail explicitly. Aliases include `token_count`,
 `turn_count`, `tool_use_count`, and `wall_clock_span`.
 
 Context filters include repository, source, provider, model, effort, file, PR,
-from/to, and up to 100 `workspace_ids`. Date filters select entity lifetimes,
-not usage inside a date window. Model/effort filters select entities containing
-that configuration, not just tokens consumed under that configuration.
+from/to, and up to 100 `workspace_ids`. Repository text is a case-insensitive
+literal substring of a repository name or remote; `%` and `_` are ordinary
+characters. Date filters select entity lifetimes, not usage inside a date
+window. Provider, model, and effort select a configuration recorded in the
+same conversation. Model and effort may come from the conversation or from
+one of its messages; the provider belongs to that conversation. These filters
+select entities containing that configuration, not just tokens consumed under
+that configuration.
 
 `select` chooses up to 20 allowlisted metrics or small context fields. An empty
 array returns IDs only. Filter/sort metrics are included automatically. Workspace

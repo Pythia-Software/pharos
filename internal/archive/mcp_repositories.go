@@ -80,12 +80,19 @@ func checkedOutAt(locations []string, path string) bool {
 	return false
 }
 
+// repositoryNamePredicate uses the same case-insensitive literal substring
+// semantics as search_text. SQL LIKE would treat repository names containing
+// '%' or '_' as patterns.
+func repositoryNamePredicate(alias string) string {
+	return "(instr(lower(" + alias + ".display_name),lower(?))>0 OR instr(lower(COALESCE(" + alias + ".canonical_remote,'')),lower(?))>0)"
+}
+
 // checkRepositoryFilter reports an error when a repository filter matches no
 // repository by name or remote, as the search filters match. The error names
 // the repository for a checkout path or a worktree's directory name, which
 // agents often pass by mistake, or else points to list_repositories.
 func (c *Catalog) checkRepositoryFilter(value string) error {
-	matches, err := queryMaps(c.DB, `SELECT 1 FROM repositories WHERE display_name LIKE ?1 OR canonical_remote LIKE ?1 LIMIT 1`, "%"+value+"%")
+	matches, err := queryMaps(c.DB, `SELECT 1 FROM repositories r WHERE `+repositoryNamePredicate("r")+` LIMIT 1`, value, value)
 	if err != nil || len(matches) > 0 {
 		return err
 	}

@@ -56,6 +56,18 @@ func TestMCPListRepositories(t *testing.T) {
 	if items := list(map[string]any{"query": "ACME/PARSER"})["items"].([]map[string]any); len(items) != 1 || items[0]["repository"] != "parser" {
 		t.Fatalf("query by remote: %#v", items)
 	}
+	if _, err := catalog.DB.Exec(`UPDATE repositories SET aliases_json='["web_100%"]' WHERE id='new'`); err != nil {
+		t.Fatal(err)
+	}
+	if items := list(map[string]any{"query": "web_100%"})["items"].([]map[string]any); len(items) != 1 || items[0]["repository"] != "web" {
+		t.Fatalf("literal alias discovery: %#v", items)
+	}
+	if items := list(map[string]any{"query": "/work/berlin"})["items"].([]map[string]any); len(items) != 1 || items[0]["repository"] != "web" {
+		t.Fatalf("literal checkout discovery: %#v", items)
+	}
+	if items := list(map[string]any{"query": "webX100Y"})["items"].([]map[string]any); len(items) != 0 {
+		t.Fatalf("wildcard alias lookalike: %#v", items)
+	}
 	if items := list(map[string]any{"path": "/work/berlin/internal"})["items"].([]map[string]any); len(items) != 1 || items[0]["repository"] != "web" {
 		t.Fatalf("path inside a checkout: %#v", items)
 	}
@@ -71,12 +83,13 @@ func TestMCPRepositoryFilterMustNameARepository(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	if _, err := catalog.DB.Exec(`INSERT INTO repositories(id,canonical_remote,display_name,local_locations_json,created_at,updated_at) VALUES
 		('a','https://github.com/acme/web.git','web','["/work/acme/berlin-v2","/src/web"]','t','t'),
-		('b','git@github.com:acme/api.git','api','["/work/acme/oslo"]','t','t')`); err != nil {
+		('b','git@github.com:acme/api.git','api','["/work/acme/oslo"]','t','t'),
+		('wild','https://github.com/acme/lib_100%.git','lib_100%','["/src/lib_100%"]','t','t')`); err != nil {
 		t.Fatal(err)
 	}
 	for _, tool := range []string{"search_conversations", "search_messages", "search_work", "list_findings", "trace_worktree"} {
 		args := map[string]any{"query": "parser"}
-		for _, repository := range []string{"web", "WEB", "acme/api"} {
+		for _, repository := range []string{"web", "WEB", "acme/api", "lib_100%", "lib_100%.git"} {
 			args["repository"] = repository
 			if _, err := callMCP(catalog, tool, args); err != nil {
 				t.Errorf("%s accepts %q: %v", tool, repository, err)
@@ -87,6 +100,8 @@ func TestMCPRepositoryFilterMustNameARepository(t *testing.T) {
 			"/work/acme/oslo/server": `it is a checkout of "api"`,
 			"work":                   `it is a checkout of "api" or "web"`,
 			"payments":               "list_repositories lists the names Pharos knows",
+			"w_b":                    "list_repositories lists the names Pharos knows",
+			"libX100Y":               "list_repositories lists the names Pharos knows",
 		} {
 			_, err := callMCP(catalog, tool, map[string]any{"repository": repository})
 			if err == nil || !strings.Contains(err.Error(), want) {
