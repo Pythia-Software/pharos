@@ -44,7 +44,7 @@ REAL="$WORK/real/Pharos.app"
 
 echo "Building the harness…"
 swiftc -parse-as-library -framework DiskArbitration -framework Security \
-    "$ROOT/macos/test/Harness.swift" "$ROOT/macos/LibraryVolume.swift" "$ROOT/macos/Launch.swift" \
+    "$ROOT/macos/test/Harness.swift" "$ROOT/macos/LibraryVolume.swift" "$ROOT/macos/Launch.swift" "$ROOT/macos/UpdateLifecycle.swift" \
     -o "$WORK/harness"
 
 hdiutil create -quiet -size 300m -fs APFS -volname "$NAME" "$WORK/$NAME.dmg"

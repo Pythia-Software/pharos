@@ -1,90 +1,371 @@
 import AppKit
+import Sparkle
 import SwiftUI
 
-enum UpdateNoticeStatus {
-    case checking
-    case available(AvailableUpdate)
-    case message(title: String, detail: String)
-}
+/// Keep Sparkle's native UI, retaining only its public cancellation/reply
+/// callbacks. A dismissed install-on-quit is resumed through checkForUpdates
+/// before replying Skip; merely clearing our flag would leave it armed.
+@MainActor final class UpdateUserDriver: SPUStandardUserDriver {
+    var deferring = false
+    var resumingInstallation = false
+    var cancellation: (() -> Void)?
+    var didCancel: (() -> Void)?
+    var prepareInstallation: ((@escaping (Error?) -> Void) -> Void)?
+    private var generation = UUID()
 
-@MainActor final class UpdateNotice: ObservableObject {
-    @Published var status: UpdateNoticeStatus?
-    @Published private(set) var isChecking = false
-    private var checkedOnLaunch = false
-
-    func checkOnLaunchIfEnabled(_ enabled: Bool) {
-        guard enabled, !checkedOnLaunch else { return }
-        checkedOnLaunch = true
-        check(showAllResults: false)
+    private func choice(installing: Bool, reply: @escaping (SPUUserUpdateChoice) -> Void,
+                        present: (@escaping (SPUUserUpdateChoice) -> Void) -> Void) {
+        let token = UUID()
+        generation = token
+        let answer: (SPUUserUpdateChoice) -> Void = { [weak self] choice in
+            guard let self, self.generation == token else { return }
+            self.generation = UUID()
+            self.cancellation = nil
+            if choice == .skip { self.didCancel?() }
+            reply(choice)
+        }
+        cancellation = { answer(installing ? .skip : .dismiss) }
+        if deferring { cancellation?(); return }
+        present { [weak self] choice in
+            guard let self else { return }
+            if choice == .install, installing, let prepare = self.prepareInstallation {
+                // Do not ask Sparkle to terminate until replacement is safe.
+                prepare { error in
+                    if let error { NSLog("Pharos update deferred: %@", error.localizedDescription) }
+                    answer(error == nil ? .install : .skip)
+                }
+            } else { answer(choice) }
+        }
     }
 
-    func check(showAllResults: Bool = true) {
-        guard !isChecking else { return }
-        isChecking = true
-        if showAllResults { status = .checking }
-        let installedVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
-        Task {
-            defer { isChecking = false }
-            do {
-                switch try await UpdateChecker.check(installedVersion: installedVersion) {
-                case .available(let update): status = .available(update)
-                case .current:
-                    if showAllResults { status = .message(title: "Pharos is up to date", detail: "You have the latest published version (\(installedVersion)).") }
-                case .noPublishedRelease:
-                    if showAllResults { status = .message(title: "No release available", detail: "Pharos has no published release yet. Check again later.") }
-                }
-            } catch {
-                if showAllResults { status = .message(title: "Could not check for updates", detail: error.localizedDescription) }
+    override func showUpdateFound(with item: SUAppcastItem, state: SPUUserUpdateState,
+                                  reply: @escaping (SPUUserUpdateChoice) -> Void) {
+        choice(installing: state.stage == .installing, reply: reply) { response in
+            super.showUpdateFound(with: item, state: state, reply: response)
+        }
+    }
+
+    override func showReady(toInstallAndRelaunch reply: @escaping (SPUUserUpdateChoice) -> Void) {
+        choice(installing: true, reply: reply) { response in
+            super.showReady(toInstallAndRelaunch: response)
+        }
+    }
+
+    override func showUserInitiatedUpdateCheck(cancellation: @escaping () -> Void) {
+        if resumingInstallation {
+            self.cancellation = nil // Wait for the staged install's choice.
+            return
+        }
+        self.cancellation = cancellation
+        if deferring { cancellation(); return }
+        super.showUserInitiatedUpdateCheck(cancellation: cancellation)
+    }
+
+    override func showDownloadInitiated(cancellation: @escaping () -> Void) {
+        self.cancellation = cancellation
+        if deferring { cancellation(); return }
+        super.showDownloadInitiated(cancellation: cancellation)
+    }
+
+    override func showDownloadDidStartExtractingUpdate() {
+        cancellation = nil // Download cancellation is no longer valid.
+        super.showDownloadDidStartExtractingUpdate()
+    }
+
+    override func dismissUpdateInstallation() {
+        generation = UUID()
+        cancellation = nil
+        super.dismissUpdateInstallation()
+    }
+}
+
+/// Sparkle owns checking, downloading, signature verification, installation,
+/// settings persistence and native update UI. Pharos coordinates its processes.
+@MainActor final class UpdateNotice: NSObject, ObservableObject, SPUUpdaterDelegate {
+    @Published private(set) var canCheck = false
+    @Published private(set) var automaticChecks = false
+    @Published private(set) var automaticDownloads = false
+    private(set) var installationPending = false
+    private(set) var installationPrepared = false
+    private(set) var preparingInstallation = false
+    var prepareInstallation: ((@escaping (Error?) -> Void) -> Void)?
+    var cancelInstallationPreparation: (() -> Void)?
+    private var started = false
+    private var observations: [NSKeyValueObservation] = []
+    private var deferrals: [(Error?) -> Void] = []
+    private var cancellationSent = false
+    private var resuming = false
+    private var deferralID = UUID()
+    private var preparationWaiters: [() -> Void] = []
+    private let makeUpdater: @MainActor (UpdateUserDriver, SPUUpdaterDelegate) -> SPUUpdater
+
+    init(makeUpdater: (@MainActor (UpdateUserDriver, SPUUpdaterDelegate) -> SPUUpdater)? = nil) {
+        self.makeUpdater = makeUpdater ?? {
+            SPUUpdater(hostBundle: .main, applicationBundle: .main, userDriver: $0, delegate: $1)
+        }
+        super.init()
+    }
+    private lazy var driver: UpdateUserDriver = {
+        let driver = UpdateUserDriver(hostBundle: .main, delegate: nil)
+        driver.didCancel = { [weak self] in self?.cancellationSent = true }
+        driver.prepareInstallation = { [weak self] completion in
+            guard let self, let prepare = self.prepareInstallation else {
+                completion(UpdateFailure(message: "Pharos cannot prepare the update right now.")); return
             }
+            self.preparingInstallation = true
+            prepare { error in
+                self.preparingInstallation = false
+                self.installationPrepared = error == nil
+                completion(error)
+                let callbacks = self.preparationWaiters
+                self.preparationWaiters = []
+                callbacks.forEach { $0() }
+            }
+        }
+        return driver
+    }()
+    private lazy var updater = makeUpdater(driver, self)
+
+    func startIfReady(_ ready: Bool) {
+        guard ready, !started,
+              Bundle.main.object(forInfoDictionaryKey: "PharosUpdatesEnabled") as? Bool == true else { return }
+        started = true
+        UpdatePreferences.migrate(UserDefaults.standard)
+        let updater = self.updater
+        observations = [
+            updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
+                MainActor.assumeIsolated {
+                    self?.canCheck = updater.canCheckForUpdates
+                    DispatchQueue.main.async { self?.continueDeferral() }
+                }
+            },
+            updater.observe(\.automaticallyChecksForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
+                MainActor.assumeIsolated { self?.automaticChecks = updater.automaticallyChecksForUpdates }
+            },
+            updater.observe(\.automaticallyDownloadsUpdates, options: [.initial, .new]) { [weak self] updater, _ in
+                MainActor.assumeIsolated { self?.automaticDownloads = updater.automaticallyDownloadsUpdates }
+            },
+        ]
+        do { try updater.start() }
+        catch { NSLog("Could not start Pharos updates: %@", error.localizedDescription) }
+    }
+
+    func check() {
+        guard deferrals.isEmpty else { return }
+        driver.deferring = false
+        updater.checkForUpdates()
+    }
+    func setAutomaticChecks(_ enabled: Bool) { updater.automaticallyChecksForUpdates = enabled }
+    func setAutomaticDownloads(_ enabled: Bool) { updater.automaticallyDownloadsUpdates = enabled }
+
+    func resumeAfterFailedEject() {
+        if deferrals.isEmpty { driver.deferring = false }
+    }
+
+    func afterPreparation(_ completion: @escaping () -> Void) {
+        if preparingInstallation { preparationWaiters.append(completion) }
+        else { completion() }
+    }
+
+    func deferInstallation(completion: @escaping (Error?) -> Void) {
+        guard started || installationPending else { completion(nil); return }
+        driver.deferring = true
+        deferrals.append(completion)
+        let token = UUID()
+        deferralID = token
+        continueDeferral()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            guard let self, self.deferralID == token, !self.deferrals.isEmpty else { return }
+            self.finishDeferral(UpdateFailure(message: "Sparkle could not cancel its installation. Let the updater finish preparing, then try again."))
+        }
+    }
+
+    private func continueDeferral() {
+        guard !deferrals.isEmpty, !resuming else { return }
+        if let cancellation = driver.cancellation {
+            driver.cancellation = nil
+            cancellation()
+        } else if !updater.sessionInProgress {
+            if installationPending {
+                resuming = true
+                driver.resumingInstallation = true
+                // A silent staged installer has no UI callback. Resume it to
+                // obtain a public user-driver reply, then cancel with Skip.
+                updater.checkForUpdates()
+            } else { finishDeferral(nil) }
+        }
+    }
+
+    private func finishDeferral(_ error: Error?) {
+        let callbacks = deferrals
+        deferrals = []
+        resuming = false
+        driver.resumingInstallation = false
+        cancellationSent = false
+        if error != nil { driver.deferring = false }
+        callbacks.forEach { $0(error) }
+    }
+
+    func updater(_ updater: SPUUpdater, mayPerform updateCheck: SPUUpdateCheck) throws {
+        if resuming { return } // Only obtaining a cancellation reply, not installing.
+        if driver.deferring {
+            throw UpdateFailure(message: "Pharos is closing or ejecting its library.")
+        }
+        try Self.validateInstallation()
+    }
+
+    static func validateInstallation(app: URL = Bundle.main.bundleURL) throws {
+        let values = try app.resourceValues(forKeys: [.volumeIsReadOnlyKey, .volumeIsLocalKey])
+        guard values.volumeIsReadOnly != true, values.volumeIsLocal == true,
+              !canonicalPath(app).contains("/AppTranslocation/") else {
+            throw UpdateFailure(message: "Copy Pharos.app out of its disk image into Applications or a folder on a local APFS drive, then check for updates from that copy.")
+        }
+        var info = statfs()
+        guard statfs(app.path, &info) == 0 else {
+            throw UpdateFailure(message: "Pharos's installation drive is unavailable. Reconnect it before updating.")
+        }
+        let filesystem = withUnsafePointer(to: &info.f_fstypename) {
+            $0.withMemoryRebound(to: CChar.self, capacity: Int(MFSTYPENAMELEN)) { String(cString: $0) }
+        }
+        guard filesystem == "apfs" || filesystem == "hfs" else {
+            throw UpdateFailure(message: "Install Pharos.app on a local APFS or Mac OS Extended volume before updating. This drive cannot safely preserve the app's frameworks and permissions.")
+        }
+    }
+
+    func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) { installationPending = true }
+    func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem,
+                 immediateInstallationBlock immediateInstallHandler: @escaping () -> Void) -> Bool {
+        installationPending = true
+        return false // Keep Sparkle's scheduler and gentle reminders running.
+    }
+    func updater(_ updater: SPUUpdater, userDidMake choice: SPUUserUpdateChoice,
+                 forUpdate item: SUAppcastItem, state: SPUUserUpdateState) {
+        userDidChooseUpdate(choice)
+    }
+
+    func userDidChooseUpdate(_ choice: SPUUserUpdateChoice) {
+        // Skip cancels even a staged installer without reporting an error.
+        // Dismiss keeps installation on quit, so it must preserve this flag.
+        if choice == .skip { installationPending = false }
+    }
+    func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
+        recoverPreparedInstallation()
+        if !driver.deferring { installationPending = false }
+    }
+
+    private func recoverPreparedInstallation() {
+        guard installationPrepared else { return }
+        installationPrepared = false
+        installationPending = false
+        cancelInstallationPreparation?()
+    }
+
+    func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
+        // Sparkle can fail after our handoff but before terminating the app.
+        // Both callbacks may report the same failure; unwind the handoff once.
+        if error != nil || cancellationSent { recoverPreparedInstallation() }
+        resuming = false
+        driver.resumingInstallation = false
+        if cancellationSent {
+            installationPending = false
+            installationPrepared = false
+            cancellationSent = false
+        }
+        guard !deferrals.isEmpty else { return }
+        if let error, installationPending { finishDeferral(error) }
+        else { DispatchQueue.main.async { self.continueDeferral() } }
+    }
+}
+
+struct UpdateCommands: Commands {
+    @ObservedObject var updates: UpdateNotice
+    var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") { updates.check() }.disabled(!updates.canCheck)
+            Toggle("Automatically Check for Updates", isOn: Binding(get: { updates.automaticChecks }, set: updates.setAutomaticChecks))
+                .disabled(!updates.canCheck)
+            Toggle("Automatically Download and Install Updates", isOn: Binding(get: { updates.automaticDownloads }, set: updates.setAutomaticDownloads))
+                .disabled(!updates.canCheck || !updates.automaticChecks)
         }
     }
 }
 
-struct UpdateNoticeSheet: View {
-    @ObservedObject var notice: UpdateNotice
+/// All quit paths, including Sparkle's install-on-quit, pass through this
+/// asynchronous gate. A relaunch-only Sparkle hook would miss ordinary quits.
+@MainActor final class PharosDelegate: NSObject, NSApplicationDelegate {
+    let service = ArchiveService()
+    let updates = UpdateNotice()
+    private var terminating = false
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            switch notice.status {
-            case .checking:
-                Text("Checking for updates…").font(.title2.weight(.semibold))
-                ProgressView()
-            case .available(let update):
-                Text("Pharos \(update.version) is available").font(.title2.weight(.semibold))
-                Text("Download the disk image, quit Pharos, and drag its app to the location of your original installation. The disk image shows the steps.")
-                if !update.notes.isEmpty {
-                    Text("Release notes").font(.headline)
-                    ScrollView {
-                        Text(update.notes).textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxHeight: 180)
-                }
-                HStack {
-                    Spacer()
-                    Button("Later") { notice.status = nil }
-                    Button("Download Disk Image") {
-                        if NSWorkspace.shared.open(update.downloadURL) {
-                            notice.status = nil
-                        } else {
-                            notice.status = .message(title: "Could not open the download", detail: "Open the Pharos GitHub Releases page in your browser and download version \(update.version).")
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
-            case .message(let title, let detail):
-                Text(title).font(.title2.weight(.semibold))
-                Text(detail).textSelection(.enabled)
-                HStack {
-                    Spacer()
-                    Button("OK") { notice.status = nil }
-                        .keyboardShortcut(.defaultAction)
-                }
-            case nil:
-                EmptyView()
+    override init() {
+        super.init()
+        service.deferUpdate = { [weak updates] completion in
+            guard let updates else { completion(nil); return }
+            updates.deferInstallation(completion: completion)
+        }
+        service.resumeUpdates = { [weak updates] in updates?.resumeAfterFailedEject() }
+        updates.prepareInstallation = { [weak service] completion in
+            guard let service else { completion(UpdateFailure(message: "Pharos is closing.")); return }
+            service.prepareToTerminate(installing: true, completion: completion)
+        }
+        updates.cancelInstallationPreparation = { [weak service] in service?.cancelUpdatePreparation() }
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if service.ejecting || updates.installationPrepared { return .terminateNow }
+        guard !terminating else { return .terminateLater }
+        terminating = true
+        if updates.preparingInstallation {
+            updates.afterPreparation { [weak self] in
+                guard let self else { return }
+                if self.updates.installationPrepared {
+                    self.terminating = false
+                    sender.reply(toApplicationShouldTerminate: true)
+                } else { self.finishOrdinaryQuit(sender) }
+            }
+            return .terminateLater
+        }
+        let installing = updates.installationPending
+        // A failed installation handoff cancels Sparkle before falling back to
+        // ordinary Quit. In particular, a writer must not veto logout/restart.
+        if !installing {
+            finishOrdinaryQuit(sender)
+            return .terminateLater
+        }
+        do { try UpdateNotice.validateInstallation() }
+        catch { finishOrdinaryQuit(sender); return .terminateLater }
+        service.prepareToTerminate(installing: installing) { [weak self] error in
+            guard let self else { return }
+            if error != nil { self.finishOrdinaryQuit(sender) }
+            else {
+                self.terminating = false
+                sender.reply(toApplicationShouldTerminate: true)
             }
         }
-        .padding(24)
-        .frame(width: 520)
+        return .terminateLater
+    }
+
+    private func finishOrdinaryQuit(_ sender: NSApplication) {
+        updates.deferInstallation { [weak self] error in
+            guard let self else { return }
+            if let error {
+                self.terminating = false
+                sender.reply(toApplicationShouldTerminate: false)
+                self.showFailure(error)
+                return
+            }
+            self.service.prepareToTerminate(installing: false) { _ in
+                self.terminating = false
+                sender.reply(toApplicationShouldTerminate: true)
+            }
+        }
+    }
+
+    private func showFailure(_ error: Error) {
+        let alert = NSAlert()
+        alert.messageText = "Pharos is still in use"
+        alert.informativeText = error.localizedDescription
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 }

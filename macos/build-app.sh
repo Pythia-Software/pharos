@@ -11,8 +11,12 @@
 #   PHAROS_VERSION            Numeric major.minor.patch bundle version. Default: 0.2.0.
 #   PHAROS_CODESIGN_TIMESTAMP Set to 1 for a secure signing timestamp (required
 #                             for Developer ID notarization). Default: 0.
+#   PHAROS_ENABLE_UPDATES     Set to 1 only for Developer ID releases. Default: 0.
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+if [ "${PHAROS_ENABLE_UPDATES:-0}" = 1 ]; then
+    python3 "$ROOT/macos/release_support.py"
+fi
 OUT=${1:-"$ROOT/dist"}
 APP="$OUT/Pharos.app"
 BUNDLE_ID=local.pharos
@@ -42,6 +46,10 @@ for name in schema.sql ui.py; do
 done
 # Reinstall pinned packages and build the ignored frontend before embedding it.
 "$ROOT/tools/setup.sh"
+SPARKLE=$("$ROOT/macos/fetch-sparkle.sh")
+mkdir -p "$APP/Contents/Frameworks"
+rm -rf "$APP/Contents/Frameworks/Sparkle.framework"
+ditto "$SPARKLE/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
 
 if [ "${PHAROS_UNIVERSAL:-0}" = 1 ]; then
     GOARCHES="arm64 amd64"
@@ -62,10 +70,11 @@ for goarch in $GOARCHES; do
     (cd "$ROOT" && GOOS=darwin GOARCH="$goarch" CGO_ENABLED="$CGO" go build -o "$WORK/pharos-$arch" ./cmd/pharos)
     echo "Building the Swift wrapper ($arch)…"
     swiftc -parse-as-library -target "$arch-apple-macos$MACOS_MIN" -framework SwiftUI -framework WebKit \
-        -framework DiskArbitration -framework Security \
+        -framework DiskArbitration -framework Security -F "$SPARKLE" -framework Sparkle \
+        -Xlinker -rpath -Xlinker '@executable_path/../Frameworks' \
         "$ROOT/macos/PharosApp.swift" "$ROOT/macos/LibraryVolume.swift" "$ROOT/macos/Launch.swift" \
         "$ROOT/macos/MenuBar.swift" \
-        "$ROOT/macos/UpdateChecker.swift" "$ROOT/macos/UpdateNotice.swift" \
+        "$ROOT/macos/UpdateLifecycle.swift" "$ROOT/macos/UpdateNotice.swift" \
         -o "$WORK/PharosApp-$arch"
 done
 for name in pharos PharosApp; do
@@ -78,10 +87,14 @@ for name in pharos PharosApp; do
     else
         cp "$WORK/$name-$arch" "$target"
     fi
-    if ! lipo "$target" -verify_arch $ARCHS; then
-        echo "$target does not contain:$ARCHS" >&2
-        exit 1
-    fi
+    # Verify slices individually: some lipo versions reject multiple arches
+    # as multiple input files despite advertising a variadic -verify_arch.
+    for expected_arch in $ARCHS; do
+        if ! lipo "$target" -verify_arch "$expected_arch"; then
+            echo "$target does not contain: $expected_arch" >&2
+            exit 1
+        fi
+    done
     lipo -info "$target"
 done
 
@@ -91,6 +104,7 @@ cp "$ROOT/macos/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
 mkdir -p "$APP/Contents/Resources/licenses"
 cp "$ROOT/internal/querytable/LICENSE" "$APP/Contents/Resources/licenses/query-table-LICENSE"
+cp "$SPARKLE/LICENSE" "$APP/Contents/Resources/licenses/Sparkle-LICENSE"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -106,6 +120,30 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>LSMinimumSystemVersion</key><string>$MACOS_MIN</string>
 </dict></plist>
 PLIST
+python3 - "$APP/Contents/Info.plist" "$ROOT/macos/sparkle.json" "${PHAROS_ENABLE_UPDATES:-0}" <<'PY'
+import base64, json, plistlib, sys
+path, config_path, enabled = sys.argv[1:]
+if enabled not in ('0', '1'):
+    raise SystemExit('PHAROS_ENABLE_UPDATES must be 0 or 1')
+config = json.load(open(config_path))
+public_key = config.get('public_key')
+if public_key is not None and len(base64.b64decode(public_key, validate=True)) != 32:
+    raise SystemExit('Invalid Sparkle public key')
+if enabled == '1' and public_key is None:
+    raise SystemExit('Configure the update public key on the deployment Mac first')
+with open(path, 'rb') as source:
+    info = plistlib.load(source)
+info.update(SUFeedURL=config['feed_url'],
+            SUVerifyUpdateBeforeExtraction=True, SURequireSignedFeed=True,
+            SUAutomaticallyUpdate=False, SUEnableSystemProfiling=False,
+            PharosUpdatesEnabled=enabled == '1')
+if public_key is not None:
+    info['SUPublicEDKey'] = public_key
+if enabled == '0':
+    info['SUEnableAutomaticChecks'] = False
+with open(path, 'wb') as target:
+    plistlib.dump(info, target)
+PY
 
 # macOS privacy grants (TCC), such as access to files on a removable volume,
 # are keyed on the app's designated requirement. With a keychain identity that
@@ -133,8 +171,39 @@ if [ "${PHAROS_HARDENED_RUNTIME:-1}" != 0 ]; then
     set -- "$@" --options runtime
 fi
 # Sign nested code first; the bundle seal records its signature.
+FRAMEWORK="$APP/Contents/Frameworks/Sparkle.framework"
+for binary in "Versions/B/Sparkle" "Versions/B/Autoupdate" \
+    "Versions/B/Updater.app/Contents/MacOS/Updater" \
+    "Versions/B/XPCServices/Downloader.xpc/Contents/MacOS/Downloader" \
+    "Versions/B/XPCServices/Installer.xpc/Contents/MacOS/Installer"; do
+    for expected_arch in $ARCHS; do
+        lipo "$FRAMEWORK/$binary" -verify_arch "$expected_arch"
+    done
+done
+for code in "Versions/B/Autoupdate" "Versions/B/Updater.app" \
+    "Versions/B/XPCServices/Downloader.xpc" "Versions/B/XPCServices/Installer.xpc"; do
+    codesign "$@" --preserve-metadata=entitlements "$FRAMEWORK/$code"
+done
+codesign "$@" "$FRAMEWORK"
 codesign "$@" --identifier "$SERVICE_ID" "$APP/Contents/MacOS/pharos"
+if [ "${PHAROS_HARDENED_RUNTIME:-1}" != 0 ] && \
+    ! codesign -dvv "$APP/Contents/MacOS/pharos" 2>&1 | grep -Eq '^Authority=(Apple Development|Developer ID Application):'; then
+    # Ad hoc and self-signed development builds cannot pass library validation.
+    # Developer ID and Apple Development builds retain full library validation.
+    cat > "$WORK/debug.entitlements" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>
+<key>com.apple.security.cs.disable-library-validation</key><true/>
+</dict></plist>
+PLIST
+    set -- "$@" --entitlements "$WORK/debug.entitlements"
+fi
 codesign "$@" --identifier "$BUNDLE_ID" "$APP"
+if [ "${PHAROS_ENABLE_UPDATES:-0}" = 1 ]; then
+    if ! codesign -dvv "$APP" 2>&1 | grep -q 'Authority=Developer ID Application:'; then
+        echo "Only Developer ID signed builds may enable production updates." >&2
+        exit 1
+    fi
+fi
 if ! codesign --verify --strict --deep --verbose=2 "$APP"; then
     echo "Code signature verification failed for $APP" >&2
     exit 1

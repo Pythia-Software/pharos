@@ -292,10 +292,16 @@ embedded service (`local.pharos.service`), then the bundle
 | `PHAROS_UNIVERSAL=1` | Build arm64 and x86_64 slices with `lipo` instead of the native architecture only. |
 | `PHAROS_VERSION` | Set both bundle version fields to a numeric `major.minor.patch`; defaults to `0.2.0` for local builds. |
 | `PHAROS_CODESIGN_TIMESTAMP=1` | Request a secure signing timestamp, required for Developer ID notarization. |
+| `PHAROS_ENABLE_UPDATES=1` | Enable Sparkle production updates; requires Developer ID signing. Set by the release script, disabled for local builds. |
 
-The local [release workflow and in-app update check](releases-and-updates.md)
-use these settings to publish ad hoc signed versioned GitHub releases by
-default, with optional Developer ID signing and notarization.
+The local [release workflow and in-app updates](releases-and-updates.md)
+use these settings to publish Developer ID signed, notarized GitHub releases
+and a signed Sparkle appcast, exclusively on the configured deployment Mac.
+Development builds/tests use no release private keys or Keychain access.
+Ad hoc releases are explicit and never enter the
+production update feed. Sparkle is embedded in the Swift wrapper; the Go CLI
+holds a shared per-install lease so app replacement waits for all users of
+the old executable to stop.
 
 A stable identity matters when Pharos runs from an external drive. macOS asks
 before an app reads files on a removable volume and records the answer against

@@ -5,7 +5,8 @@
 Pharos releases are built locally. GitHub Actions is not involved. A release
 contains a universal macOS app (arm64 and x86_64) in a Finder disk image,
 `vX.Y.Z-Pharos-macos-universal.dmg`, whose volume is named `vX.Y.Z Pharos`,
-plus a matching `.sha256` file. The tag, GitHub release, and both bundle
+plus a matching `.sha256` file and signed-update metadata (`update.json`).
+The tag, GitHub release, and both bundle
 version fields use the same `X.Y.Z` version.
 
 ### Quick release (default)
@@ -45,8 +46,10 @@ has requested the release.
 
 ### Signing and packaging details
 
-The default is an ad hoc signed release.
-GitHub will host it, but it cannot be notarized. macOS may block the downloaded
+The default is a Developer ID signed and notarized release.
+
+Use `macos/release.sh X.Y.Z --adhoc` to explicitly publish an ad hoc signed release.
+GitHub will host an ad hoc release, but it cannot be notarized. macOS may block the downloaded
 app on first launch. A user who trusts the download can try opening it, then
 choose **System Settings → Privacy & Security → Open Anyway**. See
 [Apple's instructions](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac).
@@ -61,18 +64,29 @@ Apple's [Developer ID](https://developer.apple.com/developer-id/) and
 guides. Run `xcrun notarytool store-credentials pharos` to create the keychain
 profile.
 
-For a Developer ID release:
+For a Developer ID release, the script defaults to the signing identity
+`Developer ID Application: Pythia Software LLC` and the `pharos` notarytool
+keychain profile:
 
 ```sh
-export PHAROS_CODESIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)'
-export PHAROS_NOTARY_PROFILE=pharos
-macos/release.sh 0.7.1 --developer-id
+macos/release.sh 0.7.1
 ```
+
+Override `PHAROS_CODESIGN_IDENTITY` and `PHAROS_NOTARY_PROFILE` when using a
+different certificate or keychain profile. The default identity is a
+certificate-name prefix; if multiple certificates match, set the identity to
+the intended certificate's SHA-1 fingerprint. Private keys and notarization
+credentials stay in Keychain.
+
+Releases select the macOS 26.5 SDK by default: the standalone macOS 27
+Command Line Tools SDK references a SwiftUI macro plugin not included with
+those tools. Set `SDKROOT` explicitly to use another compatible SDK.
 
 The script fetches `origin/master`, refuses a dirty or different checkout and
 an existing tag, builds and verifies the app, then creates an annotated tag
-and publishes a GitHub release. The Developer ID path also notarizes and
-staples both the app and the final disk image. It keeps the disk image and
+and publishes a GitHub release. The Developer ID path also signs the final
+disk image, notarizes and staples both app and image, signs the final image
+with Sparkle, verifies the uploaded bytes, and publishes the signed appcast last. It keeps the disk image and
 checksum under `dist/releases/vX.Y.Z/`. If publication fails after the tag is
 pushed, inspect the tag and draft release before retrying; never replace the
 asset of a published version. The disk image's Finder layout is written by
@@ -112,22 +126,221 @@ reconnect Pharos in each client. The source checkout's
 `macos/install-library.sh` remains useful for development builds and adoption
 from a per-user install.
 
-## In-app update checks
+## In-app updates
 
-The Pharos menu has **Check for Updates…** and an optional **Check for Updates
-on Launch** setting. Checks contact GitHub's latest published release endpoint
-for `Pythia-Software/pharos`, compare numeric version components against the running
-bundle, and require the matching versioned DMG asset. The app shows release
-notes and a **Download Disk Image** button, which opens that asset in the
-default browser. The browser downloads the image; Finder and the user handle
-installation. Checks on launch show a notice only when a newer release exists.
-Nothing is downloaded in the background without a user action.
+Developer ID releases embed pinned [Sparkle 2](https://sparkle-project.org/).
+**Check for Updates…** uses Sparkle's native release notes, download progress,
+verification, installation and relaunch UI. The same signed, notarized DMG is
+used for first installs and updates. No browser or Finder replacement is
+required after installing the first Sparkle-enabled release. v0.7.1 and older
+still need one final manual replacement to obtain the updater.
 
-The app in a portable library is the `Pharos.app` beside `library.toml`, and
-it runs from there; replace that copy when updating. An ad hoc signature
-changes with each build, so macOS may ask for access to the library drive
-again. Developer ID signing and notarization improve that experience, but are
-optional in the current release script.
+**Automatically Check for Updates** uses Sparkle's daily schedule. An explicit
+choice from the old **Check for Updates on Launch** setting is migrated once;
+otherwise Sparkle asks permission on its second launch, after onboarding.
+**Automatically Download and Install Updates** is a separate opt-in, initially
+off. Sparkle can then download and verify silently and install on quit; a
+long-running app receives its standard gentle reminders. System profiling and
+release-note JavaScript stay off. Ad hoc/local builds disable production checks.
+
+### Signing keys and dependency
+
+`macos/sparkle.json` pins the upstream framework version and archive SHA-256,
+the stable feed URL, the public Ed25519 key, and the Keychain account `pharos`.
+`macos/fetch-sparkle.sh` verifies the upstream archive and extracts it into
+ignored `build/`. Framework helpers are signed inside-out before the outer app;
+Developer ID releases retain hardened runtime and library validation. Ad hoc
+and self-signed local builds use a development-only library-validation exception.
+Generated framework binaries must not be committed.
+
+### Separate development and deployment Macs
+
+Development Macs build and test without either release private key. Production
+signing, notarization, update-feed signing and publication run only on the clean
+deployment Mac. Apple's Developer ID key and Sparkle's Ed25519 key authorize
+different parts of the update chain, and both stay on that deployment Mac.
+The repository and development Macs receive only Sparkle's public key.
+
+Before the first updater-enabled release, run this **on the deployment Mac**:
+
+```sh
+python3 macos/setup-release-machine.py --enable
+```
+
+This explicit setup generates the Sparkle key there if `public_key` in
+`macos/sparkle.json` is still null. It writes only the public key to that file,
+and a local opt-in under
+`~/Library/Application Support/Pharos Release/release-machine.json`. Commit the
+public configuration and bring that commit back to development; private key
+material and the machine opt-in never enter the repository. Merge the public
+configuration to master before using the ordinary quick-release workflow.
+Apple's Developer ID certificate and `notarytool` profile are configured only
+on the deployment Mac using the existing signing setup above.
+
+Until this deployment setup is complete, local builds still work with updates
+disabled. Production builds and release/feed commands fail before accessing
+Keychain. `macos/release.sh X.Y.Z` stays the normal release command on the
+deployment Mac; no additional opt-in is needed for each release. The local
+marker prevents accidental commands and prompts, while keeping private keys
+off development Macs supplies the security boundary.
+
+The private update key appears as **Private key for signing Sparkle updates**,
+account **pharos**, in the deployment Mac's login Keychain. The release script
+verifies that it matches the committed public key before building. It never
+prints or exports the private key. Back it up securely on the deployment side
+before the first updater-enabled release. Do not transfer that private key to
+a development Mac. When replacing a deployment Mac, use Sparkle's secure
+export/import workflow between deployment machines only.
+
+Local tests use disposable in-memory test keys and public signed fixtures.
+`macos/verify-update.sh PUBLIC_KEY FILE [SIGNATURE]` verifies with CryptoKit and
+never calls Keychain or `sign_update`. Even on the deployment Mac, verification
+uses the public key; only signing reads the private key.
+
+Do not replace the public key for an existing installed population. See
+Sparkle's [key rotation guidance](https://sparkle-project.org/documentation/#rotating-signing-keys):
+rotate only one trust anchor at a time. Our Developer ID-signed DMGs preserve
+its recovery route when Ed25519 verification before extraction is enabled.
+
+### Feed publishing, recovery and withdrawal
+
+The stable feed is:
+
+`https://github.com/Pythia-Software/pharos/releases/download/update-feed/appcast.xml`
+
+It lives on a dedicated **prerelease** called `update-feed`, which is excluded
+from GitHub's latest stable app release. No GitHub Pages or custom-domain setup
+is required. Both the appcast and its embedded notes are signed; the app also
+requires the archive's Ed25519 signature before extraction. Only published,
+Developer ID-signed, stapled stable releases enter this feed.
+
+The normal `macos/release.sh X.Y.Z` command performs all steps. It verifies or
+bootstraps an empty signed feed, builds and notarizes, creates a draft release,
+signs the final stapled DMG, uploads immutable `update.json`, publishes the
+release, downloads and checks the public artifact, then signs and replaces the
+feed. The archive signature covers the exact final bytes, including stapling.
+`CFBundleVersion` and the appcast's machine version remain the same monotonic
+`X.Y.Z` value; macOS compatibility is declared separately in the feed.
+The feed's minimum macOS version is read from `LSMinimumSystemVersion` in the
+app inside the final DMG and checked again against the downloaded artifact.
+
+On the deployment Mac, the feed can also be initialized before the first release:
+
+```sh
+python3 macos/update-feed.py bootstrap
+```
+
+If a release was published but feed publication failed, leave the tag and assets
+alone and resume just the final step:
+
+```sh
+python3 macos/update-feed.py publish X.Y.Z --directory dist/releases/vX.Y.Z
+```
+
+This downloads the published DMG and metadata, verifies size, SHA-256, Ed25519,
+Developer ID signature and notarization ticket, and verifies the previous signed
+feed before adding an item. Repeating an already advertised identical version
+is a no-op. If the failure occurred while the release was still a draft, inspect
+its assets first: `prepare X.Y.Z --directory ...` creates `update.json` only if
+it does not already exist; upload that file without `--clobber`, then publish
+the draft and run `publish`. Never rebuild/re-upload an existing app version.
+
+To stop offering a bad update without deleting its immutable release artifacts:
+
+```sh
+python3 macos/update-feed.py withdraw X.Y.Z
+```
+
+Withdrawal cannot recall downloads that have already been staged for
+installation or cryptographically revoke an authentic archive. Sparkle 2.10
+uses a safe fallback when feed signature validation fails: it suppresses release
+notes, links and some metadata, but can still offer a correctly signed archive.
+Archive Ed25519 verification and Apple code signing protect the installed code;
+feed signing alone does not prevent a compromised feed host from replaying a
+withdrawn, previously signed release. Recover affected users with a
+higher-version corrective release.
+Executable rollback is not a database rollback: an older app deliberately
+refuses a newer catalog schema. Back up libraries before incompatible schema
+upgrades and retain the existing schema guard.
+
+Feed publication is serialized on one release checkout. Coordinate publishers
+across different Macs/checkouts: GitHub has no conditional/atomic asset
+replacement API. `--clobber` can briefly make the feed unavailable; Sparkle fails
+to check during that gap and the installed app keeps working. Publication downloads the asset
+again and compares exact bytes before reporting success. If replacement leaves
+no feed, restore the already signed `dist/releases/vX.Y.Z/appcast.xml` to the
+`update-feed` release and verify readback; do not re-sign unknown remote content.
+
+### Shutdown and portable libraries
+
+Every application termination passes an asynchronous catalog-close gate,
+including ordinary quit and Sparkle installation on quit. Installation marks the
+app pending, refuses new bundled CLI/MCP launches, lets the service finish its
+writes, stops its MCP connections, and takes an exclusive lease only after old
+processes exit. Another CLI command or another app instance defers installation;
+it is never force-killed for an update. Before an explicit Install and Relaunch,
+Pharos performs this preparation through Sparkle's public user-driver callbacks.
+If an install-on-quit handoff is unsafe, Pharos resumes the staged installer and
+cancels it through the public Skip reply before allowing ordinary Quit. Ordinary
+Quit sends SIGTERM to its owned service, which can finish closing independently;
+a busy catalog does not veto logout or restart. Agent clients may need to reconnect.
+If Sparkle reports an installation failure after preparation, Pharos releases the
+handoff marker and lease immediately and clears its shutdown state. A stopped
+service shows instructions to reopen the app; the same version can reopen and
+CLI/MCP can reconnect without waiting for stale-marker recovery.
+
+The per-install lease and handoff marker live in this Mac's Application Support
+`Pharos/updates/`, keyed by the canonical app path. They survive the old app's
+exit, preventing reconnects in the replacement gap. The new app or a bundled
+CLI/MCP launch recognizes a changed installed version after acquiring its lease;
+CLI/MCP do not require a GUI relaunch after installation on quit. PID recovery
+checks the executable path and process start time to distinguish reused PIDs. A
+failed handoff to the same old version is recoverable after five minutes once
+the original updater is gone and no CLI lease remains. State does not travel
+with the library; installs at different paths have separate locks.
+
+Sparkle replaces only the running app bundle, in Applications or beside
+`library.toml`. Catalog, captures, configuration and preserved files remain
+outside it. Updates require a writable, local APFS or Mac OS Extended volume;
+read-only disk images, translocated apps, network volumes and FAT/exFAT installs
+receive an actionable error. Permissions for protected install locations are
+handled by Sparkle. Eject cancels any active download or staged installation
+through Sparkle before releasing the library and unmounting the portable drive.
+Sparkle may skip a staged version when cancellation uses its Skip reply; the user
+can offer it again with Check for Updates. If Sparkle cannot confirm cancellation,
+Pharos reports the failure and keeps the drive mounted.
+
+### Verifying an updater release
+
+Run the fast Go tier, Python tools tests and `macos/test/run-light.sh` after
+updater changes. These checks use no production private keys or Keychain access.
+The native light harness covers staged-update Skip versus Later, explicit
+installer/download cancellation, shutdown before the service listener opens,
+ordinary Quit with a busy/stubborn child, and readiness recovery after a deferred
+installation. It also covers installer failure after a successful handoff,
+immediate lease/marker cleanup and duplicate failure callbacks. It
+uses disposable child processes and stubbed HTTP, and fetches pinned Sparkle
+only when uncached. `macos/test/swift-harness.sh` tests the real Swift/Go lease
+handoff and MCP reconnect refusal on a throwaway APFS volume, as well as service
+release and eject. It never launches the GUI or touches a user's library.
+
+Before the first public updater release, perform a signed/notarized round trip
+on the release Mac. Use a separate checkout with a staging HTTPS feed URL in
+`macos/sparkle.json`, and two increasing test versions signed with the production
+trust anchors. Keep this test feed separate from the production `update-feed`;
+`sign_update` signs a manually generated staging appcast just as it signs the
+production feed. Install the older app in a throwaway portable library (unused
+port, never 8765/8766), and offer the newer DMG through that feed. Repeat on both
+supported CPU architectures and with the app installed in Applications.
+
+Check explicit Install and Relaunch and opt-in installation on ordinary quit;
+confirm the new version, a healthy service, catalog integrity, retained privacy
+grants, and unchanged sibling library files. Repeat with active indexing and
+MCP connections, a CLI writer, an unavailable network, a tampered archive/feed,
+insufficient disk space, a read-only installation, an external-drive disconnect,
+and another installed copy. Rejected/deferred updates must preserve the old app
+and library. A native build/signature check or lease harness alone is not this
+full signed installation test.
 
 ## Upgrading an existing library
 

@@ -41,7 +41,7 @@ func runningExecutables() -> [(pid: pid_t, path: String)] {
 
 /// Reads argv without flattening paths or arguments containing spaces. The
 /// kernel returns argc, the executable path, NUL padding, then argv strings.
-private func processArguments(_ pid: pid_t) -> [String]? {
+func processArguments(_ pid: pid_t) -> [String]? {
     var limit: Int32 = 0
     var size = MemoryLayout<Int32>.size
     var mib = [CTL_KERN, KERN_ARGMAX]
