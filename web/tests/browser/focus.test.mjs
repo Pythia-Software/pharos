@@ -7,6 +7,71 @@ import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { defaultApi, workID } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery } from "@pythia-software/query-table-core";
 
+test('Cloud backup setup focuses invalid fields and retains storage-class keyboard focus', {skip}, async t => {
+  const {page} = await open(t, {url:'/settings/backups',ready:'#cloud-explore'});
+  await page.getByRole('button',{name:'Explore cloud backup options',exact:true}).click();
+  await page.getByLabel('Cloud provider',{exact:true}).selectOption('gcp');
+  await page.getByRole('button',{name:'Configure this backup',exact:true}).click();
+  assert.ok(await page.locator('#cloud-step-1').evaluate(panel=>panel===document.activeElement));
+  await page.getByRole('button',{name:'Review configuration & commands',exact:true}).click();
+  assert.ok(await page.getByLabel('Google Cloud project ID',{exact:true}).evaluate(input=>input===document.activeElement));
+  await page.getByLabel('Google Cloud project ID',{exact:true}).fill('pharos-example');
+  const standard=page.getByLabel('Google Cloud Storage · Standard',{exact:true});
+  await standard.focus();
+  await page.keyboard.press('ArrowDown');
+  assert.ok(await page.getByLabel('Google Cloud Storage · Nearline',{exact:true}).evaluate(input=>input===document.activeElement));
+  await page.keyboard.press('ArrowDown');
+  assert.ok(await page.getByLabel('Google Cloud Storage · Coldline',{exact:true}).evaluate(input=>input===document.activeElement));
+  await page.getByLabel('Google Cloud project',{exact:true}).selectOption('new');
+  await page.getByRole('button',{name:'Review configuration & commands',exact:true}).click();
+  assert.ok(await page.getByLabel('Billing account ID',{exact:true}).evaluate(input=>input===document.activeElement));
+});
+
+test('Cloud backup price forecast supports keyboard exploration without losing focus', {skip}, async t => {
+  const {page}=await open(t,{url:'/settings/backups',ready:'#cloud-explore'});
+  await page.getByRole('button',{name:'Explore cloud backup options',exact:true}).click();
+  for(const chart of await page.locator('.cloud-results svg').all()){
+    await chart.focus();
+    const readout=chart.locator('..').locator('output'),first=await readout.textContent();
+    await page.keyboard.press('ArrowRight');
+    assert.ok(await chart.evaluate(input=>input===document.activeElement));
+    assert.notEqual(await readout.textContent(),first);
+    await page.keyboard.press('End');
+    assert.ok(await chart.evaluate(input=>input===document.activeElement));
+    await page.keyboard.press('Home');
+    assert.equal(await readout.textContent(),first);
+  }
+});
+
+test('Cloud backup password stages keep keyboard focus while copying each independent block', {skip}, async t => {
+  const {page}=await open(t,{url:'/settings/backups',ready:'#cloud-explore'});
+  await page.getByRole('button',{name:'Explore cloud backup options',exact:true}).click();
+  await page.getByRole('button',{name:'Configure this backup',exact:true}).click();
+  await page.getByLabel('Google Cloud project ID',{exact:true}).fill('pharos-example');
+  await page.getByLabel('Require a password to restore',{exact:true}).selectOption('true');
+  await page.getByRole('button',{name:'Review configuration & commands',exact:true}).click();
+  await page.evaluate(()=>{window.cloudCopies=0;Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async()=>{window.cloudCopies++;}}});});
+  for(const [index,label]of ['Copy preparation commands','Copy password setup command','Copy final commands'].entries()){
+    const button=page.getByRole('button',{name:label,exact:true});await button.focus();await page.keyboard.press('Enter');
+    await page.waitForFunction(count=>window.cloudCopies===count,index+1);
+    assert.ok(await button.evaluate(element=>element===document.activeElement));
+  }
+});
+
+test('Cloud backup wizard focuses the calculator after Reset and returns to Explore when closed', {skip}, async t => {
+  const {page}=await open(t,{url:'/settings/backups',ready:'#cloud-explore'});
+  const explore=page.getByRole('button',{name:'Explore cloud backup options',exact:true});
+  await explore.click();
+  await page.getByRole('button',{name:'Configure this backup',exact:true}).click();
+  await page.getByRole('button',{name:'Review configuration & commands',exact:true}).click();
+  await page.getByRole('button',{name:'Reset cloud backup options',exact:true}).click();
+  assert.ok(await page.locator('#cloud-step-0').evaluate(panel=>panel===document.activeElement));
+  await page.keyboard.press('Tab');
+  assert.ok(await page.getByLabel('Cloud provider',{exact:true}).evaluate(input=>input===document.activeElement));
+  await page.getByRole('button',{name:'Close cloud backup options',exact:true}).click();
+  assert.ok(await explore.evaluate(input=>input===document.activeElement));
+});
+
 for (const mode of ['drive', 'activity']) test(`Activity ${mode} refresh preserves scrolling, focus and animation phase`, {skip}, async t => {
   const main = {id: 'refreshing-index', kind: 'sync', label: 'Capture & index', stoppable: true,
     started_at: new Date(Date.now() - 120_000).toISOString(),

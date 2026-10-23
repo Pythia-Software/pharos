@@ -7,6 +7,28 @@ CREATE TABLE IF NOT EXISTS meta (
   value TEXT NOT NULL
 );
 
+-- Daily logical library sizes for a rolling, linear cloud-backup forecast.
+CREATE TABLE IF NOT EXISTS library_size_history (
+  day TEXT PRIMARY KEY,
+  measured_at TEXT NOT NULL,
+  bytes INTEGER NOT NULL CHECK (bytes > 0)
+);
+
+-- Restricted upload credentials stay in the catalog, never UI preferences.
+CREATE TABLE IF NOT EXISTS cloud_destinations (
+  id TEXT PRIMARY KEY, config_json TEXT NOT NULL, credential_json TEXT NOT NULL,
+  recovery_json TEXT NOT NULL DEFAULT '', imported_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS cloud_backup_runs (
+  id TEXT PRIMARY KEY, destination_id TEXT NOT NULL REFERENCES cloud_destinations(id),
+  status_json TEXT NOT NULL, manifest_json TEXT, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS cloud_runs_destination ON cloud_backup_runs(destination_id,created_at);
+CREATE TABLE IF NOT EXISTS cloud_backup_schedules (
+  destination_id TEXT PRIMARY KEY REFERENCES cloud_destinations(id),
+  state_json TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS sync_generations (
   host_id TEXT NOT NULL, source_name TEXT NOT NULL, generation INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY(host_id,source_name)
