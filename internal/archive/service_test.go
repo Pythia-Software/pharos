@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -231,10 +232,19 @@ func TestAuthCookieIsPerPort(t *testing.T) {
 	config.Port = 8766
 	server := testServer(t, config, catalog)
 	login := httptest.NewRecorder()
-	server.ServeHTTP(login, httptest.NewRequest(http.MethodGet, "/?token=test-token", nil))
+	server.ServeHTTP(login, httptest.NewRequest(http.MethodGet, "/?token=test-token&ask_chat=saved-chat&range=last+week", nil))
 	cookies := login.Result().Cookies()
 	if len(cookies) != 1 || cookies[0].Name != "pharos_token_8766" {
 		t.Fatalf("login cookies %v", cookies)
+	}
+	destination, err := url.Parse(login.Header().Get("Location"))
+	if err != nil || login.Code != http.StatusSeeOther || destination.Path != "/" || destination.Query().Get("ask_chat") != "saved-chat" || destination.Query().Get("range") != "last week" || destination.Query().Has("token") {
+		t.Fatalf("login lost the chat or filters, or retained the token: %s", login.Header().Get("Location"))
+	}
+	plainLogin := httptest.NewRecorder()
+	server.ServeHTTP(plainLogin, httptest.NewRequest(http.MethodGet, "/?token=test-token", nil))
+	if plainLogin.Header().Get("Location") != "/" {
+		t.Fatalf("plain login: %s", plainLogin.Header().Get("Location"))
 	}
 	check := func(server *Server, name string, want int) {
 		t.Helper()

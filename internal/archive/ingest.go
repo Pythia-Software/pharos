@@ -602,6 +602,24 @@ func ingestCopy(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host,
 }
 
 func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, host, source string, fromCapture, force bool, repositoryOptions ...repositoryOptions) (int, int, error) {
+	// Native Ask Pharos transcripts contain private lookup context. Only the
+	// separately stored user-visible chat is indexed, never the agent protocol.
+	if len(record.Conversations) > 0 {
+		kept := make([]ConversationRecord, 0, len(record.Conversations))
+		for _, conversation := range record.Conversations {
+			var excluded int
+			if err := tx.QueryRow("SELECT COUNT(*) FROM ask_native_sessions WHERE provider=? AND native_id=?", conversation.Provider, conversation.NativeID).Scan(&excluded); err != nil {
+				return 0, 0, err
+			}
+			if excluded == 0 {
+				kept = append(kept, conversation)
+			}
+		}
+		if len(kept) == 0 {
+			return 0, 0, nil
+		}
+		record.Conversations = kept
+	}
 	record = canonicalRecordTimes(record)
 	prepareRecordAccounting(&record)
 	workspaceID, err := storedWorkspaceID(tx, record)
