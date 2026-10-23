@@ -45,8 +45,10 @@ has requested the release.
 
 ### Signing and packaging details
 
-The default is an ad hoc signed release.
-GitHub will host it, but it cannot be notarized. macOS may block the downloaded
+The default is a Developer ID signed and notarized release.
+
+Use `macos/release.sh X.Y.Z --adhoc` to explicitly publish an ad hoc signed release.
+GitHub will host an ad hoc release, but it cannot be notarized. macOS may block the downloaded
 app on first launch. A user who trusts the download can try opening it, then
 choose **System Settings → Privacy & Security → Open Anyway**. See
 [Apple's instructions](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac).
@@ -61,13 +63,19 @@ Apple's [Developer ID](https://developer.apple.com/developer-id/) and
 guides. Run `xcrun notarytool store-credentials pharos` to create the keychain
 profile.
 
-For a Developer ID release:
+For a Developer ID release, the script defaults to the signing identity
+`Developer ID Application: Pythia Software LLC` and the `pharos` notarytool
+keychain profile:
 
 ```sh
-export PHAROS_CODESIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)'
-export PHAROS_NOTARY_PROFILE=pharos
-macos/release.sh 0.7.1 --developer-id
+macos/release.sh 0.7.1
 ```
+
+Override `PHAROS_CODESIGN_IDENTITY` and `PHAROS_NOTARY_PROFILE` when using a
+different certificate or keychain profile. The default identity is a
+certificate-name prefix; if multiple certificates match, set the identity to
+the intended certificate's SHA-1 fingerprint. Private keys and notarization
+credentials stay in Keychain.
 
 The script fetches `origin/master`, refuses a dirty or different checkout and
 an existing tag, builds and verifies the app, then creates an annotated tag
@@ -126,8 +134,8 @@ Nothing is downloaded in the background without a user action.
 The app in a portable library is the `Pharos.app` beside `library.toml`, and
 it runs from there; replace that copy when updating. An ad hoc signature
 changes with each build, so macOS may ask for access to the library drive
-again. Developer ID signing and notarization improve that experience, but are
-optional in the current release script.
+again. Developer ID signing and notarization improve that experience and are
+the default in the current release script.
 
 ## Upgrading an existing library
 
