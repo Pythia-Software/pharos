@@ -845,3 +845,210 @@ for (const width of [1440, 390]) test(`Capture & index saved query remains avail
   await saved.waitFor({ state: 'hidden' });
   await history.getByRole('button', { name: 'Run history to revisit', exact: true }).waitFor();
 });
+
+test('Ask Pharos invitation gives focus back to existing search when dismissed', {skip}, async t => {
+  const {page, settled} = await open(t, {url:'/', ready:'#pharos-ask .pharos-invitation:not([hidden])', api:{
+    'GET /api/ask/status':{settings:{enabled:false,showInvitation:true},providers:[{id:'Codex',models:[]}]},
+  }});
+  await page.getByRole('button',{name:'Try Ask Pharos',exact:true}).click();
+  const modal=page.getByRole('dialog',{name:'Ask in your own words',exact:true});
+  assert.ok(await modal.evaluate(element=>element.contains(document.activeElement)));
+  await page.keyboard.press('Escape');await settled();
+  assert.ok(await page.getByRole('button',{name:'Search past work',exact:true}).evaluate(element=>element===document.activeElement));
+});
+
+for (const theme of ['dark','light']) for (const width of [1440,390,320]) test(`Ask Pharos keeps long chats scrollable and the editor reachable (${theme}) @ ${width}`, {skip}, async t => {
+  const selection={provider:'Codex',model:'test-model',effort:'Low'};
+  const turn=index=>({id:'turn-'+index,prompt:'Question '+index,cli:'Codex',model:'test-model',modelLabel:'Test Model',effort:'Low',status:'multiple',message:'',elapsedMs:1000,reply:index===5?'The newest reply.':'Earlier context. '.repeat(100),cards:[]});
+  let session={id:'long-chat',createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:Array.from({length:6},(_,index)=>turn(index))};
+  let finish;
+  const reply=new Promise(resolve=>{finish=resolve;});
+  const {page,settled,shot}=await open(t,{url:'/?ask_chat=long-chat',viewport:{width,height:900},preferences:{'pharos-theme':theme},ready:'#pharos-ask .pharos-turn',api:{
+    'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
+    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
+    'GET /api/ask/session':()=>session,
+    'GET /api/ask/sessions':()=>({sessions:[session]}),
+    'POST /api/ask/session':({body})=>(session={...session,draft:body.draft}),
+    'POST /api/ask/send':async({body})=>{
+      await reply;
+      return session={...session,draft:'',conversation:[...session.conversation,{...turn(6),id:body.turnID,prompt:body.prompt,reply:'A completed reply while you read the earlier messages.'}]};
+    },
+  }});
+  const viewport=page.getByRole('region',{name:'Chat messages, scroll for earlier replies'});
+  const atBottom=element=>element.scrollHeight-element.clientHeight-element.scrollTop<2;
+  await page.waitForFunction(atBottom,await viewport.elementHandle());
+  assert.ok(await viewport.evaluate(element=>element.scrollHeight>element.clientHeight),'earlier messages must be scrollable');
+  const fits=element=>{const box=element.getBoundingClientRect();return box.top>=0&&box.bottom<=innerHeight;};
+  assert.ok(await page.getByRole('textbox',{name:'Ask a question',exact:true}).evaluate(fits),'editor must stay on screen');
+  assert.ok(await page.locator('.pharos-user-question').last().evaluate(fits),'latest prompt should be visible with a short reply');
+  assert.ok(await page.getByRole('button',{name:'Send question',exact:true}).evaluate(fits),'send must stay on screen');
+  await shot('latest-exchange');
+
+  await page.getByRole('textbox',{name:'Ask a question',exact:true}).fill('A follow-up question');
+  await page.getByRole('button',{name:'Send question',exact:true}).click();
+  await page.getByRole('region',{name:'AI request in progress',exact:true}).waitFor();
+  await viewport.evaluate(element=>{element.scrollTop=0;});
+  await page.getByRole('button',{name:'Latest reply',exact:true}).waitFor();
+  finish();
+  await settled();
+  await page.getByRole('status').filter({hasText:'A completed reply while you read the earlier messages.'}).waitFor({state:'attached'});
+  assert.equal(await viewport.evaluate(element=>element.scrollTop),0,'a reply must not pull the reader away from earlier messages');
+  await page.getByRole('button',{name:'Latest reply',exact:true}).click();
+  await page.waitForFunction(atBottom,await viewport.elementHandle());
+  await shot('returned-to-latest');
+
+  await page.setViewportSize({width,height:550});
+  await settled();
+  assert.ok(await page.getByRole('button',{name:'Send question',exact:true}).evaluate(fits),'send must remain reachable after resizing');
+  await viewport.focus();
+  await page.keyboard.press('Home');
+  await page.keyboard.press('Tab');
+  assert.ok(await page.getByRole('textbox',{name:'Ask a question',exact:true}).evaluate(element=>element===document.activeElement)||await page.getByRole('button',{name:'Latest reply',exact:true}).evaluate(element=>element===document.activeElement),'keyboard focus can leave the scrollable conversation');
+});
+
+test('Ask Pharos chat links survive reload, new tabs and browser Back/Forward', {skip}, async t => {
+  const selection={provider:'Codex',model:'test-model',effort:'Low'};
+  const saved={id:'saved-chat',createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:'saved-turn',prompt:'A prior question',cli:'Codex',model:'test-model',modelLabel:'Test Model',effort:'Low',status:'multiple',message:'',elapsedMs:1000,reply:'An earlier reply',cards:[]}]};
+  saved.conversation.push({...saved.conversation[0],id:'later-turn',prompt:'A later topic',reply:'A later reply'});
+  const sessions=new Map([[saved.id,saved]]);
+  let delaySession=false,releaseSession;
+  const delayedSession=new Promise(resolve=>{releaseSession=resolve;});
+  t.after(()=>releaseSession());
+  const {page,settled,calls}=await open(t,{url:'/',ready:'#pharos-ask .pharos-ai:not([hidden])',api:{
+    'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'},{id:'Claude'}]},
+    'GET /api/ask/models':({query})=>query.get('provider')==='Claude'
+      ? {id:'Claude',models:[{id:'claude-first',label:'Claude First',efforts:['Default','Medium'],default:true},{id:'claude-second',label:'Claude Second',efforts:['Default','Low']}],defaultSelection:{provider:'Claude',model:'claude-first',effort:'Medium'}}
+      : {id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true},{id:'second-model',label:'Second Model',efforts:['Default','Low']}]},
+    'GET /api/ask/session':async({query})=>{if(delaySession&&query.get('id')==='saved-chat')await delayedSession;return sessions.get(query.get('id'));},
+    'GET /api/ask/sessions':({query})=>({sessions:[...sessions.values()].filter(session=>JSON.stringify(session).toLowerCase().includes((query.get('q')||'').toLowerCase())).map(session=>({...session,conversation:session.conversation.slice(0,1)}))}),
+    'POST /api/ask/session':({body})=>{
+      const session={...(sessions.get(body.id)||{...saved,id:body.id,conversation:[]}),draft:body.draft,selection:body.selection};
+      sessions.set(body.id,session);return session;
+    },
+    'POST /api/ask/send':({body})=>{
+      const session={...sessions.get(body.id),draft:'',conversation:[{...saved.conversation[0],id:body.turnID,prompt:body.prompt,reply:'Your latest reply',cli:body.selection.provider,model:body.selection.model,effort:body.selection.effort}]};
+      sessions.set(body.id,session);return session;
+    },
+  }});
+  assert.ok(calls.some(call=>call.path==='/api/ask/visits'&&call.body.reconcile),'opening Ask reconciles the authoritative browser history');
+  const previousVisit=await page.evaluate(()=>JSON.parse(localStorage.getItem('pharos-history-v1'))[0]);
+  const replaced=page.waitForResponse(response=>response.url().endsWith('/api/ask/visits')&&response.request().method()==='POST'&&response.request().postDataJSON().replaces?.at===previousVisit.at);
+  await page.evaluate(()=>window.pharosNameVisit('Updated page title'));
+  const replacement=(await replaced).request().postDataJSON();
+  assert.equal(replacement.replaces.url,previousVisit.url,'the private store receives the identity removed from browser history');
+  assert.equal(replacement.visits.length,1);
+  await settled();
+  const question=page.getByRole('textbox',{name:'Ask a question',exact:true});
+  const draftSaved=page.waitForResponse(response=>response.url().includes('/api/ask/session')&&response.request().method()==='POST');
+  await question.fill('Keep this question');await draftSaved;
+  // This checks persisted chat restoration, so finish background card loads
+  // before the deliberate reload cancels the old document's requests.
+  await settled();
+  const chatURL=page.url(),id=new URL(chatURL).searchParams.get('ask_chat');
+  assert.ok(id,'a new draft gets a conversation URL');
+  await page.reload();await settled();
+  await page.waitForFunction(()=>document.querySelector('#pharos-question')?.value==='Keep this question');
+  assert.equal(await question.inputValue(),'Keep this question');
+  const choose=async(kind,value,expected)=>{
+    const persisted=page.waitForResponse(response=>response.url().includes('/api/ask/session')&&response.request().method()==='POST'&&Object.entries(expected).every(([key,value])=>response.request().postDataJSON().selection[key]===value));
+    await page.locator('.pharos-model-trigger').click();
+    const menu=page.getByRole('dialog',{name:'Model selection',exact:true});
+    await menu.getByRole('button',{name:new RegExp('^'+kind+' ')}).click();
+    await menu.getByRole('button',{name:value,exact:true}).click();
+    await page.keyboard.press('Escape');await persisted;await settled();
+    await page.reload();await settled();
+    await page.waitForFunction(()=>document.querySelector('#pharos-question')?.value==='Keep this question');
+    assert.deepEqual(sessions.get(id).selection,expected);
+    assert.ok((await page.locator('.pharos-model-trigger').textContent()).includes(value),'the saved draft should restore the chosen picker value');
+  };
+  await choose('Model','Second Model',{...selection,model:'second-model'});
+  await choose('Effort','Default',{...selection,model:'second-model',effort:'Default'});
+  await choose('CLI','Claude',{provider:'Claude',model:'claude-first',effort:'Medium'});
+  await choose('Model','Claude Second',{provider:'Claude',model:'claude-second',effort:'Default'});
+  await choose('Effort','Low',{provider:'Claude',model:'claude-second',effort:'Low'});
+  await page.getByRole('button',{name:'Send question',exact:true}).click();
+  await page.getByRole('status').filter({hasText:'Your latest reply'}).waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('ask_chat'),id);
+  await page.getByRole('button',{name:'Clear',exact:true}).click();
+  assert.equal(new URL(page.url()).searchParams.get('ask_chat'),null);
+  await page.goBack();await page.getByRole('status').filter({hasText:'Your latest reply'}).waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('ask_chat'),id);
+  await page.goForward();await settled();
+  await page.getByRole('button',{name:'History',exact:true}).click();
+  const search=page.getByRole('searchbox',{name:'Find a prior chat',exact:true});
+  const matches=page.waitForResponse(response=>response.url().includes('/api/ask/sessions?')&&new URL(response.url()).searchParams.get('q')==='later topic');
+  await search.fill('later topic');await matches;await settled();
+  const link=page.getByRole('link',{name:'Open chat: A prior question',exact:true});
+  await link.waitFor();
+  const savedURL=new URL(await link.getAttribute('href'),page.url()).href;
+  const anotherTab=await page.context().newPage();
+  await anotherTab.goto(savedURL);await anotherTab.getByRole('status').filter({hasText:'An earlier reply'}).waitFor();
+  assert.equal(new URL(anotherTab.url()).searchParams.get('ask_chat'),'saved-chat');
+  await anotherTab.close();
+  await link.click();await page.getByRole('status').filter({hasText:'An earlier reply'}).waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('ask_chat'),'saved-chat');
+  // Back can arrive before a slow chat load. Its late response must not
+  // replace the page the user has already returned to.
+  await page.getByRole('button',{name:'Clear',exact:true}).click();
+  delaySession=true;
+  const loading=page.waitForRequest(request=>new URL(request.url()).pathname==='/api/ask/session'&&request.method()==='GET');
+  await page.evaluate(()=>window.pharosNavigate('/?ask_chat=saved-chat'));await loading;
+  await page.goBack();
+  await page.waitForFunction(()=>!document.querySelector('#pharos-question')?.disabled);
+  releaseSession();await settled();
+  assert.equal(new URL(page.url()).searchParams.get('ask_chat'),null);
+  assert.equal(await page.getByRole('status').filter({hasText:'An earlier reply'}).count(),0);
+});
+
+for(const theme of ['dark','light']) for(const mode of ['choice','other','composer']) test(`Ask Pharos clarification supports ${mode} replies and keeps focus usable (${theme})`,{skip},async t=>{
+  const selection={provider:'Codex',model:'test-model',effort:'Low'};
+  const clarification={question:'By “use”, do you mean model tokens, API cost equivalent, or something else?',options:['Model tokens','API cost equivalent']};
+  let session={id:'clarification-chat',createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',clarificationDraft:'',conversation:[{id:'clarify-turn',prompt:'Show me my use',cli:'Codex',model:'test-model',modelLabel:'Test Model',effort:'Low',status:'clarification',reply:'',message:'',elapsedMs:1000,cards:[],clarification}]};
+  const submitted=[];
+  const {page,settled,shot}=await open(t,{url:'/?ask_chat=clarification-chat',viewport:{width:mode==='choice'?1440:mode==='other'?390:320,height:900},preferences:{'pharos-theme':theme},ready:'.pharos-clarification:not([hidden])',api:{
+    'GET /api/ask/status':{settings:{enabled:true,showInvitation:true,selection},providers:[{id:'Codex'}]},
+    'GET /api/ask/models':{id:'Codex',models:[{id:'test-model',label:'Test Model',efforts:['Default','Low'],default:true}]},
+    'GET /api/ask/session':()=>session,
+    'GET /api/ask/sessions':()=>({sessions:[session]}),
+    'POST /api/ask/session':({body})=>(session={...session,draft:body.draft,clarificationDraft:body.clarificationDraft||''}),
+    'POST /api/ask/send':({body})=>{
+      submitted.push(body);
+      return session={...session,draft:body.draft||'',clarificationDraft:'',conversation:[...session.conversation,{id:body.turnID,prompt:body.prompt,cli:'Codex',model:'test-model',modelLabel:'Test Model',effort:'Low',status:'multiple',message:'',elapsedMs:1000,reply:'Here are the relevant views.',cards:[{title:'Usage details',kind:'Analyze',description:'Explore the requested measure.',href:'/analyze'},{title:'Matching work',kind:'Search',description:'See the underlying conversations.',href:'/library'}]}]};
+    },
+  }});
+  const question=page.getByRole('textbox',{name:'Ask a question',exact:true}),other=page.getByRole('textbox',{name:'Other answer',exact:true});
+  const sendOther=page.getByRole('button',{name:'Send other answer',exact:true});
+  assert.ok(await sendOther.isDisabled());
+  assert.ok(await page.getByRole('button',{name:'A. Model tokens',exact:true}).isEnabled());
+  await shot('clarification');
+  let expected='API cost equivalent';
+  if(mode==='choice'){
+    await question.fill('An unrelated next question');
+    await page.getByRole('button',{name:'B. API cost equivalent',exact:true}).focus();
+    await page.keyboard.press('Enter');
+  }else if(mode==='other'){
+    await question.fill('An unrelated next question');
+    const saved=page.waitForResponse(response=>response.url().includes('/api/ask/session')&&response.request().method()==='POST'&&response.request().postDataJSON().clarificationDraft==='Workspace counts');
+    await other.fill('Workspace counts');await saved;
+    await settled();
+    await page.reload();await settled();
+    await page.waitForFunction(()=>document.querySelector('.pharos-clarification-other textarea')?.value==='Workspace counts');
+    await other.focus();await page.keyboard.press('Shift+Enter');await page.keyboard.insertText('across all projects');
+    expected='Workspace counts\nacross all projects';
+    await page.keyboard.press('Enter');
+  }else{
+    expected='Workspace counts';await question.fill(expected);await page.getByRole('button',{name:'Send question',exact:true}).click();
+  }
+  await page.getByRole('link',{name:/Usage details/}).waitFor();await settled();
+  assert.equal(submitted.length,1,'an answer should submit exactly one request');
+  assert.equal(submitted[0].prompt,expected);
+  assert.equal(new URL(page.url()).searchParams.get('ask_chat'),'clarification-chat');
+  if(mode!=='composer')assert.equal(await question.inputValue(),'An unrelated next question');
+  if(mode!=='composer')assert.ok(await question.evaluate(element=>element===document.activeElement),'answering should return keyboard focus to the composer');
+  assert.ok(await page.getByRole('button',{name:'A. Model tokens',exact:true}).isDisabled(),'older clarification options must not be submitted again');
+  const footer=page.getByRole('button',{name:'Send question',exact:true});
+  assert.ok(await footer.evaluate(element=>{const box=element.getBoundingClientRect();return box.top>=0&&box.bottom<=innerHeight;}));
+  await question.focus();
+  assert.ok(await question.evaluate(element=>element===document.activeElement));
+  await shot('answered');
+});

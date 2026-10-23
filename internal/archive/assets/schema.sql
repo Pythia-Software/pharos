@@ -1364,3 +1364,33 @@ CREATE TRIGGER IF NOT EXISTS tool_query_facts_update AFTER UPDATE OF id,workspac
  INSERT INTO tool_query_facts(rowid,id,workspace_id,started_at,duration_ms,provider,activity,tool_category,day)
  VALUES(new.rowid,new.id,new.workspace_id,new.started_at,new.duration_ms,new.provider,machine_activity(new.tool_category,new.command_category,new.tool_name,new.mcp_server,new.program),new.tool_category,date(new.started_at,'localtime'));
 END;
+
+-- Ask Pharos UI state is private to this feature, outside the MCP datasets.
+-- Settings and visit history are per host; opt-in does not travel between Macs.
+CREATE TABLE IF NOT EXISTS ask_settings (
+  host_id TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ask_sessions (
+  id TEXT PRIMARY KEY,
+  host_id TEXT NOT NULL,
+  value TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ask_sessions_host ON ask_sessions(host_id, updated_at DESC);
+CREATE TABLE IF NOT EXISTS ask_visits (
+  host_id TEXT NOT NULL,
+  url TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  PRIMARY KEY(host_id, url, at)
+);
+CREATE INDEX IF NOT EXISTS ask_visits_host ON ask_visits(host_id, at DESC);
+-- Native CLIs which retain their own transcripts must not cause private
+-- Ask Pharos context to be ingested a second time by a source adapter.
+CREATE TABLE IF NOT EXISTS ask_native_sessions (
+  provider TEXT NOT NULL,
+  native_id TEXT NOT NULL,
+  host_id TEXT NOT NULL,
+  PRIMARY KEY(provider, native_id)
+);

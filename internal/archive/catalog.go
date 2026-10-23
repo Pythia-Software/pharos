@@ -173,9 +173,11 @@ func (c *Catalog) Close() error {
 // 13: effort is part of the usage ledger key; older writers would merge effort buckets.
 // 14: workspace_names retains source titles separately from resolved titles.
 // Older writers would overwrite the display title without updating its inputs.
-// 15: normalized reasoning and its extraction ledger. Older parsers can prune
+// 15: Ask Pharos native-session exclusions protect private lookup context.
+// Older ingesters would index those CLI transcripts without the exclusion.
+// 16: normalized reasoning and its extraction ledger. Older parsers can prune
 // the newly retained reasoning during a reindex, losing saved thought again.
-const catalogSchemaVersion = 15
+const catalogSchemaVersion = 16
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.

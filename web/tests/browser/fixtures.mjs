@@ -187,6 +187,11 @@ const writingCounts = (typed, pasted, harness) => ({
 });
 
 export const defaultApi = {
+  "GET /api/ask/status": { settings: { enabled: false, showInvitation: true, selection: null }, providers: [] },
+  "POST /api/ask/clear-visits": {ok:true},
+  "POST /api/ask/visits": {ok:true},
+  "POST /api/ask/remove-visit": {ok:true},
+
   // Library preferences, saved views and snapshots.
   "GET /api/preferences": ({ state }) => ({ values: state.preferences }),
   "POST /api/preferences": ({ body, state }) => {
