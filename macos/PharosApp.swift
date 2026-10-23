@@ -120,16 +120,29 @@ final class ArchiveService: ObservableObject {
     private var service: Process?
     private var release = ReleaseState.none
     private var terminationObserver: NSObjectProtocol?
+    private var shuttingDown = false
+    private var updateLock: AppUpdateLock?
+    private let releaseService: (URL, String) -> ServiceClient.Release
+    var deferUpdate: (@escaping (Error?) -> Void) -> Void = { $0(nil) }
+    var resumeUpdates: () -> Void = {}
     private(set) var menuBar: MenuBarController!
 
-    init() {
+    init(plan: LaunchPlan = LaunchPlan.resolve(bundle: Bundle.main.bundleURL),
+         releaseService: @escaping (URL, String) -> ServiceClient.Release = { ServiceClient.release($0, token: $1) }) {
+        self.releaseService = releaseService
         defer { menuBar = MenuBarController(service: self) }
         // Here rather than on a view: with its window closed, Pharos keeps
         // running, and a view's observer would be gone when it quits.
         terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil, queue: .main
         ) { [weak self] _ in self?.stop() }
-        switch LaunchPlan.resolve(bundle: Bundle.main.bundleURL) {
+        do {
+            try AppUpdateLock.current().recover(version: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "")
+        } catch {
+            self.error = error.localizedDescription
+            return
+        }
+        switch plan {
         case .library(let directory):
             openLibrary(directory)
         case .user:
@@ -287,7 +300,7 @@ final class ArchiveService: ObservableObject {
             return (self.endpoint, self.service)
         }
         guard let endpoint else { return .approve }
-        let answer = ServiceClient.release(endpoint.url, token: endpoint.token)
+        let answer = releaseService(endpoint.url, endpoint.token)
         let (state, verdict) = ReleaseState.after(answer)
         lock.withLock { release = state }
         switch answer {
@@ -313,7 +326,19 @@ final class ArchiveService: ObservableObject {
     /// and the drive is ejected once it has. `reply` gets nil once the library
     /// is released, or the reason Pharos kept it.
     func ejectLibrary(reply: @escaping (String?) -> Void = { _ in }) {
+        guard !shuttingDown else {
+            reply("Pharos is closing. Wait for it to finish before ejecting the drive.")
+            return
+        }
+        deferUpdate { [weak self] error in
+            if let error { reply(error.localizedDescription); return }
+            self?.ejectAfterDeferringUpdate(reply: reply)
+        }
+    }
+
+    private func ejectAfterDeferringUpdate(reply: @escaping (String?) -> Void) {
         guard let volume else {
+            resumeUpdates()
             reply("This library is not on a drive that Pharos can eject.")
             return
         }
@@ -329,6 +354,7 @@ final class ArchiveService: ObservableObject {
             if case .dissent(let reason) = self.releaseForEject() {
                 DispatchQueue.main.async {
                     self.ejecting = false
+                    self.resumeUpdates()
                     reply(reason)
                 }
                 return
@@ -341,6 +367,7 @@ final class ArchiveService: ObservableObject {
             } catch {
                 DispatchQueue.main.async {
                     self.ejecting = false
+                    self.resumeUpdates()
                     self.url = nil
                     self.disconnected = Disconnection(volume: volume.name, state: .released,
                                                       note: "\(volume.name) could not be ejected: \(error.localizedDescription)")
@@ -389,7 +416,7 @@ final class ArchiveService: ObservableObject {
         }
         URLSession.shared.dataTask(with: request) { [weak self] _, response, _ in
             DispatchQueue.main.async {
-                guard let self else { return }
+                guard let self, !self.shuttingDown else { return }
                 let code = (response as? HTTPURLResponse)?.statusCode ?? 0
                 if (200..<300).contains(code) {
                     self.lock.withLock { self.release = .none }
@@ -410,6 +437,7 @@ final class ArchiveService: ObservableObject {
     }
 
     private func startService(_ serviceURL: URL, token: String, config: URL, contents: String) {
+        guard !shuttingDown else { return }
         let task = Process()
         let bundledExecutable = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("pharos")
         if let bundledExecutable, FileManager.default.isExecutableFile(atPath: bundledExecutable.path) {
@@ -435,6 +463,7 @@ final class ArchiveService: ObservableObject {
             let diagnostic = log.text().trimmingCharacters(in: .whitespacesAndNewlines)
             DispatchQueue.main.async {
                 guard let self, self.process === process else { return }
+                if self.shuttingDown { return }
                 self.process = nil
                 self.url = nil
                 // Released for an eject, or its drive went away: not an error.
@@ -483,7 +512,7 @@ final class ArchiveService: ObservableObject {
     // A large catalog may need to checkpoint its WAL before the service can
     // listen. Keep the wrapper alive while that startup work completes.
     private func waitForService(_ serviceURL: URL, token: String, attemptsRemaining: Int = 600) {
-        guard process?.isRunning == true else { return }
+        guard !shuttingDown, process?.isRunning == true else { return }
         guard let request = healthRequest(serviceURL, token: token) else {
             error = "Could not construct the local archive health URL."
             process?.terminate()
@@ -491,7 +520,7 @@ final class ArchiveService: ObservableObject {
         }
         URLSession.shared.dataTask(with: request) { [weak self] _, response, _ in
             DispatchQueue.main.async {
-                guard let self, self.process?.isRunning == true else { return }
+                guard let self, !self.shuttingDown, self.process?.isRunning == true else { return }
                 if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
                     self.error = nil
                     self.url = serviceURL
@@ -519,6 +548,86 @@ final class ArchiveService: ObservableObject {
             DispatchQueue.global().asyncAfter(deadline: .now() + seconds) {
                 if running.isRunning { kill(running.processIdentifier, SIGKILL) }
             }
+        }
+    }
+
+    /// Stop only this app's service, wait for catalog closure, and (for an
+    /// update) exclude every bundled CLI until the new app has launched.
+    func prepareToTerminate(installing: Bool, timeout: TimeInterval = 10, completion: @escaping (Error?) -> Void) {
+        shuttingDown = true
+        let child = process
+        let endpoint = lock.withLock { self.endpoint }
+        let releaseService = self.releaseService
+        let app = Bundle.main.bundleURL
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+        let lease = installing ? AppUpdateLock.current() : nil
+        updateLock = lease
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                try lease?.begin(version: version)
+                let stopService = {
+                    if let child, child.isRunning {
+                        if let endpoint {
+                            switch releaseService(endpoint.url, endpoint.token) {
+                            case .released: break
+                            case .notRunning:
+                                // The owned child may still be initializing,
+                                // before its HTTP listener has opened.
+                                if child.isRunning { child.terminate() }
+                            case .stopping: throw UpdateFailure(message: "Pharos is finishing a write. Wait a moment, then quit or install again.")
+                            case .failed(let reason): throw UpdateFailure(message: "Could not close Pharos's catalog: \(reason)")
+                            }
+                        } else { child.terminate() }
+                    }
+                }
+                if installing {
+                    try UpdateProcesses.prepare(app: app, servicePID: child?.processIdentifier, stopService: stopService)
+                    let deadline = Date().addingTimeInterval(timeout)
+                    while child?.isRunning == true {
+                        if Date() >= deadline { throw UpdateFailure(message: "Pharos is still closing its catalog. Try quitting again in a moment.") }
+                        Thread.sleep(forTimeInterval: 0.05)
+                    }
+                    try lease?.finish()
+                } else {
+                    // Ordinary Quit/log out never waits on a busy catalog.
+                    // SIGTERM asks the owned service to close safely; Go may
+                    // finish that work independently after the wrapper exits.
+                    if child?.isRunning == true { child?.terminate() }
+                    if self?.library != nil { DriveProcesses.stopMCP(runningFrom: app) }
+                }
+                lease?.allowTermination(installing: installing)
+                DispatchQueue.main.async { completion(nil) }
+            } catch {
+                lease?.cancel()
+                DispatchQueue.main.async {
+                    self?.resumeAfterCancelledTermination()
+                    completion(error)
+                }
+            }
+        }
+    }
+
+    /// Sparkle aborted after we closed the service and handed over the bundle.
+    /// Release the handoff immediately so reopening and CLI reconnects need no
+    /// stale-marker timeout. The stopped service is shown as a recoverable error.
+    func cancelUpdatePreparation() {
+        guard let updateLock else { return }
+        updateLock.cancel()
+        resumeAfterCancelledTermination()
+    }
+
+    private func resumeAfterCancelledTermination() {
+        shuttingDown = false
+        updateLock = nil
+        if process?.isRunning != true {
+            process = nil
+            serviceLog = nil
+            url = nil
+            error = "The service has stopped. Reopen Pharos to resume, or try installing the update again."
+        } else if url == nil, let endpoint = lock.withLock({ self.endpoint }) {
+            // Readiness callbacks stop while shutdown is pending.
+            // A cancelled quit must resume observing the live child.
+            waitForService(endpoint.url, token: endpoint.token)
         }
     }
 
@@ -1116,48 +1225,50 @@ struct MenuBarWindowBridge: NSViewRepresentable {
     func updateNSView(_ view: WindowView, context: Context) {}
 }
 
-@main struct PharosApp: App {
-    @StateObject private var service = ArchiveService()
-    @StateObject private var updates = UpdateNotice()
-    @AppStorage("checkForUpdatesOnLaunch") private var checkForUpdatesOnLaunch = false
-    var body: some Scene {
-        WindowGroup("Pharos", id: "pharos") {
-            Group {
-                if let disconnection = service.disconnected {
-                    LibraryDisconnectedView(disconnection: disconnection, ejecting: service.ejecting,
-                                            reopen: service.reopen, eject: { service.ejectLibrary() })
-                }
-                else if let url = service.url { ArchiveWebView(url: url, service: service).ignoresSafeArea() }
-                else if service.setupNeeded { FirstRunView(service: service) }
-                else if let error = service.error { ArchiveErrorView(message: error) }
-                else {
-                    VStack(spacing: 16) {
-                        PharosBeacon()
-                        Text(service.status)
-                            .opacity(0.8)
-                    }
-                    .harborBackdrop()
-                }
+struct PharosWindow: View {
+    @ObservedObject var service: ArchiveService
+    @ObservedObject var updates: UpdateNotice
+    var body: some View {
+        Group {
+            if let disconnection = service.disconnected {
+                LibraryDisconnectedView(disconnection: disconnection, ejecting: service.ejecting,
+                                        reopen: service.reopen, eject: { service.ejectLibrary() })
             }
-            .background(WindowChrome())
-            .background(MenuBarWindowBridge(service: service))
-            .sheet(isPresented: Binding(get: { updates.status != nil }, set: { if !$0 { updates.status = nil } })) {
-                UpdateNoticeSheet(notice: updates)
-            }
-            .task {
-                if !service.setupNeeded {
-                    updates.checkOnLaunchIfEnabled(checkForUpdatesOnLaunch)
+            else if let url = service.url { ArchiveWebView(url: url, service: service).ignoresSafeArea() }
+            else if service.setupNeeded { FirstRunView(service: service) }
+            else if let error = service.error { ArchiveErrorView(message: error) }
+            else {
+                VStack(spacing: 16) {
+                    PharosBeacon()
+                    Text(service.status)
+                        .opacity(0.8)
                 }
+                .harborBackdrop()
             }
         }
-        .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 1180, height: 780)
-        .commands {
-            CommandGroup(after: .appInfo) {
-                Button("Check for Updates…") { updates.check() }
-                    .disabled(updates.isChecking)
-                Toggle("Check for Updates on Launch", isOn: $checkForUpdatesOnLaunch)
+        .background(WindowChrome())
+        .background(MenuBarWindowBridge(service: service))
+        .task {
+            if !service.setupNeeded {
+                updates.startIfReady(true)
             }
+        }
+        .onChange(of: service.setupNeeded) { _, needed in
+            updates.startIfReady(!needed)
         }
     }
 }
+
+#if !PHAROS_NATIVE_TEST
+@main struct PharosApp: App {
+    @NSApplicationDelegateAdaptor(PharosDelegate.self) private var delegate
+    var body: some Scene {
+        WindowGroup("Pharos", id: "pharos") {
+            PharosWindow(service: delegate.service, updates: delegate.updates)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1180, height: 780)
+        .commands { UpdateCommands(updates: delegate.updates) }
+    }
+}
+#endif

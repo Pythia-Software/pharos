@@ -23,6 +23,10 @@ runs, unrelated failure investigations, or custom release-note edits unless
 requested. Keep the release script's built-in build and artifact checks. If
 the release command fails, address that specific failure and resume publishing.
 
+Release-only tasks must never run release-machine setup or create/import signing
+keys. Missing deployment configuration or signing keys is a blocker to report;
+signing and publication belong on the separately configured deployment Mac.
+
 ## Query Table dependency policy
 
 Do not add, extend, or reintroduce local Query Table patches. Required fixes

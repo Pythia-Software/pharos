@@ -235,7 +235,7 @@ func ejectTests(_ args: [String]) {
           "a config path named mcp does not make a service an MCP server")
 
     // The service, and an agent's MCP server, both running from the image.
-    let process = serveLibrary(pharos, config: config, service: service, token: token)
+    var process = serveLibrary(pharos, config: config, service: service, token: token)
     func startAgent(_ arguments: [String] = ["mcp"], executable: String? = nil, output: Any = FileHandle.nullDevice) -> Process {
         let agent = Process()
         agent.executableURL = URL(fileURLWithPath: executable ?? pharos)
@@ -281,6 +281,43 @@ func ejectTests(_ args: [String]) {
     check(forced == [agent.processIdentifier] && ended && agent.terminationStatus == SIGKILL,
           "Quit kills an MCP server that remains after the grace period (PIDs: \(forced), exited: \(ended), status: \(ended ? agent.terminationStatus : -1))")
     agent = startAgent()
+
+    // The Swift and Go halves must agree on the same per-install lease, also
+    // when the installation lives on an external APFS volume.
+    let update = AppUpdateLock.current(app: app)
+    do {
+        // CLI/MCP can recover after install-on-quit without a GUI relaunch.
+        try update.begin(version: "0.0.0")
+        let postInstallOutput = Pipe()
+        let postInstallReply = DispatchSemaphore(value: 0)
+        postInstallOutput.fileHandleForReading.readabilityHandler = { handle in
+            if !handle.availableData.isEmpty { postInstallReply.signal() }
+        }
+        let afterInstall = startAgent(output: postInstallOutput)
+        try (afterInstall.standardInput as! Pipe).fileHandleForWriting.write(contentsOf: Data("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n".utf8))
+        check(postInstallReply.wait(timeout: .now() + 3) == .success, "MCP reconnects when the installed version differs from the handoff marker")
+        postInstallOutput.fileHandleForReading.readabilityHandler = nil
+        afterInstall.terminate()
+        check(wait(3) { !afterInstall.isRunning }, "the post-install connection stops")
+        update.cancel()
+        try update.begin(version: Bundle(url: app)!.object(forInfoDictionaryKey: "CFBundleVersion") as! String)
+        let reconnect = startAgent()
+        check(wait(3) { !reconnect.isRunning }, "a new MCP connection is refused during the update")
+        check(reconnect.terminationStatus != 0, "the refused MCP connection reports an error")
+        try UpdateProcesses.prepare(app: app, servicePID: process.processIdentifier, stopService: {
+            if ServiceClient.release(service, token: token) != .released {
+                throw UpdateFailure(message: "service did not close its catalog")
+            }
+        })
+        try update.finish()
+        check(wait(3) { !process.isRunning && !agent.isRunning }, "update waits for the old service and MCP to exit")
+        update.cancel()
+        process = serveLibrary(pharos, config: config, service: service, token: token)
+        agent = startAgent()
+    } catch {
+        update.cancel()
+        check(false, "portable update coordination: \(error)")
+    }
 
     check(ServiceClient.release(service, token: token) == .released && wait(5) { !process.isRunning }, "the service released the library and exited \(process.terminationStatus)")
     let busy = run("/usr/sbin/diskutil", "eject", mount.path)
