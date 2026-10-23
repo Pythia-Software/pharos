@@ -1128,6 +1128,19 @@ query when they include saved query state.
 
 ### Auditing messages and archive coverage
 
+For saved agent thinking, use `search_text` with `surface: "reasoning"` and
+quoted phrases or Boolean alternatives, for example
+`{"surface":"reasoning","query":"\"Now I understand\" OR \"Now I see\""}`.
+The UI exposes the same scope as **Find → Saved agent reasoning**. It searches
+decoded saved thinking, analysis-channel text and reasoning summaries; hits
+identify summaries through `reasoning_format`. `reasoning_coverage` reports
+pending normalization and retained records. `get_search_capabilities` provides
+source/provider coverage, including unavailable reasoning. Run the Library's
+**Index saved reasoning** upgrade to extract older retained envelopes. Missing
+or discarded source text requires reindexing available transcripts/captures;
+normalization completeness never proves complete source history. See
+[Agent text search](agent-text-search.md).
+
 `search_messages` searches indexed message text lexically, without semantic
 fallback, title substring matches, a recent-message cutoff, or a top-500
 candidate limit. Repository, conversation, source, provider, role, kind, and

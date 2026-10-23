@@ -74,6 +74,9 @@ func TestWorkOverviewOmitsMessagesAndCarriesWhatThePageScannedFor(t *testing.T) 
 func TestWorkConversationShortensOutputsButKeepsWhatTheReaderInterprets(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	seedReaderWorkspace(t, catalog)
+	if _, err := catalog.DB.Exec(`UPDATE messages SET kind='reasoning',reasoning_format='summary' WHERE id='m5'`); err != nil {
+		t.Fatal(err)
+	}
 	conversation, err := catalog.WorkConversation("work", "main")
 	if err != nil {
 		t.Fatal(err)
@@ -103,6 +106,9 @@ func TestWorkConversationShortensOutputsButKeepsWhatTheReaderInterprets(t *testi
 	}
 	if byID["m5"]["text_clipped"] != nil {
 		t.Fatal("an event the reader renders as prose must arrive whole")
+	}
+	if byID["m5"]["reasoning_format"] != "summary" {
+		t.Fatalf("reader lost reasoning format: %#v", byID["m5"])
 	}
 	if byID["m2"]["raw_text"] != nil || byID["m2"]["text_clipped"] != nil {
 		t.Fatalf("a record identical to its text is sent once: %#v", byID["m2"])
@@ -239,6 +245,9 @@ func TestClipReaderMessagePreservesProviderEnvelopes(t *testing.T) {
 func TestWorkReaderRoutes(t *testing.T) {
 	catalog, config := testCatalog(t)
 	seedReaderWorkspace(t, catalog)
+	if _, err := catalog.DB.Exec(`UPDATE messages SET kind='reasoning',reasoning_format='summary' WHERE id='m5'`); err != nil {
+		t.Fatal(err)
+	}
 	server := testServer(t, config, catalog)
 	get := func(path string) (int, map[string]any) {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
@@ -254,6 +263,11 @@ func TestWorkReaderRoutes(t *testing.T) {
 	}
 	if code, body := get("/api/work/work/conversations/agent"); code != 200 || len(body["messages"].([]any)) != 2 {
 		t.Fatalf("conversation: %d %v", code, body)
+	}
+	if code, body := get("/api/work/work/conversations/main"); code != 200 {
+		t.Fatalf("main conversation: %d %v", code, body)
+	} else if message := body["messages"].([]any)[4].(map[string]any); message["reasoning_format"] != "summary" {
+		t.Fatalf("API lost reasoning format: %v", message)
 	}
 	if code, body := get("/api/work/work/find?q=config.toml&show=prompts,response"); code != 200 || jsonText(body["conversations"]) != `[{"hidden":1,"hidden_kinds":["reads"],"id":"agent","shown":0}]` {
 		t.Fatalf("find: %d %v", code, body)

@@ -22,7 +22,7 @@ var queryCacheTables = []string{
 	"skill_usages", "conversation_instructions", "tool_usage_daily", "tool_mirror_workspaces",
 	"cost_changes", "model_aliases", "summaries", "semantic_documents",
 	"change_sets", "change_files", "pull_requests", "work_pr_links",
-	"metrics", "metric_ledger", "text_search_documents",
+	"metrics", "metric_ledger", "text_search_documents", "reasoning_extraction_state",
 	"tl1_installations", "tl1_flavors", "tl1_tasks", "tl1_attempts", "tl1_candidates",
 	"tl1_events", "tl1_review_findings", "tl1_human_touches", "tl1_configuration_health",
 }

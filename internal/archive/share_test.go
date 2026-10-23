@@ -21,6 +21,7 @@ func seedSharedWork(t *testing.T, catalog *Catalog) string {
 			Messages: []MessageRecord{
 				{NativeID: "u1", Role: "user", Kind: "message", Text: "Please fix the parser </script><script>alert(1)</script>", Selected: true, EvidenceLocator: "/Users/gbw/.claude/projects/secret.jsonl:1"},
 				{NativeID: "a1", Role: "assistant", Kind: "message", Text: "Done.", Selected: true},
+				{NativeID: "r1", Role: "assistant", Kind: "reasoning", Text: "Now I see the parser issue.", ReasoningFormat: "summary", Selected: true},
 			},
 		}},
 	}
@@ -68,6 +69,12 @@ func TestSharedWorkIsStandaloneAndOmitsArchiveDetails(t *testing.T) {
 	data := regexp.MustCompile(`(?s)<script type="application/json" id="pharosShareData">(.*?)</script>`).FindStringSubmatch(page)
 	if data == nil || strings.Contains(data[1], "</") || !strings.Contains(data[1], "Please fix the parser") {
 		t.Fatalf("embedded data = %.200q", data)
+	}
+	payload := sharedPayload(t, response.Body.Bytes())
+	conversations := payload.Works[0]["conversations"].([]any)
+	messages := conversations[0].(map[string]any)["messages"].([]any)
+	if message := messages[2].(map[string]any); message["reasoning_format"] != "summary" || message["kind"] != "reasoning" {
+		t.Fatalf("shared reader lost reasoning format: %v", message)
 	}
 	for _, private := range []string{"gbw@example.com", "gbws-macbook", "secret.jsonl", "content_hash", "evidence_locator"} {
 		if strings.Contains(page, private) {

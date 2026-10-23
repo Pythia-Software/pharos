@@ -249,6 +249,136 @@ func TestCodexModelFollowsTurnContext(t *testing.T) {
 	}
 }
 
+func TestReasoningNormalization(t *testing.T) {
+	for _, block := range []string{`{"type":"redacted_thinking","data":"secret"}`, `{"type":"thinking","thinking":" "}`} {
+		t.Run(block, func(t *testing.T) {
+			body := `{"type":"assistant","message":{"role":"assistant","content":[` + block + `,{"type":"text","text":"Reply"}],"usage":{"input_tokens":10,"output_tokens":4}}}`
+			items := normalizeReasoningMessages([]MessageRecord{{NativeID: "event", Role: "assistant", Kind: "metadata", Text: body}})
+			if len(items) != 2 || items[0].NativeID != "event" || items[0].Kind != "metadata" || items[1].Text != "Reply" {
+				t.Fatalf("unavailable first block was duplicated: %+v", items)
+			}
+			if again := normalizeReasoningMessages(items); jsonText(again) != jsonText(items) || conversationTokenCounts(again)["total_tokens"] != 14 {
+				t.Fatalf("unavailable reasoning changed on replay: %+v", again)
+			}
+			// A legacy reply with the base ID still needs its missing first block.
+			legacy := normalizeReasoningMessages([]MessageRecord{{NativeID: "event", Role: "assistant", Kind: "message", Text: "Reply", RawText: body}})
+			if len(legacy) != 2 || legacy[0].Kind != "metadata" || legacy[0].NativeID != "event:block:0" || legacy[1].Text != "Reply" {
+				t.Fatalf("missing unavailable block was not recovered: %+v", legacy)
+			}
+		})
+	}
+	thought := "I'm puzzled about why the mobile output seems missing. Actually I think I understand now: desktop failed before mobile ran."
+	envelope := jsonText(map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": []any{
+		map[string]any{"type": "thinking", "thinking": thought}, map[string]any{"type": "text", "text": "Checking the layout."},
+		map[string]any{"type": "tool_use", "id": "read", "name": "Read", "input": map[string]any{"path": "layout.ts"}},
+	}, "usage": map[string]any{"input_tokens": 10, "output_tokens": 4}}})
+	base := MessageRecord{NativeID: "saved", Role: "assistant", Kind: "metadata", Text: envelope, CreatedAt: "2026-10-18T17:10:35Z", EvidenceLocator: "fixture:328", ParentNativeID: "child", Selected: true}
+	got := normalizeReasoningMessages([]MessageRecord{base})
+	if len(got) != 3 || got[0].Kind != "reasoning" || got[0].Text != thought || got[0].NativeID != base.NativeID || got[0].RawText != envelope || got[0].ReasoningFormat != "text" || got[0].ParentNativeID != "child" {
+		t.Fatalf("lost reasoning provenance: %+v", got)
+	}
+	if got[1].Kind != "message" || got[2].Kind != "tool_call" || got[2].CallID != "read" || got[1].RawText != "" || got[2].RawText != "" || conversationTokenCounts(got)["total_tokens"] != 14 {
+		t.Fatalf("lost order or duplicated accounting: %+v", got)
+	}
+	if again := normalizeReasoningMessages(got); jsonText(again) != jsonText(got) {
+		t.Fatalf("normalization is not idempotent: %+v", again)
+	}
+	replyFirst := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Looking"},{"type":"thinking","thinking":"Now I understand"}]}}`
+	items := normalizeReasoningMessages([]MessageRecord{{NativeID: "reply-first", Role: "assistant", Kind: "metadata", Text: replyFirst}})
+	if len(items) != 2 || items[0].Kind != "message" || items[1].Kind != "reasoning" {
+		t.Fatalf("a reply's raw envelope duplicated thinking: %+v", items)
+	}
+	if again := normalizeReasoningMessages(items); jsonText(again) != jsonText(items) {
+		t.Fatalf("reply-first normalization changed on replay: %+v", again)
+	}
+	// Historical mixed envelopes often survive only as accounting evidence on
+	// the already extracted reply. Recover the omitted block in source order.
+	oldReply := MessageRecord{NativeID: "old:block:1", Role: "assistant", Kind: "message", Text: "Checking the layout.", RawText: envelope, EvidenceLocator: "fixture:328", Selected: true}
+	recovered := normalizeReasoningMessages([]MessageRecord{oldReply})
+	if len(recovered) != 2 || recovered[0].Kind != "reasoning" || recovered[0].Text != thought || recovered[0].NativeID != "old:block:0" || recovered[0].RawText != "" || recovered[1].NativeID != oldReply.NativeID {
+		t.Fatalf("raw-only thinking not recovered: %+v", recovered)
+	}
+	if again := normalizeReasoningMessages(recovered); jsonText(again) != jsonText(recovered) || conversationTokenCounts(again)["total_tokens"] != 14 {
+		t.Fatalf("raw recovery duplicated thinking or accounting: %+v", again)
+	}
+	oldCodex := MessageRecord{NativeID: "old-codex", Role: "system", Kind: "metadata", Text: "Accounting evidence", RawText: `{"type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"Now I see"}]}}`}
+	if items := normalizeReasoningMessages([]MessageRecord{oldCodex}); len(items) != 1 || items[0].Kind != "reasoning" || items[0].ReasoningFormat != "summary" || items[0].Text != "Now I see" || items[0].NativeID != oldCodex.NativeID {
+		t.Fatalf("Codex raw reasoning envelope was not recovered: %+v", items)
+	}
+	for _, tc := range []struct{ name, role, kind, body, want, format string }{
+		{"summary", "assistant", "metadata", `{"type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"Now I see the issue"}],"encrypted_content":"secret"}}`, "reasoning", "summary"},
+		{"full text", "assistant", "metadata", `{"type":"reasoning","content":[{"type":"reasoning_text","text":"Now I understand"}],"summary":[{"type":"summary_text","text":"shorter"}]}`, "reasoning", "text"},
+		{"exec summary", "assistant", "metadata", `{"type":"reasoning","text":"I understand now"}`, "reasoning", "summary"},
+		{"analysis channel", "assistant", "metadata", `{"type":"message","role":"assistant","channel":"analysis","content":[{"type":"output_text","text":"Now I understand"}]}`, "reasoning", "text"},
+		{"encrypted", "assistant", "metadata", `{"type":"reasoning","encrypted_content":"not searchable thought"}`, "metadata", ""},
+		{"redacted", "assistant", "metadata", `{"type":"assistant","message":{"content":[{"type":"redacted_thinking","data":"not searchable thought"}]}}`, "metadata", ""},
+		{"empty", "assistant", "metadata", `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":" "}]}}`, "metadata", ""},
+		{"user quotation", "user", "message", envelope, "message", ""},
+		{"assistant quotation", "assistant", "message", envelope, "message", ""},
+		{"tool quotation", "tool", "tool_result", envelope, "tool_result", ""},
+		{"assistant tool input", "assistant", "tool_call", envelope, "tool_call", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := MessageRecord{NativeID: "event", Role: tc.role, Kind: tc.kind, Text: tc.body}
+			items := normalizeReasoningMessage(input)
+			if len(items) != 1 || items[0].Kind != tc.want || items[0].ReasoningFormat != tc.format {
+				t.Fatalf("normalization: %+v", items)
+			}
+			if tc.want != "reasoning" && tc.role == "assistant" && tc.kind == "metadata" && strings.Contains(items[0].Text, "not searchable thought") {
+				t.Fatal("unavailable payload became searchable")
+			}
+		})
+	}
+}
+
+func TestNativeReasoningRetention(t *testing.T) {
+	claude := []map[string]any{{"type": "assistant", "uuid": "event", "message": map[string]any{"role": "assistant", "model": "opus", "content": []any{
+		map[string]any{"type": "thinking", "thinking": "Now I understand"},
+		map[string]any{"type": "text", "text": "A reply"},
+		map[string]any{"type": "thinking", "thinking": "Now I see"},
+		map[string]any{"type": "text", "text": "Another reply"},
+	}}}}
+	adapter := jsonlAdapter{baseAdapter: baseAdapter{config: SourceConfig{Account: "local"}}, provider: "claude"}
+	record, ok, err := adapter.claude("fixture.jsonl", claude)
+	if err != nil || !ok {
+		t.Fatalf("Claude: %v %v", ok, err)
+	}
+	messages := record.Conversations[0].Messages
+	if len(messages) != 4 || messages[0].Kind != "reasoning" || messages[1].NativeID != "event" || messages[2].Kind != "reasoning" || messages[3].Text != "Another reply" {
+		t.Fatalf("Claude order/identity: %+v", messages)
+	}
+	conductor := conductorEvents("event", "assistant", jsonText(claude[0]), "", "fixture:1", map[string]bool{})
+	if len(conductor) != 4 || conductor[0].Kind != "reasoning" || conductor[2].Kind != "reasoning" {
+		t.Fatalf("Conductor: %+v", conductor)
+	}
+	thinkingOnly := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"First"},{"type":"thinking","thinking":"Second"}]}}`
+	backfilled := normalizeReasoningMessages([]MessageRecord{{NativeID: "thinking-only", Role: "assistant", Kind: "metadata", Text: thinkingOnly}})
+	reindexed := conductorEvents("thinking-only", "assistant", thinkingOnly, "", "", map[string]bool{})
+	if len(reindexed) != 2 || reindexed[0].NativeID != backfilled[0].NativeID || reindexed[1].NativeID != backfilled[1].NativeID {
+		t.Fatalf("Conductor reindex changed recovered identities: %+v vs %+v", reindexed, backfilled)
+	}
+	adapter.provider = "codex"
+	code, ok, err := adapter.codex("rollout.jsonl", []map[string]any{
+		{"type": "session_meta", "payload": map[string]any{"id": "reasoning-session"}},
+		{"type": "response_item", "payload": map[string]any{"id": "reason", "type": "reasoning", "summary": []any{map[string]any{"type": "summary_text", "text": "Now I understand"}}}},
+		{"type": "response_item", "payload": map[string]any{"id": "analysis", "type": "message", "role": "assistant", "channel": "analysis", "content": []any{map[string]any{"type": "output_text", "text": "Now I see"}}}},
+		{"type": "response_item", "payload": map[string]any{"id": "reply", "type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "Done"}}}},
+	})
+	if err != nil || !ok {
+		t.Fatalf("Codex: %v %v", ok, err)
+	}
+	messages = code.Conversations[0].Messages
+	if len(messages) != 3 || messages[0].Kind != "reasoning" || messages[0].ReasoningFormat != "summary" || messages[1].Kind != "reasoning" || messages[2].Kind != "message" {
+		t.Fatalf("Codex: %+v", messages)
+	}
+	path := filepath.Join(t.TempDir(), "exec.jsonl")
+	writeSourceFile(t, path, "{\"type\":\"thread.started\",\"thread_id\":\"exec\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"thought\",\"type\":\"reasoning\",\"text\":\"Now I see\"}}\n")
+	exec, ok, err := parseCodexExec(path, path)
+	if err != nil || !ok || len(exec.Messages) != 1 || exec.Messages[0].Kind != "reasoning" || exec.Messages[0].ReasoningFormat != "summary" {
+		t.Fatalf("Codex exec: %+v %v %v", exec.Messages, ok, err)
+	}
+}
+
 func TestCodexCompactionTrigger(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rollout-compaction.jsonl")
 	data := strings.Join([]string{
@@ -713,6 +843,7 @@ func TestCanonicalIngestAndAPIContract(t *testing.T) {
 				"id": "conversation-1", "provider": "codex", "messages": []any{
 					map[string]any{"id": "message-1", "role": "user", "text": "Please inspect src/parser.go"},
 					map[string]any{"id": "message-2", "role": "assistant", "text": "Fixed the parser"},
+					map[string]any{"id": "message-3", "role": "assistant", "kind": "reasoning", "reasoning_format": "summary", "text": "Now I understand the parser"},
 				},
 			}},
 			"changes": []any{map[string]any{
@@ -733,8 +864,12 @@ func TestCanonicalIngestAndAPIContract(t *testing.T) {
 	if result.Error != nil {
 		t.Fatalf("ingest failed: %v", result.Error)
 	}
-	if result.Workspaces != 1 || result.Messages != 2 {
+	if result.Workspaces != 1 || result.Messages != 3 {
 		t.Fatalf("unexpected counts: %+v", result)
+	}
+	var format string
+	if err := catalog.DB.QueryRow("SELECT reasoning_format FROM messages WHERE native_id='message-3'").Scan(&format); err != nil || format != "summary" {
+		t.Fatalf("canonical reasoning summary lost: %q %v", format, err)
 	}
 	found, err := catalog.Search(SearchOptions{Query: "parser", Limit: 10})
 	if err != nil {

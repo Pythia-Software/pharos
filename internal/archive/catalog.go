@@ -173,7 +173,11 @@ func (c *Catalog) Close() error {
 // 13: effort is part of the usage ledger key; older writers would merge effort buckets.
 // 14: workspace_names retains source titles separately from resolved titles.
 // Older writers would overwrite the display title without updating its inputs.
-const catalogSchemaVersion = 14
+// 15: Ask Pharos native-session exclusions protect private lookup context.
+// Older ingesters would index those CLI transcripts without the exclusion.
+// 16: normalized reasoning and its extraction ledger. Older parsers can prune
+// the newly retained reasoning during a reindex, losing saved thought again.
+const catalogSchemaVersion = 16
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.
@@ -244,6 +248,7 @@ func (c *Catalog) Initialize() error {
 		{"tool_usage_daily", "effort", "ALTER TABLE tool_usage_daily ADD COLUMN effort TEXT"},
 		{"messages", "previous_native_id", "ALTER TABLE messages ADD COLUMN previous_native_id TEXT"},
 		{"messages", "sender", "ALTER TABLE messages ADD COLUMN sender TEXT"},
+		{"messages", "reasoning_format", "ALTER TABLE messages ADD COLUMN reasoning_format TEXT"},
 		{"message_authorship", "harness_words", "ALTER TABLE message_authorship ADD COLUMN harness_words INTEGER NOT NULL DEFAULT 0"},
 		{"message_authorship", "automated_words", "ALTER TABLE message_authorship ADD COLUMN automated_words INTEGER NOT NULL DEFAULT 0"},
 		{"message_authorship", "template_words", "ALTER TABLE message_authorship ADD COLUMN template_words INTEGER NOT NULL DEFAULT 0"},
