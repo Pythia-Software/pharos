@@ -186,7 +186,18 @@ const writingCounts = (typed, pasted, harness) => ({
   typed_chars: typed * 5, pasted_chars: pasted * 8, harness_chars: harness * 6, total_chars: typed * 5 + pasted * 8 + harness * 6,
 });
 
+const scheduledCloudPlan={provider:'gcp',region:'us-central1',tier:'gcp-standard',name:'Personal cloud backup',bucket:'pharos-browser-fixture',object:'pharos/library.tar.zst',identity:'pharos-backup-uploader',project:'pharos-example',cadence:7,keep:4,minimumAge:1,retentionMode:'count',retentionDays:30,time:'02:00',weekday:0,timezone:'America/Denver',passwordProtected:false,storage_class:'STANDARD'};
+export const cloudScheduledStatus={
+  current_host_id:'browser-mac',schedule_catalog:'/tmp/pharos/catalog.sqlite3',library_catalog:'/tmp/pharos/catalog.sqlite3',active_run_id:'',setup_root:'/tmp/pharos/cloud-setup',
+  destinations:[{id:'cloud-browser',connected:true,config:scheduledCloudPlan,sample_verified:true,restore_verified:true}],
+  schedules:[{destination_id:'cloud-browser',enabled:true,host_id:'browser-mac',host_label:'My Mac',catalog_path:'/tmp/pharos/catalog.sqlite3',cadence:7,time:'02:00',weekday:0,timezone:'America/Denver',anchor:'2026-10-23',next_run_at:iso(-3*day),failures:0}],
+  runs:[{id:'cloud-full-latest',destination_id:'cloud-browser',kind:'full',trigger:'scheduled',state:'complete',object:scheduledCloudPlan.object,version:'1792771200000000',total_bytes:42000000000,file_bytes:140000000000,files:42879,started_at:iso(day),verified:false},
+    {id:'cloud-full-verified',destination_id:'cloud-browser',kind:'full',trigger:'manual',state:'complete',object:scheduledCloudPlan.object,version:'1792684800000000',total_bytes:40000000000,file_bytes:135000000000,files:40000,started_at:iso(8*day),verified:true,restored_directory:'/tmp/pharos/recovered-library'}]
+};
+
 export const defaultApi = {
+  "GET /api/cloud-backup": {destinations:[],runs:[],schedules:[],active_run_id:"",setup_root:"/tmp/pharos/cloud-setup"},
+  "POST /api/cloud-backup/schedule": {saved:true},
   "GET /api/ask/status": { settings: { enabled: false, showInvitation: true, selection: null }, providers: [] },
   "POST /api/ask/clear-visits": {ok:true},
   "POST /api/ask/visits": {ok:true},

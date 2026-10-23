@@ -439,16 +439,17 @@ func toBackupDestination(err error) error {
 }
 
 type backupJob struct {
-	ctx      context.Context
-	config   Config
-	plan     backupPlan
-	dest     string
-	prune    bool
-	previous *backupManifest
-	run      BackupRun
-	progress func(BackupRun)
-	buffer   []byte
-	started  time.Time
+	ctx       context.Context
+	config    Config
+	plan      backupPlan
+	dest      string
+	prune     bool
+	ephemeral bool // owned cloud snapshot, never a durable local backup
+	previous  *backupManifest
+	run       BackupRun
+	progress  func(BackupRun)
+	buffer    []byte
+	started   time.Time
 	// keep holds the DEST files (by device and inode, so names that the
 	// destination stores differently, as HFS+ does accented ones, still
 	// match) that the item being backed up accounts for; prune keeps them.
@@ -666,9 +667,12 @@ func (j *backupJob) execute() error {
 	record := backupRecord{StartedAt: j.run.StartedAt, FinishedAt: manifest.FinishedAt, Destination: j.dest, Host: manifest.Host,
 		FilesTotal: j.run.FilesTotal, FilesCopied: j.run.FilesCopied, BytesTotal: j.run.BytesTotal, BytesCopied: j.run.BytesCopied,
 		DurationSeconds: time.Since(j.started).Seconds(), Partial: len(j.run.Missing) > 0, Missing: j.run.Missing}
-	if err := recordBackup(j.config, record); err != nil {
-		j.run.Warnings = append(j.run.Warnings, fmt.Sprintf("the backup is complete, but recording it in %s failed: %v", backupRecordPath(j.config), err))
+	if !j.ephemeral {
+		if err := recordBackup(j.config, record); err != nil {
+			j.run.Warnings = append(j.run.Warnings, fmt.Sprintf("the backup is complete, but recording it in %s failed: %v", backupRecordPath(j.config), err))
+		}
 	}
+
 	return nil
 }
 

@@ -41,6 +41,9 @@ func Run(arguments []string) error {
 	}
 	command := filtered[0]
 	args := filtered[1:]
+	if command == "cloud-restore" {
+		return runCloudRestoreCLI(args)
+	}
 	if command == "init" {
 		path := "archive.toml"
 		if len(args) > 0 {
@@ -110,6 +113,9 @@ func Run(arguments []string) error {
 	// for writing.
 	if command == "capture" {
 		return runCaptureCLI(config, args)
+	}
+	if command == "cloud-backup" {
+		return runCloudCLI(config, args)
 	}
 	if command == "backup" {
 		return runBackupCLI(config, args)
@@ -316,7 +322,7 @@ func Run(arguments []string) error {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: pharos [--config PATH] {init,init-library,add-this-mac,serve,capture,index,backup,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,upgrade,build-tools,pricing,search,tl1,findings,health,doctor,dev-ui,mcp,probe,volume-id}")
+	return fmt.Errorf("usage: pharos [--config PATH] {init,init-library,add-this-mac,serve,capture,index,backup,cloud-backup,cloud-restore,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,upgrade,build-tools,pricing,search,tl1,findings,health,doctor,dev-ui,mcp,probe,volume-id}")
 }
 func urlQueryEscape(value string) string {
 	replacer := strings.NewReplacer("%", "%25", " ", "%20", "+", "%2B", "?", "%3F", "&", "%26", "=", "%3D")

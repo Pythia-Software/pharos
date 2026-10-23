@@ -66,6 +66,7 @@ type Server struct {
 	life       lifecycle
 	captures   captureRuns
 	backups    backupRuns
+	cloud      cloudJobs
 	tasks      backgroundTasks
 	timingMu   sync.Mutex
 	estimator  activityEstimator
@@ -113,6 +114,7 @@ func (s *Server) Serve() error {
 	s.spawn(s.Catalog.maintainQueryTextIndexes)
 	s.spawn(func(ctx context.Context) { s.Catalog.keepWALSmall(ctx, 10*time.Second, walSizeLimit) })
 	s.spawn(s.automaticLoop)
+	s.spawn(s.cloudScheduleLoop)
 	s.refreshGitInBackground(true)
 	return s.serveUntilStopped(server, listener)
 }
@@ -217,7 +219,7 @@ func (s *Server) authorized(r *http.Request) bool {
 // of which serves the single-page UI.
 func isUIPage(path string) bool {
 	switch path {
-	case "/", "/home", "/cards", "/library", "/settings", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/preferences", "/settings/ask", "/sources", "/activity", "/analyze", "/tools", "/tl1", "/tl1/configurations", "/tl1/followups", "/tl1/quality", "/tl1/runs", "/health", "/mcp", "/findings":
+	case "/", "/home", "/cards", "/library", "/settings", "/settings/backups", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/preferences", "/settings/ask", "/sources", "/activity", "/analyze", "/tools", "/tl1", "/tl1/configurations", "/tl1/followups", "/tl1/quality", "/tl1/runs", "/health", "/mcp", "/findings":
 		return true
 	}
 	return strings.HasPrefix(path, "/work/")
@@ -230,6 +232,7 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/onboarding.js":    {"onboarding.js", "text/javascript; charset=utf-8"},
 	"/assets/upgrade.js":       {"upgrade.js", "text/javascript; charset=utf-8"},
 	"/assets/library.js":       {"library.js", "text/javascript; charset=utf-8"},
+	"/assets/cloud-backup.js":  {"cloud-backup.js", "text/javascript; charset=utf-8"},
 	"/assets/sync.js":          {"sync.js", "text/javascript; charset=utf-8"},
 	"/assets/carbon.js":        {"carbon.js", "text/javascript; charset=utf-8"},
 	"/assets/menu-bar.js":      {"menu-bar.js", "text/javascript; charset=utf-8"},
@@ -468,6 +471,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.captureStatus(), http.StatusOK)
 	case path == "/api/index":
 		writeJSON(w, s.indexStatus(), http.StatusOK)
+	case path == "/api/cloud-backup":
+		s.getCloud(w, r)
 	case path == "/api/backup":
 		writeJSON(w, s.backupStatus(), http.StatusOK)
 	case path == "/api/search/status":
@@ -615,6 +620,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"stopped": s.Catalog.stopLibraryRefresh()}, http.StatusOK)
 	case path == "/api/library/refresh/resume":
 		writeJSON(w, map[string]any{"resumed": s.Catalog.resumeLibraryRefresh()}, http.StatusOK)
+	case strings.HasPrefix(path, "/api/cloud-backup/"):
+		s.postCloud(w, r, body)
 	case path == "/api/backup":
 		s.startBackup(w, body)
 	case path == "/api/backup/cancel":
