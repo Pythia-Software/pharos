@@ -245,6 +245,74 @@ func TestStatisticsValidationAndMetricAliases(t *testing.T) {
 	if _, err := callMCP(c, "list_metrics", nil); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := c.DB.Exec(`UPDATE repositories SET display_name='metrics_100%',canonical_remote='https://example.test/metrics_100%' WHERE id='r'`); err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range []string{"query_statistics", "search_work"} {
+		for _, repository := range []string{"metrics_100%", "_100%", "100%"} {
+			args := map[string]any{"repository": repository, "workspace_ids": []string{"w"}, "select": []string{}}
+			if tool == "query_statistics" {
+				args["entity"] = "workspace"
+			}
+			if items := statisticsItems(statisticsCall(t, c, tool, args)); len(items) != 1 {
+				t.Fatalf("%s literal repository %q: %#v", tool, repository, items)
+			}
+		}
+		if _, err := callMCP(c, tool, map[string]any{"repository": "metricsX100Y"}); err == nil {
+			t.Fatalf("%s accepted wildcard repository lookalike", tool)
+		}
+	}
+	legacy := statisticsCall(t, c, "search_work", map[string]any{"repository": "_100%"})
+	if items := statisticsItems(legacy); len(items) != 1 {
+		t.Fatalf("legacy search_work literal repository: %#v", legacy)
+	}
+	if _, err := c.DB.Exec(`UPDATE conversations SET provider='claude',model='claude-opus',effort='high' WHERE id='c1';
+		UPDATE conversations SET provider='codex',model='gpt-6-luna',effort='low' WHERE id='c2';
+		UPDATE messages SET model='claude-sonnet',effort='max' WHERE id='m1'`); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		provider, model, effort string
+		want                    int
+	}{
+		{"claude", "claude-opus", "high", 1},
+		{"codex", "gpt-6-luna", "low", 1},
+		{"claude", "claude-sonnet", "max", 1},
+		{"claude", "gpt-6-luna", "low", 0},
+		{"codex", "claude-opus", "high", 0},
+		{"claude", "claude-opus", "low", 0},
+	} {
+		for _, tool := range []string{"query_statistics", "search_work"} {
+			args := map[string]any{"provider": tc.provider, "model": tc.model, "effort": tc.effort,
+				"workspace_ids": []string{"w"}, "select": []string{}, "result_mode": "metadata"}
+			if tool == "query_statistics" {
+				args["entity"] = "workspace"
+			}
+			items := statisticsItems(statisticsCall(t, c, tool, args))
+			if len(items) != tc.want {
+				t.Fatalf("%s %s/%s/%s: %#v", tool, tc.provider, tc.model, tc.effort, items)
+			}
+		}
+		rows, err := c.searchRows(SearchOptions{Provider: tc.provider, Model: tc.model, Effort: tc.effort}, nil)
+		if err != nil || len(rows) != tc.want {
+			t.Fatalf("Library %s/%s/%s: %v %v", tc.provider, tc.model, tc.effort, rows, err)
+		}
+		legacy := statisticsCall(t, c, "search_work", map[string]any{"provider": tc.provider, "model": tc.model, "effort": tc.effort})
+		if items := statisticsItems(legacy); len(items) != tc.want {
+			t.Fatalf("legacy search_work %s/%s/%s: %#v", tc.provider, tc.model, tc.effort, items)
+		}
+		found, err := c.searchConversations(map[string]any{"provider": tc.provider, "model": tc.model, "effort": tc.effort})
+		if err != nil || len(found["items"].([]map[string]any)) != tc.want {
+			t.Fatalf("search_conversations %s/%s/%s: %#v %v", tc.provider, tc.model, tc.effort, found, err)
+		}
+		conversations := statisticsItems(statisticsCall(t, c, "query_statistics", map[string]any{
+			"entity": "conversation", "provider": tc.provider, "model": tc.model, "effort": tc.effort,
+			"workspace_ids": []string{"w"}, "select": []string{},
+		}))
+		if len(conversations) != tc.want {
+			t.Fatalf("conversation %s/%s/%s: %#v", tc.provider, tc.model, tc.effort, conversations)
+		}
+	}
 }
 
 func TestStatisticsMetricOrderingAfterMirrorCollapse(t *testing.T) {

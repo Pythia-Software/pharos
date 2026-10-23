@@ -1141,6 +1141,20 @@ or discarded source text requires reindexing available transcripts/captures;
 normalization completeness never proves complete source history. See
 [Agent text search](agent-text-search.md).
 
+The **Repair message search** Library upgrade repairs retained Claude parent and
+child links, exposes successfully delivered `SubagentHandback` reports as cited
+assistant replies, and refreshes lexical postings for tool/context envelopes.
+It resumes after interruption and preserves original message IDs, raw evidence,
+tool events, and reconciled usage. New ingestion applies these repairs directly;
+older retained records need the upgrade or a normal source reindex. Neither
+startup nor a search runs the historical repair synchronously.
+
+Token and phrase searches treat JSON-encoded whitespace in tool/context strings
+as separators, so a phrase after `\n` is searchable. Phrases stay within one
+JSON string instead of joining separate fields or content blocks. Match byte ranges still
+refer to the original stored message. Literal and regex modes continue matching
+those original bytes, including JSON escape sequences.
+
 `search_messages` searches indexed message text lexically, without semantic
 fallback, title substring matches, a recent-message cutoff, or a top-500
 candidate limit. Repository, conversation, source, provider, role, kind, and

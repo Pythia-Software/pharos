@@ -322,7 +322,7 @@ func normalizeRecordReasoning(record WorkspaceRecord) WorkspaceRecord {
 	// Do not mutate the adapter's slices: source digests and callers may reuse it.
 	record.Conversations = append([]ConversationRecord(nil), record.Conversations...)
 	for i := range record.Conversations {
-		record.Conversations[i].Messages = normalizeReasoningMessages(record.Conversations[i].Messages)
+		record.Conversations[i].Messages = normalizeHandbackMessages(normalizeReasoningMessages(record.Conversations[i].Messages))
 	}
 	return record
 }

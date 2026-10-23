@@ -68,8 +68,8 @@ func (c *Catalog) searchConversations(args map[string]any) (map[string]any, erro
 	clauses := []string{"1=1"}
 	values := []any{}
 	if repository := firstString(args["repository"]); repository != "" {
-		clauses = append(clauses, "(r.display_name LIKE ? OR r.canonical_remote LIKE ?)")
-		values = append(values, "%"+repository+"%", "%"+repository+"%")
+		clauses = append(clauses, repositoryNamePredicate("r"))
+		values = append(values, repository, repository)
 	}
 	if source := firstString(args["source"]); source != "" {
 		clauses = append(clauses, "w.source_kind=?")
@@ -244,7 +244,7 @@ func (c *Catalog) conversationCards(cards []map[string]any, parsed string) error
 		}
 		card["snippet"] = ""
 		if len(snippets) > 0 {
-			card["snippet"] = clipText(firstString(snippets[0]["snippet"]), 180)
+			card["snippet"] = clipText(lexicalSnippet(firstString(snippets[0]["snippet"])), 180)
 		}
 	}
 	if err := c.attachConversationProvenance(cards); err != nil {
@@ -431,7 +431,7 @@ func (c *Catalog) conversationPassages(args map[string]any) (map[string]any, err
 	items := []map[string]any{}
 	for _, row := range rows {
 		items = append(items, map[string]any{"message_id": row["message_id"], "role": row["role"], "kind": row["kind"],
-			"source_order": row["source_order"], "snippet": clipText(firstString(row["snippet"]), 260)})
+			"source_order": row["source_order"], "snippet": clipText(lexicalSnippet(firstString(row["snippet"])), 260)})
 	}
 	result := map[string]any{"conversation_id": id, "items": items}
 	fitConversationItems(result, mcpBudget(args, 900))

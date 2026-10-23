@@ -743,6 +743,11 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 			return 0, 0, err
 		}
 		conversationIDs[index] = conversationID
+		var searchCurrent bool
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM message_search_state WHERE conversation_id=? AND version=?)
+		 OR NOT EXISTS(SELECT 1 FROM messages WHERE conversation_id=?)`, conversationID, messageSearchVersion, conversationID).Scan(&searchCurrent); err != nil {
+			return 0, 0, err
+		}
 		messageWriter, err := newMessageWriter(tx, conversationID)
 		if err != nil {
 			return 0, 0, err
@@ -777,6 +782,13 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 			if err := insertConversationFTS(tx, conversationID); err != nil {
 				return 0, 0, err
 			}
+		}
+		if !searchCurrent && !force {
+			if err := repairMessageSearch(context.Background(), tx, conversationID); err != nil {
+				return 0, 0, err
+			}
+		} else if err := recordMessageSearchState(context.Background(), tx, conversationID); err != nil {
+			return 0, 0, err
 		}
 		if err := upsertConversationDocument(tx, conversationID); err != nil {
 			return 0, 0, err
@@ -1294,7 +1306,7 @@ func replaceMessageFTS(tx *sql.Tx, id string) error {
 	if err := deleteMessageFTS(tx, id); err != nil {
 		return err
 	}
-	result, err := tx.Exec("INSERT INTO messages_fts(message_id,text) SELECT id,text FROM messages WHERE id=? AND text<>''", id)
+	result, err := tx.Exec("INSERT INTO messages_fts(message_id,text) SELECT id,pharos_lexical_text(kind,text) FROM messages WHERE id=? AND text<>''", id)
 	if err != nil {
 		return err
 	}
@@ -1330,7 +1342,7 @@ func insertConversationFTS(tx *sql.Tx, conversationID string) error {
 	if err := tx.QueryRow("SELECT COALESCE(MAX(rowid),0) FROM messages_fts").Scan(&lastRowID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec("INSERT INTO messages_fts(message_id,text) SELECT id,text FROM messages WHERE conversation_id=? AND text<>''", conversationID); err != nil {
+	if _, err := tx.Exec("INSERT INTO messages_fts(message_id,text) SELECT id,pharos_lexical_text(kind,text) FROM messages WHERE conversation_id=? AND text<>''", conversationID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec("INSERT INTO message_fts_rows(message_id,fts_rowid) SELECT message_id,rowid FROM messages_fts WHERE rowid>?", lastRowID); err != nil {
