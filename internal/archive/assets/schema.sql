@@ -1431,3 +1431,27 @@ CREATE TABLE IF NOT EXISTS ask_native_sessions (
   host_id TEXT NOT NULL,
   PRIMARY KEY(provider, native_id)
 );
+
+-- Raw evidence authority is separate from origin, which remains byte-identical
+-- to native sightings. Updated in the same transaction as copy_versions.
+CREATE TABLE IF NOT EXISTS copy_evidence (
+ host_id TEXT NOT NULL,
+ workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+ conversation_id TEXT NOT NULL DEFAULT '',
+ origin TEXT NOT NULL DEFAULT '',
+ version INTEGER NOT NULL,
+ identity TEXT NOT NULL,
+ revision TEXT NOT NULL,
+ PRIMARY KEY(host_id,workspace_id,conversation_id,origin)
+);
+
+CREATE TABLE IF NOT EXISTS source_evidence (
+ host_id TEXT NOT NULL,
+ source_kind TEXT NOT NULL,
+ source_account TEXT NOT NULL,
+ entity TEXT NOT NULL,
+ version INTEGER NOT NULL,
+ identity TEXT NOT NULL,
+ revision TEXT NOT NULL,
+ PRIMARY KEY(host_id,source_kind,source_account,entity)
+);

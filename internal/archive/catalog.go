@@ -179,7 +179,8 @@ func (c *Catalog) Close() error {
 // the newly retained reasoning during a reindex, losing saved thought again.
 // 17: searchable handback replies and lexical JSON-whitespace postings. Older
 // writers could prune the replies or replace corrected postings with raw JSON.
-const catalogSchemaVersion = 17
+// 18: raw SQLite evidence authority. Older writers do not maintain its identity.
+const catalogSchemaVersion = 18
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.

@@ -17,15 +17,16 @@ type plannedPartGroup struct {
 // A plan retains discovery metadata and executable readers, never parsed
 // transcripts. Its membership is bounded even while live sources keep growing.
 type sourceWorkPlan struct {
-	groups           []plannedPartGroup
-	tracker          *partTracker
-	needed           int
-	size             *activitySize
-	features         workFeatures
-	discoveryError   error
-	continueOnError  bool
-	discoverySeconds float64
-	captureSignature string
+	sqliteAcquisition *sqliteAcquisitionBoundary
+	groups            []plannedPartGroup
+	tracker           *partTracker
+	needed            int
+	size              *activitySize
+	features          workFeatures
+	discoveryError    error
+	continueOnError   bool
+	discoverySeconds  float64
+	captureSignature  string
 }
 
 type partialPlanner interface {
@@ -161,6 +162,7 @@ func (c *Catalog) prepareSourcePlan(ctx context.Context, adapter Adapter) (*sour
 	if !ok {
 		return nil, nil
 	}
+	ctx = c.withSQLiteAcquisition(ctx, adapter)
 	setAdapterContext(adapter, ctx)
 	// Planned readers retain this adapter, which may differ from the one
 	// subsequently opened to index a capture.
@@ -173,6 +175,7 @@ func (c *Catalog) prepareSourcePlan(ctx context.Context, adapter Adapter) (*sour
 	if err != nil {
 		return nil, err
 	}
+	plan.sqliteAcquisition, _ = ctx.Value(sqliteAcquisitionKey{}).(*sqliteAcquisitionBoundary)
 	partial := adapter.(partialAdapter)
 	tracker, err := c.newPartTracker(sourceHost(adapter).ID, adapter.Config().Name, partial, captureViewOf(adapter))
 	if err != nil {

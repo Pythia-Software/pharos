@@ -111,6 +111,9 @@ func Run(arguments []string) error {
 	}
 	// Capturing and backing up only copy files; they never open the catalog
 	// for writing.
+	if command == "sqlite-records" {
+		return runSQLiteRecordsCLI(config, args)
+	}
 	if command == "capture" {
 		return runCaptureCLI(config, args)
 	}

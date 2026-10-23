@@ -49,6 +49,8 @@ type ConversationRecord struct {
 }
 
 type WorkspaceRecord struct {
+	EvidenceRevision                                                             string `json:"-"`
+	EvidenceIdentity                                                             string `json:"-"`
 	SourceID, SourceKind, Title, Account, Purpose, Outcome, ActivityAt, Location string
 	Repository                                                                   map[string]any
 	Metadata                                                                     map[string]any
@@ -150,7 +152,7 @@ func (a baseAdapter) original(path string) string {
 // Mac, so Git may be asked about them. Another Mac's paths may not exist here,
 // or may be an unrelated checkout.
 func (a baseAdapter) localLookups() bool {
-	return a.view == nil || !a.view.offHost()
+	return a.view == nil || !a.view.noLocalLookups && !a.view.offHost()
 }
 
 func (a baseAdapter) repository(location, remote string) map[string]any {

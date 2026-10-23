@@ -67,6 +67,7 @@ func captureViewOf(adapter Adapter) *captureView {
 // record commits on its own, so the source is left "indexing" and the next
 // sync resumes it, as after a crash.
 func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress ProgressFunc) IngestResult {
+	ctx = c.withSQLiteAcquisition(ctx, adapter)
 	setAdapterContext(adapter, ctx)
 	config := adapter.Config()
 	mode := modeOf(ctx)
@@ -278,6 +279,9 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 		if err != nil {
 			return err
 		}
+		if record.EvidenceIdentity != "" {
+			digest = record.EvidenceIdentity + ":" + digest
+		}
 		digest = indexVersion + ":" + digest
 		var storedDigest string
 		if err := c.DB.QueryRow(`SELECT digest FROM source_record_states WHERE host_id=? AND source_name=? AND source_kind=?
@@ -316,7 +320,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 				return err
 			}
 			copied, older, conversations, messages = false, false, 0, 0
-			if !mode.force {
+			if !mode.force && record.EvidenceIdentity == "" {
 				copied, err = sightCopiedRecord(tx, *record, digest, host, config.Name)
 				if err != nil {
 					return err
@@ -627,6 +631,21 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 	if err != nil {
 		return 0, 0, err
 	}
+	authority, err := resolveAuthority(tx, record, workspaceID, host)
+	if err != nil {
+		return 0, 0, err
+	}
+	hasEvidence := false
+	if workspaceID != "" {
+		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM copy_evidence WHERE host_id=? AND workspace_id=?)", host, workspaceID).Scan(&hasEvidence); err != nil {
+			return 0, 0, err
+		}
+	}
+	if fromCapture || record.EvidenceIdentity != "" || hasEvidence {
+		if err := guardCapture(tx, record, workspaceID, host, &authority); err != nil {
+			return 0, 0, err
+		}
+	}
 	if (record.SourceKind == "conductor" || record.SourceKind == "tl1") && workspaceID != "" {
 		for _, conversation := range record.Conversations {
 			if conversation.Provider != record.SourceKind {
@@ -636,15 +655,6 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 					return 0, 0, err
 				}
 			}
-		}
-	}
-	authority, err := resolveAuthority(tx, record, workspaceID, host)
-	if err != nil {
-		return 0, 0, err
-	}
-	if fromCapture {
-		if err := guardCapture(tx, record, workspaceID, host, &authority); err != nil {
-			return 0, 0, err
 		}
 	}
 	repoID, stalePaths := "", []string(nil)
@@ -946,7 +956,11 @@ func guardCapture(tx *sql.Tx, record WorkspaceRecord, workspaceID, host string, 
 		if err != nil {
 			return err
 		}
-		if known && conversation.Observed < stored {
+		rejected, err := evidenceVersionRejected(tx, host, workspaceID, claim.id, conversation.Origin, conversation.Observed, stored, known, record.EvidenceIdentity)
+		if err != nil {
+			return err
+		}
+		if rejected {
 			claim.older = true
 			older++
 		}
@@ -955,7 +969,10 @@ func guardCapture(tx *sql.Tx, record WorkspaceRecord, workspaceID, host string, 
 	if err != nil {
 		return err
 	}
-	workspaceOlder := known && record.Observed < stored
+	workspaceOlder, err := evidenceVersionRejected(tx, host, workspaceID, "", "", record.Observed, stored, known, record.EvidenceIdentity)
+	if err != nil {
+		return err
+	}
 	if older == len(record.Conversations) && (older > 0 || workspaceOlder) {
 		return errOlderCopy
 	}
@@ -1003,6 +1020,15 @@ func recordCopyVersions(tx *sql.Tx, host, workspaceID string, conversationIDs []
 		_, err := tx.Exec(`INSERT INTO copy_versions(host_id,workspace_id,conversation_id,origin,version,written_at) VALUES(?,?,?,?,?,?)
 			ON CONFLICT(host_id,workspace_id,conversation_id,origin) DO UPDATE SET version=excluded.version,written_at=excluded.written_at`,
 			host, workspaceID, conversationID, origin, version, timestamp)
+		if err != nil {
+			return err
+		}
+		if record.EvidenceIdentity == "" {
+			_, err = tx.Exec("DELETE FROM copy_evidence WHERE host_id=? AND workspace_id=? AND conversation_id=? AND origin=?", host, workspaceID, conversationID, origin)
+			return err
+		}
+		_, err = tx.Exec(`INSERT INTO copy_evidence(host_id,workspace_id,conversation_id,origin,version,identity,revision) VALUES(?,?,?,?,?,?,?)
+            ON CONFLICT(host_id,workspace_id,conversation_id,origin) DO UPDATE SET version=excluded.version,identity=excluded.identity,revision=excluded.revision`, host, workspaceID, conversationID, origin, version, record.EvidenceIdentity, record.EvidenceRevision)
 		return err
 	}
 	if workspace {
@@ -1994,3 +2020,24 @@ func (c *Catalog) ReconcileIdentitiesContext(ctx context.Context) (int, error) {
 	return after - before, nil
 }
 func decodeJSONText(text string, value any) error { return json.Unmarshal([]byte(text), value) }
+
+// Changed non-advancing evidence is retained but never promoted. Equal legacy
+// authority has no raw association and stays unresolved. Parser upgrades may
+// apply equal versions only when the associated raw identity is identical.
+func evidenceVersionRejected(tx *sql.Tx, host, workspace, conversation, origin string, incoming, stored int64, known bool, identity string) (bool, error) {
+	if !known {
+		return false, nil
+	}
+	if incoming < stored {
+		return true, nil
+	}
+	if incoming != stored {
+		return false, nil
+	}
+	var previous string
+	err := tx.QueryRow("SELECT identity FROM copy_evidence WHERE host_id=? AND workspace_id=? AND conversation_id=? AND origin=? AND version=?", host, workspace, conversation, origin, stored).Scan(&previous)
+	if err == sql.ErrNoRows {
+		return identity != "", nil
+	}
+	return identity == "" || previous != identity, err
+}

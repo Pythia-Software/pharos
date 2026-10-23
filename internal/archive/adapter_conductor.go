@@ -124,6 +124,34 @@ func (a *conductorAdapter) discover(selected map[string]bool, unchanged func([]s
 	}
 	sort.Strings(candidates)
 	for _, path := range candidates {
+		if boundary, ok := a.context().Value(sqliteAcquisitionKey{}).(*sqliteAcquisitionBoundary); ok && a.view == nil && !boundary.reconciled[path] {
+			supported, err := conductorConversationDatabase(path)
+			if err != nil {
+				return err
+			}
+			if !supported {
+				manifest, err := loadCaptureManifest(filepath.Join(boundary.root, currentHost().ID, a.config.Name))
+				if err != nil {
+					return err
+				}
+				for _, snapshot := range manifest.Snapshots {
+					supported = supported || snapshot.Path == path
+				}
+			}
+			if !supported {
+				continue
+			}
+			boundary.reconciled[path] = true
+			err = reconcileSQLiteLive(a.context(), boundary.root, a.config, path, !modeOf(a.context()).automatic)
+			if err != nil && !modeOf(a.context()).automatic {
+				return err
+			}
+			identities, identityErr := retainedConductorIdentities(a.context(), boundary.root, a.config, path)
+			if identityErr != nil {
+				return identityErr
+			}
+			boundary.identities[path] = identities
+		}
 		for attempt := 0; ; attempt++ {
 			if err := a.context().Err(); err != nil {
 				return err
@@ -210,6 +238,14 @@ func (a *conductorAdapter) database(path string, selected map[string]bool, uncha
 			return err
 		}
 	}
+	if boundary, ok := a.context().Value(sqliteAcquisitionKey{}).(*sqliteAcquisitionBoundary); ok && a.view == nil {
+		for sid, part := range signals {
+			if identity := boundary.identities[path][sid]; identity != "" {
+				part.signal = hashBytes([]byte(part.signal + ":" + identity))
+				signals[sid] = part
+			}
+		}
+	}
 	if modeOf(a.context()).automatic && selected == nil && signals != nil {
 		selected := map[string]bool{}
 		for _, session := range sessions {
@@ -256,6 +292,12 @@ func (a *conductorAdapter) database(path string, selected map[string]bool, uncha
 			if a.planSession(path, sid, parts) || unchanged(parts) {
 				continue
 			}
+		}
+		if boundary, ok := a.context().Value(sqliteAcquisitionKey{}).(*sqliteAcquisitionBoundary); ok && a.view == nil {
+			if err := acquireConductorSession(a.context(), boundary.root, a.config, path, sid, func(record WorkspaceRecord) error { return emit(&record, parts) }); err != nil {
+				return err
+			}
+			continue
 		}
 		record, err := a.session(path, tx, sessionTable, messageTable, session, sidColumn, fkColumn, scols, mcols, tables)
 		if err != nil {
@@ -438,7 +480,13 @@ func (a *conductorAdapter) session(path string, tx *sql.Tx, sessionTable, messag
 	if mcols["created_at"] && mcols["id"] {
 		order = " ORDER BY created_at,id"
 	}
-	rows, err := queryMapsContext(a.context(), tx, "SELECT * FROM "+messageTable+" WHERE "+fkColumn+"=?"+order, session[sidColumn])
+	var rows []map[string]any
+	var err error
+	if a.view != nil && a.view.recordRevision != nil {
+		rows, err = a.view.recordStore.conductorParserRows(*a.view.recordRevision, sid)
+	} else {
+		rows, err = queryMapsContext(a.context(), tx, "SELECT * FROM "+messageTable+" WHERE "+fkColumn+"=?"+order, session[sidColumn])
+	}
 	if err != nil {
 		return WorkspaceRecord{}, err
 	}

@@ -685,3 +685,33 @@ func TestBackupBoundsTheCatalogWAL(t *testing.T) {
 		t.Fatal("the abandoned snapshot was left behind")
 	}
 }
+
+// Raw revisions and persistent pin ownership are ordinary capture-tree files.
+// A restored library must replay them without either the native DB or its
+// source host, including after every native generation has disappeared.
+func addSQLiteRecordBackupFixture(t *testing.T, config *Config) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "conductor")
+	exec := conductorFixture(t, dir)
+	exec(addConductorSession("durable-backup", 2)...)
+	config.Sources = []SourceConfig{{Name: "records", Kind: "conductor", Path: dir, Account: "local", Enabled: true}}
+	if run := runCapture(t, *config); !run.OK {
+		t.Fatal(run)
+	}
+	return dir
+}
+func TestBackupRestoresSQLiteRecordReplay(t *testing.T) {
+	config, dest := backupFixture(t)
+	original := addSQLiteRecordBackupFixture(t, &config)
+	runBackup(t, config, dest, false)
+	os.RemoveAll(original)
+	restored := config
+	restored.CaptureRoot = filepath.Join(dest, "captures")
+	os.RemoveAll(capturedPath(restored, "records", "files"))
+	os.RemoveAll(capturedPath(restored, "records", "history"))
+	catalog, _ := testCatalog(t)
+	recordTestReplay(t, restored, "records", catalog)
+	if conversationMessages(t, catalog, "conductor:durable-backup") != 2 {
+		t.Fatal("backup lost durable SQLite evidence")
+	}
+}

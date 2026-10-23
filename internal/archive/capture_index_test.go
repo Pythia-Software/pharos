@@ -623,9 +623,9 @@ func TestIndexKeepsDeletedConductorSessionsFromUnindexedSnapshots(t *testing.T) 
 	capture()
 	exec(addConductorSession("s3", 1)...)
 	capture()
-	// The snapshot holding s2 is past capture_snapshot_generations but kept,
-	// since no index has seen it.
-	if kept := generations(); len(kept) != 2 {
+	// Verified raw evidence now preserves s2 even after its native generation
+	// passes ordinary snapshot retention.
+	if kept := generations(); len(kept) != 1 {
 		t.Fatalf("generations: %#v", kept)
 	}
 	targets, err := captureTargets(config.CaptureRoot, nil, false, nil)
@@ -663,7 +663,7 @@ func TestIndexKeepsDeletedConductorSessionsFromUnindexedSnapshots(t *testing.T) 
 	capture()
 	exec(addConductorSession("s7", 1)...)
 	result := capture()
-	if kept := generations(); len(kept) != 2 || len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0].Error, "never indexed") {
+	if kept := generations(); len(kept) != 1 || len(result.Warnings) != 0 {
 		t.Fatalf("unindexed generations past the limit: %#v %#v", kept, result.Warnings)
 	}
 }
@@ -873,13 +873,17 @@ func testIndexTL1CaptureWithoutTheOriginalPaths(t *testing.T, file string) {
 	}
 	writeSourceFile(t, registry, string(data))
 	config := captureTestConfig(t, SourceConfig{Name: "tl1", Kind: "tl1", Path: registry, Account: "local", Enabled: true})
-	runCapture(t, config)
+	if summary := runCapture(t, config); !summary.OK {
+		t.Fatalf("capture: %+v", summary)
+	}
 	// Index on another Mac, where none of the registry's paths exist.
 	for _, path := range []string{filepath.Join(root, "tl1"), repository} {
 		if err := os.RemoveAll(path); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// Exercise the production fallback using only durable row objects.
+	os.RemoveAll(capturedPath(config, "tl1", "files"))
 	useHost(t, "host-b")
 	catalog, _ := testCatalog(t)
 	if result := indexCaptures(t, catalog, config.CaptureRoot, "host-a")[0]; result.Workspaces != 1 || result.Conversations != 1 {
@@ -918,12 +922,15 @@ func TestIndexTL1CaptureStoresAnalysisFromTheCapture(t *testing.T) {
 		"config_path": configPath, "code_repo": repository, "transcripts_dir": transcripts, "project_name": "project"}}})
 	writeSourceFile(t, registry, string(data))
 	config := captureTestConfig(t, SourceConfig{Name: "tl1", Kind: "tl1", Path: registry, Account: "local", Enabled: true})
-	runCapture(t, config)
+	if summary := runCapture(t, config); !summary.OK {
+		t.Fatalf("capture: %+v", summary)
+	}
 	for _, path := range []string{filepath.Join(root, "tl1"), repository} {
 		if err := os.RemoveAll(path); err != nil {
 			t.Fatal(err)
 		}
 	}
+	os.RemoveAll(capturedPath(config, "tl1", "files"))
 	useHost(t, "host-b")
 	catalog, _ := testCatalog(t)
 	if result := indexCaptures(t, catalog, config.CaptureRoot, "host-a")[0]; result.Error != nil || result.Workspaces != 1 {

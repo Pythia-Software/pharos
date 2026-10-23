@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"net/http"
@@ -365,5 +366,51 @@ func TestCloudDisconnectPreservesRestoreEvidence(t *testing.T) {
 	}
 	if err = catalog.finishCloudVerification(context.Background(), config, &run, archive, nil); err != nil {
 		t.Fatalf("disconnect removed recovery evidence: %v", err)
+	}
+}
+
+func TestCloudRestoresSQLiteRecordReplay(t *testing.T) {
+	slowTest(t)
+	for _, protected := range []bool{false, true} {
+		t.Run(fmt.Sprint(protected), func(t *testing.T) {
+			_, _, destination, run, _ := cloudFixture(t, protected)
+			config, _ := backupFixture(t)
+			original := addSQLiteRecordBackupFixture(t, &config)
+			if e := os.MkdirAll(config.StagingRoot, 0700); e != nil {
+				t.Fatal(e)
+			}
+			stage, e := cloudWorkDir(config, "cloud-records-test-")
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer os.RemoveAll(stage)
+			run.Kind = "full"
+			archive, _, e := buildCloudArchive(t.Context(), destination, &run, config, stage, func(string) {})
+			if e != nil {
+				t.Fatal(e)
+			}
+			f, e := os.Open(archive)
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer f.Close()
+			payload, e := cloudPayload(f, []byte("correct recovery password"), "")
+			if e != nil {
+				t.Fatal(e)
+			}
+			restored, e := extractCloudArchive(t.Context(), config, payload, nil)
+			if e != nil {
+				t.Fatal(e)
+			}
+			os.RemoveAll(original)
+			config.CaptureRoot = filepath.Join(restored, "captures")
+			os.RemoveAll(capturedPath(config, "records", "files"))
+			os.RemoveAll(capturedPath(config, "records", "history"))
+			catalog, _ := testCatalog(t)
+			recordTestReplay(t, config, "records", catalog)
+			if conversationMessages(t, catalog, "conductor:durable-backup") != 2 {
+				t.Fatal("cloud archive lost raw SQLite evidence")
+			}
+		})
 	}
 }

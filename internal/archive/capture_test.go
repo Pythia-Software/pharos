@@ -199,6 +199,31 @@ func TestCaptureAppendsAndPreservesRewrittenFiles(t *testing.T) {
 	if len(entry.Previous) != 2 || readText(t, capturedPath(config, "claude", entry.Previous[1].Captured)) != "LINE ONE\nline two\n" {
 		t.Fatalf("truncated file lost its earlier capture: %#v", entry)
 	}
+
+	// A transcript can grow after its consistent prefix was captured. With no
+	// SQLite inputs there is no cross-file database group to invalidate it.
+	second := filepath.Join(claude, "p", "z.jsonl")
+	writeSourceFile(t, second, "another session\n")
+	appended := false
+	override(t, &captureFault, func(stage, rel string) error {
+		if stage == "copy" && rel == "files/p/z.jsonl" && !appended {
+			appended = true
+			writeSourceFile(t, file, "short\nnext tick\n")
+		}
+		return nil
+	})
+	if run := runCapture(t, config); !run.OK || !appended {
+		t.Fatalf("append after prefix capture failed: %+v", run)
+	}
+	if got := readText(t, capturedPath(config, "claude", entry.Captured)); got != "short\n" {
+		t.Fatalf("captured prefix changed: %q", got)
+	}
+	if run := runCapture(t, config); !run.OK {
+		t.Fatal(run)
+	}
+	if got := readText(t, capturedPath(config, "claude", entry.Captured)); got != "short\nnext tick\n" {
+		t.Fatalf("next capture did not catch up: %q", got)
+	}
 }
 
 func TestCaptureKeepsFilesDeletedAtSource(t *testing.T) {

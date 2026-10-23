@@ -57,7 +57,7 @@ type preparedSyncSource struct {
 // inventory is the execution plan, so estimation adds no second filesystem walk.
 func (s *Server) prepareSyncSource(ctx context.Context, source SourceConfig, p *preparedSyncSource) {
 	setAdapterContext(p.adapter, ctx)
-	if source.Kind == "conductor" {
+	if isConductorSource(source.Kind) {
 		p.preflight, p.err = conductorPreflight(p.adapter)
 		if p.err == nil {
 			var version string
@@ -69,7 +69,14 @@ func (s *Server) prepareSyncSource(ctx context.Context, source SourceConfig, p *
 		}
 		var previous string
 		_ = s.Catalog.reader().QueryRowContext(ctx, "SELECT COALESCE(preflight,'') FROM automatic_source_states WHERE host_id=? AND source_name=?", currentHost().ID, source.Name).Scan(&previous)
-		if p.preflight == previous {
+		current := true
+		if source.Options["sqlite_record_capture"] == true {
+			current, p.err = s.Catalog.sqliteReconciliationCurrent(source)
+			if p.err != nil {
+				return
+			}
+		}
+		if p.preflight == previous && current {
 			p.skipped = true
 			return
 		}

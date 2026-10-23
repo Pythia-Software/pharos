@@ -28,9 +28,13 @@ import (
 
 // captureView lets an adapter read a capture as if it were the source.
 type captureView struct {
-	host     Host
-	dir      string // <capture_root>/<host-id>/<source>
-	manifest *captureManifest
+	recordStore                        *recordStore
+	recordRevision                     *sqliteRevision
+	evidenceRevision, evidenceIdentity string
+	noLocalLookups                     bool
+	host                               Host
+	dir                                string // <capture_root>/<host-id>/<source>
+	manifest                           *captureManifest
 	// mappings pair original paths with absolute captured paths.
 	mappings []capturePathMapping
 }
@@ -289,6 +293,35 @@ func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progre
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		return fail(fmt.Errorf("%s is already being indexed: %w", target.label(), err))
 	}
+	// Native readers remain the default until the SQLite automatic rollout
+	// gate passes. If the native inputs have rotated away, use durable rows.
+	native, err := loadCaptureManifest(target.Dir)
+	if err != nil {
+		return fail(err)
+	}
+	missingNative := true
+	for _, snapshot := range native.Snapshots {
+		if _, err := os.Stat(filepath.Join(target.Dir, filepath.FromSlash(snapshot.Captured))); err == nil {
+			missingNative = false
+		}
+	}
+	if missingNative {
+		// Logical acquisitions have committed row inventories but no native
+		// snapshots. Filesystem-only sources need no SQLite reader/lock.
+		if _, err := os.Stat(filepath.Join(target.Dir, recordDir, "entities")); err == nil {
+			if reader, close, err := openSQLiteReplay(ctx, target); err != nil {
+				return fail(err)
+			} else if reader != nil {
+				defer close()
+				mode := modeOf(ctx)
+				mode.plan = nil
+				mode.force = true
+				return c.IngestContext(withIngestMode(ctx, mode), reader, progress)
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fail(err)
+		}
+	}
 	adapter, manifest, view, err := openCaptureAdapter(target)
 	if err != nil {
 		return fail(err)
@@ -315,6 +348,32 @@ func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progre
 			result.Error = fmt.Sprintf("superseded snapshots: %v", err)
 		}
 		return result
+	}
+	// Until automatic cutover is enabled, native parsing remains the primary
+	// reader. Durable history also supplies sessions whose native generation
+	// has already passed retention. Authority guards reject stale observations.
+	if isConductorSource(manifest.Source.Kind) {
+		reader, close, err := openSQLiteReplay(ctx, target)
+		if err != nil {
+			return fail(err)
+		}
+		if reader != nil {
+			func() {
+				defer close()
+				mode := modeOf(ctx)
+				mode.plan = nil
+				mode.force = true
+				setAdapterContext(reader, ctx)
+				replayed := IngestResult{Source: target.Source, Host: target.Host.ID}
+				err = c.ingestPass(withIngestMode(ctx, mode), reader, target.Host.ID, false, &replayed, func(string) {}, func(string) {})
+				result.Workspaces += replayed.Workspaces
+				result.Conversations += replayed.Conversations
+				result.Messages += replayed.Messages
+			}()
+			if err != nil {
+				return fail(err)
+			}
+		}
 	}
 	if progress != nil {
 		progress("saving index", result.Workspaces, result.Conversations, result.Messages, result.SkippedCurrent, result.Processed)

@@ -204,3 +204,23 @@ func (p *capturePlan) tl1(source SourceConfig) error {
 	}
 	return nil
 }
+
+// A previously captured conversation DB stays in scope after a schema change
+// removes its session/message tables. Unrelated cache/auth databases remain
+// outside the established Conductor capture boundary.
+func includeKnownCaptureDatabases(plan *capturePlan, manifest *captureManifest, source SourceConfig) {
+	for _, rel := range plan.skipped {
+		for _, snapshot := range manifest.Snapshots {
+			if snapshot.Captured != path.Join(captureFilesDir, rel) {
+				continue
+			}
+			expected := filepath.Join(source.Path, filepath.FromSlash(rel))
+			if info, e := os.Stat(source.Path); e == nil && !info.IsDir() {
+				expected = source.Path
+			}
+			if snapshot.Path == expected {
+				plan.databases = append(plan.databases, captureItem{snapshot.Path, rel})
+			}
+		}
+	}
+}
