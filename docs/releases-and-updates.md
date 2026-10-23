@@ -77,6 +77,10 @@ certificate-name prefix; if multiple certificates match, set the identity to
 the intended certificate's SHA-1 fingerprint. Private keys and notarization
 credentials stay in Keychain.
 
+Releases select the macOS 26.5 SDK by default: the standalone macOS 27
+Command Line Tools SDK references a SwiftUI macro plugin not included with
+those tools. Set `SDKROOT` explicitly to use another compatible SDK.
+
 The script fetches `origin/master`, refuses a dirty or different checkout and
 an existing tag, builds and verifies the app, then creates an annotated tag
 and publishes a GitHub release. The Developer ID path also notarizes and
