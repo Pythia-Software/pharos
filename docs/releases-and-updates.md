@@ -177,6 +177,10 @@ configuration to master before using the ordinary quick-release workflow.
 Apple's Developer ID certificate and `notarytool` profile are configured only
 on the deployment Mac using the existing signing setup above.
 
+Before publishing, complete [One unlock per deployment](#one-unlock-per-deployment)
+to move the existing signing keys into the dedicated release keychain. The
+ordinary release command requires that keychain and never creates it itself.
+
 Until this deployment setup is complete, local builds still work with updates
 disabled. Production builds and release/feed commands fail before accessing
 Keychain. `macos/release.sh X.Y.Z` stays the normal release command on the
@@ -184,9 +188,10 @@ deployment Mac; no additional opt-in is needed for each release. The local
 marker prevents accidental commands and prompts, while keeping private keys
 off development Macs supplies the security boundary.
 
-The private update key appears as **Private key for signing Sparkle updates**,
-account **pharos**, in the deployment Mac's login Keychain. The release script
-verifies that it matches the committed public key before building. It never
+The private update key initially appears as **Private key for signing Sparkle
+updates**, account **pharos**, in the deployment Mac's login Keychain; the
+dedicated-keychain setup below moves it into the release keychain. The release
+script verifies that it matches the committed public key before building. It never
 prints or exports the private key. Back it up securely on the deployment side
 before the first updater-enabled release. Do not transfer that private key to
 a development Mac. When replacing a deployment Mac, use Sparkle's secure
@@ -201,6 +206,82 @@ Do not replace the public key for an existing installed population. See
 Sparkle's [key rotation guidance](https://sparkle-project.org/documentation/#rotating-signing-keys):
 rotate only one trust anchor at a time. Our Developer ID-signed DMGs preserve
 its recovery route when Ed25519 verification before extraction is enabled.
+
+### One unlock per deployment
+
+Developer ID releases and standalone feed commands run inside
+`macos/release_keychain.py`. It prompts through macOS to unlock a dedicated
+`~/Library/Keychains/pharos-release.keychain-db`, runs the command, and locks
+the keychain when the command finishes, fails, or receives SIGINT, SIGTERM or
+SIGHUP. Passwords never enter command arguments, environment variables or logs.
+Nested feed commands share the release's unlock. Ad hoc builds do not unlock it.
+For a staging build, wrap the entire build/sign/publish command:
+
+```sh
+python3 macos/release_keychain.py -- YOUR-STAGING-COMMAND
+```
+
+One-time setup, explicitly on the deployment Mac:
+
+1. Run `python3 macos/setup-release-keychain.py --create`. Choose a new password
+   in the macOS dialog and save it in the release administrators' 1Password
+   vault. Do not save it in the login keychain. The script creates an empty
+   keychain, configures locking on sleep and after four hours of inactivity,
+   and leaves it locked. It never creates or imports signing keys.
+2. In Keychain Access, use **File → Add Keychain** to open that file, then
+   unlock it. Move the existing Developer ID certificate **and its private
+   key** from login into this keychain. Preserve a secure recovery backup
+   before removing the original. Verify the certificate and private key both
+   appear under **My Certificates** in the new keychain. Do not issue a new
+   certificate or generate a new Sparkle key.
+3. In that private key's **Access Control**, authorize `/usr/bin/codesign`
+   under **Always allow access by these applications**. Keep **Confirm before
+   allowing access** selected for other applications. Do not allow all apps.
+   Imported keys may also need the partition-list authorization described below.
+4. Move **Private key for signing Sparkle updates**, account **pharos**, to
+   the same keychain. Authorize the pinned Sparkle `bin/sign_update` tool for
+   that item; a changed tool version may require a new authorization. The
+   public-key lookup may also request initial access for `bin/generate_keys`.
+5. Keep the `pharos` notarization profile in login, or store it in the release
+   keychain and set `PHAROS_NOTARY_KEYCHAIN` to its full path. Do not duplicate
+   the signing private keys in login; otherwise locking the release keychain
+   would leave the login copies available. Lock the release keychain when
+   setup is finished.
+
+If `codesign` still prompts separately after the keychain is unlocked, configure
+the imported key's partition list once in your own Terminal. For a key whose
+label is **Imported Private Key**, run:
+
+```sh
+(
+    trap '/usr/bin/security lock-keychain "$HOME/Library/Keychains/pharos-release.keychain-db"' EXIT
+    /usr/bin/security set-key-partition-list -S apple: -s -t private \
+        -l 'Imported Private Key' "$HOME/Library/Keychains/pharos-release.keychain-db"
+)
+```
+
+Enter the release-keychain password at the Terminal prompt. Do not supply `-k`
+with the password: that would expose it in command arguments. This selects only
+the named private signing key in the dedicated keychain; the application's
+existing Access Control authorization still applies. Adjust the label/path for
+a different imported key. Verify two signatures within one wrapper invocation
+before removing the original identity from login. Apple's `security(1)` requires
+the `apple:` partition for `/usr/bin/codesign`.
+
+The wrapper temporarily puts this keychain first in the user's search list so
+Sparkle and code signing find its keys ahead of any remaining login copies. It
+restores the previous order afterward, preserving unrelated additions/removals,
+and explicitly selects the release keychain for code signing. It serializes
+deployments using the same keychain.
+It does not make the keychain the default or lock the login keychain. Use
+`PHAROS_RELEASE_KEYCHAIN` to select a different dedicated keychain path.
+
+Any process running as this user can still invoke the authorized tools during
+the unlocked deployment window. This bounds access in time; it does not isolate
+signing from other processes running as the same user. A forced kill (SIGKILL),
+power loss, or machine failure cannot run cleanup; the sleep/inactivity lock
+is a fallback. Lock the keychain manually after a forced termination. A release
+long enough to hit that inactivity timeout can require another unlock.
 
 ### Feed publishing, recovery and withdrawal
 
