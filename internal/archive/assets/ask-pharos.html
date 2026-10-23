@@ -1,0 +1,136 @@
+<!-- Provider logos: LobeHub, MIT; see ask-provider-logos-LICENSE.txt. -->
+<div id="pharos-ask">
+    <section class="pharos-product" aria-label="Pharos landing page search">
+      <div class="pharos-regular"><div class="pharos-search-host"></div><button type="button" class="pharos-mode-switch pharos-ai-mode" hidden>Ask Pharos <span aria-hidden="true">✦</span></button></div>
+      <form class="pharos-ai" aria-label="Ask Pharos" hidden>
+        <div class="pharos-ai-frame">
+          <svg class="pharos-ai-surface" aria-hidden="true" focusable="false"><path/></svg>
+          <svg class="pharos-edge-art" aria-hidden="true" focusable="false">
+            <defs>
+              <linearGradient id="pharos-edge-cool" x1="0" y1="1" x2="1" y2="0" gradientUnits="objectBoundingBox">
+                <stop offset="0" stop-color="var(--pharos-aqua)" stop-opacity="0"/>
+                <stop offset=".24" stop-color="var(--pharos-aqua)" stop-opacity=".72"/>
+                <stop offset=".53" stop-color="var(--pharos-violet)" stop-opacity=".95"/>
+                <stop offset=".77" stop-color="var(--pharos-aqua)" stop-opacity=".7"/>
+                <stop offset="1" stop-color="var(--pharos-aqua)" stop-opacity="0"/>
+              </linearGradient>
+              <linearGradient id="pharos-edge-warm" x1="0" y1="1" x2="1" y2="0" gradientUnits="objectBoundingBox">
+                <stop offset="0" stop-color="var(--pharos-gold)" stop-opacity="0"/>
+                <stop offset=".27" stop-color="var(--pharos-gold)" stop-opacity=".85"/>
+                <stop offset=".58" stop-color="var(--pharos-violet)" stop-opacity=".8"/>
+                <stop offset=".81" stop-color="var(--pharos-gold)" stop-opacity=".6"/>
+                <stop offset="1" stop-color="var(--pharos-violet)" stop-opacity="0"/>
+              </linearGradient>
+              <filter id="pharos-edge-halo" x="-30%" y="-50%" width="160%" height="200%" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="3"/></filter>
+              <filter id="pharos-edge-trace-glow" x="-10%" y="-30%" width="120%" height="160%" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="1.6"/></filter>
+            </defs>
+            <path class="pharos-edge-hairline"/>
+            <g class="pharos-edge-halo" filter="url(#pharos-edge-halo)"><path data-contour="cool" stroke="url(#pharos-edge-cool)"/><path data-contour="warm" stroke="url(#pharos-edge-warm)"/></g>
+            <g class="pharos-edge-lines pharos-edge-cool" stroke="url(#pharos-edge-cool)"><path/><path/><path/><path/><path/></g>
+            <g class="pharos-edge-lines pharos-edge-warm" stroke="url(#pharos-edge-warm)"><path/><path/><path/><path/></g>
+            <path class="pharos-edge-trace pharos-edge-trace-halo" pathLength="1000" filter="url(#pharos-edge-trace-glow)"/>
+            <path class="pharos-edge-trace" pathLength="1000"/>
+          </svg>
+          <div class="pharos-ai-inner">
+            <div class="pharos-thread-wrap" hidden>
+              <div class="pharos-thread-viewport" role="region" aria-label="Chat messages, scroll for earlier replies" tabindex="0">
+                <div class="pharos-thread" role="log" aria-label="Conversation" aria-live="polite" hidden></div>
+              </div>
+              <button type="button" class="pharos-latest cursor-interaction" hidden>Latest reply <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14m-5-5 5 5 5-5"/></svg></button>
+            </div>
+            <textarea id="pharos-question" aria-label="Ask a question" placeholder="What would you like to find in your work?" rows="2"></textarea>
+            <div class="pharos-composer-footer">
+              <div class="pharos-picker-anchor">
+                <button type="button" class="pharos-model-trigger cursor-interaction" aria-expanded="false" aria-haspopup="dialog" aria-controls="pharos-model-menu"><span class="pharos-current-settings">Choose a model</span><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="chevron-down" aria-hidden="true" class="lucide lucide-chevron-down"><path d="m6 9 6 6 6-6"></path></svg></button>
+                <section id="pharos-model-menu" class="pharos-model-menu" role="dialog" aria-label="Model selection" hidden>
+                  <div class="pharos-picker-root">
+                    <div class="pharos-picker-title"><h3 class="pharos-picker-heading">Model selection</h3><button type="button" class="pharos-save-default cursor-interaction" aria-label="Make this selection the default" aria-pressed="false" data-tooltip="Save this CLI, model and effort as your default"><span aria-hidden="true">&#9734;</span></button></div>
+                    <button type="button" class="pharos-picker-row cursor-interaction" data-picker="provider"><span>CLI</span><span class="pharos-selected-provider">Codex</span><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="chevron-right" aria-hidden="true" class="lucide lucide-chevron-right"><path d="m9 18 6-6-6-6"></path></svg></button>
+                    <button type="button" class="pharos-picker-row cursor-interaction" data-picker="model"><span>Model</span><span class="pharos-selected-model">Choose a model</span><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="chevron-right" aria-hidden="true" class="lucide lucide-chevron-right"><path d="m9 18 6-6-6-6"></path></svg></button>
+                    <button type="button" class="pharos-picker-row cursor-interaction" data-picker="effort"><span>Effort</span><span class="pharos-selected-effort">Low</span><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="chevron-right" aria-hidden="true" class="lucide lucide-chevron-right"><path d="m9 18 6-6-6-6"></path></svg></button>
+                  </div>
+                  <div class="pharos-picker-submenu" hidden>
+                    <button type="button" class="pharos-picker-back cursor-interaction"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="chevron-left" aria-hidden="true" class="lucide lucide-chevron-left"><path d="m15 18-6-6 6-6"></path></svg><span>Model</span></button>
+                    <div class="pharos-picker-options"></div>
+                  </div>
+                </section>
+              </div>
+              <div class="pharos-composer-actions">
+                <button type="button" class="pharos-icon-control pharos-search-mode cursor-interaction" aria-label="Switch to non-AI search" data-tooltip="Switch to non-AI search"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="arrow-left-right" aria-hidden="true" class="lucide lucide-arrow-left-right"><path d="M8 3 4 7l4 4"></path><path d="M4 7h16"></path><path d="m16 21 4-4-4-4"></path><path d="M20 17H4"></path></svg></button>
+                <div class="pharos-history-anchor">
+                  <button type="button" class="pharos-icon-control pharos-history-trigger cursor-interaction" aria-label="History" data-tooltip="Chat history" aria-expanded="false" aria-haspopup="dialog" aria-controls="pharos-chat-history"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.4 10a8.7 8.7 0 1 1 .2 4.7M3.4 4.8V10h5.2M12 7v5l3.2 2"/></svg></button>
+                  <section id="pharos-chat-history" class="pharos-chat-history" role="dialog" aria-label="Chat history" hidden>
+                    <div class="pharos-history-heading"><h3>Chat history</h3><button type="button" class="pharos-history-close cursor-interaction" aria-label="Close chat history">&#215;</button></div>
+                    <input class="pharos-history-filter" type="search" aria-label="Find a prior chat" placeholder="Find a prior chat…" />
+                    <p class="pharos-history-empty">Your conversations will appear here.</p>
+                    <div class="pharos-history-list"></div><button type="button" class="pharos-history-more pharos-plain" hidden>More chats</button>
+                  </section>
+                </div>
+                <button type="button" class="pharos-icon-control pharos-clear-chat cursor-interaction" aria-label="Clear" data-tooltip="Clear chat and start fresh" hidden><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 8H4V3m0 5a8.5 8.5 0 1 1 1.4 9.8"/></svg></button>
+                <button type="button" class="pharos-send cursor-interaction" aria-label="Send question" data-tooltip="Send question" disabled><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="send" aria-hidden="true" class="lucide lucide-send"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"></path><path d="m21.854 2.147-10.94 10.939"></path></svg></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </form>
+      <section class="pharos-suggestions" aria-label="Prompt suggestions" hidden>
+        <div class="pharos-suggestions-heading"><span>A few starting points</span><div class="pharos-idea-actions">
+          <span class="pharos-idea-countdown"><span class="pharos-idea-countdown-track"><i></i></span><span class="pharos-idea-countdown-label">More in 30s</span></span>
+          <div class="pharos-idea-controls" role="group" aria-label="Suggestion carousel controls">
+            <button type="button" class="pharos-idea-play cursor-interaction" aria-label="Pause suggestions">&#8545; Pause</button>
+            <button type="button" class="pharos-idea-previous cursor-interaction" aria-label="Previous suggestions"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="chevron-left" aria-hidden="true" class="lucide lucide-chevron-left"><path d="m15 18-6-6 6-6"></path></svg></button>
+            <button type="button" class="pharos-more-ideas cursor-interaction" aria-label="Next suggestions"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="chevron-right" aria-hidden="true" class="lucide lucide-chevron-right"><path d="m9 18 6-6-6-6"></path></svg></button>
+            <button type="button" class="pharos-idea-refresh cursor-interaction" aria-label="Refresh suggestions"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 9a8.2 8.2 0 0 0-14.2-3L4 8m0-5v5h5M4 15a8.2 8.2 0 0 0 14.2 3L20 16m0 5v-5h-5"/></svg></button>
+          </div>
+        </div></div>
+        <div class="pharos-idea-viewport" role="region" aria-label="Browse prompt suggestions"><div class="pharos-suggestion-list"></div></div>
+        <span class="pharos-idea-announcement" role="status" aria-live="polite"></span>
+      </section>
+      <div class="pharos-invitation" hidden><button type="button" class="pharos-try cursor-interaction"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="sparkles" aria-hidden="true" class="lucide lucide-sparkles"><path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"></path><path d="M20 2v4"></path><path d="M22 4h-4"></path><circle cx="4" cy="20" r="2"></circle></svg><span>Try Ask Pharos</span></button><button type="button" class="pharos-plain pharos-dismiss cursor-interaction">Not now</button></div>
+      <dialog class="pharos-modal pharos-consent" aria-labelledby="pharos-consent-title" aria-describedby="pharos-consent-intro pharos-consent-cli pharos-consent-quota pharos-consent-choice">
+        <h3 id="pharos-consent-title">Ask in your own words</h3>
+        <p id="pharos-consent-intro">Ask Pharos lets you navigate the app with questions in plain language.</p>
+        <p id="pharos-consent-cli">It uses your LLM&#8217;s native CLI integration. You&#8217;ll need Claude, Codex, or Antigravity installed and authenticated on this Mac.</p>
+        <label class="pharos-connect-label" for="pharos-connect-provider">Start with <select id="pharos-connect-provider"></select></label>
+        <p id="pharos-consent-quota">Like any chat with your agent, each conversation consumes your account&#8217;s quota and will itself be indexed by Pharos.</p>
+        <p>Your Pharos page visits and earlier Ask Pharos chats are available to this private navigation agent. Page visits are never exposed through the general MCP service.</p>
+        <p id="pharos-consent-choice">This is optional. No other use of Pharos involves AI. When Ask Pharos is disabled, Pharos will never access your agentic CLIs.</p>
+        <div class="pharos-consent-actions"><button type="button" class="pharos-solid pharos-enable cursor-interaction" autofocus>Enable Ask Pharos</button><button type="button" class="pharos-modal-secondary pharos-cancel cursor-interaction">Not right now</button><button type="button" class="pharos-plain pharos-never cursor-interaction">No, and don&#8217;t show this again</button></div>
+      </dialog>
+      <p class="pharos-search-notice" role="status" hidden></p>
+    </section>
+  <template id="pharos-turn-template">
+    <article class="pharos-turn">
+      <div class="pharos-message pharos-user-message"><span class="pharos-avatar pharos-user-avatar" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7.5" r="3"/><path d="M5.5 20v-2.2a6.5 6.5 0 0 1 13 0V20"/></svg></span><div class="pharos-message-body"><strong class="pharos-speaker">You</strong><p class="pharos-user-question"></p></div></div>
+      <div class="pharos-message pharos-agent-message"><span class="pharos-avatar pharos-agent-avatar" aria-hidden="true"></span><div class="pharos-message-body">
+        <div class="pharos-agent-heading"><strong class="pharos-speaker pharos-agent-name"></strong></div>
+        <section class="pharos-waiting" aria-label="AI request in progress" hidden>
+          <div class="pharos-wait-heading"><div><span class="pharos-wait-message">Starting&#8230;</span><small class="pharos-elapsed">0s</small></div><button type="button" class="pharos-plain pharos-stop cursor-interaction">Cancel</button></div>
+          <div class="pharos-skeleton" aria-hidden="true"><span></span><span></span><span></span></div>
+        </section>
+        <section class="pharos-destinations" aria-label="Suggested destinations" hidden>
+        <p class="pharos-results-label" role="status"></p>
+        <a class="pharos-destination" href="/" hidden><span class="pharos-destination-kind"></span><strong></strong><span></span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M7 7h10v10M7 17 17 7"/></svg></a>
+        <a class="pharos-destination" href="/" hidden><span class="pharos-destination-kind"></span><strong></strong><span></span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M7 7h10v10M7 17 17 7"/></svg></a>
+        <a class="pharos-destination" href="/" hidden><span class="pharos-destination-kind"></span><strong></strong><span></span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M7 7h10v10M7 17 17 7"/></svg></a>
+      </section>
+      <div class="pharos-answer" role="status" aria-live="polite" hidden></div>
+      <fieldset class="pharos-clarification" hidden>
+        <legend class="pharos-clarification-question"></legend>
+        <div class="pharos-clarification-options"></div>
+        <div class="pharos-clarification-other">
+          <label><span class="pharos-option-letter" aria-hidden="true"></span></label>
+          <div class="pharos-other-editor"><textarea rows="1" placeholder="other" aria-label="Other answer" maxlength="12000"></textarea><button type="button" class="pharos-other-send cursor-interaction" aria-label="Send other answer" disabled></button></div>
+        </div>
+      </fieldset>
+      <div class="pharos-recovery" hidden><button type="button" class="pharos-plain pharos-retry cursor-interaction">Try again</button><button type="button" class="pharos-plain pharos-recovery-search cursor-interaction">Use regular search</button></div>
+      </div></div>
+    </article>
+  </template>
+  <template id="pharos-suggestion-template"><button type="button" class="pharos-suggestion cursor-interaction"><svg class="pharos-idea-art" aria-hidden="true" focusable="false"><path class="pharos-idea-surface"/><path class="pharos-idea-border"/><g/></svg><span class="pharos-idea-text"></span><span class="pharos-idea-ghost" aria-hidden="true"><i></i><i></i></span></button></template>
+<template id="pharos-lighthouse-template"><svg class="pharos-lighthouse" viewBox="3.5 2 29 45" aria-hidden="true"><g class="tower"><polygon points="10.4,45 25.6,45 24.1,29.2 11.9,29.2"/><polygon points="13,27.6 23,27.6 22.2,20.4 13.8,20.4"/><rect x="15.4" y="15.2" width="5.2" height="4"/><path d="M14.6 9.7Q14.9 5.9 18 5.3Q21.1 5.9 21.4 9.7Z"/><circle cx="18" cy="3.9" r="1.2"/></g><g class="brass"><rect x="10.8" y="27.4" width="14.4" height="2.4" rx=".8"/><rect x="13.2" y="18.9" width="9.6" height="2.1" rx=".7"/><rect x="15.2" y="9.2" width="5.6" height="5.4" rx=".9"/></g><path class="door" d="M15.9 45v-3.5a2.1 2.1 0 0 1 4.2 0V45Z"/><rect class="lamp" x="16.1" y="10.1" width="3.8" height="3.6" rx=".4"/></svg></template>
+<template id="pharos-logo-codex"><svg fill="currentColor" fill-rule="evenodd" height="1em" style="flex:none;line-height:1" viewBox="0 0 24 24" width="1em" xmlns="http://www.w3.org/2000/svg"><title>Codex</title><path clip-rule="evenodd" d="M8.086.457a6.105 6.105 0 013.046-.415c1.333.153 2.521.72 3.564 1.7a.117.117 0 00.107.029c1.408-.346 2.762-.224 4.061.366l.063.03.154.076c1.357.703 2.33 1.77 2.918 3.198.278.679.418 1.388.421 2.126a5.655 5.655 0 01-.18 1.631.167.167 0 00.04.155 5.982 5.982 0 011.578 2.891c.385 1.901-.01 3.615-1.183 5.14l-.182.22a6.063 6.063 0 01-2.934 1.851.162.162 0 00-.108.102c-.255.736-.511 1.364-.987 1.992-1.199 1.582-2.962 2.462-4.948 2.451-1.583-.008-2.986-.587-4.21-1.736a.145.145 0 00-.14-.032c-.518.167-1.04.191-1.604.185a5.924 5.924 0 01-2.595-.622 6.058 6.058 0 01-2.146-1.781c-.203-.269-.404-.522-.551-.821a7.74 7.74 0 01-.495-1.283 6.11 6.11 0 01-.017-3.064.166.166 0 00.008-.074.115.115 0 00-.037-.064 5.958 5.958 0 01-1.38-2.202 5.196 5.196 0 01-.333-1.589 6.915 6.915 0 01.188-2.132c.45-1.484 1.309-2.648 2.577-3.493.282-.188.55-.334.802-.438.286-.12.573-.22.861-.304a.129.129 0 00.087-.087A6.016 6.016 0 015.635 2.31C6.315 1.464 7.132.846 8.086.457zm-.804 7.85a.848.848 0 00-1.473.842l1.694 2.965-1.688 2.848a.849.849 0 001.46.864l1.94-3.272a.849.849 0 00.007-.854l-1.94-3.393zm5.446 6.24a.849.849 0 000 1.695h4.848a.849.849 0 000-1.696h-4.848z"></path></svg></template>
+<template id="pharos-logo-claude"><svg fill="currentColor" fill-rule="evenodd" height="1em" style="flex:none;line-height:1" viewBox="0 0 24 24" width="1em" xmlns="http://www.w3.org/2000/svg"><title>Claude</title><path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z"></path></svg></template>
+<template id="pharos-logo-antigravity"><svg fill="currentColor" fill-rule="evenodd" height="1em" style="flex:none;line-height:1" viewBox="0 0 24 24" width="1em" xmlns="http://www.w3.org/2000/svg"><title>Antigravity</title><path d="M21.751 22.607c1.34 1.005 3.35.335 1.508-1.508C17.73 15.74 18.904 1 12.037 1 5.17 1 6.342 15.74.815 21.1c-2.01 2.009.167 2.511 1.507 1.506 5.192-3.517 4.857-9.714 9.715-9.714 4.857 0 4.522 6.197 9.714 9.715z"></path></svg></template>
+  <template id="pharos-check-icon"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-lucide="check" aria-hidden="true" class="lucide lucide-check"><path d="M20 6 9 17l-5-5"></path></svg></template>
+</div>

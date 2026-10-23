@@ -23,7 +23,7 @@ const source = readFileSync(join(assetRoot, "ui.py"), "utf8");
 export const html = source.slice(source.indexOf("r'''") + 4, source.lastIndexOf("'''"));
 
 // Every file under assets/, by path, read once per process.
-const types = { ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".md": "text/markdown; charset=utf-8" };
+const types = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".md": "text/markdown; charset=utf-8" };
 const assetCache = new Map();
 function asset(path) {
   if (!assetCache.has(path)) {

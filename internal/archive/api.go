@@ -73,6 +73,7 @@ type Server struct {
 	auto       automaticSync
 	// Leave catalog connections available for rows/previews while metadata scans run.
 	queryMetadata chan struct{}
+	ask           askState
 }
 
 func NewServer(config Config, catalog *Catalog) *Server {
@@ -118,7 +119,14 @@ func (s *Server) Serve() error {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/" && r.URL.Query().Get("token") != "" && secureEqual(r.URL.Query().Get("token"), s.Config().APIToken) {
 		http.SetCookie(w, &http.Cookie{Name: s.cookieName(), Value: url.QueryEscape(r.URL.Query().Get("token")), Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		params := r.URL.Query()
+		params.Del("token")
+		target := "/"
+		if len(params) > 0 {
+			target += "?" + params.Encode()
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		http.Redirect(w, r, target, http.StatusSeeOther)
 		return
 	}
 	if !s.authorized(r) {
@@ -147,6 +155,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{"error": fmt.Sprint(value)}, http.StatusInternalServerError)
 		}
 	}()
+	if strings.HasPrefix(r.URL.Path, "/api/ask/") {
+		s.askHTTP(w, r)
+		return
+	}
 	if r.URL.Path == "/api/query-object-references" {
 		s.queryObjectReferences(w, r)
 		return
@@ -205,7 +217,7 @@ func (s *Server) authorized(r *http.Request) bool {
 // of which serves the single-page UI.
 func isUIPage(path string) bool {
 	switch path {
-	case "/", "/home", "/cards", "/library", "/settings", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/preferences", "/sources", "/activity", "/analyze", "/tools", "/tl1", "/tl1/configurations", "/tl1/followups", "/tl1/quality", "/tl1/runs", "/health", "/mcp", "/findings":
+	case "/", "/home", "/cards", "/library", "/settings", "/settings/sources", "/settings/sync", "/settings/optimization", "/settings/mcp", "/settings/header", "/settings/preferences", "/settings/ask", "/sources", "/activity", "/analyze", "/tools", "/tl1", "/tl1/configurations", "/tl1/followups", "/tl1/quality", "/tl1/runs", "/health", "/mcp", "/findings":
 		return true
 	}
 	return strings.HasPrefix(path, "/work/")
@@ -222,6 +234,10 @@ var uiAssets = map[string]struct{ name, contentType string }{
 	"/assets/carbon.js":        {"carbon.js", "text/javascript; charset=utf-8"},
 	"/assets/menu-bar.js":      {"menu-bar.js", "text/javascript; charset=utf-8"},
 	"/assets/header.js":        {"header.js", "text/javascript; charset=utf-8"},
+	"/assets/ask-pharos.html":  {"ask-pharos.html", "text/html; charset=utf-8"},
+	"/assets/ask-pharos.css":   {"ask-pharos.css", "text/css; charset=utf-8"},
+	"/assets/ask-model.js":     {"ask-model.js", "text/javascript; charset=utf-8"},
+	"/assets/ask-pharos.js":    {"ask-pharos.js", "text/javascript; charset=utf-8"},
 	"/assets/reader-model.js":  {"reader-model.js", "text/javascript; charset=utf-8"},
 }
 

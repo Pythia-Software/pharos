@@ -1,3 +1,4 @@
+import "./visit-history";
 import { matchingSelectionIDs } from "./query-selection";
 import { DataTaxonomyModal, SourceQueryBuilder } from "./data-taxonomy";
 import { installDelegationExplorer } from "./delegation";
@@ -50,6 +51,7 @@ import { queryRequest, queryFetch, shouldSkipQueryOnRestore } from "./query-requ
 import { PageErrorBoundary, QueryRecovery, ResetPage, tableRecoveryQuery } from "./query-recovery";
 import { createMCPMonitor, type MCPStatus } from "./mcp-monitor";
 import { HomePage } from "./home";
+import { AskPharosSettings } from "./ask-pharos";
 import { CardLibraryPage } from "./card-library";
 import { linkTargets, navigateLink } from "./query-link-targets";
 import { QueryChip } from "./query-card";
@@ -2003,6 +2005,7 @@ const mounts: Array<[string, React.ReactNode]> = [
   ["homePage", <HomePage schemas={schemas} />],
   ["cardLibraryPage", <CardLibraryPage schemas={schemas} />],
   ["syncHistoryTables", <SyncTables />],
+  ["askSettingsPage", <AskPharosSettings />],
   ["settingsPage", <SettingsWorkspace content={document.getElementById("settingsContent")!} />],
   ["queryTableLibrary", <LibraryPage />],
   ["queryTableUsage", <UsagePage />],
