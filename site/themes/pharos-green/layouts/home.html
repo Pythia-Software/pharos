@@ -1,0 +1,12 @@
+{{ define "main" }}
+<section class="hero wrap">
+  <div class="hero-copy"><p class="eyebrow">A library for your work with coding agents</p><h1>Your work,<br>brought to <em>light.</em></h1><p class="lede">{{ .Params.intro }}</p>
+  <div class="actions"><a class="button" href="{{ site.Params.releasesURL }}">Download for Mac <span aria-hidden="true">↗</span></a><a class="text-link" href="{{ "getting-started/" | relURL }}">Take a look around <span aria-hidden="true">→</span></a></div><p class="caption">macOS 14 or later · Apple Silicon &amp; Intel</p></div>
+  <div class="hero-art"><img src="{{ "images/pharos.svg" | relURL }}" width="400" height="400" alt="A lighthouse casting warm beams across a green harbor"><p>Keep the work.<br><span>Find the thread.</span></p></div>
+</section>
+<section class="screenshot-section wrap" aria-labelledby="library-title"><div class="section-heading"><p class="eyebrow">From scattered sessions to a shared history</p><h2 id="library-title">A place for everything<br>you figured out.</h2><p>Claude Code, Codex, Antigravity, Conductor, and ChatGPT exports. Bring your conversations together, and pick up where you left off.</p></div>
+{{ $image := resources.Get "images/library.png" }}{{ $image = $image.Resize "1600x webp q85" }}
+<figure class="product"><img src="{{ $image.RelPermalink }}" width="{{ $image.Width }}" height="{{ $image.Height }}" loading="lazy" alt="Pharos Library showing a search across coding-agent conversations, with repository, token usage, and cost columns"><figcaption>A searchable record of the work behind the code.</figcaption></figure></section>
+<section class="features wrap" aria-label="What you can do with Pharos">{{ range .Params.features }}<article><p class="feature-number">{{ .number }}</p><h2>{{ .title }}</h2><p>{{ .description }}</p></article>{{ end }}</section>
+<section class="local"><div class="wrap local-inner"><p class="eyebrow">Your history stays yours</p><h2>On your Mac.<br>Or on the drive you take with you.</h2><p>Pharos reads your source conversations without changing them. Keep your library on this Mac, or put the app and library together on an external drive. Its local service listens only on loopback.</p><a class="button button-light" href="{{ "getting-started/" | relURL }}">Start your library <span aria-hidden="true">→</span></a></div></section>
+{{ end }}

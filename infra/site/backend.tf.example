@@ -1,0 +1,8 @@
+# Copy to backend.tf only AFTER the first successful apply creates this bucket.
+# Then run: tofu init -migrate-state
+terraform {
+  backend "gcs" {
+    bucket = "pythia-pharos-tofu-state"
+    prefix = "pharos/site"
+  }
+}
