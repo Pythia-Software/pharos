@@ -1,8 +1,8 @@
 #!/bin/sh
 # Build and publish a universal Pharos.app from origin/master.
 # Usage: macos/release.sh 0.3.0
-#        PHAROS_CODESIGN_IDENTITY='Developer ID Application: ...' \
-#        PHAROS_NOTARY_PROFILE=pharos macos/release.sh 0.3.0 --developer-id
+#        macos/release.sh 0.3.0 --adhoc  # explicitly skip notarization
+# Override PHAROS_CODESIGN_IDENTITY / PHAROS_NOTARY_PROFILE for another signer.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -10,25 +10,46 @@ cd "$ROOT"
 REPO=Pythia-Software/pharos
 VERSION=${1:-}
 if [ "$#" -lt 1 ] || [ "$#" -gt 2 ] || ! printf '%s\n' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-    echo "Usage: $0 major.minor.patch [--developer-id]" >&2
+    echo "Usage: $0 major.minor.patch [--developer-id|--adhoc]" >&2
     exit 2
 fi
 case "${2:-}" in
-    ''|--adhoc) MODE=adhoc ;;
-    --developer-id) MODE=developer-id ;;
-    *) echo "Usage: $0 major.minor.patch [--developer-id]" >&2; exit 2 ;;
+    ''|--developer-id) MODE=developer-id ;;
+    --adhoc) MODE=adhoc ;;
+    *) echo "Usage: $0 major.minor.patch [--developer-id|--adhoc]" >&2; exit 2 ;;
 esac
 TAG="v$VERSION"
-IDENTITY=${PHAROS_CODESIGN_IDENTITY:-}
-PROFILE=${PHAROS_NOTARY_PROFILE:-}
+if [ "$MODE" = developer-id ]; then
+    python3 "$ROOT/macos/release_support.py"
+    if [ -z "${PHAROS_RELEASE_KEYCHAIN_SESSION:-}" ]; then
+        exec python3 "$ROOT/macos/release_keychain.py" -- "$ROOT/macos/release.sh" "$@"
+    fi
+fi
+# codesign accepts an unambiguous certificate-name prefix, so no Team ID is
+# needed here. Signing keys and notarization credentials stay in Keychain.
+IDENTITY=${PHAROS_CODESIGN_IDENTITY-'Developer ID Application: Pythia Software LLC'}
+PROFILE=${PHAROS_NOTARY_PROFILE-pharos}
+notarize() {
+    if [ -n "${PHAROS_NOTARY_KEYCHAIN:-}" ]; then
+        xcrun notarytool submit "$1" --keychain-profile "$PROFILE" --keychain "$PHAROS_NOTARY_KEYCHAIN" --wait
+    else
+        xcrun notarytool submit "$1" --keychain-profile "$PROFILE" --wait
+    fi
+}
 if [ "$MODE" = developer-id ] && { [ -z "$IDENTITY" ] || [ -z "$PROFILE" ]; }; then
     echo "A Developer ID Application signing identity and notarytool keychain profile are required." >&2
-    echo "Omit --developer-id to publish an ad hoc signed release instead." >&2
+    echo "Use --adhoc to publish an ad hoc signed release instead." >&2
     exit 2
 fi
-for command in git gh go swift swiftc lipo npm xcrun codesign ditto hdiutil tiffutil uvx shasum spctl awk; do
+for command in git gh go swift swiftc lipo npm xcrun codesign ditto hdiutil tiffutil uvx shasum spctl awk python3 curl; do
     command -v "$command" >/dev/null 2>&1 || { echo "$command is required." >&2; exit 2; }
 done
+# The standalone macOS 27 SDK references SwiftUIMacros, which is absent from
+# Command Line Tools. Use the installed 26.5 SDK unless explicitly overridden.
+if [ -z "${SDKROOT:-}" ]; then
+    SDKROOT=$(xcrun --sdk macosx26.5 --show-sdk-path)
+fi
+export SDKROOT
 case "$(git remote get-url origin)" in
     https://github.com/$REPO|https://github.com/$REPO.git|git@github.com:$REPO|git@github.com:$REPO.git) ;;
     *) echo "origin must point to github.com/$REPO." >&2; exit 2 ;;
@@ -66,6 +87,11 @@ if printf '%s\n' "$LATEST" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
     fi
 fi
 
+if [ "$MODE" = developer-id ]; then
+    # Fail before building if the release Mac lacks the embedded public key's
+    # private key. On the first release, establish the stable, signed feed.
+    python3 "$ROOT/macos/update-feed.py" bootstrap
+fi
 OUT="$ROOT/dist/releases/$TAG"
 if [ -e "$OUT" ]; then
     echo "$OUT already exists; move it aside before retrying." >&2
@@ -73,11 +99,12 @@ if [ -e "$OUT" ]; then
 fi
 mkdir -p "$OUT/stage"
 if [ "$MODE" = developer-id ]; then
-    PHAROS_VERSION="$VERSION" PHAROS_UNIVERSAL=1 PHAROS_HARDENED_RUNTIME=1 \
-        PHAROS_CODESIGN_TIMESTAMP=1 "$ROOT/macos/build-app.sh" "$OUT/stage"
+    PHAROS_VERSION="$VERSION" PHAROS_UNIVERSAL=1 PHAROS_HARDENED_RUNTIME=1 PHAROS_ENABLE_UPDATES=1 \
+        PHAROS_CODESIGN_IDENTITY="$IDENTITY" PHAROS_CODESIGN_TIMESTAMP=1 \
+        "$ROOT/macos/build-app.sh" "$OUT/stage"
 else
     PHAROS_CODESIGN_IDENTITY= PHAROS_VERSION="$VERSION" PHAROS_UNIVERSAL=1 \
-        PHAROS_HARDENED_RUNTIME=1 PHAROS_CODESIGN_TIMESTAMP=0 \
+        PHAROS_HARDENED_RUNTIME=1 PHAROS_CODESIGN_TIMESTAMP=0 PHAROS_ENABLE_UPDATES=0 \
         "$ROOT/macos/build-app.sh" "$OUT/stage"
 fi
 APP="$OUT/stage/Pharos.app"
@@ -110,7 +137,7 @@ if [ "$MODE" = developer-id ]; then
     # before it is copied into the final disk image.
     NOTARY_ARCHIVE="$OUT/notarize.zip"
     ditto -c -k "$OUT/stage" "$NOTARY_ARCHIVE"
-    xcrun notarytool submit "$NOTARY_ARCHIVE" --keychain-profile "$PROFILE" --wait
+    notarize "$NOTARY_ARCHIVE"
     xcrun stapler staple "$APP"
     xcrun stapler validate "$APP"
     spctl -a -vvv -t exec "$APP"
@@ -119,7 +146,11 @@ fi
 codesign --verify --strict --deep --verbose=2 "$APP"
 "$ROOT/macos/make-release-dmg.sh" "$APP" "$IMAGE" "$VERSION"
 if [ "$MODE" = developer-id ]; then
-    xcrun notarytool submit "$IMAGE" --keychain-profile "$PROFILE" --wait
+    # Signing the container also preserves Sparkle's Developer ID fallback for
+    # Ed25519 key rotation when verification before extraction is required.
+    codesign --force --sign "$IDENTITY" --keychain "$PHAROS_CODESIGN_KEYCHAIN" --timestamp "$IMAGE"
+    codesign --verify --verbose=2 "$IMAGE"
+    notarize "$IMAGE"
     xcrun stapler staple "$IMAGE"
     xcrun stapler validate "$IMAGE"
 fi
@@ -135,6 +166,13 @@ else
     gh release create "$TAG" "$IMAGE" "$IMAGE.sha256" -R "$REPO" \
         --verify-tag --draft --title "Pharos $VERSION" --generate-notes
 fi
+if [ "$MODE" = developer-id ]; then
+    python3 "$ROOT/macos/update-feed.py" prepare "$VERSION" --directory "$OUT"
+    gh release upload "$TAG" "$OUT/update.json" -R "$REPO"
+fi
 gh release edit "$TAG" -R "$REPO" --draft=false
+if [ "$MODE" = developer-id ]; then
+    python3 "$ROOT/macos/update-feed.py" publish "$VERSION" --directory "$OUT"
+fi
 rm -rf "$OUT/stage"
 gh release view "$TAG" -R "$REPO" --json url --jq .url

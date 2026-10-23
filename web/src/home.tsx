@@ -8,7 +8,7 @@ import { QueryCard } from "./query-card";
 import { QueryConveyor } from "./query-conveyor";
 import { Icon } from "./icons";
 import "./home.css";
-import { HomeSearch } from "./search-composer";
+import { AskPharosSearch } from "./ask-pharos";
 import { cardTemplates } from "./card-library-model";
 import { defaultCardCover } from "./card-cover";
 import { cardLoadingPresentation } from "./card-loading-model";
@@ -135,7 +135,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     ? [...editingSpec.query.grouping.summaries.filter(column => column.op !== "row").map(column => ({ id: column.id, label: `${column.label ?? column.id} · grouped rows` })), ...(editingSpec.query.grouping.source.aggregations ?? []).map(metric => ({ id: metric.id, label: `${metric.label ?? metric.id} · observations` }))]
     : editingSpec?.query.aggregations?.map(metric => ({ id: metric.id, label: metric.label ?? metric.id })) ?? [];
   return <div className="curiosity-home" data-feedback-label="Home dashboard">
-    <div className="home-intro"><h1 ref={heading} tabIndex={-1}>{welcome}</h1><HomeSearch schema={schemas.library} /></div>
+    <div className="home-intro"><h1 ref={heading} tabIndex={-1}>{welcome}</h1><AskPharosSearch schema={schemas.library} /></div>
     <div className={`home-collection${drag ? " accepting" : ""}`} role="region" aria-label="Your collection" onDragOver={event => { if (drag) { event.preventDefault(); const target = (event.target as Element).closest("[data-card-id]"); setInsertBefore(target?.getAttribute("data-card-id") ?? undefined); } }} onDrop={event => drop(event)}>
       {collection.map(item => {
         const spec = queryFromURL(item.url, item.query), recipe = queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]);

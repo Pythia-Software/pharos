@@ -7,12 +7,203 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
 )
+
+func TestSubagentHandbackIngestion(t *testing.T) {
+	const report = "Final report.\n\nThe marigold conclusion is ready for the parent."
+	path := filepath.Join(t.TempDir(), "root-session", "subagents", "agent-one.jsonl")
+	lines := []string{
+		jsonText(map[string]any{"sessionId": "root-session", "uuid": "assignment", "type": "user", "timestamp": "2026-10-23T12:00:00Z", "message": map[string]any{"role": "user", "content": "Review the handout"}}),
+		jsonText(map[string]any{"sessionId": "root-session", "uuid": "interim", "type": "assistant", "timestamp": "2026-10-23T12:00:01Z", "message": map[string]any{"role": "assistant", "content": "Reviewing the handout"}}),
+		jsonText(map[string]any{"sessionId": "root-session", "uuid": "handback-call", "type": "assistant", "timestamp": "2026-10-23T12:00:02Z", "message": map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": "call-1", "name": "SubagentHandback", "input": map[string]any{"message": report}}}, "usage": map[string]any{"input_tokens": 8, "output_tokens": 3}}}),
+		jsonText(map[string]any{"sessionId": "root-session", "uuid": "ack", "type": "user", "timestamp": "2026-10-23T12:00:03Z", "message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": "call-1", "content": "Report delivered successfully."}}}}),
+	}
+	messages := parseJSONL(t, "claude", path, lines...)
+	callID := "handback-call:block:0"
+	derivedID := callID + ":handback"
+	byID := byNativeID(messages)
+	if got := byID[derivedID]; got.Kind != "message" || got.Role != "assistant" || got.Text != report || got.RawText != "" || got.CallID != "" || got.EvidenceLocator != path+":3:block:0:input.message" {
+		t.Fatalf("derived handback = %+v", got)
+	}
+	if byID[callID].Kind != "tool_call" || byID["ack:block:0"].Kind != "tool_result" || byID["handback-call:usage"].Kind != "metadata" {
+		t.Fatalf("source events changed: %v", byID)
+	}
+	if _, outcome := agentPurposeOutcome(messages); outcome != report {
+		t.Fatalf("parser outcome = %q", outcome)
+	}
+	if again := normalizeHandbackMessages(messages); len(again) != len(messages) {
+		t.Fatalf("repeated normalization changed %d messages to %d", len(messages), len(again))
+	}
+	withoutReport := []MessageRecord{}
+	for _, message := range messages {
+		if message.NativeID != derivedID {
+			withoutReport = append(withoutReport, message)
+		}
+	}
+	beforeRequests, beforeCalls := buildToolLedger(withoutReport, "claude")
+	afterRequests, afterCalls := buildToolLedger(messages, "claude")
+	if len(beforeRequests) != len(afterRequests) || len(beforeCalls) != len(afterCalls) || jsonText(conversationTokenCounts(withoutReport)) != jsonText(conversationTokenCounts(messages)) {
+		t.Fatal("handback projection changed request, tool or token accounting")
+	}
+	for _, tc := range []struct {
+		name   string
+		change func([]MessageRecord) []MessageRecord
+	}{
+		{"missing acknowledgement", func(items []MessageRecord) []MessageRecord {
+			kept := items[:0]
+			for _, item := range items {
+				if item.Kind != "tool_result" {
+					kept = append(kept, item)
+				}
+			}
+			return kept
+		}},
+		{"failed acknowledgement", func(items []MessageRecord) []MessageRecord {
+			for i := range items {
+				if items[i].Kind == "tool_result" {
+					items[i].Text = `{"content":"Delivery failed","is_error":true}`
+				}
+			}
+			return items
+		}},
+		{"failed acknowledgement without flag", func(items []MessageRecord) []MessageRecord {
+			for i := range items {
+				if items[i].Kind == "tool_result" {
+					items[i].Text = `{"content":"Report not delivered"}`
+				}
+			}
+			return items
+		}},
+		{"undelivered acknowledgement", func(items []MessageRecord) []MessageRecord {
+			for i := range items {
+				if items[i].Kind == "tool_result" {
+					items[i].Text = `{"content":"Report was undelivered"}`
+				}
+			}
+			return items
+		}},
+		{"unsuccessful structured result", func(items []MessageRecord) []MessageRecord {
+			for i := range items {
+				if items[i].Kind == "tool_result" {
+					items[i].Text = `{"content":[{"type":"text","text":"{\"success\":false,\"message\":\"Caller unavailable\"}"}]}`
+				}
+			}
+			return items
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := append([]MessageRecord(nil), messages...)
+			raw = tc.change(raw)
+			withoutDerived := raw[:0]
+			for _, m := range raw {
+				if m.NativeID != derivedID {
+					withoutDerived = append(withoutDerived, m)
+				}
+			}
+			if got := byNativeID(normalizeHandbackMessages(withoutDerived))[derivedID]; got.NativeID != "" {
+				t.Fatalf("unexpected report: %+v", got)
+			}
+		})
+	}
+
+	c, _ := testCatalog(t)
+	record := WorkspaceRecord{SourceKind: "claude", SourceID: "root-session", Account: "local", Conversations: []ConversationRecord{{NativeID: "root-session:subagent:agent-one", Provider: "claude", Account: "local", AgentDepth: 1, Messages: messages}}}
+	tx := seedTx(t, c.DB)
+	if _, _, err := ingestWorkspace(tx, record, false); err != nil {
+		t.Fatal(err)
+	}
+	commitSeed(t, tx)
+	var conversationID string
+	if err := c.DB.QueryRow("SELECT id FROM conversations WHERE native_id=?", record.Conversations[0].NativeID).Scan(&conversationID); err != nil {
+		t.Fatal(err)
+	}
+	derivedMessageID := stableID("message", conversationID, derivedID)
+	overview, err := c.conversationOverview(map[string]any{"conversation_id": conversationID})
+	if err != nil || firstString(overview["last_response"].(map[string]any)["message_id"]) != derivedMessageID || !strings.Contains(firstString(overview["last_response"].(map[string]any)["text"]), "marigold conclusion") {
+		t.Fatalf("overview = %v, %v", overview, err)
+	}
+	read, err := c.conversationMessages(map[string]any{"conversation_id": conversationID, "limit": 12})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range read["items"].([]map[string]any) {
+		if firstString(item["message_id"]) == derivedMessageID && firstString(item["text"]) == report {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("default messages omit report: %v", read)
+	}
+	for _, surface := range []string{"assistant", "prose", "tools"} {
+		result, err := c.SearchText(t.Context(), TextSearchOptions{Query: "marigold conclusion", Mode: "literal", Surface: surface, ConversationID: conversationID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := derivedMessageID
+		if surface == "tools" {
+			want = stableID("message", conversationID, callID)
+		}
+		if !slices.Equal(resultIDs(result), []string{want}) {
+			t.Fatalf("%s search = %v, want %s", surface, resultIDs(result), want)
+		}
+	}
+	var calls, results, derived, rawUsage int
+	if err := c.DB.QueryRow(`SELECT
+		SUM(kind='tool_call'), SUM(kind='tool_result'), SUM(native_id=?),
+		SUM(native_id='handback-call:usage' AND raw_text IS NOT NULL)
+		FROM messages WHERE conversation_id=?`, derivedID, conversationID).Scan(&calls, &results, &derived, &rawUsage); err != nil || calls != 1 || results != 1 || derived != 1 || rawUsage != 1 {
+		t.Fatalf("event/accounting counts = %d %d %d %d, %v", calls, results, derived, rawUsage, err)
+	}
+	var membership int
+	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM agent_session_messages am
+		JOIN agent_sessions a ON a.id=am.agent_session_id
+		WHERE a.conversation_id=? AND am.message_id=? AND a.native_id='main'`, conversationID, derivedMessageID).Scan(&membership); err != nil || membership != 1 {
+		t.Fatalf("handback session membership = %d, %v", membership, err)
+	}
+	// Recover an old catalog's missing derived report without resetting its
+	// reconciled usage, request evidence or existing source message IDs.
+	tx = seedTx(t, c.DB)
+	if err := deleteMessageFTS(tx, derivedMessageID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec("DELETE FROM messages WHERE id=?", derivedMessageID); err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertConversationDocument(tx, conversationID); err != nil {
+		t.Fatal(err)
+	}
+	commitSeed(t, tx)
+	sessions, _ := queryMaps(c.DB, "SELECT * FROM agent_sessions ORDER BY id")
+	usage, _ := queryMaps(c.DB, "SELECT * FROM agent_session_usage ORDER BY agent_session_id,usage_hour,model")
+	requests, _ := queryMaps(c.DB, "SELECT * FROM model_requests ORDER BY id")
+	if done, err := c.BackfillMessageSearch(t.Context(), nil); err != nil || done != 1 {
+		t.Fatalf("handback upgrade: done=%d err=%v", done, err)
+	}
+	for _, before := range []struct {
+		table string
+		rows  []map[string]any
+	}{{"agent_sessions", sessions}, {"agent_session_usage", usage}, {"model_requests", requests}} {
+		order := "id"
+		if before.table == "agent_session_usage" {
+			order = "agent_session_id,usage_hour,model"
+		}
+		after, err := queryMaps(c.DB, "SELECT * FROM "+before.table+" ORDER BY "+order)
+		if err != nil || jsonText(before.rows) != jsonText(after) {
+			t.Fatalf("handback upgrade changed %s: %v", before.table, err)
+		}
+	}
+	overview, err = c.conversationOverview(map[string]any{"conversation_id": conversationID})
+	if err != nil || firstString(overview["last_response"].(map[string]any)["message_id"]) != derivedMessageID {
+		t.Fatalf("upgraded outcome: %v %v", overview, err)
+	}
+}
 
 func textFixture(t *testing.T) *Catalog {
 	c, _ := testCatalog(t)
@@ -53,6 +244,436 @@ func resultIDs(r textSearchResult) []string {
 	}
 	slices.Sort(ids)
 	return ids
+}
+
+func TestTextSearchEnvelopeWhitespace(t *testing.T) {
+	c, _ := testCatalog(t)
+	tx := seedTx(t, c.DB)
+	if _, err := tx.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','claude','local','w','JSON search','2026-10-23');
+	 INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c','w','claude','local','c')`); err != nil {
+		t.Fatal(err)
+	}
+	types := []string{"tool_call", "tool_result", "delegation", "delegation_result", "context"}
+	bodies := map[string]string{}
+	for _, kind := range types {
+		body := jsonText(map[string]any{"tool": "fixture", "content": "Prior paragraph\n\nThe handout is accurate.\tThe answer follows.\rDone."})
+		id, _, err := upsertMessage(tx, "c", MessageRecord{NativeID: kind, Kind: kind, Role: "assistant", Text: body, EvidenceLocator: "fixture:" + kind, Selected: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		bodies[id] = body
+		if err := replaceMessageFTS(tx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commitSeed(t, tx)
+	for _, test := range []struct {
+		query   string
+		options TextSearchOptions
+	}{
+		{`"The handout is accurate"`, TextSearchOptions{}},
+		{`"The handout is accurate"`, TextSearchOptions{CaseSensitive: true}},
+		{`"The handout is accurate"`, TextSearchOptions{Separators: true}},
+		{`The PRE/0 handout`, TextSearchOptions{}},
+		{`"The answer follows"`, TextSearchOptions{}},
+		{`Done`, TextSearchOptions{}},
+	} {
+		o := test.options
+		o.Query, o.Surface, o.ConversationID = test.query, "all", "c"
+		result, err := c.SearchText(t.Context(), o)
+		if err != nil || len(result.Items) != len(types) || !result.Complete {
+			t.Fatalf("%s: %+v %v", test.query, result, err)
+		}
+		for _, item := range result.Items {
+			body := bodies[item.MessageID]
+			if item.StartByte < 0 || item.EndByte > len(body) || item.EndByte <= item.StartByte || !strings.Contains(body[item.StartByte:item.EndByte], "The") && test.query != "Done" {
+				t.Fatalf("range does not address original evidence: %+v", item)
+			}
+		}
+		legacy, err := c.searchMessages(map[string]any{"query": test.query, "conversation_id": "c"})
+		if !strings.Contains(test.query, "PRE/") && (err != nil || integer(legacy["total"]) != int64(len(types))) {
+			t.Fatalf("legacy %s: %v %v", test.query, legacy, err)
+		}
+	}
+	// Projection is lexical only: original JSON and literal backslashes remain
+	// queryable, and quoted user examples are never rewritten.
+	for _, kind := range []string{"tool_call", "context", "message", "metadata"} {
+		for _, body := range []string{`{"text":"literal \\nThe token"}`, `not-json \nThe token`, `{"text":"The token"}`} {
+			if got := lexicalSnippet(messageLexicalText(kind, body)); got != body {
+				t.Fatalf("rewrote literal text for %s: %q -> %q", kind, body, got)
+			}
+		}
+	}
+	if got := messageLexicalText("message", `{"text":"before\nThe token"}`); got != `{"text":"before\nThe token"}` {
+		t.Fatalf("rewrote a quoted user example: %s", got)
+	}
+	literal, err := c.SearchText(t.Context(), TextSearchOptions{Query: `\n\nThe handout`, Mode: "literal", Surface: "all", ConversationID: "c"})
+	if err != nil || len(literal.Items) != len(types) {
+		t.Fatalf("literal envelope lookup changed: %+v %v", literal, err)
+	}
+	// JSON strings remain independent phrase units, including when the left
+	// block ends in an encoded newline. Boolean queries may use both blocks.
+	boundaryBody := `{"content":["orchid\n","petal"],"other":"cedar","birch":"suffix"}`
+	writeEnvelope := func(native, body string) string {
+		t.Helper()
+		tx := seedTx(t, c.DB)
+		id, _, err := upsertMessage(tx, "c", MessageRecord{NativeID: native, Kind: "tool_result", Role: "tool", Text: body, Selected: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := replaceMessageFTS(tx, id); err != nil {
+			t.Fatal(err)
+		}
+		commitSeed(t, tx)
+		return id
+	}
+	boundaryID := writeEnvelope("boundaries", boundaryBody)
+	for _, query := range []string{`"orchid petal"`, `"cedar birch"`} {
+		for _, options := range []TextSearchOptions{{}, {CaseSensitive: true}, {Separators: true}, {workspaceRows: true}} {
+			options.Query, options.Surface, options.ConversationID = query, "tools", "c"
+			result, err := c.SearchText(t.Context(), options)
+			if err != nil || len(result.Items) != 0 || !result.Complete {
+				t.Fatalf("phrase crossed JSON fields: %s %+v %v", query, result, err)
+			}
+		}
+		legacy, err := c.searchMessages(map[string]any{"query": query, "conversation_id": "c"})
+		if err != nil || integer(legacy["total"]) != 0 {
+			t.Fatalf("legacy phrase crossed JSON fields: %s %v %v", query, legacy, err)
+		}
+	}
+	result, err := c.SearchText(t.Context(), TextSearchOptions{Query: "orchid AND petal", Surface: "tools", ConversationID: "c"})
+	if err != nil || !slices.Equal(resultIDs(result), []string{boundaryID}) {
+		t.Fatalf("Boolean search lost independent fields: %+v %v", result, err)
+	}
+	// An actual match after the rejected boundary must have original offsets,
+	// and no index-only field barriers may appear in snippets.
+	validBody := `{"content":["orchid\n","petal","orchid petal"],"extra":"escaped \"quote\"\tThe blossom opens"}`
+	validID := writeEnvelope("valid-boundary", validBody)
+	for _, options := range []TextSearchOptions{{}, {CaseSensitive: true}, {Separators: true}} {
+		options.Query, options.Surface, options.ConversationID = `"orchid petal"`, "tools", "c"
+		result, err := c.SearchText(t.Context(), options)
+		if err != nil || !slices.Equal(resultIDs(result), []string{validID}) {
+			t.Fatalf("within-field phrase: %+v %v", result, err)
+		}
+		item := result.Items[0]
+		if validBody[item.StartByte:item.EndByte] != "orchid petal" || strings.ContainsRune(item.Snippet, '\ue000') {
+			t.Fatalf("invalid source offsets or snippet: %+v", item)
+		}
+	}
+	legacy, err := c.searchMessages(map[string]any{"query": `"orchid petal"`, "conversation_id": "c"})
+	if err != nil || integer(legacy["total"]) != 1 || strings.ContainsRune(jsonText(legacy), '\ue000') {
+		t.Fatalf("legacy snippet: %v %v", legacy, err)
+	}
+	result, err = c.SearchText(t.Context(), TextSearchOptions{Query: `"The blossom opens"`, Surface: "tools", ConversationID: "c"})
+	if err != nil || !slices.Equal(resultIDs(result), []string{validID}) {
+		t.Fatalf("escaped quote changed JSON boundaries: %+v %v", result, err)
+	}
+}
+
+func TestMessageSearchUpgradeResumesAndPreservesEvidence(t *testing.T) {
+	c, _ := testCatalog(t)
+	tx := seedTx(t, c.DB)
+	if _, err := tx.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','claude','local','w','Old JSON search','2026-10-23');
+	 INSERT INTO conversations(id,workspace_id,provider,account,native_id) VALUES('c1','w','claude','local','c1'),('c2','w','claude','local','c2')`); err != nil {
+		t.Fatal(err)
+	}
+	body := jsonText(map[string]any{"tool": "Read", "content": "Previous paragraph\nThe handout is accurate"})
+	for _, cid := range []string{"c1", "c2"} {
+		id, _, err := upsertMessage(tx, cid, MessageRecord{NativeID: "tool", Kind: "tool_result", Role: "tool", Text: body, RawText: "original evidence", EvidenceLocator: "fixture:" + cid, Selected: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Simulate the old writer's raw JSON postings and their exact mapping.
+		result, err := tx.Exec("INSERT INTO messages_fts(message_id,text) VALUES(?,?)", id, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rowid, _ := result.LastInsertId()
+		if _, err := tx.Exec("INSERT INTO message_fts_rows(message_id,fts_rowid) VALUES(?,?)", id, rowid); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commitSeed(t, tx)
+	before, err := queryMaps(c.DB, "SELECT * FROM messages ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := TextSearchOptions{Query: `"The handout is accurate"`, Surface: "tools", ConversationID: "c1"}
+	if result, err := c.SearchText(t.Context(), options); err != nil || len(result.Items) != 0 {
+		t.Fatalf("fixture should require repair: %+v %v", result, err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done, err := c.BackfillMessageSearch(ctx, func(done, total int) { cancel() })
+	if done != 1 || err != context.Canceled {
+		t.Fatalf("cancelled upgrade: done=%d err=%v", done, err)
+	}
+	if pending, err := c.pendingMessageSearch(t.Context()); err != nil || pending != 1 {
+		t.Fatalf("committed checkpoint missing: pending=%d err=%v", pending, err)
+	}
+	if done, err := c.BackfillMessageSearch(t.Context(), nil); err != nil || done != 1 {
+		t.Fatalf("resume: done=%d err=%v", done, err)
+	}
+	if done, err := c.BackfillMessageSearch(t.Context(), nil); err != nil || done != 0 {
+		t.Fatalf("replayed completed work: done=%d err=%v", done, err)
+	}
+	if result, err := c.SearchText(t.Context(), options); err != nil || len(result.Items) != 1 {
+		t.Fatalf("repair missed decoded boundary: %+v %v", result, err)
+	}
+	after, err := queryMaps(c.DB, "SELECT * FROM messages ORDER BY id")
+	if err != nil || jsonText(before) != jsonText(after) {
+		t.Fatalf("lexical upgrade changed original evidence: %v", err)
+	}
+}
+
+func TestTextSearchReasoningBackfill(t *testing.T) {
+	for _, name := range []string{"root reply", "embedded child reply", "new delegation", "redacted first block", "empty first block"} {
+		t.Run(name, func(t *testing.T) {
+			c, _ := testCatalog(t)
+			tx := seedTx(t, c.DB)
+			if _, err := tx.Exec(`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('w','claude','local','w','Reasoning','2026-10-18');
+			 INSERT INTO conversations(id,workspace_id,provider,account,native_id,model,agent_depth,started_at) VALUES('c','w','claude','local','c','opus',2,'2026-10-18T17:00:00Z'),('linked','w','claude','local','linked','opus',3,'2026-10-18T17:00:00Z')`); err != nil {
+				t.Fatal(err)
+			}
+			body := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Now I understand"},{"type":"text","text":"Reply"}],"usage":{"input_tokens":10,"output_tokens":4}}}`
+			messages := []MessageRecord{{NativeID: "event", Role: "assistant", Kind: "message", Text: "Reply", RawText: body, Selected: true}}
+			if name == "embedded child reply" {
+				messages[0].ParentNativeID = "spawn"
+				messages = append([]MessageRecord{{NativeID: "spawn", Role: "assistant", Kind: "delegation", CallID: "child", Text: `{"tool":"Task","input":{"prompt":"Investigate"}}`}}, messages...)
+			} else if name == "new delegation" {
+				messages[0].Kind, messages[0].Text, messages[0].RawText = "metadata", `{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Now I understand"},{"type":"tool_use","id":"child","name":"Task","input":{"prompt":"Investigate"}}]}}`, ""
+				messages = append(messages, MessageRecord{NativeID: "child-reply", ParentNativeID: "child", Role: "assistant", Kind: "message", Text: "Found it"})
+			} else if name == "redacted first block" || name == "empty first block" {
+				block := `{"type":"redacted_thinking","data":"secret"}`
+				if name == "empty first block" {
+					block = `{"type":"thinking","thinking":" "}`
+				}
+				messages[0].Kind, messages[0].Text, messages[0].RawText = "metadata", `{"type":"assistant","message":{"role":"assistant","content":[`+block+`,{"type":"text","text":"Reply"}],"usage":{"input_tokens":10,"output_tokens":4}}}`, ""
+			}
+			for i, message := range messages {
+				message.SourceOrder = i
+				id, _, err := upsertMessage(tx, "c", message)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := replaceMessageFTS(tx, id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			conversation := ConversationRecord{Provider: "claude", Model: "opus", AgentDepth: 2, StartedAt: "2026-10-18T17:00:00Z", Messages: messages}
+			if err := replaceAgentSessions(tx, "w", "c", conversation); err != nil {
+				t.Fatal(err)
+			}
+			// Reconciled group usage and linked children must survive a text upgrade.
+			if err := insertSessionRemainder(tx, stableID("agent-session", "c", "main"), usageHour(conversation.StartedAt), "opus", tokenCounts{"input_tokens": 20, "output_tokens": 2, "total_tokens": 22}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(`UPDATE agent_sessions SET child_conversation_id='linked',usage_status='in-child-conversation' WHERE conversation_id='c' AND native_id='child'`); err != nil {
+				t.Fatal(err)
+			}
+			commitSeed(t, tx)
+			beforeSessions, err := queryMaps(c.DB, `SELECT * FROM agent_sessions WHERE conversation_id='c' ORDER BY id`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			beforeUsage, err := queryMaps(c.DB, `SELECT * FROM agent_session_usage ORDER BY agent_session_id,usage_hour,model,effort,attribution`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.BackfillReasoning(t.Context(), nil); err != nil {
+				t.Fatal(err)
+			}
+			for _, before := range beforeSessions {
+				after, err := queryMaps(c.DB, `SELECT * FROM agent_sessions WHERE id=?`, before["id"])
+				if err != nil || len(after) != 1 || jsonText(before) != jsonText(after[0]) {
+					t.Fatalf("backfill changed reconciled session: before=%v after=%v err=%v", before, after, err)
+				}
+			}
+			afterUsage, err := queryMaps(c.DB, `SELECT * FROM agent_session_usage ORDER BY agent_session_id,usage_hour,model,effort,attribution`)
+			if err != nil || jsonText(beforeUsage) != jsonText(afterUsage) {
+				t.Fatalf("backfill changed reconciled usage: before=%v after=%v err=%v", beforeUsage, afterUsage, err)
+			}
+			var missing int
+			if err := c.DB.QueryRow(`SELECT COUNT(*) FROM messages m LEFT JOIN agent_session_messages am ON am.message_id=m.id WHERE m.conversation_id='c' AND (am.message_id IS NULL OR am.source_order<>m.source_order)`).Scan(&missing); err != nil || missing != 0 {
+				t.Fatalf("backfill left missing/stale session membership: %d %v", missing, err)
+			}
+			owner, wantDepth := "main", 2
+			if name == "embedded child reply" || name == "new delegation" {
+				owner, wantDepth = "child", 3
+			}
+			var nativeID string
+			var depth int
+			kind := "reasoning"
+			if name == "new delegation" {
+				kind = "message"
+			} else if name == "redacted first block" || name == "empty first block" {
+				kind = "metadata"
+				var unavailable, count int
+				if err := c.DB.QueryRow(`SELECT unavailable_count,(SELECT COUNT(*) FROM messages WHERE conversation_id='c') FROM reasoning_extraction_state WHERE conversation_id='c'`).Scan(&unavailable, &count); err != nil || unavailable != 1 || count != 2 {
+					t.Fatalf("unavailable reasoning counted more than once: unavailable=%d messages=%d %v", unavailable, count, err)
+				}
+			}
+			if err := c.DB.QueryRow(`SELECT a.native_id,a.depth FROM messages m JOIN agent_session_messages am ON am.message_id=m.id JOIN agent_sessions a ON a.id=am.agent_session_id WHERE m.conversation_id='c' AND m.kind=?`, kind).Scan(&nativeID, &depth); err != nil || nativeID != owner || depth != wantDepth {
+				t.Fatalf("wrong recovered ownership: %s depth=%d %v", nativeID, depth, err)
+			}
+			if done, err := c.BackfillReasoning(t.Context(), nil); err != nil || done != 0 {
+				t.Fatalf("backfill replay changed completed work: %d %v", done, err)
+			}
+		})
+	}
+	c := textFixture(t)
+	thought := "I'm puzzled about missing mobile output. Actually I think I understand now: the desktop assertion stopped the run."
+	body := jsonText(map[string]any{"type": "assistant", "message": map[string]any{"id": "request", "role": "assistant", "content": []any{
+		map[string]any{"type": "thinking", "thinking": thought},
+		map[string]any{"type": "text", "text": "An ordinary reply"},
+		map[string]any{"type": "redacted_thinking", "data": "unavailable secret"},
+	}, "usage": map[string]any{"input_tokens": 10, "output_tokens": 4}}})
+	tx := seedTx(t, c.DB)
+	oldID, _, err := upsertMessage(tx, "c", MessageRecord{NativeID: "old-thinking", Role: "assistant", Kind: "metadata", Text: body,
+		CreatedAt: "2026-10-18T17:10:35Z", SourceOrder: 10, EvidenceLocator: "fixture:328", Selected: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceMessageFTS(tx, oldID); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []MessageRecord{
+		{NativeID: "quoted-user", Role: "user", Kind: "message", Text: body},
+		{NativeID: "quoted-tool", Role: "tool", Kind: "tool_result", Text: body},
+		{NativeID: "quoted-input", Role: "assistant", Kind: "tool_call", Text: body},
+	} {
+		id, _, err := upsertMessage(tx, "c", item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := replaceMessageFTS(tx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commitSeed(t, tx)
+	options := TextSearchOptions{Query: `"I understand now"`, Surface: "reasoning"}
+	before, err := c.SearchText(t.Context(), options)
+	if err != nil || len(before.Items) != 0 || before.ReasoningCoverage["normalization_complete"] != false {
+		t.Fatalf("legacy coverage: %+v %v", before, err)
+	}
+	cursor, err := c.SearchText(t.Context(), TextSearchOptions{Query: "cache", Limit: 1})
+	if err != nil || cursor.NextCursor == "" {
+		t.Fatalf("cursor: %+v %v", cursor, err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done, err := c.BackfillReasoning(ctx, func(done, total int) { cancel() })
+	if done != 1 || err != context.Canceled {
+		t.Fatalf("backfill did not stop between conversations: %d %v", done, err)
+	}
+	if pending, err := c.pendingReasoning(t.Context()); err != nil || pending != 1 {
+		t.Fatalf("checkpoint lost: pending=%d %v", pending, err)
+	}
+	find := LibraryFindOptions{Query: options.Query, Search: TextSearchOptions{Surface: "reasoning"}}
+	cached, err := c.libraryFindMatches(t.Context(), find)
+	if err != nil || cached.search.ReasoningCoverage["normalization_complete"] != false {
+		t.Fatalf("Library pending coverage: %+v %v", cached, err)
+	}
+	if done, err := c.BackfillReasoning(t.Context(), nil); err != nil || done != 1 {
+		t.Fatalf("resume repeated completed work: %d %v", done, err)
+	}
+	refreshed, err := c.libraryFindMatches(t.Context(), find)
+	if err != nil || refreshed.search.ReasoningCoverage["normalization_complete"] != true {
+		t.Fatalf("Library kept stale extraction coverage: %+v %v", refreshed, err)
+	}
+	result, err := c.searchTextMCP(t.Context(), map[string]any{"query": options.Query, "surface": "reasoning", "max_output_tokens": 4000})
+	if err != nil || len(result.Items) != 1 || result.Items[0].MessageID != oldID || result.Items[0].ReasoningFormat != "text" || !result.Complete || result.ReasoningCoverage["normalization_complete"] != true {
+		t.Fatalf("reasoning search: %+v %v", result, err)
+	}
+	if !strings.Contains(result.Items[0].Snippet, "I understand now") || result.Items[0].EvidenceLocator != "fixture:328:block:0" {
+		t.Fatalf("wrong decoded snippet or source: %+v", result.Items[0])
+	}
+	literal, err := c.SearchText(t.Context(), TextSearchOptions{Query: "I understand now", Mode: "literal", Surface: "reasoning"})
+	start := strings.Index(thought, "I understand now")
+	if err != nil || len(literal.Items) != 1 || literal.Items[0].StartByte != start || literal.Items[0].EndByte != start+len("I understand now") {
+		t.Fatalf("decoded byte offsets: %+v %v", literal, err)
+	}
+	stored, err := storedMessages(t.Context(), c.reader(), "c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundRaw := false
+	for _, message := range stored {
+		if message.NativeID == "old-thinking" {
+			foundRaw = message.RawText == body && message.Text == thought
+		}
+	}
+	if !foundRaw || conversationTokenCounts(stored)["total_tokens"] != 14 {
+		t.Fatalf("accounting or original envelope changed: %+v", stored)
+	}
+	for _, query := range []string{`"ordinary reply"`, `"unavailable secret"`, `"thinking"`} {
+		r, err := c.SearchText(t.Context(), TextSearchOptions{Query: query, Surface: "reasoning"})
+		if err != nil || len(r.Items) != 0 {
+			t.Fatalf("non-reasoning matched %s: %+v %v", query, r, err)
+		}
+	}
+	if _, err := c.SearchText(t.Context(), TextSearchOptions{Query: "cache", Cursor: cursor.NextCursor, Limit: 1}); err == nil {
+		t.Fatal("backfill preserved a cursor across changed search positions")
+	}
+	if done, err := c.BackfillReasoning(t.Context(), nil); err != nil || done != 0 {
+		t.Fatalf("completed upgrade repeated: %d %v", done, err)
+	}
+	coverage, err := c.reasoningCoverage(t.Context())
+	if err != nil || integer(coverage["retained_records"]) != 2 {
+		t.Fatalf("coverage counts: %v %v", coverage, err)
+	}
+	for _, source := range coverage["sources"].([]map[string]any) {
+		if source["source"] == "codex" && integer(source["unavailable_records"]) != 1 {
+			t.Fatalf("unavailable coverage: %v", source)
+		}
+	}
+}
+
+func TestTextSearchReasoningIngest(t *testing.T) {
+	c, config := testCatalog(t)
+	thought := "I'm puzzled.\n\nActually I think I understand now: desktop failed first."
+	body := jsonText(map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": []any{
+		map[string]any{"type": "thinking", "thinking": thought}, map[string]any{"type": "text", "text": "Checking the test."},
+	}}})
+	record := WorkspaceRecord{SourceKind: "canonical", SourceID: "reasoning", Account: "local", Conversations: []ConversationRecord{{
+		NativeID: "reasoning", Provider: "claude", Account: "local", Messages: []MessageRecord{
+			{NativeID: "thinking", Role: "assistant", Kind: "metadata", Text: body, EvidenceLocator: "fixture:1", Selected: true},
+			{NativeID: "quoted", Role: "user", Kind: "message", Text: body, Selected: true},
+			{NativeID: "reply", Role: "assistant", Kind: "message", Text: "I understand now", Selected: true},
+			{NativeID: "summary", Role: "assistant", Kind: "reasoning", ReasoningFormat: "summary", Text: "A shorter account of the analysis", Selected: true},
+			{NativeID: "encrypted", Role: "assistant", Kind: "metadata", Text: `{"type":"reasoning","encrypted_content":"opaque"}`, Selected: true},
+		},
+	}}}
+	tx := seedTx(t, c.DB)
+	if _, _, err := ingestWorkspace(tx, record, false); err != nil {
+		t.Fatal(err)
+	}
+	commitSeed(t, tx)
+	var conversation string
+	if err := c.DB.QueryRow("SELECT id FROM conversations").Scan(&conversation); err != nil {
+		t.Fatal(err)
+	}
+	server := testServer(t, config, c)
+	request := httptest.NewRequest(http.MethodPost, "/api/search/text", strings.NewReader(`{"query":"I understand now","mode":"literal","surface":"reasoning","conversation_id":"`+conversation+`"}`))
+	request.Header.Set("Authorization", "Bearer "+config.APIToken)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	var result textSearchResult
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &result) != nil || len(result.Items) != 1 || result.Items[0].ReasoningFormat != "text" || result.ReasoningCoverage["normalization_complete"] != true {
+		t.Fatalf("HTTP reasoning ingest: %d %s", response.Code, response.Body.String())
+	}
+	capabilities, err := c.textSearchCapabilities(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	coverage := capabilities["reasoning_extraction"].(map[string]any)
+	sources := coverage["sources"].([]map[string]any)
+	if len(sources) != 1 || integer(sources[0]["retained_records"]) != 2 || integer(sources[0]["summary_records"]) != 1 || integer(sources[0]["unavailable_records"]) != 1 {
+		t.Fatalf("ingest coverage: %v", coverage)
+	}
+	var quoted string
+	if err := c.DB.QueryRow("SELECT text FROM messages WHERE native_id='quoted'").Scan(&quoted); err != nil || quoted != body {
+		t.Fatalf("user quotation changed: %q %v", quoted, err)
+	}
 }
 func TestTextSearchQueries(t *testing.T) {
 	c := textFixture(t)

@@ -524,9 +524,9 @@ All require macOS and Xcode Command Line Tools (`xcode-select --install`).
 
 | Command | Coverage and when to run | Other requirements |
 |---|---|---|
-| `macos/test/run-light.sh` | Native menu state, preferences, reopen/index/eject actions and update checks against stubbed release responses; after changing `MenuBar.swift` or `UpdateChecker.swift`. | A logged-in GUI session for AppKit. No app build, service, disk images or network. |
+| `macos/test/run-light.sh` | Native menu state, preferences, reopen/index/eject actions and update preference migration, skip/dismiss behavior, startup shutdown/recovery, process coordination and installation leases; after changing `MenuBar.swift`, `UpdateNotice.swift`, `PharosApp.swift` or `UpdateLifecycle.swift`. | A logged-in GUI session for AppKit. Disposable child processes and stubbed HTTP; no app build, production service, disk images or release keys. Downloads pinned Sparkle if uncached. |
 | `macos/test/menu-bar.sh` | Just the native menu checks. | Same GUI requirement; optionally pass an output PNG path to save the menu icon. |
-| `macos/test/swift-harness.sh [PORT]` | App DiskArbitration handling, service logs, release, Quit/MCP cleanup and the Eject flow; after changing `LibraryVolume.swift`, `Launch.swift` or eject behavior. | Go, Node.js/npm, Python 3 and rsync; dependency downloads for the app build. Builds from a temporary checkout copy, then creates a 300 MB APFS image. Default port: 18768. |
+| `macos/test/swift-harness.sh [PORT]` | App DiskArbitration handling, service logs, release, Quit/MCP cleanup, real update leases/reconnect refusal and the Eject flow; after changing `LibraryVolume.swift`, `Launch.swift` or eject behavior. | Go, Node.js/npm, Python 3 and rsync; dependency downloads for the app build. Builds from a temporary checkout copy, then creates a 300 MB APFS image. Default port: 18768. |
 | `macos/test/eject-release.sh [PORT]` | Service release during sync, forced detach, catalog integrity and sync recovery; after changing service shutdown or drive handling. | Go, Python 3, curl and sqlite3. Creates a 2 GB sparse APFS image. Default port: 18767. |
 
 The two drive harnesses use `hdiutil` and `diskutil` on their own throwaway
@@ -1127,6 +1127,33 @@ views link to Settings → MCP. Older `/mcp` links open the dashboard, or the
 query when they include saved query state.
 
 ### Auditing messages and archive coverage
+
+For saved agent thinking, use `search_text` with `surface: "reasoning"` and
+quoted phrases or Boolean alternatives, for example
+`{"surface":"reasoning","query":"\"Now I understand\" OR \"Now I see\""}`.
+The UI exposes the same scope as **Find → Saved agent reasoning**. It searches
+decoded saved thinking, analysis-channel text and reasoning summaries; hits
+identify summaries through `reasoning_format`. `reasoning_coverage` reports
+pending normalization and retained records. `get_search_capabilities` provides
+source/provider coverage, including unavailable reasoning. Run the Library's
+**Index saved reasoning** upgrade to extract older retained envelopes. Missing
+or discarded source text requires reindexing available transcripts/captures;
+normalization completeness never proves complete source history. See
+[Agent text search](agent-text-search.md).
+
+The **Repair message search** Library upgrade repairs retained Claude parent and
+child links, exposes successfully delivered `SubagentHandback` reports as cited
+assistant replies, and refreshes lexical postings for tool/context envelopes.
+It resumes after interruption and preserves original message IDs, raw evidence,
+tool events, and reconciled usage. New ingestion applies these repairs directly;
+older retained records need the upgrade or a normal source reindex. Neither
+startup nor a search runs the historical repair synchronously.
+
+Token and phrase searches treat JSON-encoded whitespace in tool/context strings
+as separators, so a phrase after `\n` is searchable. Phrases stay within one
+JSON string instead of joining separate fields or content blocks. Match byte ranges still
+refer to the original stored message. Literal and regex modes continue matching
+those original bytes, including JSON escape sequences.
 
 `search_messages` searches indexed message text lexically, without semantic
 fallback, title substring matches, a recent-message cutoff, or a top-500

@@ -298,6 +298,10 @@ func storedMessages(ctx context.Context, q queryer, conversationID any) ([]Messa
 	if err != nil {
 		return nil, err
 	}
+	return storedMessageRecords(messages), nil
+}
+
+func storedMessageRecords(messages []map[string]any) []MessageRecord {
 	records := make([]MessageRecord, 0, len(messages))
 	for _, message := range messages {
 		records = append(records, MessageRecord{
@@ -307,10 +311,10 @@ func storedMessages(ctx context.Context, q queryer, conversationID any) ([]Messa
 			ParentNativeID: firstString(message["parent_native_id"]), CallID: firstString(message["call_id"]),
 			PreviousNativeID: firstString(message["previous_native_id"]),
 			EvidenceLocator:  firstString(message["evidence_locator"]), SourceOrder: int(integer(message["source_order"])), Selected: integer(message["selected"]) != 0,
-			Sender: firstString(message["sender"]),
+			Sender: firstString(message["sender"]), ReasoningFormat: firstString(message["reasoning_format"]),
 		})
 	}
-	return records, nil
+	return records
 }
 
 // BackfillToolLedger builds the tool ledger from stored messages for every

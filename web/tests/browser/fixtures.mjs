@@ -198,6 +198,11 @@ export const cloudScheduledStatus={
 export const defaultApi = {
   "GET /api/cloud-backup": {destinations:[],runs:[],schedules:[],active_run_id:"",setup_root:"/tmp/pharos/cloud-setup"},
   "POST /api/cloud-backup/schedule": {saved:true},
+  "GET /api/ask/status": { settings: { enabled: false, showInvitation: true, selection: null }, providers: [] },
+  "POST /api/ask/clear-visits": {ok:true},
+  "POST /api/ask/visits": {ok:true},
+  "POST /api/ask/remove-visit": {ok:true},
+
   // Library preferences, saved views and snapshots.
   "GET /api/preferences": ({ state }) => ({ values: state.preferences }),
   "POST /api/preferences": ({ body, state }) => {

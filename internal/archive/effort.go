@@ -41,8 +41,27 @@ func configurationPredicate(modelColumn, effortColumn, model, effort string) (st
 // workspaces once, rather than probing messages for each of tens of
 // thousands of workspaces.
 func workspaceConfigurationFilter(model, effort string) (string, []any) {
+	return workspaceRecordedConfigurationFilter("", model, effort)
+}
+
+// workspaceRecordedConfigurationFilter keeps provider, model, and effort on
+// the same conversation. A message may supply its recorded model/effort, but
+// its provider is always the provider of that conversation.
+func workspaceRecordedConfigurationFilter(provider, model, effort string) (string, []any) {
+	if model == "" && effort == "" {
+		if provider == "" {
+			return "1=1", nil
+		}
+		return "w.id IN (SELECT ce.workspace_id FROM conversations ce WHERE ce.provider=?)", []any{provider}
+	}
 	conversation, conversationArgs := configurationPredicate("ce.model", "ce.effort", model, effort)
 	message, messageArgs := configurationPredicate("COALESCE(me.model,ce.model)", "me.effort", model, effort)
+	if provider != "" {
+		conversation = "ce.provider=? AND " + conversation
+		message = "ce.provider=? AND " + message
+		conversationArgs = append([]any{provider}, conversationArgs...)
+		messageArgs = append([]any{provider}, messageArgs...)
+	}
 	return "w.id IN (SELECT ce.workspace_id FROM conversations ce WHERE " + conversation + " UNION SELECT ce.workspace_id FROM messages me JOIN conversations ce ON ce.id=me.conversation_id WHERE (me.model IS NOT NULL OR me.effort IS NOT NULL) AND " + message + ")",
 		append(conversationArgs, messageArgs...)
 }

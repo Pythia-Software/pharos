@@ -3,7 +3,6 @@ package archive
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"strings"
 )
 
@@ -102,7 +101,7 @@ func applyClaudeGroupUsage(tx *sql.Tx, workspaceID string, conversations []Conve
 				}
 			}
 		}
-		if err := linkClaudeDelegations(tx, rootID, root, conversations, ids); err != nil {
+		if err := linkClaudeGroupDelegations(tx, conversations, ids); err != nil {
 			return err
 		}
 	}
@@ -136,34 +135,6 @@ func insertSessionRemainder(tx *sql.Tx, sessionID, hour, model string, counts to
 	return err
 }
 
-func linkClaudeDelegations(tx *sql.Tx, rootID string, root ConversationRecord, conversations []ConversationRecord, ids []string) error {
-	for _, message := range root.Messages {
-		if message.Kind != "delegation_result" || message.CallID == "" {
-			continue
-		}
-		var payload map[string]any
-		if json.Unmarshal([]byte(message.Text), &payload) != nil {
-			continue
-		}
-		details := mapValueDefault(payload["details"])
-		agentID, runID := firstString(details["agentId"]), firstString(details["runId"])
-		for index, child := range conversations {
-			if index >= len(ids) || ids[index] == "" || child.AgentDepth == 0 || child.ParentNativeID != root.NativeID {
-				continue
-			}
-			if agentID != "" && !strings.HasSuffix(child.NativeID, "agent-"+agentID) || agentID == "" && (runID == "" || !strings.Contains(child.NativeID, "/"+runID+"/")) {
-				continue
-			}
-			if _, err := tx.Exec(`UPDATE agent_sessions SET usage_status='in-child-conversation',child_conversation_id=?
-				WHERE conversation_id=? AND native_id=? AND total_tokens=0`, ids[index], rootID, message.CallID); err != nil {
-				return err
-			}
-			break
-		}
-	}
-	return nil
-}
-
 // RepairUsageAttribution replays stored messages one workspace at a time.
 // The version row commits with the corrected sessions and metrics.
 func (c *Catalog) RepairUsageAttribution(ctx context.Context, progress func(int, int)) (int, error) {
@@ -188,6 +159,10 @@ func (c *Catalog) repairUsageAttribution(ctx context.Context, progress func(int,
 			return index, err
 		}
 		conversations, ids := make([]ConversationRecord, 0, len(items)), make([]string, 0, len(items))
+		nativeIDs := map[string]string{}
+		for _, item := range items {
+			nativeIDs[firstString(item["id"])] = firstString(item["native_id"])
+		}
 		for _, item := range items {
 			messages, err := storedMessages(ctx, c.DB, item["id"])
 			if err != nil {
@@ -195,8 +170,8 @@ func (c *Catalog) repairUsageAttribution(ctx context.Context, progress func(int,
 			}
 			ids = append(ids, firstString(item["id"]))
 			nativeID := firstString(item["native_id"])
-			parentNativeID := ""
-			if before, _, ok := strings.Cut(nativeID, ":subagent:"); ok {
+			parentNativeID := nativeIDs[firstString(item["parent_id"])]
+			if before, _, ok := strings.Cut(nativeID, ":subagent:"); ok && parentNativeID == "" {
 				parentNativeID = before
 			}
 			conversations = append(conversations, ConversationRecord{NativeID: nativeID, ParentNativeID: parentNativeID, Provider: firstString(item["provider"]), Model: firstString(item["model"]), Effort: firstString(item["effort"]), AgentDepth: int(integer(item["agent_depth"])), StartedAt: firstString(item["started_at"]), Messages: messages})

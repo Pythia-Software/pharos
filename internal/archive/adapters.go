@@ -25,6 +25,8 @@ type MessageRecord struct {
 	// "account:<id>" for a person, "agent:<session>" for another agent, or
 	// "automation:<name>" for a script. Empty means the source is silent.
 	Sender string `json:"Sender,omitempty"`
+	// ReasoningFormat distinguishes source-provided text from a reasoning summary.
+	ReasoningFormat string `json:"ReasoningFormat,omitempty"`
 }
 
 type ConversationRecord struct {
@@ -299,7 +301,7 @@ func ensureEOF(decoder *json.Decoder) error {
 
 type canonicalAdapter struct{ baseAdapter }
 
-const exportIndexVersion = "token-events-v3-effort"
+const exportIndexVersion = "token-events-v4-reasoning"
 
 func (a *canonicalAdapter) indexVersion() string { return exportIndexVersion }
 
@@ -384,7 +386,7 @@ func (a *canonicalAdapter) workspace(row map[string]any, file string, index int)
 			if id == "" {
 				id = fmt.Sprintf("m%d", mindex)
 			}
-			messages = append(messages, MessageRecord{RawText: accountingRaw(message), Model: firstString(message["model"], conversation["model"]), Effort: exportedEffort(message, conversation), NativeID: id, Role: defaultString(message["role"], "unknown"), Kind: defaultString(message["kind"], "message"), Text: messageText(firstNonNil(message["text"], message["content"])), CreatedAt: iso(firstNonNil(message["created_at"], message["timestamp"])), ParentNativeID: firstString(message["parent_id"]), CallID: firstString(message["call_id"]), Selected: defaultBool(message["selected"], true), EvidenceLocator: fmt.Sprintf("%s:%d:%d", a.original(file), cindex, mindex)})
+			messages = append(messages, MessageRecord{RawText: accountingRaw(message), Model: firstString(message["model"], conversation["model"]), Effort: exportedEffort(message, conversation), NativeID: id, Role: defaultString(message["role"], "unknown"), Kind: defaultString(message["kind"], "message"), ReasoningFormat: firstString(message["reasoning_format"]), Text: messageText(firstNonNil(message["text"], message["content"])), CreatedAt: iso(firstNonNil(message["created_at"], message["timestamp"])), ParentNativeID: firstString(message["parent_id"]), CallID: firstString(message["call_id"]), Selected: defaultBool(message["selected"], true), EvidenceLocator: fmt.Sprintf("%s:%d:%d", a.original(file), cindex, mindex)})
 		}
 		nativeID := firstString(conversation["id"], conversation["native_id"])
 		if nativeID == "" {
@@ -482,7 +484,7 @@ func (a *jsonlAdapter) Fingerprint() (string, error) {
 // codes, durations, interruptions); v9 retains Codex hosted web searches; v10
 // skips Claude entries replayed under a uuid already seen; v11 retains Claude
 // invoked_skills attachments for skill_usages.
-const jsonlExtractor = "message-model-v13-names"
+const jsonlExtractor = "message-model-v15-lineage-handbacks"
 
 func (a *jsonlAdapter) accept(path string) bool {
 	relative, _ := filepath.Rel(a.config.Path, path)
@@ -621,6 +623,7 @@ func (a *jsonlAdapter) readTranscriptGroup(paths []string) (*WorkspaceRecord, []
 		}
 	}
 	if combined != nil && a.provider == "claude" {
+		reconcileClaudeLineage(combined)
 		combined.Metrics = reconciledTokenMetrics(*combined)
 	}
 	return combined, read, nil
@@ -783,6 +786,19 @@ func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRec
 			}
 			text = messageText(payload["content"])
 			kind = "message"
+			if role == "assistant" && firstString(payload["channel"]) == "analysis" {
+				kind = "reasoning"
+			}
+		} else if (etype == "response_item" && firstString(payload["type"]) == "reasoning") ||
+			(etype == "event_msg" && matchesFold(firstString(payload["type"]), "agent_reasoning", "agent_reasoning_raw_content")) {
+			base := MessageRecord{NativeID: firstString(payload["id"], event["id"]), Role: "assistant", Model: model, Effort: effort,
+				CreatedAt: iso(event["timestamp"]), EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true, RawText: jsonText(event)}
+			if base.NativeID == "" {
+				base.NativeID = fmt.Sprintf("line-%d", integer(event["_line"]))
+			}
+			body, format, unavailable := reasoningBlock(payload)
+			messages = append(messages, reasoningRecord(base, body, format, unavailable))
+			continue
 		} else if etype == "response_item" && (firstString(payload["type"]) == "function_call" || firstString(payload["type"]) == "custom_tool_call") {
 			role = "assistant"
 			name := defaultString(payload["name"], "tool")
@@ -860,7 +876,11 @@ func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRec
 			if id == "" {
 				id = fmt.Sprintf("line-%d", integer(event["_line"]))
 			}
-			messages = append(messages, MessageRecord{RawText: accountingRaw(event), NativeID: id, Role: role, Kind: kind, Text: text, Model: model, Effort: effort, CallID: firstString(payload["call_id"]), CreatedAt: iso(event["timestamp"]), EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true, Sender: sender})
+			raw := accountingRaw(event)
+			if kind == "reasoning" {
+				raw = jsonText(event)
+			}
+			messages = append(messages, MessageRecord{RawText: raw, NativeID: id, Role: role, Kind: kind, Text: text, Model: model, Effort: effort, CallID: firstString(payload["call_id"]), CreatedAt: iso(event["timestamp"]), EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true, Sender: sender})
 		}
 	}
 	for callID, extra := range details {
@@ -983,8 +1003,15 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 			baseID = fmt.Sprintf("line-%d", integer(event["_line"]))
 		}
 		item := MessageRecord{NativeID: baseID, Role: role, Kind: "message", Text: text, Model: model, Effort: effort, PreviousNativeID: parent, CreatedAt: timestamp, EvidenceLocator: fmt.Sprintf("%s:%d", origin, integer(event["_line"])), Selected: true}
+		splitAssistant := false
+		if role == "assistant" {
+			for _, raw := range reasoningList(content) {
+				_, format, unavailable := reasoningBlock(mapValue(raw))
+				splitAssistant = splitAssistant || format != "" || unavailable != ""
+			}
+		}
 		if role != "user" {
-			if text != "" {
+			if text != "" && !splitAssistant {
 				messages = append(messages, item)
 			}
 		} else if source := claudeInjectedSource(event, text); source != "" {
@@ -1013,6 +1040,8 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 			}
 		}
 		if blocks, ok := content.([]any); ok {
+			replyAdded := false
+			reasoningRawKept := false
 			for index, raw := range blocks {
 				block := mapValue(raw)
 				if block == nil {
@@ -1021,7 +1050,17 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 				blockType := firstString(block["type"])
 				callID := firstString(block["id"], block["tool_use_id"])
 				kind, blockText, blockRole := "", "", role
-				if blockType == "tool_use" {
+				if splitAssistant && matchesFold(blockType, "text", "input_text", "output_text") {
+					base := item
+					base.Text = firstString(block["text"])
+					if replyAdded {
+						base.NativeID = fmt.Sprintf("%s:block:%d", baseID, index)
+					}
+					base.EvidenceLocator = fmt.Sprintf("%s:%d:block:%d", origin, integer(event["_line"]), index)
+					messages = append(messages, base)
+					replyAdded = true
+					continue
+				} else if blockType == "tool_use" {
 					name := defaultString(block["name"], "tool")
 					toolNames[callID] = name
 					kind = "tool_call"
@@ -1042,6 +1081,16 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 						payload["details"] = details
 					}
 					blockText = jsonText(payload)
+				} else if body, format, unavailable := reasoningBlock(block); role == "assistant" && (format != "" || unavailable != "") {
+					base := item
+					base.NativeID = fmt.Sprintf("%s:block:%d", baseID, index)
+					base.EvidenceLocator = fmt.Sprintf("%s:%d:block:%d", origin, integer(event["_line"]), index)
+					if !hasUsageEvidence(event) && !reasoningRawKept {
+						base.RawText = jsonText(event)
+						reasoningRawKept = true
+					}
+					messages = append(messages, reasoningRecord(base, body, format, unavailable))
+					continue
 				} else {
 					continue
 				}
@@ -1068,6 +1117,7 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 		nativeID = rootID + ":subagent:" + strings.TrimSuffix(filepath.ToSlash(relative), filepath.Ext(relative))
 	}
 	repository := a.repository(cwd, "")
+	messages = normalizeHandbackMessages(messages)
 	purpose, outcome := agentPurposeOutcome(messages)
 	metrics := []map[string]any{}
 	for key, value := range tokens {

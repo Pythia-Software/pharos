@@ -208,8 +208,41 @@ CREATE TABLE IF NOT EXISTS messages (
   content_hash TEXT NOT NULL,
   selected INTEGER NOT NULL DEFAULT 1,
   sender TEXT,
+  reasoning_format TEXT,
   UNIQUE(conversation_id, native_id)
 );
+-- Extraction progress is separate from source-history completeness. Updating a
+-- conversation and its state is atomic; an interrupted upgrade resumes at the
+-- next conversation without reparsing completed ones.
+CREATE TABLE IF NOT EXISTS reasoning_extraction_state (
+  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+  version TEXT NOT NULL,
+  retained_count INTEGER NOT NULL,
+  retained_bytes INTEGER NOT NULL,
+  summary_count INTEGER NOT NULL,
+  unavailable_count INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO meta(key,value) VALUES('reasoning_extraction_generation','0');
+CREATE TRIGGER IF NOT EXISTS reasoning_state_insert AFTER INSERT ON reasoning_extraction_state BEGIN
+  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='reasoning_extraction_generation';
+END;
+CREATE TRIGGER IF NOT EXISTS reasoning_state_delete AFTER DELETE ON reasoning_extraction_state BEGIN
+  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='reasoning_extraction_generation';
+END;
+CREATE TRIGGER IF NOT EXISTS reasoning_state_update AFTER UPDATE ON reasoning_extraction_state BEGIN
+  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='reasoning_extraction_generation';
+END;
+CREATE TRIGGER IF NOT EXISTS reasoning_message_insert AFTER INSERT ON messages BEGIN
+  DELETE FROM reasoning_extraction_state WHERE conversation_id=new.conversation_id;
+END;
+CREATE TRIGGER IF NOT EXISTS reasoning_message_delete AFTER DELETE ON messages BEGIN
+  DELETE FROM reasoning_extraction_state WHERE conversation_id=old.conversation_id;
+END;
+CREATE TRIGGER IF NOT EXISTS reasoning_message_update AFTER UPDATE OF role,kind,text,raw_text,reasoning_format,conversation_id ON messages
+WHEN (old.role,old.kind,old.text,old.raw_text,old.reasoning_format,old.conversation_id)
+ IS NOT (new.role,new.kind,new.text,new.raw_text,new.reasoning_format,new.conversation_id) BEGIN
+  DELETE FROM reasoning_extraction_state WHERE conversation_id IN (old.conversation_id,new.conversation_id);
+END;
 CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages(conversation_id, created_at);
 -- Serves the human-authorship rebuild, which reads prose turns by role in send order.
 -- A query about one conversation or workspace that also filters on role would
@@ -1153,6 +1186,21 @@ CREATE TABLE IF NOT EXISTS text_search_documents (
 );
 CREATE INDEX IF NOT EXISTS text_search_surface_idx ON text_search_documents(surface,message_rowid);
 CREATE INDEX IF NOT EXISTS text_search_conversation_idx ON text_search_documents(conversation_id,message_rowid);
+CREATE TABLE IF NOT EXISTS message_search_state (
+ conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+ version TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS message_search_insert AFTER INSERT ON messages BEGIN
+ DELETE FROM message_search_state WHERE conversation_id=new.conversation_id;
+END;
+CREATE TRIGGER IF NOT EXISTS message_search_delete AFTER DELETE ON messages BEGIN
+ DELETE FROM message_search_state WHERE conversation_id=old.conversation_id;
+END;
+CREATE TRIGGER IF NOT EXISTS message_search_update AFTER UPDATE OF conversation_id,kind,text,call_id,parent_native_id,source_order ON messages
+WHEN (old.conversation_id,old.kind,old.text,old.call_id,old.parent_native_id,old.source_order)
+ IS NOT (new.conversation_id,new.kind,new.text,new.call_id,new.parent_native_id,new.source_order) BEGIN
+ DELETE FROM message_search_state WHERE conversation_id IN (old.conversation_id,new.conversation_id);
+END;
 INSERT OR IGNORE INTO meta(key,value) VALUES('text_search_generation','0');
 INSERT OR IGNORE INTO meta(key,value) VALUES('text_search_cursor_version','2'),
  ('text_search_append_generation','0'),('text_search_span_generation','0'),('text_search_insert_conflict','0');
@@ -1353,3 +1401,33 @@ CREATE TRIGGER IF NOT EXISTS tool_query_facts_update AFTER UPDATE OF id,workspac
  INSERT INTO tool_query_facts(rowid,id,workspace_id,started_at,duration_ms,provider,activity,tool_category,day)
  VALUES(new.rowid,new.id,new.workspace_id,new.started_at,new.duration_ms,new.provider,machine_activity(new.tool_category,new.command_category,new.tool_name,new.mcp_server,new.program),new.tool_category,date(new.started_at,'localtime'));
 END;
+
+-- Ask Pharos UI state is private to this feature, outside the MCP datasets.
+-- Settings and visit history are per host; opt-in does not travel between Macs.
+CREATE TABLE IF NOT EXISTS ask_settings (
+  host_id TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ask_sessions (
+  id TEXT PRIMARY KEY,
+  host_id TEXT NOT NULL,
+  value TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ask_sessions_host ON ask_sessions(host_id, updated_at DESC);
+CREATE TABLE IF NOT EXISTS ask_visits (
+  host_id TEXT NOT NULL,
+  url TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  PRIMARY KEY(host_id, url, at)
+);
+CREATE INDEX IF NOT EXISTS ask_visits_host ON ask_visits(host_id, at DESC);
+-- Native CLIs which retain their own transcripts must not cause private
+-- Ask Pharos context to be ingested a second time by a source adapter.
+CREATE TABLE IF NOT EXISTS ask_native_sessions (
+  provider TEXT NOT NULL,
+  native_id TEXT NOT NULL,
+  host_id TEXT NOT NULL,
+  PRIMARY KEY(provider, native_id)
+);

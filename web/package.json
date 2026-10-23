@@ -15,7 +15,7 @@
     "generate-recipes": "node generate-recipe-snapshot.mjs",
     "check-recipes": "node generate-recipe-snapshot.mjs --check",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm run check-schemas && npm run check-recipes && npm run build && npm run check-bundle && npm test",
+    "check": "npm run typecheck && npm run check-schemas && npm run check-recipes && npm run check-ask-destinations && npm run build && npm run check-bundle && npm test",
     "test": "node tests/run.mjs unit",
     "test:unit": "node tests/run.mjs unit",
     "test:full": "node tests/run.mjs unit --full",
@@ -28,7 +28,9 @@
     "test:text-search": "node tests/run.mjs unit text-search-model",
     "test:search-composer": "node tests/run.mjs unit search-composer",
     "link:local": "node ../tools/link-query-table.mjs",
-    "watch:local": "node ../tools/watch-query-table.mjs"
+    "watch:local": "node ../tools/watch-query-table.mjs",
+    "generate-ask-destinations": "node generate-ask-destinations.mjs",
+    "check-ask-destinations": "node generate-ask-destinations.mjs --check"
   },
   "dependencies": {
     "@pythia-software/query-table-core": "0.9.5",

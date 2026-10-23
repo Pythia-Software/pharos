@@ -249,6 +249,136 @@ func TestCodexModelFollowsTurnContext(t *testing.T) {
 	}
 }
 
+func TestReasoningNormalization(t *testing.T) {
+	for _, block := range []string{`{"type":"redacted_thinking","data":"secret"}`, `{"type":"thinking","thinking":" "}`} {
+		t.Run(block, func(t *testing.T) {
+			body := `{"type":"assistant","message":{"role":"assistant","content":[` + block + `,{"type":"text","text":"Reply"}],"usage":{"input_tokens":10,"output_tokens":4}}}`
+			items := normalizeReasoningMessages([]MessageRecord{{NativeID: "event", Role: "assistant", Kind: "metadata", Text: body}})
+			if len(items) != 2 || items[0].NativeID != "event" || items[0].Kind != "metadata" || items[1].Text != "Reply" {
+				t.Fatalf("unavailable first block was duplicated: %+v", items)
+			}
+			if again := normalizeReasoningMessages(items); jsonText(again) != jsonText(items) || conversationTokenCounts(again)["total_tokens"] != 14 {
+				t.Fatalf("unavailable reasoning changed on replay: %+v", again)
+			}
+			// A legacy reply with the base ID still needs its missing first block.
+			legacy := normalizeReasoningMessages([]MessageRecord{{NativeID: "event", Role: "assistant", Kind: "message", Text: "Reply", RawText: body}})
+			if len(legacy) != 2 || legacy[0].Kind != "metadata" || legacy[0].NativeID != "event:block:0" || legacy[1].Text != "Reply" {
+				t.Fatalf("missing unavailable block was not recovered: %+v", legacy)
+			}
+		})
+	}
+	thought := "I'm puzzled about why the mobile output seems missing. Actually I think I understand now: desktop failed before mobile ran."
+	envelope := jsonText(map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": []any{
+		map[string]any{"type": "thinking", "thinking": thought}, map[string]any{"type": "text", "text": "Checking the layout."},
+		map[string]any{"type": "tool_use", "id": "read", "name": "Read", "input": map[string]any{"path": "layout.ts"}},
+	}, "usage": map[string]any{"input_tokens": 10, "output_tokens": 4}}})
+	base := MessageRecord{NativeID: "saved", Role: "assistant", Kind: "metadata", Text: envelope, CreatedAt: "2026-10-18T17:10:35Z", EvidenceLocator: "fixture:328", ParentNativeID: "child", Selected: true}
+	got := normalizeReasoningMessages([]MessageRecord{base})
+	if len(got) != 3 || got[0].Kind != "reasoning" || got[0].Text != thought || got[0].NativeID != base.NativeID || got[0].RawText != envelope || got[0].ReasoningFormat != "text" || got[0].ParentNativeID != "child" {
+		t.Fatalf("lost reasoning provenance: %+v", got)
+	}
+	if got[1].Kind != "message" || got[2].Kind != "tool_call" || got[2].CallID != "read" || got[1].RawText != "" || got[2].RawText != "" || conversationTokenCounts(got)["total_tokens"] != 14 {
+		t.Fatalf("lost order or duplicated accounting: %+v", got)
+	}
+	if again := normalizeReasoningMessages(got); jsonText(again) != jsonText(got) {
+		t.Fatalf("normalization is not idempotent: %+v", again)
+	}
+	replyFirst := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Looking"},{"type":"thinking","thinking":"Now I understand"}]}}`
+	items := normalizeReasoningMessages([]MessageRecord{{NativeID: "reply-first", Role: "assistant", Kind: "metadata", Text: replyFirst}})
+	if len(items) != 2 || items[0].Kind != "message" || items[1].Kind != "reasoning" {
+		t.Fatalf("a reply's raw envelope duplicated thinking: %+v", items)
+	}
+	if again := normalizeReasoningMessages(items); jsonText(again) != jsonText(items) {
+		t.Fatalf("reply-first normalization changed on replay: %+v", again)
+	}
+	// Historical mixed envelopes often survive only as accounting evidence on
+	// the already extracted reply. Recover the omitted block in source order.
+	oldReply := MessageRecord{NativeID: "old:block:1", Role: "assistant", Kind: "message", Text: "Checking the layout.", RawText: envelope, EvidenceLocator: "fixture:328", Selected: true}
+	recovered := normalizeReasoningMessages([]MessageRecord{oldReply})
+	if len(recovered) != 2 || recovered[0].Kind != "reasoning" || recovered[0].Text != thought || recovered[0].NativeID != "old:block:0" || recovered[0].RawText != "" || recovered[1].NativeID != oldReply.NativeID {
+		t.Fatalf("raw-only thinking not recovered: %+v", recovered)
+	}
+	if again := normalizeReasoningMessages(recovered); jsonText(again) != jsonText(recovered) || conversationTokenCounts(again)["total_tokens"] != 14 {
+		t.Fatalf("raw recovery duplicated thinking or accounting: %+v", again)
+	}
+	oldCodex := MessageRecord{NativeID: "old-codex", Role: "system", Kind: "metadata", Text: "Accounting evidence", RawText: `{"type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"Now I see"}]}}`}
+	if items := normalizeReasoningMessages([]MessageRecord{oldCodex}); len(items) != 1 || items[0].Kind != "reasoning" || items[0].ReasoningFormat != "summary" || items[0].Text != "Now I see" || items[0].NativeID != oldCodex.NativeID {
+		t.Fatalf("Codex raw reasoning envelope was not recovered: %+v", items)
+	}
+	for _, tc := range []struct{ name, role, kind, body, want, format string }{
+		{"summary", "assistant", "metadata", `{"type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"Now I see the issue"}],"encrypted_content":"secret"}}`, "reasoning", "summary"},
+		{"full text", "assistant", "metadata", `{"type":"reasoning","content":[{"type":"reasoning_text","text":"Now I understand"}],"summary":[{"type":"summary_text","text":"shorter"}]}`, "reasoning", "text"},
+		{"exec summary", "assistant", "metadata", `{"type":"reasoning","text":"I understand now"}`, "reasoning", "summary"},
+		{"analysis channel", "assistant", "metadata", `{"type":"message","role":"assistant","channel":"analysis","content":[{"type":"output_text","text":"Now I understand"}]}`, "reasoning", "text"},
+		{"encrypted", "assistant", "metadata", `{"type":"reasoning","encrypted_content":"not searchable thought"}`, "metadata", ""},
+		{"redacted", "assistant", "metadata", `{"type":"assistant","message":{"content":[{"type":"redacted_thinking","data":"not searchable thought"}]}}`, "metadata", ""},
+		{"empty", "assistant", "metadata", `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":" "}]}}`, "metadata", ""},
+		{"user quotation", "user", "message", envelope, "message", ""},
+		{"assistant quotation", "assistant", "message", envelope, "message", ""},
+		{"tool quotation", "tool", "tool_result", envelope, "tool_result", ""},
+		{"assistant tool input", "assistant", "tool_call", envelope, "tool_call", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := MessageRecord{NativeID: "event", Role: tc.role, Kind: tc.kind, Text: tc.body}
+			items := normalizeReasoningMessage(input)
+			if len(items) != 1 || items[0].Kind != tc.want || items[0].ReasoningFormat != tc.format {
+				t.Fatalf("normalization: %+v", items)
+			}
+			if tc.want != "reasoning" && tc.role == "assistant" && tc.kind == "metadata" && strings.Contains(items[0].Text, "not searchable thought") {
+				t.Fatal("unavailable payload became searchable")
+			}
+		})
+	}
+}
+
+func TestNativeReasoningRetention(t *testing.T) {
+	claude := []map[string]any{{"type": "assistant", "uuid": "event", "message": map[string]any{"role": "assistant", "model": "opus", "content": []any{
+		map[string]any{"type": "thinking", "thinking": "Now I understand"},
+		map[string]any{"type": "text", "text": "A reply"},
+		map[string]any{"type": "thinking", "thinking": "Now I see"},
+		map[string]any{"type": "text", "text": "Another reply"},
+	}}}}
+	adapter := jsonlAdapter{baseAdapter: baseAdapter{config: SourceConfig{Account: "local"}}, provider: "claude"}
+	record, ok, err := adapter.claude("fixture.jsonl", claude)
+	if err != nil || !ok {
+		t.Fatalf("Claude: %v %v", ok, err)
+	}
+	messages := record.Conversations[0].Messages
+	if len(messages) != 4 || messages[0].Kind != "reasoning" || messages[1].NativeID != "event" || messages[2].Kind != "reasoning" || messages[3].Text != "Another reply" {
+		t.Fatalf("Claude order/identity: %+v", messages)
+	}
+	conductor := conductorEvents("event", "assistant", jsonText(claude[0]), "", "fixture:1", map[string]bool{})
+	if len(conductor) != 4 || conductor[0].Kind != "reasoning" || conductor[2].Kind != "reasoning" {
+		t.Fatalf("Conductor: %+v", conductor)
+	}
+	thinkingOnly := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"First"},{"type":"thinking","thinking":"Second"}]}}`
+	backfilled := normalizeReasoningMessages([]MessageRecord{{NativeID: "thinking-only", Role: "assistant", Kind: "metadata", Text: thinkingOnly}})
+	reindexed := conductorEvents("thinking-only", "assistant", thinkingOnly, "", "", map[string]bool{})
+	if len(reindexed) != 2 || reindexed[0].NativeID != backfilled[0].NativeID || reindexed[1].NativeID != backfilled[1].NativeID {
+		t.Fatalf("Conductor reindex changed recovered identities: %+v vs %+v", reindexed, backfilled)
+	}
+	adapter.provider = "codex"
+	code, ok, err := adapter.codex("rollout.jsonl", []map[string]any{
+		{"type": "session_meta", "payload": map[string]any{"id": "reasoning-session"}},
+		{"type": "response_item", "payload": map[string]any{"id": "reason", "type": "reasoning", "summary": []any{map[string]any{"type": "summary_text", "text": "Now I understand"}}}},
+		{"type": "response_item", "payload": map[string]any{"id": "analysis", "type": "message", "role": "assistant", "channel": "analysis", "content": []any{map[string]any{"type": "output_text", "text": "Now I see"}}}},
+		{"type": "response_item", "payload": map[string]any{"id": "reply", "type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "Done"}}}},
+	})
+	if err != nil || !ok {
+		t.Fatalf("Codex: %v %v", ok, err)
+	}
+	messages = code.Conversations[0].Messages
+	if len(messages) != 3 || messages[0].Kind != "reasoning" || messages[0].ReasoningFormat != "summary" || messages[1].Kind != "reasoning" || messages[2].Kind != "message" {
+		t.Fatalf("Codex: %+v", messages)
+	}
+	path := filepath.Join(t.TempDir(), "exec.jsonl")
+	writeSourceFile(t, path, "{\"type\":\"thread.started\",\"thread_id\":\"exec\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"thought\",\"type\":\"reasoning\",\"text\":\"Now I see\"}}\n")
+	exec, ok, err := parseCodexExec(path, path)
+	if err != nil || !ok || len(exec.Messages) != 1 || exec.Messages[0].Kind != "reasoning" || exec.Messages[0].ReasoningFormat != "summary" {
+		t.Fatalf("Codex exec: %+v %v %v", exec.Messages, ok, err)
+	}
+}
+
 func TestCodexCompactionTrigger(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rollout-compaction.jsonl")
 	data := strings.Join([]string{
@@ -617,6 +747,340 @@ func TestClaudeSubagentHasOwnConversation(t *testing.T) {
 		integer(kinds[1]["depth"]) != 1 || integer(kinds[2]["depth"]) != 1 {
 		t.Fatalf("child session usage kind or depth missing: %#v, %v", kinds, err)
 	}
+	t.Run("acknowledged nested lineage", func(t *testing.T) {
+		catalog, _ := testCatalog(t)
+		project := t.TempDir()
+		subagents := filepath.Join(project, "session", "subagents")
+		if err := os.MkdirAll(subagents, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write := func(name string, lines ...string) {
+			t.Helper()
+			if err := os.WriteFile(filepath.Join(project, name), []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		write("session.jsonl",
+			`{"sessionId":"session","uuid":"root-launch","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"root-call","name":"Agent","input":{"prompt":"Child assignment"}}]}}`,
+			`{"sessionId":"session","uuid":"root-result","type":"user","toolUseResult":{"agentId":"z"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"root-call","content":"launched"}]}}`,
+			`{"sessionId":"session","uuid":"root-ambiguous-launch","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"root-ambiguous","name":"Agent","input":{"prompt":"Ambiguous assignment"}}]}}`,
+			`{"sessionId":"session","uuid":"root-ambiguous-result","type":"user","toolUseResult":{"agentId":"x"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"root-ambiguous","content":"launched"}]}}`,
+			`{"sessionId":"session","uuid":"root-answer","type":"assistant","message":{"role":"assistant","content":"Root done"}}`)
+		write("session/subagents/agent-z.jsonl",
+			`{"sessionId":"session","uuid":"child-assignment","type":"user","message":{"role":"user","content":"Child assignment"}}`,
+			`{"sessionId":"session","uuid":"child-launch","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"child-call","name":"Agent","input":{"prompt":"Grandchild assignment"}}]}}`,
+			`{"sessionId":"session","uuid":"child-result","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"child-call","content":[{"type":"text","text":"Async agent launched successfully.\nagentId: a (internal ID - do not mention to user.)"}]}]}}`,
+			`{"sessionId":"session","uuid":"child-ambiguous-launch","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"child-ambiguous","name":"Agent","input":{"prompt":"Ambiguous assignment"}}]}}`,
+			`{"sessionId":"session","uuid":"child-ambiguous-result","type":"user","toolUseResult":{"agentId":"x"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"child-ambiguous","content":"launched"}]}}`,
+			`{"sessionId":"session","uuid":"child-answer","type":"assistant","message":{"role":"assistant","content":"Child done"}}`)
+		write("session/subagents/agent-a.jsonl",
+			`{"sessionId":"session","uuid":"grandchild-assignment","type":"user","message":{"role":"user","content":"Grandchild assignment"}}`,
+			`{"sessionId":"session","uuid":"grandchild-answer","type":"assistant","message":{"role":"assistant","content":"Grandchild done"}}`)
+		write("session/subagents/agent-m.jsonl", `{"sessionId":"session","uuid":"unacknowledged-assignment","type":"user","message":{"role":"user","content":"Unacknowledged"}}`)
+		write("session/subagents/agent-x.jsonl", `{"sessionId":"session","uuid":"ambiguous-assignment","type":"user","message":{"role":"user","content":"Ambiguous assignment"}}`)
+		adapter, err := MakeAdapter(SourceConfig{Name: "claude", Kind: "claude", Path: project, Account: "local"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result := catalog.Ingest(adapter, nil); result.Error != nil || result.Conversations != 5 {
+			t.Fatalf("nested ingest: %#v", result)
+		}
+		rows, err := queryMaps(catalog.DB, `SELECT c.id,c.native_id,p.native_id parent,c.agent_depth depth,s.depth session_depth
+			FROM conversations c LEFT JOIN conversations p ON p.id=c.parent_id
+			JOIN agent_sessions s ON s.conversation_id=c.id AND s.native_id='main' ORDER BY c.native_id`)
+		if err != nil || len(rows) != 5 {
+			t.Fatalf("lineage rows: %#v, %v", rows, err)
+		}
+		byNative := map[string]map[string]any{}
+		for _, row := range rows {
+			byNative[firstString(row["native_id"])] = row
+		}
+		for _, expected := range []struct {
+			native, parent string
+			depth          int
+		}{
+			{"session:subagent:agent-z", "session", 1},
+			{"session:subagent:agent-a", "session:subagent:agent-z", 2},
+			{"session:subagent:agent-m", "session", 1},
+			{"session:subagent:agent-x", "session", 1},
+		} {
+			row := byNative[expected.native]
+			if firstString(row["parent"]) != expected.parent || integer(row["depth"]) != int64(expected.depth) || integer(row["session_depth"]) != int64(expected.depth) {
+				t.Fatalf("%s lineage: %#v", expected.native, row)
+			}
+		}
+		grandchild := byNative["session:subagent:agent-a"]
+		parent := byNative["session:subagent:agent-z"]
+		checkLineage := func(t *testing.T, tool string, item map[string]any) {
+			t.Helper()
+			lineage, ok := item["lineage"].(map[string]any)
+			if !ok || firstString(lineage["parent_conversation_id"]) != firstString(parent["id"]) ||
+				firstString(lineage["parent_native_id"]) != firstString(parent["native_id"]) || integer(lineage["depth"]) != 2 {
+				t.Fatalf("%s lineage inconsistent: %s", tool, jsonText(item))
+			}
+		}
+		overview, err := callMCP(catalog, "get_conversation_overview", map[string]any{"conversation_id": grandchild["id"], "max_output_tokens": 4000})
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkLineage(t, "overview", overview.(map[string]any))
+		for _, request := range []struct {
+			tool string
+			args map[string]any
+		}{
+			{"trace_worktree", map[string]any{"query": "agent-a", "max_output_tokens": 4000}},
+			{"get_work_detail", map[string]any{"workspace_id": stableID("workspace", "claude", "local", "session"), "section": "conversations", "limit": 10, "max_output_tokens": 4000}},
+		} {
+			result, err := callMCP(catalog, request.tool, request.args)
+			if err != nil {
+				t.Fatalf("%s: %v", request.tool, err)
+			}
+			found := false
+			for _, item := range result.(map[string]any)["items"].([]map[string]any) {
+				if firstString(item["conversation_id"]) == firstString(grandchild["id"]) {
+					checkLineage(t, request.tool, item)
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("%s omitted grandchild: %s", request.tool, jsonText(result))
+			}
+		}
+		links, err := queryMaps(catalog.DB, `SELECT c.native_id parent,s.native_id call,p.native_id child
+			FROM agent_sessions s JOIN conversations c ON c.id=s.conversation_id
+			LEFT JOIN conversations p ON p.id=s.child_conversation_id WHERE s.native_id IN ('root-call','child-call','root-ambiguous','child-ambiguous')`)
+		if err != nil || len(links) != 4 {
+			t.Fatalf("launch links: %#v, %v", links, err)
+		}
+		for _, link := range links {
+			want := map[string]string{"root-call": "session:subagent:agent-z", "child-call": "session:subagent:agent-a"}[firstString(link["call"])]
+			if firstString(link["child"]) != want {
+				t.Fatalf("unsafe or missing launch link: %#v; want %q", link, want)
+			}
+		}
+		// Existing catalogs retain the launch proof, but older ingesters stored
+		// the grandchild under the root and could bind ambiguous launch results.
+		root := byNative["session"]
+		if _, err := catalog.DB.Exec("UPDATE conversations SET parent_id=?,agent_depth=1 WHERE id=?", root["id"], grandchild["id"]); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := catalog.DB.Exec("UPDATE agent_sessions SET depth=1 WHERE conversation_id=?", grandchild["id"]); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := catalog.DB.Exec("DELETE FROM message_search_state"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := catalog.DB.Exec("UPDATE agent_sessions SET child_conversation_id=? WHERE native_id='root-ambiguous'", byNative["session:subagent:agent-x"]["id"]); err != nil {
+			t.Fatal(err)
+		}
+		beforeUsage, err := queryMaps(catalog.DB, "SELECT * FROM agent_session_usage ORDER BY agent_session_id,usage_hour,model")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if done, err := catalog.BackfillMessageSearch(t.Context(), nil); err != nil || done != 5 {
+			t.Fatalf("retained lineage upgrade: done=%d err=%v", done, err)
+		}
+		repaired, err := callMCP(catalog, "get_conversation_overview", map[string]any{"conversation_id": grandchild["id"], "max_output_tokens": 4000})
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkLineage(t, "upgraded overview", repaired.(map[string]any))
+		var depth int
+		if err := catalog.DB.QueryRow("SELECT depth FROM agent_sessions WHERE conversation_id=? AND native_id='main'", grandchild["id"]).Scan(&depth); err != nil || depth != 2 {
+			t.Fatalf("upgraded session depth=%d err=%v", depth, err)
+		}
+		afterUsage, err := queryMaps(catalog.DB, "SELECT * FROM agent_session_usage ORDER BY agent_session_id,usage_hour,model")
+		if err != nil || jsonText(beforeUsage) != jsonText(afterUsage) {
+			t.Fatalf("lineage repair changed usage: %v", err)
+		}
+		var ambiguous int
+		if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM agent_sessions WHERE native_id IN ('root-ambiguous','child-ambiguous') AND child_conversation_id IS NOT NULL").Scan(&ambiguous); err != nil || ambiguous != 0 {
+			t.Fatalf("ambiguous upgrade links=%d err=%v", ambiguous, err)
+		}
+		t.Run("descendant-only retained upgrade", func(t *testing.T) {
+			// A completed catalog can later receive missing launch evidence
+			// from another copy. Only the descendant's marker is invalidated.
+			messages, err := storedMessages(t.Context(), catalog.DB, parent["id"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result MessageRecord
+			stored := map[string]bool{}
+			for _, message := range messages {
+				if message.NativeID == "child-result:block:0" {
+					result = message
+				} else {
+					stored[message.NativeID] = true
+				}
+			}
+			if result.NativeID == "" {
+				t.Fatal("missing launch acknowledgement fixture")
+			}
+			tx := seedTx(t, catalog.DB)
+			if err := deleteMessageFTS(tx, stableID("message", firstString(parent["id"]), result.NativeID)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec("DELETE FROM messages WHERE conversation_id=? AND native_id=?", parent["id"], result.NativeID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec("UPDATE conversations SET parent_id=?,agent_depth=1 WHERE id=?", root["id"], grandchild["id"]); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec("UPDATE agent_sessions SET depth=1 WHERE conversation_id=?", grandchild["id"]); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec("UPDATE agent_sessions SET child_conversation_id=NULL,usage_status='unavailable' WHERE conversation_id=? AND native_id='child-call'", parent["id"]); err != nil {
+				t.Fatal(err)
+			}
+			commitSeed(t, tx)
+			if _, err := catalog.BackfillMessageSearch(t.Context(), nil); err != nil {
+				t.Fatal(err)
+			}
+			tx = seedTx(t, catalog.DB)
+			if added, err := mergeConversation(tx, conversationAuthority{id: firstString(parent["id"]), stored: stored}, ConversationRecord{Messages: []MessageRecord{result}}); err != nil || !added {
+				t.Fatalf("merge launch evidence: added=%v err=%v", added, err)
+			}
+			commitSeed(t, tx)
+			pending, err := queryMaps(catalog.DB, `SELECT c.id FROM conversations c LEFT JOIN message_search_state s ON s.conversation_id=c.id
+			 WHERE s.conversation_id IS NULL OR s.version<>?`, messageSearchVersion)
+			if err != nil || len(pending) != 1 || pending[0]["id"] != parent["id"] {
+				t.Fatalf("expected only descendant pending: %v %v", pending, err)
+			}
+			if done, err := catalog.BackfillMessageSearch(t.Context(), nil); err != nil || done != 1 {
+				t.Fatalf("descendant-only upgrade: done=%d err=%v", done, err)
+			}
+			overview, err := callMCP(catalog, "get_conversation_overview", map[string]any{"conversation_id": grandchild["id"], "max_output_tokens": 4000})
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkLineage(t, "descendant-only upgrade", overview.(map[string]any))
+			var child string
+			if err := catalog.DB.QueryRow("SELECT COALESCE(child_conversation_id,'') FROM agent_sessions WHERE conversation_id=? AND native_id='child-call'", parent["id"]).Scan(&child); err != nil || child != firstString(grandchild["id"]) {
+				t.Fatalf("upgraded launch link=%q err=%v", child, err)
+			}
+			if pending, err := catalog.pendingMessageSearch(t.Context()); err != nil || pending != 0 {
+				t.Fatalf("upgrade not complete: pending=%d err=%v", pending, err)
+			}
+			if done, err := catalog.BackfillMessageSearch(t.Context(), nil); err != nil || done != 0 {
+				t.Fatalf("completed upgrade replayed: done=%d err=%v", done, err)
+			}
+		})
+		t.Run("reindex retracts rejected links", func(t *testing.T) {
+			if result := catalog.Ingest(adapter, nil); result.Error != nil {
+				t.Fatal(result.Error)
+			}
+			var session, child string
+			if err := catalog.DB.QueryRow("SELECT id,COALESCE(child_conversation_id,'') FROM agent_sessions WHERE conversation_id=? AND native_id='child-call'", parent["id"]).Scan(&session, &child); err != nil || child != firstString(grandchild["id"]) {
+				t.Fatalf("initial launch link=%q err=%v", child, err)
+			}
+			write("session/subagents/agent-m.jsonl",
+				`{"sessionId":"session","uuid":"unacknowledged-assignment","type":"user","message":{"role":"user","content":"Unacknowledged"}}`,
+				`{"sessionId":"session","uuid":"competing-launch","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"competing-call","name":"Agent","input":{"prompt":"Grandchild assignment"}}]}}`,
+				`{"sessionId":"session","uuid":"competing-result","type":"user","toolUseResult":{"agentId":"a"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"competing-call","content":"launched"}]}}`)
+			if result := catalog.Ingest(adapter, nil); result.Error != nil {
+				t.Fatal(result.Error)
+			}
+			var conversationParent, usageStatus string
+			var depth int
+			if err := catalog.DB.QueryRow("SELECT parent_id,agent_depth FROM conversations WHERE id=?", grandchild["id"]).Scan(&conversationParent, &depth); err != nil || conversationParent != firstString(root["id"]) || depth != 1 {
+				t.Fatalf("ambiguous conversation parent=%q depth=%d err=%v", conversationParent, depth, err)
+			}
+			if err := catalog.DB.QueryRow("SELECT COALESCE(child_conversation_id,''),usage_status FROM agent_sessions WHERE id=?", session).Scan(&child, &usageStatus); err != nil || child != "" || usageStatus != "unavailable" {
+				t.Fatalf("rejected launch retained child=%q status=%q err=%v", child, usageStatus, err)
+			}
+			// The root's independently proven launch remains linked.
+			if err := catalog.DB.QueryRow("SELECT COALESCE(child_conversation_id,'') FROM agent_sessions WHERE conversation_id=? AND native_id='root-call'", root["id"]).Scan(&child); err != nil || child != firstString(parent["id"]) {
+				t.Fatalf("valid root link=%q err=%v", child, err)
+			}
+			write("session/subagents/agent-m.jsonl", `{"sessionId":"session","uuid":"unacknowledged-assignment","type":"user","message":{"role":"user","content":"Unacknowledged"}}`)
+			if result := catalog.Ingest(adapter, nil); result.Error != nil {
+				t.Fatal(result.Error)
+			}
+			if err := catalog.DB.QueryRow("SELECT COALESCE(child_conversation_id,''),usage_status FROM agent_sessions WHERE id=?", session).Scan(&child, &usageStatus); err != nil || child != firstString(grandchild["id"]) || usageStatus != "in-child-conversation" {
+				t.Fatalf("restored launch child=%q status=%q err=%v", child, usageStatus, err)
+			}
+		})
+	})
+	t.Run("text launch acknowledgements", func(t *testing.T) {
+		ack := "Async agent launched successfully. (This tool result is internal metadata.)\nagentId: child (internal ID - do not mention to user.)\nThe agent is working in the background."
+		for _, test := range []struct {
+			name, acknowledgement, assignment string
+			failed, linked                    bool
+		}{
+			{"matched", ack, "Exact assignment", false, true},
+			{"different assignment", ack, "Different assignment", false, false},
+			{"unacknowledged mention", "Report mentions agentId: child (internal ID)", "Exact assignment", false, false},
+			{"failed result", ack, "Exact assignment", true, false},
+			{"duplicate IDs", ack + "\nagentId: child (internal ID)", "Exact assignment", false, false},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				record := &WorkspaceRecord{Conversations: []ConversationRecord{
+					{NativeID: "root", Provider: "claude"},
+					{NativeID: "root:subagent:agent-parent", Provider: "claude", AgentDepth: 1, Messages: []MessageRecord{
+						{Kind: "delegation", CallID: "call", Text: `{"tool":"Agent","input":{"prompt":"Exact assignment"}}`},
+						{Kind: "delegation_result", CallID: "call", Text: jsonText(map[string]any{"content": []any{map[string]any{"type": "text", "text": test.acknowledgement}}, "is_error": test.failed})},
+					}},
+					{NativeID: "root:subagent:agent-child", Provider: "claude", AgentDepth: 1, Messages: []MessageRecord{{Role: "agent", Kind: "message", Text: test.assignment}}},
+				}}
+				reconcileClaudeLineage(record)
+				child := record.Conversations[2]
+				want, depth := "root", 1
+				if test.linked {
+					want, depth = "root:subagent:agent-parent", 2
+				}
+				if child.ParentNativeID != want || child.AgentDepth != depth {
+					t.Fatalf("text acknowledgement lineage: %#v", child)
+				}
+			})
+		}
+	})
+	t.Run("workflow run acknowledgements", func(t *testing.T) {
+		for _, ambiguous := range []bool{false, true} {
+			record := &WorkspaceRecord{Conversations: []ConversationRecord{
+				{NativeID: "root", Provider: "claude"},
+				{NativeID: "root:subagent:agent-parent", Provider: "claude", AgentDepth: 1, Messages: []MessageRecord{
+					{Kind: "delegation", CallID: "workflow"},
+					{Kind: "delegation_result", CallID: "workflow", Text: `{"details":{"runId":"run"}}`},
+				}},
+				{NativeID: "root:subagent:workflows/run/agent-one", Provider: "claude", AgentDepth: 1},
+			}}
+			if ambiguous {
+				record.Conversations = append(record.Conversations, ConversationRecord{NativeID: "root:subagent:workflows/run/agent-two", Provider: "claude", AgentDepth: 1})
+			}
+			reconcileClaudeLineage(record)
+			for _, conversation := range record.Conversations {
+				if !strings.Contains(conversation.NativeID, ":subagent:workflows/") {
+					continue
+				}
+				want, depth := "root:subagent:agent-parent", 2
+				if ambiguous {
+					want, depth = "root", 1
+				}
+				if conversation.ParentNativeID != want || conversation.AgentDepth != depth {
+					t.Fatalf("ambiguous=%v workflow lineage: %#v", ambiguous, conversation)
+				}
+			}
+		}
+	})
+	t.Run("cyclic acknowledgements", func(t *testing.T) {
+		launch := func(call, agent string) []MessageRecord {
+			return []MessageRecord{
+				{Kind: "delegation", CallID: call},
+				{Kind: "delegation_result", CallID: call, Text: jsonText(map[string]any{"details": map[string]any{"agentId": agent}})},
+			}
+		}
+		record := &WorkspaceRecord{Conversations: []ConversationRecord{
+			{NativeID: "root", Provider: "claude"},
+			{NativeID: "root:subagent:agent-a", Provider: "claude", AgentDepth: 1, Messages: launch("a-call", "b")},
+			{NativeID: "root:subagent:agent-b", Provider: "claude", AgentDepth: 1, Messages: launch("b-call", "a")},
+		}}
+		reconcileClaudeLineage(record)
+		for _, conversation := range record.Conversations[1:] {
+			if conversation.ParentNativeID != "root" || conversation.AgentDepth != 1 {
+				t.Fatalf("cycle should keep root fallback: %#v", conversation)
+			}
+		}
+	})
 }
 
 func TestNativeToolEventsRetainIdentityResultsAndConversationFlow(t *testing.T) {
@@ -713,6 +1177,7 @@ func TestCanonicalIngestAndAPIContract(t *testing.T) {
 				"id": "conversation-1", "provider": "codex", "messages": []any{
 					map[string]any{"id": "message-1", "role": "user", "text": "Please inspect src/parser.go"},
 					map[string]any{"id": "message-2", "role": "assistant", "text": "Fixed the parser"},
+					map[string]any{"id": "message-3", "role": "assistant", "kind": "reasoning", "reasoning_format": "summary", "text": "Now I understand the parser"},
 				},
 			}},
 			"changes": []any{map[string]any{
@@ -733,8 +1198,12 @@ func TestCanonicalIngestAndAPIContract(t *testing.T) {
 	if result.Error != nil {
 		t.Fatalf("ingest failed: %v", result.Error)
 	}
-	if result.Workspaces != 1 || result.Messages != 2 {
+	if result.Workspaces != 1 || result.Messages != 3 {
 		t.Fatalf("unexpected counts: %+v", result)
+	}
+	var format string
+	if err := catalog.DB.QueryRow("SELECT reasoning_format FROM messages WHERE native_id='message-3'").Scan(&format); err != nil || format != "summary" {
+		t.Fatalf("canonical reasoning summary lost: %q %v", format, err)
 	}
 	found, err := catalog.Search(SearchOptions{Query: "parser", Limit: 10})
 	if err != nil {
