@@ -31,6 +31,12 @@ fi
 for command in git gh go swift swiftc lipo npm xcrun codesign ditto hdiutil tiffutil uvx shasum spctl awk; do
     command -v "$command" >/dev/null 2>&1 || { echo "$command is required." >&2; exit 2; }
 done
+# The standalone macOS 27 SDK references SwiftUIMacros, which is absent from
+# Command Line Tools. Use the installed 26.5 SDK unless explicitly overridden.
+if [ -z "${SDKROOT:-}" ]; then
+    SDKROOT=$(xcrun --sdk macosx26.5 --show-sdk-path)
+fi
+export SDKROOT
 case "$(git remote get-url origin)" in
     https://github.com/$REPO|https://github.com/$REPO.git|git@github.com:$REPO|git@github.com:$REPO.git) ;;
     *) echo "origin must point to github.com/$REPO." >&2; exit 2 ;;

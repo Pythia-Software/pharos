@@ -78,10 +78,14 @@ for name in pharos PharosApp; do
     else
         cp "$WORK/$name-$arch" "$target"
     fi
-    if ! lipo "$target" -verify_arch $ARCHS; then
-        echo "$target does not contain:$ARCHS" >&2
-        exit 1
-    fi
+    # Verify slices individually: some lipo versions reject multiple arches
+    # as multiple input files despite advertising a variadic -verify_arch.
+    for expected_arch in $ARCHS; do
+        if ! lipo "$target" -verify_arch "$expected_arch"; then
+            echo "$target does not contain: $expected_arch" >&2
+            exit 1
+        fi
+    done
     lipo -info "$target"
 done
 
