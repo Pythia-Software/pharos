@@ -137,5 +137,90 @@
     {"term": "zanzibar", "show": [], "want": {"shown": 0, "hidden": 4, "hidden_kinds": ["prompts", "response", "commands", "events"]}},
     {"term": "not retained", "want": {"shown": 1, "hidden": 0, "hidden_kinds": []}},
     {"term": "Reasoning not retained", "case": true, "want": {"shown": 1, "hidden": 0, "hidden_kinds": []}}
-   ]}
+   ]},
+{
+  "name": "Canonical reasoning keeps decoded text and does not replay its raw envelope",
+  "messages": [
+    {
+      "native_id": "saved-thought",
+      "role": "assistant",
+      "kind": "reasoning",
+      "text": "Actually I think I understand now: desktop failed before mobile ran.",
+      "raw_text": "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"thinking\", \"thinking\": \"Actually I think I understand now: desktop failed before mobile ran.\"}, {\"type\": \"text\", \"text\": \"Checking the run.\"}], \"usage\": {\"input_tokens\": 10, \"output_tokens\": 4}}}"
+    },
+    {
+      "native_id": "saved-reply",
+      "role": "assistant",
+      "kind": "message",
+      "text": "Checking the run."
+    }
+  ],
+  "events": [
+    {
+      "kind": "reasoning",
+      "path": [
+        "thinking"
+      ]
+    },
+    {
+      "kind": "message",
+      "path": [
+        "response"
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "term": "I understand now",
+      "show": [
+        "thinking"
+      ],
+      "want": {
+        "shown": 1,
+        "hidden": 0,
+        "hidden_kinds": []
+      }
+    },
+    {
+      "term": "Checking the run.",
+      "want": {
+        "shown": 1,
+        "hidden": 0,
+        "hidden_kinds": []
+      }
+    }
+  ]
+},
+{
+  "name": "JSON-looking canonical reasoning stays reasoning and supports literal find",
+  "messages": [
+    {
+      "native_id": "json-thought",
+      "role": "assistant",
+      "kind": "reasoning",
+      "text": "{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Now I understand\"}]}"
+    }
+  ],
+  "events": [
+    {
+      "kind": "reasoning",
+      "path": [
+        "thinking"
+      ]
+    }
+  ],
+  "queries": [
+    {
+      "term": "\"type\":\"message\"",
+      "show": [
+        "thinking"
+      ],
+      "want": {
+        "shown": 1,
+        "hidden": 0,
+        "hidden_kinds": []
+      }
+    }
+  ]
+}
 ]

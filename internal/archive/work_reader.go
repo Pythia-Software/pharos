@@ -35,7 +35,7 @@ const (
 // (edit diffs) while collapsed.
 var readerClippedKinds = map[string]bool{"tool_result": true, "metadata": true, "result": true, "context": true, "error": true}
 
-const readerMessageColumns = "id,native_id,role,kind,model,effort,text,raw_text,created_at,parent_native_id,call_id"
+const readerMessageColumns = "id,native_id,role,kind,model,effort,text,raw_text,created_at,parent_native_id,call_id,reasoning_format"
 
 // WorkOverview is the workspace detail page's first request: everything but
 // the messages, plus what the page used to derive by scanning all of them.

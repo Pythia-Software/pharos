@@ -86,7 +86,7 @@ var (
 	jsStringPattern       = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
 	patchFilePattern      = regexp.MustCompile(`(?m)^\*\*\* (?:Update|Add|Delete) File: (.+)$`)
 	harnessBlockedPattern = regexp.MustCompile(`(?s)<tool_use_error>\s*blocked:`)
-	blockSuffixPattern    = regexp.MustCompile(`(:block:\d+|:usage)$`)
+	blockSuffixPattern    = regexp.MustCompile(`(:(reasoning-)?block:\d+|:usage)$`)
 	benignExitPrograms    = map[string]bool{"grep": true, "rg": true, "ag": true, "egrep": true, "fgrep": true, "diff": true, "cmp": true, "test": true, "[": true, "[[": true}
 	shellToolNames        = map[string]bool{"bash": true, "shell": true, "exec_command": true, "exec": true, "local_shell": true, "run": true, "container.exec": true, "run_command": true, "execute_command": true}
 	toolCategoryByName    = map[string]string{}

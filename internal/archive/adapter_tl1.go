@@ -288,7 +288,7 @@ func (a *tl1Adapter) Fingerprint() (string, error) {
 	return hashBytes([]byte(a.indexVersion() + ":" + strings.Join(rows, "\n"))), nil
 }
 
-func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v2-effort" }
+func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v3-reasoning" }
 
 func (a *tl1Adapter) Discover(emit func(WorkspaceRecord) error) error {
 	a.snapshots = nil
@@ -834,6 +834,10 @@ func parseCodexExec(path, origin string, initialEffort ...string) (ConversationR
 			switch firstString(item["type"]) {
 			case "agent_message":
 				add(id, "assistant", "message", firstString(item["text"]), "", "")
+			case "reasoning":
+				body, format, unavailable := reasoningBlock(item)
+				messages = append(messages, reasoningRecord(MessageRecord{NativeID: id, Effort: effort,
+					CreatedAt: iso(event["timestamp"]), EvidenceLocator: fmt.Sprintf("%s:%d", origin, line), RawText: jsonText(event), Selected: true}, body, format, unavailable))
 			case "command_execution":
 				add(id+":call", "assistant", "tool_call", jsonText(map[string]any{"tool": "shell", "input": map[string]any{"command": item["command"]}}), id, "")
 				exitCode := item["exit_code"]

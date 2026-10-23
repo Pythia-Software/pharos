@@ -167,7 +167,7 @@ func TestTextSearchAppendAndNoopKeepCursor(t *testing.T) {
 			// Exercise the ingest upsert twice, including its conflict path, then
 			// append; an old conflict flag must not poison the next insert.
 			for i := 0; i < 2; i++ {
-				if _, err := c.DB.Exec(messageWriteSQL, "a", "c", "a", "user", "message", nil, nil, "cache race condition timeout retry foo::bar café", nil, 0, "2026-10-11T12:00:00Z", nil, nil, nil, nil, "a", 1, nil); err != nil {
+				if _, err := c.DB.Exec(messageWriteSQL, "a", "c", "a", "user", "message", nil, nil, "cache race condition timeout retry foo::bar café", nil, 0, "2026-10-11T12:00:00Z", nil, nil, nil, nil, "a", 1, nil, nil); err != nil {
 					t.Fatal(err)
 				}
 			}

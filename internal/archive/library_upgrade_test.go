@@ -195,6 +195,7 @@ func legacyUpgradeCatalog(t *testing.T) *Catalog {
 		"DELETE FROM usage_attribution_state",
 		"UPDATE tool_ledger_state SET version='tools-v2'",
 		"DELETE FROM conversation_instructions_state",
+		"DELETE FROM reasoning_extraction_state",
 		"UPDATE conversations SET harness=NULL,harness_version_first=NULL,harness_version_last=NULL",
 		"DELETE FROM meta WHERE key IN ('repository_merge_version','harness_version_upgrade')",
 		`INSERT INTO repositories(id,canonical_remote,display_name,created_at,updated_at) VALUES
@@ -212,7 +213,7 @@ func legacyUpgradeCatalog(t *testing.T) *Catalog {
 func TestLibraryUpgrade(t *testing.T) {
 	catalog := legacyUpgradeCatalog(t)
 	pending := upgradePending(t, catalog)
-	if pending["repositories"] == 0 || pending["usage"] != 1 || pending["harness"] == 0 || pending["instructions"] == 0 || pending["tools"] != 2 {
+	if pending["repositories"] == 0 || pending["usage"] != 1 || pending["harness"] == 0 || pending["instructions"] == 0 || pending["reasoning"] == 0 || pending["tools"] != 2 {
 		t.Fatalf("legacy library pending: %v", pending)
 	}
 	preview, err := catalog.RepositoryMergePreview(context.Background())
@@ -228,7 +229,7 @@ func TestLibraryUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Repositories merge before the ledger, which records file repositories.
-	want := []string{"repositories", "usage", "harness", "instructions", "tools", "rollup"}
+	want := []string{"repositories", "usage", "harness", "instructions", "reasoning", "tools", "rollup"}
 	if len(steps) != len(want) {
 		t.Fatalf("steps ran in order %v, want %v", steps, want)
 	}

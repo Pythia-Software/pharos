@@ -451,7 +451,7 @@ func (c *Catalog) conversationMessages(args map[string]any) (map[string]any, err
 	}
 	if messageID != "" {
 		length := max(100, mcpBudget(args, 1200)*3-300)
-		rows, err := queryMaps(c.DB, `SELECT id,role,kind,source_order,created_at,
+		rows, err := queryMaps(c.DB, `SELECT id,role,kind,reasoning_format,source_order,created_at,
 			substr(text,?,?) text,length(text) text_length,evidence_locator FROM messages
 			WHERE id=? AND conversation_id=? AND `+filters, append([]any{textOffset + 1, length, messageID, id}, filterValues...)...)
 		if err != nil {
@@ -468,6 +468,9 @@ func (c *Catalog) conversationMessages(args map[string]any) (map[string]any, err
 		item := map[string]any{"message_id": messageID, "role": row["role"], "kind": row["kind"],
 			"source_order": row["source_order"], "created_at": row["created_at"], "evidence_locator": row["evidence_locator"],
 			"text": string(runes), "text_offset": textOffset, "next_text_offset": nil}
+		if firstString(row["reasoning_format"]) != "" {
+			item["reasoning_format"] = row["reasoning_format"]
+		}
 		if end < total {
 			item["next_text_offset"] = end
 		}
@@ -497,7 +500,7 @@ func (c *Catalog) conversationMessages(args map[string]any) (map[string]any, err
 	}
 	budget := mcpBudget(args, 1200)
 	maxText := max(100, (budget*3-300)/limit)
-	rows, err := queryMaps(c.DB, `SELECT id,role,kind,source_order,created_at,substr(text,1,?) text,
+	rows, err := queryMaps(c.DB, `SELECT id,role,kind,reasoning_format,source_order,created_at,substr(text,1,?) text,
 		length(text) text_length,evidence_locator FROM messages
 		WHERE conversation_id=? AND `+filters+` ORDER BY source_order IS NULL,source_order,created_at,id LIMIT ? OFFSET ?`, append(append([]any{maxText, id}, filterValues...), limit+1, offset)...)
 	if err != nil {
@@ -513,6 +516,9 @@ func (c *Catalog) conversationMessages(args map[string]any) (map[string]any, err
 		item := map[string]any{"message_id": row["id"], "role": row["role"], "kind": row["kind"],
 			"source_order": row["source_order"], "created_at": row["created_at"], "evidence_locator": row["evidence_locator"],
 			"text": original, "next_text_offset": nil}
+		if firstString(row["reasoning_format"]) != "" {
+			item["reasoning_format"] = row["reasoning_format"]
+		}
 		if int(integer(row["text_length"])) > maxText {
 			item["next_text_offset"] = maxText
 		}

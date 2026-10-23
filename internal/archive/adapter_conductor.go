@@ -31,7 +31,7 @@ const conductorExtractor = "conductor-v12-workspace-names"
 // every Conductor conversation also stores as its coverage, so a parser change
 // that must reach sessions already indexed need not rewrite them all.
 // +sender: user messages record who sent them.
-const conductorPartExtractor = conductorExtractor + "+sender"
+const conductorPartExtractor = conductorExtractor + "+sender+reasoning-v1"
 
 func (a *conductorAdapter) ExtractorVersion() string { return conductorExtractor }
 func (a *conductorAdapter) partExtractor() string    { return conductorPartExtractor }
@@ -884,7 +884,25 @@ func conductorEvents(nativeID, fallbackRole, text, createdAt, locator string, de
 	parent := firstString(object["parent_tool_use_id"])
 	content := firstNonNil(message["content"], object["content"])
 	blocks, _ := content.([]any)
+	legacyDisplay, hasReasoning := false, false
+	for _, raw := range blocks {
+		block := mapValue(raw)
+		kind := firstString(block["type"])
+		legacyDisplay = legacyDisplay || kind == "tool_use" || kind == "tool_result" || (kind == "text" && firstString(block["text"]) != "")
+		_, format, unavailable := reasoningBlock(block)
+		hasReasoning = hasReasoning || format != "" || unavailable != ""
+	}
+	if role == "assistant" && hasReasoning && !legacyDisplay {
+		// The old parser stored this whole envelope under the event ID. Use
+		// the same splitter as the catalog backfill so later reindexing keeps
+		// its IDs, including events with multiple thinking-only blocks.
+		base.NativeID, base.Role, base.Kind, base.ParentNativeID = nativeID, role, "metadata", parent
+		object["role"] = role
+		base.Text, base.RawText = jsonText(object), text
+		return normalizeReasoningMessage(base)
+	}
 	output := []MessageRecord{}
+	reasoningSeen := false
 	for index, raw := range blocks {
 		block := mapValue(raw)
 		if block == nil {
@@ -895,10 +913,20 @@ func conductorEvents(nativeID, fallbackRole, text, createdAt, locator string, de
 		item.NativeID = fmt.Sprintf("%s:block:%d", nativeID, index)
 		item.ParentNativeID = parent
 		switch blockType {
-		case "text":
+		case "thinking", "reasoning", "reasoning_text", "summary_text", "redacted_thinking":
+			if role == "assistant" {
+				reasoningSeen = true
+				body, format, unavailable := reasoningBlock(block)
+				output = append(output, reasoningRecord(item, body, format, unavailable))
+			}
+		case "text", "input_text", "output_text":
 			if firstString(block["text"]) != "" {
 				item.Role = role
 				item.Kind = "message"
+				if role == "assistant" && firstString(message["channel"], object["channel"]) == "analysis" {
+					item.Kind, item.ReasoningFormat = "reasoning", "text"
+					reasoningSeen = true
+				}
 				item.Text = firstString(block["text"])
 				output = append(output, item)
 			}
@@ -933,7 +961,7 @@ func conductorEvents(nativeID, fallbackRole, text, createdAt, locator string, de
 		}
 	}
 	if len(output) > 0 {
-		if hasUsageEvidence(object) {
+		if hasUsageEvidence(object) || reasoningSeen {
 			output[0].RawText = text
 		}
 		return output
@@ -952,7 +980,7 @@ func conductorEvents(nativeID, fallbackRole, text, createdAt, locator string, de
 	base.Kind = kind
 	base.ParentNativeID = parent
 	base.Text = jsonText(object)
-	return []MessageRecord{base}
+	return normalizeReasoningMessage(base)
 }
 
 var prURLPattern = regexp.MustCompile(`https?://([^/\s]+)/([^/\s]+)/([^/\s]+)/pull/(\d+)`)
