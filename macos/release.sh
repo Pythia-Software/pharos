@@ -21,11 +21,21 @@ esac
 TAG="v$VERSION"
 if [ "$MODE" = developer-id ]; then
     python3 "$ROOT/macos/release_support.py"
+    if [ -z "${PHAROS_RELEASE_KEYCHAIN_SESSION:-}" ]; then
+        exec python3 "$ROOT/macos/release_keychain.py" -- "$ROOT/macos/release.sh" "$@"
+    fi
 fi
 # codesign accepts an unambiguous certificate-name prefix, so no Team ID is
 # needed here. Signing keys and notarization credentials stay in Keychain.
 IDENTITY=${PHAROS_CODESIGN_IDENTITY-'Developer ID Application: Pythia Software LLC'}
 PROFILE=${PHAROS_NOTARY_PROFILE-pharos}
+notarize() {
+    if [ -n "${PHAROS_NOTARY_KEYCHAIN:-}" ]; then
+        xcrun notarytool submit "$1" --keychain-profile "$PROFILE" --keychain "$PHAROS_NOTARY_KEYCHAIN" --wait
+    else
+        xcrun notarytool submit "$1" --keychain-profile "$PROFILE" --wait
+    fi
+}
 if [ "$MODE" = developer-id ] && { [ -z "$IDENTITY" ] || [ -z "$PROFILE" ]; }; then
     echo "A Developer ID Application signing identity and notarytool keychain profile are required." >&2
     echo "Use --adhoc to publish an ad hoc signed release instead." >&2
@@ -127,7 +137,7 @@ if [ "$MODE" = developer-id ]; then
     # before it is copied into the final disk image.
     NOTARY_ARCHIVE="$OUT/notarize.zip"
     ditto -c -k "$OUT/stage" "$NOTARY_ARCHIVE"
-    xcrun notarytool submit "$NOTARY_ARCHIVE" --keychain-profile "$PROFILE" --wait
+    notarize "$NOTARY_ARCHIVE"
     xcrun stapler staple "$APP"
     xcrun stapler validate "$APP"
     spctl -a -vvv -t exec "$APP"
@@ -138,9 +148,9 @@ codesign --verify --strict --deep --verbose=2 "$APP"
 if [ "$MODE" = developer-id ]; then
     # Signing the container also preserves Sparkle's Developer ID fallback for
     # Ed25519 key rotation when verification before extraction is required.
-    codesign --force --sign "$IDENTITY" --timestamp "$IMAGE"
+    codesign --force --sign "$IDENTITY" --keychain "$PHAROS_CODESIGN_KEYCHAIN" --timestamp "$IMAGE"
     codesign --verify --verbose=2 "$IMAGE"
-    xcrun notarytool submit "$IMAGE" --keychain-profile "$PROFILE" --wait
+    notarize "$IMAGE"
     xcrun stapler staple "$IMAGE"
     xcrun stapler validate "$IMAGE"
 fi

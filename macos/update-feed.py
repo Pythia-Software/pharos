@@ -11,10 +11,12 @@ from datetime import datetime, timezone
 from email.utils import format_datetime
 import hashlib
 import json
+import os
 from pathlib import Path
 import plistlib
 import re
 import subprocess
+import sys
 import tempfile
 import xml.etree.ElementTree as ET
 
@@ -249,6 +251,10 @@ def main():
     args = parser.parse_args()
     if args.action != 'bootstrap':
         version(args.version or '')
+    from release_keychain import SESSION, with_keychain
+    if not os.environ.get(SESSION):
+        require_release_machine(json.loads((ROOT / 'macos/sparkle.json').read_text()))
+        return with_keychain([sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]])
     config, tools = config_and_tools()
     # Release operations on this Mac serialize. Publishers on other Macs must
     # coordinate; the GitHub asset API has no conditional replacement operation.
@@ -291,6 +297,6 @@ def main():
 
 if __name__ == '__main__':
     try:
-        main()
+        raise SystemExit(main())
     except (ValueError, OSError, subprocess.CalledProcessError) as error:
         raise SystemExit(f'Update feed: {error}')

@@ -157,6 +157,9 @@ if [ -z "$IDENTITY" ]; then
 fi
 # Positional parameters double as the codesign argument list.
 set -- --force --sign "$IDENTITY"
+if [ -n "${PHAROS_CODESIGN_KEYCHAIN:-}" ]; then
+    set -- "$@" --keychain "$PHAROS_CODESIGN_KEYCHAIN"
+fi
 case "${PHAROS_CODESIGN_TIMESTAMP:-0}" in
     0) set -- "$@" --timestamp=none ;;
     1) set -- "$@" --timestamp ;;
