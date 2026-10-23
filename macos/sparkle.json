@@ -2,6 +2,6 @@
   "version": "2.10.0",
   "sha256": "c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c",
   "feed_url": "https://github.com/Pythia-Software/pharos/releases/download/update-feed/appcast.xml",
-  "public_key": null,
+  "public_key": "hgkQ7zLsH7C0ndZE0NRW/jszrSkAzxPvAXWZJtjbkgU=",
   "keychain_account": "pharos"
 }
