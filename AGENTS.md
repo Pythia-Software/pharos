@@ -14,7 +14,7 @@ Use the [quick release workflow](docs/releases-and-updates.md#quick-release-defa
 for routine publishing requests. Fetch `origin/master` and tags, temporarily
 check out that exact commit, run `macos/release.sh X.Y.Z`, then restore the
 workspace branch and return the download link. Use the requested version;
-default to ad hoc signing unless notarization is requested.
+default to Developer ID signing and notarization; use `--adhoc` only when requested.
 
 A release-only request does not require merging master into the workspace
 branch or running test suites. The testing requirements below apply to source

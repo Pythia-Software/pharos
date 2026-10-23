@@ -1,8 +1,8 @@
 #!/bin/sh
 # Build and publish a universal Pharos.app from origin/master.
 # Usage: macos/release.sh 0.3.0
-#        PHAROS_CODESIGN_IDENTITY='Developer ID Application: ...' \
-#        PHAROS_NOTARY_PROFILE=pharos macos/release.sh 0.3.0 --developer-id
+#        macos/release.sh 0.3.0 --adhoc  # explicitly skip notarization
+# Override PHAROS_CODESIGN_IDENTITY / PHAROS_NOTARY_PROFILE for another signer.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -10,20 +10,22 @@ cd "$ROOT"
 REPO=Pythia-Software/pharos
 VERSION=${1:-}
 if [ "$#" -lt 1 ] || [ "$#" -gt 2 ] || ! printf '%s\n' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-    echo "Usage: $0 major.minor.patch [--developer-id]" >&2
+    echo "Usage: $0 major.minor.patch [--developer-id|--adhoc]" >&2
     exit 2
 fi
 case "${2:-}" in
-    ''|--adhoc) MODE=adhoc ;;
-    --developer-id) MODE=developer-id ;;
-    *) echo "Usage: $0 major.minor.patch [--developer-id]" >&2; exit 2 ;;
+    ''|--developer-id) MODE=developer-id ;;
+    --adhoc) MODE=adhoc ;;
+    *) echo "Usage: $0 major.minor.patch [--developer-id|--adhoc]" >&2; exit 2 ;;
 esac
 TAG="v$VERSION"
-IDENTITY=${PHAROS_CODESIGN_IDENTITY:-}
-PROFILE=${PHAROS_NOTARY_PROFILE:-}
+# codesign accepts an unambiguous certificate-name prefix, so no Team ID is
+# needed here. Signing keys and notarization credentials stay in Keychain.
+IDENTITY=${PHAROS_CODESIGN_IDENTITY-'Developer ID Application: Pythia Software LLC'}
+PROFILE=${PHAROS_NOTARY_PROFILE-pharos}
 if [ "$MODE" = developer-id ] && { [ -z "$IDENTITY" ] || [ -z "$PROFILE" ]; }; then
     echo "A Developer ID Application signing identity and notarytool keychain profile are required." >&2
-    echo "Omit --developer-id to publish an ad hoc signed release instead." >&2
+    echo "Use --adhoc to publish an ad hoc signed release instead." >&2
     exit 2
 fi
 for command in git gh go swift swiftc lipo npm xcrun codesign ditto hdiutil tiffutil uvx shasum spctl awk; do
@@ -74,7 +76,8 @@ fi
 mkdir -p "$OUT/stage"
 if [ "$MODE" = developer-id ]; then
     PHAROS_VERSION="$VERSION" PHAROS_UNIVERSAL=1 PHAROS_HARDENED_RUNTIME=1 \
-        PHAROS_CODESIGN_TIMESTAMP=1 "$ROOT/macos/build-app.sh" "$OUT/stage"
+        PHAROS_CODESIGN_IDENTITY="$IDENTITY" PHAROS_CODESIGN_TIMESTAMP=1 \
+        "$ROOT/macos/build-app.sh" "$OUT/stage"
 else
     PHAROS_CODESIGN_IDENTITY= PHAROS_VERSION="$VERSION" PHAROS_UNIVERSAL=1 \
         PHAROS_HARDENED_RUNTIME=1 PHAROS_CODESIGN_TIMESTAMP=0 \
