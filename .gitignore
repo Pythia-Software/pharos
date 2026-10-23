@@ -14,3 +14,17 @@ go.work.sum
 web/.test-build/
 internal/archive/assets/query-tables.js
 internal/archive/assets/query-tables.css
+
+# Hugo site and OpenTofu local state
+site/public/
+site/resources/
+site/.hugo_build.lock
+site/.firebase/
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+!*.tfvars.example
+!infra/site/production.auto.tfvars
+crash.log

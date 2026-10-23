@@ -1,0 +1,4 @@
+project_id      = "pythia-pharos"
+organization_id = "205553137863"
+# To link Pythia Billing and create the remote state bucket, set:
+# billing_account = "YOUR_BILLING_ACCOUNT_ID"

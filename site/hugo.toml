@@ -1,0 +1,25 @@
+baseURL = 'https://pythia-pharos.web.app/'
+locale = 'en-US'
+title = 'Pharos'
+theme = 'pharos-green'
+enableRobotsTXT = true
+disableKinds = ['taxonomy', 'term', 'RSS']
+
+[params]
+  description = 'A searchable library of your work with coding agents. Find past conversations, understand token costs, and bring your history into the next session.'
+  releasesURL = 'https://github.com/Pythia-Software/pharos/releases/latest'
+  sourceURL = 'https://github.com/Pythia-Software/pharos'
+
+[module]
+  [[module.mounts]]
+    source = 'content'
+    target = 'content'
+  [[module.mounts]]
+    source = 'assets'
+    target = 'assets'
+  [[module.mounts]]
+    source = '../docs/images/library.png'
+    target = 'assets/images/library.png'
+  [[module.mounts]]
+    source = '../macos/AppIcon.svg'
+    target = 'static/images/pharos.svg'

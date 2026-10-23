@@ -14,6 +14,7 @@
   <a href="#getting-started-from-source-code">Build from source</a> ·
   <a href="#make-it-yours">Make it yours</a> ·
   <a href="docs/technical-overview.md">Technical overview</a> ·
+  <a href="site/README.md">Website development</a> ·
   <a href="#contact">Contact</a>
 </p>
 

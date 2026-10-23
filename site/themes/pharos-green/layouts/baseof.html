@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="{{ site.Language.Locale }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ if .IsHome }}Pharos — Your work, brought to light{{ else }}{{ .Title }} · Pharos{{ end }}</title>
+  <meta name="description" content="{{ .Description | default site.Params.description }}">
+  {{ if ne .Kind "404" }}<link rel="canonical" href="{{ .Permalink }}">{{ end }}
+  <meta property="og:title" content="{{ .Title }}">
+  <meta property="og:description" content="{{ .Description | default site.Params.description }}">
+  <meta property="og:type" content="website">
+  <link rel="icon" type="image/svg+xml" href="{{ "images/pharos.svg" | relURL }}">
+  {{ $css := resources.Get "css/site.css" | minify | fingerprint }}
+  <link rel="stylesheet" href="{{ $css.RelPermalink }}" integrity="{{ $css.Data.Integrity }}">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="header wrap">
+    <a class="brand" href="{{ site.Home.RelPermalink }}"><img src="{{ "images/pharos.svg" | relURL }}" width="48" height="48" alt=""><span>Pharos</span></a>
+    <nav aria-label="Main navigation"><a href="{{ "getting-started/" | relURL }}">Get started</a><a href="{{ site.Params.sourceURL }}">GitHub <span aria-hidden="true">↗</span></a></nav>
+  </header>
+  <main id="main">{{ block "main" . }}{{ end }}</main>
+  <footer class="footer wrap"><a class="wordmark" href="{{ site.Home.RelPermalink }}">Pharos</a><p>Made by Pythia Software LLC.</p><a href="{{ site.Params.sourceURL }}/blob/master/LICENSE">License</a><a href="{{ site.Params.releasesURL }}">Releases</a></footer>
+</body>
+</html>
