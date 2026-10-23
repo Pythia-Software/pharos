@@ -26,5 +26,5 @@ site/.firebase/
 *.tfplan
 *.tfvars
 !*.tfvars.example
-infra/site/backend.tf
+!infra/site/production.auto.tfvars
 crash.log

@@ -28,24 +28,28 @@ resource "google_project_service" "site" {
 }
 
 resource "google_firebase_project" "site" {
-  provider        = google-beta
-  project         = google_project.site.project_id
-  deletion_policy = "PREVENT"
-  depends_on      = [google_project_service.site]
+  provider   = google-beta
+  project    = google_project.site.project_id
+  depends_on = [google_project_service.site]
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # Firebase's default site uses the project ID. The provider handles the default
 # site case; no Firebase web-app registration or client SDK is needed for Hugo.
 resource "google_firebase_hosting_site" "site" {
-  provider        = google-beta
-  project         = google_project.site.project_id
-  site_id         = google_project.site.project_id
-  deletion_policy = "PREVENT"
-  depends_on      = [google_firebase_project.site]
+  provider   = google-beta
+  project    = google_project.site.project_id
+  site_id    = google_project.site.project_id
+  depends_on = [google_firebase_project.site]
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # Billing is optional for static Hosting, but required for our remote state
-# bucket. Leave this absent until a billing account is deliberately selected.
+# bucket. production.auto.tfvars selects the authorized Pythia Billing account.
 resource "google_storage_bucket" "state" {
   provider                    = google-beta
   count                       = var.billing_account == null ? 0 : 1

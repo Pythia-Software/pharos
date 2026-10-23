@@ -36,9 +36,8 @@ The script builds with the Firebase production URL and deploys Hosting only.
 Run deployment commands from this worktree so its Firebase configuration is used.
 Hugo emits real pages and a custom 404; there is no SPA catch-all rewrite.
 
-The planned initial URL is `https://pythia-pharos.web.app/`; this URL is not live
-until infrastructure creation and the first deployment succeed. Firebase
-provides managed HTTPS. A custom domain can be added once its name and DNS
+The production URL is `https://pythia-pharos.web.app/`. Firebase provides
+managed HTTPS. A custom domain can be added once its name and DNS
 ownership are known; set `PHAROS_SITE_URL` to that domain before deploying.
 
 The initial workflow is an explicit local deployment. GitHub Actions deployment

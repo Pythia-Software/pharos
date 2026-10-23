@@ -8,8 +8,8 @@ terraform {
   }
 }
 
-# Bootstrap uses local state. Migrate to the managed GCS bucket before sharing
-# infrastructure administration; see README.md. Never commit state files.
+# State is stored in the private, versioned GCS bucket configured in backend.tf.
+# Authentication uses ADC; no credentials belong in this repository.
 provider "google-beta" {
   user_project_override = true
 }
