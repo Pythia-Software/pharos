@@ -19,6 +19,13 @@ import (
 )
 
 func Run(arguments []string) error {
+	lease, err := acquireAppUpdateLease(runningExecutable(), pharosSupportDir())
+	if err != nil {
+		return err
+	}
+	if lease != nil {
+		defer lease.Close()
+	}
 	configPath := ""
 	filtered := []string{}
 	for index := 0; index < len(arguments); index++ {

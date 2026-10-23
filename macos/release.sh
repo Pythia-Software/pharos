@@ -19,6 +19,9 @@ case "${2:-}" in
     *) echo "Usage: $0 major.minor.patch [--developer-id|--adhoc]" >&2; exit 2 ;;
 esac
 TAG="v$VERSION"
+if [ "$MODE" = developer-id ]; then
+    python3 "$ROOT/macos/release_support.py"
+fi
 # codesign accepts an unambiguous certificate-name prefix, so no Team ID is
 # needed here. Signing keys and notarization credentials stay in Keychain.
 IDENTITY=${PHAROS_CODESIGN_IDENTITY-'Developer ID Application: Pythia Software LLC'}
@@ -28,7 +31,7 @@ if [ "$MODE" = developer-id ] && { [ -z "$IDENTITY" ] || [ -z "$PROFILE" ]; }; t
     echo "Use --adhoc to publish an ad hoc signed release instead." >&2
     exit 2
 fi
-for command in git gh go swift swiftc lipo npm xcrun codesign ditto hdiutil tiffutil uvx shasum spctl awk; do
+for command in git gh go swift swiftc lipo npm xcrun codesign ditto hdiutil tiffutil uvx shasum spctl awk python3 curl; do
     command -v "$command" >/dev/null 2>&1 || { echo "$command is required." >&2; exit 2; }
 done
 # The standalone macOS 27 SDK references SwiftUIMacros, which is absent from
@@ -74,6 +77,11 @@ if printf '%s\n' "$LATEST" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
     fi
 fi
 
+if [ "$MODE" = developer-id ]; then
+    # Fail before building if the release Mac lacks the embedded public key's
+    # private key. On the first release, establish the stable, signed feed.
+    python3 "$ROOT/macos/update-feed.py" bootstrap
+fi
 OUT="$ROOT/dist/releases/$TAG"
 if [ -e "$OUT" ]; then
     echo "$OUT already exists; move it aside before retrying." >&2
@@ -81,12 +89,12 @@ if [ -e "$OUT" ]; then
 fi
 mkdir -p "$OUT/stage"
 if [ "$MODE" = developer-id ]; then
-    PHAROS_VERSION="$VERSION" PHAROS_UNIVERSAL=1 PHAROS_HARDENED_RUNTIME=1 \
+    PHAROS_VERSION="$VERSION" PHAROS_UNIVERSAL=1 PHAROS_HARDENED_RUNTIME=1 PHAROS_ENABLE_UPDATES=1 \
         PHAROS_CODESIGN_IDENTITY="$IDENTITY" PHAROS_CODESIGN_TIMESTAMP=1 \
         "$ROOT/macos/build-app.sh" "$OUT/stage"
 else
     PHAROS_CODESIGN_IDENTITY= PHAROS_VERSION="$VERSION" PHAROS_UNIVERSAL=1 \
-        PHAROS_HARDENED_RUNTIME=1 PHAROS_CODESIGN_TIMESTAMP=0 \
+        PHAROS_HARDENED_RUNTIME=1 PHAROS_CODESIGN_TIMESTAMP=0 PHAROS_ENABLE_UPDATES=0 \
         "$ROOT/macos/build-app.sh" "$OUT/stage"
 fi
 APP="$OUT/stage/Pharos.app"
@@ -128,6 +136,10 @@ fi
 codesign --verify --strict --deep --verbose=2 "$APP"
 "$ROOT/macos/make-release-dmg.sh" "$APP" "$IMAGE" "$VERSION"
 if [ "$MODE" = developer-id ]; then
+    # Signing the container also preserves Sparkle's Developer ID fallback for
+    # Ed25519 key rotation when verification before extraction is required.
+    codesign --force --sign "$IDENTITY" --timestamp "$IMAGE"
+    codesign --verify --verbose=2 "$IMAGE"
     xcrun notarytool submit "$IMAGE" --keychain-profile "$PROFILE" --wait
     xcrun stapler staple "$IMAGE"
     xcrun stapler validate "$IMAGE"
@@ -144,6 +156,13 @@ else
     gh release create "$TAG" "$IMAGE" "$IMAGE.sha256" -R "$REPO" \
         --verify-tag --draft --title "Pharos $VERSION" --generate-notes
 fi
+if [ "$MODE" = developer-id ]; then
+    python3 "$ROOT/macos/update-feed.py" prepare "$VERSION" --directory "$OUT"
+    gh release upload "$TAG" "$OUT/update.json" -R "$REPO"
+fi
 gh release edit "$TAG" -R "$REPO" --draft=false
+if [ "$MODE" = developer-id ]; then
+    python3 "$ROOT/macos/update-feed.py" publish "$VERSION" --directory "$OUT"
+fi
 rm -rf "$OUT/stage"
 gh release view "$TAG" -R "$REPO" --json url --jq .url

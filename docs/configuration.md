@@ -524,9 +524,9 @@ All require macOS and Xcode Command Line Tools (`xcode-select --install`).
 
 | Command | Coverage and when to run | Other requirements |
 |---|---|---|
-| `macos/test/run-light.sh` | Native menu state, preferences, reopen/index/eject actions and update checks against stubbed release responses; after changing `MenuBar.swift` or `UpdateChecker.swift`. | A logged-in GUI session for AppKit. No app build, service, disk images or network. |
+| `macos/test/run-light.sh` | Native menu state, preferences, reopen/index/eject actions and update preference migration, skip/dismiss behavior, startup shutdown/recovery, process coordination and installation leases; after changing `MenuBar.swift`, `UpdateNotice.swift`, `PharosApp.swift` or `UpdateLifecycle.swift`. | A logged-in GUI session for AppKit. Disposable child processes and stubbed HTTP; no app build, production service, disk images or release keys. Downloads pinned Sparkle if uncached. |
 | `macos/test/menu-bar.sh` | Just the native menu checks. | Same GUI requirement; optionally pass an output PNG path to save the menu icon. |
-| `macos/test/swift-harness.sh [PORT]` | App DiskArbitration handling, service logs, release, Quit/MCP cleanup and the Eject flow; after changing `LibraryVolume.swift`, `Launch.swift` or eject behavior. | Go, Node.js/npm, Python 3 and rsync; dependency downloads for the app build. Builds from a temporary checkout copy, then creates a 300 MB APFS image. Default port: 18768. |
+| `macos/test/swift-harness.sh [PORT]` | App DiskArbitration handling, service logs, release, Quit/MCP cleanup, real update leases/reconnect refusal and the Eject flow; after changing `LibraryVolume.swift`, `Launch.swift` or eject behavior. | Go, Node.js/npm, Python 3 and rsync; dependency downloads for the app build. Builds from a temporary checkout copy, then creates a 300 MB APFS image. Default port: 18768. |
 | `macos/test/eject-release.sh [PORT]` | Service release during sync, forced detach, catalog integrity and sync recovery; after changing service shutdown or drive handling. | Go, Python 3, curl and sqlite3. Creates a 2 GB sparse APFS image. Default port: 18767. |
 
 The two drive harnesses use `hdiutil` and `diskutil` on their own throwaway
