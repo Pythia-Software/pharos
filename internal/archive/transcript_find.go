@@ -211,6 +211,9 @@ func (event transcriptEvent) findableText() string {
 	if event.kind == "message" {
 		return event.displayText()
 	}
+	if event.kind == "reasoning" {
+		return event.text
+	}
 	if !event.hasValue {
 		return event.text
 	}
@@ -269,6 +272,9 @@ func normalizeTranscript(messages []MessageRecord) []transcriptEvent {
 // normalizeRecord appends the events one stored message holds. Each message
 // normalizes on its own, so any one can be re-read to recover its events.
 func normalizeRecord(message MessageRecord, events []transcriptEvent) []transcriptEvent {
+	if message.Kind == "reasoning" || message.Kind == "thinking" || message.Kind == "analysis" {
+		return append(events, newTranscriptEvent(message, "reasoning", message.Role, message.CallID, message.Text))
+	}
 	parsed, _ := parseReaderJSON(message.Text)
 	value := parsed
 	if payload := jsonObject(jsonObject(parsed)["payload"]); payload != nil {

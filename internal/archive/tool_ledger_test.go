@@ -95,6 +95,19 @@ var claudeToolFixture = []string{
 }
 
 func TestClaudeToolLedger(t *testing.T) {
+	t.Run("retained thinking envelope", func(t *testing.T) {
+		body := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Now I see"},{"type":"tool_use","id":"read","name":"Read","input":{"path":"a.go"}},{"type":"tool_use","id":"check","name":"Bash","input":{"command":"go test"}}],"usage":{"input_tokens":10,"output_tokens":4}}}`
+		messages := normalizeReasoningMessages([]MessageRecord{{NativeID: "event", Role: "assistant", Kind: "metadata", Text: body}})
+		requests, calls := buildToolLedger(messages, "opus")
+		if len(requests) != 1 || len(calls) != 2 {
+			t.Fatalf("requests=%+v calls=%+v", requests, calls)
+		}
+		for _, call := range calls {
+			if call.RequestKey != requests[0].Key || call.OutputTokens != 2 || call.ParallelCount != 2 {
+				t.Fatalf("extracted tool lost request attribution: %+v", call)
+			}
+		}
+	})
 	catalog, _ := testCatalog(t)
 	root := t.TempDir()
 	writeFixture(t, root, "project/claude-tools.jsonl", claudeToolFixture)

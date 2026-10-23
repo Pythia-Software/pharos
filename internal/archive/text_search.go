@@ -72,28 +72,30 @@ type textSearchItem struct {
 	SpanCategory    string        `json:"span_category,omitempty"`
 	Captures        []textCapture `json:"captures,omitempty"`
 	CapturesClipped bool          `json:"captures_clipped,omitempty"`
+	ReasoningFormat string        `json:"reasoning_format,omitempty"`
 	// Cursor after this result, before any later verification work. Used when
 	// an MCP output budget trims a page, so no matches are silently skipped.
 	cursor string
 }
 type textSearchResult struct {
-	Items           []textSearchItem    `json:"items"`
-	NextCursor      string              `json:"next_cursor"`
-	Complete        bool                `json:"complete"`
-	StopReason      string              `json:"stop_reason"`
-	StopMessage     string              `json:"stop_message,omitempty"`
-	Count           int                 `json:"count"`
-	CountRelation   string              `json:"count_relation"`
-	Strategy        string              `json:"strategy"`
-	Candidates      int                 `json:"candidates"`
-	VerifiedBytes   int                 `json:"verified_bytes"`
-	SkippedOversize int                 `json:"skipped_oversize"`
-	ElapsedMS       int64               `json:"elapsed_ms"`
-	Query           *textQuery          `json:"interpreted_query"`
-	Expansions      map[string][]string `json:"expansions,omitempty"`
-	Surface         string              `json:"surface"`
-	Coverage        string              `json:"coverage"`
-	Generation      string              `json:"generation"`
+	Items             []textSearchItem    `json:"items"`
+	NextCursor        string              `json:"next_cursor"`
+	Complete          bool                `json:"complete"`
+	StopReason        string              `json:"stop_reason"`
+	StopMessage       string              `json:"stop_message,omitempty"`
+	Count             int                 `json:"count"`
+	CountRelation     string              `json:"count_relation"`
+	Strategy          string              `json:"strategy"`
+	Candidates        int                 `json:"candidates"`
+	VerifiedBytes     int                 `json:"verified_bytes"`
+	SkippedOversize   int                 `json:"skipped_oversize"`
+	ElapsedMS         int64               `json:"elapsed_ms"`
+	Query             *textQuery          `json:"interpreted_query"`
+	Expansions        map[string][]string `json:"expansions,omitempty"`
+	Surface           string              `json:"surface"`
+	Coverage          string              `json:"coverage"`
+	ReasoningCoverage map[string]any      `json:"reasoning_coverage,omitempty"`
+	Generation        string              `json:"generation"`
 }
 type textSearchCursor struct {
 	Version     int    `json:"v"`
@@ -347,7 +349,18 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	}
 	result.Query = node
 	result.Surface = o.Surface
-	result.Coverage = "Stored message text only; omitted source history is unknown. Reasoning covers explicit retained thinking/reasoning/analysis messages."
+	result.Coverage = "Stored message text only; omitted source history is unknown. Reasoning searches normalized saved thinking, analysis text and reasoning summaries."
+	if o.Surface == "reasoning" {
+		coverage, e := c.reasoningCoverage(ctx)
+		if e != nil {
+			return result, e
+		}
+		delete(coverage, "sources")
+		result.ReasoningCoverage = coverage
+		if coverage["normalization_complete"] == false {
+			result.Coverage += " Retained-envelope normalization is pending; run the Library upgrade to include those records."
+		}
+	}
 	span := textSpanSurface(o.Surface)
 	if span {
 		result.Coverage = "Matches individual stored authorship spans, never text outside the category. Classification may be absent or stale; search does not rebuild it."
@@ -388,7 +401,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 		}
 		if n == 0 {
 			emptySurface = true
-			result.Coverage = "No explicit thinking/reasoning/analysis messages are retained in this catalog. Embedded or discarded reasoning is not indexed as this surface."
+			result.Coverage += " No canonical reasoning records are indexed yet; this does not establish that sources contain no reasoning."
 		}
 	}
 	small := o.Surface == "prose" || o.Surface == "user" || o.Surface == "assistant" || o.Surface == "reasoning" || span
@@ -621,7 +634,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	} else {
 		arguments = append(arguments, o.MaxCandidates+1)
 	}
-	selectSQL := fmt.Sprintf(`SELECT %s,m.id,m.conversation_id,c.workspace_id,w.title,c.provider,COALESCE(c.started_at,''),m.role,m.kind,COALESCE(m.created_at,''),m.content_hash,COALESCE(m.evidence_locator,''),CASE WHEN (%s) THEN %s ELSE 0 END,CASE WHEN (%s) AND %s<=%d THEN m.text ELSE '' END AS search_body,%s%s
+	selectSQL := fmt.Sprintf(`SELECT %s,m.id,m.conversation_id,c.workspace_id,w.title,c.provider,COALESCE(c.started_at,''),m.role,m.kind,COALESCE(m.created_at,''),m.content_hash,COALESCE(m.evidence_locator,''),COALESCE(m.reasoning_format,''),CASE WHEN (%s) THEN %s ELSE 0 END,CASE WHEN (%s) AND %s<=%d THEN m.text ELSE '' END AS search_body,%s%s
  FROM %s JOIN conversations c ON c.id=m.conversation_id JOIN workspaces w ON w.id=c.workspace_id WHERE %s ORDER BY %s DESC%s`, key, eligibleSQL, sizeSQL, eligibleSQL, sizeSQL, maxMessage, eligibleSQL, countSQL, from, strings.Join(clauses, " AND "), key, limitSQL)
 	indexedWorkspaces := o.workspaceRows && !scan && !span && !strict && !ordered
 	if o.workspaceRows {
@@ -632,7 +645,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 			// FTS already proves these token/phrase/Boolean matches. Count them
 			// without copying and tokenizing every matching body. SQLite's MAX
 			// aggregate selects the evidence columns from the newest matching row.
-			selectSQL = fmt.Sprintf(`SELECT MAX(%s),m.id,m.conversation_id,c.workspace_id,'','','','','','','','',0,'' AS search_body,1,count(*)
+			selectSQL = fmt.Sprintf(`SELECT MAX(%s),m.id,m.conversation_id,c.workspace_id,'','','','','','','','','',0,'' AS search_body,1,count(*)
  FROM %s JOIN conversations c ON c.id=m.conversation_id JOIN workspaces w ON w.id=c.workspace_id WHERE %s AND (%s) GROUP BY c.workspace_id`, key, from, strings.Join(clauses, " AND "), eligibleSQL)
 		}
 	}
@@ -664,7 +677,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 		var size int
 		var eligible bool
 		count := 1
-		columns := []any{&position, &item.MessageID, &item.ConversationID, &item.WorkspaceID, &item.Title, &item.Provider, &item.StartedAt, &item.Role, &item.MessageKind, &item.CreatedAt, &item.ContentHash, &item.EvidenceLocator, &size, &body, &eligible}
+		columns := []any{&position, &item.MessageID, &item.ConversationID, &item.WorkspaceID, &item.Title, &item.Provider, &item.StartedAt, &item.Role, &item.MessageKind, &item.CreatedAt, &item.ContentHash, &item.EvidenceLocator, &item.ReasoningFormat, &size, &body, &eligible}
 		if o.workspaceRows {
 			columns = append(columns, &count)
 		}

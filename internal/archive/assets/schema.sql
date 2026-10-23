@@ -186,8 +186,41 @@ CREATE TABLE IF NOT EXISTS messages (
   content_hash TEXT NOT NULL,
   selected INTEGER NOT NULL DEFAULT 1,
   sender TEXT,
+  reasoning_format TEXT,
   UNIQUE(conversation_id, native_id)
 );
+-- Extraction progress is separate from source-history completeness. Updating a
+-- conversation and its state is atomic; an interrupted upgrade resumes at the
+-- next conversation without reparsing completed ones.
+CREATE TABLE IF NOT EXISTS reasoning_extraction_state (
+  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+  version TEXT NOT NULL,
+  retained_count INTEGER NOT NULL,
+  retained_bytes INTEGER NOT NULL,
+  summary_count INTEGER NOT NULL,
+  unavailable_count INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO meta(key,value) VALUES('reasoning_extraction_generation','0');
+CREATE TRIGGER IF NOT EXISTS reasoning_state_insert AFTER INSERT ON reasoning_extraction_state BEGIN
+  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='reasoning_extraction_generation';
+END;
+CREATE TRIGGER IF NOT EXISTS reasoning_state_delete AFTER DELETE ON reasoning_extraction_state BEGIN
+  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='reasoning_extraction_generation';
+END;
+CREATE TRIGGER IF NOT EXISTS reasoning_state_update AFTER UPDATE ON reasoning_extraction_state BEGIN
+  UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='reasoning_extraction_generation';
+END;
+CREATE TRIGGER IF NOT EXISTS reasoning_message_insert AFTER INSERT ON messages BEGIN
+  DELETE FROM reasoning_extraction_state WHERE conversation_id=new.conversation_id;
+END;
+CREATE TRIGGER IF NOT EXISTS reasoning_message_delete AFTER DELETE ON messages BEGIN
+  DELETE FROM reasoning_extraction_state WHERE conversation_id=old.conversation_id;
+END;
+CREATE TRIGGER IF NOT EXISTS reasoning_message_update AFTER UPDATE OF role,kind,text,raw_text,reasoning_format,conversation_id ON messages
+WHEN (old.role,old.kind,old.text,old.raw_text,old.reasoning_format,old.conversation_id)
+ IS NOT (new.role,new.kind,new.text,new.raw_text,new.reasoning_format,new.conversation_id) BEGIN
+  DELETE FROM reasoning_extraction_state WHERE conversation_id IN (old.conversation_id,new.conversation_id);
+END;
 CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages(conversation_id, created_at);
 -- Serves the human-authorship rebuild, which reads prose turns by role in send order.
 -- A query about one conversation or workspace that also filters on role would

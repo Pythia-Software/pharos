@@ -147,7 +147,9 @@ func (c *Catalog) libraryFindVersion(ctx context.Context, o LibraryFindOptions) 
 	var readiness string
 	err = c.reader().QueryRowContext(ctx, `SELECT
         COALESCE((SELECT value FROM meta WHERE key='text_search_documents_version'),'') || ':' ||
-        COALESCE((SELECT value FROM meta WHERE key='message_trigram_version'),'')`).Scan(&readiness)
+        COALESCE((SELECT value FROM meta WHERE key='message_trigram_version'),'') || ':' ||
+        CASE WHEN ? THEN COALESCE((SELECT value FROM meta WHERE key='reasoning_extraction_generation'),'0') ELSE '-' END`,
+		o.Search.Surface == "reasoning").Scan(&readiness)
 	return version + ":" + readiness, err
 }
 

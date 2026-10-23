@@ -620,6 +620,7 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 		}
 		record.Conversations = kept
 	}
+	record = normalizeRecordReasoning(record)
 	record = canonicalRecordTimes(record)
 	prepareRecordAccounting(&record)
 	workspaceID, err := storedWorkspaceID(tx, record)
@@ -764,6 +765,9 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 		}
 		messageWriter.statement.Close()
 		if err := pruneMessages(tx, conversationID, retained); err != nil {
+			return 0, 0, err
+		}
+		if err := recordReasoningState(tx, conversationID, conversation.Messages); err != nil {
 			return 0, 0, err
 		}
 		if force {
@@ -1245,9 +1249,9 @@ func upsertMessage(tx *sql.Tx, conversationID string, value MessageRecord) (stri
 	var storedSelected int
 	lookupErr := tx.QueryRow(`SELECT id,content_hash,role,kind,COALESCE(model,''),COALESCE(effort,''),text,COALESCE(raw_text,''),COALESCE(source_order,0),
 		COALESCE(created_at,''),COALESCE(parent_native_id,''),COALESCE(previous_native_id,''),COALESCE(call_id,''),
-		COALESCE(evidence_locator,''),selected,COALESCE(sender,'') FROM messages WHERE conversation_id=? AND native_id=?`, conversationID, value.NativeID).
+		COALESCE(evidence_locator,''),selected,COALESCE(sender,''),COALESCE(reasoning_format,'') FROM messages WHERE conversation_id=? AND native_id=?`, conversationID, value.NativeID).
 		Scan(&existingID, &existingHash, &stored.Role, &stored.Kind, &stored.Model, &stored.Effort, &stored.Text, &stored.RawText, &stored.SourceOrder,
-			&stored.CreatedAt, &stored.ParentNativeID, &stored.PreviousNativeID, &stored.CallID, &stored.EvidenceLocator, &storedSelected, &stored.Sender)
+			&stored.CreatedAt, &stored.ParentNativeID, &stored.PreviousNativeID, &stored.CallID, &stored.EvidenceLocator, &storedSelected, &stored.Sender, &stored.ReasoningFormat)
 	if lookupErr != nil && lookupErr != sql.ErrNoRows {
 		return "", false, lookupErr
 	}
@@ -1262,14 +1266,14 @@ func upsertMessage(tx *sql.Tx, conversationID string, value MessageRecord) (stri
 	if lookupErr == nil {
 		id = existingID
 	}
-	_, err := tx.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,model,effort,text,raw_text,source_order,created_at,parent_native_id,previous_native_id,call_id,evidence_locator,content_hash,selected,sender)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(conversation_id,native_id) DO UPDATE SET
+	_, err := tx.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,kind,model,effort,text,raw_text,source_order,created_at,parent_native_id,previous_native_id,call_id,evidence_locator,content_hash,selected,sender,reasoning_format)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(conversation_id,native_id) DO UPDATE SET
 		role=excluded.role,kind=excluded.kind,model=excluded.model,effort=excluded.effort,text=excluded.text,raw_text=excluded.raw_text,source_order=excluded.source_order,
 		created_at=excluded.created_at,parent_native_id=excluded.parent_native_id,previous_native_id=excluded.previous_native_id,call_id=excluded.call_id,
-		evidence_locator=excluded.evidence_locator,content_hash=excluded.content_hash,selected=excluded.selected,sender=excluded.sender`,
+		evidence_locator=excluded.evidence_locator,content_hash=excluded.content_hash,selected=excluded.selected,sender=excluded.sender,reasoning_format=excluded.reasoning_format`,
 		id, conversationID, value.NativeID, defaultString(value.Role, "unknown"), defaultString(value.Kind, "message"), nilIfEmpty(value.Model), nilIfEmpty(value.Effort), value.Text,
 		nilIfEmpty(value.RawText), value.SourceOrder, nilIfEmpty(value.CreatedAt), nilIfEmpty(value.ParentNativeID), nilIfEmpty(value.PreviousNativeID),
-		nilIfEmpty(value.CallID), nilIfEmpty(value.EvidenceLocator), contentHash, selected, nilIfEmpty(value.Sender))
+		nilIfEmpty(value.CallID), nilIfEmpty(value.EvidenceLocator), contentHash, selected, nilIfEmpty(value.Sender), nilIfEmpty(value.ReasoningFormat))
 	if err != nil {
 		return "", false, err
 	}
@@ -1437,7 +1441,43 @@ func replaceAgentSessions(tx *sql.Tx, workspaceID, conversationID string, conver
 }
 
 func replaceAgentSessionsWithCostState(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord, suppressCostState bool) error {
+	return writeAgentSessions(tx, workspaceID, conversationID, conversation, suppressCostState, false)
+}
+
+// A text backfill changes membership and order, but must preserve usage that
+// has already been reconciled across conversations, and linked child sessions.
+// Newly discovered delegations still need a session of their own.
+func refreshAgentSessionMembership(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord) error {
+	return writeAgentSessions(tx, workspaceID, conversationID, conversation, false, true)
+}
+
+func writeAgentSessions(tx *sql.Tx, workspaceID, conversationID string, conversation ConversationRecord, suppressCostState, preserveExisting bool) error {
 	summaries := agentSessionSummariesWithCostState(conversation.Messages, suppressCostState)
+	priorSessions, err := queryMaps(tx, "SELECT id,native_id FROM agent_sessions WHERE conversation_id=?", conversationID)
+	if err != nil {
+		return err
+	}
+	existingSessions := map[string]string{}
+	for _, row := range priorSessions {
+		existingSessions[firstString(row["native_id"])] = firstString(row["id"])
+	}
+	messageIDs := map[string]string{}
+	if preserveExisting {
+		rows, err := queryMaps(tx, "SELECT id,native_id FROM messages WHERE conversation_id=?", conversationID)
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			messageIDs[firstString(row["native_id"])] = firstString(row["id"])
+		}
+	}
+	messageID := func(index int) string {
+		nativeID := conversation.Messages[index].NativeID
+		if id := messageIDs[nativeID]; id != "" {
+			return id
+		}
+		return stableID("message", conversationID, nativeID)
+	}
 	existingMappings, err := queryMaps(tx, `SELECT am.agent_session_id,am.message_id,am.source_order FROM agent_session_messages am
 		JOIN agent_sessions a ON a.id=am.agent_session_id WHERE a.conversation_id=?`, conversationID)
 	if err != nil {
@@ -1451,15 +1491,21 @@ func replaceAgentSessionsWithCostState(tx *sql.Tx, workspaceID, conversationID s
 	ids := map[string]string{}
 	for _, summary := range summaries {
 		ids[summary.nativeID] = stableID("agent-session", conversationID, summary.nativeID)
+		if preserveExisting && existingSessions[summary.nativeID] != "" {
+			ids[summary.nativeID] = existingSessions[summary.nativeID]
+		}
 	}
 	for _, summary := range summaries {
+		if preserveExisting && existingSessions[summary.nativeID] != "" {
+			continue
+		}
 		childAgent := conversation.AgentDepth > 0
 		var parentID, delegationMessageID any
 		if summary.parentNativeID != "" {
 			parentID = ids[summary.parentNativeID]
 		}
 		if summary.delegationMessageIndex >= 0 && summary.delegationMessageIndex < len(conversation.Messages) {
-			delegationMessageID = stableID("message", conversationID, conversation.Messages[summary.delegationMessageIndex].NativeID)
+			delegationMessageID = messageID(summary.delegationMessageIndex)
 		}
 		kind := "subagent"
 		if summary.nativeID == "main" {
@@ -1542,8 +1588,7 @@ func replaceAgentSessionsWithCostState(tx *sql.Tx, workspaceID, conversationID s
 			if index < 0 || index >= len(conversation.Messages) {
 				continue
 			}
-			messageID := stableID("message", conversationID, conversation.Messages[index].NativeID)
-			key := ids[summary.nativeID] + "\x00" + messageID
+			key := ids[summary.nativeID] + "\x00" + messageID(index)
 			if previous, ok := desiredMappings[key]; !ok || index < previous {
 				desiredMappings[key] = index
 			}
@@ -1567,9 +1612,8 @@ func replaceAgentSessionsWithCostState(tx *sql.Tx, workspaceID, conversationID s
 			}
 		}
 	}
-	priorSessions, err := queryMaps(tx, "SELECT id FROM agent_sessions WHERE conversation_id=?", conversationID)
-	if err != nil {
-		return err
+	if preserveExisting {
+		return nil
 	}
 	retained := map[string]bool{}
 	for _, id := range ids {

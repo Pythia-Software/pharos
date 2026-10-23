@@ -21,6 +21,7 @@ type transcriptFindFixture struct {
 		ParentNativeID string          `json:"parent_native_id"`
 		CallID         string          `json:"call_id"`
 		Text           json.RawMessage `json:"text"`
+		RawText        string          `json:"raw_text"`
 	}
 	Events []struct {
 		Kind string   `json:"kind"`
@@ -60,7 +61,7 @@ func (test transcriptFindFixture) records() []MessageRecord {
 		if json.Unmarshal(message.Text, &text) != nil {
 			text = string(message.Text)
 		}
-		records = append(records, MessageRecord{NativeID: message.NativeID, Role: message.Role, Kind: message.Kind, ParentNativeID: message.ParentNativeID, CallID: message.CallID, Text: text})
+		records = append(records, MessageRecord{NativeID: message.NativeID, Role: message.Role, Kind: message.Kind, ParentNativeID: message.ParentNativeID, CallID: message.CallID, Text: text, RawText: message.RawText})
 	}
 	return records
 }

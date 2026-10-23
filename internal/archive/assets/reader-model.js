@@ -186,6 +186,7 @@ function normalizeMessages(messages){
     const base={...message,native_id:message.native_id||`event-${index}`,raw_text:original};
     let emitted=false;
     const emit=(fields,suffix='')=>{const normalized={...base,...fields,tokenReport:emitted?null:reports[index],native_id:base.native_id+suffix};messageJSONCache.set(normalized,{...messageJSONCache.get(message)});output.push(normalized);emitted=true};
+    if(['thinking','reasoning','analysis'].includes(message.kind)){emit({kind:'reasoning'});return}
     const blocks=Array.isArray(value?.message?.content)?value.message.content:Array.isArray(value?.content)?value.content:Array.isArray(value)?value:null;
     if(!['tool_result','delegation_result','error'].includes(message.kind)&&blocks&&blocks.some(block=>['text','input_text','output_text','tool_use','tool_result','thinking'].includes(block?.type))){
       blocks.forEach((block,i)=>{
@@ -315,7 +316,7 @@ function transcriptStructure(messages){
 // The text Find matches in an event: a message's prose, or the string values a
 // tool call, result, or event carries (object keys in sorted order).
 function jsonStrings(value,out=[]){if(typeof value==='string')out.push(value);else if(Array.isArray(value))value.forEach(item=>jsonStrings(item,out));else if(value&&typeof value==='object')Object.keys(value).sort().forEach(key=>jsonStrings(value[key],out));return out}
-function findableText(message){return message.findableText??=message.kind==='message'?displayText(message):jsonStrings(messageJSON(message)??String(message.text??'')).join('\n')}
+function findableText(message){return message.findableText??=message.kind==='message'?displayText(message):['thinking','reasoning','analysis'].includes(message.kind)?String(message.text??''):jsonStrings(messageJSON(message)??String(message.text??'')).join('\n')}
 // Counts the events whose findable text matches pattern (a RegExp without the
 // g flag): shown ones, and hidden ones with the kinds hiding them. Results
 // count only when output is searched.
