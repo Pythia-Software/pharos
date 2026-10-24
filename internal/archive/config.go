@@ -27,32 +27,37 @@ type SourceConfig struct {
 }
 
 type Config struct {
-	Path               string
-	Library            bool
-	Executable         string
-	CatalogPath        string
-	ArchiveRoot        string
-	StagingRoot        string
-	VolumeID           string
-	APIToken           string
-	Host               string
-	Port               int
-	PackageCapBytes    int64
-	UpcomingDays       int
-	EligibleDays       int
-	SnoozeDays         int
-	StagingCapBytes    int64
-	EnableReclamation  bool
-	ReleaseHookProven  bool
-	TL1URL             string
-	TL1Token           string
-	GitHubToken        string
-	CPUIDLECeiling     float64
-	IOMBPSCeiling      float64
-	YieldPollSeconds   float64
-	Sources            []SourceConfig
-	RepositoryAliases  map[string]string
-	RepositorySeparate []string
+	// Runtime-only fields supplied by the application broker, never library TOML.
+	RuntimeEndpoint        string
+	Application            string
+	PendingCapture         bool
+	DeliveryTargetInstance string
+	Path                   string
+	Library                bool
+	Executable             string
+	CatalogPath            string
+	ArchiveRoot            string
+	StagingRoot            string
+	VolumeID               string
+	APIToken               string
+	Host                   string
+	Port                   int
+	PackageCapBytes        int64
+	UpcomingDays           int
+	EligibleDays           int
+	SnoozeDays             int
+	StagingCapBytes        int64
+	EnableReclamation      bool
+	ReleaseHookProven      bool
+	TL1URL                 string
+	TL1Token               string
+	GitHubToken            string
+	CPUIDLECeiling         float64
+	IOMBPSCeiling          float64
+	YieldPollSeconds       float64
+	Sources                []SourceConfig
+	RepositoryAliases      map[string]string
+	RepositorySeparate     []string
 
 	// CaptureRoot holds raw captures of each host's sources; see capture.go.
 	CaptureRoot        string

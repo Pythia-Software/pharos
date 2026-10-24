@@ -92,12 +92,34 @@ func (s *Server) Config() Config { s.configMu.RLock(); defer s.configMu.RUnlock(
 
 func (s *Server) Serve() error {
 	config := s.Config()
+	use, err := fileLease(libraryUseLock(config), false)
+	if err != nil {
+		return err
+	}
+	defer use.Close()
+	owner, err := fileLease(filepath.Join(filepath.Dir(canonical(config.CatalogPath)), ".pharos-service.lock"), true)
+	if err != nil {
+		return err
+	}
+	defer owner.Close()
 	if config.Host != "127.0.0.1" && config.Host != "::1" && config.Host != "localhost" {
 		return fmt.Errorf("the archive API may bind only to a loopback address")
 	}
 	listener, err := net.Listen("tcp", net.JoinHostPort(config.Host, strconv.Itoa(config.Port)))
 	if err != nil {
 		return err
+	}
+	defer listener.Close()
+	config.Port = listener.Addr().(*net.TCPAddr).Port
+	s.configMu.Lock()
+	s.config.Port = config.Port
+	s.configMu.Unlock()
+	if config.RuntimeEndpoint != "" {
+		ep := applicationEndpoint{URL: "http://" + listener.Addr().String(), Token: config.APIToken, PID: os.Getpid(), Lifetime: randomToken(), Catalog: config.CatalogPath}
+		if err := durableJSON(config.RuntimeEndpoint, ep); err != nil {
+			return err
+		}
+		defer os.Remove(config.RuntimeEndpoint)
 	}
 	s.life.onListen()
 	display := config.Host

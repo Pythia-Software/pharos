@@ -354,6 +354,13 @@ func refuses(_ work: () throws -> Void, _ message: String) {
             processes.removeAll { $0.pid == pid }
         }, wait: { $0() })
         expect(stopped && processes.map(\.pid) == [903], "service and own MCP stop; another installation stays running")
+        processes = [(901, cli), (902, cli), (905, cli)]
+        try UpdateProcesses.prepare(app: app, servicePID: 901, stopService: {
+            processes.removeAll { [901, 902].contains($0.pid) }
+        }, processes: { processes }, arguments: { pid in
+            pid == 902 ? ["pharos", "serve", "--dynamic", "--application", app.path] : ["pharos", "mcp-app", "--application", app.path]
+        }, parentPID: { $0 == 902 ? 901 : nil }, signal: { pid in processes.removeAll { $0.pid == pid } }, wait: { $0() })
+        expect(processes.isEmpty, "update waits for broker-owned library services and managed MCP")
         processes = [(904, cli)]
         stopped = false
         refuses({ try UpdateProcesses.prepare(app: app, servicePID: nil, stopService: { stopped = true },

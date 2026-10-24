@@ -1,5 +1,11 @@
 # Configuration
 
+The native app now opens **Libraries** for setup, library selection, recovery and
+per-application MCP assignment. See [Libraries and application setup](library-management.md)
+for those flows, independent app/library locations, and verified moves. The
+configuration and beside-app layouts below remain available for existing installs
+and explicit CLI use.
+
 The default file is `archive.toml`; override it with `--config` or `PHAROS_CONFIG`. Paths may use `~`.
 Relative paths (`data_dir`, `catalog_path`, `archive_root`, `staging_root`,
 `executable`, and source `path`s) resolve against the directory containing the
@@ -53,12 +59,12 @@ account = "local"
 
 Source paths are explicit opt-ins. A missing or unreadable source is recorded as failed/stale; the service never claims freshness after a failed read. The internal catalog contains searchable cache, protection state, cursors, queues, and receipts. The authoritative retained evidence and its primary package manifest live under `archive_root`.
 
-For a new app installed in Applications, **Set Up on This Mac** creates
-`archive.toml` in `~/Library/Application Support/Pharos`. Its default
-`archive_root` is `~/Library/Application Support/Pharos/preserved`, so the
-catalog, captures, staging files, and preserved data stay outside Applications.
-The example above shows how to move preserved data to a separate drive; set
-`volume_id` when you do so.
+For a new app installed in Applications, **Create a library** defaults to a
+dedicated folder under `~/Library/Application Support/Pharos/Libraries/`. Catalog,
+captures, staging files and preserved data stay together outside Applications.
+Existing `archive.toml` installations can be adopted without moving their data.
+The example above shows a legacy split layout; set `volume_id` when preserved
+data lives on a separate drive.
 
 ## Header controls
 

@@ -6,6 +6,12 @@ The primary implementation is Go 1.26 with SQLite FTS, a local concept index, an
 
 The command-line executable is `pharos`, and a per-user installation keeps its configuration in `~/Library/Application Support/Pharos`.
 
+The native app uses an application broker to open named libraries independently
+of its own location. Each library service has an allocated loopback endpoint and
+private runtime credential. The broker owns the primary connection, explicit MCP
+assignment and verified library transfers. See [Libraries and application setup](library-management.md)
+and the [implementation design](onboarding-and-library-design.md).
+
 ## Safety defaults
 
 - Every configured source is read-only. No home-directory scan occurs: `pharos probe` and the new-Mac panel check only a fixed list of known agent locations, and nothing is indexed until you opt in.

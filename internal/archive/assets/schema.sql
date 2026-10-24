@@ -7,6 +7,29 @@ CREATE TABLE IF NOT EXISTS meta (
   value TEXT NOT NULL
 );
 
+-- Small delivery proof, never an offline transcript cache. It prevents a
+-- changed source container from rehydrating unchanged delivered conversations.
+CREATE TABLE IF NOT EXISTS library_delivery_checkpoints (
+ provider TEXT NOT NULL, account TEXT NOT NULL, native_id TEXT NOT NULL,
+ digest TEXT NOT NULL, workspace_id TEXT NOT NULL, destination_instance TEXT NOT NULL, delivery_id TEXT NOT NULL,
+ PRIMARY KEY(provider,account,native_id)
+);
+CREATE TABLE IF NOT EXISTS library_workspace_delivery_checkpoints (
+ source_kind TEXT NOT NULL, source_account TEXT NOT NULL, source_id TEXT NOT NULL,
+ digest TEXT NOT NULL, destination_instance TEXT NOT NULL, delivery_id TEXT NOT NULL,
+ PRIMARY KEY(source_kind,source_account,source_id)
+);
+-- Normalized workspace inputs excluding conversations. A metadata-only revision
+-- can be delivered independently of already delivered transcript content.
+CREATE TABLE IF NOT EXISTS workspace_delivery_inputs (
+ workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+ fingerprint TEXT NOT NULL, writer_host_id TEXT NOT NULL, version INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS conversation_parent_refs (
+ provider TEXT NOT NULL, account TEXT NOT NULL, native_id TEXT NOT NULL,
+ parent_native_id TEXT NOT NULL, PRIMARY KEY(provider,account,native_id)
+);
+
 -- Daily logical library sizes for a rolling, linear cloud-backup forecast.
 CREATE TABLE IF NOT EXISTS library_size_history (
   day TEXT PRIMARY KEY,

@@ -110,6 +110,12 @@ func (m *mcpServer) dispatch(request map[string]any) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if application := managedApplicationForConfig(runningExecutable(), config); application != "" {
+		if firstString(request["method"]) == "tools/list" {
+			return mcpResult(request, map[string]any{"tools": mcpTools}), nil
+		}
+		return applicationRPC(m.client, application, request)
+	}
 	if response, forwarded, err := m.forward(config, request); forwarded {
 		return response, err
 	}
@@ -206,6 +212,16 @@ func (m *mcpServer) direct(config Config, request map[string]any) (response map[
 	}
 	if releasedRecently(config.CatalogPath) {
 		return nil, errLibraryReleased
+	}
+	if _, e := os.Stat(config.CatalogPath); e == nil {
+		lease, e := fileLease(libraryUseLock(config), false)
+		if e != nil {
+			return nil, e
+		}
+		defer lease.Close()
+		if _, e = os.Stat(pendingDeliveryPath(config)); e == nil {
+			return nil, fmt.Errorf("this library is finishing a verified move; resume it in Pharos")
+		}
 	}
 	defer debug.SetPanicOnFault(debug.SetPanicOnFault(true))
 	defer func() {

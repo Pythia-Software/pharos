@@ -75,6 +75,9 @@ func libraryConfigBeside(executable string) string {
 // not mounted, so neither may be papered over with a fresh empty catalog.
 // identity is volumeIdentity outside tests; it shells out, so call this once.
 func (c Config) checkLibrary(identity func(string) string) error {
+	if _, err := readLibraryDescriptor(c); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	if !c.Library {
 		return nil
 	}
@@ -112,7 +115,8 @@ func InitLibrary(dir string, identity func(string) string) (Config, error) {
 		_ = os.Remove(path)
 		return Config{}, err
 	}
-	return config, nil
+	_, err = ensureLibraryDescriptor(config, filepath.Base(dir))
+	return config, err
 }
 
 // writeLibraryConfig creates dir/library.toml, never replacing one, and

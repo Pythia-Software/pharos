@@ -41,6 +41,18 @@ func Run(arguments []string) error {
 	}
 	command := filtered[0]
 	args := filtered[1:]
+	if command == "app" {
+		return runApplicationCLI(args)
+	}
+	if command == "mcp-app" {
+		return runApplicationMCPCLI(args, os.Stdin, os.Stdout)
+	}
+	if command == "library-transfer" {
+		return runLibraryTransferCLI(args)
+	}
+	if command == "library-recover" {
+		return runLibraryRecoverCLI(args)
+	}
 	if command == "cloud-restore" {
 		return runCloudRestoreCLI(args)
 	}
@@ -98,6 +110,25 @@ func Run(arguments []string) error {
 	if err != nil {
 		return err
 	}
+	if command == "serve" {
+		flags := flag.NewFlagSet("serve", flag.ContinueOnError)
+		dynamic := flags.Bool("dynamic", false, "allocate an available loopback port")
+		endpoint := flags.String("endpoint", "", "publish runtime endpoint to this private file")
+		application := flags.String("application", "", "application installation managing this service")
+		open := flags.Bool("open", false, "open a browser")
+		if err := flags.Parse(args); err != nil {
+			return err
+		}
+		if *dynamic {
+			config.Port = 0
+			config.APIToken = randomToken()
+		}
+		config.RuntimeEndpoint, config.Application = *endpoint, *application
+		args = nil
+		if *open {
+			args = []string{"--open"}
+		}
+	}
 	if command == "doctor" {
 		return runDoctor(config)
 	}
@@ -108,6 +139,16 @@ func Run(arguments []string) error {
 	}
 	if err := config.checkLibrary(volumeIdentity); err != nil {
 		return err
+	}
+	if _, err := os.Stat(pendingDeliveryPath(config)); err == nil {
+		return fmt.Errorf("a verified library move needs to finish cleanup; resume its transfer before opening or capturing this library")
+	}
+	if _, err := os.Stat(config.CatalogPath); err == nil {
+		use, err := fileLease(libraryUseLock(config), false)
+		if err != nil {
+			return err
+		}
+		defer use.Close()
 	}
 	// Capturing and backing up only copy files; they never open the catalog
 	// for writing.
@@ -322,7 +363,8 @@ func Run(arguments []string) error {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: pharos [--config PATH] {init,init-library,add-this-mac,serve,capture,index,backup,cloud-backup,cloud-restore,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,upgrade,build-tools,pricing,search,tl1,findings,health,doctor,dev-ui,mcp,probe,volume-id}")
+	return fmt.Errorf("usage: pharos [--config PATH] {app,mcp-app,library-transfer,library-recover,init,init-library,add-this-mac,serve,capture,index,backup,cloud-backup,cloud-restore,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,upgrade,build-tools,pricing,search,tl1,findings,health,doctor,dev-ui,mcp,probe,volume-id}")
+
 }
 func urlQueryEscape(value string) string {
 	replacer := strings.NewReplacer("%", "%25", " ", "%20", "+", "%2B", "?", "%3F", "&", "%26", "=", "%3D")

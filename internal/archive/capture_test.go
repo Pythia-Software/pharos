@@ -22,6 +22,9 @@ func captureTestConfig(t *testing.T, sources ...SourceConfig) Config {
 	t.Helper()
 	root := t.TempDir()
 	config := defaultConfig(filepath.Join(root, "archive.toml"))
+	config.CatalogPath = filepath.Join(root, "catalog.sqlite3")
+	config.ArchiveRoot = filepath.Join(root, "preserved")
+	config.StagingRoot = filepath.Join(root, "staging")
 	config.CaptureRoot = filepath.Join(root, "captures")
 	config.Sources = sources
 	return config
@@ -488,6 +491,26 @@ func TestCaptureRetainsSnapshotGenerations(t *testing.T) {
 	}
 	if entries, err := os.ReadDir(capturedPath(config, "conductor", captureHistoryDir)); err == nil && len(entries) > 0 {
 		t.Fatalf("history kept %d entries with no generations configured", len(entries))
+	}
+	// A pending library must keep every unindexed generation, even when its
+	// ordinary retention is zero and indexing has never completed once.
+	// Protection survives a fresh config load and ordinary capture, without
+	// relying on the application worker's runtime-only PendingCapture flag.
+	pending := testLibrary(t, filepath.Join(t.TempDir(), "pending"))
+	if err := protectPendingEvidence(pending); err != nil {
+		t.Fatal(err)
+	}
+	config = pending
+	config.Sources = []SourceConfig{{Name: "conductor", Kind: "conductor", Path: conductor, Enabled: true}}
+	config.CaptureGenerations = 0
+	runCapture(t, config)
+	for _, id := range []string{"pending-1", "pending-2", "pending-3"} {
+		execSQL(t, db, "DELETE FROM sessions", "INSERT INTO sessions VALUES('"+id+"')")
+		runCapture(t, config)
+	}
+	snapshot = readCaptureManifest(t, config, "conductor").Snapshots[0]
+	if len(snapshot.Generations) != 3 || sessionsIn(snapshot.Generations[2].Captured) != "generation-2,generation-3,generation-4" {
+		t.Fatal("pending retention lost history before its first index", snapshot)
 	}
 }
 

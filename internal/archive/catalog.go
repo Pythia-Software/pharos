@@ -179,7 +179,9 @@ func (c *Catalog) Close() error {
 // the newly retained reasoning during a reindex, losing saved thought again.
 // 17: searchable handback replies and lexical JSON-whitespace postings. Older
 // writers could prune the replies or replace corrected postings with raw JSON.
-const catalogSchemaVersion = 17
+// 18: library delivery checkpoints. Older writers ignore delivered inventories
+// and can recreate history that was explicitly moved out of the source.
+const catalogSchemaVersion = 18
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.

@@ -260,6 +260,13 @@ func planBackup(config Config) (backupPlan, error) {
 		return plan, err
 	}
 	plan.files = append(plan.files, file)
+	if _, err := os.Stat(descriptorPath(config)); err == nil {
+		descriptor := backupItem{Name: "library_identity", Source: descriptorPath(config)}
+		if err = place(&descriptor, libraryDescriptorName, libraryDescriptorName); err != nil {
+			return plan, err
+		}
+		plan.files = append(plan.files, descriptor)
+	}
 	for _, tree := range []backupItem{{Name: "captures", Source: config.CaptureRoot}, {Name: "preserved", Source: config.ArchiveRoot}, {Name: "hosts", Source: filepath.Join(root, hostsDirName)}} {
 		if tree.Source == "" || tree.Name == "hosts" && !config.Library {
 			continue

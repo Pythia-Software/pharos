@@ -133,7 +133,7 @@ func (c *sourceCapture) snapshot(item captureItem, rel string, state sqliteSourc
 	snapshot := &capturedSnapshot{RecoveryID: c.session.recoveryID, Path: item.path, Captured: rel, Size: info.Size(), CapturedMTimeNS: info.ModTime().UnixNano(), CapturedAt: now(), Method: "sqlite-backup", Source: state}
 	if previous != nil {
 		snapshot.Generations = slices.Clone(previous.Generations)
-		if c.session.generations > 0 {
+		if c.session.generations > 0 || c.session.preserveUnindexed {
 			source := previous.Source
 			version := capturedVersion{Captured: previous.Captured, Size: previous.Size, CapturedAt: previous.CapturedAt, Source: &source}
 			intact := c.intact(previous.Captured, previous.Size, previous.CapturedMTimeNS)
@@ -164,7 +164,7 @@ func (c *sourceCapture) snapshot(item captureItem, rel string, state sqliteSourc
 // sessions deleted at the source survive until indexed; past that the oldest
 // goes with a warning, so an index that never runs cannot fill the drive.
 func (c *sourceCapture) retain(path string, generations []capturedVersion) []capturedVersion {
-	if c.session.recoveryID != "" {
+	if c.session.recoveryID != "" || c.session.preserveUnindexed {
 		return generations
 	}
 	limit := c.session.generations

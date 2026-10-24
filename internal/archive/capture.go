@@ -46,12 +46,12 @@ const (
 	captureTempSuffix      = ".pharos-tmp"
 	captureLockName        = ".capture.lock"
 	captureStampLayout     = "20060102T150405.000000000Z"
-	// captureFreeMargin stays free on the capture volume so a capture never
-	// fills the drive the catalog lives on.
-	captureFreeMargin = int64(1 << 30)
 )
 
 var (
+	// captureFreeMargin stays free on the capture volume so a capture never
+	// fills the drive the catalog lives on.
+	captureFreeMargin = int64(1 << 30)
 	// captureCheckpointInterval bounds the work a killed run loses.
 	captureCheckpointInterval = 5 * time.Second
 	// captureFault injects failures in tests; a returned error acts like the
@@ -63,16 +63,17 @@ var (
 )
 
 type captureManifest struct {
-	Version       int                    `json:"version"`
-	Host          Host                   `json:"host"`
-	Source        captureSourceInfo      `json:"source"`
-	UpdatedAt     string                 `json:"updated_at"`
-	LastDataAt    string                 `json:"last_data_at,omitempty"`
-	Files         []*capturedFile        `json:"files"`
-	Snapshots     []*capturedSnapshot    `json:"snapshots"`
-	Installations []capturedInstallation `json:"installations,omitempty"`
-	PathMap       []capturePathMapping   `json:"path_map"`
-	LastRun       *captureRunRecord      `json:"last_run,omitempty"`
+	DeliveredFingerprint string                 `json:"source_fingerprint,omitempty"`
+	Version              int                    `json:"version"`
+	Host                 Host                   `json:"host"`
+	Source               captureSourceInfo      `json:"source"`
+	UpdatedAt            string                 `json:"updated_at"`
+	LastDataAt           string                 `json:"last_data_at,omitempty"`
+	Files                []*capturedFile        `json:"files"`
+	Snapshots            []*capturedSnapshot    `json:"snapshots"`
+	Installations        []capturedInstallation `json:"installations,omitempty"`
+	PathMap              []capturePathMapping   `json:"path_map"`
+	LastRun              *captureRunRecord      `json:"last_run,omitempty"`
 }
 
 type captureSourceInfo struct {
@@ -267,11 +268,15 @@ func Capture(ctx context.Context, config Config, sources []SourceConfig, progres
 }
 
 type captureSession struct {
-	recoveryID  string
-	hostDir     string
-	host        Host
-	generations int
-	lock        *os.File
+	// Pending evidence is retained until verified delivery, including indexed
+	// snapshots whose original source may subsequently prune or rewrite history.
+	preserveUnindexed bool
+	deliveryTarget    string
+	recoveryID        string
+	hostDir           string
+	host              Host
+	generations       int
+	lock              *os.File
 	// buffers bound a copy's memory; they circulate between the copy and
 	// its hasher.
 	buffers chan []byte
@@ -280,6 +285,11 @@ type captureSession struct {
 // beginCapture takes the per-host capture lock, which also keeps a CLI run and
 // the service from capturing at once.
 func beginCapture(config Config) (*captureSession, error) {
+	if d, err := readLibraryDescriptor(config); err == nil {
+		config.PendingCapture = config.PendingCapture || d.RetainPendingEvidence
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
 	root := config.CaptureRoot
 	if root == "" {
 		return nil, errors.New("capture_root is not configured")
@@ -311,7 +321,7 @@ func beginCapture(config Config) (*captureSession, error) {
 		}
 		return nil, err
 	}
-	session := &captureSession{recoveryID: config.CaptureRecoveryID, hostDir: hostDir, host: host, generations: max(config.CaptureGenerations, 0), lock: lock, buffers: make(chan []byte, 4)}
+	session := &captureSession{deliveryTarget: config.DeliveryTargetInstance, preserveUnindexed: config.PendingCapture, recoveryID: config.CaptureRecoveryID, hostDir: hostDir, host: host, generations: max(config.CaptureGenerations, 0), lock: lock, buffers: make(chan []byte, 4)}
 	for range cap(session.buffers) {
 		session.buffers <- make([]byte, 1<<20)
 	}
@@ -419,6 +429,15 @@ func (s *captureSession) source(ctx context.Context, source SourceConfig, progre
 		// than deleted, so nothing is marked missing and nothing is written.
 		return c.finish(err)
 	}
+	fingerprint := captureDeliveryFingerprint(source, plan)
+	var delivered struct {
+		Fingerprint string `json:"fingerprint"`
+		Target      string `json:"destination_instance"`
+	}
+	if b, e := os.ReadFile(filepath.Join(c.dir, ".delivered.json")); e == nil && json.Unmarshal(b, &delivered) == nil && c.session.recoveryID == "" && fingerprint != "" && delivered.Fingerprint == fingerprint && (c.session.deliveryTarget == "" || c.session.deliveryTarget == delivered.Target) {
+		c.result.Phase = "Already delivered; source is unchanged"
+		return c.finish(nil)
+	}
 	if err := os.MkdirAll(c.dir, 0o700); err != nil {
 		return c.finish(toDestination(err))
 	}
@@ -440,6 +459,11 @@ func (s *captureSession) source(ctx context.Context, source SourceConfig, progre
 		c.fail("", err)
 	}
 	c.phase("saving capture manifest")
+	if after, e := planCapture(source); e == nil && fingerprint != "" && captureDeliveryFingerprint(source, after) == fingerprint && len(c.result.Errors) == 0 {
+		c.manifest.DeliveredFingerprint = fingerprint
+	} else {
+		c.manifest.DeliveredFingerprint = ""
+	}
 	err = c.commit(true)
 	if err == nil {
 		c.removePruned(true)

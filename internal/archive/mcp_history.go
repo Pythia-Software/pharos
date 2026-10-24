@@ -250,6 +250,9 @@ func mcpCommandLine(config Config) (string, error) {
 // For a library it is the pharos in the Pharos.app beside library.toml, which
 // finds that library by itself and keeps its path when the app is updated.
 func mcpCommand(config Config) (string, []string, error) {
+	if config.Application != "" {
+		return runningExecutable(), []string{"mcp-app", "--application", config.Application}, nil
+	}
 	configPath, err := filepath.Abs(config.Path)
 	if err != nil {
 		return "", nil, err
