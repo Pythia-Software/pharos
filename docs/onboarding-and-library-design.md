@@ -177,8 +177,10 @@ Restore into a separate candidate, validate the backup's completeness, catalog,
 referenced payload and compatibility, then register it as a new writable
 instance. Capture, delivery and schedules start inactive. Full recovery carries
 user state; history import into an existing library uses the transfer boundary
-without source cleanup. Cloud backup is shown as future capability until a
-provider and key-recovery contract actually exist.
+without source cleanup. The merged beta cloud-backup flow can prepare a verified
+recovery folder for this candidate-recovery flow; provider setup and key recovery
+stay in that flow. Cloud backup settings remain with their source library on
+moves, and candidate recovery pauses their schedules.
 
 A new recovery epoch invalidates previous delivery proof for that writable
 target. Recapture or redelivery requires surviving evidence. If the only copy

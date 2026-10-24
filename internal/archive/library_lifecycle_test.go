@@ -101,6 +101,9 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 		}
 	}
 	_, err := c.DB.Exec(`INSERT OR REPLACE INTO ui_preferences(key,value) VALUES('saved-view','source'); INSERT INTO ask_sessions(id,host_id,value,updated_at) VALUES('private','host','secret',1);
+ INSERT INTO cloud_destinations(id,config_json,credential_json,imported_at) VALUES('source-cloud','{"name":"Source backup"}','{"fixture":"upload-only"}','2026-10-23');
+ INSERT INTO cloud_backup_runs(id,destination_id,status_json,created_at) VALUES('source-run','source-cloud','{"state":"complete"}','2026-10-23');
+ INSERT INTO cloud_backup_schedules(destination_id,state_json) VALUES('source-cloud','{"enabled":true}');
  INSERT INTO message_authorship_spans(message_id,position,category,rule,start_byte,end_byte,chars,words) SELECT id,0,'typed','source',0,3,3,1 FROM messages WHERE role='user';`)
 	c.Close()
 	if err != nil {
@@ -168,6 +171,11 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 	}
 	if catalogCount(t, a, "ask_sessions") != 1 {
 		t.Fatal("source user state was removed")
+	}
+	for _, table := range []string{"cloud_destinations", "cloud_backup_runs", "cloud_backup_schedules"} {
+		if catalogCount(t, a, table) != 1 || catalogCount(t, b, table) != 0 {
+			t.Fatal("move discarded or merged independent cloud backup configuration", table)
+		}
 	}
 	c = reopenCatalog(t, a.CatalogPath)
 	if enabled, err := c.MCPEnabled(); err != nil || enabled {
@@ -281,6 +289,13 @@ func TestApplicationMCPConnectionAndLateResponse(t *testing.T) {
 func TestLibraryRecoveryCandidate(t *testing.T) {
 	a, _ := lifecycleLibraries(t)
 	dest := filepath.Join(t.TempDir(), "backup")
+	c := reopenCatalog(t, a.CatalogPath)
+	_, err := c.DB.Exec(`INSERT INTO cloud_destinations(id,config_json,credential_json,imported_at) VALUES('recovery-cloud','{}','{"fixture":"upload-only"}','2026-10-23');
+ INSERT INTO cloud_backup_schedules(destination_id,state_json) VALUES('recovery-cloud','{"enabled":true}');`)
+	c.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// The backup fixture's drive facts are isolated from this Mac.
 	stubBackupDrives(t, canonical(filepath.Dir(dest)), nil)
@@ -308,6 +323,9 @@ func TestLibraryRecoveryCandidate(t *testing.T) {
 	}
 	if catalogCount(t, candidate, "messages") != 2 {
 		t.Fatal("recovered history missing")
+	}
+	if catalogCount(t, candidate, "cloud_backup_schedules") != 0 || catalogCount(t, a, "cloud_backup_schedules") != 1 || catalogCount(t, candidate, "cloud_destinations") != 1 {
+		t.Fatal("recovery must pause candidate cloud backups while keeping original settings intact")
 	}
 	after, _, err := fileDigest(filepath.Join(dest, backupManifestName))
 	if err != nil || after != before {

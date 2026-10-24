@@ -427,7 +427,7 @@ func (n *textQuery) strictPattern(caseSensitive, separators bool) *regexp.Regexp
 	for i, w := range words {
 		parts[i] = regexp.QuoteMeta(w)
 	}
-	pattern := strings.Join(parts, `[^\pL\pN]+`)
+	pattern := strings.Join(parts, `[^\pL\pN\x{e000}]+`)
 	if n.Op == "phrase" && separators {
 		pattern = regexp.QuoteMeta(n.Text)
 	}

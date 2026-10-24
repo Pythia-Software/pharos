@@ -254,6 +254,7 @@ type driveState struct {
 	facts   volumeFacts
 	sizes   librarySizes
 	checked time.Time
+	growth  cloudGrowth
 }
 
 func collectDrive(ctx context.Context, config Config) *driveState {
@@ -330,6 +331,7 @@ func (s *Server) driveHealth() map[string]any {
 			var fresh *driveState
 			defer func() { drives.store(config, fresh) }()
 			if state := collectDrive(ctx, config); ctx.Err() == nil {
+				state.growth = s.Catalog.recordCloudLibrarySize(ctx, config, state)
 				fresh = state
 			}
 		})
@@ -456,6 +458,7 @@ func driveReport(config Config, state *driveState) map[string]any {
 	total, free := diskUsage(path)
 	report["volume"] = facts
 	report["sizes"] = state.sizes
+	report["cloud_growth"] = state.growth
 	report["total_bytes"], report["free_bytes"] = total, free
 	report["checked_at"] = state.checked.UTC().Format(time.RFC3339)
 	checks = append(checks, encryptionCheck(facts), spotlightCheck(facts, path), filesystemCheck(facts), locationCheck(facts, scope),

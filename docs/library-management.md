@@ -153,12 +153,15 @@ The candidate has a new logical ID and writable instance, with its source lineag
 and backup recovery point recorded. It carries saved state but starts with sync
 schedules paused and no automatic delivery pair. To weave a backup into an
 existing library, recover a candidate first, then copy its history into that
-library. The destination's independent preferences remain intact. Cloud restore
-is deferred until a provider and key-recovery contract exist.
+library. The destination's independent preferences remain intact. For a cloud archive, use
+[Cloud Backups](cloud-backups.md) or `pharos cloud-restore` to download, decrypt
+when needed, and verify a recovery folder, then recover that folder into a
+separate candidate here. Recovery also pauses cloud-backup schedules; ordinary
+moves retain each library's cloud destinations, credentials and schedules.
 
 Opening a catalog written by a newer incompatible build is refused before
 migration or transfer. This implementation advances the catalog writer guard to
-17 because older writers do not understand delivery checkpoints. App rollback
+18 because older writers do not understand delivery checkpoints. App rollback
 does not roll a library back.
 
 ## CLI operations

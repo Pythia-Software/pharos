@@ -185,7 +185,8 @@ library B, its corresponding source data can be deleted from A.
 
 A move can therefore leave one surviving library copy. Backup setup may explain
 and improve protection, but it is not a prerequisite disguised as an onboarding
-step. Cloud backup can become another destination when implemented.
+step. The merged beta cloud-backup flow is an optional protection path; its
+verified recovery folders can be recovered as separate candidates.
 
 ### Move and merge preserve information
 

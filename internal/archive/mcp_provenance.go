@@ -221,8 +221,8 @@ func (c *Catalog) traceWorktree(args map[string]any) (map[string]any, error) {
 		values[index] = query
 	}
 	if repository := firstString(args["repository"]); repository != "" {
-		base += " AND w.repository_id IN (SELECT id FROM repositories WHERE display_name LIKE ? OR canonical_remote LIKE ?)"
-		values = append(values, "%"+repository+"%", "%"+repository+"%")
+		base += " AND w.repository_id IN (SELECT r.id FROM repositories r WHERE " + repositoryNamePredicate("r") + ")"
+		values = append(values, repository, repository)
 	}
 	transaction, err := c.DB.Begin()
 	if err != nil {
@@ -243,8 +243,8 @@ func (c *Catalog) traceWorktree(args map[string]any) (map[string]any, error) {
 			JOIN messages m ON m.id=messages_fts.message_id WHERE messages_fts MATCH ? AND instr(m.text,?)>0)`
 		values = []any{parsed, query}
 		if repository := firstString(args["repository"]); repository != "" {
-			base += " AND (r.display_name LIKE ? OR r.canonical_remote LIKE ?)"
-			values = append(values, "%"+repository+"%", "%"+repository+"%")
+			base += " AND " + repositoryNamePredicate("r")
+			values = append(values, repository, repository)
 		}
 		if err := transaction.QueryRow("SELECT COUNT(*)"+base, values...).Scan(&total); err != nil {
 			return nil, err

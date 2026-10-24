@@ -747,6 +747,340 @@ func TestClaudeSubagentHasOwnConversation(t *testing.T) {
 		integer(kinds[1]["depth"]) != 1 || integer(kinds[2]["depth"]) != 1 {
 		t.Fatalf("child session usage kind or depth missing: %#v, %v", kinds, err)
 	}
+	t.Run("acknowledged nested lineage", func(t *testing.T) {
+		catalog, _ := testCatalog(t)
+		project := t.TempDir()
+		subagents := filepath.Join(project, "session", "subagents")
+		if err := os.MkdirAll(subagents, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		write := func(name string, lines ...string) {
+			t.Helper()
+			if err := os.WriteFile(filepath.Join(project, name), []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		write("session.jsonl",
+			`{"sessionId":"session","uuid":"root-launch","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"root-call","name":"Agent","input":{"prompt":"Child assignment"}}]}}`,
+			`{"sessionId":"session","uuid":"root-result","type":"user","toolUseResult":{"agentId":"z"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"root-call","content":"launched"}]}}`,
+			`{"sessionId":"session","uuid":"root-ambiguous-launch","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"root-ambiguous","name":"Agent","input":{"prompt":"Ambiguous assignment"}}]}}`,
+			`{"sessionId":"session","uuid":"root-ambiguous-result","type":"user","toolUseResult":{"agentId":"x"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"root-ambiguous","content":"launched"}]}}`,
+			`{"sessionId":"session","uuid":"root-answer","type":"assistant","message":{"role":"assistant","content":"Root done"}}`)
+		write("session/subagents/agent-z.jsonl",
+			`{"sessionId":"session","uuid":"child-assignment","type":"user","message":{"role":"user","content":"Child assignment"}}`,
+			`{"sessionId":"session","uuid":"child-launch","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"child-call","name":"Agent","input":{"prompt":"Grandchild assignment"}}]}}`,
+			`{"sessionId":"session","uuid":"child-result","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"child-call","content":[{"type":"text","text":"Async agent launched successfully.\nagentId: a (internal ID - do not mention to user.)"}]}]}}`,
+			`{"sessionId":"session","uuid":"child-ambiguous-launch","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"child-ambiguous","name":"Agent","input":{"prompt":"Ambiguous assignment"}}]}}`,
+			`{"sessionId":"session","uuid":"child-ambiguous-result","type":"user","toolUseResult":{"agentId":"x"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"child-ambiguous","content":"launched"}]}}`,
+			`{"sessionId":"session","uuid":"child-answer","type":"assistant","message":{"role":"assistant","content":"Child done"}}`)
+		write("session/subagents/agent-a.jsonl",
+			`{"sessionId":"session","uuid":"grandchild-assignment","type":"user","message":{"role":"user","content":"Grandchild assignment"}}`,
+			`{"sessionId":"session","uuid":"grandchild-answer","type":"assistant","message":{"role":"assistant","content":"Grandchild done"}}`)
+		write("session/subagents/agent-m.jsonl", `{"sessionId":"session","uuid":"unacknowledged-assignment","type":"user","message":{"role":"user","content":"Unacknowledged"}}`)
+		write("session/subagents/agent-x.jsonl", `{"sessionId":"session","uuid":"ambiguous-assignment","type":"user","message":{"role":"user","content":"Ambiguous assignment"}}`)
+		adapter, err := MakeAdapter(SourceConfig{Name: "claude", Kind: "claude", Path: project, Account: "local"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result := catalog.Ingest(adapter, nil); result.Error != nil || result.Conversations != 5 {
+			t.Fatalf("nested ingest: %#v", result)
+		}
+		rows, err := queryMaps(catalog.DB, `SELECT c.id,c.native_id,p.native_id parent,c.agent_depth depth,s.depth session_depth
+			FROM conversations c LEFT JOIN conversations p ON p.id=c.parent_id
+			JOIN agent_sessions s ON s.conversation_id=c.id AND s.native_id='main' ORDER BY c.native_id`)
+		if err != nil || len(rows) != 5 {
+			t.Fatalf("lineage rows: %#v, %v", rows, err)
+		}
+		byNative := map[string]map[string]any{}
+		for _, row := range rows {
+			byNative[firstString(row["native_id"])] = row
+		}
+		for _, expected := range []struct {
+			native, parent string
+			depth          int
+		}{
+			{"session:subagent:agent-z", "session", 1},
+			{"session:subagent:agent-a", "session:subagent:agent-z", 2},
+			{"session:subagent:agent-m", "session", 1},
+			{"session:subagent:agent-x", "session", 1},
+		} {
+			row := byNative[expected.native]
+			if firstString(row["parent"]) != expected.parent || integer(row["depth"]) != int64(expected.depth) || integer(row["session_depth"]) != int64(expected.depth) {
+				t.Fatalf("%s lineage: %#v", expected.native, row)
+			}
+		}
+		grandchild := byNative["session:subagent:agent-a"]
+		parent := byNative["session:subagent:agent-z"]
+		checkLineage := func(t *testing.T, tool string, item map[string]any) {
+			t.Helper()
+			lineage, ok := item["lineage"].(map[string]any)
+			if !ok || firstString(lineage["parent_conversation_id"]) != firstString(parent["id"]) ||
+				firstString(lineage["parent_native_id"]) != firstString(parent["native_id"]) || integer(lineage["depth"]) != 2 {
+				t.Fatalf("%s lineage inconsistent: %s", tool, jsonText(item))
+			}
+		}
+		overview, err := callMCP(catalog, "get_conversation_overview", map[string]any{"conversation_id": grandchild["id"], "max_output_tokens": 4000})
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkLineage(t, "overview", overview.(map[string]any))
+		for _, request := range []struct {
+			tool string
+			args map[string]any
+		}{
+			{"trace_worktree", map[string]any{"query": "agent-a", "max_output_tokens": 4000}},
+			{"get_work_detail", map[string]any{"workspace_id": stableID("workspace", "claude", "local", "session"), "section": "conversations", "limit": 10, "max_output_tokens": 4000}},
+		} {
+			result, err := callMCP(catalog, request.tool, request.args)
+			if err != nil {
+				t.Fatalf("%s: %v", request.tool, err)
+			}
+			found := false
+			for _, item := range result.(map[string]any)["items"].([]map[string]any) {
+				if firstString(item["conversation_id"]) == firstString(grandchild["id"]) {
+					checkLineage(t, request.tool, item)
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("%s omitted grandchild: %s", request.tool, jsonText(result))
+			}
+		}
+		links, err := queryMaps(catalog.DB, `SELECT c.native_id parent,s.native_id call,p.native_id child
+			FROM agent_sessions s JOIN conversations c ON c.id=s.conversation_id
+			LEFT JOIN conversations p ON p.id=s.child_conversation_id WHERE s.native_id IN ('root-call','child-call','root-ambiguous','child-ambiguous')`)
+		if err != nil || len(links) != 4 {
+			t.Fatalf("launch links: %#v, %v", links, err)
+		}
+		for _, link := range links {
+			want := map[string]string{"root-call": "session:subagent:agent-z", "child-call": "session:subagent:agent-a"}[firstString(link["call"])]
+			if firstString(link["child"]) != want {
+				t.Fatalf("unsafe or missing launch link: %#v; want %q", link, want)
+			}
+		}
+		// Existing catalogs retain the launch proof, but older ingesters stored
+		// the grandchild under the root and could bind ambiguous launch results.
+		root := byNative["session"]
+		if _, err := catalog.DB.Exec("UPDATE conversations SET parent_id=?,agent_depth=1 WHERE id=?", root["id"], grandchild["id"]); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := catalog.DB.Exec("UPDATE agent_sessions SET depth=1 WHERE conversation_id=?", grandchild["id"]); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := catalog.DB.Exec("DELETE FROM message_search_state"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := catalog.DB.Exec("UPDATE agent_sessions SET child_conversation_id=? WHERE native_id='root-ambiguous'", byNative["session:subagent:agent-x"]["id"]); err != nil {
+			t.Fatal(err)
+		}
+		beforeUsage, err := queryMaps(catalog.DB, "SELECT * FROM agent_session_usage ORDER BY agent_session_id,usage_hour,model")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if done, err := catalog.BackfillMessageSearch(t.Context(), nil); err != nil || done != 5 {
+			t.Fatalf("retained lineage upgrade: done=%d err=%v", done, err)
+		}
+		repaired, err := callMCP(catalog, "get_conversation_overview", map[string]any{"conversation_id": grandchild["id"], "max_output_tokens": 4000})
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkLineage(t, "upgraded overview", repaired.(map[string]any))
+		var depth int
+		if err := catalog.DB.QueryRow("SELECT depth FROM agent_sessions WHERE conversation_id=? AND native_id='main'", grandchild["id"]).Scan(&depth); err != nil || depth != 2 {
+			t.Fatalf("upgraded session depth=%d err=%v", depth, err)
+		}
+		afterUsage, err := queryMaps(catalog.DB, "SELECT * FROM agent_session_usage ORDER BY agent_session_id,usage_hour,model")
+		if err != nil || jsonText(beforeUsage) != jsonText(afterUsage) {
+			t.Fatalf("lineage repair changed usage: %v", err)
+		}
+		var ambiguous int
+		if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM agent_sessions WHERE native_id IN ('root-ambiguous','child-ambiguous') AND child_conversation_id IS NOT NULL").Scan(&ambiguous); err != nil || ambiguous != 0 {
+			t.Fatalf("ambiguous upgrade links=%d err=%v", ambiguous, err)
+		}
+		t.Run("descendant-only retained upgrade", func(t *testing.T) {
+			// A completed catalog can later receive missing launch evidence
+			// from another copy. Only the descendant's marker is invalidated.
+			messages, err := storedMessages(t.Context(), catalog.DB, parent["id"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result MessageRecord
+			stored := map[string]bool{}
+			for _, message := range messages {
+				if message.NativeID == "child-result:block:0" {
+					result = message
+				} else {
+					stored[message.NativeID] = true
+				}
+			}
+			if result.NativeID == "" {
+				t.Fatal("missing launch acknowledgement fixture")
+			}
+			tx := seedTx(t, catalog.DB)
+			if err := deleteMessageFTS(tx, stableID("message", firstString(parent["id"]), result.NativeID)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec("DELETE FROM messages WHERE conversation_id=? AND native_id=?", parent["id"], result.NativeID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec("UPDATE conversations SET parent_id=?,agent_depth=1 WHERE id=?", root["id"], grandchild["id"]); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec("UPDATE agent_sessions SET depth=1 WHERE conversation_id=?", grandchild["id"]); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec("UPDATE agent_sessions SET child_conversation_id=NULL,usage_status='unavailable' WHERE conversation_id=? AND native_id='child-call'", parent["id"]); err != nil {
+				t.Fatal(err)
+			}
+			commitSeed(t, tx)
+			if _, err := catalog.BackfillMessageSearch(t.Context(), nil); err != nil {
+				t.Fatal(err)
+			}
+			tx = seedTx(t, catalog.DB)
+			if added, err := mergeConversation(tx, conversationAuthority{id: firstString(parent["id"]), stored: stored}, ConversationRecord{Messages: []MessageRecord{result}}); err != nil || !added {
+				t.Fatalf("merge launch evidence: added=%v err=%v", added, err)
+			}
+			commitSeed(t, tx)
+			pending, err := queryMaps(catalog.DB, `SELECT c.id FROM conversations c LEFT JOIN message_search_state s ON s.conversation_id=c.id
+			 WHERE s.conversation_id IS NULL OR s.version<>?`, messageSearchVersion)
+			if err != nil || len(pending) != 1 || pending[0]["id"] != parent["id"] {
+				t.Fatalf("expected only descendant pending: %v %v", pending, err)
+			}
+			if done, err := catalog.BackfillMessageSearch(t.Context(), nil); err != nil || done != 1 {
+				t.Fatalf("descendant-only upgrade: done=%d err=%v", done, err)
+			}
+			overview, err := callMCP(catalog, "get_conversation_overview", map[string]any{"conversation_id": grandchild["id"], "max_output_tokens": 4000})
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkLineage(t, "descendant-only upgrade", overview.(map[string]any))
+			var child string
+			if err := catalog.DB.QueryRow("SELECT COALESCE(child_conversation_id,'') FROM agent_sessions WHERE conversation_id=? AND native_id='child-call'", parent["id"]).Scan(&child); err != nil || child != firstString(grandchild["id"]) {
+				t.Fatalf("upgraded launch link=%q err=%v", child, err)
+			}
+			if pending, err := catalog.pendingMessageSearch(t.Context()); err != nil || pending != 0 {
+				t.Fatalf("upgrade not complete: pending=%d err=%v", pending, err)
+			}
+			if done, err := catalog.BackfillMessageSearch(t.Context(), nil); err != nil || done != 0 {
+				t.Fatalf("completed upgrade replayed: done=%d err=%v", done, err)
+			}
+		})
+		t.Run("reindex retracts rejected links", func(t *testing.T) {
+			if result := catalog.Ingest(adapter, nil); result.Error != nil {
+				t.Fatal(result.Error)
+			}
+			var session, child string
+			if err := catalog.DB.QueryRow("SELECT id,COALESCE(child_conversation_id,'') FROM agent_sessions WHERE conversation_id=? AND native_id='child-call'", parent["id"]).Scan(&session, &child); err != nil || child != firstString(grandchild["id"]) {
+				t.Fatalf("initial launch link=%q err=%v", child, err)
+			}
+			write("session/subagents/agent-m.jsonl",
+				`{"sessionId":"session","uuid":"unacknowledged-assignment","type":"user","message":{"role":"user","content":"Unacknowledged"}}`,
+				`{"sessionId":"session","uuid":"competing-launch","type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"competing-call","name":"Agent","input":{"prompt":"Grandchild assignment"}}]}}`,
+				`{"sessionId":"session","uuid":"competing-result","type":"user","toolUseResult":{"agentId":"a"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"competing-call","content":"launched"}]}}`)
+			if result := catalog.Ingest(adapter, nil); result.Error != nil {
+				t.Fatal(result.Error)
+			}
+			var conversationParent, usageStatus string
+			var depth int
+			if err := catalog.DB.QueryRow("SELECT parent_id,agent_depth FROM conversations WHERE id=?", grandchild["id"]).Scan(&conversationParent, &depth); err != nil || conversationParent != firstString(root["id"]) || depth != 1 {
+				t.Fatalf("ambiguous conversation parent=%q depth=%d err=%v", conversationParent, depth, err)
+			}
+			if err := catalog.DB.QueryRow("SELECT COALESCE(child_conversation_id,''),usage_status FROM agent_sessions WHERE id=?", session).Scan(&child, &usageStatus); err != nil || child != "" || usageStatus != "unavailable" {
+				t.Fatalf("rejected launch retained child=%q status=%q err=%v", child, usageStatus, err)
+			}
+			// The root's independently proven launch remains linked.
+			if err := catalog.DB.QueryRow("SELECT COALESCE(child_conversation_id,'') FROM agent_sessions WHERE conversation_id=? AND native_id='root-call'", root["id"]).Scan(&child); err != nil || child != firstString(parent["id"]) {
+				t.Fatalf("valid root link=%q err=%v", child, err)
+			}
+			write("session/subagents/agent-m.jsonl", `{"sessionId":"session","uuid":"unacknowledged-assignment","type":"user","message":{"role":"user","content":"Unacknowledged"}}`)
+			if result := catalog.Ingest(adapter, nil); result.Error != nil {
+				t.Fatal(result.Error)
+			}
+			if err := catalog.DB.QueryRow("SELECT COALESCE(child_conversation_id,''),usage_status FROM agent_sessions WHERE id=?", session).Scan(&child, &usageStatus); err != nil || child != firstString(grandchild["id"]) || usageStatus != "in-child-conversation" {
+				t.Fatalf("restored launch child=%q status=%q err=%v", child, usageStatus, err)
+			}
+		})
+	})
+	t.Run("text launch acknowledgements", func(t *testing.T) {
+		ack := "Async agent launched successfully. (This tool result is internal metadata.)\nagentId: child (internal ID - do not mention to user.)\nThe agent is working in the background."
+		for _, test := range []struct {
+			name, acknowledgement, assignment string
+			failed, linked                    bool
+		}{
+			{"matched", ack, "Exact assignment", false, true},
+			{"different assignment", ack, "Different assignment", false, false},
+			{"unacknowledged mention", "Report mentions agentId: child (internal ID)", "Exact assignment", false, false},
+			{"failed result", ack, "Exact assignment", true, false},
+			{"duplicate IDs", ack + "\nagentId: child (internal ID)", "Exact assignment", false, false},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				record := &WorkspaceRecord{Conversations: []ConversationRecord{
+					{NativeID: "root", Provider: "claude"},
+					{NativeID: "root:subagent:agent-parent", Provider: "claude", AgentDepth: 1, Messages: []MessageRecord{
+						{Kind: "delegation", CallID: "call", Text: `{"tool":"Agent","input":{"prompt":"Exact assignment"}}`},
+						{Kind: "delegation_result", CallID: "call", Text: jsonText(map[string]any{"content": []any{map[string]any{"type": "text", "text": test.acknowledgement}}, "is_error": test.failed})},
+					}},
+					{NativeID: "root:subagent:agent-child", Provider: "claude", AgentDepth: 1, Messages: []MessageRecord{{Role: "agent", Kind: "message", Text: test.assignment}}},
+				}}
+				reconcileClaudeLineage(record)
+				child := record.Conversations[2]
+				want, depth := "root", 1
+				if test.linked {
+					want, depth = "root:subagent:agent-parent", 2
+				}
+				if child.ParentNativeID != want || child.AgentDepth != depth {
+					t.Fatalf("text acknowledgement lineage: %#v", child)
+				}
+			})
+		}
+	})
+	t.Run("workflow run acknowledgements", func(t *testing.T) {
+		for _, ambiguous := range []bool{false, true} {
+			record := &WorkspaceRecord{Conversations: []ConversationRecord{
+				{NativeID: "root", Provider: "claude"},
+				{NativeID: "root:subagent:agent-parent", Provider: "claude", AgentDepth: 1, Messages: []MessageRecord{
+					{Kind: "delegation", CallID: "workflow"},
+					{Kind: "delegation_result", CallID: "workflow", Text: `{"details":{"runId":"run"}}`},
+				}},
+				{NativeID: "root:subagent:workflows/run/agent-one", Provider: "claude", AgentDepth: 1},
+			}}
+			if ambiguous {
+				record.Conversations = append(record.Conversations, ConversationRecord{NativeID: "root:subagent:workflows/run/agent-two", Provider: "claude", AgentDepth: 1})
+			}
+			reconcileClaudeLineage(record)
+			for _, conversation := range record.Conversations {
+				if !strings.Contains(conversation.NativeID, ":subagent:workflows/") {
+					continue
+				}
+				want, depth := "root:subagent:agent-parent", 2
+				if ambiguous {
+					want, depth = "root", 1
+				}
+				if conversation.ParentNativeID != want || conversation.AgentDepth != depth {
+					t.Fatalf("ambiguous=%v workflow lineage: %#v", ambiguous, conversation)
+				}
+			}
+		}
+	})
+	t.Run("cyclic acknowledgements", func(t *testing.T) {
+		launch := func(call, agent string) []MessageRecord {
+			return []MessageRecord{
+				{Kind: "delegation", CallID: call},
+				{Kind: "delegation_result", CallID: call, Text: jsonText(map[string]any{"details": map[string]any{"agentId": agent}})},
+			}
+		}
+		record := &WorkspaceRecord{Conversations: []ConversationRecord{
+			{NativeID: "root", Provider: "claude"},
+			{NativeID: "root:subagent:agent-a", Provider: "claude", AgentDepth: 1, Messages: launch("a-call", "b")},
+			{NativeID: "root:subagent:agent-b", Provider: "claude", AgentDepth: 1, Messages: launch("b-call", "a")},
+		}}
+		reconcileClaudeLineage(record)
+		for _, conversation := range record.Conversations[1:] {
+			if conversation.ParentNativeID != "root" || conversation.AgentDepth != 1 {
+				t.Fatalf("cycle should keep root fallback: %#v", conversation)
+			}
+		}
+	})
 }
 
 func TestNativeToolEventsRetainIdentityResultsAndConversationFlow(t *testing.T) {

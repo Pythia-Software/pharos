@@ -337,8 +337,8 @@ func statisticsContext(r statisticsRequest) ([]string, []any) {
 		where = append(where, currentGroupConversation("c"))
 	}
 	if r.Repository != "" {
-		where = append(where, "(repo.display_name LIKE ? OR repo.canonical_remote LIKE ?)")
-		args = append(args, "%"+r.Repository+"%", "%"+r.Repository+"%")
+		where = append(where, repositoryNamePredicate("repo"))
+		args = append(args, r.Repository, r.Repository)
 	}
 	if r.Source != "" {
 		where = append(where, "w.source_kind=?")
@@ -358,28 +358,22 @@ func statisticsContext(r statisticsRequest) ([]string, []any) {
 		where = append(where, "w.id IN (SELECT value FROM json_each(?))")
 		args = append(args, jsonText(r.WorkspaceIDs))
 	}
-	if r.Provider != "" {
-		if r.Entity == "conversation" {
-			where = append(where, "c.provider=?")
+	if r.Provider != "" || r.Model != "" || r.Effort != "" {
+		if r.Entity == "workspace" {
+			clause, values := workspaceRecordedConfigurationFilter(r.Provider, r.Model, normalizeEffort(r.Effort))
+			where = append(where, clause)
+			args = append(args, values...)
 		} else {
-			where = append(where, "EXISTS(SELECT 1 FROM conversations cp WHERE cp.workspace_id=w.id AND cp.provider=?)")
+			if r.Provider != "" {
+				where = append(where, "c.provider=?")
+				args = append(args, r.Provider)
+			}
+			if r.Model != "" || r.Effort != "" {
+				clause, values := conversationConfigurationFilter(r.Model, normalizeEffort(r.Effort))
+				where = append(where, clause)
+				args = append(args, values...)
+			}
 		}
-		args = append(args, r.Provider)
-	}
-	if r.Model != "" || r.Effort != "" {
-		alias := "c"
-		if r.Entity == "workspace" {
-			alias = "ce"
-		}
-		conv, cv := configurationPredicate(alias+".model", alias+".effort", r.Model, normalizeEffort(r.Effort))
-		msg, mv := configurationPredicate("COALESCE(me.model,"+alias+".model)", "me.effort", r.Model, normalizeEffort(r.Effort))
-		clause := "((" + conv + ") OR EXISTS(SELECT 1 FROM messages me WHERE me.conversation_id=" + alias + ".id AND (me.model IS NOT NULL OR me.effort IS NOT NULL) AND " + msg + "))"
-		if r.Entity == "workspace" {
-			clause = "EXISTS(SELECT 1 FROM conversations ce WHERE ce.workspace_id=w.id AND " + clause + ")"
-		}
-		where = append(where, clause)
-		args = append(args, cv...)
-		args = append(args, mv...)
 	}
 	if r.File != "" {
 		where = append(where, "EXISTS(SELECT 1 FROM change_sets cs JOIN change_files cf ON cf.change_set_id=cs.id WHERE cs.workspace_id=w.id AND cf.path LIKE ?)")

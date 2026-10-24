@@ -1184,6 +1184,9 @@
   }
 
   function renderDriveHealth(drive, backup) {
+    window.pharosCloudBackup?.seedLibrary?.(drive.sizes?.library_bytes, drive.cloud_growth);
+    const backupPage = document.getElementById('backupSettingsLocal');
+    if (backupPage && document.activeElement?.id !== 'pharosBackupDestinationPage') backupPage.replaceChildren(backupPanel(backup, drive.volume?.name || 'Library drive', 'Page'));
     const cards = document.getElementById('healthCards');
     // Leave the form alone while someone is typing a destination.
     if (!cards || document.activeElement?.id === 'pharosBackupDestination') return;
@@ -1255,10 +1258,11 @@
     section.append(details);
   }
 
-  function backupPanel(backup, driveLabel) {
+  function backupPanel(backup, driveLabel, suffix = '') {
     const box = node('div', 'pharos-backup');
-    box.id = 'pharosBackup';
-    box.append(node('h3', '', 'Backups'));
+    box.id = 'pharosBackup' + suffix;
+    box.append(node('h3', '', suffix ? 'Back up to another drive' : 'Backups'));
+    if (!suffix) { const link = node('a', '', 'Plan cloud backups →'); link.href = '/settings/backups'; box.append(link); }
     const last = backup.last_success;
     if (last) {
       const line = node('p', '');
@@ -1285,7 +1289,7 @@
       if (problems.childElementCount) box.append(problems);
     }
     const form = node('form'), label = node('label', '', 'Back up to'), input = node('input'), go = node('button', 'pharos-button primary', 'Back up now');
-    label.htmlFor = input.id = 'pharosBackupDestination';
+    label.htmlFor = input.id = 'pharosBackupDestination' + suffix;
     input.value = backupDraft ?? backup.suggested_destination ?? '';
     input.placeholder = '/Volumes/Other Drive/Pharos Backup';
     input.spellcheck = false;
@@ -1312,7 +1316,7 @@
     box.append(form);
     if (backupError) {
       const error = node('p', 'pharos-error', backupError);
-      error.id = 'pharosBackupError';
+      error.id = 'pharosBackupError' + suffix;
       error.setAttribute('role', 'alert');
       box.append(error);
     }

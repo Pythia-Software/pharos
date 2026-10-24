@@ -177,9 +177,11 @@ func (c *Catalog) Close() error {
 // Older ingesters would index those CLI transcripts without the exclusion.
 // 16: normalized reasoning and its extraction ledger. Older parsers can prune
 // the newly retained reasoning during a reindex, losing saved thought again.
-// 17: library delivery checkpoints. Older writers ignore delivered inventories
+// 17: searchable handback replies and lexical JSON-whitespace postings. Older
+// writers could prune the replies or replace corrected postings with raw JSON.
+// 18: library delivery checkpoints. Older writers ignore delivered inventories
 // and can recreate history that was explicitly moved out of the source.
-const catalogSchemaVersion = 17
+const catalogSchemaVersion = 18
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.
@@ -933,8 +935,8 @@ func (c *Catalog) computeSearchRows(options SearchOptions, fields libraryFields)
 		}
 	}
 	if options.Repository != "" {
-		where = append(where, "(r.display_name LIKE ? OR r.canonical_remote LIKE ?)")
-		args = append(args, "%"+options.Repository+"%", "%"+options.Repository+"%")
+		where = append(where, repositoryNamePredicate("r"))
+		args = append(args, options.Repository, options.Repository)
 	}
 	if options.Source != "" {
 		where = append(where, "w.source_kind=?")
@@ -946,12 +948,8 @@ func (c *Catalog) computeSearchRows(options SearchOptions, fields libraryFields)
 	}
 	// A filter on another table selects its workspaces once, rather than
 	// probing that table for each of tens of thousands of workspaces.
-	if options.Provider != "" {
-		where = append(where, "w.id IN (SELECT cp.workspace_id FROM conversations cp WHERE cp.provider=?)")
-		args = append(args, options.Provider)
-	}
-	if model, effort := strings.TrimSpace(options.Model), normalizeEffort(options.Effort); model != "" || effort != "" {
-		filter, filterArgs := workspaceConfigurationFilter(model, effort)
+	if model, effort := strings.TrimSpace(options.Model), normalizeEffort(options.Effort); options.Provider != "" || model != "" || effort != "" {
+		filter, filterArgs := workspaceRecordedConfigurationFilter(options.Provider, model, effort)
 		where = append(where, filter)
 		args = append(args, filterArgs...)
 	}

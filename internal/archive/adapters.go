@@ -484,7 +484,7 @@ func (a *jsonlAdapter) Fingerprint() (string, error) {
 // codes, durations, interruptions); v9 retains Codex hosted web searches; v10
 // skips Claude entries replayed under a uuid already seen; v11 retains Claude
 // invoked_skills attachments for skill_usages.
-const jsonlExtractor = "message-model-v14-reasoning"
+const jsonlExtractor = "message-model-v15-lineage-handbacks"
 
 func (a *jsonlAdapter) accept(path string) bool {
 	relative, _ := filepath.Rel(a.config.Path, path)
@@ -623,6 +623,7 @@ func (a *jsonlAdapter) readTranscriptGroup(paths []string) (*WorkspaceRecord, []
 		}
 	}
 	if combined != nil && a.provider == "claude" {
+		reconcileClaudeLineage(combined)
 		combined.Metrics = reconciledTokenMetrics(*combined)
 	}
 	return combined, read, nil
@@ -1116,6 +1117,7 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 		nativeID = rootID + ":subagent:" + strings.TrimSuffix(filepath.ToSlash(relative), filepath.Ext(relative))
 	}
 	repository := a.repository(cwd, "")
+	messages = normalizeHandbackMessages(messages)
 	purpose, outcome := agentPurposeOutcome(messages)
 	metrics := []map[string]any{}
 	for key, value := range tokens {

@@ -152,6 +152,9 @@ func validateTextTree(n *textQuery, depth int, count *int) error {
 		if n.Text == "" || len(n.Text) > 2000 {
 			return fmt.Errorf("query text needs 1–2,000 bytes")
 		}
+		if n.Op != "literal" && n.Op != "regex" && strings.ContainsRune(n.Text, '\ue000') {
+			return fmt.Errorf("token clause contains a reserved search character; use literal mode")
+		}
 		if n.Op != "literal" && n.Op != "regex" && len(auditQueryWords(n.Text)) == 0 {
 			return fmt.Errorf("token clause needs a word")
 		}
@@ -711,8 +714,14 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 			continue
 		}
 		result.VerifiedBytes += size
+		originalBody := body
+		projection := messageLexicalProjection{text: body}
+		if !scan && !span {
+			projection = projectMessageLexicalText(item.MessageKind, body)
+			body = projection.text
+		}
 		lo, hi, ok := 0, 0, true
-		snippetBody, snippetBase := body, 0
+		snippetBody, snippetBase := originalBody, 0
 		if scan {
 			at := verify.FindStringSubmatchIndex(body)
 			ok = at != nil
@@ -788,6 +797,7 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 		if hi == 0 && !scan {
 			lo, hi = lexicalExcerpt(body, node)
 		}
+		lo, hi = projection.sourceOffset(lo), projection.sourceOffset(hi)
 		item.StartByte, item.EndByte = lo, hi
 		item.RangeKind = "excerpt"
 		if scan {

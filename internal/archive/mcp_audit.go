@@ -201,8 +201,8 @@ func (c *Catalog) searchMessages(args map[string]any) (map[string]any, error) {
 		}
 	}
 	if repository := firstString(args["repository"]); repository != "" {
-		clauses = append(clauses, "(r.display_name LIKE ? OR r.canonical_remote LIKE ?)")
-		values = append(values, "%"+repository+"%", "%"+repository+"%")
+		clauses = append(clauses, repositoryNamePredicate("r"))
+		values = append(values, repository, repository)
 	}
 	for _, key := range []string{"from", "to"} {
 		if value := firstString(args[key]); value != "" {
@@ -246,7 +246,7 @@ func (c *Catalog) searchMessages(args map[string]any) (map[string]any, error) {
 		return nil, err
 	}
 	for _, item := range items {
-		item["snippet"] = clipText(firstString(item["snippet"]), 240)
+		item["snippet"] = clipText(lexicalSnippet(firstString(item["snippet"])), 240)
 	}
 	if err := c.attachConversationProvenance(items); err != nil {
 		return nil, err

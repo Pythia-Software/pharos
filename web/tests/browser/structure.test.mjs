@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { layoutProblems, scrollProblems } from "./layout.mjs";
-import { defaultApi, rootConversation, workID } from "./fixtures.mjs";
+import { defaultApi, cloudScheduledStatus, rootConversation, workID } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 const work = `/work/${workID}`;
@@ -166,6 +166,64 @@ const ROUTES = [
   { name: "MCP legacy link", url: "/mcp", ready: ".usage-mcp-dashboard .qt-metric" },
   { name: "MCP settings", url: "/settings/mcp", ready: "#mcpSettingsPage .mcp-setup-grid" },
   { name: "Library health", url: "/settings", ready: "#healthCards .panel:not([aria-busy])" },
+  { name: "Cloud backup entry", url: "/settings/backups", ready: "#cloud-explore" },
+  { name: "Cloud backup ongoing status", url: "/settings/backups", ready: ".cloud-ongoing article", api:{'GET /api/cloud-backup':cloudScheduledStatus} },
+  { name: "Cloud backup schedule settings", url: "/settings/backups", ready: ".cloud-ongoing article", api:{'GET /api/cloud-backup':cloudScheduledStatus},open:page=>page.locator('.cloud-schedule-settings summary').click(),shown:'.cloud-schedule-settings .cloud-fields' },
+  { name: "Cloud backup previous revisions", url: "/settings/backups", ready: ".cloud-ongoing article", api:{'GET /api/cloud-backup':cloudScheduledStatus},open:page=>page.getByRole('button',{name:'View backups and test restore',exact:true}).click(),shown:'.cloud-history-select' },
+  { name: "Cloud backup calculator", url: "/settings/backups", ready: "#cloud-explore", open: page => page.getByRole('button', {name: 'Explore cloud backup options', exact: true}).click(), shown: ".cloud-results svg" },
+  { name: "Cloud backup minimum storage breakdown", url: "/settings/backups", ready: "#cloud-explore", open: async page => {
+    await page.getByRole('button', {name: 'Explore cloud backup options', exact: true}).click();
+    await page.getByText('Detailed options', {exact: true}).click();
+    await page.getByLabel('Storage class', {exact: true}).selectOption('gcp-archive');
+    await page.getByText('Detailed options', {exact: true}).click();
+  }, shown: '.cloud-results svg' },
+  { name: "Cloud backup detailed options", url: "/settings/backups", ready: "#cloud-explore", open: async page => {
+    await page.getByRole('button', {name: 'Explore cloud backup options', exact: true}).click();
+    await page.getByText('Detailed options', {exact: true}).click();
+  }, shown: "#cloud-region" },
+  { name: "Cloud backup configuration", url: "/settings/backups", ready: "#cloud-explore", open: async page => {
+    await page.getByRole('button', {name: 'Explore cloud backup options', exact: true}).click();
+    await page.getByRole('button', {name: 'Configure this backup', exact: true}).click();
+  }, shown: "#cloud-step-1" },
+  { name: "Cloud backup commands", url: "/settings/backups", ready: "#cloud-explore", open: async page => {
+    await page.getByRole('button', {name: 'Explore cloud backup options', exact: true}).click();
+    await page.getByRole('button', {name: 'Configure this backup', exact: true}).click();
+    await page.getByLabel('Google Cloud project ID', {exact: true}).fill('pharos-example');
+    await page.getByLabel('Bucket location', {exact: true}).selectOption('europe-west2');
+    await page.getByLabel('Google Cloud Storage · Archive', {exact: true}).check();
+    await page.getByRole('button', {name: 'Review configuration & commands', exact: true}).click();
+  }, shown: "#cloud-step-2 pre" },
+  { name: "Cloud backup new GCP project", url: "/settings/backups", ready: "#cloud-explore", open: async page => {
+    await page.getByRole('button', {name: 'Explore cloud backup options', exact: true}).click();
+    await page.getByRole('button', {name: 'Configure this backup', exact: true}).click();
+    await page.getByLabel('Google Cloud project', {exact: true}).selectOption('new');
+    await page.getByLabel('Billing account ID', {exact: true}).fill('012ABC-345DEF-678ABC');
+    await page.getByText('Schedule and advanced settings', {exact: true}).click();
+  }, shown: '#cloud-projectParent' },
+  { name: "Cloud backup password commands", url: "/settings/backups", ready: "#cloud-explore", open: async page => {
+    await page.getByRole('button', {name: 'Explore cloud backup options', exact: true}).click();
+    await page.getByRole('button', {name: 'Configure this backup', exact: true}).click();
+    await page.getByLabel('Google Cloud project ID', {exact: true}).fill('pharos-example');
+    await page.getByLabel('Require a password to restore', {exact: true}).selectOption('true');
+    await page.getByRole('button', {name: 'Review configuration & commands', exact: true}).click();
+  }, shown: '.cloud-protected-commands' },
+  { name: "Cloud backup Azure commands", url: "/settings/backups", ready: "#cloud-explore", open: async page => {
+    await page.getByRole('button', {name: 'Explore cloud backup options', exact: true}).click();
+    await page.getByLabel('Cloud provider', {exact: true}).selectOption('azure');
+    await page.getByRole('button', {name: 'Configure this backup', exact: true}).click();
+    await page.getByLabel('Azure subscription', {exact: true}).fill('Backup subscription');
+    await page.getByLabel('Azure Blob Storage · Cold', {exact: true}).check();
+    await page.getByRole('button', {name: 'Review configuration & commands', exact: true}).click();
+  }, shown: "#cloud-step-2 pre" },
+  ...[[4,"Test"],[5,"First backup"],[6,"Test restore"]].map(([step,label])=>({
+    name:`Cloud backup ${label.toLowerCase()}`,url:"/settings/backups",ready:"#cloud-explore",
+    open:async page=>{
+      await page.getByRole('button',{name:'Explore cloud backup options',exact:true}).click();
+      await page.getByRole('button',{name:'Configure this backup',exact:true}).click();
+      await page.getByLabel('Google Cloud project ID',{exact:true}).fill('pharos-example');
+      await page.getByRole('button',{name:`Step ${step}: ${label}`,exact:true}).click();
+    },shown:`#cloud-step-${step-1}`
+  })),
   { name: "Sources", url: "/settings/sources", ready: "#sourceGrid .source-card" },
   { name: "Capture & index", url: "/settings/sync", ready: "#syncHistoryTables .qt-row" },
   { name: "Capture & index diagnostics", url: "/settings/sync", ready: "#syncHistoryTables .qt-row", open: page => page.getByText("Performance & verification details", { exact: true }).click(), shown: "#syncDiagnosticTables .qt-row" },

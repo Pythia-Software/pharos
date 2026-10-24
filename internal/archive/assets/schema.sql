@@ -30,6 +30,28 @@ CREATE TABLE IF NOT EXISTS conversation_parent_refs (
  parent_native_id TEXT NOT NULL, PRIMARY KEY(provider,account,native_id)
 );
 
+-- Daily logical library sizes for a rolling, linear cloud-backup forecast.
+CREATE TABLE IF NOT EXISTS library_size_history (
+  day TEXT PRIMARY KEY,
+  measured_at TEXT NOT NULL,
+  bytes INTEGER NOT NULL CHECK (bytes > 0)
+);
+
+-- Restricted upload credentials stay in the catalog, never UI preferences.
+CREATE TABLE IF NOT EXISTS cloud_destinations (
+  id TEXT PRIMARY KEY, config_json TEXT NOT NULL, credential_json TEXT NOT NULL,
+  recovery_json TEXT NOT NULL DEFAULT '', imported_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS cloud_backup_runs (
+  id TEXT PRIMARY KEY, destination_id TEXT NOT NULL REFERENCES cloud_destinations(id),
+  status_json TEXT NOT NULL, manifest_json TEXT, created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS cloud_runs_destination ON cloud_backup_runs(destination_id,created_at);
+CREATE TABLE IF NOT EXISTS cloud_backup_schedules (
+  destination_id TEXT PRIMARY KEY REFERENCES cloud_destinations(id),
+  state_json TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS sync_generations (
   host_id TEXT NOT NULL, source_name TEXT NOT NULL, generation INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY(host_id,source_name)
@@ -1187,6 +1209,21 @@ CREATE TABLE IF NOT EXISTS text_search_documents (
 );
 CREATE INDEX IF NOT EXISTS text_search_surface_idx ON text_search_documents(surface,message_rowid);
 CREATE INDEX IF NOT EXISTS text_search_conversation_idx ON text_search_documents(conversation_id,message_rowid);
+CREATE TABLE IF NOT EXISTS message_search_state (
+ conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+ version TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS message_search_insert AFTER INSERT ON messages BEGIN
+ DELETE FROM message_search_state WHERE conversation_id=new.conversation_id;
+END;
+CREATE TRIGGER IF NOT EXISTS message_search_delete AFTER DELETE ON messages BEGIN
+ DELETE FROM message_search_state WHERE conversation_id=old.conversation_id;
+END;
+CREATE TRIGGER IF NOT EXISTS message_search_update AFTER UPDATE OF conversation_id,kind,text,call_id,parent_native_id,source_order ON messages
+WHEN (old.conversation_id,old.kind,old.text,old.call_id,old.parent_native_id,old.source_order)
+ IS NOT (new.conversation_id,new.kind,new.text,new.call_id,new.parent_native_id,new.source_order) BEGIN
+ DELETE FROM message_search_state WHERE conversation_id IN (old.conversation_id,new.conversation_id);
+END;
 INSERT OR IGNORE INTO meta(key,value) VALUES('text_search_generation','0');
 INSERT OR IGNORE INTO meta(key,value) VALUES('text_search_cursor_version','2'),
  ('text_search_append_generation','0'),('text_search_span_generation','0'),('text_search_insert_conflict','0');

@@ -182,6 +182,7 @@ func RecoverLibrary(ctx context.Context, backup, destination string, progress fu
 		// exists. Reset both proofs and parser shortcuts so explicitly resumed
 		// capture can recover surviving originals on the same Mac.
 		_, err = catalog.DB.ExecContext(ctx, `DELETE FROM sync_settings; DELETE FROM automatic_source_states; DELETE FROM sync_deferred; DELETE FROM sync_recovery_jobs;
+ DELETE FROM cloud_backup_schedules;
  DELETE FROM library_delivery_checkpoints; DELETE FROM library_workspace_delivery_checkpoints;
  DELETE FROM source_states; DELETE FROM source_record_states; DELETE FROM source_item_states; DELETE FROM source_terminal_states; DELETE FROM sync_generations;`)
 	}
