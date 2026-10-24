@@ -36,6 +36,8 @@ const askAPI = {
 };
 const askClarificationSession={...askSession,conversation:[{...askSession.conversation[0],status:'clarification',cards:[],reply:'',clarification:{question:'By “use”, do you mean model tokens, API cost equivalent, or something else?',options:['Model tokens','API cost equivalent']}}]};
 const ROUTES = [
+  {name:"Application library chooser",url:"/app",ready:"#library-list .card"},
+  ...["create","open","recover"].map(flow=>({name:`Application library ${flow}`,url:"/app",ready:"#library-list .card",open:page=>page.locator(`[data-flow="${flow}"]`).click(),shown:"#setup:not([hidden])"})),
   ...["dark","light"].flatMap(theme => [
   {name:"Ask Pharos removed CLI",url:"/",ready:"#pharos-ask .home-search-trigger",api:{"GET /api/ask/status":{settings:{enabled:true,showInvitation:true,selection:askSelection},providers:[]}}},
   {name:"Ask Pharos opted out",url:"/",ready:"#pharos-ask .home-search-trigger",api:{"GET /api/ask/status":{settings:{enabled:false,showInvitation:false},providers:askProviders}}},

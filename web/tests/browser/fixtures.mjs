@@ -187,6 +187,7 @@ const writingCounts = (typed, pasted, harness) => ({
 });
 
 export const defaultApi = {
+  "GET /api/app/state": {application:"/Applications/Pharos.app",selected:"local",mcp:"external",busy:false,libraries:[{id:"local",name:"Pending history",available:true,config:"/Users/test/Library/Application Support/Pharos/Libraries/Pending/library.toml"},{id:"external",name:"My archive",available:false,config:"/Volumes/Archive/Pharos/library.toml"}]},
   "GET /api/ask/status": { settings: { enabled: false, showInvitation: true, selection: null }, providers: [] },
   "POST /api/ask/clear-visits": {ok:true},
   "POST /api/ask/visits": {ok:true},

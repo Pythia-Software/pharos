@@ -265,6 +265,9 @@ func ejectTests(_ args: [String]) {
     agent = startAgent(["--config", config, "mcp"])
     check(DriveProcesses.stopMCP(runningFrom: app) == [agent.processIdentifier] && wait(3) { !agent.isRunning },
           "Quit also stops an MCP server launched with an explicit config")
+    agent = startAgent(["mcp-app", "--application", app.path])
+    check(DriveProcesses.stopMCP(runningFrom: app) == [agent.processIdentifier] && wait(3) { !agent.isRunning },
+          "Quit stops the managed portable MCP entry point")
     let initialized = Pipe()
     let answered = DispatchSemaphore(value: 0)
     initialized.fileHandleForReading.readabilityHandler = { handle in

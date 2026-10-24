@@ -82,6 +82,7 @@ function serve(routes, state, record) {
     }
     if (!path.startsWith("/api/")) {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+      if (path === "/app") return response.end(asset("application.html"));
       return response.end(state.concurrency ? html.replace("<html", "<html data-concurrency-prototype") : html);
     }
     const chunks = [];

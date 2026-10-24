@@ -623,6 +623,25 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 	record = normalizeRecordReasoning(record)
 	record = canonicalRecordTimes(record)
 	prepareRecordAccounting(&record)
+	workspaceInput := workspaceDeliveryDigest(record)
+	filtered, removed, err := suppressDeliveredConversations(tx, record)
+	if err != nil {
+		return 0, 0, err
+	}
+	if removed && len(filtered.Conversations) == 0 {
+		current, err := deliveredWorkspaceCurrent(tx, record, workspaceInput)
+		if err != nil || current {
+			return 0, 0, err
+		}
+	}
+	record = filtered
+	for _, conversation := range record.Conversations {
+		if conversation.ParentNativeID != "" {
+			if _, err = tx.Exec(`INSERT OR REPLACE INTO conversation_parent_refs(provider,account,native_id,parent_native_id) VALUES(?,?,?,?)`, conversation.Provider, conversation.Account, conversation.NativeID, conversation.ParentNativeID); err != nil {
+				return 0, 0, err
+			}
+		}
+	}
 	workspaceID, err := storedWorkspaceID(tx, record)
 	if err != nil {
 		return 0, 0, err
@@ -665,6 +684,12 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 	}
 	if err != nil {
 		return 0, 0, err
+	}
+	if authority.workspace {
+		if _, err := tx.Exec(`INSERT INTO workspace_delivery_inputs(workspace_id,fingerprint,writer_host_id,version) VALUES(?,?,?,?)
+ ON CONFLICT(workspace_id) DO UPDATE SET fingerprint=excluded.fingerprint,writer_host_id=excluded.writer_host_id,version=excluded.version`, workspaceID, workspaceInput, host, record.Observed); err != nil {
+			return 0, 0, err
+		}
 	}
 	// Tool calls already stored may name a checkout this record made known.
 	if err := reresolveToolPaths(tx, stalePaths); err != nil {
@@ -784,7 +809,7 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 		if err := linkAliases(tx, conversationID, conversation.Aliases); err != nil {
 			return 0, 0, err
 		}
-		input := hashBytes([]byte(workspaceID + ":" + conversationDerivationVersion + ":" + jsonText(conversation)))
+		input := conversationDeliveryDigest(workspaceID, conversation)
 		var priorInput string
 		inputErr := tx.QueryRow("SELECT fingerprint FROM conversation_derivation_inputs WHERE conversation_id=?", conversationID).Scan(&priorInput)
 		if inputErr != nil && inputErr != sql.ErrNoRows {

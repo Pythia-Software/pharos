@@ -135,13 +135,16 @@ enum ServiceClient {
 
     /// Blocks until the service answers. The service gives up after 7 s,
     /// inside DiskArbitration's ~10 s wait for an eject approval.
-    static func release(_ service: URL, token: String, timeout: TimeInterval = 8.5) -> Release {
+    static func release(_ service: URL, token: String, timeout: TimeInterval = 8.5,
+                        path: String = "/api/release", body: Data? = nil) -> Release {
         var components = URLComponents(url: service, resolvingAgainstBaseURL: false)
-        components?.path = "/api/release"
+        components?.path = path
         components?.query = nil
         guard let url = components?.url else { return .failed("invalid service URL \(service)") }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
         request.httpMethod = "POST"
+        request.httpBody = body
+        if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         let session = URLSession(configuration: .ephemeral)
         defer { session.finishTasksAndInvalidate() }

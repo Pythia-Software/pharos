@@ -177,7 +177,9 @@ func (c *Catalog) Close() error {
 // Older ingesters would index those CLI transcripts without the exclusion.
 // 16: normalized reasoning and its extraction ledger. Older parsers can prune
 // the newly retained reasoning during a reindex, losing saved thought again.
-const catalogSchemaVersion = 16
+// 17: library delivery checkpoints. Older writers ignore delivered inventories
+// and can recreate history that was explicitly moved out of the source.
+const catalogSchemaVersion = 17
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.

@@ -68,6 +68,13 @@ func processArguments(_ pid: pid_t) -> [String]? {
     return arguments
 }
 
+func processParentPID(_ pid: pid_t) -> pid_t? {
+    var info = proc_bsdinfo()
+    let size = MemoryLayout<proc_bsdinfo>.size
+    guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, Int32(size)) == size else { return nil }
+    return pid_t(info.pbi_ppid)
+}
+
 /// How this launch of Pharos.app should proceed.
 enum LaunchPlan: Equatable {
     /// Serve the library in this directory.
@@ -109,7 +116,7 @@ enum DriveProcesses {
         let candidates = running(from: app, in: runningExecutables().filter { $0.path == executable })
         let pids = candidates.filter { pid in
             guard let arguments = processArguments(pid) else { return false }
-            return command(in: arguments) == "mcp"
+            return ["mcp", "mcp-app"].contains(command(in: arguments) ?? "")
         }
         return stop(pids, grace: grace)
     }
