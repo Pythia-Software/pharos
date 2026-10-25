@@ -21,6 +21,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 
 from release_support import require_release_machine
+from release_keychain import check_sparkle_access
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = 'Pythia-Software/pharos'
@@ -37,6 +38,7 @@ def config_and_tools():
     config = json.loads((ROOT / 'macos/sparkle.json').read_text())
     require_release_machine(config)
     tools = Path(run(ROOT / 'macos/fetch-sparkle.sh')) / 'bin'
+    check_sparkle_access(tools, config['keychain_account'])
     public = run(tools / 'generate_keys', '--account', config['keychain_account'], '-p')
     if public != config['public_key']:
         raise ValueError('Release blocked: the Keychain signing key does not match macos/sparkle.json. Report this mismatch; do not create or import keys during a release task.')

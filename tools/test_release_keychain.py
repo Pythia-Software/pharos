@@ -1,11 +1,15 @@
 """Release signing window tests; never access the real Keychain or secrets."""
+import contextlib
 import importlib.util
+import io
 import os
 from pathlib import Path
 import signal
 import subprocess
+import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 SOURCE = Path(__file__).resolve().parents[1] / 'macos/release_keychain.py'
@@ -15,6 +19,119 @@ spec.loader.exec_module(keychain)
 
 
 class ReleaseKeychainTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == 'darwin' and os.environ.get('PHAROS_KEYCHAIN_TESTS') == '1',
+                         'explicit macOS disposable-keychain integration test')
+    def test_native_sparkle_access_checks_existing_item_without_dialogs(self):
+        # Read only access-control metadata on disposable public dummy items.
+        original = keychain.search_list()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'test.keychain-db'
+            command = keychain.sparkle_access_command(directory, 'check', path,
+                                                       Path('/unused'), 'test-pharos')
+            command[-2:] = ['/usr/bin/true', '/usr/bin/false']
+            source = SOURCE.with_name('sparkle-keychain-access.swift').read_text()
+            fixture = """
+if CommandLine.arguments.count == 4 && CommandLine.arguments[1] == "fixture" {
+    var keychain: SecKeychain?
+    try check(SecKeychainOpen(CommandLine.arguments[2], &keychain))
+    var security: SecTrustedApplication?
+    try check(SecTrustedApplicationCreateFromPath("/usr/bin/security", &security))
+    var trusted = [security!]
+    if CommandLine.arguments[3] != "test-pharos" {
+        for path in ["/usr/bin/true", "/usr/bin/false"] {
+            var app: SecTrustedApplication?
+            try check(SecTrustedApplicationCreateFromPath(path, &app))
+            trusted.append(app!)
+        }
+    }
+    var access: SecAccess?
+    try check(SecAccessCreate("public test fixture" as CFString, trusted as CFArray, &access))
+    var partitions = ["apple:"]
+    if CommandLine.arguments[3] == "test-authorized" {
+        partitions += try ["/usr/bin/true", "/usr/bin/false"].map { try codePartition($0) }
+    }
+    let properties: [String: Any] = ["Partitions": partitions]
+    let description = try partitionDescription(properties)
+    guard try partitionProperties(description)["Partitions"] as? [String] == partitions else { exit(2) }
+    var partitionACL: SecACL?
+    try check(SecACLCreateWithSimpleContents(access!, nil, description, SecKeychainPromptSelector(), &partitionACL))
+    try check(SecACLUpdateAuthorizations(partitionACL!, [kSecACLAuthorizationPartitionID] as CFArray))
+    let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: "https://sparkle-project.org",
+        kSecAttrAccount as String: CommandLine.arguments[3],
+        kSecUseKeychain as String: keychain!,
+        kSecAttrAccess as String: access!,
+        kSecValueData as String: Data("public-test-value".utf8),
+    ]
+    try check(SecItemAdd(query as CFDictionary, nil))
+    exit(0)
+}
+"""
+            fixture_source = Path(directory) / 'fixture.swift'
+            fixture_source.write_text(source.replace('do { try main() }', fixture + '\ndo { try main() }'))
+            sdk = subprocess.check_output(['xcrun', '--sdk', 'macosx26.5', '--show-sdk-path'], text=True).strip()
+            subprocess.run(['swiftc', '-sdk', sdk, '-suppress-warnings', str(fixture_source),
+                            '-o', command[0]], check=True)
+            try:
+                keychain.security('create-keychain', '-p', 'disposable-test-password', path)
+                keychain.security('list-keychains', '-d', 'user', '-s', *original)
+                for account in ('test-pharos', 'test-paths-only', 'test-authorized'):
+                    subprocess.run([command[0], 'fixture', str(path), account], check=True, timeout=10)
+                missing = subprocess.run(command, capture_output=True, text=True, timeout=10)
+                self.assertNotEqual(missing.returncode, 0)
+                self.assertIn('--authorize-sparkle', missing.stderr)
+                # This is the actual review finding: matching paths passed the old
+                # check while Sparkle's code hashes were missing from partitions.
+                command[3] = 'test-paths-only'
+                missing_hashes = subprocess.run(command, capture_output=True, text=True, timeout=10)
+                self.assertNotEqual(missing_hashes.returncode, 0)
+                self.assertIn('partition authorization', missing_hashes.stderr)
+                command[1] = 'partitions'
+                planned = subprocess.check_output(command, text=True, timeout=10).strip().split(',')
+                self.assertIn('apple:', planned)  # Preserve unrelated existing permissions.
+                self.assertEqual(sum(value.startswith('cdhash:') for value in planned), 2)
+                command[1] = 'check'
+                self.assertNotEqual(subprocess.run(command, capture_output=True, timeout=10).returncode, 0)
+                command[3] = 'test-authorized'
+                subprocess.run(command, check=True, timeout=10)
+                value = keychain.security('find-generic-password', '-a', 'test-pharos',
+                                          '-s', 'https://sparkle-project.org', '-w', path, capture=True)
+                self.assertEqual(value.strip(), 'public-test-value')
+            finally:
+                if path.exists():
+                    keychain.security('delete-keychain', path)
+                keychain.security('list-keychains', '-d', 'user', '-s', *original)
+
+    def test_sparkle_access_check_uses_exact_tools_and_dedicated_keychain(self):
+        with patch.dict(os.environ, {'PHAROS_RELEASE_KEYCHAIN': '/test/release.keychain-db', 'SDKROOT': ''}), \
+             patch.object(keychain.subprocess, 'check_output', return_value='/test/sdk\n') as discover, \
+             patch.object(keychain.subprocess, 'run') as run:
+            keychain.check_sparkle_access(Path('/test/Sparkle/bin'), 'pharos')
+        discover.assert_called_once_with(['xcrun', '--sdk', 'macosx26.5', '--show-sdk-path'], text=True)
+        compile_command = run.call_args_list[0].args[0]
+        self.assertIn('/test/sdk', compile_command)
+        command = run.call_args_list[1].args[0]
+        self.assertEqual(command[1:], ['check', '/test/release.keychain-db', 'pharos',
+                                     '/test/Sparkle/bin/generate_keys', '/test/Sparkle/bin/sign_update'])
+
+    def test_sparkle_helper_honors_sdkroot_without_discovering_default_sdk(self):
+        sdk = '/custom SDK/MacOSX.sdk'
+        with patch.dict(os.environ, {'SDKROOT': sdk}), \
+             patch.object(keychain.subprocess, 'check_output', side_effect=FileNotFoundError('26.5 SDK unavailable')) as discover, \
+             patch.object(keychain.subprocess, 'run') as compile:
+            keychain.sparkle_access_command('/test/build', 'check', Path('/test/keychain'),
+                                            Path('/test/tools'), 'pharos')
+        discover.assert_not_called()
+        command = compile.call_args.args[0]
+        self.assertEqual(command[command.index('-sdk') + 1], sdk)
+
+    def test_sparkle_access_failure_blocks_the_caller(self):
+        with patch.object(keychain, 'sparkle_access_command', return_value=['check-access']), \
+             patch.object(keychain.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'check-access')):
+            with self.assertRaises(subprocess.CalledProcessError):
+                keychain.check_sparkle_access(Path('/test/tools'), 'pharos')
+
     def session(self, exit_code=0, wait_error=None, unlock_error=None):
         events = []
         child = MagicMock(pid=987654321)
@@ -52,6 +169,7 @@ class ReleaseKeychainTests(unittest.TestCase):
                 self.assertIn('/test/added-by-another-app.keychain-db', restored)
                 env = launch.call_args.kwargs['env']
                 self.assertEqual(env['PHAROS_CODESIGN_KEYCHAIN'], '/test/release.keychain-db')
+                self.assertEqual(env['PHAROS_NOTARY_KEYCHAIN'], '/test/release.keychain-db')
                 self.assertEqual(env[keychain.SESSION], '/test/release.keychain-db')
                 self.assertTrue(launch.call_args.kwargs['start_new_session'])
                 self.assertIn(('unlock-keychain', '-u', Path('/test/release.keychain-db')), events)
@@ -132,6 +250,92 @@ class ReleaseKeychainTests(unittest.TestCase):
              patch.object(keychain.os, 'killpg'):
             self.assertEqual(keychain.run_session(Path('/test/release.keychain-db'), ['release']), 0)
         self.assertEqual(current, original)
+
+
+class CredentialRehearsalTests(unittest.TestCase):
+    def load(self, name):
+        source = SOURCE.with_name(name)
+        spec = importlib.util.spec_from_file_location('credential_rehearsal_test', source)
+        module = importlib.util.module_from_spec(spec)
+        sys.path.insert(0, str(source.parent))
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            sys.path.pop(0)
+        return module
+
+    def test_rehearsal_uses_dedicated_apple_credentials_and_never_prints_gh_token(self):
+        probe = self.load('check-release-credentials.py')
+        feed = MagicMock()
+        feed.config_and_tools.return_value = ({'keychain_account': 'pharos'}, Path('/test/tools'))
+        commands = []
+        def run(*args):
+            commands.append(args)
+            if args[:3] == ('xcrun', 'notarytool', 'history'):
+                return '{"message":"Successfully received submission history."}'
+            if args[:2] == ('gh', 'api'):
+                return '{"push":true}'
+            if args[:3] == ('gh', 'auth', 'status'):
+                self.assertIn('--jq', args)
+                self.assertEqual(args[-1], '[.hosts["github.com"][] | select(.active) | .tokenSource]')
+                return '["keyring"]'
+            return 'public-signature'
+        output = io.StringIO()
+        with patch.object(probe, 'load_feed', return_value=feed), \
+             patch.object(probe, 'run', side_effect=run), \
+             patch.object(probe.subprocess, 'run', return_value=SimpleNamespace(stderr='Authority=Developer ID Application: Test\nTimestamp=today')) as codesign, \
+             patch.dict(os.environ, {'PHAROS_RELEASE_KEYCHAIN': '/test/release.keychain-db'}), \
+             contextlib.redirect_stdout(output):
+            probe.exercise()
+        self.assertEqual(feed.verify_signature.call_count, 2)
+        self.assertEqual(sum(call.args[0][1] == '--force' for call in codesign.call_args_list), 2)
+        notary = next(command for command in commands if command[:3] == ('xcrun', 'notarytool', 'history'))
+        self.assertEqual(notary[notary.index('--keychain') + 1], '/test/release.keychain-db')
+        self.assertIn('Credential operations passed', output.getvalue())
+        self.assertIn('does not count macOS dialogs', output.getvalue())
+
+    def test_notary_setup_leaves_password_input_to_apple_and_reuses_unlock(self):
+        setup = self.load('setup-release-keychain.py')
+        path = str(Path('/test/release.keychain-db').resolve())
+        with patch.object(setup, 'require_release_machine'), \
+             patch.object(sys, 'argv', ['setup', '--configure-notary']), \
+             patch.dict(os.environ, {'PHAROS_RELEASE_KEYCHAIN': path, setup.SESSION: path}), \
+             patch.object(setup, 'with_keychain') as unlock, \
+             patch.object(setup.subprocess, 'run') as store, \
+             patch.object(setup.subprocess, 'call', return_value=0) as rehearse:
+            setup.main()
+        unlock.assert_not_called()
+        store.assert_called_once_with(['xcrun', 'notarytool', 'store-credentials', 'pharos',
+                                       '--keychain', path], check=True)
+        self.assertEqual(Path(rehearse.call_args.args[0][1]).name, 'check-release-credentials.py')
+
+    def test_sparkle_partition_setup_leaves_password_input_to_security(self):
+        setup = self.load('setup-release-keychain.py')
+        path = str(Path('/test/release.keychain-db').resolve())
+        with patch.object(setup, 'require_release_machine'), \
+             patch.object(sys, 'argv', ['setup', '--authorize-sparkle']), \
+             patch.dict(os.environ, {'PHAROS_RELEASE_KEYCHAIN': path, setup.SESSION: path}), \
+             patch.object(setup.sys.stdin, 'isatty', return_value=True), \
+             patch.object(setup, 'sparkle_access_command', return_value=['acl-helper', 'authorize']), \
+             patch.object(setup.subprocess, 'check_output', side_effect=['/test/Sparkle', 'apple:,cdhash:a,cdhash:b']), \
+             patch.object(setup.subprocess, 'run') as run:
+            setup.main()
+        security = next(call for call in run.call_args_list if call.args[0][0] == '/usr/bin/security')
+        self.assertEqual(security.args[0], ['/usr/bin/security', 'set-generic-password-partition-list',
+                                          '-a', 'pharos', '-s', 'https://sparkle-project.org',
+                                          '-S', 'apple:,cdhash:a,cdhash:b', path])
+        self.assertNotIn('input', security.kwargs)
+        self.assertNotIn('env', security.kwargs)
+
+    def test_sparkle_partition_setup_requires_operator_terminal_before_unlock(self):
+        setup = self.load('setup-release-keychain.py')
+        with patch.object(setup, 'require_release_machine'), \
+             patch.object(sys, 'argv', ['setup', '--authorize-sparkle']), \
+             patch.object(setup.sys.stdin, 'isatty', return_value=False), \
+             patch.object(setup, 'with_keychain') as unlock:
+            with self.assertRaisesRegex(ValueError, 'own Terminal'):
+                setup.main()
+        unlock.assert_not_called()
 
 
 if __name__ == '__main__':
