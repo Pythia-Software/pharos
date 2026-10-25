@@ -104,15 +104,27 @@ if CommandLine.arguments.count == 4 && CommandLine.arguments[1] == "fixture" {
                 keychain.security('list-keychains', '-d', 'user', '-s', *original)
 
     def test_sparkle_access_check_uses_exact_tools_and_dedicated_keychain(self):
-        with patch.dict(os.environ, {'PHAROS_RELEASE_KEYCHAIN': '/test/release.keychain-db'}), \
-             patch.object(keychain.subprocess, 'check_output', return_value='/test/sdk\n'), \
+        with patch.dict(os.environ, {'PHAROS_RELEASE_KEYCHAIN': '/test/release.keychain-db', 'SDKROOT': ''}), \
+             patch.object(keychain.subprocess, 'check_output', return_value='/test/sdk\n') as discover, \
              patch.object(keychain.subprocess, 'run') as run:
             keychain.check_sparkle_access(Path('/test/Sparkle/bin'), 'pharos')
+        discover.assert_called_once_with(['xcrun', '--sdk', 'macosx26.5', '--show-sdk-path'], text=True)
         compile_command = run.call_args_list[0].args[0]
         self.assertIn('/test/sdk', compile_command)
         command = run.call_args_list[1].args[0]
         self.assertEqual(command[1:], ['check', '/test/release.keychain-db', 'pharos',
                                      '/test/Sparkle/bin/generate_keys', '/test/Sparkle/bin/sign_update'])
+
+    def test_sparkle_helper_honors_sdkroot_without_discovering_default_sdk(self):
+        sdk = '/custom SDK/MacOSX.sdk'
+        with patch.dict(os.environ, {'SDKROOT': sdk}), \
+             patch.object(keychain.subprocess, 'check_output', side_effect=FileNotFoundError('26.5 SDK unavailable')) as discover, \
+             patch.object(keychain.subprocess, 'run') as compile:
+            keychain.sparkle_access_command('/test/build', 'check', Path('/test/keychain'),
+                                            Path('/test/tools'), 'pharos')
+        discover.assert_not_called()
+        command = compile.call_args.args[0]
+        self.assertEqual(command[command.index('-sdk') + 1], sdk)
 
     def test_sparkle_access_failure_blocks_the_caller(self):
         with patch.object(keychain, 'sparkle_access_command', return_value=['check-access']), \
