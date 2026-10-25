@@ -1,0 +1,1 @@
+{{ define "main" }}<section class="prose wrap"><h1>{{ .Title }}</h1>{{ .Content }}{{ range .Pages }}<h2><a href="{{ .RelPermalink }}">{{ .Title }}</a></h2><p>{{ .Description }}</p>{{ end }}</section>{{ end }}

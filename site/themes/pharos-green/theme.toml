@@ -1,0 +1,6 @@
+name = 'Pharos Green'
+min_version = '0.168.0'
+license = 'PolyForm Shield 1.0.0'
+description = 'The Pharos product site: harbor green, cream, and brass.'
+[author]
+  name = 'Pythia Software LLC'
