@@ -7,6 +7,50 @@ import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { defaultApi, workID } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery } from "@pythia-software/query-table-core";
 
+for (const topic of ['tokens', 'human', 'skills', 'time', 'carbon']) for (const display of ['interval', 'cumulative']) test(`Dashboard ${topic} ${display} inspection focuses its links and dismisses on Escape or outside click`, { skip }, async t => {
+  const { page, settled, shot } = await open(t, { url: `/analyze?${new URLSearchParams({ analyze_topic: topic, analyze_chart: JSON.stringify({ display }) })}`, ready: '.usage-chart-bars:not(.loading) > button' });
+  const chart = page.locator('.usage-dashboard .usage-chart').first();
+  const bar = display === 'cumulative' ? chart.locator('.usage-chart-bars > button').last() : chart.locator('.usage-chart-bars > button').filter({ has: page.locator('i') }).first();
+  await bar.focus();
+  await page.keyboard.press('Enter');
+  const details = chart.getByRole('group', { name: /^Details for / });
+  await details.getByRole('link').first().waitFor();
+  await shot('pinned-key');
+  assert.ok(await details.evaluate(element => element.contains(document.activeElement)), 'keyboard inspection focuses a reachable detail link');
+  await page.keyboard.press('Escape');
+  await details.waitFor({ state: 'hidden' });
+  assert.ok(await bar.evaluate(element => element === document.activeElement), 'Escape returns focus to the inspected period');
+  await bar.click();
+  await details.waitFor();
+  await chart.locator('h3').click();
+  await details.waitFor({ state: 'hidden' });
+  await settled();
+});
+
+test('Dashboard chart pointer capture snaps to columns and treats a drag back to its anchor as inspection', { skip }, async t => {
+  const { page, settled } = await open(t, { url: '/analyze?analyze_topic=tokens', ready: '.usage-chart-bars:not(.loading) > button' });
+  const chart = page.locator('.usage-dashboard .usage-chart').first();
+  const bars = chart.locator('.usage-chart-bars > button');
+  const before = page.url();
+  const start = await bars.nth(1).boundingBox(), end = await bars.nth(4).boundingBox();
+  await page.mouse.move(start.x + start.width / 2, start.y + 30);
+  await page.mouse.down();
+  await page.mouse.move(end.x + end.width / 2, end.y + 30);
+  await chart.getByRole('status').filter({ hasText: /4 periods.*Release to filter/ }).waitFor();
+  await page.mouse.move(start.x + start.width / 2, start.y + 30);
+  await chart.getByRole('status').filter({ hasText: /1 period.*Release to inspect/ }).waitFor();
+  await page.mouse.up();
+  await chart.getByRole('group', { name: /^Details for / }).waitFor();
+  assert.equal(page.url(), before, 'one-period inspection leaves date filters alone');
+  await chart.locator('h3').click();
+  await page.mouse.move(end.x + end.width / 2, end.y + 30);
+  await page.mouse.down();
+  await page.mouse.move(start.x + start.width / 2, start.y + 30);
+  await page.mouse.up();
+  await page.waitForFunction(previous => location.href !== previous, before);
+  await settled();
+});
+
 test('Cloud backup setup focuses invalid fields and retains storage-class keyboard focus', {skip}, async t => {
   const {page} = await open(t, {url:'/settings/backups',ready:'#cloud-explore'});
   await page.getByRole('button',{name:'Explore cloud backup options',exact:true}).click();

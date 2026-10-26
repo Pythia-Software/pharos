@@ -6,6 +6,7 @@ import { chartBucketsWithHistory, foldSeries, plottedBucketKey, validChartDispla
 import { readSlice, withSlice } from "./chart-selection";
 import { validChartPresentation, type ChartPresentation } from "./chart-selection";
 import { preferences } from "./preferences";
+import { dashboardChartURL } from "./dashboard-chart-links";
 
 type CarbonTokens = { tokens: Record<string, Record<string, number>> };
 type CarbonFactors = { tiers: Array<{ key: string; label: string }> };
@@ -204,7 +205,15 @@ export function CarbonImpact({ queryLinks }: { queryLinks?: (state: { where: Whe
       <RollingControl value={view.rollingPeriods} display={view.display} period={view.period} count={count} onChange={rollingPeriods => update({ rollingPeriods })} />
     </>} series={series} buckets={buckets} period={view.period} periodCount={count} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={cumulativeStart} scale="linear"
       format={format ?? (value => String(value))} noun="" loading={loading} error={error} legend={series.length > 0} onExpand={() => update({ seriesLimit: Math.min(1000, limit + 5) })}
-      onRange={pickRange(onFilter, usageTime, view.period, count, period => update({ period }))} />
+      onRange={pickRange(onFilter, usageTime, view.period, count, period => update({ period }))}
+      seriesHref={(range, item) => {
+        const current = new URLSearchParams(location.search);
+        current.set("analyze_topic", "carbon");
+        const fields = view.split !== "type" ? ["total_tokens"] : item.key === "uncached_input" ? ["uncached_input_tokens", "unclassified_tokens"]
+          : [{ cache_read: "cache_read_input_tokens", cache_write: "cache_creation_input_tokens", output: "output_tokens" }[item.key]!];
+        return dashboardChartURL({ dataset: "usage", where: range.rolling ? requestedWhere : where, time: usageTime, range, series: item,
+          split: view.split === "type" ? null : view.split === "tier" ? "carbon_tier" : view.split, fields, current });
+      }} />
     <div id="carbonSummary" className="carbon-card carbon-summary" aria-label="Filtered carbon estimate" />
     {data?.undated_tokens ? <p className="muted">{data.undated_tokens.toLocaleString()} tokens have no usage date. They are included in the total but cannot be placed on the chart.</p> : null}
     {queryLinks?.({ where, view })}
