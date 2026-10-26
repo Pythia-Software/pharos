@@ -23,6 +23,7 @@ var shellEnvCache struct {
 	values map[string]string
 	err    error
 	at     time.Time
+	key    string
 }
 
 // cachedLoginShellEnv returns nil values and no error when disabled with
@@ -33,14 +34,17 @@ func cachedLoginShellEnv(names []string) (map[string]string, error) {
 	}
 	shellEnvCache.Lock()
 	defer shellEnvCache.Unlock()
-	if !shellEnvCache.at.IsZero() && time.Since(shellEnvCache.at) < 10*time.Minute {
-		return shellEnvCache.values, shellEnvCache.err
-	}
 	shell := os.Getenv("SHELL")
 	if shell == "" {
 		shell = "/bin/zsh"
 	}
+	// Each guided probe reads only its selected tools' overrides.
+	key := shell + "\x00" + strings.Join(names, "\x00")
+	if shellEnvCache.key == key && !shellEnvCache.at.IsZero() && time.Since(shellEnvCache.at) < 10*time.Minute {
+		return shellEnvCache.values, shellEnvCache.err
+	}
 	shellEnvCache.values, shellEnvCache.err = loginShellEnv(shell, names, shellEnvTimeout)
+	shellEnvCache.key = key
 	shellEnvCache.at = time.Now()
 	return shellEnvCache.values, shellEnvCache.err
 }

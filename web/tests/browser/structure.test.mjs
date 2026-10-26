@@ -36,8 +36,50 @@ const askAPI = {
 };
 const askClarificationSession={...askSession,conversation:[{...askSession.conversation[0],status:'clarification',cards:[],reply:'',clarification:{question:'By “use”, do you mean model tokens, API cost equivalent, or something else?',options:['Model tokens','API cost equivalent']}}]};
 const ROUTES = [
+  {name:"Application first launch",url:"/app",ready:"#application-setup[open]",api:{"GET /api/app/state":{application:"/Applications/Pharos.app",selected:"",mcp:"",busy:false,libraries:[]}}},
+  ...["about","machines","storage","details","review"].map(step=>({name:`Application introduction ${step}`,url:"/app",ready:"#application-setup[open]",api:{"GET /api/app/state":{application:"/Applications/Pharos.app",selected:"",mcp:"",busy:false,libraries:[]}},open:async page=>{
+    await page.locator('#meet-pharos').click();
+    if(step==='about')return;
+    await page.locator('#start-setup').click();
+    if(step==='machines')return;
+    await page.locator('#submit').click();
+    if(step==='storage')return;
+    await page.locator('#submit').click();
+    if(step==='review')await page.locator('#submit').click();
+  },shown:step==='about'?'#about-pharos:not([hidden])':`#wizard-${step}:not([hidden])`})),
   {name:"Application library chooser",url:"/app",ready:"#library-list .card"},
-  ...["create","open","recover"].map(flow=>({name:`Application library ${flow}`,url:"/app",ready:"#library-list .card",open:page=>page.locator(`[data-flow="${flow}"]`).click(),shown:"#setup:not([hidden])"})),
+  ...['tools','other','none','locations','custom','review','empty'].map(step=>({name:`Application sources ${step}`,url:'/app',ready:'#application-setup[open]',api:{
+    'GET /api/app/state':{application:'/Applications/Pharos.app',selected:'',mcp:'',busy:false,libraries:[]},
+    'POST /api/app/create':{saved:true},
+    ...(step==='none'?{'GET /api/probe/tools':{tools:[]}}:{}),
+  },open:async page=>{
+    await page.locator('#meet-pharos').click();await page.locator('#start-setup').click();
+    for(let i=0;i<4;i++)await page.locator('#submit').click();
+    await page.locator('#configure-sources').click();
+    const guide=page.locator('#pharosOnboarding');
+    await guide.locator('.pharos-other-tools>summary').waitFor();
+    if(['tools','none'].includes(step))return;
+    if(step==='other'){await guide.locator('.pharos-other-tools>summary').click();return}
+    if(step==='empty'){await guide.getByRole('checkbox',{name:/Claude Code/}).uncheck();await guide.locator('.pharos-other-tools>summary').click()}
+    await guide.getByRole('checkbox',{name:step==='empty'?/Antigravity/:/Claude Code/}).check();
+    await guide.getByRole('button',{name:'Continue',exact:true}).click();
+    await guide.getByRole('button',{name:'Back',exact:true}).waitFor();
+    if(step==='custom')await guide.locator('.pharos-custom-source summary').click();
+    if(step==='review')await guide.getByRole('button',{name:'Continue',exact:true}).click();
+  },shown:'#pharosOnboarding'})),
+  {name:'Source settings guide',url:'/settings/sources',ready:'#pharosFindSources',open:page=>page.locator('#pharosFindSources').click(),shown:'#pharosOnboarding'},
+  ...["create","open","recover"].map(flow=>({name:`Application library ${flow}`,url:"/app",ready:"#library-list .card",open:page=>page.locator(`#library-actions [data-flow="${flow}"]`).click(),shown:"#setup:not([hidden])"})),
+  ...["storage","details","review"].map(step=>({name:`Application SSD ${step}`,url:"/app",ready:"#application-setup[open]",api:{"GET /api/app/state":{application:"/Applications/Pharos.app",selected:"",mcp:"",busy:false,libraries:[]}},open:async page=>{
+    await page.locator('#meet-pharos').click();await page.locator('#start-setup').click();
+    await page.locator('input[name=machines][value=many]').check();await page.locator('#submit').click();
+    if(step==='storage')return;
+    await page.locator('#submit').click();
+    if(step==='review'){await page.getByRole('button',{name:'Edit library location',exact:true}).click();await page.locator('#path').fill('/Volumes/My SSD');await page.locator('#submit').click()}
+  },shown:`#wizard-${step}:not([hidden])`})),
+  ...[1,2].map(step=>({name:`Application restoration step ${step+1}`,url:"/app",ready:"#library-list .card",open:async page=>{
+    await page.locator('#library-actions [data-flow=recover]').click();await page.locator('#backup').fill('/Backups/Library');await page.locator('#submit').click();
+    if(step===2){await page.locator('#recover-path').fill('/Libraries/Restored');await page.locator('#submit').click()}
+  },shown:step===1?'#wizard-recover-target:not([hidden])':'#wizard-recover-review:not([hidden])'})),
   ...["dark","light"].flatMap(theme => [
   {name:"Ask Pharos removed CLI",url:"/",ready:"#pharos-ask .home-search-trigger",api:{"GET /api/ask/status":{settings:{enabled:true,showInvitation:true,selection:askSelection},providers:[]}}},
   {name:"Ask Pharos opted out",url:"/",ready:"#pharos-ask .home-search-trigger",api:{"GET /api/ask/status":{settings:{enabled:false,showInvitation:false},providers:askProviders}}},

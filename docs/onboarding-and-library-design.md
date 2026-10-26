@@ -49,7 +49,7 @@ separately, including an SSD app beside or elsewhere from its library.
 The Mac's registry stores library bookmarks/volume identity and installation
 records. Host files remain in libraries in every mode. Secrets and OS grants
 are not copied as source authorization. Portable previews use a nonpersistent
-website data store; durable user choices still go through the library API.
+website data store. Working sessions (drafts, annotations, navigation history and last-used table queries) are persisted through the library API under a per-host/per-installation namespace; covers and other browser caches remain temporary. Native Quit, update and Eject await those writes. Durable shared preferences still follow the library between Macs.
 
 Application installation resolution must survive Sparkle replacing the bundle
 and an SSD mounting under another name. Resolve the registry entry using its

@@ -272,6 +272,25 @@ func TestLoginShellEnvToleratesNoiseAndHangs(t *testing.T) {
 	if _, err := loginShellEnv(script("silent", "exit 0\n"), probeEnvNames, time.Second); err == nil {
 		t.Fatal("a shell that printed nothing was accepted")
 	}
+	t.Run("cache follows selected tools", func(t *testing.T) {
+		t.Setenv("PHAROS_PROBE_SHELL", "1")
+		t.Setenv("SHELL", noisy)
+		t.Setenv("CODEX_HOME", "/profiles/codex work")
+		override(t, &shellEnvCache.key, "")
+		override(t, &shellEnvCache.at, time.Time{})
+		override(t, &shellEnvCache.values, map[string]string{})
+		override(t, &shellEnvCache.err, error(nil))
+		for _, name := range probeEnvNames {
+			values, err := cachedLoginShellEnv([]string{name})
+			if err != nil || len(values) != 1 || values[name] == "" {
+				t.Fatal("previous tool choice hid this tool's override", name, values, err)
+			}
+		}
+		values, err := cachedLoginShellEnv(probeEnvNames)
+		if err != nil || len(values) != 2 {
+			t.Fatal("full CLI discovery reused a partial result", values, err)
+		}
+	})
 }
 
 // writeLibrary writes library.toml with extra appended and returns its path.
@@ -497,6 +516,134 @@ func TestProbeAcceptRefusesPerUserConfig(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(config.Path), hostsDirName)); !os.IsNotExist(err) {
 		t.Fatalf("hosts directory created for a per-user config: %v", err)
+	}
+}
+
+func TestProbeToolPresence(t *testing.T) {
+	home := probeHome(t)
+	apps := t.TempDir()
+	override(t, &probeApplicationDirs, func(string) []string { return []string{apps} })
+	override(t, &probeShellEnv, func([]string) (map[string]string, error) {
+		t.Fatal("presence detection started a shell")
+		return nil, nil
+	})
+	if tools := probeTools(home, Config{}); len(tools) != 0 {
+		t.Fatal("invented installed tools", tools)
+	}
+	for _, dir := range []string{filepath.Join(home, ".codex"), filepath.Join(home, ".tl1"), filepath.Join(home, ".gemini", "antigravity-work"), filepath.Join(home, "Library", "Application Support", "com.conductor.app"), filepath.Join(apps, "Claude Code.app")} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// These bytes are deliberately invalid: presence must not parse history or databases.
+	probePut(t, filepath.Join(home, ".codex", "sessions", "not-a-session.jsonl"), "not JSON")
+	probePut(t, filepath.Join(home, "Library", "Application Support", "com.conductor.app", "history.db"), "not SQLite")
+	tools := probeTools(home, Config{})
+	if len(tools) != 5 {
+		t.Fatal("missed a common application or data folder", tools)
+	}
+	for index, kind := range []string{"claude", "codex", "conductor", "tl1", "antigravity"} {
+		if tools[index].Kind != kind || tools[index].Path == "" {
+			t.Fatal("missing detection evidence", tools)
+		}
+	}
+	server := probeServer(t, probeLibrary(t, ""))
+	if code, result := probeCall(t, server, http.MethodGet, "/api/probe/tools", ""); code != 200 || len(result["tools"].([]any)) != 5 {
+		t.Fatal(code, result)
+	}
+	if len(server.Config().Sources) != 0 {
+		t.Fatal("presence enabled sources")
+	}
+	if _, err := os.Stat(hostConfigPath(server.Config())); !os.IsNotExist(err) {
+		t.Fatal("presence saved source access", err)
+	}
+	t.Run("custom and protected paths", func(t *testing.T) {
+		other := probeHome(t)
+		override(t, &probeApplicationDirs, func(string) []string { return nil })
+		secret := filepath.Join(other, "Documents", "private-codex")
+		probePut(t, filepath.Join(secret, "history.jsonl"), "private")
+		if err := os.Symlink(secret, filepath.Join(other, ".codex")); err != nil {
+			t.Fatal(err)
+		}
+		probePut(t, filepath.Join(other, ".gemini", "settings.json"), "{}")
+		if tools := probeTools(other, Config{}); len(tools) != 0 {
+			t.Fatal("followed a protected link or mistook Gemini for AGY", tools)
+		}
+		custom := filepath.Join(other, "work-codex")
+		if err := os.MkdirAll(custom, 0700); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("CODEX_HOME", custom)
+		tools := probeTools(other, Config{})
+		if len(tools) != 1 || tools[0].Kind != "codex" || tools[0].FoundBy != "CODEX_HOME" {
+			t.Fatal("missed configured home override", tools)
+		}
+	})
+}
+
+func TestProbeSelectedTools(t *testing.T) {
+	home := probeHome(t)
+	useHost(t, "source-choice-mac")
+	probePut(t, filepath.Join(home, ".claude", "projects", "-repo", probeID1+".jsonl"), "{}\n")
+	probePut(t, filepath.Join(home, ".codex", "sessions", "rollout-"+probeID2+".jsonl"), "{}\n")
+	custom := filepath.Join(home, "chosen profile")
+	probePut(t, filepath.Join(custom, "projects", "-repo", probeID3+".jsonl"), "{}\n")
+	shellCalls := 0
+	override(t, &probeShellEnv, func(names []string) (map[string]string, error) {
+		shellCalls++
+		if len(names) != 1 || names[0] != "CLAUDE_CONFIG_DIR" {
+			t.Errorf("read environment of unselected tools: %v", names)
+		}
+		return map[string]string{}, nil
+	})
+	server := probeServer(t, probeLibrary(t, ""))
+	for _, body := range []string{`{}`, `{"kinds":["unknown"]}`, `{"kinds":[],"locations":[{"kind":"claude","path":"/other"}]}`, `{"kinds":["claude"],"locations":[{"kind":"claude","path":"relative"}]}`} {
+		if code, _ := probeCall(t, server, http.MethodPost, "/api/probe", body); code != 400 {
+			t.Fatal("invalid discovery request accepted", body, code)
+		}
+	}
+	if shellCalls != 0 {
+		t.Fatal("invalid requests started discovery")
+	}
+	request, _ := json.Marshal(ProbeSelection{Kinds: &[]string{"claude"}, Locations: []ProbeLocation{{Kind: "claude", Path: custom}}})
+	code, result := probeCall(t, server, http.MethodPost, "/api/probe", string(request))
+	if code != 200 {
+		t.Fatal(code, result)
+	}
+	var report ProbeReport
+	data, _ := json.Marshal(result)
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Candidates) != 2 || shellCalls != 1 {
+		t.Fatal("selected default and custom profile were not discovered", report.Candidates, shellCalls)
+	}
+	for _, item := range report.Checked {
+		if item.Kind != "claude" {
+			t.Fatal("looked at an unselected tool", item)
+		}
+	}
+	for _, candidate := range report.Candidates {
+		if candidate.Kind != "claude" || !candidate.Recommended {
+			t.Fatal(candidate)
+		}
+	}
+	if code, _ := probeCall(t, server, http.MethodPost, "/api/probe/accept", `{"kinds":["claude"],"accept":["codex"]}`); code != 400 {
+		t.Fatal("accepted an unselected tool", code)
+	}
+	if _, err := os.Stat(hostConfigPath(server.Config())); !os.IsNotExist(err) {
+		t.Fatal("discovery changed source permissions", err)
+	}
+	before := shellCalls
+	if code, _ := probeCall(t, server, http.MethodPost, "/api/probe/accept", `{"kinds":[],"accept":[],"decline":[]}`); code != 200 {
+		t.Fatal("could not defer setup", code)
+	}
+	if shellCalls != before || len(server.Config().Sources) != 0 {
+		t.Fatal("deferring setup discovered or enabled sources")
+	}
+	probePut(t, filepath.Join(home, ".gemini", "antigravity", "not-a-conversation"), "")
+	if code, status := probeCall(t, server, http.MethodGet, "/api/probe/status?discovery=none", ""); code != 200 || status["new_sources"] != float64(0) {
+		t.Fatal("status for the tools-first UI discovered unselected tools", code, status)
 	}
 }
 

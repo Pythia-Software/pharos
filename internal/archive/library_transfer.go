@@ -590,6 +590,18 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
  AND NOT EXISTS(SELECT 1 FROM incoming_messages s WHERE s.conversation_id=messages.conversation_id AND s.native_id=messages.native_id)`); err != nil {
 		return err
 	}
+	// Accepted session state is authoritative, including removals and hourly
+	// usage buckets. Replace its membership/usage and prune obsolete derived
+	// entities before importing; divergent unions keep their existing facts.
+	if _, err = tx.ExecContext(ctx, `DELETE FROM agent_session_messages WHERE agent_session_id IN (SELECT id FROM agent_sessions WHERE conversation_id IN (SELECT id FROM delivered_conversations));
+ DELETE FROM agent_session_usage WHERE agent_session_id IN (SELECT id FROM agent_sessions WHERE conversation_id IN (SELECT id FROM delivered_conversations));`); err != nil {
+		return err
+	}
+	for _, table := range []string{"agent_sessions", "skill_usages", "tool_calls", "model_requests"} {
+		if _, err = tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE conversation_id IN (SELECT id FROM delivered_conversations) AND id NOT IN (SELECT id FROM incoming_"+table+")"); err != nil {
+			return err
+		}
+	}
 	// Integer row IDs are destination-local. Replace per-workspace metrics only
 	// when the source owns that revision; union-derived totals are rebuilt below.
 	if _, err = tx.ExecContext(ctx, `DELETE FROM metrics WHERE workspace_id IN (SELECT id FROM delivered_workspaces);
@@ -698,7 +710,9 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 	if err != nil {
 		return err
 	}
-	conversationRows, err := queryMaps(tx, "SELECT id FROM incoming_conversations WHERE id NOT IN (SELECT id FROM delivered_older)")
+	// Accepted copies already carry reconciled sessions and ledgers. Only a
+	// divergent union needs those facts rebuilt from its combined messages.
+	conversationRows, err := queryMaps(tx, "SELECT id FROM incoming_conversations WHERE id NOT IN (SELECT id FROM delivered_older) AND id NOT IN (SELECT id FROM delivered_conversations)")
 	if err != nil {
 		return err
 	}
@@ -790,9 +804,36 @@ func verifyTransferPayloadContext(ctx context.Context, dir string, r libraryTran
 	return nil
 }
 
+// Transfers walk both retained trees and write a catalog, configuration and
+// delivery journal. Check cross-library containment before creating any output,
+// including symlink aliases of existing ancestors and hard-linked catalogs.
+func libraryStorageOverlaps(source, target Config) bool {
+	if sameFile(source.CatalogPath, target.CatalogPath) {
+		return true
+	}
+	paths := func(c Config) []string {
+		return []string{c.CatalogPath, c.CaptureRoot, c.ArchiveRoot, c.Path, descriptorPath(c)}
+	}
+	for _, a := range paths(source) {
+		if a == "" {
+			continue
+		}
+		for _, b := range paths(target) {
+			if b == "" {
+				continue
+			}
+			a, b := canonical(a), canonical(b)
+			if within(a, b) || within(b, a) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TransferLibrary(ctx context.Context, source, target Config, move bool, progress func(string)) (libraryTransferReceipt, error) {
 	var receipt libraryTransferReceipt
-	if sameFile(source.CatalogPath, target.CatalogPath) || within(target.CaptureRoot, source.CaptureRoot) || within(source.CaptureRoot, target.CaptureRoot) {
+	if libraryStorageOverlaps(source, target) {
 		return receipt, fmt.Errorf("source and destination libraries must have separate storage")
 	}
 	if err := source.checkLibrary(libraryVolumeIdentity); err != nil {

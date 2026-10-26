@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -13,10 +14,57 @@ import (
 // ones are written enabled; declined ones are written disabled, so the choice
 // is remembered and can be reversed from Sources.
 type ProbeSelection struct {
-	Accept  []string          `json:"accept"`
-	Decline []string          `json:"decline"`
-	Names   map[string]string `json:"names"`
-	All     bool              `json:"all"`
+	Accept    []string          `json:"accept"`
+	Decline   []string          `json:"decline"`
+	Names     map[string]string `json:"names"`
+	All       bool              `json:"all"`
+	Kinds     *[]string         `json:"kinds,omitempty"`
+	Locations []ProbeLocation   `json:"locations,omitempty"`
+}
+
+// Keep omitted selections backward compatible with the CLI and older clients.
+// The guided UI always sends kinds, including [] when deferring setup.
+func selectedProbe(config Config, catalog *Catalog, selection ProbeSelection) (ProbeReport, error) {
+	if selection.Kinds == nil {
+		if len(selection.Locations) != 0 {
+			return ProbeReport{}, probeRequestError{fmt.Errorf("choose tools before adding folders")}
+		}
+		return ProbeSources(config, catalog), nil
+	}
+	kinds := map[string]bool{}
+	for _, kind := range *selection.Kinds {
+		switch kind {
+		case "claude", "codex", "conductor", "tl1", "antigravity":
+			kinds[kind] = true
+		default:
+			return ProbeReport{}, probeRequestError{fmt.Errorf("unsupported source kind %q", kind)}
+		}
+	}
+	if len(selection.Locations) > 20 {
+		return ProbeReport{}, probeRequestError{fmt.Errorf("choose at most 20 additional folders")}
+	}
+	for _, location := range selection.Locations {
+		if !kinds[location.Kind] || (!strings.HasPrefix(location.Path, "/") && !strings.HasPrefix(location.Path, "~/")) {
+			return ProbeReport{}, probeRequestError{fmt.Errorf("choose an absolute folder for a selected tool")}
+		}
+	}
+	home, _ := os.UserHomeDir()
+	return probeSelectedSources(home, config, catalog, kinds, selection.Locations), nil
+}
+
+func (s *Server) probeSelected(w http.ResponseWriter, body map[string]any) {
+	var selection ProbeSelection
+	payload, _ := json.Marshal(body)
+	if err := json.Unmarshal(payload, &selection); err != nil || selection.Kinds == nil {
+		writeError(w, fmt.Errorf("choose the tools to look for first"), http.StatusBadRequest)
+		return
+	}
+	report, err := selectedProbe(s.Config(), s.Catalog, selection)
+	if err != nil {
+		writeError(w, err, http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, report, http.StatusOK)
 }
 
 type ProbeAcceptResult struct {
@@ -145,7 +193,12 @@ func (s *Server) acceptProbe(w http.ResponseWriter, body map[string]any) {
 		writeError(w, err, http.StatusBadRequest)
 		return
 	}
-	result, err := AcceptProbe(config, ProbeSources(config, s.Catalog), selection)
+	report, err := selectedProbe(config, s.Catalog, selection)
+	if err != nil {
+		writeError(w, err, http.StatusBadRequest)
+		return
+	}
+	result, err := AcceptProbe(config, report, selection)
 	if err == nil {
 		err = s.reloadSources()
 	}

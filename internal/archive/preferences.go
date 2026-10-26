@@ -18,8 +18,8 @@ import (
 //
 //	{"set": {"pharos-theme": "light"}, "delete": ["pharos-usage-view"]}
 //
-// Values are any JSON. What stays in the web view's own storage is per Mac by
-// design: page history, unsent annotations, and whether a panel is open.
+// Values are any JSON. Managed sessions also store a narrow set of working
+// values under a per-Mac/per-application namespace; browser caches stay temporary.
 
 var preferenceKey = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:_.-]{0,199}$`)
 

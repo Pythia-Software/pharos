@@ -1499,14 +1499,12 @@ func writeAgentSessions(tx *sql.Tx, workspaceID, conversationID string, conversa
 		existingSessions[firstString(row["native_id"])] = firstString(row["id"])
 	}
 	messageIDs := map[string]string{}
-	if preserveExisting {
-		rows, err := queryMaps(tx, "SELECT id,native_id FROM messages WHERE conversation_id=?", conversationID)
-		if err != nil {
-			return err
-		}
-		for _, row := range rows {
-			messageIDs[firstString(row["native_id"])] = firstString(row["id"])
-		}
+	rows, err := queryMaps(tx, "SELECT id,native_id FROM messages WHERE conversation_id=?", conversationID)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		messageIDs[firstString(row["native_id"])] = firstString(row["id"])
 	}
 	messageID := func(index int) string {
 		nativeID := conversation.Messages[index].NativeID
@@ -1528,7 +1526,7 @@ func writeAgentSessions(tx *sql.Tx, workspaceID, conversationID string, conversa
 	ids := map[string]string{}
 	for _, summary := range summaries {
 		ids[summary.nativeID] = stableID("agent-session", conversationID, summary.nativeID)
-		if preserveExisting && existingSessions[summary.nativeID] != "" {
+		if existingSessions[summary.nativeID] != "" {
 			ids[summary.nativeID] = existingSessions[summary.nativeID]
 		}
 	}

@@ -1,5 +1,9 @@
 # Releases and app updates
 
+For the release introducing managed libraries, include the
+[library management upgrade notes](onboarding-and-library-upgrade-notes.md),
+especially the requirement to keep Pharos running for managed MCP access.
+
 ## Publish a release from a Mac
 
 Pharos releases are built locally. GitHub Actions is not involved. A release

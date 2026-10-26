@@ -226,18 +226,19 @@ enum ManagedLibraryEject {
         init(_ message: String) { errorDescription = message }
     }
 
-    static func volume(in data: Data) throws -> LibraryVolume {
+    static func volume(in data: Data, application: URL? = nil) throws -> LibraryVolume {
         struct State: Decodable {
             struct Library: Decodable { let id: String; let config: String }
             let selected: String
             let libraries: [Library]
         }
         let state = try JSONDecoder().decode(State.self, from: data)
-        guard let library = state.libraries.first(where: { $0.id == state.selected }),
-              let volume = LibraryVolume(containing: URL(fileURLWithPath: library.config).deletingLastPathComponent()) else {
-            throw Failure("The connected library is not on a drive that Pharos can eject.")
+        if let library = state.libraries.first(where: { $0.id == state.selected }),
+           let volume = LibraryVolume(containing: URL(fileURLWithPath: library.config).deletingLastPathComponent()) {
+            return volume
         }
-        return volume
+        if let application, let volume = LibraryVolume(containing: application) { return volume }
+        throw Failure("The selected library and this application are not on a drive that Pharos can eject.")
     }
 
     static func release(_ volume: LibraryVolume, service: URL, token: String) -> ServiceClient.Release {

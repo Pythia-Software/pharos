@@ -7,6 +7,177 @@ import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { defaultApi, workID } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery } from "@pythia-software/query-table-core";
 
+test('Library setup keeps focus in its modal and returns to the choice after cancelling a flow', {skip}, async t => {
+  let folderSelections=0;
+  const {page, calls, shot} = await open(t, {url:'/app',ready:'#application-setup[open]',api:{
+    'GET /api/app/state': {application:'/Applications/Pharos.app',selected:'',mcp:'',busy:false,libraries:[]},
+    'POST /api/app/create': {saved:true},
+    'POST /api/app/choose-folder': ()=>({path:folderSelections++===0?'/Volumes/Test SSD':''}),
+  }});
+  const dialog=page.locator('#application-setup');
+  assert.ok(await dialog.evaluate(element=>element.contains(document.activeElement)));
+  await page.locator('.brand').evaluate(element=>element.focus());
+  assert.ok(await dialog.evaluate(element=>element.contains(document.activeElement)), 'background took focus during setup');
+  for(let i=0;i<8;i++){
+    await page.keyboard.press('Tab');
+    assert.ok(await dialog.evaluate(element=>element.contains(document.activeElement)), 'Tab escaped the modal');
+  }
+  await shot('welcome');
+  await page.locator('#meet-pharos').click();
+  assert.ok(await page.locator('#about-title').evaluate(element=>element===document.activeElement));
+  await shot('about-pharos');
+  await page.locator('#back-to-welcome').click();
+  assert.ok(await page.locator('#welcome-title').evaluate(element=>element===document.activeElement));
+  await page.locator('#meet-pharos').click();
+  await page.locator('#start-setup').click();
+  assert.ok(await page.locator('#flow-title').evaluate(element=>element===document.activeElement));
+  await shot('machines');
+  await page.locator('.wizard-alternate summary').focus();
+  await page.keyboard.press('Shift+Tab');
+  assert.ok(await page.evaluate(()=>document.activeElement.matches('input[name=machines]')), 'reverse Tab skipped the machine choices');
+  await page.locator('input[name=machines][value=many]').check();
+  await page.locator('#submit').click();
+  assert.ok(await page.locator('#flow-title').evaluate(element=>element===document.activeElement));
+  await shot('storage');
+  await page.locator('#submit').click();
+  assert.ok(await page.locator('#name').isHidden());
+  assert.ok(await page.locator('#path').isHidden());
+  await page.locator('#submit').click();
+  assert.ok(await page.locator('#path').evaluate(element=>element===document.activeElement), 'missing SSD folder was not focused');
+  await page.getByRole('button',{name:'Edit library name',exact:true}).click();
+  assert.ok(await page.locator('#name').evaluate(element=>element===document.activeElement), 'editing the library name did not focus its input');
+  await page.locator('#name').fill('Research');
+  await page.getByRole('button',{name:'Done editing library name',exact:true}).click();
+  assert.ok(await page.locator('#name').isHidden());
+  await page.locator('#choose-folder').click();
+  await page.waitForFunction(()=>document.querySelector('#path').value==='/Volumes/Test SSD'&&!document.querySelector('#choose-folder').disabled);
+  assert.ok(await page.locator('#choose-folder').evaluate(element=>element===document.activeElement), 'folder selection lost keyboard focus');
+  await page.locator('#choose-folder').click();
+  await page.waitForFunction(()=>!document.querySelector('#choose-folder').disabled);
+  assert.equal(await page.locator('#path').inputValue(),'/Volumes/Test SSD', 'cancelling cleared the selected folder');
+  await shot('details');
+  await page.locator('#submit').click();
+  assert.ok(await page.locator('#flow-title').evaluate(element=>element===document.activeElement));
+  await shot('review');
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#name').inputValue(),'Research');
+  assert.ok(await page.locator('#name').isHidden(), 'returning from review exposed the editor');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  assert.ok(await page.locator('#about-title').evaluate(element=>element===document.activeElement));
+  await page.locator('#start-setup').click();
+  await page.locator('.wizard-alternate summary').click();
+  await page.locator('#wizard-machines [data-flow=open]').click();
+  await page.locator('#submit').click();
+  assert.ok(await page.locator('#existing-path').evaluate(element=>element===document.activeElement));
+  await page.keyboard.press('Escape');
+  assert.ok(await page.locator('#flow-title').evaluate(element=>element===document.activeElement));
+  await page.locator('#wizard-machines [data-flow=recover]').click();
+  await page.locator('#submit').click();
+  assert.ok(await page.locator('#backup').evaluate(element=>element===document.activeElement));
+  await page.locator('#backup').fill('/Backups/My Library');
+  await page.locator('#submit').click();
+  await page.locator('#submit').click();
+  assert.ok(await page.locator('#recover-path').evaluate(element=>element===document.activeElement));
+  await page.locator('#recover-path').fill('/Libraries/Restored');
+  await page.locator('#submit').click();
+  await shot('restore-review');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  assert.ok(await dialog.isVisible(), 'initial setup dismissed before choosing a library');
+  assert.ok(calls.every(call=>['/api/app/state','/api/app/choose-folder'].includes(call.path)), 'setup wrote data before final review');
+  await page.locator('#application-theme').click();
+  await shot('machines-light');
+  await page.locator('#submit').click();
+  await page.locator('#submit').click();
+  await page.locator('#submit').click();
+  await page.locator('#submit').click();
+  await page.locator('#next').waitFor({state:'visible'});
+  assert.ok(await page.locator('#next').evaluate(element=>element===document.activeElement), 'completion did not focus source approval');
+  await shot('ready');
+});
+
+test('Library proposal allows default setup and deliberate inline overrides', {skip}, async t => {
+  const parent='/Users/test/Library/Application Support/Pharos/Libraries';
+  const {page,calls}=await open(t,{url:'/app',ready:'#application-setup[open]',api:{
+    'GET /api/app/state':{application:'/Applications/Pharos.app',selected:'',mcp:'',busy:false,libraries:[],local_library_parent:parent},
+    'POST /api/app/create':{saved:true},
+  }});
+  await page.locator('#meet-pharos').click();await page.locator('#start-setup').click();
+  await page.locator('#submit').click();await page.locator('#submit').click();
+  assert.ok(await page.locator('#name').isHidden());assert.ok(await page.locator('#path').isHidden());
+  assert.ok((await page.locator('#location-path').textContent()).includes(parent));
+  await page.locator('#submit').click();
+  assert.ok((await page.locator('#review-folder').textContent()).startsWith(parent+'/'));
+  await page.locator('#cancel').click();
+  await page.getByRole('button',{name:'Edit library location',exact:true}).click();
+  assert.equal(await page.locator('#path').inputValue(),parent);
+  assert.ok(await page.locator('#path').evaluate(element=>element===document.activeElement));
+  await page.locator('#path').fill('/Users/test/Research');
+  await page.getByRole('button',{name:'Done editing library location',exact:true}).click();
+  await page.getByRole('button',{name:'Edit library name',exact:true}).click();
+  await page.locator('#name').fill('');await page.locator('#submit').click();
+  assert.ok(await page.locator('#name').evaluate(element=>element===document.activeElement));
+  await page.locator('#name').fill('Research');
+  await page.locator('#submit').click();await page.locator('#cancel').click();
+  assert.ok(await page.locator('#name').isHidden());assert.ok(await page.locator('#path').isHidden());
+  await page.locator('#submit').click();
+  assert.ok(!calls.some(call=>call.path==='/api/app/create'), 'editing the proposal created a library');
+  await page.locator('#submit').click();await page.locator('#next').waitFor({state:'visible'});
+  assert.deepEqual(calls.find(call=>call.path==='/api/app/create').body,{name:'Research',path:'/Users/test/Research/Research',location:'mac'});
+});
+
+test('Source setup keeps tool choices and focus while reviewing folders before approval', {skip}, async t => {
+  const {page,calls,shot}=await open(t,{url:'/app',ready:'#application-setup[open]',api:{
+    'GET /api/app/state':{application:'/Applications/Pharos.app',selected:'source-review-library',mcp:'',busy:false,libraries:[]},
+    'POST /api/app/create':{saved:true},
+    'POST /api/probe/accept':{added:['claude'],enabled:[],declined:['claude-work'],skipped:[]},
+    'POST /api/capture':{run:{id:'capture-test',state:'complete',sources:['claude'],bytes_copied:2400000,results:[]}},
+    'POST /api/index':{run:{id:'index-test',state:'complete',sources:['claude'],conversations:24,messages:100,results:[]}},
+  }});
+  const libraryScopes=[];
+  page.on('request',request=>{if(/^\/api\/(probe|capture|index)/.test(new URL(request.url()).pathname))libraryScopes.push(request.headers()['x-pharos-library'])});
+  await page.locator('#meet-pharos').click();await page.locator('#start-setup').click();
+  for(let step=0;step<4;step++)await page.locator('#submit').click();
+  await page.locator('#configure-sources').click();
+  const guide=page.locator('#pharosOnboarding');
+  await guide.getByRole('group',{name:'Detected tools',exact:true}).waitFor();
+  assert.ok(await guide.locator('h2').evaluate(element=>element===document.activeElement));
+  assert.ok(await guide.getByRole('checkbox',{name:/Claude Code/}).isChecked());
+  assert.ok(!await guide.getByRole('checkbox',{name:/Codex/}).isVisible());
+  assert.ok(!calls.some(call=>call.path==='/api/probe'),'presence detection parsed source history');
+  await shot('source-tools');
+  await guide.getByText('Other tools',{exact:true}).click();
+  await guide.getByRole('checkbox',{name:/Codex/}).check();
+  await guide.getByRole('checkbox',{name:/Codex/}).uncheck();
+  await guide.getByRole('checkbox',{name:/Claude Code/}).check();
+  await guide.getByRole('button',{name:'Continue',exact:true}).click();
+  await guide.locator('.pharos-candidate').first().waitFor();
+  assert.ok(await guide.locator('h2').evaluate(element=>element===document.activeElement));
+  await guide.getByRole('checkbox',{name:/claude-work\/projects/}).uncheck();
+  await shot('source-locations');
+  await guide.getByRole('button',{name:'Continue',exact:true}).click();
+  assert.ok(await guide.locator('h2').evaluate(element=>element===document.activeElement));
+  await shot('source-review');
+  await page.keyboard.press('Escape');
+  assert.ok(await guide.getByRole('button',{name:'Continue',exact:true}).isVisible());
+  await guide.getByRole('button',{name:'Back',exact:true}).click();
+  assert.ok(await guide.getByRole('checkbox',{name:/Claude Code/}).isChecked());
+  await guide.getByRole('button',{name:'Continue',exact:true}).click();
+  assert.ok(!await guide.getByRole('checkbox',{name:/claude-work\/projects/}).isChecked());
+  await guide.getByRole('button',{name:'Continue',exact:true}).click();
+  assert.ok(!calls.some(call=>['/api/probe/accept','/api/capture','/api/index'].includes(call.path)),'history was read or capture approved before final consent');
+  await guide.getByRole('button',{name:'Add and capture',exact:true}).click();
+  await guide.getByRole('button',{name:'Index now',exact:true}).waitFor();
+  await guide.getByRole('button',{name:'Index now',exact:true}).click();
+  await guide.getByRole('button',{name:'Done',exact:true}).waitFor();
+  assert.ok(await guide.getByRole('button',{name:'Done',exact:true}).evaluate(element=>element===document.activeElement));
+  assert.deepEqual(calls.find(call=>call.path==='/api/probe/accept').body,{kinds:['claude'],locations:[],accept:['claude'],decline:['claude-work'],names:{}});
+  assert.ok(libraryScopes.length>0&&libraryScopes.every(scope=>scope==='source-review-library'),'source setup requests lost their library binding');
+});
+
 test('Cloud backup setup focuses invalid fields and retains storage-class keyboard focus', {skip}, async t => {
   const {page} = await open(t, {url:'/settings/backups',ready:'#cloud-explore'});
   await page.getByRole('button',{name:'Explore cloud backup options',exact:true}).click();

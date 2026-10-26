@@ -1,17 +1,39 @@
 # Libraries and application setup
 
 Pharos.app can run from Applications or from an SSD. Its library is a separate
-folder. The native app opens **Libraries** on startup; the same screen is linked
-from the library toolbar. It offers creation, opening, recovery, MCP assignment,
-manual transfers, and an optional pending-library delivery pair.
+folder. The native app opens **Libraries** on startup as a modal over the
+standard Pharos header and Home view; the same modal is linked from the library
+toolbar. The background stays inactive until a library is connected. First
+launch introduces Pharos and guides new setup one decision at a time. Existing
+history and backup recovery are separate branches. Once a library exists, the modal
+also offers MCP assignment, manual transfers, and an optional pending-library
+delivery pair.
 
 ## Choose locations
 
-For an app on the Mac, a new library defaults to
-`~/Library/Application Support/Pharos/Libraries/<name>/`. An app on an SSD defaults
-to `Libraries/<name>/` beside its bundle. A chosen folder can be elsewhere. The
-folder picker chooses a parent for a new library and the library folder itself
-when opening one. No library files are installed in Applications by default.
+The setup guide asks, in order:
+
+1. **Your Macs:** one Mac or several, using illustrated choices.
+2. **Storage:** introduce the library as a folder of files and recommend this
+   Mac for one-Mac use, or an attached SSD for several Macs. Either choice is
+   available; choosing several Macs does not configure transfers automatically.
+3. **Name and folder:** name the library and choose its parent folder. Local
+   storage can use the standard Pharos Libraries folder; SSD storage requires
+   an explicit folder on the drive.
+4. **Review:** show the resolved folder and choices before creating files.
+
+Back preserves answers. Changing the Mac count resets the storage recommendation
+and parent folder; changing storage clears the previous parent. Opening existing
+history skips these creation questions. Recovery instead asks for the backup,
+a new destination, then review. Source approval follows creation, with optional
+backup information disclosed separately.
+
+Choosing **On this Mac** uses
+`~/Library/Application Support/Pharos/Libraries/<name>/` (or the configured support
+folder), even when Pharos.app itself runs from an SSD. The parent folder picker
+creates `<name>/` inside the chosen parent. No library files are installed in
+Applications by default. Older callers that omit an explicit storage choice
+retain the portable app's default of `Libraries/<name>/` beside its bundle.
 
 A library keeps these components together:
 
@@ -40,8 +62,20 @@ settings. Re-register agent commands after moving an app to another location.
 
 ## Sources and preferences
 
-Choose sources using **Choose sources on this Mac**, after registering a
-library. Existing discovery, estimates and opt-in controls are used. Source
+After creating a library, Pharos checks common application and data-folder
+locations on this Mac. Detected tools appear selected in the guide; remaining
+tools are available under **Other tools**. This initial presence check uses
+metadata only, without parsing conversations, opening databases, or running a
+shell. Continue to inspect the selected tools' history locations, including
+their relevant environment overrides. Review discovered
+folders, exclude individual profiles, or check an additional folder for a
+selected tool. The final review lists the approved locations and estimated
+source-file size before **Add and capture** saves the choices and copies history.
+Indexing is a separate next step. **Set up later** saves an empty host choice
+without discovering or capturing sources. Settings → Sources reopens this same
+guide. Conductor and TL1 do not implicitly select Claude Code or Codex.
+
+Source
 bindings remain inside `hosts/<host-id>.toml`; carrying the library to another
 Mac does not grant that Mac access to the original paths or OS permissions.
 
@@ -52,7 +86,12 @@ the bookmarked history has moved; the transcript is then unavailable in that
 source library.
 
 The native managed window uses nonpersistent WebKit storage. Preview caches are
-scoped to a service credential and local session keys are scoped to a library.
+scoped to a service credential. Annotations and drafts, page history, last-used
+table queries and navigation-panel state are saved in the library, under a
+per-Mac/per-application session namespace. They survive relaunch and updates
+without leaving a portable app's history on the Mac. Quit, update and native
+Eject await pending session saves before closing its service. History transfers
+do not merge these independent session values.
 Portable use leaves no Pharos helper or history cache running on the Mac while
 its SSD is absent. Small updater, window, app-registration and explicitly
 requested integration settings can remain; macOS permission records are separate.
@@ -69,6 +108,11 @@ that service is ready. Otherwise it returns a helpful unavailable error. It
 does not open the assigned catalog directly. Responses completing after a
 connection or assignment switch are discarded. Private Ask Pharos requests stay
 bound to their originating library.
+
+The application must remain running, though its window may be closed. This is
+a change from older bundled `mcp` registrations, which could read the catalog
+after the app quit. Existing registered libraries use the same managed gate.
+Explicitly standalone CLI installations retain direct-catalog access.
 
 Managed registrations use `mcp-app --application APP`. Older `--config ... mcp`
 registrations launched by the same installed app also enter its broker gate once
@@ -124,6 +168,9 @@ is also available for a later Finder eject. Releasing the archive keeps local
 pending capture configured and suspends delivery until reconnect or drive return.
 Finder ejects also release managed data libraries; quit a portable app first if
 using Finder to eject its own drive.
+Release is temporary: it preserves the selected library, MCP assignment and
+delivery pair. Relaunch reconnects the selected library when its drive is
+available. A released source pauses capture as well as delivery until reconnect.
 
 ## Verified transfer and recovery
 

@@ -146,8 +146,10 @@ catalog itself, see [MCP access](#mcp-access)) checks that:
 
 - the library directory is on the volume that `volume_id` pins, so a clone or
   backup of the drive is not mistaken for the original and silently diverges.
-  After deliberately moving or restoring a library, set `volume_id` to the value
-  the error reports, or to `""` to stop pinning;
+  A folder copy also has a different writable identity. Use **Restore a backup**
+  or `pharos library-recover` when restoring or moving data by copying; changing
+  `volume_id` alone does not make a copy safe to open. A rename on the same
+  volume preserves its identity;
 - the catalog exists. A missing catalog usually means its drive is not mounted,
   so it is an error rather than an invitation to start an empty one. To start
   over deliberately, move `library.toml` aside and run `init-library` again.
@@ -339,10 +341,11 @@ Ctrl-C stops safely, and running it again resumes. Run it again whenever you
 want the library brought up to date: it adds sources that appeared since, and
 captures and indexes only what changed.
 
-The app offers the same steps. The first time a library is opened on a Mac, Pharos shows **New Mac detected:
-<name>** with the conversation sources it found there. (A Mac that has already
-indexed into the library, such as the one that created it, sees **Set up sources
-for <name>** instead.) Pharos looks only in these places. It never searches the
+The app offers a guided setup after library configuration, and the first time
+a library is opened on another Mac. It first detects tools using application
+bundles and familiar data folders, then shows those tools selected as options.
+Undetected tools are under **Other tools**. Continuing checks the selected
+tools' conversation locations below. It never searches the
 rest of the home folder and never enters a folder that macOS guards with a
 permission prompt: Desktop, Documents, Downloads, iCloud Drive and other cloud
 storage, other apps' containers, Mail, Messages, and other volumes.
@@ -373,11 +376,16 @@ Conductor, installations for TL1), their size and date range, and:
   before shows up here.
 - Whether it is already configured, and as which source.
 
-Checked locations become enabled sources and unchecked ones paused sources, so
-the Mac is not asked again; enable those later in Settings → Sources. When a
-newer Pharos learns to read a new kind of source (Antigravity, so far), a Mac
-already set up is offered, once, the folders of that kind no source covers yet:
-the app opens **New sources on <name>**, and `add-this-mac` lists them too. The choice
+The setup guide initially checks only tool presence, without parsing history,
+opening databases, or launching a shell. Detected tools are selected by default;
+you can exclude them or add undetected tools under **Other tools**. The next
+step checks only the selected tools and their relevant environment overrides. You can
+review discovered folders, exclude profiles, and check an additional folder.
+The review shows locations and estimated source-file size before **Add and
+capture** saves access and copies history. Checked locations become enabled
+sources and unchecked found locations become paused sources; enable those
+later in Settings → Sources. New tool support is available through the guide
+without automatically selecting it. The choice
 is written, atomically, to `hosts/<host-id>.toml` in the library:
 
 ```toml
@@ -411,10 +419,10 @@ name; every other `library.toml` source still applies. Toggling a source in
 Settings writes whichever file defines it. Hand edits take effect when the
 service restarts; accepting in the panel reloads sources immediately.
 
-**Not now** writes nothing, and the panel returns the next time Pharos starts.
-Settings → Sources names the Mac its sources belong to and offers **Find
-sources on this Mac…** to look again, for example after installing another
-agent.
+**Set up later** saves an empty host choice without discovering or capturing
+sources, so the guide does not interrupt the next launch. Settings → Sources
+names the Mac its sources belong to and offers **Configure sources on this Mac…**
+to revisit the guide, for example after installing another agent.
 
 After adding sources the panel captures them onto the library straight away
 (see [Capture](#capture)), showing each source's files and bytes as they are
@@ -438,6 +446,12 @@ pharos probe --accept-all                 # add every recommended candidate
 The API equivalents are `GET /api/probe/status` (cheap; includes
 `needs_onboarding`), `GET /api/probe`, and `POST /api/probe/accept` with
 `{"accept": ["claude"], "decline": ["codex"], "names": {"claude": "claude-mbp"}}`.
+The guided UI uses `GET /api/probe/status?discovery=none` and the lightweight
+`GET /api/probe/tools` presence check, then `POST /api/probe`
+with `{"kinds":["claude"],"locations":[]}`. The same `kinds` and `locations`
+are sent with approval, so revalidation stays within those choices. Empty
+`kinds` explicitly means no tools. Legacy requests and the CLI retain full
+discovery when that field is omitted.
 
 A per-user `archive.toml` has no per-Mac file, so there `probe` only reports:
 `--accept` and `POST /api/probe/accept` refuse, and the `[[sources]]` wanted are
@@ -445,7 +459,7 @@ copied into `archive.toml` by hand.
 
 Pharos has two verbs for keeping the library current: **capture** copies
 this Mac's source files into the library, and **index** makes conversations
-searchable. Settings → Sources keeps **Find sources on this Mac**, source
+searchable. Settings → Sources keeps **Configure sources on this Mac**, source
 configuration, and enable switches, with **Open Capture & index** linking to
 the controls. Settings → Capture & index offers **Capture & index**: capture
 this Mac, index captures from every Mac, then any pending library upgrade.
@@ -1090,20 +1104,36 @@ backup with nothing changed 0.07 s, and one after 50 files and the catalog
 changed 4.4 s, most of it copying the catalog again. A library's catalog of tens
 of gigabytes is therefore copied in minutes whenever it has changed.
 
-**Restoring.** Copy the backup folder to a drive, install the app into it
-(`macos/install-library.sh DIR` keeps the existing `library.toml`), and set
-`volume_id` in `library.toml` to what `pharos volume-id DIR` prints: until
-then the guard refuses to open the copy, as it should for any copy of a library.
-Set `github_token` or `tl1_token` again if you used them. `pharos-backup.json`
-can be deleted. The restored library gets a new `library_id` on its first
-backup, so back it up to a new folder.
+**Restoring.** In Pharos, choose **Restore a backup**, select the completed
+backup and a new candidate folder. The CLI equivalent is:
+
+```sh
+pharos library-recover --backup /path/Backup --to /path/NewCandidate
+```
+
+Recovery verifies the retained evidence and catalog, pins the destination
+volume, and creates fresh library and writable-instance identities. The backup
+stays intact. Open the resulting candidate in Pharos and review its paused
+source and backup schedules before resuming them. Re-enter tokens if needed.
+Changing `volume_id` or deleting `pharos-library.json` is not a restore procedure:
+the directory-copy guard intentionally refuses those copies. See
+[Verified transfer and recovery](library-management.md#verified-transfer-and-recovery).
 
 ## MCP access
 
 Settings → MCP shows the local stdio command and configuration to copy into an
-agent client's MCP settings. For a per-user install that is the configured
-`executable` with `--config PATH mcp`. For a library it is the `pharos` inside
-the library's own app, which finds `library.toml` beside the app by itself:
+agent client's MCP settings. **Managed Pharos.app installations now require the
+app to remain open and connected to their explicitly assigned MCP library.**
+Closing the window is fine; quitting the application makes its MCP tools report
+that Pharos is offline. Existing bundled `mcp` registrations follow this rule
+once their library is registered with the app. Reopening the app resumes the
+last selected library; browsing a different library does not change MCP's
+assignment. The current managed registration uses `mcp-app --application APP`.
+See [MCP and the primary connection](library-management.md#mcp-and-the-primary-connection).
+
+For an explicitly standalone, unbundled CLI install the command remains the
+configured `executable` with `--config PATH mcp`. Older portable installations
+used the bundled executable, which finds `library.toml` beside its app:
 
 ```json
 {"mcpServers": {"pharos": {"command": "/Volumes/euclid/Pharos/Pharos.app/Contents/MacOS/pharos", "args": ["mcp"]}}}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 )
@@ -22,6 +23,7 @@ func RecoverLibrary(ctx context.Context, backup, destination string, progress fu
 		return Config{}, fmt.Errorf("recovery destination already exists or is inaccessible: %s", destination)
 	}
 	var manifest backupManifest
+	var repositoryConfig Config
 	b, err := os.ReadFile(filepath.Join(backup, backupManifestName))
 	var lock *os.File
 	libraryCopy := os.IsNotExist(err)
@@ -37,6 +39,7 @@ func RecoverLibrary(ctx context.Context, backup, destination string, progress fu
 		if !config.Library {
 			return Config{}, fmt.Errorf("use a complete backup to recover a legacy installation")
 		}
+		repositoryConfig = config
 		relative := func(path string) (string, error) {
 			rel, e := filepath.Rel(backup, canonical(path))
 			if e != nil || !filepath.IsLocal(rel) {
@@ -109,6 +112,21 @@ func RecoverLibrary(ctx context.Context, backup, destination string, progress fu
 	if err = checkCatalogCompatibility(catalogPath); err != nil {
 		return Config{}, err
 	}
+	if !libraryCopy {
+		for _, item := range manifest.Items {
+			if item.Name != "config" {
+				continue
+			}
+			path, err := safe(item.Path)
+			if err != nil {
+				return Config{}, err
+			}
+			repositoryConfig, err = loadConfig(path, false)
+			if err != nil {
+				return Config{}, err
+			}
+		}
+	}
 	stage, err := os.MkdirTemp(filepath.Dir(destination), ".pharos-recovery-")
 	if err != nil {
 		return Config{}, err
@@ -122,6 +140,33 @@ func RecoverLibrary(ctx context.Context, backup, destination string, progress fu
 	// A failed candidate is retained for inspection, never published as usable.
 	configPath, err := writeLibraryConfig(stage, libraryVolumeIdentity, defaultLibrarySettings)
 	if err != nil {
+		return Config{}, err
+	}
+	// Repository identity choices travel with the library. Carry only these
+	// sections into the fresh config, leaving paths and credentials reset.
+	text, err := os.ReadFile(configPath)
+	if err != nil {
+		return Config{}, err
+	}
+	var settings strings.Builder
+	if len(repositoryConfig.RepositoryAliases) > 0 {
+		settings.WriteString("\n[repositories.aliases]\n")
+		keys := make([]string, 0, len(repositoryConfig.RepositoryAliases))
+		for key := range repositoryConfig.RepositoryAliases {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			fmt.Fprintf(&settings, "%q = %q\n", key, repositoryConfig.RepositoryAliases[key])
+		}
+	}
+	if len(repositoryConfig.RepositorySeparate) > 0 {
+		settings.WriteString("\n[repositories.separate]\n")
+		for _, id := range repositoryConfig.RepositorySeparate {
+			fmt.Fprintf(&settings, "%q = true\n", id)
+		}
+	}
+	if err = writeFileAtomic(configPath, append(text, settings.String()...), 0o600); err != nil {
 		return Config{}, err
 	}
 	config, err := LoadConfig(configPath)

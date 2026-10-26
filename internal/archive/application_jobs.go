@@ -90,7 +90,7 @@ func (m *applicationManager) deliveryCycle(sourceID, targetID string) {
 	defer m.operationMu.Unlock()
 	m.mu.Lock()
 	a, b := m.registry.library(sourceID), m.registry.library(targetID)
-	if a == nil || b == nil || m.released {
+	if a == nil || b == nil || m.released || m.suspended[sourceID] {
 		m.mu.Unlock()
 		return
 	}

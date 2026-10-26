@@ -227,6 +227,46 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 }
 func TestLibraryTransferRejectsNewerCatalogAndBusySource(t *testing.T) {
 	a, b := lifecycleLibraries(t)
+	t.Run("separate storage", func(t *testing.T) {
+		for _, sourcePath := range []string{a.CaptureRoot, a.ArchiveRoot} {
+			for _, field := range []string{"captures", "preserved", "catalog", "config"} {
+				t.Run(filepath.Base(sourcePath)+"/"+field, func(t *testing.T) {
+					nested := b
+					path := filepath.Join(sourcePath, "nested")
+					switch field {
+					case "captures":
+						nested.CaptureRoot = path
+					case "preserved":
+						nested.ArchiveRoot = path
+					case "catalog":
+						nested.CatalogPath = filepath.Join(path, "catalog.sqlite3")
+					case "config":
+						nested.Path = filepath.Join(path, libraryConfigName)
+					}
+					for _, pair := range [][2]Config{{a, nested}, {nested, a}} {
+						if _, err := TransferLibrary(t.Context(), pair[0], pair[1], true, nil); err == nil || !strings.Contains(err.Error(), "separate storage") {
+							t.Fatal("overlapping storage accepted", field, err)
+						}
+					}
+				})
+			}
+		}
+		alias := filepath.Join(t.TempDir(), "preserved-link")
+		if err := os.MkdirAll(a.ArchiveRoot, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(a.ArchiveRoot, alias); err != nil {
+			t.Fatal(err)
+		}
+		nested := b
+		nested.CaptureRoot = filepath.Join(alias, "new-library", "captures")
+		if _, err := TransferLibrary(t.Context(), a, nested, false, nil); err == nil || !strings.Contains(err.Error(), "separate storage") {
+			t.Fatal("symlink overlap accepted", err)
+		}
+		if _, err := os.Stat(filepath.Join(b.CaptureRoot, ".imports")); !os.IsNotExist(err) {
+			t.Fatal("overlap refusal created staging output", err)
+		}
+	})
 	t.Run("insufficient space", func(t *testing.T) {
 		override(t, &captureFreeMargin, int64(1<<62))
 		if _, err := TransferLibrary(context.Background(), a, b, true, nil); err == nil || !strings.Contains(err.Error(), "free") {
@@ -276,6 +316,14 @@ func TestApplicationMCPConnectionAndLateResponse(t *testing.T) {
 	if _, err = m.mcp(context.Background(), request); err == nil || !strings.Contains(err.Error(), "MCP is attached") {
 		t.Fatal("wrong library was answered", err)
 	}
+	if _, err = m.mcp(context.Background(), request); err == nil || strings.Contains(err.Error(), "working with") {
+		t.Fatal("an offline selection was described as a connected library", err)
+	}
+	m.children[second] = &applicationChild{done: make(chan struct{})}
+	if _, err = m.mcp(context.Background(), request); err == nil || !strings.Contains(err.Error(), "working with") {
+		t.Fatal("a different connected library was not identified", err)
+	}
+	delete(m.children, second)
 	m.registry.Selected = first
 	started, finish := make(chan struct{}), make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -305,6 +353,117 @@ func TestApplicationMCPConnectionAndLateResponse(t *testing.T) {
 		t.Fatal("offline MCP directly opened a catalog")
 	}
 }
+
+func TestApplicationSetupWithoutLibrary(t *testing.T) {
+	m, err := newApplicationManager(context.Background(), filepath.Join(t.TempDir(), "Pharos.app"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/app", "/assets/query-tables.css", "/assets/ask-pharos.css"} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		response := httptest.NewRecorder()
+		m.ServeHTTP(response, request)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("anonymous setup resource %s: %d", path, response.Code)
+		}
+		request.Header.Set("Authorization", "Bearer "+m.token)
+		response = httptest.NewRecorder()
+		m.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || response.Body.Len() == 0 {
+			t.Fatalf("setup resource %s requires a library: %d", path, response.Code)
+		}
+	}
+	if len(m.children) != 0 || len(m.registry.Libraries) != 0 {
+		t.Fatal("showing setup started a library")
+	}
+	t.Run("browser folder picker", func(t *testing.T) {
+		calls := 0
+		chosen := "/Volumes/My SSD/quoted \"folder\"\nname"
+		var pickerError error
+		override(t, &applicationFolderPicker, func(ctx context.Context) (string, error) {
+			calls++
+			return chosen, pickerError
+		})
+		request := func(method, origin, token string) *httptest.ResponseRecorder {
+			r := httptest.NewRequest(method, "/api/app/choose-folder", strings.NewReader(`{}`))
+			r.Header.Set("Authorization", "Bearer "+token)
+			r.Header.Set("Origin", origin)
+			w := httptest.NewRecorder()
+			m.ServeHTTP(w, r)
+			return w
+		}
+		for _, input := range []struct{ method, origin, token string }{
+			{http.MethodPost, "", "wrong"},
+			{http.MethodPost, "http://other.example", m.token},
+			{http.MethodGet, "", m.token},
+		} {
+			if w := request(input.method, input.origin, input.token); w.Code == http.StatusOK || calls != 0 {
+				t.Fatal("picker opened without an authorized same-origin POST", w.Code, calls)
+			}
+		}
+		for _, path := range []string{chosen, ""} {
+			chosen = path
+			w := request(http.MethodPost, "", m.token)
+			var result map[string]string
+			if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || w.Code != http.StatusOK || result["path"] != path {
+				t.Fatal("selection or cancellation was not preserved", w.Body.String(), err)
+			}
+		}
+		pickerError = fmt.Errorf("picker unavailable")
+		if w := request(http.MethodPost, "", m.token); w.Code != http.StatusInternalServerError {
+			t.Fatal("picker failure reported success", w.Body.String())
+		}
+		callsBefore := calls
+		m.pickerMu.Lock()
+		w := request(http.MethodPost, "", m.token)
+		m.pickerMu.Unlock()
+		if w.Code != http.StatusConflict || calls != callsBefore {
+			t.Fatal("opened a second picker", w.Code, calls)
+		}
+		if len(m.children) != 0 || len(m.registry.Libraries) != 0 {
+			t.Fatal("folder selection created or started a library")
+		}
+	})
+	t.Run("explicit storage choices", func(t *testing.T) {
+		support := t.TempDir()
+		t.Setenv("PHAROS_SUPPORT_DIR", support)
+		override(t, &libraryVolumeIdentity, testIdentity)
+		app, err := newApplicationManager(t.Context(), filepath.Join(t.TempDir(), "Pharos.app"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Exercise a portable app without creating or touching a real volume.
+		app.registry.Application = "/Volumes/Portable/Pharos.app"
+		response := httptest.NewRecorder()
+		app.api(response, httptest.NewRequest(http.MethodGet, "/api/app/state", nil))
+		var state map[string]any
+		if err := json.Unmarshal(response.Body.Bytes(), &state); err != nil {
+			t.Fatal(err)
+		}
+		if state["local_library_parent"] != filepath.Join(support, "Libraries") {
+			t.Fatal("wrong local folder", state)
+		}
+		response = httptest.NewRecorder()
+		app.api(response, httptest.NewRequest(http.MethodPost, "/api/app/create", strings.NewReader(`{"name":"Archive","location":"ssd"}`)))
+		if response.Code != http.StatusBadRequest || len(app.registry.Libraries) != 0 {
+			t.Fatal("external choice silently fell back to default storage", response.Body.String())
+		}
+		response = httptest.NewRecorder()
+		app.api(response, httptest.NewRequest(http.MethodPost, "/api/app/create", strings.NewReader(`{"name":"Local history","location":"mac"}`)))
+		if response.Code != http.StatusOK || len(app.registry.Libraries) != 1 {
+			t.Fatal("local setup failed", response.Body.String())
+		}
+		config := app.registry.Libraries[0].Config
+		if config != filepath.Join(support, "Libraries", "Local history", libraryConfigName) {
+			t.Fatal("portable app overrode the chosen Mac storage", config)
+		}
+		if len(app.children) != 0 {
+			t.Fatal("setup started capture before source approval")
+		}
+	})
+
+}
+
 func TestLibraryRecoveryCandidate(t *testing.T) {
 	t.Run("all retained evidence", func(t *testing.T) {
 		slowTest(t)
@@ -394,6 +553,25 @@ func TestLibraryRecoveryCandidate(t *testing.T) {
 	})
 	a, _ := lifecycleLibraries(t)
 	dest := filepath.Join(t.TempDir(), "backup")
+	configText := readText(t, a.Path) + `
+[repositories.aliases]
+"github.com/acme/old" = "github.com/acme/new"
+[repositories.separate]
+"repo_keep" = true
+`
+	if err := os.WriteFile(a.Path, []byte(configText), 0600); err != nil {
+		t.Fatal(err)
+	}
+	assertRepositoryChoices := func(t *testing.T, config Config) {
+		t.Helper()
+		if config.RepositoryAliases["github.com/acme/old"] != "github.com/acme/new" || len(config.RepositorySeparate) != 1 || config.RepositorySeparate[0] != "repo_keep" {
+			t.Fatal("recovery lost repository identity choices", config.RepositoryAliases, config.RepositorySeparate)
+		}
+		loaded, err := LoadConfig(config.Path)
+		if err != nil || loaded.RepositoryAliases["github.com/acme/old"] != "github.com/acme/new" || len(loaded.RepositorySeparate) != 1 {
+			t.Fatal("recovered repository choices did not survive reload", err)
+		}
+	}
 	c := reopenCatalog(t, a.CatalogPath)
 	_, err := c.DB.Exec(`INSERT INTO cloud_destinations(id,config_json,credential_json,imported_at) VALUES('recovery-cloud','{}','{"fixture":"upload-only"}','2026-10-23');
  INSERT INTO cloud_backup_schedules(destination_id,state_json) VALUES('recovery-cloud','{"enabled":true}');`)
@@ -421,6 +599,12 @@ func TestLibraryRecoveryCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertRepositoryChoices(t, candidate)
+	copied, err := RecoverLibrary(t.Context(), filepath.Dir(a.Path), filepath.Join(t.TempDir(), "copy-candidate"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRepositoryChoices(t, copied)
 	old, _ := readLibraryDescriptor(a)
 	fresh, err := readLibraryDescriptor(candidate)
 	if err != nil || old.Instance == fresh.Instance {
@@ -483,7 +667,171 @@ func TestLibraryRecoveryCandidate(t *testing.T) {
 	}
 }
 
+func remapLifecycleIdentities(t *testing.T, config Config, prefix string) {
+	t.Helper()
+	c := reopenCatalog(t, config.CatalogPath)
+	defer c.Close()
+	tx, err := c.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec("PRAGMA defer_foreign_keys=ON"); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []struct{ table, column string }{
+		{"messages", "id"}, {"workspace_names", "authored_message_id"},
+		{"conversation_documents", "initiation_message_id"}, {"conversation_documents", "outcome_message_id"},
+		{"agent_sessions", "delegation_message_id"}, {"agent_session_messages", "message_id"},
+		{"tool_calls", "call_message_id"}, {"tool_calls", "result_message_id"},
+		{"skill_usages", "evidence_message_id"}, {"skill_usages", "body_message_id"},
+		{"agent_sessions", "id"}, {"agent_sessions", "parent_id"},
+		{"agent_session_messages", "agent_session_id"}, {"agent_session_usage", "agent_session_id"},
+		{"model_requests", "agent_session_id"}, {"tool_calls", "agent_session_id"}, {"skill_usages", "agent_session_id"},
+	} {
+		if _, err = tx.Exec("UPDATE "+item.table+" SET "+item.column+"=?||"+item.column+" WHERE "+item.column+" IS NOT NULL", prefix); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLibraryTransferPreservesNewerWriterAndMapsNativeIdentity(t *testing.T) {
+	t.Run("accepted session facts replace prior revision", func(t *testing.T) {
+		a, b := lifecycleLibraries(t)
+		if _, err := TransferLibrary(t.Context(), a, b, false, nil); err != nil {
+			t.Fatal(err)
+		}
+		c := reopenCatalog(t, b.CatalogPath)
+		_, err := c.DB.Exec(`INSERT INTO agent_sessions(id,workspace_id,conversation_id,native_id,kind,provider)
+ SELECT 'obsolete',workspace_id,id,'obsolete','subagent',provider FROM conversations;
+ INSERT INTO agent_session_usage(agent_session_id,usage_hour,attribution,total_tokens)
+ SELECT id,'2026-01-01T00:00:00Z','request',999 FROM agent_sessions WHERE native_id='main';`)
+		c.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		c = reopenCatalog(t, a.CatalogPath)
+		_, err = c.DB.Exec("UPDATE copy_versions SET version=version+1")
+		c.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = TransferLibrary(t.Context(), a, b, false, nil); err != nil {
+			t.Fatal(err)
+		}
+		if catalogCount(t, b, "agent_sessions") != catalogCount(t, a, "agent_sessions") || catalogCount(t, b, "agent_session_usage") != catalogCount(t, a, "agent_session_usage") {
+			t.Fatal("accepted session facts retained an obsolete revision")
+		}
+	})
+	t.Run("legacy stored identities", func(t *testing.T) {
+		a, b := lifecycleLibraries(t)
+		remapLifecycleIdentities(t, a, "legacy-")
+		var err error
+		for _, divergent := range []bool{false, true} {
+			if divergent {
+				remapLifecycleIdentities(t, b, "destination-")
+				for _, input := range []struct {
+					config Config
+					id     string
+				}{{a, "source-only"}, {b, "target-only"}} {
+					c := reopenCatalog(t, input.config.CatalogPath)
+					_, err := c.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,text,content_hash)
+ SELECT ?,id,?,'user',?,'new' FROM conversations;`, input.id, input.id, input.id)
+					c.Close()
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if _, err := TransferLibrary(t.Context(), a, b, false, nil); err != nil {
+				t.Fatal("valid legacy history rejected", divergent, err)
+			}
+			c := reopenCatalog(t, b.CatalogPath)
+			var links int
+			err = c.DB.QueryRow(`SELECT COUNT(*) FROM agent_session_messages am JOIN messages m ON m.id=am.message_id JOIN agent_sessions a ON a.id=am.agent_session_id`).Scan(&links)
+			c.Close()
+			want := 2
+			if divergent {
+				want = 4
+			}
+			if err != nil || links != want {
+				t.Fatal("import lost stored message/session references", links, want, err)
+			}
+		}
+	})
+	t.Run("Claude group delegation", func(t *testing.T) {
+		a, b := lifecycleLibraries(t)
+		c := reopenCatalog(t, a.CatalogPath)
+		root := ConversationRecord{NativeID: "root", Provider: "claude", Model: "opus", Account: "local", StartedAt: "2026-09-20T10:00:00Z", Messages: []MessageRecord{
+			{NativeID: "request", Kind: "metadata", Model: "opus", Text: `{"type":"assistant","message":{"id":"request","usage":{"input_tokens":90,"output_tokens":10}}}`},
+			{NativeID: "delegate", Kind: "delegation", CallID: "tool-1", Text: `{}`},
+			{NativeID: "result", Kind: "delegation_result", CallID: "tool-1", Text: `{"details":{"agentId":"child1"}}`},
+			{NativeID: "claim", Kind: "metadata", Text: `{"type":"cost-state","modelUsage":{"opus":{"input_tokens":270,"output_tokens":30}}}`},
+		}}
+		child := ConversationRecord{NativeID: "root:subagent:agent-child1", ParentNativeID: "root", Provider: "claude", Model: "opus", Account: "local", AgentDepth: 1, Messages: []MessageRecord{
+			{NativeID: "child-request", Kind: "metadata", Model: "opus", Text: `{"type":"assistant","message":{"id":"child-request","usage":{"input_tokens":180,"output_tokens":20}}}`},
+		}}
+		tx, err := c.DB.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = ingestWorkspace(tx, WorkspaceRecord{SourceID: "claude-group", SourceKind: "claude", Account: "local", Conversations: []ConversationRecord{root, child}}, false)
+		if err != nil {
+			tx.Rollback()
+			t.Fatal(err)
+		}
+		if err = tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		c.Close()
+		assertGroup := func(config Config) {
+			c := reopenCatalog(t, config.CatalogPath)
+			defer c.Close()
+			var status, linked string
+			var tokens int
+			if err := c.DB.QueryRow(`SELECT usage_status,child_conversation_id FROM agent_sessions WHERE native_id='tool-1'`).Scan(&status, &linked); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.DB.QueryRow(`SELECT SUM(total_tokens) FROM agent_sessions WHERE provider='claude'`).Scan(&tokens); err != nil {
+				t.Fatal(err)
+			}
+			if status != "in-child-conversation" || linked == "" || tokens != 300 {
+				t.Fatal("delegation or reconciled usage lost", status, linked, tokens)
+			}
+			var broken int
+			if err := c.DB.QueryRow(`SELECT COUNT(*) FROM model_requests r LEFT JOIN agent_sessions a ON a.id=r.agent_session_id WHERE a.id IS NULL`).Scan(&broken); err != nil || broken != 0 {
+				t.Fatal("rebuilt tool usage lost stored session references", broken, err)
+			}
+			if err := c.DB.QueryRow(`SELECT COUNT(*) FROM tool_calls t LEFT JOIN messages m ON m.id=t.call_message_id WHERE t.call_message_id IS NOT NULL AND m.id IS NULL`).Scan(&broken); err != nil || broken != 0 {
+				t.Fatal("rebuilt tool call lost stored message references", broken, err)
+			}
+		}
+		remapLifecycleIdentities(t, a, "legacy-")
+		assertGroup(a)
+		for _, divergent := range []bool{false, true} {
+			if divergent {
+				for _, input := range []struct {
+					config Config
+					id     string
+				}{{a, "source-extra"}, {b, "target-extra"}} {
+					c := reopenCatalog(t, input.config.CatalogPath)
+					_, err := c.DB.Exec(`INSERT INTO messages(id,conversation_id,native_id,role,text,content_hash) SELECT ?,id,?,'user',?,'extra' FROM conversations WHERE native_id='root'`, input.id, input.id, input.id)
+					c.Close()
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if _, err := TransferLibrary(t.Context(), a, b, false, nil); err != nil {
+				t.Fatal(err)
+			}
+			assertGroup(b)
+		}
+	})
+
 	a, b := lifecycleLibraries(t)
 	c := reopenCatalog(t, b.CatalogPath)
 	if _, err := c.DB.Exec("ATTACH DATABASE ? AS fixture", a.CatalogPath); err != nil {
@@ -894,5 +1242,45 @@ func TestApplicationReleasePreservesOtherLibraryAndLegacyMCPGate(t *testing.T) {
 	}
 	if m.registry.DeliverySource != second || m.registry.DeliveryTarget != first {
 		t.Fatal("releasing archive stopped local pending capture")
+	}
+
+	m.registry.Selected = first
+	if err = m.registry.save(); err != nil {
+		t.Fatal(err)
+	}
+	response = httptest.NewRecorder()
+	m.api(response, httptest.NewRequest(http.MethodPost, "/api/app/release-volume", strings.NewReader(`{"volume":"uuid:TEST-VOLUME"}`)))
+	if response.Code != 200 || m.registry.Selected != first || !m.suspended[first] {
+		t.Fatal("releasing the selected volume lost its intended selection", response.Body.String())
+	}
+	fresh, err := newApplicationManager(context.Background(), application)
+	if err != nil || fresh.registry.Selected != first || fresh.suspended[first] || fresh.registry.MCP != first {
+		t.Fatal("eject/relaunch did not restore the intended library and MCP assignment", err)
+	}
+	if fresh.registry.DeliverySource != second || fresh.registry.DeliveryTarget != first {
+		t.Fatal("eject/relaunch lost the delivery pair")
+	}
+
+	m.registry.DeliverySource, m.registry.DeliveryTarget = first, second
+	if err = m.registry.save(); err != nil {
+		t.Fatal(err)
+	}
+	response = httptest.NewRecorder()
+	m.api(response, httptest.NewRequest(http.MethodPost, "/api/app/disconnect", strings.NewReader(fmt.Sprintf(`{"id":%q}`, first))))
+	if response.Code != 200 || m.registry.Selected != first || m.registry.DeliverySource != first {
+		t.Fatal("release erased the source's selection or delivery configuration", response.Body.String())
+	}
+	m.deliveryCycle(first, second)
+	if m.job != nil || m.busy {
+		t.Fatal("released source continued automatic capture")
+	}
+
+	m.registry.Selected = ""
+	if err = m.registry.save(); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err = newApplicationManager(context.Background(), application)
+	if err != nil || fresh.registry.Selected != first {
+		t.Fatal("an older eject-erased selection was not repaired from its MCP assignment", err)
 	}
 }

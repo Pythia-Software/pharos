@@ -235,11 +235,13 @@ func managedEjectTests(app: URL, config: String) {
     guard wait(15, until: { FileManager.default.fileExists(atPath: endpoint.path) }),
           let data = try? Data(contentsOf: endpoint),
           let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let address = value["url"] as? String, let service = URL(string: address),
-          let token = value["token"] as? String else {
+          let address = value["url"] as? String, let firstService = URL(string: address),
+          let firstToken = value["token"] as? String else {
         check(false, "managed broker publishes its endpoint: \(log.text())")
         return
     }
+    var service = firstService
+    var token = firstToken
     func get(_ path: String) -> (Int, Data) {
         var request = URLRequest(url: URL(string: path, relativeTo: service)!)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -266,12 +268,43 @@ func managedEjectTests(app: URL, config: String) {
               "releasing a data SSD leaves the app broker available")
         let disconnected = get("/api/app/state").1
         do {
-            _ = try ManagedLibraryEject.volume(in: disconnected)
-            check(false, "an eject without a connected library is refused")
-        } catch { check(true, "an eject without a connected library is refused") }
+            let retryVolume = try ManagedLibraryEject.volume(in: disconnected)
+            check(retryVolume == volume, "a released selection retains its eject target for retry")
+            let empty = Data(#"{"selected":"","libraries":[]}"#.utf8)
+            let appVolume = try ManagedLibraryEject.volume(in: empty, application: URL(fileURLWithPath: config).deletingLastPathComponent())
+            check(appVolume == volume, "a portable app can eject its own drive before choosing a library")
+        } catch { check(false, "eject target after release: \(error)") }
         check(get("/api/library/status").0 == 503, "eject does not reopen the released library")
         broker.terminate()
         check(wait(10) { !broker.isRunning }, "portable eject closes the broker before the quit/eject handoff")
+        let reopened = Process()
+        reopened.executableURL = broker.executableURL
+        reopened.arguments = broker.arguments
+        reopened.standardOutput = FileHandle.nullDevice
+        let reopenLog = ServiceLog()
+        reopened.standardError = reopenLog.pipe
+        try reopened.run()
+        defer { if reopened.isRunning { reopened.terminate() }; _ = wait(10) { !reopened.isRunning } }
+        guard wait(15, until: { FileManager.default.fileExists(atPath: endpoint.path) }),
+              let next = try? Data(contentsOf: endpoint),
+              let details = try? JSONSerialization.jsonObject(with: next) as? [String: Any],
+              let nextAddress = details["url"] as? String, let nextService = URL(string: nextAddress),
+              let nextToken = details["token"] as? String else {
+            check(false, "broker relaunch publishes a new endpoint: \(reopenLog.text())")
+            return
+        }
+        service = nextService
+        token = nextToken
+        check(get("/?token=\(token)").0 == 200, "relaunch sign-in opens the remembered library")
+        let stateData = get("/api/app/state").1
+        let connectedState = try JSONSerialization.jsonObject(with: stateData) as? [String: Any]
+        let connectedLibraries = connectedState?["libraries"] as? [[String: Any]] ?? []
+        check(connectedLibraries.contains { $0["connected"] as? Bool == true }, "relaunch reconnects without a Connect click")
+        let nextVolume = try ManagedLibraryEject.volume(in: stateData)
+        check(nextVolume == volume, "eject/relaunch retains the same SSD target")
+        check(ManagedLibraryEject.release(nextVolume, service: service, token: token) == .released,
+              "Eject still releases the SSD after relaunch")
+
     } catch { check(false, "managed eject: \(error)") }
 }
 

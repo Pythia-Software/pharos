@@ -12,6 +12,8 @@ final class ArchiveService: ObservableObject {
         var note: String?
     }
     @Published var url: URL? = URL(string: "http://menu-bar-test.invalid/")
+    @Published var libraryConnection: String?
+    var hasConnectedLibrary = true
     var error: String?
     var setupError: String?
     var disconnected: Disconnection?
@@ -39,6 +41,15 @@ final class MenuFixture: URLProtocol {
     static var indexRequested = false
     static var usageFailure = false
     static var usageRequests = 0
+    static var humanWords = 3240
+    private static let usageGate = NSLock()
+    private static var holdUsage = false
+    private static var heldUsage = 0
+    private static var canceledUsage = 0
+    private var waitingUsage = false
+    static func holdNextUsageRequest() { usageGate.withLock { holdUsage = true } }
+    static var waitingUsageRequests: Int { usageGate.withLock { heldUsage } }
+    static var canceledUsageRequests: Int { usageGate.withLock { canceledUsage } }
     static var indexFailure = false
     static var statusFailure = false
     override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "menu-bar-test.invalid" }
@@ -49,11 +60,18 @@ final class MenuFixture: URLProtocol {
         let value: [String: Any]
         if path == "/api/menu-bar/usage" {
             Self.usageRequests += 1
+            if Self.usageGate.withLock({
+                if !Self.holdUsage { return false }
+                Self.holdUsage = false
+                Self.heldUsage += 1
+                waitingUsage = true
+                return true
+            }) { return }
             if Self.usageFailure {
                 client?.urlProtocol(self, didFailWithError: NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut))
                 return
             }
-            value = ["human_words": 3240, "tokens": 1200000, "co2e_g": 18.25, "cost_usd": 8.42]
+            value = ["human_words": Self.humanWords, "tokens": 1200000, "co2e_g": 18.25, "cost_usd": 8.42]
         } else if path == "/api/sync/check" {
             Self.indexRequested = true
             if Self.indexFailure {
@@ -76,7 +94,15 @@ final class MenuFixture: URLProtocol {
         client?.urlProtocol(self, didLoad: try! JSONSerialization.data(withJSONObject: value))
         client?.urlProtocolDidFinishLoading(self)
     }
-    override func stopLoading() {}
+    override func stopLoading() {
+        Self.usageGate.withLock {
+            if waitingUsage {
+                waitingUsage = false
+                Self.heldUsage -= 1
+                Self.canceledUsage += 1
+            }
+        }
+    }
 }
 
 @main struct MenuBarHarness {
@@ -99,6 +125,33 @@ final class MenuFixture: URLProtocol {
         let service = ArchiveService()
         let controller = MenuBarController(service: service, defaults: defaults)
         let menu = menu(controller)
+        pump { menu.items.contains { $0.title == "Pharos · Idle" } && menu.items.contains { $0.attributedTitle?.string.contains("3,240") == true } }
+        // The managed broker URL stays the same through a library switch.
+        // Old totals must disappear immediately and the 60-second throttle
+        // must not defer the new library's usage request.
+        let brokerURL = service.url
+        let initialUsageRequests = MenuFixture.usageRequests
+        let canceledUsageRequests = MenuFixture.canceledUsageRequests
+        MenuFixture.holdNextUsageRequest()
+        controller.invalidateUsage()
+        pump { MenuFixture.waitingUsageRequests == 1 }
+        MenuFixture.humanWords = 8765
+        service.libraryConnection = "library-b:2:true"
+        controller.refresh()
+        precondition(service.url == brokerURL)
+        precondition(!menu.items.contains { $0.attributedTitle?.string.contains("3,240") == true }, "Library A totals survived the switch")
+        pump { MenuFixture.usageRequests >= initialUsageRequests + 2 && MenuFixture.canceledUsageRequests > canceledUsageRequests && menu.items.contains { $0.attributedTitle?.string.contains("8,765") == true } }
+        service.hasConnectedLibrary = false
+        service.libraryConnection = "library-b:3:false"
+        controller.refresh()
+        precondition(!menu.items.contains { $0.attributedTitle?.string.contains("8,765") == true }, "Released library totals remain visible")
+        let releasedUsageRequests = MenuFixture.usageRequests
+        controller.invalidateUsage()
+        precondition(MenuFixture.usageRequests == releasedUsageRequests, "Released library fetched usage")
+        MenuFixture.humanWords = 3240
+        service.hasConnectedLibrary = true
+        service.libraryConnection = "library-a:4:true"
+        controller.refresh()
         pump { menu.items.contains { $0.title == "Pharos · Idle" } && menu.items.contains { $0.attributedTitle?.string.contains("3,240") == true } }
         let visible = menu.items.filter { !$0.isHidden && !$0.isSeparatorItem }.map { String($0.title.split(separator: "\t")[0]) }
         precondition(visible.first == "Open Pharos")
@@ -312,6 +365,6 @@ final class MenuFixture: URLProtocol {
             let data = NSBitmapImageRep(data: image.tiffRepresentation!)!.representation(using: .png, properties: [:])!
             try! data.write(to: URL(fileURLWithPath: CommandLine.arguments[1]))
         }
-        print("Native menu: custom order, migration, visibility, status precedence/recovery, closed window reopening, index/eject actions, template icon, wrapping and trailing value alignment passed")
+        print("Native menu: library switching/release and request cancellation, custom order, migration, visibility, status precedence/recovery, closed window reopening, index/eject actions, template icon, wrapping and trailing value alignment passed")
     }
 }

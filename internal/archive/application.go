@@ -3,6 +3,7 @@ package archive
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -16,6 +17,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,6 +49,7 @@ type applicationManager struct {
 	ctx         context.Context
 	operationMu sync.Mutex
 	jobMu       sync.Mutex
+	pickerMu    sync.Mutex
 	job         map[string]any
 	client      *http.Client
 	busy        bool
@@ -63,6 +66,11 @@ func newApplicationManager(ctx context.Context, application string) (*applicatio
 	r, err := loadInstallation(application)
 	if err != nil {
 		return nil, err
+	}
+	// Earlier managed releases persisted an empty selection on eject. Recover
+	// that installation's explicit integration choice once at startup.
+	if r.Selected == "" && r.library(r.MCP) != nil {
+		r.Selected = r.MCP
 	}
 	return &applicationManager{registry: r, id: installationID(application), token: randomToken(), children: map[string]*applicationChild{}, suspended: map[string]bool{}, missing: map[string]bool{}, ctx: ctx,
 		client: &http.Client{Timeout: 2 * time.Minute, Transport: &http.Transport{Proxy: nil}}}, nil
@@ -270,7 +278,13 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.URL.Path == "/" && secureEqual(r.URL.Query().Get("token"), m.token) {
 		http.SetCookie(w, &http.Cookie{Name: "pharos_app_" + m.id, Value: m.token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
-		http.Redirect(w, r, "/app", http.StatusSeeOther)
+		target := "/app"
+		m.mu.Lock()
+		if _, err := m.childLocked(m.registry.Selected); err == nil {
+			target = "/"
+		}
+		m.mu.Unlock()
+		http.Redirect(w, r, target, http.StatusSeeOther)
 		return
 	}
 	if !m.authorized(r) {
@@ -329,13 +343,13 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == "/app" || r.URL.Path == "/app/" {
-		payload, err := assets.ReadFile("assets/application.html")
-		if err != nil {
-			writeError(w, err, 500)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(payload)
+		writeHTML(w, applicationHTML())
+		return
+	}
+	// The startup shell needs its styles even with no selected library. Static
+	// assets never open a catalog or start a library service.
+	if asset, ok := uiAssets[r.URL.Path]; ok && r.Method == http.MethodGet {
+		writeEmbeddedAsset(w, asset.name, asset.contentType)
 		return
 	}
 	m.mu.Lock()
@@ -380,7 +394,12 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		scope, _ := json.Marshal(id)
-		script := `<script>(()=>{const s=window.localStorage,p=` + string(scope) + `+":";const scoped={getItem:k=>s.getItem(p+k),setItem:(k,v)=>s.setItem(p+k,v),removeItem:k=>s.removeItem(p+k),clear:()=>Object.keys(s).filter(k=>k.startsWith(p)).forEach(k=>s.removeItem(k)),key:i=>Object.keys(s).filter(k=>k.startsWith(p))[i]?.slice(p.length)??null,get length(){return Object.keys(s).filter(k=>k.startsWith(p)).length}};Object.defineProperty(window,"localStorage",{value:scoped})})();</script>`
+		sessionScope := sha256.Sum256([]byte(currentHost().ID + "\x00" + m.id))
+		m.mu.Lock()
+		instance := m.registry.library(id).Instance
+		m.mu.Unlock()
+		session, _ := json.Marshal(map[string]string{"preferences": fmt.Sprintf("pharos-session:%x:", sessionScope[:16]), "storage": id + ":" + instance + ":", "legacy": id + ":"})
+		script := `<script>window.pharosManagedSession=` + string(session) + `;</script>`
 		html := strings.Replace(string(b), "<head>", "<head>"+script, 1)
 		binding := `<script>(()=>{const f=window.fetch;window.fetch=(input,options={})=>{const u=new URL(input instanceof Request?input.url:input,location.href);if(u.origin===location.origin&&!u.pathname.startsWith('/api/app/')){const h=new Headers(input instanceof Request?input.headers:options.headers);h.set('X-Pharos-Library',` + string(scope) + `);options={...options,headers:h}}return f.call(window,input,options)};setInterval(()=>f.call(window,'/api/app/state').then(r=>r.json()).then(s=>{if(s.selected!==` + string(scope) + `||!s.libraries?.some(l=>l.id===` + string(scope) + `&&l.connected)){location.replace('/app')}}).catch(()=>{document.body.textContent='Pharos is offline. Reopen the application to reconnect.'}),3000)})();</script>`
 		html = strings.Replace(html, "<head>", "<head>"+binding, 1)
@@ -400,14 +419,28 @@ func (m *applicationManager) mcp(ctx context.Context, request map[string]any) (m
 		m.mu.Unlock()
 		return nil, fmt.Errorf("open a library in Pharos to assign MCP")
 	}
+	if m.suspended[assigned.ID] || m.released || m.busy {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("the assigned MCP library is released or temporarily unavailable; reconnect it in Pharos after its current operation finishes")
+	}
 	if m.registry.Selected != assigned.ID {
 		name := assigned.Name
-		active := "another library"
-		if l := m.registry.library(m.registry.Selected); l != nil {
-			active = l.Name
+		active := m.registry.library(m.registry.Selected)
+		child := m.children[m.registry.Selected]
+		connected := active != nil && child != nil && !m.suspended[m.registry.Selected] && !m.released
+		if connected {
+			select {
+			case <-child.done:
+				connected = false
+			default:
+			}
+		}
+		if !connected {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("no library is connected. MCP is attached to %s; connect to it in Pharos", name)
 		}
 		m.mu.Unlock()
-		return nil, fmt.Errorf("Pharos is working with %s right now. MCP is attached to %s. Connect to %s or explicitly change its assignment in MCP settings", active, name, name)
+		return nil, fmt.Errorf("Pharos is working with %s right now. MCP is attached to %s. Connect to %s or explicitly change its assignment in MCP settings", active.Name, name, name)
 	}
 	c := m.children[assigned.ID]
 	if c == nil {
@@ -456,6 +489,33 @@ func (m *applicationManager) mcp(ctx context.Context, request map[string]any) (m
 	return answer, nil
 }
 
+// Browser windows do not have the native WebKit bridge. Standard Additions
+// provides the same directory picker on the Mac running this local service.
+// Keep cancellation distinct from failure, and return paths as JSON so spaces,
+// quotes and newlines survive without shell interpolation.
+var applicationFolderPicker = func(ctx context.Context) (string, error) {
+	if runtime.GOOS != "darwin" {
+		return "", fmt.Errorf("the folder picker requires macOS; enter the folder path instead")
+	}
+	const script = `const app = Application.currentApplication();
+app.includeStandardAdditions = true;
+try {
+  JSON.stringify(app.chooseFolder({withPrompt: "Choose a Pharos library or a parent folder for a new library."}).toString());
+} catch (error) {
+  if (error.errorNumber !== -128) throw error;
+  JSON.stringify("");
+}`
+	output, err := exec.CommandContext(ctx, "/usr/bin/osascript", "-l", "JavaScript", "-e", script).Output()
+	if err != nil {
+		return "", fmt.Errorf("could not open the folder picker; enter the folder path or try again: %w", err)
+	}
+	var path string
+	if err = json.Unmarshal(output, &path); err != nil {
+		return "", fmt.Errorf("could not read the selected folder: %w", err)
+	}
+	return path, nil
+}
+
 func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/api/app/state" && r.Method == "GET" {
 		m.mu.Lock()
@@ -477,7 +537,8 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 			}
 			libraries = append(libraries, entry)
 		}
-		state := map[string]any{"libraries": libraries, "selected": m.registry.Selected, "mcp": m.registry.MCP, "application": m.registry.Application, "installation": m.id, "delivery_source": m.registry.DeliverySource, "delivery_target": m.registry.DeliveryTarget, "busy": m.busy}
+		state := map[string]any{"libraries": libraries, "selected": m.registry.Selected, "generation": m.generation, "mcp": m.registry.MCP, "application": m.registry.Application, "installation": m.id, "delivery_source": m.registry.DeliverySource, "delivery_target": m.registry.DeliveryTarget, "busy": m.busy}
+		state["local_library_parent"] = filepath.Join(pharosSupportDir(), "Libraries")
 		m.mu.Unlock()
 		m.jobMu.Lock()
 		state["job"] = m.job
@@ -492,6 +553,20 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 	var body map[string]any
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
 		writeError(w, err, 400)
+		return
+	}
+	if r.URL.Path == "/api/app/choose-folder" {
+		if !m.pickerMu.TryLock() {
+			writeError(w, fmt.Errorf("a folder picker is already open"), http.StatusConflict)
+			return
+		}
+		defer m.pickerMu.Unlock()
+		path, err := applicationFolderPicker(r.Context())
+		if err != nil {
+			writeError(w, err, http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]string{"path": path}, http.StatusOK)
 		return
 	}
 	if r.URL.Path == "/api/app/transfer" || r.URL.Path == "/api/app/recover" {
@@ -519,20 +594,11 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 					writeError(w, fmt.Errorf("library is still closing; retry eject shortly"), 503)
 					return
 				}
-				if m.registry.Selected == l.ID {
-					m.registry.Selected = ""
-				}
-				if m.registry.DeliverySource == l.ID {
-					m.registry.DeliverySource = ""
-					m.registry.DeliveryTarget = ""
-				}
 			}
 		}
 		m.generation++
-		if err := m.registry.save(); err != nil {
-			writeError(w, err, 500)
-			return
-		}
+		// Eject suspends this lifetime only. Keep the selected library and the
+		// delivery pair on disk for relaunch or a verified drive return.
 		writeJSON(w, map[string]any{"released": true}, 200)
 		return
 	}
@@ -547,9 +613,18 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		path := firstString(body["path"])
+		location := firstString(body["location"])
+		if location != "" && location != "mac" && location != "ssd" {
+			err = fmt.Errorf("choose local or external library storage")
+			break
+		}
+		if location == "ssd" && path == "" {
+			err = fmt.Errorf("choose a library folder on your external drive")
+			break
+		}
 		if path == "" {
 			path = filepath.Join(pharosSupportDir(), "Libraries", name)
-			if strings.HasPrefix(m.registry.Application, "/Volumes/") {
+			if location == "" && strings.HasPrefix(m.registry.Application, "/Volumes/") {
 				path = filepath.Join(filepath.Dir(m.registry.Application), "Libraries", name)
 			}
 			err = os.MkdirAll(filepath.Dir(path), 0o700)
@@ -627,15 +702,8 @@ func (m *applicationManager) api(w http.ResponseWriter, r *http.Request) {
 			err = fmt.Errorf("library is still closing; retry shortly")
 			break
 		}
-		if m.registry.Selected == id {
-			m.registry.Selected = ""
-			m.generation++
-		}
+		m.generation++
 		m.suspended[id] = true
-		if m.registry.DeliverySource == id {
-			m.registry.DeliverySource = ""
-			m.registry.DeliveryTarget = ""
-		}
 	case "/api/app/mcp-library":
 		id := firstString(body["id"])
 		if m.registry.library(id) == nil {
