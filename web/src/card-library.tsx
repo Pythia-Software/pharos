@@ -13,6 +13,7 @@ import { invalidateCardPreviews, loadCardPreviews } from "./card-previews";
 import { usePreviewReload } from "./use-preview-reload";
 import { collectDurableQuery, migrateSavedQueries, readBookmarks } from "./bookmarks";
 import { PageLink } from "./nested-pages";
+import { focusPageContent } from "./page-focus";
 import "./card-library.css";
 
 // Card Library has its own page. Legacy links retain their filter/edit layout;
@@ -20,6 +21,8 @@ import "./card-library.css";
 export const CARD_LIBRARY_VIEW_KEY = "pharos-home-card-library-v1";
 export type CardLibraryView = { topic?: string; filters?: boolean; edit?: boolean };
 export const cardLibraryParams = ["card_search", "card_data", "card_topic", "card_kind", "card_sort"];
+// A lazy page can first mount after navigation, rather than during startup.
+const openedOnCardLibrary = location.pathname === "/cards";
 export const isCardLibraryLink = (search = location.search) => new URLSearchParams(search).get("cards") === "library";
 export const hasCardLibraryParams = (search = location.search, keys = cardLibraryParams) => { const params = new URLSearchParams(search); return keys.some(key => params.get(key)); };
 // card_topic=all marks the All tab, including on legacy links.
@@ -37,7 +40,7 @@ export function CardLibraryPage({ schemas }: { schemas: Record<QueryDataset, Fie
   const [collection, setCollection] = useState(readBookmarks);
   const [generation, setGeneration] = useState(0), [message, setMessage] = useState("");
   const [hidden, setHidden] = useState(document.hidden);
-  const heading = useRef<HTMLDivElement>(null);
+  const wasActive = useRef(openedOnCardLibrary && active);
   useEffect(() => {
     migrateSavedQueries(); setCollection(readBookmarks());
     const route = () => setRoute(location.href);
@@ -59,8 +62,9 @@ export function CardLibraryPage({ schemas }: { schemas: Record<QueryDataset, Fie
     };
   }, []);
   useEffect(() => {
-    if (active) heading.current?.querySelector<HTMLHeadingElement>("h1")?.focus({ preventScroll: true });
-  }, [active, route]);
+    if (active && !wasActive.current) focusPageContent();
+    wasActive.current = active;
+  }, [active]);
   async function keep(item: QuerySuggestion) {
     try {
       await collectDurableQuery(item.dataset, item.query, item.title, { description: item.description, templateId: item.instanceId, window: item.window, cover: item.cover ?? defaultCardCover(item), url: item.url });
@@ -68,7 +72,7 @@ export function CardLibraryPage({ schemas }: { schemas: Record<QueryDataset, Fie
     } catch (error) { setMessage(String(error)); }
   }
   if (!active) return null;
-  return <div ref={heading} className="card-library-page">
+  return <div className="card-library-page">
     <PageLink className="card-library-back" href="/"><Icon name="arrow-left" />Back to Home</PageLink>
     <CardLibrary key={route} schemas={schemas} active={active} prewarm={!hidden} generation={generation}
       collected={new Set(collection.map(item => item.templateId?.split(":")[0]))} message={message}
@@ -203,7 +207,7 @@ function CardLibrary({ schemas, active, prewarm, generation, collected, message,
   const activeFilters = [search, dataset, kind].filter(Boolean).length;
   return <section id="card-library" className="card-library" aria-labelledby="card-library-title">
     <div className="card-library-head">
-      <h1 id="card-library-title" tabIndex={-1}><Icon name="read" />Card Library</h1>
+      <h1 id="card-library-title"><Icon name="read" />Card Library</h1>
       <div className="card-library-actions">
         <button type="button" aria-expanded={filtersOpen} aria-controls="card-library-controls" onClick={() => { const open = !filtersOpen; setFiltersOpen(open); saveCardLibraryView({ filters: open }); }}><Icon name="search" />Filters{activeFilters ? <span className="card-library-badge">{activeFilters}</span> : null}</button>
         <button type="button" aria-pressed={editMode} onClick={() => { const edit = !editMode; setEditMode(edit); saveCardLibraryView({ edit }); }}><Icon name="edit" />Edit cards</button>

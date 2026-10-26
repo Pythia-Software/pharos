@@ -643,7 +643,13 @@ func (s *Server) getIncrementalSync(w http.ResponseWriter, r *http.Request) {
 	} else if s.syncActive() {
 		pause = "Indexing"
 	}
-	writeJSON(w, map[string]any{"settings": settings, "sources": syncSourceChoices(s.autoSources(settings)), "available_sources": syncSourceChoices(s.autoSources(syncSettings{})), "source_states": states, "history": samples, "statistics": syncStatistics(samples, settings.Interval), "pause_reason": pause, "busy": s.syncActive() || s.captureActive(), "recovery_jobs": jobs, "deferred": deferred, "coverage": coverage, "issues": issues, "measurement_limits": syncMeasurementLimits, "forecast_accuracy": forecastAccuracy, "forecast_runs": forecastRuns}, 200)
+	// Existence checks keep empty-page status cheap even on a large library.
+	var libraryEmpty bool
+	if err := s.Catalog.reader().QueryRowContext(r.Context(), "SELECT NOT EXISTS(SELECT 1 FROM workspaces) AND NOT EXISTS(SELECT 1 FROM conversations)").Scan(&libraryEmpty); err != nil {
+		writeError(w, err, 500)
+		return
+	}
+	writeJSON(w, map[string]any{"settings": settings, "sources": syncSourceChoices(s.autoSources(settings)), "available_sources": syncSourceChoices(s.autoSources(syncSettings{})), "source_states": states, "history": samples, "statistics": syncStatistics(samples, settings.Interval), "pause_reason": pause, "busy": s.syncActive() || s.captureActive(), "library_empty": libraryEmpty, "has_sources": slices.ContainsFunc(s.Config().Sources, func(source SourceConfig) bool { return source.Enabled }), "recovery_jobs": jobs, "deferred": deferred, "coverage": coverage, "issues": issues, "measurement_limits": syncMeasurementLimits, "forecast_accuracy": forecastAccuracy, "forecast_runs": forecastRuns}, 200)
 }
 
 func lastCaptureAt(root, host, source string) string {

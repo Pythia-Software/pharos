@@ -38,6 +38,7 @@ import { defaultChartScale, validChartScale } from "./chart-scale";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { useLocationRevision } from "./nested-pages";
+import { LibraryContent } from "./library-content";
 import { SyncTables } from "./sync-tables";
 import { SettingsWorkspace } from "./settings-workspace";
 import { installAppNavigation } from "./app-navigation";
@@ -2032,7 +2033,12 @@ function LazyPage({ host, children }: { host: HTMLElement; children: React.React
   useLocationRevision();
   const visited = useRef(false);
   visited.current ||= Boolean(shared || host.id === "searchComposerDialog" || host.closest(".view.active"));
-  return visited.current ? <>{children}</> : null;
+  if (!visited.current) return null;
+  const libraryPage = ["queryTableLibrary", "queryTableUsage", "toolsPage", "findingsPage"].includes(host.id);
+  const settings = host.id === "findingsPage" && new URLSearchParams(location.search).get("view") === "settings";
+  // Keep one element type across routes: Findings Settings bypasses the empty
+  // state without remounting the dashboard and its retained table.
+  return <LibraryContent enabled={!shared && libraryPage && !settings}>{children}</LibraryContent>;
 }
 
 for (const [id, component] of mounts) {

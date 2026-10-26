@@ -135,6 +135,18 @@ used for first installs and updates. No browser or Finder replacement is
 required after installing the first Sparkle-enabled release. v0.7.1 and older
 still need one final manual replacement to obtain the updater.
 
+When Sparkle offers an installable release, the library header shows
+an update icon between drive status and Refresh. One click downloads,
+verifies, installs and relaunches Pharos, after the same safe process handoff
+as the native updater. A dot marks an available update, a ring shows download
+progress, a package marks preparation, and a restart arrow marks installation.
+Hover text includes the version, current stage and download percentage.
+The icon stays the same width across states; the header measures the full
+combo again as the icon appears or disappears and moves it
+into **More tools** when space is limited. macOS may still request authorization
+if the installed app requires it. The action is available in the native app;
+browser sessions and local builds do not offer production updates.
+
 **Automatically Check for Updates** uses Sparkle's daily schedule. An explicit
 choice from the old **Check for Updates on Launch** setting is migrated once;
 otherwise Sparkle asks permission on its second launch, after onboarding.

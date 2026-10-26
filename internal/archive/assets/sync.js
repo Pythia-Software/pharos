@@ -289,7 +289,7 @@
       const activity = await call('/api/activity');
       renderHeader(activity);
       announceChanges(activity);
-      if (document.getElementById('settings')?.classList.contains('active') || !status) {
+      if (document.getElementById('settings')?.classList.contains('active') || !status || status.library_empty) {
         status = await call('/api/sync/status');
         renderDashboard();
         window.dispatchEvent(new Event('pharos:sync-status'));
