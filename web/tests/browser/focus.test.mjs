@@ -3,6 +3,7 @@
 // stay below the header; the annotation toolbar stays on screen.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { defaultApi, workID } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery } from "@pythia-software/query-table-core";
@@ -808,6 +809,40 @@ test("the expanded feedback panel stays inside a 360px viewport", { skip }, asyn
   await page.setViewportSize({ width: 360, height: 420 });
   const box = await onScreen(page.locator(".feedback-toolbar"));
   assert.equal(box, true, `expanded toolbar at [${box}] in 360×420`);
+});
+
+test("feedback review keeps focus, fits a phone, and returns focus to its opener", { skip }, async t => {
+  const { page, shot } = await open(t, { url: "/settings", ready: "#healthCards .panel" });
+  await activateHeaderTool(page, "feedbackSubmitToggle");
+  const dialog = page.getByRole("dialog", { name: "Send feedback", exact: true });
+  await dialog.waitFor();
+  await page.waitForFunction(() => document.querySelector(".uifeedback-dialog")?.contains(document.activeElement));
+  await page.setViewportSize({ width: 360, height: 640 });
+  assert.equal(await onScreen(dialog), true);
+  await shot("feedback-review");
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "hidden" });
+  assert.equal(await page.evaluate(() => headerToolAnchor(document.getElementById("feedbackSubmitToggle")) === document.activeElement), true);
+});
+
+test("annotated element screenshots render and the reviewed report sends without leaving the page", { skip }, async t => {
+  const page = await annotate(t);
+  await page.locator("#feedbackNote").fill("Make this heading clearer");
+  await page.locator("#feedbackIncludeURL").check();
+  await page.getByRole("button", { name: "Take a screenshot of this element", exact: true }).click();
+  await page.waitForFunction(() => {
+    const img = document.getElementById("feedbackScreenshotPreview");
+    return !img.hidden && img.complete && img.naturalWidth > 0;
+  });
+  if (process.env.PHAROS_UI_SCREENSHOTS) { mkdirSync(process.env.PHAROS_UI_SCREENSHOTS, { recursive: true }); await page.locator("#feedbackScreenshotPreview").screenshot({ path: `${process.env.PHAROS_UI_SCREENSHOTS}/feedback-element-capture.png` }); }
+  await page.locator("#feedbackAdd").click();
+  await page.locator("#feedbackSend").click();
+  const dialog = page.getByRole("dialog", { name: "Send feedback", exact: true });
+  await dialog.waitFor();
+  await page.waitForFunction(() => document.querySelector(".uifeedback-dialog img")?.naturalWidth > 0);
+  await dialog.getByRole("button", { name: "Send feedback", exact: true }).click();
+  await page.getByRole("dialog", { name: "Feedback sent", exact: true }).waitFor();
+  assert.equal(new URL(page.url()).pathname, "/settings");
 });
 
 test('Analyze record keyword editor keeps focus through apply, edit and cancel', { skip }, async t => {
