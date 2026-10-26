@@ -26,7 +26,7 @@ Use `preservation-pins.json` version 1, `sourceCapture.pinVersion`,
 `releasePreservationOwner`, and source acquisition allowances (`gate`/`ungate`)
 under the host capture flock. Pinning `files/...` first preserves immutable
 history, including at retention zero. Capture manifest version 4 and catalog
-schema 19 refuse incompatible writers. Do not use recovery IDs as leases.
+schema 20 refuse incompatible writers. Do not use recovery IDs as leases.
 
 Committed input receipts are in `records/v1/receipts/`; they identify the exact
 retained path, input SHA-256 and verified revision. Cross-file/database closure

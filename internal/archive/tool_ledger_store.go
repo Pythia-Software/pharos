@@ -12,7 +12,7 @@ import (
 
 // toolRollupVersion names the tool_usage_daily and tool_call_cube layouts
 // and their derivation.
-const toolRollupVersion = "rollup-v5-effort"
+const toolRollupVersion = "rollup-v6-origins"
 
 // toolLedgerState tracks the in-process ledger backfill and rollup rebuilds.
 type toolLedgerState struct {
@@ -481,6 +481,9 @@ func (c *Catalog) currentToolRollup(ctx context.Context) error {
 // writing, rebuilds are spaced out so each query does not redo the whole
 // rollup.
 func (c *Catalog) ensureToolRollup(ctx context.Context) error {
+	if err := c.ensureOrigins(ctx); err != nil {
+		return err
+	}
 	state := &c.tools
 	state.rollup.Lock()
 	defer state.rollup.Unlock()
@@ -514,7 +517,7 @@ var toolUsageColumns = []string{"id", "day", "week", "month", "repository_name",
 	"no_result_count", "rejected_count", "interrupted_count", "timeout_count", "nonzero_exit_count", "hook_blocked_count", "truncated_count",
 	"timed_count", "total_duration_ms", "avg_duration_ms", "max_duration_ms", "input_bytes", "result_bytes", "result_tokens", "measured_count",
 	"avg_result_tokens", "carried_tokens", "output_tokens", "lines_added", "lines_removed", "work_count", "context_cost_usd", "output_cost_usd",
-	"tool_cost_usd", "price_status"}
+	"tool_cost_usd", "price_status", "channel", "machine_id", "machine", "machine_kind", "execution_machine_id", "execution_machine", "execution_machine_kind"}
 
 // toolUsageRecord turns one row of toolRollupFromCube into a tool_usage_daily
 // row: its bucket fields, rates, and costs.
@@ -549,7 +552,7 @@ func toolUsageRecord(book priceBook, row map[string]any) map[string]any {
 	total := addCost(addCost(nil, contextCost.cost), outputCost.cost)
 	return map[string]any{
 		"id": stableID("tool-usage", dayValue, row["repository_name"], row["source_kind"], row["provider"], model, row["effort"], row["session_kind"], row["tool_name"],
-			row["tool_category"], row["mcp_server"], row["program"], row["subcommand"], row["command_category"]),
+			row["tool_category"], row["mcp_server"], row["program"], row["subcommand"], row["command_category"], row["channel"], row["machine_id"], row["execution_machine_id"]),
 		"day": nilIfEmpty(dayValue), "week": week, "month": month, "repository_name": row["repository_name"], "source_kind": row["source_kind"],
 		"provider": row["provider"], "model": nilIfEmpty(model), "effort": row["effort"], "model_family": nilIfEmpty(modelFamily(model)), "session_kind": row["session_kind"],
 		"model_effort": modelEffort(model, firstString(row["effort"])),
@@ -563,7 +566,14 @@ func toolUsageRecord(book priceBook, row map[string]any) map[string]any {
 		"result_tokens": row["result_tokens"], "measured_count": row["measured_count"], "avg_result_tokens": avgResult, "carried_tokens": row["carried_tokens"],
 		"output_tokens": outputTokens, "lines_added": row["lines_added"], "lines_removed": row["lines_removed"], "work_count": row["work_count"],
 		"context_cost_usd": costValue(contextCost.cost), "output_cost_usd": costValue(outputCost.cost), "tool_cost_usd": costValue(total),
-		"price_status": worsePriceStatus(contextCost.status, outputCost.status),
+		"price_status":           worsePriceStatus(contextCost.status, outputCost.status),
+		"channel":                row["channel"],
+		"machine_id":             row["machine_id"],
+		"machine":                row["machine"],
+		"machine_kind":           row["machine_kind"],
+		"execution_machine_id":   row["execution_machine_id"],
+		"execution_machine":      row["execution_machine"],
+		"execution_machine_kind": row["execution_machine_kind"],
 	}
 }
 

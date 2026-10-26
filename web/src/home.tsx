@@ -32,7 +32,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true), [generation, setGeneration] = useState(0);
   const [welcome] = useState(() => welcomes[Math.floor(Math.random() * welcomes.length)]);
-  const editor = useRef<HTMLDialogElement>(null), heading = useRef<HTMLHeadingElement>(null);
+  const editor = useRef<HTMLDialogElement>(null);
   const [editing, setEditing] = useState<Bookmark | null>(null), [editTitle, setEditTitle] = useState(""), [editDescription, setEditDescription] = useState("");
   const [editDays, setEditDays] = useState("");
   const [editCover, setEditCover] = useState("");
@@ -57,7 +57,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     window.addEventListener("pharos:data-refresh", refresh); document.addEventListener("visibilitychange", visibility);
     return () => { window.removeEventListener("pharos:card-templates", templates); window.removeEventListener("pharos:bookmarks", bookmarks); window.removeEventListener("pharos:route", route); window.removeEventListener("pharos:view", route); window.removeEventListener("pharos:data-refresh", refresh); document.removeEventListener("visibilitychange", visibility); };
   }, []);
-  useEffect(() => { if (active) { setGeneration(value => value + 1); heading.current?.focus({ preventScroll: true }); } }, [active]);
+  useEffect(() => { if (active) setGeneration(value => value + 1); }, [active]);
   useEffect(() => {
     if (!active) return;
     const controller = new AbortController();
@@ -135,7 +135,7 @@ export function HomePage({ schemas }: { schemas: Record<QueryDataset, FieldSchem
     ? [...editingSpec.query.grouping.summaries.filter(column => column.op !== "row").map(column => ({ id: column.id, label: `${column.label ?? column.id} · grouped rows` })), ...(editingSpec.query.grouping.source.aggregations ?? []).map(metric => ({ id: metric.id, label: `${metric.label ?? metric.id} · observations` }))]
     : editingSpec?.query.aggregations?.map(metric => ({ id: metric.id, label: metric.label ?? metric.id })) ?? [];
   return <div className="curiosity-home" data-feedback-label="Home dashboard">
-    <div className="home-intro"><h1 ref={heading} tabIndex={-1}>{welcome}</h1><AskPharosSearch schema={schemas.library} /></div>
+    <div className="home-intro"><h1>{welcome}</h1><AskPharosSearch schema={schemas.library} /></div>
     <div className={`home-collection${drag ? " accepting" : ""}`} role="region" aria-label="Your collection" onDragOver={event => { if (drag) { event.preventDefault(); const target = (event.target as Element).closest("[data-card-id]"); setInsertBefore(target?.getAttribute("data-card-id") ?? undefined); } }} onDrop={event => drop(event)}>
       {collection.map(item => {
         const spec = queryFromURL(item.url, item.query), recipe = queryRecipes.find(recipe => recipe.id === item.templateId?.split(":")[0]);

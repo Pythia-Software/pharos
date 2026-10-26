@@ -11,11 +11,11 @@ export const recordDashboards: Record<RecordDashboardTopic, DashboardSpec> = {
   time: { dataset: "tool_calls", time: "started_at", measures: [
     { label: "Recorded tool time", op: "sum", field: "duration_ms", unit: "hours", divisor: 3_600_000 },
     { label: "Tool calls", op: "count", unit: "calls" },
-  ], splits: [["activity", "Activity"], ["tool_category", "Tool category"], ["provider", "Provider"], ["repository_name", "Repository"]], note: "Recorded durations can overlap and may include approval waits. Their sum is tool time, not elapsed wall time. Use the legacy view for command-family comparisons and timelines." },
+  ], splits: [["activity", "Activity"], ["tool_category", "Tool category"], ["provider", "Provider"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"], ["repository_name", "Repository"]], note: "Recorded durations can overlap and may include approval waits. Their sum is tool time, not elapsed wall time. Use the legacy view for command-family comparisons and timelines." },
   skills: { dataset: "skill_usages", time: "created_at", measures: [
     { label: "Evidence records", op: "count", unit: "records" },
     { label: "Retained body volume", op: "sum", expression: "SUM(IF([content_bytes]>0,[content_bytes],0))", unit: "bytes" },
-  ], splits: [["skill_name", "Skill"], ["evidence_type", "Evidence type"], ["provider", "Provider"], ["repository_name", "Repository"], ["status", "Status"]], note: "These are observed invocations, file loads, and harness-reported loads. A load does not prove a skill was followed. Body volume sums known positive recorded sizes, including repeated loads." },
+  ], splits: [["skill_name", "Skill"], ["evidence_type", "Evidence type"], ["provider", "Provider"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"], ["repository_name", "Repository"], ["status", "Status"]], note: "These are observed invocations, file loads, and harness-reported loads. A load does not prove a skill was followed. Body volume sums known positive recorded sizes, including repeated loads." },
 
 };
 

@@ -3,9 +3,54 @@
 // stay below the header; the annotation toolbar stays on screen.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync } from "node:fs";
 import { activateHeaderTool, open, skip } from "./harness.mjs";
 import { defaultApi, workID } from "./fixtures.mjs";
 import { EMPTY_QUERY, encodeQuery } from "@pythia-software/query-table-core";
+
+for (const topic of ['tokens', 'human', 'skills', 'time', 'carbon']) for (const display of ['interval', 'cumulative']) test(`Dashboard ${topic} ${display} inspection focuses its links and dismisses on Escape or outside click`, { skip }, async t => {
+  const { page, settled, shot } = await open(t, { url: `/analyze?${new URLSearchParams({ analyze_topic: topic, analyze_chart: JSON.stringify({ display }) })}`, ready: '.usage-chart-bars:not(.loading) > button' });
+  const chart = page.locator('.usage-dashboard .usage-chart').first();
+  const bar = display === 'cumulative' ? chart.locator('.usage-chart-bars > button').last() : chart.locator('.usage-chart-bars > button').filter({ has: page.locator('i') }).first();
+  await bar.focus();
+  await page.keyboard.press('Enter');
+  const details = chart.getByRole('group', { name: /^Details for / });
+  await details.getByRole('link').first().waitFor();
+  await shot('pinned-key');
+  assert.ok(await details.evaluate(element => element.contains(document.activeElement)), 'keyboard inspection focuses a reachable detail link');
+  await page.keyboard.press('Escape');
+  await details.waitFor({ state: 'hidden' });
+  assert.ok(await bar.evaluate(element => element === document.activeElement), 'Escape returns focus to the inspected period');
+  await bar.click();
+  await details.waitFor();
+  await chart.locator('h3').click();
+  await details.waitFor({ state: 'hidden' });
+  await settled();
+});
+
+test('Dashboard chart pointer capture snaps to columns and treats a drag back to its anchor as inspection', { skip }, async t => {
+  const { page, settled } = await open(t, { url: '/analyze?analyze_topic=tokens', ready: '.usage-chart-bars:not(.loading) > button' });
+  const chart = page.locator('.usage-dashboard .usage-chart').first();
+  const bars = chart.locator('.usage-chart-bars > button');
+  const before = page.url();
+  const start = await bars.nth(1).boundingBox(), end = await bars.nth(4).boundingBox();
+  await page.mouse.move(start.x + start.width / 2, start.y + 30);
+  await page.mouse.down();
+  await page.mouse.move(end.x + end.width / 2, end.y + 30);
+  await chart.getByRole('status').filter({ hasText: /4 periods.*Release to filter/ }).waitFor();
+  await page.mouse.move(start.x + start.width / 2, start.y + 30);
+  await chart.getByRole('status').filter({ hasText: /1 period.*Release to inspect/ }).waitFor();
+  await page.mouse.up();
+  await chart.getByRole('group', { name: /^Details for / }).waitFor();
+  assert.equal(page.url(), before, 'one-period inspection leaves date filters alone');
+  await chart.locator('h3').click();
+  await page.mouse.move(end.x + end.width / 2, end.y + 30);
+  await page.mouse.down();
+  await page.mouse.move(start.x + start.width / 2, start.y + 30);
+  await page.mouse.up();
+  await page.waitForFunction(previous => location.href !== previous, before);
+  await settled();
+});
 
 test('Cloud backup setup focuses invalid fields and retains storage-class keyboard focus', {skip}, async t => {
   const {page} = await open(t, {url:'/settings/backups',ready:'#cloud-explore'});
@@ -343,7 +388,7 @@ for (const viewport of [{ width: 2133, height: 1075 }, { width: 1440, height: 90
     await sidebar.waitFor();
     await press(sidebar.getByRole('link', { name: /^Human words$/i }));
     await page.locator('.usage-dashboard .writing-panel .usage-chart').waitFor();
-    await page.waitForFunction(() => document.activeElement?.tagName === 'H1');
+    await page.waitForFunction(() => document.activeElement?.tagName === 'MAIN');
     assert.equal(await sidebar.getByRole('link', { name: /^Human words$/i }).getAttribute('aria-current'), 'page');
   });
 }
@@ -416,7 +461,7 @@ for (const route of [
   await target.waitFor();
   await press(target);
   await page.locator(route.destination).first().waitFor();
-  await page.waitForFunction(() => document.activeElement?.tagName === "H1");
+  await page.waitForFunction(() => document.activeElement?.tagName === "MAIN");
   assert.equal(await menu.isVisible(), false);
   await page.goBack();
   await page.locator(route.ready).first().waitFor();
@@ -433,11 +478,17 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 640 }
     await press(dialog.getByRole('button', { name: 'Settings', exact: true }));
     await press(dialog.getByRole('link', { name: 'Sources', exact: true }));
     await page.locator('#sourceGrid .source-card').first().waitFor();
-    await page.waitForFunction(() => document.activeElement?.tagName === 'H1');
+    await page.waitForFunction(() => document.activeElement?.tagName === 'MAIN');
     assert.equal(new URL(page.url()).pathname, '/settings/sources');
     await page.goBack();
     await page.locator('.usage-dashboard .usage-chart').waitFor();
     assert.equal(await opener.getAttribute('aria-expanded'), 'false');
+    await press(opener);
+    await press(dialog.getByRole('button', { name: 'All pages', exact: true }));
+    await press(dialog.getByRole('link', { name: 'Home', exact: true }));
+    await page.locator('.home-intro h1').waitFor();
+    await page.waitForFunction(() => document.activeElement?.tagName === 'MAIN');
+    assert.equal(await page.locator('.home-intro h1').evaluate(element => { element.focus(); return document.activeElement === element; }), false, 'navigation keeps the welcome text unfocusable');
   });
 }
 
@@ -499,16 +550,22 @@ for (const width of [1440, 390]) test(`Optimize pages move keyboard focus to the
     if (phone) await press(page.locator('#appNavigationToggle'));
     await press(navigation.getByRole('link', { name, exact: true }));
     await page.locator(ready).first().waitFor();
-    await page.waitForFunction(() => document.activeElement?.tagName === 'H1');
+    await page.waitForFunction(() => document.activeElement?.tagName === 'MAIN');
     if (phone) assert.equal(await menu.isVisible(), false);
   }
   await choose('Settings', '.findings-settings .findings-panel');
   await choose('Table', '.findings-table .qt-row');
+  // Settings bypasses the empty-library state without remounting the page,
+  // so the retained findings table survives the round trip.
+  const table = await page.locator('.findings-table').elementHandle();
+  await choose('Settings', '.findings-settings .findings-panel');
+  await choose('Table', '.findings-table .qt-row');
+  assert.ok(await table.evaluate(element => element.isConnected), 'Findings Settings keeps the findings table mounted');
   await choose('Dashboard', '.findings-card');
   if (phone) await press(page.locator('#appNavigationToggle'));
   await press(navigation.getByRole('link', { name: 'Configurations', exact: true }));
   await page.locator('#tl1-matrix').waitFor();
-  await page.waitForFunction(() => document.activeElement?.tagName === 'H1');
+  await page.waitForFunction(() => document.activeElement?.tagName === 'MAIN');
   await settled();
   await shot('optimize-tl1');
   await page.goBack();
@@ -595,23 +652,79 @@ test('header editing keeps keyboard focus on the handle being changed', { skip }
   await page.waitForFunction(element => document.activeElement === element, await settings.elementHandle());
 });
 
-test("All Cards opens a page with focus on its heading and browser history returns Home", { skip }, async t => {
+for (const [url, ready] of [
+  ["/cards", ".card-library-entry .query-card"],
+  ["/library", "#queryTableLibrary .qt-row"],
+  ["/analyze", ".usage-dashboard .usage-chart"],
+  ["/findings", ".findings-card"],
+  ["/settings", "#healthCards .panel:not([aria-busy])"],
+  ["/settings/sources", "#sourceGrid .source-card"],
+  ["/settings/preferences", "#optionalBehaviors"],
+  ["/tl1", ".tl1-tiles"],
+  [`/work/${workID}`, ".work-heading h1"],
+  [`/work/${workID}/conversation/conv-root`, ".conversation-panel .turn"],
+]) test(`Opening ${url} leaves focus alone and its title is ordinary text`, { skip }, async t => {
+  const { page } = await open(t, { url, ready });
+  assert.ok(await page.evaluate(() => document.activeElement === document.body), "loading a page should not choose a focused element");
+  for (const title of await page.locator(".view.active h1:visible").all()) {
+    assert.equal(await title.evaluate(element => { element.focus(); return document.activeElement === element; }), false, "page titles should not accept focus");
+    await title.click();
+    assert.equal(await title.evaluate(element => document.activeElement === element), false, "clicking a title should leave it unfocused");
+  }
+});
+
+for (const [drawer, toggle, close] of [
+  ["History", "historyToggle", "historyClose"],
+  ["Bookmarks", "bookmarksToggle", "bookmarksClose"],
+]) for (const width of [1440, 390]) test(`${drawer} close restores reachable focus at ${width}px`, { skip }, async t => {
+  const { page } = await open(t, { url: "/library", viewport: { width, height: 900 }, ready: "#queryTableLibrary .qt-row", preferences: { "pharos-header-tools-v1": ["navigator", "settings"] } });
+  await activateHeaderTool(page, "navigatorToggle");
+  await press(page.locator(`#${toggle}`));
+  await press(page.locator(`#${close}`));
+  const target = await page.evaluate(id => {
+    const opener = document.getElementById(id);
+    const anchor = window.headerToolAnchor?.(opener) ?? opener;
+    return anchor === document.activeElement && !!anchor.getClientRects().length;
+  }, toggle);
+  assert.ok(target, "closing the drawer returns focus to its visible opener");
+  await press(page.locator(`#${toggle}`));
+  const other = page.locator("#navigatorURI");
+  await other.focus();
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator(`#${close}`).isVisible(), false);
+  assert.ok(await other.evaluate(element => element === document.activeElement), "dismissing a drawer should preserve focus chosen outside it");
+});
+
+for (const url of ["/", "/home"]) test(`Home at ${url} leaves initial focus to the user`, { skip }, async t => {
+  const { page } = await open(t, { url, ready: ".home-belt-row .query-card" });
+  assert.ok(await page.evaluate(() => document.activeElement === document.body), "opening Home should not focus a page element");
+  const welcome = page.locator(".home-intro h1");
+  assert.equal(await welcome.evaluate(element => { element.focus(); return document.activeElement === element; }), false, "the welcome text should not accept programmatic focus");
+  await welcome.click();
+  assert.equal(await welcome.evaluate(element => document.activeElement === element), false, "clicking the welcome text should not focus it");
+  await press(page.getByRole("button", { name: "Search past work", exact: true }));
+  await page.waitForFunction(() => document.activeElement?.matches(".home-search-content textarea, .home-search-content input"));
+});
+
+test("All Cards moves focus to its content and browser history returns Home", { skip }, async t => {
   const { page, settled, shot } = await open(t, { ready: ".home-belt-row .query-card", preferences: { "pharos-home-card-library-v1": { shown: true } } });
   await press(page.getByRole("button", { name: "All Cards", exact: true }));
   const heading = page.getByRole("heading", { name: "Card Library", exact: true });
   await heading.waitFor();
-  await page.waitForFunction(element => document.activeElement === element, await heading.elementHandle());
+  await page.waitForFunction(() => document.activeElement?.tagName === "MAIN");
   await settled();
   await shot("card-library");
   await page.goBack();
   const welcome = page.locator(".home-intro h1");
   await welcome.waitFor();
-  await page.waitForFunction(element => document.activeElement === element, await welcome.elementHandle());
+  await settled();
+  assert.equal(await welcome.evaluate(element => { element.focus(); return document.activeElement === element; }), false, "browser history leaves the welcome text unfocusable");
   await page.goForward();
   await heading.waitFor();
   await press(page.getByRole("link", { name: "Back to Home", exact: true }));
   await welcome.waitFor();
-  await page.waitForFunction(element => document.activeElement === element, await welcome.elementHandle());
+  await settled();
+  assert.equal(await welcome.evaluate(element => { element.focus(); return document.activeElement === element; }), false, "returning Home leaves the welcome text unfocusable");
 });
 
 test("the card template editor takes focus, keeps it and returns it on Escape", { skip }, async t => {
@@ -638,6 +751,31 @@ test("the delegation session sheet on a phone takes focus, keeps it and returns 
   const sheet = page.locator('[role="dialog"][aria-label="Workspace sessions"]');
   await sheet.waitFor();
   await holdsFocus(page, sheet, show);
+});
+
+for (const moveFocus of [false, true]) test(`conversation navigation ${moveFocus ? "preserves a newer focus choice" : "focuses the requested reader"}`, { skip }, async t => {
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  const { page, settled } = await open(t, { url: `/work/${workID}/conversation/conv-root`, ready: ".conversation-panel .turn", api: {
+    "GET /api/work/:id/conversations/:conversation": async call => {
+      if (call.params.conversation === "conv-child") await pending;
+      return defaultApi["GET /api/work/:id/conversations/:conversation"](call);
+    },
+  } });
+  const loading = page.waitForRequest(request => new URL(request.url()).pathname.endsWith("/conversations/conv-child"));
+  await page.evaluate(url => window.pharosNavigate(url), `/work/${workID}/conversation/conv-child`);
+  await loading;
+  const control = page.locator("#settingsToggle");
+  if (moveFocus) { await control.focus(); assert.ok(await control.evaluate(element => element === document.activeElement)); }
+  release();
+  await page.getByRole("article", { name: "User message", exact: true }).getByText("Review the change (conv-child)", { exact: true }).waitFor();
+  await settled();
+  const target = moveFocus ? control : page.locator(".conversation-panel");
+  await page.waitForFunction(element => document.activeElement === element, await target.elementHandle());
+  await press(page.locator(".workspace-reader-workspace"));
+  await page.waitForFunction(() => document.activeElement?.tagName === "MAIN");
+  assert.equal(await page.locator(".work-heading h1").evaluate(element => { element.focus(); return element === document.activeElement; }), false, "returning to the overview leaves its title unfocusable");
 });
 
 for (const merged of [false, true]) test(`transcript rails follow layout changes in ${merged ? "merged" : "split"} workspaces`, { skip }, async t => {
@@ -766,6 +904,40 @@ test("the expanded feedback panel stays inside a 360px viewport", { skip }, asyn
   assert.equal(box, true, `expanded toolbar at [${box}] in 360×420`);
 });
 
+test("feedback review keeps focus, fits a phone, and returns focus to its opener", { skip }, async t => {
+  const { page, shot } = await open(t, { url: "/settings", ready: "#healthCards .panel" });
+  await activateHeaderTool(page, "feedbackSubmitToggle");
+  const dialog = page.getByRole("dialog", { name: "Send feedback", exact: true });
+  await dialog.waitFor();
+  await page.waitForFunction(() => document.querySelector(".uifeedback-dialog")?.contains(document.activeElement));
+  await page.setViewportSize({ width: 360, height: 640 });
+  assert.equal(await onScreen(dialog), true);
+  await shot("feedback-review");
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "hidden" });
+  assert.equal(await page.evaluate(() => headerToolAnchor(document.getElementById("feedbackSubmitToggle")) === document.activeElement), true);
+});
+
+test("annotated element screenshots render and the reviewed report sends without leaving the page", { skip }, async t => {
+  const page = await annotate(t);
+  await page.locator("#feedbackNote").fill("Make this heading clearer");
+  await page.locator("#feedbackIncludeURL").check();
+  await page.getByRole("button", { name: "Take a screenshot of this element", exact: true }).click();
+  await page.waitForFunction(() => {
+    const img = document.getElementById("feedbackScreenshotPreview");
+    return !img.hidden && img.complete && img.naturalWidth > 0;
+  });
+  if (process.env.PHAROS_UI_SCREENSHOTS) { mkdirSync(process.env.PHAROS_UI_SCREENSHOTS, { recursive: true }); await page.locator("#feedbackScreenshotPreview").screenshot({ path: `${process.env.PHAROS_UI_SCREENSHOTS}/feedback-element-capture.png` }); }
+  await page.locator("#feedbackAdd").click();
+  await page.locator("#feedbackSend").click();
+  const dialog = page.getByRole("dialog", { name: "Send feedback", exact: true });
+  await dialog.waitFor();
+  await page.waitForFunction(() => document.querySelector(".uifeedback-dialog img")?.naturalWidth > 0);
+  await dialog.getByRole("button", { name: "Send feedback", exact: true }).click();
+  await page.getByRole("dialog", { name: "Feedback sent", exact: true }).waitFor();
+  assert.equal(new URL(page.url()).pathname, "/settings");
+});
+
 test('Analyze record keyword editor keeps focus through apply, edit and cancel', { skip }, async t => {
   const { page, settled, shot } = await open(t, { url:'/analyze?analyze_mode=query&analyze_data=tool_calls',ready:'.usage-workspace-table .qt-qb' });
   const opener=page.getByRole('button',{name:/^Add keyword filter for /});
@@ -837,7 +1009,30 @@ test('Capture & index query editor retains focus and edits across live refreshes
 });
 
 test('Mac menu editing preserves focus when adding, moving, and removing items', { skip }, async t => {
-  const { page, shot } = await open(t, { url: '/settings/preferences', ready: '#menuBarActive button' });
+  const { page, shot } = await open(t, { url: '/settings/preferences', ready: '#showMacMenuBar', preferences: { 'pharos-menu-bar': { enabled: false } } });
+  const disclosure = page.locator('#menuBarExpand');
+  const visibility = page.getByRole('switch', { name: 'macOS menu bar', exact: true });
+  const options = page.locator('#menuBarOptions');
+  assert.equal(await visibility.getAttribute('aria-checked'), 'false');
+  assert.equal(await disclosure.isVisible(), false, 'the off state only shows the visibility toggle');
+  await shot('off');
+  await press(visibility);
+  await disclosure.waitFor();
+  assert.ok(await visibility.evaluate(element => document.activeElement === element), 'enabling the menu keeps focus on its toggle');
+  assert.equal(await disclosure.getAttribute('aria-expanded'), 'false', 'enabled menu settings start collapsed');
+  assert.equal(await options.isVisible(), false);
+  await shot('collapsed');
+  await press(disclosure);
+  await options.waitFor();
+  assert.ok(await disclosure.evaluate(element => document.activeElement === element), 'opening the card keeps keyboard focus on the disclosure');
+  await shot('expanded');
+  await press(disclosure, 'Space');
+  await options.waitFor({ state: 'hidden' });
+  assert.equal(await visibility.getAttribute('aria-checked'), 'true', 'collapsing the editor keeps the menu enabled');
+  await page.keyboard.press('Tab');
+  assert.ok(await options.evaluate(element => !element.contains(document.activeElement)), 'Tab skips collapsed menu controls');
+  await press(disclosure);
+  await options.waitFor();
   const add = page.getByRole('button', { name: 'Add Estimated API cost', exact: true });
   const handle = page.getByRole('button', { name: 'Arrange Estimated API cost', exact: true });
   const focused = async locator => page.waitForFunction(element => document.activeElement === element, await locator.elementHandle());
@@ -871,6 +1066,13 @@ test('Mac menu editing preserves focus when adding, moving, and removing items',
   await page.keyboard.press('Delete');
   await focused(addSeparator);
   assert.equal(await separators.count(), before);
+  await press(visibility);
+  await options.waitFor({ state: 'hidden' });
+  assert.equal(await disclosure.isVisible(), false, 'disabling the menu hides its editor control');
+  assert.ok(await visibility.evaluate(element => document.activeElement === element), 'disabling the menu keeps its toggle reachable');
+  await press(visibility);
+  await disclosure.waitFor();
+  assert.equal(await disclosure.getAttribute('aria-expanded'), 'false', 'reenabling the menu starts collapsed');
 });
 
 for (const width of [390, 320]) test(`Capture & index tables retain horizontal scrolling through status refreshes @ ${width}`, { skip }, async t => {
@@ -971,6 +1173,31 @@ for (const theme of ['dark','light']) for (const width of [1440,390,320]) test(`
   assert.ok(await page.getByRole('textbox',{name:'Ask a question',exact:true}).evaluate(element=>element===document.activeElement)||await page.getByRole('button',{name:'Latest reply',exact:true}).evaluate(element=>element===document.activeElement),'keyboard focus can leave the scrollable conversation');
 });
 
+for (const moveFocus of [false, true]) test(`opening a saved chat ${moveFocus ? "preserves a newer focus choice" : "focuses its composer"}`, { skip }, async t => {
+  const selection = { provider: 'Codex', model: 'test-model', effort: 'Low' };
+  const session = { id: 'focus-chat', createdAt: Date.now(), updatedAt: Date.now(), selection, draft: '', conversation: [{ id: 'prior-turn', prompt: 'A prior question', cli: 'Codex', model: 'test-model', modelLabel: 'Test Model', effort: 'Low', status: 'multiple', message: '', elapsedMs: 1000, reply: 'A saved reply', cards: [] }] };
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  const { page, settled } = await open(t, { ready: '#pharos-ask .pharos-ai:not([hidden])', api: {
+    'GET /api/ask/status': { settings: { enabled: true, showInvitation: true, selection }, providers: [{ id: 'Codex' }] },
+    'GET /api/ask/models': { id: 'Codex', models: [{ id: 'test-model', label: 'Test Model', efforts: ['Default', 'Low'], default: true }] },
+    'GET /api/ask/sessions': { sessions: [session] },
+    'GET /api/ask/session': async () => { await pending; return session; },
+  } });
+  await press(page.getByRole('button', { name: 'History', exact: true }));
+  const loading = page.waitForRequest(request => new URL(request.url()).pathname === '/api/ask/session');
+  await press(page.getByRole('link', { name: 'Open chat: A prior question', exact: true }));
+  await loading;
+  const control = page.locator('#settingsToggle');
+  if (moveFocus) { await control.focus(); assert.ok(await control.evaluate(element => element === document.activeElement)); }
+  release();
+  await page.getByRole('status').filter({ hasText: 'A saved reply' }).waitFor();
+  await settled();
+  const target = moveFocus ? control : page.getByRole('textbox', { name: 'Ask a question', exact: true });
+  await page.waitForFunction(element => document.activeElement === element, await target.elementHandle());
+});
+
 test('Ask Pharos chat links survive reload, new tabs and browser Back/Forward', {skip}, async t => {
   const selection={provider:'Codex',model:'test-model',effort:'Low'};
   const saved={id:'saved-chat',createdAt:Date.now(),updatedAt:Date.now(),selection,draft:'',conversation:[{id:'saved-turn',prompt:'A prior question',cli:'Codex',model:'test-model',modelLabel:'Test Model',effort:'Low',status:'multiple',message:'',elapsedMs:1000,reply:'An earlier reply',cards:[]}]};
@@ -1014,6 +1241,7 @@ test('Ask Pharos chat links survive reload, new tabs and browser Back/Forward', 
   await page.reload();await settled();
   await page.waitForFunction(()=>document.querySelector('#pharos-question')?.value==='Keep this question');
   assert.equal(await question.inputValue(),'Keep this question');
+  assert.ok(await page.evaluate(() => document.activeElement === document.body), 'restoring a chat should leave initial focus alone');
   const choose=async(kind,value,expected)=>{
     const persisted=page.waitForResponse(response=>response.url().includes('/api/ask/session')&&response.request().method()==='POST'&&Object.entries(expected).every(([key,value])=>response.request().postDataJSON().selection[key]===value));
     await page.locator('.pharos-model-trigger').click();

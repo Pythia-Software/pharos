@@ -19,11 +19,11 @@ export type Segment = { text: string; category?: string; rule?: string; reason?:
 export const authorshipCategories = [
   { key: "typed", label: "Typed", color: "var(--sea)", description: "Written or dictated by you: no other rule claimed it." },
   { key: "pasted", label: "Likely pasted", color: "var(--heat-1)", description: "Looks like code, logs, tables, or agent formatting, or arrived faster than anyone types. Inferred from how the text looks." },
-  { key: "quoted", label: "Copied", color: "var(--gold)", description: "Matches agent output from the 48 hours before, or is quoted with >." },
+  { key: "quoted", label: "Copied", color: "var(--gold)", description: "Matches agent output or authored file content from the preceding seven days, or is explicitly quoted." },
   { key: "resent", label: "Re-sent", color: "var(--gold)", striped: true, description: "Matches something you sent before." },
   { key: "template", label: "Template", color: "var(--heat-2)", description: "A one-click prompt or saved prompt sent again and again, or a slash command." },
   { key: "attachment", label: "Attachment", color: "var(--heat-2)", striped: true, description: "An attachment reference or image placeholder." },
-  { key: "harness", label: "Harness", color: "var(--muted)", description: "Instructions the harness put at the start of the prompt." },
+  { key: "harness", label: "Harness", color: "var(--muted)", description: "Generated prompt context, question forms, and feedback metadata." },
   { key: "automated", label: "Automated", color: "var(--muted)", striped: true, description: "The whole message came from a script or another agent." },
 ];
 const categoryByKey = new Map(authorshipCategories.map(category => [category.key, category]));
@@ -41,8 +41,12 @@ const ruleHelp: Record<string, string> = {
   "Sent faster than typing": "The rest of the message arrived faster than 20 characters a second after your previous message in this conversation.",
   "Generated page feedback": "The generated labels, selectors, page text, styles, and instructions around a feedback comment.",
   "Human feedback comment": "The comment entered in a recognized page-feedback report; generated context is counted separately.",
+  "Matches agent-written content": "Matches newly authored file content or added patch lines from the preceding seven days, including short review items anchored to that same source.",
+  "Generated question form": "The question, a prewritten selected option, or a skipped marker from a related question event; free-text answers stay eligible as your writing.",
+  "Pasted conversation": "Explicitly quoted conversation text or existing output wording; surrounding commentary stays separate.",
+  "Reported output": "A bounded program report or output explicitly introduced as an error or message.",
   "Quoted with >": "Lines starting with >.",
-  "Matches recent agent output": "A run of 12 or more words matching agent output from the 48 hours before, in any conversation.",
+  "Matches recent agent output": "A run of 12 or more words matching one agent source from the preceding seven days, or a short review item anchored to that same source.",
   "Already sent earlier": "A run of 12 or more words matching a message you sent before, however long ago.",
   "Line already sent in other conversations": "A line of 8 or more words already sent in 2 other conversations.",
   "Repeated prompt": "The same text was sent in 5 or more sessions on 3 or more days: a button or saved prompt.",

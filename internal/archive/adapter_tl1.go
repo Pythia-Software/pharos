@@ -289,7 +289,7 @@ func (a *tl1Adapter) Fingerprint() (string, error) {
 	return hashBytes([]byte(a.indexVersion() + ":" + strings.Join(rows, "\n"))), nil
 }
 
-func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v3-reasoning" }
+func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v4-origins" }
 
 func (a *tl1Adapter) Discover(emit func(WorkspaceRecord) error) error {
 	a.snapshots = nil

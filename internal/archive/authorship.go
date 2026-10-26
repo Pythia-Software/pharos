@@ -24,17 +24,20 @@ import (
 // docs/human-authorship.md.
 
 // authorshipVersion names the classification rules; a new version rebuilds.
-const authorshipVersion = "authorship-v7"
+const authorshipVersion = "authorship-v8"
 
 const (
 	// authorshipWindow bounds how far back agent output is looked for. Your
 	// own earlier messages are compared however old they are, since saved
 	// prompts are often re-sent weeks apart.
-	authorshipWindow = 48 * time.Hour
+	authorshipWindow = 7 * 24 * time.Hour
 	// shingleWords is the length of the word runs compared between texts.
 	shingleWords = 8
 	// quoteMinWords is the shortest matching run treated as copied.
 	quoteMinWords = 12
+	// A candidate contains enough consecutive shingles to establish a copy
+	// on its own. Short excerpts cannot replace a complete candidate.
+	copyShingles = quoteMinWords - shingleWords + 1
 	// Prompts with the same text in this many sessions on this many days are
 	// templates (buttons, saved prompts) rather than text typed each time.
 	templateSessions, templateDays, templateMinChars = 5, 3, 10
@@ -306,47 +309,64 @@ type textOrigin struct {
 
 // shingleRef records where and when a word run was last seen.
 type shingleRef struct {
-	at int64
-	textOrigin
+	batch  *shingleBatch
+	offset int
 }
 
 // shingleIndex holds the word runs of texts seen within the window.
 type shingleIndex struct {
-	seen  map[uint64]shingleRef
-	queue []shingleBatch
+	seen   map[uint64]shingleRef
+	queue  []*shingleBatch
+	byText map[[32]byte]*shingleBatch
 }
 
 type shingleBatch struct {
-	at     int64
-	hashes []uint64
+	sentAt  time.Time
+	at      int64
+	hashes  []uint64
+	origin  textOrigin
+	reviews map[string]bool
+	headers map[string]bool
+	digest  [32]byte
+	tool    bool
 }
 
-func newShingleIndex() *shingleIndex { return &shingleIndex{seen: map[uint64]shingleRef{}} }
+func newShingleIndex() *shingleIndex {
+	return &shingleIndex{seen: map[uint64]shingleRef{}, byText: map[[32]byte]*shingleBatch{}}
+}
 
 func (index *shingleIndex) add(at time.Time, origin textOrigin, hashes []uint64) {
 	if len(hashes) == 0 {
 		return
 	}
 	stamp := at.Unix()
-	for _, hash := range hashes {
-		index.seen[hash] = shingleRef{at: stamp, textOrigin: origin}
+	batch := &shingleBatch{sentAt: at, at: stamp, hashes: hashes, origin: origin}
+	for offset := 0; offset+copyShingles <= len(hashes); offset++ {
+		index.seen[copyCandidate(hashes[offset:])] = shingleRef{batch: batch, offset: offset}
 	}
-	index.queue = append(index.queue, shingleBatch{at: stamp, hashes: hashes})
+	index.queue = append(index.queue, batch)
 }
 
 // evict forgets runs last seen before cutoff. Batches arrive in time order.
 func (index *shingleIndex) evict(cutoff time.Time) {
-	stamp, drop := cutoff.Unix(), 0
-	for drop < len(index.queue) && index.queue[drop].at < stamp {
-		for _, hash := range index.queue[drop].hashes {
-			if ref, ok := index.seen[hash]; ok && ref.at < stamp {
+	drop := 0
+	for drop < len(index.queue) && index.queue[drop].sentAt.Before(cutoff) {
+		batch := index.queue[drop]
+		if index.byText[batch.digest] == batch {
+			delete(index.byText, batch.digest)
+		}
+		for offset := 0; offset+copyShingles <= len(batch.hashes); offset++ {
+			hash := copyCandidate(batch.hashes[offset:])
+			if ref, ok := index.seen[hash]; ok && ref.batch.sentAt.Before(cutoff) {
 				delete(index.seen, hash)
 			}
 		}
 		drop++
 	}
 	if drop > 0 {
-		index.queue = append(index.queue[:0], index.queue[drop:]...)
+		remaining := copy(index.queue, index.queue[drop:])
+		clear(index.queue[remaining:])
+		index.queue = index.queue[:remaining]
 	}
 }
 
@@ -397,41 +417,44 @@ type copiedRun struct {
 	start, end int
 	origin     textOrigin
 	at         int64
+	batch      *shingleBatch
 }
 
-// copiedRuns finds runs of at least quoteMinWords words whose every word lies
-// in a shingle the index saw at or after cutoff.
-func copiedRuns(tokens []wordToken, hashes []uint64, index *shingleIndex, cutoff time.Time) []copiedRun {
-	covered := make([]int, len(tokens))
-	refs := make([]shingleRef, len(tokens))
-	stamp := cutoff.Unix()
-	for position, hash := range hashes {
-		ref, ok := index.seen[hash]
-		if !ok || ref.at < stamp {
-			continue
-		}
-		for offset := position; offset < position+shingleWords; offset++ {
-			covered[offset]++
-			if refs[offset].conversation == "" || ref.at > refs[offset].at {
-				refs[offset] = ref
-			}
-		}
+// copyCandidate indexes a complete minimum-length copy, represented by its
+// overlapping shingles. The source sequence is verified after lookup.
+func copyCandidate(hashes []uint64) uint64 {
+	hash := uint64(14695981039346656037)
+	for _, part := range hashes[:copyShingles] {
+		hash = (hash ^ part) * 1099511628211
 	}
+	return hash
+}
+
+// copiedRuns verifies fixed-size candidates from individual sources. Every
+// position takes constant work, even for repetitive text; coalescing verified
+// coverage keeps the labeler from rescanning overlapping prefixes.
+func copiedRuns(tokens []wordToken, hashes []uint64, index *shingleIndex, cutoff time.Time) []copiedRun {
 	runs := []copiedRun{}
-	for position := 0; position < len(tokens); {
-		if covered[position] == 0 {
-			position++
+	for position := 0; position+copyShingles <= len(hashes); position++ {
+		ref, ok := index.seen[copyCandidate(hashes[position:])]
+		if !ok || ref.batch.sentAt.Before(cutoff) {
 			continue
 		}
-		end := position
-		for end < len(tokens) && covered[end] > 0 {
-			end++
+		if !slices.Equal(hashes[position:position+copyShingles], ref.batch.hashes[ref.offset:ref.offset+copyShingles]) {
+			continue
 		}
-		if end-position >= quoteMinWords {
-			ref := refs[position]
-			runs = append(runs, copiedRun{start: tokens[position].start, end: tokens[end-1].end, origin: ref.textOrigin, at: ref.at})
+		start, end := tokens[position].start, tokens[position+quoteMinWords-1].end
+		if len(runs) > 0 {
+			last := &runs[len(runs)-1]
+			if last.batch == ref.batch && start <= last.end {
+				last.end = end
+				continue
+			}
+			// Earlier candidates already established this prefix. Preserve their
+			// source attribution and add only the newly verified suffix.
+			start = max(start, last.end)
 		}
-		position = end
+		runs = append(runs, copiedRun{start: start, end: end, origin: ref.batch.origin, at: ref.batch.at, batch: ref.batch})
 	}
 	return runs
 }
@@ -572,6 +595,7 @@ type classifier struct {
 	userText     *shingleIndex
 	lines        map[uint64]*lineUse
 	lastUserSent map[string]time.Time
+	questions    map[string][]authorshipQuestion
 }
 
 func newClassifier(inputs []authorInput) *classifier {
@@ -592,7 +616,7 @@ func newClassifier(inputs []authorInput) *classifier {
 		use.sessions[input.ConversationID] = true
 		use.days[input.SentAt.Local().Format("2006-01-02")] = true
 	}
-	return &classifier{templates: templates, agentText: newShingleIndex(), userText: newShingleIndex(), lines: map[uint64]*lineUse{}, lastUserSent: map[string]time.Time{}}
+	return &classifier{templates: templates, agentText: newShingleIndex(), userText: newShingleIndex(), lines: map[uint64]*lineUse{}, lastUserSent: map[string]time.Time{}, questions: map[string][]authorshipQuestion{}}
 }
 
 // classify labels one message. Agent output sent before it must already be
@@ -623,6 +647,7 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 	body := strings.TrimSpace(text[bodyStart:])
 	feedback := pageFeedbackReports(text, bodyStart)
 	claimFeedbackMetadata(l, feedback)
+	c.claimQuestionForms(l, input, bodyStart)
 	if use := c.templates[templateKey(text)]; use != nil && use.template() {
 		l.claim(0, len(text), spanTemplate, reasonRepeatedPrompt.with(fmt.Sprintf("sent in %d sessions on %d days", len(use.sessions), len(use.days))), textOrigin{})
 	}
@@ -632,17 +657,9 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 	for _, match := range attachmentPattern.FindAllStringIndex(text, -1) {
 		l.claim(match[0], match[1], spanAttachment, reasonAttachment, textOrigin{})
 	}
-	comparisonText := maskFeedback(text, feedback, false)
-	heuristicText := maskFeedback(text, feedback, true)
-	for _, match := range fencePattern.FindAllStringIndex(heuristicText, -1) {
-		l.claim(match[0], match[1], spanPasted, reasonCodeBlock, textOrigin{})
-	}
+	comparisonText := maskGeneratedAuthorship(maskFeedback(text, feedback, false), l)
+	heuristicText := maskGeneratedAuthorship(maskFeedback(text, feedback, true), l)
 	lines := textLines(text)
-	for _, line := range lines {
-		if strings.HasPrefix(strings.TrimLeft(heuristicText[line[0]:line[1]], " "), ">") {
-			l.claim(line[0], line[1], spanQuoted, reasonQuoted, textOrigin{})
-		}
-	}
 	// Harness text is left out of word runs, or its closing words and the
 	// first words typed after it would match every earlier session's.
 	tokens := wordTokens(comparisonText)
@@ -650,12 +667,27 @@ func (c *classifier) classify(input authorInput) []authorSpan {
 		tokens = tokens[1:]
 	}
 	hashes := shingles(tokens)
-	for _, run := range copiedRuns(tokens, hashes, c.agentText, input.SentAt.Add(-authorshipWindow)) {
-		l.claim(run.start, run.end, spanQuoted, reasonAgentOutput.with(ago(input.SentAt, run.at)), run.origin)
+	agentRuns := copiedRuns(tokens, hashes, c.agentText, input.SentAt.Add(-authorshipWindow))
+	for _, run := range agentRuns {
+		reason := reasonAgentOutput
+		if run.batch.tool {
+			reason = reasonAuthoredTool
+		}
+		l.claim(run.start, run.end, spanQuoted, reason.with(ago(input.SentAt, run.at)), run.origin)
 	}
+	claimCopiedReviewItems(l, comparisonText, agentRuns, input.SentAt)
 	for _, run := range copiedRuns(tokens, hashes, c.userText, time.Time{}) {
 		l.claim(run.start, run.end, spanResent, reasonAlreadySent.with(ago(input.SentAt, run.at)), run.origin)
 	}
+	for _, match := range fencePattern.FindAllStringIndex(heuristicText, -1) {
+		l.claim(match[0], match[1], spanPasted, reasonCodeBlock, textOrigin{})
+	}
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimLeft(heuristicText[line[0]:line[1]], " "), ">") {
+			l.claim(line[0], line[1], spanQuoted, reasonQuoted, textOrigin{})
+		}
+	}
+	claimExplicitPastes(l, heuristicText, bodyStart)
 	// A reused line counts as re-sent on its own only when it is too long to
 	// be a phrase typed again by chance; shorter ones only mark pasted output.
 	keys, repeated := c.repeatedLines(input.ConversationID, comparisonText, lines, bodyStart)
@@ -822,7 +854,7 @@ func codePunctuation(text string) int {
 
 func tableLine(line string) bool {
 	trimmed := strings.TrimSpace(line)
-	return len(trimmed) > 1 && strings.HasPrefix(trimmed, "|") && strings.HasSuffix(trimmed, "|")
+	return len(trimmed) > 1 && strings.HasPrefix(trimmed, "|") && strings.HasSuffix(trimmed, "|") || strings.Count(trimmed, "\t") >= 2
 }
 
 func headingLine(line string) bool {
@@ -910,7 +942,7 @@ func claimStructuredBlocks(l *labeler, text string, lines [][2]int, repeated []b
 		}
 	}
 	if first >= 0 && (headings >= 2 || bullets >= 3 || headings >= 1 && bullets >= 2) {
-		end := last
+		end := pastedDocumentTail(text, lines, first, last)
 		for end+1 < len(lines) && strings.TrimSpace(text[lines[end+1][0]:lines[end+1][1]]) != "" {
 			end++
 		}
@@ -1038,10 +1070,11 @@ type authorshipCounts struct {
 
 func countSpans(text string, spans []authorSpan) authorshipCounts {
 	counts := authorshipCounts{chars: map[string]int{}, words: map[string]int{}}
-	for _, span := range spans {
+	words := authorshipWordCounts(text, spans)
+	for index, span := range spans {
 		value := text[span.Start:span.End]
 		counts.chars[span.Category] += utf8.RuneCountInString(strings.TrimSpace(value))
-		counts.words[span.Category] += len(strings.Fields(value))
+		counts.words[span.Category] += words[index]
 	}
 	return counts
 }
@@ -1052,6 +1085,7 @@ func countSpans(text string, spans []authorSpan) authorshipCounts {
 type spanSummary struct{ main, categories, rules string }
 
 func summarizeSpans(text string, spans []authorSpan) spanSummary {
+	wordCounts := authorshipWordCounts(text, spans)
 	type weight struct {
 		name         string
 		words, chars int
@@ -1059,7 +1093,7 @@ func summarizeSpans(text string, spans []authorSpan) spanSummary {
 	tally := func(key func(authorSpan) string) []weight {
 		weights := []weight{}
 		index := map[string]int{}
-		for _, span := range spans {
+		for position, span := range spans {
 			value := text[span.Start:span.End]
 			chars := utf8.RuneCountInString(strings.TrimSpace(value))
 			if chars == 0 {
@@ -1071,7 +1105,7 @@ func summarizeSpans(text string, spans []authorSpan) spanSummary {
 				weights = append(weights, weight{name: name})
 			}
 			entry := &weights[index[name]]
-			entry.words += len(strings.Fields(value))
+			entry.words += wordCounts[position]
 			entry.chars += chars
 		}
 		sort.SliceStable(weights, func(i, j int) bool {
@@ -1230,16 +1264,20 @@ func (c *Catalog) RebuildAuthorship(ctx context.Context, generation string) erro
 }
 
 // The user messages to classify, and the agent replies, in send order, that
-// they are compared with. messages_prose_idx serves both without a temporary
-// sort.
+// they are compared with. The existing prose and tool-ledger time indexes
+// stream both sides without scanning wide tool results or adding a new index.
 const (
 	authorshipInputsQuery = `SELECT m.id,m.conversation_id,c.workspace_id,m.text,m.created_at,COALESCE(m.sender,''),w.source_kind,c.parent_id IS NOT NULL,
 			COALESCE(c.harness,''),COALESCE(c.origin_host_id,'')
 		FROM messages m
 		JOIN conversations c ON c.id=m.conversation_id JOIN workspaces w ON w.id=c.workspace_id
 		WHERE m.kind='message' AND m.role='user' AND m.created_at IS NOT NULL`
-	authorshipRepliesQuery = `SELECT id,conversation_id,created_at,text FROM messages
-		WHERE kind='message' AND role='assistant' AND created_at>=? ORDER BY created_at`
+	authorshipRepliesQuery = `SELECT id,conversation_id,created_at,text,kind FROM messages
+		WHERE kind='message' AND role='assistant' AND created_at>=?1
+		UNION ALL SELECT m.id,m.conversation_id,t.started_at,m.text,m.kind FROM tool_calls t
+        JOIN messages m ON m.id=t.call_message_id
+        WHERE t.started_at>=?1 AND t.tool_category IN ('command','edit','user','mcp','other')
+        AND m.kind='tool_call' AND m.role='assistant' ORDER BY created_at`
 )
 
 // authorshipInputs links headless runs to the commands that launched them,
@@ -1372,12 +1410,13 @@ func (c *Catalog) classifyInputs(ctx context.Context, inputs []authorInput) ([]a
 		at     time.Time
 		origin textOrigin
 		text   string
+		kind   string
 	}
 	next := func() error {
 		pending = nil
 		for rows.Next() {
-			var id, conversation, createdAt, text string
-			if err := rows.Scan(&id, &conversation, &createdAt, &text); err != nil {
+			var id, conversation, createdAt, text, kind string
+			if err := rows.Scan(&id, &conversation, &createdAt, &text, &kind); err != nil {
 				return err
 			}
 			if at, ok := parseTime(createdAt); ok {
@@ -1385,7 +1424,8 @@ func (c *Catalog) classifyInputs(ctx context.Context, inputs []authorInput) ([]a
 					at     time.Time
 					origin textOrigin
 					text   string
-				}{at, textOrigin{conversation, id}, text}
+					kind   string
+				}{at, textOrigin{conversation, id}, text, kind}
 				return nil
 			}
 		}
@@ -1396,13 +1436,18 @@ func (c *Catalog) classifyInputs(ctx context.Context, inputs []authorInput) ([]a
 	}
 	reportWork(ctx, "classifying authorship", "message", 0, len(inputs))
 	for index, input := range inputs {
+		cutoff := input.SentAt.Add(-authorshipWindow)
 		for pending != nil && pending.at.Before(input.SentAt) {
-			classifier.agentText.add(pending.at, pending.origin, shingles(wordTokens(pending.text)))
+			if pending.kind == "tool_call" {
+				classifier.addAuthorshipTool(pending.at, pending.origin, pending.text)
+			} else {
+				classifier.addAgentText(pending.at, pending.origin, pending.text, false)
+			}
+			classifier.agentText.evict(cutoff)
 			if err := next(); err != nil {
 				return nil, err
 			}
 		}
-		cutoff := input.SentAt.Add(-authorshipWindow)
 		classifier.agentText.evict(cutoff)
 		results = append(results, authorResult{Input: input, Spans: classifier.classify(input)})
 		if index%100 == 0 || index+1 == len(inputs) {
@@ -1467,10 +1512,11 @@ func (c *Catalog) storeAuthorship(ctx context.Context, results []authorResult, l
 		if _, err := statement.ExecContext(ctx, values...); err != nil {
 			return err
 		}
+		wordCounts := authorshipWordCounts(input.Text, result.Spans)
 		for position, span := range result.Spans {
 			value := input.Text[span.Start:span.End]
 			if _, err := spanStatement.ExecContext(ctx, input.ID, position, span.Category, spanRule(span), nilIfEmpty(span.Reason), span.Start, span.End,
-				utf8.RuneCountInString(strings.TrimSpace(value)), len(strings.Fields(value)), nilIfEmpty(span.Source), nilIfEmpty(span.Message)); err != nil {
+				utf8.RuneCountInString(strings.TrimSpace(value)), wordCounts[position], nilIfEmpty(span.Source), nilIfEmpty(span.Message)); err != nil {
 				return err
 			}
 		}
@@ -1584,12 +1630,13 @@ func (c *Catalog) messageAuthorshipAttacher(conversationID any) (func(map[string
 		}
 		text := firstString(message["text"])
 		parts := []map[string]any{}
-		for _, span := range decoded[id] {
+		wordCounts := authorshipWordCounts(text, decoded[id])
+		for position, span := range decoded[id] {
 			if span.End > len(text) {
 				break
 			}
 			value := strings.TrimSpace(text[span.Start:span.End])
-			part := map[string]any{"category": span.Category, "reason": nilIfEmpty(span.Reason), "words": len(strings.Fields(value)), "excerpt": excerpt(value, 120)}
+			part := map[string]any{"category": span.Category, "reason": nilIfEmpty(span.Reason), "words": wordCounts[position], "excerpt": excerpt(value, 120)}
 			if source := workspaces[span.Source]; source != nil {
 				part["source"] = map[string]any{"workspace_id": source["workspace_id"], "conversation_id": span.Source, "message_id": nilIfEmpty(span.Message), "title": source["title"]}
 			}

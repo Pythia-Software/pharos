@@ -1,6 +1,21 @@
 import type { AggregationClause, WhereClause, WhereTerm } from "@pythia-software/query-table-core";
 
-export type MachineScope = { days: number; repository: string; provider: string; model: string };
+export type MachineScope = { channel?: string; machine_id?: string; execution_machine_id?: string; days: number; repository: string; provider: string; model: string };
+export function machineScopeFromParams(params: URLSearchParams, saved: MachineScope): MachineScope {
+  // Explicit links carry their own population, including older links written
+  // before origin filters existed. Only an unscoped visit restores preferences.
+  const fields = ["channel", "machine_id", "execution_machine_id"] as const;
+  const explicit = params.has("q_usage") || ["days", "repo", "provider", "model", ...fields].some(field => params.has(`activity_${field}`));
+  const fallback = explicit ? { days: 0, repository: "", provider: "", model: "" } : saved;
+  const days = Number(params.get("activity_days") ?? fallback.days);
+  return {
+    days: [0, 7, 14, 30, 90].includes(days) ? days : 0,
+    repository: params.get("activity_repo") ?? fallback.repository ?? "",
+    provider: params.get("activity_provider") ?? fallback.provider ?? "",
+    model: params.get("activity_model") ?? fallback.model ?? "",
+    ...Object.fromEntries(fields.map(field => [field, params.get(`activity_${field}`) ?? (fallback as MachineScope)[field] ?? ""])),
+  };
+}
 export type MachineWindow = { start: string; end: string; previous: string };
 export const activities = [
   { id: "test", label: "Tests & checks", color: "var(--heat-2)" },
@@ -83,6 +98,7 @@ export function machineWindow(days: number, now = new Date()): MachineWindow {
 export function machineWhere(scope: MachineScope, window: MachineWindow, timeField = "started_at", previous = false): WhereTerm[] {
   const where: WhereTerm[] = [];
   where.push(...repositoryWhere(scope.repository));
+  for (const field of ["channel", "machine_id", "execution_machine_id"] as const) if (scope[field]) where.push({ field, op: "=", value: scope[field]! });
   if (scope.provider) where.push({ field: "provider", op: "=", value: scope.provider });
   if (scope.model) where.push({ field: "model", op: "=", value: scope.model });
   if (scope.days) where.push({ field: timeField, op: ">=", value: previous ? window.previous : window.start }, { field: timeField, op: "<", value: previous ? window.start : window.end });

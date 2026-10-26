@@ -1,4 +1,6 @@
 import "./visit-history";
+import { originDimensions, originLabel, originRenderers, useOriginMetadata, isOriginDimension } from "./origin-dimensions";
+import "./uifeedback/pharos-client";
 import { matchingSelectionIDs } from "./query-selection";
 import { DataTaxonomyModal, SourceQueryBuilder } from "./data-taxonomy";
 import { installDelegationExplorer } from "./delegation";
@@ -37,6 +39,7 @@ import { defaultChartScale, validChartScale } from "./chart-scale";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { useLocationRevision } from "./nested-pages";
+import { LibraryContent } from "./library-content";
 import { SyncTables } from "./sync-tables";
 import { SettingsWorkspace } from "./settings-workspace";
 import { installAppNavigation } from "./app-navigation";
@@ -84,8 +87,9 @@ import { currentUsageAnalyses, isUsageWorkspace, readUsageWorkspace, usageDatase
 import { defaultMCPDashboard, validMCPDashboard, cumulativeMCPTrend, mcpDashboardMeasures, mcpDashboardBreakdowns, mcpDashboardQuery, mcpTrendRanking, withMCPTrendGroups, mcpTrendGroups } from "./mcp-dashboard-model";
 import { UsageWorkspace, UsageDashboardLinks, UsageWorkspaceLink } from "./usage-workspace";
 import { UsageQueryIdeas } from "./usage-query-ideas";
-import { toolSummaryCallFilters, defaultToolDashboard, validToolDashboard, cumulativeToolTrend, toolDashboardMeasures, toolDashboardBreakdowns, toolDashboardQuery, toolTrendRanking, withToolTrendGroups, toolTrendGroups } from "./tools-dashboard-model";
+import { toolSummaryCallFilters, toolMetricPresentation, defaultToolDashboard, validToolDashboard, cumulativeToolTrend, toolDashboardMeasures, toolDashboardBreakdowns, toolDashboardQuery, toolTrendRanking, withToolTrendGroups, toolTrendGroups } from "./tools-dashboard-model";
 import { readDashboardQuery, inspectDashboardBucket, recordDashboardMetric, recordDashboards, parallelismSelectionQuery, toolDashboardWhere, type RecordDashboardTopic } from "./usage-dashboard-model";
+import { dashboardChartURL } from "./dashboard-chart-links";
 
 type Row = Record<string, any>;
 const relationships: RelationshipAdapter = {
@@ -350,6 +354,7 @@ const renderers: RenderRegistry<Row> = {
     return <span className={`mcp-call-state ${state}`}>{state.replace("_", " ")}</span>;
   },
   ...authoredRenderers,
+  ...originRenderers<Row>(),
 };
 
 // Filter chips, pickers, and cell quick filters show each value's schema label
@@ -366,7 +371,7 @@ const statusBadges: Record<string, (value: string, label: string) => React.React
 const filterPresentations = Object.fromEntries(Object.entries(schemas).map(([dataset, schema]) => {
   const labels = optionLabels(schema.fields);
   const badges = new Map(schema.fields.flatMap(field => typeof field.render === "string" && statusBadges[field.render] ? [[field.name, statusBadges[field.render]] as const] : []));
-  const label = (field: string, value: string) => labels.get(field)?.get(value) ?? value;
+  const label = (field: string, value: string) => isOriginDimension(field) ? originLabel(field, value) : labels.get(field)?.get(value) ?? value;
   const presentation: FilterValuePresentation = {
     label,
     render: (field, value) => value ? badges.get(field)?.(value, label(field, value)) : undefined,
@@ -597,8 +602,8 @@ function QuerySurface({ dataset, usageActions = false, libraryView = "table", me
   // Inactive controllers retain their query state, but their controls must not
   // mount: filter nullability/autocomplete and header charts issue metadata
   // requests independently of useQueryTable's active row-fetch flag.
+  useOriginMetadata(Boolean(visible));
   if (!visible) return null;
-
   return <FilterValueProvider value={filterPresentations[dataset]}>
     <QueryRecovery busy={api.loading || api.restoration.status === "resolving" || (remote && !capabilities && !capabilityError)} error={capabilityError ?? api.error} recovered={recovered} identity={JSON.stringify(api.query)}
       onRetry={() => { retryLastQuery(schema.name); if (capabilityError) setCapabilityRetry(value => value + 1); else if (api.restoration.error) void api.restoreLocation(location.href).catch(() => {}); else api.refresh(); }}
@@ -1071,7 +1076,7 @@ function useMetrics(dataset: Dataset, where: WhereTerm[], clauses: AggregationCl
   return { ...state, metrics: state.key === key ? state.metrics : [], loading: state.key !== key || state.loading, error: state.key === key ? state.error : "" };
 }
 
-const tokenSplits: Array<[TokenSplit, string]> = [["type", "Token type"], ["provider", "Provider"], ["model_family", "Model"], ["model_effort", "Model + effort"], ["effort", "Effort"], ["repository_name", "Repository"], ["session_kind", "Root Agent/Subagent"]];
+const tokenSplits: Array<[TokenSplit, string]> = [["type", "Token type"], ...originDimensions.map(([key, label]): [TokenSplit, string] => [key, label]), ["provider", "Provider"], ["model_family", "Model"], ["model_effort", "Model + effort"], ["effort", "Effort"], ["repository_name", "Repository"], ["session_kind", "Root Agent/Subagent"]];
 // Providers and agent kinds keep one color each whatever the filters; models
 // and repositories show the fifteen largest in view and fold the rest into Other.
 const fixedSplitOrder: Partial<Record<TokenSplit, string[]>> = { provider: ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"], session_kind: ["root", "subagent"] };
@@ -1083,6 +1088,7 @@ const costTick = (value: number) => Math.abs(value) >= 1e4 ? `$${compactNumber(v
 function splitLabel(split: TokenSplit, value: unknown): string {
   if (value === null || value === undefined || value === "") return split === "repository_name" ? "No repository" : "Unknown";
   const text = String(value);
+  if (isOriginDimension(split)) return originLabel(split, value);
   if (split === "provider") return optionLabels(schemas.usage.fields).get("provider")?.get(text) ?? text;
   if (split === "session_kind") return sessionKindLabels[text] ?? text;
   return text;
@@ -1093,6 +1099,7 @@ function splitLabel(split: TokenSplit, value: unknown): string {
 // the key to pick from. Token types are not rows, so clicking one only
 // narrows the chart.
 function TokenChart({ where, onFilter, onTimeFilter = onFilter, view, onChange }: { where: WhereTerm[]; onFilter: FilterChange; onTimeFilter?: FilterChange; view: TokenChartView; onChange: (next: Partial<TokenChartView>) => void }) {
+  const originRevision = useOriginMetadata();
   const cost = costMetric(view);
   const percent = view.metric === "percent" || view.metric === "percent_cost";
   const cumulative = view.display === "cumulative";
@@ -1131,7 +1138,7 @@ function TokenChart({ where, onFilter, onTimeFilter = onFilter, view, onChange }
     }
     const rows = (result.metrics[0]?.buckets ?? []).map(bucket => [plottedKey(bucket.keys[0]), String(bucket.keys[1] ?? ""), Number(bucket.value) || 0] as [string, string, number]);
     return { series: foldSeries(rows, byKey, name => splitLabel(split, name), fixedSplitOrder[split], chosen, seriesLimit, split), buckets, cumulativeStart };
-  }, [result.metrics, split, view.period, periodCount, bounds.from?.getTime(), bounds.to?.getTime(), chosen.join("\u0000"), seriesLimit, cumulative, view.rollingPeriods]);
+  }, [result.metrics, originRevision, split, view.period, periodCount, bounds.from?.getTime(), bounds.to?.getTime(), chosen.join("\u0000"), seriesLimit, cumulative, view.rollingPeriods]);
   useUsageChartPalette(sliced ? split : null, series);
   const selected = series.filter(item => item.value !== undefined && chosen.includes(item.value)).map(item => item.key);
   function select(key: string | null, action: LegendAction) {
@@ -1155,7 +1162,9 @@ function TokenChart({ where, onFilter, onTimeFilter = onFilter, view, onChange }
     format={percent ? value => `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })}%` : cost ? formatUSD : compactNumber}
     tickFormat={percent ? value => `${value}%` : cost ? costTick : compactNumber}
     noun={view.metric === "tokens" ? "tokens" : ""} loading={result.loading} error={result.error} legend={series.length > 0} percent={percent}
-    selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => onChange({ seriesLimit: Math.min(1000, seriesLimit + 5) })} onRange={pickRange(onTimeFilter, usageTime, view.period, periodCount, period => onChange({ period }))} />;
+    selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => onChange({ seriesLimit: Math.min(1000, seriesLimit + 5) })} onRange={pickRange(onTimeFilter, usageTime, view.period, periodCount, period => onChange({ period }))}
+    seriesHref={(range, item) => dashboardChartURL({ dataset: "usage", where: range.rolling ? requestedWhere : where, time: usageTime, range, series: item, split: sliced ? split : null,
+      fields: [sliced ? cost ? "cost_usd" : "total_tokens" : item.key], current: new URLSearchParams(location.search) })} />;
 }
 
 function PresetRow({ label, presets, query, chart, onApply, clear }: { label: string; presets: UsagePreset[]; query: QueryTableApi<Row>["query"]; chart?: TokenChartView; onApply: (preset: UsagePreset | null) => void; clear?: boolean }) {
@@ -1262,11 +1271,12 @@ function useAuthorshipStatus(onBuilt: () => void): AuthorshipStatus | null {
   return status;
 }
 
-type WritingSplit = "kind" | "repository_name" | "source_kind" | "providers";
-const writingSplits: Array<[WritingSplit, string]> = [["kind", "Kind"], ["repository_name", "Repository"], ["source_kind", "App"], ["providers", "Provider"]];
+type WritingSplit = "channels" | "machines" | "execution_machines" | "kind" | "repository_name" | "source_kind" | "providers";
+const writingSplits: Array<[WritingSplit, string]> = [["kind", "Kind"], ["channels", "Channels"], ["machines", "Machines"], ["execution_machines", "Execution machines"], ["repository_name", "Repository"], ["source_kind", "App"], ["providers", "Provider"]];
 type WritingSplitDay = { day: string; value: string | null; typed_words: number; words: number };
 
 function writingSplitLabel(split: WritingSplit, value: string): string {
+  if (["channels", "machines", "execution_machines"].includes(split)) return value.split(", ").map(v => originLabel(split === "channels" ? "channel" : "machine_id", v === "Unknown" ? null : v)).join(" + ");
   if (!value) return split === "repository_name" ? "No repository" : "Unknown";
   const labels = (field: string) => optionLabels(schemas.writing.fields).get(field);
   if (split === "source_kind") return labels("source_kind")?.get(value) ?? value;
@@ -1299,6 +1309,7 @@ const defaultWritingChart = { period: "day" as ChartPeriod, scope: "typed" as "t
 type WritingChartView = typeof defaultWritingChart & ChartPresentation;
 const validWritingChart = (value: WritingChartView) => Object.hasOwn(chartPeriods, value.period) && validPeriodCount(value.hours) && validPeriodCount(value.days) && ["typed", "all"].includes(value.scope) && writingSplits.some(([option]) => option === value.split) && validRollingPeriods(value.rollingPeriods) && validChartScale(value.scale) && validChartDisplay(value.display) && validChartPresentation(value);
 function WritingPanel({ where, onFilter, status, reload, dashboard = false, viewOverride, onViewChange }: { where: WhereTerm[]; onFilter: FilterChange; status: AuthorshipStatus | null; reload: number; dashboard?: boolean; viewOverride?: WritingChartView; onViewChange?: (next: Partial<WritingChartView>) => void }) {
+  const originRevision = useOriginMetadata();
   const [savedView, setView] = useState<WritingChartView>(() => readStored(writingViewKey, { ...defaultWritingChart, period: "week" as ChartPeriod }, validWritingChart));
   const view = viewOverride ?? savedView;
   const update = (next: Partial<typeof view>) => {
@@ -1346,7 +1357,7 @@ function WritingPanel({ where, onFilter, status, reload, dashboard = false, view
     if (!split) return { chartSeries: groups.map(group => ({ key: group.key, label: group.label, color: group.color, value: group.key })), buckets, cumulativeStart };
     const rows = (chartData.series?.split ?? []).map(entry => [bucketOf(entry.day), entry.value ?? "", Number(view.scope === "typed" ? entry.typed_words : entry.words) || 0] as [string, string, number]);
     return { chartSeries: foldSeries(rows, byKey, name => writingSplitLabel(split, name), undefined, chosen, seriesLimit, `writing:${split}`), buckets, cumulativeStart };
-  }, [series, chartData.series, split, view.scope, view.period, periodCount, hourly, bounds.from?.getTime(), bounds.to?.getTime(), chosen.join("\u0000"), seriesLimit, view.rollingPeriods, cumulative]);
+  }, [series, chartData.series, originRevision, split, view.scope, view.period, periodCount, hourly, bounds.from?.getTime(), bounds.to?.getTime(), chosen.join("\u0000"), seriesLimit, view.rollingPeriods, cumulative]);
   useUsageChartPalette(split, chartSeries);
   const selected = chartSeries.filter(item => item.value !== undefined && chosen.includes(item.value)).map(item => item.key);
   function select(key: string | null, action: LegendAction) {
@@ -1387,7 +1398,10 @@ function WritingPanel({ where, onFilter, status, reload, dashboard = false, view
       </>}
       series={chartSeries} buckets={buckets} period={view.period} periodCount={periodCount} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={cumulativeStart} scale={view.scale} legend={chartSeries.length > 0}
       format={value => value.toLocaleString()} tickFormat={compactNumber} noun="words" loading={chartData.loading} error={chartData.error}
-      selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => update({ seriesLimit: Math.min(1000, seriesLimit + 5) })} onRange={pickRange(onFilter, writingTime, view.period, periodCount, period => update({ period }))} />
+      selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => update({ seriesLimit: Math.min(1000, seriesLimit + 5) })} onRange={pickRange(onFilter, writingTime, view.period, periodCount, period => update({ period }))}
+      seriesHref={(range, item) => dashboardChartURL({ dataset: "writing", where: range.rolling ? requestedWhere : where, time: writingTime, range, series: item, split,
+        fields: split ? [view.scope === "typed" ? "typed_words" : "user_words"] : writingGroups.find(group => group.key === item.key)?.categories.map(category => `${category}_words`),
+        current: new URLSearchParams(location.search) })} />
     {dashboard ? <>
       <div className="mcp-metrics dashboard-stats" aria-label="Human Words summary" aria-busy={data.loading}>
         {card("Words you wrote", amount(compactNumber(typed)), "typed or dictated in the selected period")}
@@ -1546,7 +1560,7 @@ function TokenUsageDashboard() {
     <TokenChart where={state.where} onFilter={state.onFilter} view={state.view} onChange={state.update} />
     <TokenSummary where={state.where} />
     <UsageDashboardLinks schema={schemas.usage} dataset="usage" query={{ ...EMPTY_QUERY, where: state.where, aggregations: tokenChartMetrics(state.view).map(clause => ({ ...clause, label: clause.label === "chart" ? costMetric(state.view) ? "API cost (USD)" : "Tokens" : clause.label })) }} currentURL="/analyze?analyze_view=tokens&machine_view=tokens" />
-    <p className="usage-dashboard-note">Drag across the graph to zoom into a period. Select legend entries to compare or exclude series. Cumulative lines total each series from the range start; click a point to select the range contributing to it. Grouped rows expose the underlying interval amounts before percentages, smoothing, accumulation, or folded series. API cost is the list-price equivalent; subscriptions and long-context premiums are excluded. ≈ marks assumed prices.</p>
+    <p className="usage-dashboard-note">Click a column or point to pin its key, then follow a series to its contributing usage records. Drag across two or more periods to filter dates. Select legend entries to compare or exclude series. Cumulative links include activity from the range start; rolling-average links include the averaging window. Grouped rows expose the underlying interval amounts before percentages, smoothing, accumulation, or folded series. API cost is the list-price equivalent; subscriptions and long-context premiums are excluded. ≈ marks assumed prices.</p>
   </>;
 }
 
@@ -1563,12 +1577,13 @@ function HumanUsageDashboard() {
   return <>
     <WritingPanel dashboard where={state.where} onFilter={state.onFilter} status={status} reload={reload} viewOverride={state.view} onViewChange={state.update} />
     <UsageDashboardLinks schema={schemas.writing} dataset="writing" query={{ ...EMPTY_QUERY, where: state.where, aggregations: [sum(state.view.scope === "typed" ? "typed_words" : "user_words", [state.view.split === "kind" ? "repository_name" : state.view.split], state.view.scope === "typed" ? "Typed words per conversation group" : "User input per conversation group")] }} currentURL="/analyze?analyze_view=writing" />
-    <p className="usage-dashboard-note">The grouped query contains whole-conversation totals for the matching conversations. The graph restricts their writing to the selected dates.</p>
+    <p className="usage-dashboard-note">Series links open contributing workspaces, whose totals cover their whole conversations. Follow a workspace’s Messages link for its individual messages. The graph restricts writing to the selected dates.</p>
     <p className="usage-dashboard-note">Typed and dictated words are distinguished from pastes, harness instructions, and other supplied text.</p>
   </>;
 }
 
 function RecordUsageDashboard({ topic }: { topic: RecordDashboardTopic }) {
+ const originRevision=useOriginMetadata();
   const spec = recordDashboards[topic];
   const state = useUsageDashboardState({ metric: 0, split: spec.splits[0][0], period: "day" as "day" | "week" | "month", rollingPeriods: 0, display: "interval" as ChartDisplay, scale: defaultChartScale, seriesLimit: 15 }, view => Number.isInteger(view.metric) && Boolean(spec.measures[view.metric]) && spec.splits.some(([key]) => key === view.split) && ["day", "week", "month"].includes(view.period) && validRollingPeriods(view.rollingPeriods) && validChartScale(view.scale) && validChartDisplay(view.display) && validChartPresentation(view), { first: spec.time, last: spec.time });
   const { view, where, onFilter } = state;
@@ -1589,9 +1604,9 @@ function RecordUsageDashboard({ topic }: { topic: RecordDashboardTopic }) {
       !cumulative && view.rollingPeriods > 1 ? timeBounds(requestedWhere, { first: spec.time, last: spec.time }).from ?? earliest : undefined);
     const byKey = new Map(buckets.map(bucket => [bucket.key, bucket]));
     const rows = metrics.map(bucket => [plottedBucketKey(parseDay(String(bucket.keys[0])), view.period, 1, buckets, view.display), String(bucket.keys[1] ?? ""), (Number(bucket.value) || 0) / (measure.divisor ?? 1)] as [string, string, number]);
-    const name = (value: string) => view.split === "activity" ? activityPresentation(value).label : (optionLabels(schemas[spec.dataset].fields).get(view.split)?.get(value) ?? value) || "Unspecified";
+    const name = (value: string) => view.split === "activity" ? activityPresentation(value).label : isOriginDimension(view.split) ? originLabel(view.split,value) : (optionLabels(schemas[spec.dataset].fields).get(view.split)?.get(value) ?? value) || "Unspecified";
     return { buckets, series: foldSeries(rows, byKey, name, undefined, chosen, limit, view.split) };
-  }, [result.metrics, view.period, view.split, view.metric, bounds.from?.getTime(), bounds.to?.getTime(), chosen.join("\u0000"), limit, view.rollingPeriods, cumulative]);
+  }, [result.metrics, originRevision, view.period, view.split, view.metric, bounds.from?.getTime(), bounds.to?.getTime(), chosen.join("\u0000"), limit, view.rollingPeriods, cumulative]);
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   return <>
     <StackedColumns title={`${cumulative ? "Cumulative " : ""}${measure.label}${cumulative ? "" : ` per ${view.period}`} by ${spec.splits.find(([key]) => key === view.split)?.[1].toLowerCase()}`} controls={<>
@@ -1605,7 +1620,9 @@ function RecordUsageDashboard({ topic }: { topic: RecordDashboardTopic }) {
     </>} buckets={buckets} series={series} period={view.period} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={bounds.from ?? earliestKey(result.metrics[0]?.buckets.map(bucket => bucket.keys[0]) ?? [])} scale={view.scale} legend={series.length > 0} loading={result.loading} error={result.error} format={compactNumber} tickFormat={compactNumber} noun={measure.unit}
       selected={series.filter(item => chosen.includes(String(item.value ?? ""))).map(item => item.key)} excluded={selection.excluded}
       onSelect={(key, action) => onFilter(current => withSlice(current, view.split, updateSlice(readSlice(current, view.split), key === null ? null : String(series.find(item => item.key === key)?.value ?? "") || null, action)))}
-      onExpand={() => state.update({ seriesLimit: Math.min(1000, limit + 5) })} onRange={pickRange(onFilter, { first: spec.time, last: spec.time }, view.period, 1, period => state.update({ period: period === "month" || period === "week" ? period : "day" }))} />
+      onExpand={() => state.update({ seriesLimit: Math.min(1000, limit + 5) })} onRange={pickRange(onFilter, { first: spec.time, last: spec.time }, view.period, 1, period => state.update({ period: period === "month" || period === "week" ? period : "day" }))}
+      seriesHref={(range, item) => dashboardChartURL({ dataset: spec.dataset, where: range.rolling ? requestedWhere : where, time: { first: spec.time, last: spec.time }, range, series: item, split: view.split,
+        fields: measure.field ? [measure.field] : measure.expression ? ["content_bytes"] : [], current: new URLSearchParams(location.search) })} />
     {topic === "time" ? <AgentTimeSummary where={where} /> : null}
     <UsageDashboardLinks schema={schemas[spec.dataset]} dataset={spec.dataset} query={{ ...EMPTY_QUERY, where, aggregations: [clause] }} currentURL={currentUsageAnalyses.find(item => item.topic === topic)!.url} />
     <p className="usage-dashboard-note">{spec.note}</p>
@@ -1790,6 +1807,7 @@ function MCPSettingsPage() {
 type ToolLedgerStatus = { conversations: number; current_conversations: number; pending_conversations: number; tool_calls: number; backfill: { running: boolean; done: number; total: number; error: string | null } };
 
 function ToolsUsageDashboard() {
+ const originRevision=useOriginMetadata();
   const state = useUsageDashboardState(defaultToolDashboard, validToolDashboard, { first: "day", last: "day" });
   const { view } = state;
   const cumulative = view.view === "trend" && view.display === "cumulative";
@@ -1811,7 +1829,8 @@ function ToolsUsageDashboard() {
   const bounds = timeBounds(state.where, { first: "day", last: "day" });
   const metric = useMemo(() => cumulative ? cumulativeToolTrend(view, result.metrics,
     ...chartSpan(bounds, earliestKey(result.metrics[0]?.buckets.map(bucket => bucket.keys[0]) ?? []))) : view.view === "trend" ? rollingMetricTrend(result.metrics[0], view.period, view.rollingPeriods ?? 0,
-    ...chartSpan(bounds, earliestKey(result.metrics[0]?.buckets.map(bucket => bucket.keys[0]) ?? [])), timeBounds(requestedWhere, { first: "day", last: "day" }).from ?? earliestKey(result.metrics[0]?.buckets.map(bucket => bucket.keys[0]) ?? [])) : result.metrics[0], [result.metrics, view.view, view.period, view.rollingPeriods, bounds.from?.getTime(), bounds.to?.getTime(), cumulative, view.metric]);
+    ...chartSpan(bounds, earliestKey(result.metrics[0]?.buckets.map(bucket => bucket.keys[0]) ?? [])), timeBounds(requestedWhere, { first: "day", last: "day" }).from ?? earliestKey(result.metrics[0]?.buckets.map(bucket => bucket.keys[0]) ?? [])) : result.metrics[0], [result.metrics, originRevision, view.view, view.period, view.rollingPeriods, bounds.from?.getTime(), bounds.to?.getTime(), cumulative, view.metric]);
+  const presentation = useMemo(() => toolMetricPresentation(metric, clause.groupBy ?? []), [metric, originRevision, view.split, view.view]);
   const measure = toolDashboardMeasures[view.metric];
   if (error) return <p className="query-table-error" role="alert">{error}</p>;
   return <section className="usage-tools-dashboard">
@@ -1827,8 +1846,8 @@ function ToolsUsageDashboard() {
     <p className="usage-dashboard-note">{toolDashboardBreakdowns[view.split].note}{view.view === "trend" ? ` · Up to ${toolTrendGroups} busiest groups by call volume in this range` : ""} · {measure.note}</p>
     {view.view === "trend" && !cumulative && (view.rollingPeriods ?? 0) > 1 ? <p className="usage-dashboard-note">{view.rollingPeriods}-{view.period} trailing average of interval values; empty intervals count as zero. Points and query links open the original interval records and measures.</p> : null}
     {cumulative ? <p className="usage-dashboard-note">Values run from the selected range start. Rates and averages use running totals and counts. Select a point to open all contributing records through that interval. Grouped queries show the original interval measures.</p> : null}
-    {result.error || ranking.error ? <p className="query-table-error" role="alert">{result.error || ranking.error}</p> : <MetricCard clause={cumulative ? { ...clause, label: `Cumulative ${clause.label}`, display: { ...clause.display, kind: "line" as const, yLabel: `Cumulative ${clause.label}` } } : clause} result={metric as AggregationResultEntry | undefined} fields={schemas.tools.fields} loading={result.loading || pending} renderers={defaultRenderers} onInspect={bucket => {
-      const records = inspectDashboardBucket(query, bucket, clause, schemas.tools, cumulative);
+    {result.error || ranking.error ? <p className="query-table-error" role="alert">{result.error || ranking.error}</p> : <MetricCard clause={cumulative ? { ...clause, label: `Cumulative ${clause.label}`, display: { ...clause.display, kind: "line" as const, yLabel: `Cumulative ${clause.label}` } } : clause} result={presentation.metric as AggregationResultEntry | undefined} fields={schemas.tools.fields} loading={result.loading || pending} renderers={defaultRenderers} onInspect={bucket => {
+      const records = inspectDashboardBucket(query, presentation.sourceBucket(bucket) as typeof bucket, clause, schemas.tools, cumulative);
       if (records) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset: "tools", query: orderedUsageQuery("tools", records) }, new URLSearchParams(location.search)));
     }} />}
     {!pending && !ranking.error ? <UsageDashboardLinks schema={schemas.tools} dataset="tools" query={query} currentURL="/tools?tools_view=summary" /> : null}
@@ -2023,7 +2042,12 @@ function LazyPage({ host, children }: { host: HTMLElement; children: React.React
   useLocationRevision();
   const visited = useRef(false);
   visited.current ||= Boolean(shared || host.id === "searchComposerDialog" || host.closest(".view.active"));
-  return visited.current ? <>{children}</> : null;
+  if (!visited.current) return null;
+  const libraryPage = ["queryTableLibrary", "queryTableUsage", "toolsPage", "findingsPage"].includes(host.id);
+  const settings = host.id === "findingsPage" && new URLSearchParams(location.search).get("view") === "settings";
+  // Keep one element type across routes: Findings Settings bypasses the empty
+  // state without remounting the dashboard and its retained table.
+  return <LibraryContent enabled={!shared && libraryPage && !settings}>{children}</LibraryContent>;
 }
 
 for (const [id, component] of mounts) {

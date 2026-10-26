@@ -193,7 +193,7 @@ go test -vet=off -run '^$' -bench 'BenchmarkSQLite(RecordExport|ConductorChanged
 Original origins remain byte-identical, e.g. `sqlite:<original Conductor path>`.
 The revision reference is stored separately in `copy_evidence`, keyed like
 `copy_versions`; TL1 installation analysis uses `source_evidence`. Both update in
-the same catalog transaction as the accepted state. Catalog schema 19 refuses
+the same catalog transaction as the accepted state. Catalog schema 20 refuses
 older writers that would fail to maintain these associations.
 
 Source mtime/WAL `Observed` remains the authority integer. A different raw

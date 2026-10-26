@@ -160,6 +160,9 @@ func freezeManifestInputPolicy(ctx context.Context, target captureTarget, source
 	if manifest.Version == 0 || manifest.Host.ID != target.Host.ID || manifest.Source.Name != target.Source {
 		return result, errors.New("capture identity mismatch")
 	}
+	// As in openCaptureAdapter: older host.json files omitted the machine that
+	// this validated source manifest still names.
+	target.Host.MachineID = defaultString(target.Host.MachineID, manifest.Host.MachineID)
 	data, err := json.Marshal(manifest)
 	if err != nil {
 		return result, err

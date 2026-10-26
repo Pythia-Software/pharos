@@ -1,6 +1,7 @@
 // sync.js: when Home refreshes after a run, when Index changes is busy, and
 // how the Sync page's run history is formatted (window.pharosSync).
 import { sourceNames, syncTables, runTables } from "../../../src/sync-table-model";
+import { emptyLibraryState } from "../../../src/empty-library-model";
 import { applyQuery, EMPTY_QUERY } from "@pythia-software/query-table-core";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -12,6 +13,46 @@ class FixedDate extends Date { static now() { return reference; } }
 const { pharosSync } = loadClassicScript("sync.js", { Date: FixedDate }).window;
 
 const run = (id, state, conversations = 0, workspaces = conversations) => ({ id, kind: "automatic-sync", state, phase: "checking", conversations, workspaces });
+
+test("empty pages distinguish source setup, idle sources and a running sync", () => {
+  const message = status => emptyLibraryState(status)?.message ?? null;
+  assert.equal(emptyLibraryState(null), null);
+  assert.equal(emptyLibraryState({}), null);
+  assert.deepEqual(emptyLibraryState({ library_empty: true, has_sources: false, busy: false }), { message: "No sources configured yet", action: { label: "Configure", href: "/settings/sources" } });
+  // Configured sources alone do not mean anything is being pulled in: sync
+  // may be off, or a source may have no sessions. Offer a way forward.
+  const idle = emptyLibraryState({ library_empty: true, has_sources: true, busy: false });
+  assert.doesNotMatch(idle.message, /^Pulling in conversations/);
+  assert.equal(idle.action?.href, "/settings/sources");
+  for (const status of [{ busy: true }, { has_sources: true, busy: true }]) {
+    assert.deepEqual(emptyLibraryState({ library_empty: true, ...status }), { message: "Pulling in conversations - this may take some time" });
+  }
+  for (const status of [{ has_sources: true }, { busy: true }, { has_sources: true, busy: true }]) {
+    assert.equal(message({ library_empty: false, ...status }), null, "an existing library keeps its own results, including empty filtered results");
+  }
+});
+
+test("empty-library status keeps polling until the first content arrives", async () => {
+  let status = { library_empty: true, has_sources: false, busy: false };
+  let reads = 0;
+  const script = loadClassicScript("sync.js", { fetch: async path => ({ ok: true, json: async () => {
+    if (path === "/api/sync/status") { reads++; return { ...status }; }
+    return path === "/api/activity" ? { runs: [] } : { issues: [] };
+  } }) });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(reads, 1);
+  status = { library_empty: true, has_sources: true, busy: true };
+  await script.window.pharosSync.refresh();
+  assert.equal(reads, 2);
+  assert.match(emptyLibraryState(script.window.pharosSync.status())?.message ?? "", /^Pulling in conversations/);
+  status = { library_empty: false, has_sources: true, busy: true };
+  await script.window.pharosSync.refresh();
+  assert.equal(reads, 3);
+  assert.equal(emptyLibraryState(script.window.pharosSync.status()), null);
+  await script.window.pharosSync.refresh();
+  assert.equal(reads, 3, "populated libraries use the usual background activity poll");
+  assert.equal(script.events.filter(event => event.type === "pharos:sync-status").length, 3);
+});
 
 // Each step: the runs /api/activity reports, and whether Home refreshes.
 // sync.js follows the runs that were running at the step before.

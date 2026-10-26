@@ -10,9 +10,29 @@ import shlex
 import signal
 import subprocess
 import sys
+import tempfile
 
 KEYCHAIN = Path.home() / 'Library/Keychains/pharos-release.keychain-db'
 SESSION = 'PHAROS_RELEASE_KEYCHAIN_SESSION'
+
+
+def sparkle_access_command(directory, action, keychain, tools, account):
+    """Build a metadata-only ACL helper; no signing secrets enter Python."""
+    source = Path(__file__).with_name('sparkle-keychain-access.swift')
+    binary = Path(directory) / 'sparkle-keychain-access'
+    sdk = os.environ.get('SDKROOT') or subprocess.check_output(
+        ['xcrun', '--sdk', 'macosx26.5', '--show-sdk-path'], text=True).strip()
+    subprocess.run(['swiftc', '-sdk', sdk, '-suppress-warnings', str(source),
+                    '-o', str(binary)], check=True)
+    return [str(binary), action, str(keychain), account,
+            str(tools / 'generate_keys'), str(tools / 'sign_update')]
+
+
+def check_sparkle_access(tools, account):
+    keychain = Path(os.environ.get('PHAROS_RELEASE_KEYCHAIN', KEYCHAIN)).expanduser().resolve()
+    with tempfile.TemporaryDirectory(prefix='pharos-keychain-access-') as directory:
+        subprocess.run(sparkle_access_command(directory, 'check', keychain, tools, account),
+                       check=True)
 
 
 def security(*args, capture=False):
@@ -62,11 +82,12 @@ def run_session(keychain, command):
         security('lock-keychain', keychain)
         print('Unlock the Pharos release keychain for this deployment in the macOS prompt.', flush=True)
         security('unlock-keychain', '-u', keychain)
-        # Preserve login/system keychains for notarization and certificate chains.
+        # Preserve login/system keychains for certificate chains and gh auth.
         if changed_search:
             security('list-keychains', '-d', 'user', '-s', *preferred)
         environment = dict(os.environ, PHAROS_RELEASE_KEYCHAIN=str(keychain),
-                           PHAROS_CODESIGN_KEYCHAIN=str(keychain))
+                           PHAROS_CODESIGN_KEYCHAIN=str(keychain),
+                           PHAROS_NOTARY_KEYCHAIN=str(keychain))
         environment[SESSION] = str(keychain)
         # Keep the whole build tree addressable so interruption stops signing
         # descendants before the wrapper closes its signing window.

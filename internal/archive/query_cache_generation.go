@@ -12,8 +12,10 @@ import (
 // audit records, preferences and progress metadata do not change those values.
 // Keep this list alongside new cached data dependencies.
 // Text-search documents do affect search coverage while their index catches up.
+// Origin publication is also observable data: it can follow its source commit,
+// so readers of the previous projection must be invalidated when it is saved.
 var queryCacheTables = []string{
-	"hosts",
+	"hosts", "machines", "host_machines", "origin_observations", "conversation_sightings", "conversation_origins",
 	"repositories", "workspaces", "workspace_names", "work_items", "conversations",
 	"messages", "message_authorship", "message_authorship_spans", "conversation_launches",
 	"conversation_documents", "conversation_identity_links", "conversation_group_membership",
@@ -31,6 +33,7 @@ var queryCacheTables = []string{
 // changing any cached view. Metrics IDs are internal keys, not cached facts.
 var queryCacheBookkeepingColumns = map[string]map[string]bool{
 	"hosts":                  {"first_seen_at": true, "last_seen_at": true},
+	"conversation_sightings": {"first_seen_at": true, "last_seen_at": true, "messages": true, "ended_at": true, "origin": true, "source_name": true},
 	"repositories":           {"created_at": true, "updated_at": true},
 	"workspaces":             {"indexed_at": true},
 	"conversations":          {"origin_host_id": true},

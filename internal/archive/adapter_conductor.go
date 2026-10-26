@@ -24,7 +24,7 @@ type conductorAdapter struct {
 	selected map[string]bool
 }
 
-const conductorExtractor = "conductor-v12-workspace-names"
+const conductorExtractor = "conductor-v13-origins"
 
 // conductorPartExtractor versions the parser for per-session part states
 // (source_item_states). It changes separately from conductorExtractor, which

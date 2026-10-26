@@ -30,6 +30,10 @@ type MessageRecord struct {
 }
 
 type ConversationRecord struct {
+	ParentProvider                                                                                   string            `json:"ParentProvider,omitempty"`
+	ParentAccount                                                                                    string            `json:"ParentAccount,omitempty"`
+	NativeContext                                                                                    map[string]any    `json:"NativeContext,omitempty"`
+	Initiation                                                                                       *InitiationRecord `json:"Initiation,omitempty"`
 	NativeID, Provider, Model, Effort, Account, ParentNativeID, Origin, Coverage, StartedAt, EndedAt string
 	AgentDepth                                                                                       int    `json:"AgentDepth,omitempty"`
 	AgentPath                                                                                        string `json:"AgentPath,omitempty"`
@@ -306,7 +310,7 @@ func ensureEOF(decoder *json.Decoder) error {
 
 type canonicalAdapter struct{ baseAdapter }
 
-const exportIndexVersion = "token-events-v4-reasoning"
+const exportIndexVersion = "token-events-v5-origin"
 
 func (a *canonicalAdapter) indexVersion() string { return exportIndexVersion }
 
@@ -398,7 +402,15 @@ func (a *canonicalAdapter) workspace(row map[string]any, file string, index int)
 		if nativeID == "" {
 			nativeID = fmt.Sprintf("%s-%d", strings.TrimSuffix(filepath.Base(file), filepath.Ext(file)), cindex)
 		}
-		conversations = append(conversations, ConversationRecord{NativeID: nativeID, Provider: defaultString(conversation["provider"], a.config.Kind), Account: a.config.Account, Model: firstString(conversation["model"]), Effort: recordedEffort(conversation), ParentNativeID: firstString(conversation["parent_id"]), Origin: firstString(conversation["origin"]), Coverage: defaultString(conversation["coverage"], "complete"), Messages: messages, StartedAt: iso(conversation["started_at"]), EndedAt: iso(conversation["ended_at"]), Aliases: stringSlice(conversation["aliases"]), Harness: defaultString(conversation["harness"], "canonical"), HarnessVersionFirst: firstString(conversation["harness_version_first"]), HarnessVersionLast: firstString(conversation["harness_version_last"])})
+		var initiation *InitiationRecord
+		if raw := conversation["initiation"]; raw != nil {
+			data, _ := json.Marshal(raw)
+			initiation = &InitiationRecord{}
+			if err := json.Unmarshal(data, initiation); err != nil {
+				return WorkspaceRecord{}, err
+			}
+		}
+		conversations = append(conversations, ConversationRecord{Initiation: initiation, NativeID: nativeID, Provider: defaultString(conversation["provider"], a.config.Kind), Account: a.config.Account, Model: firstString(conversation["model"]), Effort: recordedEffort(conversation), ParentNativeID: firstString(conversation["parent_id"]), ParentProvider: firstString(conversation["parent_provider"]), ParentAccount: firstString(conversation["parent_account"]), Origin: firstString(conversation["origin"], a.original(file)), Coverage: defaultString(conversation["coverage"], "complete"), Messages: messages, StartedAt: iso(conversation["started_at"]), EndedAt: iso(conversation["ended_at"]), Aliases: stringSlice(conversation["aliases"]), Harness: defaultString(conversation["harness"], "canonical"), HarnessVersionFirst: firstString(conversation["harness_version_first"]), HarnessVersionLast: firstString(conversation["harness_version_last"])})
 	}
 	sid := firstString(row["id"], row["source_id"])
 	if sid == "" {
@@ -490,7 +502,7 @@ func (a *jsonlAdapter) Fingerprint() (string, error) {
 // codes, durations, interruptions); v9 retains Codex hosted web searches; v10
 // skips Claude entries replayed under a uuid already seen; v11 retains Claude
 // invoked_skills attachments for skill_usages.
-const jsonlExtractor = "message-model-v15-lineage-handbacks"
+const jsonlExtractor = "message-model-v17-origin-entrypoints"
 
 func (a *jsonlAdapter) accept(path string) bool {
 	relative, _ := filepath.Rel(a.config.Path, path)
@@ -917,7 +929,7 @@ func (a *jsonlAdapter) codex(path string, events []map[string]any) (WorkspaceRec
 		started = iso(events[0]["timestamp"])
 		ended = iso(events[len(events)-1]["timestamp"])
 	}
-	record := WorkspaceRecord{SourceID: nativeID, SourceKind: "codex", Title: defaultString(meta["title"], "Codex "+short(nativeID)), Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: ended, Location: cwd, Repository: repository, Metadata: map[string]any{"originator": meta["originator"], "branch": git["branch"], "head_ref": git["commit_hash"]}, Conversations: []ConversationRecord{{NativeID: nativeID, Provider: "codex", Account: a.config.Account, Model: model, Effort: effort, ParentNativeID: parentNativeID, AgentDepth: agentDepth, AgentPath: firstString(meta["agent_path"], spawn["agent_path"]), AgentNickname: firstString(meta["agent_nickname"], spawn["agent_nickname"]), Origin: origin, Coverage: "complete", Messages: messages, StartedAt: started, EndedAt: ended, Harness: harness, HarnessVersionFirst: versionFirst, HarnessVersionLast: versionLast, Instructions: codexInstructions(events)}}, Metrics: metrics}
+	record := WorkspaceRecord{SourceID: nativeID, SourceKind: "codex", Title: defaultString(meta["title"], "Codex "+short(nativeID)), Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: ended, Location: cwd, Repository: repository, Metadata: map[string]any{"originator": meta["originator"], "branch": git["branch"], "head_ref": git["commit_hash"]}, Conversations: []ConversationRecord{{NativeContext: nativeOriginContext(meta), NativeID: nativeID, Provider: "codex", Account: a.config.Account, Model: model, Effort: effort, ParentNativeID: parentNativeID, AgentDepth: agentDepth, AgentPath: firstString(meta["agent_path"], spawn["agent_path"]), AgentNickname: firstString(meta["agent_nickname"], spawn["agent_nickname"]), Origin: origin, Coverage: "complete", Messages: messages, StartedAt: started, EndedAt: ended, Harness: harness, HarnessVersionFirst: versionFirst, HarnessVersionLast: versionLast, Instructions: codexInstructions(events)}}, Metrics: metrics}
 	record.Metrics = reconciledTokenMetrics(record)
 	return record, true, nil
 }
@@ -933,6 +945,7 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 	cwd, started, ended, model, effort, branch, title, customTitle := "", "", "", "", a.initialEffort, "", "", ""
 	customTitleSeen := false
 	harness, versionFirst, versionLast := "claude-code", "", ""
+	firstEntrypoint := ""
 	tokens := map[string]float64{"input_tokens": 0, "output_tokens": 0, "cache_tokens": 0}
 	delegated := map[string]bool{}
 	toolNames := map[string]string{}
@@ -952,6 +965,9 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 		}
 		if entrypoint := firstString(event["entrypoint"]); entrypoint != "" {
 			harness = "claude-code/" + entrypoint
+			if firstEntrypoint == "" {
+				firstEntrypoint = entrypoint
+			}
 		}
 		if version := firstString(event["version"]); version != "" {
 			if versionFirst == "" {
@@ -1139,7 +1155,7 @@ func (a *jsonlAdapter) claude(path string, events []map[string]any) (WorkspaceRe
 	if rootID != "" {
 		depth = 1
 	}
-	record := WorkspaceRecord{SourceID: sourceID, SourceKind: "claude", Title: defaultString(firstString(customTitle, title), "Claude "+short(sourceID)), Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: ended, Location: cwd, Repository: repository, Metadata: map[string]any{"branch": branch}, Conversations: []ConversationRecord{{NativeID: nativeID, Provider: "claude", Account: a.config.Account, Model: model, Effort: effort, ParentNativeID: rootID, AgentDepth: depth, Origin: origin, Coverage: "complete", Messages: messages, StartedAt: started, EndedAt: ended, Harness: harness, HarnessVersionFirst: versionFirst, HarnessVersionLast: versionLast, Instructions: claudeInstructions(events)}}, Metrics: metrics}
+	record := WorkspaceRecord{SourceID: sourceID, SourceKind: "claude", Title: defaultString(firstString(customTitle, title), "Claude "+short(sourceID)), Account: a.config.Account, Purpose: purpose, Outcome: outcome, ActivityAt: ended, Location: cwd, Repository: repository, Metadata: map[string]any{"branch": branch}, Conversations: []ConversationRecord{{NativeContext: map[string]any{"entrypoint": firstEntrypoint}, NativeID: nativeID, Provider: "claude", Account: a.config.Account, Model: model, Effort: effort, ParentNativeID: rootID, AgentDepth: depth, Origin: origin, Coverage: "complete", Messages: messages, StartedAt: started, EndedAt: ended, Harness: harness, HarnessVersionFirst: versionFirst, HarnessVersionLast: versionLast, Instructions: claudeInstructions(events)}}, Metrics: metrics}
 	if customTitle != "" {
 		record.Metadata["title_kind"] = "custom"
 	}

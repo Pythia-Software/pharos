@@ -4,12 +4,13 @@ import type { ChartScale } from "./chart-scale";
 import type { ChartPresentation } from "./chart-selection";
 import type { ChartDisplay } from "./chart-series";
 
-export type TokenSplit = "type" | "provider" | "model_family" | "model_effort" | "effort" | "repository_name" | "session_kind";
+export type TokenSplit = "type" | "channel" | "machine_id" | "execution_machine_id" | "provider" | "model_family" | "model_effort" | "effort" | "repository_name" | "session_kind";
 export type TokenChartView = ChartPresentation & { metric: "tokens" | "cost" | "percent" | "percent_cost"; split: TokenSplit; period: ChartPeriod; hours: number; days: number; rollingPeriods: number; scale: ChartScale; display?: ChartDisplay };
 // Chart shortcuts and the writing page's metric/sort shortcuts.
 export type UsagePreset = { label: string; title: string; aggregations?: AggregationClause[]; chart?: Partial<TokenChartView>; orderBy?: OrderByClause[] };
 const sum = (field: string, groupBy: string[], label: string): AggregationClause => ({ id: `${field}:${groupBy.join(",")}`, op: "sum", field, groupBy, label });
 export const usageChartPresets: UsagePreset[] = [
+  ...([ ["channel", "channel"], ["machine_id", "machine"], ["execution_machine_id", "execution machine"] ] as const).map(([split, label]) => ({ label: `Daily by ${label}`, title: `Chart tokens per day by ${label}`, chart: { metric: "tokens" as const, split, period: "day" as const } })),
   { label: "Daily by provider", title: "Chart total tokens per day, split by provider", chart: { metric: "tokens", split: "provider", period: "day" } },
   { label: "Weekly cache mix", title: "Chart uncached input, cache reads, cache writes, and output per week", chart: { metric: "tokens", split: "type", period: "week" } },
   { label: "Daily cost", title: "Chart API-equivalent cost per day, split by provider", chart: { metric: "cost", split: "provider", period: "day" } },

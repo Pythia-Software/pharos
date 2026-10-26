@@ -15,8 +15,76 @@ import { currentUsageAnalyses, isUsageWorkspace, readUsageWorkspace, usageAnalys
 import { defaultMCPDashboard, validMCPDashboard, cumulativeMCPTrend, mcpDashboardMeasures, mcpDashboardBreakdowns, mcpDashboardQuery, mcpTrendRanking, withMCPTrendGroups, mcpTrendGroups } from "../../../src/mcp-dashboard-model.ts";
 import { toolSummaryCallFilters, defaultToolDashboard, validToolDashboard, cumulativeToolTrend, toolDashboardMeasures, toolDashboardBreakdowns, toolDashboardQuery, toolTrendRanking, withToolTrendGroups, toolTrendGroups } from "../../../src/tools-dashboard-model.ts";
 import { readDashboardQuery, inspectDashboardBucket, recordDashboardMetric, recordDashboards, groupedDashboardQuery, parallelismSelectionQuery, toolDashboardWhere } from "../../../src/usage-dashboard-model.ts";
-import { timeBounds, usageTime, withTimeRange } from "../../../src/usage-chart.tsx";
+import { timeBounds, usageTime, withTimeRange, smoothingWhere } from "../../../src/usage-chart.tsx";
 import { dashboardQueryDetails, dashboardQueryLinks, dashboardQuerySentence } from "../../../src/dashboard-query-links.ts";
+import { dashboardChartURL } from "../../../src/dashboard-chart-links.ts";
+
+test('dashboard series links retain filters, resolve Other and null identities, and select contributing records', () => {
+  const range = { from: new Date('2026-10-02T00:00:00Z'), to: new Date('2026-10-03T00:00:00Z'), rolling: false };
+  const where = [{ field: 'provider', op: '=', value: 'codex' }, { field: 'model_family', op: '=', value: 'previous' }];
+  const current = new URLSearchParams({ analyze_topic: 'tokens', analyze_chart: JSON.stringify({ period: 'day' }) });
+  const series = { key: 'other', label: 'Other', color: 'gray', foldedValues: ['model-hidden', ''] };
+  const href = dashboardChartURL({ dataset: 'usage', where, time: usageTime, range, series, split: 'model_family', fields: ['output_tokens'], current });
+  const url = new URL(href, 'http://localhost'), query = decodeQueryStrict(url.searchParams.get('q_usage'));
+  assert.equal(url.searchParams.get('analyze_mode'), 'query');
+  assert.equal(url.searchParams.get('analyze_chart'), current.get('analyze_chart'));
+  const rows = [
+    { id: 'hidden', provider: 'codex', model_family: 'model-hidden', first_usage_at: '2026-10-02T12:00:00Z', last_usage_at: '2026-10-02T12:00:00Z', output_tokens: 1 },
+    { id: 'missing', provider: 'codex', model_family: null, first_usage_at: '2026-10-02T12:00:00Z', last_usage_at: '2026-10-02T12:00:00Z', output_tokens: 2 },
+  ];
+  const candidates = [...rows,
+    { ...rows[0], id: 'wrong-provider', provider: 'claude' },
+    { ...rows[0], id: 'wrong-model', model_family: 'previous' },
+    { ...rows[0], id: 'zero', output_tokens: 0 },
+    { ...rows[0], id: 'outside', first_usage_at: '2026-10-03T00:00:00Z', last_usage_at: '2026-10-03T00:00:00Z' },
+  ];
+  assert.deepEqual(applyQuery(candidates, query, loadSchema(usage)).rows.map(row => row.id).sort(), ['hidden', 'missing']);
+  assert.deepEqual(where, [{ field: 'provider', op: '=', value: 'codex' }, { field: 'model_family', op: '=', value: 'previous' }]);
+});
+
+test('dashboard links use each record dataset, raw dimension, contributing field, and time semantics', () => {
+  const from = new Date('2026-10-02T00:00:00Z'), to = new Date('2026-10-03T00:00:00Z');
+  const cases = [
+    { dataset: 'usage', document: usage, time: usageTime, split: 'model_effort', value: 'gpt-6-sol / high', fields: ['total_tokens'] },
+    { dataset: 'usage', document: usage, time: usageTime, split: 'carbon_tier', value: 'large', fields: ['energy_wh'] },
+    { dataset: 'writing', document: writing, time: { first: 'first_message_at', last: 'last_message_at' }, split: 'providers', value: 'claude,codex', fields: ['typed_words'] },
+    { dataset: 'writing', document: writing, time: { first: 'first_message_at', last: 'last_message_at' }, fields: ['quoted_words', 'resent_words'] },
+    { dataset: 'tool_calls', document: toolCalls, time: { first: 'started_at', last: 'started_at' }, split: 'activity', value: 'shell', fields: ['duration_ms'] },
+    { dataset: 'skill_usages', document: skillUsages, time: { first: 'created_at', last: 'created_at' }, split: 'skill_name', value: '/path/to/skill', fields: [] },
+  ];
+  for (const spec of cases) {
+    const series = { key: 'series', label: 'Display label is not a filter', color: 'gray', value: spec.value };
+    const href = dashboardChartURL({ ...spec, where: [], range: { from, to, rolling: false }, series });
+    const params = new URL(href, 'http://localhost').searchParams;
+    assert.equal(params.get('analyze_data'), spec.dataset);
+    const query = decodeQueryStrict(params.get(`q_${spec.dataset}`));
+    const row = { id: 'contributor', [spec.time.first]: '2026-10-02T12:00:00Z', [spec.time.last]: '2026-10-02T12:00:00Z', ...spec.split ? { [spec.split]: spec.value } : {}, ...spec.fields.length ? { [spec.fields.at(-1)]: 2 } : {} };
+    assert.equal(applyQuery([row], query, loadSchema(spec.document)).rows.length, 1, spec.dataset);
+    assert.ok(!query.where.some(term => 'field' in term && term.value === series.label));
+  }
+});
+
+test('inspection clamps partial intervals but includes the full averaging window', () => {
+  const where = [
+    { field: 'first_usage_at', op: '>=', value: '2026-10-02T12:00:30.123Z' },
+    { field: 'last_usage_at', op: '<', value: '2026-10-05T12:00:40.456Z' },
+  ];
+  const series = { key: 'tokens', label: 'Tokens', color: 'gray' };
+  const range = { from: new Date('2026-10-01T00:00:00Z'), to: new Date('2026-10-06T00:00:00Z'), rolling: false };
+  for (const rolling of [false, true]) {
+    const source = rolling ? smoothingWhere(where, usageTime, 'day', 3) : where;
+    const href = dashboardChartURL({ dataset: 'usage', where: source, time: usageTime, range: { ...range, rolling }, series });
+    const query = decodeQueryStrict(new URL(href, 'http://localhost').searchParams.get('q_usage'));
+    const bounds = timeBounds(query.where, usageTime);
+    assert.equal(bounds.from.getTime(), rolling ? range.from.getTime() : Date.parse(where[0].value));
+    assert.equal(bounds.to.getTime(), Date.parse(where[1].value));
+    const overlapping = [
+      { id: 'before-source-start', first_usage_at: '2026-10-01T00:00:00Z', last_usage_at: '2026-10-03T00:00:00Z' },
+      { id: 'after-source-end', first_usage_at: '2026-10-03T00:00:00Z', last_usage_at: '2026-10-06T00:00:00Z' },
+    ];
+    assert.deepEqual(applyQuery(overlapping, query, loadSchema(usage)).rows.map(row => row.id), rolling ? ['before-source-start'] : []);
+  }
+});
 
 test("dashboard destinations describe their encoded query and consolidate record search", () => {
   const schema = loadSchema(usage);

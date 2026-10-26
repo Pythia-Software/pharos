@@ -749,6 +749,9 @@ func metricDependencies(ctx context.Context, q qt.MetricQuery, schema qt.Schema,
 }
 
 func (s *Server) executeQueryV2(ctx context.Context, dataset string, params url.Values, schema qt.Schema, rowRequest *qt.ServerQueryV2, metrics *qt.MetricQuery, populationLimit ...int) (queryV2ExecutionResult, error) {
+	if err := s.Catalog.ensureOrigins(ctx); err != nil {
+		return queryV2ExecutionResult{}, err
+	}
 	if params.Get("record_search") != "" {
 		return queryV2ExecutionResult{}, fmt.Errorf("record keyword search requires query-v3")
 	}

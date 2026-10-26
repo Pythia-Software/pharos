@@ -24,10 +24,11 @@ var skillUsageDataset = sqlDataset{
 	from: `FROM skill_usages s JOIN workspaces w ON w.id=s.workspace_id
 		JOIN conversations c ON c.id=s.conversation_id LEFT JOIN repositories r ON r.id=w.repository_id
 		LEFT JOIN messages m ON m.id=s.evidence_message_id
-		LEFT JOIN tool_calls t ON t.id=s.tool_call_id LEFT JOIN agent_sessions a ON a.id=s.agent_session_id`,
+		LEFT JOIN tool_calls t ON t.id=s.tool_call_id LEFT JOIN agent_sessions a ON a.id=s.agent_session_id LEFT JOIN conversation_origins o ON o.conversation_id=COALESCE(a.child_conversation_id,s.conversation_id)`,
 	base:    "s.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)",
 	lookups: map[string]bool{"id": true, "conversation_id": true, "workspace_id": true, "tool_call_id": true},
 	optionalJoins: map[string]string{
+		"o": " LEFT JOIN conversation_origins o ON o.conversation_id=COALESCE(a.child_conversation_id,s.conversation_id)",
 		"r": " LEFT JOIN repositories r ON r.id=w.repository_id",
 		"m": "LEFT JOIN messages m ON m.id=s.evidence_message_id",
 		"t": "LEFT JOIN tool_calls t ON t.id=s.tool_call_id",
@@ -36,6 +37,22 @@ var skillUsageDataset = sqlDataset{
 	pageFrom:    "FROM skill_usages s",
 	pageIndexes: map[string]string{"created_at": "skill_usages_page_idx"},
 	columns: map[string]string{
+		"channel":                  "o.channel",
+		"machine_id":               "o.machine_id",
+		"machine":                  "o.machine",
+		"machine_kind":             "o.machine_kind",
+		"execution_machine_id":     "o.execution_machine_id",
+		"execution_machine":        "o.execution_machine",
+		"execution_machine_kind":   "o.execution_machine_kind",
+		"channel_status":           "o.channel_status",
+		"machine_status":           "o.machine_status",
+		"execution_machine_status": "o.execution_machine_status",
+		"origin_conversation_id":   "o.origin_conversation_id",
+		"origin_evidence":          "o.origin_evidence",
+		"channels":                 "COALESCE(o.channel,'Unknown')",
+		"machines":                 "COALESCE(o.machine_id,'Unknown')",
+		"execution_machines":       "COALESCE(o.execution_machine_id,'Unknown')",
+
 		"id": "s.id", "workspace_id": "s.workspace_id", "conversation_id": "s.conversation_id", "tool_call_id": "s.tool_call_id",
 		"evidence_message_id": "s.evidence_message_id", "body_message_id": "s.body_message_id",
 		"skill_name": "s.skill_name", "skill_path": "s.skill_path", "evidence_type": "s.evidence_type", "status": "s.status",

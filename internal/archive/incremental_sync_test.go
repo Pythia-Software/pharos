@@ -813,15 +813,20 @@ func TestConductorNativeAliasesLinkInEitherArrivalOrder(t *testing.T) {
 func TestSyncStatusExposesLowercaseSourceChoices(t *testing.T) {
 	source := stableCodexSource(t, 2)
 	server := automaticTestServer(t, source)
-	response := httptest.NewRecorder()
-	server.getIncrementalSync(response, httptest.NewRequest("GET", "/api/sync/status", nil))
-	if response.Code != 200 {
-		t.Fatal(response.Body.String())
+	readStatus := func(server *Server) map[string]any {
+		t.Helper()
+		response := httptest.NewRecorder()
+		server.getIncrementalSync(response, httptest.NewRequest("GET", "/api/sync/status", nil))
+		if response.Code != 200 {
+			t.Fatal(response.Body.String())
+		}
+		var status map[string]any
+		if err := json.Unmarshal(response.Body.Bytes(), &status); err != nil {
+			t.Fatal(err)
+		}
+		return status
 	}
-	var status map[string]any
-	if err := json.Unmarshal(response.Body.Bytes(), &status); err != nil {
-		t.Fatal(err)
-	}
+	status := readStatus(server)
 	for _, key := range []string{"sources", "available_sources"} {
 		choices, ok := status[key].([]any)
 		if !ok || len(choices) != 1 {
@@ -830,6 +835,28 @@ func TestSyncStatusExposesLowercaseSourceChoices(t *testing.T) {
 		choice := choices[0].(map[string]any)
 		if choice["name"] != source.Name || choice["kind"] != source.Kind || choice["enabled"] != true {
 			t.Fatalf("%s does not match the Sync UI contract: %+v", key, choice)
+		}
+	}
+	if status["library_empty"] != true || status["has_sources"] != true {
+		t.Fatalf("configured sources before first index: %+v", status)
+	}
+	adapter, err := MakeAdapter(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := server.Catalog.Ingest(adapter, nil); result.Error != nil {
+		t.Fatal(result.Error)
+	}
+	if status := readStatus(server); status["library_empty"] != false || status["has_sources"] != true {
+		t.Fatalf("indexed conversations must reveal page content: %+v", status)
+	}
+	disabled := source
+	disabled.Enabled = false
+	for name, sources := range map[string][]SourceConfig{"without configured sources": nil, "with only disabled sources": {disabled}} {
+		catalog, config := testCatalog(t)
+		config.Sources = sources
+		if status := readStatus(testServer(t, config, catalog)); status["library_empty"] != true || status["has_sources"] != false {
+			t.Fatalf("new library %s: %+v", name, status)
 		}
 	}
 	// "Needs capture" still means indexed since the last capture, without the

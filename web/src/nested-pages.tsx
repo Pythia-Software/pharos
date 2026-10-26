@@ -1,5 +1,6 @@
 import React, { useEffect, useId, useRef, useState } from "react";
 import { localPageNavigation, nestedPageTrail, type NestedPage } from "./nested-pages-model";
+import { focusPageContent } from "./page-focus";
 import "./nested-pages.css";
 
 // Both classic-script hosts and React pages use the app router. Subscribe to
@@ -36,14 +37,14 @@ export function NestedPageLayout({ label, pages, current, title, description, ac
     if (previous.current === current) return;
     previous.current = current;
     if (!heading.current?.getClientRects().length) return;
-    heading.current.focus({ preventScroll: true });
+    focusPageContent();
     document.querySelector("main")?.scrollTo({ top: 0 });
   }, [current]);
   return <div className={`nested-page ${className}`}>
     <div className="nested-page-layout">
       <div className={`nested-page-content ${contentClassName}`}>
         <div className="view-heading nested-page-heading"><div>
-          <h1 ref={heading} id={headingId ?? generatedId} tabIndex={-1}>{title ?? page?.label}</h1>
+          <h1 ref={heading} id={headingId ?? generatedId}>{title ?? page?.label}</h1>
           {description ?? page?.description ? <p className="muted">{description ?? page?.description}</p> : null}
         </div>{actions}</div>
         {children}

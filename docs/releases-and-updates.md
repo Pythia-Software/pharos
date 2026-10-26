@@ -135,6 +135,18 @@ used for first installs and updates. No browser or Finder replacement is
 required after installing the first Sparkle-enabled release. v0.7.1 and older
 still need one final manual replacement to obtain the updater.
 
+When Sparkle offers an installable release, the library header shows
+an update icon between drive status and Refresh. One click downloads,
+verifies, installs and relaunches Pharos, after the same safe process handoff
+as the native updater. A dot marks an available update, a ring shows download
+progress, a package marks preparation, and a restart arrow marks installation.
+Hover text includes the version, current stage and download percentage.
+The icon stays the same width across states; the header measures the full
+combo again as the icon appears or disappears and moves it
+into **More tools** when space is limited. macOS may still request authorization
+if the installed app requires it. The action is available in the native app;
+browser sessions and local builds do not offer production updates.
+
 **Automatically Check for Updates** uses Sparkle's daily schedule. An explicit
 choice from the old **Check for Updates on Launch** setting is migrated once;
 otherwise Sparkle asks permission on its second launch, after onboarding.
@@ -239,14 +251,50 @@ One-time setup, explicitly on the deployment Mac:
    allowing access** selected for other applications. Do not allow all apps.
    Imported keys may also need the partition-list authorization described below.
 4. Move **Private key for signing Sparkle updates**, account **pharos**, to
-   the same keychain. Authorize the pinned Sparkle `bin/sign_update` tool for
-   that item; a changed tool version may require a new authorization. The
-   public-key lookup may also request initial access for `bin/generate_keys`.
-5. Keep the `pharos` notarization profile in login, or store it in the release
-   keychain and set `PHAROS_NOTARY_KEYCHAIN` to its full path. Do not duplicate
-   the signing private keys in login; otherwise locking the release keychain
-   would leave the login copies available. Lock the release keychain when
-   setup is finished.
+   the same keychain. Run `python3 macos/setup-release-keychain.py --authorize-sparkle`
+   in your own Terminal once to authorize the pinned `bin/sign_update` and
+   `bin/generate_keys` tools for that existing item. This setup can ask for unlock
+   and access-control approval. Apple's `security` utility then asks for the release-keychain
+   password in Terminal to update partition permissions; the password is not
+   supplied with `-k` and never enters Python, arguments, environment or logs.
+   Setup never reads, exports, creates or imports the key. It preserves
+   unrelated trusted applications and partition permissions. It updates only
+   that item's decrypt ACL and adds the exact code-directory hashes of both
+   pinned helpers to its partition ACL. Both layers are required: trusted paths
+   alone can still produce one password prompt per Sparkle invocation.
+   Repeat this explicit setup after changing the pinned Sparkle tools or moving
+   the release checkout. Ordinary release/feed commands check this authorization
+   (both paths and code hashes) without password dialogs before accessing the key,
+   so missing setup fails before building instead of interrupting publication.
+   The deployment itself is intended to need only the wrapper's initial unlock; confirm the observed
+   prompt count with the rehearsal below.
+5. In your own Terminal, run
+   `python3 macos/setup-release-keychain.py --configure-notary`.
+   It unlocks the release keychain and runs Apple's interactive
+   `notarytool store-credentials pharos --keychain ...` against that keychain.
+   At the optional App Store Connect API private-key prompt, press Return to use
+   Apple ID authentication. Enter your Apple ID, team ID and app-specific password
+   directly in Apple's prompts; never paste credentials into agent chat or shell arguments. Existing
+   profiles in login or Local Items are not moved or deleted. The command then
+   rehearses credential access in the same unlocked session and locks on exit.
+   Ordinary releases explicitly select this profile in the dedicated keychain;
+   there is no fallback to login or Local Items. GitHub authentication remains
+   managed separately by `gh` and is checked in the rehearsal.
+
+Do not duplicate the signing private keys in login; otherwise locking the
+release keychain would leave the login copies available. Lock the release
+keychain when setup is finished.
+
+To verify an already configured deployment Mac, run
+`python3 macos/check-release-credentials.py`. It starts a fresh unlock session,
+creates and verifies two disposable Developer ID signatures and two Sparkle
+signatures, authenticates to Apple's history API using the dedicated keychain,
+and checks GitHub authentication and repository write permission. It publishes
+nothing. Its success message confirms credential operations, not a prompt count.
+Successful output plus observing only the initial unlock prompt is
+the acceptance check for a one-password deployment on this Mac. Repeat after
+changing credentials or tool permissions. A timed-out or sleeping keychain,
+revoked credentials or changed tools may require setup or another unlock.
 
 If `codesign` still prompts separately after the keychain is unlocked, configure
 the imported key's partition list once in your own Terminal. For a key whose
@@ -425,7 +473,7 @@ full signed installation test.
 
 ## Upgrading an existing library
 
-The preservation update upgrades catalog schema 17 to 19 and writes capture
+The preservation update upgrades catalog schema 18 to 20 and writes capture
 manifest version 4. Earlier builds refuse these versions. Take and verify a backup of
 both the catalog and captures before upgrading: rollback requires restoring
 the pre-upgrade catalog and capture tree together, not just replacing the app.

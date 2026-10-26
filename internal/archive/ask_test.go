@@ -9,6 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -526,14 +529,27 @@ func TestAskInstalledCLI(t *testing.T) {
 		effort = "Low"
 	}
 	catalog, config := testCatalog(t)
+	config.Executable = filepath.Join(t.TempDir(), "pharos")
+	build := exec.CommandContext(ctx, "go", "build", "-o", config.Executable, "../../cmd/pharos")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build MCP server: %v\n%s", err, output)
+	}
+	config.Port = 1 // MCP uses this test catalog directly, never a live service.
+	if err := os.WriteFile(config.Path, []byte(fmt.Sprintf("catalog_path = %q\narchive_root = %q\nstaging_root = %q\nport = 1\n", config.CatalogPath, config.ArchiveRoot, config.StagingRoot)), 0600); err != nil {
+		t.Fatal(err)
+	}
 	server := testServer(t, config, catalog)
-	session := askSession{Selection: askSelection{Provider: name, Model: model.ID, Effort: effort}, Conversation: []askTurn{{Prompt: "Show me Pharos settings. Use the catalog directly; do not request a lookup."}}}
+	session := askSession{Selection: askSelection{Provider: name, Model: model.ID, Effort: effort}, Conversation: []askTurn{{Prompt: "First call list_repositories through the Pharos MCP server (pharos-ask for Antigravity, pharos otherwise), then show me Pharos settings. Use the catalog for the destination; do not request a private lookup."}}}
 	answer, err := server.answerAsk(ctx, provider, session, "America/Denver")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(answer.Cards) == 0 {
 		t.Fatalf("no destination returned: %s", answer.Message)
+	}
+	var calls int
+	if err := catalog.DB.QueryRow("SELECT COUNT(*) FROM mcp_calls WHERE tool_name='list_repositories' AND status='ok'").Scan(&calls); err != nil || calls == 0 {
+		t.Fatalf("agent did not successfully use Pharos MCP: calls=%d, err=%v", calls, err)
 	}
 	t.Logf("%s · %s · %s -> %s", name, model.Label, effort, answer.Cards[0].Title)
 }
@@ -621,6 +637,201 @@ func TestAskCLIProcessCancellation(t *testing.T) {
 		}
 	case <-time.After(4 * time.Second):
 		t.Fatal("descendant kept canceled request alive")
+	}
+}
+
+func TestAskUsesLibraryMCP(t *testing.T) {
+	s := askTestServer(t)
+	askEnable(t, s)
+	command, args, err := mcpCommand(s.Config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	override(t, &askRunCLI, func(ctx context.Context, p askProvider, selection askSelection, prompt string) ([]byte, error) {
+		calls++
+		if p.mcp.Command != command || !reflect.DeepEqual(p.mcp.Args, args) {
+			t.Fatalf("MCP connection = %+v, want %s %v", p.mcp, command, args)
+		}
+		if !strings.Contains(prompt, "pharos MCP server connected") || !strings.Contains(prompt, "Page visits and private chat history remain available only through lookup") {
+			t.Fatal("missing MCP or private-history instructions")
+		}
+		return askReply("home"), nil
+	})
+	askOK(t, s, "send", askInput())
+	if calls != 1 {
+		t.Fatalf("CLI calls = %d", calls)
+	}
+	if err := s.Catalog.SetMCPEnabled(false); err != nil {
+		t.Fatal(err)
+	}
+	input := askInput()
+	input["turnID"] = "turn-2"
+	response := askOK(t, s, "send", input)
+	if calls != 1 || !strings.Contains(response.Body.String(), "Pharos MCP is turned off") {
+		t.Fatalf("disabled MCP launched CLI or lost the error: %d %s", calls, response.Body.String())
+	}
+	if enabled, err := s.Catalog.MCPEnabled(); err != nil || enabled {
+		t.Fatalf("Ask changed MCP consent: %v %v", enabled, err)
+	}
+}
+
+func TestAskCLIConnections(t *testing.T) {
+	// No installed CLI or inference is involved: inspect the configuration each
+	// adapter hands to its process, including paths needing serialization.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PHAROS_API_TOKEN", "must-not-reach-agent")
+	settings := filepath.Join(os.Getenv("HOME"), ".gemini", "antigravity-cli", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settings), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settings, []byte(`{"permissions":{"allow":["mcp(pharos-ask/*)"]}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	want := askMCPServer{Command: `/drive with spaces/Pharos "special".app/pharos`, Args: []string{"--config", "/drive with spaces/library.toml", "mcp"}}
+	for _, name := range []string{"Codex", "Claude", "Antigravity"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			provider := askProvider{ID: name, path: "/test/cli", mcp: want}
+			cmd, err := askPrepareCLI(t.Context(), provider, askSelection{Provider: name, Model: "test-model", Effort: "Low"}, dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range cmd.Env {
+				if strings.HasPrefix(entry, "PHAROS_API_TOKEN=") {
+					t.Fatal("API token reached provider")
+				}
+			}
+			flag := func(name string) string {
+				t.Helper()
+				index := slices.Index(cmd.Args, name)
+				if index < 0 || index+1 >= len(cmd.Args) {
+					t.Fatalf("missing %s in %v", name, cmd.Args)
+				}
+				return cmd.Args[index+1]
+			}
+			var got askMCPServer
+			switch name {
+			case "Codex":
+				config := map[string]string{}
+				for i, arg := range cmd.Args {
+					if arg == "-c" {
+						key, value, _ := strings.Cut(cmd.Args[i+1], "=")
+						config[key] = value
+					}
+				}
+				if err := json.Unmarshal([]byte(config["mcp_servers.pharos.command"]), &got.Command); err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal([]byte(config["mcp_servers.pharos.args"]), &got.Args); err != nil {
+					t.Fatal(err)
+				}
+				if config["mcp_servers.pharos.required"] != "true" || config["features.shell_tool"] != "false" || flag("--sandbox") != "read-only" || cmd.Args[len(cmd.Args)-1] != "-" {
+					t.Fatalf("missing required MCP startup or sandbox: %v", cmd.Args)
+				}
+			case "Claude":
+				var config struct {
+					Servers map[string]askMCPServer `json:"mcpServers"`
+				}
+				if err := json.Unmarshal([]byte(flag("--mcp-config")), &config); err != nil {
+					t.Fatal(err)
+				}
+				got = config.Servers["pharos"]
+				if len(config.Servers) != 1 || flag("--allowedTools") != "mcp__pharos" || flag("--tools") != "" || flag("--permission-mode") != "dontAsk" || !slices.Contains(cmd.Args, "--strict-mcp-config") {
+					t.Fatalf("missing scoped MCP permissions: %v", cmd.Args)
+				}
+			case "Antigravity":
+				agent, err := os.ReadFile(filepath.Join(dir, ".agents", "agents", "pharos-navigation.md"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				servers, err := os.ReadFile(filepath.Join(dir, ".agents", "mcp_config.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var config struct {
+					Servers map[string]askMCPServer `json:"mcpServers"`
+				}
+				if err := json.Unmarshal(servers, &config); err != nil {
+					t.Fatal(err)
+				}
+				if len(config.Servers) != 1 || !strings.Contains(string(agent), "  - call_mcp_tool\n") || flag("--agent") != "pharos-navigation" {
+					t.Fatalf("MCP not available to navigation agent: %s", agent)
+				}
+				got = config.Servers["pharos-ask"]
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("MCP connection = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestAskAntigravityMCPPermissions(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	path := filepath.Join(os.Getenv("HOME"), ".gemini", "antigravity-cli", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		settings string
+		allowed  bool
+	}{
+		{`{}`, false},
+		{`{"permissions":{"allow":["mcp(pharos-ask/*)"]}}`, true},
+		{`{"permissions":{"allow":["mcp(other/*)"]}}`, false},
+		{`{"permissions":{"allow":["mcp(pharos/*)"]}}`, false},
+		{`{"permissions":{"allow":["mcp(pharos-ask/list_repositories)"]}}`, false},
+		{`{"toolPermission":"always-proceed"}`, true},
+		{`{"toolPermission":"strict","permissions":{"allow":["mcp(pharos-ask/*)"]}}`, false},
+		{`{"permissions":{"allow":["mcp(*)"],"deny":["mcp(pharos-ask/search_work)"]}}`, false},
+		{`{"permissions":{"allow":["mcp(*)"],"ask":["mcp(pharos-ask/*)"]}}`, false},
+	} {
+		if err := os.WriteFile(path, []byte(tc.settings), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := askCheckAGYMCPPermissions(); (err == nil) != tc.allowed {
+			t.Errorf("permissions %s: %v", tc.settings, err)
+		}
+	}
+	shared := filepath.Join(os.Getenv("HOME"), ".gemini", "config", "config.json")
+	if err := os.MkdirAll(filepath.Dir(shared), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, shared, cli string
+		allowed           bool
+	}{
+		{"shared grant without CLI file", `{"allow":["mcp(pharos-ask/*)"]}`, "", true},
+		{"shared grant with unrelated CLI settings", `{"allow":["mcp(pharos-ask/*)"]}`, `{"model":"test-model"}`, true},
+		{"shared grant with null CLI permissions", `{"allow":["mcp(pharos-ask/*)"]}`, `{"permissions":null}`, true},
+		{"shared grant with empty CLI permissions", `{"allow":["mcp(pharos-ask/*)"]}`, `{"permissions":{}}`, true},
+		{"shared grant with unrelated CLI permissions", `{"allow":["mcp(pharos-ask/*)"]}`, `{"permissions":{"allow":["mcp(other/*)"]}}`, true},
+		{"CLI deny overrides shared allow", `{"allow":["mcp(pharos-ask/*)"]}`, `{"permissions":{"deny":["mcp(pharos-ask/*)"]}}`, false},
+		{"CLI ask overrides shared allow", `{"allow":["mcp(pharos-ask/*)"]}`, `{"permissions":{"ask":["mcp(pharos-ask/*)"]}}`, false},
+		{"strict mode blocks shared grant", `{"allow":["mcp(pharos-ask/*)"]}`, `{"toolPermission":"strict"}`, false},
+		{"shared deny beats shared allow", `{"allow":["mcp(*)"],"deny":["mcp(pharos-ask/*)"]}`, "", false},
+		{"shared deny beats CLI allow", `{"deny":["mcp(pharos-ask/*)"]}`, `{"permissions":{"allow":["mcp(pharos-ask/*)"]}}`, false},
+		{"shared ask beats CLI allow", `{"ask":["mcp(pharos-ask/*)"]}`, `{"permissions":{"allow":["mcp(pharos-ask/*)"]}}`, false},
+		{"shared ask beats shared allow", `{"allow":["mcp(*)"],"ask":["mcp(pharos-ask/*)"]}`, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			if tc.cli != "" {
+				if err := os.WriteFile(path, []byte(tc.cli), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			raw := `{"userSettings":{"globalPermissionGrants":` + tc.shared + `}}`
+			if err := os.WriteFile(shared, []byte(raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := askCheckAGYMCPPermissions(); (err == nil) != tc.allowed {
+				t.Errorf("shared=%s CLI=%s: %v", tc.shared, tc.cli, err)
+			}
+		})
 	}
 }
 

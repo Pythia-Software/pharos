@@ -1,0 +1,21 @@
+.library-empty-card {
+  width: fit-content;
+  max-width: 100%;
+  box-sizing: border-box;
+  margin: 24px 0;
+  padding: 18px 22px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: var(--fs-base);
+  line-height: 1.5;
+}
+.library-empty-configure {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-inline-start: 6px;
+  white-space: nowrap;
+}
+.library-empty-configure .app-icon { width: 14px; height: 14px; }

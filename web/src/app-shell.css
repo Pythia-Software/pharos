@@ -30,6 +30,9 @@
 .app-sidebar-toggle[aria-expanded=false]{left:12px;background:var(--panel);border-color:var(--line)}
 .app-shell .app-icon{flex:none}.app-shell #appLocation .app-icon,.app-shell .app-navigation-list .app-icon,.app-shell .app-navigation-dialog .app-icon{width:16px;height:16px}
 .app-shell main{margin-left:0}
+/* focusPageContent moves focus to the landmark; ringing the whole page would
+   only replace the title outline it avoids. Controls keep their own rings. */
+main[tabindex="-1"]:focus{outline:none}
 .app-shell main:has(>.app-content-navigation>#appNavigationRail:not([hidden])){margin-left:var(--app-rail-width)}
 .app-shell main>.view{width:100%;max-width:none;margin:0;padding:24px var(--app-page-gutter) 64px}
 .app-shell main:has(>.app-content-navigation>.app-sidebar-toggle[aria-expanded=false])>.view{padding-left:calc(var(--app-page-gutter) + 40px)}

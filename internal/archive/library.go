@@ -502,7 +502,7 @@ var (
 		"version", "lifecycle", "preservation_completeness", "main_merge_title", "location"}
 	// libraryGoFields are added in Go after the read: relevance, mirror
 	// suppression, and costs.
-	libraryGoFields = []string{"score", "match_types", "source_aliases", "mirrored_workspace_ids",
+	libraryGoFields = []string{"channel", "machine_id", "machine", "machine_kind", "execution_machine_id", "execution_machine", "execution_machine_kind", "channels", "machines", "execution_machines", "score", "match_types", "source_aliases", "mirrored_workspace_ids",
 		"cost_usd", "cost_today_usd", "price_status"}
 	libraryCostFields = []string{"cost_usd", "cost_today_usd", "price_status"}
 	// libraryLargeFields hold long text, so only requests that use them read them.
@@ -677,6 +677,9 @@ func (c *Catalog) libraryPage(ctx context.Context, rows []map[string]any) ([]map
 		page[index] = maps.Clone(row)
 		// Relevance and mirror fields come from the search, not the read.
 		maps.Copy(page[index], byID[firstString(row["id"])])
+	}
+	if err := c.attachWorkspaceOrigins(ctx, page, nil); err != nil {
+		return nil, err
 	}
 	return page, c.attachLibraryPreviews(ctx, page)
 }

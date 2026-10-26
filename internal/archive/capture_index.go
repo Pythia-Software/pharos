@@ -211,6 +211,7 @@ func capturedHost(dir, id string) Host {
 	var record captureHostRecord
 	if data, err := os.ReadFile(filepath.Join(dir, captureHostName)); err == nil && json.Unmarshal(data, &record) == nil {
 		host.Label, host.User = defaultString(record.Label, id), record.User
+		host.MachineID = record.MachineID
 	}
 	return host
 }
@@ -230,6 +231,9 @@ func openCaptureAdapter(target captureTarget) (Adapter, *captureManifest, *captu
 	if manifest.Host.ID != target.Host.ID || manifest.Source.Name != target.Source {
 		return nil, nil, nil, fmt.Errorf("capture %s belongs to %s/%s", target.Dir, manifest.Host.ID, manifest.Source.Name)
 	}
+	// Older host.json files omitted the machine even when the source manifest
+	// retained it. Both records describe this same validated capturing host.
+	target.Host.MachineID = defaultString(target.Host.MachineID, manifest.Host.MachineID)
 	view := newCaptureView(target.Host, target.Dir, manifest)
 	root, ok := view.captured(manifest.Source.Path)
 	if !ok {

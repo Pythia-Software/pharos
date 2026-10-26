@@ -63,6 +63,9 @@ func (c *Catalog) conversationActivityRows(ctx context.Context) ([]map[string]an
 			}
 			rows = append(rows, event)
 		}
+		if err := c.attachOrigins(ctx, rows); err != nil {
+			return nil, err
+		}
 		return rows, nil
 	})
 }

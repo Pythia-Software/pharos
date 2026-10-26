@@ -163,6 +163,9 @@ func (c *Catalog) computeWritingDataByPeriod(ctx context.Context, hourly bool) (
 		rows = append(rows, writingRow(work, total, spent, len(members[id])-1-runs, runs))
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return firstString(rows[i]["id"]) < firstString(rows[j]["id"]) })
+	if err := c.attachWorkspaceOrigins(ctx, rows, members); err != nil {
+		return writingTable{}, err
+	}
 	return writingTable{rows, daily}, nil
 }
 
@@ -253,7 +256,7 @@ func rootWorkspace(id string, parents map[string]string) string {
 }
 
 // writingSplits are the row fields the writing chart can split its words by.
-var writingSplits = map[string]bool{"repository_name": true, "source_kind": true, "providers": true}
+var writingSplits = map[string]bool{"repository_name": true, "source_kind": true, "providers": true, "channel": true, "machine_id": true, "execution_machine_id": true, "channels": true, "machines": true, "execution_machines": true}
 
 // writingSeries sums, per day, the classified text of the writing rows that
 // match the request's filters, and totals it, so the page's chart and

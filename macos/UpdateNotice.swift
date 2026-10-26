@@ -2,6 +2,18 @@ import AppKit
 import Sparkle
 import SwiftUI
 
+struct HeaderUpdateState: Equatable {
+    var version = ""
+    var phase = ""
+    var progress: Int? = nil
+
+    var dictionary: [String: Any] {
+        var value: [String: Any] = ["version": version, "phase": phase]
+        if let progress { value["progress"] = progress }
+        return value
+    }
+}
+
 /// Keep Sparkle's native UI, retaining only its public cancellation/reply
 /// callbacks. A dismissed install-on-quit is resumed through checkForUpdates
 /// before replying Skip; merely clearing our flag would leave it armed.
@@ -11,9 +23,17 @@ import SwiftUI
     var cancellation: (() -> Void)?
     var didCancel: (() -> Void)?
     var prepareInstallation: ((@escaping (Error?) -> Void) -> Void)?
+    var stateChanged: ((HeaderUpdateState) -> Void)?
+    private(set) var headerState = HeaderUpdateState() {
+        didSet { if headerState != oldValue { stateChanged?(headerState) } }
+    }
+    private var headerInstall: (() -> Void)?
+    private var installInOneClick = false
+    private var expectedLength: UInt64 = 0
+    private var receivedLength: UInt64 = 0
     private var generation = UUID()
 
-    private func choice(installing: Bool, reply: @escaping (SPUUserUpdateChoice) -> Void,
+    private func choice(installing: Bool, offerInHeader: Bool = false, reply: @escaping (SPUUserUpdateChoice) -> Void,
                         present: (@escaping (SPUUserUpdateChoice) -> Void) -> Void) {
         let token = UUID()
         generation = token
@@ -21,13 +41,20 @@ import SwiftUI
             guard let self, self.generation == token else { return }
             self.generation = UUID()
             self.cancellation = nil
+            self.headerInstall = nil
+            if choice != .install { self.clearHeaderUpdate() }
+            else { self.headerState.phase = installing ? "installing" : "downloading" }
             if choice == .skip { self.didCancel?() }
             reply(choice)
         }
         cancellation = { answer(installing ? .skip : .dismiss) }
         if deferring { cancellation?(); return }
-        present { [weak self] choice in
-            guard let self else { return }
+        let respond: (SPUUserUpdateChoice) -> Void = { [weak self] choice in
+            guard let self, self.generation == token else { return }
+            if choice == .install {
+                self.headerInstall = nil
+                self.headerState.phase = installing ? "installing" : "downloading"
+            }
             if choice == .install, installing, let prepare = self.prepareInstallation {
                 // Do not ask Sparkle to terminate until replacement is safe.
                 prepare { error in
@@ -36,17 +63,56 @@ import SwiftUI
                 }
             } else { answer(choice) }
         }
+        if offerInHeader {
+            headerInstall = { [weak self] in
+                guard let self, self.generation == token else { return }
+                self.headerInstall = nil
+                self.installInOneClick = true
+                self.headerState.phase = installing ? "installing" : "downloading"
+                respond(.install)
+            }
+            headerState.phase = "available"
+        }
+        if installing && installInOneClick { respond(.install) }
+        else { present(respond) }
+    }
+
+    @discardableResult func installFromHeader() -> Bool {
+        guard !deferring, let install = headerInstall else { return false }
+        // The header answers Sparkle directly, bypassing the native alert's
+        // button. Close that alert before download progress replaces it.
+        // Calling the superclass clears only UI, preserving our guarded reply.
+        super.dismissUpdateInstallation()
+        install()
+        return true
+    }
+
+    func clearHeaderUpdate() {
+        generation = UUID()
+        cancellation = nil
+        headerInstall = nil
+        installInOneClick = false
+        headerState = HeaderUpdateState()
     }
 
     override func showUpdateFound(with item: SUAppcastItem, state: SPUUserUpdateState,
                                   reply: @escaping (SPUUserUpdateChoice) -> Void) {
-        choice(installing: state.stage == .installing, reply: reply) { response in
+        offerUpdate(version: item.isInformationOnlyUpdate ? "" : item.displayVersionString,
+                    installing: state.stage == .installing, reply: reply) { response in
             super.showUpdateFound(with: item, state: state, reply: response)
         }
     }
 
+    // Shares Sparkle's guarded reply with the header and native release notes.
+    func offerUpdate(version: String, installing: Bool, reply: @escaping (SPUUserUpdateChoice) -> Void,
+                     present: (@escaping (SPUUserUpdateChoice) -> Void) -> Void) {
+        headerState = HeaderUpdateState(version: version)
+        choice(installing: installing, offerInHeader: !version.isEmpty, reply: reply, present: present)
+    }
+
     override func showReady(toInstallAndRelaunch reply: @escaping (SPUUserUpdateChoice) -> Void) {
-        choice(installing: true, reply: reply) { response in
+        if installInOneClick { headerState.phase = "installing" }
+        choice(installing: true, offerInHeader: !headerState.version.isEmpty && !installInOneClick, reply: reply) { response in
             super.showReady(toInstallAndRelaunch: response)
         }
     }
@@ -62,19 +128,37 @@ import SwiftUI
     }
 
     override func showDownloadInitiated(cancellation: @escaping () -> Void) {
+        expectedLength = 0
+        receivedLength = 0
+        headerState.phase = "downloading"
+        headerState.progress = nil
         self.cancellation = cancellation
         if deferring { cancellation(); return }
         super.showDownloadInitiated(cancellation: cancellation)
     }
 
     override func showDownloadDidStartExtractingUpdate() {
+        headerState.phase = "preparing"
+        headerState.progress = nil
         cancellation = nil // Download cancellation is no longer valid.
         super.showDownloadDidStartExtractingUpdate()
+    }
+
+    override func showDownloadDidReceiveExpectedContentLength(_ expectedContentLength: UInt64) {
+        expectedLength = expectedContentLength
+        super.showDownloadDidReceiveExpectedContentLength(expectedContentLength)
+    }
+
+    override func showDownloadDidReceiveData(ofLength length: UInt64) {
+        receivedLength += length
+        if expectedLength > 0 { headerState.progress = Int(min(100, Double(receivedLength) / Double(expectedLength) * 100)) }
+        super.showDownloadDidReceiveData(ofLength: length)
     }
 
     override func dismissUpdateInstallation() {
         generation = UUID()
         cancellation = nil
+        clearHeaderUpdate()
         super.dismissUpdateInstallation()
     }
 }
@@ -85,6 +169,7 @@ import SwiftUI
     @Published private(set) var canCheck = false
     @Published private(set) var automaticChecks = false
     @Published private(set) var automaticDownloads = false
+    @Published private(set) var headerState = HeaderUpdateState()
     private(set) var installationPending = false
     private(set) var installationPrepared = false
     private(set) var preparingInstallation = false
@@ -107,6 +192,7 @@ import SwiftUI
     }
     private lazy var driver: UpdateUserDriver = {
         let driver = UpdateUserDriver(hostBundle: .main, delegate: nil)
+        driver.stateChanged = { [weak self] in self?.headerState = $0 }
         driver.didCancel = { [weak self] in self?.cancellationSent = true }
         driver.prepareInstallation = { [weak self] completion in
             guard let self, let prepare = self.prepareInstallation else {
@@ -155,6 +241,7 @@ import SwiftUI
         driver.deferring = false
         updater.checkForUpdates()
     }
+    func installFromHeader() -> Bool { driver.installFromHeader() }
     func setAutomaticChecks(_ enabled: Bool) { updater.automaticallyChecksForUpdates = enabled }
     func setAutomaticDownloads(_ enabled: Bool) { updater.automaticallyDownloadsUpdates = enabled }
 
@@ -249,6 +336,7 @@ import SwiftUI
         if choice == .skip { installationPending = false }
     }
     func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
+        driver.clearHeaderUpdate()
         recoverPreparedInstallation()
         if !driver.deferring { installationPending = false }
     }
