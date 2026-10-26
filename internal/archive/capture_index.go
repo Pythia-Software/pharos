@@ -31,6 +31,7 @@ type captureView struct {
 	recordStore                        *recordStore
 	recordRevision                     *sqliteRevision
 	evidenceRevision, evidenceIdentity string
+	evidenceVolatile                   bool
 	noLocalLookups                     bool
 	host                               Host
 	dir                                string // <capture_root>/<host-id>/<source>
@@ -277,9 +278,9 @@ func (c *Catalog) captureIndexPlan(ctx context.Context, target captureTarget) (i
 // IndexCapture parses one host's captured source into the catalog. It reads
 // only the capture, never the original paths, and stops between records once
 // ctx is cancelled; the next run resumes.
-func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progress ProgressFunc) IngestResult {
+func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progress ProgressFunc) (result IngestResult) {
 	c.setCaptureRoot(filepath.Dir(filepath.Dir(target.Dir)))
-	result := IngestResult{Source: target.Source, Host: target.Host.ID}
+	result = IngestResult{Source: target.Source, Host: target.Host.ID}
 	fail := func(err error) IngestResult {
 		result.Error = err.Error()
 		return result
@@ -293,6 +294,32 @@ func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progre
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		return fail(fmt.Errorf("%s is already being indexed: %w", target.label(), err))
 	}
+	historyWarnings := []captureError{}
+	reportHistoryWarning := func(warning captureError) {
+		for _, previous := range historyWarnings {
+			if previous == warning {
+				return
+			}
+		}
+		historyWarnings = append(historyWarnings, warning)
+	}
+	defer func() { result.HistoryWarnings = historyWarnings }()
+	defer func() {
+		if result.Error == nil && ctx.Err() == nil {
+			n, err := c.indexHistoricalRecovery(ctx, target, false, reportHistoryWarning)
+			if err != nil {
+				result.Error = err.Error()
+			} else {
+				result.Workspaces += n
+				if n > 0 {
+					result.SkippedUnchanged = false
+				}
+			}
+		}
+	}()
+	if _, err := c.indexHistoricalRecovery(ctx, target, true, reportHistoryWarning); err != nil {
+		return fail(err)
+	}
 	// Native readers remain the default until the SQLite automatic rollout
 	// gate passes. If the native inputs have rotated away, use durable rows.
 	native, err := loadCaptureManifest(target.Dir)
@@ -305,7 +332,7 @@ func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progre
 			missingNative = false
 		}
 	}
-	if missingNative {
+	if missingNative || native.LatestRecords {
 		// Logical acquisitions have committed row inventories but no native
 		// snapshots. Filesystem-only sources need no SQLite reader/lock.
 		if _, err := os.Stat(filepath.Join(target.Dir, recordDir, "entities")); err == nil {
@@ -322,10 +349,33 @@ func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progre
 			return fail(err)
 		}
 	}
-	adapter, manifest, view, err := openCaptureAdapter(target)
+	// Lease the whole inventory before planning. Replacement and pruning may
+	// proceed once the host lock is released; every planned path stays stable.
+	captureLock, err := lockCaptureReader(ctx, target.Dir)
 	if err != nil {
 		return fail(err)
 	}
+	input, err := leaseCaptureForIndex(ctx, target)
+	captureLock.Close()
+	if err != nil {
+		return fail(err)
+	}
+	defer input.Close()
+	defer func() { result.UnavailableInputs = input.Unavailable }()
+	if input.Adapter == nil {
+		return result
+	}
+	adapter := input.Adapter
+	if plan := modeOf(ctx).plan; plan != nil {
+		if previous, ok := plan.reader.(*antigravityAdapter); ok {
+			if next, ok := adapter.(*antigravityAdapter); ok {
+				next.installedVersions = previous.installedVersions
+				next.installedVersion = previous.installedVersion
+			}
+		}
+	}
+	view := captureViewOf(adapter)
+	manifest := view.manifest
 	mode := modeOf(ctx)
 	if mode.plan != nil && mode.plan.captureSignature != view.planSignature() {
 		// A capture committed between counting and execution. Discover its
@@ -379,7 +429,9 @@ func (c *Catalog) IndexCapture(ctx context.Context, target captureTarget, progre
 		progress("saving index", result.Workspaces, result.Conversations, result.Messages, result.SkippedCurrent, result.Processed)
 	}
 	for _, snapshot := range manifest.Snapshots {
-		marker.add(snapshot.Path, snapshot.CapturedAt)
+		if _, err := os.Stat(filepath.Join(view.dir, filepath.FromSlash(snapshot.Captured))); err == nil {
+			marker.add(snapshot.Path, snapshot.CapturedAt)
+		}
 	}
 	// A capture may have replaced a snapshot while it was indexed, and what
 	// was read is then unknown: its snapshots stay unlisted for the next run.
@@ -420,9 +472,14 @@ func (c *Catalog) indexGenerations(ctx context.Context, adapter Adapter, view *c
 			}
 			continue
 		}
-		handled, err := conductorSessionIDs(filepath.Join(view.dir, filepath.FromSlash(snapshot.Captured)))
-		if err != nil {
-			return err
+		handled := map[string]bool{}
+		latest := filepath.Join(view.dir, filepath.FromSlash(snapshot.Captured))
+		if _, err := os.Stat(latest); !errors.Is(err, fs.ErrNotExist) {
+			var err error
+			handled, err = conductorSessionIDs(latest)
+			if err != nil {
+				return err
+			}
 		}
 		reportWork(ctx, "indexing retained snapshots", "snapshot", 0, len(snapshot.Generations))
 		for generationIndex, generation := range snapshot.Generations { // newest first

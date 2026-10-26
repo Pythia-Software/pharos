@@ -45,6 +45,15 @@ func planCapture(source SourceConfig) (capturePlan, error) {
 		plan.files = plan.walk(source.Path, info, "", func(file string) bool {
 			return jsonl(file) || filepath.Base(file) == "sessions-index.json"
 		})
+		if !info.IsDir() {
+			index := filepath.Join(filepath.Dir(source.Path), "sessions-index.json")
+			if stat, e := os.Stat(index); e == nil && stat.Mode().IsRegular() {
+				plan.files = append(plan.files, captureItem{index, "sessions-index.json"})
+				plan.pathMap = append(plan.pathMap, capturePathMapping{Original: filepath.Dir(source.Path), Captured: captureFilesDir})
+			} else if e != nil && !os.IsNotExist(e) {
+				return plan, e
+			}
+		}
 	case "codex":
 		adapter := jsonlAdapter{baseAdapter: baseAdapter{config: source}, provider: "codex"}
 		plan.files = plan.walk(source.Path, info, "", func(file string) bool {

@@ -37,7 +37,7 @@ func (c *sourceCapture) captureDatabases(items []captureItem, present map[string
 		previous := c.snapshots[rel]
 		if previous != nil {
 			previous.MissingSince = ""
-			if (c.session.recoveryID == "" || previous.RecoveryID == c.session.recoveryID) && previous.Source == state && c.intact(previous.Captured, previous.Size, previous.CapturedMTimeNS) {
+			if previous.Path == item.path && (c.session.recoveryID == "" || previous.RecoveryID == c.session.recoveryID) && previous.Source == state && c.intact(previous.Captured, previous.Size, previous.CapturedMTimeNS) {
 				c.result.SnapshotsUnchanged++
 				if err := c.exportSnapshot(previous); err != nil {
 					c.fail(item.path, err)
@@ -114,6 +114,9 @@ func sqliteDependencyState(file string) (sqliteSourceState, error) {
 // snapshot replaces a database's latest snapshot, keeping the previous one as
 // a generation. Retention keeps the newest capture_snapshot_generations.
 func (c *sourceCapture) snapshot(item captureItem, rel string, state sqliteSourceState, previous *capturedSnapshot) (*capturedSnapshot, error) {
+	if err := checkNativeSnapshotPause(c.dir); err != nil {
+		return nil, err
+	}
 	if captureFault != nil {
 		if err := captureFault("snapshot", rel); err != nil {
 			return nil, toDestination(err)
@@ -143,7 +146,7 @@ func (c *sourceCapture) snapshot(item captureItem, rel string, state sqliteSourc
 	snapshot := &capturedSnapshot{RecoveryID: c.session.recoveryID, Path: item.path, Captured: rel, Size: info.Size(), CapturedMTimeNS: info.ModTime().UnixNano(), CapturedAt: now(), Method: "sqlite-backup", Source: state}
 	if previous != nil {
 		snapshot.Generations = slices.Clone(previous.Generations)
-		{ // Every unexported generation is a safety net, including at retention zero.
+		if c.session.generations > 0 || c.source.Options["sqlite_record_capture"] == true {
 			source := previous.Source
 			version := capturedVersion{Captured: previous.Captured, Size: previous.Size, CapturedAt: previous.CapturedAt, Source: &source}
 			intact := c.intact(previous.Captured, previous.Size, previous.CapturedMTimeNS)
@@ -170,17 +173,32 @@ func (c *sourceCapture) snapshot(item captureItem, rel string, state sqliteSourc
 // retain keeps ordinary generations plus every pinned or unverified input.
 // An indexed marker is never a preservation receipt. Unique evidence is not
 // evicted to make room; the acquisition space/capacity gate stops the writer.
-func (c *sourceCapture) retain(_ string, generations []capturedVersion) []capturedVersion {
+func (c *sourceCapture) retain(sourcePath string, generations []capturedVersion) []capturedVersion {
 	if c.session.recoveryID != "" {
 		return generations
 	}
 	kept := make([]capturedVersion, 0, len(generations))
+	extra := 0
 	for i, old := range generations {
-		if i < c.session.generations || !c.canPruneSnapshot(old.Captured) {
+		pinned, err := pinnedPath(c.dir, old.Captured)
+		if i < c.session.generations || err != nil || pinned {
 			kept = append(kept, old)
-		} else {
-			c.prune = append(c.prune, old.Captured)
+			continue
 		}
+		if c.source.Options["sqlite_record_capture"] == true {
+			if !c.canPruneSnapshot(old.Captured) {
+				kept = append(kept, old)
+				continue
+			}
+		} else if c.indexed != nil && c.indexed.exists && !c.indexed.has(sourcePath, old.CapturedAt) {
+			if extra < c.session.generations {
+				kept = append(kept, old)
+				extra++
+				continue
+			}
+			c.result.Warnings = append(c.result.Warnings, captureError{Path: old.Captured, Error: "pruned a database snapshot that was never indexed; sessions deleted at the source before it was superseded may be lost"})
+		}
+		c.prune = append(c.prune, old.Captured)
 	}
 	return kept
 }

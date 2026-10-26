@@ -240,6 +240,12 @@ func TestInstructionsBackfill(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, captureManifestName), manifest, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	for _, hidden := range []string{historyDir, ".enrichment", ".temporary"} {
+		writeSourceFile(t, filepath.Join(c.captureRootPath(), hidden, "metadata.json"), "{}")
+	}
+	if hosts := c.captureHosts(); len(hosts) != 1 || hosts[0] != "other-host" {
+		t.Fatalf("bookkeeping directories appeared as Macs: %v", hosts)
+	}
 	host := currentHost().ID
 	for _, statement := range []string{
 		`INSERT INTO repositories(id,display_name,local_locations_json,created_at,updated_at) VALUES('repo','repo','["/work/repo"]','2026-01-01','2026-01-01')`,
@@ -275,6 +281,9 @@ func TestInstructionsBackfill(t *testing.T) {
 	}
 	if after, err := os.ReadFile(claudeFile); err != nil || string(after) != string(before) {
 		t.Fatalf("source changed: %v", err)
+	}
+	if entries, err := os.ReadDir(filepath.Join(c.captureRootPath(), ".enrichment")); err != nil || len(entries) != 1 || entries[0].Name() != "metadata.json" {
+		t.Fatalf("instructions backfill created retained transcripts without opt-in: %v, %v", entries, err)
 	}
 	// Nothing is read twice.
 	if done, err := c.BackfillInstructions(context.Background(), nil); err != nil || done != 0 {

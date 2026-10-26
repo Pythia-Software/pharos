@@ -964,6 +964,11 @@ func (s *recordStore) dependencies() ([]recordDependency, error) {
 	}
 	deps := []recordDependency{}
 	for _, f := range sortedCaptures(s.c.files) {
+		if cached, ok := s.c.recordDependencyCache[f.Path]; ok && cached.Object != nil && cached.Object.Hash == f.SHA256 && cached.Object.Length == f.Size {
+			cached.MTimeNS, cached.MissingSince = f.MTimeNS, f.MissingSince
+			deps = append(deps, cached)
+			continue
+		}
 		file := filepath.Join(s.c.dir, filepath.FromSlash(f.Captured))
 		h, size, e := fileSHA256Context(s.c.ctx, file)
 		if e != nil || h != f.SHA256 || size != f.Size {
@@ -985,6 +990,9 @@ func (s *recordStore) dependencies() ([]recordDependency, error) {
 	return deps, nil
 }
 func (c *sourceCapture) exportSnapshot(snapshot *capturedSnapshot) error {
+	if c.source.Options["sqlite_record_capture"] != true {
+		return nil
+	}
 	s := newRecordStore(c)
 	deps, e := s.dependencies()
 	if e != nil {
@@ -1040,6 +1048,9 @@ func (c *sourceCapture) canPruneSnapshot(rel string) bool {
 	pinned, e := pinnedPath(c.dir, rel)
 	if e != nil || pinned {
 		return false
+	}
+	if c.source.Options["sqlite_record_capture"] != true {
+		return true
 	}
 	_, verified := c.verifiedSnapshotReceipt(rel, rel)
 	return verified

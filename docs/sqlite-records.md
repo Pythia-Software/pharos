@@ -37,7 +37,7 @@ or a native `indexed.json` marker as proof of complete preservation.
 All authoritative files are below the source's existing `CaptureRoot` directory:
 
 ```text
-<host>/<source>/manifest.json                  # capture manifest version 2
+<host>/<source>/manifest.json                  # capture manifest version 4
 <host>/<source>/preservation-pins.json         # pins version 1
 <host>/<source>/records/v1/
   objects/<sha256>.gz                         # immutable objects
@@ -193,7 +193,7 @@ go test -vet=off -run '^$' -bench 'BenchmarkSQLite(RecordExport|ConductorChanged
 Original origins remain byte-identical, e.g. `sqlite:<original Conductor path>`.
 The revision reference is stored separately in `copy_evidence`, keyed like
 `copy_versions`; TL1 installation analysis uses `source_evidence`. Both update in
-the same catalog transaction as the accepted state. Catalog schema 18 refuses
+the same catalog transaction as the accepted state. Catalog schema 19 refuses
 older writers that would fail to maintain these associations.
 
 Source mtime/WAL `Observed` remains the authority integer. A different raw
@@ -228,8 +228,8 @@ independently/idempotently. Restart does not expire pins. Both queued pruning
 and unnamed-history sweeps recheck them. Unverifiable/unexported generations
 stay native regardless of indexed status or ordinary generation count.
 
-Capture manifest version 2 is written/flushed **before** publishing pins or
-capacity gates; version-1 executables refuse it. Require all routine writers to
+Capture manifest version 4 is written/flushed **before** publishing pins or
+capacity gates; version-1 and version-2 executables refuse it. Require all routine writers to
 be compatible. A legacy native reader can still read its existing inputs with a
 compatible writer; downgrading the executable is not supported after upgrade.
 
@@ -247,7 +247,10 @@ pharos --config PATH sqlite-records release HOST SOURCE JOB
 pharos --config PATH sqlite-records ungate HOST SOURCE JOB
 ```
 
-`replay` writes the configured catalog through ordinary ingestion. Status and
+`replay` writes the configured catalog through ordinary ingestion. It takes the
+same catalog-wide ingest file lock as the service before opening the catalog;
+if indexing is active, retry after it finishes. A CLI replay also prevents the
+service from starting another ingest until replay closes. Status and
 verification do not open the catalog. Pin/gate operations are preparation
 writes. Zero allowance pauses acquisition for that source; finite allowances are
 charged durably before each file/snapshot/logical acquisition. The exporter
@@ -263,3 +266,27 @@ after a verified closure receipt or an explicit safe abandonment decision.
 The backfill planner/job and a production migration are separate work. Existing
 native generations with unknown versions or unresolved historical dependency
 closure remain protected for that work.
+
+Capture-before-index also writes manifest version 4. `latest_records: true`
+selects committed logical evidence for ordinary offline indexing even when an
+older native snapshot remains. Earlier manifest versions remain readable; older
+writers refuse version 4. Explicit successful native capture clears this flag.
+Immutable filesystem inventories live under `inputs/<revision>/`; native reader
+leases are temporary, excluded from backups, and reclaimed after a crash once
+their per-reader lease lock is free.
+
+
+Historical preservation uses the operator workflow in [capture-history.md](capture-history.md).
+Capture manifest version 4 additionally guards durable job-owned native snapshot
+pauses. `preservation-pins.json` stays version 1; `native_snapshot_pauses` is a
+source-local overlay, independent of byte gates for all acquisitions. Backfill
+catalog envelopes are explicitly degraded and never native SQLite receipts.
+
+All SQLite readers use an OS-held lease, including live session and grouped
+acquisitions. Closed readers are removed from pin bookkeeping. If a backup or
+capture prevents that write, close reports deferred cleanup and leaves its
+inactive lease directory as a cleanup queue. Status exposes these owners in
+`reader_cleanup_pending`; they no longer pin evidence. The next capture or
+replay retries the metadata write before reclaiming their directories. Active
+readers and operator/job pins remain protected. Lease directories are excluded
+from local and cloud snapshots.

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -56,7 +57,7 @@ func TestSQLiteRecordsTypedRoundTrip(t *testing.T) {
 		}
 	}
 	commitSeed(t, tx)
-	source := SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true}
+	source := SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}}
 	config := captureTestConfig(t, source)
 	if run := runCapture(t, config); !run.OK {
 		t.Fatal(run)
@@ -132,7 +133,7 @@ func TestSQLiteRecordsRebuildKeepsAbsentSessionsAndLatestMessageSet(t *testing.T
 	exec := conductorFixture(t, dir)
 	exec(addConductorSession("deleted", 2)...)
 	exec(addConductorSession("survives", 3)...)
-	config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true})
+	config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}})
 	config.CaptureGenerations = 0
 	if run := runCapture(t, config); !run.OK {
 		t.Fatal(run)
@@ -165,6 +166,84 @@ func TestSQLiteRecordsRebuildKeepsAbsentSessionsAndLatestMessageSet(t *testing.T
 	if countRows(t, catalog, `SELECT COUNT(*) FROM copy_evidence WHERE revision<>''`) < 2 {
 		t.Fatal("raw revision authority was not persisted")
 	}
+	for range 3 {
+		recordTestReplay(t, config, "conductor", catalog)
+		pins, err := loadPreservationPins(sourceDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, pin := range pins.Pins {
+			if strings.HasPrefix(pin.Owner, "reader:") {
+				t.Fatal("closed reader left a growing pin closure", pin.Owner)
+			}
+		}
+	}
+	target := captureTarget{Host: Host{ID: "host-a"}, Source: "conductor", Dir: sourceDir}
+	_, closeReader, err := openSQLiteReplay(t.Context(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backupLock, err := os.Open(filepath.Join(filepath.Dir(sourceDir), captureLockName))
+	if err != nil {
+		closeReader()
+		t.Fatal(err)
+	}
+	defer backupLock.Close()
+	if err = syscall.Flock(int(backupLock.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		closeReader()
+		t.Fatal(err)
+	}
+	closeReader() // the backup prevents the ordinary pin-removal write
+	pins, err := loadPreservationPins(sourceDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pin := range pins.Pins {
+		if strings.HasPrefix(pin.Owner, "reader:") {
+			t.Fatal("backup stranded an inactive reader pin")
+		}
+	}
+	if len(pins.pendingReaders) != 1 {
+		t.Fatalf("deferred cleanup is not discoverable: %v", pins.pendingReaders)
+	}
+	if dirs, err := filepath.Glob(filepath.Join(sourceDir, ".reader-pin-*"+captureTempSuffix)); err != nil || len(dirs) != 1 {
+		t.Fatalf("close discarded the deferred cleanup directory: %v, %v", dirs, err)
+	}
+	backupLock.Close()
+	recordTestReplay(t, config, "conductor", catalog)
+	var stored preservationPins
+	if err := json.Unmarshal([]byte(readText(t, filepath.Join(sourceDir, preservationPinsName))), &stored); err != nil || len(stored.Pins) != 0 {
+		t.Fatalf("next replay failed to persist reader cleanup: %+v, %v", stored, err)
+	}
+	if dirs, err := filepath.Glob(filepath.Join(sourceDir, ".reader-pin-*"+captureTempSuffix)); err != nil || len(dirs) != 0 {
+		t.Fatalf("deferred reader folders were not reclaimed: %v, %v", dirs, err)
+	}
+	// CLI replay and the running service must take the same ingest lease,
+	// before the CLI opens the catalog or publishes reader pins.
+	cliConfig := config
+	cliConfig.CatalogPath = catalog.Path
+	server := testServer(t, cliConfig, catalog)
+	if !server.acquireManualIngest() {
+		t.Fatal("could not acquire service ingest coordinator")
+	}
+	err = runSQLiteRecordsCLI(cliConfig, []string{"replay", "host-a", "conductor"})
+	server.ingestMu.Unlock()
+	if !errors.Is(err, errCatalogIngestBusy) {
+		t.Fatalf("CLI bypassed active service ingestion: %v", err)
+	}
+	lease, err := lockCatalogIngest(catalog.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acquired := server.acquireManualIngest(); acquired {
+		server.ingestMu.Unlock()
+		lease.Close()
+		t.Fatal("service bypassed active CLI ingestion")
+	}
+	lease.Close()
+	if err := runSQLiteRecordsCLI(cliConfig, []string{"replay", "host-a", "conductor"}); err != nil {
+		t.Fatal("CLI replay did not resume after service ingestion finished", err)
+	}
 }
 func TestSQLiteRecordsBudgetAndPublicationRecovery(t *testing.T) {
 	for _, stage := range []string{"records-objects", "records-inventory", "records-head", "records-receipt"} {
@@ -173,7 +252,7 @@ func TestSQLiteRecordsBudgetAndPublicationRecovery(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "conductor")
 			exec := conductorFixture(t, dir)
 			exec(addConductorSession("s", 1)...)
-			config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true})
+			config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}})
 			override(t, &captureFault, func(point, rel string) error {
 				if point == stage {
 					return errors.New("injected interruption")
@@ -200,7 +279,7 @@ func TestSQLiteRecordsBudgetAndPublicationRecovery(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "conductor")
 		exec := conductorFixture(t, dir)
 		exec(addConductorSession("s", 2)...)
-		config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true})
+		config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}})
 		config.CaptureGenerations = 0
 		override(t, &recordMaxValueBytes, int64(8))
 		if run := runCapture(t, config); run.OK {
@@ -224,7 +303,7 @@ func TestSQLiteRecordsPinsSurviveRotationAndOverlappingOwners(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "conductor")
 	exec := conductorFixture(t, dir)
 	exec(addConductorSession("s", 1)...)
-	config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true})
+	config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}})
 	config.CaptureGenerations = 0
 	if run := runCapture(t, config); !run.OK {
 		t.Fatal(run)
@@ -240,6 +319,9 @@ func TestSQLiteRecordsPinsSurviveRotationAndOverlappingOwners(t *testing.T) {
 	}
 	snapshot := c.manifest.Snapshots[0]
 	v := capturedVersion{Captured: snapshot.Captured, Size: snapshot.Size, CapturedAt: snapshot.CapturedAt, Source: &snapshot.Source}
+	previousLink := pinLinkFile
+	pinLinkFile = func(string, string) error { return errors.New("hard links unavailable") }
+	t.Cleanup(func() { pinLinkFile = previousLink })
 	first, e := c.pinVersion("job-a", "backfill", v)
 	if e != nil {
 		t.Fatal(e)
@@ -247,6 +329,10 @@ func TestSQLiteRecordsPinsSurviveRotationAndOverlappingOwners(t *testing.T) {
 	second, e := c.pinVersion("job-b", "reader", v)
 	if e != nil {
 		t.Fatal(e)
+	}
+	pinLinkFile = previousLink
+	if _, err := os.Stat(filepath.Join(c.dir, v.Captured)); err != nil {
+		t.Fatal("pinning removed latest native input on a filesystem without hardlinks", err)
 	}
 	if first.Path != second.Path || first.ID == second.ID {
 		t.Fatal("owners did not independently pin the same immutable input")
@@ -351,19 +437,78 @@ func TestSQLiteRecordsRawAuthority(t *testing.T) {
 		t.Fatalf("identical raw parser upgrade failed: %v", e)
 	}
 	execSQL(t, catalog.DB, "DELETE FROM copy_evidence")
-	if e := apply(record); !errors.Is(e, errOlderCopy) {
-		t.Fatalf("legacy unassociated equality applied: %v", e)
+	if e := apply(record); e != nil {
+		t.Fatalf("legacy equal-version parser upgrade failed: %v", e)
+	}
+	if countRows(t, catalog, "SELECT COUNT(*) FROM copy_evidence") != 2 {
+		t.Fatal("legacy reparse did not associate its retained evidence")
 	}
 	if workspaceTitle(t, catalog, "s") != "first" {
 		t.Fatal("rejected branch changed workspace state")
 	}
 }
 func TestSQLiteRecordsLogicalAcquisitionUsesRetainedParserInput(t *testing.T) {
+	t.Run("account-edit", func(t *testing.T) {
+		useHost(t, "host-a")
+		dir := filepath.Join(t.TempDir(), "conductor")
+		exec := conductorFixture(t, dir)
+		exec(addConductorSession("s", 1)...)
+		source := SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}}
+		config := captureTestConfig(t, source)
+		for _, account := range []string{"local", "changed-account"} {
+			source.Account = account
+			if err := acquireConductorSession(t.Context(), config.CaptureRoot, source, filepath.Join(dir, "conductor.db"), "s", func(record WorkspaceRecord) error {
+				if record.Account != account {
+					t.Errorf("acquired account = %q, want %q", record.Account, account)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		reader, closeReader, err := openSQLiteReplay(t.Context(), captureTarget{Host: currentHost(), Source: source.Name, Dir: filepath.Join(config.CaptureRoot, "host-a", source.Name)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer closeReader()
+		accounts := map[string]bool{}
+		if err := reader.Discover(func(record WorkspaceRecord) error { accounts[record.Account] = true; return nil }); err != nil || !accounts["local"] || !accounts["changed-account"] {
+			t.Fatalf("logical replay lost historical accounts: %v, %v", accounts, err)
+		}
+		var held *captureSession
+		if err := acquireConductorSession(t.Context(), config.CaptureRoot, source, filepath.Join(dir, "conductor.db"), "s", func(WorkspaceRecord) error {
+			var err error
+			held, err = beginCapture(config)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		defer held.Close()
+		sourceDir := capturedPath(config, source.Name, "")
+		pins, err := loadPreservationPins(sourceDir)
+		if err != nil || len(pins.pendingReaders) != 1 {
+			t.Fatalf("live session reader lost its deferred cleanup: %+v, %v", pins, err)
+		}
+		held.Close()
+		lock, err := lockCaptureTarget(t.Context(), sourceDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = cleanupPreservationReaders(sourceDir)
+		lock.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		pins, err = loadPreservationPins(sourceDir)
+		if err != nil || len(pins.pendingReaders) != 0 || len(pins.Pins) == 0 {
+			t.Fatalf("cleanup did not distinguish live and closed readers: %+v, %v", pins, err)
+		}
+	})
 	useHost(t, "host-a")
 	dir := filepath.Join(t.TempDir(), "conductor")
 	exec := conductorFixture(t, dir)
 	exec(addConductorSession("s", 2)...)
-	source := SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true}
+	source := SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}}
 	config := captureTestConfig(t, source)
 	calls := 0
 	e := acquireConductorSession(t.Context(), config.CaptureRoot, source, filepath.Join(dir, "conductor.db"), "s", func(r WorkspaceRecord) error {
@@ -412,7 +557,7 @@ func TestSQLiteRecordsCancellationAndReconciliation(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "conductor")
 	exec := conductorFixture(t, dir)
 	exec(addConductorSession("s", 1)...)
-	source := SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true}
+	source := SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}}
 	config := captureTestConfig(t, source)
 	if e := reconcileSQLiteLive(t.Context(), config.CaptureRoot, source, filepath.Join(dir, "conductor.db"), true); e != nil {
 		t.Fatal(e)
@@ -482,7 +627,7 @@ func TestSQLiteRecordsAntigravityGroupsAndDBOnlyRows(t *testing.T) {
 	dir := antigravityFixture(t)
 	orphan := "dddddddd-0000-4000-8000-000000000004"
 	antigravityRequestRows(t, dir, orphan, []any{[]uint64{1}, "gemini-unknown", 1, 2, 0, 0})
-	source := SourceConfig{Name: "antigravity", Kind: "antigravity", Path: dir, Account: "local", Enabled: true}
+	source := SourceConfig{Name: "antigravity", Kind: "antigravity", Path: dir, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}}
 	config := captureTestConfig(t, source)
 	oracle, _ := testCatalog(t)
 	ingestSource(t, oracle, source)
@@ -571,7 +716,7 @@ func TestSQLiteRecordsLocatorsBindDuplicateRowsToObservation(t *testing.T) {
 	file := filepath.Join(dir, "conductor.db")
 	db := openWritableSQLite(t, file)
 	execSQL(t, db, `CREATE TABLE sessions(id TEXT)`, `CREATE TABLE messages(id TEXT,session_id TEXT,created_at TEXT,content TEXT,full_message TEXT)`, `INSERT INTO sessions VALUES('s')`, `INSERT INTO messages VALUES('duplicate','s','same','first','{"unknown":1}')`, `INSERT INTO messages VALUES('duplicate','s','same','second','{"unknown":2}')`)
-	config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true})
+	config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}})
 	if run := runCapture(t, config); !run.OK {
 		t.Fatal(run)
 	}
@@ -608,7 +753,7 @@ func TestSQLiteRecordsLocatorsBindDuplicateRowsToObservation(t *testing.T) {
 func TestSQLiteRecordsCrossFileRaceDoesNotCommitGroup(t *testing.T) {
 	useHost(t, "host-a")
 	dir := antigravityFixture(t)
-	config := captureTestConfig(t, SourceConfig{Name: "antigravity", Kind: "antigravity", Path: dir, Account: "local", Enabled: true})
+	config := captureTestConfig(t, SourceConfig{Name: "antigravity", Kind: "antigravity", Path: dir, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}})
 	moved := false
 	override(t, &captureFault, func(stage, rel string) error {
 		if stage == "records-objects" && !moved {
@@ -674,7 +819,7 @@ func TestSQLiteRecordsWholeAndSelectiveObservationsShareEntityAuthority(t *testi
 	dir := filepath.Join(t.TempDir(), "conductor")
 	exec := conductorFixture(t, dir)
 	exec(addConductorSession("s", 2)...)
-	source := SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true}
+	source := SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}}
 	config := captureTestConfig(t, source)
 	if run := runCapture(t, config); !run.OK {
 		t.Fatal(run)
@@ -760,5 +905,125 @@ func TestSQLiteRecordsFullReconciliationInvalidatesFastSignals(t *testing.T) {
 	indexCaptures(t, rebuilt, config.CaptureRoot, "host-a")
 	if countRows(t, rebuilt, `SELECT COUNT(*) FROM messages WHERE text='changed without a signal'`) != 1 {
 		t.Fatal("ordinary indexing lost reconciliation-only capture")
+	}
+}
+
+func TestSQLiteRecordsLiveGroupedAcquisition(t *testing.T) {
+	useHost(t, "host-a")
+	for _, kind := range []string{"codex", "antigravity"} {
+		t.Run(kind, func(t *testing.T) {
+			catalog, _ := testCatalog(t)
+			var root string
+			if kind == "antigravity" {
+				root = antigravityFixture(t)
+			} else {
+				root = t.TempDir()
+				writeSourceFile(t, filepath.Join(root, "sessions", "rollout.jsonl"), codexLines("s", 1))
+				db, err := sql.Open("sqlite", filepath.Join(root, "state_1.sqlite"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				execSQL(t, db, `CREATE TABLE threads(id TEXT,name TEXT);INSERT INTO threads VALUES('s','Retained name')`)
+				db.Close()
+			}
+			source := SourceConfig{Name: kind, Kind: kind, Path: root, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}}
+			config := captureTestConfig(t, source)
+			config.CaptureRoot = catalog.captureRootPath()
+			runCapture(t, config)
+			if kind == "codex" {
+				appendSourceFile(t, filepath.Join(root, "sessions", "rollout.jsonl"), `{"type":"event_msg","payload":{"type":"user_message","message":"new logical revision"}}`+"\n")
+				stamp := time.Now().Add(time.Millisecond)
+				if err := os.Chtimes(filepath.Join(root, "sessions", "rollout.jsonl"), stamp, stamp); err != nil {
+					t.Fatal(err)
+				}
+			}
+			adapter, _ := MakeAdapter(source)
+			input, err := catalog.acquireRetainedInput(t.Context(), adapter, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer input.Close()
+			dir := filepath.Join(catalog.captureRootPath(), "host-a", kind)
+			manifest, err := loadCaptureManifest(dir)
+			if err != nil || !manifest.LatestRecords {
+				t.Fatalf("logical acquisition failed to select the retained reader: %#v %v", manifest, err)
+			}
+			// Capture has completed; parsing must not inspect the source again.
+			if err = os.Rename(root, root+".held"); err != nil {
+				t.Fatal(err)
+			}
+			result := catalog.IngestContext(t.Context(), input.Adapter, nil)
+			if result.Error != nil || countRows(t, catalog, "SELECT COUNT(*) FROM messages") == 0 {
+				t.Fatalf("retained group ingest: %+v", result)
+			}
+			if countRows(t, catalog, "SELECT COUNT(*) FROM copy_evidence WHERE revision<>''") == 0 {
+				t.Fatal("group lost raw identities")
+			}
+			restored, _ := testCatalog(t)
+			replay := restored.IndexCapture(t.Context(), captureTarget{Host: currentHost(), Source: source.Name, Dir: dir}, nil)
+			if replay.Error != nil || countRows(t, restored, "SELECT COUNT(*) FROM messages") != countRows(t, catalog, "SELECT COUNT(*) FROM messages") {
+				t.Fatalf("ordinary index preferred stale native data: %+v", replay)
+			}
+			if err = os.Rename(root+".held", root); err != nil {
+				t.Fatal(err)
+			}
+			result = ingestSource(t, catalog, source)
+			if result.Workspaces != 0 || result.Parsed != 0 {
+				t.Fatalf("unchanged group reparsed: %+v", result)
+			}
+			// An account edit may reuse row chunks, but its new observation
+			// must use the new account and leave earlier observations intact.
+			source.Account = "changed-account"
+			adapter, _ = MakeAdapter(source)
+			next, err := catalog.acquireRetainedInput(t.Context(), adapter, nil)
+			if err != nil {
+				t.Fatal("acquisition after account edit", err)
+			}
+			defer next.Close()
+			read := func(adapter Adapter, account string) {
+				t.Helper()
+				records := 0
+				if err := adapter.Discover(func(record WorkspaceRecord) error {
+					records++
+					if record.Account != account {
+						t.Errorf("retained account = %q, want %q", record.Account, account)
+					}
+					return nil
+				}); err != nil || records == 0 {
+					t.Fatalf("retained account read: %d records, %v", records, err)
+				}
+			}
+			read(next.Adapter, source.Account)
+			read(input.Adapter, "local")
+			// Replaying all committed observations must preserve both accounts.
+			replayAdapter, closeReplay, err := openSQLiteReplay(t.Context(), captureTarget{Host: currentHost(), Source: source.Name, Dir: dir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer closeReplay()
+			accounts := map[string]bool{}
+			if err := replayAdapter.Discover(func(record WorkspaceRecord) error { accounts[record.Account] = true; return nil }); err != nil || !accounts["local"] || !accounts[source.Account] {
+				t.Fatalf("replay changed historical accounts: %v, %v", accounts, err)
+			}
+			held, err := lockCaptureTarget(t.Context(), dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			next.Close()
+			held.Close()
+			pins, err := loadPreservationPins(dir)
+			if err != nil || len(pins.pendingReaders) != 1 {
+				t.Fatalf("group reader lost its deferred cleanup: %+v, %v", pins, err)
+			}
+			_, cleanup, err := openSQLiteReplay(t.Context(), captureTarget{Host: currentHost(), Source: source.Name, Dir: dir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cleanup()
+			pins, err = loadPreservationPins(dir)
+			if err != nil || len(pins.pendingReaders) != 0 || len(pins.Pins) == 0 {
+				t.Fatalf("group cleanup retired an active reader: %+v, %v", pins, err)
+			}
+		})
 	}
 }

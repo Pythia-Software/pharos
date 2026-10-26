@@ -479,7 +479,8 @@ func (c *Catalog) BackfillInstructions(ctx context.Context, progress func(done, 
 	if err != nil {
 		return 0, err
 	}
-	captured := map[string]map[string]string{}
+	captured := newHarnessInputs()
+	defer captured.Close()
 	var hosts []string
 	const batch = 100
 	type prepared struct {
@@ -495,7 +496,14 @@ func (c *Catalog) BackfillInstructions(ctx context.Context, progress func(done, 
 		for _, row := range rows {
 			value := prepared{id: firstString(row["id"]), workspaceID: firstString(row["workspace_id"]), status: "unavailable"}
 			origin, host := firstString(row["origin"]), firstString(row["origin_host_id"])
-			path := c.harnessSourcePath(origin, host, captured)
+			path, err := c.harnessSourcePath(ctx, origin, host, firstString(row["source_kind"]), captured)
+			if err != nil {
+				if ctx.Err() != nil {
+					return start, ctx.Err()
+				}
+				continue
+			}
+			lookupFailed := false
 			if path == "" && origin != "" && !strings.HasPrefix(origin, "sqlite:") {
 				// A conversation merged from several Macs' copies names no one
 				// host; this Mac's file or any capture of it will do.
@@ -504,11 +512,20 @@ func (c *Catalog) BackfillInstructions(ctx context.Context, progress func(done, 
 				}
 				for _, other := range hosts {
 					if other != host {
-						if path = c.harnessSourcePath(origin, other, captured); path != "" {
+						if path, err = c.harnessSourcePath(ctx, origin, other, firstString(row["source_kind"]), captured); err != nil {
+							if ctx.Err() != nil {
+								return start, ctx.Err()
+							}
+							lookupFailed = true
+							continue
+						} else if path != "" {
 							break
 						}
 					}
 				}
+			}
+			if path == "" && lookupFailed {
+				continue
 			}
 			if path != "" {
 				records, err := readInstructionsFile(path, firstString(row["source_kind"]))
@@ -518,6 +535,7 @@ func (c *Catalog) BackfillInstructions(ctx context.Context, progress func(done, 
 			}
 			values = append(values, value)
 		}
+		captured.Close()
 		if err := c.writeTransaction(ctx, fmt.Sprintf("instructions-backfill batch=%d", start/batch), func(tx *sql.Tx) error {
 			for _, value := range values {
 				// A conversation indexed meanwhile holds a newer read.
@@ -551,7 +569,7 @@ func (c *Catalog) captureHosts() []string {
 		return hosts
 	}
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() && validCaptureName(entry.Name()) {
 			hosts = append(hosts, entry.Name())
 		}
 	}

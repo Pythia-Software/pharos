@@ -259,11 +259,23 @@ func TestLiveIngestAndCaptureIndexShareWriterAndParts(t *testing.T) {
 	}
 	check("then live", 0, 2)
 
-	// The live source moves on; its capture, now older, must not roll it back.
+	// Index changes refreshes latest capture too. Keep its previous immutable
+	// inventory to exercise the older-reader guard across that refresh.
+	target := captureTarget{Host: currentHost(), Source: source.Name, Dir: filepath.Join(config.CaptureRoot, "host-a", source.Name)}
+	lock, err := lockCaptureTarget(t.Context(), target.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldInput, err := freezeCaptureInput(t.Context(), target, source, true)
+	lock.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oldInput.Close()
 	appendSourceFile(t, file, claudeLine("s1", "u3", "three", "/proj", 3))
 	ingestSource(t, catalog, source)
 	check("live ahead", 1, 3)
-	if result := indexCaptures(t, catalog, config.CaptureRoot, "host-a")[0]; result.Unchanged != 1 || result.Workspaces != 0 {
+	if result := catalog.IngestContext(t.Context(), oldInput.Adapter, nil); result.Unchanged != 1 || result.Workspaces != 0 {
 		t.Fatalf("older capture: %#v", result)
 	}
 	check("older capture", 0, 3)
@@ -604,11 +616,50 @@ func TestCapturedPlanRefreshesWhenManifestChanges(t *testing.T) {
 }
 
 func TestIndexKeepsDeletedConductorSessionsFromUnindexedSnapshots(t *testing.T) {
+	for _, damage := range []string{"missing-generation", "resized-generation", "missing-latest"} {
+		t.Run(damage, func(t *testing.T) {
+			useHost(t, "host-a")
+			catalog, _ := testCatalog(t)
+			dir := filepath.Join(t.TempDir(), "conductor")
+			exec := conductorFixture(t, dir)
+			config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true})
+			exec(addConductorSession("old", 1)...)
+			runCapture(t, config)
+			exec("DELETE FROM session_messages", "DELETE FROM sessions")
+			exec(addConductorSession("latest", 1)...)
+			runCapture(t, config)
+			snapshot := readCaptureManifest(t, config, "conductor").Snapshots[0]
+			if len(snapshot.Generations) != 1 {
+				t.Fatal("fixture needs one retained generation")
+			}
+			rel := snapshot.Generations[0].Captured
+			want := "conductor:latest"
+			if damage == "missing-latest" {
+				rel, want = snapshot.Captured, "conductor:old"
+			}
+			file := capturedPath(config, "conductor", rel)
+			if damage == "resized-generation" {
+				writeSourceFile(t, file, "damaged snapshot")
+			} else if err := os.Remove(file); err != nil {
+				t.Fatal(err)
+			}
+			target := captureTarget{Host: currentHost(), Source: "conductor", Dir: filepath.Join(config.CaptureRoot, "host-a", "conductor")}
+			for range 2 {
+				result := catalog.IndexCapture(t.Context(), target, nil)
+				if result.Error != nil || len(result.UnavailableInputs) != 1 || conversationMessages(t, catalog, want) != 1 {
+					t.Fatalf("unavailable snapshot blocked surviving inputs: %+v", result)
+				}
+			}
+			if damage == "missing-latest" && loadIndexMarker(target.Dir).has(snapshot.Path, snapshot.CapturedAt) {
+				t.Fatal("missing latest snapshot was marked indexed")
+			}
+		})
+	}
 	useHost(t, "host-a")
 	catalog, _ := testCatalog(t)
 	dir := filepath.Join(t.TempDir(), "conductor")
 	exec := conductorFixture(t, dir)
-	config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true})
+	config := captureTestConfig(t, SourceConfig{Name: "conductor", Kind: "conductor", Path: dir, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}})
 	generations := func() []capturedVersion { return readCaptureManifest(t, config, "conductor").Snapshots[0].Generations }
 	capture := func() CaptureSourceResult {
 		t.Helper()
@@ -808,31 +859,68 @@ func TestIndexRunCountsConversationsBesideAnUncountableSource(t *testing.T) {
 }
 
 func TestIndexReadsOneVersionWhileACaptureReplacesIt(t *testing.T) {
+	for _, damage := range []string{"missing", "resized"} {
+		t.Run(damage, func(t *testing.T) {
+			useHost(t, "host-a")
+			catalog, _ := testCatalog(t)
+			dir := t.TempDir()
+			writeSourceFile(t, filepath.Join(dir, "good.jsonl"), claudeLine("good", "u1", "healthy input", "/p", 1))
+			writeSourceFile(t, filepath.Join(dir, "bad.jsonl"), claudeLine("bad", "u1", "unavailable input", "/p", 1))
+			source := SourceConfig{Name: "claude", Kind: "claude", Path: dir, Account: "local", Enabled: true, Options: map[string]any{"retained_input_capture": true}}
+			config := captureTestConfig(t, source)
+			runCapture(t, config)
+			file := capturedPath(config, "claude", "files/bad.jsonl")
+			if damage == "resized" {
+				writeSourceFile(t, file, "damaged transcript")
+			} else if err := os.Remove(file); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.RemoveAll(dir); err != nil {
+				t.Fatal(err)
+			}
+			target := captureTarget{Host: currentHost(), Source: source.Name, Dir: filepath.Join(config.CaptureRoot, "host-a", source.Name)}
+			for range 2 {
+				result := catalog.IndexCapture(t.Context(), target, nil)
+				if result.Error != nil || len(result.UnavailableInputs) != 1 || result.Revision != "" || conversationMessages(t, catalog, "good") != 1 || conversationMessages(t, catalog, "bad") != 0 {
+					t.Fatalf("unavailable transcript blocked healthy input: %+v", result)
+				}
+			}
+			if countRows(t, catalog, "SELECT COUNT(*) FROM copy_evidence WHERE revision<>''") != 0 {
+				t.Fatal("partial inventory certified retained evidence")
+			}
+			if _, err := os.Stat(filepath.Join(target.Dir, "inputs")); !os.IsNotExist(err) {
+				t.Fatal("partial inventory was retained as a durable revision", err)
+			}
+		})
+	}
 	useHost(t, "host-a")
 	catalog, _ := testCatalog(t)
 	claude := filepath.Join(t.TempDir(), "claude")
 	file := filepath.Join(claude, "-p", "s1.jsonl")
 	writeSourceFile(t, file, claudeLine("s1", "u1", "one", "/p", 1))
+	child := filepath.Join(claude, "-p", "s1", "subagents", "agent-a.jsonl")
+	writeSourceFile(t, child, claudeLine("child", "a1", "child one", "/p", 1))
 	config := captureTestConfig(t, SourceConfig{Name: "claude", Kind: "claude", Path: claude, Account: "local", Enabled: true})
 	runCapture(t, config)
 	appendSourceFile(t, file, claudeLine("s1", "u2", "two", "/p", 2))
+	appendSourceFile(t, child, claudeLine("child", "a2", "child two", "/p", 2))
 	// The index holds no capture lock: a capture replacing the very file being
 	// parsed proceeds, and the index reads the version it opened whole.
 	var captured atomic.Bool
 	parseHook = func(string) {
 		if captured.CompareAndSwap(false, true) {
-			if summary := runCapture(t, config); !summary.OK || captureResult(t, summary, "claude").FilesCopied != 1 {
+			if summary := runCapture(t, config); !summary.OK || captureResult(t, summary, "claude").FilesCopied != 2 {
 				t.Errorf("capture during an index: %#v", summary)
 			}
 		}
 	}
 	t.Cleanup(func() { parseHook = nil })
 	indexCaptures(t, catalog, config.CaptureRoot, "host-a")
-	if !captured.Load() || conversationMessages(t, catalog, "s1") != 1 {
+	if !captured.Load() || conversationMessages(t, catalog, "s1") != 1 || conversationMessages(t, catalog, "s1:subagent:agent-a") != 1 {
 		t.Fatalf("index during a capture: %d messages", conversationMessages(t, catalog, "s1"))
 	}
 	// It recorded the version it read, so the replacement is parsed next.
-	if result := indexCaptures(t, catalog, config.CaptureRoot, "host-a")[0]; result.Parsed != 1 || conversationMessages(t, catalog, "s1") != 2 {
+	if result := indexCaptures(t, catalog, config.CaptureRoot, "host-a")[0]; result.Parsed != 2 || conversationMessages(t, catalog, "s1") != 2 || conversationMessages(t, catalog, "s1:subagent:agent-a") != 2 {
 		t.Fatalf("after the capture: %#v, %d messages", result, conversationMessages(t, catalog, "s1"))
 	}
 }
@@ -872,7 +960,7 @@ func testIndexTL1CaptureWithoutTheOriginalPaths(t *testing.T, file string) {
 		installation = database
 	}
 	writeSourceFile(t, registry, string(data))
-	config := captureTestConfig(t, SourceConfig{Name: "tl1", Kind: "tl1", Path: registry, Account: "local", Enabled: true})
+	config := captureTestConfig(t, SourceConfig{Name: "tl1", Kind: "tl1", Path: registry, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}})
 	if summary := runCapture(t, config); !summary.OK {
 		t.Fatalf("capture: %+v", summary)
 	}
@@ -921,7 +1009,7 @@ func TestIndexTL1CaptureStoresAnalysisFromTheCapture(t *testing.T) {
 	data, _ := json.Marshal(map[string]any{"installations": []map[string]string{{"installation_id": "abc123", "db_path": database,
 		"config_path": configPath, "code_repo": repository, "transcripts_dir": transcripts, "project_name": "project"}}})
 	writeSourceFile(t, registry, string(data))
-	config := captureTestConfig(t, SourceConfig{Name: "tl1", Kind: "tl1", Path: registry, Account: "local", Enabled: true})
+	config := captureTestConfig(t, SourceConfig{Name: "tl1", Kind: "tl1", Path: registry, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}})
 	if summary := runCapture(t, config); !summary.OK {
 		t.Fatalf("capture: %+v", summary)
 	}
@@ -1024,7 +1112,9 @@ func TestIndexAPIRunsInBackground(t *testing.T) {
 	if code, _ := call(http.MethodPost, `{"host":"nobody"}`); code != http.StatusBadRequest {
 		t.Fatalf("unknown host: %d", code)
 	}
-	server.ingestMu.Lock()
+	if !server.ingestMu.TryLock() {
+		t.Fatal("could not acquire ingest coordinator")
+	}
 	if code, _ := call(http.MethodPost, `{}`); code != http.StatusConflict {
 		t.Fatalf("index during a sync: %d", code)
 	}
@@ -1345,26 +1435,32 @@ func TestSourcePlanBoundsDiscoveryAndRechecksReadVersions(t *testing.T) {
 	root := t.TempDir()
 	first := filepath.Join(root, "rollout-first.jsonl")
 	writeSourceFile(t, first, codexLines("planned-first", 1))
-	source := SourceConfig{Name: "codex", Kind: "codex", Path: root, Account: "local", Enabled: true}
+	source := SourceConfig{Name: "codex", Kind: "codex", Path: root, Account: "local", Enabled: true, Options: map[string]any{"retained_input_capture": true}}
 	adapter, err := MakeAdapter(source)
 	if err != nil {
 		t.Fatal(err)
 	}
 	parses := countParses(t)
+	input, err := catalog.acquireRetainedInput(t.Context(), adapter, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	adapter = input.Adapter
 	plan, err := catalog.prepareSourcePlan(t.Context(), adapter)
 	if err != nil || parses.Load() != 0 || plan.needed != 1 || plan.size == nil || plan.size.Total <= 0 {
 		t.Fatalf("planning parsed input or lost its size: plan=%+v err=%v", plan, err)
 	}
 	before := plan.size.Total
-	// Membership is fixed, but an existing input's actual read version wins over
-	// metadata from discovery. A later source scan picks up the new file.
+	// Both membership and bytes are fixed by acquisition. A later acquisition
+	// picks up the append and the newly discovered file.
 	writeSourceFile(t, filepath.Join(root, "rollout-later.jsonl"), codexLines("planned-later", 1))
 	appendSourceFile(t, first, `{"type":"event_msg","timestamp":"2026-09-01T01:00:00Z","payload":{"type":"agent_message","message":"reply"}}`+"\n")
 	result := catalog.IngestContext(withIngestMode(t.Context(), ingestMode{plan: plan}), adapter, nil)
-	if result.Error != nil || parses.Load() != 1 || result.Processed != 1 || conversationMessages(t, catalog, "planned-first") != 2 || plan.size.Total <= before {
+	if result.Error != nil || parses.Load() != 1 || result.Processed != 1 || conversationMessages(t, catalog, "planned-first") != 1 || plan.size.Total != before {
 		t.Fatalf("plan was rediscovered or its read version was stale: result=%+v parses=%d size=%+v", result, parses.Load(), plan.size)
 	}
-	if result = ingestSource(t, catalog, source); result.Error != nil || result.Parsed != 1 || conversationMessages(t, catalog, "planned-later") != 1 {
+	if result = ingestSource(t, catalog, source); result.Error != nil || result.Parsed != 2 || conversationMessages(t, catalog, "planned-later") != 1 || conversationMessages(t, catalog, "planned-first") != 2 {
 		t.Fatalf("later input was lost: %+v", result)
 	}
 }

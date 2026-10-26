@@ -62,7 +62,7 @@ func beginSQLiteRecordSource(ctx context.Context, root string, source SourceConf
 	if e != nil {
 		return fail(e)
 	}
-	if m.Version != 0 && (m.Host.ID != session.host.ID || m.Source.Name != source.Name || m.Source.Kind != source.Kind || m.Source.Path != source.Path || m.Source.Account != source.Account) {
+	if !m.acceptsSource(session.host, source) {
 		return fail(errors.New("SQLite capture source identity changed; choose a separate source name"))
 	}
 	c := &sourceCapture{ctx: ctx, dir: dir, session: session, source: source, manifest: m, files: map[string]*capturedFile{}, snapshots: map[string]*capturedSnapshot{}}
@@ -185,6 +185,13 @@ func runSQLiteRecordsCLI(config Config, args []string) error {
 		if len(args) != 3 {
 			return errors.New("usage: pharos sqlite-records replay HOST SOURCE")
 		}
+		// The running service uses this same catalog-wide ingest lease. Take
+		// it before opening the catalog or publishing any reader pins.
+		ingest, e := lockCatalogIngest(config.CatalogPath)
+		if e != nil {
+			return e
+		}
+		defer ingest.Close()
 		reader, close, e := openSQLiteReplay(context.Background(), target)
 		if e != nil {
 			return e
@@ -262,7 +269,7 @@ func runSQLiteRecordsCLI(config Config, args []string) error {
 			}
 		}
 		partials, _ := os.ReadDir(filepath.Join(c.dir, recordDir, "partial"))
-		return printJSON(map[string]any{"version": recordFormat, "writer": recordWriter, "revisions": len(revs), "coverage": sqliteCoverageForStatus(c.manifest), "active_pin_owners": owners, "pinned_bytes": bytes, "partial_acquisitions": len(partials), "acquisition_allowances": pins.Gates, "automatic_cutover": "gated; sqlite_record_capture is opt-in"})
+		return printJSON(map[string]any{"version": recordFormat, "writer": recordWriter, "revisions": len(revs), "coverage": sqliteCoverageForStatus(c.manifest), "active_pin_owners": owners, "reader_cleanup_pending": pins.pendingReaders, "pinned_bytes": bytes, "partial_acquisitions": len(partials), "acquisition_allowances": pins.Gates, "native_snapshot_pauses": pins.NativePauses, "automatic_cutover": "gated; sqlite_record_capture is opt-in"})
 	case "pin":
 		if len(args) != 5 {
 			return errors.New("usage: pharos sqlite-records pin HOST SOURCE OWNER RETAINED_PATH")

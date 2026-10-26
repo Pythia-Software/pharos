@@ -35,14 +35,15 @@ type automaticSync struct {
 }
 
 type syncUnit struct {
-	ID      string       `json:"id"`
-	Parts   []sourcePart `json:"-"`
-	Changed bool         `json:"changed"`
-	Bytes   int64        `json:"bytes"`
-	Version int64        `json:"version"`
-	Source  SourceConfig `json:"-"`
-	Host    string       `json:"host,omitempty"`
-	Reader  Adapter      `json:"-"`
+	ID      string           `json:"id"`
+	Parts   []sourcePart     `json:"-"`
+	Changed bool             `json:"changed"`
+	Bytes   int64            `json:"bytes"`
+	Version int64            `json:"version"`
+	Source  SourceConfig     `json:"-"`
+	Host    string           `json:"host,omitempty"`
+	Reader  Adapter          `json:"-"`
+	Record  *WorkspaceRecord `json:"-"`
 }
 
 type preparedSyncSource struct {
@@ -51,11 +52,19 @@ type preparedSyncSource struct {
 	preflight string
 	skipped   bool
 	err       error
+	close     func()
+	progress  ProgressFunc
 }
 
 // Discover every selected source before reading transcripts. The retained
 // inventory is the execution plan, so estimation adds no second filesystem walk.
 func (s *Server) prepareSyncSource(ctx context.Context, source SourceConfig, p *preparedSyncSource) {
+	input, err := s.Catalog.acquireRetainedInput(ctx, p.adapter, p.progress)
+	if err != nil {
+		p.err = err
+		return
+	}
+	p.adapter, p.close = input.Adapter, input.Close
 	setAdapterContext(p.adapter, ctx)
 	if isConductorSource(source.Kind) {
 		p.preflight, p.err = conductorPreflight(p.adapter)
@@ -77,12 +86,16 @@ func (s *Server) prepareSyncSource(ctx context.Context, source SourceConfig, p *
 			}
 		}
 		if p.preflight == previous && current {
-			p.skipped = true
+			p.err = s.Catalog.recordInputIndexed(currentHost().ID, source.Name, "")
+			p.skipped = p.err == nil
 			return
 		}
 	}
 	_ = s.Catalog.registerHost(currentHost(), "")
 	p.plan, p.err = s.Catalog.prepareSourcePlan(withIngestMode(ctx, ingestMode{automatic: true}), p.adapter)
+	if p.err != nil {
+		_ = s.Catalog.recordInputAcquisition(currentHost().ID, source, "", p.err)
+	}
 }
 
 func (unit syncUnit) hostID() string {
@@ -146,7 +159,7 @@ func (s *Server) autoSources(settings syncSettings) []SourceConfig {
 func syncSourceChoices(sources []SourceConfig) []map[string]any {
 	choices := make([]map[string]any, 0, len(sources))
 	for _, source := range sources {
-		choices = append(choices, map[string]any{"name": source.Name, "kind": source.Kind, "account": source.Account, "enabled": source.Enabled})
+		choices = append(choices, map[string]any{"name": source.Name, "kind": source.Kind, "account": source.Account, "enabled": source.Enabled, "preservation_mode": preservationMode(source)})
 	}
 	return choices
 }
@@ -209,6 +222,9 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 		return false
 	}
 	ctx, cancel := context.WithCancel(parent)
+	mode := modeOf(ctx)
+	mode.automatic = !manual
+	ctx = withIngestMode(ctx, mode)
 	done := make(chan struct{})
 	if !manual {
 		s.auto.cancel, s.auto.done = cancel, done
@@ -253,6 +269,13 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 	ctx = withOperationForecast(ctx, op)
 	op.add("discovery", "incremental-discovery-v1", "Discover selected sources", workFeatures{}, false)
 	prepared := make([]preparedSyncSource, len(sources))
+	defer func() {
+		for _, p := range prepared {
+			if p.close != nil {
+				p.close()
+			}
+		}
+	}()
 	for index, source := range sources {
 		prepared[index].adapter, prepared[index].err = syncAdapter(source)
 		model := source.Kind
@@ -276,6 +299,10 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 		workMeter.model = "discovery-v1:" + source.Kind
 		workMeter.report(activityWork{Phase: "discovering inputs", Source: source.Name})
 		p := &prepared[index]
+		p.progress = func(phase string, _, _, _, _, _ int) {
+			s.updateRun(run.ID, func(run *SyncRun) { run.Phase = phase; run.CurrentSource = source.Name })
+			workMeter.report(activityWork{Phase: phase, Source: source.Name})
+		}
 		if p.err == nil {
 			s.prepareSyncSource(ctx, source, p)
 		}
@@ -318,8 +345,14 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 			run.CurrentSource, run.Phase = source.Name, "checking"
 			run.CompletedSources, run.InputsChecked = index, 0
 		})
+		if errors.Is(err, errCaptureBusy) {
+			results = append(results, IngestResult{Source: source.Name, Host: currentHost().ID, Pending: true, Deferred: true})
+			op.end("source:"+source.Name, false)
+			continue
+		}
 		if err != nil {
 			failure = err.Error()
+			results = append(results, IngestResult{Source: source.Name, Host: currentHost().ID, Pending: true, Error: err.Error(), Preservation: preservationMode(source)})
 			s.Catalog.recordAutomaticCheck(source.Name, err)
 			op.end("source:"+source.Name, false)
 			continue
@@ -358,7 +391,9 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 				}
 			}
 		}, discovered: func(parts []sourcePart, changed bool) {
-			pool.consider(unitOf(source, parts, changed))
+			unit := unitOf(adapter.Config(), parts, changed)
+			unit.Reader = adapter
+			pool.consider(unit)
 			checked++
 			// This visits the retained inventory; it does not walk the source again.
 			if checked == 1 || checked%100 == 0 {
@@ -387,7 +422,10 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 		if result.Error != nil {
 			failure = result.Error
 		}
-		completed := result.Error == nil && ctx.Err() == nil
+		if result.Deferred {
+			continue
+		}
+		completed := result.Error == nil && !result.Pending && ctx.Err() == nil
 		stamp := now()
 		_, err = s.Catalog.DB.Exec(`INSERT INTO automatic_source_states(host_id,source_name,attempted_at,succeeded_at,error,indexed_at,preflight,counts_json)
 			VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(host_id,source_name) DO UPDATE SET attempted_at=excluded.attempted_at,
@@ -454,6 +492,13 @@ func (s *Server) runIncremental(parent context.Context, settings syncSettings, m
 		state = "interrupted"
 	} else if failure != nil {
 		state = "failed"
+	} else {
+		for _, result := range results {
+			if result.Pending {
+				state = "deferred"
+				break
+			}
+		}
 	}
 	sample := meter.finish()
 	sample.RunID, sample.State, sample.ColdStart, sample.Audit = run.ID, state, cold, audit
@@ -634,9 +679,9 @@ func (s *Server) getIncrementalSync(w http.ResponseWriter, r *http.Request) {
 	for _, row := range states {
 		lastCapture := lastCaptureAt(s.Config().CaptureRoot, currentHost().ID, firstString(row["source_name"]))
 		row["last_capture_at"] = lastCapture
-		indexed, _ := parseTime(firstString(row["indexed_at"]))
-		captured, _ := parseTime(lastCapture)
-		row["pending_preservation"] = !indexed.IsZero() && indexed.After(captured)
+		preservation := s.Catalog.inputPreservationStatus(r.Context(), currentHost().ID, firstString(row["source_name"]))
+		row["preservation"] = preservation
+		row["pending_preservation"] = capturePending(firstString(row["indexed_at"]), lastCapture, preservation)
 	}
 	deferred, _ := queryMaps(s.Catalog.reader(), "SELECT * FROM sync_deferred WHERE generation>completed_generation")
 	coverage, _ := queryMaps(s.Catalog.reader(), "SELECT source_name,outcome,COUNT(*) units,MAX(checked_at) last_verification FROM sync_verifications WHERE host_id=? GROUP BY source_name,outcome", currentHost().ID)
@@ -651,6 +696,14 @@ func (s *Server) getIncrementalSync(w http.ResponseWriter, r *http.Request) {
 		pause = "Indexing"
 	}
 	writeJSON(w, map[string]any{"settings": settings, "sources": syncSourceChoices(s.autoSources(settings)), "available_sources": syncSourceChoices(s.autoSources(syncSettings{})), "source_states": states, "history": samples, "statistics": syncStatistics(samples, settings.Interval), "pause_reason": pause, "busy": s.syncActive() || s.captureActive(), "recovery_jobs": jobs, "deferred": deferred, "coverage": coverage, "issues": issues, "measurement_limits": syncMeasurementLimits, "forecast_accuracy": forecastAccuracy, "forecast_runs": forecastRuns}, 200)
+}
+
+// capturePending is the Sources table's "Needs capture": the source was indexed
+// after its last capture, or an opted-in acquisition has inputs not yet indexed.
+func capturePending(indexedAt, lastCapture string, preservation map[string]any) bool {
+	indexed, _ := parseTime(indexedAt)
+	captured, _ := parseTime(lastCapture)
+	return !indexed.IsZero() && indexed.After(captured) || preservation["pending_newer_inputs"] == true
 }
 
 func lastCaptureAt(root, host, source string) string {

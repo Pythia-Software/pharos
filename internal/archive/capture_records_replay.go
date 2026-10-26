@@ -268,6 +268,7 @@ func sourceCaptureForTarget(ctx context.Context, target captureTarget) (*sourceC
 		return nil, errors.New("capture identity mismatch")
 	}
 	c := &sourceCapture{ctx: ctx, dir: target.Dir, manifest: m, session: &captureSession{host: target.Host}, source: SourceConfig{Name: m.Source.Name, Kind: m.Source.Kind, Path: m.Source.Path, Account: m.Source.Account}, files: map[string]*capturedFile{}, snapshots: map[string]*capturedSnapshot{}}
+	c.source.Options = map[string]any{"sqlite_record_capture": m.SQLiteRecordCapture}
 	for _, f := range m.Files {
 		c.files[f.Captured] = f
 	}
@@ -278,6 +279,12 @@ func sourceCaptureForTarget(ctx context.Context, target captureTarget) (*sourceC
 }
 
 type sqliteReplayAdapter struct {
+	// History verification confines materialization to its reviewed scratch volume
+	// and parses Conductor one bounded session at a time. Ordinary replay keeps
+	// its existing defaults.
+	scratchRoot    string
+	maxEntityBytes int64
+	entityGap      func(string)
 	baseAdapter
 	store     *recordStore
 	revisions []retainedSQLiteRevision
@@ -295,6 +302,9 @@ func (a *sqliteReplayAdapter) ExtractorVersion() string {
 	ordinary, e := MakeAdapter(a.config)
 	if e != nil {
 		return recordWriter
+	}
+	if v, ok := ordinary.(partialAdapter); ok {
+		return recordWriter + ":" + v.partExtractor()
 	}
 	if v, ok := ordinary.(VersionedAdapter); ok {
 		return recordWriter + ":" + v.ExtractorVersion()
@@ -314,6 +324,9 @@ func (a *sqliteReplayAdapter) Discover(emit func(WorkspaceRecord) error) error {
 			other := a.revisions[j].Revision
 			if other.Database != v.Database || other.Observed.version() != v.Observed.version() {
 				break
+			}
+			if other.Source.Account != v.Source.Account {
+				continue
 			}
 			conflict := false
 			if isConductorSource(v.Source.Kind) {
@@ -343,7 +356,7 @@ func (a *sqliteReplayAdapter) replay(r retainedSQLiteRevision, emit func(Workspa
 	if v.Host.ID != a.view.host.ID || v.Source.Name != a.config.Name {
 		return errors.New("SQLite revision origin mismatch")
 	}
-	dir, e := os.MkdirTemp("", "pharos-record-replay-")
+	dir, e := os.MkdirTemp(a.scratchRoot, "pharos-record-replay-")
 	if e != nil {
 		return e
 	}
@@ -433,6 +446,7 @@ func (a *sqliteReplayAdapter) replay(r retainedSQLiteRevision, emit func(Workspa
 		return errors.New("unmapped source root")
 	}
 	config := a.config
+	config.Name, config.Kind, config.Account = v.Source.Name, v.Source.Kind, v.Source.Account
 	config.Path = root
 	adapter, e := MakeAdapter(config)
 	if e != nil {
@@ -447,7 +461,41 @@ func (a *sqliteReplayAdapter) replay(r retainedSQLiteRevision, emit func(Workspa
 			conductor.selected = map[string]bool{strings.TrimPrefix(v.Entity, "session:"): true}
 		}
 	}
-	if e = adapter.Discover(func(record WorkspaceRecord) error {
+	discover := adapter.Discover
+	if conductor, ok := adapter.(*conductorAdapter); ok && a.maxEntityBytes > 0 && !strings.HasPrefix(v.Entity, "session:") {
+		discover = func(emit func(WorkspaceRecord) error) error {
+			ids := make([]string, 0, len(v.ParserInputs))
+			for id := range v.ParserInputs {
+				ids = append(ids, id)
+			}
+			sort.Strings(ids)
+			if len(ids) == 0 {
+				return errors.New("bounded historical replay needs retained session parser inputs")
+			}
+			for _, id := range ids {
+				var table recordTable
+				if err := a.store.readJSON(v.ParserInputs[id], &table); err != nil {
+					return err
+				}
+				var bytes int64
+				for _, chunk := range table.Chunks {
+					bytes += chunk.Length
+				}
+				if bytes > a.maxEntityBytes {
+					if a.entityGap != nil {
+						a.entityGap(id)
+					}
+					continue
+				}
+				conductor.selected = map[string]bool{id: true}
+				if err := conductor.Discover(emit); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}
+	if e = discover(func(record WorkspaceRecord) error {
 		record.EvidenceIdentity = retainedSQLiteIdentity(r)
 		if isConductorSource(v.Source.Kind) {
 			identity, ok := v.EntityIdentities[record.SourceID]
@@ -475,7 +523,7 @@ func (a *sqliteReplayAdapter) replay(r retainedSQLiteRevision, emit func(Workspa
 // openSQLiteReplay pins committed revisions while holding the capture lock,
 // then releases it before decompression, parsing, catalog writes or uploads.
 func openSQLiteReplay(ctx context.Context, target captureTarget) (*sqliteReplayAdapter, func(), error) {
-	lock, e := lockCaptureTarget(ctx, target.Dir)
+	lock, e := lockCaptureReader(ctx, target.Dir)
 	if e != nil {
 		return nil, nil, e
 	}
@@ -490,7 +538,6 @@ func openSQLiteReplay(ctx context.Context, target captureTarget) (*sqliteReplayA
 		lock.Close()
 		return nil, nil, e
 	}
-	owner := "reader:" + randomToken()
 	allRefs := []recordObject{}
 	for _, r := range revs {
 		allRefs = append(allRefs, r.Ref)
@@ -498,22 +545,15 @@ func openSQLiteReplay(ctx context.Context, target captureTarget) (*sqliteReplayA
 			allRefs = append(allRefs, other.Ref)
 		}
 	}
-	for _, ref := range allRefs {
-		if e = s.pinRevision(owner, ref); e != nil {
-			lock.Close()
-			return nil, nil, e
-		}
+	close, e := c.pinReader(allRefs)
+	if e != nil {
+		lock.Close()
+		return nil, nil, e
 	}
 	lock.Close()
 	config := c.source
 	config.Path = target.Dir
 	adapter := &sqliteReplayAdapter{baseAdapter: baseAdapter{config: config, capability: "retrieval-only", view: newCaptureView(target.Host, target.Dir, c.manifest)}, store: s, revisions: revs}
-	close := func() {
-		if l, e := lockCaptureTarget(context.Background(), target.Dir); e == nil {
-			defer l.Close()
-			_ = releasePreservationOwner(target.Dir, owner)
-		}
-	}
 	return adapter, close, nil
 }
 

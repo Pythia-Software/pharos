@@ -1,6 +1,24 @@
 # 2. Preserve evidence before indexing
 
 
+## Implementation update (2026-10-23)
+
+The shared acquisition boundary and source matrix are implemented in
+[`incremental-sync.md`](incremental-sync.md#source-acquisition-rollout). Filesystem
+acquisition is experimental and requires `retained_input_capture = true` until
+its inventory retention and backup path counts are bounded; default indexing
+continues to read live inputs. Opt-in imports preserve before parsing; Codex SQLite naming dependencies have a gated
+logical acquisition path. Direct/API/CLI and retained indexing share the
+contract. Metadata backfills read existing captures or same-host live inputs
+without creating additional captures; offline rebuilds use retained evidence
+only. SQLite logical
+group acquisition is available for TL1/Antigravity with `sqlite_record_capture`;
+Conductor retains its candidate/session implementation. SQLite defaults remain
+unchanged pending the documented performance gates. TL1/Antigravity/Codex metadata still need
+candidate-level acquisition before default enablement. Logical group verification uses pinned evidence and isolated comparisons. This staged change does not close the all-source rollout
+or authorize real-library validation/backfill. The previous completed prerequisite
+was committed as `ed47b7c` before starting this implementation.
+
 ## Implemented prerequisite API (2026-10-23)
 
 Handoff 1 now provides [SQLite row evidence v1](sqlite-records.md). Use that

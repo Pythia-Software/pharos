@@ -35,6 +35,8 @@ func TestHarnessVersionsFromTranscripts(t *testing.T) {
 
 func TestHarnessBackfillAndAlias(t *testing.T) {
 	c, _ := testCatalog(t)
+	file := filepath.Join(t.TempDir(), "rollout.jsonl")
+	writeSourceFile(t, file, `{"type":"session_meta","payload":{"id":"x","originator":"codex_exec","cli_version":"0.155.0"}}`+"\n")
 	for _, statement := range []string{
 		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('wc','claude','local','c','Claude','2026-09-01'),('ww','conductor','local','w','Conductor','2026-09-01')`,
 		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness) VALUES('c','wc','claude','local','c','claude-code'),('w','ww','claude','local','conductor:w','conductor')`,
@@ -44,6 +46,10 @@ func TestHarnessBackfillAndAlias(t *testing.T) {
 		if _, err := c.DB.Exec(statement); err != nil {
 			t.Fatal(err)
 		}
+	}
+	execSQL(t, c.DB, `INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('wx','codex','local','x','Codex','2026-09-01')`)
+	if _, err := c.DB.Exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,origin,origin_host_id) VALUES('x','wx','codex','local','x',?,?)`, file, currentHost().ID); err != nil {
+		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
 		if err := c.backfillHarnessVersions(); err != nil {
@@ -59,6 +65,12 @@ func TestHarnessBackfillAndAlias(t *testing.T) {
 	}
 	if firstString(rows[0]["harness"]) != "claude-code/cli" || firstString(rows[0]["harness_version_first"]) != "2.1.1" || firstString(rows[0]["harness_version_last"]) != "2.1.2" || firstString(rows[1]["harness_version_last"]) != "2.1.2" || firstString(rows[1]["harness_version_source"]) != "alias" {
 		t.Fatalf("backfill/alias: %#v", rows)
+	}
+	if firstString(rows[2]["harness"]) != "codex/codex_exec" || firstString(rows[2]["harness_version_last"]) != "0.155.0" {
+		t.Fatalf("live Codex metadata was not backfilled: %#v", rows[2])
+	}
+	if _, err := os.Stat(c.captureRootPath()); !os.IsNotExist(err) {
+		t.Fatalf("metadata backfill created retained transcripts without opt-in: %v", err)
 	}
 }
 

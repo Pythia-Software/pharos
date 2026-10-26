@@ -6,6 +6,7 @@ import (
 
 type sqliteAcquisitionKey struct{}
 type sqliteAcquisitionBoundary struct {
+	catalog    *Catalog
 	root       string
 	reconciled map[string]bool
 	identities map[string]map[string]string
@@ -23,7 +24,7 @@ func (c *Catalog) withSQLiteAcquisition(ctx context.Context, adapter Adapter) co
 		boundary = plan.sqliteAcquisition
 	}
 	if boundary == nil {
-		boundary = &sqliteAcquisitionBoundary{root: c.captureRootPath(), reconciled: map[string]bool{}, identities: map[string]map[string]string{}}
+		boundary = &sqliteAcquisitionBoundary{catalog: c, root: c.captureRootPath(), reconciled: map[string]bool{}, identities: map[string]map[string]string{}}
 	}
 	return context.WithValue(ctx, sqliteAcquisitionKey{}, boundary)
 }
@@ -59,22 +60,27 @@ func acquireConductorSession(ctx context.Context, root string, source SourceConf
 	if e = c.commit(false); e != nil {
 		return e
 	}
-	owner := "reader:" + randomToken()
-	if e = s.pinRevision(owner, ref); e != nil {
+	closeReader, e := c.pinReader([]recordObject{ref})
+	if e != nil {
 		return e
 	}
+	defer closeReader()
 	v, e := s.loadRevision(ref)
 	if e != nil {
 		return e
 	}
 	session.Close()
 	closed = true
-	defer func() {
-		if lock, e := lockCaptureTarget(context.Background(), dir); e == nil {
-			defer lock.Close()
-			_ = releasePreservationOwner(dir, owner)
-		}
-	}()
 	reader := &sqliteReplayAdapter{baseAdapter: baseAdapter{ctx: ctx, config: source, capability: "retrieval-only", view: newCaptureView(session.host, dir, m)}, store: s}
-	return reader.replay(retainedSQLiteRevision{Ref: ref, Revision: v}, emit)
+	boundary, _ := ctx.Value(sqliteAcquisitionKey{}).(*sqliteAcquisitionBoundary)
+	if boundary != nil && boundary.catalog != nil {
+		if e = boundary.catalog.recordInputAcquisition(session.host.ID, source, ref.Hash, nil); e != nil {
+			return e
+		}
+	}
+	e = reader.replay(retainedSQLiteRevision{Ref: ref, Revision: v}, emit)
+	if e == nil && boundary != nil && boundary.catalog != nil {
+		e = boundary.catalog.recordInputIndexed(session.host.ID, source.Name, ref.Hash)
+	}
+	return e
 }

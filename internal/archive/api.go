@@ -58,7 +58,7 @@ type Server struct {
 	Catalog  *Catalog
 	config   Config
 	configMu sync.RWMutex
-	ingestMu sync.Mutex
+	ingestMu ingestCoordinator
 	// ingestStop stops the run holding ingestMu.
 	ingestStop ingestStopper
 	runsMu     sync.RWMutex
@@ -81,6 +81,7 @@ func NewServer(config Config, catalog *Catalog) *Server {
 	server := &Server{Catalog: catalog, config: config, runs: []*SyncRun{}, queryMetadata: make(chan struct{}, 1)}
 	server.life.init()
 	if catalog != nil {
+		server.ingestMu.path = catalog.Path
 		catalog.background = server.spawn
 		catalog.RepositoryAliases = config.RepositoryAliases
 		catalog.RepositorySeparate = config.RepositorySeparate
@@ -817,6 +818,8 @@ func (s *Server) sourceInventory() (map[string]any, error) {
 			stale = value
 		}
 		item := map[string]any{"name": source.Name, "kind": source.Kind, "account": source.Account, "path": nilIfEmpty(source.Path), "path_status": pathStatus, "enabled": source.Enabled, "capability": capability, "coverage": coverage, "last_attempt_at": state["last_attempt_at"], "last_success_at": state["last_success_at"], "pending_count": integer(state["pending_count"]), "error": state["error"], "stale": stale, "host_id": host.ID, "host_label": host.Label}
+		item["preservation_mode"] = preservationMode(source)
+		item["preservation"] = s.Catalog.inputPreservationStatus(context.Background(), host.ID, source.Name)
 		items = append(items, item)
 		if source.Enabled {
 			enabled++

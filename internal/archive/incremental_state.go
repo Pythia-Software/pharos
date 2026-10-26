@@ -3,9 +3,61 @@ package archive
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
+	"sync"
+	"syscall"
 )
+
+var errCatalogIngestBusy = errors.New("source indexing is already running for this catalog; retry when it finishes")
+
+// The service's ingest mutex also participates in CLI replay coordination.
+// Keep the file lease for the complete ingest, before any capture/DB locks.
+type ingestCoordinator struct {
+	mu    sync.Mutex
+	path  string
+	lease *os.File
+}
+
+func lockCatalogIngest(path string) (*os.File, error) {
+	lease, err := os.OpenFile(canonical(path)+".ingest.lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err = syscall.Flock(int(lease.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lease.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, errCatalogIngestBusy
+		}
+		return nil, err
+	}
+	return lease, nil
+}
+
+func (m *ingestCoordinator) TryLock() bool {
+	if !m.mu.TryLock() {
+		return false
+	}
+	if m.path != "" {
+		lease, err := lockCatalogIngest(m.path)
+		if err != nil {
+			m.mu.Unlock()
+			return false
+		}
+		m.lease = lease
+	}
+	return true
+}
+
+func (m *ingestCoordinator) Unlock() {
+	if m.lease != nil {
+		m.lease.Close()
+		m.lease = nil
+	}
+	m.mu.Unlock()
+}
 
 const conversationDerivationVersion = "sessions-ledger-instructions-v2-effort"
 

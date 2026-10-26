@@ -425,6 +425,22 @@ full signed installation test.
 
 ## Upgrading an existing library
 
+The preservation update upgrades catalog schema 17 to 19 and writes capture
+manifest version 4. Earlier builds refuse these versions. Take and verify a backup of
+both the catalog and captures before upgrading: rollback requires restoring
+the pre-upgrade catalog and capture tree together, not just replacing the app.
+New automatic retained-input options remain off unless explicitly configured.
+SQLite row export during Capture requires `sqlite_record_capture = true`.
+
+Cloud archives containing shared retained inodes use manifest version 2 and
+hard-link entries. This build reads versions 1 and 2; earlier builds cannot
+restore version 2. Keep the pre-upgrade backup for rollback. Local backup copies
+and cloud restores on filesystems without hard links use ordinary files.
+
+Before release, validate an upgrade and rollback against a separately reviewed
+copy of a real library, including disk budget and destination. Fixture tests do
+not substitute for that rollout validation; no production backfill is implied.
+
 A new version can derive more from the transcripts a library already holds.
 When it opens a catalog indexed by an older version, Pharos includes the
 required upgrade in **Capture & index**, in the drive panel and on Settings →

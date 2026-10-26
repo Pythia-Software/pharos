@@ -294,6 +294,7 @@ func (a *conductorAdapter) database(path string, selected map[string]bool, uncha
 			}
 		}
 		if boundary, ok := a.context().Value(sqliteAcquisitionKey{}).(*sqliteAcquisitionBoundary); ok && a.view == nil {
+			reportWork(a.context(), "preserving inputs", "session", 0, 1)
 			if err := acquireConductorSession(a.context(), boundary.root, a.config, path, sid, func(record WorkspaceRecord) error { return emit(&record, parts) }); err != nil {
 				return err
 			}

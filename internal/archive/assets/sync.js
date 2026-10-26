@@ -42,6 +42,11 @@
     if (rounded < 3600) return `${Math.floor(rounded / 60)}m${rounded % 60 ? ` ${rounded % 60}s` : ''}`;
     return `${Math.floor(rounded / 3600)}h${Math.floor(rounded % 3600 / 60) ? ` ${Math.floor(rounded % 3600 / 60)}m` : ''}`;
   };
+  const preservationState = value => {
+    if (value?.pending_newer_inputs) return 'pending';
+    if (value?.status === 'indexed') return 'indexed';
+    return 'untracked';
+  };
   const memory = value => value == null || !Number.isFinite(Number(value)) ? '—' : Number(value) >= 1073741824
     ? `${(Number(value) / 1073741824).toFixed(1)} GiB` : `${number(Number(value) / 1048576)} MiB`;
   const percent = value => value == null || !Number.isFinite(Number(value)) ? '—' : `${Number(value).toLocaleString(undefined, {maximumFractionDigits: 1})}%`;
@@ -247,7 +252,11 @@
       };
       const sourceLabel = node('label', ''); sourceLabel.append(choice, document.createTextNode(` ${source.name}`)); sources.append(sourceLabel);
     }
-    preferences.append(sources, node('p', 'Automatic indexing makes new conversations searchable without capturing them. Manual Index changes also refreshes library-wide analysis. Capture & index also keeps a copy of the source files.', 'muted'));
+    for (const source of status.available_sources || []) {
+      if (source.preservation_mode === 'filesystem-retained-sqlite-gated') preferences.append(node('p', `${source.name}: transcript preservation is enabled for file-only inputs. Sources with SQLite naming metadata await preservation validation.`, 'muted'));
+      if (source.preservation_mode === 'live-sqlite-rollout-gap') preferences.append(node('p', `${source.name}: live indexing continues; automatic source preservation awaits validation. Use Capture & index to preserve available inputs.`, 'muted'));
+    }
+    preferences.append(sources, node('p', 'Index changes reads live inputs by default. Input preservation is opt-in; use Capture & index to preserve available inputs. Manual indexing also refreshes library-wide analysis.', 'muted'));
     dashboard.insertBefore(preferences, document.getElementById('syncSourceTables'));
     const latest = status.history?.[0];
     if (settings.enabled && latest?.seconds > settings.interval_seconds) dashboard.insertBefore(node('p', 'Indexing changes takes longer than the selected interval. The next run starts after this one finishes.', 'badtext'), document.getElementById('syncDiagnosticTables'));
@@ -263,7 +272,11 @@
       line.append(resume); repairs.append(line);
     }
     for (const source of status.source_states || []) {
-      const line = node('p', `${source.source_name} `);
+      const preservation = source.preservation || {};
+      const state = preservationState(preservation);
+      if (state === 'untracked') continue;
+      const labels = {pending: preservation.error ? 'Acquisition failed; inputs remain pending' : 'Newer inputs pending', indexed: 'Latest retained acquisition indexed'};
+      const line = node('p', `${source.source_name} · ${labels[state]} `);
       line.append(button('Repair this source…', () => recovery('full', [source.source_name])));
       repairs.append(line);
     }
@@ -307,6 +320,6 @@
   window.addEventListener('pharos:route', refresh);
   window.pharosSync = {status: () => status, refresh, recovery, isBusy: () => Boolean(activeRun), issues: () => openIssues,
     // Pure helpers, for web/tests/unit/page/sync.test.mjs.
-    finishedRunsChanged, runningRun, format: {seconds, memory, when, number, percent}};
+    finishedRunsChanged, runningRun, preservationState, format: {seconds, memory, when, number, percent}};
   refresh();
 })();

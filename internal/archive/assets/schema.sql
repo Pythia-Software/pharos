@@ -1455,3 +1455,21 @@ CREATE TABLE IF NOT EXISTS source_evidence (
  revision TEXT NOT NULL,
  PRIMARY KEY(host_id,source_kind,source_account,entity)
 );
+
+-- Source acquisition and parsing are separate phases. Exact accepted copy
+-- identities remain in copy_evidence; these are operational summaries only.
+CREATE TABLE IF NOT EXISTS source_input_states (
+ host_id TEXT NOT NULL,
+ source_name TEXT NOT NULL,
+ preservation_mode TEXT NOT NULL,
+ acquired_revision TEXT,
+ acquired_at TEXT,
+ indexed_revision TEXT,
+ indexed_at TEXT,
+ pending INTEGER NOT NULL DEFAULT 1,
+ error TEXT,
+ PRIMARY KEY(host_id,source_name)
+);
+
+CREATE INDEX IF NOT EXISTS conversation_sightings_host_source
+ ON conversation_sightings(host_id,source_name,conversation_id,origin);

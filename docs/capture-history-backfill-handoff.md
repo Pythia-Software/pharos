@@ -1,6 +1,19 @@
 # 3. Backfill and verify historical capture coverage
 
 
+## Implementation (2026-10-26)
+
+The operator CLI, durable job/receipt contract, typed catalog recovery reader,
+selected-source native snapshot pauses, offline rebuild and comparison are
+implemented in [Historical preservation jobs](capture-history.md). The command
+uses a fixed offline cutoff and the existing SQLite evidence format/pins.
+Unknown historical dependency groups remain pinned and explicitly partial;
+missing conversations within an existing stronger workspace remain comparison
+gaps. Current acquisition, concurrent native rotations and destructive cleanup
+are not elected by this workflow. Catalog and cloud-backup behavior is retained.
+No real-library backfill has been run. Capture manifest version **4** protects
+the native-pause contract from earlier writers; catalog schema remains 19.
+
 ## Implemented prerequisite API (2026-10-23)
 
 Handoff 1 now provides [SQLite row evidence v1](sqlite-records.md). Use that
@@ -12,8 +25,8 @@ and catalog backups remain enabled. No real historical backfill has run.
 Use `preservation-pins.json` version 1, `sourceCapture.pinVersion`,
 `releasePreservationOwner`, and source acquisition allowances (`gate`/`ungate`)
 under the host capture flock. Pinning `files/...` first preserves immutable
-history, including at retention zero. Capture manifest version 2 and catalog
-schema 18 refuse incompatible writers. Do not use recovery IDs as leases.
+history, including at retention zero. Capture manifest version 4 and catalog
+schema 19 refuse incompatible writers. Do not use recovery IDs as leases.
 
 Committed input receipts are in `records/v1/receipts/`; they identify the exact
 retained path, input SHA-256 and verified revision. Cross-file/database closure
@@ -22,8 +35,8 @@ entity head alone do not certify historical closure. Do not pair an old database
 with today's dependency files. Missing/unknown historical groups remain pinned
 native inputs until the planner can resolve or report them. `sqlite-records
 status|verify|replay` provide inventory, integrity checks and ordinary-parser
-rebuild; `resolve` binds a legacy ordinal to an explicit revision. Persist job
-cursors and rollback plans separately; those are not implemented by this format.
+rebuild; `resolve` binds a legacy ordinal to an explicit revision. Job cursors and rollback plans live separately in `.history-backfill/jobs/`;
+they are not SQLite row-format receipts.
 
 
 Status: implementation handoff, not an instruction to run a migration on the

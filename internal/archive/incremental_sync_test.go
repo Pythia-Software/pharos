@@ -832,6 +832,36 @@ func TestSyncStatusExposesLowercaseSourceChoices(t *testing.T) {
 			t.Fatalf("%s does not match the Sync UI contract: %+v", key, choice)
 		}
 	}
+	// "Needs capture" still means indexed since the last capture, without the
+	// opt-in retained acquisition; a later capture clears it.
+	indexed := time.Now().UTC()
+	if _, err := server.Catalog.DB.Exec("INSERT INTO automatic_source_states(host_id,source_name,attempted_at,succeeded_at,indexed_at) VALUES(?,?,?,?,?)",
+		currentHost().ID, source.Name, indexed.Format(time.RFC3339Nano), indexed.Format(time.RFC3339Nano), indexed.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	pending := func() any {
+		t.Helper()
+		response := httptest.NewRecorder()
+		server.getIncrementalSync(response, httptest.NewRequest("GET", "/api/sync/status", nil))
+		var status struct {
+			SourceStates []map[string]any `json:"source_states"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &status); err != nil || len(status.SourceStates) != 1 {
+			t.Fatal(response.Body.String(), err)
+		}
+		return status.SourceStates[0]["pending_preservation"]
+	}
+	if pending() != true {
+		t.Fatal("a source indexed after its last capture is not flagged as needing capture")
+	}
+	config := server.Config()
+	config.Sources = []SourceConfig{source}
+	if run := runCapture(t, config); !run.OK {
+		t.Fatal(run)
+	}
+	if pending() != false {
+		t.Fatal("a capture after the index did not clear Needs capture")
+	}
 }
 
 func TestDeferredIdentityReconciliationHonorsCancellation(t *testing.T) {
@@ -908,5 +938,149 @@ func TestIncrementalDiscoversAllSourcesBeforeReadingAndRetainsForecasts(t *testi
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || len(result.Samples) != 1 || len(result.Samples[0].Forecasts) == 0 || result.Accuracy[automaticRunKind] == nil {
 		t.Fatalf("forecast evidence missing from history API: %s (%v)", response.Body.String(), err)
+	}
+}
+
+func TestAutomaticCaptureBusyDefersWithoutFailure(t *testing.T) {
+	useHost(t, "host-a")
+	source := stableCodexSource(t, 1)
+	source.Options = map[string]any{"retained_input_capture": true}
+	server := automaticTestServer(t, source)
+	lock, err := beginCapture(server.Config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !server.runAutomatic(t.Context(), syncSettings{Interval: 60}) {
+		t.Fatal("automatic tick was not admitted")
+	}
+	if countRows(t, server.Catalog, "SELECT COUNT(*) FROM automatic_source_states") != 0 || countRows(t, server.Catalog, "SELECT COUNT(*) FROM source_item_states") != 0 {
+		t.Fatal("capture contention advanced source state")
+	}
+	var encoded string
+	if err := server.Catalog.DB.QueryRow("SELECT sample_json FROM sync_history ORDER BY id DESC LIMIT 1").Scan(&encoded); err != nil {
+		t.Fatal(err)
+	}
+	var sample syncMeasurement
+	if err := json.Unmarshal([]byte(encoded), &sample); err != nil {
+		t.Fatal(err)
+	}
+	if sample.State != "deferred" || len(sample.SourceResults) != 1 || !sample.SourceResults[0].Deferred || sample.SourceResults[0].Error != nil {
+		t.Fatalf("contention was treated as failure: %+v", sample)
+	}
+	lock.Close()
+	if !server.runAutomatic(t.Context(), syncSettings{Interval: 60}) || conversationMessages(t, server.Catalog, "incremental-test") != 1 {
+		t.Fatal("pending input did not resume")
+	}
+}
+
+func TestUnchangedIngestDoesNotCertifyLegacyEvidence(t *testing.T) {
+	t.Run("live-planning-recovery", func(t *testing.T) {
+		useHost(t, "host-a")
+		source := stableCodexSource(t, 1)
+		server := automaticTestServer(t, source)
+		catalog := server.Catalog
+		file := readText(t, source.Path)
+		if err := os.Remove(source.Path); err != nil {
+			t.Fatal(err)
+		}
+		adapter, _ := MakeAdapter(source)
+		prepared := preparedSyncSource{adapter: adapter}
+		server.prepareSyncSource(t.Context(), source, &prepared)
+		if prepared.close != nil {
+			prepared.close()
+		}
+		if prepared.err == nil {
+			t.Fatal("missing live input did not fail planning")
+		}
+		if status := catalog.inputPreservationStatus(t.Context(), "host-a", source.Name); status["pending_newer_inputs"] != false {
+			t.Fatalf("live planning failure requested capture: %#v", status)
+		}
+		// Heal pending errors written by builds that treated every plan failure
+		// as an acquisition failure, including the unchanged ingest fast path.
+		writeSourceFile(t, source.Path, file)
+		for _, unchanged := range []bool{false, true} {
+			if _, err := catalog.DB.Exec(`INSERT INTO source_input_states(host_id,source_name,preservation_mode,pending,error) VALUES('host-a',?,'live-rollout-gap',1,'old planning error') ON CONFLICT(host_id,source_name) DO UPDATE SET pending=1,error=excluded.error`, source.Name); err != nil {
+				t.Fatal(err)
+			}
+			result := ingestSource(t, catalog, source)
+			if result.Error != nil || result.SkippedUnchanged != unchanged {
+				t.Fatal("successful live ingest", result)
+			}
+			status := catalog.inputPreservationStatus(t.Context(), "host-a", source.Name)
+			if status["pending_newer_inputs"] != false || status["error"] != nil {
+				t.Fatalf("successful ingest left stale capture status: %#v", status)
+			}
+		}
+		// Reading live data cannot acknowledge a different retained revision.
+		if _, err := catalog.DB.Exec(`UPDATE source_input_states SET acquired_revision='unindexed-evidence',pending=1 WHERE host_id='host-a' AND source_name=?`, source.Name); err != nil {
+			t.Fatal(err)
+		}
+		if result := ingestSource(t, catalog, source); result.Error != nil {
+			t.Fatal(result)
+		}
+		if status := catalog.inputPreservationStatus(t.Context(), "host-a", source.Name); status["pending_newer_inputs"] != true {
+			t.Fatalf("live index acknowledged unindexed retained evidence: %#v", status)
+		}
+	})
+	for _, reason := range []string{"force", "generation", "parser"} {
+		t.Run("legacy-reparse/"+reason, func(t *testing.T) {
+			useHost(t, "host-a")
+			source := stableCodexSource(t, 1)
+			catalog, _ := testCatalog(t)
+			ingestSource(t, catalog, source)
+			execSQL(t, catalog.DB, "UPDATE messages SET text='stale parser output' WHERE kind='message'")
+			source.Options = map[string]any{"retained_input_capture": true}
+			mode := ingestMode{force: reason == "force"}
+			if reason == "generation" {
+				if err := catalog.advanceSyncGeneration(t.Context(), "host-a", source.Name); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if reason == "parser" {
+				execTx(t, catalog.DB, "UPDATE source_item_states SET extractor='older-parser'", "UPDATE source_states SET index_version='older-parser'", "UPDATE source_record_states SET digest='older-parser:old'")
+			}
+			adapter, err := MakeAdapter(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := catalog.IngestContext(withIngestMode(t.Context(), mode), adapter, nil)
+			if result.Error != nil || result.Older != 0 || result.Workspaces != 1 || countRows(t, catalog, "SELECT COUNT(*) FROM copy_evidence") == 0 {
+				t.Fatal("legacy reparse was blocked", result)
+			}
+			if countRows(t, catalog, "SELECT COUNT(*) FROM messages WHERE text='stale parser output'") != 0 {
+				t.Fatal("legacy parser output survived reparse")
+			}
+		})
+	}
+	useHost(t, "host-a")
+	source := stableCodexSource(t, 1)
+	catalog, _ := testCatalog(t)
+	ingestSource(t, catalog, source)
+	execSQL(t, catalog.DB, "DELETE FROM copy_evidence")
+	result := ingestSource(t, catalog, source)
+	if !result.SkippedUnchanged || countRows(t, catalog, "SELECT COUNT(*) FROM copy_evidence") != 0 {
+		t.Fatalf("no-op certified historical content: %+v", result)
+	}
+	status := catalog.inputPreservationStatus(t.Context(), "host-a", source.Name)
+	if status["status"] != "untracked" || status["pending_newer_inputs"] != false {
+		t.Fatalf("ordinary live indexing claimed preservation or requested capture: %#v", status)
+	}
+	for _, key := range []string{"indexed_copies", "preserved_copies", "legacy_preservation_gaps"} {
+		if _, present := status[key]; present {
+			t.Fatalf("polling status included historical coverage %s: %#v", key, status)
+		}
+	}
+	source.Options = map[string]any{"retained_input_capture": true}
+	if err := catalog.recordInputAcquisition("host-a", source, "retained-revision", nil); err != nil {
+		t.Fatal(err)
+	}
+	if status := catalog.inputPreservationStatus(t.Context(), "host-a", source.Name); status["status"] != "acquired" || status["pending_newer_inputs"] != true {
+		t.Fatalf("missing pending acquisition: %#v", status)
+	}
+	if err := catalog.recordInputIndexed("host-a", source.Name, "retained-revision"); err != nil {
+		t.Fatal(err)
+	}
+	if status := catalog.inputPreservationStatus(t.Context(), "host-a", source.Name); status["status"] != "indexed" || status["pending_newer_inputs"] != false {
+		t.Fatalf("missing indexed acquisition: %#v", status)
 	}
 }

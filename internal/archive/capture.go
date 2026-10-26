@@ -38,7 +38,7 @@ import (
 // interrupted run (error, kill, unplug) leaves the previous state valid and the
 // next run resumes from the last manifest checkpoint.
 const (
-	captureManifestVersion = 2
+	captureManifestVersion = 4
 	captureManifestName    = "manifest.json"
 	captureHostName        = "host.json"
 	captureFilesDir        = "files"
@@ -63,17 +63,20 @@ var (
 )
 
 type captureManifest struct {
-	RecordCoverage map[string]sqliteCoverageStatus `json:"sqlite_record_coverage,omitempty"`
-	Version        int                             `json:"version"`
-	Host           Host                            `json:"host"`
-	Source         captureSourceInfo               `json:"source"`
-	UpdatedAt      string                          `json:"updated_at"`
-	LastDataAt     string                          `json:"last_data_at,omitempty"`
-	Files          []*capturedFile                 `json:"files"`
-	Snapshots      []*capturedSnapshot             `json:"snapshots"`
-	Installations  []capturedInstallation          `json:"installations,omitempty"`
-	PathMap        []capturePathMapping            `json:"path_map"`
-	LastRun        *captureRunRecord               `json:"last_run,omitempty"`
+	RetainedInputCapture bool                            `json:"retained_input_capture,omitempty"`
+	SQLiteRecordCapture  bool                            `json:"sqlite_record_capture,omitempty"`
+	LatestRecords        bool                            `json:"latest_records,omitempty"`
+	RecordCoverage       map[string]sqliteCoverageStatus `json:"sqlite_record_coverage,omitempty"`
+	Version              int                             `json:"version"`
+	Host                 Host                            `json:"host"`
+	Source               captureSourceInfo               `json:"source"`
+	UpdatedAt            string                          `json:"updated_at"`
+	LastDataAt           string                          `json:"last_data_at,omitempty"`
+	Files                []*capturedFile                 `json:"files"`
+	Snapshots            []*capturedSnapshot             `json:"snapshots"`
+	Installations        []capturedInstallation          `json:"installations,omitempty"`
+	PathMap              []capturePathMapping            `json:"path_map"`
+	LastRun              *captureRunRecord               `json:"last_run,omitempty"`
 }
 
 type captureSourceInfo struct {
@@ -81,6 +84,13 @@ type captureSourceInfo struct {
 	Kind    string `json:"kind"`
 	Path    string `json:"path"`
 	Account string `json:"account"`
+}
+
+// The capture directory belongs to a host, source name and adapter kind.
+// Paths and account labels are editable configuration. Immutable inventories
+// and SQLite revisions keep the configuration with which they were acquired.
+func (m *captureManifest) acceptsSource(host Host, source SourceConfig) bool {
+	return m.Version == 0 || m.Host.ID == host.ID && m.Source.Name == source.Name && strings.EqualFold(m.Source.Kind, source.Kind)
 }
 
 // capturedFile is one source file. Captured paths are slash-separated and
@@ -375,6 +385,8 @@ func validCaptureName(name string) bool {
 }
 
 type sourceCapture struct {
+	readerLease              string
+	recordDependencyCache    map[string]recordDependency
 	recordDependencies       []recordDependency
 	recordDependenciesLoaded bool
 	session                  *captureSession
@@ -395,6 +407,12 @@ type sourceCapture struct {
 }
 
 func (s *captureSession) source(ctx context.Context, source SourceConfig, progress func(CaptureSourceResult)) CaptureSourceResult {
+	return s.sourcePlanned(ctx, source, progress, nil)
+}
+
+// A bounded verification may acquire only one filesystem dependency group.
+// The private plan controls acquisition, never bypasses durable publication.
+func (s *captureSession) sourcePlanned(ctx context.Context, source SourceConfig, progress func(CaptureSourceResult), selected *capturePlan) CaptureSourceResult {
 	c := &sourceCapture{session: s, ctx: ctx, source: source, progress: progress, checkpoint: time.Now(),
 		result: CaptureSourceResult{Name: source.Name, Kind: source.Kind, State: "running", captureRunRecord: captureRunRecord{StartedAt: now(), Errors: []captureError{}}}}
 	if !validCaptureName(source.Name) {
@@ -407,10 +425,13 @@ func (s *captureSession) source(ctx context.Context, source SourceConfig, progre
 	if err != nil {
 		return c.finish(err)
 	}
-	if manifest.Version != 0 && (manifest.Host.ID != s.host.ID || manifest.Source.Name != source.Name || !strings.EqualFold(manifest.Source.Kind, source.Kind) || manifest.Source.Path != source.Path || manifest.Source.Account != source.Account) {
+	if !manifest.acceptsSource(s.host, source) {
 		return c.finish(errors.New("capture source identity changed; use a new source name to preserve the existing capture"))
 	}
 	c.manifest, c.indexed = manifest, loadIndexMarker(c.dir)
+	if err := checkNativeSnapshotPause(c.dir); err != nil {
+		return c.finish(err)
+	}
 	c.files, c.snapshots = map[string]*capturedFile{}, map[string]*capturedSnapshot{}
 	for _, file := range manifest.Files {
 		c.files[file.Captured] = file
@@ -418,7 +439,12 @@ func (s *captureSession) source(ctx context.Context, source SourceConfig, progre
 	for _, snapshot := range manifest.Snapshots {
 		c.snapshots[snapshot.Captured] = snapshot
 	}
-	plan, err := planCapture(source)
+	var plan capturePlan
+	if selected != nil {
+		plan = *selected
+	} else {
+		plan, err = planCapture(source)
+	}
 	if err == nil && isConductorSource(source.Kind) {
 		includeKnownCaptureDatabases(&plan, manifest, source)
 	}
@@ -453,9 +479,11 @@ func (s *captureSession) source(ctx context.Context, source SourceConfig, progre
 	if err == nil && plan.complete {
 		c.markMissing(present)
 	}
-	if err == nil && plan.complete && len(c.result.Errors) == 0 {
+	if err == nil && plan.complete && len(c.result.Errors) == 0 && source.Options["sqlite_record_capture"] == true {
 		if e := c.commitRecordGroup(); e != nil {
 			c.fail("", e)
+		} else {
+			c.manifest.LatestRecords = false
 		}
 	}
 	if err != nil {
@@ -502,6 +530,9 @@ func (c *sourceCapture) finish(err error) CaptureSourceResult {
 	c.result.State = "complete"
 	if len(c.result.Errors) > 0 {
 		c.result.State = "failed"
+		if errors.Is(err, errNativeSnapshotPaused) {
+			c.result.State = "pending"
+		}
 	}
 	c.report()
 	return c.result.clone()
@@ -609,6 +640,8 @@ func (m *captureManifest) lastCapturedDataAt() string {
 func (c *sourceCapture) commit(final bool) error {
 	m := c.manifest
 	m.Version = captureManifestVersion
+	m.SQLiteRecordCapture = c.source.Options["sqlite_record_capture"] == true
+	m.RetainedInputCapture = retainedAcquisitionEnabled(c.source)
 	m.Host = c.session.host
 	m.Source = captureSourceInfo{Name: c.source.Name, Kind: c.source.Kind, Path: c.source.Path, Account: c.source.Account}
 	m.UpdatedAt = now()
@@ -676,7 +709,7 @@ func (c *sourceCapture) captureFiles(items []captureItem, present map[string]boo
 		previous := c.files[rel]
 		if previous != nil {
 			previous.MissingSince = ""
-			if (c.session.recoveryID == "" || previous.RecoveryID == c.session.recoveryID) && previous.Size == info.Size() && previous.MTimeNS == info.ModTime().UnixNano() && c.intact(previous.Captured, previous.Size, previous.MTimeNS) {
+			if previous.Path == item.path && (c.session.recoveryID == "" || previous.RecoveryID == c.session.recoveryID) && previous.Size == info.Size() && previous.MTimeNS == info.ModTime().UnixNano() && c.intact(previous.Captured, previous.Size, previous.MTimeNS) {
 				c.result.FilesUnchanged++
 				continue
 			}
@@ -1003,7 +1036,31 @@ func removeEmptyDirs(dir, stop string) {
 // removeCaptureTemporaries deletes what a killed run left half-written. The
 // capture lock guarantees no other run is writing them.
 func removeCaptureTemporaries(dir string) {
+	readerCleanup := cleanupPreservationReaders(dir)
+	if readerCleanup != nil {
+		fmt.Fprintf(os.Stderr, "Pharos: deferred reader pin cleanup for %s: %v\n", dir, readerCleanup)
+	}
 	_ = filepath.WalkDir(dir, func(file string, entry fs.DirEntry, err error) error {
+		if err == nil && entry.IsDir() {
+			if file != dir && entry.Name() == "inputs" {
+				return fs.SkipDir
+			}
+			if strings.HasPrefix(entry.Name(), ".reader-") && strings.HasSuffix(entry.Name(), captureTempSuffix) {
+				if strings.HasPrefix(entry.Name(), ".reader-pin-") && readerCleanup != nil {
+					return fs.SkipDir
+				}
+				// Active readers hold this lease flock, including audits.
+				// After a crash the lock is released, allowing native space back.
+				lock, e := os.OpenFile(filepath.Join(file, ".reader.lock"), os.O_RDWR|os.O_CREATE, 0600)
+				if e == nil {
+					if syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil {
+						_ = os.RemoveAll(file)
+					}
+					lock.Close()
+				}
+				return fs.SkipDir
+			}
+		}
 		if err == nil && !entry.IsDir() && strings.HasSuffix(entry.Name(), captureTempSuffix) {
 			os.Remove(file)
 		}
