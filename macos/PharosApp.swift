@@ -210,7 +210,7 @@ final class ArchiveService: ObservableObject {
         } catch { self.error = "Could not start Pharos: \(error.localizedDescription)" }
         if let appVolume = LibraryVolume(containing: bundle), let watcher = LibraryVolumeMonitor(volumeUUID: appVolume.uuid) {
             managedPortable = true
-            watcher.approveUnmount = { .dissent("Pharos is running from this drive. Quit Pharos before ejecting it.") }
+            watcher.approveUnmount = { .dissent("Pharos is running from this drive. Use Eject in Pharos, or quit Pharos before ejecting it.") }
             watcher.onUnmount = { DispatchQueue.main.async { NSApplication.shared.terminate(nil) } }
             monitor = watcher
             watcher.start()
@@ -433,10 +433,6 @@ final class ArchiveService: ObservableObject {
     /// and the drive is ejected once it has. `reply` gets nil once the library
     /// is released, or the reason Pharos kept it.
     func ejectLibrary(reply: @escaping (String?) -> Void = { _ in }) {
-        if managedApplication {
-            reply("Open Libraries, release the library, then eject its drive in Finder. If Pharos itself runs from that drive, quit Pharos first.")
-            return
-        }
         guard !shuttingDown else {
             reply("Pharos is closing. Wait for it to finish before ejecting the drive.")
             return
@@ -448,6 +444,10 @@ final class ArchiveService: ObservableObject {
     }
 
     private func ejectAfterDeferringUpdate(reply: @escaping (String?) -> Void) {
+        if managedApplication {
+            ejectManagedLibrary(reply: reply)
+            return
+        }
         guard let volume else {
             resumeUpdates()
             reply("This library is not on a drive that Pharos can eject.")
@@ -485,6 +485,69 @@ final class ArchiveService: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Resolve the current broker selection for each action; app placement
+    /// and the previously displayed library cannot select the volume to eject.
+    private func ejectManagedLibrary(reply: @escaping (String?) -> Void) {
+        guard !ejecting else { reply("Pharos is already ejecting a drive."); return }
+        guard let request = localRequest("/api/app/state"), let broker = lock.withLock({ endpoint }) else {
+            resumeUpdates()
+            reply("Pharos is not ready to release its library yet.")
+            return
+        }
+        ejecting = true
+        let app = Bundle.main.bundleURL
+        let child = process
+        let fail: (String) -> Void = { [weak self] reason in
+            DispatchQueue.main.async {
+                self?.ejecting = false
+                self?.resumeUpdates()
+                reply(reason)
+            }
+        }
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard let self else { return fail("Pharos is closing.") }
+            do {
+                if let error { throw error }
+                guard (response as? HTTPURLResponse)?.statusCode == 200, let data else {
+                    throw ManagedLibraryEject.Failure("Could not read the connected library. Try again once Pharos is ready.")
+                }
+                let volume = try ManagedLibraryEject.volume(in: data)
+                switch ManagedLibraryEject.release(volume, service: broker.url, token: broker.token) {
+                case .released: break
+                case .notRunning: throw ManagedLibraryEject.Failure("Pharos stopped before confirming that its library was released.")
+                case .stopping: throw ManagedLibraryEject.Failure(ReleaseState.finishingMessage)
+                case .failed(let reason): throw ManagedLibraryEject.Failure("Could not release the library: \(reason)")
+                }
+                if LibraryVolume(containing: app)?.uuid == volume.uuid {
+                    // The broker can also own libraries on other disks. Ask
+                    // it to close those safely rather than killing its tree.
+                    if let child, child.isRunning {
+                        child.terminate()
+                        let deadline = Date().addingTimeInterval(10)
+                        while child.isRunning {
+                            guard Date() < deadline else {
+                                throw ManagedLibraryEject.Failure("Pharos is still closing. Try ejecting again in a moment.")
+                            }
+                            Thread.sleep(forTimeInterval: 0.05)
+                        }
+                    }
+                    DriveProcesses.stopMCP(runningFrom: app)
+                    try VolumeEject.afterExit(of: getpid(), mount: volume.mount, name: volume.name)
+                    DispatchQueue.main.async { reply(nil); NSApp.terminate(nil) }
+                } else {
+                    // The app remains available with its local libraries.
+                    try NSWorkspace.shared.unmountAndEjectDevice(at: volume.mount)
+                    DispatchQueue.main.async {
+                        self.ejecting = false
+                        self.resumeUpdates()
+                        self.url = broker.url
+                        reply(nil)
+                    }
+                }
+            } catch { fail(error.localizedDescription) }
+        }.resume()
     }
 
     /// Shows a release in progress or done, unless the drive is already gone.

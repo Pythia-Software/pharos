@@ -114,10 +114,14 @@ UI, scheduled and CLI captures too. Pausing automatic delivery leaves that
 protection in place, so undelivered snapshots cannot become eligible for normal
 generation pruning.
 
-Use **Release library** before ejecting. Releasing the archive keeps local pending
-capture configured and suspends delivery until reconnect or drive return. Finder
-ejects also release managed libraries on that volume. If the app itself runs
-from the drive, quit it before ejecting; its managed MCP processes stop too.
+Use **Eject** in the library drive panel or menu bar to release the libraries
+on that volume and eject it. An app installed on the Mac stays open with its
+local libraries available. If the app runs from that SSD, Eject also closes its
+broker and bundled MCP processes, then quits before ejecting. **Release library**
+is also available for a later Finder eject. Releasing the archive keeps local
+pending capture configured and suspends delivery until reconnect or drive return.
+Finder ejects also release managed data libraries; quit a portable app first if
+using Finder to eject its own drive.
 
 ## Verified transfer and recovery
 

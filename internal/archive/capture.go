@@ -429,14 +429,19 @@ func (s *captureSession) source(ctx context.Context, source SourceConfig, progre
 		// than deleted, so nothing is marked missing and nothing is written.
 		return c.finish(err)
 	}
-	fingerprint := captureDeliveryFingerprint(source, plan)
 	var delivered struct {
 		Fingerprint string `json:"fingerprint"`
 		Target      string `json:"destination_instance"`
 	}
-	if b, e := os.ReadFile(filepath.Join(c.dir, ".delivered.json")); e == nil && json.Unmarshal(b, &delivered) == nil && c.session.recoveryID == "" && fingerprint != "" && delivered.Fingerprint == fingerprint && (c.session.deliveryTarget == "" || c.session.deliveryTarget == delivered.Target) {
-		c.result.Phase = "Already delivered; source is unchanged"
-		return c.finish(nil)
+	if b, e := os.ReadFile(filepath.Join(c.dir, ".delivered.json")); e == nil && json.Unmarshal(b, &delivered) == nil && c.session.recoveryID == "" && delivered.Fingerprint != "" && (c.session.deliveryTarget == "" || c.session.deliveryTarget == delivered.Target) {
+		fingerprint, err := captureDeliveryFingerprint(ctx, source, plan, nil)
+		if err != nil {
+			return c.finish(err)
+		}
+		if delivered.Fingerprint == fingerprint {
+			c.result.Phase = "Already delivered; source is unchanged"
+			return c.finish(nil)
+		}
 	}
 	if err := os.MkdirAll(c.dir, 0o700); err != nil {
 		return c.finish(toDestination(err))
@@ -459,10 +464,14 @@ func (s *captureSession) source(ctx context.Context, source SourceConfig, progre
 		c.fail("", err)
 	}
 	c.phase("saving capture manifest")
-	if after, e := planCapture(source); e == nil && fingerprint != "" && captureDeliveryFingerprint(source, after) == fingerprint && len(c.result.Errors) == 0 {
-		c.manifest.DeliveredFingerprint = fingerprint
-	} else {
-		c.manifest.DeliveredFingerprint = ""
+	c.manifest.DeliveredFingerprint = ""
+	if len(c.result.Errors) == 0 {
+		fingerprint, fingerprintErr := captureDeliveryFingerprint(ctx, source, plan, c)
+		if fingerprintErr != nil {
+			c.fail("", fingerprintErr)
+		} else {
+			c.manifest.DeliveredFingerprint = fingerprint
+		}
 	}
 	err = c.commit(true)
 	if err == nil {

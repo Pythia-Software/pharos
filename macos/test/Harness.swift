@@ -215,6 +215,66 @@ func volumeTests(_ args: [String]) {
     monitor.stop()
 }
 
+/// Normal launches own a broker, not a direct catalog service. Exercise the
+/// same selection and volume-release helpers used by both native eject controls.
+func managedEjectTests(app: URL, config: String) {
+    let endpoint = URL(fileURLWithPath: ProcessInfo.processInfo.environment["PHAROS_SUPPORT_DIR"]!)
+        .appendingPathComponent("managed-eject.json")
+    let broker = Process()
+    broker.executableURL = app.appendingPathComponent("Contents/MacOS/pharos")
+    broker.arguments = ["app", "--application", app.path, "--initial-config", config, "--endpoint", endpoint.path]
+    broker.standardOutput = FileHandle.nullDevice
+    let log = ServiceLog()
+    broker.standardError = log.pipe
+    do { try broker.run() } catch { check(false, "managed broker starts: \(error)"); return }
+    defer {
+        if broker.isRunning { broker.terminate() }
+        _ = wait(10) { !broker.isRunning }
+        try? FileManager.default.removeItem(at: endpoint)
+    }
+    guard wait(15, until: { FileManager.default.fileExists(atPath: endpoint.path) }),
+          let data = try? Data(contentsOf: endpoint),
+          let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let address = value["url"] as? String, let service = URL(string: address),
+          let token = value["token"] as? String else {
+        check(false, "managed broker publishes its endpoint: \(log.text())")
+        return
+    }
+    func get(_ path: String) -> (Int, Data) {
+        var request = URLRequest(url: URL(string: path, relativeTo: service)!)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 20
+        let done = DispatchSemaphore(value: 0)
+        var result = (0, Data())
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            result = ((response as? HTTPURLResponse)?.statusCode ?? 0, data ?? Data())
+            done.signal()
+        }.resume()
+        _ = done.wait(timeout: .now() + 25)
+        return result
+    }
+    let opened = get("/api/library/status")
+    check(opened.0 == 200, "managed launch opens the existing SSD library" +
+          (opened.0 == 200 ? "" : " (HTTP \(opened.0): \(String(decoding: opened.1, as: UTF8.self)))"))
+    do {
+        let volume = try ManagedLibraryEject.volume(in: get("/api/app/state").1)
+        check(volume == LibraryVolume(containing: URL(fileURLWithPath: config).deletingLastPathComponent()),
+              "managed eject selects the connected library's volume")
+        check(ManagedLibraryEject.release(volume, service: service, token: token) == .released,
+              "managed eject releases the broker's library services")
+        check(broker.isRunning && get("/api/ready").0 == 200,
+              "releasing a data SSD leaves the app broker available")
+        let disconnected = get("/api/app/state").1
+        do {
+            _ = try ManagedLibraryEject.volume(in: disconnected)
+            check(false, "an eject without a connected library is refused")
+        } catch { check(true, "an eject without a connected library is refused") }
+        check(get("/api/library/status").0 == 503, "eject does not reopen the released library")
+        broker.terminate()
+        check(wait(10) { !broker.isRunning }, "portable eject closes the broker before the quit/eject handoff")
+    } catch { check(false, "managed eject: \(error)") }
+}
+
 /// eject MOUNT APP CONFIG PORT TOKEN
 /// The Eject button's path, with APP the library's Pharos.app on the image:
 /// release, stop what runs from the app, then eject once the app has exited.
@@ -223,6 +283,8 @@ func ejectTests(_ args: [String]) {
     let service = URL(string: "http://127.0.0.1:\(args[3])/")!, token = args[4]
     let name = mount.lastPathComponent
     let pharos = app.appendingPathComponent("Contents/MacOS/pharos").path
+
+    managedEjectTests(app: app, config: config)
 
     // Which processes run from the app.
     let listed: [(pid: pid_t, path: String)] = [(1, "/usr/bin/true"), (2, canonicalPath(app) + "/Contents/MacOS/pharos"),

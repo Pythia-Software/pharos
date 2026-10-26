@@ -153,6 +153,16 @@ func TestCaptureCopiesWhatAdaptersReadIncrementally(t *testing.T) {
 		t.Fatal("first capture did not record when data arrived")
 	}
 
+	// Ordinary incremental capture must remain a metadata-only operation for
+	// unchanged transcripts, while still retaining proof for a later manual move.
+	ordinaryReads := 0
+	override(t, &captureFault, func(stage, rel string) error {
+		if stage == "delivery-read" {
+			ordinaryReads++
+			return errors.New("ordinary capture attempted a delivery transcript read")
+		}
+		return nil
+	})
 	second := runCapture(t, config)
 	if codexResult := captureResult(t, second, "codex"); !second.OK || codexResult.FilesCopied != 0 || codexResult.FilesUnchanged != 3 || captureResult(t, second, "claude").FilesUnchanged != 2 {
 		t.Fatalf("no-op capture copied: %#v", second)
@@ -168,6 +178,49 @@ func TestCaptureCopiesWhatAdaptersReadIncrementally(t *testing.T) {
 	}
 	if third := runCapture(t, config); captureResult(t, third, "codex").FilesCopied != 1 {
 		t.Fatalf("lost capture was not restored: %#v", third)
+	}
+
+	if ordinaryReads != 0 {
+		t.Fatal("ordinary incremental capture read transcript bytes for delivery proof", ordinaryReads)
+	}
+
+	// A source with delivered evidence must still read its current bytes before
+	// suppressing recapture, even when automatic delivery is no longer enabled.
+	manifest = readCaptureManifest(t, config, "claude")
+	if manifest.DeliveredFingerprint == "" {
+		t.Fatal("ordinary capture lost the proof needed by a future manual move")
+	}
+	if err := durableJSON(capturedPath(config, "claude", ".delivered.json"), map[string]string{"fingerprint": manifest.DeliveredFingerprint, "destination_instance": "archive"}); err != nil {
+		t.Fatal(err)
+	}
+	reads := 0
+	captureFault = func(stage, rel string) error {
+		if stage == "delivery-read" {
+			reads++
+		}
+		return nil
+	}
+	summary, err := Capture(context.Background(), config, config.Sources[:1], nil)
+	if err != nil || !summary.OK || reads == 0 || summary.Sources[0].FilesSeen != 0 {
+		t.Fatal("delivered source was not verified and suppressed", summary, reads, err)
+	}
+
+	// Cancel after hashing starts, before the rest of the source is read.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reads = 0
+	captureFault = func(stage, rel string) error {
+		if stage == "delivery-read" {
+			reads++
+			if reads == 2 {
+				cancel()
+			}
+		}
+		return nil
+	}
+	summary, err = Capture(ctx, config, config.Sources[:1], nil)
+	if err != nil || summary.OK || !strings.Contains(jsonText(summary), context.Canceled.Error()) {
+		t.Fatal("delivery hashing ignored cancellation", summary, err)
 	}
 }
 

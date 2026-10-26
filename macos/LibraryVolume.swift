@@ -218,6 +218,34 @@ enum ReleaseState: Equatable {
     }
 }
 
+/// The broker owns library services even when the app is installed elsewhere.
+/// Both native eject controls release the selected library's entire volume.
+enum ManagedLibraryEject {
+    struct Failure: LocalizedError {
+        let errorDescription: String?
+        init(_ message: String) { errorDescription = message }
+    }
+
+    static func volume(in data: Data) throws -> LibraryVolume {
+        struct State: Decodable {
+            struct Library: Decodable { let id: String; let config: String }
+            let selected: String
+            let libraries: [Library]
+        }
+        let state = try JSONDecoder().decode(State.self, from: data)
+        guard let library = state.libraries.first(where: { $0.id == state.selected }),
+              let volume = LibraryVolume(containing: URL(fileURLWithPath: library.config).deletingLastPathComponent()) else {
+            throw Failure("The connected library is not on a drive that Pharos can eject.")
+        }
+        return volume
+    }
+
+    static func release(_ volume: LibraryVolume, service: URL, token: String) -> ServiceClient.Release {
+        let body = try? JSONSerialization.data(withJSONObject: ["volume": "uuid:" + volume.uuid])
+        return ServiceClient.release(service, token: token, path: "/api/app/release-volume", body: body)
+    }
+}
+
 /// Ejects the drive holding a library, as `diskutil eject` does: every volume
 /// on the drive is unmounted, and the drive is ejected. Pharos runs from that
 /// drive, so it can only be ejected once Pharos has quit.
