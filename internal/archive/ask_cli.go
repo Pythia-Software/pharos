@@ -39,6 +39,12 @@ type askProvider struct {
 	DefaultSelection *askSelection `json:"defaultSelection,omitempty"`
 	Error            string        `json:"error,omitempty"`
 	path             string
+	mcp              askMCPServer
+}
+
+type askMCPServer struct {
+	Command string   `json:"command"`
+	Args    []string `json:"args"`
 }
 
 var askProviderBinaries = map[string]string{"Codex": "codex", "Claude": "claude", "Antigravity": "agy"}
@@ -317,68 +323,19 @@ func askValidSelection(p askProvider, s askSelection) bool {
 	return false
 }
 
-// The navigation agent is a structured planner. Pharos performs its bounded
-// lookups itself; no general MCP connection or Pharos credential is passed to
-// a provider process. Each call runs in a disposable private directory.
+// Each call gets an explicit connection to this library's read-only MCP server
+// in a disposable private directory. Private history stays in the lookup loop;
+// the provider receives no Pharos API token or persistent configuration edits.
 var askRunCLI = func(ctx context.Context, p askProvider, s askSelection, prompt string) ([]byte, error) {
 	dir, err := os.MkdirTemp("", "pharos-ask-")
 	if err != nil {
 		return nil, err
 	}
 	defer os.RemoveAll(dir)
-	schema := filepath.Join(dir, "response.schema.json")
-	if err = os.WriteFile(schema, []byte(askResponseSchema), 0600); err != nil {
+	cmd, err := askPrepareCLI(ctx, p, s, dir)
+	if err != nil {
 		return nil, err
 	}
-	var args []string
-	switch p.ID {
-	case "Codex":
-		args = []string{"exec", "--ignore-user-config", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "-c", `approval_policy="never"`, "-c", "features.shell_tool=false", "-c", "features.apply_patch_freeform=false", "-c", `web_search="disabled"`, "--model", s.Model, "--output-schema", schema, "--output-last-message", filepath.Join(dir, "answer.json"), "--color", "never", "-"}
-	case "Claude":
-		args = []string{"-p", "--output-format", "json", "--json-schema", askResponseSchema, "--model", s.Model, "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--setting-sources", "", "--settings", `{"disableAllHooks":true}`, "--no-session-persistence", "--permission-mode", "dontAsk"}
-	case "Antigravity":
-		// Use a dedicated workspace agent, plan mode and the terminal
-		// sandbox. Pharos lookups stay in the private response loop.
-		agentDir := filepath.Join(dir, ".agents", "agents")
-		if err = os.MkdirAll(agentDir, 0700); err != nil {
-			return nil, err
-		}
-		agent := `---
-name: pharos-navigation
-description: Pharos private navigation planner
-mainAgent: true
-subagent: false
-tools:
-  - finish
-mcpServers: []
-skills: []
-plugins: []
-commandExecutionPolicy: off
----
-Use only the supplied JSON navigation context. Do not use native tools.
-`
-		if err = os.WriteFile(filepath.Join(agentDir, "pharos-navigation.md"), []byte(agent), 0600); err != nil {
-			return nil, err
-		}
-		model := s.Model
-		for _, m := range p.Models {
-			if m.ID == s.Model && m.Variants[s.Effort] != "" {
-				model = m.Variants[s.Effort]
-			}
-		}
-		args = []string{"--input-format", "stream-json", "--output-format", "stream-json", "--json-schema", schema, "--model", model, "--agent", "pharos-navigation", "--sandbox", "--mode", "plan", "--disable-slash-commands", "--print-timeout", "3m"}
-
-	default:
-		return nil, fmt.Errorf("unsupported CLI")
-	}
-	if s.Effort != "Default" && p.ID != "Antigravity" {
-		if p.ID == "Codex" {
-			args = append(args[:len(args)-1], "-c", `model_reasoning_effort="`+strings.ToLower(s.Effort)+`"`, "-")
-		} else {
-			args = append(args, "--effort", strings.ToLower(s.Effort))
-		}
-	}
-	cmd := askCommand(ctx, p.path, dir, args...)
 	if p.ID == "Antigravity" {
 		return askRunAGY(ctx, cmd, p, prompt)
 	}
@@ -390,7 +347,7 @@ Use only the supplied JSON navigation context. Do not use native tools.
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, fmt.Errorf("%s could not complete the request. Check its CLI version, login and account limits in Terminal, then retry", p.ID)
+		return nil, fmt.Errorf("%s could not complete the request. Check its CLI version, Pharos MCP connection, login and account limits in Terminal, then retry", p.ID)
 	}
 	if p.ID == "Codex" {
 		file, err := os.Open(filepath.Join(dir, "answer.json"))
@@ -424,6 +381,135 @@ Use only the supplied JSON navigation context. Do not use native tools.
 		return value, nil
 	}
 	return nil, fmt.Errorf("%s returned no response", p.ID)
+}
+
+func askPrepareCLI(ctx context.Context, p askProvider, s askSelection, dir string) (*exec.Cmd, error) {
+	if p.mcp.Command == "" {
+		return nil, fmt.Errorf("Pharos MCP connection is unavailable; retry from Pharos")
+	}
+	schema := filepath.Join(dir, "response.schema.json")
+	if err := os.WriteFile(schema, []byte(askResponseSchema), 0600); err != nil {
+		return nil, err
+	}
+	var args []string
+	switch p.ID {
+	case "Codex":
+		args = []string{"exec", "--ignore-user-config", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "-c", `approval_policy="never"`, "-c", "features.shell_tool=false", "-c", "features.apply_patch_freeform=false", "-c", `web_search="disabled"`, "--model", s.Model, "--output-schema", schema, "--output-last-message", filepath.Join(dir, "answer.json"), "--color", "never", "-"}
+		args = append(args[:len(args)-1], "-c", "mcp_servers.pharos.command="+jsonText(p.mcp.Command), "-c", "mcp_servers.pharos.args="+jsonText(p.mcp.Args), "-c", "mcp_servers.pharos.required=true", "-")
+	case "Claude":
+		args = []string{"-p", "--output-format", "json", "--json-schema", askResponseSchema, "--model", s.Model, "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--setting-sources", "", "--settings", `{"disableAllHooks":true}`, "--no-session-persistence", "--permission-mode", "dontAsk"}
+		args = append(args, "--mcp-config", jsonText(map[string]any{"mcpServers": map[string]askMCPServer{"pharos": p.mcp}}), "--allowedTools", "mcp__pharos")
+	case "Antigravity":
+		// Use a dedicated workspace agent, plan mode and the terminal sandbox.
+		// AGY has no session-scoped permission flag: fail before sending private
+		// context if its global policy would soft-deny the connected MCP tools.
+		// Use a distinct name: AGY keeps an already-running global server when
+		// another definition has the same name, even for a different library.
+		if err := askCheckAGYMCPPermissions(); err != nil {
+			return nil, err
+		}
+		agentDir := filepath.Join(dir, ".agents", "agents")
+		if err := os.MkdirAll(agentDir, 0700); err != nil {
+			return nil, err
+		}
+		mcpConfig := jsonText(map[string]any{"mcpServers": map[string]askMCPServer{"pharos-ask": p.mcp}})
+		if err := os.WriteFile(filepath.Join(dir, ".agents", "mcp_config.json"), []byte(mcpConfig), 0600); err != nil {
+			return nil, err
+		}
+		agent := `---
+name: pharos-navigation
+description: Pharos private navigation planner
+mainAgent: true
+subagent: false
+tools:
+  - finish
+  - call_mcp_tool
+mcpServers: []
+skills: []
+plugins: []
+commandExecutionPolicy: off
+---
+Use only the pharos-ask MCP server for archived work and the supplied JSON navigation context for destinations and private history. Do not use other MCP servers or native tools.
+`
+		if err := os.WriteFile(filepath.Join(agentDir, "pharos-navigation.md"), []byte(agent), 0600); err != nil {
+			return nil, err
+		}
+		model := s.Model
+		for _, m := range p.Models {
+			if m.ID == s.Model && m.Variants[s.Effort] != "" {
+				model = m.Variants[s.Effort]
+			}
+		}
+		args = []string{"--input-format", "stream-json", "--output-format", "stream-json", "--json-schema", schema, "--model", model, "--agent", "pharos-navigation", "--sandbox", "--mode", "plan", "--disable-slash-commands", "--print-timeout", "3m"}
+
+	default:
+		return nil, fmt.Errorf("unsupported CLI")
+	}
+	if s.Effort != "Default" && p.ID != "Antigravity" {
+		if p.ID == "Codex" {
+			args = append(args[:len(args)-1], "-c", `model_reasoning_effort="`+strings.ToLower(s.Effort)+`"`, "-")
+		} else {
+			args = append(args, "--effort", strings.ToLower(s.Effort))
+		}
+	}
+	return askCommand(ctx, p.path, dir, args...), nil
+}
+
+func askCheckAGYMCPPermissions() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(home, ".gemini", "antigravity-cli", "settings.json")
+	sharedPath := filepath.Join(home, ".gemini", "config", "config.json")
+	type permissionGrants struct {
+		Allow []string `json:"allow"`
+		Ask   []string `json:"ask"`
+		Deny  []string `json:"deny"`
+	}
+	var settings struct {
+		ToolPermission string           `json:"toolPermission"`
+		Permissions    permissionGrants `json:"permissions"`
+	}
+	var shared struct {
+		UserSettings struct {
+			GlobalPermissionGrants permissionGrants `json:"globalPermissionGrants"`
+		} `json:"userSettings"`
+	}
+	readSettings := func(path string, value any) error {
+		raw, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err == nil && len(raw) > 0 {
+			err = json.Unmarshal(raw, value)
+		}
+		if err != nil {
+			return fmt.Errorf("read Antigravity MCP permissions in %s: %w", path, err)
+		}
+		return nil
+	}
+	if err := readSettings(path, &settings); err != nil {
+		return err
+	}
+	if err := readSettings(sharedPath, &shared); err != nil {
+		return err
+	}
+	// AGY combines shared and CLI grants. Matching deny and ask rules still
+	// take precedence over an allow, regardless of which file supplies it.
+	grants := shared.UserSettings.GlobalPermissionGrants
+	grants.Allow = append(grants.Allow, settings.Permissions.Allow...)
+	grants.Ask = append(grants.Ask, settings.Permissions.Ask...)
+	grants.Deny = append(grants.Deny, settings.Permissions.Deny...)
+	for _, tool := range mcpTools {
+		matches := func(rules []string) bool {
+			return slices.Contains(rules, "mcp(*)") || slices.Contains(rules, "mcp(pharos-ask/*)") || slices.Contains(rules, "mcp(pharos-ask/"+firstString(tool["name"])+")")
+		}
+		if settings.ToolPermission == "strict" || matches(grants.Deny) || matches(grants.Ask) || settings.ToolPermission != "always-proceed" && !matches(grants.Allow) {
+			return fmt.Errorf("Antigravity needs permission to use Pharos MCP. Allow mcp(pharos-ask/*) using /permissions in Antigravity and resolve any conflicting ask, deny, or strict policy, then retry")
+		}
+	}
+	return nil
 }
 
 // Register AGY's retained transcript before sending any private context. The
