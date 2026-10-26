@@ -35,11 +35,11 @@ var (
 )
 
 func pageFeedbackReports(text string, bodyStart int) []feedbackReport {
-	if !strings.Contains(text, "Page Feedback:") && !strings.Contains(text, "UI feedback") {
+	if !strings.Contains(text, "Page Feedback:") && !strings.Contains(text, "UI feedback") && !strings.Contains(text, "design feedback") {
 		return nil
 	}
 	lines := textLines(text)
-	var reports []feedbackReport
+	reports := designFeedbackReports(text, bodyStart)
 	inFence := false
 	for i := 0; i < len(lines); i++ {
 		line := strings.TrimSpace(text[lines[i][0]:lines[i][1]])
@@ -285,4 +285,105 @@ func maskFeedback(text string, reports []feedbackReport, includeComments bool) s
 		blank(start, report.end)
 	}
 	return string(masked)
+}
+
+var designFeedbackHeader = regexp.MustCompile(`^# .+ design feedback$`)
+var designFeedbackAnnotation = regexp.MustCompile(`^## ([0-9]+)\. .+$`)
+
+// The design-preview exporter puts free-form comments before Element/State/
+// Source fields and a JSON state snapshot. Require that complete signature,
+// so a heading in an ordinary discussion is never enough to claim comments.
+func designFeedbackReports(text string, bodyStart int) []feedbackReport {
+	lines := textLines(text)
+	var reports []feedbackReport
+	fenced := false
+	for i := 0; i < len(lines); i++ {
+		value := strings.TrimSpace(text[lines[i][0]:lines[i][1]])
+		if strings.HasPrefix(value, "```") || strings.HasPrefix(value, "~~~") {
+			fenced = !fenced
+		}
+		if fenced || lines[i][0] < bodyStart || !designFeedbackHeader.MatchString(value) {
+			continue
+		}
+		report := feedbackReport{start: lines[i][0], end: lines[i][1]}
+		number, j := 0, i+1
+		for j < len(lines) {
+			if strings.TrimSpace(text[lines[j][0]:lines[j][1]]) == "" {
+				j++
+				continue
+			}
+			m := designFeedbackAnnotation.FindStringSubmatch(strings.TrimSpace(text[lines[j][0]:lines[j][1]]))
+			if m == nil {
+				break
+			}
+			n, _ := strconv.Atoi(m[1])
+			if n != number+1 {
+				break
+			}
+			start := j + 1
+			for start < len(lines) && strings.TrimSpace(text[lines[start][0]:lines[start][1]]) == "" {
+				start++
+			}
+			metadata := start
+			for metadata < len(lines) && !strings.HasPrefix(strings.TrimSpace(text[lines[metadata][0]:lines[metadata][1]]), "- Element: ") {
+				v := strings.TrimSpace(text[lines[metadata][0]:lines[metadata][1]])
+				if headingLine(v) {
+					break
+				}
+				metadata++
+			}
+			if metadata == len(lines) || metadata == start {
+				break
+			}
+			end := metadata
+			fields := map[string]bool{}
+			for end < len(lines) {
+				v := strings.TrimSpace(text[lines[end][0]:lines[end][1]])
+				if v == "" {
+					end++
+					continue
+				}
+				found := false
+				for _, key := range []string{"Element", "State", "Source", "Revision"} {
+					if strings.HasPrefix(v, "- "+key+": ") {
+						fields[key] = true
+						found = true
+						break
+					}
+				}
+				if !found {
+					break
+				}
+				end++
+			}
+			if !fields["Element"] || !fields["State"] || !fields["Source"] {
+				break
+			}
+			if end < len(lines) && strings.TrimSpace(text[lines[end][0]:lines[end][1]]) == "```json" {
+				close := end + 1
+				for close < len(lines) && strings.TrimSpace(text[lines[close][0]:lines[close][1]]) != "```" {
+					close++
+				}
+				if close < len(lines) {
+					end = close + 1
+				}
+			}
+			noteEnd := metadata - 1
+			for noteEnd >= start && strings.TrimSpace(text[lines[noteEnd][0]:lines[noteEnd][1]]) == "" {
+				noteEnd--
+			}
+			if noteEnd < start {
+				break
+			}
+			report.notes = append(report.notes, [2]int{lines[start][0], feedbackLineEnd(text, lines[noteEnd])})
+			report.end = lines[end-1][1]
+			number = n
+			j = end
+		}
+		if len(report.notes) > 0 {
+			reports = append(reports, report)
+			i = j - 1
+		}
+	}
+	return reports
 }

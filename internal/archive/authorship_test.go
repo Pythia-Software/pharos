@@ -3,7 +3,9 @@ package archive
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -107,16 +109,23 @@ func TestAuthorshipFindsCopiedTextWithinWindow(t *testing.T) {
 	if quoted.Source != "other-chat" || !strings.Contains(quoted.Reason, "30m") {
 		t.Fatalf("quoted = %#v", quoted)
 	}
+	// A Friday-to-Monday copy remains covered, including the exact boundary.
+	for _, when := range []time.Duration{3 * 24 * time.Hour, authorshipWindow} {
+		in := authorInput{ID: "week", ConversationID: "week", Text: reply, SentAt: authorAt(0).Add(when)}
+		if got := categoryText(reply, c.classify(in), spanQuoted); got != reply {
+			t.Fatalf("within seven days: %q", got)
+		}
+	}
 	// Agent output leaves the window; your own messages never do.
 	fresh := newClassifier(nil)
 	fresh.agentText.add(authorAt(0), textOrigin{"other-chat", "reply"}, shingles(wordTokens(reply)))
-	late := authorInput{ID: "late", ConversationID: "c", Text: reply, SentAt: authorAt(49 * 60)}
+	late := authorInput{ID: "late", ConversationID: "c", Text: reply, SentAt: authorAt(169 * 60)}
 	fresh.agentText.evict(late.SentAt.Add(-authorshipWindow))
 	if spans := fresh.classify(late); categoryText(reply, spans, spanTyped) != reply {
 		t.Fatalf("text from outside the window = %#v", spans)
 	}
 	again := authorInput{ID: "again", ConversationID: "d", Text: reply, SentAt: authorAt(10 * 24 * 60)}
-	if spans := fresh.classify(again); len(spans) != 1 || spans[0].Category != spanResent || spans[0].Source != "c" || !strings.Contains(spans[0].Reason, "7d") {
+	if spans := fresh.classify(again); len(spans) != 1 || spans[0].Category != spanResent || spans[0].Source != "c" || !strings.Contains(spans[0].Reason, "2d") {
 		t.Fatalf("resent = %#v", spans)
 	}
 }
@@ -192,6 +201,11 @@ func TestAuthorshipFlagsPastedStructure(t *testing.T) {
 	spans = c.classify(authorInput{ID: "k", ConversationID: "c", Text: code, SentAt: authorAt(120)})
 	if categoryText(code, spans, spanTyped) != "Why does this fail?" || !strings.HasPrefix(categoryText(code, spans, spanPasted), "```go") {
 		t.Fatalf("code spans = %#v", spans)
+	}
+	table := "Please check these results.\n\nPR\tTitle\tStatus\n123\tPreserve the selected scope\topen\n124\tRefresh cached records\tclosed\n\nAlso check mobile."
+	spans = c.classify(authorInput{ID: "table", ConversationID: "table", Text: table, SentAt: authorAt(180)})
+	if got := categoryText(table, spans, spanTyped); got != "Please check these results.|Also check mobile." {
+		t.Fatalf("TSV table leaked or human follow-up lost: %q", got)
 	}
 }
 
@@ -526,5 +540,356 @@ func TestAuthorshipInputsSeeMirrorLinksCachedBeforeARun(t *testing.T) {
 	}
 	if len(inputs) != 1 {
 		t.Fatalf("authorship classified a mirror the run just linked: %+v", inputs)
+	}
+}
+
+func TestAuthorshipCountsWordsConsistently(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		want int
+	}{
+		{"- · => . # [ )", 0},
+		{"don't re-enter frontend/backend 2m 1", 5},
+		{"1. Ship it\n2) Keep it\n1", 5},
+		{"Café déjà-vu 中文", 3},
+		{"1.", 1},
+	} {
+		spans := []authorSpan{{Start: 0, End: len(tc.text), Category: spanTyped}}
+		if got := countSpans(tc.text, spans).words[spanTyped]; got != tc.want {
+			t.Errorf("%q: words=%d want %d", tc.text, got, tc.want)
+		}
+	}
+	text := "Review finished."
+	end := len(text) - 1
+	spans := []authorSpan{{Start: 0, End: end, Category: spanQuoted}, {Start: end, End: len(text), Category: spanTyped}}
+	counts := countSpans(text, spans)
+	if counts.words[spanTyped] != 0 || counts.words[spanQuoted] != 2 {
+		t.Fatalf("punctuation creates human words: %+v", counts)
+	}
+	// Partitioning a word into different explanation spans cannot create words.
+	text = "Can't re-enter Café"
+	for split := range text {
+		if split == 0 {
+			continue
+		}
+		spans := []authorSpan{{Start: 0, End: split, Category: spanTyped}, {Start: split, End: len(text), Category: spanTyped, Reason: "another reason"}}
+		if got := countSpans(text, spans).words[spanTyped]; got != 3 {
+			t.Fatalf("split %d creates %d words", split, got)
+		}
+	}
+}
+
+func TestAuthorshipCopyMatchesOneContiguousSource(t *testing.T) {
+	text := "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima"
+	tokens := wordTokens(text)
+	for _, source := range [][]string{
+		{"alpha bravo charlie delta echo foxtrot golf hotel", "echo foxtrot golf hotel india juliet kilo lima"},
+		{"alpha bravo charlie delta echo foxtrot golf hotel completely separate fragment echo foxtrot golf hotel india juliet kilo lima"},
+	} {
+		c := newClassifier(nil)
+		for i, part := range source {
+			c.agentText.add(authorAt(i), textOrigin{"other", "reply"}, shingles(wordTokens(part)))
+		}
+		if got := copiedRuns(tokens, shingles(tokens), c.agentText, authorAt(-1)); len(got) != 0 {
+			t.Fatalf("stitched fragments counted as copy: %+v", got)
+		}
+	}
+	c := newClassifier(nil)
+	c.agentText.add(authorAt(0), textOrigin{"other", "full"}, shingles(tokens))
+	c.agentText.add(authorAt(1), textOrigin{"other", "fragment"}, shingles(tokens[:8]))
+	if got := copiedRuns(tokens, shingles(tokens), c.agentText, authorAt(-1)); len(got) != 1 || got[0].origin.message != "full" {
+		t.Fatalf("a later shared phrase hides the full source: %+v", got)
+	}
+	c.agentText.add(authorAt(2), textOrigin{"other", "prefix"}, shingles(tokens[:10]))
+	c.agentText.add(authorAt(3), textOrigin{"other", "suffix"}, shingles(tokens[2:]))
+	if got := copiedRuns(tokens, shingles(tokens), c.agentText, authorAt(-1)); len(got) != 1 || got[0].origin.message != "full" || got[0].start != 0 || got[0].end != len(text) {
+		t.Fatalf("later excerpts hid the complete copy: %+v", got)
+	}
+	// Repeated bodies share source data, but a later timestamp must retain
+	// its own seven-day lifetime, even for mirrors less than a second apart.
+	c = newClassifier(nil)
+	c.addAgentText(authorAt(0), textOrigin{"first", "first"}, text, false)
+	later := authorAt(0).Add(500 * time.Millisecond)
+	c.addAgentText(later, textOrigin{"later", "later"}, text, false)
+	cutoff := authorAt(0).Add(250 * time.Millisecond)
+	c.agentText.evict(cutoff)
+	if got := copiedRuns(tokens, shingles(tokens), c.agentText, cutoff); len(got) != 1 || got[0].origin.message != "later" {
+		t.Fatalf("deduplicated body lost its later source lifetime: %+v", got)
+	}
+}
+
+func TestAuthorshipRepeatedCopiesHaveCoalescedCoverage(t *testing.T) {
+	for _, size := range []int{1024, 32768} {
+		text := strings.Repeat("repeat ", size-1) + "repeat"
+		tokens := wordTokens(text)
+		hashes := shingles(tokens)
+		index := newShingleIndex()
+		index.add(authorAt(0), textOrigin{"source", "reply"}, hashes)
+		runs := copiedRuns(tokens, hashes, index, authorAt(-1))
+		if len(runs) != 1 || runs[0].start != 0 || runs[0].end != len(text) {
+			t.Fatalf("%d repeated words have fragmented or incomplete coverage: %d runs", size, len(runs))
+		}
+	}
+}
+
+func BenchmarkAuthorshipRepeatedCopy(b *testing.B) {
+	for _, size := range []int{4096, 8192, 16384, 32768} {
+		b.Run(fmt.Sprint(size), func(b *testing.B) {
+			tokens := wordTokens(strings.Repeat("repeat ", size))
+			hashes := shingles(tokens)
+			index := newShingleIndex()
+			index.add(authorAt(0), textOrigin{"source", "reply"}, hashes)
+			for b.Loop() {
+				if runs := copiedRuns(tokens, hashes, index, authorAt(-1)); len(runs) != 1 {
+					b.Fatalf("fragmented coverage: %d runs", len(runs))
+				}
+			}
+		})
+	}
+}
+
+func TestAuthorshipAgentWrittenPayloads(t *testing.T) {
+	body := "Write the workbook result outside both named input ranges so that the calculation is no longer circular.\n\nRegenerate the fixture and preserve the human comment after this handoff."
+	patch := "*** Begin Patch\n*** Update File: docs/handoff.md\n old context remains human material\n-removed text is not newly authored\n+" + strings.ReplaceAll(body, "\n", "\n+") + "\n*** End Patch"
+	cases := []struct {
+		name  string
+		input any
+		want  string
+	}{
+		{"Write", map[string]any{"content": body}, body},
+		{"Edit", map[string]any{"old_string": "old context remains human material", "new_string": body}, body},
+		{"apply_patch", patch, body},
+		{"exec", "await tools.apply_patch(" + strconv.Quote(patch) + ")", body},
+		{"exec", "await tools.apply_patch(`" + patch + "`)", body},
+		{"exec", "const patch = " + strconv.Quote(patch) + "; await tools.apply_patch(patch)", body},
+		{"exec", "await tools.Write({content: " + strconv.Quote(body) + ", path: 'handoff.md',})", body},
+		{"exec_command", map[string]any{"cmd": "cat > docs/handoff.md <<'EOF'\n" + body + "\nEOF\n"}, body},
+		{"exec_command", map[string]any{"cmd": "cat >> 'docs/handoff text.md' <<'EOF'\n" + body + "\nEOF\n"}, body},
+		{"exec_command", map[string]any{"cmd": "cat <<'EOF' 1>docs/handoff.md\n" + body + "\nEOF\n"}, body},
+		{"exec_command", map[string]any{"cmd": "cat &>docs/handoff.md <<'EOF'\n" + body + "\nEOF\n"}, body},
+		{"exec_command", map[string]any{"cmd": "tee -a docs/handoff.md <<'EOF'\n" + body + "\nEOF\n"}, body},
+		{"exec_command", map[string]any{"cmd": "tee <<'EOF' docs/handoff.md\n" + body + "\nEOF\n"}, body},
+		{"exec_command", map[string]any{"cmd": "mkdir -p docs && cat > docs/handoff.md <<'EOF'\n" + body + "\nEOF\n"}, body},
+		{"exec", "await tools.exec_command({cmd:" + strconv.Quote("cat > docs/handoff.md <<'EOF'\n"+body+"\nEOF\n") + "})", body},
+		{"exec", "const cmd = `cat > docs/handoff.md <<'EOF'\n" + body + "\nEOF\n`; await tools.exec_command({cmd})", body},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+"/"+fmt.Sprint(len(fmt.Sprint(tc.input))), func(t *testing.T) {
+			parts := authoredToolText(tc.name, tc.input)
+			if strings.Join(parts, "\n") != tc.want {
+				t.Fatalf("authored payload=%q", parts)
+			}
+			c := newClassifier(nil)
+			payload, _ := json.Marshal(map[string]any{"tool": tc.name, "input": tc.input})
+			c.addAuthorshipTool(authorAt(0), textOrigin{"writer", "write-event"}, string(payload))
+			text := body + "\n\nPlease also check mobile."
+			spans := c.classify(authorInput{ID: "m", ConversationID: "reader", Text: text, SentAt: authorAt(3)})
+			if got := categoryText(text, spans, spanTyped); strings.TrimLeft(got, ". \n") != "Please also check mobile." {
+				t.Fatalf("copied handoff leaked or follow-up lost: %q", got)
+			}
+			if countSpans(text, spans).words[spanTyped] != 4 {
+				t.Fatalf("typed words=%v", countSpans(text, spans).words)
+			}
+			for _, span := range spans {
+				if span.Category == spanQuoted && (span.Message != "write-event" || spanRule(span) != reasonAuthoredTool.rule) {
+					t.Fatalf("missing file provenance: %+v", span)
+				}
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name  string
+		input any
+	}{
+		{"Read", map[string]any{"content": body}},
+		{"Edit", map[string]any{"old_string": body}},
+		{"exec_command", map[string]any{"cmd": "cat <<'EOF'\n" + body + "\nEOF"}},
+		{"exec_command", map[string]any{"cmd": "cat <<'EOF' | grep -E '>'\n" + body + "\nEOF"}},
+		{"exec_command", map[string]any{"cmd": "cat '>' <<'EOF'\n" + body + "\nEOF"}},
+		{"exec_command", map[string]any{"cmd": "cat \"$(printf '>')\" <<'EOF'\n" + body + "\nEOF"}},
+		{"exec_command", map[string]any{"cmd": "cat <<'EOF' # > output.md\n" + body + "\nEOF"}},
+		{"exec_command", map[string]any{"cmd": "cat 2>errors.log <<'EOF'\n" + body + "\nEOF"}},
+		{"exec_command", map[string]any{"cmd": "cat 1>&2 <<'EOF'\n" + body + "\nEOF"}},
+		{"exec_command", map[string]any{"cmd": "cat >output.md >/dev/null <<'EOF'\n" + body + "\nEOF"}},
+		{"exec_command", map[string]any{"cmd": "cat existing.md >output.md <<'EOF'\n" + body + "\nEOF"}},
+		{"exec_command", map[string]any{"cmd": "cat <<'EOF' existing.md >output.md\n" + body + "\nEOF"}},
+		{"exec_command", map[string]any{"cmd": "cat <<'EOF' <existing.md >output.md\n" + body + "\nEOF"}},
+		{"exec_command", map[string]any{"cmd": "cat 3<<'EOF' >output.md\n" + body + "\nEOF"}},
+		{"exec_command", map[string]any{"cmd": "tee <<'EOF'\n" + body + "\nEOF"}},
+		{"exec_command", map[string]any{"cmd": "tee -a <<'EOF'\n" + body + "\nEOF"}},
+		{"exec_command", map[string]any{"cmd": "tee /dev/null <<'EOF'\n" + body + "\nEOF"}},
+		{"exec_command", map[string]any{"cmd": "python3 - <<'PY'\n" + body + "\nPY"}},
+		{"exec_command", map[string]any{"cmd": "cat > file <<'EOF'\n" + body}},
+		{"exec", "// await tools.apply_patch(" + strconv.Quote(patch) + ")"},
+		{"exec", "/* await tools.apply_patch(" + strconv.Quote(patch) + ") */"},
+		{"exec", "const example = " + strconv.Quote("await tools.apply_patch("+strconv.Quote(patch)+")")},
+		{"exec", `const example = /tools.Write({content:"` + strings.ReplaceAll(body, "\n", " ") + `"})/;`},
+		{"exec", "await tools.apply_patch(makePatch())"},
+		{"exec", "await tools.apply_patch(`" + patch + "${unknown}`)"},
+		{"exec", "const unusedCommand = `cat > file <<'EOF'\n" + body + "\nEOF`;"},
+	} {
+		if parts := authoredToolText(tc.name, tc.input); len(parts) > 0 {
+			t.Errorf("read/context/incomplete content treated as authored: %q", parts)
+		}
+	}
+}
+
+func TestAuthorshipQuestionForms(t *testing.T) {
+	c := newClassifier(nil)
+	source := `{"tool":"request_user_input_async","input":{"questions":[{"title":"Which mode should we use?","options":["Individual records (Recommended)","Conversation text"]},{"title":"Which name do you prefer?"},{"title":"Which color?"}]}}`
+	c.addAuthorshipTool(authorAt(0), textOrigin{"chat", "question"}, source)
+	text := "Which mode should we use?\nIndividual records\n\nWhich name do you prefer?\nMy new descriptive name\n\nWhich color?\n(Skipped)"
+	spans := c.classify(authorInput{ID: "answer", ConversationID: "chat", Text: text, SentAt: authorAt(10 * 24 * 60)})
+	if got := categoryText(text, spans, spanTyped); got != "My new descriptive name" {
+		t.Fatalf("question text leaked or free answer lost: %q", got)
+	}
+	for _, input := range []authorInput{
+		{ID: "plain", ConversationID: "chat", Text: "Individual records", SentAt: authorAt(2)},
+		{ID: "other", ConversationID: "other", Text: "Which mode should we use?\nIndividual records", SentAt: authorAt(2)},
+	} {
+		if got := categoryText(input.Text, c.classify(input), spanTyped); got != input.Text {
+			t.Fatalf("option/title alone establishes provenance: %q", got)
+		}
+	}
+	for _, script := range []string{
+		`await tools.request_user_input_async({questions:[{title:'Which records?',options:['Individual records (Recommended)','Conversations'],},]})`,
+		`await tools.exec("await tools.request_user_input_async({questions:[{title:'Which records?',options:['Individual records','Conversations']}]})")`,
+	} {
+		c := newClassifier(nil)
+		envelope, _ := json.Marshal(map[string]any{"tool": "exec", "input": script})
+		c.addAuthorshipTool(authorAt(0), textOrigin{"chat", "question"}, string(envelope))
+		text := "Which records?\nIndividual records\n\nPlease also check mobile."
+		spans := c.classify(authorInput{ID: "answer", ConversationID: "chat", Text: text, SentAt: authorAt(1)})
+		if got := categoryText(text, spans, spanTyped); got != "Please also check mobile." {
+			t.Fatalf("nested question form leaked or follow-up lost: %q", got)
+		}
+	}
+}
+
+func TestAuthorshipExplicitPastesPreserveHumanFollowup(t *testing.T) {
+	for _, tc := range []struct{ text, want string }{
+		{"The current label should say \"This is brand new descriptive copy for our application welcome screen\".", "The current label should say \"This is brand new descriptive copy for our application welcome screen\"."},
+		{"User: Sends requests\nAgent: Returns helpful answers", "User: Sends requests\nAgent: Returns helpful answers"},
+		{"This is the following error:\n\nI think the header needs more spacing.", "This is the following error:\n\nI think the header needs more spacing."},
+
+		{"From Claude recently:\n\nME: Please explain this.\nCLAUDE: The result includes the previously selected scope.\n\nCan you improve the API?", "From Claude recently:|Can you improve the API?"},
+		{"From Claude:\n\nUSER: " + strings.Repeat("Long conversation context. ", 40) + "\n\nASSISTANT: This later answer belongs to the same exchange.\nUSER: Please explain the final detail.\n\nASSISTANT: The final answer also belongs to that exchange.\n\nThat clarifies the background; please improve our API.", "From Claude:|That clarifies the background; please improve our API."},
+		{"The operation fails with\n\nThe last checkpoint failed.\nSaved revision is abc12345\n\nPlease investigate this.", "The operation fails with|Please investigate this."},
+		{"The operation _fails_ with\n\nThe last checkpoint failed.\nSaved revision is abc12345\n\nPlease investigate this.", "The operation _fails_ with|Please investigate this."},
+		{"The page is broken with this error:\n\nMachine Parallelism\n\nNo captured timing snapshot is available for this library.\n\nPlease fix", "The page is broken with this error:|Please fix"},
+		{"The page shows this error:\n\nMachine Parallelism\n\nThe heading needs more spacing.", "The page shows this error:|The heading needs more spacing."},
+		{"Please review this pasted plan.\n\n# Plan\n## Context\nSome earlier text.\n\n## Requested change\n\nRegenerate the fixture and calculate the workbook again.\n\nAlso check mobile.", "Please review this pasted plan.|Also check mobile."},
+		{"I wrote this plan.\n\n# Plan\n## Context\nSome earlier text.\n\n## Next steps\n\nThis final paragraph is my own writing.", "I wrote this plan.|This final paragraph is my own writing."},
+		{"Please use \"This is brand new descriptive copy for our application welcome screen\".", "Please use \"This is brand new descriptive copy for our application welcome screen\"."},
+		{"The current description reads \"Manage your library, choose what Pharos reads, and customize how the app behaves.\"\n\nPlease replace it.", "The current description reads|Please replace it."},
+		{"Auth configuration plan — cannot be applied\ntitle: Allow limited access\nverdict: may_change\n\nFAILING OPERATION\n  operation 1 failed\n\nPLAN JSON\n{\"version\":1}\n\nPlease fix it.", "Please fix it."},
+	} {
+		spans := newClassifier(nil).classify(authorInput{ID: "m", ConversationID: "chat", Text: tc.text, SentAt: authorAt(0)})
+		if got := categoryText(tc.text, spans, spanTyped); got != tc.want {
+			t.Errorf("%q\ntyped=%q want=%q", tc.text, got, tc.want)
+		}
+	}
+}
+
+func TestAuthorshipShortReviewItemsNeedTheSameSource(t *testing.T) {
+	c := newClassifier(nil)
+	long := "New source bytes can be permanently skipped after a rewrite with unchanged size and timestamp."
+	source := "Posted findings:\n1. **P1:** " + long + " [Code](/capture.go:10)\n2. **P2:** Mandatory hard links break indexing on external drives. [Location](/capture.go:20)"
+	c.addAgentText(authorAt(0), textOrigin{"review", "reply"}, source, false)
+	text := "Possibly stale review:\n\nP1: " + long + " Location:10\nP2: Mandatory hard links break indexing on external drives. Location:20\nP2: This is my newly written finding about correctness."
+	spans := c.classify(authorInput{ID: "m", ConversationID: "chat", Text: text, SentAt: authorAt(3 * 24 * 60)})
+	if got := categoryText(text, spans, spanTyped); got != "Possibly stale review:|P2: This is my newly written finding about correctness." {
+		t.Fatalf("short report leak or new item lost: %q", got)
+	}
+	alone := "P2: Mandatory hard links break indexing on external drives."
+	if got := categoryText(alone, c.classify(authorInput{ID: "alone", ConversationID: "other", Text: alone, SentAt: authorAt(4 * 24 * 60)}), spanQuoted); got != "" {
+		t.Fatalf("unanchored short phrase matched: %q", got)
+	}
+	c = newClassifier(nil)
+	source = "Posted five inline findings:\n- **[P2] Conversation-day sample counts messages.** [human-word-recipes.ts:47](/human-word-recipes.ts:47) omits the trend count and counts every message in the conversation instead.\n- **[P1] Offline rebuild reads live data.** [capture.go:707](/capture.go:707) invokes enrichment against records that may change after capture."
+	c.addAgentText(authorAt(0), textOrigin{"review", "inline"}, source, false)
+	text = "Posted five inline findings:\nP2] Conversation-day sample counts messages. human-word-recipes.ts:47 omits the trend count and counts every message in the conversation instead.\nP1 — Offline rebuild reads live data. capture.go:707 invokes enrichment against records that may change after capture.\n\nPlease fix both issues."
+	spans = c.classify(authorInput{ID: "edited", ConversationID: "chat", Text: text, SentAt: authorAt(3 * 24 * 60)})
+	if got := categoryText(text, spans, spanTyped); got != "Please fix both issues." {
+		t.Fatalf("edited review headings leaked or follow-up lost: %q", got)
+	}
+}
+
+func TestAuthorshipRebuildUsesToolSourcesAndSharedCounts(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	body := "Place the calculation result outside the named input ranges and regenerate the workbook with a fresh oracle."
+	old := "The previously generated document describes an entirely different workbook and its separate calculation policy and verification procedure."
+	envelope := func(name string, input any) string {
+		b, _ := json.Marshal(map[string]any{"tool": name, "input": input})
+		return string(b)
+	}
+	record := WorkspaceRecord{SourceID: "authored-tools", SourceKind: "codex", Account: "local", Title: "Authored tools", Conversations: []ConversationRecord{{NativeID: "chat", Provider: "codex", Messages: []MessageRecord{
+		{NativeID: "write", Role: "assistant", Kind: "tool_call", Text: envelope("exec", "await tools.apply_patch("+strconv.Quote("*** Begin Patch\n*** Add File: handoff.md\n+"+body+"\n*** End Patch")+")"), CreatedAt: "2026-09-01T12:00:00Z", Selected: true},
+		{NativeID: "old-write", Role: "assistant", Kind: "tool_call", Text: envelope("Write", map[string]any{"content": old}), CreatedAt: "2026-09-01T12:01:00Z", Selected: true},
+		{NativeID: "question", Role: "assistant", Kind: "tool_call", Text: envelope("exec", `await tools.request_user_input_async({questions:[{title:'Which records?',options:['Individual records','Conversations']}]})`), CreatedAt: "2026-09-01T12:02:00Z", Selected: true},
+		{NativeID: "copied", Role: "user", Kind: "message", Text: body + "\n\nPlease also check mobile.", CreatedAt: "2026-09-04T12:00:00Z", Selected: true},
+		{NativeID: "form", Role: "user", Kind: "message", Text: "Which records?\nIndividual records", CreatedAt: "2026-09-04T12:01:00Z", Selected: true},
+		{NativeID: "late", Role: "user", Kind: "message", Text: old, CreatedAt: "2026-09-10T12:00:00Z", Selected: true},
+	}}}}
+	tx, err := catalog.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ingestWorkspace(tx, record, false); err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.RebuildAuthorship(context.Background(), "test"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := queryMaps(catalog.DB, `SELECT m.native_id,a.message_id,a.conversation_id,a.typed_words,a.quoted_words FROM message_authorship a JOIN messages m ON m.id=a.message_id ORDER BY a.sent_at`)
+	if err != nil || len(rows) != 3 {
+		t.Fatalf("rows=%v error=%v", rows, err)
+	}
+	if integer(rows[0]["typed_words"]) != 4 || integer(rows[0]["quoted_words"]) != 17 || integer(rows[1]["typed_words"]) != 0 || integer(rows[2]["typed_words"]) == 0 || integer(rows[2]["quoted_words"]) != 0 {
+		t.Fatalf("counts/window=%v", rows)
+	}
+	var source string
+	if err := catalog.DB.QueryRow(`SELECT source_message_id FROM message_authorship_spans WHERE message_id=? AND category='quoted'`, rows[0]["message_id"]).Scan(&source); err != nil {
+		t.Fatal(err)
+	}
+	var native string
+	if err := catalog.DB.QueryRow(`SELECT native_id FROM messages WHERE id=?`, source).Scan(&native); err != nil || native != "write" {
+		t.Fatalf("source=%s %v", native, err)
+	}
+	for _, row := range rows {
+		var words int64
+		if err := catalog.DB.QueryRow(`SELECT SUM(words) FROM message_authorship_spans WHERE message_id=? AND category='typed'`, row["message_id"]).Scan(&words); err != nil {
+			// A fully generated form has no typed span at all.
+			if integer(row["typed_words"]) != 0 {
+				t.Fatal(err)
+			}
+		}
+		if words != integer(row["typed_words"]) {
+			t.Fatalf("span and ledger words differ: %v vs %d", row, words)
+		}
+	}
+	var text string
+	if err := catalog.DB.QueryRow(`SELECT text FROM messages WHERE id=?`, rows[0]["message_id"]).Scan(&text); err != nil {
+		t.Fatal(err)
+	}
+	message := map[string]any{"id": rows[0]["message_id"], "text": text}
+	attach, err := catalog.messageAuthorshipAttacher(rows[0]["conversation_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	attach(message)
+	parts := message["authorship"].(map[string]any)["spans"].([]map[string]any)
+	typed := int64(0)
+	for _, part := range parts {
+		if part["category"] == spanTyped {
+			typed += integer(part["words"])
+		}
+	}
+	if typed != 4 {
+		t.Fatalf("reader words=%d", typed)
 	}
 }
