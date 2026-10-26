@@ -8,6 +8,7 @@ const HEADER_TOOLS = [
   { id: 'search', element: 'searchToggle', label: 'Search', description: 'Search the library. The ⌘K shortcut also works.', on: true },
   { id: 'summary', element: 'usageSummaryToggle', label: 'Analyze summary', description: 'Recent words, tokens, CO₂e, and API cost.', on: true, legacy: 'pharos-show-usage-summary-button' },
   { id: 'annotations', element: 'feedbackToggle', label: 'Agent annotations', description: 'Mark up the interface to share feedback with an agent.', on: false, legacy: 'pharos-show-agent-annotation-button' },
+  { id: 'feedback', element: 'feedbackSubmitToggle', label: 'Send feedback', description: 'Send a bug report, request, or prompt to Pythia Software.', on: true },
   { id: 'settings', element: 'settingsToggle', label: 'Settings', description: 'Keep app settings within reach.', on: true, required: true },
   { id: 'theme', element: 'themeToggle', label: 'Color theme', description: 'Switch between system, light, and dark themes.', on: true, legacy: 'pharos-show-theme-button' },
   { id: 'navigator', element: 'navigatorToggle', label: 'Navigation bar', description: 'Navigate by URL, save bookmarks, and view page history.', on: false, legacy: 'pharos-show-nav-button' },

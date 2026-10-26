@@ -250,6 +250,8 @@ export const defaultApi = {
   "GET /api/menu-bar/usage": { human_words: 3240, tokens: 1200000, cost_usd: 8.42, co2e_g: 18.25 },
 
   // Settings.
+  "GET /api/feedback/diagnostics": { service: "Recent service diagnostics" },
+  "POST /api/feedback/submit": ({ body }) => ({ id: body.id, received: true }),
   "GET /api/health/counts": { workspaces: 1964, conversations: 2400, messages: 311120 },
   "GET /api/health/storage": { volume_name: "Pharos SSD", index_bytes: 2_000_000_000, internal_free_bytes: 100_000_000_000, free_bytes: 400_000_000_000, staging_bytes: 0, staging_cap_bytes: 1, path: "/Volumes/Pharos SSD/Pharos", status: "available" },
   "GET /api/health/pricing": { priced_tokens: 90, assumed_tokens: 0, partial_tokens: 0, unpriced_tokens: 10, total_tokens: 2_500_000_000, cost_usd: 1234.5, recent_tokens: 400_000_000, recent_cost_usd: 300, confirmed_changes: 3, proposed_changes: 0, unpriced_models: [] },

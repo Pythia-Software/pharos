@@ -1,4 +1,5 @@
 import "./visit-history";
+import "./uifeedback/pharos-client";
 import { matchingSelectionIDs } from "./query-selection";
 import { DataTaxonomyModal, SourceQueryBuilder } from "./data-taxonomy";
 import { installDelegationExplorer } from "./delegation";
