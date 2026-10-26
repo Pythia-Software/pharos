@@ -1,3 +1,4 @@
+import { originDimensions, originLabel, isOriginDimension, useOriginMetadata } from "./origin-dimensions";
 import React, { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { EMPTY_QUERY, decodeQuery, encodeQuery, type WhereTerm } from "@pythia-software/query-table-core";
 import { ChartSelect, DisplayControl, PeriodControl, RangeControl, RollingControl, StackedColumns, chartPeriodCount, chartSpan, pickRange, presetPeriod, rangeLabel, smoothingWhere, timeBounds, usageTime, withTimeRange, type ChartRange, type FilterChange, type PeriodView } from "./usage-chart";
@@ -31,10 +32,10 @@ declare global {
   }
 }
 
-type CarbonView = PeriodView & ChartPresentation & { metric: "co2" | "energy"; split: "type" | "provider" | "repository_name" | "tier"; rollingPeriods: number; display?: ChartDisplay };
+type CarbonView = PeriodView & ChartPresentation & { metric: "co2" | "energy"; split: "type" | "channel" | "machine_id" | "execution_machine_id" | "provider" | "repository_name" | "tier"; rollingPeriods: number; display?: ChartDisplay };
 const viewKey = "pharos-carbon-chart", filtersKey = "pharos-carbon-filters";
 const defaultView: CarbonView = { metric: "co2", split: "type", period: "week", hours: 6, days: 3, seriesLimit: 15, rollingPeriods: 0, display: "interval" };
-const splits: Array<[CarbonView["split"], string]> = [["type", "Token type"], ["provider", "Provider"], ["repository_name", "Repository"], ["tier", "Model tier"]];
+const splits: Array<[CarbonView["split"], string]> = [["type", "Token type"], ...originDimensions.map(([key,label]): [CarbonView["split"], string] => [key,label]), ["provider", "Provider"], ["repository_name", "Repository"], ["tier", "Model tier"]];
 const categories: ChartSeries[] = [
   { key: "uncached_input", label: "Uncached input", color: "var(--heat-3)" },
   { key: "cache_read", label: "Cache reads", color: "var(--heat-1)" },
@@ -68,13 +69,13 @@ function initialWhere(dashboard = false): WhereTerm[] {
   return [];
 }
 
-function CarbonFilter({ field, choices, where, onFilter }: { field: "repository_name" | "provider"; choices: string[]; where: WhereTerm[]; onFilter: FilterChange }) {
+function CarbonFilter({ field, choices, where, onFilter }: { field: "repository_name" | "provider" | "channel" | "machine_id" | "execution_machine_id"; choices: string[]; where: WhereTerm[]; onFilter: FilterChange }) {
   const selected = readSlice(where, field), values = [...new Set([...choices, ...selected.values.map(value => value ?? "")])].sort();
   const multiple = selected.excluded || selected.values.length > 1;
-  const label = field === "repository_name" ? "Repository" : "Provider";
+  const label = originDimensions.find(([key]) => key===field)?.[1] ?? (field === "repository_name" ? "Repository" : "Provider");
   const value = multiple ? "selection" : selected.values.length ? `v:${selected.values[0] ?? ""}` : "all";
   return <ChartSelect label={label} value={value}
-    options={[["all", `All ${field === "repository_name" ? "repositories" : "providers"}`], ...values.map((name): [string, string] => [`v:${name}`, name ? field === "provider" ? providers[name] ?? name : name : field === "provider" ? "Unknown provider" : "No repository"]), ...(multiple ? [["selection", "Multiple values / exclusions", "Filters restored from this link"] as [string, string, string]] : [])]}
+    options={[["all", `All ${field === "repository_name" ? "repositories" : field === "provider" ? "providers" : label.toLowerCase()+" values"}`], ...values.map((name): [string, string] => [`v:${name}`, isOriginDimension(field) ? originLabel(field,name) : name ? field === "provider" ? providers[name] ?? name : name : field === "provider" ? "Unknown provider" : "No repository"]), ...(multiple ? [["selection", "Multiple values / exclusions", "Filters restored from this link"] as [string, string, string]] : [])]}
     onChange={next => onFilter(current => withSlice(current, field, { values: next === "all" ? [] : [next.slice(2) || null], excluded: false }))} />;
 }
 
@@ -97,6 +98,7 @@ function useCarbonData(requestKey: string, refresh: number) {
 }
 
 export function CarbonImpact({ queryLinks }: { queryLinks?: (state: { where: WhereTerm[]; view: CarbonView }) => React.ReactNode } = {}) {
+  const originRevision = useOriginMetadata();
   const [view, setView] = useState(() => initialView(Boolean(queryLinks))), [where, setWhere] = useState(() => initialWhere(Boolean(queryLinks)));
   const [calculator, setCalculator] = useState(() => window.pharosCarbon);
   const [refresh, setRefresh] = useState(0), [assumptions, setAssumptions] = useState(0);
@@ -146,13 +148,14 @@ export function CarbonImpact({ queryLinks }: { queryLinks?: (state: { where: Whe
   const historyData = useCarbonData(separate ? JSON.stringify({ where: requestedWhere, hourly: isHourly(view.period), split: view.split === "type" ? "" : view.split }) : "", refresh);
   const data = state.data, chartData = separate ? historyData.data : data;
   const loading = state.loading || separate && historyData.loading, error = state.error || (separate ? historyData.error : "");
-  const scopeValue = (field: "repository_name" | "provider") => {
+  const scopeValue = (field: "repository_name" | "provider" | "channel" | "machine_id" | "execution_machine_id") => {
     const selection = readSlice(where, field);
-    if (!selection.values.length) return field === "repository_name" ? "All repositories" : "All providers";
-    return `${selection.excluded ? "Except " : ""}${selection.values.map(value => value ? field === "provider" ? providers[value] ?? value : value : field === "provider" ? "Unknown provider" : "No repository").join(", ")}`;
+    if (!selection.values.length) return field === "repository_name" ? "All repositories" : field === "provider" ? "All providers" : `All ${originDimensions.find(([key]) => key===field)?.[1].toLowerCase()} values`;
+    return `${selection.excluded ? "Except " : ""}${selection.values.map(value => isOriginDimension(field) ? originLabel(field,value) : value ? field === "provider" ? providers[value] ?? value : value : field === "provider" ? "Unknown provider" : "No repository").join(", ")}`;
   };
-  const scope = `${scopeValue("repository_name")} · ${scopeValue("provider")} · ${bounds.from || bounds.to ? `${bounds.from?.toLocaleString() ?? "Start of history"} → ${bounds.to?.toLocaleString() ?? "Present"}${bounds.to ? " (end exclusive)" : ""}` : "All time"}`;
-  const label = `${scopeValue("repository_name")} · ${scopeValue("provider")} · ${rangeLabel(bounds) || "All time"}`;
+  const originScope = originDimensions.filter(([field]) => readSlice(where,field).values.length).map(([field]) => scopeValue(field)).join(" · ");
+  const scope = `${originScope ? originScope+" · " : ""}${scopeValue("repository_name")} · ${scopeValue("provider")} · ${bounds.from || bounds.to ? `${bounds.from?.toLocaleString() ?? "Start of history"} → ${bounds.to?.toLocaleString() ?? "Present"}${bounds.to ? " (end exclusive)" : ""}` : "All time"}`;
+  const label = `${originScope ? originScope+" · " : ""}${scopeValue("repository_name")} · ${scopeValue("provider")} · ${rangeLabel(bounds) || "All time"}`;
   const onDateRange = (from?: Date, to?: Date, preset?: ChartRange | "all") => {
     onFilter(current => withTimeRange(current, usageTime, from, to, preset));
   };
@@ -179,9 +182,9 @@ export function CarbonImpact({ queryLinks }: { queryLinks?: (state: { where: Whe
         }
       } else rows.push([key, point.value, view.metric === "co2" ? result.co2 : result.facilityWh]);
     }
-    const name = (value: string) => view.split === "tier" ? chartData.factors.tiers.find(tier => tier.key === value)?.label ?? value : view.split === "provider" ? (providers[value] ?? value) || "Unknown provider" : value || "No repository";
+    const name = (value: string) => view.split === "tier" ? chartData.factors.tiers.find(tier => tier.key === value)?.label ?? value : isOriginDimension(view.split) ? originLabel(view.split, value) : view.split === "provider" ? (providers[value] ?? value) || "Unknown provider" : value || "No repository";
     return { series: view.split === "type" ? categories : foldSeries(rows, byKey, name, undefined, [], limit, view.split === "tier" ? "carbon:tier" : view.split), buckets, cumulativeStart };
-  }, [calculator, chartData, assumptions, view.metric, view.split, view.period, count, bounds.from?.getTime(), bounds.to?.getTime(), limit, view.rollingPeriods, cumulative]);
+  }, [calculator, chartData, originRevision, assumptions, view.metric, view.split, view.period, count, bounds.from?.getTime(), bounds.to?.getTime(), limit, view.rollingPeriods, cumulative]);
   const format = view.metric === "co2" ? calculator?.mass : calculator?.energy;
   const title = `${cumulative ? "Cumulative estimated" : "Estimated"} ${view.metric === "co2" ? "CO₂e" : "electricity"}${cumulative ? "" : ` per ${periodLabel(view.period, count)}`} by ${splits.find(([key]) => key === view.split)?.[1].toLowerCase()}`;
   const choices = state.data?.choices ?? {};
@@ -192,6 +195,7 @@ export function CarbonImpact({ queryLinks }: { queryLinks?: (state: { where: Whe
       <div className="usage-chart-controls">
         <CarbonFilter field="repository_name" choices={choices.repository_name ?? []} where={where} onFilter={onFilter} />
         <CarbonFilter field="provider" choices={choices.provider ?? []} where={where} onFilter={onFilter} />
+        {originDimensions.map(([field]) => <CarbonFilter key={field} field={field} choices={choices[field] ?? []} where={where} onFilter={onFilter} />)}
       </div>
     </section>
     {data && !data.windows.some(window => Object.values(window.tokens).some(counts => Object.values(counts).some(value => value > 0))) ? <p className="muted" role="status">No reported token usage matches these filters.</p> : null}

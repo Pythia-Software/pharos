@@ -18,6 +18,9 @@ type toolRollupBuild struct {
 }
 
 func (c *Catalog) updateToolRollup(ctx context.Context, generation, day string, force bool) error {
+	if err := c.ensureOrigins(ctx); err != nil {
+		return err
+	}
 	for attempt := 0; attempt < 3; attempt++ {
 		err := c.constructToolRollup(ctx, generation, day, force)
 		if !errors.Is(err, errToolPublicationChanged) {

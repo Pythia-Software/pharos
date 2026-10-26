@@ -24,6 +24,9 @@ var toolCubeGroups = func() []struct{ column, expr string } {
 		{"source_kind", "w.source_kind"}, {"day", "date(t.started_at,'localtime')"},
 		{"session_kind", "COALESCE(a.kind,'root')"}, {"agent_depth", "COALESCE(a.depth,0)"},
 	}
+	for _, field := range originDimensions {
+		groups = append(groups, struct{ column, expr string }{field, "o." + field})
+	}
 	for _, column := range []string{"provider", "model", "effort", "kind", "tool_name", "tool_category", "mcp_server", "program", "subcommand",
 		"command_category", "status", "error_type", "test_failure", "path_repository", "path_scope", "exit_code", "interrupted", "truncated", "has_pipe", "has_redirect", "has_heredoc",
 		"backgrounded", "host", "duration_source", "result_tokens_source"} {
@@ -73,7 +76,7 @@ func toolCubeSelect(mirrors string) string {
 
 // toolRollupFromCube sums the cube into tool_usage_daily's groups and counts.
 const toolRollupFromCube = `SELECT day,repository_name,source_kind,provider,COALESCE(model,'') model,effort,session_kind,
-		tool_name,tool_category,mcp_server,program,subcommand,command_category,
+		tool_name,tool_category,mcp_server,program,subcommand,command_category,channel,machine_id,machine,machine_kind,execution_machine_id,execution_machine,execution_machine_kind,
 		SUM(call_count) call_count,SUM(CASE WHEN status='error' THEN call_count ELSE 0 END) error_count,
 		SUM(CASE WHEN status='no_result' THEN call_count ELSE 0 END) no_result_count,
 		SUM(CASE WHEN error_type='user_rejected' THEN call_count ELSE 0 END) rejected_count,SUM(interrupted*call_count) interrupted_count,
@@ -85,18 +88,21 @@ const toolRollupFromCube = `SELECT day,repository_name,source_kind,provider,COAL
 		SUM(CASE WHEN result_tokens_source='measured' THEN call_count ELSE 0 END) measured_count,
 		SUM(carried_tokens_sum) carried_tokens,SUM(output_tokens_sum) output_tokens,
 		COALESCE(SUM(lines_added_sum),0) lines_added,COALESCE(SUM(lines_removed_sum),0) lines_removed,COUNT(DISTINCT workspace_id) work_count
-	FROM tool_call_cube GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13`
+	FROM tool_call_cube GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20`
 
 // toolCallCube describes tool_call_cube to the Tool calls table.
 var toolCallCube = func() *sqlCube {
 	cube := &sqlCube{from: "FROM tool_call_cube", count: "call_count", dimensions: map[string]string{
 		"week": "date(day,'-6 days','weekday 1')", "month": "strftime('%Y-%m',day)", "model_family": "model_family(model)",
-		"model_effort":   "model_effort(model,effort)",
-		"command_name":   "NULLIF(TRIM(COALESCE(program,'')||' '||COALESCE(subcommand,'')),'')",
-		"operation_key":  "machine_operation_key(tool_name,mcp_server,program,subcommand)",
-		"operation_name": "machine_operation_name(tool_name,mcp_server,program,subcommand)",
-		"activity":       "machine_activity(tool_category,command_category,tool_name,mcp_server,program)",
-		"mcp_method":     mcpMethodSQL(""),
+		"model_effort":       "model_effort(model,effort)",
+		"channels":           "COALESCE(channel,'Unknown')",
+		"machines":           "COALESCE(machine_id,'Unknown')",
+		"execution_machines": "COALESCE(execution_machine_id,'Unknown')",
+		"command_name":       "NULLIF(TRIM(COALESCE(program,'')||' '||COALESCE(subcommand,'')),'')",
+		"operation_key":      "machine_operation_key(tool_name,mcp_server,program,subcommand)",
+		"operation_name":     "machine_operation_name(tool_name,mcp_server,program,subcommand)",
+		"activity":           "machine_activity(tool_category,command_category,tool_name,mcp_server,program)",
+		"mcp_method":         mcpMethodSQL(""),
 		// Per-call values that follow from a group.
 		"call_count": "1", "error_count": "(status='error')",
 	}, present: map[string]string{}, measures: map[string]cubeMeasure{}}

@@ -40,6 +40,9 @@ func init() {
 		}
 		schema := tool["inputSchema"].(map[string]any)
 		properties := schema["properties"].(map[string]any)
+		for _, key := range []string{"channel", "machine_id", "execution_machine_id"} {
+			properties[key] = map[string]any{"type": "string"}
+		}
 		for k, v := range statisticsProperties() {
 			properties[k] = v
 		}
@@ -55,7 +58,7 @@ func init() {
 	properties := statisticsProperties()
 	properties["result_mode"] = map[string]any{"type": "string", "const": "metadata"}
 	properties["release_snapshot"] = map[string]any{"type": "boolean", "description": "Release a finished snapshot before expiry; provide only release_snapshot=true and snapshot_id."}
-	for _, key := range []string{"query", "repository", "source", "provider", "model", "effort", "file", "from", "to", "owner", "flavor", "version", "outcome", "error"} {
+	for _, key := range []string{"query", "repository", "source", "provider", "channel", "machine_id", "execution_machine_id", "model", "effort", "file", "from", "to", "owner", "flavor", "version", "outcome", "error"} {
 		properties[key] = map[string]any{"type": "string"}
 	}
 	properties["pr"] = map[string]any{"type": "integer"}
@@ -64,6 +67,6 @@ func init() {
 	properties["limit"] = map[string]any{"type": "integer", "minimum": 1, "maximum": 500, "default": 100}
 	properties["max_output_tokens"] = map[string]any{"type": "integer", "minimum": 200, "maximum": 8000, "default": 4000}
 	properties["aggregations"] = map[string]any{"type": "array", "maxItems": 8, "items": map[string]any{"type": "object", "required": []string{"id", "op"}, "additionalProperties": false, "properties": map[string]any{"id": map[string]any{"type": "string", "minLength": 1, "maxLength": 80}, "op": map[string]any{"type": "string", "enum": []string{"count", "sum", "avg", "min", "max"}}, "metric": map[string]any{"type": "string"}}}}
-	properties["group_by"] = map[string]any{"type": "array", "maxItems": 2, "uniqueItems": true, "items": map[string]any{"type": "string", "enum": []string{"repository", "source"}}}
+	properties["group_by"] = map[string]any{"type": "array", "maxItems": 3, "uniqueItems": true, "items": map[string]any{"type": "string", "enum": []string{"repository", "source", "provider", "channel", "machine_id", "execution_machine_id", "channels", "machines"}}}
 	mcpTools = append(mcpTools, map[string]any{"name": "query_statistics", "description": "Query compact workspace/conversation IDs and selected metrics, or count/sum/avg/min/max over the full filtered canonical population. No previews or transcripts. Use entity=workspace for workspace totals including subagents, conversation for own-stream metrics. Omit query for exhaustive numeric discovery; text retrieval reports population_complete=false. Cursor pages freeze values for five minutes; copy the effective original arguments. Missing/partial evidence and aggregate denominators stay explicit.", "inputSchema": map[string]any{"type": "object", "properties": properties, "additionalProperties": false}}, map[string]any{"name": "list_metrics", "description": "Discover metric names, units, definitions, aliases, scopes and quality semantics before filtering or aggregating.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"metric_scope": map[string]any{"type": "string", "enum": []string{"workspace", "conversation"}}}, "additionalProperties": false}})
 }

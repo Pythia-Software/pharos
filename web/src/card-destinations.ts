@@ -30,6 +30,10 @@ const tools = (metric: ToolDashboardView["metric"], split: ToolDashboardView["sp
   topic: "tools", chart: { metric, split, view: "compare", period: "day", rollingPeriods: 0, display: "interval", ...extra },
 });
 const dashboards: Record<string, CardDashboard> = {
+  ...Object.fromEntries((["channel", "machine_id", "execution_machine_id"] as const).flatMap(field => [
+    [`origin-tokens-${field}`, tokens("tokens", field)],
+    [`origin-cost-${field}`, tokens("cost", field)],
+  ])),
   "usage-models": tokens("tokens", "model_family"),
   "usage-repos": tokens("tokens", "repository_name"),
   "cost-repos": tokens("cost", "repository_name"),

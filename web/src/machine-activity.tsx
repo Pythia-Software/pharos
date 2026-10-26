@@ -1,3 +1,4 @@
+import { originDimensions, originLabel, useOriginMetadata } from "./origin-dimensions";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { WhereTerm } from "@pythia-software/query-table-core";
 import { pushMachineLocation } from "./machine-location";
@@ -5,7 +6,7 @@ import { readMachineConcurrencySettings } from "./concurrency-settings";
 import { preferences } from "./preferences";
 import { ConcurrencyPanel } from "./concurrency";
 import { MachineTime, type MachineCallsSurface } from "./machine-time";
-import { machineDay, shiftMachineDay, machineWhere, machineWindow, type MachineScope } from "./machine-activity-data";
+import { machineDay, shiftMachineDay, machineWhere, machineWindow, machineScopeFromParams, type MachineScope } from "./machine-activity-data";
 import "./machine-activity.css";
 
 type MachineView = "tokens" | "parallelism" | "time";
@@ -16,7 +17,7 @@ const views: Array<[MachineView, string, string]> = [
   ["time", "Machine Time", "Where is agent time going?"],
 ];
 
-function readLocation() {
+function readLocation(): { view: MachineView; scope: MachineScope } {
   const params = new URLSearchParams(location.search);
   // A bookmarked token query carries its own population. Saved Machine Time
   // filters must not silently narrow a card’s destination. Explicit URL scopes
@@ -25,16 +26,11 @@ function readLocation() {
   const requested = params.get("machine_view") ?? (tokenQuery ? "tokens" : preferences().get("pharos-machine-view", "tokens"));
   const view: MachineView = requested === "time" || requested === "parallelism" ? requested : "tokens";
   const saved = tokenQuery ? { days: 0, repository: "", provider: "", model: "" } : preferences().get<MachineScope>(scopeKey, { days: 0, repository: "", provider: "", model: "" });
-  const days = Number(params.get("activity_days") ?? saved.days);
-  return { view, scope: {
-    days: [0, 7, 14, 30, 90].includes(days) ? days : 0,
-    repository: params.get("activity_repo") ?? saved.repository ?? "",
-    provider: params.get("activity_provider") ?? saved.provider ?? "",
-    model: params.get("activity_model") ?? saved.model ?? "",
-  } };
+  return { view, scope: machineScopeFromParams(params, saved) };
 }
 
 export function MachineActivity({ tokens, calls, parallelism }: { tokens: (where: WhereTerm[], applied: React.MutableRefObject<WhereTerm[]>, onTimeRangeChange: () => void) => React.ReactNode; calls: MachineCallsSurface; parallelism?: () => React.ReactNode }) {
+  useOriginMetadata();
   const [state, setState] = useState(readLocation);
   const { view, scope } = state;
   const appliedTokenScope = useRef<WhereTerm[]>([]);
@@ -46,7 +42,7 @@ export function MachineActivity({ tokens, calls, parallelism }: { tokens: (where
     const url = new URL(location.href);
     url.searchParams.delete("machine_demo");
     const initial = readLocation();
-    for (const [key, value] of Object.entries({ usage: "tokens", machine_view: initial.view, activity_days: String(initial.scope.days), activity_repo: initial.scope.repository, activity_provider: initial.scope.provider, activity_model: initial.scope.model })) url.searchParams.set(key, value);
+    for (const [key, value] of Object.entries({ usage: "tokens", machine_view: initial.view, activity_days: String(initial.scope.days), activity_repo: initial.scope.repository, activity_provider: initial.scope.provider, activity_model: initial.scope.model, ...Object.fromEntries(originDimensions.map(([field])=>[`activity_${field}`, initial.scope[field] ?? ""])) })) url.searchParams.set(key, value);
     history.replaceState(history.state, "", url);
     globalThis.window.dispatchEvent(new Event("pharos:uri-changed"));
     const restore = () => setState(readLocation());
@@ -55,7 +51,7 @@ export function MachineActivity({ tokens, calls, parallelism }: { tokens: (where
   }, []);
   useEffect(() => {
     const controller = new AbortController();
-    const fields = ["repository_name", "provider", "model"];
+    const fields = ["repository_name", "provider", "model", ...originDimensions.map(([field]) => field)];
     Promise.all(fields.map(async field => {
       const response = await fetch(`/api/query/usage/distinct?field=${field}&limit=1000`, { signal: controller.signal });
       if (!response.ok) throw new Error("Filter choices could not be loaded. Saved selections still apply.");
@@ -71,7 +67,7 @@ export function MachineActivity({ tokens, calls, parallelism }: { tokens: (where
     preferences().set("pharos-machine-view", merged.view);
     const url = new URL(location.href);
     const values = { machine_view: merged.view,
-      activity_days: String(merged.scope.days), activity_repo: merged.scope.repository, activity_provider: merged.scope.provider, activity_model: merged.scope.model };
+      activity_days: String(merged.scope.days), activity_repo: merged.scope.repository, activity_provider: merged.scope.provider, activity_model: merged.scope.model, ...Object.fromEntries(originDimensions.map(([field])=>[`activity_${field}`, merged.scope[field] ?? ""])) };
     for (const [key, value] of Object.entries(values)) url.searchParams.set(key, value);
     if (JSON.stringify(merged.scope) !== JSON.stringify(scope)) {
       const captured = readMachineConcurrencySettings();
@@ -88,6 +84,7 @@ export function MachineActivity({ tokens, calls, parallelism }: { tokens: (where
     <div className="machine-scope" role="group" aria-label="Machine Activity filters">
       <label>Period<select aria-label="Activity period" value={scope.days} onChange={event => filter({ days: Number(event.target.value) })}><option value="0">All recorded time</option>{[7, 14, 30, 90].map(days => <option key={days} value={days}>Last {days} complete days</option>)}</select></label>
       <label>Repository<select aria-label="Activity repository" value={scope.repository} onChange={event => filter({ repository: event.target.value })}><option value="">All repositories</option>{choices("repository_name", scope.repository).map(repository => <option key={repository}>{repository}</option>)}</select></label>
+      {originDimensions.map(([field,label]) => <label key={field}>{label}<select aria-label={`Activity ${label.toLowerCase()}`} value={scope[field]} onChange={event => filter({ [field]: event.target.value })}><option value="">All {label.toLowerCase()} values</option>{choices(field, scope[field] ?? "").map(value => <option key={value} value={value}>{originLabel(field,value)}</option>)}</select></label>)}
       <label>Provider<select aria-label="Activity provider" value={scope.provider} onChange={event => filter({ provider: event.target.value })}><option value="">All providers</option>{choices("provider", scope.provider).map(provider => <option key={provider}>{provider}</option>)}</select></label>
       <label>Model<select aria-label="Activity model" value={scope.model} onChange={event => filter({ model: event.target.value })}><option value="">All models</option>{choices("model", scope.model).map(model => <option key={model}>{model}</option>)}</select></label>
     </div>

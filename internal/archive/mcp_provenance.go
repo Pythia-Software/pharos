@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"sort"
@@ -158,6 +159,9 @@ func (c *Catalog) boundedWorkDetail(args map[string]any) (map[string]any, error)
 		}
 	}
 	if section == "conversations" {
+		if err := c.attachOrigins(context.Background(), items); err != nil {
+			return nil, err
+		}
 		if err := c.attachConversationProvenance(items); err != nil {
 			return nil, err
 		}

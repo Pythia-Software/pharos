@@ -23,32 +23,36 @@ import (
 // by relevant edits, deletes, or index reordering. Ordinary appends are safe;
 // fuzzy searches also watch vocabulary changes and spans watch classification.
 type TextSearchOptions struct {
-	Query              string     `json:"query"`
-	Mode               string     `json:"mode,omitempty"`
-	Where              *textQuery `json:"where,omitempty"`
-	Surface            string     `json:"surface,omitempty"`
-	Repository         string     `json:"repository,omitempty"`
-	ConversationID     string     `json:"conversation_id,omitempty"`
-	WorkspaceID        string     `json:"workspace_id,omitempty"`
-	WorkspaceIDs       []string   `json:"workspace_ids,omitempty"`
-	Source             string     `json:"source,omitempty"`
-	Provider           string     `json:"provider,omitempty"`
-	Roles              []string   `json:"roles,omitempty"`
-	Kinds              []string   `json:"kinds,omitempty"`
-	From               string     `json:"from,omitempty"`
-	To                 string     `json:"to,omitempty"`
-	CaseSensitive      bool       `json:"case_sensitive,omitempty"`
-	Separators         bool       `json:"separators,omitempty"`
-	FuzzyPrefixLength  int        `json:"fuzzy_prefix_length,omitempty"`
-	FuzzyMaxEdits      int        `json:"fuzzy_max_edits,omitempty"`
-	FuzzyMaxExpansions int        `json:"fuzzy_max_expansions,omitempty"`
-	Fuzzy              bool       `json:"fuzzy,omitempty"`
-	SelectedOnly       bool       `json:"selected_only,omitempty"`
-	Cursor             string     `json:"cursor,omitempty"`
-	Limit              int        `json:"limit,omitempty"`
-	MaxCandidates      int        `json:"max_candidates,omitempty"`
-	MaxBytes           int        `json:"max_bytes,omitempty"`
-	TimeoutMS          int        `json:"timeout_ms,omitempty"`
+	originConversationIDs []string
+	Query                 string     `json:"query"`
+	Mode                  string     `json:"mode,omitempty"`
+	Where                 *textQuery `json:"where,omitempty"`
+	Surface               string     `json:"surface,omitempty"`
+	Repository            string     `json:"repository,omitempty"`
+	ConversationID        string     `json:"conversation_id,omitempty"`
+	WorkspaceID           string     `json:"workspace_id,omitempty"`
+	WorkspaceIDs          []string   `json:"workspace_ids,omitempty"`
+	Source                string     `json:"source,omitempty"`
+	Channel               string     `json:"channel,omitempty"`
+	MachineID             string     `json:"machine_id,omitempty"`
+	ExecutionMachineID    string     `json:"execution_machine_id,omitempty"`
+	Provider              string     `json:"provider,omitempty"`
+	Roles                 []string   `json:"roles,omitempty"`
+	Kinds                 []string   `json:"kinds,omitempty"`
+	From                  string     `json:"from,omitempty"`
+	To                    string     `json:"to,omitempty"`
+	CaseSensitive         bool       `json:"case_sensitive,omitempty"`
+	Separators            bool       `json:"separators,omitempty"`
+	FuzzyPrefixLength     int        `json:"fuzzy_prefix_length,omitempty"`
+	FuzzyMaxEdits         int        `json:"fuzzy_max_edits,omitempty"`
+	FuzzyMaxExpansions    int        `json:"fuzzy_max_expansions,omitempty"`
+	Fuzzy                 bool       `json:"fuzzy,omitempty"`
+	SelectedOnly          bool       `json:"selected_only,omitempty"`
+	Cursor                string     `json:"cursor,omitempty"`
+	Limit                 int        `json:"limit,omitempty"`
+	MaxCandidates         int        `json:"max_candidates,omitempty"`
+	MaxBytes              int        `json:"max_bytes,omitempty"`
+	TimeoutMS             int        `json:"timeout_ms,omitempty"`
 	// Internal Library table execution: collect the whole workspace population,
 	// with one evidence item and an exact message count per workspace. Public
 	// message search retains its cursor, byte and candidate budgets.
@@ -118,6 +122,13 @@ func (c *Catalog) textSearchGeneration(ctx context.Context, o TextSearchOptions)
 	if err == sql.ErrNoRows {
 		v, e := c.catalogVersion(ctx)
 		return fmt.Sprintf("%s:%d", textSearchEpoch, v), e
+	}
+	if err == nil && (o.Channel != "" || o.MachineID != "" || o.ExecutionMachineID != "") {
+		var revision int64
+		if e := c.reader().QueryRowContext(ctx, "SELECT revision FROM origin_state WHERE id=1").Scan(&revision); e != nil {
+			return "", e
+		}
+		generation += fmt.Sprintf(":origins:%d", revision)
 	}
 	return generation, err
 }
@@ -336,6 +347,21 @@ func compileTextPattern(node *textQuery, caseSensitive bool) (*regexp.Regexp, in
 // original text verifier sees at most min(1 MiB, MaxBytes) per message;
 // oversized records are counted and make the final count a lower bound.
 func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (result textSearchResult, err error) {
+	if err := c.ensureOrigins(parent); err != nil {
+		return result, err
+	}
+	if c.queryOnly && (o.Channel != "" || o.MachineID != "" || o.ExecutionMachineID != "") {
+		origins, err := c.conversationOrigins(parent)
+		if err != nil {
+			return result, err
+		}
+		o.originConversationIDs = []string{}
+		for id, row := range origins {
+			if (o.Channel == "" || row["channel"] == o.Channel) && (o.MachineID == "" || row["machine_id"] == o.MachineID) && (o.ExecutionMachineID == "" || row["execution_machine_id"] == o.ExecutionMachineID) {
+				o.originConversationIDs = append(o.originConversationIDs, id)
+			}
+		}
+	}
 	started := time.Now()
 	defer func() { result.ElapsedMS = time.Since(started).Milliseconds() }()
 	result.Items = []textSearchItem{}
@@ -543,11 +569,18 @@ func (c *Catalog) SearchText(parent context.Context, o TextSearchOptions) (resul
 	if o.SelectedOnly {
 		clauses = append(clauses, "m.selected=1")
 	}
-	for _, f := range []struct{ column, value string }{{"m.conversation_id", o.ConversationID}, {"c.workspace_id", o.WorkspaceID}, {"w.source_kind", o.Source}, {"c.provider", o.Provider}} {
+	for _, f := range []struct{ column, value string }{{"m.conversation_id", o.ConversationID}, {"c.workspace_id", o.WorkspaceID}, {"w.source_kind", o.Source}, {"c.provider", o.Provider}, {"(SELECT channel FROM conversation_origins oo WHERE oo.conversation_id=c.id)", o.Channel}, {"(SELECT machine_id FROM conversation_origins oo WHERE oo.conversation_id=c.id)", o.MachineID}, {"(SELECT execution_machine_id FROM conversation_origins oo WHERE oo.conversation_id=c.id)", o.ExecutionMachineID}} {
+		if o.originConversationIDs != nil && strings.HasPrefix(f.column, "(SELECT") {
+			continue
+		}
 		if f.value != "" {
 			clauses = append(clauses, f.column+"=?")
 			arguments = append(arguments, f.value)
 		}
+	}
+	if o.originConversationIDs != nil {
+		clauses = append(clauses, "m.conversation_id IN (SELECT value FROM json_each(?))")
+		arguments = append(arguments, jsonText(o.originConversationIDs))
 	}
 	if o.WorkspaceIDs != nil {
 		clauses = append(clauses, "c.workspace_id IN (SELECT value FROM json_each(?))")

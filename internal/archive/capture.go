@@ -213,6 +213,7 @@ type CaptureSummary struct {
 
 type captureHostRecord struct {
 	ID             string `json:"id"`
+	MachineID      string `json:"machine_id,omitempty"`
 	Label          string `json:"label"`
 	User           string `json:"user"`
 	FirstCaptureAt string `json:"first_capture_at"`
@@ -355,6 +356,7 @@ func (s *captureSession) writeHost(started, finished string) error {
 		return nil
 	}
 	record.ID, record.Label, record.User = s.host.ID, s.host.Label, s.host.User
+	record.MachineID = defaultString(s.host.MachineID, record.MachineID)
 	record.FirstCaptureAt = defaultString(record.FirstCaptureAt, started)
 	if finished != "" {
 		record.LastCaptureAt = finished
