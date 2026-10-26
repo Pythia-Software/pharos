@@ -116,7 +116,7 @@
 #pharos-ask .pharos-send svg,#pharos-ask .pharos-icon-control svg{width:17px;height:17px}
 #pharos-ask .pharos-plain{border:0;padding:3px 0;background:transparent;color:var(--pharos-sea)!important;display:inline-flex;align-items:center;gap:5px;text-align:left}
 #pharos-ask .pharos-plain svg{width:14px;height:14px}
-#pharos-ask .pharos-invitation{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px;margin-top:6px}
+#pharos-ask .pharos-invitation{display:flex;align-items:center;gap:12px;font-size:12px;margin-top:6px}
 #pharos-ask .pharos-dismiss{color:var(--pharos-muted)!important}
 #pharos-ask .pharos-product-heading{display:flex;align-items:flex-start;gap:14px}
 #pharos-ask .pharos-product-heading h2{flex:1;min-width:0}
@@ -143,9 +143,8 @@
 #pharos-ask .pharos-mode-switch svg{width:13px;height:13px}
 #pharos-ask .pharos-search-head .pharos-ai-mode{margin:0 0 0 4px;color:var(--pharos-sea)!important;background:linear-gradient(110deg,color-mix(in srgb,var(--pharos-aqua) 8%,var(--pharos-panel)),color-mix(in srgb,var(--pharos-violet) 10%,var(--pharos-panel)),color-mix(in srgb,var(--pharos-gold) 12%,var(--pharos-panel)))}
 #pharos-ask .pharos-ai-mode svg{color:var(--pharos-violet)}
-#pharos-ask .pharos-try{display:inline-flex;gap:6px;align-items:center;padding:5px 10px;border:1px solid color-mix(in srgb,var(--pharos-violet) 40%,var(--pharos-line));border-radius:20px;background:linear-gradient(110deg,color-mix(in srgb,var(--pharos-aqua) 9%,var(--pharos-panel)),color-mix(in srgb,var(--pharos-violet) 12%,var(--pharos-panel)),color-mix(in srgb,var(--pharos-gold) 13%,var(--pharos-panel)));box-shadow:0 2px 12px color-mix(in srgb,var(--pharos-violet) 12%,transparent)}
+#pharos-ask .pharos-try{display:inline-flex;gap:6px;align-items:center;padding:5px 10px;border:1px solid color-mix(in srgb,var(--pharos-violet) 40%,var(--pharos-line));border-radius:10px;background:linear-gradient(110deg,color-mix(in srgb,var(--pharos-aqua) 9%,var(--pharos-panel)),color-mix(in srgb,var(--pharos-violet) 12%,var(--pharos-panel)),color-mix(in srgb,var(--pharos-gold) 13%,var(--pharos-panel)));box-shadow:0 2px 12px color-mix(in srgb,var(--pharos-violet) 12%,transparent)}
 #pharos-ask .pharos-try span{background:linear-gradient(90deg,var(--pharos-sea),var(--pharos-violet),var(--pharos-gold));background-clip:text;-webkit-background-clip:text;color:transparent}
-#pharos-ask .pharos-try svg{width:15px;height:15px;color:var(--pharos-violet)}
 #pharos-ask .pharos-search-options{display:flex;align-items:center;gap:10px 16px;flex-wrap:wrap;margin:8px 0;color:var(--pharos-muted);font-size:12px}
 #pharos-ask .pharos-search-options label{display:inline-flex;align-items:center;gap:6px;margin:0}
 #pharos-ask .pharos-search-options select{max-width:100%;padding:4px;background:var(--pharos-bg);border:1px solid var(--pharos-line);border-radius:5px}

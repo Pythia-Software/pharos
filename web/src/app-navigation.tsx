@@ -6,6 +6,7 @@ import { localPageNavigation, type NestedPage } from "./nested-pages-model";
 import { PageLink, useLocationRevision } from "./nested-pages";
 import { Icon } from "./icons";
 import { preferences } from "./preferences";
+import { focusPageContent } from "./page-focus";
 import "./app-shell.css";
 
 type Layout = "wide" | "compact" | "phone";
@@ -86,8 +87,7 @@ function AppNavigation({ settings, contentNavigation }: { settings: NestedPage[]
     if (navigating.current) {
       navigating.current = false;
       requestAnimationFrame(() => {
-        const heading = document.querySelector<HTMLElement>(".view.active h1") ?? document.querySelector<HTMLElement>("main");
-        if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); }
+        focusPageContent();
         document.querySelector("main")?.scrollTo({ top: 0, left: 0 });
       });
     }

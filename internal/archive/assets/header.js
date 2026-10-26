@@ -156,8 +156,10 @@ function initHeaderOverflow(readTools) {
   const schedule = () => {
     if (!frame) frame = requestAnimationFrame(() => { frame = 0; layout(); });
   };
-  // Font loading, drive labels, tab visibility, preferences, and native window
-  // padding can change the fit without a window resize.
+  // Font loading, drive labels, release availability/download progress, tab
+  // visibility, preferences, and native window padding can change the fit
+  // without a window resize. Observe the overflow list too: a changing combo
+  // must be remeasured even while its popup is closed.
   const resize = new ResizeObserver(schedule);
   for (const node of [bar, brand, tabs, root, location].filter(Boolean)) resize.observe(node);
   const changes = new MutationObserver(schedule);

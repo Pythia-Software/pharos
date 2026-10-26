@@ -160,6 +160,7 @@ window.initPharosAsk = function(root) {
   async function openSession(id,navigate=false){
     const request=++sessionLoad;
     stop();saveChat(false);flushDraft();closeHistory();closePicker();
+    const focused=document.activeElement;
     openingSession=request;syncComposer();
     try {
       await writeQueue;
@@ -167,12 +168,12 @@ window.initPharosAsk = function(root) {
       if(disposed||request!==sessionLoad)return;
       activateSession(session);regularOverride=false;syncChatURL(id,navigate);renderThread();render();
     }catch(error){if(!disposed&&request===sessionLoad)report(error);}
-    finally{if(openingSession===request){openingSession=null;syncComposer();if(!disposed&&request===sessionLoad)question.focus({preventScroll:true});}}
+    finally{if(openingSession===request){openingSession=null;syncComposer();if(navigate&&!disposed&&request===sessionLoad&&(document.activeElement===focused||document.activeElement===document.body))question.focus({preventScroll:true});}}
   }
   function clearChat(navigate=true){
     sessionLoad++;openingSession=null;
     stop();saveChat(false);flushDraft();closeHistory();closePicker();
-    turns=[];activeSessionId=null;activeCreatedAt=0;activeUpdatedAt=0;question.value='';clarificationDraft='';threadFollowing=true;writeHistory();syncChatURL(null,!!navigate);renderThread();render();question.focus({preventScroll:true});
+    turns=[];activeSessionId=null;activeCreatedAt=0;activeUpdatedAt=0;question.value='';clarificationDraft='';threadFollowing=true;writeHistory();syncChatURL(null,!!navigate);renderThread();render();if(navigate)question.focus({preventScroll:true});
   }
   async function loadChatHistory(){
     const request=++sessionLoad;

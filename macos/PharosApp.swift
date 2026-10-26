@@ -665,11 +665,13 @@ final class ArchiveWKWebView: WKWebView {
 struct ArchiveWebView: NSViewRepresentable {
     let url: URL
     let service: ArchiveService
+    @ObservedObject var updates: UpdateNotice
 
     /// Native actions for the page. `pharosLibrary` takes {"action": "eject"};
     /// the page offers Eject only when this handler exists and otherwise says
     /// how to eject in Finder.
     static let libraryHandler = "pharosLibrary"
+    static let updateHandler = "pharosUpdates"
 
     // WKWebView has no `-webkit-app-region`, so the page reports presses on
     // the app header's empty space and the window drags or zooms natively.
@@ -724,6 +726,8 @@ struct ArchiveWebView: NSViewRepresentable {
         let origin: URL
         weak var webView: ArchiveWKWebView?
         weak var service: ArchiveService?
+        weak var updates: UpdateNotice?
+        private var publishedUpdateState: HeaderUpdateState?
         private var observers: [NSObjectProtocol] = []
 
         init(origin: URL) { self.origin = origin }
@@ -750,6 +754,18 @@ struct ArchiveWebView: NSViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             setFullScreenClass(webView.window?.styleMask.contains(.fullScreen) == true)
             service?.menuBar.navigationFinished()
+            publishedUpdateState = nil
+            publishUpdateState()
+        }
+
+        func publishUpdateState() {
+            guard let webView, let updates, let page = webView.url,
+                  page.scheme == origin.scheme, page.host == origin.host, page.port == origin.port,
+                  publishedUpdateState != updates.headerState,
+                  let data = try? JSONSerialization.data(withJSONObject: updates.headerState.dictionary),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            publishedUpdateState = updates.headerState
+            webView.evaluateJavaScript("window.dispatchEvent(new CustomEvent('pharos:app-update', {detail: \(json)}))")
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -799,6 +815,23 @@ struct ArchiveWebView: NSViewRepresentable {
             didReceive message: WKScriptMessage,
             replyHandler: @escaping (Any?, String?) -> Void
         ) {
+            if message.name == ArchiveWebView.updateHandler {
+                guard message.frameInfo.isMainFrame, let page = message.frameInfo.request.url,
+                      page.scheme == origin.scheme, page.host == origin.host, page.port == origin.port,
+                      let updates else {
+                    replyHandler(nil, "Updates are available only from the Pharos app."); return
+                }
+                switch (message.body as? [String: Any])?["action"] as? String {
+                case "status": replyHandler(updates.headerState.dictionary, nil)
+                case "install":
+                    guard updates.installFromHeader() else {
+                        replyHandler(nil, "This update is no longer ready. Use Check for Updates in the Pharos menu."); return
+                    }
+                    replyHandler(updates.headerState.dictionary, nil)
+                default: replyHandler(nil, "Unknown update action.")
+                }
+                return
+            }
             if message.name == ArchiveWebView.libraryHandler {
                 library(message.body, replyHandler: replyHandler)
                 return
@@ -931,6 +964,7 @@ struct ArchiveWebView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> ArchiveWKWebView {
         context.coordinator.service = service
+        context.coordinator.updates = updates
         let configuration = WKWebViewConfiguration()
         configuration.userContentController.addScriptMessageHandler(
             context.coordinator,
@@ -941,6 +975,11 @@ struct ArchiveWebView: NSViewRepresentable {
             context.coordinator,
             contentWorld: .page,
             name: Self.libraryHandler
+        )
+        configuration.userContentController.addScriptMessageHandler(
+            context.coordinator,
+            contentWorld: .page,
+            name: Self.updateHandler
         )
         configuration.userContentController.add(context.coordinator, name: Self.windowMessageName)
         configuration.userContentController.add(context.coordinator, name: "pharosMenuBar")
@@ -960,9 +999,12 @@ struct ArchiveWebView: NSViewRepresentable {
         view.load(URLRequest(url: url))
         return view
     }
-    func updateNSView(_ view: ArchiveWKWebView, context: Context) {}
+    func updateNSView(_ view: ArchiveWKWebView, context: Context) {
+        context.coordinator.publishUpdateState()
+    }
 
     static func dismantleNSView(_ view: ArchiveWKWebView, coordinator: Coordinator) {
+        view.configuration.userContentController.removeScriptMessageHandler(forName: updateHandler, contentWorld: .page)
         view.configuration.userContentController.removeScriptMessageHandler(forName: windowMessageName)
         view.configuration.userContentController.removeScriptMessageHandler(forName: "pharosMenuBar")
         view.configuration.userContentController.removeScriptMessageHandler(
@@ -1234,7 +1276,7 @@ struct PharosWindow: View {
                 LibraryDisconnectedView(disconnection: disconnection, ejecting: service.ejecting,
                                         reopen: service.reopen, eject: { service.ejectLibrary() })
             }
-            else if let url = service.url { ArchiveWebView(url: url, service: service).ignoresSafeArea() }
+            else if let url = service.url { ArchiveWebView(url: url, service: service, updates: updates).ignoresSafeArea() }
             else if service.setupNeeded { FirstRunView(service: service) }
             else if let error = service.error { ArchiveErrorView(message: error) }
             else {
