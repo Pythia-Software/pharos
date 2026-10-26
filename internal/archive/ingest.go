@@ -722,6 +722,9 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 		conversationCount++
 		if claim := authority.conversations[index]; !claim.writer {
 			conversationIDs[index] = claim.id
+			if err := recordOriginObservation(tx, claim.id, host, record.SourceKind, conversation); err != nil {
+				return 0, 0, err
+			}
 			added, err := mergeConversation(tx, claim, conversation)
 			if err != nil {
 				return 0, 0, err
@@ -743,6 +746,9 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 			return 0, 0, err
 		}
 		conversationIDs[index] = conversationID
+		if err := recordOriginObservation(tx, conversationID, host, record.SourceKind, conversation); err != nil {
+			return 0, 0, err
+		}
 		var searchCurrent bool
 		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM message_search_state WHERE conversation_id=? AND version=?)
 		 OR NOT EXISTS(SELECT 1 FROM messages WHERE conversation_id=?)`, conversationID, messageSearchVersion, conversationID).Scan(&searchCurrent); err != nil {
@@ -1232,7 +1238,7 @@ func upsertConversation(tx *sql.Tx, workspaceID, workItemID string, value Conver
 	var parent any
 	if value.ParentNativeID != "" {
 		var found string
-		if tx.QueryRow("SELECT id FROM conversations WHERE provider=? AND account=? AND native_id=?", value.Provider, value.Account, value.ParentNativeID).Scan(&found) == nil {
+		if tx.QueryRow("SELECT id FROM conversations WHERE provider=? AND account=? AND native_id=?", firstString(value.ParentProvider, value.Provider), firstString(value.ParentAccount, value.Account), value.ParentNativeID).Scan(&found) == nil {
 			parent = found
 		}
 	}

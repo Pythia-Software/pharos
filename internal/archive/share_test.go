@@ -151,6 +151,12 @@ func TestSharedExportScopesTablesToItsWorks(t *testing.T) {
 	if _, err := catalog.DB.Exec("UPDATE workspaces SET location='/Users/someone/secret', owner='someone'"); err != nil {
 		t.Fatal(err)
 	}
+	execTx(t, catalog.DB,
+		`INSERT INTO machines(id,label,kind) VALUES('laptop','Laptop','device'),('remote','Remote','cloud')`,
+		`UPDATE conversations SET parent_id='conv-0',agent_depth=1 WHERE id='conv-1'`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth) VALUES('remote-child','ws-0','codex','local','remote-child','conv-0',1)`,
+		`INSERT INTO origin_observations(conversation_id,evidence_key,channel,machine_id,execution_machine_id,priority,evidence) VALUES('conv-0','producer','desktop','laptop','laptop',30,'desktop start'),('conv-1','producer',NULL,NULL,'remote',30,'remote child'),('remote-child','producer',NULL,NULL,'remote',30,'remote child')`,
+	)
 	page, name, err := catalog.SharedHTML(context.Background(), []string{"ws-1", "ws-0", "ws-1"})
 	if err != nil {
 		t.Fatal(err)
@@ -184,10 +190,36 @@ func TestSharedExportScopesTablesToItsWorks(t *testing.T) {
 		t.Errorf("tools summary counts %d calls, want %d", summarized, want)
 	}
 	for _, row := range payload.Datasets["library"] {
+		for field, want := range map[string]any{"channel": "desktop", "channels": "desktop", "machine_id": "laptop", "machines": "laptop", "machine": "Laptop", "machine_kind": "device"} {
+			if row[field] != want {
+				t.Errorf("exported Library %s = %#v, want %#v: %#v", field, row[field], want, row)
+			}
+		}
+		if row["id"] == "ws-0" {
+			if row["execution_machine_id"] != nil || row["execution_machine"] != nil || row["execution_machines"] != "laptop, remote" {
+				t.Errorf("exported Library lost mixed execution machines: %#v", row)
+			}
+		} else if row["execution_machine_id"] != "remote" || row["execution_machine"] != "Remote" || row["execution_machine_kind"] != "cloud" || row["execution_machines"] != "remote" {
+			t.Errorf("exported Library lost child execution machine: %#v", row)
+		}
 		for _, private := range []string{"location", "owner"} {
 			if _, ok := row[private]; ok {
 				t.Errorf("library row keeps %s", private)
 			}
+		}
+	}
+	document, err := querySchemaDocument("library")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema, err := querytable.LoadSchema(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, term := range []querytable.WhereTerm{{Field: "channel", Op: "=", Value: "desktop"}, {Field: "machine_id", Op: "=", Value: "laptop"}, {Field: "execution_machines", Op: "contains", Value: "remote"}} {
+		result, err := querytable.Apply(payload.Datasets["library"], querytable.Query{Where: []querytable.WhereTerm{term}, Limit: 50}, schema)
+		if err != nil || result.Total != 2 {
+			t.Fatalf("shared Library origin filter %#v = %#v, %v", term, result, err)
 		}
 	}
 }

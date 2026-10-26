@@ -512,7 +512,7 @@ func addCarbonTokens(target map[string]map[string]int64, tier string, counts map
 // can recalculate together without refetching. Filter at ledger-hour precision
 // even for daily charts: a partial-day range must not include the whole day.
 func (c *Catalog) carbonSeries(ctx context.Context, request carbonSeriesRequest) (map[string]any, error) {
-	if !slices.Contains([]string{"", "provider", "repository_name", "tier"}, request.Split) {
+	if !slices.Contains([]string{"", "provider", "channel", "machine_id", "execution_machine_id", "repository_name", "tier"}, request.Split) {
 		return nil, fmt.Errorf("carbon series cannot split by %q", request.Split)
 	}
 	doc, err := loadCarbonDocument()
@@ -589,7 +589,7 @@ func (c *Catalog) carbonSeries(ctx context.Context, request carbonSeriesRequest)
 		return nil, err
 	}
 	choices := map[string][]string{}
-	for _, field := range []string{"repository_name", "provider"} {
+	for _, field := range []string{"repository_name", "provider", "channel", "machine_id", "execution_machine_id"} {
 		values := map[string]bool{}
 		for _, row := range all {
 			values[firstString(row[field])] = true

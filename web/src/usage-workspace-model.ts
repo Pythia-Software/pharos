@@ -87,7 +87,7 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
   for (const key of [...params.keys()]) {
     if (key.startsWith("record_") && (key !== `record_${next.dataset}` || next.dataset !== previous.dataset || mode === "dashboards")) params.delete(key);
     // A different dataset must never inherit another table's query/window.
-    if (key.startsWith("q_") || key.startsWith("window_") || ["card_query", "analyze_workspace", "analyze_view", "writing", "machine_view", "activity_days", "activity_repo", "activity_provider", "activity_model", "machine_demo", "tools_view"].includes(key)) params.delete(key);
+    if (key.startsWith("q_") || key.startsWith("window_") || ["card_query", "analyze_workspace", "analyze_view", "writing", "machine_view", "activity_days", "activity_repo", "activity_provider", "activity_model", "activity_channel", "activity_machine_id", "activity_execution_machine_id", "machine_demo", "tools_view"].includes(key)) params.delete(key);
   }
   params.set("analyze_mode", mode);
   if (next.mode === "search" || next.search) params.set("analyze_search", "1"); else params.delete("analyze_search");

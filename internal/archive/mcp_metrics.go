@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -78,44 +79,47 @@ type metricAggregation struct {
 	Metric string `json:"metric,omitempty"`
 }
 type statisticsRequest struct {
-	Entity          string              `json:"entity"`
-	Scope           string              `json:"metric_scope"`
-	Quality         string              `json:"metric_quality"`
-	Mode            string              `json:"result_mode"`
-	Type            string              `json:"result_type"`
-	Select          []string            `json:"select"`
-	Filters         []metricFilter      `json:"metric_filters"`
-	Order           *metricOrder        `json:"order_by,omitempty"`
-	Aggregations    []metricAggregation `json:"aggregations,omitempty"`
-	GroupBy         []string            `json:"group_by,omitempty"`
-	WorkspaceIDs    []string            `json:"workspace_ids,omitempty"`
-	Query           string              `json:"query,omitempty"`
-	Repository      string              `json:"repository,omitempty"`
-	Owner           string              `json:"owner,omitempty"`
-	Flavor          string              `json:"flavor,omitempty"`
-	Version         string              `json:"version,omitempty"`
-	Outcome         string              `json:"outcome,omitempty"`
-	Error           string              `json:"error,omitempty"`
-	Source          string              `json:"source,omitempty"`
-	Provider        string              `json:"provider,omitempty"`
-	Model           string              `json:"model,omitempty"`
-	Effort          string              `json:"effort,omitempty"`
-	File            string              `json:"file,omitempty"`
-	PR              *int                `json:"pr,omitempty"`
-	From            string              `json:"from,omitempty"`
-	To              string              `json:"to,omitempty"`
-	Limit           int                 `json:"limit"`
-	Budget          int                 `json:"max_output_tokens"`
-	Offset          int                 `json:"offset,omitempty"`
-	Cursor          string              `json:"cursor,omitempty"`
-	SnapshotID      string              `json:"snapshot_id,omitempty"`
-	RetainSnapshot  bool                `json:"retain_snapshot,omitempty"`
-	ReleaseSnapshot bool                `json:"release_snapshot,omitempty"`
-	Metrics         []string            `json:"-"`
+	Entity             string              `json:"entity"`
+	Scope              string              `json:"metric_scope"`
+	Quality            string              `json:"metric_quality"`
+	Mode               string              `json:"result_mode"`
+	Type               string              `json:"result_type"`
+	Select             []string            `json:"select"`
+	Filters            []metricFilter      `json:"metric_filters"`
+	Order              *metricOrder        `json:"order_by,omitempty"`
+	Aggregations       []metricAggregation `json:"aggregations,omitempty"`
+	GroupBy            []string            `json:"group_by,omitempty"`
+	WorkspaceIDs       []string            `json:"workspace_ids,omitempty"`
+	Query              string              `json:"query,omitempty"`
+	Repository         string              `json:"repository,omitempty"`
+	Owner              string              `json:"owner,omitempty"`
+	Flavor             string              `json:"flavor,omitempty"`
+	Version            string              `json:"version,omitempty"`
+	Outcome            string              `json:"outcome,omitempty"`
+	Error              string              `json:"error,omitempty"`
+	Source             string              `json:"source,omitempty"`
+	Channel            string              `json:"channel,omitempty"`
+	MachineID          string              `json:"machine_id,omitempty"`
+	ExecutionMachineID string              `json:"execution_machine_id,omitempty"`
+	Provider           string              `json:"provider,omitempty"`
+	Model              string              `json:"model,omitempty"`
+	Effort             string              `json:"effort,omitempty"`
+	File               string              `json:"file,omitempty"`
+	PR                 *int                `json:"pr,omitempty"`
+	From               string              `json:"from,omitempty"`
+	To                 string              `json:"to,omitempty"`
+	Limit              int                 `json:"limit"`
+	Budget             int                 `json:"max_output_tokens"`
+	Offset             int                 `json:"offset,omitempty"`
+	Cursor             string              `json:"cursor,omitempty"`
+	SnapshotID         string              `json:"snapshot_id,omitempty"`
+	RetainSnapshot     bool                `json:"retain_snapshot,omitempty"`
+	ReleaseSnapshot    bool                `json:"release_snapshot,omitempty"`
+	Metrics            []string            `json:"-"`
 }
 
 func metricCall(args map[string]any) bool {
-	for _, key := range []string{"metric_filters", "metric_scope", "metric_quality", "order_by", "select", "result_mode", "cursor", "snapshot_id", "retain_snapshot", "workspace_ids"} {
+	for _, key := range []string{"metric_filters", "metric_scope", "metric_quality", "order_by", "select", "result_mode", "cursor", "snapshot_id", "retain_snapshot", "workspace_ids", "channel", "machine_id", "execution_machine_id"} {
 		if _, ok := args[key]; ok {
 			return true
 		}
@@ -235,8 +239,8 @@ func parseMetricRequest(tool string, args map[string]any) (statisticsRequest, er
 	if r.Mode == "cards" && (r.Cursor != "" || r.SnapshotID != "" || r.RetainSnapshot) {
 		return r, fmt.Errorf("snapshot/cursor paging requires metadata mode")
 	}
-	if len(r.Filters) > 8 || len(r.Select) > 20 || len(r.Aggregations) > 8 || len(r.WorkspaceIDs) > 100 || len(r.GroupBy) > 2 {
-		return r, fmt.Errorf("maximum: 8 filters, 20 selected fields, 8 aggregations, 100 workspace IDs, 2 group dimensions")
+	if len(r.Filters) > 8 || len(r.Select) > 20 || len(r.Aggregations) > 8 || len(r.WorkspaceIDs) > 100 || len(r.GroupBy) > 3 {
+		return r, fmt.Errorf("maximum: 8 filters, 20 selected fields, 8 aggregations, 100 workspace IDs, 3 group dimensions")
 	}
 	for _, id := range r.WorkspaceIDs {
 		if id == "" {
@@ -315,11 +319,14 @@ func parseMetricRequest(tool string, args map[string]any) (statisticsRequest, er
 			continue
 		}
 		switch field {
-		case "workspace_id", "conversation_id", "conversation_ids", "conversation_count", "linked_conversation_ids", "mirrored_workspace_ids", "repository", "source", "model", "provider", "effort", "started_at", "activity_at", "coverage":
+		case "execution_machine_status", "channel", "machine_id", "machine", "machine_kind", "execution_machine_id", "execution_machine", "execution_machine_kind", "channel_status", "machine_status", "origin_conversation_id", "origin_evidence", "channels", "machines", "execution_machines", "workspace_id", "conversation_id", "conversation_ids", "conversation_count", "linked_conversation_ids", "mirrored_workspace_ids", "repository", "source", "model", "provider", "effort", "started_at", "activity_at", "coverage":
+			if r.Entity == "workspace" && slices.Contains(originFields, field) {
+				return r, fmt.Errorf("field %s requires conversation entities; workspace membership is available as channels/machines", field)
+			}
 			if r.Entity == "workspace" && (field == "conversation_id" || field == "linked_conversation_ids" || field == "model" || field == "provider" || field == "effort" || field == "started_at" || field == "coverage") {
 				return r, fmt.Errorf("field %s requires conversation entities", field)
 			}
-			if r.Entity == "conversation" && (field == "conversation_ids" || field == "conversation_count" || field == "mirrored_workspace_ids") {
+			if r.Entity == "conversation" && (field == "conversation_ids" || field == "conversation_count" || field == "mirrored_workspace_ids" || field == "channels" || field == "machines" || field == "execution_machines") {
 				return r, fmt.Errorf("field %s requires workspace entities", field)
 			}
 			selected[field] = true
@@ -358,8 +365,14 @@ func parseMetricRequest(tool string, args map[string]any) (statisticsRequest, er
 	}
 	groups := map[string]bool{}
 	for _, g := range r.GroupBy {
-		if (g != "repository" && g != "source") || groups[g] {
-			return r, fmt.Errorf("group_by supports unique repository/source dimensions")
+		if !slices.Contains([]string{"repository", "source", "provider", "channel", "machine_id", "execution_machine_id", "channels", "machines"}, g) || groups[g] {
+			return r, fmt.Errorf("group_by requires unique supported dimensions")
+		}
+		if r.Entity == "workspace" && slices.Contains([]string{"provider", "channel", "machine_id", "execution_machine_id"}, g) {
+			return r, fmt.Errorf("grouping by %s requires conversation entities; use channels/machines for workspace membership combinations", g)
+		}
+		if r.Entity == "conversation" && slices.Contains([]string{"channels", "machines"}, g) {
+			return r, fmt.Errorf("grouping by %s requires workspace entities", g)
 		}
 		groups[g] = true
 	}

@@ -38,6 +38,9 @@ func TestHostIDSurvivesAnIoregFailure(t *testing.T) {
 		record != (hostRecord{HardwareUUID: "UUID-A", User: first.User, ID: first.ID}) || first.Fallback {
 		t.Fatalf("host.json %+v %v", record, err)
 	}
+	if first.MachineID != stableID("machine", "UUID-A") {
+		t.Fatalf("wrong physical machine identity: %+v", first)
+	}
 	if !slices.Equal(waited, long) {
 		t.Fatalf("with nothing recorded, ioreg got %v, want %v", waited, long)
 	}

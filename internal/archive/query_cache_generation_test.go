@@ -80,6 +80,47 @@ func TestQueryCacheGenerationRollsBackWithSourceChanges(t *testing.T) {
 	}
 }
 
+func TestOriginPublicationInvalidatesProjectionReaders(t *testing.T) {
+	c, _ := testCatalog(t)
+	execTx(t, c.DB,
+		`INSERT INTO workspaces(id,source_kind,source_account,source_id,title,indexed_at) VALUES('work','codex','local','work','Work','x')`,
+		`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness) VALUES('first','work','codex','local','first','codex/codex_desktop')`)
+	if err := c.ensureOrigins(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.DB.Exec(`INSERT INTO conversations(id,workspace_id,provider,account,native_id,harness) VALUES('second','work','codex','local','second','codex/codex_desktop')`); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := OpenCatalogForQuery(c.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	// Model the race after an origin cleanliness check: the source commit has
+	// advanced the cache generation, but the projection is still the old one.
+	read := func() int {
+		t.Helper()
+		count, err := cachedValue(t.Context(), reader, "origin-publication-probe", func(ctx context.Context) (int, error) {
+			var count int
+			err := c.reader().QueryRowContext(ctx, `SELECT COUNT(*) FROM conversation_origins WHERE channel='desktop'`).Scan(&count)
+			return count, err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return count
+	}
+	if read() != 1 {
+		t.Fatal("expected the pre-publication snapshot")
+	}
+	if err := c.ensureOrigins(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); got != 2 {
+		t.Fatalf("published attribution left a stale cached snapshot: %d", got)
+	}
+}
+
 func TestQueryCacheNoopIndexPreservesGenerationAndMetricIDs(t *testing.T) {
 	catalog, _ := testCatalog(t)
 	record := incrementalFixture(5)

@@ -19,11 +19,13 @@ func TestWritingRowsFoldSubagentWorkAndFollowFilters(t *testing.T) {
 				{NativeID: "p2", Role: "user", Kind: "message", Text: "Now add a fixture for empty rows", CreatedAt: "2026-09-08T12:00:00.000Z", Selected: true},
 			}}}},
 		{SourceID: "review", SourceKind: "codex", Account: "local", Title: "Review", Conversations: []ConversationRecord{{
-			NativeID: "review", Provider: "codex", Account: "local", Coverage: "complete", Messages: []MessageRecord{
+			Initiation: &InitiationRecord{Channel: "desktop", Machine: &MachineRecord{"laptop", "Laptop", "device"}, ExecutionMachine: &MachineRecord{"laptop", "Laptop", "device"}},
+			NativeID:   "review", Provider: "codex", Account: "local", Coverage: "complete", Messages: []MessageRecord{
 				{NativeID: "r1", Role: "user", Kind: "message", Text: "Review the grammar change", CreatedAt: "2026-09-02T12:00:00.000Z", Selected: true},
 			}}}},
 		{SourceID: "review-child", SourceKind: "codex", Account: "local", Title: "Review helper", Conversations: []ConversationRecord{{
-			NativeID: "child", Provider: "codex", Account: "local", Coverage: "complete", Messages: []MessageRecord{
+			Initiation: &InitiationRecord{ExecutionMachine: &MachineRecord{"remote", "Remote worker", "cloud"}},
+			NativeID:   "child", Provider: "codex", Account: "local", Coverage: "complete", Messages: []MessageRecord{
 				{NativeID: "c1", Role: "user", Kind: "message", Text: "Check every fixture file for regressions", CreatedAt: "2026-09-02T13:10:00.000Z", Selected: true},
 			}}}},
 	} {
@@ -61,6 +63,9 @@ func TestWritingRowsFoldSubagentWorkAndFollowFilters(t *testing.T) {
 	if integer(review["user_turns"]) != 2 || integer(review["typed_words"]) != 4 || integer(review["automated_words"]) != 6 || integer(review["subagent_works"]) != 1 {
 		t.Fatalf("review = %#v", review)
 	}
+	if review["channel"] != "desktop" || review["machine_id"] != "laptop" || review["execution_machine_id"] != nil || review["execution_machines"] != "laptop, remote" {
+		t.Fatalf("folded writing lost a child's execution placement: %#v", review)
+	}
 	parser := byTitle["Parser"]
 	if integer(parser["typed_turns"]) != 2 || integer(parser["typed_words"]) != 13 || integer(parser["longest_typed_words"]) != 7 || parser["typed_share"] != float64(100) {
 		t.Fatalf("parser = %#v", parser)
@@ -73,6 +78,14 @@ func TestWritingRowsFoldSubagentWorkAndFollowFilters(t *testing.T) {
 	schema, err := querytable.LoadSchema(document)
 	if err != nil {
 		t.Fatal(err)
+	}
+	remote, err := catalog.writingSeries(context.Background(), writingSeriesRequest{Split: "execution_machines", Where: []querytable.WhereTerm{{Field: "execution_machines", Op: "contains", Value: "remote"}}}, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteSplit := remote["split"].([]map[string]any)
+	if remote["works"] != 1 || integer(remote["totals"].(map[string]any)["messages"]) != 2 || len(remoteSplit) != 1 || remoteSplit[0]["value"] != "laptop, remote" {
+		t.Fatalf("folded writing filter/breakdown lost remote execution: %#v", remote)
 	}
 	series, err := catalog.writingSeries(context.Background(), writingSeriesRequest{Where: []querytable.WhereTerm{{Field: "title", Op: "=", Value: "Parser"}}}, schema)
 	if err != nil {

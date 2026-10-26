@@ -51,3 +51,36 @@ Roles and metric absence are preserved. Producers should classify subagent tool 
 
 
 Conversations and messages accept optional `model` and `effort` fields. A message inherits the conversation effort when its field is absent; `effort: null` explicitly means unknown. Set effort on each message when configuration changes during a conversation. Levels are retained as normalized lowercase strings, including provider-specific and future values. Pharos does not infer effort from thinking token counts or thinking budgets.
+
+Conversations also accept optional initiation metadata:
+
+```json
+{
+  "id": "provider-native-session-id",
+  "provider": "codex",
+  "initiation": {
+    "channel": "desktop",
+    "machine": {"id": "device-laptop", "label": "Laptop", "kind": "device"},
+    "execution_machine": {"id": "worker-1", "label": "Remote worker", "kind": "cloud"},
+    "evidence": "Recorded initiating client and worker assignment"
+  }
+}
+```
+
+Channels are `conductor`, `tl1`, `cli`, `desktop`, `web`, `ide`, or `api`; omit
+unknown values. Machine kinds are `device`, `web`, and `cloud`. IDs must be stable
+within the library; names can change without changing IDs. A known Web origin
+without a device is displayed as **Web (device unknown)**. An export without
+initiation metadata keeps unknown placement rather than inheriting the importing
+Mac.
+
+Each descendant inherits the initiating root's channel and machine, including
+mixed-provider and remote delegation. `execution_machine` describes the session
+itself and can differ from the root's machine. Preserve native parent IDs and
+aliases so that children imported before their parents can resolve later.
+`parent_id` names the parent's native ID; optional `parent_provider` and
+`parent_account` identify parents from another provider or account and default
+to the child's provider and source account. A
+child's runtime does not override its parent's channel. Conflicting equal-authority
+claims remain visible as conflicts. See [channel and machine](channel-and-machine.md)
+for inheritance, evidence, and grouping semantics.

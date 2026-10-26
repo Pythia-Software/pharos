@@ -224,7 +224,7 @@ export function ConcurrencyPanel({ scope, activityWindow, routeParameter, onSele
   const rangeBounds = range.bounds;
   const singleDay = range.startDay === range.endDay;
   const { mode, gap, counting } = settings;
-  const threads = useMemo(() => (data?.threads ?? []).filter(thread => (!repository || thread.repository === repository) && (!scope?.provider || thread.provider === scope.provider) && (!scope?.model || thread.model === scope.model)), [data, repository, scope?.provider, scope?.model]);
+  const threads = useMemo(() => (data?.threads ?? []).filter(thread => (!repository || thread.repository === repository) && (!scope?.provider || thread.provider === scope.provider) && (!scope?.model || thread.model === scope.model) && (!scope?.channel || thread.channel === scope.channel) && (!scope?.machine_id || thread.machine_id === scope.machine_id) && (!scope?.execution_machine_id || thread.execution_machine_id === scope.execution_machine_id)), [data, repository, scope?.provider, scope?.model, scope?.channel, scope?.machine_id, scope?.execution_machine_id]);
   const sessions = useMemo(() => workSessions(threads), [threads]);
   const rangeThreads = useMemo(() => threads.map(thread => ({ ...thread, turns: clipIntervals(thread.turns, rangeBounds), model_spans: clipIntervals(thread.model_spans, rangeBounds), continuous_spans: clipIntervals(mergeIntervals(thread.turns, gap * minute), rangeBounds) })).filter(thread => thread.turns.length || thread.model_spans.length || thread.continuous_spans.length), [threads, rangeBounds, gap]);
   const rangeSessions = useMemo(() => clipIntervals(sessions, rangeBounds), [sessions, rangeBounds]);

@@ -101,11 +101,23 @@ func TestIndexAttributesCapturesToTheCapturingHost(t *testing.T) {
 	originals := map[string]string{}
 	for _, host := range []string{"host-a", "host-b"} {
 		useHost(t, host)
+		currentHost = func() Host { return Host{ID: host, MachineID: "machine-" + host, Label: "Mac " + host, User: "tester"} }
 		claude := filepath.Join(root, host, "claude")
 		originals[host] = filepath.Join(claude, "-proj", host+"-session.jsonl")
 		writeSourceFile(t, originals[host], claudeLine(host+"-session", "u1", "hello from "+host, "/Users/"+host+"/proj", 1))
 		config.Sources = []SourceConfig{{Name: "claude", Kind: "claude", Path: claude, Account: "local", Enabled: true}}
 		runCapture(t, config)
+		if host == "host-b" {
+			// The older host record omitted physical identity; its source
+			// manifest still retains that same capturing machine.
+			file := filepath.Join(config.CaptureRoot, host, captureHostName)
+			var record captureHostRecord
+			if err := json.Unmarshal([]byte(readText(t, file)), &record); err != nil {
+				t.Fatal(err)
+			}
+			record.MachineID = ""
+			writeSourceFile(t, file, jsonText(record))
+		}
 		// The capturing Mac leaves with its files.
 		if err := os.RemoveAll(filepath.Join(root, host)); err != nil {
 			t.Fatal(err)
@@ -138,6 +150,14 @@ func TestIndexAttributesCapturesToTheCapturingHost(t *testing.T) {
 		}
 	}
 	for host, original := range originals {
+		origins, err := catalog.conversationOrigins(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := stableID("conversation", "claude", "local", host+"-session")
+		if origins[id]["machine_id"] != "machine-"+host || origins[id]["execution_machine_id"] != "machine-"+host {
+			t.Fatalf("capture lost %s's physical machine: %#v", host, origins[id])
+		}
 		var origin, writer, locator, label string
 		if err := catalog.DB.QueryRow(`SELECT c.origin,c.origin_host_id,m.evidence_locator FROM conversations c JOIN messages m ON m.conversation_id=c.id
 			WHERE c.native_id=?`, host+"-session").Scan(&origin, &writer, &locator); err != nil {

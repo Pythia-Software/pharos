@@ -77,7 +77,7 @@ func seedToolCalls(t testing.TB, catalog *Catalog, n int) {
 // toolRollupFromCalls is how tool_usage_daily was grouped before
 // tool_call_cube: directly from the calls.
 const toolRollupFromCalls = `SELECT date(t.started_at,'localtime') day,r.display_name repository_name,w.source_kind,t.provider,
-		COALESCE(t.model,'') model,t.effort,COALESCE(a.kind,'root') session_kind,t.tool_name,t.tool_category,t.mcp_server,t.program,t.subcommand,t.command_category,
+		COALESCE(t.model,'') model,t.effort,COALESCE(a.kind,'root') session_kind,t.tool_name,t.tool_category,t.mcp_server,t.program,t.subcommand,t.command_category,o.channel,o.machine_id,o.machine,o.machine_kind,o.execution_machine_id,o.execution_machine,o.execution_machine_kind,
 		COUNT(*) call_count,SUM(COALESCE(t.status,'')='error') error_count,SUM(COALESCE(t.status,'')='no_result') no_result_count,
 		SUM(COALESCE(t.error_type,'')='user_rejected') rejected_count,SUM(t.interrupted) interrupted_count,SUM(COALESCE(t.error_type,'')='timeout') timeout_count,
 		SUM(COALESCE(t.error_type,'')='nonzero_exit') nonzero_exit_count,SUM(COALESCE(t.error_type,'')='hook_blocked') hook_blocked_count,SUM(t.truncated) truncated_count,
@@ -89,8 +89,9 @@ const toolRollupFromCalls = `SELECT date(t.started_at,'localtime') day,r.display
 	JOIN workspaces w ON w.id=t.workspace_id
 	LEFT JOIN repositories r ON r.id=w.repository_id
 	LEFT JOIN agent_sessions a ON a.id=t.agent_session_id
+ LEFT JOIN conversation_origins o ON o.conversation_id=COALESCE(a.child_conversation_id,t.conversation_id)
 	WHERE t.workspace_id NOT IN (SELECT workspace_id FROM tool_mirror_workspaces)
-	GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13`
+	GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20`
 
 // same compares two results that should agree. Floats may differ in the
 // last places: sums taken in another order, or scores from float32 vectors.

@@ -429,6 +429,57 @@ func TestParallelismThreadsAndRows(t *testing.T) {
 			t.Fatalf("agent unit: %v", row)
 		}
 	}
+	t.Run("continuations across machines", func(t *testing.T) {
+		execTx(t, c.DB,
+			`INSERT INTO machines(id,label,kind) VALUES('laptop','Laptop','device'),('remote','Remote','cloud')`,
+			`INSERT INTO origin_observations(conversation_id,evidence_key,channel,machine_id,execution_machine_id,priority,evidence) VALUES('cv-a2','producer','desktop','laptop','laptop',30,'desktop start'),('cv-n1','producer','cli','remote','remote',30,'remote start')`,
+			`INSERT INTO conversations(id,workspace_id,provider,account,native_id,parent_id,agent_depth,started_at,ended_at) VALUES('continued','ws-n1','codex','local','continued','cv-a2',0,'2026-11-03T18:00:00Z','2026-11-03T19:00:00Z')`,
+			`INSERT INTO origin_observations(conversation_id,evidence_key,execution_machine_id,priority,evidence) VALUES('continued','producer','remote',30,'remote continuation')`,
+			`INSERT INTO messages(id,conversation_id,native_id,role,kind,text,content_hash,source_order,created_at) VALUES('continued-u','continued','u','user','message','','h',0,'2026-11-03T18:00:00Z'),('continued-a','continued','a','assistant','message','','h',1,'2026-11-03T19:00:00Z')`,
+		)
+		for _, counting := range []string{"agent", "workspace"} {
+			if err := c.SetUIPreferences(t.Context(), map[string]any{"set": map[string]any{parallelismSettingsKey: map[string]any{"gap": 15, "counting": counting}}}); err != nil {
+				t.Fatal(err)
+			}
+			// Request labels alone as well: enrichment must retain their IDs
+			// internally without restoring the root's mixed execution placement.
+			for _, fields := range []libraryFields{nil, fieldSet("unit_id", "elapsed_hours", "machine", "machine_kind", "execution_machine", "execution_machine_kind")} {
+				rows, err := c.parallelismQueryRows(t.Context(), fields)
+				if err != nil {
+					t.Fatal(err)
+				}
+				unitID := "cv-a2"
+				if counting == "workspace" {
+					unitID = "/code/alpha-2"
+				}
+				var hours float64
+				var knownMachine bool
+				for _, row := range rows {
+					if row["unit_id"] == "cv-n1" || row["unit_id"] == "/code/scratch" {
+						knownMachine = true
+						if row["machine"] != "Remote" || row["machine_kind"] != "cloud" || row["execution_machine"] != "Remote" || row["execution_machine_kind"] != "cloud" {
+							t.Fatalf("%s lost an unambiguous machine's labels: %#v", counting, row)
+						}
+					}
+					if row["unit_id"] != unitID {
+						continue
+					}
+					hours += row["elapsed_hours"].(float64)
+					if row["machine"] != "Laptop" || row["machine_kind"] != "device" || row["execution_machine"] != nil || row["execution_machine_kind"] != nil {
+						t.Fatalf("%s labels misattribute a mixed unit: %#v", counting, row)
+					}
+					if fields == nil && (row["channel"] != "desktop" || row["machine_id"] != "laptop" || row["execution_machine_id"] != nil) {
+						t.Fatalf("%s dimensions misattribute a mixed unit: %#v", counting, row)
+					}
+				}
+				// The original hour has half an hour at level 2 and half at
+				// level 3; the continuation adds an hour alone.
+				if !knownMachine || math.Abs(hours-(1+0.5/2+0.5/3)) > 1e-9 {
+					t.Fatalf("%s continuation changed elapsed share: %v", counting, hours)
+				}
+			}
+		}
+	})
 }
 
 func TestParallelismSettingsAndHTTP(t *testing.T) {

@@ -6,6 +6,12 @@ The primary implementation is Go 1.26 with SQLite FTS, a local concept index, an
 
 The command-line executable is `pharos`, and a per-user installation keeps its configuration in `~/Library/Application Support/Pharos`.
 
+Channel and Machine attribute work to its initiating conversation and device,
+including delegated usage. Execution machine records each session's placement
+separately. These dimensions are available across query tables, charts, cards,
+and MCP; see [channel and machine](channel-and-machine.md) for the evidence and
+inheritance contract. Unknown placement remains visible in totals.
+
 ## Safety defaults
 
 - Every configured source is read-only. No home-directory scan occurs: `pharos probe` and the new-Mac panel check only a fixed list of known agent locations, and nothing is indexed until you opt in.

@@ -28,6 +28,7 @@ export const usageGroupPresets: UsageTablePreset[] = [
   grouped("Repositories", "Compare repository cost, tokens, sessions and cache reuse", ["repository_name"]),
   grouped("Models", "Compare models within each provider", ["provider", "model_family"]),
   grouped("Model + effort", "Keep each provider, model and recorded effort level separate, including missing effort", ["provider", "model_family", "effort"]),
+  ...[["channel", "Channels"], ["machine_id", "Machines"], ["execution_machine_id", "Execution machines"]].map(([field,label]) => grouped(label, `Compare usage by ${label.toLowerCase()}`, [field])),
   grouped("Providers", "Compare provider cost, tokens, sessions and cache reuse", ["provider"]),
   grouped("Agents", "Compare root agents and subagents within each provider", ["provider", "session_kind"]),
   { ...work,

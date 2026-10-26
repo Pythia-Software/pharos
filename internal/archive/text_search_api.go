@@ -21,7 +21,7 @@ func textOptionsFromValues(values url.Values, prefix string) (TextSearchOptions,
 		}
 		return parts
 	}
-	o := TextSearchOptions{Mode: get("mode"), Surface: get("surface"), Repository: get("repository"), ConversationID: get("conversation_id"), WorkspaceID: get("workspace_id"), Source: get("source"), Provider: get("provider"), Roles: list("roles"), Kinds: list("kinds"), From: get("from"), To: get("to"), Cursor: get("cursor")}
+	o := TextSearchOptions{Mode: get("mode"), Surface: get("surface"), Repository: get("repository"), ConversationID: get("conversation_id"), WorkspaceID: get("workspace_id"), Source: get("source"), Provider: get("provider"), Channel: get("channel"), MachineID: get("machine_id"), ExecutionMachineID: get("execution_machine_id"), Roles: list("roles"), Kinds: list("kinds"), From: get("from"), To: get("to"), Cursor: get("cursor")}
 	if raw := get("where"); raw != "" {
 		if len(raw) > 32000 {
 			return o, fmt.Errorf("visual search is too large; remove some rules")
@@ -76,7 +76,7 @@ var textSearchTool = map[string]any{
 		"fuzzy_max_edits":      map[string]any{"type": "integer", "minimum": 0, "maximum": 2, "default": 0, "description": "0 selects 1 edit for 4–6 character words and 2 for longer words."},
 		"fuzzy_max_expansions": map[string]any{"type": "integer", "minimum": 1, "maximum": 64, "default": 24},
 		"case_sensitive":       map[string]any{"type": "boolean"}, "separators": map[string]any{"type": "boolean", "description": "Require original separators in quoted phrases."}, "fuzzy": map[string]any{"type": "boolean", "default": false},
-		"repository": map[string]any{"type": "string"}, "conversation_id": map[string]any{"type": "string"}, "workspace_id": map[string]any{"type": "string"}, "provider": map[string]any{"type": "string"}, "source": map[string]any{"type": "string"},
+		"repository": map[string]any{"type": "string"}, "conversation_id": map[string]any{"type": "string"}, "workspace_id": map[string]any{"type": "string"}, "provider": map[string]any{"type": "string"}, "channel": map[string]any{"type": "string"}, "machine_id": map[string]any{"type": "string"}, "execution_machine_id": map[string]any{"type": "string"}, "source": map[string]any{"type": "string"},
 		"roles": messageListSchema("Exact roles."), "kinds": messageListSchema("Exact kinds; all is allowed alone."), "selected_only": map[string]any{"type": "boolean", "default": false},
 		"from": map[string]any{"type": "string", "description": "Inclusive UTC date or timestamp."}, "to": map[string]any{"type": "string", "description": "Inclusive UTC date or timestamp; date includes the whole day."},
 		"cursor":            map[string]any{"type": "string", "description": "Copy next_cursor unchanged with the same query and filters. Ordinary cursors survive appends and no-op writes. Restart after edits, deletes, or index reordering; fuzzy cursors also expire on appends, and span cursors on classification changes."},

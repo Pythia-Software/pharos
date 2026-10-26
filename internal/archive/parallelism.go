@@ -420,6 +420,9 @@ type concurrencyThread struct {
 	WorkspaceName      string           `json:"workspace_name"`
 	Repository         string           `json:"repository"`
 	Title              string           `json:"title"`
+	Channel            string           `json:"channel"`
+	MachineID          string           `json:"machine_id"`
+	ExecutionMachineID string           `json:"execution_machine_id"`
 	Provider           string           `json:"provider"`
 	Model              string           `json:"model"`
 	AgentDepth         int64            `json:"agent_depth"`
@@ -555,6 +558,17 @@ func (c *Catalog) parallelismThreads(ctx context.Context, now time.Time, activit
 		data.Coverage.UnexplainedWait += activity.Unexplained
 		data.Threads = append(data.Threads, thread)
 	}
+	origins, err := c.conversationOrigins(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range data.Threads {
+		t := &data.Threads[i]
+		o := origins[t.ConversationID]
+		t.Channel = firstString(o["channel"])
+		t.MachineID = firstString(o["machine_id"])
+		t.ExecutionMachineID = firstString(o["execution_machine_id"])
+	}
 	data.Coverage.Conversations = len(data.Threads)
 	return data, nil
 }
@@ -589,10 +603,11 @@ func (c *Catalog) parallelismSettings(ctx context.Context) parallelismSettings {
 }
 
 type parallelismUnit struct {
-	id, label, workspace, location string
-	repository, conversation       any
-	provider, model                any
-	spans                          parallelismSpans
+	channel, machineID, executionMachineID string
+	id, label, workspace, location         string
+	repository, conversation               any
+	provider, model                        any
+	spans                                  parallelismSpans
 }
 
 // parallelismUnits is concurrencySpans(threads, "user", gap, counting): each
@@ -611,12 +626,21 @@ func parallelismUnits(threads []concurrencyThread, settings parallelismSettings)
 		}
 		at, ok := index[id]
 		if !ok {
-			unit := parallelismUnit{id: id, label: thread.WorkspaceName, workspace: thread.WorkspaceName, location: thread.location, repository: nilIfEmpty(thread.Repository)}
+			unit := parallelismUnit{channel: thread.Channel, machineID: thread.MachineID, executionMachineID: thread.ExecutionMachineID, id: id, label: thread.WorkspaceName, workspace: thread.WorkspaceName, location: thread.location, repository: nilIfEmpty(thread.Repository)}
 			if settings.counting == "agent" {
 				unit.label, unit.conversation, unit.provider, unit.model = thread.Title, id, thread.rootProvider, thread.rootModel
 			}
 			at, index[id] = len(units), len(units)
 			units = append(units, unit)
+		}
+		if units[at].channel != thread.Channel {
+			units[at].channel = ""
+		}
+		if units[at].machineID != thread.MachineID {
+			units[at].machineID = ""
+		}
+		if units[at].executionMachineID != thread.ExecutionMachineID {
+			units[at].executionMachineID = ""
 		}
 		units[at].spans = append(units[at].spans, mergeSpans(thread.Turns, settings.gap*60_000)...)
 	}
@@ -765,6 +789,7 @@ func (table *parallelismTable) maps(fields libraryFields, from, to int64) []map[
 		values := map[string]any{"started_at": at.started, "day": at.day, "hour_of_day": at.hour, "week": at.week, "month": at.month,
 			"counting": table.settings.counting, "gap_minutes": table.settings.gap,
 			"unit_id": unit.id, "unit_label": unit.label, "repository_name": unit.repository, "workspace_name": nilIfEmpty(unit.workspace),
+			"channel": nilIfEmpty(unit.channel), "machine_id": nilIfEmpty(unit.machineID), "execution_machine_id": nilIfEmpty(unit.executionMachineID),
 			"location": nilIfEmpty(unit.location), "conversation_id": unit.conversation, "provider": unit.provider, "model": unit.model,
 			"level": int64(cell.level), "level_band": band, "repo_level": int64(cell.repoLevel),
 			"unit_ms": cell.active, "elapsed_ms": cell.elapsed, "repo_elapsed_ms": cell.repo, "parallel_elapsed_ms": cell.parallelism,
@@ -838,7 +863,14 @@ func (c *Catalog) parallelismQueryRows(ctx context.Context, fields libraryFields
 		a, b := parallelismWindow(terms)
 		from, to = max(from, a), min(to, b)
 	}
-	return table.maps(fields, from, to), nil
+	if fields != nil {
+		fields = fields.union(fieldSet("machine_id", "execution_machine_id"))
+	}
+	rows := table.maps(fields, from, to)
+	if err := c.attachOriginMachineLabels(ctx, rows); err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 // mapRowsWhere is the row filter a map dataset may pre-select with, resolved

@@ -819,6 +819,48 @@
     "href": "/analyze?q_usage=2d.jVRdi9swEPwrrp6uNAX3XgqhLVwphcIVjh6FlhCMIm9SEVnr6iNnE_Lfb1eJE_lw4J5iaXdmZ3dW2Qsv5ouFcIihctCi1wFdX1nZgFjOFkKq6gnddvhW6MPwHXAL1ovlciaQSPZircHUYn7GzEStHZ1r8IoONhpD1YSRxHGYXfIniw9gSdgDldikEnrMjy0dG9nR58ZhbL_2lHWtmQl9Rq7A0M2vc3LBkWKHJjZQSFsXdw8_Cvgf9U4asIEw0LUOvNdoCfjz7s_N4sS3fDuK_s3CPLYUTirvdaODmN-WJTfpWyNJ9l5stWV1XskQwFFydz_Io4aKIP3W020_3I6VFTe_H79xCQMbsPUD93PUaNHyOLtHRYlcqMGafoXBDdkg-iv33Xd0jSSdZ2U2NqskrAalG8lmlkzwmsTbw4FdXKUs6HnrrvrkY9NIp4GTpi1XGG2oaHZBW8WmjFZJod2B85L7rwie-XwZJC_gQJ22-kRNxTM-jlTR5xyTY8_ZTu9iki9gkOaScdk_ha6GujhFeFQ0GNokKkF97MgXfj40G4xOJbc8GKDe5wvKffoHji6zN_iiUJLyhT5IdWSTy9ELbJ1WUHkqFc_Zn7PsFK9HkGwyR_I8f8x-xZQE076yFOXmMvyr4W_yqiPUWrskUG6gouWcUvn-47ilacinDPGuPHrDZrn0Z0MHc3zOH_g543rtgQ4lrfsz&analyze_mode=dashboards&analyze_topic=tokens&analyze_data=usage&window_mode=relative&window_days=7&window_field=first_usage_at&window_dataset=usage&analyze_days=7&analyze_chart=%7B%22period%22%3A%22day%22%2C%22rollingPeriods%22%3A0%2C%22display%22%3A%22interval%22%2C%22scale%22%3A%22linear%22%2C%22seriesLimit%22%3A15%2C%22metric%22%3A%22cost%22%2C%22split%22%3A%22repository_name%22%2C%22hours%22%3A6%2C%22days%22%3A3%2C%22selection%22%3A%7B%22values%22%3A%5B%5D%2C%22excluded%22%3Afalse%7D%7D&analyze_filters=2d.jY-xCsMwDES_pVqbQrZCaPsjpQgTO8XUWMGS0yH432syuDZkyCZ0906nFb4wPFeYrHEaBhAS5VDoYzxDBzTn3SMPi3LR5LmH1P3dc7CjQRYlsbjvlXvTdYOMxIKRdQmv_W16IBIcyS8msBJLHm3BLKPPqo_OVfxh_FRfbajJhq2gehtUstvycm1f2kduFXHuGdIr_QA&card_query=usage&card_id=work-volume-cost"
   },
   {
+    "id": "origin-tokens-channel",
+    "title": "Tokens by channel",
+    "description": "Recorded tokens over the last 7 days, grouped by channel.",
+    "kind": "Analyze",
+    "href": "/analyze?q_usage=2d.jVHLasMwEPyVste64J4Kpi20n9CrCUax1skSRQpaKSUY_3tHeTo59aadnZ2dWY2k1LQt9WvjPTtaVC2l3KWwYa_HKkRZie-UVSUUbFFRwMxIg7Cz1Mz4FVmJQCxrj8Jn5yBPzmiiqbpNXLZd-Ab0CbpLakba8KF4mlkizduticIFH0kel4YdAHDwvHoKybgbw5kllBr64T5Ey_bp3CmmjnKPKc-ifcg-dVY0ie_TTN-sGI0zvYPEbcdXaT1dlUquyLvICtgk2TM15TBIFXLsUeEP2DHkmxbc3zVHgPP73mc5GvvEY29cBpPqu9sOEjV1WeGwM8Xyif8xG3h5s_8YeZ9NPNenIOV48ftwcupkKzD9WtdoDIMyinqapj8&analyze_mode=dashboards&analyze_topic=tokens&analyze_data=usage&window_mode=relative&window_days=7&window_field=first_usage_at&window_dataset=usage&analyze_days=7&analyze_chart=%7B%22period%22%3A%22day%22%2C%22rollingPeriods%22%3A0%2C%22display%22%3A%22interval%22%2C%22scale%22%3A%22linear%22%2C%22seriesLimit%22%3A15%2C%22metric%22%3A%22tokens%22%2C%22split%22%3A%22channel%22%2C%22hours%22%3A6%2C%22days%22%3A3%2C%22selection%22%3A%7B%22values%22%3A%5B%5D%2C%22excluded%22%3Afalse%7D%7D&analyze_filters=2d.q1YqV7KKrlZKy0zNSVGyUirJL0nMiS_Jz07NK1bSUcovAIrZARlliTmlqUC2gVKtDkJ1WmZRcUl8aXFiemp8YglcvS2SBl3zFCK02CDp0DYoVqqNrQUA&card_query=usage&card_id=origin-tokens-channel"
+  },
+  {
+    "id": "origin-cost-channel",
+    "title": "API cost by channel",
+    "description": "Recorded API-equivalent cost over the last 7 days, grouped by channel.",
+    "kind": "Analyze",
+    "href": "/analyze?q_usage=2d.jVDLTsMwEPyVaq8EKZyQIqgEN26IaxVFrr1prTp28aOoivLvTBLSpMCht33Mzs5MS4GKzYbkXljLhspsQ87rnbaVdCEOfUxVdAe2gcoyIwd8S7Vmo6i4wmaktMdMcZBobDIG5GQEdl0230y_JrwAvAPzloqWDnzuFS0EUUhNI7zmft6S_vvWHTECCuXlBzZVCgojI7bgKejl_W3Fn0mfhGE7Khq4Znv_MkUXhZkRE9sHS-cVq9XPpjfg-eg5gFxEfWIq-gQg3yUv0SFqNiwjXAD7tWeP4SLKX48GKWsU0JuApPwqxFr7waHYcSUuIayfFwf3j-qGk6fFxV0-Gumd-dfzqNToRkP0Q55jUdeB0eRd130D&analyze_mode=dashboards&analyze_topic=tokens&analyze_data=usage&window_mode=relative&window_days=7&window_field=first_usage_at&window_dataset=usage&analyze_days=7&analyze_chart=%7B%22period%22%3A%22day%22%2C%22rollingPeriods%22%3A0%2C%22display%22%3A%22interval%22%2C%22scale%22%3A%22linear%22%2C%22seriesLimit%22%3A15%2C%22metric%22%3A%22cost%22%2C%22split%22%3A%22channel%22%2C%22hours%22%3A6%2C%22days%22%3A3%2C%22selection%22%3A%7B%22values%22%3A%5B%5D%2C%22excluded%22%3Afalse%7D%7D&analyze_filters=2d.q1YqV7KKrlZKy0zNSVGyUirJL0nMiS_Jz07NK1bSUcovAIrZARlliTmlqUC2gVKtDkJ1WmZRcUl8aXFiemp8YglcvS2SBl3zFCK02CDp0DYoVqqNrQUA&card_query=usage&card_id=origin-cost-channel"
+  },
+  {
+    "id": "origin-tokens-machine_id",
+    "title": "Tokens by machine",
+    "description": "Recorded tokens over the last 7 days, grouped by machine.",
+    "kind": "Analyze",
+    "href": "/analyze?q_usage=2d.jVHBasMwDP2VousyyE6DsA22T9g1lODaSivq2MWyO0rIv09u0tbZaTfr6T3pPXkEhqZtYVD6QA47MrCtWoipi_6Ijq-VD7Qn1zEyk8_YtgIvshF6QmugKfgVGAqCGGQthUvWygawiiNM1UNRLLxJlCgmGb2DZoQjXrKztTHgNAwqEObWCIKtV_uTAMKR592Zj8o-GFbt0Ar8jdoHg2azdLK167i_WZeh2icXO0McyelYzFd7lMZCn9Pcdnzm1uY-KUcLeArIAqtIZ4Qmn0dS-RS0VPIZaFHGN61wfw4YBCyvvM5yNfYhj7OySZhQry7cU-DYJRaHncqWZ_57IXh-Nf-QvBWKp3oOko8Xvi6zU0sDiemXupZG3zNKUU_T9As&analyze_mode=dashboards&analyze_topic=tokens&analyze_data=usage&window_mode=relative&window_days=7&window_field=first_usage_at&window_dataset=usage&analyze_days=7&analyze_chart=%7B%22period%22%3A%22day%22%2C%22rollingPeriods%22%3A0%2C%22display%22%3A%22interval%22%2C%22scale%22%3A%22linear%22%2C%22seriesLimit%22%3A15%2C%22metric%22%3A%22tokens%22%2C%22split%22%3A%22machine_id%22%2C%22hours%22%3A6%2C%22days%22%3A3%2C%22selection%22%3A%7B%22values%22%3A%5B%5D%2C%22excluded%22%3Afalse%7D%7D&analyze_filters=2d.q1YqV7KKrlZKy0zNSVGyUirJL0nMiS_Jz07NK1bSUcovAIrZARlliTmlqUC2gVKtDkJ1WmZRcUl8aXFiemp8YglcvS2SBl3zFCK02CDp0DYoVqqNrQUA&card_query=usage&card_id=origin-tokens-machine_id"
+  },
+  {
+    "id": "origin-cost-machine_id",
+    "title": "API cost by machine",
+    "description": "Recorded API-equivalent cost over the last 7 days, grouped by machine.",
+    "kind": "Analyze",
+    "href": "/analyze?q_usage=2d.jVBNS8NAFPwr5V2NEE9C0ILevInXEsJ296VdusnW_aiUkP_ubGJMUjx4e18zb2Y68lTsdtQIedQtV1pRme3IOn3QbSWtD0MfYhXsiVtPZZmRBaSjWrNRVKxuM1LaYabYSzRtNAb8ZAR2fTZjFu8miACiB_meio5OfE261rLIx6YRTnNadYTZ7XN7xghXKKdPaVNFn_4YsWeD0cv724Y_o74Iw-2oa-CaTf7JFGwQZr6Y2D5YWqdYbX42yYPjs2MPchH0halIOUC-jU6iQ-ZsWAa4wO3XkR2Gi0BvHg1StiigN-KS8lWUtXaDQ3HgSvyGsH1eAO4f1T8gTwvEXT4aSc7c63VUanSjIfohz7Goa89o8r7vvwE&analyze_mode=dashboards&analyze_topic=tokens&analyze_data=usage&window_mode=relative&window_days=7&window_field=first_usage_at&window_dataset=usage&analyze_days=7&analyze_chart=%7B%22period%22%3A%22day%22%2C%22rollingPeriods%22%3A0%2C%22display%22%3A%22interval%22%2C%22scale%22%3A%22linear%22%2C%22seriesLimit%22%3A15%2C%22metric%22%3A%22cost%22%2C%22split%22%3A%22machine_id%22%2C%22hours%22%3A6%2C%22days%22%3A3%2C%22selection%22%3A%7B%22values%22%3A%5B%5D%2C%22excluded%22%3Afalse%7D%7D&analyze_filters=2d.q1YqV7KKrlZKy0zNSVGyUirJL0nMiS_Jz07NK1bSUcovAIrZARlliTmlqUC2gVKtDkJ1WmZRcUl8aXFiemp8YglcvS2SBl3zFCK02CDp0DYoVqqNrQUA&card_query=usage&card_id=origin-cost-machine_id"
+  },
+  {
+    "id": "origin-tokens-execution_machine_id",
+    "title": "Tokens by execution machine",
+    "description": "Recorded tokens over the last 7 days, grouped by execution machine.",
+    "kind": "Analyze",
+    "href": "/analyze?q_usage=2d.jVFda8MwDPwrRa_LIHsahG2w_YS9hmJcW2lFHbtYdrcS8t8nN_1IxwZ9s06n0508AEPTtoDfaHKi4FWvzYY8KrKwrFpIWaWwRc_HKkRak1eMzMIVbFlBEIEBOkJnoZnxK7AUBbHIRgqfnZNd4DQnGKvrxJ-rz8NaZkdZsoJmgC0eitv_zALnvteRsJAGEOzWTtgJIBx5XtyGpN2V4fQKncCfaEK0aBenTrF7lPud_yRqQvZJWeJE3qSZvl6jNE70Kdd5x3tpLS5KJWTEXUQWWCfaIzTlZJIq5Gikkq9ChyLftML92mAUcH752yxHY2_y2GuXhQn1zdU7ipxUZnGodLE88V9nA4_P9o6Rl9nEQz0FKceLH4fJqaOexPRTXUuj6xilqMdx_AE&analyze_mode=dashboards&analyze_topic=tokens&analyze_data=usage&window_mode=relative&window_days=7&window_field=first_usage_at&window_dataset=usage&analyze_days=7&analyze_chart=%7B%22period%22%3A%22day%22%2C%22rollingPeriods%22%3A0%2C%22display%22%3A%22interval%22%2C%22scale%22%3A%22linear%22%2C%22seriesLimit%22%3A15%2C%22metric%22%3A%22tokens%22%2C%22split%22%3A%22execution_machine_id%22%2C%22hours%22%3A6%2C%22days%22%3A3%2C%22selection%22%3A%7B%22values%22%3A%5B%5D%2C%22excluded%22%3Afalse%7D%7D&analyze_filters=2d.q1YqV7KKrlZKy0zNSVGyUirJL0nMiS_Jz07NK1bSUcovAIrZARlliTmlqUC2gVKtDkJ1WmZRcUl8aXFiemp8YglcvS2SBl3zFCK02CDp0DYoVqqNrQUA&card_query=usage&card_id=origin-tokens-execution_machine_id"
+  },
+  {
+    "id": "origin-cost-execution_machine_id",
+    "title": "API cost by execution machine",
+    "description": "Recorded API-equivalent cost over the last 7 days, grouped by execution machine.",
+    "kind": "Analyze",
+    "href": "/analyze?q_usage=2d.jVHLTsMwEPyVaq8EKZyQIqgEN26Ia1VFrr1pV3Xi4kehivLvjFNKHypSb97dmZ2ZdU-BqtmM-Jt1iuK6ulV6JR3XYmhezMh5WUpXaxfiWMdUR7fmLtB8XpADuadG2BqqzrAFGfHoGQ4aRZeshRJZhdlQHDlXhQ9kBe4AmQVVPa15l73-Z5VCalvlhTOoJ_QuDbkNWkDheVDPkzqFrGjVgi1aL-9vE_5MslWWu73Xcdcx-NVN0UVlj4jDtg_Wzhs2k99JTuN54zlguYqyZarybWDfJa9R4UfYso5IAezXij2aJ0e-EBqtTPGA3wQklWfnbcSPCdWSa_V3hOnzCeH-0dxAeTph3JX7IDmZf93tnVppBaYfyhKDpgmMohyG4Qc&analyze_mode=dashboards&analyze_topic=tokens&analyze_data=usage&window_mode=relative&window_days=7&window_field=first_usage_at&window_dataset=usage&analyze_days=7&analyze_chart=%7B%22period%22%3A%22day%22%2C%22rollingPeriods%22%3A0%2C%22display%22%3A%22interval%22%2C%22scale%22%3A%22linear%22%2C%22seriesLimit%22%3A15%2C%22metric%22%3A%22cost%22%2C%22split%22%3A%22execution_machine_id%22%2C%22hours%22%3A6%2C%22days%22%3A3%2C%22selection%22%3A%7B%22values%22%3A%5B%5D%2C%22excluded%22%3Afalse%7D%7D&analyze_filters=2d.q1YqV7KKrlZKy0zNSVGyUirJL0nMiS_Jz07NK1bSUcovAIrZARlliTmlqUC2gVKtDkJ1WmZRcUl8aXFiemp8YglcvS2SBl3zFCK02CDp0DYoVqqNrQUA&card_query=usage&card_id=origin-cost-execution_machine_id"
+  },
+  {
     "id": "run-effort-token-ranges",
     "title": "Run tokens by effort",
     "description": "Own tokens per standalone, parent, or delegated run by recorded effort over the last 7 days.",

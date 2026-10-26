@@ -224,6 +224,9 @@ func (c *Catalog) conversationCards(cards []map[string]any, parsed string) error
 		return err
 	}
 	byID := map[string]map[string]any{}
+	if err := c.attachOrigins(context.Background(), rows); err != nil {
+		return err
+	}
 	for _, row := range rows {
 		byID[firstString(row["conversation_id"])] = row
 	}
@@ -231,6 +234,11 @@ func (c *Catalog) conversationCards(cards []map[string]any, parsed string) error
 		row := byID[firstString(card["conversation_id"])]
 		for _, key := range []string{"workspace_id", "repository", "provider", "model", "effort", "ended_at", "message_count", "coverage", "indexed_at"} {
 			card[key] = row[key]
+		}
+		for _, field := range []string{"channel", "machine_id", "machine", "execution_machine_id", "execution_machine"} {
+			if row[field] != nil {
+				card[field] = row[field]
+			}
 		}
 		card["title"] = clipText(firstString(row["title"]), 100)
 		if _, matched := card["message_id"]; !matched {
@@ -324,6 +332,9 @@ func (c *Catalog) conversationOverview(args map[string]any) (map[string]any, err
 		}
 		return nil, fmt.Errorf("conversation not found")
 	}
+	if err := c.attachOrigins(context.Background(), rows); err != nil {
+		return nil, err
+	}
 	row := rows[0]
 	budget := mcpBudget(args, 700)
 	result := map[string]any{"conversation_id": id, "workspace_id": row["workspace_id"], "title": clipText(firstString(row["title"]), 120),
@@ -333,6 +344,7 @@ func (c *Catalog) conversationOverview(args map[string]any) (map[string]any, err
 		"last_response":     map[string]any{"text": clipText(firstString(row["conversation_outcome"]), min(500, budget)), "message_id": row["outcome_message_id"]},
 		"workspace_outcome": clipText(firstString(row["outcome"]), 200),
 		"note":              "Extractive previews; inspect cited messages before treating an outcome as verified."}
+	copyOrigin(result, row)
 	if args["include_metrics"] == true {
 		if _, err := c.refreshMetricProjections(context.Background(), 1, firstString(row["workspace_id"])); err != nil {
 			return nil, err

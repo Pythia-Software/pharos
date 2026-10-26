@@ -61,6 +61,10 @@ func (c *Catalog) usageRowsByPeriod(location *time.Location, hourly bool) ([]map
 }
 
 func (c *Catalog) usageRowsFromLedger(location *time.Location, hourly bool, ledger []map[string]any) ([]map[string]any, error) {
+	origins, err := c.conversationOrigins(context.Background())
+	if err != nil {
+		return nil, err
+	}
 	book, err := c.loadPriceBook()
 	if err != nil {
 		return nil, err
@@ -99,6 +103,7 @@ func (c *Catalog) usageRowsFromLedger(location *time.Location, hourly bool, ledg
 				"hour": hourKey, "day": day, "week": week, "month": month, "first_usage_at": at, "last_usage_at": at,
 				"cost_usd": nil, "cost_today_usd": nil, "price_status": "", "priced_model": nil,
 			}
+			copyOrigin(row, origins[firstString(entry["conversation_id"])])
 			row["carbon_tier"], _ = carbon.tier(model)
 			for _, field := range usageTokenFields {
 				row[field] = int64(0)

@@ -63,6 +63,16 @@ const runSummaries = [tokens, input, output, title, rootRepository];
 const runAction = "Explore runs by effort";
 
 export const tokenUsageRecipes: QueryRecipe[] = [
+  ...([ ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"] ] as const).flatMap(([field,label]) => [
+    card(`origin-tokens-${field}`, `Tokens by ${label.toLowerCase()}`, `Recorded tokens over the last {days} days, grouped by ${label.toLowerCase()}.`, [field], [tokens, { id: "origin_sessions", op: "count_distinct", field: "agent_session_id", label: "Agent sessions" }], `Inspect ${label.toLowerCase()} usage`, {
+      note: `${recorded} Channel and Machine follow the initiating conversation, including delegated usage. Execution machine identifies the session's execution location. Unknown attribution stays in the denominator; a capture host is not necessarily an execution device.`,
+      cover: { mode:"result",metricId:tokens.id,kind:"bar-horizontal",maxGroups:6,showOther:true },
+    }),
+    card(`origin-cost-${field}`, `API cost by ${label.toLowerCase()}`, `Recorded API-equivalent cost over the last {days} days, grouped by ${label.toLowerCase()}.`, [field], [{ id:"origin_cost",op:"sum",field:"cost_usd",label:"API equivalent" },tokens], `Inspect ${label.toLowerCase()} cost`, {
+      unit:"USD",note:"API list-price equivalent, not subscription spend or invoices. Assumed and partial prices retain their existing meaning; missing costs do not become zero. Channel and Machine follow task initiation, including descendants; execution placement stays separate. Unknown origin groups remain visible.",
+      cover:{mode:"result",metricId:"origin_cost",kind:"bar-horizontal",maxGroups:6,showOther:true},
+    }),
+  ]),
   card("run-effort-token-ranges", "Run tokens by effort", "Own tokens per standalone, parent, or delegated run by recorded effort over the last {days} days.", runKeys, runSummaries, runAction, {
     idea: "models-06", where: [...roots, { field: "run_role", op: "is_not_null", value: "" }],
     note: `${recorded} One observation is a canonical execution’s own selected-period tokens at one recorded effort, excluding its descendants’ tokens. Separate Standalone (root with no known children), Parent (root with known children), and Delegated (any non-root execution, even if it delegates further). Roles use full recorded lineage, including tokenless children and linked launches. Missing/cyclic execution ancestry is excluded. Group by root conversation and canonical delegated identity, merging continuations and exact handles/child transcripts. Own effort comes from each usage fact, not the root; a run changing effort contributes a separate, nonoverlapping run/effort observation to each setting. Missing effort remains Unspecified. Require three run/effort observations per cohort; sparse cohorts stay in the destination. All boxes share one log-token axis. Workload and model mix can differ across roles.`,

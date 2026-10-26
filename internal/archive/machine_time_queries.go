@@ -17,7 +17,7 @@ import (
 // the wide tool cube before computing command identities, once per generation,
 // instead of invoking JSON/classification functions on every cube row for each
 // of the dashboard's metrics and comparison windows.
-var machineTimeDimensions = fieldSet("repository_name", "provider", "model", "model_family", "model_effort", "effort", "day", "week", "month", "status", "operation_key", "operation_name", "activity", "tool_name", "mcp_server", "program", "subcommand", "tool_category", "command_category")
+var machineTimeDimensions = fieldSet("channel", "machine_id", "execution_machine_id", "repository_name", "provider", "model", "model_family", "model_effort", "effort", "day", "week", "month", "status", "operation_key", "operation_name", "activity", "tool_name", "mcp_server", "program", "subcommand", "tool_category", "command_category")
 
 const machineTimeIndexSQL = `CREATE INDEX IF NOT EXISTS tool_call_cube_machine_time_command_idx ON tool_call_cube(
  repository_name,provider,model,effort,day,status,tool_name,mcp_server,program,subcommand,
@@ -31,10 +31,10 @@ func (c *Catalog) machineTimeRowsIn(ctx context.Context, tx *sql.Tx) ([]map[stri
 	}
 	key := "machine-time:" + time.Local.String() + ":" + c.clock().Format("2006-01-02") + ":" + publication
 	rows, err := cachedValue(ctx, c, key, func(ctx context.Context) ([]map[string]any, error) {
-		rows, err := queryMapsContext(ctx, tx, `SELECT repository_name,provider,model,effort,day,status,
+		rows, err := queryMapsContext(ctx, tx, `SELECT channel,machine_id,execution_machine_id,repository_name,provider,model,effort,day,status,
  tool_name,mcp_server,program,subcommand,tool_category,command_category,present_command,
  SUM(duration_ms_sum) duration_ms,SUM(duration_ms_n) machine_timed,SUM(call_count) machine_calls
- FROM tool_call_cube GROUP BY repository_name,provider,model,effort,day,status,
+ FROM tool_call_cube GROUP BY channel,machine_id,execution_machine_id,repository_name,provider,model,effort,day,status,
  tool_name,mcp_server,program,subcommand,tool_category,command_category,present_command`)
 		if err != nil {
 			return nil, err
