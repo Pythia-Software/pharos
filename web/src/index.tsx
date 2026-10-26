@@ -86,6 +86,7 @@ import { UsageWorkspace, UsageDashboardLinks, UsageWorkspaceLink } from "./usage
 import { UsageQueryIdeas } from "./usage-query-ideas";
 import { toolSummaryCallFilters, defaultToolDashboard, validToolDashboard, cumulativeToolTrend, toolDashboardMeasures, toolDashboardBreakdowns, toolDashboardQuery, toolTrendRanking, withToolTrendGroups, toolTrendGroups } from "./tools-dashboard-model";
 import { readDashboardQuery, inspectDashboardBucket, recordDashboardMetric, recordDashboards, parallelismSelectionQuery, toolDashboardWhere, type RecordDashboardTopic } from "./usage-dashboard-model";
+import { dashboardChartURL } from "./dashboard-chart-links";
 
 type Row = Record<string, any>;
 const relationships: RelationshipAdapter = {
@@ -1155,7 +1156,9 @@ function TokenChart({ where, onFilter, onTimeFilter = onFilter, view, onChange }
     format={percent ? value => `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })}%` : cost ? formatUSD : compactNumber}
     tickFormat={percent ? value => `${value}%` : cost ? costTick : compactNumber}
     noun={view.metric === "tokens" ? "tokens" : ""} loading={result.loading} error={result.error} legend={series.length > 0} percent={percent}
-    selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => onChange({ seriesLimit: Math.min(1000, seriesLimit + 5) })} onRange={pickRange(onTimeFilter, usageTime, view.period, periodCount, period => onChange({ period }))} />;
+    selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => onChange({ seriesLimit: Math.min(1000, seriesLimit + 5) })} onRange={pickRange(onTimeFilter, usageTime, view.period, periodCount, period => onChange({ period }))}
+    seriesHref={(range, item) => dashboardChartURL({ dataset: "usage", where: range.rolling ? requestedWhere : where, time: usageTime, range, series: item, split: sliced ? split : null,
+      fields: [sliced ? cost ? "cost_usd" : "total_tokens" : item.key], current: new URLSearchParams(location.search) })} />;
 }
 
 function PresetRow({ label, presets, query, chart, onApply, clear }: { label: string; presets: UsagePreset[]; query: QueryTableApi<Row>["query"]; chart?: TokenChartView; onApply: (preset: UsagePreset | null) => void; clear?: boolean }) {
@@ -1387,7 +1390,10 @@ function WritingPanel({ where, onFilter, status, reload, dashboard = false, view
       </>}
       series={chartSeries} buckets={buckets} period={view.period} periodCount={periodCount} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={cumulativeStart} scale={view.scale} legend={chartSeries.length > 0}
       format={value => value.toLocaleString()} tickFormat={compactNumber} noun="words" loading={chartData.loading} error={chartData.error}
-      selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => update({ seriesLimit: Math.min(1000, seriesLimit + 5) })} onRange={pickRange(onFilter, writingTime, view.period, periodCount, period => update({ period }))} />
+      selected={selected} excluded={selection.excluded} onSelect={select} onExpand={() => update({ seriesLimit: Math.min(1000, seriesLimit + 5) })} onRange={pickRange(onFilter, writingTime, view.period, periodCount, period => update({ period }))}
+      seriesHref={(range, item) => dashboardChartURL({ dataset: "writing", where: range.rolling ? requestedWhere : where, time: writingTime, range, series: item, split,
+        fields: split ? [view.scope === "typed" ? "typed_words" : "user_words"] : writingGroups.find(group => group.key === item.key)?.categories.map(category => `${category}_words`),
+        current: new URLSearchParams(location.search) })} />
     {dashboard ? <>
       <div className="mcp-metrics dashboard-stats" aria-label="Human Words summary" aria-busy={data.loading}>
         {card("Words you wrote", amount(compactNumber(typed)), "typed or dictated in the selected period")}
@@ -1546,7 +1552,7 @@ function TokenUsageDashboard() {
     <TokenChart where={state.where} onFilter={state.onFilter} view={state.view} onChange={state.update} />
     <TokenSummary where={state.where} />
     <UsageDashboardLinks schema={schemas.usage} dataset="usage" query={{ ...EMPTY_QUERY, where: state.where, aggregations: tokenChartMetrics(state.view).map(clause => ({ ...clause, label: clause.label === "chart" ? costMetric(state.view) ? "API cost (USD)" : "Tokens" : clause.label })) }} currentURL="/analyze?analyze_view=tokens&machine_view=tokens" />
-    <p className="usage-dashboard-note">Drag across the graph to zoom into a period. Select legend entries to compare or exclude series. Cumulative lines total each series from the range start; click a point to select the range contributing to it. Grouped rows expose the underlying interval amounts before percentages, smoothing, accumulation, or folded series. API cost is the list-price equivalent; subscriptions and long-context premiums are excluded. ≈ marks assumed prices.</p>
+    <p className="usage-dashboard-note">Click a column or point to pin its key, then follow a series to its contributing usage records. Drag across two or more periods to filter dates. Select legend entries to compare or exclude series. Cumulative links include activity from the range start; rolling-average links include the averaging window. Grouped rows expose the underlying interval amounts before percentages, smoothing, accumulation, or folded series. API cost is the list-price equivalent; subscriptions and long-context premiums are excluded. ≈ marks assumed prices.</p>
   </>;
 }
 
@@ -1563,7 +1569,7 @@ function HumanUsageDashboard() {
   return <>
     <WritingPanel dashboard where={state.where} onFilter={state.onFilter} status={status} reload={reload} viewOverride={state.view} onViewChange={state.update} />
     <UsageDashboardLinks schema={schemas.writing} dataset="writing" query={{ ...EMPTY_QUERY, where: state.where, aggregations: [sum(state.view.scope === "typed" ? "typed_words" : "user_words", [state.view.split === "kind" ? "repository_name" : state.view.split], state.view.scope === "typed" ? "Typed words per conversation group" : "User input per conversation group")] }} currentURL="/analyze?analyze_view=writing" />
-    <p className="usage-dashboard-note">The grouped query contains whole-conversation totals for the matching conversations. The graph restricts their writing to the selected dates.</p>
+    <p className="usage-dashboard-note">Series links open contributing workspaces, whose totals cover their whole conversations. Follow a workspace’s Messages link for its individual messages. The graph restricts writing to the selected dates.</p>
     <p className="usage-dashboard-note">Typed and dictated words are distinguished from pastes, harness instructions, and other supplied text.</p>
   </>;
 }
@@ -1605,7 +1611,9 @@ function RecordUsageDashboard({ topic }: { topic: RecordDashboardTopic }) {
     </>} buckets={buckets} series={series} period={view.period} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={bounds.from ?? earliestKey(result.metrics[0]?.buckets.map(bucket => bucket.keys[0]) ?? [])} scale={view.scale} legend={series.length > 0} loading={result.loading} error={result.error} format={compactNumber} tickFormat={compactNumber} noun={measure.unit}
       selected={series.filter(item => chosen.includes(String(item.value ?? ""))).map(item => item.key)} excluded={selection.excluded}
       onSelect={(key, action) => onFilter(current => withSlice(current, view.split, updateSlice(readSlice(current, view.split), key === null ? null : String(series.find(item => item.key === key)?.value ?? "") || null, action)))}
-      onExpand={() => state.update({ seriesLimit: Math.min(1000, limit + 5) })} onRange={pickRange(onFilter, { first: spec.time, last: spec.time }, view.period, 1, period => state.update({ period: period === "month" || period === "week" ? period : "day" }))} />
+      onExpand={() => state.update({ seriesLimit: Math.min(1000, limit + 5) })} onRange={pickRange(onFilter, { first: spec.time, last: spec.time }, view.period, 1, period => state.update({ period: period === "month" || period === "week" ? period : "day" }))}
+      seriesHref={(range, item) => dashboardChartURL({ dataset: spec.dataset, where: range.rolling ? requestedWhere : where, time: { first: spec.time, last: spec.time }, range, series: item, split: view.split,
+        fields: measure.field ? [measure.field] : measure.expression ? ["content_bytes"] : [], current: new URLSearchParams(location.search) })} />
     {topic === "time" ? <AgentTimeSummary where={where} /> : null}
     <UsageDashboardLinks schema={schemas[spec.dataset]} dataset={spec.dataset} query={{ ...EMPTY_QUERY, where, aggregations: [clause] }} currentURL={currentUsageAnalyses.find(item => item.topic === topic)!.url} />
     <p className="usage-dashboard-note">{spec.note}</p>
