@@ -375,6 +375,7 @@ func (c *Catalog) archiveStatus(args map[string]any) (map[string]any, error) {
 		if root != "" {
 			row["last_capture_at"] = nilIfEmpty(lastCaptureAt(root, firstString(row["host_id"]), firstString(row["source"])))
 		}
+		row["preservation"] = c.inputPreservationStatus(context.Background(), firstString(row["host_id"]), firstString(row["source"]))
 		items = append(items, row)
 	}
 	sort.SliceStable(items, func(left, right int) bool {

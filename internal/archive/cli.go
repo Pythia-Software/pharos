@@ -106,11 +106,26 @@ func Run(arguments []string) error {
 	if command == "dev-ui" {
 		return runDevUICLI(config, args)
 	}
+	if command == "history-backfill" {
+		guard := config
+		// Preserve the volume guard while allowing catalog-independent status,
+		// resume and offline rebuild. Only plan/prepare require the live DB.
+		if len(args) > 0 && args[0] != "plan" && args[0] != "prepare" {
+			guard.CatalogPath = config.Path
+		}
+		if err := guard.checkLibrary(volumeIdentity); err != nil {
+			return err
+		}
+		return runHistoryCLI(config, args)
+	}
 	if err := config.checkLibrary(volumeIdentity); err != nil {
 		return err
 	}
 	// Capturing and backing up only copy files; they never open the catalog
 	// for writing.
+	if command == "sqlite-records" {
+		return runSQLiteRecordsCLI(config, args)
+	}
 	if command == "capture" {
 		return runCaptureCLI(config, args)
 	}
@@ -322,7 +337,7 @@ func Run(arguments []string) error {
 }
 
 func usageError() error {
-	return fmt.Errorf("usage: pharos [--config PATH] {init,init-library,add-this-mac,serve,capture,index,backup,cloud-backup,cloud-restore,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,upgrade,build-tools,pricing,search,tl1,findings,health,doctor,dev-ui,mcp,probe,volume-id}")
+	return fmt.Errorf("usage: pharos [--config PATH] {init,init-library,add-this-mac,serve,capture,index,history-backfill,sqlite-records,backup,cloud-backup,cloud-restore,ingest,repositories,repair-existing,refine-usage,repair-usage-attribution,upgrade,build-tools,pricing,search,tl1,findings,health,doctor,dev-ui,mcp,probe,volume-id}")
 }
 func urlQueryEscape(value string) string {
 	replacer := strings.NewReplacer("%", "%25", " ", "%20", "+", "%2B", "?", "%3F", "&", "%26", "=", "%3D")

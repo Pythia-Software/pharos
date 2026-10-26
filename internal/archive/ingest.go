@@ -14,11 +14,15 @@ import (
 )
 
 type IngestResult struct {
-	DiscoverySeconds      float64 `json:"discovery_seconds,omitempty"`
-	WriteSeconds          float64 `json:"write_seconds,omitempty"`
-	DiscoveryParseSeconds float64 `json:"discovery_parse_seconds,omitempty"`
-	WriteRows             int64   `json:"write_rows,omitempty"`
-	Source                string  `json:"source"`
+	HistoryWarnings       []captureError `json:"historical_recovery_warnings,omitempty"`
+	UnavailableInputs     []captureError `json:"unavailable_capture_inputs,omitempty"`
+	DiscoverySeconds      float64        `json:"discovery_seconds,omitempty"`
+	WriteSeconds          float64        `json:"write_seconds,omitempty"`
+	DiscoveryParseSeconds float64        `json:"discovery_parse_seconds,omitempty"`
+	WriteRows             int64          `json:"write_rows,omitempty"`
+	Source                string         `json:"source"`
+	Preservation          string         `json:"preservation,omitempty"`
+	Revision              string         `json:"retained_revision,omitempty"`
 	// Host is the Mac whose copy of the source was ingested.
 	Host             string `json:"host,omitempty"`
 	Workspaces       int    `json:"workspaces"`
@@ -37,8 +41,10 @@ type IngestResult struct {
 	Older int `json:"older,omitempty"`
 	// Processed counts the part groups an incremental ingest handled, written
 	// or not; an index's progress measures it against captureIndexWork.
-	Processed int `json:"-"`
-	Error     any `json:"error"`
+	Processed int  `json:"-"`
+	Error     any  `json:"error"`
+	Pending   bool `json:"pending,omitempty"`
+	Deferred  bool `json:"deferred,omitempty"`
 }
 
 type ProgressFunc func(phase string, workspaces, conversations, messages, skippedCurrent, processed int)
@@ -67,11 +73,44 @@ func captureViewOf(adapter Adapter) *captureView {
 // record commits on its own, so the source is left "indexing" and the next
 // sync resumes it, as after a crash.
 func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress ProgressFunc) IngestResult {
+	// Plans retain the acquired reader, never readers over a live inventory.
+	if plan := modeOf(ctx).plan; plan != nil && plan.reader != nil {
+		adapter = plan.reader
+	}
+	input, acquisitionErr := c.acquireRetainedInput(ctx, adapter, progress)
+	if acquisitionErr != nil {
+		result := IngestResult{Source: adapter.Config().Name, Host: sourceHost(adapter).ID, Pending: true}
+		if errors.Is(acquisitionErr, errCaptureBusy) && modeOf(ctx).automatic {
+			result.Deferred = true
+		} else {
+			result.Error = acquisitionErr.Error()
+		}
+		return result
+	}
+	defer input.Close()
+	if input.Adapter != adapter && modeOf(ctx).plan != nil {
+		mode := modeOf(ctx)
+		mode.plan = nil
+		ctx = withIngestMode(ctx, mode)
+	}
+	adapter = input.Adapter
+	ctx = c.withSQLiteAcquisition(ctx, adapter)
 	setAdapterContext(adapter, ctx)
 	config := adapter.Config()
 	mode := modeOf(ctx)
 	host, view := sourceHost(adapter), captureViewOf(adapter)
-	result := IngestResult{Source: config.Name, Host: host.ID}
+	result := IngestResult{Source: config.Name, Host: host.ID, Preservation: preservationMode(config)}
+	if view != nil {
+		result.Preservation = "captured-inputs"
+		if !view.evidenceVolatile {
+			result.Revision = view.evidenceRevision
+		}
+		if result.Revision != "" {
+			result.Preservation = "retained-inputs"
+		}
+	} else if strings.EqualFold(config.Kind, "codex") && productionAdapter(adapter) {
+		result.Preservation = "live-sqlite-rollout-gap"
+	}
 	if host.Fallback {
 		result.Error = errHostUnknown.Error()
 		return result
@@ -113,6 +152,17 @@ func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress P
 	report("discovering inputs")
 	if mode.plan == nil {
 		plan, err := c.prepareSourcePlan(ctx, adapter)
+		if errors.Is(err, errCaptureBusy) {
+			result.Pending = true
+			if mode.automatic {
+				result.Deferred = true
+			} else {
+				result.Error = err.Error()
+			}
+			_ = c.recordInputAcquisition(host.ID, config, "", err)
+			report("waiting for capture")
+			return result
+		}
 		if err != nil {
 			state("failed", "", "", err.Error(), 0, false)
 			result.Error = err.Error()
@@ -165,6 +215,10 @@ func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress P
 	if !mode.automatic && !mode.force && (mode.plan == nil || mode.plan.discoveryError == nil && mode.plan.needed == 0) && err == nil && priorFingerprint.String == fingerprint && priorVersion.String == indexVersion && lastSuccess.Valid && !priorError.Valid && pending == 0 && coverage.String == "complete" {
 		state("complete", fingerprint, fingerprint, "", 0, true)
 		result.SkippedUnchanged = true
+		if err := c.recordInputIndexed(host.ID, config.Name, result.Revision); err != nil {
+			result.Error = err.Error()
+			return result
+		}
 		report("complete")
 		return result
 	}
@@ -177,7 +231,19 @@ func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress P
 	err = c.ingestPass(ctx, adapter, host.ID, resume, &result, report, func(sourceID string) {
 		state("indexing", sourceID, fingerprint, "", -1, false)
 	})
+	if errors.Is(err, errCaptureBusy) {
+		result.Pending = true
+		if mode.automatic {
+			result.Deferred = true
+		} else {
+			result.Error = err.Error()
+		}
+		_ = c.recordInputAcquisition(host.ID, config, "", err)
+		report("waiting for capture")
+		return result
+	}
 	if err != nil && ctx.Err() != nil {
+		result.Pending = true
 		result.Error = "interrupted: the index stopped before this source finished; the next index resumes it"
 		report("interrupted")
 		return result
@@ -209,6 +275,10 @@ func (c *Catalog) IngestContext(ctx context.Context, adapter Adapter, progress P
 			report("failed")
 			return result
 		}
+	}
+	if err := c.recordInputIndexed(host.ID, config.Name, result.Revision); err != nil {
+		result.Error = err.Error()
+		return result
 	}
 	report("complete")
 	return result
@@ -259,6 +329,9 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 		if mode.automatic {
 			tracker.writer = "automatic"
 		}
+		if mode.force {
+			tracker.states = nil
+		}
 	}
 	processRecord := func(record *WorkspaceRecord, parts []sourcePart) error {
 		started := time.Now()
@@ -271,12 +344,17 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 			err := tracker.hold(c, parts)
 			return err
 		}
+		retainedRecordIdentity(captureViewOf(adapter), record, parts)
 		if mode.plan != nil {
 			mode.plan.observe(record)
 		}
 		digest, err := workspaceRecordDigest(*record)
 		if err != nil {
 			return err
+		}
+		payloadDigest := indexVersion + ":" + digest
+		if record.EvidenceIdentity != "" {
+			digest = record.EvidenceIdentity + ":" + digest
 		}
 		digest = indexVersion + ":" + digest
 		var storedDigest string
@@ -288,6 +366,21 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 			}
 		} else if err != nil && err != sql.ErrNoRows {
 			return err
+		}
+		if !mode.force && record.EvidenceIdentity != "" && recordPayloadDigest(storedDigest, indexVersion) == payloadDigest {
+			updated, err := c.acceptUnchangedEvidence(ctx, adapter, *record, parts, tracker, digest, payloadDigest, indexVersion)
+			if errors.Is(err, errOlderCopy) {
+				result.Older++
+				return tracker.recordTerminal(c, parts)
+			}
+			if err != nil {
+				return err
+			}
+			if updated {
+				c.boundWAL(walSizeLimit)
+				result.SkippedCurrent++
+				return nil
+			}
 		}
 		// Parts supersede this: a record skipped here would have its part
 		// recorded as current and never be parsed again.
@@ -316,7 +409,7 @@ func (c *Catalog) ingestPass(ctx context.Context, adapter Adapter, host string, 
 				return err
 			}
 			copied, older, conversations, messages = false, false, 0, 0
-			if !mode.force {
+			if !mode.force && record.EvidenceIdentity == "" {
 				copied, err = sightCopiedRecord(tx, *record, digest, host, config.Name)
 				if err != nil {
 					return err
@@ -491,6 +584,13 @@ func (c *Catalog) recordUsesCurrentExtractor(adapter Adapter, record WorkspaceRe
 // intentionally leaves source coverage partial so it can never masquerade as
 // a complete source discovery.
 func (c *Catalog) IngestExisting(adapter Adapter, progress ProgressFunc) IngestResult {
+	input, err := c.acquireRetainedInput(context.Background(), adapter, progress)
+	if err != nil {
+		return IngestResult{Source: adapter.Config().Name, ExistingOnly: true, Error: err.Error(), Pending: true}
+	}
+	defer input.Close()
+	adapter = input.Adapter
+	setAdapterContext(adapter, c.withSQLiteAcquisition(context.Background(), adapter))
 	config := adapter.Config()
 	result := IngestResult{Source: config.Name, ExistingOnly: true}
 	selective, ok := adapter.(SelectiveAdapter)
@@ -521,6 +621,7 @@ func (c *Catalog) IngestExisting(adapter Adapter, progress ProgressFunc) IngestR
 		if !selected[record.SourceID] {
 			return fmt.Errorf("selective adapter emitted unrequested source id %q", record.SourceID)
 		}
+		retainedRecordIdentity(captureViewOf(adapter), &record, nil)
 		tx, beginErr := c.beginWrite(context.Background())
 		if beginErr != nil {
 			return beginErr
@@ -627,6 +728,15 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 	if err != nil {
 		return 0, 0, err
 	}
+	authority, err := resolveAuthority(tx, record, workspaceID, host)
+	if err != nil {
+		return 0, 0, err
+	}
+	if fromCapture || record.EvidenceIdentity != "" {
+		if err := guardCapture(tx, record, workspaceID, host, &authority); err != nil {
+			return 0, 0, err
+		}
+	}
 	if (record.SourceKind == "conductor" || record.SourceKind == "tl1") && workspaceID != "" {
 		for _, conversation := range record.Conversations {
 			if conversation.Provider != record.SourceKind {
@@ -636,15 +746,6 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 					return 0, 0, err
 				}
 			}
-		}
-	}
-	authority, err := resolveAuthority(tx, record, workspaceID, host)
-	if err != nil {
-		return 0, 0, err
-	}
-	if fromCapture {
-		if err := guardCapture(tx, record, workspaceID, host, &authority); err != nil {
-			return 0, 0, err
 		}
 	}
 	repoID, stalePaths := "", []string(nil)
@@ -671,43 +772,45 @@ func ingestCopyMode(tx *sql.Tx, record WorkspaceRecord, allowReclamation bool, h
 		return 0, 0, err
 	}
 	workItemID := ""
-	if authority.older {
-		// Work items, attempts and handoffs are the workspace's own, which an
-		// older copy leaves as they are.
-		if err := tx.QueryRow("SELECT COALESCE(MAX(id),'') FROM work_items WHERE workspace_id=?", workspaceID).Scan(&workItemID); err != nil {
-			return 0, 0, err
-		}
-	}
-	for _, item := range record.WorkItems {
+	if !record.catalogRecovery {
 		if authority.older {
-			break
+			// Work items, attempts and handoffs are the workspace's own, which an
+			// older copy leaves as they are.
+			if err := tx.QueryRow("SELECT COALESCE(MAX(id),'') FROM work_items WHERE workspace_id=?", workspaceID).Scan(&workItemID); err != nil {
+				return 0, 0, err
+			}
 		}
-		if firstString(item["source_kind"]) == "" {
-			item["source_kind"] = record.SourceKind
+		for _, item := range record.WorkItems {
+			if authority.older {
+				break
+			}
+			if firstString(item["source_kind"]) == "" {
+				item["source_kind"] = record.SourceKind
+			}
+			if firstString(item["source_account"]) == "" {
+				item["source_account"] = record.Account
+			}
+			if firstString(item["source_id"]) == "" {
+				item["source_id"] = firstString(item["id"])
+			}
+			workItemID, err = upsertWorkItem(tx, workspaceID, item)
+			if err != nil {
+				return 0, 0, err
+			}
 		}
-		if firstString(item["source_account"]) == "" {
-			item["source_account"] = record.Account
+		if workItemID == "" && !authority.older {
+			workItemID, err = upsertWorkItem(tx, workspaceID, map[string]any{"source_kind": record.SourceKind, "source_account": record.Account, "source_id": record.SourceID, "title": record.Title, "status": metadata["status"], "explicit": true})
+			if err != nil {
+				return 0, 0, err
+			}
 		}
-		if firstString(item["source_id"]) == "" {
-			item["source_id"] = firstString(item["id"])
-		}
-		workItemID, err = upsertWorkItem(tx, workspaceID, item)
-		if err != nil {
-			return 0, 0, err
-		}
-	}
-	if workItemID == "" && !authority.older {
-		workItemID, err = upsertWorkItem(tx, workspaceID, map[string]any{"source_kind": record.SourceKind, "source_account": record.Account, "source_id": record.SourceID, "title": record.Title, "status": metadata["status"], "explicit": true})
-		if err != nil {
-			return 0, 0, err
-		}
-	}
-	if !authority.older {
-		if err := upsertAttempts(tx, workItemID, record.Attempts); err != nil {
-			return 0, 0, err
-		}
-		if err := upsertHandoffs(tx, workspaceID, record.Handoffs); err != nil {
-			return 0, 0, err
+		if !authority.older {
+			if err := upsertAttempts(tx, workItemID, record.Attempts); err != nil {
+				return 0, 0, err
+			}
+			if err := upsertHandoffs(tx, workspaceID, record.Handoffs); err != nil {
+				return 0, 0, err
+			}
 		}
 	}
 	messageCount, conversationCount := 0, 0
@@ -952,7 +1055,11 @@ func guardCapture(tx *sql.Tx, record WorkspaceRecord, workspaceID, host string, 
 		if err != nil {
 			return err
 		}
-		if known && conversation.Observed < stored {
+		rejected, err := evidenceVersionRejected(tx, host, workspaceID, claim.id, conversation.Origin, conversation.Observed, stored, known, record.EvidenceIdentity)
+		if err != nil {
+			return err
+		}
+		if rejected {
 			claim.older = true
 			older++
 		}
@@ -961,7 +1068,10 @@ func guardCapture(tx *sql.Tx, record WorkspaceRecord, workspaceID, host string, 
 	if err != nil {
 		return err
 	}
-	workspaceOlder := known && record.Observed < stored
+	workspaceOlder, err := evidenceVersionRejected(tx, host, workspaceID, "", "", record.Observed, stored, known, record.EvidenceIdentity)
+	if err != nil {
+		return err
+	}
 	if older == len(record.Conversations) && (older > 0 || workspaceOlder) {
 		return errOlderCopy
 	}
@@ -1009,6 +1119,15 @@ func recordCopyVersions(tx *sql.Tx, host, workspaceID string, conversationIDs []
 		_, err := tx.Exec(`INSERT INTO copy_versions(host_id,workspace_id,conversation_id,origin,version,written_at) VALUES(?,?,?,?,?,?)
 			ON CONFLICT(host_id,workspace_id,conversation_id,origin) DO UPDATE SET version=excluded.version,written_at=excluded.written_at`,
 			host, workspaceID, conversationID, origin, version, timestamp)
+		if err != nil {
+			return err
+		}
+		if record.EvidenceIdentity == "" {
+			_, err = tx.Exec("DELETE FROM copy_evidence WHERE host_id=? AND workspace_id=? AND conversation_id=? AND origin=?", host, workspaceID, conversationID, origin)
+			return err
+		}
+		_, err = tx.Exec(`INSERT INTO copy_evidence(host_id,workspace_id,conversation_id,origin,version,identity,revision) VALUES(?,?,?,?,?,?,?)
+            ON CONFLICT(host_id,workspace_id,conversation_id,origin) DO UPDATE SET version=excluded.version,identity=excluded.identity,revision=excluded.revision`, host, workspaceID, conversationID, origin, version, record.EvidenceIdentity, record.EvidenceRevision)
 		return err
 	}
 	if workspace {
@@ -1921,6 +2040,9 @@ func (c *Catalog) ReconcileIdentities() (int, error) {
 }
 
 func (c *Catalog) ReconcileIdentitiesContext(ctx context.Context) (int, error) {
+	if err := c.reconcileHistoryLinks(ctx); err != nil {
+		return 0, err
+	}
 	var before int
 	if err := c.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM conversation_identity_links").Scan(&before); err != nil {
 		return 0, err
@@ -2000,3 +2122,25 @@ func (c *Catalog) ReconcileIdentitiesContext(ctx context.Context) (int, error) {
 	return after - before, nil
 }
 func decodeJSONText(text string, value any) error { return json.Unmarshal([]byte(text), value) }
+
+// Changed non-advancing evidence is retained but never promoted. Equal legacy
+// authority can acquire its first association at the same version, allowing
+// forced reparses and extractor upgrades. Once associated, equal versions must
+// have identical raw identity. This does not certify older unassociated reads.
+func evidenceVersionRejected(tx *sql.Tx, host, workspace, conversation, origin string, incoming, stored int64, known bool, identity string) (bool, error) {
+	if !known {
+		return false, nil
+	}
+	if incoming < stored {
+		return true, nil
+	}
+	if incoming != stored {
+		return false, nil
+	}
+	var previous string
+	err := tx.QueryRow("SELECT identity FROM copy_evidence WHERE host_id=? AND workspace_id=? AND conversation_id=? AND origin=? AND version=?", host, workspace, conversation, origin, stored).Scan(&previous)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return identity == "" || previous != identity, err
+}

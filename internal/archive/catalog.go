@@ -26,12 +26,15 @@ type Catalog struct {
 	RepositorySeparate []string
 	captureRootMu      sync.RWMutex
 	captureRoot        string
-	library            libraryCache
-	catchUp            libraryCatchUp
-	find               libraryFindCache
-	transcripts        transcriptFindCache
-	derived            derivedCache
-	queryCounts        queryCountCache
+	// evidenceOnly restricts offline rebuild enrichment to imported catalog rows.
+	// Set once before replay; live paths and unselected captures are unavailable.
+	evidenceOnly bool
+	library      libraryCache
+	catchUp      libraryCatchUp
+	find         libraryFindCache
+	transcripts  transcriptFindCache
+	derived      derivedCache
+	queryCounts  queryCountCache
 	// quietVersion and warmVersion are the catalog versions warmCaches last
 	// saw and warmed; only the Library maintenance loop uses them.
 	quietVersion, warmVersion int64
@@ -183,7 +186,11 @@ func (c *Catalog) Close() error {
 // writers could prune the replies or replace corrected postings with raw JSON.
 // 18: retained initiation observations, physical machines, and origin-aware
 // tool rollups. Older writers do not preserve these attribution dimensions.
-const catalogSchemaVersion = 18
+// 19: skipped. Unmerged preservation builds wrote it without version 18.
+// 20: raw SQLite evidence authority, retained input acquisition state and
+// deferred historical relationships. Older writers cannot maintain the
+// preservation contract of these rows.
+const catalogSchemaVersion = 20
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.

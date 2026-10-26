@@ -194,3 +194,11 @@ test('run detail queries distinguish unknown work totals and forecasts from meas
   assert.equal(tables.forecasts.rows[1].error_seconds, 10);
   assert.equal(tables.forecasts.rows[2].error_seconds, -2);
 });
+
+
+test("preservation shows pending or indexed acquisitions without warning about default live copies", () => {
+  assert.equal(pharosSync.preservationState({status:"indexed",last_capture_at:"old",indexed_at:"new"}),"indexed");
+  assert.equal(pharosSync.preservationState({status:"indexed",pending_newer_inputs:true}),"pending");
+  assert.equal(pharosSync.preservationState({status:"untracked",legacy_preservation_gaps:2000000}),"untracked");
+  assert.equal(pharosSync.preservationState({last_capture_at:"new",indexed_at:"old"}),"untracked");
+});

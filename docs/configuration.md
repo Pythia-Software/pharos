@@ -667,6 +667,21 @@ captures/<host-id>/
     history/<stamp>/...     # superseded versions, named by their captured_at
 ```
 
+**Index changes uses live inputs by default.** Experimental filesystem capture
+requires `retained_input_capture = true`; SQLite row export and logical
+acquisition require `sqlite_record_capture = true`. Neither is enabled by an
+upgrade. The filesystem option retains unbounded immutable revisions and is
+not suitable for production timers yet. See the [source rollout
+matrix](incremental-sync.md#source-acquisition-rollout). Explicit Capture keeps
+its normal native snapshots, and Index captured files uses temporary readers
+without retaining additional inventories unless acquisition was opted in.
+Metadata backfills during sync and upgrades read existing captures or local
+files without creating additional transcript copies. Editing a source's path
+or account does not require a new capture source name; immutable inventories
+retain their original acquisition configuration.
+The catalog remains part of local/cloud backups; encryption, schedules and
+upload permissions keep their existing behavior.
+
 **What is captured** is exactly what the source's adapter reads:
 
 | Kind | Captured |
@@ -707,9 +722,12 @@ mtimes are unchanged is not snapshotted again. A session deleted from a database
 disappears from its next snapshot, so the previous snapshot is kept as a
 generation in `history/`; `capture_snapshot_generations` sets how many (default
 1, i.e. latest plus previous: about 17.5 GB for an 8.7 GB Conductor database).
-The catalog, not the captures, is the long-term record of indexed sessions; the
-previous generation gives indexing a full capture cycle to pick up a session
-deleted at the source, and where captures are indexed, a snapshot the index has
+Verified logical [SQLite records](sqlite-records.md) retain exported evidence
+beyond native rotation; files without verified export/closure remain protected.
+Unexported or legacy sessions still depend on the catalog and surviving native
+generations. Historical backfill and the real-library validation remain separate
+milestones. The previous generation gives indexing a full capture cycle to pick
+up a session deleted at the source, and where captures are indexed, a snapshot the index has
 not yet seen is kept longer (see [Indexing captures](#indexing-captures)). Raise
 it where the drive allows.
 
@@ -873,7 +891,8 @@ for the same reason: a version-6 build would re-ingest conversations without
 rebuilding their tool ledger, record TL1 sources as synced without their
 analysis, and write timestamps in the old format.
 
-**Captures keep going during an index.** An index takes no capture lock, so a
+**Captures keep going during an index.** An index briefly takes the host capture
+lock to lease its inventory, then releases it before planning and parsing. A
 long index never holds up a capture or "safe to unplug". Captured files are
 replaced by rename, so the index reads the version it opened whole and records
 that version's size and mtime (not the manifest's); a file replaced meanwhile is
@@ -1468,3 +1487,27 @@ The operation is idempotent. It does not run during ordinary ingest; the
 [library upgrade](releases-and-updates.md#upgrading-an-existing-library) runs
 it, and offers it again when a version of Pharos changes how repositories are
 recognized.
+
+
+### Experimental retained input acquisition
+
+Index changes, CLI ingest and API sync use live filesystem readers by default.
+`retained_input_capture = true` in a source's `[sources.options]` enables the
+experimental filesystem pipeline. It keeps every immutable inventory, including
+complete earlier copies of growing files, and has no collector. It is not a
+production timer default. `sqlite_record_capture = true` is the independent
+opt-in for SQLite acquisition and row export during explicit Capture; ordinary
+Capture retains its bounded native snapshot policy without scanning database
+rows. Capture & index remains the default way to preserve before indexing.
+Legacy preservation gaps are reported separately from pending acquisition;
+a successful capture alone does not prove preservation of older indexed reads.
+
+### Historical preservation
+
+`pharos history-backfill plan` is a scoped read-only inventory. Explicit
+`prepare`, `resume`, `rebuild`, `verify` and protection-release operations are
+documented in [Historical preservation jobs](capture-history.md). Preparation
+requires a reviewed plan, a rollback destination on another physical drive,
+and explicit disk budgets. It pauses native snapshots only for selected sources;
+interrupted/unresolved jobs keep their pins and explain pending captures.
+Catalog-derived rescue is labeled separately from raw-source preservation.

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -35,11 +36,16 @@ func writeSourceFile(t *testing.T, file, content string) {
 	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	previous, _ := os.Stat(file)
 	if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	captureClock = captureClock.Add(time.Minute)
-	if err := os.Chtimes(file, captureClock, captureClock); err != nil {
+	stamp := captureClock
+	if previous != nil && !stamp.After(previous.ModTime()) {
+		stamp = previous.ModTime().Add(time.Nanosecond)
+	}
+	if err := os.Chtimes(file, stamp, stamp); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -166,6 +172,25 @@ func TestCaptureCopiesWhatAdaptersReadIncrementally(t *testing.T) {
 	if third := runCapture(t, config); captureResult(t, third, "codex").FilesCopied != 1 {
 		t.Fatalf("lost capture was not restored: %#v", third)
 	}
+
+	// Moving a configured source and editing its account must not strand its
+	// capture. Even identical file metadata must acquire the new original path.
+	moved := filepath.Join(t.TempDir(), "moved-claude")
+	if err := os.Rename(claude, moved); err != nil {
+		t.Fatal(err)
+	}
+	config.Sources[0].Path = moved
+	for _, account := range []string{"", "changed-account"} {
+		config.Sources[0].Account = account
+		if run := runCapture(t, config); !run.OK {
+			t.Fatalf("capture after source configuration edit: %+v", run)
+		}
+		manifest := readCaptureManifest(t, config, "claude")
+		file := manifestFile(t, manifest, "files/-proj/s1.jsonl")
+		if manifest.Source.Path != moved || manifest.Source.Account != account || file.Path != filepath.Join(moved, "-proj", "s1.jsonl") {
+			t.Fatalf("capture retained stale source configuration: %+v %+v", manifest.Source, file)
+		}
+	}
 }
 
 func TestCaptureAppendsAndPreservesRewrittenFiles(t *testing.T) {
@@ -198,6 +223,31 @@ func TestCaptureAppendsAndPreservesRewrittenFiles(t *testing.T) {
 	entry = manifestFile(t, readCaptureManifest(t, config, "claude"), "files/p/s.jsonl")
 	if len(entry.Previous) != 2 || readText(t, capturedPath(config, "claude", entry.Previous[1].Captured)) != "LINE ONE\nline two\n" {
 		t.Fatalf("truncated file lost its earlier capture: %#v", entry)
+	}
+
+	// A transcript can grow after its consistent prefix was captured. With no
+	// SQLite inputs there is no cross-file database group to invalidate it.
+	second := filepath.Join(claude, "p", "z.jsonl")
+	writeSourceFile(t, second, "another session\n")
+	appended := false
+	override(t, &captureFault, func(stage, rel string) error {
+		if stage == "copy" && rel == "files/p/z.jsonl" && !appended {
+			appended = true
+			writeSourceFile(t, file, "short\nnext tick\n")
+		}
+		return nil
+	})
+	if run := runCapture(t, config); !run.OK || !appended {
+		t.Fatalf("append after prefix capture failed: %+v", run)
+	}
+	if got := readText(t, capturedPath(config, "claude", entry.Captured)); got != "short\n" {
+		t.Fatalf("captured prefix changed: %q", got)
+	}
+	if run := runCapture(t, config); !run.OK {
+		t.Fatal(run)
+	}
+	if got := readText(t, capturedPath(config, "claude", entry.Captured)); got != "short\nnext tick\n" {
+		t.Fatalf("next capture did not catch up: %q", got)
 	}
 }
 
@@ -479,6 +529,9 @@ func TestCaptureRetainsSnapshotGenerations(t *testing.T) {
 	if unchanged.SnapshotsTaken != 0 || unchanged.SnapshotsUnchanged != 1 {
 		t.Fatalf("unchanged database was snapshotted again: %#v", unchanged)
 	}
+	if _, err := os.Stat(capturedPath(config, "conductor", recordDir)); !os.IsNotExist(err) {
+		t.Fatal("default capture exported SQLite rows", err)
+	}
 
 	config.CaptureGenerations = 0
 	execSQL(t, db, "INSERT INTO sessions VALUES('generation-4')")
@@ -488,6 +541,21 @@ func TestCaptureRetainsSnapshotGenerations(t *testing.T) {
 	}
 	if entries, err := os.ReadDir(capturedPath(config, "conductor", captureHistoryDir)); err == nil && len(entries) > 0 {
 		t.Fatalf("history kept %d entries with no generations configured", len(entries))
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(t.TempDir(), "moved-conductor")
+	if err := os.Rename(conductor, moved); err != nil {
+		t.Fatal(err)
+	}
+	config.Sources[0].Path, config.Sources[0].Account = moved, "changed-account"
+	if run := runCapture(t, config); !run.OK {
+		t.Fatalf("native capture after configuration edit: %+v", run)
+	}
+	manifest := readCaptureManifest(t, config, "conductor")
+	if manifest.Source.Account != "changed-account" || manifest.Snapshots[0].Path != filepath.Join(moved, "conductor.db") || sessionsIn(manifest.Snapshots[0].Captured) != "generation-2,generation-3,generation-4" {
+		t.Fatalf("native snapshot kept stale configuration: %+v", manifest)
 	}
 }
 
@@ -625,6 +693,49 @@ func TestCaptureRootDefaultsAndGuards(t *testing.T) {
 	} else {
 		session.Close()
 	}
+	for _, cancelled := range []bool{false, true} {
+		t.Run(fmt.Sprint("reader-wait-cancel=", cancelled), func(t *testing.T) {
+			held, err := beginCapture(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer held.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			busy := make(chan struct{}, 1)
+			result := make(chan error, 1)
+			go func() {
+				lock, err := waitCaptureLock(ctx, func() (*os.File, error) {
+					lock, err := lockCaptureTarget(ctx, filepath.Join(config.CaptureRoot, currentHost().ID, "reader"))
+					if errors.Is(err, errCaptureBusy) {
+						select {
+						case busy <- struct{}{}:
+						default:
+						}
+					}
+					return lock, err
+				})
+				if lock != nil {
+					lock.Close()
+				}
+				result <- err
+			}()
+			select {
+			case <-busy:
+			case <-ctx.Done():
+				t.Fatal("reader did not encounter the held capture lock")
+			}
+			if cancelled {
+				cancel()
+			} else {
+				held.Close()
+			}
+			err = <-result
+			if cancelled && !errors.Is(err, context.Canceled) || !cancelled && err != nil {
+				t.Fatal("reader lock wait", err)
+			}
+		})
+	}
 	if _, err := captureSources(config, []string{"nope"}); err == nil {
 		t.Fatal("unknown source accepted")
 	}
@@ -732,5 +843,352 @@ func TestCaptureExports(t *testing.T) {
 		if len(manifest.Files) != 1 || manifest.Files[0].Captured != want {
 			t.Fatalf("%s captured %#v", source, manifest.Files)
 		}
+	}
+}
+
+// Opt-in filesystem imports parse the durable inventory, even when the
+// source disappears or grows between publication and the first parser read.
+func TestIngestPreservesBeforeParsing(t *testing.T) {
+	t.Run("default-off", func(t *testing.T) {
+		catalog, _ := testCatalog(t)
+		source := stableCodexSource(t, 1)
+		if result := ingestSource(t, catalog, source); result.Error != nil || result.Revision != "" {
+			t.Fatal(result)
+		}
+		appendSourceFile(t, source.Path, codexLines("another-session", 1))
+		if result := ingestSource(t, catalog, source); result.Error != nil || result.Revision != "" {
+			t.Fatal(result)
+		}
+		moved := filepath.Join(t.TempDir(), "rollout-moved.jsonl")
+		if err := os.Rename(source.Path, moved); err != nil {
+			t.Fatal(err)
+		}
+		source.Path, source.Account = moved, "changed-account"
+		if result := ingestSource(t, catalog, source); result.Error != nil || result.Workspaces == 0 {
+			t.Fatal("configuration edit blocked indexing", result)
+		}
+		if _, err := os.Stat(catalog.captureRootPath()); !os.IsNotExist(err) {
+			t.Fatal("default indexing created captures", err)
+		}
+		config := Config{CaptureRoot: catalog.captureRootPath(), Sources: []SourceConfig{source}}
+		if run := runCapture(t, config); !run.OK {
+			t.Fatal(run)
+		}
+		target := captureTarget{Host: currentHost(), Source: source.Name, Dir: filepath.Join(config.CaptureRoot, currentHost().ID, source.Name)}
+		if result := catalog.IndexCapture(t.Context(), target, nil); result.Error != nil || result.Revision != "" {
+			t.Fatal("default captured index published an experimental inventory", result)
+		}
+		if _, err := os.Stat(filepath.Join(target.Dir, "inputs")); !os.IsNotExist(err) {
+			t.Fatal("default captured index retained duplicate inputs", err)
+		}
+	})
+	for _, removed := range []bool{false, true} {
+		t.Run(fmt.Sprint("removed=", removed), func(t *testing.T) {
+			useHost(t, "host-a")
+			catalog, _ := testCatalog(t)
+			root := filepath.Join(t.TempDir(), "claude")
+			file := filepath.Join(root, "project", "s.jsonl")
+			first := claudeLine("s", "u1", "retained first", "/project", 1)
+			writeSourceFile(t, file, first)
+			index := filepath.Join(filepath.Dir(file), "sessions-index.json")
+			writeSourceFile(t, index, `{"entries":[{"sessionId":"s","customTitle":"Preserved title"}]}`)
+			source := SourceConfig{Name: "claude", Kind: "claude", Path: root, Account: "local", Enabled: true, Options: map[string]any{"retained_input_capture": true}}
+			adapter, _ := MakeAdapter(source)
+			changed := false
+			result := catalog.Ingest(adapter, func(phase string, _, _, _, _, _ int) {
+				if phase != "discovering inputs" || changed {
+					return
+				}
+				changed = true
+				if removed {
+					if err := os.RemoveAll(root); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					appendSourceFile(t, file, claudeLine("s", "u2", "later live append", "/project", 2))
+					writeSourceFile(t, index, `{"entries":[{"sessionId":"s","customTitle":"Later title"}]}`)
+				}
+			})
+			if result.Error != nil || !changed || result.Revision == "" || conversationMessages(t, catalog, "s") != 1 || workspaceTitle(t, catalog, "s") != "Preserved title" {
+				t.Fatalf("acquired revision: %+v", result)
+			}
+			dir := filepath.Join(catalog.captureRootPath(), "host-a", source.Name, "inputs", result.Revision)
+			retained, _, _, err := openCaptureAdapter(captureTarget{Host: currentHost(), Source: source.Name, Dir: dir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if countRows(t, catalog, "SELECT COUNT(*) FROM copy_evidence WHERE revision=?", result.Revision) != 2 {
+				t.Fatal("catalog has no exact retained identity")
+			}
+			if removed {
+				// A parser upgrade uses the same retained bytes without the source.
+				ctx := withIngestMode(t.Context(), ingestMode{force: true})
+				if replay := catalog.IngestContext(ctx, retained, nil); replay.Error != nil {
+					t.Fatal(replay.Error)
+				}
+			} else if next := ingestSource(t, catalog, source); next.Messages != 2 || conversationMessages(t, catalog, "s") != 2 {
+				t.Fatalf("next revision: %+v", next)
+			}
+		})
+	}
+}
+
+func TestIngestAcquisitionFailureDoesNotAdvanceCheckpoints(t *testing.T) {
+	for _, stage := range []string{"copy", "input-publish"} {
+		t.Run(stage, func(t *testing.T) {
+			useHost(t, "host-a")
+			catalog, _ := testCatalog(t)
+			source := SourceConfig{Name: "claude", Kind: "claude", Path: filepath.Join(t.TempDir(), "s.jsonl"), Account: "local", Enabled: true, Options: map[string]any{"retained_input_capture": true}}
+			writeSourceFile(t, source.Path, claudeLine("s", "u1", "first", "/p", 1))
+			ingestSource(t, catalog, source)
+			before, err := queryMaps(catalog.DB, "SELECT * FROM source_item_states")
+			if err != nil {
+				t.Fatal(err)
+			}
+			appendSourceFile(t, source.Path, claudeLine("s", "u2", "pending", "/p", 2))
+			override(t, &captureFault, func(point, _ string) error {
+				if point == stage {
+					return errors.New("injected acquisition failure")
+				}
+				return nil
+			})
+			adapter, _ := MakeAdapter(source)
+			result := catalog.Ingest(adapter, nil)
+			if result.Error == nil || !result.Pending || conversationMessages(t, catalog, "s") != 1 {
+				t.Fatalf("failed acquisition published content: %+v", result)
+			}
+			after, _ := queryMaps(catalog.DB, "SELECT * FROM source_item_states")
+			if jsonText(before) != jsonText(after) {
+				t.Fatal("failed acquisition advanced parts")
+			}
+			status := catalog.inputPreservationStatus(t.Context(), "host-a", source.Name)
+			if status["pending_newer_inputs"] != true || status["error"] == nil {
+				t.Fatalf("missing pending failure: %#v", status)
+			}
+		})
+	}
+}
+
+func TestIngestResumesDurableInputAfterCancellation(t *testing.T) {
+	useHost(t, "host-a")
+	catalog, _ := testCatalog(t)
+	source := SourceConfig{Name: "claude", Kind: "claude", Path: filepath.Join(t.TempDir(), "s.jsonl"), Account: "local", Enabled: true, Options: map[string]any{"retained_input_capture": true}}
+	writeSourceFile(t, source.Path, claudeLine("s", "u1", "survives cancellation", "/p", 1))
+	adapter, _ := MakeAdapter(source)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	result := catalog.IngestContext(ctx, adapter, func(phase string, _, _, _, _, _ int) {
+		if phase == "discovering inputs" {
+			cancel()
+		}
+	})
+	if result.Error == nil || result.Revision == "" || countRows(t, catalog, "SELECT COUNT(*) FROM source_item_states") != 0 || countRows(t, catalog, "SELECT COUNT(*) FROM conversations") != 0 {
+		t.Fatalf("cancelled acquisition: %+v", result)
+	}
+	if err := os.Remove(source.Path); err != nil {
+		t.Fatal(err)
+	}
+	target := captureTarget{Host: currentHost(), Source: source.Name, Dir: filepath.Join(catalog.captureRootPath(), "host-a", source.Name)}
+	replay := catalog.IndexCapture(t.Context(), target, nil)
+	if replay.Error != nil || conversationMessages(t, catalog, "s") != 1 {
+		t.Fatalf("offline resume: %+v", replay)
+	}
+}
+
+func TestCaptureCleansOnlyAbandonedReaderLeases(t *testing.T) {
+	dir := t.TempDir()
+	lease, err := os.MkdirTemp(dir, ".reader-*"+captureTempSuffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(lease, "snapshot.db")
+	writeSourceFile(t, file, "retained native bytes")
+	lock, err := os.OpenFile(filepath.Join(lease, ".reader.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	removeCaptureTemporaries(dir)
+	if _, err = os.Stat(file); err != nil {
+		t.Fatal("active reader lost its snapshot", err)
+	}
+	lock.Close()
+	removeCaptureTemporaries(dir)
+	if _, err = os.Stat(lease); !os.IsNotExist(err) {
+		t.Fatalf("abandoned native lease remains: %v", err)
+	}
+}
+
+func TestFreezeRetainedInputsWithoutHardLinks(t *testing.T) {
+	for _, durable := range []bool{true, false} {
+		t.Run(fmt.Sprint("durable=", durable), func(t *testing.T) {
+			useHost(t, "host-a")
+			catalog, _ := testCatalog(t)
+			root := t.TempDir()
+			source := SourceConfig{Name: "source", Kind: "claude", Path: root, Account: "local", Enabled: true, Options: map[string]any{"retained_input_capture": true}}
+			var change func()
+			if durable {
+				file := filepath.Join(root, "project", "s.jsonl")
+				writeSourceFile(t, file, claudeLine("s", "u1", "first", "/project", 1))
+				change = func() { appendSourceFile(t, file, claudeLine("s", "u2", "later", "/project", 2)) }
+			} else {
+				source.Kind = "conductor"
+				exec := conductorFixture(t, root)
+				exec(addConductorSession("s", 1)...)
+				updates := 0
+				change = func() {
+					updates++
+					exec(fmt.Sprintf("UPDATE session_messages SET content='later-%d' WHERE session_id='s'", updates))
+				}
+			}
+			config := captureTestConfig(t, source)
+			if run := runCapture(t, config); !run.OK {
+				t.Fatal(run)
+			}
+			// Populate a native generation too, so the temporary reader must
+			// lease latest and historical snapshots on the linkless volume.
+			if !durable {
+				change()
+				if run := runCapture(t, config); !run.OK {
+					t.Fatal(run)
+				}
+			}
+			override(t, &retainedLinkFile, func(string, string) error { return syscall.ENOTSUP })
+			target := captureTarget{Host: currentHost(), Source: source.Name, Dir: filepath.Join(config.CaptureRoot, "host-a", source.Name)}
+			lock, err := lockCaptureTarget(t.Context(), target.Dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lock.Close()
+			if durable {
+				// Simulate a crash after copying but before the inventory commit.
+				originalFault := captureFault
+				override(t, &captureFault, func(stage, path string) error {
+					if stage == "input-publish" {
+						return errors.New("interrupted inventory publication")
+					}
+					return nil
+				})
+				if _, err = freezeCaptureInput(t.Context(), target, source, durable); err == nil {
+					t.Fatal("publication fault missed")
+				}
+				captureFault = originalFault
+			}
+			input, err := freezeCaptureInput(t.Context(), target, source, durable)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer input.Close()
+			view := captureViewOf(input.Adapter)
+			check := func(rel string) {
+				t.Helper()
+				original, copied := filepath.Join(target.Dir, rel), filepath.Join(view.dir, rel)
+				a, err := os.Stat(original)
+				if err != nil {
+					t.Fatal(err)
+				}
+				b, err := os.Stat(copied)
+				if err != nil || os.SameFile(a, b) || !a.ModTime().Equal(b.ModTime()) {
+					t.Fatal("reader did not preserve independent bytes and mtime", rel, err)
+				}
+				h1, n1, e1 := fileSHA256(original)
+				h2, n2, e2 := fileSHA256(copied)
+				if e1 != nil || e2 != nil || h1 != h2 || n1 != n2 {
+					t.Fatal("reader copy changed input", rel, e1, e2)
+				}
+			}
+			for _, f := range view.manifest.Files {
+				check(f.Captured)
+			}
+			for _, snapshot := range view.manifest.Snapshots {
+				check(snapshot.Captured)
+				for _, generation := range snapshot.Generations {
+					check(generation.Captured)
+				}
+			}
+			again, err := freezeCaptureInput(t.Context(), target, source, durable)
+			if err != nil {
+				t.Fatal("could not reuse copied inventory", err)
+			}
+			again.Close()
+			lock.Close()
+			change()
+			if run := runCapture(t, config); !run.OK {
+				t.Fatal(run)
+			}
+			if err = os.RemoveAll(root); err != nil {
+				t.Fatal(err)
+			}
+			result := catalog.IngestContext(t.Context(), input.Adapter, nil)
+			id, body := "s", "first"
+			if !durable {
+				id, body = "conductor:s", "later-1"
+				if len(view.manifest.Snapshots) == 0 || len(view.manifest.Snapshots[0].Generations) == 0 {
+					t.Fatal("native fixture lacks a historical snapshot")
+				}
+			}
+			var text string
+			if err = catalog.DB.QueryRow("SELECT text FROM messages WHERE kind='message' LIMIT 1").Scan(&text); err != nil {
+				t.Fatal(err)
+			}
+			if result.Error != nil || conversationMessages(t, catalog, id) != 1 || text != body {
+				t.Fatalf("rotated reader failed without live sources: %+v, text %q", result, text)
+			}
+		})
+	}
+}
+
+func TestFreezeRetainedCopyFailureDoesNotPublish(t *testing.T) {
+	for _, mode := range []string{"cancel", "corrupt", "reserve"} {
+		t.Run(mode, func(t *testing.T) {
+			useHost(t, "host-a")
+			source := SourceConfig{Name: "claude", Kind: "claude", Path: filepath.Join(t.TempDir(), "s.jsonl"), Account: "local", Enabled: true, Options: map[string]any{"retained_input_capture": true}}
+			writeSourceFile(t, source.Path, claudeLine("s", "u1", "first", "/project", 1))
+			config := captureTestConfig(t, source)
+			if run := runCapture(t, config); !run.OK {
+				t.Fatal(run)
+			}
+			target := captureTarget{Host: currentHost(), Source: source.Name, Dir: filepath.Join(config.CaptureRoot, "host-a", source.Name)}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			override(t, &retainedLinkFile, func(input, _ string) error {
+				if mode == "cancel" {
+					cancel()
+				} else if mode == "corrupt" {
+					if err := os.WriteFile(input, []byte("corrupt"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return syscall.ENOTSUP
+			})
+			if mode == "reserve" {
+				if err := savePreservationPins(target.Dir, preservationPins{Version: 1, Gates: map[string]int64{"fixture": 0}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			lock, err := lockCaptureTarget(t.Context(), target.Dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lock.Close()
+			if _, err = freezeCaptureInput(ctx, target, source, true); err == nil {
+				t.Fatal("copy failure published an inventory")
+			}
+			err = filepath.WalkDir(filepath.Join(target.Dir, "inputs"), func(path string, entry os.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if !entry.IsDir() && (entry.Name() == captureManifestName || strings.HasSuffix(entry.Name(), captureTempSuffix)) {
+					t.Fatal("failed copy left published inventory or partial bytes", path)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
