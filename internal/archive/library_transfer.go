@@ -178,13 +178,32 @@ func historyOrder(table string) string {
 }
 
 func fileDigest(path string) (string, int64, error) {
+	return fileDigestContext(context.Background(), path)
+}
+
+type transferContextReader struct {
+	ctx context.Context
+	io.Reader
+}
+
+func (r transferContextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.Reader.Read(p)
+}
+
+func fileDigestContext(ctx context.Context, path string) (string, int64, error) {
+	if err := ctx.Err(); err != nil {
+		return "", 0, err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return "", 0, err
 	}
 	defer f.Close()
 	h := sha256.New()
-	n, err := io.Copy(h, f)
+	n, err := io.Copy(h, transferContextReader{ctx: ctx, Reader: f})
 	return hex.EncodeToString(h.Sum(nil)), n, err
 }
 
@@ -336,6 +355,9 @@ func sanitizeHistory(ctx context.Context, path string) error {
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1)
+	if err = removePrivateAskHistory(ctx, db); err != nil {
+		return err
+	}
 	tables, err := historyTables(ctx, db)
 	if err != nil {
 		return err
@@ -384,6 +406,28 @@ func sanitizeHistory(ctx context.Context, path string) error {
 		return err
 	}
 	return syncFile(path)
+}
+
+// Ask's user-visible questions and replies also have searchable mirrors.
+// Remove those roots and their provenance before dropping private tables and
+// vacuuming the snapshot; no deleted text may survive in the transfer file.
+func removePrivateAskHistory(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, `PRAGMA foreign_keys=ON;
+ CREATE TEMP TABLE private_ask_workspaces AS SELECT w.id FROM workspaces w WHERE w.source_kind='pharos' AND (
+ EXISTS(SELECT 1 FROM ask_sessions a WHERE a.id=w.source_id AND a.host_id=w.source_account)
+ OR EXISTS(SELECT 1 FROM conversations c WHERE c.workspace_id=w.id AND c.origin='Ask Pharos' AND c.account='pharos:'||w.source_account));
+ CREATE TEMP TABLE private_ask_conversations AS SELECT id,provider,account,native_id FROM conversations WHERE workspace_id IN (SELECT id FROM private_ask_workspaces);
+ CREATE TEMP TABLE private_ask_messages AS SELECT id FROM messages WHERE conversation_id IN (SELECT id FROM private_ask_conversations);
+ DELETE FROM message_authorship_spans WHERE message_id IN (SELECT id FROM private_ask_messages) OR source_message_id IN (SELECT id FROM private_ask_messages) OR source_conversation_id IN (SELECT id FROM private_ask_conversations);
+ DELETE FROM message_authorship WHERE workspace_id IN (SELECT id FROM private_ask_workspaces) OR conversation_id IN (SELECT id FROM private_ask_conversations);
+ DELETE FROM conversation_launches WHERE child_id IN (SELECT id FROM private_ask_conversations) OR parent_id IN (SELECT id FROM private_ask_conversations);
+ DELETE FROM conversation_parent_refs WHERE (provider,account,native_id) IN (SELECT provider,account,native_id FROM private_ask_conversations);
+ DELETE FROM protections WHERE (scope_type='workspace' AND scope_id IN (SELECT id FROM private_ask_workspaces)) OR (scope_type='conversation' AND scope_id IN (SELECT id FROM private_ask_conversations)) OR (scope_type='message' AND scope_id IN (SELECT id FROM private_ask_messages));
+ DELETE FROM receipts WHERE workspace_id IN (SELECT id FROM private_ask_workspaces);
+ DELETE FROM reclamation WHERE workspace_id IN (SELECT id FROM private_ask_workspaces);
+ UPDATE conversations SET parent_id=NULL WHERE parent_id IN (SELECT id FROM private_ask_conversations);
+ DELETE FROM workspaces WHERE id IN (SELECT id FROM private_ask_workspaces);`)
+	return err
 }
 
 type transferColumn struct {
@@ -726,7 +770,11 @@ func verifyTransfer(target Config, r libraryTransferReceipt) error {
 }
 
 func verifyTransferPayload(dir string, r libraryTransferReceipt) error {
-	digest, _, err := fileDigest(filepath.Join(dir, "history.sqlite3"))
+	return verifyTransferPayloadContext(context.Background(), dir, r)
+}
+
+func verifyTransferPayloadContext(ctx context.Context, dir string, r libraryTransferReceipt) error {
+	digest, _, err := fileDigestContext(ctx, filepath.Join(dir, "history.sqlite3"))
 	if err != nil || digest != r.CatalogDigest {
 		return fmt.Errorf("destination history snapshot failed verification")
 	}
@@ -734,7 +782,7 @@ func verifyTransferPayload(dir string, r libraryTransferReceipt) error {
 		if !filepath.IsLocal(f.Path) {
 			return fmt.Errorf("unsafe delivery inventory")
 		}
-		digest, size, e := fileDigest(filepath.Join(dir, filepath.FromSlash(f.Path)))
+		digest, size, e := fileDigestContext(ctx, filepath.Join(dir, filepath.FromSlash(f.Path)))
 		if e != nil || digest != f.SHA256 || size != f.Size {
 			return fmt.Errorf("destination evidence failed verification: %s", f.Path)
 		}

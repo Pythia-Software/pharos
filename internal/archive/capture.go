@@ -394,6 +394,9 @@ type sourceCapture struct {
 	result     CaptureSourceResult
 	progress   func(CaptureSourceResult)
 	checkpoint time.Time
+	// Pending captures verify unchanged metadata against source bytes before
+	// declaring them delivered; ordinary capture retains its metadata shortcut.
+	verifyDelivery bool
 	// prune lists superseded snapshot generations to delete once a committed
 	// manifest no longer names them.
 	prune []string
@@ -403,7 +406,8 @@ type sourceCapture struct {
 
 func (s *captureSession) source(ctx context.Context, source SourceConfig, progress func(CaptureSourceResult)) CaptureSourceResult {
 	c := &sourceCapture{session: s, ctx: ctx, source: source, progress: progress, checkpoint: time.Now(),
-		result: CaptureSourceResult{Name: source.Name, Kind: source.Kind, State: "running", captureRunRecord: captureRunRecord{StartedAt: now(), Errors: []captureError{}}}}
+		result:         CaptureSourceResult{Name: source.Name, Kind: source.Kind, State: "running", captureRunRecord: captureRunRecord{StartedAt: now(), Errors: []captureError{}}},
+		verifyDelivery: s.preserveUnindexed || s.deliveryTarget != ""}
 	if !validCaptureName(source.Name) {
 		return c.finish(fmt.Errorf("source name %q cannot name a capture directory", source.Name))
 	}
@@ -434,6 +438,7 @@ func (s *captureSession) source(ctx context.Context, source SourceConfig, progre
 		Target      string `json:"destination_instance"`
 	}
 	if b, e := os.ReadFile(filepath.Join(c.dir, ".delivered.json")); e == nil && json.Unmarshal(b, &delivered) == nil && c.session.recoveryID == "" && delivered.Fingerprint != "" && (c.session.deliveryTarget == "" || c.session.deliveryTarget == delivered.Target) {
+		c.verifyDelivery = true
 		fingerprint, err := captureDeliveryFingerprint(ctx, source, plan, nil)
 		if err != nil {
 			return c.finish(err)
@@ -682,8 +687,18 @@ func (c *sourceCapture) captureFiles(items []captureItem, present map[string]boo
 		if previous != nil {
 			previous.MissingSince = ""
 			if (c.session.recoveryID == "" || previous.RecoveryID == c.session.recoveryID) && previous.Size == info.Size() && previous.MTimeNS == info.ModTime().UnixNano() && c.intact(previous.Captured, previous.Size, previous.MTimeNS) {
-				c.result.FilesUnchanged++
-				continue
+				unchanged := true
+				if c.verifyDelivery {
+					digest, err := captureDeliveryDigest(c.ctx, item.path)
+					if err != nil {
+						return err
+					}
+					unchanged = digest == previous.SHA256
+				}
+				if unchanged {
+					c.result.FilesUnchanged++
+					continue
+				}
 			}
 		}
 		jobs = append(jobs, job{item, previous})

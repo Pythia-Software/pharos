@@ -89,13 +89,15 @@ locally, so pending history can be browsed. Delivery moves the entire pending
 history and its retained evidence, then empties the pending catalog and removes
 delivered evidence. Source content fingerprints suppress unchanged re-capture;
 changed conversations can become pending again without repopulating unchanged
-conversations from the same source container. Neither browsing selection nor MCP
-assignment follows the delivery target automatically.
+conversations from the same source container. Pending capture checks content even
+when size and modification time are unchanged; ordinary incremental capture
+reuses recorded hashes without rereading transcript history. Neither browsing
+selection nor MCP assignment follows the delivery target automatically.
 
 Delivery proof includes each normalized conversation's metadata, instructions
-and aliases. A metadata change can return to pending even when its text is
-unchanged. Workspace metadata has separate proof: title, branch, outcome and
-other workspace changes can be delivered without recapturing unchanged
+and aliases, including the current workspace association. A metadata change
+can return to pending even when its text is unchanged. Workspace metadata has
+separate proof: title, branch, outcome and other workspace changes can be delivered without recapturing unchanged
 conversations. Proof names the exact destination instance. Explicitly selecting a
 different destination invalidates the old suppression checkpoints and recaptures
 surviving originals. Recovery clears these checkpoints and their indexing
@@ -128,8 +130,8 @@ using Finder to eject its own drive.
 **Move or copy history** works between registered libraries. Both services pause
 for the operation. A consistent catalog snapshot preserves catalog-only sessions
 that no longer exist in retained database captures. History snapshots exclude
-private Ask chats and independent user settings. Raw captures and preserved
-artifacts are copied and verified by size and SHA-256. Imports are retained
+private Ask chats, their searchable mirrors and provenance, and independent user
+settings. Raw captures and preserved artifacts are copied and verified by size and SHA-256. Imports are retained
 under `captures/.imports/` outside ordinary capture generation pruning.
 
 Reconciliation maps native identities to destination IDs, guards older copies,
@@ -151,7 +153,10 @@ complete local backup, or a self-contained copied library. A backup is locked fo
 reading and remains unchanged. A copied library is held under an exclusive use
 lease while SQLite, including its WAL, is snapshotted. External references in a
 copied library require a full backup instead. Known capture evidence and catalog
-integrity are checked before the candidate is published.
+integrity are checked before the candidate is published. Validation includes
+previous file versions, every retained database generation, and each nested
+import's history snapshot and receipt inventory; missing evidence prevents
+publication.
 
 The candidate has a new logical ID and writable instance, with its source lineage
 and backup recovery point recorded. It carries saved state but starts with sync

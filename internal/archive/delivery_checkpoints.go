@@ -37,12 +37,19 @@ func suppressDeliveredConversations(tx *sql.Tx, record WorkspaceRecord) (Workspa
 	if checkpoints == 0 {
 		return record, false, nil
 	}
+	workspaceID, err := storedWorkspaceID(tx, record)
+	if err != nil {
+		return record, false, err
+	}
+	if workspaceID == "" {
+		workspaceID = stableID("workspace", record.SourceKind, record.Account, record.SourceID)
+	}
 	kept := make([]ConversationRecord, 0, len(record.Conversations))
 	removed := false
 	for _, conversation := range record.Conversations {
-		var digest, workspaceID string
-		err := tx.QueryRow(`SELECT digest,workspace_id FROM library_delivery_checkpoints d WHERE provider=? AND account=? AND native_id=?
- AND NOT EXISTS(SELECT 1 FROM conversations c WHERE c.provider=d.provider AND c.account=d.account AND c.native_id=d.native_id)`, conversation.Provider, conversation.Account, conversation.NativeID).Scan(&digest, &workspaceID)
+		var digest string
+		err := tx.QueryRow(`SELECT digest FROM library_delivery_checkpoints d WHERE provider=? AND account=? AND native_id=?
+ AND NOT EXISTS(SELECT 1 FROM conversations c WHERE c.provider=d.provider AND c.account=d.account AND c.native_id=d.native_id)`, conversation.Provider, conversation.Account, conversation.NativeID).Scan(&digest)
 		if err != nil && err != sql.ErrNoRows {
 			return record, false, err
 		}

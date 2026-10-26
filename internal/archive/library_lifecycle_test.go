@@ -100,11 +100,24 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	_, err := c.DB.Exec(`INSERT OR REPLACE INTO ui_preferences(key,value) VALUES('saved-view','source'); INSERT INTO ask_sessions(id,host_id,value,updated_at) VALUES('private','host','secret',1);
+	// The source kind alone is not a privacy marker: ordinary imported history
+	// may also identify Pharos as its source.
+	_, err := c.DB.Exec(`UPDATE workspaces SET source_kind='pharos' WHERE source_id='work-1';
+ INSERT OR REPLACE INTO ui_preferences(key,value) VALUES('saved-view','source');
  INSERT INTO cloud_destinations(id,config_json,credential_json,imported_at) VALUES('source-cloud','{"name":"Source backup"}','{"fixture":"upload-only"}','2026-10-23');
  INSERT INTO cloud_backup_runs(id,destination_id,status_json,created_at) VALUES('source-run','source-cloud','{"state":"complete"}','2026-10-23');
  INSERT INTO cloud_backup_schedules(destination_id,state_json) VALUES('source-cloud','{"enabled":true}');
  INSERT INTO message_authorship_spans(message_id,position,category,rule,start_byte,end_byte,chars,words) SELECT id,0,'typed','source',0,3,3,1 FROM messages WHERE role='user';`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := testServer(t, a, c)
+	private := askSession{ID: "private", HostID: currentHost().ID, CreatedAt: 1, UpdatedAt: 2,
+		Selection: askSelection{Provider: "codex"}, Conversation: []askTurn{{ID: "turn", Prompt: "PRIVATE_ASK_QUESTION", Reply: "PRIVATE_ASK_REPLY"}}}
+	if err = server.saveAskSession(t.Context(), private, true); err != nil {
+		t.Fatal(err)
+	}
+	settleServer(t, server)
 	c.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -124,8 +137,14 @@ func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if catalogCount(t, b, "messages") != 2 || catalogCount(t, a, "messages") != 2 {
+	if catalogCount(t, b, "messages") != 2 || catalogCount(t, a, "messages") != 4 {
 		t.Fatal("copy did not retain both histories")
+	}
+	for _, marker := range []string{"PRIVATE_ASK_QUESTION", "PRIVATE_ASK_REPLY"} {
+		bytes, err := os.ReadFile(filepath.Join(b.CaptureRoot, ".imports", receipt.ID, "history.sqlite3"))
+		if err != nil || strings.Contains(string(bytes), marker) {
+			t.Fatal("retained history snapshot contains private Ask text", marker, err)
+		}
 	}
 	if catalogCount(t, b, "message_authorship_spans") != 1 {
 		t.Fatal("compound integer identities were not retained")
@@ -287,6 +306,92 @@ func TestApplicationMCPConnectionAndLateResponse(t *testing.T) {
 	}
 }
 func TestLibraryRecoveryCandidate(t *testing.T) {
+	t.Run("all retained evidence", func(t *testing.T) {
+		slowTest(t)
+		a, b := lifecycleLibraries(t)
+		writeSourceFile(t, filepath.Join(a.ArchiveRoot, "package", "patch.diff"), "retained patch")
+		receipt, err := TransferLibrary(t.Context(), a, b, false, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sourceDir := filepath.Join(b.CaptureRoot, currentHost().ID, "validation")
+		files := map[string]string{"files/latest.json": "latest", "history/previous.json": "previous", "files/latest.db": "latest snapshot", "history/previous.db": "previous snapshot"}
+		for rel, content := range files {
+			writeSourceFile(t, filepath.Join(sourceDir, rel), content)
+		}
+		manifest := captureManifest{Version: captureManifestVersion, Host: currentHost(), Source: captureSourceInfo{Name: "validation", Kind: "canonical", Path: "/source"},
+			Files: []*capturedFile{{Captured: "files/latest.json", Size: int64(len(files["files/latest.json"])), SHA256: hashBytes([]byte(files["files/latest.json"])),
+				Previous: []capturedVersion{{Captured: "history/previous.json", Size: int64(len(files["history/previous.json"])), SHA256: hashBytes([]byte(files["history/previous.json"]))}}}},
+			Snapshots: []*capturedSnapshot{{Captured: "files/latest.db", Size: int64(len(files["files/latest.db"])),
+				Generations: []capturedVersion{{Captured: "history/previous.db", Size: int64(len(files["history/previous.db"]))}}}}}
+		if err = durableJSON(filepath.Join(sourceDir, captureManifestName), manifest); err != nil {
+			t.Fatal(err)
+		}
+		for _, dir := range []string{b.ArchiveRoot, filepath.Join(filepath.Dir(b.Path), hostsDirName)} {
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		backup := filepath.Join(t.TempDir(), "backup")
+		stubBackupDrives(t, canonical(filepath.Dir(backup)), nil)
+		if run := runBackup(t, b, backup, false); run.State != "complete" {
+			t.Fatal("evidence backup failed", run)
+		}
+		data, err := os.ReadFile(filepath.Join(backup, backupManifestName))
+		var inventory backupManifest
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = json.Unmarshal(data, &inventory); err != nil {
+			t.Fatal(err)
+		}
+		backupCaptures := ""
+		for _, item := range inventory.Items {
+			if item.Name == "captures" {
+				backupCaptures = filepath.Join(backup, item.Path)
+			}
+		}
+		if backupCaptures == "" {
+			t.Fatal("backup has no capture tree")
+		}
+		for _, input := range []struct{ name, root, captures string }{{"copied library", filepath.Dir(b.Path), b.CaptureRoot}, {"backup", backup, backupCaptures}} {
+			t.Run(input.name, func(t *testing.T) {
+				if _, err := RecoverLibrary(t.Context(), input.root, filepath.Join(t.TempDir(), "intact"), nil); err != nil {
+					t.Fatal("intact evidence rejected", err)
+				}
+				for _, rel := range []string{
+					filepath.Join(currentHost().ID, "validation", "history", "previous.json"),
+					filepath.Join(currentHost().ID, "validation", "history", "previous.db"),
+					filepath.Join(".imports", receipt.ID, "history.sqlite3"),
+					filepath.Join(".imports", receipt.ID, "preserved", "package", "patch.diff"),
+					filepath.Join(".imports", receipt.ID, "transfer.json"),
+				} {
+					t.Run(filepath.ToSlash(rel), func(t *testing.T) {
+						file := filepath.Join(input.captures, rel)
+						data, err := os.ReadFile(file)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err = os.Remove(file); err != nil {
+							t.Fatal(err)
+						}
+						t.Cleanup(func() {
+							if err := os.WriteFile(file, data, 0600); err != nil {
+								t.Error(err)
+							}
+						})
+						destination := filepath.Join(t.TempDir(), "incomplete")
+						if _, err = RecoverLibrary(t.Context(), input.root, destination, nil); err == nil {
+							t.Fatal("recovery published a candidate with missing retained evidence", rel)
+						}
+						if _, err = os.Stat(destination); !os.IsNotExist(err) {
+							t.Fatal("failed recovery published its destination", err)
+						}
+					})
+				}
+			})
+		}
+	})
 	a, _ := lifecycleLibraries(t)
 	dest := filepath.Join(t.TempDir(), "backup")
 	c := reopenCatalog(t, a.CatalogPath)
@@ -573,6 +678,85 @@ func TestLibraryMoveKeepsChangedSource(t *testing.T) {
 }
 
 func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
+	t.Run("workspace reassignment", func(t *testing.T) {
+		a, b := lifecycleLibraries(t)
+		file := filepath.Join(t.TempDir(), "workspace.json")
+		moving := `{"id":"move-chat","provider":"codex","messages":[{"id":"q","role":"user","text":"moving conversation"}]}`
+		staying := `{"id":"stay-chat","provider":"codex","messages":[{"id":"q","role":"user","text":"unchanged sibling"}]}`
+		writeSourceFile(t, file, `{"workspaces":[{"id":"before","title":"Before","conversations":[`+moving+`]},{"id":"stable","title":"Stable","conversations":[`+staying+`]}]}`)
+		a.Sources = []SourceConfig{{Name: "workspace", Kind: "canonical", Path: file, Account: "local", Enabled: true}}
+		if err := capturePending(t.Context(), a); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := TransferLibrary(t.Context(), a, b, true, nil); err != nil {
+			t.Fatal(err)
+		}
+		writeSourceFile(t, file, `{"workspaces":[{"id":"after","title":"After","conversations":[`+moving+`]},{"id":"stable","title":"Stable","conversations":[`+staying+`]}]}`)
+		if err := capturePending(t.Context(), a); err != nil {
+			t.Fatal(err)
+		}
+		if catalogCount(t, a, "conversations") != 1 {
+			t.Fatal("workspace reassignment was suppressed or repopulated an unchanged sibling")
+		}
+		if _, err := TransferLibrary(t.Context(), a, b, true, nil); err != nil {
+			t.Fatal(err)
+		}
+		c := reopenCatalog(t, b.CatalogPath)
+		defer c.Close()
+		rows, err := queryMaps(c.DB, `SELECT c.native_id,w.source_id FROM conversations c JOIN workspaces w ON w.id=c.workspace_id WHERE c.native_id IN ('move-chat','stay-chat')`)
+		if err != nil || len(rows) != 2 {
+			t.Fatal("transferred conversations missing", rows, err)
+		}
+		for _, row := range rows {
+			want := "stable"
+			if row["native_id"] == "move-chat" {
+				want = "after"
+			}
+			if row["source_id"] != want {
+				t.Fatal("conversation workspace change did not reach archive", row)
+			}
+		}
+	})
+	t.Run("same-metadata rewrite before delivery", func(t *testing.T) {
+		a, b := lifecycleLibraries(t)
+		file := filepath.Join(t.TempDir(), "rewrite.json")
+		canonicalExport(t, file, "Rewrite", "before")
+		a.Sources = []SourceConfig{{Name: "rewrite", Kind: "canonical", Path: file, Account: "local", Enabled: true}}
+		if err := capturePending(t.Context(), a); err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeSourceFile(t, file, strings.Replace(readText(t, file), "before", "after!", 1))
+		if err = os.Chtimes(file, info.ModTime(), info.ModTime()); err != nil {
+			t.Fatal(err)
+		}
+		if err = capturePending(t.Context(), a); err != nil {
+			t.Fatal(err)
+		}
+		captured, err := capturedPathFor(a.CaptureRoot, currentHost().ID, "rewrite", file)
+		if err != nil || !strings.Contains(readText(t, captured), "after!") {
+			t.Fatal("pending capture kept old bytes after a same-size, same-mtime rewrite", err)
+		}
+		if _, err = TransferLibrary(t.Context(), a, b, true, nil); err != nil {
+			t.Fatal(err)
+		}
+		c := reopenCatalog(t, b.CatalogPath)
+		var messages string
+		err = c.DB.QueryRow("SELECT group_concat(text) FROM messages").Scan(&messages)
+		c.Close()
+		if err != nil || !strings.Contains(messages, "after!") {
+			t.Fatal("rewritten bytes were not delivered", messages, err)
+		}
+		if err = capturePending(t.Context(), a); err != nil {
+			t.Fatal(err)
+		}
+		if catalogCount(t, a, "messages") != 0 {
+			t.Fatal("delivered rewrite returned to pending")
+		}
+	})
 	a, b := lifecycleLibraries(t)
 	path := filepath.Join(t.TempDir(), "history.json")
 	writeSourceFile(t, path, `{"workspaces":[{"id":"pending-session","title":"Pending","conversations":[{"id":"pending-chat","provider":"codex","messages":[{"id":"q","role":"user","text":"pending text"}]},{"id":"unchanged-chat","provider":"codex","messages":[{"id":"q2","role":"user","text":"already delivered sibling"}]}]}]}`)

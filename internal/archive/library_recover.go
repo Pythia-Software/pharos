@@ -221,7 +221,7 @@ func RecoverLibrary(ctx context.Context, backup, destination string, progress fu
 	if err = durableJSON(descriptorPath(config), descriptor); err != nil {
 		return Config{}, err
 	}
-	if err = validateCaptureEvidence(config.CaptureRoot); err != nil {
+	if err = validateCaptureEvidence(ctx, config.CaptureRoot); err != nil {
 		return Config{}, err
 	}
 	report("Validating recovered history and publishing candidate")
@@ -246,8 +246,13 @@ func syncDirectory(path string) error {
 	return f.Sync()
 }
 
-func validateCaptureEvidence(root string) error {
+// Every manifest reference is part of the recovery contract, including old
+// file versions, database generations and nested immutable transfer inventories.
+func validateCaptureEvidence(ctx context.Context, root string) error {
 	return filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if os.IsNotExist(err) && path == root {
 			return nil
 		}
@@ -257,29 +262,70 @@ func validateCaptureEvidence(root string) error {
 		if entry.Type()&os.ModeSymlink != 0 {
 			return fmt.Errorf("symbolic link in capture evidence: %s", path)
 		}
-		if entry.IsDir() || entry.Name() != captureManifestName {
+		if entry.IsDir() {
+			if filepath.Base(filepath.Dir(path)) == ".imports" {
+				receipt, err := readTransferReceipt(filepath.Join(path, "transfer.json"))
+				if err != nil {
+					return fmt.Errorf("invalid retained import %s: %w", path, err)
+				}
+				if receipt.ID != entry.Name() {
+					return fmt.Errorf("retained import identity does not match its directory: %s", path)
+				}
+				if err = verifyTransferPayloadContext(ctx, path, receipt); err != nil {
+					return fmt.Errorf("retained import %s: %w", path, err)
+				}
+			}
 			return nil
 		}
-		manifest, err := loadCaptureManifest(filepath.Dir(path))
+		if entry.Name() != captureManifestName {
+			return nil
+		}
+		dir := filepath.Dir(path)
+		manifest, err := loadCaptureManifest(dir)
 		if err != nil {
 			return err
 		}
-		for _, file := range manifest.Files {
-			if !filepath.IsLocal(file.Captured) {
-				return fmt.Errorf("unsafe captured path")
+		verify := func(rel string, size int64, checksum string) error {
+			if !filepath.IsLocal(rel) || rel == "." || strings.Contains(rel, "\\") {
+				return fmt.Errorf("unsafe captured evidence path: %q", rel)
 			}
-			digest, size, err := fileDigest(filepath.Join(filepath.Dir(path), filepath.FromSlash(file.Captured)))
-			if err != nil || size != file.Size || (file.SHA256 != "" && digest != file.SHA256) {
-				return fmt.Errorf("capture evidence failed verification: %s", file.Captured)
+			file := filepath.Join(dir, filepath.FromSlash(rel))
+			info, err := os.Lstat(file)
+			if err != nil {
+				return fmt.Errorf("missing captured evidence %s: %w", file, err)
+			}
+			if !info.Mode().IsRegular() || info.Size() != size {
+				return fmt.Errorf("captured evidence failed verification: %s", file)
+			}
+			if checksum != "" {
+				digest, _, err := fileDigestContext(ctx, file)
+				if err != nil {
+					return err
+				}
+				if digest != checksum {
+					return fmt.Errorf("captured evidence failed verification: %s", file)
+				}
+			}
+			return nil
+		}
+		for _, file := range manifest.Files {
+			if err = verify(file.Captured, file.Size, file.SHA256); err != nil {
+				return err
+			}
+			for _, previous := range file.Previous {
+				if err = verify(previous.Captured, previous.Size, previous.SHA256); err != nil {
+					return err
+				}
 			}
 		}
 		for _, snapshot := range manifest.Snapshots {
-			if !filepath.IsLocal(snapshot.Captured) {
-				return fmt.Errorf("unsafe captured snapshot path")
+			if err = verify(snapshot.Captured, snapshot.Size, ""); err != nil {
+				return err
 			}
-			info, err := os.Stat(filepath.Join(filepath.Dir(path), filepath.FromSlash(snapshot.Captured)))
-			if err != nil || info.Size() != snapshot.Size {
-				return fmt.Errorf("captured snapshot failed verification: %s", snapshot.Captured)
+			for _, generation := range snapshot.Generations {
+				if err = verify(generation.Captured, generation.Size, generation.SHA256); err != nil {
+					return err
+				}
 			}
 		}
 		return nil

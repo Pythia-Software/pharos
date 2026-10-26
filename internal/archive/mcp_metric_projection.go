@@ -382,12 +382,15 @@ func metricFallback(ctx context.Context, tx *sql.Tx, workspace, cid string, valu
 	return nil
 }
 
+// A conversation can move between workspaces. Its new workspace may publish
+// before the old workspace clears its projection, so replace that same entity.
 func storeMetricProjection(ctx context.Context, tx *sql.Tx, entity, id, workspace string, values map[string]statMetricValue) error {
 	data, err := json.Marshal(values)
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO mcp_metric_projection(entity,entity_id,workspace_id,metrics_json,total_tokens,cost_usd,tool_error_count) VALUES(?,?,?,?,?,?,?)`, entity, id, workspace, string(data), values["total_tokens"].effective("complete"), values["cost_usd"].effective("complete"), values["tool_error_count"].effective("complete"))
+	_, err = tx.ExecContext(ctx, `INSERT INTO mcp_metric_projection(entity,entity_id,workspace_id,metrics_json,total_tokens,cost_usd,tool_error_count) VALUES(?,?,?,?,?,?,?)
+ ON CONFLICT(entity,entity_id) DO UPDATE SET workspace_id=excluded.workspace_id,metrics_json=excluded.metrics_json,total_tokens=excluded.total_tokens,cost_usd=excluded.cost_usd,tool_error_count=excluded.tool_error_count`, entity, id, workspace, string(data), values["total_tokens"].effective("complete"), values["cost_usd"].effective("complete"), values["tool_error_count"].effective("complete"))
 	return err
 }
 
