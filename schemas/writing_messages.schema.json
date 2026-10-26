@@ -326,7 +326,11 @@
             "Sent by another agent session",
             "Sent by TL1 orchestration",
             "Sub-agent conversation",
-            "Sent by a headless claude -p or SDK run Conductor did not start"
+            "Sent by a headless claude -p or SDK run Conductor did not start",
+            "Matches agent-written content",
+            "Generated question form",
+            "Pasted conversation",
+            "Reported output"
           ]
         }
       },

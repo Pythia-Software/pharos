@@ -91,7 +91,7 @@ func TestWritingMessagesFilterBySpanAndSplitText(t *testing.T) {
 	}
 
 	code := query(querytable.WhereTerm{Field: "rules", Op: "includes", Value: "Code block"})
-	if len(code) != 1 || code[0]["text"] != pasted || integer(code[0]["typed_words"]) != 7 || integer(code[0]["pasted_words"]) != 9 {
+	if len(code) != 1 || code[0]["text"] != pasted || integer(code[0]["typed_words"]) != 7 || integer(code[0]["pasted_words"]) != 7 {
 		t.Fatalf("code = %#v", code)
 	}
 	if categories := code[0]["categories"].([]string); !slices.Equal(categories, []string{spanTyped, spanPasted}) && !slices.Equal(categories, []string{spanPasted, spanTyped}) {

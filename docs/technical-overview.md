@@ -100,9 +100,22 @@ Deduplication uses account-scoped native IDs. Conductor aliases are retained as 
 
 No claim is made that ChatGPT desktop’s local cache is complete. ChatGPT is indexed from a user-provided supported export, and its health row makes that acquisition boundary visible.
 
+## UI feedback
+
+The **Send feedback** header tool reuses element annotations for optional bug
+reports, feature requests, and prompts. Users review their commentary and choose
+whether to attach element screenshots, captured URLs, element text, recent
+diagnostics, and a contact email. Sending explicitly uploads that report to the
+independent Go feedback service; archive indexing and search remain local.
+`internal/uifeedback` owns the reusable protocol, GCS store, Pythia-authenticated
+admin inbox, and notifications. `cmd/feedback` hosts it separately from Pharos's
+loopback service. The admin UI uses Query Table over the complete cached report
+population, with tags and permanent deletion. See [UI feedback](ui-feedback.md)
+for the protocol, privacy boundaries, deployment, and operation.
+
 ## Search, API, and MCP
 
-The Library UI sends its text, file, and URL searches to the Library query table as `find=` (with `find_kind`, `find_fuzzy`, `find_case`, and `find_separators`), which keeps the work `/api/library/find` hits and adds each row's best match and match count; `/api/library/find` still returns the hits themselves. Its text path uses FTS vocabulary and message verification without vector ranking. Legacy `/api/search`, query-table `search=`, and MCP conversation discovery still retain the previous concept/feature embedding behavior. No archive content leaves the machine. Extractive summaries cite retained source locators.
+The Library UI sends its text, file, and URL searches to the Library query table as `find=` (with `find_kind`, `find_fuzzy`, `find_case`, and `find_separators`), which keeps the work `/api/library/find` hits and adds each row's best match and match count; `/api/library/find` still returns the hits themselves. Its text path uses FTS vocabulary and message verification without vector ranking. Legacy `/api/search`, query-table `search=`, and MCP conversation discovery still retain the previous concept/feature embedding behavior. Search and MCP do not upload archive content. Extractive summaries cite retained source locators.
 
 The workspace page loads a workspace in pieces, since one long session with many sub-agents can retain hundreds of megabytes. `/api/work/{id}` returns the workspace without messages, plus what the page used to derive from all of them: each conversation's message count and first prompt, pull request links found in any message, and the files its tool calls touched. `/api/work/{id}/conversations/{id}` returns one conversation for the reader. Its long tool outputs and event bodies are shortened past 2 KB, with JSON keeping its structure so error flags, exit codes, and token usage survive, and are marked `text_clipped`/`raw_clipped`. `/api/messages/{id}` returns a message's original when the reader opens it. Finding text across a workspace's conversations runs on the service (`/find`). In the reader, a turn initially renders 50 events and adds pages of 150 as it scrolls; event details are built when opened.
 
