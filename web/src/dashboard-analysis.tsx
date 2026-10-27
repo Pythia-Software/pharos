@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import type { AggregationClause, AggregationResultEntry, FieldDef, FieldSchema, QueryState, WhereTerm } from "@pythia-software/query-table-core";
 import { MetricCard, defaultRenderers } from "@pythia-software/query-table-ui";
-import { changeState, selectedShares, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, type AnalysisCatalog, type AnalysisReduce, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
+import { changeState, selectedShares, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, type AnalysisCatalog, type AnalysisQuery as AnalysisQueryResult, type AnalysisReduce, type AnalysisUnit, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
 import { runAnalysisQuery, type LocalRows } from "./analysis-request";
 import { ChartSelect, DisplayControl, PeriodControl, RangeControl, RollingControl, ScaleControl, presetPeriod, timeBounds, withTimeRange, type ChartRange, type FilterChange, type TimeBounds } from "./usage-chart";
 import { trendPeriodCount } from "./dashboard-trend-model";
@@ -85,6 +85,11 @@ export function AnalysisControls({ catalog, view, set, onView, bounds, onRange }
   return trend ? content : <div className="usage-tools-controls usage-analysis-controls">{content}</div>;
 }
 
+const selectionNote = (group: string, unit: AnalysisUnit | undefined, selection: NonNullable<AnalysisQueryResult["selection"]>, missing = 0) =>
+  `Your ${group} selection is drawn as slices and every other group as Other; shares are of every group in your other filters.`
+  + (selection.mapped && unit ? ` Each ${unit.label.toLowerCase()} is counted in its top-level ${group} group, so the selection is shown as the top-level ${group}.` : "")
+  + (missing ? ` ${missing.toLocaleString()} selected ${missing === 1 ? "group is" : "groups are"} not among the largest groups returned; any ${missing === 1 ? "value it has is" : "values they have are"} counted in Other.` : "");
+
 // The folded cycle's slots are not dataset fields; name them for the chart.
 const cycleFields: FieldDef[] = [{ name: "hour_of_day", label: "Local hour", type: "text", source: { kind: "backend" } }, { name: "weekday", label: "Weekday", type: "text", source: { kind: "backend" } }];
 const scales: Array<["linear" | "logarithmic", string]> = [["linear", "Linear"], ["logarithmic", "Logarithmic"]];
@@ -109,7 +114,8 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
   const unit = view.unit === records ? undefined : catalog.units[view.unit];
   const subjects = (unit?.plural ?? catalog.records.plural).toLowerCase();
 
-  let clause: AggregationClause = analysis.clause, entry: AggregationResultEntry | undefined = result.results[0] && selectedShares(result.results[0], analysis.selection), error = result.error, slots = "";
+  const selected = result.results[0] && selectedShares(result.results[0], analysis.selection);
+  let clause: AggregationClause = analysis.clause, entry: AggregationResultEntry | undefined = selected, error = result.error, slots = "";
   if (view.view === "cycle" && entry) {
     try {
       const now = Date.now();
@@ -135,7 +141,7 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
           const query = analysisInspectQuery(analysis, presentation.sourceBucket(bucket) as typeof bucket, analysis.clause, schema, view.view);
           if (query) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset, query: orderedUsageQuery(dataset, query) }, new URLSearchParams(location.search)));
         }} />}
-    {hidden || slots || analysis.selection ? <p className="usage-dashboard-note" role="status">{[hidden, slots, analysis.selection ? `Your ${catalog.breakdowns[view.split].label.toLowerCase()} selection is drawn as slices and every other group as Other; shares are of every group in your other filters.` : ""].filter(Boolean).join(" ")}</p> : null}
+    {hidden || slots || analysis.selection ? <p className="usage-dashboard-note" role="status">{[hidden, slots, analysis.selection ? selectionNote(catalog.breakdowns[view.split].label.toLowerCase(), unit, analysis.selection, selected?.missing) : ""].filter(Boolean).join(" ")}</p> : null}
     {/* No legacy link: that page has no analysis views, and would show this query's table under its default chart. */}
     <UsageDashboardLinks schema={schema} dataset={dataset} query={analysis.supporting} />
     <p className="usage-dashboard-note">{analysisNote(catalog, view)}{view.view === "cycle" ? "" : ` Select a ${view.view === "scatter" ? "point" : "bar or box"} to open its ${unit ? subjects : "records"}.`}</p>

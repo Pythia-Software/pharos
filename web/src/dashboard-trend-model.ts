@@ -1,6 +1,7 @@
 import { EMPTY_QUERY, type AggregationClause, type AggregationResultEntry, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 import { earliestKey, nextPeriod, parseDay, periodBuckets, periodKey, periodLabel, periodStart, shiftPeriod } from "./chart-period";
-import { chartSpan, smoothingWhere, timeBounds, widenStart, withEnd } from "./chart-range";
+import { chartSpan, smoothingWhere, timeBounds, widenStart, withEnd, withStart } from "./chart-range";
+import { otherSeriesColor } from "./chart-colors";
 import { chartBucketsWithHistory, cumulativeBuckets, foldSeries, rollingBuckets, shareBuckets, type ChartBucket, type ChartSeries } from "./chart-series";
 import { isSliceTerm, readSlice } from "./chart-selection";
 import { aggregate, completeStart, periodField, measureExpression, noSplit, normalizeAnalysis, ratioPart, rollingSumUnit, trendKind, unique, type AnalysisCatalog, type AnalysisState, type ResolvedAnalysis } from "./dashboard-analysis-model";
@@ -65,8 +66,12 @@ export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where
   // filters, a legend selection included.
   let shown = where;
   if (state.completePeriods) {
+    // From the first drawn bucket: a custom multi-day or multi-hour bucket
+    // starting before the rounded start is not drawn.
     const bounds = timeBounds(range, catalog.time, now), end = periodStart(new Date(Math.min(bounds.to?.getTime() ?? now, now)), state.period, count);
-    shown = withEnd(completeStart(where, catalog.time, zone, now, periodField(state.period)), catalog.time, end);
+    let first = bounds.from && periodStart(bounds.from, state.period, count);
+    if (first && bounds.from && first < bounds.from) { first = new Date(first); nextPeriod(first, state.period, count); }
+    shown = withEnd(first ? withStart(where, catalog.time, first) : where, catalog.time, end);
   }
   return {
     query: { ...EMPTY_QUERY, where: unique([...requested, ...population]), aggregations: clauses },
@@ -160,7 +165,9 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
     // history then follow the same series, so turning the norm on or
     // widening a window never changes which groups are shown.
     const weights = kind === "ratio" ? rows("trend:denominator") : rows("trend"), weighted = kind === "ratio" ? denominators : amounts;
-    const drawnKeys = new Set(weighted.filter(bucket => !bucket.history).map(bucket => bucket.key));
+    // With whole periods, a partial last period is not drawn either.
+    const limit = Math.min(bounds.to?.getTime() ?? now, now);
+    const drawnKeys = new Set(weighted.filter(bucket => !bucket.history && (!state.completePeriods || (() => { const next = new Date(bucket.date); nextPeriod(next, state.period, count); return next.getTime() <= limit; })())).map(bucket => bucket.key));
     series = foldSeries(weights.filter(([key]) => drawnKeys.has(key)), byKey(weighted), seriesLabel, breakdown.order, picked, state.seriesLimit, breakdown.fields.length === 1 ? breakdown.fields[0] : state.split);
     const shown = new Set(series.flatMap(item => item.value === undefined ? [] : [item.value]));
     const assign = (entries: Rows, buckets: ChartBucket[]) => {
@@ -176,6 +183,14 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
     };
     assign(weights.filter(([key]) => !drawnKeys.has(key)), weighted);
     if (kind === "ratio") assign(rows("trend"), amounts);
+    // A group outside the chosen series that only history holds still adds
+    // to drawn windows, shares and the norm, so Other lists it.
+    const history = new Set(weighted.filter(bucket => bucket.history).map(bucket => bucket.key));
+    const unseen = [...new Set(weights.filter(([key]) => history.has(key)).map(([, text]) => text))].filter(text => !shown.has(text));
+    if (kind === "additive" || kind === "ratio") {
+      const other = series.find(item => item.key === "other"), folded = [...new Set([...other?.foldedValues ?? [], ...unseen])];
+      if (folded.length) series = [...series.filter(item => item.key !== "other"), { key: "other", label: `Other (${folded.length})`, color: otherSeriesColor, hiddenCount: folded.length, foldedValues: folded }];
+    }
     if (kind === "count" || kind === "level") {
       // Distinct counts of several groups do not add up, so Other has no
       // honest value; it stays in the key only to show more groups.

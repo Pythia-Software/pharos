@@ -169,8 +169,17 @@ can:
   - **Compare's shares** (records and unit counts alike) leave the same
     filter out of the share's query. `selectedShares` then draws the
     selected groups as slices and every other group as Other, so a small
-    selected group stays visible. "View supporting query" keeps the filter.
-    Bars keep the filter: there a selection chooses the groups.
+    selected group stays visible. "View supporting query" keeps the
+    selection. Bars keep the filter: there a selection chooses the groups.
+  - **Units.** A selection is of a breakdown group, so it maps through the
+    unit's fields: `provider = codex` selects the conversations (or
+    delegated runs) whose top-level provider is codex, never a population
+    filter on record `provider`. The note says the selection is shown as the
+    top-level group, and the supporting query filters the grouped rows on
+    that field.
+  - **Beyond the group limit.** Compare returns the 1,000 largest groups. A
+    selected group outside them is already in Other; the note says how
+    many selected groups that is, rather than dropping them silently.
   - A test checks that the trend and Compare give the same share under a
     selection.
 - **No legacy link.** The analysis views do not link to the legacy page.
@@ -231,7 +240,8 @@ no sum, cumulative or share.
   not an error.
 - **Supporting query.** It covers what is drawn: the dashboard's filters (a
   legend selection included) and populations, with whole periods from the
-  rounded start to the end of the last whole period.
+  first drawn bucket (for custom multi-day or multi-hour buckets, the first
+  whole bucket after the rounded start) to the end of the last whole period.
 - **Drill-downs** open the records behind a point: the dashboard's filters,
   the measure's and breakdown's populations, the series and the point's
   window, and for a distinct count only records holding a value
@@ -250,9 +260,12 @@ no sum, cumulative or share.
   reads the hourly ledger, as before.
 - **Series.** `trendSeries` lays out the calendar grid, folds groups into the
   top `seriesLimit` plus Other (`foldSeries`, ranking a ratio's groups by
-  their denominator). Only the drawn periods rank groups; smoothing and norm
-  history then follow the chosen series, so turning the norm on never
-  changes which groups are shown. It then smooths or accumulates, then divides a ratio's pooled
+  their denominator). Only the drawn periods rank groups (with whole
+  periods, not the partial last one); smoothing and norm history then follow
+  the chosen series, so turning the norm on never changes which groups are
+  shown. A group that only history holds still adds to drawn windows, shares
+  and the norm, so Other lists it, and the series always add up to the
+  total without a breakdown. It then smooths or accumulates, then divides a ratio's pooled
   parts or takes shares, drops history and partial periods, and computes
   the norm over the drawn series.
 - **Rendering.** `StackedColumns` keeps its interactions: legend selection,
@@ -428,11 +441,15 @@ The four Query Table limitations are requested in
      rolling sums as well as means, whole periods only, and a norm. Tokens
      and Cost and the legacy Usage page draw it; the bespoke Token chart is
      gone.
-   - **2b inherits** the trend unchanged: a new catalog declares its
+   - **2b inherits** the trend: a new catalog declares its
      measures (additive, ratio or distinct), breakdowns with any `order`,
      `values` and `empty` labels, component breakdowns, `periods`, and a
      `legacy` mapping for its old link shapes, then renders `AnalysisTrend`
-     (typed to a `UsageDataset`, which every 2b dashboard is). What 2b adds:
+     (typed to a `UsageDataset`, which every 2b dashboard is). Component
+     breakdowns are the exception: today a part is a summed field, so
+     Carbon needs the derived components below, a change to
+     `AnalysisComponent` and to the component branch of `trendSeries`. What
+     2b adds:
      - Let each cycle entry declare how its keys work. A recorded date (usage
        `day`) and an instant (usage `hour`) work today. A `dateGrouping` over
        timestamps in the viewer's zone is needed for Human Words and

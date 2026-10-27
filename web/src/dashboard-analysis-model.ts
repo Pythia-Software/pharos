@@ -2,7 +2,7 @@ import { EMPTY_QUERY, coerceValue, inspectBucketQuery, metricDateFloor, metricDa
 import { validChartScale, type ChartScale } from "./chart-scale";
 import { chartPeriods, validPeriodCount, type ChartPeriod } from "./chart-period";
 import { validChartDisplay, validRollingPeriods, type ChartDisplay } from "./chart-series";
-import { isSliceTerm, readSlice, validChartPresentation, type SliceSelection } from "./chart-selection";
+import { isSliceTerm, readSlice, validChartPresentation, withSlice, type SliceSelection } from "./chart-selection";
 import { cycleBoxes, cycleGroups, cycleSamples, hoursOfDay, idleIsZero, weekdays, type CalendarCycle } from "./weekday-cover";
 
 // A dashboard analysis is a view over one catalog: which records count as
@@ -335,8 +335,11 @@ export type AnalysisQuery = {
   // breakdown's own (single) field, or the trend's own selection of combined
   // groups. It is left out of a share's query, so it never changes the
   // denominator, as in the trend; selectedShares then draws the selected
-  // groups and the rest as Other. The supporting query keeps the filter.
-  selection?: { values: string[]; excluded: boolean };
+  // groups and the rest as Other. A selection is of a breakdown group, so for
+  // a unit it maps through the unit's fields (provider = codex selects the
+  // conversations whose top-level provider is codex); mapped names the unit
+  // field when it differs. The supporting query keeps the selection.
+  selection?: { values: string[]; excluded: boolean; mapped?: string };
 };
 
 // The executed query for a non-trend view. Records compare and distribute
@@ -361,10 +364,14 @@ export function completeStart(where: WhereTerm[], time: AnalysisCatalog["time"],
 export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, inputWhere: WhereTerm[], { zone = "UTC", now = Date.now() }: { zone?: string; now?: number } = {}): AnalysisQuery {
   const state = normalizeAnalysis(catalog, input);
   if (state.view === "trend") throw new Error("The trend view has its own chart.");
-  const shareFields = state.view === "compare" && state.compareAs === "share" && state.split !== noSplit ? state.unit === records ? catalog.breakdowns[state.split].fields : catalog.units[state.unit].breakdowns[state.split] : [];
-  const sliced = shareFields.length === 1 && inputWhere.some(term => isSliceTerm(term, shareFields[0])) ? shareFields[0] : undefined;
-  const chosen = sliced ? readSlice(inputWhere, sliced) : shareFields.length > 1 ? state.selection : undefined;
-  const selection = chosen?.values.length ? { values: chosen.values.map(value => value ?? ""), excluded: chosen.excluded } : undefined;
+  const shares = state.view === "compare" && state.compareAs === "share" && state.split !== noSplit;
+  // The selection is read on the breakdown's record field, as the trend's
+  // legend writes it, and drawn on the group field of the current unit.
+  const recordFields = shares ? catalog.breakdowns[state.split].fields : [];
+  const groupFields = shares ? state.unit === records ? recordFields : catalog.units[state.unit].breakdowns[state.split] : [];
+  const sliced = recordFields.length === 1 && inputWhere.some(term => isSliceTerm(term, recordFields[0])) ? recordFields[0] : undefined;
+  const chosen = sliced ? readSlice(inputWhere, sliced) : recordFields.length > 1 ? state.selection : undefined;
+  const selection = chosen?.values.length ? { values: chosen.values.map(value => value ?? ""), excluded: chosen.excluded, ...groupFields[0] !== recordFields[0] ? { mapped: groupFields[0] } : {} } : undefined;
   const where = state.view === "cycle" && state.cycle === "weekday" ? completeStart(inputWhere, catalog.time, zone, now)
     : sliced ? inputWhere.filter(term => !isSliceTerm(term, sliced)) : inputWhere;
   const measure = catalog.measures[state.metric], measureY = catalog.measures[state.metricY];
@@ -427,20 +434,28 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
   const having: WhereTerm[] = state.view === "distribution" || state.view === "compare" && state.reduce !== "count" ? [{ field: "analysis_value", op: "is_not_null", value: "" }] : [];
   const query: QueryState = { ...EMPTY_QUERY, grouping: { source: { ...EMPTY_QUERY, where: sourceWhere }, keys, summaries, representative: null },
     select: [...keys, ...summaries.map(column => column.id)].map(field => ({ field })), where: having, orderBy: [{ field: "analysis_value", dir: "desc", nulls: "last" }, ...keys.map(field => ({ field, dir: "asc" as const }))], aggregations: [clause] };
-  return { query, clause, grouped: true, selection, supporting: sliced ? { ...query, grouping: { ...query.grouping!, source: { ...query.grouping!.source, where: supportingWhere } } } : query };
+  // The supporting query lists the selected groups' units: a group filter
+  // on the unit's own field, never a record filter on another one.
+  const chosenGroups: WhereTerm[] = selection && groupFields.length === 1 ? withSlice([], groupFields[0], { values: selection.values.map(value => value || null), excluded: selection.excluded }) : [];
+  return { query, clause, grouped: true, selection, supporting: chosenGroups.length ? { ...query, where: [...query.where, ...chosenGroups] } : query };
 }
 
 // A share display with a legend selection: the selected groups (or all but
 // the excluded ones) as slices, every other group as Other, so a small
 // selected group is never folded away and the shares keep every group as
 // their denominator.
-export function selectedShares(entry: AggregationResultEntry, selection?: AnalysisQuery["selection"]): AggregationResultEntry {
+// Groups beyond the query's group limit are already folded into Other; a
+// selected one among them is counted there (missing says how many).
+export function selectedShares(entry: AggregationResultEntry, selection?: AnalysisQuery["selection"]): AggregationResultEntry & { missing?: number } {
   if (!selection?.values.length) return entry;
+  const truncated = Boolean(entry.other) || (entry.groupCount ?? 0) > entry.buckets.length;
+  const returned = new Set(entry.buckets.map(bucket => bucket.keys.length === 1 ? String(bucket.keys[0] ?? "") : JSON.stringify(bucket.keys)));
+  const missing = !selection.excluded && truncated ? selection.values.filter(value => !returned.has(value)).length : 0;
   const key = (bucket: AggregationBucket) => bucket.keys.length === 1 ? String(bucket.keys[0] ?? "") : JSON.stringify(bucket.keys);
   const drawn = (bucket: AggregationBucket) => selection.values.includes(key(bucket)) !== selection.excluded;
   const rest = [...entry.buckets.filter(bucket => !drawn(bucket)), ...entry.other ? [entry.other] : []];
   const value = rest.reduce((sum, bucket) => sum + (Number(bucket.value) || 0), 0), count = rest.reduce((sum, bucket) => sum + bucket.count, 0);
-  return { ...entry, buckets: entry.buckets.filter(drawn), ...rest.length ? { other: { keys: [], value, count } } : { other: undefined } };
+  return { ...entry, buckets: entry.buckets.filter(drawn), ...rest.length ? { other: { keys: [], value, count } } : { other: undefined }, ...missing ? { missing } : {} };
 }
 
 function groupedRecords(where: WhereTerm[], keys: string[], summaries: SummaryColumn[], having: WhereTerm[], order = summaries[0].id): QueryState {

@@ -116,6 +116,11 @@ export function widenStart(where: WhereTerm[], fields: TimeFields, start: Date |
   return [...where.filter(term => !lower(term)), ...(start ? [{ field: field && "field" in field ? field.field : fields.last, op: ">=" as const, value: localStamp(start) }] : [])];
 }
 
+// Start the range at start, replacing any lower bound.
+export function withStart(where: WhereTerm[], fields: TimeFields, start: Date): WhereTerm[] {
+  return [...where.filter(term => !(isTimeTerm(term, fields) && [">", ">="].includes(term.op))), { field: fields.last, op: ">=", value: localStamp(start) }];
+}
+
 // End the range at end (exclusive), replacing any upper bound.
 export function withEnd(where: WhereTerm[], fields: TimeFields, end: Date): WhereTerm[] {
   return [...where.filter(term => !(isTimeTerm(term, fields) && ["<", "<="].includes(term.op))), { field: fields.first, op: "<", value: localStamp(end) }];

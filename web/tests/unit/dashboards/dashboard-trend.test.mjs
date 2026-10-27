@@ -181,7 +181,7 @@ test("whole periods drop the current day and a partial first period, also from r
   assert.equal(built.buckets.at(-1).values.total, rows.filter(row => local(row.day) >= first && local(row.day) < end).reduce((sum, row) => sum + row.total_tokens, 0));
   // What "View supporting query" opens is what is drawn.
   const supporting = trendQuery(catalog, { ...base, metric: "tokens", split: "none", period: "days", days: 3, completePeriods: true }, where, { now }).supporting.where;
-  assert.equal(new Date(supporting.find(term => term.op === ">=").value).getTime(), midnight.getTime());
+  assert.equal(new Date(supporting.find(term => term.op === ">=").value).getTime(), first.getTime(), "it starts at the first drawn bucket, not the rounded midnight");
   const current = new Date(now); current.setHours(0, 0, 0, 0); while (dayNumber(current) % 3) current.setDate(current.getDate() - 1);
   assert.equal(new Date(supporting.find(term => term.op === "<").value).getTime(), current.getTime(), "it ends where the current partial bucket begins");
 });
@@ -273,11 +273,57 @@ test("a share is of every group in the filters; a legend selection only chooses 
   assert.deepEqual(selectedShares(core.evaluateMetrics(rows, multi.query, schema, { now }).metrics[0], multi.selection).buckets.map(bucket => JSON.stringify(bucket.keys)), [pair]);
   const sessions = analysisQuery(catalog, { view: "compare", unit: "agent_session", reduce: "count", metric: "tokens", split: "provider", compareAs: "share" }, where, { now });
   assert.deepEqual(sessions.selection, { values: [smallest], excluded: false });
-  assert.ok(!sessions.query.grouping.source.where.some(term => term.field === "provider") && sessions.supporting.grouping.source.where.some(term => term.field === "provider"));
+  assert.ok(!sessions.query.grouping.source.where.some(term => term.field === "provider") && sessions.supporting.where.some(term => term.field === "provider"), "the supporting query keeps the selected group");
   const counted = selectedShares(core.evaluateMetrics(rows, sessions.query, schema, { now }).metrics[0], sessions.selection);
   assert.equal(counted.buckets[0].value + counted.other.value, new Set(rows.map(row => row.agent_session_id)).size, "unit shares are of every session");
   // Bars keep the filter: there a selection chooses the groups.
   assert.ok(analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider" }, where, { now }).query.where.some(term => term.field === "provider"));
+});
+
+test("a group only smoothing or norm history holds is listed in Other, so series add up to the total", () => {
+  // tl1 is used 3 and 12 days ago, never in the drawn week.
+  const at = days => { const date = new Date(now - days * 86400000); return { ...rows[0], id: `tl1-${days}`, provider: "tl1", day: localDay(date), first_usage_at: date.toISOString(), last_usage_at: date.toISOString(), total_tokens: 5e6 }; };
+  const data = [...rows, at(9), at(12)], week = [{ field: "last_usage_at", op: ">=", value: "-7d" }, { field: "first_usage_at", op: "<", value: "+0s" }];
+  const state = { ...base, metric: "tokens", rollingPeriods: 7, norm: true };
+  const byProvider = draw({ ...state, split: "provider" }, { where: week, data }).built, total = draw({ ...state, split: "none" }, { where: week, data }).built;
+  assert.deepEqual(byProvider.series.find(item => item.key === "other")?.foldedValues, ["tl1"], "Other lists the history-only group");
+  assert.ok(Math.abs(byProvider.norm - total.norm) < 1e-9, `norm by provider ${byProvider.norm} != ${total.norm}`);
+  assert.ok(total.buckets.some(bucket => bucket.values.total > 0));
+  byProvider.buckets.forEach((bucket, index) => {
+    const stacked = byProvider.series.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0);
+    assert.ok(Math.abs(stacked - (total.buckets[index].values.total ?? 0)) < 1e-6, bucket.key);
+  });
+  const shares = draw({ ...state, split: "provider", share: true, norm: false }, { where: week, data }).built;
+  for (const bucket of shares.buckets) {
+    const sum = shares.series.reduce((total, item) => total + (bucket.values[item.key] ?? 0), 0);
+    assert.ok(sum === 0 || Math.abs(sum - 1) < 1e-12, `${bucket.key}: drawn shares add up to ${sum}`);
+  }
+});
+
+test("with whole periods, the partial last period does not rank the series", () => {
+  const today = new Date(now - 3600000), burst = { ...rows[0], id: "burst", provider: "chatgpt", day: localDay(today), first_usage_at: today.toISOString(), last_usage_at: today.toISOString(), total_tokens: 1e12 };
+  const built = draw({ ...base, metric: "tokens", split: "provider", seriesLimit: 1, completePeriods: true }, { data: [...rows, burst] }).built;
+  assert.notEqual(built.series[0].value, "chatgpt");
+  assert.ok(!built.series.some(item => item.foldedValues?.includes("chatgpt")), "it adds nothing that is drawn");
+});
+
+test("Compare maps a selection through the unit: provider selects top-level provider groups of conversations", () => {
+  const where = [...range, { field: "provider", op: "=", value: "codex" }];
+  const conversations = analysisQuery(catalog, { view: "compare", unit: "conversation", reduce: "count", metric: "tokens", split: "provider", compareAs: "share" }, where, { now });
+  assert.deepEqual(conversations.selection, { values: ["codex"], excluded: false, mapped: "root_provider" });
+  assert.ok(!conversations.query.grouping.source.where.some(term => term.field === "provider"), "never a population filter on record provider");
+  const pie = selectedShares(core.evaluateMetrics(rows, conversations.query, schema, { now }).metrics[0], conversations.selection);
+  const roots = new Map(rows.map(row => [row.root_conversation_id, row.root_provider]));
+  assert.deepEqual(pie.buckets.map(bucket => [bucket.keys[0], bucket.value]), [["codex", [...roots.values()].filter(provider => provider === "codex").length]]);
+  assert.equal(pie.buckets[0].value + pie.other.value, roots.size, "every conversation is in the denominator");
+  assert.deepEqual(conversations.supporting.where.filter(term => term.field === "root_provider"), [{ field: "root_provider", op: "=", value: "codex" }], "the supporting query lists the selected group's conversations");
+});
+
+test("a selected group beyond the returned groups is reported, not silently dropped", () => {
+  const entry = { id: "analysis", groupCount: 1001, buckets: [{ keys: ["repo-0"], value: 10, count: 1 }], other: { keys: [], value: 5, count: 3 } };
+  const shown = selectedShares(entry, { values: ["repo-0", "repo-1001"], excluded: false });
+  assert.deepEqual([shown.buckets.length, shown.other.value, shown.missing], [1, 5, 1]);
+  assert.equal(selectedShares({ ...entry, groupCount: 1, other: undefined }, { values: ["repo-0", "unused"], excluded: false }).missing, undefined, "a complete result has nothing beyond it");
 });
 
 test("while results load there is no error", () => {
