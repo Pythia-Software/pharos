@@ -377,6 +377,15 @@ background operations, and no request waits for one. Ask Pharos stays out of sco
 save of a finished answer, which writes the catalog after its request has
 ended, is registered.
 
+**A pinned WAL.** A bound checkpoint that a reader keeps busy ends
+`skipped(catalog-busy)`. Once the WAL is over `walPinBytes` (1 GiB) the skip
+also diagnoses (`wal_pin.go`), at most once a minute: it reads the -shm
+header (`mxFrame`, `nBackfill`, the read marks), asks `F_GETLK` which other
+process holds each pinning read slot (macOS), and otherwise names this
+process with its operations that were running before the checkpoint stopped
+advancing, oldest first. The diagnosis goes in the skipped operation's
+detail, one stderr line and attention rule 9 (§7.3). It cancels nothing.
+
 ### 3.5 E. Transitions
 
 | Kind | Label · verb | Trigger | Proc | Holds | Affects | Stop | On stop or eject | Latency | Journal | Pri |
@@ -1233,11 +1242,12 @@ positives fixed in phase 0:
 | 6 | The latest local backup failed | error | Open Backups (`/settings/backups`) |
 | 7 | A scheduled cloud backup failed (the schedule has `failures > 0`) or the latest verification failed | error | Open Backups |
 | 8 | The library is unavailable, was disconnected, or setup is needed (native rules today) | error | as today |
+| 9 | The WAL is over 1 GiB and a bound checkpoint is busy: a reader's snapshot keeps it from folding in recent changes. The item says how big the log is, since when the checkpoint has not advanced, and who holds it (another process by pid and command, or this process and its operations that were running before the stall). It clears once a checkpoint succeeds. | warning | Open Capture & index |
 
 Rule 4 is today's web rule (the native menu ignores interruptions). The
 first rule that applies sets the menu's single line; the snapshot lists all.
 
-Phase 2 (`status_attention.go`): rules 1–7 are the service's, each item
+Phase 2 (`status_attention.go`): rules 1–7 and 9 are the service's, each item
 `{id, rule, severity, title, detail, action: {label, path}}`; rules 3 and 4
 are left out while an index or capture runs, as the web rule does, and
 read the journal's latest ended top-level index row as well as this

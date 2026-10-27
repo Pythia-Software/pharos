@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // The attention list (docs/background-work.md §7.3): what needs the user,
@@ -238,7 +239,27 @@ func (s *Server) attention(ctx context.Context) []attentionItem {
 			}
 		}
 	}
+
+	// 9. A reader keeps the catalog's checkpoint from advancing while the
+	// WAL grows (wal_pin.go).
+	if pin := s.Catalog.walPinned(); pin != nil {
+		items = append(items, attentionItem{ID: "wal-pinned", Rule: 9, Severity: "warning", Title: "The catalog can't fold in recent changes",
+			Detail: walPinDetail(*pin, s.Catalog.clock()), Action: openCaptureAndIndex})
+	}
 	return items
+}
+
+// walPinDetail says how big the log is, since when, and who holds it.
+func walPinDetail(pin walPin, now time.Time) string {
+	detail := "Its change log has grown to " + humanBytes(pin.WALBytes)
+	if pin.Pending > 0 {
+		detail += " (" + formatCount(int(pin.Pending)) + " changes not yet folded in)"
+	}
+	detail += " and has not shrunk for " + humanDuration(now.Sub(pin.Since)) + ", which slows indexing and reading."
+	if pin.Holder != "" {
+		detail += " A long read holds it open: " + pin.Holder + "."
+	}
+	return detail
 }
 
 func joinDetail(detail, more string) string {

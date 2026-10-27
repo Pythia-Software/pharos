@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -161,6 +162,10 @@ func (c *Catalog) checkpointWith(passive func(func())) error {
 type walBound struct {
 	mu      sync.Mutex
 	retryAt time.Time
+	// stall is the busy checkpoint's diagnosis bookkeeping (wal_pin.go);
+	// pin its result, read by the attention list without mu.
+	stall walStall
+	pin   atomic.Pointer[walPin]
 }
 
 // boundWAL checkpoints once the WAL outgrows limit. An automatic checkpoint
@@ -183,6 +188,11 @@ func (c *Catalog) boundWAL(ctx context.Context, limit int64) {
 // carries no operation.
 func (c *Catalog) boundWALAt(ctx context.Context, limit int64, priority string) {
 	if info, err := os.Stat(c.Path + "-wal"); err != nil || info.Size() <= limit {
+		// Another checkpoint (after a run, another process's) folded it in.
+		if c.wal.pin.Load() != nil && c.wal.mu.TryLock() {
+			c.noteWALCheckpointed()
+			c.wal.mu.Unlock()
+		}
 		return
 	}
 	if !c.wal.mu.TryLock() {
@@ -210,9 +220,19 @@ func (c *Catalog) boundWALAt(ctx context.Context, limit int64, priority string) 
 	err := c.checkpointWith(op.RunIO)
 	if err != nil {
 		c.wal.retryAt = time.Now().Add(walRetryDelay)
+	} else {
+		c.noteWALCheckpointed()
 	}
 	if errors.Is(err, errCheckpointBusy) {
-		op.Skip("catalog-busy")
+		// A reader keeps the checkpoint from advancing. Past walPinBytes,
+		// say who (wal_pin.go).
+		detail := ""
+		if info, statErr := os.Stat(c.Path + "-wal"); statErr == nil {
+			if pin := c.noteWALBusy(info.Size(), c.clock()); pin != nil {
+				detail = pin.String()
+			}
+		}
+		op.SkipWith("catalog-busy", detail)
 		return
 	}
 	op.Finish(err)

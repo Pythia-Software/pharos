@@ -763,6 +763,11 @@ func (op *Op) SafePoint(next time.Duration) {
 
 // Skip ends the operation as skipped(reason); the work must return.
 func (op *Op) Skip(reason string) {
+	op.SkipWith(reason, "")
+}
+
+// SkipWith is Skip with a detail for people (what kept it from running).
+func (op *Op) SkipWith(reason, detail string) {
 	if !op.lock() {
 		return
 	}
@@ -773,6 +778,9 @@ func (op *Op) Skip(reason string) {
 	if op.state == opQueued || op.state == opRunning || op.state == opBlocked || op.state == opStopping {
 		op.state, op.reason = opSkipped, reason
 		op.ended = op.reg.clock()
+		if detail != "" {
+			op.detail = detail
+		}
 	}
 	op.unlock(true)
 }
