@@ -23,7 +23,7 @@ import { SearchResultsDisplay } from "./search-results-view";
 import { queryForSearchResultsView, searchResultsView, type SearchResultsView } from "./search-results-view-model";
 import { newKeywordSearch, readTextSearch, textFindParameters, searchSentence, withheldBatch, type TextSearchDraft } from "./text-search-model";
 import { CarbonImpact, useLegacyCarbonFilters } from "./carbon-impact";
-import { carbonCatalogShape } from "./carbon-analysis-catalog";
+import { carbonCatalogShape, legacyCarbonChart } from "./carbon-analysis-catalog";
 import { usageSummaryURL } from "./usage-summary-links";
 import { readConcurrencySettings } from "./concurrency-settings";
 import { pushMachineLocation, useMachineQueryNavigation } from "./machine-location";
@@ -98,7 +98,8 @@ import { AnalysisTrend, type AmountFormat } from "./dashboard-trend";
 import { canonicalState, normalizeAnalysis, readAnalysisLink, switchView, validAnalysisState, type AnalysisCatalog, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { tokenAnalysisCatalog } from "./token-analysis-catalog";
 import { humanAnalysisCatalog, humanWhere, writingGroups } from "./human-analysis-catalog";
-import { parallelismAnalysisCatalog } from "./parallelism-analysis-catalog";
+import { parallelismSettingsNote, type ParallelismSettings } from "./parallelism-analysis-catalog";
+import { useCarbonCatalog, useParallelismCatalog } from "./analysis-catalog-hooks";
 import type { LocalRows } from "./analysis-request";
 
 type Row = Record<string, any>;
@@ -1456,54 +1457,67 @@ function GuidedUsageDashboard({ topic }: { topic: UsageTopic }) {
   if (topic === "parallelism") return <ParallelismUsageDashboard />;
   if (topic === "tools") return <ToolsUsageDashboard />;
   if (topic === "mcp") return <MCPUsageDashboard />;
-  if (topic === "carbon") return <CatalogDashboard catalog={carbonCatalogShape} dataset="usage" name="carbon" defaults={{ metric: "co2", split: "type", period: "day" }} currentURL="/analyze?analyze_view=carbon"
-    frame={(views, where, onFilter) => <CarbonImpact where={where} onFilter={onFilter} chart={(catalog, format) => views(catalog, carbonAmount(format))} />} />;
+  if (topic === "carbon") return <CarbonDashboard />;
   if (topic === "time") return <AgentTimeDashboard />;
   return <SkillsDashboard />;
 }
 
 // CO₂e and electricity in the Carbon page's units; other amounts compactly.
 const carbonAmount = (format: (value: number, metric: string) => string): AmountFormat => (value, measure) => measure.unit === "g CO₂e" ? format(value, "co2") : measure.unit === "Wh" ? format(value, "energy") : compactNumber(value);
+const carbonLoading = <p className="muted" role="status">Loading your Carbon assumptions…</p>;
+
+// Carbon's views, drawn with the catalog of the current assumptions inside
+// the Carbon page's filters and estimate. Older links read through the shape.
+function CarbonDashboard() {
+  const carbon = useCarbonCatalog();
+  return <CatalogDashboard catalog={carbon.catalog ?? carbonCatalogShape} dataset="usage" name="carbon" defaults={{ metric: "co2", split: "type", period: "day" }} currentURL="/analyze?analyze_view=carbon"
+    frame={(views, where, onFilter) => <CarbonImpact where={where} onFilter={onFilter}>{carbon.catalog ? views(carbon.catalog, carbonAmount(carbon.format)) : carbonLoading}</CarbonImpact>} />;
+}
 
 // The legacy Carbon Impact page: the same chart over its own saved filters
-// and chart preference, without the dashboard's views or links.
+// and chart, without the dashboard's views or links. A link's chart
+// (analyze_chart, in the old page's vocabulary) wins over the saved one, on
+// entry and on route changes.
 const carbonChartKey = "pharos-carbon-chart";
 function LegacyCarbon() {
   const [where, onFilter] = useLegacyCarbonFilters();
-  const [chart, setChart] = useState<AnalysisState>(() => readStored(carbonChartKey, { metric: "co2", split: "type", period: "week" } as AnalysisState, view => validAnalysisState(carbonCatalogShape, { ...view, view: "trend" })));
-  const update = (next: Partial<AnalysisState>) => setChart(previous => { const merged = { ...previous, ...next }; store(carbonChartKey, merged); return merged; });
-  return <CarbonImpact where={where} onFilter={onFilter} chart={(catalog, format) => <AnalysisTrend catalog={catalog} schema={schemas.usage} dataset="usage" state={chart} where={where} onChange={update} onFilter={onFilter} format={carbonAmount(format)} links={false} />} />;
-}
-
-// The service builds parallelism records with the saved counting and gap
-// settings, so the engine's views follow them: each save rebuilds the
-// catalog, whose population names them. A link may open the ribbon with
-// other settings it has not saved; the note says so.
-function useSavedParallelism() {
-  const read = () => { const { counting, gap } = readConcurrencySettings(); return { counting, gap }; };
-  const [settings, setSettings] = useState(read);
+  const carbon = useCarbonCatalog();
+  const read = () => legacyCarbonChart(new URLSearchParams(location.search).get("analyze_chart"), preferences().get<unknown>(carbonChartKey, null));
+  const [chart, setChart] = useState<AnalysisState>(read);
   useEffect(() => {
-    const saved = (event: Event) => { if (Object.hasOwn((event as CustomEvent<{ set?: object }>).detail?.set ?? {}, "pharos-concurrency-v1")) setSettings(read()); };
-    window.addEventListener("pharos:preferences-saved", saved);
-    return () => window.removeEventListener("pharos:preferences-saved", saved);
+    const restore = () => setChart(read());
+    window.addEventListener("pharos:route", restore);
+    return () => window.removeEventListener("pharos:route", restore);
   }, []);
-  return settings;
+  const update = (next: Partial<AnalysisState>) => setChart(previous => { const merged = { ...previous, ...next }; store(carbonChartKey, merged); return merged; });
+  return <CarbonImpact where={where} onFilter={onFilter}>{carbon.catalog ? <AnalysisTrend catalog={carbon.catalog} schema={schemas.usage} dataset="usage" state={chart} where={where} onChange={update} onFilter={onFilter} format={carbonAmount(carbon.format)} links={false} /> : carbonLoading}</CarbonImpact>;
 }
 
+// Parallelism's views follow the saved counting and gap, with which the
+// service builds its records; the note names the settings the returned
+// records carry, and warns when another window saved others.
 function ParallelismUsageDashboard() {
   const [selection, setSelection] = useState<ConcurrencySelection | null>(null);
-  const saved = useSavedParallelism();
-  const catalog = useMemo(() => parallelismAnalysisCatalog(saved), [saved.counting, saved.gap]);
-  const ribbon = selection?.settings, differs = ribbon && (ribbon.counting !== saved.counting || ribbon.gap !== saved.gap);
+  const { catalog, settings } = useParallelismCatalog();
+  const ribbon = selection?.settings, differs = ribbon && (ribbon.counting !== settings.counting || ribbon.gap !== settings.gap);
   return <CatalogDashboard catalog={catalog} dataset="parallelism" name="parallelism" defaults={{ metric: "agent_hours", split: "level_band", period: "day" }} currentURL="/analyze?analyze_view=tokens&machine_view=parallelism"
+    summary={where => <ParallelismSettingsNote where={where} believed={settings} />}
     before={<>
       <ConcurrencyPanel routeParameter="analyze_parallelism" onSelection={setSelection} />
       {selection ? <UsageDashboardLinks schema={schemas.parallelism} dataset="parallelism" query={parallelismSelectionQuery(selection)} currentURL="/analyze?analyze_view=tokens&machine_view=parallelism" /> : null}
       <p className="usage-dashboard-note">The query view contains the hourly occupancy records touching the selected range, with the same repository, counting, gap, and ribbon selection. Those records describe threaded activity; model-only timing remains in the chart.</p>
-      <h3 className="usage-dashboard-heading">Parallel activity over time</h3>
+      <h3>Parallel activity over time</h3>
       {differs ? <p className="usage-dashboard-note" role="status">The ribbon uses this link’s counting and gap; the views below use your saved settings, with which the service builds its records. Change a setting in the ribbon to save it.</p> : null}
     </>} />;
 }
+function ParallelismSettingsNote({ where, believed }: { where: WhereTerm[]; believed: ParallelismSettings }) {
+  const result = useMetrics("parallelism", where, parallelismSettingsMetric);
+  const returned = (result.metrics[0]?.buckets ?? []).map(bucket => ({ counting: bucket.keys[0] === "agent" ? "agent" as const : "workspace" as const, gap: Number(bucket.keys[1]) }));
+  if (result.loading || result.error) return null;
+  const { note, warning } = parallelismSettingsNote(returned, believed);
+  return <p className="usage-dashboard-note" role="status">{note}{warning ? <strong> {warning}</strong> : null}</p>;
+}
+const parallelismSettingsMetric: AggregationClause[] = [{ id: "settings", op: "count", groupBy: ["counting", "gap_minutes"] }];
 
 // Over time and the analysis views share the dashboard's filters and range;
 // their fields sit side by side in one analyze_chart object.

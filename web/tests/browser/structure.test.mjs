@@ -251,7 +251,7 @@ const ROUTES = [
     mcp: { compare: { view: "compare", metric: "mean_output", split: "query_source" }, distribution: { view: "distribution", metric: "bytes", split: "tool_name", minSamples: 3, scale: "logarithmic" }, "hour cycle": { view: "cycle", cycle: "hour", metric: "calls", split: "none" }, "weekday cycle": { view: "cycle", cycle: "weekday", metric: "time", split: "none", reduce: "mean" }, "over time": { view: "trend", metric: "failure_rate", split: "status", rollingPeriods: 7 } },
     time: { compare: { view: "compare", metric: "time", split: "activity", compareAs: "share" }, "unit compare": { view: "compare", unit: "conversation", metric: "calls", split: "repository_name", reduce: "median" }, distribution: { view: "distribution", metric: "time", split: "command_source", minSamples: 3, scale: "logarithmic" }, "unit distribution": { view: "distribution", unit: "tool_conversation", metric: "calls", split: "tool_name" }, scatter: { view: "scatter", unit: "conversation", metric: "calls", metricY: "time", split: "provider" }, cycle: { view: "cycle", cycle: "hour", metric: "time", split: "none", reduce: "total" }, "over time": { v: 2, metric: "mean_time", split: "none", rollingPeriods: 7, completePeriods: true, norm: true } },
     // 2c: messages, usage under the Carbon assumptions, and parallelism records.
-    human: { compare: { view: "compare", metric: "typed", split: "repository_name", compareAs: "share" }, "unit compare": { view: "compare", unit: "conversation", metric: "typed", split: "repository_name", reduce: "mean" }, distribution: { view: "distribution", unit: "conversation", metric: "typed", split: "none" }, "hour cycle": { view: "cycle", cycle: "hour", metric: "typed", split: "none", reduce: "total" }, "weekday cycle": { view: "cycle", cycle: "weekday", metric: "typed_messages", split: "none" }, "over time": { v: 2, metric: "words", split: "kind", rollingPeriods: 7 }, "cue share": { v: 2, metric: "correction_share", split: "none", period: "week" } },
+    human: { compare: { view: "compare", metric: "typed", split: "repository_name", compareAs: "share" }, "unit compare": { view: "compare", unit: "conversation", metric: "typed", split: "repository_name", reduce: "mean" }, distribution: { view: "distribution", unit: "conversation", metric: "typed", split: "none" }, "hour cycle": { view: "cycle", cycle: "hour", metric: "typed", split: "none", reduce: "total" }, "weekday cycle": { view: "cycle", cycle: "weekday", metric: "typed_messages", split: "none" }, "over time": { v: 2, metric: "words", split: "kind", rollingPeriods: 7 }, "cue share": { v: 2, metric: "correction_share", split: "none", period: "week" }, hourly: { v: 2, metric: "typed", split: "none", period: "hour" } },
     carbon: { compare: { view: "compare", metric: "co2", split: "carbon_tier", compareAs: "share" }, "over time": { v: 2, metric: "energy", split: "type", rollingPeriods: 7, rollingOp: "sum" }, cycle: { view: "cycle", cycle: "weekday", metric: "co2", split: "none" } },
     parallelism: { "over time": { v: 2, metric: "at_once", split: "none", rollingPeriods: 7, completePeriods: true, norm: true }, compare: { view: "compare", metric: "agent_hours", split: "repository_name" }, distribution: { view: "distribution", unit: "agent", metric: "agent_hours", split: "repository_name" }, cycle: { view: "cycle", cycle: "hour", metric: "agent_hours", split: "none", reduce: "total" } },
     skills: { compare: { view: "compare", metric: "conversations", split: "skill_name" }, distribution: { view: "distribution", metric: "body", split: "skill_evidence", minSamples: 3 }, "unit distribution": { view: "distribution", unit: "skill_path", metric: "loads", split: "skill_name" }, scatter: { view: "scatter", unit: "conversation", metric: "records", metricY: "body", split: "provider" }, cycle: { view: "cycle", cycle: "weekday", metric: "records", split: "none" }, "over time": { v: 2, metric: "records", split: "evidence_type", share: true, rollingPeriods: 7 } },
@@ -765,40 +765,6 @@ for (const width of [1504, 390, 320]) test(`Parallelism dashboard and inline ran
     assert.ok(dates.x >= picker.x + picker.width && dates.y < picker.y + picker.height && picker.y < dates.y + dates.height, 'custom inputs sit beside the range selector');
   }
   await app.shot('custom-dates');
-});
-
-// Human Words reads messages through the engine: its relative range stays
-// relative in every request, a presentation change reuses the query, and
-// Refresh and new filters rerun it.
-for (const [name, chart] of [
-  ["text sources", { metric: "words", split: "kind" }],
-  ["smoothed repositories", { metric: "typed", split: "repository_name", rollingPeriods: 7 }],
-  ["hourly", { metric: "typed", split: "none", period: "hour" }],
-]) test(`Human Words dashboard queries messages and reruns on refresh (${name})`, { skip }, async t => {
-  const query = days => ({ ...EMPTY_QUERY, where: [{ field: "sent_at", op: ">=", value: `-${days}d` }, { field: "sent_at", op: "<", value: "+0s" }] });
-  const params = new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "human", analyze_filters: encodeQuery(query(7)), analyze_chart: JSON.stringify({ v: 2, period: "day", ...chart }) });
-  const app = await open(t, { url: `/analyze?${params}`, ready: `.usage-human-dashboard ${overTimeReady}` });
-  const requests = () => app.calls.filter(call => call.path === "/api/query/writing_messages/query-v3" && JSON.stringify(call.body).includes("dateGrouping"));
-  assert.equal(requests().length, 1, "one trend query");
-  assert.equal(app.calls.some(call => call.path === "/api/query/writing/series"), false, "the series endpoint is not read");
-  await app.page.setViewportSize({ width: 390, height: 844 });
-  await app.page.getByRole("combobox", { name: "Scale", exact: true }).selectOption("logarithmic");
-  await app.settled();
-  assert.equal(requests().length, 1, "presentation changes reuse the query");
-  const refreshed = app.page.waitForResponse(response => response.url().includes("/api/query/writing_messages/query-v3"));
-  await app.page.getByRole("button", { name: "Refresh", exact: true }).click();
-  await refreshed;
-  await app.settled();
-  assert.equal(requests().length, 2, "Refresh reruns the query");
-  const filtered = app.page.waitForResponse(response => response.url().includes("/api/query/writing_messages/query-v3"));
-  await app.page.evaluate(filters => {
-    const url = new URL(location.href); url.searchParams.set("analyze_filters", filters);
-    history.replaceState(history.state, "", url); window.dispatchEvent(new Event("pharos:route"));
-  }, encodeQuery(query(30)));
-  await filtered;
-  await app.settled();
-  // A smoothing window widens the start; either way the range is new.
-  assert.notDeepEqual(requests().at(-1).body.source.where, requests()[0].body.source.where, "filter changes issue the new request");
 });
 
 describe("structure", { concurrency: Number(process.env.PHAROS_SWEEP_CONCURRENCY || 3) }, () => {

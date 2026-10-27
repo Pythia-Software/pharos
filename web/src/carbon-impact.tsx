@@ -1,11 +1,10 @@
 import { originDimensions, originLabel, isOriginDimension, useOriginMetadata } from "./origin-dimensions";
-import React, { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import React, { useEffect, useLayoutEffect, useState } from "react";
 import { EMPTY_QUERY, decodeQuery, encodeQuery, type WhereTerm } from "@pythia-software/query-table-core";
 import { ChartSelect, rangeLabel, timeBounds, usageTime, withTimeRange, type FilterChange } from "./usage-chart";
 import { readSlice, withSlice } from "./chart-selection";
 import { preferences } from "./preferences";
-import { carbonAnalysisCatalog, type CarbonFactors } from "./carbon-analysis-catalog";
-import type { AnalysisCatalog } from "./dashboard-analysis-model";
+import type { CarbonFactors } from "./carbon-analysis-catalog";
 
 type CarbonTokens = { tokens: Record<string, Record<string, number>> };
 type CarbonResult = { pue: number; co2: number; facilityWh: number; byCategory: Record<string, { wh: number }>; grams: (wh: number) => number };
@@ -24,7 +23,7 @@ declare global {
       estimate: (factors: CarbonFactors, period: CarbonTokens) => CarbonResult;
       mass: (grams: number) => string;
       energy: (wh: number) => string;
-      settingsSnapshot: () => Record<string, unknown>;
+      settingsSnapshot: (factors?: CarbonFactors) => Record<string, unknown>;
     };
   }
 }
@@ -94,15 +93,13 @@ export function useLegacyCarbonFilters(): [WhereTerm[], FilterChange] {
   return [where, onFilter];
 }
 
-// Carbon Impact: the usage filters, the page's own estimate and assumptions
-// (carbon.js), and a chart drawn by the analysis engine over usage records
-// under the user's current assumptions. chart receives the catalog once the
-// calculator and its factors are loaded, and again whenever the assumptions
-// change, so every query names the assumptions it was drawn under.
-export function CarbonImpact({ where, onFilter, chart }: { where: WhereTerm[]; onFilter: FilterChange; chart: (catalog: AnalysisCatalog, format: (value: number, metric: string) => string) => React.ReactNode }) {
+// Carbon Impact: the usage filters and the page's own estimate and
+// assumptions (carbon.js), around a chart its caller draws with the engine
+// (useCarbonCatalog builds the catalog from the current assumptions).
+export function CarbonImpact({ where, onFilter, children }: { where: WhereTerm[]; onFilter: FilterChange; children: React.ReactNode }) {
   useOriginMetadata();
   const [calculator, setCalculator] = useState(() => window.pharosCarbon);
-  const [refresh, setRefresh] = useState(0), [assumptions, setAssumptions] = useState(0);
+  const [refresh, setRefresh] = useState(0);
   useEffect(() => {
     const ready = () => setCalculator(window.pharosCarbon);
     window.addEventListener("pharos:carbon-ready", ready);
@@ -110,23 +107,14 @@ export function CarbonImpact({ where, onFilter, chart }: { where: WhereTerm[]; o
     return () => window.removeEventListener("pharos:carbon-ready", ready);
   }, []);
   useEffect(() => {
-    const reload = () => setRefresh(value => value + 1), recalculate = () => setAssumptions(value => value + 1);
+    const reload = () => setRefresh(value => value + 1);
     window.addEventListener("pharos:usage-refresh", reload);
-    window.addEventListener("pharos:carbon-settings", recalculate);
-    return () => {
-      window.removeEventListener("pharos:usage-refresh", reload);
-      window.removeEventListener("pharos:carbon-settings", recalculate);
-    };
+    return () => window.removeEventListener("pharos:usage-refresh", reload);
   }, []);
   const requestKey = JSON.stringify({ where, hourly: false, split: "" });
   const bounds = timeBounds(where, usageTime);
   const state = useCarbonData(requestKey, refresh);
-  const data = state.data, loading = state.loading, error = state.error;
-  // The factors do not depend on the filters: keep the last ones while new
-  // totals load, so the chart is not rebuilt for every filter change.
-  const [factors, setFactors] = useState<CarbonFactors | null>(null);
-  useEffect(() => { if (data?.factors && JSON.stringify(data.factors) !== JSON.stringify(factors)) setFactors(data.factors); }, [data?.factors]);
-  const catalog = useMemo(() => calculator && factors ? carbonAnalysisCatalog({ settings: calculator.settingsSnapshot(), factors, estimate: calculator.estimate }) : null, [calculator, factors, assumptions]);
+  const data = state.data, error = state.error;
   const scopeValue = (field: "repository_name" | "provider" | "channel" | "machine_id" | "execution_machine_id") => {
     const selection = readSlice(where, field);
     if (!selection.values.length) return field === "repository_name" ? "All repositories" : field === "provider" ? "All providers" : `All ${originDimensions.find(([key]) => key===field)?.[1].toLowerCase()} values`;
@@ -139,7 +127,6 @@ export function CarbonImpact({ where, onFilter, chart }: { where: WhereTerm[]; o
     if (data) calculator?.show(data, label, scope);
     else calculator?.pending(error);
   }, [calculator, data, label, scope, error]);
-  const format = (value: number, metric: string) => metric === "co2" ? calculator?.mass(value) ?? String(value) : metric === "energy" ? calculator?.energy(value) ?? String(value) : value.toLocaleString();
   const choices = state.data?.choices ?? {};
   return <section className="carbon-impact" aria-label="Carbon Impact" data-feedback-label="Carbon Impact">
     <section className="carbon-analysis" aria-label="Carbon usage analysis">
@@ -153,7 +140,7 @@ export function CarbonImpact({ where, onFilter, chart }: { where: WhereTerm[]; o
     </section>
     {data && !data.windows.some(window => Object.values(window.tokens).some(counts => Object.values(counts).some(value => value > 0))) ? <p className="muted" role="status">No reported token usage matches these filters.</p> : null}
     {error ? <button type="button" onClick={() => setRefresh(value => value + 1)}>Retry carbon usage</button> : null}
-    {catalog ? chart(catalog, format) : <p className="muted" role="status" aria-busy={loading}>{error ? "Carbon estimates are unavailable." : "Loading your Carbon assumptions…"}</p>}
+    {children}
     <div id="carbonSummary" className="carbon-card carbon-summary" aria-label="Filtered carbon estimate" />
     {data?.undated_tokens ? <p className="muted">{data.undated_tokens.toLocaleString()} tokens have no usage date. They are included in the total but cannot be placed on the chart.</p> : null}
     </section>

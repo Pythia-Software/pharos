@@ -7,6 +7,7 @@ import { cardDashboardWhere } from "./card-exploration";
 import { analysisVersion, type AnalysisState } from "./dashboard-analysis-model";
 import { concurrencyWindowRange, defaultConcurrencySettings } from "./concurrency-settings";
 import { defaultCardCover } from "./card-cover";
+import { windowedChart } from "./card-windows";
 
 type DailyChart = { period: "day"; rollingPeriods: number; display: "interval"; scale: "linear"; seriesLimit: number };
 export type CardDashboard =
@@ -146,7 +147,7 @@ export function cardDestination(recipe: QueryRecipe, query: QueryState, window?:
   parsed.searchParams.set("analyze_topic", target.topic);
   parsed.searchParams.set("analyze_data", target.dataset);
   parsed.searchParams.set("analyze_days", String(window?.days ?? 30));
-  parsed.searchParams.set("analyze_chart", JSON.stringify(target.chart));
+  parsed.searchParams.set("analyze_chart", JSON.stringify(windowedChart(recipe.id, target.chart, window?.days)));
   parsed.searchParams.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where: cardDashboardWhere(recipe.dataset as UsageDataset, target.dataset, (query.grouping?.source ?? query).where) }));
   if (target.topic === "parallelism") {
     // The record dataset uses saved counting/gap preferences. Inherit those

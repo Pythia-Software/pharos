@@ -1,4 +1,4 @@
-import type { WhereTerm } from "@pythia-software/query-table-core";
+import type { WhereClause, WhereTerm } from "@pythia-software/query-table-core";
 import type { AnalysisCatalog, AnalysisMeasure, AnalysisState } from "./dashboard-analysis-model";
 
 // Human Words over writing_messages: one record is one classified user
@@ -76,14 +76,30 @@ export const humanAnalysisCatalog: AnalysisCatalog = {
   scatter: ["typed", "words"],
 };
 humanAnalysisCatalog.breakdowns.provider.order = ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"];
+// The series endpoint grouped a whole work by its combined providers,
+// channels or machines; messages are grouped by their own.
+for (const [split, label] of [["provider", "providers"], ["channel", "channels"], ["machine_id", "machines"], ["execution_machine_id", "execution machines"]]) {
+  humanAnalysisCatalog.breakdowns[split].note = `Each message counts under its own conversation's ${label.replace(/s$/, "")}; older links' work-level combined groups (such as two ${label} of one work) are now these per-message groups.`;
+}
 
 // Filters older links wrote against the writing dataset (one row per work):
-// its message-time bounds and combined fields, read as their message fields.
-const timeFields: Record<string, string> = { first_message_at: "sent_at", last_message_at: "sent_at" };
-// Where nothing needs reading, where itself is returned, so the link is not
+// its message-time bounds, and its combined values. A work's providers,
+// channels and machines were one joined value ("claude,codex", "laptop,
+// remote"); a message holds one, so an equality on a combined value reads as
+// an OR over its single values, and an inequality as one per value. Where
+// nothing needs reading, where itself is returned, so the link is not
 // rewritten.
+const timeFields: Record<string, string> = { first_message_at: "sent_at", last_message_at: "sent_at" };
+const singles = (value: string) => value.split(/,\s*/).map(part => part.trim()).filter(Boolean);
 export function humanWhere(where: WhereTerm[]): WhereTerm[] {
   const field = (name: string) => timeFields[name] ?? splits[name] ?? name;
   if (!where.some(term => ("any" in term ? term.any : [term]).some(clause => field(clause.field) !== clause.field))) return where;
-  return where.map(term => "any" in term ? { ...term, any: term.any.map(clause => ({ ...clause, field: field(clause.field) })) } : { ...term, field: field(term.field) });
+  const equal = (clause: WhereClause): WhereClause[] => Object.hasOwn(splits, clause.field) && clause.op === "=" && !clause.negated ? singles(clause.value).map(value => ({ ...clause, field: field(clause.field), value })) : [{ ...clause, field: field(clause.field) }];
+  return where.flatMap((term): WhereTerm[] => {
+    if ("any" in term) return [{ ...term, any: term.any.flatMap(equal) }];
+    if (!Object.hasOwn(splits, term.field)) return [{ ...term, field: field(term.field) }];
+    if (term.op === "!=" && !term.negated) return singles(term.value).map(value => ({ ...term, field: field(term.field), value }));
+    const clauses = equal(term);
+    return clauses.length > 1 ? [{ any: clauses }] : clauses;
+  });
 }

@@ -37,17 +37,24 @@ export function writingMessages() {
 }
 
 // Hour-by-agent records: each local hour of an agent at one level of agents
-// active at once. Records built with other counting or gap settings (as a
-// stale cache might hold) must never be counted.
+// active at once, built with the saved settings (workspace counting, a
+// 60-minute gap), the only records the service serves. The last starts in
+// the hour that is in progress at now.
 export function parallelismRecords() {
   const rows = [];
+  const cells = [];
   for (let day = 0; day < 40; day++) for (let slot = 0; slot < 3 + day % 4; slot++) {
     const at = new Date(now - (day + 1) * 86400000); at.setHours(8 + slot * 2 + day % 3, 0, 0, 0);
+    cells.push([day, slot, at]);
+  }
+  const current = new Date(now); current.setMinutes(0, 0, 0);
+  cells.push([40, 1, current]);
+  for (const [day, slot, at] of cells) {
     const level = 1 + (day + slot) % 4, unit = (day * 3 + slot) % 6;
-    for (const [counting, gap] of [["workspace", 60], ...slot === 0 ? [["agent", 15]] : []]) {
+    for (const [counting, gap] of [["workspace", 60]]) {
       const unitMs = 1800000 + 600000 * (slot % 3), elapsedMs = unitMs / level;
       rows.push({
-        id: `cell-${day}-${slot}-${counting}`, started_at: at.toISOString(), ...calendar(at), hour_of_day: pad(at.getHours()), counting, gap_minutes: gap,
+        id: `cell-${day}-${slot}`, started_at: at.toISOString(), ...calendar(at), hour_of_day: pad(at.getHours()), counting, gap_minutes: gap,
         unit_id: `unit-${unit}`, unit_label: `Workspace ${unit}`, workspace_name: `Workspace ${unit}`, repository_name: repositories[unit % 3], provider: unit % 2 ? "claude" : "codex",
         level, level_band: level >= 4 ? "4+" : String(level), unit_ms: unitMs, elapsed_ms: elapsedMs, unit_hours: unitMs / 3600000, elapsed_hours: elapsedMs / 3600000,
         parallel_elapsed_hours: level > 1 ? elapsedMs / 3600000 : 0,

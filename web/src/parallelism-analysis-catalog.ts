@@ -1,14 +1,16 @@
-import type { WhereTerm } from "@pythia-software/query-table-core";
 import type { AnalysisCatalog, AnalysisMeasure } from "./dashboard-analysis-model";
 
 // Parallelism over the parallelism dataset: one record is one local hour of
 // one agent (a workspace, or a top-level session, by the user's counting) at
-// one machine-wide level of concurrency. The service builds the records with
-// the user's saved counting and turn-gap settings; the catalog names them as
-// the population every query runs under, so a record built with other
-// settings is never counted and the note says which settings apply.
+// one machine-wide level of concurrency. The service builds every record
+// with the user's saved counting and turn-gap settings, and serves no
+// others, so the catalog filters nothing by them; the dashboard reads the
+// settings the returned records carry and says which they are
+// (parallelismSettingsNote). A per-request override, like Carbon's, would
+// need a Go change.
 
-export type ParallelismRequest = { counting: "workspace" | "agent"; gap: number };
+export type ParallelismCounting = "workspace" | "agent";
+export type ParallelismSettings = { counting: ParallelismCounting; gap: number };
 
 const hours = { kind: "number", decimals: 1 } as const, ratio = { kind: "number", decimals: 2 } as const, count = { kind: "number", decimals: 0 } as const;
 const measures: Record<string, AnalysisMeasure> = {
@@ -22,28 +24,41 @@ const measures: Record<string, AnalysisMeasure> = {
 const single = (entries: Array<[string, string]>): AnalysisCatalog["breakdowns"] => Object.fromEntries(entries.map(([field, label]) => [field, { label, fields: [field] }]));
 const origin = { channel: ["channel"], machine_id: ["machine_id"], execution_machine_id: ["execution_machine_id"] };
 
-export function parallelismAnalysisCatalog(settings?: ParallelismRequest): AnalysisCatalog {
-  const where: WhereTerm[] = settings ? [{ field: "counting", op: "=", value: settings.counting }, { field: "gap_minutes", op: "=", value: String(settings.gap) }] : [];
+// Provider and model belong to a top-level session: the service records them
+// only under agent counting, so other counting offers neither. Without
+// settings (reading links) every breakdown is offered.
+export function parallelismAnalysisCatalog(counting?: ParallelismCounting): AnalysisCatalog {
+  const agent = counting === undefined || counting === "agent";
   const catalog: AnalysisCatalog = {
     dataset: "parallelism", time: { first: "started_at", last: "started_at" }, measures,
     breakdowns: {
       level_band: { label: "Agents at once", fields: ["level_band"], order: ["1", "2", "3", "4+"] },
       repository_name: { label: "Repository", fields: ["repository_name"], empty: "No repository" },
-      ...single([["provider", "Provider"], ["model", "Model"], ["workspace_name", "Workspace"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"]]),
+      ...single([...agent ? [["provider", "Provider"], ["model", "Model"]] as Array<[string, string]> : [], ["workspace_name", "Workspace"], ["channel", "Channel"], ["machine_id", "Machine"], ["execution_machine_id", "Execution machine"]]),
     },
     records: { label: "Agent hour", plural: "Agent hours", note: "A record is one local hour of one agent at one level of agents active at once." },
     units: {
       agent: { label: "Agent", plural: "Agents", key: "unit_id", where: [{ field: "unit_id", op: "is_not_null", value: "" }],
-        breakdowns: { repository_name: ["repository_name"], provider: ["provider"], workspace_name: ["workspace_name"], ...origin },
+        breakdowns: { repository_name: ["repository_name"], ...agent ? { provider: ["provider"] } : {}, workspace_name: ["workspace_name"], ...origin },
         note: "An agent is one workspace, or one top-level session, by your counting setting; its repository and origin are constant." },
     },
     cycle: { hour: { kind: "timestamp", field: "started_at" }, weekday: { kind: "timestamp", field: "started_at" } },
     periods: { day: "day", week: "week", month: "month" }, timestamp: "started_at",
-    request: settings ? { where, note: `Records count ${settings.counting === "agent" ? "top-level sessions" : "workspaces"} and join turns across gaps up to ${settings.gap} minutes: your saved Parallelism settings, with which the service builds them.` } : undefined,
     trend: { metric: "agent_hours", split: "level_band" },
     scatter: ["agent_hours", "active_hours"],
   };
-  catalog.breakdowns.provider.order = ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"];
+  if (catalog.breakdowns.provider) catalog.breakdowns.provider.order = ["claude", "antigravity", "codex", "chatgpt", "tl1", "canonical"];
   return catalog;
 }
 export const parallelismCatalogShape = parallelismAnalysisCatalog();
+
+// What the returned records were built with, in words, and a warning when
+// that is not what the page believes is saved (another window changed the
+// settings, say). returned lists the distinct settings the records carry.
+export function parallelismSettingsNote(returned: ParallelismSettings[], believed: ParallelismSettings): { note: string; warning?: string } {
+  const describe = ({ counting, gap }: ParallelismSettings) => `count ${counting === "agent" ? "top-level sessions" : "workspaces"} and join turns across gaps up to ${gap} minutes`;
+  if (!returned.length) return { note: `No records in range; records are built with your saved Parallelism settings, which here ${describe(believed)}.` };
+  const note = `These records ${returned.map(describe).join("; others ")}: the saved Parallelism settings the service built them with.`;
+  const differs = returned.some(item => item.counting !== believed.counting || item.gap !== believed.gap);
+  return differs ? { note, warning: `This page believes the saved settings ${describe(believed)}; the records were built with others, perhaps saved in another window. Reload to follow them.` } : { note };
+}

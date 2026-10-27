@@ -1,4 +1,4 @@
-import type { AnalysisCatalog, AnalysisMeasure, AnalysisState, DerivedTotals } from "./dashboard-analysis-model";
+import { canonicalState, validAnalysisState, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type DerivedTotals } from "./dashboard-analysis-model";
 import { tokenAnalysisCatalog } from "./token-analysis-catalog";
 
 // Carbon over the usage ledger: one record is one agent session's usage of
@@ -75,3 +75,15 @@ export function carbonAnalysisCatalog(assumptions?: CarbonAssumptions): Analysis
 }
 // For validation and comparison only.
 export const carbonCatalogShape = carbonAnalysisCatalog();
+
+// The legacy Carbon page's chart: a link's analyze_chart (written by the old
+// chart, CarbonView: metric co2 or energy, split type, tier, …) wins over the
+// saved chart, which wins over the default. Read in the catalog's terms.
+const legacyDefaults: AnalysisState = { metric: "co2", split: "type", period: "week" };
+export function legacyCarbonChart(encoded: string | null, saved: unknown): AnalysisState {
+  const valid = (value: unknown): value is AnalysisState => Boolean(value) && typeof value === "object" && !Array.isArray(value) && validAnalysisState(carbonCatalogShape, { ...legacyDefaults, ...value as AnalysisState, view: "trend" });
+  let linked: unknown;
+  try { linked = encoded ? JSON.parse(encoded) : undefined; } catch { linked = undefined; }
+  const chosen = valid(linked) ? linked : valid(saved) ? saved : {};
+  return canonicalState(carbonCatalogShape, { ...legacyDefaults, ...chosen });
+}

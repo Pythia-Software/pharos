@@ -10,11 +10,15 @@ import factors from "../../../../carbon/co2_factors.json";
 import { core, schemas, instantiateRecipe, recipeById, cardCoverQuery } from "../helpers/recipes.mjs";
 import { now, writingMessages, parallelismRecords, carbonUsage } from "../helpers/bespoke-ledgers.mjs";
 import { loadClassicScript } from "../helpers/classic-script.mjs";
-import { analysisQuery, catalogProblems, cycleResult, normalizeAnalysis, selectGroups, trendAdjustments, validAnalysisState, readAnalysisLink, analysisVersion } from "../../../src/dashboard-analysis-model";
+import { canonicalState, analysisQuery, catalogProblems, cycleResult, normalizeAnalysis, selectGroups, trendAdjustments, validAnalysisState, readAnalysisLink, analysisVersion } from "../../../src/dashboard-analysis-model";
 import { trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
 import { humanAnalysisCatalog as human, humanWhere } from "../../../src/human-analysis-catalog";
 import { carbonAnalysisCatalog, carbonCatalogShape, deriveCarbon } from "../../../src/carbon-analysis-catalog";
-import { parallelismAnalysisCatalog } from "../../../src/parallelism-analysis-catalog";
+import { parallelismAnalysisCatalog, parallelismSettingsNote } from "../../../src/parallelism-analysis-catalog";
+import { legacyCarbonChart } from "../../../src/carbon-analysis-catalog";
+import { windowedChart } from "../../../src/card-windows";
+import { cardDestination } from "../../../src/card-destinations";
+import { usageDashboardReturn } from "../../../src/usage-workspace-model";
 import { cardDashboardWhere } from "../../../src/card-exploration";
 import { loadQueryPreview, clearPreviewCache } from "../../../src/curiosity-data";
 import { compactTimelineBuckets } from "../../../src/column-marks";
@@ -22,6 +26,7 @@ import { buildCardTrend, cardTrendDays, cardTrendQueries } from "../../../src/ca
 import { withTimeRange } from "../../../src/chart-range";
 import { weekdayMetric } from "../../../src/weekday-cover";
 import { answerQuery } from "../../support/query-server.mjs";
+import { runAnalysisQuery } from "../../../src/analysis-request";
 
 const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 // The calculator under some non-default assumptions, and the usage records
@@ -30,13 +35,12 @@ const settings = { scenario: "high", pueScenario: "low", grid: "world", inputSen
 const calculator = loadClassicScript("carbon.js", { pharosPrefs: { get: (key, fallback) => key === "pharos-carbon-v1" ? settings : fallback, set() {} } }).window.pharosCarbon;
 const assumptions = { settings: calculator.settingsSnapshot(factors), factors, estimate: calculator.estimate };
 const carbon = carbonAnalysisCatalog(assumptions), usage = carbonUsage(calculator.estimate, factors);
-const saved = { counting: "workspace", gap: 60 }, parallelism = parallelismAnalysisCatalog(saved);
-// The service serves the records of the saved settings; the dashboard's
-// ledger also holds records of other settings, which it must leave out.
-const records = parallelismRecords(), served = records.filter(row => row.counting === saved.counting && row.gap_minutes === saved.gap);
+// The service serves only records built with the saved settings.
+const saved = { counting: "workspace", gap: 60 }, parallelism = parallelismAnalysisCatalog(saved.counting);
+const records = parallelismRecords();
 const catalogs = { human, carbon, parallelism };
-const cardRows = { writing_messages: writingMessages(), usage: usage.rows, parallelism: served };
-const dashboardRows = { writing_messages: cardRows.writing_messages, usage: usage.rows, parallelism: records };
+const cardRows = { writing_messages: writingMessages(), usage: usage.rows, parallelism: records };
+const dashboardRows = cardRows;
 const round = value => typeof value === "number" ? Number(value.toPrecision(12)) : value;
 const byKeys = (buckets, scale = 1) => Object.fromEntries(buckets.map(bucket => [JSON.stringify(bucket.keys), round(bucket.value * scale)]));
 // Carbon cards report kilograms; the dashboard measures grams.
@@ -181,14 +185,18 @@ test("a message recorded on another Mac's day: the day trend files it as the car
 // A trailing-window card through buildCardTrend, opened on "Last 30 days" at
 // 14:00 (dashboard-parity.test.mjs): the dashboard's points and norm are the
 // card's.
-function trailingCard(id, scale = 1) {
-  const recipe = recipeById(id), trend = recipe.trend, catalog = catalogs[recipe.destination.topic], lookback = trend.lookback ?? 7;
+// A card without its own lookback ({days}) trails over its window, which
+// its destination follows (windowedChart).
+function trailingCard(id, scale = 1, window = 7) {
+  const recipe = recipeById(id), trend = recipe.trend, catalog = catalogs[recipe.destination.topic], lookback = trend.lookback ?? window;
   const afternoon = new Date(now); afternoon.setHours(14, 0, 0, 0);
   const at = afternoon.getTime() < now ? afternoon.getTime() + 86400000 : afternoon.getTime();
   const { days, ends } = cardTrendDays(lookback, Boolean(trend.completeDays), at);
   const card = buildCardTrend(trend, lookback, cardTrendQueries(recipe.where ?? [], trend, days).map(query => core.evaluateMetrics(cardRows[trend.dataset ?? recipe.dataset], query, schemas[recipe.dataset], { now: at }).metrics), at).study;
   const where = [...cardDashboardWhere(recipe.dataset, catalog.dataset, recipe.where ?? []), ...withTimeRange([], catalog.time, undefined, undefined, "30d")];
-  const state = { ...recipe.destination.chart, view: "trend" };
+  const opened = new URL(cardDestination(recipe, instantiateRecipe(recipe, window, new Date(at)).query, { days: window, field: recipe.field, mode: "relative" }), "http://localhost");
+  const state = { ...JSON.parse(opened.searchParams.get("analyze_chart")), view: "trend" };
+  assert.deepEqual(state, { ...windowedChart(id, recipe.destination.chart, window), view: "trend" });
   assert.deepEqual([state.rollingPeriods, state.completePeriods === true, state.norm, state.split], [lookback, Boolean(trend.completeDays), true, "none"], id);
   const query = trendQuery(catalog, state, where, { now: at, zone });
   const built = trendSeries(catalog, state, query, core.evaluateMetrics(dashboardRows[catalog.dataset], query.query, schemas[catalog.dataset], { now: at }).metrics, { now: at });
@@ -233,17 +241,19 @@ test("human-words-weekday and human-messages-weekday: daily totals by local week
   weekdayPair("human-messages-weekday");
 });
 
-function hourPair(id, cardHours) {
+// A cycle counts complete hours only; the card also counts the hour in
+// progress. At an hour boundary the two agree; mid-hour, the card holds that
+// hour's records as well (inProgress), which the dashboard leaves out.
+function hourPair(id, cardHours, { minutes = 0, inProgress = {} } = {}) {
   const recipe = recipeById(id), catalog = catalogs[recipe.destination.topic];
-  // Whole local hours: the card's window starts at a local hour boundary.
-  const at = new Date(now); at.setMinutes(0, 0, 0);
+  const at = new Date(now); at.setMinutes(minutes, 0, 0);
   const item = instantiateRecipe(recipe, 7, at), where = cardDashboardWhere(recipe.dataset, catalog.dataset, (item.query.grouping?.source ?? item.query).where);
   const state = normalizeAnalysis(catalog, recipe.destination.chart), analysis = analysisQuery(catalog, state, where, { now: at.getTime(), zone });
   assert.deepEqual([state.view, state.cycle, state.reduce], ["cycle", "hour", "total"], id);
   const result = core.evaluateMetrics(dashboardRows[catalog.dataset], analysis.query, schemas[catalog.dataset], { now: at.getTime() }).metrics[0];
   const from = where.find(term => term.field === catalog.time.first && (term.op === ">=" || term.op === ">"));
   const folded = cycleResult(catalog, state, result, { from: from ? Number(core.coerceValue("datetime", from.value, at.getTime())) : undefined, to: at.getTime() }, zone);
-  const expected = cardHours(item, at.getTime());
+  const expected = Object.fromEntries(Object.entries(cardHours(item, at.getTime())).map(([hour, value]) => [hour, round(value - (inProgress[hour] ?? 0))]).filter(([, value]) => value));
   assert.deepEqual(Object.fromEntries(folded.result.buckets.filter(bucket => bucket.value).map(bucket => [bucket.keys[0], round(bucket.value)])), expected, id);
   assert.ok(Object.keys(expected).length > 3);
 }
@@ -266,8 +276,9 @@ test("carbon-tiers, carbon-repositories, carbon-models, carbon-providers and car
   }
 });
 
-test("carbon-trend: estimated CO₂e over each trailing 7 days, including today, with its norm", () => {
-  trailingCard("carbon-trend", 1 / 1000);
+test("carbon-trend: estimated CO₂e over each trailing 7 or 30 days, including today, with its norm", () => {
+  trailingCard("carbon-trend", 1 / 1000, 7);
+  trailingCard("carbon-trend", 1 / 1000, 30);
 });
 
 test("Carbon sends the user's assumptions with every request, and splits token types with the page's own calculator", () => {
@@ -304,7 +315,7 @@ test("parallel-days and parallel-repositories: active hours by agents at once, a
   const where = cardDashboardWhere(recipe.dataset, parallelism.dataset, (item.query.grouping?.source ?? item.query).where);
   const query = trendQuery(parallelism, { ...state, seriesLimit: 1000 }, where, { now, zone });
   const built = trendSeries(parallelism, { ...state, seriesLimit: 1000 }, query, core.evaluateMetrics(records, query.query, schemas.parallelism, { now }).metrics, { now });
-  const cover = cardCoverQuery(item.query, recipe), card = core.evaluateMetrics(served, cover.query, schemas.parallelism, { now }).metrics.find(metric => metric.id === cover.metricId), expected = {};
+  const cover = cardCoverQuery(item.query, recipe), card = core.evaluateMetrics(records, cover.query, schemas.parallelism, { now }).metrics.find(metric => metric.id === cover.metricId), expected = {};
   for (const bucket of card.buckets) expected[`${bucket.keys[0]} s:${bucket.keys[1]}`] = round(bucket.value);
   const drawn = {};
   for (const bucket of built.buckets) for (const [key, value] of Object.entries(bucket.values)) if (value) drawn[`${bucket.key} ${key}`] = round(value);
@@ -319,20 +330,72 @@ test("parallel-trend: agents at once while active, pooled over 7 complete days, 
 test("parallel-hours, parallel-active-weekday and parallel-weekday: agent hours by local hour, and daily values by weekday", () => {
   hourPair("parallel-hours", (item, at) => {
     // The card groups the dataset's own local hour (hour_of_day).
-    const card = core.evaluateMetrics(served, cardCoverQuery(item.query, recipeById("parallel-hours")).query, schemas.parallelism, { now: at }).metrics[0];
+    const card = core.evaluateMetrics(records, cardCoverQuery(item.query, recipeById("parallel-hours")).query, schemas.parallelism, { now: at }).metrics[0];
     return Object.fromEntries(card.buckets.filter(bucket => bucket.value).map(bucket => [`${bucket.keys[0]}:00`, round(bucket.value)]));
   });
+  // Mid-hour, the record starting this hour is on the card, not the cycle.
+  const current = records.find(row => Date.parse(row.started_at) === now - new Date(now).getMinutes() * 60000 - new Date(now).getSeconds() * 1000);
+  assert.ok(current, "the fixture has a record in the hour in progress");
+  hourPair("parallel-hours", (item, at) => {
+    const card = core.evaluateMetrics(records, cardCoverQuery(item.query, recipeById("parallel-hours")).query, schemas.parallelism, { now: at }).metrics[0];
+    assert.ok(card.buckets.some(bucket => bucket.keys[0] === current.hour_of_day), "the card counts the hour in progress");
+    return Object.fromEntries(card.buckets.filter(bucket => bucket.value).map(bucket => [`${bucket.keys[0]}:00`, round(bucket.value)]));
+  }, { minutes: 30, inProgress: { [`${current.hour_of_day}:00`]: current.unit_hours } });
   weekdayPair("parallel-active-weekday");
   weekdayPair("parallel-weekday");
 });
 
-test("Parallelism counts only records built with the saved settings, and says which", () => {
-  const where = withTimeRange([], parallelism.time, undefined, undefined, "30d");
-  const total = catalog => core.evaluateMetrics(records, analysisQuery(catalog, { view: "compare", metric: "agent_hours", split: "none" }, where, { now }).query, schemas.parallelism, { now }).metrics[0].buckets[0].value;
-  const expected = served.filter(row => Date.parse(row.started_at) >= now - 30 * 86400000).reduce((sum, row) => sum + row.unit_hours, 0);
-  assert.ok(Math.abs(total(parallelism) - expected) < 1e-9);
-  assert.ok(total(parallelismAnalysisCatalog({ counting: "agent", gap: 15 })) < expected, "another setting's records are another population");
-  assert.match(parallelismAnalysisCatalog({ counting: "agent", gap: 15 }).request.note, /top-level sessions and join turns across gaps up to 15 minutes/);
+test("Parallelism names the settings its records carry, warns when they differ, and offers provider and model only under agent counting", () => {
+  assert.equal(parallelism.request, undefined, "no built-under filter: the service serves only the saved settings' records");
+  const workspace = { counting: "workspace", gap: 60 };
+  assert.deepEqual(parallelismSettingsNote([workspace], workspace), { note: "These records count workspaces and join turns across gaps up to 60 minutes: the saved Parallelism settings the service built them with." });
+  const stale = parallelismSettingsNote([{ counting: "agent", gap: 15 }], workspace);
+  assert.match(stale.note, /count top-level sessions and join turns across gaps up to 15 minutes/);
+  assert.match(stale.warning, /believes the saved settings count workspaces/);
+  assert.match(parallelismSettingsNote([], workspace).note, /No records in range/);
+  assert.equal(parallelismAnalysisCatalog("workspace").breakdowns.provider, undefined);
+  assert.equal(parallelismAnalysisCatalog("workspace").breakdowns.model, undefined);
+  assert.ok(parallelismAnalysisCatalog("agent").breakdowns.provider && parallelismAnalysisCatalog("agent").units.agent.breakdowns.provider);
+  assert.deepEqual(catalogProblems(parallelismAnalysisCatalog("workspace")), []);
+});
+
+test("Back to dashboard from a Parallelism query leaves counting and gap out of the dashboard's filters", () => {
+  const where = withTimeRange([], parallelism.time, undefined, undefined, "7d");
+  const dashboard = new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "parallelism", analyze_data: "parallelism", analyze_filters: core.encodeQuery({ ...core.EMPTY_QUERY, where }) });
+  const opened = new URLSearchParams(dashboard);
+  opened.set("analyze_mode", "query");
+  opened.set("analyze_opened", core.encodeQuery({ ...core.EMPTY_QUERY, where }));
+  const edited = [...where, { field: "counting", op: "=", value: "agent" }, { field: "gap_minutes", op: "=", value: "15" }, { field: "repository_name", op: "=", value: "pharos" }];
+  opened.set("q_parallelism", core.encodeQuery({ ...core.EMPTY_QUERY, where: edited }));
+  const back = core.decodeQueryStrict(new URL(usageDashboardReturn(opened).href, "http://localhost").searchParams.get("analyze_filters")).where;
+  assert.deepEqual(back, [...where, { field: "repository_name", op: "=", value: "pharos" }]);
+});
+
+test("old Human Words links: a work's combined value reads as its single values, as a filter or a selection", () => {
+  const where = [{ field: "sent_at", op: ">=", value: "-7d" }, { field: "channels", op: "=", value: "desktop, cli" }, { field: "machines", op: "!=", value: "laptop, remote" }];
+  assert.deepEqual(humanWhere(where), [where[0], { any: [{ field: "channel", op: "=", value: "desktop" }, { field: "channel", op: "=", value: "cli" }] },
+    { field: "machine_id", op: "!=", value: "laptop" }, { field: "machine_id", op: "!=", value: "remote" }]);
+  // A legend filter on providers ("claude,codex") selects both providers.
+  const link = readAnalysisLink(human, normalizeAnalysis(human, { scope: "all", split: "providers" }), humanWhere([{ any: [{ field: "providers", op: "=", value: "claude,codex" }, { field: "providers", op: "=", value: "tl1" }] }]));
+  assert.deepEqual(link.state.selection, { values: ["claude", "codex", "tl1"], excluded: false });
+  assert.deepEqual(link.where, []);
+  assert.match(human.breakdowns.provider.note, /work-level combined groups .* are now these per-message groups/);
+  // Executed over the messages, the filter keeps either channel.
+  const filtered = core.applyQuery(cardRows.writing_messages, { ...core.EMPTY_QUERY, where: humanWhere([{ field: "channels", op: "=", value: "desktop, cli" }]), limit: 1000 }, schemas.writing_messages, { now }).rows;
+  assert.equal(filtered.length, cardRows.writing_messages.length);
+});
+
+test("old Carbon chart links keep their chart: on the legacy page a link wins over the saved chart, and the dashboard reads it in its terms", () => {
+  const old = { metric: "energy", split: "tier", period: "days", hours: 6, days: 3, seriesLimit: 15, rollingPeriods: 7, display: "cumulative" };
+  const saved = { metric: "co2", split: "provider", period: "month" };
+  const linked = legacyCarbonChart(JSON.stringify(old), saved);
+  assert.deepEqual([linked.metric, linked.split, linked.period, linked.days, linked.rollingPeriods, linked.display], ["energy", "carbon_tier", "days", 3, 7, "cumulative"]);
+  assert.deepEqual([legacyCarbonChart(null, saved).metric, legacyCarbonChart(null, saved).split, legacyCarbonChart(null, saved).period], ["co2", "provider", "month"]);
+  assert.deepEqual([legacyCarbonChart("{broken", null).metric, legacyCarbonChart('{"metric":"nonsense"}', null).split], ["co2", "type"]);
+  // The dashboard fills its defaults, reads the link in its terms and marks it.
+  const read = readAnalysisLink(carbonCatalogShape, canonicalState(carbonCatalogShape, { metric: "co2", split: "type", period: "day", ...old }), []);
+  assert.deepEqual([read.state.metric, read.state.split, read.state.v], ["energy", "carbon_tier", analysisVersion]);
+  assert.ok(validAnalysisState(carbonCatalogShape, read.state));
 });
 
 test("every 2c card destination opens a valid, versioned state", () => {
@@ -342,4 +405,33 @@ test("every 2c card destination opens a valid, versioned state", () => {
     assert.equal(chart.v, analysisVersion, id);
     assert.ok(validAnalysisState(catalogs[topic], chart), id);
   }
+});
+
+// What the Human Words dashboard sends: a relative range stays relative, so
+// the same query serves every render and the service resolves its end at
+// each request, which is how Refresh renews it.
+test("Human Words queries keep a relative range relative; each request, Refresh included, resolves the end anew", async t => {
+  const where = [{ field: "sent_at", op: ">=", value: "-7d" }, { field: "sent_at", op: "<", value: "+0s" }];
+  for (const chart of [{ metric: "words", split: "kind" }, { metric: "typed", split: "none", period: "hour" }]) {
+    const first = trendQuery(human, chart, where, { now, zone }), later = trendQuery(human, chart, where, { now: now + 3600000, zone });
+    assert.deepEqual(first.query, later.query, `${JSON.stringify(chart)}: a render an hour later sends the same query`);
+    assert.ok(first.query.where.some(term => term.value === "-7d") && first.query.where.some(term => term.value === "+0s"));
+  }
+  // A smoothing window resolves the start against the clock; the end stays
+  // relative, and a later day's query starts a day later.
+  const smoothed = { metric: "typed", split: "repository_name", rollingPeriods: 7 };
+  const start = at => Date.parse(trendQuery(human, smoothed, where, { now: at, zone }).query.where.find(term => term.op === ">=").value);
+  assert.ok(trendQuery(human, smoothed, where, { now, zone }).query.where.some(term => term.op === "<" && term.value === "+0s"));
+  assert.equal(start(now + 86400000) - start(now), 86400000);
+  // The same request run again later counts what arrived since.
+  const query = trendQuery(human, { metric: "messages", split: "none" }, where, { now, zone }).query;
+  const arrived = { ...cardRows.writing_messages[2], id: "late", sent_at: new Date(now + 60000).toISOString(), ...{ day: new Date(now + 60000).toLocaleDateString("en-CA") } };
+  let clock = now;
+  const prior = global.fetch;
+  global.fetch = async (url, init = {}) => Response.json(answerQuery(String(url).split("?")[0].split("/").at(-1), init.body ? JSON.parse(init.body) : undefined, [...cardRows.writing_messages, arrived], schemas.writing_messages, { now: clock }));
+  t.after(() => { global.fetch = prior; });
+  const total = results => results[0].buckets.reduce((sum, bucket) => sum + bucket.value, 0);
+  const before = total(await runAnalysisQuery("writing_messages", schemas.writing_messages, query));
+  clock = now + 120000;
+  assert.equal(total(await runAnalysisQuery("writing_messages", schemas.writing_messages, query)), before + 1, "the refreshed request reaches the new end");
 });

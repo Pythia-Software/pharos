@@ -14,6 +14,7 @@ import { cardDashboardWhere, cardDetailsURL } from "../../../src/card-exploratio
 import { usageWorkspaceURL } from "../../../src/usage-workspace-model";
 import { timeBounds, usageTime, writingTime } from "../../../src/usage-chart";
 import { cardAnalysisJob, relatedCardDashboardURL, resolveCardAnalysisJob } from "../../../src/card-analysis-model";
+import { windowedChart } from "../../../src/card-windows";
 const clock = new Date(2026, 9, 13, 12);
 
 test("origin cards explore the metric and breakdown promised by their covers", t => {
@@ -129,7 +130,8 @@ test("dashboard card windows and retained cover queries stay aligned after colle
       const spec = queryFromURL(url.href), filters = readDashboardQuery(url.searchParams, core.EMPTY_QUERY);
       assert.deepEqual(filters.query.where, cardDashboardWhere(recipe.dataset, recipe.destination.dataset, (spec.query.grouping?.source ?? spec.query).where), `${recipe.id} @${days}`);
       assert.equal(filters.error, "");
-      assert.deepEqual(JSON.parse(url.searchParams.get("analyze_chart")), recipe.destination.chart);
+      // All time keeps the window the card was opened with (30 days).
+      assert.deepEqual(JSON.parse(url.searchParams.get("analyze_chart")), windowedChart(recipe.id, recipe.destination.chart, days ?? 30));
       assert.equal(spec.window?.days, days ?? undefined);
     }
   }
