@@ -3828,9 +3828,10 @@
         "chart": {
           "v": 2,
           "view": "compare",
-          "metric": "calls",
+          "metric": "truncation_rate",
           "split": "tool_name",
-          "period": "day"
+          "period": "day",
+          "minSamples": 10
         },
         "dataset": "tools",
         "detailAction": "Inspect truncated tool calls"
@@ -4208,7 +4209,7 @@
           "v": 2,
           "view": "compare",
           "metric": "calls",
-          "split": "mcp_server",
+          "split": "mcp_server_method",
           "period": "day"
         },
         "dataset": "tools",
@@ -18927,7 +18928,7 @@
       "days": [
         30
       ],
-      "action": "Explore Agent Time",
+      "action": "Explore Tools",
       "measures": [
         {
           "id": "mt_daily_mean",
@@ -18970,7 +18971,7 @@
         "detail": "Each point: recorded duration ÷ timed calls over its trailing seven complete local days. The norm is the mean of the prior 30 endpoints."
       },
       "destination": {
-        "topic": "time",
+        "topic": "tools",
         "chart": {
           "v": 2,
           "view": "trend",
@@ -18981,7 +18982,7 @@
           "completePeriods": true,
           "norm": true
         },
-        "dataset": "tool_calls",
+        "dataset": "tools",
         "detailAction": "Inspect daily call times"
       }
     },

@@ -1,4 +1,4 @@
-import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, type QueryState } from "@pythia-software/query-table-core";
+import { EMPTY_QUERY, decodeQueryStrict, encodeQuery, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
 
 // Analyze owns guided dashboards and the full query surfaces. Explicit older
 // analysis URLs remain available while their specialized controls migrate.
@@ -34,6 +34,21 @@ export const usageTopicDatasets: Record<UsageTopic, UsageDataset> = {
   tokens: "usage", human: "writing", time: "tool_calls", parallelism: "parallelism", tools: "tools", mcp: "mcp_calls", skills: "skill_usages", carbon: "usage",
 };
 
+// The dashboard's own filters, with the user's edits to the query a dashboard
+// link opened. A link adds its own terms (a legend selection, a measure's
+// population, the dataset's day predicates); those are not the dashboard's
+// filters. So the way back keeps the dashboard's filters, less the opened
+// terms the user removed, plus the terms the user added. Without a record of
+// the opened query (older links), the query's own filters are the filters.
+function returnedWhere(current: URLSearchParams, edited: WhereTerm[]): WhereTerm[] {
+  let opened: QueryState | null = null, dashboard: QueryState | null = null;
+  try { opened = decodeQueryStrict(current.get("analyze_opened") ?? ""); dashboard = decodeQueryStrict(current.get("analyze_filters") ?? ""); } catch { return edited; }
+  if (!opened || !dashboard) return edited;
+  const key = (term: WhereTerm) => JSON.stringify(term);
+  const before = new Set(opened.where.map(key)), after = new Set(edited.map(key));
+  return [...dashboard.where.filter(term => !before.has(key(term)) || after.has(key(term))), ...edited.filter(term => !before.has(key(term)))];
+}
+
 export function usageDashboardReturn(current: URLSearchParams) {
   const state = readUsageWorkspace(current), dataset = usageTopicDatasets[state.topic];
   const keywords = current.has(`record_${state.dataset}`);
@@ -44,7 +59,7 @@ export function usageDashboardReturn(current: URLSearchParams) {
   try { query = decodeQueryStrict(current.get(`q_${state.dataset}`) ?? "") ?? undefined; } catch { /* Explicitly reset an unavailable query. */ }
   const compatible = dataset === state.dataset && state.topic !== "parallelism" && Boolean(query);
   const params = new URLSearchParams(current);
-  params.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where: compatible ? (query!.grouping?.source ?? query!).where : [] }));
+  params.set("analyze_filters", encodeQuery({ ...EMPTY_QUERY, where: compatible ? returnedWhere(current, (query!.grouping?.source ?? query!).where) : [] }));
   return {
     href: usageWorkspaceURL({ mode: "dashboards", dataset, search: false }, params),
     label: !compatible ? "Back to dashboard (resets query filters)" : keywords ? "Back to dashboard (resets keyword filters)" : query!.grouping && query!.where.length ? "Back to dashboard (resets group filters)" : "Back to dashboard",
@@ -93,9 +108,13 @@ export function usageWorkspaceURL(change: { mode?: UsageMode | "search"; search?
   if (next.mode === "search" || next.search) params.set("analyze_search", "1"); else params.delete("analyze_search");
   params.set("analyze_data", next.dataset); params.set("analyze_topic", next.topic); params.set("analyze_days", String(next.days));
   if (next.report) params.set("analyze_report", next.report); else params.delete("analyze_report");
+  // The query a dashboard link opened, so the way back can tell the user's
+  // edits from what the link added (usageDashboardReturn).
+  if (mode === "dashboards" || next.dataset !== previous.dataset) params.delete("analyze_opened");
   if (mode !== "dashboards") {
     const query = change.query;
     if (query) params.set(`q_${next.dataset}`, encodeQuery({ ...query, fitToScreen: true }));
+    if (query && current.has("analyze_filters")) params.set("analyze_opened", encodeQuery({ ...EMPTY_QUERY, where: (query.grouping?.source ?? query).where }));
     else if (next.dataset === previous.dataset && current.has(`q_${next.dataset}`)) params.set(`q_${next.dataset}`, current.get(`q_${next.dataset}`)!);
     if (current.get("window_dataset") === next.dataset) for (const [key, value] of current) if (key.startsWith("window_")) params.set(key, value);
   }

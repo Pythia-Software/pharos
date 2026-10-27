@@ -8,15 +8,21 @@ import { isOriginDimension, originLabel } from "./origin-dimensions";
 export function toolMetricPresentation(metric: MetricResult | undefined, groupBy: string[], labels: Record<string, (value: string) => string> = {}) {
   const source = new Map<string, MetricResult["buckets"][number]>();
   if (!metric) return { metric, sourceBucket: (bucket: MetricResult["buckets"][number]) => bucket };
+  // A label shared by two values (device names, or Agent Time's command:foo
+  // and tool:foo) names its value too, so every group stays distinct and
+  // opens its own records.
   const names = groupBy.map(field => {
     const names = new Map<unknown, string>();
-    if (labels[field]) { for (const bucket of metric.buckets) { const value = bucket.keys[groupBy.indexOf(field)]; if (value !== null && value !== undefined && value !== "") names.set(value, labels[field](String(value))); } return names; }
-    if (!isOriginDimension(field)) return names;
+    const custom = labels[field] as ((value: string) => string) | undefined, origin = isOriginDimension(field);
+    if (!custom && !origin) return names;
+    const name = (value: unknown) => custom ? value === null || value === undefined || value === "" ? undefined : custom(String(value)) : originLabel(field, value);
+    const shown = (value: unknown) => name(value) ?? value;
     const values = [...new Set(metric.buckets.map(bucket => bucket.keys[groupBy.indexOf(field)]))];
     for (const value of values) {
-      const label = originLabel(field, value);
-      const repeated = values.some(other => other !== value && originLabel(field, other) === label);
-      names.set(value, repeated ? `${label} (${String(value ?? "unknown").slice(-8)})` : label);
+      const label = name(value);
+      if (label === undefined) continue;
+      const repeated = values.some(other => other !== value && shown(other) === label);
+      names.set(value, repeated ? `${label} (${custom !== undefined ? String(value) : String(value ?? "unknown").slice(-8)})` : label);
     }
     return names;
   });

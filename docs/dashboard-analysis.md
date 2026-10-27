@@ -233,11 +233,16 @@ for a missing one), a combined one's are JSON arrays of them.
   the executed query.
 - **The trend** ranks and draws the selected series (never folded into
   Other), divides shares by every series, and keeps every series in the key.
-- **Compare, Distribution and Scatter** (`selectGroups`). A share draws the
-  selected groups as slices and every other group as Other. Bars, boxes and
-  points draw only the selected groups; a scatter matches a point by its
-  breakdown keys. A selected group beyond the 1,000 returned groups is
-  counted in Other or not drawn, and the note says how many.
+- **Compare, Distribution and Scatter.** A share keeps every group in its
+  query and draws the selected groups as slices and every other group as
+  Other (`selectGroups`); a selected group beyond the 1,000 returned groups
+  is counted in Other, and the note says how many. Outside shares there is no
+  denominator to protect, so a single-field selection filters the executed
+  query: a record filter on the breakdown's field, or for units a group
+  filter on the unit's field. No group or point limit can then crowd a
+  selected group out (a scatter draws its 2,000 largest points among the
+  selected groups). A combined selection has no single filter, so bars,
+  boxes and points of a combined breakdown still select after the query.
 - **Units.** A selection is of a breakdown group, so it maps through the
   unit's fields: `provider = codex` selects the conversations (or delegated
   runs) whose top-level provider is codex, never a population filter on
@@ -263,8 +268,21 @@ reads every link through `readAnalysisLink`:
   such values, or their exclusion) becomes the selection and leaves `where`.
   Tools and Pharos MCP had no legend, so their old filters were always
   populations and stay so.
-- Either way the result is marked, and a migrated link is rewritten in place,
-  so it is never read twice.
+- A card's link (one with `card_query`) never held a legend selection, so
+  its filters stay the population even without the marker.
+- Either way the result is marked. A migrated link is rewritten when the
+  dashboard opens it; one restored by a route change is written whole with
+  the dashboard's next change, never by a route event that may belong to
+  another page.
+- **The way back.** "View supporting query" records the query it opened
+  (`analyze_opened`), and "Back to dashboard" returns the dashboard's own
+  filters, less what the user removed from the opened query, plus what they
+  added. What the link itself added (a selection, a measure's population,
+  translated days) never becomes a dashboard filter, so a codex selection
+  shown as shares comes back as the same selection.
+- Collected cards compare their dashboard charts as drawn
+  (`normalizedDashboardChart`), so re-collecting a card saved before the
+  marker finds the saved one.
 - Card destinations (`card-destinations.ts`) write versioned states, so a
   card's own filter stays its population. The legacy Usage page keeps its
   chart in preferences; its legend now writes the chart's selection, and a
@@ -464,8 +482,17 @@ around it. Its default view is the one it always opened on.
   MCP server and MCP method imply their populations. A rollup row is no
   observation a person cares about, so there are no units or per-record
   values: Distribution and Scatter are disabled with that reason, and a
-  minimum counts calls (`samples`). The rollup's text `day` makes it the one
-  catalog with `executable` bounds. Record-level analysis of individual calls
+  minimum counts calls (`samples`); a bar opens the group's daily summaries,
+  and the note says the minimum cannot count the groups it hides. The
+  rollup's text `day` makes it the one catalog with `executable` bounds.
+  - **Whole days.** The rollup records whole local days, so a range snaps to
+    whole days: one starting mid-day counts that whole day, and the note
+    (`rangeNote`) says so. A card whose window starts mid-day therefore
+    counts a little more on the dashboard than on the card; parity holds for
+    windows starting at a local midnight, and the test checks the
+    difference for one that starts at noon. Phase 3 (record-level Tools on
+    `tool_calls`) decides whether exact-window Tools cards move to a
+    record-level catalog. Record-level analysis of individual calls
   (phase 3) would be another catalog over `tool_calls`; this one declares its
   dataset, so the seam is a second catalog, not a change to this one.
   - **Trend ranking.** The old trend drew the six groups with the most calls
@@ -495,14 +522,23 @@ around it. Its default view is the one it always opened on.
   delegated subagents are their own), split by what is constant within it.
   A tool in a conversation (`[conversation_id, tool_name]`) is the
   observation of the per-conversation failure cards. `AgentTimeSummary`
-  follows every view.
+  follows every view. Activities read as Agent Time names them; two that
+  share a name (`command:Edit` and `tool:Edit`) also show their value, stay
+  separate groups and series keyed by the raw value, and open their own
+  records.
 - **Skills** (`record-analysis-catalogs.ts`). Evidence records, retained body
   volume (`content_bytes` over its population of known positive sizes, which
   replaces the old `IF` expression and keeps drill-downs exact), distinct
   conversations reached and distinct file-load calls, by the old splits plus
   skill + evidence type. Units are conversations and skill paths in a
   conversation (`[conversation_id, skill_path]`, with the skill as its
-  breakdown), the observation of `skill-load-distribution`.
+  breakdown), the observation of `skill-load-distribution`. Body volume
+  counts only evidence with a known positive size; a scatter pairing it with
+  another measure counts that measure over the same evidence, and its note
+  says so.
+
+Every engine dashboard has a Refresh action, which reruns its queries (Pharos
+MCP's own requests arrive while it is open).
 
 ## Mapping a card to a dashboard state
 
@@ -568,17 +604,19 @@ from them, Pharos requests and skill evidence
 | `tool-failures`, `tool-call-share` | Tools, compare, share, failures or calls by tool |
 | `tool-failure-rates` | Tools, compare, failure rate by tool, minimum 10 calls (see below) |
 | `machine-call-trend` | Tools, trend, calls, 7-day mean, whole periods, norm (`buildCardTrend`) |
+| `machine-latency-trend` | Tools, trend, mean timed call duration, 7-day pooled, whole periods, norm (`buildCardTrend` over the same rollup; Agent Time's pooled mean over individual calls agrees) |
+| `truncated-outputs` | Tools, compare, truncation rate by tool, minimum 10 calls |
+| `mcp-methods` | Tools, compare, calls by MCP server + method, which implies the card's method population |
 | `mcp-response-size`, `pharos-mcp-durations` | Pharos MCP, distribution of bytes or request time by tool, minimum 3 |
 | `pharos-mcp-query-sources` | Pharos MCP, compare, calls by requested source |
 | `mcp-call-trend` | Pharos MCP, trend, calls by tool, 7-day rolling mean |
-| `machine-time` | Agent Time, trend, tool time by activity, 6 series (the cover's limit) |
+| `machine-time` | Agent Time, trend, tool time by activity, 6 series (the cover's limit); compared by raw activity with the card's daily totals, since the card's preview names series by label |
 | `machine-activities` | Agent Time, compare, share, tool time by activity |
 | `large-outputs` | Agent Time, compare, share, result tokens by tool + result-size source |
 | `duration-distribution` | Agent Time, distribution, time by command + timing source, minimum 3 |
 | `output-distribution` | Agent Time, distribution, result tokens by tool + result-size source, minimum 3 |
 | `conversation-error-counts` | Agent Time, distribution, tool-in-conversation unit, calls by tool, minimum 3 |
 | `tool-calls-per-conversation`, `research-conversation-searches` | Agent Time, distribution, conversation unit, calls by repository, minimum 3 |
-| `machine-latency-trend` | Agent Time, trend, mean call duration, 7-day pooled, whole periods, norm (`buildCardTrend` over the rollup) |
 | `skill-evidence` | Skills, compare, conversations reached by skill |
 | `skill-body-sizes` | Skills, distribution, body by skill + evidence type, minimum 3 |
 | `skill-load-distribution` | Skills, distribution, skill-path unit, distinct load calls by skill, minimum 3 |
@@ -597,9 +635,9 @@ failures at 0%, which draw nothing.
 | `model-conversation-reach` | A share of group incidences (phase 4). |
 | Human Words, Carbon and Parallelism cards | Their catalogs (2c). |
 
-`truncated-outputs`, `mcp-methods` and `machine-operations` now have the
-measure or breakdown they need (truncation rate, MCP method, operation) but
-no parity test yet; phase 4 maps and checks them with the rest.
+`machine-operations` has the breakdown it needs (operation) but no parity
+test yet; phase 4 maps and checks it with the rest. The Tools cards above
+match for windows starting at a local midnight; see Whole days.
 
 ## Limitations
 
@@ -659,9 +697,17 @@ The Query Table limitations are requested in
      each need a catalog, `legacySlices` for their legends, a `legacy`
      mapping for their older shapes (Human Words' `scope`, Carbon's `co2`
      and `tier`), and `timestamp` cycle keys for their weekday cards, whose
-     `weekdayMetric` already reads keys through `cycleFrame`. Writing is
-     not a Query Table dataset today, so its catalog needs a runner beside
-     `runAnalysisQuery`.
+     `weekdayMetric` already reads keys through `cycleFrame`.
+     - **Decision for 2c: one day boundary.** On Pharos MCP, Agent Time and
+       Skills, the cycle groups timestamps by date in the viewer's zone,
+       while Over time groups by the recorded `day`, the recording Mac's
+       date. A traveller's days can differ between the two views. Human
+       Words needs timestamp trend periods anyway; 2c decides one rule
+       for both.
+     - **Human Words needs a request seam.** Its writing-series endpoint is
+       not a Query Table query, so `executable` (a rewrite of `where`) is not
+       enough: its catalog needs a catalog-level request function beside
+       `runAnalysisQuery`.
    - **What 2b inherited** from 2a: a new catalog declares its
      measures (additive, ratio or distinct), breakdowns with any `order`,
      `values` and `empty` labels, component breakdowns, `periods`, and a

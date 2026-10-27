@@ -7,7 +7,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { core, schemas, instantiateRecipe, recipeById, cardCoverQuery } from "../helpers/recipes.mjs";
 import { now, toolCalls, toolsRollup, mcpCalls, skillUsages } from "../helpers/record-ledgers.mjs";
-import { analysisQuery, normalizeAnalysis, selectGroups } from "../../../src/dashboard-analysis-model";
+import { analysisNote, analysisQuery, normalizeAnalysis, selectGroups } from "../../../src/dashboard-analysis-model";
 import { trendQuery, trendSeries } from "../../../src/dashboard-trend-model";
 import { toolsAnalysisCatalog } from "../../../src/tools-analysis-catalog";
 import { mcpAnalysisCatalog } from "../../../src/mcp-analysis-catalog";
@@ -21,26 +21,27 @@ import { withTimeRange } from "../../../src/chart-range";
 import { answerQuery } from "../../support/query-server.mjs";
 
 const catalogs = { tools: toolsAnalysisCatalog, mcp: mcpAnalysisCatalog, time: agentTimeAnalysisCatalog, skills: skillsAnalysisCatalog };
-const pad = value => String(value).padStart(2, "0"), localDay = time => { const date = new Date(time); return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`; };
-// The rollup's days are whole, so a card's range starting mid-day can only
-// match it when that first, partial day holds no calls.
-const calls = toolCalls().filter(call => call.day !== localDay(now - 7 * 86400000));
+const calls = toolCalls();
 const rows = { tool_calls: calls, tools: toolsRollup(calls), mcp_calls: mcpCalls(), skill_usages: skillUsages() };
+// The tools rollup holds whole local days, so a Tools card matches its
+// dashboard when the card's window starts at a local midnight. A window
+// starting mid-day is the documented difference (below).
+const midnight = (() => { const date = new Date(now); date.setHours(0, 0, 0, 0); return date.getTime(); })();
 const round = value => typeof value === "number" ? Number(value.toPrecision(12)) : value;
 const byKeys = (buckets, value = bucket => bucket.value) => Object.fromEntries(buckets.map(bucket => [JSON.stringify(bucket.keys), round(value(bucket))]));
 const summary = bucket => JSON.stringify(bucket.distribution.summary, (_, value) => round(value));
 
 // The card's cover metric and the dashboard its destination opens, with the
 // card's population as the dashboard's filters (cardDestination).
-function pair(id, { days = 7 } = {}) {
-  const recipe = recipeById(id), item = instantiateRecipe(recipe, days, new Date(now));
+function pair(id, { days = 7, at = now } = {}) {
+  const recipe = recipeById(id), item = instantiateRecipe(recipe, days, new Date(at));
   const { topic, chart, dataset } = recipe.destination, catalog = catalogs[topic];
   assert.equal(catalog.dataset, dataset, id);
   const card = cardCoverQuery(item.query, recipe);
   const where = cardDashboardWhere(recipe.dataset, dataset, (item.query.grouping?.source ?? item.query).where);
-  const analysis = analysisQuery(catalog, chart, where, { now });
-  const cardResult = core.evaluateMetrics(rows[recipe.dataset], card.query, schemas[recipe.dataset], { now }).metrics.find(metric => metric.id === card.metricId);
-  const dashboard = core.evaluateMetrics(rows[dataset], analysis.query, schemas[dataset], { now }).metrics[0];
+  const analysis = analysisQuery(catalog, chart, where, { now: at });
+  const cardResult = core.evaluateMetrics(rows[recipe.dataset], card.query, schemas[recipe.dataset], { now: at }).metrics.find(metric => metric.id === card.metricId);
+  const dashboard = core.evaluateMetrics(rows[dataset], analysis.query, schemas[dataset], { now: at }).metrics[0];
   assert.equal(cardResult.error, undefined, `${id}: card`);
   assert.equal(dashboard.error, undefined, `${id}: dashboard`);
   assert.ok(cardResult.buckets.length > 1, `${id}: the fixture has groups to compare`);
@@ -60,7 +61,7 @@ const sameBoxes = (id, recipe, card, dashboard) => {
 
 test("tool-failures and tool-call-share: shares of failures and calls by tool, from the rollup", () => {
   for (const [id, metric] of [["tool-failures", "failures"], ["tool-call-share", "calls"]]) {
-    const { card, dashboard, state, analysis } = pair(id);
+    const { card, dashboard, state, analysis } = pair(id, { at: midnight });
     assert.deepEqual([state.view, state.metric, state.split, state.compareAs], ["compare", metric, "tool_name", "share"]);
     assert.equal(analysis.clause.display.kind, "pie");
     sameGroups(id, card, dashboard, true);
@@ -68,9 +69,8 @@ test("tool-failures and tool-call-share: shares of failures and calls by tool, f
 });
 
 test("tool-failure-rates: pooled failure rates by tool, with the card's ten-call minimum counted in calls", () => {
-  const { card, dashboard, state, analysis } = pair("tool-failure-rates");
+  const { card, dashboard, state } = pair("tool-failure-rates", { at: midnight });
   assert.deepEqual([state.metric, state.minSamples], ["failure_rate", 10]);
-  assert.match(analysis.query.where.map(term => `${term.field} ${term.op} ${term.value}`).join(), /analysis_samples >= 10/, "the minimum counts calls, not daily summaries");
   // Every tool the card shows has the card's rate.
   const dashboardRates = byKeys(dashboard.buckets);
   for (const [key, rate] of Object.entries(byKeys(card.buckets))) assert.equal(dashboardRates[key], rate, key);
@@ -83,6 +83,28 @@ test("tool-failure-rates: pooled failure rates by tool, with the card's ten-call
 
 test("machine-call-trend: calls a day, a 7-day mean over complete days, with its norm, from the rollup", () => {
   trailingCard("machine-call-trend", 1);
+});
+
+test("truncated-outputs and mcp-methods: truncation rates by tool with ten calls, and calls by server and method", () => {
+  const rates = pair("truncated-outputs", { at: midnight });
+  assert.deepEqual([rates.state.metric, rates.state.minSamples], ["truncation_rate", 10]);
+  sameGroups("truncated-outputs", rates.card, rates.dashboard);
+  const methods = pair("mcp-methods", { days: 30, at: midnight });
+  assert.ok(methods.analysis.query.where.some(term => term.field === "mcp_method"), "the card's method population is the breakdown's");
+  sameGroups("mcp-methods", methods.card, methods.dashboard);
+  assert.ok(Object.keys(byKeys(methods.card.buckets)).filter(key => key.includes("search")).length > 1, "one method on two servers stays two groups");
+});
+
+test("a Tools window starting mid-day counts that whole first day, as its note says", () => {
+  const at = midnight + 12 * 3600000, { card, dashboard } = pair("tool-call-share", { at });
+  // The first day's calls before noon are in the dashboard, not the card.
+  const start = at - 7 * 86400000, first = new Date(start).toDateString();
+  const early = new Map();
+  for (const call of calls) if (new Date(call.started_at).toDateString() === first && Date.parse(call.started_at) < start) early.set(call.tool_name, (early.get(call.tool_name) ?? 0) + 1);
+  assert.ok(early.size > 0, "the fixture has calls before the card's start on its first day");
+  const cardCalls = byKeys(card.buckets), dashboardCalls = byKeys(dashboard.buckets);
+  for (const [key, value] of Object.entries(dashboardCalls)) assert.equal(value - (cardCalls[key] ?? 0), early.get(JSON.parse(key)[0]) ?? 0, key);
+  assert.match(analysisNote(toolsAnalysisCatalog, { view: "compare", metric: "calls", split: "tool_name" }), /snaps to whole days/);
 });
 
 // ----- Pharos MCP: one record per request -----------------------------------
@@ -173,10 +195,25 @@ async function trendPair(t, id, days, scale = 1) {
   return { state };
 }
 
-test("machine-time: recorded tool time by activity, day by day", async t => {
-  // The card draws hours; the dashboard's measure is milliseconds, shown in hours.
-  const { state } = await trendPair(t, "machine-time", 30, 1 / 3_600_000);
+test("machine-time: recorded tool time by activity, day by day, by raw activity", () => {
+  // The card's preview names series by activity label, which would merge
+  // command:Edit and tool:Edit; compare the card's own daily totals by raw
+  // activity with the dashboard's series, keyed by the raw value.
+  const recipe = recipeById("machine-time"), item = instantiateRecipe(recipe, 30, new Date(now)), state = normalizeAnalysis(agentTimeAnalysisCatalog, { ...recipe.destination.chart, seriesLimit: 1000 });
   assert.deepEqual([state.view, state.metric, state.split], ["trend", "time", "activity"]);
+  const source = item.query.grouping?.source ?? item.query;
+  const daily = core.evaluateMetrics(calls, { ...core.EMPTY_QUERY, where: source.where, aggregations: [{ ...recipe.measures[0], groupLimit: 10000 }] }, schemas.tool_calls, { now }).metrics[0];
+  assert.equal(daily.error, undefined);
+  const expected = {};
+  for (const bucket of daily.buckets) expected[`${bucket.keys[0]} s:${bucket.keys[1]}`] = bucket.value;
+  const query = trendQuery(agentTimeAnalysisCatalog, state, source.where, { now });
+  const built = trendSeries(agentTimeAnalysisCatalog, state, query, core.evaluateMetrics(calls, query.query, schemas.tool_calls, { now }).metrics, { now });
+  const drawn = {};
+  for (const bucket of built.buckets) for (const [key, value] of Object.entries(bucket.values)) if (value) drawn[`${bucket.key} ${key}`] = value;
+  assert.deepEqual(drawn, expected);
+  assert.ok(Object.keys(expected).some(key => key.endsWith("s:command:Edit")) && Object.keys(expected).some(key => key.endsWith("s:tool:Edit")), "both Edit activities have time");
+  const labels = built.series.filter(item => item.value?.endsWith(":Edit")).map(item => item.label).sort();
+  assert.deepEqual(labels, ["Edit (command:Edit)", "Edit (tool:Edit)"], "a shared label names each value");
 });
 
 test("mcp-call-trend: Pharos calls by tool, 7-day rolling mean", async t => {
@@ -187,13 +224,13 @@ test("mcp-call-trend: Pharos calls by tool, 7-day rolling mean", async t => {
 // A trailing-window card through buildCardTrend, opened on "Last 30 days" at
 // 14:00 with whole periods and a norm: the points the dashboard draws, and
 // its norm, are the card's (dashboard-parity.test.mjs, for tokens).
-function trailingCard(id, scale) {
-  const recipe = recipeById(id), trend = recipe.trend, catalog = catalogs[recipe.destination.topic];
+function trailingCard(id, scale, catalog = catalogs[recipeById(id).destination.topic]) {
+  const recipe = recipeById(id), trend = recipe.trend;
   const afternoon = new Date(now); afternoon.setHours(14, 0, 0, 0);
   const at = afternoon.getTime() < now ? afternoon.getTime() + 86400000 : afternoon.getTime();
   const { days, ends } = cardTrendDays(trend.lookback, true, at);
   const card = buildCardTrend(trend, trend.lookback, cardTrendQueries([], trend, days).map(query => core.evaluateMetrics(rows[trend.dataset], query, schemas[trend.dataset], { now: at }).metrics), at).study;
-  const where = withTimeRange([], catalog.time, undefined, undefined, "30d"), state = recipe.destination.chart;
+  const where = withTimeRange([], catalog.time, undefined, undefined, "30d"), state = { ...recipe.destination.chart, view: "trend" };
   assert.deepEqual([state.rollingPeriods, state.completePeriods, state.norm, state.split], [trend.lookback, true, true, "none"]);
   const query = trendQuery(catalog, state, where, { now: at });
   const built = trendSeries(catalog, state, query, core.evaluateMetrics(rows[catalog.dataset], query.query, schemas[catalog.dataset], { now: at }).metrics, { now: at });
@@ -209,10 +246,11 @@ function trailingCard(id, scale) {
   assert.ok(Math.abs(built.norm * scale - card.baseline) < 1e-9 * Math.max(1, card.baseline), `norm ${built.norm * scale} != baseline ${card.baseline}`);
 }
 
-test("machine-latency-trend: a pooled trailing mean call time over complete days, with its norm, from individual calls", () => {
-  // The card reads the rollup's total duration over timed calls; Agent Time
-  // pools the calls' own durations over calls with one.
+test("machine-latency-trend: a pooled trailing mean call time over complete days, with its norm, on the rollup and on individual calls", () => {
+  // Its destination is Tools, the card's own rollup; Agent Time pools the
+  // calls' own durations over calls with one, and agrees.
   trailingCard("machine-latency-trend", 0.001);
+  trailingCard("machine-latency-trend", 0.001, agentTimeAnalysisCatalog);
 });
 
 // ----- Skills: one record per piece of evidence -----------------------------

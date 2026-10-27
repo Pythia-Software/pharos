@@ -170,6 +170,9 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
     const limit = Math.min(bounds.to?.getTime() ?? now, now);
     const drawnKeys = new Set(weighted.filter(bucket => !bucket.history && (!state.completePeriods || (() => { const next = new Date(bucket.date); nextPeriod(next, state.period, count); return next.getTime() <= limit; })())).map(bucket => bucket.key));
     series = foldSeries(weights.filter(([key]) => drawnKeys.has(key)), byKey(weighted), seriesLabel, breakdown.order, picked, state.seriesLimit, breakdown.fields.length === 1 ? breakdown.fields[0] : state.split);
+    // Series are keyed by their raw values; a label two of them share (Agent
+    // Time's command:foo and tool:foo) names the value too.
+    series = series.map(item => item.value !== undefined && series.some(other => other !== item && other.label === item.label) ? { ...item, label: `${item.label} (${item.value})` } : item);
     const shown = new Set(series.flatMap(item => item.value === undefined ? [] : [item.value]));
     const assign = (entries: Rows, buckets: ChartBucket[]) => {
       const targets = byKey(buckets);
@@ -250,6 +253,7 @@ export function trendNote(catalog: AnalysisCatalog, input: AnalysisState): strin
   const rolling = state.display !== "cumulative" && state.rollingPeriods > 1, parts = [measure.note];
   if (catalog.components?.[state.split]) parts.push(`${catalog.components[state.split].label} splits each ${unit}'s ${measure.label.toLowerCase()} into its parts.`);
   if (catalog.breakdowns[state.split]?.note) parts.push(catalog.breakdowns[state.split].note!);
+  if (catalog.rangeNote) parts.push(catalog.rangeNote);
   const part = (index: 0 | 1) => { const { op, field } = ratioPart(measure.ratio![index]); return `${op === "sum" ? "summed" : "the count of"} ${field.replaceAll("_", " ")}`; };
   if (kind === "ratio") parts.push(`Each point pools its records: ${part(0)} divided by ${part(1)}, never an average of ratios.`);
   if (kind === "count") parts.push(`Distinct ${measure.unit} are counted in each ${unit}.${state.split === noSplit ? "" : ` One active in several groups counts in each, so groups do not add up, and Other is not drawn.`}`);

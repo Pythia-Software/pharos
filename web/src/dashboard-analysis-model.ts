@@ -90,6 +90,9 @@ export type AnalysisCatalog = {
   // execute, for every query and drill-down that leaves the dashboard (the
   // tools rollup's days are text). The bounds stay as they are for drawing.
   executable?: (where: WhereTerm[], now: number) => WhereTerm[];
+  // What the executed range covers, when it differs from the range shown
+  // (the tools rollup counts whole days).
+  rangeNote?: string;
   scatter: [string, string];
 };
 
@@ -118,7 +121,10 @@ export const sampleThresholds = [0, 2, 3, 5, 10, 20, 50, 100];
 const analysisDefaults = { unit: records, reduce: "total", compareAs: "bars", minSamples: 0, scaleY: "linear", cycle: "weekday",
   period: "day", hours: 6, days: 3, rollingPeriods: 0, rollingOp: "mean", display: "interval", share: false, completePeriods: false, norm: false, normPeriods: 30, seriesLimit: 15 } as const;
 // Groups drawn are fixed per display. The trend's seriesLimit is its own.
-const maxGroups = 1000, maxPoints = 2000, barsShown = 12, slicesShown = 8;
+const barsShown = 12, slicesShown = 8;
+// The groups a view fetches, and the points a scatter draws; a test lowers
+// them rather than inserting thousands of rows.
+export const analysisLimits = { groups: 1000, points: 2000 };
 
 const oneOf = <T,>(value: unknown, options: readonly T[]): value is T => options.includes(value as T);
 const has = (record: object, key: unknown) => typeof key === "string" && Object.hasOwn(record, key);
@@ -237,10 +243,12 @@ export const canonicalState = <T extends AnalysisState>(catalog: AnalysisCatalog
 // filter on the breakdown's single field: that filter becomes the state's
 // selection, and the rest of where stays the population. Either way the
 // result is marked, so it is read the same way again.
-export function readAnalysisLink<T extends AnalysisState>(catalog: AnalysisCatalog, state: T, where: WhereTerm[]): { state: T; where: WhereTerm[] } {
+// A card's link (card: true, from card_query) never held a legend
+// selection: cards always wrote their filters as the population.
+export function readAnalysisLink<T extends AnalysisState>(catalog: AnalysisCatalog, state: T, where: WhereTerm[], { card = false }: { card?: boolean } = {}): { state: T; where: WhereTerm[] } {
   if (state.v === analysisVersion) return { state, where };
   const fields = catalog.breakdowns[canonicalState(catalog, state).split]?.fields ?? [], field = fields[0];
-  if (!catalog.legacySlices || fields.length !== 1 || !where.some(term => isSliceTerm(term, field))) return { state: { ...state, v: analysisVersion }, where };
+  if (card || !catalog.legacySlices || fields.length !== 1 || !where.some(term => isSliceTerm(term, field))) return { state: { ...state, v: analysisVersion }, where };
   const slice = readSlice(where, field);
   return { state: { ...state, v: analysisVersion, selection: { values: slice.values.map(value => value ?? ""), excluded: slice.excluded } }, where: where.filter(term => !isSliceTerm(term, field)) };
 }
@@ -398,6 +406,9 @@ export type AnalysisQuery = {
   // What "View supporting query" opens: the same population and grouping.
   supporting: QueryState;
   grouped: boolean;
+  // A query grouped only to apply a minimum counted in a measure (samples):
+  // a bucket opens its group's own records, not the one grouped row.
+  recordsGrouped?: boolean;
   // A share is of every group in the population the filters define. A
   // legend selection (the state's selection) only chooses which groups are
   // drawn, so it never enters the executed query and never changes a
@@ -450,6 +461,10 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
   // record filter on the breakdown's field, or a group filter on the unit's.
   const chosenGroups = (field: string): WhereTerm[] => selection && groupFields.length === 1 ? withSlice([], field, { values: selection.values.map(value => value || null), excluded: selection.excluded }) : [];
   const supportingWhere = unit ? sourceWhere : [...sourceWhere, ...chosenGroups(recordFields[0])];
+  // Outside shares there is no denominator to protect, so a single-field
+  // selection filters the executed query: no group or point limit can crowd
+  // a selected group out. A share keeps every group and selects afterwards.
+  const filtered = Boolean(selection && !shares && groupFields.length === 1);
   // A threshold counts what is plotted: a distribution drops missing values
   // before grouping (records) or as a group filter (units).
   const minCount = thresholded(state) ? { minCount: state.minSamples } : {};
@@ -478,20 +493,20 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
     // calls, not its rollup rows); the minimum is a group filter on them.
     const keys = breakdown!.fields, samples = catalog.measures[catalog.samples];
     const columns = [summary("analysis_value", measure), summary("analysis_samples", samples), ...ratioParts(measure)];
-    const clause: AggregationClause = { id: "analysis", op: "sum", field: "analysis_value", groupBy: keys, groupLimit: maxGroups, sort: [{ key: "value", dir: "desc" }], label: valueLabel, display: compareDisplay(true) };
-    const query: QueryState = { ...groupedRecords(run(sourceWhere), keys, columns, [{ field: "analysis_samples", op: ">=", value: String(state.minSamples) }], "analysis_value"), aggregations: [clause] };
+    const clause: AggregationClause = { id: "analysis", op: "sum", field: "analysis_value", groupBy: keys, groupLimit: analysisLimits.groups, sort: [{ key: "value", dir: "desc" }], label: valueLabel, display: compareDisplay(true) };
+    const query: QueryState = { ...groupedRecords(run(sourceWhere), keys, columns, [{ field: "analysis_samples", op: ">=", value: String(state.minSamples) }, ...filtered ? chosenGroups(keys[0]) : []], "analysis_value"), aggregations: [clause] };
     const { aggregations: _, ...supporting } = query;
-    return { query, clause, grouped: true, selection, supporting: { ...supporting, where: [...supporting.where, ...chosenGroups(keys[0])] } };
+    return { query, clause, grouped: true, recordsGrouped: true, selection, supporting: { ...supporting, where: [...supporting.where, ...filtered ? [] : chosenGroups(keys[0])] } };
   }
 
   if (!unit) {
     const groupBy = breakdown?.fields ?? [];
     const valued: WhereTerm[] = state.view === "distribution" ? [{ field: measure.value!, op: "is_not_null", value: "" }] : [];
     const clause: AggregationClause = state.view === "distribution"
-      ? { id: "analysis", op: "count", groupBy, groupLimit: maxGroups, sort: [{ key: "samples", dir: "desc" }], label: measure.label, ...minCount,
+      ? { id: "analysis", op: "count", groupBy, groupLimit: analysisLimits.groups, sort: [{ key: "samples", dir: "desc" }], label: measure.label, ...minCount,
         distribution: breakdown ? { kind: "box", input: `[${measure.value}]`, whiskers: "tukey" } : { kind: "histogram", input: `[${measure.value}]` }, display: distributionDisplay(Boolean(breakdown)) }
-      : { id: "analysis", ...aggregate(measure), groupBy, groupLimit: maxGroups, sort: [{ key: "value", dir: "desc" }], label: valueLabel, ...minCount, display: compareDisplay(Boolean(breakdown)) };
-    const query = { ...EMPTY_QUERY, where: run([...sourceWhere, ...valued]), aggregations: [clause] };
+      : { id: "analysis", ...aggregate(measure), groupBy, groupLimit: analysisLimits.groups, sort: [{ key: "value", dir: "desc" }], label: valueLabel, ...minCount, display: compareDisplay(Boolean(breakdown)) };
+    const query = { ...EMPTY_QUERY, where: run([...filtered ? supportingWhere : sourceWhere, ...valued]), aggregations: [clause] };
     const summaries = [summary("analysis_value", measure), ...ratioParts(measure), { id: "analysis_records", op: "count" as const, label: catalog.records.plural }];
     if (state.view === "distribution") summaries.splice(1, 0, { id: "analysis_median", op: "formula", expression: `MEDIAN([${measure.value}])`, label: `Median ${measure.label.toLowerCase()} per ${catalog.records.label.toLowerCase()}` });
     const having: WhereTerm[] = "minCount" in minCount ? [{ field: "analysis_records", op: ">=", value: String(state.minSamples) }] : [];
@@ -510,20 +525,20 @@ export function analysisQuery(catalog: AnalysisCatalog, input: AnalysisState, in
     count: { op: "count" }, median: { op: "count", field: "analysis_value", expression: "MEDIAN([analysis_value])" },
   };
   const clause: AggregationClause = state.view === "scatter"
-    ? { id: "analysis", op: "max", field: "analysis_value", expression: "MAX([analysis_value])", expressionY: "MAX([analysis_y])", groupBy: keys, groupLimit: maxPoints, sort: [{ key: "value", dir: "desc" }], label: unit.plural,
-      display: { kind: "scatter", maxGroups: maxPoints, xLabel: measure.label, yLabel: measureY.label, xScale: log(state.scale), yScale: log(state.scaleY), xFormat: measure.format, yFormat: measureY.format, legendPosition: unitSplit ? "right" : "none" } }
+    ? { id: "analysis", op: "max", field: "analysis_value", expression: "MAX([analysis_value])", expressionY: "MAX([analysis_y])", groupBy: keys, groupLimit: analysisLimits.points, sort: [{ key: "value", dir: "desc" }], label: unit.plural,
+      display: { kind: "scatter", maxGroups: analysisLimits.points, xLabel: measure.label, yLabel: measureY.label, xScale: log(state.scale), yScale: log(state.scaleY), xFormat: measure.format, yFormat: measureY.format, legendPosition: unitSplit ? "right" : "none" } }
     : state.view === "distribution"
-      ? { id: "analysis", op: "count", field: "analysis_value", ...unitSplit ? { expression: "MEDIAN([analysis_value])" } : {}, groupBy, groupLimit: maxGroups, sort: [{ key: "samples", dir: "desc" }], label: `${measure.label} per ${unit.label.toLowerCase()}`, ...minCount,
+      ? { id: "analysis", op: "count", field: "analysis_value", ...unitSplit ? { expression: "MEDIAN([analysis_value])" } : {}, groupBy, groupLimit: analysisLimits.groups, sort: [{ key: "samples", dir: "desc" }], label: `${measure.label} per ${unit.label.toLowerCase()}`, ...minCount,
         distribution: unitSplit ? { kind: "box", input: "[analysis_value]", whiskers: "tukey" } : { kind: "histogram", input: "[analysis_value]" }, display: distributionDisplay(Boolean(unitSplit)) }
-      : { id: "analysis", ...reduce[state.reduce], groupBy, groupLimit: maxGroups, sort: [{ key: "value", dir: "desc" }], label: valueLabel, ...minCount, display: compareDisplay(Boolean(unitSplit)) };
+      : { id: "analysis", ...reduce[state.reduce], groupBy, groupLimit: analysisLimits.groups, sort: [{ key: "value", dir: "desc" }], label: valueLabel, ...minCount, display: compareDisplay(Boolean(unitSplit)) };
   // Only units with a value are plotted, so only they meet a minimum. A
   // count of units counts every unit.
   const having: WhereTerm[] = state.view === "distribution" || state.view === "compare" && state.reduce !== "count" ? [{ field: "analysis_value", op: "is_not_null", value: "" }] : [];
   const query: QueryState = { ...EMPTY_QUERY, grouping: { source: { ...EMPTY_QUERY, where: run(sourceWhere) }, keys, summaries, representative: null },
-    select: [...keys, ...summaries.map(column => column.id)].map(field => ({ field })), where: having, orderBy: [{ field: "analysis_value", dir: "desc", nulls: "last" }, ...keys.map(field => ({ field, dir: "asc" as const }))], aggregations: [clause] };
+    select: [...keys, ...summaries.map(column => column.id)].map(field => ({ field })), where: [...having, ...filtered ? chosenGroups(groupFields[0]) : []], orderBy: [{ field: "analysis_value", dir: "desc", nulls: "last" }, ...keys.map(field => ({ field, dir: "asc" as const }))], aggregations: [clause] };
   // The supporting query lists the selected groups' units: a group filter
   // on the unit's own field, never a record filter on another one.
-  const groups = chosenGroups(groupFields[0]);
+  const groups = filtered ? [] : chosenGroups(groupFields[0]);
   return { query, clause, grouped: true, selection, supporting: groups.length ? { ...query, where: [...query.where, ...groups] } : query };
 }
 
@@ -561,6 +576,7 @@ function groupedRecords(where: WhereTerm[], keys: string[], summaries: SummaryCo
 export function analysisInspectQuery(analysis: AnalysisQuery, bucket: AggregationBucket, clause: AggregationClause, schema: FieldSchema, view: AnalysisView): QueryState | null {
   if (view === "cycle") return null;
   if (!analysis.grouped) return inspectBucketQuery({ ...EMPTY_QUERY, where: analysis.query.where }, bucket, clause, schema);
+  if (analysis.recordsGrouped) return inspectBucketQuery({ ...EMPTY_QUERY, where: analysis.query.grouping!.source.where }, bucket, { id: clause.id, op: "count", groupBy: clause.groupBy }, schema);
   const { aggregations: _, ...units } = analysis.query;
   return inspectBucketQuery(units, bucket, clause, schema);
 }
@@ -613,24 +629,26 @@ export function analysisNote(catalog: AnalysisCatalog, input: AnalysisState): st
   const state = normalizeAnalysis(catalog, input), measure = catalog.measures[state.metric];
   const unit = state.unit === records ? undefined : catalog.units[state.unit];
   const subject = unit ? unit.plural.toLowerCase() : catalog.records.plural.toLowerCase();
-  const parts = [measure.note];
+  const parts = [measure.note, ...catalog.rangeNote ? [catalog.rangeNote] : []];
   const idle = idleIsZero(aggregate(measure)) ? " as zero" : ", which have no value", kind = state.view === "cycle" ? catalog.cycle![state.cycle]!.kind : undefined;
   if (state.view === "cycle") parts.push(state.cycle === "hour"
     ? `One observation is one complete clock hour in the range, placed at its hour in your time zone, idle hours included${idle}. Partial first and last hours are left out. An hour bar spans many dates, so it has no single drill-down; hourly totals cannot yet open as a grouped query, so the link opens the records.`
     : kind === "recorded-date" ? `One observation is one complete recorded day in the range, idle days included${idle}. Days are the dates the recording Mac assigned in its own time zone. The range starts at your next local midnight; the current day is left out. When the recording Mac's time zone differs from yours, a date just before your first date can be returned with part of its records; it is left out and reported. Select the grouped query for the daily totals; a weekday bar spans many dates, so it has no single drill-down.`
     : `One observation is one complete day in your time zone in the range, idle days included${idle}. The range starts at your next local midnight; the current day is left out. A weekday bar spans many dates, so it has no single drill-down; daily totals of a timestamp cannot yet open as a grouped query, so the link opens the records.`);
   else if (unit) parts.push(`${unit.note} One observation is one ${unit.label.toLowerCase()}: its ${measure.label.toLowerCase()} over all its matching records in the range.`);
+  else parts.push(`One observation is one ${catalog.records.label.toLowerCase()}. ${catalog.records.note}`);
+  // A breakdown's implied population follows the measure's note.
   const breakdown = state.split === noSplit ? undefined : catalog.breakdowns[state.split];
   if (breakdown?.note && state.view !== "cycle") parts.splice(1, 0, breakdown.note);
-  else parts.push(`One observation is one ${catalog.records.label.toLowerCase()}. ${catalog.records.note}`);
   if (state.view === "compare" && unit) parts.push(state.reduce === "count" ? `Bars count ${subject} in each group.`
     : state.reduce === "total" ? measure.ratio ? `Bars pool the ${subject} in each group: the ratio of their summed parts, as if they were one ${unit.label.toLowerCase()}.` : `Bars add up the ${subject} in each group.`
     : `Bars show the ${state.reduce === "max" ? "largest" : state.reduce} ${unit.label.toLowerCase()} in each group${state.reduce === "mean" && !measure.additive ? `, every ${unit.label.toLowerCase()} weighted equally` : ""}.`);
   if (state.view === "cycle" && state.reduce === "mean" && !measure.additive) parts.push(`The mean weights every ${state.cycle === "hour" ? "hour" : "day"} equally${measure.ratio ? ", not by tokens" : ""}.`);
   if (state.view === "cycle" && state.reduce === "total") parts.push(`Totals add up every ${state.cycle === "hour" ? "hour" : "day"} that falls on each bar.`);
-  if (state.view === "scatter") parts.push(`Each point is one ${unit!.label.toLowerCase()}; both measures use the records matching both measures' populations. Up to ${maxPoints.toLocaleString("en-US")} ${subject} with the largest ${measure.label.toLowerCase()} are drawn; the grouped query lists them all.`);
+  const narrowed = state.view === "scatter" ? [[measure, catalog.measures[state.metricY]], [catalog.measures[state.metricY], measure]].filter(([own, other]) => own.where?.length && !other.where?.length).map(([own, other]) => `${other.label} counts only ${own.label.toLowerCase()}'s records here.`) : [];
+  if (state.view === "scatter") parts.push(`Each point is one ${unit!.label.toLowerCase()}; both measures use the records matching both measures' populations.${narrowed.length ? ` ${narrowed.join(" ")}` : ""} Up to ${analysisLimits.points.toLocaleString("en-US")} ${subject} with the largest ${measure.label.toLowerCase()} are drawn; the grouped query lists them all.`);
   if (state.view === "distribution" || state.view === "compare" && unit && state.reduce !== "count") parts.push(`${unit ? subject[0].toUpperCase() + subject.slice(1) : catalog.records.plural} without a ${measure.label.toLowerCase()} value are left out.`);
-  if (thresholded(state)) parts.push(`Groups with fewer than ${state.minSamples.toLocaleString("en-US")} ${state.view === "distribution" ? "plotted " : ""}${sampleSubject(catalog, state)} are hidden.`);
+  if (thresholded(state)) parts.push(`Groups with fewer than ${state.minSamples.toLocaleString("en-US")} ${state.view === "distribution" ? "plotted " : ""}${sampleSubject(catalog, state)} are hidden${unit || !catalog.samples || state.view !== "compare" ? "" : "; how many is not shown"}.`);
   if (state.compareAs === "share" && state.view === "compare") parts.push("Shares divide each group by the total of all groups, including those folded into Other.");
   return parts.join(" ");
 }

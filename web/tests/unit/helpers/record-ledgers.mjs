@@ -26,7 +26,9 @@ const repositories = ["pharos", "query-table", null];
 export function toolCalls() {
   return Array.from({ length: 360 }, (_, index) => {
     // A rare failing tool and a rare command, so minimums hide groups.
-    const [tool_name, tool_category, activity, command_name, operation_name] = index % 30 === 3 ? ["Grep", "read", "tool:Grep", null, "Grep"] : index % 45 === 8 ? ["Bash", "command", "command:vcs", "git status", "git status"] : tools[index % 5 === 4 ? 4 : index % 7 % 4];
+    const [tool_name, tool_category, activity, command_name, operation_name] = index % 30 === 3 ? ["Grep", "read", "tool:Grep", null, "Grep"] : index % 45 === 8 ? ["Bash", "command", "command:vcs", "git status", "git status"]
+      // A command and a tool whose activities share a label ("Edit").
+      : index % 20 === 11 ? ["Bash", "command", "command:Edit", "edit", "edit"] : tools[index % 5 === 4 ? 4 : index % 7 % 4];
     const at = hoursAgo(index * 7 + Math.floor(index / 5), 40), conversation = `conversation-${index % 13}`;
     const failed = (index % 9 === 0 || tool_name === "Edit" && index % 3 === 0 || tool_name === "Grep") && tool_name !== "Read";
     return {
@@ -39,12 +41,14 @@ export function toolCalls() {
       result_tokens: index % 8 === 0 ? 0 : (index % 9 + 1) * 10 ** (index % 3 + 1), result_tokens_source: index % 2 ? "measured" : "estimated",
       error_count: failed ? 1 : 0, call_count: 1, status: failed ? "error" : "ok", truncated: index % 13 === 0,
       search_query: tool_name === "WebSearch" ? `query ${index % 4}` : null,
+      // One method name on two servers.
+      mcp_server: index % 8 === 6 ? ["linear", "github"][index % 3 % 2] : null, mcp_method: index % 8 === 6 ? ["search", "list_issues"][index % 5 % 2] : null,
     };
   });
 }
 
 // The rollup sums each day's calls of one tool group.
-const rollupKeys = ["day", "week", "month", "tool_name", "tool_category", "command_name", "command_category", "program", "repository_name", "provider"];
+const rollupKeys = ["day", "week", "month", "tool_name", "tool_category", "command_name", "command_category", "program", "repository_name", "provider", "mcp_server", "mcp_method"];
 export function toolsRollup(calls = toolCalls()) {
   const groups = new Map();
   for (const call of calls) {

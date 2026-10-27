@@ -4,12 +4,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { core, queryRecipes, schemas } from "../helpers/recipes.mjs";
 import { now, usageLedger } from "../helpers/usage-ledger.mjs";
-import { analysisQuery, catalogProblems, changeState, selectGroups, normalizeAnalysis, readAnalysisLink, analysisVersion, switchView, trendAdjustments, trendLimits, validAnalysisState } from "../../../src/dashboard-analysis-model";
+import { analysisLimits, analysisQuery, catalogProblems, changeState, selectGroups, normalizeAnalysis, readAnalysisLink, analysisVersion, switchView, trendAdjustments, trendLimits, validAnalysisState } from "../../../src/dashboard-analysis-model";
 import { trendNote, trendQuery, trendSeries, trendTitle } from "../../../src/dashboard-trend-model";
 import { tokenAnalysisCatalog as catalog } from "../../../src/token-analysis-catalog";
 import { tokenTypes } from "../../../src/token-chart-request";
 import { usageChartPresets } from "../../../src/usage-presets";
 import { runAnalysisQuery } from "../../../src/analysis-request";
+import { dashboardQueryLinks } from "../../../src/dashboard-query-links";
+import { usageDashboardReturn } from "../../../src/usage-workspace-model";
 
 const { rows, hourly } = usageLedger(), schema = schemas.usage;
 const base = { period: "day", hours: 6, days: 3, rollingPeriods: 0, scale: "linear", display: "interval" };
@@ -277,9 +279,10 @@ test("a share is of every group in the filters; a legend selection only chooses 
   assert.ok(!sessions.query.grouping.source.where.some(term => term.field === "provider") && sessions.supporting.where.some(term => term.field === "provider"), "the supporting query keeps the selected group");
   const counted = selectGroups(core.evaluateMetrics(rows, sessions.query, schema, { now }).metrics[0], sessions.selection);
   assert.equal(counted.buckets[0].value + counted.other.value, new Set(rows.map(row => row.agent_session_id)).size, "unit shares are of every session");
-  // Bars draw only the selected groups; the query is still the population.
+  // Outside shares there is no denominator to protect: the selection
+  // filters the executed query, so no group limit can crowd it out.
   const bars = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider", selection }, where, { now });
-  assert.ok(!bars.query.where.some(term => term.field === "provider"));
+  assert.ok(bars.query.where.some(term => term.field === "provider"));
   assert.deepEqual(selectGroups(core.evaluateMetrics(rows, bars.query, schema, { now }).metrics[0], bars.selection).buckets.map(bucket => [bucket.keys[0], bucket.value]), [[smallest, totals.get(smallest)]]);
   // A population filter on the breakdown's own field is a population: its
   // shares are of the filtered groups only.
@@ -395,4 +398,47 @@ test("titles name the measure, period and breakdown", () => {
   assert.equal(trendTitle(catalog, { ...base, metric: "tokens", split: "type", display: "cumulative" }), "Cumulative tokens by token type");
   assert.equal(trendTitle(catalog, { ...base, metric: "conversations", split: "none" }), "Conversations reached per day");
   assert.equal(trendTitle(catalog, { ...base, metric: "percent", split: "type", display: "cumulative" }), "Cumulative share of tokens by token type");
+});
+
+test("a selection outside shares is in the executed query: a scatter's selected group is drawn whatever the point limit", t => {
+  const prior = analysisLimits.points;
+  analysisLimits.points = 3;
+  t.after(() => { analysisLimits.points = prior; });
+  // Codex's two conversations are far from the three largest by tokens.
+  const state = { view: "scatter", unit: "conversation", metric: "tokens", metricY: "cost", split: "provider", selection: { values: ["codex"], excluded: false } };
+  const all = core.evaluateMetrics(rows, analysisQuery(catalog, { ...state, selection: undefined }, range, { now }).query, schema, { now }).metrics[0];
+  assert.ok(!all.buckets.some(bucket => bucket.keys[0] === "codex"), "the overall top three hold none of them");
+  const scatter = analysisQuery(catalog, state, range, { now });
+  assert.deepEqual(scatter.query.where.filter(term => term.field === "root_provider"), [{ field: "root_provider", op: "=", value: "codex" }], "mapped through the unit's field, as a group filter");
+  const drawn = selectGroups(core.evaluateMetrics(rows, scatter.query, schema, { now }).metrics[0], scatter.selection);
+  assert.deepEqual(drawn.buckets.map(bucket => bucket.keys[0]), ["codex", "codex"]);
+  // Records filter on the breakdown's own field.
+  const box = analysisQuery(catalog, { view: "distribution", metric: "tokens", split: "provider", selection: { values: ["codex"], excluded: true } }, range, { now });
+  assert.ok(box.query.where.some(term => term.any?.some(clause => clause.field === "provider" && clause.op === "!=")));
+});
+
+test("View supporting query, then Back to dashboard, returns the dashboard's own filters and selection", () => {
+  // Over time by provider, as shares, with codex selected.
+  const chart = { v: analysisVersion, metric: "tokens", split: "provider", share: true, period: "day", selection: { values: ["codex"], excluded: false } };
+  const dashboard = new URLSearchParams({ analyze_mode: "dashboards", analyze_topic: "tokens", analyze_data: "usage", analyze_chart: JSON.stringify(chart), analyze_filters: core.encodeQuery({ ...core.EMPTY_QUERY, where: range }) });
+  const supporting = trendQuery(catalog, chart, range, { now }).supporting;
+  assert.ok(supporting.where.some(term => term.field === "provider"), "the supporting query lists the selected series");
+  for (const link of dashboardQueryLinks("usage", supporting, schema, dashboard)) {
+    const opened = new URL(link.href, "http://localhost").searchParams;
+    const back = new URL(usageDashboardReturn(opened).href, "http://localhost").searchParams;
+    assert.equal(back.get("analyze_filters"), dashboard.get("analyze_filters"), link.title);
+    const read = readAnalysisLink(catalog, JSON.parse(back.get("analyze_chart")), core.decodeQueryStrict(back.get("analyze_filters")).where);
+    assert.deepEqual([read.state.selection, read.where], [chart.selection, range], `${link.title}: codex is still a selection among every provider`);
+    // An edit in the table is kept; what the link added is not.
+    const edited = core.decodeQueryStrict(opened.get("q_usage")), extra = { field: "effort", op: "=", value: "high" };
+    const source = edited.grouping ? { ...edited, grouping: { ...edited.grouping, source: { ...edited.grouping.source, where: [...edited.grouping.source.where, extra] } } } : { ...edited, where: [...edited.where, extra] };
+    opened.set("q_usage", core.encodeQuery(source));
+    assert.deepEqual(core.decodeQueryStrict(new URL(usageDashboardReturn(opened).href, "http://localhost").searchParams.get("analyze_filters")).where, [...range, extra], link.title);
+  }
+});
+
+test("a card's link without a version keeps its filters as the population", () => {
+  const filter = { field: "provider", op: "=", value: "codex" };
+  const card = readAnalysisLink(catalog, { metric: "tokens", split: "provider" }, [...range, filter], { card: true });
+  assert.deepEqual([card.where, card.state.selection, card.state.v], [[...range, filter], undefined, analysisVersion]);
 });

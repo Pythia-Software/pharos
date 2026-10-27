@@ -1495,7 +1495,7 @@ const tokenSharedRows: LocalRows | undefined = shared ? { rows: shared.datasets.
 const validTokenDashboard = (view: TokenTrendView) => validAnalysisState(tokenAnalysisCatalog, view);
 
 function TokenUsageDashboard() {
-  const state = useUsageDashboardState<TokenTrendView>({ ...defaultTokenChart, period: "day" as ChartPeriod }, validTokenDashboard, usageTime, (view, where) => readAnalysisLink(tokenAnalysisCatalog, view, where));
+  const state = useUsageDashboardState<TokenTrendView>({ ...defaultTokenChart, period: "day" as ChartPeriod }, validTokenDashboard, usageTime, (view, where) => readAnalysisLink(tokenAnalysisCatalog, view, where, { card: new URLSearchParams(location.search).has("card_query") }));
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   const choose = (next: AnalysisView) => state.update(switchView(tokenAnalysisCatalog, state.view, next));
   if ((state.view.view ?? "trend") !== "trend") return <DashboardAnalysis catalog={tokenAnalysisCatalog} schema={schemas.usage} dataset="usage" state={state.view} where={state.where}
@@ -1535,7 +1535,7 @@ function CatalogDashboard({ catalog, dataset, name, defaults, currentURL, before
   catalog: AnalysisCatalog; dataset: UsageDataset; name: string; defaults: AnalysisState; currentURL?: string;
   before?: React.ReactNode; after?: React.ReactNode; summary?: (where: WhereTerm[]) => React.ReactNode;
 }) {
-  const state = useUsageDashboardState<AnalysisState>(defaults, view => validAnalysisState(catalog, view), catalog.time, (view, where) => readAnalysisLink(catalog, view, where));
+  const state = useUsageDashboardState<AnalysisState>(defaults, view => validAnalysisState(catalog, view), catalog.time, (view, where) => readAnalysisLink(catalog, view, where, { card: new URLSearchParams(location.search).has("card_query") }));
   if (state.error) return <p className="query-table-error" role="alert">{state.error}</p>;
   const choose = (next: AnalysisView) => state.update(switchView(catalog, state.view, next));
   const schema = schemas[dataset];
@@ -1544,6 +1544,8 @@ function CatalogDashboard({ catalog, dataset, name, defaults, currentURL, before
     {(state.view.view ?? "trend") !== "trend"
       ? <DashboardAnalysis catalog={catalog} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter}>{summary?.(state.where)}</DashboardAnalysis>
       : <AnalysisTrend catalog={catalog} schema={schema} dataset={dataset} state={state.view} where={state.where} onChange={state.update} onView={choose} onFilter={state.onFilter} format={catalogAmount} currentURL={currentURL}>{summary?.(state.where)}</AnalysisTrend>}
+    {/* New records arrive while the dashboard is open (Pharos MCP's own requests). */}
+    <p className="usage-dashboard-note usage-dashboard-refresh"><button type="button" onClick={() => window.dispatchEvent(new Event("pharos:usage-refresh"))}>Refresh</button></p>
     {after}
   </section>;
 }

@@ -23,6 +23,7 @@ const measures: Record<string, AnalysisMeasure> = {
 };
 
 const commands: WhereTerm[] = [{ field: "tool_category", op: "=", value: "command" }];
+const methods: WhereTerm[] = [{ field: "mcp_method", op: "is_not_null", value: "" }, { field: "mcp_method", op: "!=", value: "" }];
 const breakdowns: AnalysisCatalog["breakdowns"] = {
   tool_category: { label: "Tool category", fields: ["tool_category"] },
   tool_name: { label: "Tool", fields: ["tool_name"] },
@@ -30,7 +31,9 @@ const breakdowns: AnalysisCatalog["breakdowns"] = {
   program: { label: "Shell program", fields: ["program"], where: commands, note: "Shell programs count shell commands only." },
   command_name: { label: "Command", fields: ["command_name"], where: commands, note: "Commands count shell commands only." },
   mcp_server: { label: "MCP server", fields: ["mcp_server"], where: [{ field: "mcp_server", op: "is_not_null", value: "" }], note: "MCP servers count calls with an identified MCP server only." },
-  mcp_method: { label: "MCP method", fields: ["mcp_method"], where: [{ field: "mcp_method", op: "is_not_null", value: "" }, { field: "mcp_method", op: "!=", value: "" }], note: "MCP methods count calls with a recorded MCP method only." },
+  mcp_method: { label: "MCP method", fields: ["mcp_method"], where: methods, note: "MCP methods count calls with a recorded MCP method only." },
+  // A method name can recur on several servers, so cards keep them apart.
+  mcp_server_method: { label: "MCP server + method", fields: ["mcp_server", "mcp_method"], where: methods, note: "MCP servers and methods count calls with a recorded MCP method only." },
   repository_name: { label: "Repository", fields: ["repository_name"], empty: "No repository" },
   source_kind: { label: "App", fields: ["source_kind"] },
   channel: { label: "Channel", fields: ["channel"] },
@@ -48,6 +51,7 @@ export const toolsAnalysisCatalog: AnalysisCatalog = {
   records: { label: "Daily tool summary", plural: "Daily tool summaries", note: "A daily tool summary is one recorded day's calls of one tool, command, model, repository and origin: a rollup, not one call. Follow a summary's Calls link to its individual calls." },
   periods: { day: "day", week: "week", month: "month" },
   trend: { metric: "calls", split: "tool_category" },
+  rangeNote: "The tools rollup records whole local days, so the range snaps to whole days: a range starting mid-day counts that whole day.",
   // A minimum counts calls: a daily summary holds many.
   samples: "calls",
   executable: (where, now) => toolDashboardWhere(where, timeBounds(where, time, now), new Date(now)),
