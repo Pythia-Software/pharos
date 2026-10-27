@@ -108,7 +108,18 @@ final class ArchiveService: ObservableObject {
     // (starting, respawning, stopped for a delivery) is not "no library".
     private var managedLibraryKnown = false
     private var managedSelectedAvailable = false
-    var noLibrarySelected: Bool { managedApplication && managedLibraryKnown && !managedSelectedAvailable }
+    // A library operation the broker reports (recover, transfer, delivery),
+    // or one it is too busy to report: /api/app/state waits for the broker's
+    // lock, which creating a library holds.
+    private var managedOperationPhase: String?
+    private var managedStateRequestedAt = Date.distantPast
+    var libraryOperation: String? {
+        guard managedApplication else { return nil }
+        if let phase = managedOperationPhase { return phase }
+        if managedLibraryStateTask != nil, Date().timeIntervalSince(managedStateRequestedAt) > 6 { return "Finishing a library operation…" }
+        return nil
+    }
+    var noLibrarySelected: Bool { managedApplication && managedLibraryKnown && !managedSelectedAvailable && libraryOperation == nil }
     @Published var error: String?
     @Published var status = "Starting local archive…"
     @Published var disconnected: Disconnection?
@@ -254,6 +265,7 @@ final class ArchiveService: ObservableObject {
         guard managedApplication, !shuttingDown else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.watchManagedLibraries() }
         guard managedLibraryStateTask == nil, let request = localRequest("/api/app/state"), let broker = lock.withLock({ endpoint }) else { return }
+        managedStateRequestedAt = Date()
         managedLibraryStateTask = URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
             let state = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
             DispatchQueue.main.async {
@@ -266,6 +278,9 @@ final class ArchiveService: ObservableObject {
                 let connected = libraries.contains { $0["id"] as? String == selected && $0["connected"] as? Bool == true }
                 self.managedLibraryConnected = connected
                 self.managedLibraryKnown = true
+                let job = state["job"] as? [String: Any]
+                let operating = state["busy"] as? Bool == true || job?["state"] as? String == "running"
+                self.managedOperationPhase = operating ? ((job?["state"] as? String == "running" ? job?["phase"] as? String : nil) ?? "Finishing a library operation…") : nil
                 self.managedSelectedAvailable = !selected.isEmpty && libraries.contains { $0["id"] as? String == selected && $0["available"] as? Bool == true }
                 self.managedSelectedLibrary = selected
                 let connection = "\(selected):\(generation):\(connected)"

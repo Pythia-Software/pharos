@@ -15,6 +15,7 @@ final class ArchiveService: ObservableObject {
     @Published var libraryConnection: String?
     var hasConnectedLibrary = true
     var noLibrarySelected = false
+    var libraryOperation: String?
     var error: String?
     var setupError: String?
     var disconnected: Disconnection?
@@ -163,7 +164,15 @@ final class MenuFixture: URLProtocol {
         precondition(menu.items.contains { $0.title == "Pharos · No library connected" }, "No library must not read as Working")
         precondition(neutralDot.color == .systemGray)
         precondition(menu.items.first { $0.title == "Index changes now" }?.isEnabled != true, "No library to index")
+        // With nothing selected, a broker operation that writes a drive
+        // (creating or recovering a library) is still work.
         service.noLibrarySelected = false
+        service.libraryOperation = "Restoring the library from the backup"
+        controller.refresh()
+        precondition(menu.items.contains { $0.title == "Pharos · Working" }, "A broker operation must read as Working")
+        precondition(menu.items.contains { $0.title == "Restoring the library from the backup" })
+        precondition(neutralDot.color == .systemYellow)
+        service.libraryOperation = nil
         MenuFixture.humanWords = 3240
         service.hasConnectedLibrary = true
         service.libraryConnection = "library-a:4:true"

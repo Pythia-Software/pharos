@@ -407,7 +407,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                     parts.append(activity["estimated_completion_scope"] as? String == "operation" ? "about \(minutes) min left" : "about \(minutes) min for this stage")
                 }
                 detail = parts.joined(separator: " · ")
-            } else { detail = indexing ? "Starting indexing…" : !service.hasConnectedLibrary ? "Waiting for the library…" : "Checking the library…" }
+            } else if let operation = service.libraryOperation { detail = operation }
+            else { detail = indexing ? "Starting indexing…" : !service.hasConnectedLibrary ? "Waiting for the library…" : "Checking the library…" }
             dot.color = .systemYellow
         } else {
             title = "Pharos · Idle"
