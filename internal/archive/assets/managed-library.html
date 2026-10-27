@@ -1,0 +1,40 @@
+    <section id="librarySettings" class="settings-section" data-settings-route="/settings/libraries" data-page-title="Libraries" data-page-description="Choose the library Pharos opens, or create a separate home for your history." aria-labelledby="settingsPageHeading" hidden>
+      <p id="library-settings-status" role="status" aria-live="polite"></p>
+      <div id="library-settings-current"></div>
+      <div class="library-settings-actions" aria-label="Library actions">
+        <button id="library-settings-open" type="button" aria-expanded="false" aria-controls="library-settings-open-form">Open a library…</button>
+        <button id="library-settings-new" type="button" aria-expanded="false" aria-controls="library-settings-create-form">New library…</button>
+      </div>
+      <form id="library-settings-open-form" class="library-settings-card library-settings-form" hidden>
+        <h3>Open an existing library</h3>
+        <p class="muted">Choose a Pharos library folder, or paste the path to its library.toml file.</p>
+        <fieldset>
+          <label for="library-settings-existing">Library folder or configuration file</label>
+          <div class="library-settings-folder"><input id="library-settings-existing" autocomplete="off" spellcheck="false" required><button type="button" data-library-pick="library-settings-existing">Choose folder…</button></div>
+          <div class="library-settings-actions"><button type="submit">Open and switch</button><button type="button" data-library-cancel="open">Cancel</button></div>
+        </fieldset>
+      </form>
+      <form id="library-settings-create-form" class="library-settings-card library-settings-form" hidden>
+        <h3>Create a library</h3>
+        <p class="muted">Keep a separate collection of history, saved views, and preferences on this Mac or an attached drive.</p>
+        <fieldset>
+          <label for="library-settings-name">Library name</label>
+          <input id="library-settings-name" maxlength="160" autocomplete="off" required>
+          <label for="library-settings-storage">Store the library</label>
+          <select id="library-settings-storage"><option value="mac">On this Mac</option><option value="ssd">On an external drive</option></select>
+          <label for="library-settings-parent">Parent folder</label>
+          <div class="library-settings-folder"><input id="library-settings-parent" autocomplete="off" spellcheck="false" aria-describedby="library-settings-folder-note"><button type="button" data-library-pick="library-settings-parent">Choose folder…</button></div>
+          <p id="library-settings-folder-note" class="muted">Pharos creates a new folder with the library’s name inside this folder.</p>
+          <div class="library-settings-destination"><span class="muted">New library folder</span><output id="library-settings-destination" for="library-settings-name library-settings-parent"></output></div>
+          <p class="muted">After creation, choose which sources to add in Settings → Sources.</p>
+          <div class="library-settings-actions"><button type="submit">Create and switch</button><button type="button" data-library-cancel="create">Cancel</button></div>
+        </fieldset>
+      </form>
+      <h3 class="library-settings-list-heading">Other libraries on this Mac</h3>
+      <p class="muted">Switching changes the library you browse. Each library keeps its own source choices and saved views.</p>
+      <div id="library-settings-list"></div>
+      <details class="library-settings-card library-settings-mcp"><summary>Library used by MCP</summary>
+        <p class="muted">Switching libraries keeps this assignment. Agents can use Pharos when you are browsing the assigned library.</p>
+        <form id="library-settings-mcp-form"><fieldset><label for="library-settings-mcp">Assigned library</label><select id="library-settings-mcp"></select><div class="library-settings-actions"><button type="submit">Save MCP assignment</button><a href="/settings/mcp">Agent connections →</a></div></fieldset></form>
+      </details>
+    </section>

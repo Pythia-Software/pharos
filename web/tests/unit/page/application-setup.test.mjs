@@ -3,10 +3,11 @@ import {test} from 'node:test';
 import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import vm from 'node:vm';
-import {assets} from '../helpers/classic-script.mjs';
+import {assets, loadClassicScript} from '../helpers/classic-script.mjs';
 
 const source=readFileSync(join(assets,'application.html'),'utf8').match(/<script id="setup-wizard-model">([\s\S]*?)<\/script>/)[1];
-const create=vm.runInNewContext(source+';createPharosSetupWizard',{TextEncoder});
+const model=vm.runInNewContext(source+';({createPharosSetupWizard,nextPharosLibraryName})',{TextEncoder,URLSearchParams});
+const create=model.createPharosSetupWizard;
 const plain=value=>structuredClone(value);
 
 test('setup recommends storage from the number of Macs without creating anything',()=>{
@@ -60,4 +61,37 @@ test('setup keeps invalid names and paths out of review',()=>{
   assert.equal(wizard.next().field,'path');wizard.parent='~/History';wizard.next();
   assert.equal(wizard.payload().path,'~/History/My Library');
   assert.throws(()=>wizard.setMachines('unknown'));assert.throws(()=>wizard.setStorage('network'));
+});
+
+test('new libraries get an unused proposed name',()=>{
+  assert.equal(model.nextPharosLibraryName([]),'My Library');
+  assert.equal(model.nextPharosLibraryName([{name:'My Library'},{name:'My Library 2'},{name:'Research'}]),'My Library 3');
+});
+
+test('switching libraries saves the current session before connecting and only navigates on success',async()=>{
+  const {switchPharosLibrary}=loadClassicScript('managed-library.js');
+  for(const failing of ['', 'save', 'connect']){
+    const events=[];
+    const operation=switchPharosLibrary('archive',{
+      flush:async()=>{events.push('save');if(failing==='save')throw Error('save failed')},
+      connect:async id=>{events.push(id);if(failing==='connect')throw Error('connect failed')},
+      navigate:path=>events.push(path),
+    });
+    if(failing)await assert.rejects(operation,new RegExp(failing+' failed'));else await operation;
+    assert.deepEqual(events,failing==='save'?['save']:failing==='connect'?['save','archive']:['save','archive','/settings/libraries']);
+  }
+});
+
+
+test('library settings resolves local and external destinations and rejects invalid proposals',()=>{
+  const {pharosLibraryProposal,pharosLibraryName}=loadClassicScript('managed-library.js');
+  assert.equal(pharosLibraryName([{name:'My Library'},{name:'My Library 2'}]),'My Library 3');
+  assert.deepEqual(plain(pharosLibraryProposal(' Research ','','mac')),{name:'Research',path:'',location:'mac'});
+  assert.deepEqual(plain(pharosLibraryProposal(' Research ',' /Volumes/SSD/ ','ssd')),{name:'Research',path:'/Volumes/SSD/Research',location:'ssd'});
+  assert.equal(pharosLibraryProposal('Research','/','mac').path,'/Research');
+  assert.equal(pharosLibraryProposal('Research','~/Libraries','mac').path,'~/Libraries/Research');
+  for(const name of ['', '.', '..', 'a/b', 'a\\b', 'é'.repeat(81)])assert.throws(()=>pharosLibraryProposal(name,'','mac'),/name/);
+  assert.throws(()=>pharosLibraryProposal('Research','','ssd'),/parent folder/);
+  assert.throws(()=>pharosLibraryProposal('Research','relative/path','mac'),/absolute/);
+  assert.throws(()=>pharosLibraryProposal('Research','','network'),/store/);
 });

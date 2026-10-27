@@ -1,13 +1,31 @@
 # Libraries and application setup
 
 Pharos.app can run from Applications or from an SSD. Its library is a separate
-folder. The native app opens **Libraries** on startup as a modal over the
-standard Pharos header and Home view; the same modal is linked from the library
-toolbar. The background stays inactive until a library is connected. First
+folder. The native app opens the standard Pharos header and Home view. First
 launch introduces Pharos and guides new setup one decision at a time. Existing
-history and backup recovery are separate branches. Once a library exists, the modal
-also offers MCP assignment, manual transfers, and an optional pending-library
-delivery pair.
+history and backup recovery are separate branches. If no library is connected,
+the startup dialog offers registered locations and recovery.
+
+## Change the current library
+
+Open **Settings → Libraries** to see the current library, its folder, and the
+other registered libraries on this Mac. Choose **Switch to library** to change
+which collection Pharos browses. Unavailable libraries stay visible; reconnect
+their drive before selecting them. Pharos saves pending UI session changes
+before switching and keeps you in Settings. The selection is remembered on the
+next launch.
+
+**Open a library…** expands a form on this page for choosing a library folder or
+pasting its `library.toml` path. **New library…** expands a form for its name,
+storage and parent folder, with the resolved destination shown before creation.
+The standard local location is proposed by default. When the default name is
+already registered, Pharos proposes the next available numbered name. Creating
+a library takes you to **Settings → Sources** to choose what to add.
+
+These actions stay in Settings and use inline forms. Each library keeps its own
+source choices, saved views and preferences. MCP assignment is a separate,
+explicit choice in **Library used by MCP**. Creation, opening and switching
+wait until an active transfer or recovery finishes.
 
 ## Choose locations
 
@@ -99,8 +117,8 @@ requested integration settings can remain; macOS permission records are separate
 ## MCP and the primary connection
 
 The first registered library becomes the MCP assignment for this application on
-this Mac. Merely connecting to another library never changes it. Use **MCP
-settings** in Libraries to change it explicitly, then use the assigned library's
+this Mac. Merely connecting to another library never changes it. Use **Library used by MCP** in
+Settings → Libraries to change it explicitly, then use the assigned library's
 MCP settings to register or update an agent client.
 
 MCP answers only when that app's primary connection is its assigned library and
