@@ -38,6 +38,7 @@ type brokerOperationRecord struct {
 	ID        string   `json:"id"`
 	Kind      string   `json:"kind"`
 	Variant   string   `json:"variant,omitempty"`
+	Subject   string   `json:"subject,omitempty"`
 	Libraries []string `json:"libraries,omitempty"`
 	Trigger   string   `json:"trigger"`
 	State     string   `json:"state"`
@@ -57,6 +58,10 @@ type brokerLibrary struct {
 	Child *applicationEndpoint
 	// ChildStarted is when that service became ready.
 	ChildStarted time.Time
+	// Config is its configuration's path, and LeaseDirs where Terminal
+	// commands writing it take their leases.
+	Config    string
+	LeaseDirs []string
 }
 
 type brokerOperations struct {
@@ -102,7 +107,7 @@ func (b *brokerOperations) begin(spec OperationSpec, libraries ...string) *Op {
 	if b == nil {
 		return nil
 	}
-	spec.Subject = strings.Join(slices.DeleteFunc(slices.Clone(libraries), func(id string) bool { return id == "" }), ",")
+	spec.Libraries = slices.DeleteFunc(slices.Clone(libraries), func(id string) bool { return id == "" })
 	if spec.Trigger == "" {
 		spec.Trigger = triggerUser
 	}
@@ -123,9 +128,8 @@ func (b *brokerOperations) records() []brokerOperationRecord {
 	for _, view := range b.reg.views() {
 		record := brokerOperationRecord{ID: string(view.ID), Kind: view.Spec.Kind, Variant: view.Spec.Variant, Trigger: view.Spec.Trigger, State: view.State,
 			Reason: view.Reason, Error: view.Error, Step: view.Step.Name, StartedAt: formatTime(view.Started)}
-		if view.Spec.Subject != "" {
-			record.Libraries = strings.Split(view.Spec.Subject, ",")
-		}
+		record.Libraries = view.Spec.Libraries
+		record.Subject = view.Spec.Subject
 		if !view.Ended.IsZero() {
 			record.EndedAt = formatTime(view.Ended)
 		}
@@ -216,7 +220,13 @@ func (m *applicationManager) publishLocked() {
 	}
 	libraries := make([]brokerLibrary, 0, len(m.registry.Libraries))
 	for _, l := range m.registry.Libraries {
-		library := brokerLibrary{ID: l.ID, Name: l.Name, Selected: l.ID == m.registry.Selected}
+		library := brokerLibrary{ID: l.ID, Name: l.Name, Selected: l.ID == m.registry.Selected, Config: l.resolve()}
+		if dirs, ok := m.leaseDirCache[library.Config]; ok {
+			library.LeaseDirs = dirs
+		} else if config, err := LoadConfig(library.Config); err == nil {
+			library.LeaseDirs = leaseDirs(config)
+			m.leaseDirCache[library.Config] = library.LeaseDirs
+		}
 		if c := m.children[l.ID]; c != nil {
 			select {
 			case <-c.done:
@@ -242,7 +252,7 @@ func brokerOperationEntry(record brokerOperationRecord) map[string]any {
 		kind = operationKindIndex[unknownOperationKind]
 	}
 	view := opView{ID: OpID(record.ID), Kind: kind, State: record.State, Reason: record.Reason, Error: record.Error,
-		Spec: OperationSpec{Kind: record.Kind, Variant: record.Variant, Trigger: record.Trigger, Holds: parseHolds(kind.Holds), Priority: kind.Priority}}
+		Spec: OperationSpec{Kind: record.Kind, Variant: record.Variant, Subject: record.Subject, Trigger: record.Trigger, Holds: parseHolds(kind.Holds), Priority: kind.Priority, Libraries: record.Libraries}}
 	view.Started, _ = parseTime(record.StartedAt)
 	view.Ended, _ = parseTime(record.EndedAt)
 	if record.Step != "" {
@@ -257,8 +267,8 @@ func brokerOperationEntry(record brokerOperationRecord) map[string]any {
 // brokerLibraryVerdict combines a library's own verdict with the broker
 // operations that touch it (§4.4), which make it busy, and with the
 // service being unreachable, which makes it unsafe.
-func brokerLibraryVerdict(own *ejectVerdict, records []brokerOperationRecord, library string, unreachable string) ejectVerdict {
-	in := verdictInput{unreachable: unreachable}
+func brokerLibraryVerdict(own *ejectVerdict, records []brokerOperationRecord, library string, unreachable string, leases []leaseProbe) ejectVerdict {
+	in := verdictInput{unreachable: unreachable, leases: leases}
 	for _, record := range records {
 		if opTerminal(record.State) || !operationTouches(record, library) {
 			continue
@@ -322,10 +332,17 @@ func (b *brokerOperations) fetchServiceOperations(ctx context.Context, endpoint 
 
 // document builds GET /api/app/operations (§7.2). It reads only what the
 // broker published under its own lock and asks each connected child.
-func (b *brokerOperations) document(ctx context.Context) map[string]any {
+//
+// Without withLibraries (?libraries=0, the native menu's poll) it lists only
+// the broker's own operations and app-level leases: no child is asked, no
+// library's leases are read.
+func (b *brokerOperations) document(ctx context.Context, withLibraries bool) map[string]any {
 	b.mu.Lock()
 	libraries := slices.Clone(b.libraries)
 	b.mu.Unlock()
+	if !withLibraries {
+		libraries = nil
+	}
 	records := b.records()
 	snapshots := make([]map[string]any, len(libraries))
 	failures := make([]error, len(libraries))
@@ -338,6 +355,7 @@ func (b *brokerOperations) document(ctx context.Context) map[string]any {
 	}
 	wait.Wait()
 	cutoff := time.Now().Add(-10 * time.Minute)
+	appLeases := probeLeases([]string{appLeaseDir()})
 	entries := []map[string]any{}
 	for index, library := range libraries {
 		service := map[string]any{"state": "stopped", "pid": nil, "started_at": nil, "restarts_10m": 0}
@@ -375,7 +393,19 @@ func (b *brokerOperations) document(ctx context.Context) map[string]any {
 		case starting:
 			service["state"] = "starting"
 		}
-		verdict := brokerLibraryVerdict(own, records, library.ID, unreachable)
+		// Without a service to ask, the broker reads the leases of Terminal
+		// commands writing this library itself (lease files, never a capture
+		// or index lock), and those of app-level commands naming it.
+		leases := []leaseProbe{}
+		if own == nil {
+			leases = probeLeases(library.LeaseDirs)
+		}
+		for _, probe := range appLeases {
+			if probe.Info != nil && slices.ContainsFunc(probe.Info.Libraries, func(path string) bool { return canonical(path) == canonical(library.Config) }) {
+				leases = append(leases, probe)
+			}
+		}
+		verdict := brokerLibraryVerdict(own, records, library.ID, unreachable, leases)
 		var snapshot any
 		if snapshots[index] != nil {
 			snapshot = snapshots[index]
@@ -390,6 +420,17 @@ func (b *brokerOperations) document(ctx context.Context) map[string]any {
 			continue
 		}
 		app = append(app, brokerOperationEntry(record))
+	}
+	// App-level Terminal commands (a transfer, a recovery) under a live lease.
+	for _, probe := range appLeases {
+		if !probe.Live || probe.Info == nil {
+			continue
+		}
+		kind := firstOf(probe.Info.Kinds)
+		entry := brokerOperationEntry(brokerOperationRecord{ID: "lease:" + probe.Info.Instance, Kind: kind, Trigger: triggerCLI, State: opRunning, StartedAt: probe.Info.StartedAt})
+		entry["process"], entry["libraries"] = probe.Info.Process, probe.Info.Libraries
+		entry["detail"] = "In another process (" + strings.Replace(probe.Info.Process, "cli:", "pharos ", 1) + ")"
+		app = append(app, entry)
 	}
 	return map[string]any{"version": 1, "revision": b.reg.currentRevision(), "generated_at": now(), "libraries": entries,
 		"app": map[string]any{"operations": app, "update": nil}, "attention": []any{}}

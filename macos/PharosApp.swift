@@ -258,14 +258,17 @@ final class ArchiveService: ObservableObject {
     /// waits for one to finish. An older broker without the endpoint leaves
     /// the state-based detection alone.
     private func watchBrokerOperations(_ broker: (url: URL, token: String)) {
-        guard brokerOperationsTask == nil, let request = localRequest("/api/app/operations") else { return }
+        // Broker-only: no library's service is asked.
+        guard brokerOperationsTask == nil, let request = localRequest("/api/app/operations?libraries=0") else { return }
         brokerOperationsTask = URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
             let document = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.brokerOperationsTask = nil
                 guard !self.shuttingDown, self.lock.withLock({ self.endpoint?.url == broker.url }) else { return }
-                guard let document, let running = ManagedLibraryStatus.runningBrokerOperations(document) else { return }
+                // An answer that is not an operations document (an older or
+                // restarting broker) clears what an earlier one said.
+                let running = document.flatMap(ManagedLibraryStatus.runningBrokerOperations) ?? []
                 self.managedStatus = self.managedStatus.withBrokerOperations(running)
             }
         }
@@ -275,6 +278,9 @@ final class ArchiveService: ObservableObject {
     private func watchManagedLibraries() {
         guard managedApplication, !shuttingDown else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.watchManagedLibraries() }
+        // Its own schedule: /api/app/state can wait on the broker's lock for
+        // minutes, which is exactly when this poll is needed.
+        if let broker = lock.withLock({ endpoint }) { watchBrokerOperations(broker) }
         guard managedLibraryStateTask == nil, let request = localRequest("/api/app/state"), let broker = lock.withLock({ endpoint }) else { return }
         managedStateRequestedAt = Date()
         managedLibraryStateTask = URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
@@ -318,7 +324,6 @@ final class ArchiveService: ObservableObject {
             }
         }
         managedLibraryStateTask?.resume()
-        watchBrokerOperations(broker)
     }
 
     var installationFolder: URL { Bundle.main.bundleURL.deletingLastPathComponent() }

@@ -148,6 +148,10 @@ var operationKinds = []operationKind{
 		OnEject: "Cannot be stopped; the service has no API until it ends. A kill rolls back the step in progress, and the next open re-runs from the last committed meta key.", Latency: "none", Journal: journalLonger(2 * time.Second), Priority: priorityForeground},
 	{Kind: "library.upgrade", Label: "Upgrade the library", Verb: "Upgrading the library", Holds: "D:w W:w", Affects: "upgrade, an.tools",
 		OnEject: "Stops after the unit in progress; starting the upgrade again resumes it.", Latency: "record", Journal: journalAlways, Priority: priorityForeground},
+	{Kind: "catalog.repair", Label: "Repair usage (Terminal)", Verb: "Repairing usage", Holds: "D:w W:w", Affects: "an.tools, an.authorship",
+		OnEject: "Pharos cannot stop it.", Latency: "none", Journal: journalAlways, Priority: priorityForeground},
+	{Kind: "repositories.merge", Label: "Merge repositories (Terminal)", Verb: "Merging repositories", Holds: "D:w W:w", Affects: "an.identities, an.git",
+		OnEject: "Pharos cannot stop it.", Latency: "none", Journal: journalAlways, Priority: priorityForeground},
 	{Kind: "tools.ledger.build", Label: "Build the Tools ledger", Verb: "Building the Tools ledger", Holds: "D:w W:w", Affects: "an.ledger, an.tools",
 		OnEject: "Stops between conversations; building the ledger again resumes it.", Latency: "record", Journal: journalAlways, Priority: priorityForeground},
 

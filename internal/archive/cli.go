@@ -225,23 +225,9 @@ func Run(arguments []string) error {
 			return err
 		}
 		defer catalog.Close()
-		items, err := loadRepositoryIdentities(catalog.DB)
-		if err != nil {
-			return err
-		}
-		prepareRepositoryIdentities(items)
-		resolveGitHubRepositories(context.Background(), items, nil)
-		if err := catalog.saveRepositoryEvidence(context.Background(), items); err != nil {
-			return err
-		}
-		groups := planRepositoryMerges(items, config.RepositoryAliases, config.RepositorySeparate...)
-		printRepositoryMergePlan(os.Stdout, groups)
-		for _, group := range groups {
-			if err := catalog.mergeRepositoryGroup(context.Background(), group); err != nil {
-				return err
-			}
-		}
-		return catalog.writeTransaction(context.Background(), "repository-merge", func(tx *sql.Tx) error { return setMeta(tx, "repository_merge_version", repositoryMergeVersion) })
+		return runCLIOperation(config, catalog, "repositories", OperationSpec{Kind: "repositories.merge"}, func(context.Context, *Op) error {
+			return applyRepositoryMergesCLI(config, catalog)
+		})
 	}
 	if command == "add-this-mac" {
 		return runAddThisMacCLI(config, args, os.Stdin, os.Stdout)
@@ -291,25 +277,31 @@ func Run(arguments []string) error {
 			return runBuildToolsCLI(ctx, catalog, op)
 		})
 	case "refine-usage":
-		refined, err := catalog.RefineUsageTimeline(func(done, total int) {
-			if done%100 == 0 || done == total {
-				fmt.Fprintf(os.Stderr, "refined %d/%d conversations\n", done, total)
+		return runCLIOperation(config, catalog, "refine-usage", OperationSpec{Kind: "catalog.repair", Variant: "refine-usage"}, func(ctx context.Context, op *Op) error {
+			refined, err := catalog.RefineUsageTimeline(func(done, total int) {
+				op.progress("Refine usage", "", "conversation", float64(done), float64(total), total > 0)
+				if done%100 == 0 || done == total {
+					fmt.Fprintf(os.Stderr, "refined %d/%d conversations\n", done, total)
+				}
+			})
+			if err != nil {
+				return fmt.Errorf("refine usage after %d conversations: %w", refined, err)
 			}
+			return printJSON(map[string]any{"conversations_refined": refined})
 		})
-		if err != nil {
-			return fmt.Errorf("refine usage after %d conversations: %w", refined, err)
-		}
-		return printJSON(map[string]any{"conversations_refined": refined})
 	case "repair-usage-attribution":
-		repaired, err := catalog.RepairUsageAttribution(context.Background(), func(done, total int) {
-			if done%100 == 0 || done == total {
-				fmt.Fprintf(os.Stderr, "repaired usage for %d/%d workspaces\n", done, total)
+		return runCLIOperation(config, catalog, "repair-usage-attribution", OperationSpec{Kind: "catalog.repair", Variant: "repair-usage-attribution"}, func(ctx context.Context, op *Op) error {
+			repaired, err := catalog.RepairUsageAttribution(ctx, func(done, total int) {
+				op.progress("Repair usage attribution", "", "workspace", float64(done), float64(total), total > 0)
+				if done%100 == 0 || done == total {
+					fmt.Fprintf(os.Stderr, "repaired usage for %d/%d workspaces\n", done, total)
+				}
+			})
+			if err != nil {
+				return fmt.Errorf("repair usage attribution after %d workspaces: %w", repaired, err)
 			}
+			return printJSON(map[string]any{"workspaces_repaired": repaired})
 		})
-		if err != nil {
-			return fmt.Errorf("repair usage attribution after %d workspaces: %w", repaired, err)
-		}
-		return printJSON(map[string]any{"workspaces_repaired": repaired})
 	case "upgrade":
 		if slices.Contains(args, "--status") || slices.Contains(args, "--preview") {
 			return runUpgradeCLI(catalog, args) // reads
@@ -324,7 +316,12 @@ func Run(arguments []string) error {
 	case "tl1":
 		return runTL1CLI(catalog, args)
 	case "findings":
-		return runFindingsCLI(catalog, args)
+		if !slices.Contains(args, "--refresh") {
+			return runFindingsCLI(catalog, args)
+		}
+		return runCLIOperation(config, catalog, "findings", OperationSpec{Kind: "analysis.findings"}, func(context.Context, *Op) error {
+			return runFindingsCLI(catalog, args)
+		})
 	case "health":
 		value := catalog.Health()
 		value["storage"] = storage(config)
@@ -425,6 +422,27 @@ func runBuildToolsCLI(ctx context.Context, catalog *Catalog, op *Op) error {
 		return err
 	}
 	return printJSON(map[string]any{"conversations_built": built, "status": status})
+}
+
+// applyRepositoryMergesCLI: pharos repositories --merge --apply.
+func applyRepositoryMergesCLI(config Config, catalog *Catalog) error {
+	items, err := loadRepositoryIdentities(catalog.DB)
+	if err != nil {
+		return err
+	}
+	prepareRepositoryIdentities(items)
+	resolveGitHubRepositories(context.Background(), items, nil)
+	if err := catalog.saveRepositoryEvidence(context.Background(), items); err != nil {
+		return err
+	}
+	groups := planRepositoryMerges(items, config.RepositoryAliases, config.RepositorySeparate...)
+	printRepositoryMergePlan(os.Stdout, groups)
+	for _, group := range groups {
+		if err := catalog.mergeRepositoryGroup(context.Background(), group); err != nil {
+			return err
+		}
+	}
+	return catalog.writeTransaction(context.Background(), "repository-merge", func(tx *sql.Tx) error { return setMeta(tx, "repository_merge_version", repositoryMergeVersion) })
 }
 
 // firstOf is args' first element, or "".

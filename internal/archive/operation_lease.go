@@ -24,15 +24,18 @@ const leaseDirName = ".pharos-leases"
 
 // leaseInfo is a lease file's contents.
 type leaseInfo struct {
-	Instance   string                  `json:"instance"`
-	PID        int                     `json:"pid"`
-	HostID     string                  `json:"host_id"`
-	Process    string                  `json:"process"`
-	Kinds      []string                `json:"kinds"`
-	Holds      []Hold                  `json:"holds"`
-	StartedAt  string                  `json:"started_at"`
-	Operations []string                `json:"operations,omitempty"`
-	Outcomes   map[string]leaseOutcome `json:"outcomes,omitempty"`
+	Instance   string   `json:"instance"`
+	PID        int      `json:"pid"`
+	HostID     string   `json:"host_id"`
+	Process    string   `json:"process"`
+	Kinds      []string `json:"kinds"`
+	Holds      []Hold   `json:"holds"`
+	StartedAt  string   `json:"started_at"`
+	Operations []string `json:"operations,omitempty"`
+	// Libraries are the configurations of libraries an app-level command
+	// (a transfer, a recovery) writes.
+	Libraries []string                `json:"libraries,omitempty"`
+	Outcomes  map[string]leaseOutcome `json:"outcomes,omitempty"`
 }
 
 // leaseOutcome is an operation's terminal state, recorded in the lease when
@@ -55,6 +58,12 @@ func leaseDirs(config Config) []string {
 		}
 	}
 	return dirs
+}
+
+// appLeaseDir is where app-level Terminal commands (a library transfer or
+// recovery) also take their lease, for the broker to list them.
+func appLeaseDir() string {
+	return filepath.Join(pharosSupportDir(), leaseDirName)
 }
 
 func leasePath(dir, instance string) string {
@@ -236,7 +245,13 @@ func probeLeases(dirs []string) []leaseProbe {
 	probes := []leaseProbe{}
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)
+		if errors.Is(err, os.ErrNotExist) {
+			continue // no process has taken a lease here
+		}
 		if err != nil {
+			// A directory that exists but cannot be listed may hold a live
+			// lease: the verdict cannot vouch for it (fail closed).
+			probes = append(probes, leaseProbe{Path: dir, Err: err})
 			continue
 		}
 		for _, entry := range entries {

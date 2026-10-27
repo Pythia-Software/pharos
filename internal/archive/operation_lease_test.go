@@ -73,6 +73,39 @@ func TestLeaseIsLockedInPlaceUntilReleased(t *testing.T) {
 	}
 }
 
+// Failing closed (§6.5): a lease directory that exists but cannot be listed
+// makes the verdict unsafe, and a writing command that cannot take its lease
+// does not run.
+func TestLeasesFailClosed(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), leaseDirName)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0o700)
+	if _, err := os.ReadDir(dir); err == nil {
+		t.Skip("running as a user who can list an unreadable directory")
+	}
+	if verdict := computeEjectVerdict(verdictInput{leases: probeLeases([]string{dir})}); verdict.Verdict != verdictUnsafe {
+		t.Fatalf("an unlistable lease directory: %+v", verdict)
+	}
+	if probes := probeLeases([]string{filepath.Join(t.TempDir(), "missing")}); len(probes) != 0 {
+		t.Fatalf("a missing directory: %+v", probes)
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, leaseDirName), nil, 0o600); err != nil { // not a directory
+		t.Fatal(err)
+	}
+	ran := false
+	err := runCLIOperation(Config{CatalogPath: filepath.Join(root, "catalog.sqlite3"), CaptureRoot: root}, nil, "capture", OperationSpec{Kind: "capture.cli"},
+		func(context.Context, *Op) error { ran = true; return nil })
+	if err == nil || ran || !strings.Contains(err.Error(), "nothing was changed") {
+		t.Fatalf("a command without its lease: ran=%v err=%v", ran, err)
+	}
+}
+
 // TestLeaseHelperProcess is the other Pharos process of
 // TestServiceSeesAnotherProcessThroughItsLease: a Terminal index that holds
 // a lease and journals into the catalog.

@@ -74,10 +74,28 @@ func TestBrokerOperationsAnswerWithoutTheMainLock(t *testing.T) {
 	defer service.Close()
 	m := &applicationManager{token: "broker-token", id: "installation", operations: newBrokerOperations(filepath.Join(t.TempDir(), "operations.json")),
 		children: map[string]*applicationChild{}}
+	// Library e has no service; a Terminal capture holds a lease in its
+	// capture root, and an app-level recovery names library f.
+	eDirs := []string{filepath.Join(t.TempDir(), leaseDirName)}
+	capture, err := acquireProcessLease(eDirs[0], leaseInfo{Instance: "terminal", HostID: currentHost().ID, Process: "cli:capture", Kinds: []string{"capture.cli"},
+		Holds: parseHolds("D:w"), StartedAt: now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer capture.release()
+	fConfig := filepath.Join(t.TempDir(), "library.toml")
+	recovery, err := acquireProcessLease(appLeaseDir(), leaseInfo{Instance: "recovery", HostID: currentHost().ID, Process: "cli:library-recover",
+		Kinds: []string{"library.recover"}, Holds: parseHolds("O:w D(target):w"), Libraries: []string{fConfig}, StartedAt: now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recovery.release()
 	m.operations.publish([]brokerLibrary{
 		{ID: "a", Name: "Euclid", Selected: true, Child: &applicationEndpoint{URL: service.URL, Token: "child-token", PID: 42}, ChildStarted: time.Now()},
 		{ID: "b", Name: "Archive"},
 		{ID: "c", Name: "Gone", Child: &applicationEndpoint{URL: "http://127.0.0.1:1", Token: "x"}},
+		{ID: "e", Name: "Captured", LeaseDirs: eDirs},
+		{ID: "f", Name: "Recovered", Config: fConfig},
 	})
 	create := m.operations.begin(OperationSpec{Kind: "library.create"})
 	m.operations.begin(OperationSpec{Kind: "library.transfer", Variant: "copy"}, "b", "d")
@@ -115,7 +133,7 @@ func TestBrokerOperationsAnswerWithoutTheMainLock(t *testing.T) {
 	for _, library := range document.Libraries {
 		verdicts[library.ID] = library.Eject.Verdict
 	}
-	if verdicts["a"] != verdictSafeIn || verdicts["b"] != verdictBusy || verdicts["c"] != verdictUnsafe {
+	if verdicts["a"] != verdictSafeIn || verdicts["b"] != verdictBusy || verdicts["c"] != verdictUnsafe || verdicts["e"] != verdictBusy || verdicts["f"] != verdictBusy {
 		t.Fatalf("verdicts: %v", verdicts)
 	}
 	if document.Libraries[0].Service["state"] != "running" || !document.Libraries[0].Connected || document.Libraries[1].Service["state"] != "stopped" {
@@ -125,8 +143,22 @@ func TestBrokerOperationsAnswerWithoutTheMainLock(t *testing.T) {
 	for _, operation := range document.App.Operations {
 		running[firstString(operation["kind"])] = firstString(operation["verb"]) + "/" + firstString(operation["state"])
 	}
-	if running["library.create"] != "Creating the library/running" || running["library.transfer"] != "Copying the library/running" {
+	if running["library.create"] != "Creating the library/running" || running["library.transfer"] != "Copying the library/running" || running["library.recover"] != "Restoring a backup/running" {
 		t.Fatalf("broker operations: %v", running)
+	}
+	// The menu's broker-only mode asks no library.
+	request := httptest.NewRequest(http.MethodGet, "/api/app/operations?libraries=0", nil)
+	request.Header.Set("Authorization", "Bearer broker-token")
+	brokerOnly := httptest.NewRecorder()
+	m.ServeHTTP(brokerOnly, request)
+	var only struct {
+		Libraries []any `json:"libraries"`
+		App       struct {
+			Operations []any `json:"operations"`
+		} `json:"app"`
+	}
+	if err := json.Unmarshal(brokerOnly.Body.Bytes(), &only); err != nil || len(only.Libraries) != 0 || len(only.App.Operations) != 3 {
+		t.Fatalf("broker-only: %s", brokerOnly.Body.String())
 	}
 	create.Finish(nil)
 }

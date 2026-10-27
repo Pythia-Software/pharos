@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -18,41 +20,56 @@ import (
 
 // cliOperations is a command's registry, lease and journal writer.
 type cliOperations struct {
-	reg     *opRegistry
-	lease   *processLease
+	reg *opRegistry
+	// leases are the command's lease files, one per directory it must be
+	// seen from (a transfer: both libraries'); one instance, all held.
+	leases  []*processLease
 	journal *journalWriter
 	stop    context.CancelFunc
 	done    chan struct{}
+	// declared are the kinds' holds, with this Mac resolved.
+	declared []Hold
 }
 
 // cliFinalBudget bounds the final journal round at exit.
 var cliFinalBudget = time.Second
 
-// beginCLIOperations prepares command's lease (beside the catalog when it
-// has one, under the capture root otherwise) and, with a catalog, its
-// journal. Failing to take a lease never fails the command: it then runs
-// with an in-memory registry only, as before leases existed.
-func beginCLIOperations(config Config, catalog *Catalog, command string, kinds ...string) *cliOperations {
-	reg := newOpRegistry("cli:" + command)
-	ops := &cliOperations{reg: reg}
-	holds := []Hold{}
-	for _, kind := range kinds {
-		if row, ok := lookupOperationKind(kind); ok {
-			holds = append(holds, parseHolds(row.Holds)...)
-		}
-	}
+// beginCLIOperations takes command's lease (beside the catalog when it has
+// one, under the capture root otherwise) and, with a catalog, starts its
+// journal. A writing command that cannot take its lease does not run: the
+// service could not tell it is writing (fail closed, §6.5).
+func beginCLIOperations(config Config, catalog *Catalog, command string, kinds ...string) (*cliOperations, error) {
 	dirs := leaseDirs(config)
 	dir := dirs[len(dirs)-1]
 	if catalog != nil {
 		dir = dirs[0]
 	}
-	lease, err := acquireProcessLease(dir, leaseInfo{Instance: reg.instance, PID: os.Getpid(), HostID: currentHost().ID, Process: reg.process,
-		Kinds: kinds, Holds: holds, StartedAt: now()})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Pharos: could not take an operation lease (%v); the service will not see this command\n", err)
-		return ops
+	return beginCLIOperationsIn([]string{dir}, nil, catalog, command, kinds...)
+}
+
+// beginCLIOperationsIn takes command's lease in each of dirs, naming the
+// library configurations it touches.
+func beginCLIOperationsIn(dirs, libraries []string, catalog *Catalog, command string, kinds ...string) (*cliOperations, error) {
+	reg := newOpRegistry("cli:" + command)
+	ops := &cliOperations{reg: reg}
+	for _, kind := range kinds {
+		if row, ok := lookupOperationKind(kind); ok {
+			ops.declared = append(ops.declared, resolveHolds(parseHolds(row.Holds))...)
+		}
 	}
-	ops.lease = lease
+	for _, dir := range dirs {
+		lease, err := acquireProcessLease(dir, leaseInfo{Instance: reg.instance, PID: os.Getpid(), HostID: currentHost().ID, Process: reg.process,
+			Kinds: kinds, Holds: ops.declared, Libraries: libraries, StartedAt: now()})
+		if err != nil {
+			for _, taken := range ops.leases {
+				taken.release()
+			}
+			return nil, fmt.Errorf("Pharos could not take its operation lease in %s, so a running Pharos could not see this command writing; nothing was changed: %w", dir, err)
+		}
+		ops.leases = append(ops.leases, lease)
+	}
+	// The locks it takes are named in the lease as it takes them.
+	reg.holdsChanged = ops.refreshLeaseHolds
 	if catalog != nil {
 		catalog.ops = reg
 		if ops.journal = newJournalWriter(catalog, reg); ops.journal != nil {
@@ -65,14 +82,54 @@ func beginCLIOperations(config Config, catalog *Catalog, command string, kinds .
 			}()
 		}
 	}
-	return ops
+	return ops, nil
+}
+
+// resolveHolds names this Mac in holds declared for "this" (C(this)).
+func resolveHolds(holds []Hold) []Hold {
+	resolved := slices.Clone(holds)
+	for i := range resolved {
+		if resource, ok := strings.CutSuffix(resolved[i].Resource, ":this"); ok {
+			resolved[i].Resource = resource + ":" + currentHost().ID
+		}
+	}
+	return resolved
+}
+
+// refreshLeaseHolds writes the declared holds and the locks the command's
+// running operations hold now into its lease.
+func (o *cliOperations) refreshLeaseHolds() {
+	holds := slices.Clone(o.declared)
+	for _, view := range o.reg.views() {
+		if opTerminal(view.State) {
+			continue
+		}
+		for _, hold := range view.Spec.Holds {
+			if !slices.Contains(holds, hold) {
+				holds = append(holds, hold)
+			}
+		}
+	}
+	o.updateLeases(func(info *leaseInfo) { info.Holds = holds })
+}
+
+func (o *cliOperations) updateLeases(change func(*leaseInfo)) {
+	for _, lease := range o.leases {
+		_ = lease.update(change)
+	}
+}
+
+func (o *cliOperations) releaseLeases() {
+	for _, lease := range o.leases {
+		lease.release()
+	}
 }
 
 // begin registers the command's operation and names it in the lease.
 func (o *cliOperations) begin(ctx context.Context, spec OperationSpec) (context.Context, *Op) {
 	ctx, op := o.reg.begin(ctx, spec)
-	if o.lease != nil && o.journal != nil {
-		_ = o.lease.update(func(info *leaseInfo) { info.Operations = append(info.Operations, string(op.ID())) })
+	if o.journal != nil {
+		o.updateLeases(func(info *leaseInfo) { info.Operations = append(info.Operations, string(op.ID())) })
 	}
 	return ctx, op
 }
@@ -89,7 +146,7 @@ func (o *cliOperations) close() {
 		<-o.done
 	}
 	if o.journal == nil {
-		o.lease.release()
+		o.releaseLeases()
 		return
 	}
 	deadline := time.Now().Add(cliFinalBudget)
@@ -102,7 +159,7 @@ func (o *cliOperations) close() {
 		}
 	}
 	if err == nil && !o.journal.pending() {
-		o.lease.release()
+		o.releaseLeases()
 		return
 	}
 	outcomes := map[string]leaseOutcome{}
@@ -111,19 +168,38 @@ func (o *cliOperations) close() {
 			outcomes[string(view.ID)] = leaseOutcome{State: view.State, Reason: view.Reason, Error: view.Error, EndedAt: formatTime(view.Ended)}
 		}
 	}
-	_ = o.lease.abandon(outcomes)
+	for _, lease := range o.leases {
+		_ = lease.abandon(outcomes)
+	}
 }
 
 // runCLIOperation runs work as command's operation spec, with a lease and,
 // given a writable catalog, a journal.
 func runCLIOperation(config Config, catalog *Catalog, command string, spec OperationSpec, work func(ctx context.Context, op *Op) error) error {
+	ops, err := beginCLIOperations(config, catalog, command, spec.Kind)
+	if err != nil {
+		return err
+	}
+	return ops.run(spec, work)
+}
+
+// runCLIOperationIn runs work with leases in dirs and no journal: a
+// command that writes libraries it does not open as a catalog (a transfer,
+// a recovery), naming their configurations.
+func runCLIOperationIn(dirs, libraries []string, command string, spec OperationSpec, work func(ctx context.Context, op *Op) error) error {
+	ops, err := beginCLIOperationsIn(dirs, libraries, nil, command, spec.Kind)
+	if err != nil {
+		return err
+	}
+	return ops.run(spec, work)
+}
+
+func (ops *cliOperations) run(spec OperationSpec, work func(ctx context.Context, op *Op) error) (err error) {
 	if spec.Trigger == "" {
 		spec.Trigger = triggerCLI
 	}
-	ops := beginCLIOperations(config, catalog, command, spec.Kind)
 	defer ops.close()
 	ctx, op := ops.begin(context.Background(), spec)
-	var err error
 	func() {
 		defer func() {
 			if value := recover(); value != nil {

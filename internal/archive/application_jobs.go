@@ -128,14 +128,14 @@ func (m *applicationManager) deliveryCycle(sourceID, targetID string) {
 	progress := func(s string) { m.reportJob("running", s); deliver.Step(s, "", -1) }
 	if _, e := os.Stat(pendingDeliveryPath(source)); os.IsNotExist(e) {
 		progress("Capturing approved sources into the pending library")
-		_, capture := deliver.Child(OperationSpec{Kind: "library.deliver.capture", Subject: sourceID, Trigger: triggerChained})
+		_, capture := deliver.Child(OperationSpec{Kind: "library.deliver.capture", Libraries: []string{sourceID}, Trigger: triggerChained})
 		err = capturePendingLibrary(m.ctx, source)
 		capture.Finish(err)
 	}
 	if err == nil {
 		err = targetErr
 		if err == nil {
-			_, move := deliver.Child(OperationSpec{Kind: "library.transfer", Variant: "move", Subject: sourceID + "," + targetID, Trigger: triggerChained})
+			_, move := deliver.Child(OperationSpec{Kind: "library.transfer", Variant: "move", Libraries: []string{sourceID, targetID}, Trigger: triggerChained})
 			_, err = TransferLibrary(m.ctx, source, target, true, func(s string) { progress(s); move.Step(s, "", -1) })
 			move.Finish(err)
 		}
