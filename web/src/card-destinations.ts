@@ -3,19 +3,17 @@ import type { QueryRecipe } from "./curiosity-data";
 import { queryURL, type RollingWindow } from "./query-links";
 import type { TokenChartView } from "./usage-presets";
 import { usageDatasetTopics, usageTopicDatasets, usageTopics, type UsageDataset } from "./usage-workspace-model";
-import type { MCPDashboardView } from "./mcp-dashboard-model";
-import type { ToolDashboardView } from "./tools-dashboard-model";
 import { cardDashboardWhere } from "./card-exploration";
-import { analysisVersion } from "./dashboard-analysis-model";
+import { analysisVersion, type AnalysisState } from "./dashboard-analysis-model";
 import { concurrencyWindowRange, defaultConcurrencySettings } from "./concurrency-settings";
 import { defaultCardCover } from "./card-cover";
 
 type DailyChart = { period: "day"; rollingPeriods: number; display: "interval"; scale: "linear"; seriesLimit: number };
 export type CardDashboard =
   | { topic: "tokens"; chart: TokenChartView & { v?: number } }
-  | { topic: "mcp"; chart: MCPDashboardView }
-  | { topic: "tools"; chart: ToolDashboardView }
-  | { topic: "time" | "skills"; chart: DailyChart & { metric: number; split: string } }
+  // Engine dashboards take an analysis state, versioned so the card's own
+  // filters stay its population.
+  | { topic: "mcp" | "tools" | "time" | "skills"; chart: AnalysisState & { v: number } }
   | { topic: "human"; chart: DailyChart & { scope: "typed" | "all"; split: "kind" | "repository_name" | "source_kind" | "providers"; hours: number; days: number } }
   | { topic: "carbon"; chart: { metric: "co2"; split: "type" | "provider" | "repository_name" | "tier"; period: "day"; hours: number; days: number; rollingPeriods: number; display: "interval"; seriesLimit: number } }
   | { topic: "parallelism"; chart: null };
@@ -25,12 +23,11 @@ const daily: DailyChart = { period: "day", rollingPeriods: 0, display: "interval
 const tokens = (metric: TokenChartView["metric"], split: TokenChartView["split"], extra: Partial<TokenChartView> = {}): CardDashboard => ({
   topic: "tokens", chart: { ...daily, v: analysisVersion, metric, split, hours: 6, days: 3, selection: { values: [], excluded: false }, ...extra },
 });
-const mcp = (metric: MCPDashboardView["metric"], split: MCPDashboardView["split"], extra: Partial<MCPDashboardView> = {}): CardDashboard => ({
-  topic: "mcp", chart: { metric, split, view: "compare", period: "day", rollingPeriods: 0, display: "interval", ...extra },
+const engine = (topic: "mcp" | "tools" | "time" | "skills", view: AnalysisState["view"]) => (metric: string, split: string, extra: Partial<AnalysisState> = {}): CardDashboard => ({
+  topic, chart: { v: analysisVersion, view, metric, split, period: "day", ...extra },
 });
-const tools = (metric: ToolDashboardView["metric"], split: ToolDashboardView["split"] = "tool_name", extra: Partial<ToolDashboardView> = {}): CardDashboard => ({
-  topic: "tools", chart: { metric, split, view: "compare", period: "day", rollingPeriods: 0, display: "interval", ...extra },
-});
+const mcp = engine("mcp", "compare"), time = engine("time", "trend"), skills = engine("skills", "trend");
+const tools = (metric: string, split = "tool_name", extra: Partial<AnalysisState> = {}) => engine("tools", "compare")(metric, split, extra);
 const dashboards: Record<string, CardDashboard> = {
   ...Object.fromEntries((["channel", "machine_id", "execution_machine_id"] as const).flatMap(field => [
     [`origin-tokens-${field}`, tokens("tokens", field)],
@@ -46,21 +43,32 @@ const dashboards: Record<string, CardDashboard> = {
   "token-volume-log": tokens("tokens", "repository_name", { scale: "logarithmic" }),
   "cumulative-api-cost": tokens("cost", "provider", { display: "cumulative" }),
   "mcp-call-trend": mcp("calls", "tool_name", { view: "trend", rollingPeriods: 7 }),
-  "mcp-response-size": mcp("bytes", "tool_name"),
+  "mcp-response-size": mcp("bytes", "tool_name", { view: "distribution", minSamples: 3, scale: "logarithmic" }),
   "pharos-mcp-query-sources": mcp("calls", "query_source"),
-  "pharos-mcp-durations": mcp("mean_time", "tool_name"),
+  "pharos-mcp-durations": mcp("time", "tool_name", { view: "distribution", minSamples: 3, scale: "logarithmic" }),
   "archive-empty-search-rate": mcp("calls", "status"),
-  "tool-failure-rates": tools("failure_rate"),
+  "tool-failures": tools("failures", "tool_name", { compareAs: "share" }),
+  "tool-call-share": tools("calls", "tool_name", { compareAs: "share" }),
+  "tool-failure-rates": tools("failure_rate", "tool_name", { minSamples: 10 }),
   "repository-failure-rates": tools("failure_rate", "repository_name"),
   "edit-failures": tools("failures", "repository_name"),
   "test-failures": tools("failures", "command_name"),
-  "large-outputs": tools("context_added"),
-  "output-distribution": tools("context_added"),
-  "duration-distribution": tools("mean_time", "command_name"),
+  "large-outputs": time("result_tokens", "tool_source", { view: "compare", compareAs: "share" }),
+  "output-distribution": time("result_tokens", "tool_source", { view: "distribution", minSamples: 3, scale: "logarithmic" }),
+  "duration-distribution": time("time", "command_source", { view: "distribution", minSamples: 3, scale: "logarithmic" }),
+  "machine-time": time("time", "activity", { seriesLimit: 6 }),
+  "machine-activities": time("time", "activity", { view: "compare", compareAs: "share" }),
+  "machine-operations": time("time", "operation_name", { view: "compare" }),
+  "conversation-error-counts": time("calls", "tool_name", { view: "distribution", unit: "tool_conversation", minSamples: 3, scale: "logarithmic" }),
+  "tool-calls-per-conversation": time("calls", "repository_name", { view: "distribution", unit: "conversation", minSamples: 3, scale: "logarithmic" }),
+  "research-conversation-searches": time("calls", "repository_name", { view: "distribution", unit: "conversation", minSamples: 3, scale: "logarithmic" }),
+  "skill-evidence": skills("conversations", "skill_name", { view: "compare" }),
+  "skill-body-sizes": skills("body", "skill_evidence", { view: "distribution", minSamples: 3, scale: "logarithmic" }),
+  "skill-load-distribution": skills("loads", "skill_name", { view: "distribution", unit: "skill_path", minSamples: 3, scale: "logarithmic" }),
   "mcp-methods": tools("calls", "mcp_server"),
   "pharos-mcp-sources": tools("calls", "source_kind"),
-  "machine-call-trend": tools("calls", "tool_category", { view: "trend", rollingPeriods: 7 }),
-  "machine-latency-trend": tools("mean_time", "tool_category", { view: "trend", rollingPeriods: 7 }),
+  "machine-call-trend": tools("calls", "none", { view: "trend", rollingPeriods: 7, completePeriods: true, norm: true }),
+  "machine-latency-trend": time("mean_time", "none", { rollingPeriods: 7, completePeriods: true, norm: true }),
   "cache-efficiency": tokens("tokens", "type"),
   "cache-repositories": tokens("tokens", "type"),
   "price-coverage": tokens("tokens", "provider"),
@@ -86,8 +94,8 @@ function dashboardFor(recipe: QueryRecipe): CardDashboard {
   if (recipe.dataset === "writing_messages" || recipe.dataset === "writing" || recipe.dataset === "conversation_activity") return { topic: "human", chart: { ...daily, scope: "typed", split: recipe.id.includes("repo") || recipe.id === "explaining-repos" ? "repository_name" : "kind", hours: 6, days: 3 } };
   if (recipe.dataset === "parallelism") return { topic: "parallelism", chart: null };
   if (recipe.category === "carbon") return { topic: "carbon", chart: { metric: "co2", split: recipe.id.includes("tier") ? "tier" : recipe.id.includes("repo") ? "repository_name" : recipe.id.includes("provider") ? "provider" : "type", period: "day", hours: 6, days: 3, rollingPeriods: 0, display: "interval", seriesLimit: 15 } };
-  if (recipe.dataset === "skill_usages") return { topic: "skills", chart: { ...daily, metric: recipe.id === "skill-body-sizes" ? 1 : 0, split: "skill_name" } };
-  if (recipe.category === "machines") return { topic: "time", chart: { ...daily, metric: 0, split: "activity" } };
+  if (recipe.dataset === "skill_usages") return skills("records", "skill_name");
+  if (recipe.category === "machines") return time("time", "activity");
   if (recipe.dataset === "mcp_calls") return mcp("calls", "tool_name");
   if (recipe.dataset === "tool_calls" || recipe.dataset === "tools") return tools(recipe.category === "errors" ? "failures" : "calls", recipe.id.includes("repo") || recipe.id === "cross-repo-errors" ? "repository_name" : "tool_name");
   return tokens(recipe.unit === "USD" || recipe.category === "cost" ? "cost" : "tokens", recipe.category === "delegation" ? "session_kind" : recipe.category === "models" ? "model_family" : "repository_name");
