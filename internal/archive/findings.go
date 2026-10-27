@@ -816,13 +816,16 @@ func (c *Catalog) RefreshFindings(ctx context.Context, force bool) error {
 		}
 	}()
 	started := time.Now()
+	// The full pass reads the library as it is now: the freshness ledger
+	// compares this with the inputs later (§5).
+	inputs := c.inputsGeneration(ctx)
 	built, _ := c.metaValue(ctx, "findings_generation")
 	full := force || built != c.findingsGeneration()
 	err = c.runFindingsPass(ctx, full)
 	if err == nil && full {
 		err = c.writeTransaction(ctx, "findings-meta", func(tx *sql.Tx) error {
 			for key, value := range map[string]string{"findings_generation": c.findingsGeneration(), "findings_built_at": formatTime(c.clock()),
-				"findings_took_ms": fmt.Sprint(time.Since(started).Milliseconds())} {
+				"findings_took_ms": fmt.Sprint(time.Since(started).Milliseconds()), "findings_inputs_generation": inputs} {
 				if _, err := tx.Exec("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value); err != nil {
 					return err
 				}

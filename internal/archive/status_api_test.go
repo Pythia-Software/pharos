@@ -56,7 +56,7 @@ func TestStatusSnapshotComposesVerdictOperationsAndPlaceholders(t *testing.T) {
 	if rows, ok := idle.raw["freshness"].([]any); !ok || len(rows) == 0 {
 		t.Fatalf("freshness lists the ledger's domains (§5): %#v", idle.raw["freshness"])
 	}
-	if groups, ok := idle.raw["freshness_summary"].([]any); !ok || len(groups) == 0 {
+	if summary, ok := idle.raw["freshness_summary"].(map[string]any); !ok || len(summary["groups"].([]any)) == 0 {
 		t.Fatalf("freshness_summary groups them for the panel: %#v", idle.raw["freshness_summary"])
 	}
 	if idle.Eject.Verdict != verdictSafe || idle.Eject.Checked != "polled" || len(idle.Operations) != 0 || len(idle.Attention) != 0 {

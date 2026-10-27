@@ -218,15 +218,17 @@ const idleLedger = [
   domain("an.identities", "analyses", "Identity links", "current", { as_of: iso(3 * 3600000) }),
   domain("an.tools", "analyses", "Tools rollup", "current", { as_of: iso(3 * 3600000) }),
   domain("findings", "findings", "Findings", "current", { as_of: iso(3 * 3600000) }),
-  domain("backup.local", "backups", "Local backup", "current", { as_of: iso(2 * day) }),
+  // A scheduled cloud backup within its schedule: a local one, which has no
+  // schedule, would be unknown.
+  domain("backup.cloud:archive", "backups", "Cloud backup (Archive bucket)", "current", { as_of: iso(2 * day) }),
 ];
-const idleSummary = [
-  { group: "conversations", label: "Conversations", state: "current", text: "current", as_of: iso(180000), as_of_label: "", catching_up: null, shown: true },
-  { group: "analyses", label: "Analyses", state: "current", text: "current", as_of: iso(3 * 3600000), as_of_label: "", catching_up: null, shown: true },
-  { group: "findings", label: "Findings", state: "current", text: "current", as_of: iso(3 * 3600000), as_of_label: "", catching_up: null, shown: false },
-  { group: "backups", label: "Backups", state: "current", text: "current", as_of: iso(2 * day), as_of_label: "", catching_up: null, shown: false },
-];
-const deferred = { reason: { code: "deferred-by-schedule", text: "Scheduled indexing skips analyses" }, next: "updates with the next manual index", behind: { state: "behind", count: 4, unit: "scheduled index" } };
+const idleSummary = { all_current: true, text: "All current", checked_label: "checked", checked_at: iso(180000), groups: [
+  { group: "conversations", label: "Conversations", state: "current", short: "", short_age: false, text: "current", as_of: iso(180000), as_of_label: "", catching_up: null, shown: false },
+  { group: "analyses", label: "Analyses", state: "current", short: "", short_age: false, text: "current", as_of: iso(3 * 3600000), as_of_label: "", catching_up: null, shown: false },
+  { group: "findings", label: "Findings", state: "current", short: "", short_age: false, text: "current", as_of: iso(3 * 3600000), as_of_label: "", catching_up: null, shown: false },
+  { group: "backups", label: "Backups", state: "current", short: "", short_age: false, text: "current", as_of: iso(2 * day), as_of_label: "", catching_up: null, shown: false },
+] };
+const deferred = { reason: { code: "deferred-by-schedule", text: "Scheduled indexing skips analyses" }, next: "updates with the next manual index", behind: { state: "behind", count: null, unit: null } };
 const busyLedger = [
   domain("conv:claude-code-with-a-long-source-name", "conversations", "Conversations (claude-code-with-a-long-source-name)", "behind", { as_of: iso(2 * day), reason: { code: "indexing", text: "Indexing now" }, catching_up: "op-index", catching_up_label: "Index changes" }),
   domain("conv:codex", "conversations", "Conversations (codex)", "unknown", { as_of: iso(3600000), reason: { code: "schedule-off", text: "Scheduled indexing is off for it" }, next: "updates with the next manual index" }),
@@ -236,13 +238,13 @@ const busyLedger = [
   domain("findings", "findings", "Findings", "behind", { as_of: iso(3 * 3600000), reason: { code: "daily-pass-due", text: "Today's full pass has not run yet" }, next: "updates with the next manual index" }),
   domain("backup.cloud:archive", "backups", "Cloud backup (Archive bucket with a long name)", "behind", { as_of: iso(9 * day), reason: { code: "overdue", text: "Older than its schedule" }, next: "updates with the next scheduled cloud backup" }),
 ];
-const busySummary = [
-  { group: "conversations", label: "Conversations", state: "behind", text: "catching up", as_of: iso(2 * day), as_of_label: "last current", catching_up: "op-index", tooltip: "Conversations (claude-code-with-a-long-source-name): behind, indexing now", shown: true },
-  { group: "analyses", label: "Analyses", state: "behind", text: "behind, updates with the next manual index", as_of: iso(3 * 3600000), as_of_label: "last current", catching_up: null, tooltip: "Identity links: behind, scheduled indexing skips analyses\nTools rollup: behind, scheduled indexing skips analyses", shown: true },
-  { group: "findings", label: "Findings", state: "behind", text: "behind, updates with the next manual index", as_of: iso(3 * 3600000), as_of_label: "last current", catching_up: null, shown: true },
-  { group: "search", label: "Search", state: "behind", text: "catching up", as_of: null, as_of_label: "", catching_up: "op-view", shown: true },
-  { group: "backups", label: "Backups", state: "behind", text: "behind, updates with the next scheduled cloud backup", as_of: iso(9 * day), as_of_label: "last current", catching_up: null, shown: true },
-];
+const busySummary = { all_current: false, checked_at: null, groups: [
+  { group: "conversations", label: "Conversations", state: "behind", short: "updating", short_age: false, text: "catching up", as_of: iso(2 * day), as_of_label: "last current", catching_up: "op-index", tooltip: "Conversations (claude-code-with-a-long-source-name): behind, indexing now", shown: true },
+  { group: "analyses", label: "Analyses", state: "behind", short: "waits for manual index", short_age: false, text: "behind, updates with the next manual index", as_of: iso(3 * 3600000), as_of_label: "last current", catching_up: null, tooltip: "Identity links: behind, scheduled indexing skips analyses\nTools rollup: behind, scheduled indexing skips analyses", shown: true },
+  { group: "findings", label: "Findings", state: "behind", short: "waits for manual index", short_age: false, text: "behind, updates with the next manual index", as_of: iso(3 * 3600000), as_of_label: "last current", catching_up: null, shown: true },
+  { group: "search", label: "Search", state: "behind", short: "updating", short_age: false, text: "catching up", as_of: null, as_of_label: "", catching_up: "op-view", shown: true },
+  { group: "backups", label: "Backups", state: "behind", short: "behind", short_age: true, text: "behind, updates with the next scheduled cloud backup", as_of: iso(9 * day), as_of_label: "last current", catching_up: null, shown: true },
+] };
 export const idleStatus = {
   version: 1, revision: 1, generated_at: iso(0), host: { id: "test-mac", label: "This Mac" }, library: statusLibrary,
   eject: { verdict: "safe", eta_seconds: null, checked: "polled", blockers: [], headline: "Safe to eject; checked again on eject", summary: "Nothing Pharos can see is writing to the library. Pharos checks everything again when you eject." },

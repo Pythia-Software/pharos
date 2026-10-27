@@ -98,7 +98,7 @@ test("freshness and load rows stay out while the snapshot says null", () => {
   const idle = model(view());
   assert.equal(idle.freshness, null);
   assert.equal(idle.load, null);
-  const filled = model(view({ freshness: [{ domain: "conv:codex" }], freshness_summary: [], resources: { cpu_percent: 45 } }));
+  const filled = model(view({ freshness: [{ domain: "conv:codex" }], freshness_summary: { groups: [] }, resources: { cpu_percent: 45 } }));
   assert.ok(filled.freshness);
   assert.ok(filled.load);
 });
@@ -113,26 +113,34 @@ const ledger = {
     { domain: "findings", group: "findings", label: "Findings", as_of: null, behind: { state: "behind", count: null, unit: null }, state_label: "Behind",
       reason: { code: "running", text: "Running words" }, catching_up: "op-1", catching_up_label: "Index changes", next: null },
   ],
-  freshness_summary: [
-    { group: "conversations", label: "Conversations", state: "current", text: "current", as_of: minutesAgo(2), as_of_label: "", shown: true },
-    { group: "analyses", label: "Analyses", state: "behind", text: "behind, next words", as_of: minutesAgo(180), as_of_label: "last current", tooltip: "Tools rollup: behind", shown: true },
-    { group: "backups", label: "Backups", state: "current", text: "current", as_of: null, shown: false },
-  ],
+  freshness_summary: { all_current: false, checked_at: null, groups: [
+    { group: "conversations", label: "Conversations", state: "current", short: "", text: "current", as_of: minutesAgo(2), as_of_label: "", shown: false },
+    { group: "analyses", label: "Analyses", state: "behind", short: "short words", short_age: false, text: "behind, next words", as_of: minutesAgo(180), as_of_label: "last current", tooltip: "Tools rollup: behind", shown: true },
+    { group: "findings", label: "Findings", state: "behind", short: "behind", short_age: true, text: "behind", as_of: minutesAgo(180), as_of_label: "last current", shown: true },
+    { group: "backups", label: "Backups", state: "current", short: "", text: "current", as_of: null, shown: false },
+  ] },
 };
 
-test("the Data row shows the server's shown groups with their ages; Show all lists every domain", () => {
+test("the Data row lists the groups that are not current by their short state; the longer words are the tooltip; Show all lists every domain", () => {
   const data = plain(panel.dataModel(ledger, at));
-  assert.deepEqual(data.line.map(group => group.group), ["conversations", "analyses"]);
-  assert.equal(data.line[0].text, "current (2 min ago)");
-  assert.equal(data.line[1].text, "behind, next words (last current 3 h ago)");
-  assert.equal(data.line[1].tooltip, "Tools rollup: behind");
+  assert.deepEqual(data.line.map(group => group.group), ["analyses", "findings"]);
+  assert.equal(data.line[0].text, "short words");
+  assert.equal(data.line[1].text, "behind 3 h");
+  assert.equal(data.line[0].tooltip, "behind, next words\nlast current 3 h ago\nTools rollup: behind");
   assert.deepEqual(data.domains.map(domain => domain.domain), ["conv:codex", "an.tools", "findings"]);
   assert.equal(data.domains[1].text, "Behind · Reason words · 2 scheduled indexes · 3 h ago");
   assert.equal(data.domains[1].tooltip, "Next words");
   assert.equal(data.domains[2].text, "Behind · Running words (Index changes)");
 });
 
+test("with every group current the row says so, with the last check", () => {
+  const data = plain(panel.dataModel({ freshness: [], freshness_summary: { all_current: true, text: "All words", checked_label: "checked", checked_at: minutesAgo(4), groups: [] } }, at));
+  assert.deepEqual(data.line.map(group => group.text), ["All words · checked 4 min ago"]);
+});
+
 test("ages are whole minutes, hours or days", () => {
+  assert.equal(panel.span(minutesAgo(0.5), at), "<1 min");
+  assert.equal(panel.span(minutesAgo(180), at), "3 h");
   assert.equal(panel.ago(minutesAgo(0.5), at), "just now");
   assert.equal(panel.ago(minutesAgo(59), at), "59 min ago");
   assert.equal(panel.ago(minutesAgo(60 * 47), at), "47 h ago");

@@ -389,13 +389,20 @@ func (c *Catalog) archiveStatus(args map[string]any) (map[string]any, error) {
 	return fitArchiveStatus(c, result, mcpBudget(args, 1800), offset, total)
 }
 
+// archiveStatusLedger turns the ledger off, for a test that compares the
+// page with and without it.
+var archiveStatusLedger = true
+
 // fitArchiveStatus adds the freshness ledger (docs/background-work.md §5)
 // to the page: domains, each with its state, reason and the operation
 // catching it up, and running, the open operations affecting them. The
-// older fields are unchanged. When the budget cannot hold every domain, the
-// current ones are left out first, then the ledger; the page itself is
-// fitted as before.
+// older fields are unchanged: the page is fitted first, as before, and the
+// ledger gets only the budget left, dropping the current domains first,
+// then itself.
 func fitArchiveStatus(c *Catalog, result map[string]any, budget, offset, total int) (map[string]any, error) {
+	if !archiveStatusLedger {
+		return result, fitAuditPage(result, budget, offset, total)
+	}
 	rows, ops := c.mcpFreshness(context.Background())
 	domains, behind := []map[string]any{}, []map[string]any{}
 	for _, row := range rows {
@@ -428,23 +435,23 @@ func fitArchiveStatus(c *Catalog, result map[string]any, budget, offset, total i
 			running = append(running, map[string]any{"id": op.ID, "kind": op.Kind, "label": op.Label, "state": op.State, "started_at": formatTime(op.Started), "domains": affected})
 		}
 	}
-	items := result["items"].([]map[string]any)
-	var lastErr error
+	// The page first, exactly as without the ledger; the ledger only takes
+	// what budget is left.
+	if err := fitAuditPage(result, budget, offset, total); err != nil {
+		return nil, err
+	}
 	for _, attempt := range []func(map[string]any){
 		func(page map[string]any) { page["domains"], page["running"] = domains, running },
 		func(page map[string]any) {
 			page["domains"], page["running"], page["domains_partial"] = behind, running, true
 		},
-		func(page map[string]any) {
-			page["domains_omitted"] = "increase max_output_tokens to see the freshness domains"
-		},
 	} {
 		page := maps.Clone(result)
-		page["items"] = slices.Clone(items)
 		attempt(page)
-		if lastErr = fitAuditPage(page, budget, offset, total); lastErr == nil {
+		if len(jsonText(page)) <= budget*3 {
 			return page, nil
 		}
 	}
-	return nil, lastErr
+	result["domains_omitted"] = "increase max_output_tokens to see the freshness domains"
+	return result, nil
 }

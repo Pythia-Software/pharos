@@ -575,18 +575,19 @@ blocker "Delivering history".
 ## 5. Freshness domains
 
 Phase 3 implements these as one function over today's storage
-(`Catalog.freshness`, `freshness.go`); storage does not change. Every row
-has:
+(`Catalog.freshness`, `freshness.go`). Storage changes only by two kinds of
+additive `meta` rows that record what a completion was for (below). Every
+row has:
 
 - `domain`, `group` (`conversations`, `search`, `analyses`, `findings`,
   `upgrade`, `backups`), `label` and `state_label` (server words);
 - `as_of`: when the domain was last brought current (RFC 3339), or null
-  when that is not recorded (the search indexes, the tool ledger, the
-  upgrade) or it never was;
+  when that is not recorded (the search indexes) or it never was;
 - `behind`: `{"state": "current" | "behind" | "unknown", "count": N, "unit": "…"}`,
-  with `count` and `unit` only when the tables hold them;
+  with `count` and `unit` only when the tables count something real;
 - `reason`: `{"code", "text", "detail"}`, one code from the list below with
-  its server sentence, or null when current;
+  its server sentence (`detail` names, for example, the failed stage), or
+  null when current;
 - `catching_up`: the ID of the queued, running or blocked operation whose
   kind's `affects` (§3) covers the domain (the most recently started, so a
   chain stage before the index that started it), or null; with
@@ -597,24 +598,58 @@ has:
   index", "carries on by itself"), and `next_at` where a schedule says
   when. Null while an operation is catching it up.
 
+**The governing rule: `current` needs positive evidence.** A domain is
+`current` only when there is a recorded completion at or after the last
+relevant change of its inputs. The absence of a "behind" marker is not
+evidence. Without that evidence the state is `unknown`, with its `as_of`
+and an honest reason. The evidence per domain:
+
+- conversations: the scheduled index's successful check within its
+  interval (it read the source);
+- captures: `capturedHosts` finds the source indexed after its newest
+  captured data, at the current indexer version;
+- the Search view and the search indexes: their trigger-maintained dirty
+  set is empty, or their done flag is set (the triggers keep them current
+  after that), at this version;
+- the Tools rollup and writing classification: their built generation
+  equals the generation they are built from (the existing rebuild rules);
+- identity links and Git merges: `meta['analysis_inputs:<stage>']`, written
+  in the chain's completion transaction for that stage, equals the
+  library's input generation, `tool_ledger_generation:authorship_inputs_generation`
+  (every write of conversations moves one of the two), and nothing is
+  deferred;
+- findings: today's full pass, and `meta['findings_inputs_generation']`
+  (written with the pass's other meta, read before it starts) equals the
+  input generation, and nothing is deferred;
+- the tool ledger and the upgrade: the last `UpgradeSteps` count was taken
+  for the current input generation;
+- backups: a verified (cloud) or complete (local) backup within an enabled
+  schedule. Without a schedule, the newest backup is reported `unknown`
+  (`no-schedule`) with its `as_of`; local backups have no schedule.
+
+Catalogs from before phase 3 have no `analysis_inputs:*` or
+`findings_inputs_generation` rows: those domains are `unknown`
+(`no-record`) until the next manual index (or findings' next full pass).
+An older Pharos ignores the rows.
+
 | Domain | `as_of` from | Behind measured by | Reason codes (in order after the running code) | Caught up by |
 |---|---|---|---|---|
 | `conv:<source>` (this Mac's enabled sources) | max of `automatic_source_states.indexed_at`/`succeeded_at` and `source_states.last_success_at` for this host | count unknown | `indexing`, `never-indexed` (behind), `interrupted`, `source-error` (the latest attempt, across both tables), `capture-busy` (the latest index left it to a running capture), `needs-capture` (behind: `source_input_states.pending`), `schedule-off`, `overdue` (the schedule's last success is older than max(2 × interval, interval + 15 min)); all but the two marked are `unknown` | `index.changes.*`, `library.update`, `index.sources.legacy`, `index.captures`, `library.rebuild` |
-| `capt:<host>/<source>` | the source's `source_states.last_success_at` on that host (when its captures were last indexed) | `needs_index` from `capturedHosts`; count unknown | `indexing`, `capture-running` (a `capture.*` operation is the one catching up), `not-indexed` (detail: `capturedHosts`' `index_reason`) | `index.captures`, `library.update`, `capture.*` |
+| `capt:<host>/<source>` | the source's `source_states.last_success_at` on that host (when its captures were last indexed) | `needs_index` from `capturedHosts`; count unknown | `indexing`, `capture-running` (a `capture.*` operation is the one catching up), `unreadable` (the capture root cannot be read: the rows last read, all `unknown`, or one `capt:*` row when none were read; a root that does not exist and never had captures has no rows), `not-indexed` (detail: `capturedHosts`' `index_reason`) | `index.captures`, `library.update`, `capture.*` |
 | `view` (Search view rows) | — | `COUNT(*)` of `workspace_library_dirty` (capped at 100,000), unit workspace | `refreshing`, `version` (`workspace_library_version`; count unknown), `stopped` (`libraryRefreshStopped`) | `maintenance.library-view` |
 | `search.substring` | — | conversations past `message_trigram_cursor` (counted only while not ready) | `building`, `version` | `maintenance.search.substring` |
 | `search.text` | — | `text_search_documents_version` not `1`; count unknown | `building`, `version` | `maintenance.search.text` |
 | `search.tools` | — | `tool_command_fts_version` not `1`; count unknown | `building`, `version` | `maintenance.search.tools` |
 | `search.query` | — | the three `*_ready` keys not at their index's version; count unknown | `building`, `version` | `maintenance.search.query` |
-| `an.identities` | `sync_deferred[identities].completed_at` | `generation − completed_generation`, unit scheduled index | `running`, `deferred-by-schedule`, `failed` (the latest ended `analysis.identities` journal row failed after `as_of`) | `analysis.chain`, `analysis.identities`, `analysis.github` |
-| `an.git` | `sync_deferred[git].completed_at` | as above | as above (`git-unavailable` is not detected: the 6 h retry timers are in memory) | `analysis.git`, `analysis.chain`, `analysis.refresh` |
-| `an.tools` (Tools rollup) | `sync_deferred[tools].completed_at` | `COUNT(*)` of `tool_rollup_dirty` (capped), unit workspace, when that is why | `running`, `deferred-by-schedule`, `never-built`, `version` (an older layout), `changed` (a newer ledger generation, dirty workspaces, another day or timezone: the `toolRollupStale` rule), `failed` | `analysis.tools`, `library.upgrade`, `tools.ledger.build` |
-| `an.authorship` | `authorship_built_at` | `authorship_generation` ≠ `tool_ledger_generation:authorship_inputs_generation/version`; count unknown | `running`, `deferred-by-schedule`, `never-built`, `changed`, `failed` | `analysis.authorship` |
-| `an.ledger` (tool ledger) | — | the upgrade's `tools` step count, from the last `UpgradeSteps` (below); `unknown` before anything counted | `running`, `version` | `tools.ledger.build`, `library.upgrade` |
-| `findings` | `findings_built_at` | `sync_deferred[findings]` (unit scheduled index), else `findings_generation` ≠ `findingsVersion/<today>` | `running`, `never-built`, `deferred-by-schedule`, `daily-pass-due` | `analysis.findings`, `analysis.chain` |
-| `upgrade` | — | steps with pending units, from the last `UpgradeSteps`; `unknown` before anything counted | `running`, `upgrade-available` | `library.upgrade` |
-| `backup.local` | the newest non-partial backup in `backups.json` | age only: local backups have no schedule | `running`, `failed` (this process's latest backup failed after `as_of`), `never` (`unknown`: Pharos cannot tell whether one is wanted) | `backup.local` |
-| `backup.cloud:<destination>` | the newest complete, verified full run | against an enabled schedule: older than its cadence + 12 h | `running`, `retrying` (enabled, `failures > 0`), `failed`, `unverified`, `never`, `overdue`, then `paused` replaces any but `failed` when the schedule exists and is off | `cloud.upload`, `cloud.verify` |
+| `an.identities` | the later of `sync_deferred[identities].completed_at` and its latest succeeded journal row | count unknown: `sync_deferred` generations count written records, not runs | `running`, `failed` / `blocked` (below), `deferred-by-schedule`, `no-record` (unknown), `changed` (the inputs moved since its completion: a write outside the chain, such as a Terminal ingest) | `analysis.chain`, `analysis.identities`, `analysis.github` |
+| `an.git` | as above, for `git` | as above | as above (`git-unavailable` is not detected: the 6 h retry timers are in memory) | `analysis.git`, `analysis.chain`, `analysis.refresh` |
+| `an.tools` (Tools rollup) | as above, for `tools` | `COUNT(*)` of `tool_rollup_dirty` (capped), unit workspace, when that is why | `running`, `failed` / `blocked`, `deferred-by-schedule`, `never-built`, `version` (an older layout), `changed` (a newer ledger generation, dirty workspaces, another day or timezone: the `toolRollupStale` rule) | `analysis.tools`, `library.upgrade`, `tools.ledger.build` |
+| `an.authorship` | `authorship_built_at` | `authorship_generation` ≠ `tool_ledger_generation:authorship_inputs_generation/version`; count unknown | `running`, `failed` / `blocked`, `deferred-by-schedule`, `never-built`, `changed` | `analysis.authorship` |
+| `an.ledger` (tool ledger) | when it was last counted | the upgrade's `tools` step count, from the last `UpgradeSteps` | `running`, `not-counted` (unknown: never counted, or counted for other inputs), `version` | `tools.ledger.build`, `library.upgrade` |
+| `findings` | `findings_built_at` | count unknown | `running`, `never-built`, `failed` / `blocked`, `deferred-by-schedule`, `daily-pass-due` (`findings_generation` ≠ `findingsVersion/<today>`), `no-record` (unknown), `changed` (new data since today's full pass: "updates with Refresh findings now, or the first index tomorrow") | `analysis.findings`, `analysis.chain` |
+| `upgrade` | when it was last counted | steps with pending units, from the last `UpgradeSteps` | `running`, `not-counted` (unknown), `upgrade-available` | `library.upgrade` |
+| `backup.local` | the newest non-partial backup in `backups.json` | age only | `running`, `failed` (this process's latest backup failed after `as_of`), `never` (unknown), `no-schedule` (unknown, with `as_of`) | `backup.local` |
+| `backup.cloud:<destination>` | the destination's newest complete, verified full run | against an enabled schedule: older than its cadence + 12 h | `running`, `retrying` (enabled, `failures > 0`), `failed`, `unverified`, `never`, `overdue`, `no-schedule` (unknown, with `as_of`); `paused` replaces any but `failed` when the schedule exists and is off | `cloud.upload`, `cloud.verify` |
 
 Rules:
 
@@ -623,32 +658,54 @@ Rules:
   `building`, `running`, or `capture-running`), whatever the stored state
   says, so "indexing now" beats an earlier `source-error`. Otherwise
   `reason` is the first applicable code in the row's list.
-- **`unknown` is an honest answer.** Conversations are known current only
-  as of the scheduled index's last check, within its interval; off
-  schedule, after an error or an interruption, they are `unknown`, not
-  guessed. A count the tables do not hold is left out.
+- **Failure precedence.** The chain runs github, identities, git, tools,
+  authorship, findings, and stops at the first failure. For an analysis
+  that is not current, its own stage's latest journal row having failed
+  after its `as_of` (and after the deferral's `changed_at`, when scheduled
+  indexing deferred it) makes it `failed`; an earlier stage's such failure
+  makes it `blocked`, with that stage's label as `detail`. Both outrank
+  `deferred-by-schedule`. A domain whose evidence says current stays
+  current whatever failed before.
+- **No misleading counts.** A count is given only when it counts the unit
+  it names (workspaces, conversations, steps). Scheduled deferral is shown
+  as behind since `as_of`, with no count.
 - **Cheap.** It runs on every snapshot computation: one `meta` query for
   every key, `sync_deferred` (5 rows), the source state tables for this
-  host, two counts capped at 100,000, `cloud_destinations`, the latest 100
-  cloud runs and the schedules, and the journal's newest 200 analysis rows
-  through its `(host_id, started_at)` index. It never probes a lock. The
-  file-derived inputs (`backups.json`, `capturedHosts`' capture manifests)
-  are cached for a minute, and read again sooner (not more than once per
+  host, two counts capped at 100,000, `cloud_destinations`, two indexed
+  queries per destination (its latest finished and latest verified full
+  run, through `cloud_runs_destination`) and the schedules, and the
+  journal's newest 200 analysis rows through its `(host_id, started_at)`
+  index. It never probes a lock. The file-derived inputs (`backups.json`,
+  `capturedHosts`' capture manifests) are cached for a minute per capture
+  root and backup history, and read again sooner (not more than once per
   2 s) when an operation affecting `capt:*` or `backup.local` starts or
-  ends. Counting the upgrade's steps scans the catalog, so `upgrade` and
-  `an.ledger` read the answer `UpgradeSteps` last gave (the page asks on
-  every load), set to none pending after a complete upgrade and forgotten
-  after one that failed. Measured: about 0.25 ms per computation on a test
-  catalog with 2,000 rows in each dirty table.
-- **Summary.** `/api/status` also carries `freshness_summary`: one entry
-  per group present, `{group, label, state, text, as_of, as_of_label,
-  tooltip, catching_up, shown}`. Its state is the worst of its rows
-  (`behind` over `unknown` over `current`); `text` is "current", "catching
-  up", or the state with the first row's `next` ("behind, updates with the
-  next manual index"); `as_of` is the least recent among the rows in that
-  state; `tooltip` lists the rows that are not current, with why. `shown`
-  is true for conversations and analyses, and for any other group that is
-  not current: the panel's Data row shows those, adding only ages.
+  ends. The release path's fresh check (`?fresh=1`) reads no file: it uses
+  the cache for the same configuration, or reports those domains
+  `unknown`. Counting the upgrade's steps scans the catalog, so `upgrade`
+  and `an.ledger` read the answer `UpgradeSteps` last gave (the page asks
+  on every load), with the input generation it was taken for; a count that
+  started before an upgrade ended is not kept; a complete upgrade leaves
+  none pending, and a failed one forgets the count. Measured: about
+  0.25 ms per computation on a test catalog with 2,000 rows in each dirty
+  table.
+- **Summary.** `/api/status` also carries `freshness_summary`:
+  `{groups, all_current, text, checked_label, checked_at}`. Each group
+  present is `{group, label, state, short, short_age, text, as_of,
+  as_of_label, tooltip, catching_up, shown}`. Its state is the worst of its
+  rows (`behind` over `unknown` over `current`). `short` is the Data row's
+  word: `failed` (a row failed, is blocked or retrying), `updating` (every
+  row that is not current is being caught up), `waits for manual index`
+  (every uncaught behind row's `next` is the next manual index), `behind`
+  (with its age when `short_age`), or `unknown`. `text` is the longer
+  phrase for tooltips: "catching up" only when every row that is not
+  current is caught up, otherwise the state with the first uncaught row's
+  `next`. `as_of` is the least recent among the rows in that state;
+  `tooltip` lists the rows that are not current, why, and what catches them
+  up. `shown` is true exactly for groups that are not current. With none
+  shown, `all_current` is true, `text` is "All current" and `checked_at`
+  the least recent check of this Mac's conversations. The panel's Data row
+  is one line (two on a narrow screen): the shown groups as
+  "<label> <short>", or "All current · checked <age>"; it adds only ages.
 - **The three older Go rules stay** (no retirement in this series):
   `Catalog.Freshness` (`catalog.go`) ignores scheduled indexing, MCP
   `archiveSourceStatus` (`mcp_audit.go`) counts it but calls a source with
@@ -661,12 +718,15 @@ Rules:
   row compact: `domain`, `state`, `as_of`, `count`, `unit`, `reason`,
   `reason_text`, `catching_up`, `next`) and `running` (the operations
   affecting them: `id`, `kind`, `label`, `state`, `started_at`,
-  `domains`). The MCP process has no registry or configuration: its
-  sources are those the state tables know for this host, its operations
-  are this host's open journal rows whose process is alive (work shorter
-  than its kind's journal threshold is not there yet), and the local
-  backup is `unknown`. A budget too small for every domain drops the
-  current ones (`domains_partial`), then the ledger (`domains_omitted`).
+  `domains`). It is additive: the page is fitted first, exactly as without
+  the ledger, and the ledger takes only the budget left, dropping the
+  current domains (`domains_partial`), then itself (`domains_omitted`). The
+  MCP process has no registry or configuration: its sources are those the
+  state tables know for this host, its operations are this host's open
+  journal rows whose process is alive and started no later than the row
+  (so a reused PID does not count; without a start time the row is not
+  counted), work shorter than its kind's journal threshold is not there
+  yet, and the local backup is `unknown`.
 - Freshness is per library and this Mac's sources only; other Macs' captures
   appear as `capt:<host>/<source>` for indexing, not as conversations.
 
@@ -988,11 +1048,11 @@ recent rows and `freshness: []`; it has no stream. `GET /api/status?fresh=1`
   "attention": [{"id": "backup-failed", "severity": "error", "title": "The last backup failed",
                  "detail": "…", "action": {"label": "Open Backups", "path": "/settings/backups"}}],
   "freshness": [{"domain": "an.tools", "group": "analyses", "label": "Tools rollup", "as_of": "…",
-                 "behind": {"state": "behind", "count": 2, "unit": "scheduled index"}, "state_label": "Behind",
+                 "behind": {"state": "behind", "count": null, "unit": null}, "state_label": "Behind",
                  "reason": {"code": "deferred-by-schedule", "text": "Scheduled indexing skips analyses"},
                  "catching_up": null, "catching_up_label": null, "next": "updates with the next manual index"}],
-  "freshness_summary": [{"group": "analyses", "label": "Analyses", "state": "behind",
-                         "text": "behind, updates with the next manual index", "as_of": "…", "shown": true}],
+  "freshness_summary": {"all_current": false, "checked_at": null, "groups": [{"group": "analyses", "label": "Analyses", "state": "behind",
+                         "short": "waits for manual index", "text": "behind, updates with the next manual index", "as_of": "…", "shown": true}]},
   "resources": null,
   "journal": {"dropped": 0}
 }

@@ -33,6 +33,8 @@
 .pharos-status-tree ul{padding-left:16px}
 .pharos-status-tree li{margin:3px 0;overflow-wrap:anywhere}
 .pharos-status-domains{margin-top:10px;border-top:1px solid var(--line,#ddd);padding-top:8px}
+.pharos-status-data{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;line-clamp:1;overflow:hidden;overflow-wrap:normal}
+@media (max-width:600px){.pharos-status-data{-webkit-line-clamp:2;line-clamp:2}}
 .pharos-status-panel details>summary{cursor:pointer}
 .pharos-status-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
 .pharos-status-panel .pharos-panel-head{flex-wrap:wrap}`;
@@ -68,23 +70,36 @@
     if (seconds < 86400 * 2) return `${Math.floor(seconds / 3600)} h ago`;
     return `${Math.floor(seconds / 86400)} d ago`;
   }
+  // An age without "ago", for "behind 3 h".
+  const span = (value, now = Date.now()) => {
+    const text = ago(value, now);
+    return text === 'just now' ? '<1 min' : text.replace(/ ago$/, '');
+  };
 
-  // The Data row and its detail (docs/background-work.md §5): the server's
-  // summary groups that are shown, each "Label: text (age)", and under Show
-  // all one line per domain. The server says every word; this adds ages and
-  // counts. Null until the snapshot has a ledger.
+  // The Data row and its detail (docs/background-work.md §5): the groups
+  // that are not current, each "Label short-state" ("Analyses waits for
+  // manual index", "Findings behind 3 h"), or "All current · checked 2 min
+  // ago"; the longer words are the tooltip. Under Show all, one line per
+  // domain. The server says every word; this adds ages and counts. Null
+  // until the snapshot has a ledger.
   function dataModel(library, now = Date.now()) {
     if (!Array.isArray(library?.freshness)) return null;
-    const age = (value, label) => value ? ` (${[label, ago(value, now)].filter(Boolean).join(' ')})` : '';
-    const line = (library.freshness_summary || []).filter(group => group.shown).map(group => ({
-      group: group.group, state: group.state, label: group.label, text: `${group.text}${age(group.as_of, group.as_of_label)}`, tooltip: group.tooltip || ''}));
+    const summary = library.freshness_summary || {};
+    const shown = (Array.isArray(summary.groups) ? summary.groups : []).filter(group => group.shown);
+    const line = shown.map(group => ({group: group.group, state: group.state, label: group.label,
+      text: `${group.short || group.state}${group.short_age && group.as_of ? ` ${span(group.as_of, now)}` : ''}`,
+      tooltip: [group.text, group.as_of ? `${group.as_of_label || ''} ${ago(group.as_of, now)}`.trim() : '', group.tooltip].filter(Boolean).join('\n')}));
+    if (!line.length && summary.all_current && summary.text) {
+      line.push({group: 'all', state: 'current', label: '',
+        text: [summary.text, summary.checked_at ? `${summary.checked_label || ''} ${ago(summary.checked_at, now)}`.trim() : ''].filter(Boolean).join(' · '), tooltip: ''});
+    }
     const domains = library.freshness.map(row => {
       const behind = row.behind || {};
       const amount = behind.count > 0 && behind.unit ? `${count(behind.count)} ${unitName(behind.unit, behind.count)}` : '';
-      const reason = row.reason?.text ? (row.catching_up_label ? `${row.reason.text} (${row.catching_up_label})` : row.reason.text) : '';
+      const reason = row.reason?.text ? (row.catching_up_label ? `${row.reason.text} (${row.catching_up_label})` : row.reason.detail ? `${row.reason.text} (${row.reason.detail})` : row.reason.text) : '';
       return {domain: row.domain, group: row.group, state: behind.state, label: row.label,
         text: [row.state_label, reason, amount].filter(Boolean).join(' · ') + (row.as_of ? ` · ${ago(row.as_of, now)}` : ''),
-        tooltip: [row.reason?.detail, row.next].filter(Boolean).join('\n')};
+        tooltip: [row.next].filter(Boolean).join('\n')};
     });
     return {line, domains};
   }
@@ -416,13 +431,22 @@
     verdict.append(node('span', 'pharos-dot' + (model.verdict.dot ? ` ${model.verdict.dot}` : '')), node('span', '', model.verdict.text));
     if (model.verdict.tooltip) verdict.title = model.verdict.tooltip;
     row('eject', 'Eject', verdict);
-    if (model.freshness?.line.length) row('data', 'Data', model.freshness.line.map((group, index) => {
-      const item = node('span', 'pharos-status-data-group');
-      item.dataset.key = `data:${group.group}`;
-      item.append(index ? ' · ' : '', node('strong', '', `${group.label}:`), ` ${group.text}`);
-      if (group.tooltip) item.title = group.tooltip;
-      return item;
-    }));
+    if (model.freshness?.line.length) {
+      // One line (two on a narrow screen); the rest is in the tooltip and
+      // under Show all.
+      const data = node('span', 'pharos-status-data');
+      for (const [index, group] of model.freshness.line.entries()) {
+        const item = node('span');
+        item.dataset.key = `data:${group.group}`;
+        item.append(index ? ' · ' : '');
+        if (group.label) item.append(node('strong', '', group.label), ' ');
+        item.append(group.text);
+        if (group.tooltip) item.title = group.tooltip;
+        data.append(item);
+      }
+      data.title = model.freshness.line.map(group => [group.label, group.text].filter(Boolean).join(' ') + (group.tooltip ? `\n${group.tooltip}` : '')).join('\n\n');
+      row('data', 'Data', data);
+    }
     if (model.load) row('load', 'Load', node('span', '', loadText(model.load)));
     appendWork(content, rows, model);
     if (model.others.length) {
@@ -623,7 +647,7 @@
   window.pharosStatusPanel = {
     open, close, toggle, render, renderHeader,
     // Pure helpers, for web/tests/unit/page/status-panel.test.mjs.
-    panelModel, chipModel, operationLine, lineText, treeNode, currentOperations, settleVerdict, ejectDecision, indexBusy, stepAmount, dataModel, ago,
+    panelModel, chipModel, operationLine, lineText, treeNode, currentOperations, settleVerdict, ejectDecision, indexBusy, stepAmount, dataModel, ago, span,
   };
   if (enabled()) activate();
 })();

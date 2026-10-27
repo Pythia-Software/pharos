@@ -47,8 +47,12 @@ type upgradeState struct {
 	githubAt time.Time
 	// lastSteps is UpgradeSteps' latest answer, and when it was computed:
 	// the freshness ledger reads it instead of counting again (§5).
-	lastSteps   []upgradeStep
-	lastStepsAt time.Time
+	lastSteps       []upgradeStep
+	lastStepsAt     time.Time
+	lastStepsInputs string
+	// lastFinishedAt is when an upgrade last ended, so a count that started
+	// before it does not overwrite what the upgrade left.
+	lastFinishedAt time.Time
 }
 
 type upgradeMergeGroup struct {
@@ -84,6 +88,8 @@ func (c *Catalog) UpgradeSteps(ctx context.Context) ([]upgradeStep, error) {
 		err := c.reader().QueryRowContext(ctx, query, args...).Scan(&value)
 		return value, err
 	}
+	// What the count is for: the library's inputs before counting.
+	started, inputs := time.Now(), c.inputsGeneration(ctx)
 	merged, err := c.metaValue(ctx, "repository_merge_version")
 	if err != nil {
 		return nil, err
@@ -154,7 +160,9 @@ func (c *Catalog) UpgradeSteps(ctx context.Context) ([]upgradeStep, error) {
 	for index := range steps {
 		steps[index].Seconds = state.seconds[steps[index].ID]
 	}
-	state.lastSteps, state.lastStepsAt = slices.Clone(steps), time.Now()
+	if !state.lastFinishedAt.After(started) && inputs != "" {
+		state.lastSteps, state.lastStepsAt, state.lastStepsInputs = slices.Clone(steps), time.Now(), inputs
+	}
 	return steps, nil
 }
 
@@ -298,7 +306,9 @@ func (c *Catalog) RunUpgrade(ctx context.Context, progress func(step string, don
 		}
 	}
 	finish := func(err error) error {
+		inputs := c.inputsGeneration(context.WithoutCancel(ctx))
 		state.mu.Lock()
+		state.lastFinishedAt = time.Now()
 		state.running, state.step = false, ""
 		if err != nil && ctx.Err() == nil {
 			state.lastError = err.Error()
@@ -309,7 +319,7 @@ func (c *Catalog) RunUpgrade(ctx context.Context, progress func(step string, don
 			for index := range state.lastSteps {
 				state.lastSteps[index].Pending = 0
 			}
-			state.lastStepsAt = time.Now()
+			state.lastStepsAt, state.lastStepsInputs = time.Now(), inputs
 		} else if err != nil {
 			state.lastSteps, state.lastStepsAt = nil, time.Time{}
 		}
@@ -484,4 +494,15 @@ func repositoryRenames(db queryer) (map[string]string, error) {
 func setMeta(db execer, key, value string) error {
 	_, err := db.Exec(`INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	return err
+}
+
+// inputsGeneration is libraryInputs read from the catalog, or "" when it
+// cannot be read.
+func (c *Catalog) inputsGeneration(ctx context.Context) string {
+	var value string
+	if c.reader().QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM meta WHERE key='tool_ledger_generation'),'')||':'||
+		COALESCE((SELECT value FROM meta WHERE key='authorship_inputs_generation'),'')`).Scan(&value) != nil {
+		return ""
+	}
+	return value
 }

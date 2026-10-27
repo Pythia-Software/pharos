@@ -94,6 +94,11 @@ var freshnessReasons = map[string]string{
 	"retrying":             "The scheduled backup failed; it will try again",
 	"unverified":           "The newest cloud backup is not verified yet",
 	"paused":               "Its schedule is paused",
+	"no-record":            "No record that it was built for the current data",
+	"blocked":              "Waits for an earlier step that failed",
+	"no-schedule":          "Has no schedule, so Pharos cannot say it is current",
+	"not-counted":          "Not counted since the library last changed",
+	"unreadable":           "The capture folder cannot be read",
 }
 
 // freshnessReasonOverrides word a code for one kind of domain (the part of
@@ -104,6 +109,7 @@ var freshnessReasonOverrides = map[string]string{
 	"backups overdue":    "Older than its schedule",
 	"backup.cloud never": "No verified cloud backup yet",
 	"backup.local never": "No local backup yet",
+	"findings changed":   "New data since today's full pass",
 }
 
 // reasonText is a code's words for domain, in group.
@@ -130,6 +136,8 @@ const (
 	nextBackup         = "updates with your next backup"
 	nextCloudSchedule  = "updates with the next scheduled cloud backup"
 	nextCloudBackup    = "updates with your next cloud backup"
+	nextFindingsPass   = "updates with Refresh findings now, or the first index tomorrow"
+	nextCapturesRead   = "updates when the capture folder can be read"
 )
 
 // freshnessOp is a queued or running operation the ledger can name as
@@ -174,7 +182,10 @@ type freshnessFiles struct {
 	backupAt    string
 	backupKnown bool
 	// captures are capturedHosts' rows: one per host and captured source.
-	captures []freshnessCapture
+	// capturesUnreadable says the capture root could not be read: captures
+	// are then the last rows read, if any, and every one is unknown.
+	captures           []freshnessCapture
+	capturesUnreadable bool
 }
 
 type freshnessCapture struct {
@@ -186,7 +197,8 @@ type freshnessCapture struct {
 var freshnessMetaKeys = []string{"message_trigram_version", "text_search_documents_version", "text_search_documents_cursor", "tool_command_fts_version",
 	"human_query_text_fts_ready", "tool_query_text_fts_ready", "tool_query_facts_ready", "workspace_library_version",
 	"tool_ledger_generation", "tool_rollup_generation", "tool_rollup_day", "tool_rollup_timezone", "tool_rollup_full_revision", "tool_rollup_built_full_revision",
-	"authorship_inputs_generation", "authorship_generation", "authorship_built_at", "findings_generation", "findings_built_at"}
+	"authorship_inputs_generation", "authorship_generation", "authorship_built_at", "findings_generation", "findings_built_at",
+	"findings_inputs_generation", "analysis_inputs:identities", "analysis_inputs:git"}
 
 // libraryVersionOnce is libraryVersion, which hashes the projection's
 // definition, computed once.
@@ -209,15 +221,15 @@ func (c *Catalog) freshness(ctx context.Context, in freshnessInput) []freshnessR
 	l := ledger{in: in}
 	meta, metaErr := c.freshnessMeta(ctx)
 	deferred, deferredErr := c.freshnessDeferred(ctx)
-	failures := c.latestAnalysisFailures(ctx, in.host)
+	ends := c.latestAnalysisEnds(ctx, in.host)
 
 	l.conversations(ctx, c)
 	l.captures()
 	l.view(ctx, c, meta, metaErr)
 	l.search(ctx, c, meta, metaErr)
-	l.analyses(ctx, c, meta, metaErr, deferred, deferredErr, failures)
-	l.findings(c, meta, metaErr, deferred, deferredErr)
-	l.upgrade(c)
+	l.analyses(ctx, c, meta, metaErr, deferred, deferredErr, ends)
+	l.findings(c, meta, metaErr, deferred, deferredErr, ends)
+	l.upgrade(c, meta, metaErr)
 	l.backups(ctx, c)
 	return l.rows
 }
@@ -351,12 +363,12 @@ func (c *Catalog) freshnessMeta(ctx context.Context) (map[string]string, error) 
 }
 
 type deferredRow struct {
-	generation, completed int64
-	completedAt           string
+	generation, completed  int64
+	changedAt, completedAt string
 }
 
 func (c *Catalog) freshnessDeferred(ctx context.Context) (map[string]deferredRow, error) {
-	rows, err := c.reader().QueryContext(ctx, "SELECT name,generation,completed_generation,COALESCE(completed_at,'') FROM sync_deferred")
+	rows, err := c.reader().QueryContext(ctx, "SELECT name,generation,completed_generation,changed_at,COALESCE(completed_at,'') FROM sync_deferred")
 	if err != nil {
 		return nil, err
 	}
@@ -365,7 +377,7 @@ func (c *Catalog) freshnessDeferred(ctx context.Context) (map[string]deferredRow
 	for rows.Next() {
 		var name string
 		var row deferredRow
-		if err := rows.Scan(&name, &row.generation, &row.completed, &row.completedAt); err != nil {
+		if err := rows.Scan(&name, &row.generation, &row.completed, &row.changedAt, &row.completedAt); err != nil {
 			return nil, err
 		}
 		values[name] = row
@@ -373,29 +385,35 @@ func (c *Catalog) freshnessDeferred(ctx context.Context) (map[string]deferredRow
 	return values, rows.Err()
 }
 
-// latestAnalysisFailures are the analysis kinds whose latest ended journal
-// row on this Mac failed, with when it ended. It reads this host's newest
-// rows through the journal's (host_id, started_at) index.
-func (c *Catalog) latestAnalysisFailures(ctx context.Context, host string) map[string]string {
-	failed := map[string]string{}
+// journalEnd is what the journal says of an analysis kind on this Mac: its
+// latest ended row's state and end, and when it last succeeded.
+type journalEnd struct{ state, ended, succeeded string }
+
+// latestAnalysisEnds reads this host's newest analysis rows through the
+// journal's (host_id, started_at) index.
+func (c *Catalog) latestAnalysisEnds(ctx context.Context, host string) map[string]journalEnd {
+	ends := map[string]journalEnd{}
 	rows, err := c.reader().QueryContext(ctx, `SELECT kind,state,COALESCE(ended_at,'') FROM operation_journal WHERE host_id=? AND kind LIKE 'analysis.%' AND ended_at IS NOT NULL
 		ORDER BY started_at DESC LIMIT 200`, host)
 	if err != nil {
-		return failed
+		return ends
 	}
 	defer rows.Close()
-	seen := map[string]bool{}
 	for rows.Next() {
 		var kind, state, ended string
-		if rows.Scan(&kind, &state, &ended) != nil || seen[kind] {
+		if rows.Scan(&kind, &state, &ended) != nil {
 			continue
 		}
-		seen[kind] = true
-		if state == opFailed {
-			failed[kind] = ended
+		end, seen := ends[kind]
+		if !seen {
+			end.state, end.ended = state, ended
 		}
+		if state == opSucceeded && end.succeeded == "" {
+			end.succeeded = ended
+		}
+		ends[kind] = end
 	}
-	return failed
+	return ends
 }
 
 // conversations is conv:<source> for this Mac's live sources.
@@ -502,10 +520,18 @@ func (l *ledger) captures() {
 	if l.in.files == nil {
 		return
 	}
+	if l.in.files.capturesUnreadable && len(l.in.files.captures) == 0 {
+		l.add(domainEntry{domain: "capt:*", group: "conversations", label: "Captures", state: freshUnknown, reason: "unreadable", next: nextCapturesRead})
+		return
+	}
 	for _, capture := range l.in.files.captures {
 		entry := domainEntry{domain: "capt:" + capture.host + "/" + capture.source, group: "conversations", asOf: capture.indexedAt,
 			label: "Captures (" + capture.source + " on " + defaultString(capture.hostLabel, capture.host) + ")", running: "indexing", next: nextManualIndex, state: freshCurrent}
-		if capture.needsIndex {
+		switch {
+		case l.in.files.capturesUnreadable:
+			// The last rows read, which cannot be checked now.
+			entry.state, entry.reason, entry.next = freshUnknown, "unreadable", nextCapturesRead
+		case capture.needsIndex:
 			entry.state, entry.reason, entry.detail = freshBehind, "not-indexed", capture.reason
 		}
 		l.add(entry)
@@ -566,88 +592,133 @@ func (l *ledger) search(ctx context.Context, c *Catalog, meta map[string]string,
 		meta["tool_query_facts_ready"] == toolQueryFacts.version(), 0, false, "")
 }
 
+// libraryInputs is the catalog's input generation: the tool ledger's
+// generation and the record writer's authorship inputs, which every write of
+// conversations moves. A derived domain is current only when its recorded
+// completion was for this value (or its own generation check says so).
+func libraryInputs(meta map[string]string) string {
+	return meta["tool_ledger_generation"] + ":" + meta["authorship_inputs_generation"]
+}
+
+// chainStages are the analysis chain's stages in the order it runs them; it
+// stops at the first that fails.
+var chainStages = []struct{ kind, domain, label string }{
+	{"analysis.github", "", "GitHub check"}, {"analysis.identities", "an.identities", "Identity links"}, {"analysis.git", "an.git", "Merges from Git"},
+	{"analysis.tools", "an.tools", "Tools rollup"}, {"analysis.authorship", "an.authorship", "Writing classification"}, {"analysis.findings", "findings", "Findings"}}
+
+// chainFailure applies failure precedence (§5) to a domain that is not
+// current: its own stage failed after its last completion (and after the
+// deferral, when scheduled indexing deferred it) makes it failed; an earlier
+// stage's failure makes it blocked, since the chain stopped there.
+func chainFailure(entry *domainEntry, ends map[string]journalEnd, deferral string) bool {
+	relevant := func(ended string) bool {
+		return ended != "" && canonicalTime(ended) > canonicalTime(entry.asOf) && (deferral == "" || canonicalTime(ended) > canonicalTime(deferral))
+	}
+	for _, stage := range chainStages {
+		end := ends[stage.kind]
+		if end.state == opFailed && relevant(end.ended) {
+			if stage.domain == entry.domain {
+				entry.state, entry.reason, entry.next = freshBehind, "failed", nextManualIndex
+			} else {
+				entry.state, entry.reason, entry.detail, entry.next = freshBehind, "blocked", stage.label, nextManualIndex
+			}
+			return true
+		}
+		if stage.domain == entry.domain {
+			return false
+		}
+	}
+	return false
+}
+
 // analyses is the library-wide analyses the chain after a manual index
 // brings current, and scheduled indexing leaves behind (sync_deferred).
-func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]string, metaErr error, deferred map[string]deferredRow, deferredErr error, failures map[string]string) {
-	// A deferred analysis: its generation is ahead of what the chain last
-	// completed, by the number of scheduled indexes since.
-	behindBySchedule := func(entry *domainEntry, name string) bool {
+func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]string, metaErr error, deferred map[string]deferredRow, deferredErr error, ends map[string]journalEnd) {
+	inputs := libraryInputs(meta)
+	// Scheduled indexing deferred it: behind since its last completion. The
+	// generations count written records, not runs, so no count is given.
+	pendingDeferral := func(name string) (string, bool) {
 		row, ok := deferred[name]
-		if !ok || row.generation <= row.completed {
-			return false
-		}
+		return row.changedAt, ok && row.generation > row.completed
+	}
+	deferral := func(entry *domainEntry) {
 		entry.state, entry.reason, entry.next = freshBehind, "deferred-by-schedule", nextManualIndex
-		entry.count, entry.countKnown, entry.unit = row.generation-row.completed, true, "scheduled index"
-		return true
 	}
-	failedSince := func(entry *domainEntry, kind string) bool {
-		ended, ok := failures[kind]
-		if !ok || canonicalTime(ended) <= canonicalTime(entry.asOf) {
-			return false
-		}
-		entry.state, entry.reason, entry.next = freshBehind, "failed", nextManualIndex
-		return true
-	}
-	for _, stage := range []struct{ name, domain, label string }{{"identities", "an.identities", "Identity links"}, {"git", "an.git", "Merges from Git"}} {
-		entry := domainEntry{domain: stage.domain, group: "analyses", label: stage.label, asOf: deferred[stage.name].completedAt, state: freshCurrent}
+	for _, stage := range chainStages[1:3] {
+		name := strings.TrimPrefix(stage.kind, "analysis.")
+		entry := domainEntry{domain: stage.domain, group: "analyses", label: stage.label, state: freshCurrent,
+			asOf: latestTime(deferred[name].completedAt, ends[stage.kind].succeeded)}
+		changedAt, isDeferred := pendingDeferral(name)
+		recorded := meta["analysis_inputs:"+name]
 		switch {
-		case deferredErr != nil:
+		case deferredErr != nil || metaErr != nil:
 			entry.state = freshUnknown
-		case behindBySchedule(&entry, stage.name):
-		case failedSince(&entry, "analysis."+stage.name):
+		case !isDeferred && recorded == inputs:
+		case chainFailure(&entry, ends, changedAt):
+		case isDeferred:
+			deferral(&entry)
+		case recorded == "":
+			entry.state, entry.reason, entry.next = freshUnknown, "no-record", nextManualIndex
+		default:
+			entry.state, entry.reason, entry.next = freshBehind, "changed", nextManualIndex
 		}
 		l.add(entry)
 	}
 
 	// The Tools rollup: built for the ledger's generation, this layout,
 	// today and this timezone, with no dirty workspaces.
-	tools := domainEntry{domain: "an.tools", group: "analyses", label: "Tools rollup", asOf: deferred["tools"].completedAt, state: freshCurrent}
+	tools := domainEntry{domain: "an.tools", group: "analyses", label: "Tools rollup", state: freshCurrent,
+		asOf: latestTime(deferred["tools"].completedAt, ends["analysis.tools"].succeeded)}
 	var dirty int64
 	dirtyErr := c.reader().QueryRowContext(ctx, "SELECT COUNT(*) FROM (SELECT 1 FROM tool_rollup_dirty LIMIT ?)", freshnessCap).Scan(&dirty)
 	built := meta["tool_rollup_generation"]
+	changedAt, isDeferred := pendingDeferral("tools")
+	layout := strings.HasSuffix(built, "/"+toolRollupVersion)
+	stale := built != meta["tool_ledger_generation"]+"/"+toolRollupVersion || dirty > 0 || meta["tool_rollup_day"] != c.clock().Format("2006-01-02") ||
+		meta["tool_rollup_timezone"] != toolRollupTimezone() || meta["tool_rollup_full_revision"] != meta["tool_rollup_built_full_revision"]
 	switch {
-	case metaErr != nil || deferredErr != nil:
+	case metaErr != nil || deferredErr != nil || dirtyErr != nil:
 		tools.state = freshUnknown
-	case behindBySchedule(&tools, "tools"):
-	case !strings.HasSuffix(built, "/"+toolRollupVersion) || meta["tool_ledger_generation"]+"/"+toolRollupVersion != built:
+	case !stale && !isDeferred:
+	case chainFailure(&tools, ends, changedAt):
+	case isDeferred:
+		deferral(&tools)
+	case built == "":
+		tools.state, tools.reason, tools.next = freshBehind, "never-built", nextReadOrIndex
+	case !layout:
 		tools.state, tools.reason, tools.next = freshBehind, "version", nextReadOrIndex
-		if built == "" {
-			tools.reason = "never-built"
-		} else if strings.HasSuffix(built, "/"+toolRollupVersion) {
-			tools.reason = "changed"
-		}
-	case dirtyErr != nil:
-		tools.state = freshUnknown
-	case dirty > 0 || meta["tool_rollup_day"] != c.clock().Format("2006-01-02") || meta["tool_rollup_timezone"] != toolRollupTimezone() ||
-		meta["tool_rollup_full_revision"] != meta["tool_rollup_built_full_revision"]:
+	default:
 		tools.state, tools.reason, tools.next = freshBehind, "changed", nextReadOrIndex
 		if dirty > 0 {
 			tools.count, tools.countKnown, tools.unit = dirty, true, "workspace"
 		}
-	case failedSince(&tools, "analysis.tools"):
 	}
 	l.add(tools)
 
 	// Writing classification: built for the ledger and record generations.
 	authorship := domainEntry{domain: "an.authorship", group: "analyses", label: "Writing classification", asOf: meta["authorship_built_at"], state: freshCurrent}
-	want := meta["tool_ledger_generation"] + ":" + meta["authorship_inputs_generation"] + "/" + authorshipVersion
+	want := inputs + "/" + authorshipVersion
+	changedAt, isDeferred = pendingDeferral("authorship")
 	switch {
 	case metaErr != nil || deferredErr != nil:
 		authorship.state = freshUnknown
-	case behindBySchedule(&authorship, "authorship"):
+	case meta["authorship_generation"] == want && !isDeferred:
+	case chainFailure(&authorship, ends, changedAt):
+	case isDeferred:
+		deferral(&authorship)
 	case meta["authorship_generation"] == "":
 		authorship.state, authorship.reason, authorship.next = freshBehind, "never-built", nextManualIndex
-	case meta["authorship_generation"] != want:
+	default:
 		authorship.state, authorship.reason, authorship.next = freshBehind, "changed", nextManualIndex
-	case failedSince(&authorship, "analysis.authorship"):
 	}
 	l.add(authorship)
 
 	// The tool ledger: conversations whose ledger is from an older version.
 	// Counting them reads every conversation, so the ledger takes the count
-	// from the last time anything asked for the upgrade's steps.
+	// from the last time anything asked for the upgrade's steps, and only
+	// while the library has not changed since.
 	ledgerEntry := domainEntry{domain: "an.ledger", group: "analyses", label: "Tools ledger", unit: "conversation", next: nextUpgrade}
-	if steps, _, ok := c.upgrade().cachedSteps(); ok {
+	if steps, ok := l.countedSteps(c, meta, metaErr, &ledgerEntry); ok {
 		pending := int64(0)
 		for _, step := range steps {
 			if step.ID == "tools" {
@@ -658,37 +729,71 @@ func (l *ledger) analyses(ctx context.Context, c *Catalog, meta map[string]strin
 		if pending > 0 {
 			ledgerEntry.state, ledgerEntry.reason = freshBehind, "version"
 		}
-	} else {
-		ledgerEntry.state = freshUnknown
 	}
 	l.add(ledgerEntry)
 }
 
-// findings is the findings' daily full pass.
-func (l *ledger) findings(c *Catalog, meta map[string]string, metaErr error, deferred map[string]deferredRow, deferredErr error) {
+// countedSteps is the upgrade's last count when it was taken for the
+// library's current inputs; otherwise it makes entry unknown.
+func (l *ledger) countedSteps(c *Catalog, meta map[string]string, metaErr error, entry *domainEntry) ([]upgradeStep, bool) {
+	steps, at, counted, ok := c.upgrade().cachedSteps()
+	entry.asOf = ""
+	if ok {
+		entry.asOf = formatTime(at)
+	}
+	switch {
+	case metaErr != nil:
+		entry.state = freshUnknown
+	case !ok:
+		entry.state, entry.reason = freshUnknown, "not-counted"
+	case counted != libraryInputs(meta):
+		entry.state, entry.reason = freshUnknown, "not-counted"
+	default:
+		return steps, true
+	}
+	return nil, false
+}
+
+// findings is the findings' daily full pass, for the library's inputs.
+func (l *ledger) findings(c *Catalog, meta map[string]string, metaErr error, deferred map[string]deferredRow, deferredErr error, ends map[string]journalEnd) {
 	entry := domainEntry{domain: "findings", group: "findings", label: "Findings", asOf: meta["findings_built_at"], state: freshCurrent, next: nextManualIndex}
 	row := deferred["findings"]
+	isDeferred := row.generation > row.completed
+	today := meta["findings_generation"] == c.findingsGeneration()
 	switch {
 	case metaErr != nil || deferredErr != nil:
 		entry.state = freshUnknown
+	case today && !isDeferred && meta["findings_inputs_generation"] == libraryInputs(meta):
 	case meta["findings_generation"] == "":
 		entry.state, entry.reason = freshBehind, "never-built"
-	case row.generation > row.completed:
+	case chainFailure(&entry, ends, conditionalText(isDeferred, row.changedAt)):
+	case isDeferred:
 		entry.state, entry.reason = freshBehind, "deferred-by-schedule"
-		entry.count, entry.countKnown, entry.unit = row.generation-row.completed, true, "scheduled index"
-	case meta["findings_generation"] != c.findingsGeneration():
+	case !today:
 		entry.state, entry.reason = freshBehind, "daily-pass-due"
+	case meta["findings_inputs_generation"] == "":
+		entry.state, entry.reason = freshUnknown, "no-record"
+	default:
+		// The full pass runs once a day; later data waits for tomorrow's
+		// or for Refresh findings now.
+		entry.state, entry.reason, entry.next = freshBehind, "changed", nextFindingsPass
 	}
 	l.add(entry)
 }
 
-// upgrade is the library upgrade's pending steps, from the last time
-// anything asked for them (counting them scans the catalog).
-func (l *ledger) upgrade(c *Catalog) {
+func conditionalText(condition bool, value string) string {
+	if condition {
+		return value
+	}
+	return ""
+}
+
+// upgrade is the library upgrade's pending steps, from the last count taken
+// for the current inputs (counting them scans the catalog).
+func (l *ledger) upgrade(c *Catalog, meta map[string]string, metaErr error) {
 	entry := domainEntry{domain: "upgrade", group: "upgrade", label: "Library upgrade", unit: "step", next: nextUpgrade}
-	steps, _, ok := c.upgrade().cachedSteps()
+	steps, ok := l.countedSteps(c, meta, metaErr, &entry)
 	if !ok {
-		entry.state = freshUnknown
 		l.add(entry)
 		return
 	}
@@ -705,8 +810,9 @@ func (l *ledger) upgrade(c *Catalog) {
 	l.add(entry)
 }
 
-// backups is the local backup (age only: it has no schedule) and each cloud
-// destination (against its schedule).
+// backups is the local backup and each cloud destination. Only a schedule
+// says what current means: without one, the newest backup is reported with
+// its age as unknown.
 func (l *ledger) backups(ctx context.Context, c *Catalog) {
 	local := domainEntry{domain: "backup.local", group: "backups", label: "Local backup", next: nextBackup}
 	switch {
@@ -715,10 +821,10 @@ func (l *ledger) backups(ctx context.Context, c *Catalog) {
 	case l.in.backupFailedAt != "" && canonicalTime(l.in.backupFailedAt) > canonicalTime(l.in.files.backupAt):
 		local.asOf, local.state, local.reason = l.in.files.backupAt, freshBehind, "failed"
 	case l.in.files.backupAt == "":
-		// No backup at all: Pharos cannot tell whether one is wanted.
 		local.state, local.reason = freshUnknown, "never"
 	default:
-		local.asOf, local.state = l.in.files.backupAt, freshCurrent
+		// Local backups have no schedule.
+		local.asOf, local.state, local.reason = l.in.files.backupAt, freshUnknown, "no-schedule"
 	}
 	l.add(local)
 
@@ -726,27 +832,14 @@ func (l *ledger) backups(ctx context.Context, c *Catalog) {
 	if err != nil || len(destinations) == 0 {
 		return
 	}
-	runs, runsErr := c.cloudRuns(ctx)
 	schedules, schedulesErr := c.cloudSchedules(ctx)
 	for _, destination := range destinations {
 		entry := domainEntry{domain: "backup.cloud:" + destination.id, group: "backups", label: "Cloud backup (" + destination.name + ")", next: nextCloudBackup}
+		latest, verified, runsErr := c.freshnessCloudRuns(ctx, destination.id)
 		if runsErr != nil || schedulesErr != nil {
 			entry.state = freshUnknown
 			l.add(entry)
 			continue
-		}
-		var verified, latest *cloudRun
-		for index := range runs { // newest first
-			run := &runs[index]
-			if run.DestinationID != destination.id || run.Kind == "sample" {
-				continue
-			}
-			if latest == nil && run.State != "running" && run.State != "pending" {
-				latest = run
-			}
-			if verified == nil && run.State == "complete" && run.Verified {
-				verified = run
-			}
 		}
 		var schedule *cloudSchedule
 		for index := range schedules {
@@ -774,8 +867,10 @@ func (l *ledger) backups(ctx context.Context, c *Catalog) {
 			entry.state, entry.reason = freshBehind, "never"
 		case overdue:
 			entry.state, entry.reason = freshBehind, "overdue"
-		case latest != nil && latest != verified && latest.State == "complete" && !latest.Verified:
+		case latest != nil && latest.ID != verified.ID && latest.State == "complete" && !latest.Verified:
 			entry.state, entry.reason = freshBehind, "unverified"
+		case !enabled:
+			entry.state, entry.reason = freshUnknown, "no-schedule"
 		default:
 			entry.state = freshCurrent
 		}
@@ -784,6 +879,47 @@ func (l *ledger) backups(ctx context.Context, c *Catalog) {
 		}
 		l.add(entry)
 	}
+}
+
+// freshnessCloudRuns is one destination's latest finished full run and its
+// latest complete, verified one, through cloud_runs_destination.
+func (c *Catalog) freshnessCloudRuns(ctx context.Context, destination string) (latest, verified *cloudRun, err error) {
+	scan := func(query string) ([]cloudRun, error) {
+		rows, err := c.reader().QueryContext(ctx, query, destination)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		out := []cloudRun{}
+		for rows.Next() {
+			var raw string
+			var run cloudRun
+			if err := rows.Scan(&raw); err != nil {
+				return nil, err
+			}
+			if json.Unmarshal([]byte(raw), &run) == nil {
+				out = append(out, run)
+			}
+		}
+		return out, rows.Err()
+	}
+	recent, err := scan(`SELECT status_json FROM cloud_backup_runs WHERE destination_id=? AND json_extract(status_json,'$.kind')<>'sample'
+		AND json_extract(status_json,'$.state') NOT IN ('running','pending') ORDER BY created_at DESC LIMIT 1`)
+	if err != nil {
+		return nil, nil, err
+	}
+	good, err := scan(`SELECT status_json FROM cloud_backup_runs WHERE destination_id=? AND json_extract(status_json,'$.kind')<>'sample'
+		AND json_extract(status_json,'$.state')='complete' AND json_extract(status_json,'$.verified')=1 ORDER BY created_at DESC LIMIT 1`)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(recent) > 0 {
+		latest = &recent[0]
+	}
+	if len(good) > 0 {
+		verified = &good[0]
+	}
+	return latest, verified, nil
 }
 
 type freshnessDestination struct{ id, name string }
@@ -809,35 +945,59 @@ func (c *Catalog) freshnessCloudDestinations(ctx context.Context) ([]freshnessDe
 	return out, rows.Err()
 }
 
-// freshnessGroups are the summary line's groups, in order, with their words.
+// freshnessGroups are the summary's groups, in order, with their words.
 var freshnessGroups = []struct{ id, label string }{
 	{"conversations", "Conversations"}, {"analyses", "Analyses"}, {"findings", "Findings"}, {"search", "Search"}, {"upgrade", "Upgrade"}, {"backups", "Backups"}}
 
-// freshnessGroup is one group of the summary line (§5, the panel's Data
-// row): the worst of its rows, with server words.
+// Short states (§5): the Data row's words for a group that is not current.
+const (
+	shortUpdating = "updating"
+	shortBehind   = "behind"
+	shortManual   = "waits for manual index"
+	shortUnknown  = "unknown"
+	shortFailed   = "failed"
+)
+
+// freshnessGroup is one group of the summary (§5, the panel's Data row):
+// the worst of its rows, with server words.
 type freshnessGroup struct {
 	Group string `json:"group"`
 	Label string `json:"label"`
 	State string `json:"state"`
-	// Text is the state in a few words: "current", "behind, updates with
-	// the next manual index", "catching up".
+	// Short is the Data row's word for it: updating, behind (with its age
+	// when ShortAge), waits for manual index, unknown or failed.
+	Short    string `json:"short"`
+	ShortAge bool   `json:"short_age"`
+	// Text is the state with what catches it up, for tooltips: "behind,
+	// updates with the next manual index", "catching up".
 	Text string `json:"text"`
 	// AsOf is the least recent as_of among the rows in the group's state;
-	// AsOfLabel is what the surface says before its age.
+	// AsOfLabel is what a surface says before its age.
 	AsOf      *string `json:"as_of"`
 	AsOfLabel string  `json:"as_of_label"`
 	// Tooltip lists the rows that are not current and why.
 	Tooltip    string  `json:"tooltip,omitempty"`
 	CatchingUp *string `json:"catching_up"`
-	// Shown is whether the one-line summary includes it: conversations and
-	// analyses always, the rest when not current.
+	// Shown is whether the Data row lists it: only groups not current.
 	Shown bool `json:"shown"`
 }
 
-// summarizeFreshness groups rows for the one-line summary.
-func summarizeFreshness(rows []freshnessRow) []freshnessGroup {
+// freshnessSummary is the Data row: the groups, and the words for when
+// every group is current.
+type freshnessSummary struct {
+	Groups     []freshnessGroup `json:"groups"`
+	AllCurrent bool             `json:"all_current"`
+	// Text ("All current") and CheckedLabel ("checked") with CheckedAt, the
+	// least recent check of this Mac's conversations, when all are current.
+	Text         string  `json:"text,omitempty"`
+	CheckedLabel string  `json:"checked_label,omitempty"`
+	CheckedAt    *string `json:"checked_at"`
+}
+
+// summarizeFreshness groups rows for the Data row.
+func summarizeFreshness(rows []freshnessRow) freshnessSummary {
 	rank := map[string]int{freshCurrent: 0, freshUnknown: 1, freshBehind: 2}
-	groups := []freshnessGroup{}
+	summary := freshnessSummary{Groups: []freshnessGroup{}, AllCurrent: true}
 	for _, definition := range freshnessGroups {
 		members := slices.DeleteFunc(slices.Clone(rows), func(row freshnessRow) bool { return row.Group != definition.id })
 		if len(members) == 0 {
@@ -849,14 +1009,30 @@ func summarizeFreshness(rows []freshnessRow) []freshnessGroup {
 				group.State = row.Behind.State
 			}
 		}
-		next, tooltip := "", []string{}
+		tooltip := []string{}
+		failed, allCaught, manualOnly := false, true, true
+		next := ""
 		for _, row := range members {
-			if row.Behind.State != freshCurrent {
-				line := row.Label + ": " + lowerFirst(row.StateLabel)
-				if row.Reason != nil {
-					line += ", " + lowerFirst(row.Reason.Text)
+			if row.Behind.State == freshCurrent {
+				if definition.id == "conversations" && row.AsOf != nil && (summary.CheckedAt == nil || canonicalTime(*row.AsOf) < canonicalTime(*summary.CheckedAt)) {
+					summary.CheckedAt = row.AsOf
 				}
-				tooltip = append(tooltip, line)
+				continue
+			}
+			line := row.Label + ": " + lowerFirst(row.StateLabel)
+			if row.Reason != nil {
+				line += ", " + lowerFirst(row.Reason.Text)
+				if row.Reason.Detail != "" {
+					line += " (" + row.Reason.Detail + ")"
+				}
+				failed = failed || slices.Contains([]string{"failed", "blocked", "retrying"}, row.Reason.Code)
+			}
+			if row.Next != nil {
+				line += "; " + *row.Next
+			}
+			tooltip = append(tooltip, line)
+			if row.CatchingUp == nil {
+				allCaught = false
 			}
 			if row.Behind.State != group.State {
 				continue
@@ -867,33 +1043,58 @@ func summarizeFreshness(rows []freshnessRow) []freshnessGroup {
 			if row.CatchingUp != nil && group.CatchingUp == nil {
 				group.CatchingUp = row.CatchingUp
 			}
-			if next == "" && row.Next != nil {
-				next = *row.Next
+			if row.CatchingUp == nil {
+				if next == "" && row.Next != nil {
+					next = *row.Next
+				}
+				if row.Next == nil || *row.Next != nextManualIndex {
+					manualOnly = false
+				}
 			}
 		}
 		group.Tooltip = strings.Join(tooltip, "\n")
 		switch {
 		case group.State == freshCurrent:
 			group.Text = "current"
-		case group.CatchingUp != nil:
+		case allCaught:
 			group.Text = "catching up"
 		case next != "":
 			group.Text = group.State + ", " + next
 		default:
 			group.Text = group.State
 		}
+		switch {
+		case group.State == freshCurrent:
+		case failed:
+			group.Short = shortFailed
+		case allCaught:
+			group.Short = shortUpdating
+		case group.State == freshBehind && manualOnly:
+			group.Short = shortManual
+		case group.State == freshBehind:
+			group.Short, group.ShortAge = shortBehind, group.AsOf != nil
+		default:
+			group.Short = shortUnknown
+		}
 		if group.AsOf != nil && group.State != freshCurrent {
 			group.AsOfLabel = "last current"
 		}
-		group.Shown = definition.id == "conversations" || definition.id == "analyses" || group.State != freshCurrent
-		groups = append(groups, group)
+		group.Shown = group.State != freshCurrent
+		summary.AllCurrent = summary.AllCurrent && !group.Shown
+		summary.Groups = append(summary.Groups, group)
 	}
-	return groups
+	if summary.AllCurrent {
+		summary.Text, summary.CheckedLabel = "All current", "checked"
+	} else {
+		summary.CheckedAt = nil
+	}
+	return summary
 }
 
-// upgradeStepsCache remembers UpgradeSteps' latest answer for the ledger.
-func (state *upgradeState) cachedSteps() ([]upgradeStep, time.Time, bool) {
+// cachedSteps is UpgradeSteps' latest answer for the ledger: the steps,
+// when they were counted, and the library's inputs then.
+func (state *upgradeState) cachedSteps() ([]upgradeStep, time.Time, string, bool) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	return slices.Clone(state.lastSteps), state.lastStepsAt, !state.lastStepsAt.IsZero()
+	return slices.Clone(state.lastSteps), state.lastStepsAt, state.lastStepsInputs, !state.lastStepsAt.IsZero()
 }

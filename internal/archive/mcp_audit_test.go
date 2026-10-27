@@ -466,7 +466,10 @@ func TestMCPArchiveStatusListsDomainsAndRunningWork(t *testing.T) {
 		fmt.Sprintf(`INSERT INTO operation_journal(id,root_id,kind,trigger,host_id,process,pid,instance,state,started_at,updated_at,detail_json)
 			VALUES('op-live','op-live','index.changes.manual','user',%s,'service',%d,'svc','running',%s,%s,'{}')`, sqlQuote(host), os.Getpid(), sqlQuote(now()), sqlQuote(now())),
 		fmt.Sprintf(`INSERT INTO operation_journal(id,root_id,kind,trigger,host_id,process,pid,instance,state,started_at,updated_at,detail_json)
-			VALUES('op-dead','op-dead','analysis.authorship','read',%s,'service',%d,'gone','running',%s,%s,'{}')`, sqlQuote(host), 1<<22-1, sqlQuote(now()), sqlQuote(now())))
+			VALUES('op-dead','op-dead','analysis.authorship','read',%s,'service',%d,'gone','running',%s,%s,'{}')`, sqlQuote(host), 1<<22-1, sqlQuote(now()), sqlQuote(now())),
+		// A live PID that started after the row: another process reused it.
+		fmt.Sprintf(`INSERT INTO operation_journal(id,root_id,kind,trigger,host_id,process,pid,instance,state,started_at,updated_at,detail_json)
+			VALUES('op-reused','op-reused','analysis.tools','read',%s,'service',%d,'old','running','2001-01-01T00:00:00Z','2001-01-01T00:00:00Z','{}')`, sqlQuote(host), os.Getpid()))
 	result := auditCall(t, catalog, "get_archive_status", map[string]any{"max_output_tokens": 4000})
 	if result["status"] != "current" || integer(result["total"]) != 1 {
 		t.Fatalf("the older fields are unchanged: %#v", result)
@@ -485,11 +488,32 @@ func TestMCPArchiveStatusListsDomainsAndRunningWork(t *testing.T) {
 	}
 	running := result["running"].([]map[string]any)
 	if len(running) != 1 || running[0]["id"] != "op-live" || !slices.Contains(running[0]["domains"].([]string), "findings") {
-		t.Fatalf("running lists the live operation and the domains it affects, not the dead one: %#v", running)
+		t.Fatalf("running lists the live operation and the domains it affects, not the dead or reused one: %#v", running)
 	}
-	small := auditCall(t, catalog, "get_archive_status", map[string]any{"max_output_tokens": 450})
-	if small["domains"] != nil && small["domains_partial"] != true {
-		t.Fatalf("a small budget keeps the page and sheds the ledger: %#v", small)
+	// The ledger is additive: at the default budget, with enough sources to
+	// fill a page, the items, next_offset and truncated are those of the
+	// page without it.
+	statements := []string{}
+	for index := range 40 {
+		statements = append(statements, fmt.Sprintf("INSERT INTO source_states(host_id,source_name,kind,capability,coverage,last_attempt_at,last_success_at,updated_at) VALUES(%s,'source-%02d-with-a-longer-name','codex','read','partial',%s,%s,%s)",
+			sqlQuote(host), index, sqlQuote(now()), sqlQuote(now()), sqlQuote(now())))
+	}
+	execTx(t, catalog.DB, statements...)
+	for _, args := range []map[string]any{{}, {"max_output_tokens": 450}, {"offset": 3}} {
+		with := auditCall(t, catalog, "get_archive_status", args)
+		override(t, &archiveStatusLedger, false)
+		without := auditCall(t, catalog, "get_archive_status", args)
+		archiveStatusLedger = true
+		if len(with["items"].([]map[string]any)) != len(without["items"].([]map[string]any)) || with["next_offset"] != without["next_offset"] || with["truncated"] != without["truncated"] {
+			t.Fatalf("%v: the ledger changed the page: %d items, next %v, truncated %v; without it %d, %v, %v", args, len(with["items"].([]map[string]any)), with["next_offset"], with["truncated"],
+				len(without["items"].([]map[string]any)), without["next_offset"], without["truncated"])
+		}
+		if without["truncated"] != true && len(args) == 0 {
+			t.Fatal("the fixture must fill the default page")
+		}
+		if with["domains"] == nil && with["domains_omitted"] == nil {
+			t.Fatalf("%v: the ledger is either there or said to be omitted: %#v", args, with)
+		}
 	}
 }
 

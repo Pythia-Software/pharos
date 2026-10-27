@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -39,7 +41,8 @@ func setMetaSQL(key, value string) string {
 func sqlQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }
 
 // builtToday is the meta of a library whose search indexes, Tools rollup,
-// writing classification and findings were all built for today.
+// writing classification, identity links, Git merges and findings were all
+// built for today and for its current inputs.
 func (f *freshnessFixture) builtToday() []string {
 	c := f.catalog
 	return []string{
@@ -51,6 +54,8 @@ func (f *freshnessFixture) builtToday() []string {
 		setMetaSQL("tool_rollup_full_revision", "r1"), setMetaSQL("tool_rollup_built_full_revision", "r1"),
 		setMetaSQL("authorship_inputs_generation", "3"), setMetaSQL("authorship_generation", "7:3/"+authorshipVersion), setMetaSQL("authorship_built_at", "2026-10-27T08:00:00Z"),
 		setMetaSQL("findings_generation", c.findingsGeneration()), setMetaSQL("findings_built_at", "2026-10-27T08:05:00Z"),
+		// Each completion was for the library's inputs as they are (7:3).
+		setMetaSQL("findings_inputs_generation", "7:3"), setMetaSQL("analysis_inputs:identities", "7:3"), setMetaSQL("analysis_inputs:git", "7:3"),
 		"DELETE FROM workspace_library_dirty", "DELETE FROM tool_rollup_dirty",
 	}
 }
@@ -118,6 +123,17 @@ func keysOf[V any](values map[string]V) []string {
 		keys = append(keys, key)
 	}
 	return keys
+}
+
+// counted is a setup that leaves steps as the upgrade's last count, taken
+// for inputs.
+func counted(inputs string, steps ...upgradeStep) func(*freshnessFixture) {
+	return func(f *freshnessFixture) {
+		state := f.catalog.upgrade()
+		state.mu.Lock()
+		state.lastSteps, state.lastStepsAt, state.lastStepsInputs = steps, time.Now(), inputs
+		state.mu.Unlock()
+	}
 }
 
 func runningOp(id, kind, subject string) freshnessOp {
@@ -222,11 +238,15 @@ func TestFreshnessDomains(t *testing.T) {
 
 		{name: "identities current", domain: "an.identities", state: freshCurrent},
 		{name: "identities deferred", domain: "an.identities", seed: []string{"INSERT INTO sync_deferred(name,generation,completed_generation,changed_at,completed_at) VALUES('identities',5,3,'2026-10-27T10:00:00Z','2026-10-27T07:00:00Z')"},
-			state: freshBehind, reason: "deferred-by-schedule", count: 2, countKnown: true, unit: "scheduled index", asOf: "2026-10-27T07:00:00Z"},
+			state: freshBehind, reason: "deferred-by-schedule", asOf: "2026-10-27T07:00:00Z"},
+		{name: "identities with no record for the current data", domain: "an.identities", seed: []string{"DELETE FROM meta WHERE key='analysis_inputs:identities'"}, state: freshUnknown, reason: "no-record"},
+		{name: "identities after a write outside the chain", domain: "an.identities", seed: []string{setMetaSQL("authorship_inputs_generation", "4"), setMetaSQL("authorship_generation", "7:4/"+authorshipVersion)},
+			state: freshBehind, reason: "changed"},
 		{name: "identities caught up by the chain", domain: "an.identities", seed: []string{"INSERT INTO sync_deferred(name,generation,completed_generation,changed_at) VALUES('identities',1,0,'2026-10-27T10:00:00Z')"},
-			in: freshnessInput{ops: []freshnessOp{runningOp("op-index", "index.changes.manual", ""), runningOp("op-chain", "analysis.chain", "")}}, state: freshBehind, reason: "running", catching: "op-chain", count: 1, countKnown: true},
-		{name: "git failed since", domain: "an.git", seed: []string{"INSERT INTO sync_deferred(name,generation,completed_generation,changed_at,completed_at) VALUES('git',1,1,'2026-10-27T06:00:00Z','2026-10-27T06:00:00Z')", failedJournal("analysis.git")},
-			state: freshBehind, reason: "failed"},
+			in: freshnessInput{ops: []freshnessOp{runningOp("op-index", "index.changes.manual", ""), runningOp("op-chain", "analysis.chain", "")}}, state: freshBehind, reason: "running", catching: "op-chain"},
+		{name: "git failed since", domain: "an.git", seed: []string{"INSERT INTO sync_deferred(name,generation,completed_generation,changed_at,completed_at) VALUES('git',1,1,'2026-10-27T06:00:00Z','2026-10-27T06:00:00Z')",
+			setMetaSQL("analysis_inputs:git", "6:3"), failedJournal("analysis.git")}, state: freshBehind, reason: "failed"},
+		{name: "git current for its inputs, whatever failed earlier", domain: "an.git", seed: []string{failedJournal("analysis.git")}, state: freshCurrent},
 		{name: "tools rollup current", domain: "an.tools", state: freshCurrent},
 		{name: "tools rollup changed", domain: "an.tools", seed: []string{"INSERT INTO tool_rollup_dirty(workspace_id,revision) VALUES('w1','r'),('w2','r'),('w3','r')"}, state: freshBehind, reason: "changed", count: 3, countKnown: true, unit: "workspace"},
 		{name: "tools rollup of an older layout", domain: "an.tools", seed: []string{setMetaSQL("tool_rollup_generation", "7/old")}, state: freshBehind, reason: "version"},
@@ -234,36 +254,31 @@ func TestFreshnessDomains(t *testing.T) {
 		{name: "writing classification behind", domain: "an.authorship", seed: []string{setMetaSQL("authorship_inputs_generation", "4")}, state: freshBehind, reason: "changed", asOf: "2026-10-27T08:00:00Z"},
 		{name: "writing classification caught up", domain: "an.authorship", seed: []string{setMetaSQL("authorship_inputs_generation", "4")},
 			in: freshnessInput{ops: []freshnessOp{runningOp("op-author", "analysis.authorship", "")}}, state: freshBehind, reason: "running", catching: "op-author"},
-		{name: "tools ledger unknown before anything counted it", domain: "an.ledger", state: freshUnknown},
-		{name: "tools ledger of an older version", domain: "an.ledger", setup: func(f *freshnessFixture) {
-			state := f.catalog.upgrade()
-			state.mu.Lock()
-			state.lastSteps, state.lastStepsAt = []upgradeStep{{ID: "tools", Pending: 12}, {ID: "usage", Pending: 1}}, time.Now()
-			state.mu.Unlock()
-		}, state: freshBehind, reason: "version", count: 12, countKnown: true, unit: "conversation"},
+		{name: "tools ledger unknown before anything counted it", domain: "an.ledger", state: freshUnknown, reason: "not-counted"},
+		{name: "tools ledger of an older version", domain: "an.ledger", setup: counted("7:3", upgradeStep{ID: "tools", Pending: 12}, upgradeStep{ID: "usage", Pending: 1}),
+			state: freshBehind, reason: "version", count: 12, countKnown: true, unit: "conversation"},
+		{name: "tools ledger counted before the library changed", domain: "an.ledger", setup: counted("6:3", upgradeStep{ID: "tools"}), state: freshUnknown, reason: "not-counted"},
 
 		{name: "findings current", domain: "findings", state: freshCurrent, asOf: "2026-10-27T08:05:00Z"},
 		{name: "findings daily pass due", domain: "findings", seed: []string{setMetaSQL("findings_generation", findingsVersion+"/2026-10-26")}, state: freshBehind, reason: "daily-pass-due"},
 		{name: "findings never built", domain: "findings", seed: []string{"DELETE FROM meta WHERE key='findings_generation'"}, state: freshBehind, reason: "never-built"},
+		{name: "findings after a Terminal ingest", domain: "findings", seed: []string{setMetaSQL("authorship_inputs_generation", "4")}, state: freshBehind, reason: "changed"},
+		{name: "findings with no record of their inputs", domain: "findings", seed: []string{"DELETE FROM meta WHERE key='findings_inputs_generation'"}, state: freshUnknown, reason: "no-record"},
 		{name: "findings caught up", domain: "findings", seed: []string{"DELETE FROM meta WHERE key='findings_generation'"},
 			in: freshnessInput{ops: []freshnessOp{runningOp("op-find", "analysis.findings", "")}}, state: freshBehind, reason: "running", catching: "op-find"},
 
-		{name: "upgrade unknown before anything counted it", domain: "upgrade", state: freshUnknown},
+		{name: "upgrade unknown before anything counted it", domain: "upgrade", state: freshUnknown, reason: "not-counted"},
 		{name: "upgrade current once counted", domain: "upgrade", setup: func(f *freshnessFixture) {
 			if _, err := f.catalog.UpgradeSteps(context.Background()); err != nil {
 				f.t.Fatal(err)
 			}
 		}, state: freshCurrent},
-		{name: "upgrade available and running", domain: "upgrade", setup: func(f *freshnessFixture) {
-			state := f.catalog.upgrade()
-			state.mu.Lock()
-			state.lastSteps, state.lastStepsAt = []upgradeStep{{ID: "tools", Pending: 12}, {ID: "usage", Pending: 1}, {ID: "harness"}}, time.Now()
-			state.mu.Unlock()
-		}, in: freshnessInput{ops: []freshnessOp{runningOp("op-up", "library.upgrade", "")}}, state: freshBehind, reason: "running", catching: "op-up", count: 2, countKnown: true, unit: "step"},
+		{name: "upgrade available and running", domain: "upgrade", setup: counted("7:3", upgradeStep{ID: "tools", Pending: 12}, upgradeStep{ID: "usage", Pending: 1}, upgradeStep{ID: "harness"}), in: freshnessInput{ops: []freshnessOp{runningOp("op-up", "library.upgrade", "")}}, state: freshBehind, reason: "running", catching: "op-up", count: 2, countKnown: true, unit: "step"},
 
 		{name: "local backup unknown without the history", domain: "backup.local", state: freshUnknown},
 		{name: "no local backup yet", domain: "backup.local", in: freshnessInput{files: &freshnessFiles{backupKnown: true}}, state: freshUnknown, reason: "never"},
-		{name: "local backup current", domain: "backup.local", in: freshnessInput{files: &freshnessFiles{backupKnown: true, backupAt: "2026-10-20T10:00:00Z"}}, state: freshCurrent, asOf: "2026-10-20T10:00:00Z"},
+		{name: "a local backup has no schedule to be current against", domain: "backup.local", in: freshnessInput{files: &freshnessFiles{backupKnown: true, backupAt: "2026-10-20T10:00:00Z"}},
+			state: freshUnknown, reason: "no-schedule", asOf: "2026-10-20T10:00:00Z"},
 		{name: "local backup failed since", domain: "backup.local", in: freshnessInput{files: &freshnessFiles{backupKnown: true, backupAt: "2026-10-20T10:00:00Z"}, backupFailedAt: "2026-10-27T10:00:00Z"},
 			state: freshBehind, reason: "failed", asOf: "2026-10-20T10:00:00Z"},
 		{name: "local backup caught up", domain: "backup.local", in: freshnessInput{files: &freshnessFiles{backupKnown: true}, backupFailedAt: "2026-10-27T10:00:00Z",
@@ -275,6 +290,9 @@ func TestFreshnessDomains(t *testing.T) {
 			{host: "other-mac", source: "codex", needsIndex: true}}}, ops: []freshnessOp{runningOp("op-ic", "index.captures", "")}}, state: freshBehind, reason: "indexing", catching: "op-ic"},
 		{name: "this Mac's captures while it captures", domain: "capt:" + currentHost().ID + "/claude", in: freshnessInput{files: &freshnessFiles{captures: []freshnessCapture{
 			{host: currentHost().ID, source: "claude", needsIndex: true}}}, ops: []freshnessOp{runningOp("op-cap", "capture.this-mac", "")}}, state: freshBehind, reason: "capture-running", catching: "op-cap"},
+		{name: "an unreadable capture folder", domain: "capt:*", in: freshnessInput{files: &freshnessFiles{capturesUnreadable: true}}, state: freshUnknown, reason: "unreadable"},
+		{name: "the last captures read, while the folder cannot be read", domain: "capt:other-mac/codex", in: freshnessInput{files: &freshnessFiles{capturesUnreadable: true, captures: []freshnessCapture{
+			{host: "other-mac", source: "codex", needsIndex: true}}}}, state: freshUnknown, reason: "unreadable"},
 		{name: "captures indexed", domain: "capt:other-mac/codex", in: freshnessInput{files: &freshnessFiles{captures: []freshnessCapture{
 			{host: "other-mac", source: "codex", indexedAt: "2026-10-27T09:00:00Z"}}}}, state: freshCurrent, asOf: "2026-10-27T09:00:00Z"},
 	} {
@@ -322,6 +340,7 @@ func TestFreshnessCloudBackups(t *testing.T) {
 	}{
 		{name: "never", seed: []string{destination}, state: freshBehind, reason: "never"},
 		{name: "current within its schedule", seed: []string{destination, run("r1", "complete", true, recent), schedule(true, 1, 0)}, state: freshCurrent},
+		{name: "no schedule to be current against", seed: []string{destination, run("r1", "complete", true, recent)}, state: freshUnknown, reason: "no-schedule"},
 		{name: "older than its schedule", seed: []string{destination, run("r1", "complete", true, old), schedule(true, 7, 0)}, state: freshBehind, reason: "overdue"},
 		{name: "a failed schedule retries", seed: []string{destination, run("r1", "complete", true, old), schedule(true, 7, 2)}, state: freshBehind, reason: "retrying"},
 		{name: "the newest backup failed", seed: []string{destination, run("r1", "complete", true, old), run("r2", "failed", false, recent)}, state: freshBehind, reason: "failed"},
@@ -344,7 +363,8 @@ func TestFreshnessCloudBackups(t *testing.T) {
 // After a scheduled (automatic-only) index, every library-wide analysis and
 // the findings are behind: scheduled indexing marks them deferred, and only
 // the chain after a manual index completes them. The summary says so in the
-// server's words, and the chain brings them current again.
+// server's words. A stage that then fails outranks the deferral, and the
+// stages after it say they wait for it. The chain brings them current.
 func TestFreshnessAfterAutomaticIndexLeavesAnalysesBehind(t *testing.T) {
 	f := newFreshnessFixture(t)
 	server := testServer(t, f.config, f.catalog)
@@ -353,50 +373,122 @@ func TestFreshnessAfterAutomaticIndexLeavesAnalysesBehind(t *testing.T) {
 	for _, domain := range append(analyses, "findings") {
 		expectRow(t, before, domain, freshCurrent, "", "")
 	}
-	// What an automatic index's write transaction does (ingest.go).
+	// What an automatic index's write transaction does for each record it
+	// writes (ingest.go).
 	for range 2 {
 		if err := f.catalog.writeTransaction(context.Background(), "test-deferred", markSyncDeferred); err != nil {
 			t.Fatal(err)
 		}
 	}
-	rows := server.freshness(context.Background(), server.ops.views())
-	byDomain := map[string]freshnessRow{}
-	for _, row := range rows {
-		byDomain[row.Domain] = row
+	ledger := func() ([]freshnessRow, map[string]freshnessRow) {
+		rows := server.freshness(context.Background(), server.ops.views(), false)
+		byDomain := map[string]freshnessRow{}
+		for _, row := range rows {
+			byDomain[row.Domain] = row
+		}
+		return rows, byDomain
 	}
+	rows, byDomain := ledger()
 	for _, domain := range append(analyses, "findings") {
 		row := expectRow(t, byDomain, domain, freshBehind, "deferred-by-schedule", "")
-		if row.Next == nil || *row.Next != nextManualIndex || row.Behind.Count == nil || *row.Behind.Count != 2 {
-			t.Fatalf("%s: behind by two scheduled indexes, until the next manual index: %+v", domain, row)
+		// The generations count written records, not runs: no count.
+		if row.Next == nil || *row.Next != nextManualIndex || row.Behind.Count != nil {
+			t.Fatalf("%s: behind, with no count, until the next manual index: %+v", domain, row)
 		}
 	}
-	var group *freshnessGroup
-	for _, candidate := range summarizeFreshness(rows) {
-		if candidate.Group == "analyses" {
-			group = &candidate
-		}
-	}
-	if group == nil || group.State != freshBehind || group.Text != "behind, "+nextManualIndex || !group.Shown || !strings.Contains(group.Tooltip, "scheduled indexing skips analyses") {
+	group := summaryGroup(t, summarizeFreshness(rows), "analyses")
+	if group.State != freshBehind || group.Short != shortManual || group.Text != "behind, "+nextManualIndex || !group.Shown || !strings.Contains(group.Tooltip, "scheduled indexing skips analyses") {
 		t.Fatalf("the summary says analyses wait for the next manual index: %+v", group)
 	}
 
-	// The chain a manual index runs completes them.
+	// A manual index then fails at Git: Git is failed, the stages after it
+	// are blocked by it, and identities (before it) stay deferred.
+	failedAt := sqlQuote(formatTime(time.Now().Add(time.Minute)))
+	f.exec(`INSERT INTO operation_journal(id,root_id,kind,trigger,host_id,process,pid,instance,state,started_at,updated_at,ended_at)
+		VALUES('j-git','j-git','analysis.git','chained',` + sqlQuote(currentHost().ID) + `,'service',1,'old','failed',` + failedAt + `,` + failedAt + `,` + failedAt + `)`)
+	rows, byDomain = ledger()
+	expectRow(t, byDomain, "an.identities", freshBehind, "deferred-by-schedule", "")
+	expectRow(t, byDomain, "an.git", freshBehind, "failed", "")
+	for _, domain := range []string{"an.tools", "an.authorship", "findings"} {
+		if row := expectRow(t, byDomain, domain, freshBehind, "blocked", ""); row.Reason.Detail != "Merges from Git" {
+			t.Fatalf("%s says which stage it waits for: %+v", domain, row.Reason)
+		}
+	}
+	if group := summaryGroup(t, summarizeFreshness(rows), "analyses"); group.Short != shortFailed {
+		t.Fatalf("a failed stage makes the group failed: %+v", group)
+	}
+
+	// The chain a manual index runs completes them, for the current inputs.
 	slowTest(t)
 	if err := server.finishDeferredSync(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	after := server.freshness(context.Background(), server.ops.views())
-	for _, row := range after {
-		if row.Reason != nil && row.Reason.Code == "deferred-by-schedule" {
-			t.Fatalf("%s is still deferred after the chain: %+v", row.Domain, row)
+	_, byDomain = ledger()
+	for _, domain := range append(analyses, "findings") {
+		expectRow(t, byDomain, domain, freshCurrent, "", "")
+	}
+}
+
+func summaryGroup(t *testing.T, summary freshnessSummary, id string) freshnessGroup {
+	t.Helper()
+	for _, group := range summary.Groups {
+		if group.Group == id {
+			return group
 		}
+	}
+	t.Fatalf("no %s group in %+v", id, summary)
+	return freshnessGroup{}
+}
+
+// The Data row lists only groups that are not current, each with a short
+// state, and says "All current" otherwise; a group catches up only when
+// every row that is not current is being caught up.
+func TestFreshnessSummary(t *testing.T) {
+	text := func(value string) *string { return &value }
+	row := func(domain, group, state string, changes func(*freshnessRow)) freshnessRow {
+		r := freshnessRow{Domain: domain, Group: group, Label: domain, Behind: freshnessBehind{State: state}, StateLabel: freshnessStateLabels[state]}
+		if changes != nil {
+			changes(&r)
+		}
+		return r
+	}
+	current := []freshnessRow{row("conv:a", "conversations", freshCurrent, func(r *freshnessRow) { r.AsOf = text("2026-10-27T10:00:00Z") }),
+		row("conv:b", "conversations", freshCurrent, func(r *freshnessRow) { r.AsOf = text("2026-10-27T09:00:00Z") }), row("findings", "findings", freshCurrent, nil)}
+	all := summarizeFreshness(current)
+	if !all.AllCurrent || all.Text != "All current" || all.CheckedAt == nil || *all.CheckedAt != "2026-10-27T09:00:00Z" || slices.ContainsFunc(all.Groups, func(g freshnessGroup) bool { return g.Shown }) {
+		t.Fatalf("all current, checked as of the least recent check: %+v", all)
+	}
+	caught := func(r *freshnessRow) {
+		r.CatchingUp, r.Reason = text("op-1"), &freshnessReason{Code: "indexing", Text: "Indexing now"}
+	}
+	mixed := summarizeFreshness([]freshnessRow{
+		row("conv:a", "conversations", freshBehind, caught),
+		row("conv:b", "conversations", freshBehind, func(r *freshnessRow) {
+			r.Reason, r.Next, r.AsOf = &freshnessReason{Code: "never-indexed", Text: "Not indexed yet"}, text(nextScheduledIndex), text("2026-10-26T10:00:00Z")
+		}),
+		row("an.tools", "analyses", freshBehind, caught),
+		row("backup.local", "backups", freshUnknown, func(r *freshnessRow) {
+			r.Reason, r.Next = &freshnessReason{Code: "no-schedule", Text: "words"}, text(nextBackup)
+		}),
+	})
+	if mixed.AllCurrent || mixed.Text != "" {
+		t.Fatalf("not all current: %+v", mixed)
+	}
+	if g := summaryGroup(t, mixed, "conversations"); g.Short != shortBehind || !g.ShortAge || g.Text != "behind, "+nextScheduledIndex {
+		t.Fatalf("one source caught up and one not is behind, with the uncaught one's next: %+v", g)
+	}
+	if g := summaryGroup(t, mixed, "analyses"); g.Short != shortUpdating || g.Text != "catching up" {
+		t.Fatalf("every row caught up is updating: %+v", g)
+	}
+	if g := summaryGroup(t, mixed, "backups"); g.Short != shortUnknown || !g.Shown {
+		t.Fatalf("unknown backups are listed: %+v", g)
 	}
 }
 
 // The snapshot carries the ledger, and the server fills what the catalog
 // cannot know: this Mac's enabled sources, the operations it runs, the
-// backup history (cached), and the sources the latest index left to a
-// capture.
+// backup history (cached, per configuration), and the sources the latest
+// index left to a capture. The release path's fresh check reads no file.
 func TestStatusSnapshotCarriesTheLedger(t *testing.T) {
 	override(t, &statusCoalesce, 10*time.Millisecond)
 	f := newFreshnessFixture(t)
@@ -413,24 +505,43 @@ func TestStatusSnapshotCarriesTheLedger(t *testing.T) {
 			return freshnessRow{}
 		}()}
 	}
-	expectRow(t, find(server.freshness(context.Background(), views()), "backup.local"), "backup.local", freshUnknown, "never", "")
+	// Nothing cached yet: the fresh path leaves the files unknown.
+	expectRow(t, find(server.freshness(context.Background(), views(), true), "backup.local"), "backup.local", freshUnknown, "", "")
+	expectRow(t, find(server.freshness(context.Background(), views(), false), "backup.local"), "backup.local", freshUnknown, "never", "")
 	if err := recordBackup(f.config, backupRecord{FinishedAt: "2026-10-26T10:00:00Z", Destination: "/Volumes/B"}); err != nil {
 		t.Fatal(err)
 	}
 	// Cached: the history is read again only after a while, or when an
 	// operation that changes it starts or ends.
-	expectRow(t, find(server.freshness(context.Background(), views()), "backup.local"), "backup.local", freshUnknown, "never", "")
+	expectRow(t, find(server.freshness(context.Background(), views(), false), "backup.local"), "backup.local", freshUnknown, "never", "")
 	override(t, &freshnessFilesMinAge, 0)
 	_, backup := server.begin(context.Background(), OperationSpec{Kind: "backup.local", Subject: "/Volumes/B", Trigger: triggerUser})
-	expectRow(t, find(server.freshness(context.Background(), views()), "backup.local"), "backup.local", freshCurrent, "", "")
+	// While it runs, it catches the domain up; the fresh path still takes
+	// the cached (old) history.
+	expectRow(t, find(server.freshness(context.Background(), views(), true), "backup.local"), "backup.local", freshUnknown, "running", string(backup.id))
+	if cached := server.freshnessFiles(server.Config(), views(), true); cached == nil || cached.backupAt != "" {
+		t.Fatalf("the fresh path read the history again: %+v", cached)
+	}
 	backup.Finish(nil)
+	// Once it ends, the polled ledger reads the history again.
+	local := expectRow(t, find(server.freshness(context.Background(), views(), false), "backup.local"), "backup.local", freshUnknown, "no-schedule", "")
+	if local.AsOf == nil || *local.AsOf != "2026-10-26T10:00:00Z" {
+		t.Fatalf("the backup's age is reported: %+v", local)
+	}
+	// Another configuration's files are not the cached ones.
+	server.configMu.Lock()
+	server.config.CaptureRoot = t.TempDir()
+	server.configMu.Unlock()
+	if server.freshnessFiles(server.Config(), views(), true) != nil {
+		t.Fatal("the cache served another capture root's files")
+	}
 
 	server.runsMu.Lock()
 	server.runs = append([]*SyncRun{{ID: "run-1", State: "complete", Results: []IngestResult{{Source: "claude", Deferred: true}}}}, server.runs...)
 	server.runsMu.Unlock()
 	f.scheduled(true)
 	f.exec("INSERT INTO automatic_source_states(host_id,source_name,attempted_at,succeeded_at) VALUES(" + sqlQuote(currentHost().ID) + ",'claude'," + sqlQuote(now()) + "," + sqlQuote(now()) + ")")
-	expectRow(t, find(server.freshness(context.Background(), views()), "conv:claude"), "conv:claude", freshUnknown, "capture-busy", "")
+	expectRow(t, find(server.freshness(context.Background(), views(), false), "conv:claude"), "conv:claude", freshUnknown, "capture-busy", "")
 
 	_, index := server.begin(context.Background(), OperationSpec{Kind: "index.changes.manual", Trigger: triggerUser})
 	defer index.Finish(nil)
@@ -442,10 +553,31 @@ func TestStatusSnapshotCarriesTheLedger(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectRow(t, find(rows, "findings"), "findings", freshBehind, "running", string(index.id))
-	groups := []freshnessGroup{}
+	summary := freshnessSummary{}
 	data, _ = json.Marshal(status.raw["freshness_summary"])
-	if err := json.Unmarshal(data, &groups); err != nil || len(groups) == 0 || groups[0].Group != "conversations" {
+	if err := json.Unmarshal(data, &summary); err != nil || len(summary.Groups) == 0 || summary.Groups[0].Group != "conversations" {
 		t.Fatalf("the summary starts with conversations: %s", data)
+	}
+}
+
+// An unreadable capture folder keeps the captures it last read, unknown;
+// one that does not exist and never had captures has none.
+func TestFreshnessFilesKeepCapturesThroughAnUnreadableRoot(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	missing := filepath.Join(t.TempDir(), "absent")
+	if files := readFreshnessFiles(catalog, missing, nil, nil); files.capturesUnreadable || len(files.captures) != 0 {
+		t.Fatalf("no captures folder, no captures: %+v", files)
+	}
+	previous := []freshnessCapture{{host: "other-mac", source: "codex", needsIndex: true}}
+	if files := readFreshnessFiles(catalog, missing, nil, previous); !files.capturesUnreadable || len(files.captures) != 1 {
+		t.Fatalf("a folder that went away keeps the last captures, unreadable: %+v", files)
+	}
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if files := readFreshnessFiles(catalog, file, nil, nil); !files.capturesUnreadable {
+		t.Fatalf("a capture root that cannot be read is unreadable: %+v", files)
 	}
 }
 
@@ -461,12 +593,12 @@ func TestFreshnessIsCheap(t *testing.T) {
 	}
 	f.exec(statements...)
 	server := testServer(t, f.config, f.catalog)
-	server.freshness(context.Background(), nil) // warm the file cache
+	server.freshness(context.Background(), nil, false) // warm the file cache
 	scans, probes := lockScans.Load(), lockProbes.Load()
 	const runs = 20
 	started := time.Now()
 	for range runs {
-		server.freshness(context.Background(), server.ops.views())
+		server.freshness(context.Background(), server.ops.views(), false)
 	}
 	each := time.Since(started) / runs
 	t.Logf("freshness: %v per computation", each)
@@ -559,5 +691,28 @@ func TestFreshnessReasonsAreTheContracts(t *testing.T) {
 		if !strings.Contains(section, "`"+code+"`") {
 			t.Errorf("reason %s is not in the contract's §5", code)
 		}
+	}
+}
+
+// A count that started before an upgrade ended does not overwrite what the
+// upgrade left, and a count is kept with the inputs it was taken for.
+func TestUpgradeCountKeepsTheNewerAnswer(t *testing.T) {
+	catalog, _ := testCatalog(t)
+	state := catalog.upgrade()
+	if _, err := catalog.UpgradeSteps(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_, _, inputs, ok := state.cachedSteps()
+	if !ok || inputs != catalog.inputsGeneration(context.Background()) {
+		t.Fatalf("the count is kept with its inputs: %q %v", inputs, ok)
+	}
+	state.mu.Lock()
+	state.lastSteps, state.lastFinishedAt = []upgradeStep{{ID: "tools"}}, time.Now().Add(time.Hour)
+	state.mu.Unlock()
+	if _, err := catalog.UpgradeSteps(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if steps, _, _, _ := state.cachedSteps(); len(steps) != 1 {
+		t.Fatalf("a count older than the upgrade's end replaced it: %+v", steps)
 	}
 }

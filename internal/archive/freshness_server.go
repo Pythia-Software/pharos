@@ -2,11 +2,11 @@ package archive
 
 import (
 	"context"
+	"os"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -27,8 +27,9 @@ var (
 type freshnessFileCache struct {
 	mu    sync.Mutex
 	files *freshnessFiles
-	// key names the operations that change them, as last seen.
-	key string
+	// key names the operations that change them, as last seen; source the
+	// capture root and backup history they were read from.
+	key, source string
 }
 
 // liveOperation reports whether state is one an operation can still catch a
@@ -56,11 +57,13 @@ func freshnessOps(views []opView) []freshnessOp {
 }
 
 // freshness is the ledger for this library on this Mac, with views the
-// snapshot's operations (this service's and other processes').
-func (s *Server) freshness(ctx context.Context, views []opView) []freshnessRow {
+// snapshot's operations (this service's and other processes'). cachedOnly
+// (the release path's fresh check) never reads the library's files: it
+// takes what the cache has, or leaves them unknown.
+func (s *Server) freshness(ctx context.Context, views []opView, cachedOnly bool) []freshnessRow {
 	config := s.Config()
 	in := freshnessInput{host: currentHost().ID, now: time.Now(), sources: []string{}, ops: freshnessOps(views),
-		viewStopped: s.Catalog.libraryRefreshStopped(), files: s.freshnessFiles(config, views)}
+		viewStopped: s.Catalog.libraryRefreshStopped(), files: s.freshnessFiles(config, views, cachedOnly)}
 	for _, source := range config.Sources {
 		if source.Enabled {
 			in.sources = append(in.sources, source.Name)
@@ -90,9 +93,11 @@ func (s *Server) freshness(ctx context.Context, views []opView) []freshnessRow {
 }
 
 // freshnessFiles returns the cached file-derived inputs, reading them again
-// when they are older than freshnessFilesMaxAge or an operation that changes
-// them has started or ended since.
-func (s *Server) freshnessFiles(config Config, views []opView) *freshnessFiles {
+// when they are older than freshnessFilesMaxAge, the configuration names
+// other files, or an operation that changes them has started or ended since.
+func (s *Server) freshnessFiles(config Config, views []opView, cachedOnly bool) *freshnessFiles {
+	// The files the cache was read from.
+	source := config.CaptureRoot + "\x00" + backupRecordPath(config)
 	parts := []string{}
 	for _, view := range views {
 		if view.Tentative {
@@ -113,20 +118,33 @@ func (s *Server) freshnessFiles(config Config, views []opView) *freshnessFiles {
 	cache := &s.freshFiles
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
-	if cache.files != nil {
+	sameFiles := cache.files != nil && cache.source == source
+	if cachedOnly {
+		if sameFiles {
+			return cache.files
+		}
+		return nil
+	}
+	if cache.files != nil && sameFiles {
 		age := time.Since(cache.files.at)
 		if age < freshnessFilesMaxAge && (key == cache.key || age < freshnessFilesMinAge) {
 			return cache.files
 		}
 	}
-	files := readFreshnessFiles(s.Catalog, config.CaptureRoot, &config)
-	cache.files, cache.key = files, key
+	var previous []freshnessCapture
+	if cache.files != nil && sameFiles {
+		previous = cache.files.captures
+	}
+	files := readFreshnessFiles(s.Catalog, config.CaptureRoot, &config, previous)
+	cache.files, cache.key, cache.source = files, key, source
 	return files
 }
 
 // readFreshnessFiles reads backups.json (when config is known) and the
-// capture manifests under root.
-func readFreshnessFiles(catalog *Catalog, root string, config *Config) *freshnessFiles {
+// capture manifests under root. When root cannot be read, the captures are
+// previous (the last rows read) and unknown; a root that does not exist and
+// had no captures has none.
+func readFreshnessFiles(catalog *Catalog, root string, config *Config, previous []freshnessCapture) *freshnessFiles {
 	files := &freshnessFiles{at: time.Now()}
 	if config != nil {
 		files.backupKnown = true
@@ -142,6 +160,9 @@ func readFreshnessFiles(catalog *Catalog, root string, config *Config) *freshnes
 	}
 	hosts, err := catalog.capturedHosts(root)
 	if err != nil {
+		if _, statErr := os.Stat(root); !os.IsNotExist(statErr) || len(previous) > 0 {
+			files.captures, files.capturesUnreadable = previous, true
+		}
 		return files
 	}
 	for _, host := range hosts {
@@ -160,13 +181,14 @@ func readFreshnessFiles(catalog *Catalog, root string, config *Config) *freshnes
 // history.
 func (c *Catalog) mcpFreshness(ctx context.Context) ([]freshnessRow, []freshnessOp) {
 	ops := c.journalFreshnessOps(ctx)
-	rows := c.freshness(ctx, freshnessInput{host: currentHost().ID, ops: ops, files: readFreshnessFiles(c, c.captureRootPath(), nil)})
+	rows := c.freshness(ctx, freshnessInput{host: currentHost().ID, ops: ops, files: readFreshnessFiles(c, c.captureRootPath(), nil, nil)})
 	return rows, ops
 }
 
 // journalFreshnessOps are this host's open journal rows whose process is
-// still alive: the queued and running work of the service and of Terminal
-// commands. Work shorter than its kind's journal threshold is not there yet.
+// still the one that wrote them: alive, and started no later than the row
+// (a reused PID started after it). Without the start time it is not
+// counted. Work shorter than its kind's journal threshold is not there yet.
 func (c *Catalog) journalFreshnessOps(ctx context.Context) []freshnessOp {
 	rows, err := c.openJournal(ctx, "")
 	if err != nil {
@@ -174,11 +196,14 @@ func (c *Catalog) journalFreshnessOps(ctx context.Context) []freshnessOp {
 	}
 	ops := []freshnessOp{}
 	for _, row := range rows {
-		if !liveOperation(row.State) || row.PID <= 0 || syscall.Kill(row.PID, 0) == syscall.ESRCH {
+		started, _ := parseTime(row.StartedAt)
+		if !liveOperation(row.State) || row.PID <= 0 || started.IsZero() {
+			continue
+		}
+		if processStarted, ok := processStartTime(row.PID); !ok || processStarted.After(started.Add(time.Second)) {
 			continue
 		}
 		view := foreignView(leaseInfo{}, row)
-		started, _ := parseTime(row.StartedAt)
 		affects := view.Spec.Affects
 		if affects == nil {
 			affects = parseAffects(view.Kind.Affects)

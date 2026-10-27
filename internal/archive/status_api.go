@@ -52,7 +52,7 @@ func (s *Server) statusDocument(ctx context.Context, fresh bool) map[string]any 
 	}
 	document["attention"] = s.attention(ctx)
 	// The freshness ledger (§5), and its one-line summary for the panel.
-	freshness := s.freshness(ctx, views)
+	freshness := s.freshness(ctx, views, fresh)
 	document["freshness"] = freshness
 	document["freshness_summary"] = summarizeFreshness(freshness)
 	// A stable key, filled by phase 4.
