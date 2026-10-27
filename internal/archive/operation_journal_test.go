@@ -356,6 +356,18 @@ func TestReconcileEndsRowsWhoseOwnerIsGone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A direct MCP call's lease names no host, and another Mac's lease
+	// names its own: both left behind by processes that died.
+	for _, info := range []leaseInfo{{Instance: "dead-mcp", Process: "cli:mcp", Kinds: []string{"maintenance.mcp-history"}, StartedAt: now(), volatile: true},
+		{Instance: "dead-other-mac", HostID: "host-b", Process: "cli:index", Kinds: []string{"index.captures"}, StartedAt: now()}} {
+		lease, err := acquireProcessLease(dirs[0], info)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := lease.abandon(nil); err != nil {
+			t.Fatal(err)
+		}
+	}
 	insert("recorded", "dead-cli", "host-a", "cli:index")
 	insert("unrecorded", "dead-cli", "host-a", "cli:index")
 	if err := dead.abandon(map[string]leaseOutcome{"recorded": {State: opFailed, Error: "disk full", EndedAt: now()}}); err != nil {
@@ -396,6 +408,12 @@ func TestReconcileEndsRowsWhoseOwnerIsGone(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dirs[0], "live-cli.json")); err != nil {
 		t.Fatalf("the live lease was touched: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dirs[0], "dead-mcp.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a dead lease without a host was kept: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dirs[0], "dead-other-mac.json")); err != nil {
+		t.Fatalf("another Mac's dead lease was touched: %v", err)
 	}
 	// A reconcile is conditional: it never overwrites an ended row.
 	server.journal.queueReconcile(journalReconcile{ID: "previous", Instance: "previous-service", State: opFailed, EndedAt: now()})

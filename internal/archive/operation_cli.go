@@ -63,6 +63,8 @@ func beginCLIOperationsIn(dirs, libraries []string, catalog *Catalog, command st
 }
 
 // beginCLIOperationsAs is beginCLIOperationsIn naming host in the lease.
+// Without a host (a direct MCP call) the lease is also volatile: not fsynced
+// while live.
 func beginCLIOperationsAs(host string, dirs, libraries []string, catalog *Catalog, command string, kinds ...string) (*cliOperations, error) {
 	reg := newOpRegistry("cli:" + command)
 	ops := &cliOperations{reg: reg}
@@ -73,7 +75,7 @@ func beginCLIOperationsAs(host string, dirs, libraries []string, catalog *Catalo
 	}
 	for _, dir := range dirs {
 		lease, err := acquireProcessLease(dir, leaseInfo{Instance: reg.instance, PID: os.Getpid(), HostID: host, Process: reg.process,
-			Kinds: kinds, Holds: ops.declared, Libraries: libraries, StartedAt: now()})
+			Kinds: kinds, Holds: ops.declared, Libraries: libraries, StartedAt: now(), volatile: host == ""})
 		if err != nil {
 			for _, taken := range ops.leases {
 				taken.release()

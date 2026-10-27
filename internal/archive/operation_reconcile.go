@@ -75,8 +75,11 @@ func (s *Server) reconcileOperations(ctx context.Context) bool {
 				continue
 			}
 			done(false)
-			if info != nil && info.HostID != host {
-				continue // another Mac's: never touched here
+			// Another Mac's is never touched here. One without a host (a
+			// direct MCP call's) is this Mac's: only a process here could
+			// have written it while holding its flock.
+			if info != nil && info.HostID != "" && info.HostID != host {
+				continue
 			}
 			instance := strings.TrimSuffix(entry.Name(), ".json")
 			deadPaths = append(deadPaths, filepath.Join(dir, entry.Name()))

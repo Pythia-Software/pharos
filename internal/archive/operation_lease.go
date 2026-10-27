@@ -38,6 +38,10 @@ type leaseInfo struct {
 	// (a transfer, a recovery) writes.
 	Libraries []string                `json:"libraries,omitempty"`
 	Outcomes  map[string]leaseOutcome `json:"outcomes,omitempty"`
+	// volatile leases are not fsynced while live: the flock is the liveness,
+	// and a crash leaves a file the service treats as dead whatever it holds.
+	// Outcomes, written when abandoning, are fsynced regardless.
+	volatile bool
 }
 
 // leaseOutcome is an operation's terminal state, recorded in the lease when
@@ -135,6 +139,9 @@ func (l *processLease) writeLocked() error {
 	}
 	if _, err := l.file.WriteAt(data, 0); err != nil {
 		return err
+	}
+	if l.info.volatile && len(l.info.Outcomes) == 0 {
+		return nil
 	}
 	return l.file.Sync()
 }

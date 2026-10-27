@@ -803,10 +803,15 @@ Liveness of other processes is never inferred from pids or heartbeat rows.
   call itself (no service answering) leases it the same way, as
   `maintenance.mcp-history` with `catalog.initialize` declared: from before
   it opens the catalog until it has closed it, after the answer is out,
-  which stores the call's history and may checkpoint. It waits at most 1 s
-  for this Mac's host ID; a lease written without one still counts for the
-  verdict (only a process on this Mac can hold its flock) but is not
-  listed. A call that cannot take its lease opens nothing.
+  which stores the call's history and may checkpoint. The lease names no
+  host, since looking this Mac up can wait for `ioreg`: it still counts for
+  the verdict (only a process on this Mac can hold its flock) but is not
+  listed. It is written without `fsync`, as the flock alone is its
+  liveness and a crash leaves a dead file whatever it holds. Writes fail
+  closed, reads degrade: a call that cannot take its lease (an unwritable
+  lease directory) still answers, from read-only connections, so it runs
+  no Initialize, stores no history and never checkpoints. A call holds at
+  most one lease.
 - **When the final round cannot write.** The process writes its terminal
   outcomes into its lease file in place (`ftruncate` + `pwrite`, `fsync`;
   it still holds the lock): an `outcomes` map of op ID to state, reason,
@@ -818,8 +823,10 @@ Liveness of other processes is never inferred from pids or heartbeat rows.
   enough to read any `outcomes` (so a verdict probe meanwhile does not take
   it for live), queues each as a conditional reconcile (§6.2) with that
   recorded state, and once those have been written claims it again and
-  deletes it (the protocol above). The broker deletes dead leases in the
-  app lease directory, which have no journal rows, every 10 s.
+  deletes it (the protocol above). It skips another Mac's leases, but
+  takes one without a host (a direct MCP call's) for this Mac's. The
+  broker deletes dead leases in the app lease directory, which have no
+  journal rows, every 10 s.
   Then it reads the open rows on this host whose `instance` is not the
   running service's, and for each one probes **that row's own** lease
   (`<instance>.json`) at that moment; missing or unheld means dead. A dead

@@ -166,6 +166,9 @@ const mcpHistoryQueue = 1000
 // closes, which the MCP process does once the call is answered, under its
 // memory-fault guard; a background goroutine would have none.
 func (c *Catalog) RecordMCPCall(name string, args map[string]any, status, errorText string, duration time.Duration, responseBytes int, resultCount *int, truncated bool) {
+	if c.readOnly {
+		return
+	}
 	if len(errorText) > 500 {
 		errorText = errorText[:500]
 	}

@@ -18,7 +18,10 @@ import (
 )
 
 type Catalog struct {
-	queryOnly          bool
+	queryOnly bool
+	// readOnly is a catalog opened with read-only connections (see
+	// openCatalogReadOnly): it records no MCP history.
+	readOnly           bool
 	Path               string
 	DB                 *sql.DB
 	reads              *sql.DB

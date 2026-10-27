@@ -112,6 +112,36 @@ func OpenCatalogForQuery(path string) (*Catalog, error) {
 	return catalog, nil
 }
 
+// openCatalogReadOnly opens an existing catalog for MCP tool calls that could
+// not take their operation lease (an unwritable lease directory): read-only
+// connections, so neither Initialize, call history nor a checkpoint writes.
+// A catalog this build has not initialized is read only if its schema version
+// is this build's.
+func openCatalogReadOnly(path string) (*Catalog, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", readerDSN(path))
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(4)
+	catalog := &Catalog{Path: path, DB: db, queryOnly: true, readOnly: true}
+	current, err := catalog.initializedByThisBuild()
+	if err == nil && !current {
+		var version string
+		if err = db.QueryRow("SELECT value FROM meta WHERE key='schema_version'").Scan(&version); err == nil && strings.TrimSpace(version) != strconv.Itoa(catalogSchemaVersion) {
+			err = fmt.Errorf("%w (%s has catalog schema version %s, and Pharos could not take its operation lease to initialize it)", errCatalogNeedsUpgrade, path, version)
+		}
+	}
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	return catalog, nil
+}
+
 // Initialize writes statement by statement, so another process's Initialize
 // could run in its gaps: during the service's upgrade of a large catalog, an
 // MCP call would redo the backfills alongside it and stall on the write lock.
@@ -181,11 +211,15 @@ func (c *Catalog) recordInitialize(reg *opRegistry, trigger string) {
 // checkpointed. SQLite still checkpoints when the last connection of any
 // process closes, which leaves nothing to replay if the drive is then pulled.
 func (c *Catalog) closeQuery() error {
-	c.closeMCPHistory()
+	if !c.readOnly {
+		c.closeMCPHistory()
+	}
 	if c.reads != nil {
 		_ = c.reads.Close()
 	}
-	c.boundWAL(walSizeLimit)
+	if !c.readOnly {
+		c.boundWAL(walSizeLimit)
+	}
 	c.library.mu.Lock()
 	c.library.close()
 	c.library.mu.Unlock()

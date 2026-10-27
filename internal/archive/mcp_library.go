@@ -267,8 +267,11 @@ func (m *mcpServer) direct(config Config, request map[string]any) (response map[
 	var lease *os.File
 	// ops is the call's operation lease (§6.5): taken before the catalog
 	// opens and ended after it closes, so a service on this Mac sees the
-	// call's Initialize, its history store and the close's checkpoint.
+	// call's Initialize, its history store and the close's checkpoint. A
+	// call that cannot take it still answers, read-only: it opens the catalog
+	// without Initialize, stores no history and never checkpoints.
 	var ops *cliOperations
+	readOnly := false
 	var op *Op
 	defer func() {
 		if lease != nil {
@@ -287,7 +290,7 @@ func (m *mcpServer) direct(config Config, request map[string]any) (response map[
 			return nil, fmt.Errorf("this library is finishing a verified move; resume it in Pharos")
 		}
 		if ops, op, e = beginMCPCallLease(config); e != nil {
-			return nil, e
+			readOnly = true
 		}
 	}
 	defer debug.SetPanicOnFault(debug.SetPanicOnFault(true))
@@ -300,7 +303,12 @@ func (m *mcpServer) direct(config Config, request map[string]any) (response map[
 			response, err = nil, libraryFault(config.CatalogPath, value)
 		}
 	}()
-	catalog, err := OpenCatalogForQuery(config.CatalogPath)
+	var catalog *Catalog
+	if readOnly {
+		catalog, err = openCatalogReadOnly(config.CatalogPath)
+	} else {
+		catalog, err = OpenCatalogForQuery(config.CatalogPath)
+	}
 	if errors.Is(err, os.ErrNotExist) {
 		if config.Library {
 			m.verified = ""
@@ -308,7 +316,12 @@ func (m *mcpServer) direct(config Config, request map[string]any) (response map[
 		}
 		// Only a library refuses to start a missing catalog (see checkLibrary).
 		if err = config.EnsureDirs(); err == nil {
-			if ops, op, err = beginMCPCallLease(config); err == nil {
+			// Creating a catalog writes, so it needs the lease. A call holds
+			// at most one: one taken above stays.
+			if ops == nil {
+				ops, op, err = beginMCPCallLease(config)
+			}
+			if err == nil {
 				catalog, err = OpenCatalog(config.CatalogPath)
 			}
 		}
@@ -337,23 +350,12 @@ func (m *mcpServer) direct(config Config, request map[string]any) (response map[
 	return response, nil
 }
 
-// mcpLeaseHostWait bounds how long a direct call's lease waits to name this
-// Mac: an agent's call must not wait for a slow ioreg. A lease without a host
-// still counts for the eject verdict, which needs only that it is held (a
-// flock is held only by a process on this Mac); the snapshot does not list it.
-var mcpLeaseHostWait = time.Second
-
 // beginMCPCallLease takes a direct MCP call's operation lease beside the
-// catalog. A call that cannot take it opens nothing (fail closed, §6.5).
+// catalog. It names no host: looking this Mac up can wait for ioreg, and a
+// lease counts for the eject verdict by its flock alone, which only a
+// process on this Mac can hold. It is not fsynced while live (§6.5).
 func beginMCPCallLease(config Config) (*cliOperations, *Op, error) {
-	host := make(chan string, 1)
-	go func() { host <- currentHost().ID }()
-	id := ""
-	select {
-	case id = <-host:
-	case <-time.After(mcpLeaseHostWait):
-	}
-	ops, err := beginCLIOperationsAs(id, []string{leaseDirs(config)[0]}, nil, nil, "mcp", "maintenance.mcp-history", "catalog.initialize")
+	ops, err := beginCLIOperationsAs("", []string{leaseDirs(config)[0]}, nil, nil, "mcp", "maintenance.mcp-history", "catalog.initialize")
 	if err != nil {
 		return nil, nil, err
 	}
