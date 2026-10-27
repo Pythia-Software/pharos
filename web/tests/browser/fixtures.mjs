@@ -217,7 +217,8 @@ const idleLedger = [
   domain("search.substring", "search", "Substring search", "current"),
   domain("an.identities", "analyses", "Identity links", "current", { as_of: iso(3 * 3600000) }),
   domain("an.tools", "analyses", "Tools rollup", "current", { as_of: iso(3 * 3600000) }),
-  domain("findings", "findings", "Findings", "current", { as_of: iso(3 * 3600000) }),
+  domain("findings", "findings", "Findings", "scheduled", { as_of: iso(3 * 3600000), state_label: "Scheduled",
+    reason: { code: "changed", text: "New data since today's full pass; the next one runs tomorrow" }, next: "updates with Refresh findings now, or the first index tomorrow" }),
   // A scheduled cloud backup within its schedule: a local one, which has no
   // schedule, would be unknown.
   domain("backup.cloud:archive", "backups", "Cloud backup (Archive bucket)", "current", { as_of: iso(2 * day) }),
@@ -225,7 +226,7 @@ const idleLedger = [
 const idleSummary = { all_current: true, text: "All current", checked_label: "checked", checked_at: iso(180000), groups: [
   { group: "conversations", label: "Conversations", state: "current", short: "", short_age: false, text: "current", as_of: iso(180000), as_of_label: "", catching_up: null, shown: false },
   { group: "analyses", label: "Analyses", state: "current", short: "", short_age: false, text: "current", as_of: iso(3 * 3600000), as_of_label: "", catching_up: null, shown: false },
-  { group: "findings", label: "Findings", state: "current", short: "", short_age: false, text: "current", as_of: iso(3 * 3600000), as_of_label: "", catching_up: null, shown: false },
+  { group: "findings", label: "Findings", state: "scheduled", short: "updates tomorrow", short_age: false, text: "scheduled, updates with Refresh findings now, or the first index tomorrow", as_of: iso(3 * 3600000), as_of_label: "", catching_up: null, shown: false, muted: true },
   { group: "backups", label: "Backups", state: "current", short: "", short_age: false, text: "current", as_of: iso(2 * day), as_of_label: "", catching_up: null, shown: false },
 ] };
 const deferred = { reason: { code: "deferred-by-schedule", text: "Scheduled indexing skips analyses" }, next: "updates with the next manual index", behind: { state: "behind", count: null, unit: null } };
@@ -243,7 +244,7 @@ const busySummary = { all_current: false, checked_at: null, groups: [
   { group: "analyses", label: "Analyses", state: "behind", short: "waits for manual index", short_age: false, text: "behind, updates with the next manual index", as_of: iso(3 * 3600000), as_of_label: "last current", catching_up: null, tooltip: "Identity links: behind, scheduled indexing skips analyses\nTools rollup: behind, scheduled indexing skips analyses", shown: true },
   { group: "findings", label: "Findings", state: "behind", short: "waits for manual index", short_age: false, text: "behind, updates with the next manual index", as_of: iso(3 * 3600000), as_of_label: "last current", catching_up: null, shown: true },
   { group: "search", label: "Search", state: "behind", short: "updating", short_age: false, text: "catching up", as_of: null, as_of_label: "", catching_up: "op-view", shown: true },
-  { group: "backups", label: "Backups", state: "behind", short: "behind", short_age: true, text: "behind, updates with the next scheduled cloud backup", as_of: iso(9 * day), as_of_label: "last current", catching_up: null, shown: true },
+  { group: "backups", label: "Backups", state: "behind", short: "behind", short_age: true, text: "behind, updates with the next scheduled cloud backup", as_of: iso(9 * day), as_of_label: "last current", catching_up: null, shown: false, muted: false },
 ] };
 export const idleStatus = {
   version: 1, revision: 1, generated_at: iso(0), host: { id: "test-mac", label: "This Mac" }, library: statusLibrary,

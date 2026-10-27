@@ -27,6 +27,9 @@ const (
 	freshCurrent = "current"
 	freshBehind  = "behind"
 	freshUnknown = "unknown"
+	// freshScheduled is waiting for its next planned run, within its
+	// designed cadence: not stale, and not alarming (§5).
+	freshScheduled = "scheduled"
 )
 
 // freshnessRow is one domain in the snapshot's shape.
@@ -94,7 +97,7 @@ var freshnessReasons = map[string]string{
 	"retrying":             "The scheduled backup failed; it will try again",
 	"unverified":           "The newest cloud backup is not verified yet",
 	"paused":               "Its schedule is paused",
-	"no-record":            "No record that it was built for the current data",
+	"no-record":            "Not checked since this version of Pharos; updates with the next manual index",
 	"blocked":              "Waits for an earlier step that failed",
 	"no-schedule":          "Has no schedule, so Pharos cannot say it is current",
 	"not-counted":          "Not counted since the library last changed",
@@ -109,7 +112,7 @@ var freshnessReasonOverrides = map[string]string{
 	"backups overdue":    "Older than its schedule",
 	"backup.cloud never": "No verified cloud backup yet",
 	"backup.local never": "No local backup yet",
-	"findings changed":   "New data since today's full pass",
+	"findings changed":   "New data since today's full pass; the next one runs tomorrow",
 }
 
 // reasonText is a code's words for domain, in group.
@@ -123,7 +126,16 @@ func reasonText(domain, group, code string) string {
 	return freshnessReasons[code]
 }
 
-var freshnessStateLabels = map[string]string{freshCurrent: "Current", freshBehind: "Behind", freshUnknown: "Unknown"}
+var freshnessStateLabels = map[string]string{freshCurrent: "Current", freshScheduled: "Scheduled", freshBehind: "Behind", freshUnknown: "Unknown"}
+
+// scheduledShort is the Data row's muted words for a scheduled domain:
+// "updates <when>".
+var scheduledShort = map[string]string{"findings": "updates tomorrow"}
+
+// pageGroups are the groups that feed pages, which the Data row covers.
+// Backups are in the ledger, Show all and MCP, and reach the panel only
+// through attention.
+var pageGroups = map[string]bool{"conversations": true, "search": true, "analyses": true, "findings": true, "upgrade": true}
 
 // What catches a domain up when nothing runs (§5 "next").
 const (
@@ -774,9 +786,10 @@ func (l *ledger) findings(c *Catalog, meta map[string]string, metaErr error, def
 	case meta["findings_inputs_generation"] == "":
 		entry.state, entry.reason = freshUnknown, "no-record"
 	default:
-		// The full pass runs once a day; later data waits for tomorrow's
-		// or for Refresh findings now.
-		entry.state, entry.reason, entry.next = freshBehind, "changed", nextFindingsPass
+		// The full pass runs once a day: later data waits for tomorrow's
+		// (or Refresh findings now). Within today that is its designed
+		// cadence; tomorrow, without a pass, it is daily-pass-due.
+		entry.state, entry.reason, entry.next = freshScheduled, "changed", nextFindingsPass
 	}
 	l.add(entry)
 }
@@ -978,8 +991,11 @@ type freshnessGroup struct {
 	// Tooltip lists the rows that are not current and why.
 	Tooltip    string  `json:"tooltip,omitempty"`
 	CatchingUp *string `json:"catching_up"`
-	// Shown is whether the Data row lists it: only groups not current.
+	// Shown is whether the Data row lists it: page groups that are behind,
+	// unknown or failed. Muted is a page group that is only scheduled, which
+	// the row may show muted after "All current".
 	Shown bool `json:"shown"`
+	Muted bool `json:"muted"`
 }
 
 // freshnessSummary is the Data row: the groups, and the words for when
@@ -996,7 +1012,7 @@ type freshnessSummary struct {
 
 // summarizeFreshness groups rows for the Data row.
 func summarizeFreshness(rows []freshnessRow) freshnessSummary {
-	rank := map[string]int{freshCurrent: 0, freshUnknown: 1, freshBehind: 2}
+	rank := map[string]int{freshCurrent: 0, freshScheduled: 1, freshUnknown: 2, freshBehind: 3}
 	summary := freshnessSummary{Groups: []freshnessGroup{}, AllCurrent: true}
 	for _, definition := range freshnessGroups {
 		members := slices.DeleteFunc(slices.Clone(rows), func(row freshnessRow) bool { return row.Group != definition.id })
@@ -1017,6 +1033,11 @@ func summarizeFreshness(rows []freshnessRow) freshnessSummary {
 				if definition.id == "conversations" && row.AsOf != nil && (summary.CheckedAt == nil || canonicalTime(*row.AsOf) < canonicalTime(*summary.CheckedAt)) {
 					summary.CheckedAt = row.AsOf
 				}
+				continue
+			}
+			if row.Behind.State == freshScheduled && group.State != freshScheduled {
+				// Planned, not stale: only a tooltip line.
+				tooltip = append(tooltip, row.Label+": "+lowerFirst(row.StateLabel))
 				continue
 			}
 			line := row.Label + ": " + lowerFirst(row.StateLabel)
@@ -1065,6 +1086,13 @@ func summarizeFreshness(rows []freshnessRow) freshnessSummary {
 		}
 		switch {
 		case group.State == freshCurrent:
+		case group.State == freshScheduled:
+			group.Short = defaultString(scheduledShort[members[0].Domain], "updates later")
+			for _, row := range members {
+				if short := scheduledShort[row.Domain]; short != "" && row.Behind.State == freshScheduled {
+					group.Short = short
+				}
+			}
 		case failed:
 			group.Short = shortFailed
 		case allCaught:
@@ -1079,7 +1107,10 @@ func summarizeFreshness(rows []freshnessRow) freshnessSummary {
 		if group.AsOf != nil && group.State != freshCurrent {
 			group.AsOfLabel = "last current"
 		}
-		group.Shown = group.State != freshCurrent
+		// The Data row: page groups that are stale; a scheduled one is
+		// muted and never keeps the row from "All current".
+		group.Shown = pageGroups[definition.id] && group.State != freshCurrent && group.State != freshScheduled
+		group.Muted = pageGroups[definition.id] && group.State == freshScheduled
 		summary.AllCurrent = summary.AllCurrent && !group.Shown
 		summary.Groups = append(summary.Groups, group)
 	}

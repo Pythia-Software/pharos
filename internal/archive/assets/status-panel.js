@@ -76,8 +76,9 @@
     return text === 'just now' ? '<1 min' : text.replace(/ ago$/, '');
   };
 
-  // The Data row and its detail (docs/background-work.md §5): the groups
-  // that are not current, each "Label short-state" ("Analyses waits for
+  // The Data row and its detail (docs/background-work.md §5): the page
+  // groups that are stale (backups and planned runs are not), each "Label
+  // short-state" ("Analyses waits for
   // manual index", "Findings behind 3 h"), or "All current · checked 2 min
   // ago"; the longer words are the tooltip. Under Show all, one line per
   // domain. The server says every word; this adds ages and counts. Null
@@ -92,6 +93,10 @@
     if (!line.length && summary.all_current && summary.text) {
       line.push({group: 'all', state: 'current', label: '',
         text: [summary.text, summary.checked_at ? `${summary.checked_label || ''} ${ago(summary.checked_at, now)}`.trim() : ''].filter(Boolean).join(' · '), tooltip: ''});
+      // Planned runs, muted: "Findings updates tomorrow".
+      for (const group of summary.groups || []) if (group.muted) {
+        line.push({group: group.group, state: group.state, label: group.label, text: group.short || '', tooltip: [group.text, group.tooltip].filter(Boolean).join('\n'), muted: true});
+      }
     }
     const domains = library.freshness.map(row => {
       const behind = row.behind || {};
@@ -436,7 +441,7 @@
       // under Show all.
       const data = node('span', 'pharos-status-data');
       for (const [index, group] of model.freshness.line.entries()) {
-        const item = node('span');
+        const item = node('span', group.muted ? 'pharos-sub' : '');
         item.dataset.key = `data:${group.group}`;
         item.append(index ? ' · ' : '');
         if (group.label) item.append(node('strong', '', group.label), ' ');

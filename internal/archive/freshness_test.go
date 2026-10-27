@@ -262,7 +262,8 @@ func TestFreshnessDomains(t *testing.T) {
 		{name: "findings current", domain: "findings", state: freshCurrent, asOf: "2026-10-27T08:05:00Z"},
 		{name: "findings daily pass due", domain: "findings", seed: []string{setMetaSQL("findings_generation", findingsVersion+"/2026-10-26")}, state: freshBehind, reason: "daily-pass-due"},
 		{name: "findings never built", domain: "findings", seed: []string{"DELETE FROM meta WHERE key='findings_generation'"}, state: freshBehind, reason: "never-built"},
-		{name: "findings after a Terminal ingest", domain: "findings", seed: []string{setMetaSQL("authorship_inputs_generation", "4")}, state: freshBehind, reason: "changed"},
+		// Within its daily cadence: scheduled, not behind.
+		{name: "findings after a Terminal ingest", domain: "findings", seed: []string{setMetaSQL("authorship_inputs_generation", "4")}, state: freshScheduled, reason: "changed"},
 		{name: "findings with no record of their inputs", domain: "findings", seed: []string{"DELETE FROM meta WHERE key='findings_inputs_generation'"}, state: freshUnknown, reason: "no-record"},
 		{name: "findings caught up", domain: "findings", seed: []string{"DELETE FROM meta WHERE key='findings_generation'"},
 			in: freshnessInput{ops: []freshnessOp{runningOp("op-find", "analysis.findings", "")}}, state: freshBehind, reason: "running", catching: "op-find"},
@@ -480,8 +481,17 @@ func TestFreshnessSummary(t *testing.T) {
 	if g := summaryGroup(t, mixed, "analyses"); g.Short != shortUpdating || g.Text != "catching up" {
 		t.Fatalf("every row caught up is updating: %+v", g)
 	}
-	if g := summaryGroup(t, mixed, "backups"); g.Short != shortUnknown || !g.Shown {
-		t.Fatalf("unknown backups are listed: %+v", g)
+	if g := summaryGroup(t, mixed, "backups"); g.Short != shortUnknown || g.Shown {
+		t.Fatalf("backups feed no page: never on the Data row: %+v", g)
+	}
+
+	// Unscheduled backups and findings waiting for tomorrow's pass leave the
+	// row at "All current", the findings muted.
+	quiet := summarizeFreshness(append(slices.Clone(current[:2]),
+		row("findings", "findings", freshScheduled, func(r *freshnessRow) { r.Reason, r.Next = &freshnessReason{Code: "changed", Text: "words"}, text(nextFindingsPass) }),
+		row("backup.local", "backups", freshUnknown, func(r *freshnessRow) { r.Reason = &freshnessReason{Code: "no-schedule", Text: "words"} })))
+	if g := summaryGroup(t, quiet, "findings"); !quiet.AllCurrent || g.Shown || !g.Muted || g.Short != "updates tomorrow" {
+		t.Fatalf("scheduled findings are muted and all is current: %+v %+v", quiet, g)
 	}
 }
 

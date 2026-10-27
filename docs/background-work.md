@@ -583,8 +583,13 @@ row has:
   `upgrade`, `backups`), `label` and `state_label` (server words);
 - `as_of`: when the domain was last brought current (RFC 3339), or null
   when that is not recorded (the search indexes) or it never was;
-- `behind`: `{"state": "current" | "behind" | "unknown", "count": N, "unit": "…"}`,
-  with `count` and `unit` only when the tables count something real;
+- `behind`: `{"state": "current" | "scheduled" | "behind" | "unknown", "count": N, "unit": "…"}`,
+  with `count` and `unit` only when the tables count something real.
+  `scheduled` is a domain waiting for its next planned run within its
+  designed cadence (today: findings whose inputs changed after today's full
+  pass, which runs once a day); past its cadence it becomes `behind`
+  (findings: `daily-pass-due`). It is not staleness. Analyses deferred by
+  scheduled indexing are not `scheduled`: they are `behind`;
 - `reason`: `{"code", "text", "detail"}`, one code from the list below with
   its server sentence (`detail` names, for example, the failed stage), or
   null when current;
@@ -629,7 +634,9 @@ and an honest reason. The evidence per domain:
 
 Catalogs from before phase 3 have no `analysis_inputs:*` or
 `findings_inputs_generation` rows: those domains are `unknown`
-(`no-record`) until the next manual index (or findings' next full pass).
+(`no-record`, "Not checked since this version of Pharos; updates with the
+next manual index") until the next manual index (or findings' next full
+pass). This is transitional and expected.
 An older Pharos ignores the rows.
 
 | Domain | `as_of` from | Behind measured by | Reason codes (in order after the running code) | Caught up by |
@@ -646,7 +653,7 @@ An older Pharos ignores the rows.
 | `an.tools` (Tools rollup) | as above, for `tools` | `COUNT(*)` of `tool_rollup_dirty` (capped), unit workspace, when that is why | `running`, `failed` / `blocked`, `deferred-by-schedule`, `never-built`, `version` (an older layout), `changed` (a newer ledger generation, dirty workspaces, another day or timezone: the `toolRollupStale` rule) | `analysis.tools`, `library.upgrade`, `tools.ledger.build` |
 | `an.authorship` | `authorship_built_at` | `authorship_generation` ≠ `tool_ledger_generation:authorship_inputs_generation/version`; count unknown | `running`, `failed` / `blocked`, `deferred-by-schedule`, `never-built`, `changed` | `analysis.authorship` |
 | `an.ledger` (tool ledger) | when it was last counted | the upgrade's `tools` step count, from the last `UpgradeSteps` | `running`, `not-counted` (unknown: never counted, or counted for other inputs), `version` | `tools.ledger.build`, `library.upgrade` |
-| `findings` | `findings_built_at` | count unknown | `running`, `never-built`, `failed` / `blocked`, `deferred-by-schedule`, `daily-pass-due` (`findings_generation` ≠ `findingsVersion/<today>`), `no-record` (unknown), `changed` (new data since today's full pass: "updates with Refresh findings now, or the first index tomorrow") | `analysis.findings`, `analysis.chain` |
+| `findings` | `findings_built_at` | count unknown | `running`, `never-built`, `failed` / `blocked`, `deferred-by-schedule`, `daily-pass-due` (`findings_generation` ≠ `findingsVersion/<today>`), `no-record` (unknown), `changed` (`scheduled`: new data since today's full pass, "updates with Refresh findings now, or the first index tomorrow") | `analysis.findings`, `analysis.chain` |
 | `upgrade` | when it was last counted | steps with pending units, from the last `UpgradeSteps` | `running`, `not-counted` (unknown), `upgrade-available` | `library.upgrade` |
 | `backup.local` | the newest non-partial backup in `backups.json` | age only | `running`, `failed` (this process's latest backup failed after `as_of`), `never` (unknown), `no-schedule` (unknown, with `as_of`) | `backup.local` |
 | `backup.cloud:<destination>` | the destination's newest complete, verified full run | against an enabled schedule: older than its cadence + 12 h | `running`, `retrying` (enabled, `failures > 0`), `failed`, `unverified`, `never`, `overdue`, `no-schedule` (unknown, with `as_of`); `paused` replaces any but `failed` when the schedule exists and is off | `cloud.upload`, `cloud.verify` |
@@ -691,8 +698,9 @@ Rules:
 - **Summary.** `/api/status` also carries `freshness_summary`:
   `{groups, all_current, text, checked_label, checked_at}`. Each group
   present is `{group, label, state, short, short_age, text, as_of,
-  as_of_label, tooltip, catching_up, shown}`. Its state is the worst of its
-  rows (`behind` over `unknown` over `current`). `short` is the Data row's
+  as_of_label, tooltip, catching_up, shown, muted}`. Its state is the worst
+  of its rows (`behind` over `unknown` over `scheduled` over `current`). A
+  `scheduled` group's `short` is "updates <when>" ("updates tomorrow"). `short` is the Data row's
   word: `failed` (a row failed, is blocked or retrying), `updating` (every
   row that is not current is being caught up), `waits for manual index`
   (every uncaught behind row's `next` is the next manual index), `behind`
@@ -701,11 +709,18 @@ Rules:
   current is caught up, otherwise the state with the first uncaught row's
   `next`. `as_of` is the least recent among the rows in that state;
   `tooltip` lists the rows that are not current, why, and what catches them
-  up. `shown` is true exactly for groups that are not current. With none
-  shown, `all_current` is true, `text` is "All current" and `checked_at`
-  the least recent check of this Mac's conversations. The panel's Data row
-  is one line (two on a narrow screen): the shown groups as
-  "<label> <short>", or "All current · checked <age>"; it adds only ages.
+  up. The Data row answers "is the data on my pages current?", so it covers
+  only the groups that feed pages: conversations (with captures), search,
+  analyses, findings and upgrade. `shown` is true for those that are
+  `behind` or `unknown`; `muted` for those only `scheduled`. Backups are
+  never shown: they stay in the ledger, Show all and MCP, and reach the
+  panel only through attention (§7.3 rules 6 and 7: a failed backup, a
+  failed scheduled cloud backup). With none shown, `all_current` is true,
+  `text` is "All current" and `checked_at` the least recent check of this
+  Mac's conversations; `scheduled` and backups never prevent it. The
+  panel's Data row is one line (two on a narrow screen): the shown groups
+  as "<label> <short>", or "All current · checked <age>" followed by any
+  muted groups ("Findings updates tomorrow"); it adds only ages.
 - **The three older Go rules stay** (no retirement in this series):
   `Catalog.Freshness` (`catalog.go`) ignores scheduled indexing, MCP
   `archiveSourceStatus` (`mcp_audit.go`) counts it but calls a source with
@@ -1244,6 +1259,11 @@ Search).
 Never: "deferred", "Working" for an idle library, "Automatic sync in
 progress" for work that is not an automatic index, "for this stage" for a
 whole-operation estimate.
+
+Freshness states (§5), as `state_label`: `current` Current, `scheduled`
+Scheduled (muted: "updates tomorrow"; never "stale"), `behind` Behind,
+`unknown` Unknown. The Data row's short words: "updating", "behind <age>",
+"waits for manual index", "unknown", "failed", "updates <when>".
 
 ### 8.3 Reason codes
 

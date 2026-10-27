@@ -136,6 +136,9 @@ test("the Data row lists the groups that are not current by their short state; t
 test("with every group current the row says so, with the last check", () => {
   const data = plain(panel.dataModel({ freshness: [], freshness_summary: { all_current: true, text: "All words", checked_label: "checked", checked_at: minutesAgo(4), groups: [] } }, at));
   assert.deepEqual(data.line.map(group => group.text), ["All words · checked 4 min ago"]);
+  const planned = plain(panel.dataModel({ freshness: [], freshness_summary: { all_current: true, text: "All words", checked_label: "checked", checked_at: minutesAgo(4),
+    groups: [{ group: "findings", label: "Findings", state: "scheduled", short: "updates tomorrow", text: "scheduled", shown: false, muted: true }] } }, at));
+  assert.deepEqual(planned.line.map(group => [group.label, group.text, Boolean(group.muted)]), [["", "All words · checked 4 min ago", false], ["Findings", "updates tomorrow", true]]);
 });
 
 test("ages are whole minutes, hours or days", () => {
