@@ -443,7 +443,9 @@ var originsRunInterval = runCacheHold
 // an operation only when the projection was out of date (§3.4).
 func (c *Catalog) originsPass(ctx context.Context) {
 	origins := c.beginPass(ctx, "maintenance.origins", triggerChained)
-	published, err := c.publishOrigins(ctx)
+	var published bool
+	var err error
+	origins.runIO(func() { published, err = c.publishOrigins(ctx) })
 	if published {
 		origins.worked(1)
 	}
@@ -499,7 +501,9 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 			continue
 		}
 		begin(&view, "maintenance.library-view")
-		count, err := c.RefreshLibrary(pass, 10)
+		var count int
+		var err error
+		view.runIO(func() { count, err = c.RefreshLibrary(pass, 10) })
 		c.noteLibraryRefresh(count, err)
 		view.worked(count)
 		settle(&view, count > 0, err)
@@ -515,7 +519,8 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 		} else if count == 0 {
 			// Idle: fill in previews, then keep the page caches warm.
 			begin(&previews, "maintenance.previews")
-			filled, err := c.refreshPreviews(pass, 25)
+			var filled int
+			previews.runIO(func() { filled, err = c.refreshPreviews(pass, 25) })
 			previews.worked(filled)
 			settle(&previews, filled > 0, err)
 			if err != nil || filled == 0 {
@@ -525,7 +530,8 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 				// Then store changed conversations' parallelism timing, so a
 				// page computes only what changed since (all, after an upgrade).
 				begin(&parallelism, "maintenance.parallelism")
-				derived, err := c.refreshParallelism(pass, parallelismBatch, false)
+				var derived int
+				parallelism.runIO(func() { derived, err = c.refreshParallelism(pass, parallelismBatch, false) })
 				parallelism.worked(derived)
 				settle(&parallelism, derived > 0, err)
 				if err != nil || derived == 0 {
@@ -535,7 +541,7 @@ func (c *Catalog) maintainLibrary(ctx context.Context) {
 					wait = 2 * time.Second
 					// Warming only reads; its operation is never published.
 					warm := c.beginPass(ctx, "maintenance.cache-warm", triggerChained)
-					c.warmCaches(ctx)
+					warm.runIO(func() { c.warmCaches(ctx) })
 					warm.end(nil)
 				}
 			}

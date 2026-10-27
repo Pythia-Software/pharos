@@ -123,7 +123,9 @@ func (c *Catalog) maintainSubstringIndex(ctx context.Context) {
 	pass := c.beginPass(ctx, "maintenance.search.substring", triggerVersion)
 	defer func() { pass.end(nil) }()
 	for {
-		more, err := c.indexSubstringBatch(ctx)
+		var more bool
+		var err error
+		pass.runIO(func() { more, err = c.indexSubstringBatch(ctx) })
 		if more {
 			pass.worked(1)
 		}

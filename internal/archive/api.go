@@ -105,6 +105,8 @@ func NewServer(config Config, catalog *Catalog) *Server {
 		server.ingestMu.path = catalog.Path
 		catalog.background = server.start
 		catalog.ops = server.ops
+		// Background work's IO follows the flag (§10); off, it is as before.
+		server.ops.lowerIO = func() bool { return catalog.unifiedActivity(context.Background()) }
 		server.journal = newJournalWriter(catalog, server.ops)
 		catalog.recordInitialize(server.ops, triggerStartup)
 		server.leases.dirs = func() []string { return leaseDirs(server.Config()) }

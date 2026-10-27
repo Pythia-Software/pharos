@@ -165,7 +165,8 @@ func (c *Catalog) boundWAL(limit int64) {
 	}
 	// Only a check that runs a checkpoint is an operation (§3.4).
 	_, op := c.beginOp(context.Background(), OperationSpec{Kind: "maintenance.checkpoint", Variant: "bound", Trigger: triggerSchedule})
-	err := c.Checkpoint()
+	var err error
+	op.RunIO(func() { err = c.Checkpoint() })
 	if err != nil {
 		c.wal.retryAt = time.Now().Add(walRetryDelay)
 	}

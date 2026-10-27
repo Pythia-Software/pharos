@@ -58,7 +58,9 @@ func (c *Catalog) maintainTextSearch(ctx context.Context) {
 	pass := c.beginPass(ctx, "maintenance.search.text", triggerVersion)
 	defer func() { pass.end(nil) }()
 	for {
-		more, err := c.indexTextSearchBatch(ctx)
+		var more bool
+		var err error
+		pass.runIO(func() { more, err = c.indexTextSearchBatch(ctx) })
 		if more {
 			pass.worked(1)
 		}
