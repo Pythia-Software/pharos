@@ -21,8 +21,8 @@ type cloudJobs struct {
 	active string
 	cancel context.CancelFunc
 	// current is what libraryActivities lists. It has its own lock because
-	// reconcileCloudRuns holds mu across catalog writes, which status
-	// requests must not wait for.
+	// getCloud and interruptedCloudRuns hold mu across catalog reads, which
+	// status requests must not wait for.
 	currentMu sync.Mutex
 	current   *cloudJob
 	// op is the running job's operation, which report and stop follow.

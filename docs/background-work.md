@@ -349,7 +349,6 @@ operation.
 | `maintenance.search.tools` | Build tool search · Building tool search | version, chained | svc | D:w W:w | search.tools | — | Stops between batches; it carries on later. | batch | >30 s | bg |
 | `maintenance.search.query` | Build Query Table text indexes · Building table search | version, chained | svc | D:w W:w | search.query | — | Stops between batches; it carries on later. | batch | >30 s | bg |
 | `maintenance.checkpoint` (variants `bound`, `after-run`, `close`) | Save the catalog · Saving the catalog | daemon pass (WAL over 64 MiB, every 10 s), chained, release | svc | D:w W:w | — | — | Not interruptible; short. | record | >1 s | bg |
-| `maintenance.metrics` | Update MCP metrics · Updating metrics | none: requests never write, so a `query_statistics` call computes dirty workspaces' metrics in its read snapshot and `maintenance.library-view` stores them; the kind stays so that journal rows naming it still render | mcp, svc | D:w W:w | — | — | Ends with the call. | record | never | fg |
 | `maintenance.origins` | Publish conversation origins · Publishing conversation origins | daemon pass (`maintainLibrary`: every pass while no ingest runs, at most once a minute during one); the end of each ingest and the Tools rollup publish them as part of their own operation | svc | D:w W:w | — | — | Stops; it publishes them on its next pass. | batch | never | bg |
 | `maintenance.mcp-history` | Store MCP call history · Storing MCP call history | read (an MCP call through the service queues its record; one background writer stores the queue, so no request waits for the writer; a direct MCP call stores its own record when it closes the catalog, after its answer is out) | svc, mcp | D:w W:w | — | — | Stops; closing the catalog stores what is still queued. | record | never | bg |
 | `ask.save` | Save an Ask Pharos answer · Saving an Ask Pharos answer | user (a finished Ask turn whose save missed its deadline is retried in the background for up to 5 min) | svc | D:w W:w | — | — | Stops retrying; an answer not yet saved is lost, as when the service stops. | record | never | bg |
@@ -368,8 +367,8 @@ check does nothing. The check is the daemon. Only a check that runs a
 checkpoint starts `maintenance.checkpoint`, which is registered (so eject
 sees it) but journaled only past 1 s. The same pattern applies to every
 `>T` row: register always, journal only past T or when `op.Wrote()` was
-called. `drive.measure`, `maintenance.metrics`, `maintenance.origins`,
-`maintenance.mcp-history`, `ask.save` and `cloud.reconcile` (§3.6) are
+called. `drive.measure`, `maintenance.origins`, `maintenance.mcp-history`,
+`ask.save` and `cloud.reconcile` (§3.6) are
 listed only so the unregistered-work test passes and eject sees them; they
 are D-family and hidden from surfaces. Requests never write: the writes
 they used to make (origins, MCP history, interrupted cloud runs) are these
@@ -925,9 +924,9 @@ a server-sent-events stream of the same document.
 - `operations` holds this host's top-level operations that are not
   terminal, plus those that ended in the last 10 minutes, newest first.
   `children` holds running children; `children_count` all of them. Daemons
-  and kinds marked hidden (`drive.measure`, `maintenance.metrics`,
-  `maintenance.origins`, `maintenance.mcp-history`, `ask.save`,
-  `cloud.reconcile`, `maintenance.cache-warm`) are omitted but still count for the verdict.
+  and kinds marked hidden (`drive.measure`, `maintenance.origins`,
+  `maintenance.mcp-history`, `ask.save`, `cloud.reconcile`,
+  `maintenance.cache-warm`) are omitted but still count for the verdict.
 - A tentative daemon pass (§3.4) is not listed and not journaled; it
   counts for the verdict only. The ETag covers the listed operations, the
   whole `eject` document and the journal rows.
