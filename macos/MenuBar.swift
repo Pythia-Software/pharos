@@ -378,9 +378,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         var problem = actionError ?? service.error ?? service.setupError ?? statusError ?? nonempty(snapshot["error"])
         if let disconnected = service.disconnected, disconnected.state != .finishing { problem = disconnected.note ?? "Library unavailable: \(disconnected.volume)" }
         if service.setupNeeded && !service.settingUp { problem = problem ?? "Set up Pharos to connect a library." }
-        // The managed app with no connected library has nothing to poll, so
-        // its snapshot stays empty: that is idle, not a check in progress.
-        let noLibrary = service.url != nil && !service.hasConnectedLibrary && !service.ejecting && !service.settingUp && service.disconnected?.state != .finishing
+        // The managed app with no library selected (or the selected one
+        // unavailable) has nothing to poll, so its snapshot stays empty: that
+        // is idle, not a check in progress. A selected library whose service
+        // is not up yet (starting, respawning, stopped by a delivery) is work.
+        let noLibrary = service.url != nil && service.noLibrarySelected && !service.ejecting && !service.settingUp && service.disconnected?.state != .finishing
         let busy = service.ejecting || service.settingUp || service.disconnected?.state == .finishing || service.url == nil || !activities.isEmpty || indexing || (snapshot["library"] == nil && !noLibrary)
         let title: String
         let detail: String
@@ -405,7 +407,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
                     parts.append(activity["estimated_completion_scope"] as? String == "operation" ? "about \(minutes) min left" : "about \(minutes) min for this stage")
                 }
                 detail = parts.joined(separator: " · ")
-            } else { detail = indexing ? "Starting indexing…" : "Checking the library…" }
+            } else { detail = indexing ? "Starting indexing…" : !service.hasConnectedLibrary ? "Waiting for the library…" : "Checking the library…" }
             dot.color = .systemYellow
         } else {
             title = "Pharos · Idle"

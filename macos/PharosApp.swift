@@ -103,6 +103,12 @@ final class ArchiveService: ObservableObject {
     private var managedLibraryConnected = false
     private var managedSelectedLibrary = ""
     var hasConnectedLibrary: Bool { !managedApplication || managedLibraryConnected }
+    // Whether the broker has answered, and whether it names a selected
+    // library that is available. A selected library whose service is not up
+    // (starting, respawning, stopped for a delivery) is not "no library".
+    private var managedLibraryKnown = false
+    private var managedSelectedAvailable = false
+    var noLibrarySelected: Bool { managedApplication && managedLibraryKnown && !managedSelectedAvailable }
     @Published var error: String?
     @Published var status = "Starting local archive…"
     @Published var disconnected: Disconnection?
@@ -259,6 +265,8 @@ final class ArchiveService: ObservableObject {
                 let generation = (state["generation"] as? NSNumber)?.stringValue ?? "0"
                 let connected = libraries.contains { $0["id"] as? String == selected && $0["connected"] as? Bool == true }
                 self.managedLibraryConnected = connected
+                self.managedLibraryKnown = true
+                self.managedSelectedAvailable = !selected.isEmpty && libraries.contains { $0["id"] as? String == selected && $0["available"] as? Bool == true }
                 self.managedSelectedLibrary = selected
                 let connection = "\(selected):\(generation):\(connected)"
                 if self.libraryConnection != connection { self.libraryConnection = connection }
