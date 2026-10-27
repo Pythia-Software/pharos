@@ -234,8 +234,8 @@ func (s *Server) menuBarStatus(ctx context.Context) (map[string]any, error) {
 	}
 	_, backups := s.backups.status()
 	if problem == "" && len(backups) > 0 && backups[0].State == "failed" {
-		problem = "Backup failed. Open Library health for details."
-		status["error_path"] = "/settings"
+		problem = "Backup failed. Open Backups for details."
+		status["error_path"] = "/settings/backups"
 	}
 	status["error"] = problem
 	if settings["backup"] {

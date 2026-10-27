@@ -130,6 +130,13 @@ func TestMenuBarIgnoresDisabledAndRemovedSourceFailures(t *testing.T) {
 	// Source filtering must not hide a failure of the service itself.
 	server.runs[0].Error = "catalog read failed"
 	check("catalog read failed")
+	// A failed backup links to Settings → Backups, where backups now live.
+	server.runs, server.captures.runs = nil, nil
+	server.backups.runs = []*BackupRun{{ID: "backup-1", State: "failed"}}
+	status := libraryStatusCall(t, server, "/api/menu-bar/status")
+	if status["error"] != "Backup failed. Open Backups for details." || status["error_path"] != "/settings/backups" {
+		t.Fatalf("backup failure: %v, %v", status["error"], status["error_path"])
+	}
 }
 
 func TestMenuBarFreshnessIsScopedToThisMac(t *testing.T) {

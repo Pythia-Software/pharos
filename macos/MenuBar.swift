@@ -225,7 +225,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         row("cost", "Estimated API cost", path: "/analyze?analyze_topic=tokens")
         row("carbon", "Estimated CO₂e", path: "/analyze?analyze_topic=carbon")
         row("usage-note", "Loading usage…")
-        row("backup", "Last backup", path: "/settings")
+        row("backup", "Last backup", path: "/settings/backups")
         row("space", "Library size", path: "/settings")
         row("free", "Calculating free space…")
         row("search", "Search conversations…", path: "/library")
