@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import type { AggregationClause, AggregationResultEntry, FieldDef, FieldSchema, QueryState, WhereTerm } from "@pythia-software/query-table-core";
 import { MetricCard, defaultRenderers } from "@pythia-software/query-table-ui";
-import { analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, type AnalysisCatalog, type AnalysisReduce, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
+import { changeState, analysisEmptyLabel, analysisInspectQuery, analysisNote, analysisQuery, analysisReductions, viewOptions, cycleResult, cycleTotal, noSplit, normalizeAnalysis, records, reductionLabel, sampleThresholds, shareable, splitValid, trendLimits, unitTotal, type AnalysisCatalog, type AnalysisReduce, type AnalysisState, type AnalysisView, type ResolvedAnalysis } from "./dashboard-analysis-model";
 import { runAnalysisQuery, type LocalRows } from "./analysis-request";
 import { ChartSelect, DisplayControl, PeriodControl, RangeControl, RollingControl, ScaleControl, presetPeriod, timeBounds, withTimeRange, type ChartRange, type FilterChange, type TimeBounds } from "./usage-chart";
 import { trendPeriodCount } from "./dashboard-trend-model";
@@ -104,7 +104,8 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
   const analysis = useMemo(() => analysisQuery(catalog, view, where, { zone }), [catalog, JSON.stringify(view), JSON.stringify(where), zone, new Date().toDateString()]);
   const result = useAnalysisResult(dataset, schema, analysis.query, local);
   const bounds = timeBounds(where, catalog.time);
-  const set = (change: Partial<AnalysisState>) => onChange(normalizeAnalysis(catalog, { ...state, ...change }) as Partial<T>);
+  // Save what was asked for; only drawing and querying normalize.
+  const set = (change: Partial<AnalysisState>) => onChange(changeState(catalog, state, change) as Partial<T>);
   const unit = view.unit === records ? undefined : catalog.units[view.unit];
   const subjects = (unit?.plural ?? catalog.records.plural).toLowerCase();
 
@@ -134,7 +135,7 @@ export function DashboardAnalysis<T extends AnalysisState>({ catalog, schema, da
           const query = analysisInspectQuery(analysis, presentation.sourceBucket(bucket) as typeof bucket, analysis.clause, schema, view.view);
           if (query) window.pharosNavigate?.(usageWorkspaceURL({ mode: "query", dataset, query: orderedUsageQuery(dataset, query) }, new URLSearchParams(location.search)));
         }} />}
-    {hidden || slots ? <p className="usage-dashboard-note" role="status">{[hidden, slots].filter(Boolean).join(" ")}</p> : null}
+    {hidden || slots || analysis.selection ? <p className="usage-dashboard-note" role="status">{[hidden, slots, analysis.selection ? `Shares are of every ${catalog.breakdowns[view.split].label.toLowerCase()} in your other filters; your ${catalog.breakdowns[view.split].label.toLowerCase()} selection does not change them.` : ""].filter(Boolean).join(" ")}</p> : null}
     {/* No legacy link: that page has no analysis views, and would show this query's table under its default chart. */}
     <UsageDashboardLinks schema={schema} dataset={dataset} query={analysis.supporting} />
     <p className="usage-dashboard-note">{analysisNote(catalog, view)}{view.view === "cycle" ? "" : ` Select a ${view.view === "scatter" ? "point" : "bar or box"} to open its ${unit ? subjects : "records"}.`}</p>

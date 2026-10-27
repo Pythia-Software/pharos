@@ -1,9 +1,9 @@
 import { EMPTY_QUERY, type AggregationClause, type AggregationResultEntry, type QueryState, type WhereTerm } from "@pythia-software/query-table-core";
-import { earliestKey, isHourly, nextPeriod, parseDay, periodKey, periodLabel, type ChartPeriod } from "./chart-period";
-import { chartSpan, smoothingWhere, timeBounds } from "./chart-range";
+import { earliestKey, isHourly, nextPeriod, parseDay, periodBuckets, periodKey, periodLabel, periodStart, shiftPeriod, type ChartPeriod } from "./chart-period";
+import { chartSpan, smoothingWhere, timeBounds, widenStart } from "./chart-range";
 import { chartBucketsWithHistory, cumulativeBuckets, foldSeries, rollingBuckets, shareBuckets, type ChartBucket, type ChartSeries } from "./chart-series";
 import { isSliceTerm, readSlice } from "./chart-selection";
-import { aggregate, completeStart, measureExpression, noSplit, normalizeAnalysis, rollingSumUnit, trendKind, unique, type AnalysisCatalog, type AnalysisState, type ResolvedAnalysis, type TrendPeriodField } from "./dashboard-analysis-model";
+import { aggregate, completeStart, measureExpression, noSplit, normalizeAnalysis, ratioPart, rollingSumUnit, trendKind, unique, type AnalysisCatalog, type AnalysisState, type ResolvedAnalysis, type TrendPeriodField } from "./dashboard-analysis-model";
 
 // Over time, driven by a catalog: any measure, over its own population, by
 // any breakdown, a component breakdown or none. The query asks for interval
@@ -24,10 +24,15 @@ export type TrendQuery = {
   // selection on a breakdown field is left out of both, so its alternatives
   // stay in the key.
   range: WhereTerm[]; requested: WhereTerm[];
-  // The measure's and breakdown's implied populations, which drill-downs add.
-  population: WhereTerm[];
+  // The measure's and breakdown's implied populations, and for a distinct
+  // count the records holding a value: what a drill-down adds to open only
+  // the records behind a point.
+  population: WhereTerm[]; records: WhereTerm[];
   // The breakdown field whose legend selection filters the dashboard.
   slice?: string;
+  // The norm's points: the periods from normFrom up to, not including, the
+  // latest one (normTo).
+  normFrom?: Date; normTo?: Date;
 };
 
 // Clauses: one per series kind, grouped by [period, ...breakdown fields]; a
@@ -39,17 +44,28 @@ export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where
   const slice = breakdown?.fields.length === 1 ? breakdown.fields[0] : undefined;
   const chartWhere = slice ? where.filter(term => !isSliceTerm(term, slice)) : where;
   const range = state.completePeriods ? completeStart(chartWhere, catalog.time, zone, now, periodField(state.period)) : chartWhere;
-  const requested = smoothingWhere(range, catalog.time, state.period, cumulative ? 0 : state.rollingPeriods, count, now);
+  // The norm averages a fixed number of points before the latest, whatever
+  // the range, so the query reaches back for them (and their windows).
+  let normFrom: Date | undefined, normTo: Date | undefined;
+  if (state.norm) {
+    const bounds = timeBounds(range, catalog.time, now), limit = Math.min(bounds.to?.getTime() ?? now, now);
+    normTo = periodStart(new Date(limit - 1), state.period, count);
+    const end = new Date(normTo); nextPeriod(end, state.period, count);
+    if (state.completePeriods && end.getTime() > limit) normTo = shiftPeriod(normTo, state.period, -1, count) ?? normTo;
+    normFrom = shiftPeriod(normTo, state.period, -state.normPeriods, count);
+  }
+  const requested = smoothingWhere(normFrom ? widenStart(range, catalog.time, normFrom, now) : range, catalog.time, state.period, cumulative ? 0 : state.rollingPeriods, count, now);
   const population = unique([...measure.where ?? [], ...breakdown?.where ?? []]);
   const groupBy = [field, ...breakdown?.fields ?? []];
   const clauses: AggregationClause[] = components ? components.parts.map(part => ({ id: `trend:${part.key}`, op: "sum", field: part.field, groupBy: [field], label: part.label }))
-    : measure.ratio ? [{ id: "trend", op: "sum", field: measure.ratio[0], groupBy, label: `${measure.label}: numerator` }, { id: "trend:denominator", op: "sum", field: measure.ratio[1], groupBy, label: `${measure.label}: denominator` }]
+    : measure.ratio ? [{ id: "trend", ...ratioPart(measure.ratio[0]), groupBy, label: `${measure.label}: numerator` }, { id: "trend:denominator", ...ratioPart(measure.ratio[1]), groupBy, label: `${measure.label}: denominator` }]
     : [{ id: "trend", ...aggregate(measure), groupBy, label: measure.label }];
   const supporting = measure.ratio ? [{ id: "trend:ratio", op: "sum" as const, expression: measureExpression(measure), groupBy, label: measure.label }, ...clauses] : clauses;
   return {
     query: { ...EMPTY_QUERY, where: unique([...requested, ...population]), aggregations: clauses },
     supporting: { ...EMPTY_QUERY, where: unique([...where, ...population]), aggregations: supporting },
-    range, requested, population, slice,
+    range, requested, population, slice, normFrom, normTo,
+    records: unique([...population, ...trendKind(measure) === "count" && measure.field ? [{ field: measure.field, op: "is_not_null" as const, value: "" }, { field: measure.field, op: "!=" as const, value: "" }] : []]),
   };
 }
 
@@ -57,8 +73,9 @@ export type TrendSeries = {
   series: ChartSeries[]; buckets: ChartBucket[];
   // Series keys the legend selection draws, or hides when excluded.
   selected: string[]; excluded: boolean;
-  // The mean of every drawn point before the latest one.
-  norm?: number;
+  // The mean of the drawn values at the normPeriods points before the latest
+  // one, and how many of those points had a value.
+  norm?: number; normPoints?: number;
   cumulativeStart?: Date;
   // Non-additive series do not stack; they draw as lines. Their tooltip has
   // no total.
@@ -79,22 +96,32 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
   const breakdown = catalog.breakdowns[state.split], components = catalog.components?.[state.split];
   const count = trendPeriodCount(state), cumulative = state.display === "cumulative", grid = { period: state.period, count };
   const additive = kind === "additive", empty: TrendSeries = { series: [], buckets: [], selected: [], excluded: false, lines: false, additive };
-  const failed = results.find(result => result.error);
-  if (failed) return { ...empty, error: failed.error };
+  // A missing, partial or truncated clause would read as idle periods.
+  for (const clause of trend.query.aggregations ?? []) {
+    const found = results.find(item => item.id === clause.id);
+    if (found?.error) return { ...empty, error: found.error };
+    if (!found || found.coverage === "partial" || found.groupCount !== undefined && found.groupCount > found.buckets.length || (found.hiddenGroups ?? 0) > 0 || found.buckets.some(bucket => bucket.error)) {
+      return { ...empty, error: found?.buckets.find(bucket => bucket.error)?.error ?? "The trend needs complete totals for every period. Choose a shorter range or a longer time bucket." };
+    }
+  }
   const result = (id: string) => results.find(item => item.id === id)?.buckets ?? [];
 
   const bounds = timeBounds(trend.range, catalog.time, now);
   const keys = results.flatMap(item => item.buckets.map(bucket => bucket.keys[0]));
   const earliest = earliestKey(keys), [start, end] = chartSpan(bounds, earliest, now);
-  const historyStart = !cumulative && state.rollingPeriods > 1 ? timeBounds(trend.requested, catalog.time, now).from ?? earliest : undefined;
+  const historyStart = !cumulative && (state.rollingPeriods > 1 || state.norm) ? timeBounds(trend.requested, catalog.time, now).from ?? earliest : undefined;
   const dates = keys.map(key => parseDay(String(key)));
   // Whole periods only: a period starting before the rounded range start
-  // is history, which smoothing may read but nothing draws.
-  const layout = () => chartBucketsWithHistory(state.period, start, end, count, dates, historyStart)
+  // is history, which smoothing may read but nothing draws. The norm's
+  // earlier points are history too, every period of them, idle ones included.
+  const visible = periodStart(start, state.period, count);
+  const layout = () => (state.norm && historyStart ? periodBuckets(state.period, historyStart, end, count).map(bucket => bucket.date < visible ? { ...bucket, history: true } : bucket)
+    : chartBucketsWithHistory(state.period, start, end, count, dates, historyStart))
     .map(bucket => state.completePeriods && bounds.from && bucket.date < bounds.from ? { ...bucket, history: true } : bucket);
   const amounts = layout(), denominators = kind === "ratio" ? layout() : [];
-  const first = amounts.find(bucket => !bucket.history)?.key;
   // A cumulative plot capped at 5,000 periods opens on the earlier balance.
+  // A partial first period is history, so it adds nothing.
+  const first = amounts[0]?.key;
   const plotted = (value: unknown) => { const key = periodKey(parseDay(String(value)), state.period, count); return cumulative && first && key < first ? first : key; };
   const name = (bucketKeys: unknown[]) => !breakdown ? total : breakdown.fields.length === 1 ? String(bucketKeys[0] ?? "") : JSON.stringify(bucketKeys);
   const rows = (id: string): Rows => result(id).map(bucket => [plotted(bucket.keys[0]), name(bucket.keys.slice(1)), Number(bucket.value) || 0]);
@@ -151,6 +178,16 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
     buckets = window(amounts, state.rollingOp);
     if (state.share) buckets = shareBuckets(buckets);
   }
+  let norm: number | undefined, normPoints: number | undefined;
+  const selected = series.filter(item => item.value !== undefined && picked.includes(item.value)).map(item => item.key);
+  const drawn = selected.length ? series.filter(item => chosen.excluded ? !selected.includes(item.key) : selected.includes(item.key)) : series;
+  if (state.norm && trend.normFrom && trend.normTo) {
+    const from = trend.normFrom.getTime(), to = trend.normTo.getTime();
+    const points = buckets.filter(bucket => bucket.date.getTime() >= from && bucket.date.getTime() < to).map(bucket => additive ? drawn.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0)
+      : kind === "ratio" ? bucket.values[drawn[0]?.key] : bucket.values[drawn[0]?.key] ?? 0).filter((value): value is number => typeof value === "number");
+    normPoints = points.length;
+    norm = points.length ? points.reduce((sum, value) => sum + value, 0) / points.length : undefined;
+  }
   buckets = buckets.filter(bucket => !bucket.history);
   if (state.completePeriods) {
     // The current period, and one reaching past the range's end, are partial.
@@ -158,15 +195,7 @@ export function trendSeries(catalog: AnalysisCatalog, input: AnalysisState, tren
     buckets = buckets.filter(bucket => { const next = new Date(bucket.date); nextPeriod(next, state.period, count); return next.getTime() <= limit; });
   }
 
-  const selected = series.filter(item => item.value !== undefined && picked.includes(item.value)).map(item => item.key);
-  const drawn = selected.length ? series.filter(item => chosen.excluded ? !selected.includes(item.key) : selected.includes(item.key)) : series;
-  let norm: number | undefined;
-  if (state.norm) {
-    const points = buckets.slice(0, -1).map(bucket => additive ? drawn.reduce((sum, item) => sum + (bucket.values[item.key] ?? 0), 0)
-      : kind === "ratio" ? bucket.values[drawn[0]?.key] : bucket.values[drawn[0]?.key] ?? 0).filter((value): value is number => typeof value === "number");
-    norm = points.length ? points.reduce((sum, value) => sum + value, 0) / points.length : undefined;
-  }
-  return { series, buckets, selected, excluded: chosen.excluded, norm, cumulativeStart: bounds.from ?? earliest, lines: !additive && series.length > 1, additive };
+  return { series, buckets, selected, excluded: chosen.excluded, norm, normPoints, cumulativeStart: bounds.from ?? earliest, lines: !additive && series.length > 1, additive };
 }
 
 // The chart's title, in the dashboards' plain style.
@@ -184,7 +213,8 @@ export function trendNote(catalog: AnalysisCatalog, input: AnalysisState): strin
   const unit = periodLabel(state.period, trendPeriodCount(state)), window = `${state.rollingPeriods} ${state.rollingPeriods === 1 ? unit : `${unit}s`}`;
   const rolling = state.display !== "cumulative" && state.rollingPeriods > 1, parts = [measure.note];
   if (catalog.components?.[state.split]) parts.push(`${catalog.components[state.split].label} splits each ${unit}'s ${measure.label.toLowerCase()} into its parts.`);
-  if (kind === "ratio") parts.push(`Each point pools its records: summed ${measure.ratio![0].replaceAll("_", " ")} divided by summed ${measure.ratio![1].replaceAll("_", " ")}, never an average of ratios.`);
+  const part = (index: 0 | 1) => { const { op, field } = ratioPart(measure.ratio![index]); return `${op === "sum" ? "summed" : "the count of"} ${field.replaceAll("_", " ")}`; };
+  if (kind === "ratio") parts.push(`Each point pools its records: ${part(0)} divided by ${part(1)}, never an average of ratios.`);
   if (kind === "count") parts.push(`Distinct ${measure.unit} are counted in each ${unit}.${state.split === noSplit ? "" : ` One active in several groups counts in each, so groups do not add up, and Other is not drawn.`}`);
   if (state.display === "cumulative") parts.push(kind === "ratio" ? "Each point pools everything from the range start." : "Each point is the running total from the range start.");
   else if (rolling) parts.push(kind === "ratio" ? `Each point pools the parts of its trailing ${window}, including history before the range.`
@@ -194,6 +224,6 @@ export function trendNote(catalog: AnalysisCatalog, input: AnalysisState): strin
     : `Each point is the mean of its trailing ${window}, idle ones as zero, including history before the range.`);
   if (state.share) parts.push(`Shares divide each series by the ${unit}'s total of all series, Other included${rolling ? ", after smoothing" : ""}; a legend selection hides series without changing that total.`);
   if (state.completePeriods) parts.push(`Only whole local ${periodLabel(state.period, 1)}s are drawn: the range starts at the next ${periodLabel(state.period, 1)} boundary, and the current ${periodLabel(state.period, 1)} is left out.`);
-  if (state.norm) parts.push("The norm is the mean of every point before the latest one, over the drawn series.");
+  if (state.norm) parts.push(`The norm is the mean of the ${state.normPeriods} ${periodLabel(state.period, trendPeriodCount(state))}${state.normPeriods === 1 ? "" : "s"} before the latest point, over the drawn series, whatever the range.`);
   return parts.join(" ");
 }

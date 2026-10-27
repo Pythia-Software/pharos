@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { core, queryRecipes, schemas } from "../helpers/recipes.mjs";
 import { now, usageLedger } from "../helpers/usage-ledger.mjs";
-import { catalogProblems, normalizeAnalysis, trendAdjustments, trendLimits, validAnalysisState } from "../../../src/dashboard-analysis-model";
+import { analysisQuery, catalogProblems, changeState, normalizeAnalysis, switchView, trendAdjustments, trendLimits, validAnalysisState } from "../../../src/dashboard-analysis-model";
 import { trendNote, trendQuery, trendSeries, trendTitle } from "../../../src/dashboard-trend-model";
 import { tokenAnalysisCatalog as catalog } from "../../../src/token-analysis-catalog";
 import { tokenTypes } from "../../../src/token-chart-request";
@@ -40,7 +40,10 @@ test("every Tokens card destination and Usage chart preset opens the chart it al
     assert.deepEqual([state.view, state.metric, state.share, state.split], ["trend", expected.metric, expected.share, expected.split], name);
     for (const key of ["period", "rollingPeriods", "display", "scale", "seriesLimit"]) if (chart[key] !== undefined) assert.equal(state[key], chart[key], `${name}: ${key}`);
     assert.deepEqual(trendQuery(catalog, chart, range, { now }).query.aggregations.map(clause => [clause.field, clause.groupBy]), expected.clauses, name);
-    assert.deepEqual(trendAdjustments(catalog, chart).filter(note => !note.startsWith("Token type")), [], `${name}: nothing else moves`);
+    // Only cost by token type moves, and the note says where.
+    const notes = trendAdjustments(catalog, chart);
+    if (expected.split !== chart.split) assert.deepEqual(notes, ["Token type splits tokens only; API cost (USD) is shown by provider."], name);
+    else assert.deepEqual(notes, [], `${name}: nothing moves`);
   }
 });
 
@@ -144,21 +147,98 @@ test("shares divide by every series, after smoothing; a selection hides series w
   assert.ok(Math.abs(day.values.output_tokens - parts.reduce((n, row) => n + row.output_tokens, 0) / parts.reduce((n, row) => n + row.total_tokens, 0)) < 1e-12);
 });
 
-test("whole periods drop the current day; the norm averages every earlier drawn point", () => {
+test("whole periods drop the current day and a partial first period, also from running totals", () => {
   const today = localDay(new Date(now));
   const all = draw({ ...base, metric: "tokens", split: "provider" }).built;
-  const whole = draw({ ...base, metric: "tokens", split: "provider", completePeriods: true, norm: true, selection: { values: [], excluded: false } }).built;
+  const whole = draw({ ...base, metric: "tokens", split: "provider", completePeriods: true }).built;
   assert.equal(all.buckets.at(-1).key, today);
   assert.notEqual(whole.buckets.at(-1).key, today);
   assert.equal(whole.buckets.length, all.buckets.length - 2, "the partial first day and today are left out");
-  const totals = whole.buckets.map(bucket => Object.values(bucket.values).reduce((a, b) => a + b, 0));
-  assert.ok(Math.abs(whole.norm - totals.slice(0, -1).reduce((a, b) => a + b, 0) / (totals.length - 1)) < 1e-9);
-  // Over the drawn series only.
+  assert.match(trendNote(catalog, { ...base, metric: "tokens", split: "none", completePeriods: true }), /whole local days.*current day is left out/);
+  // Three-day buckets from a mid-day start: the first bucket begins before the
+  // rounded start, so its records are left out of the running total too.
+  const where = [{ field: "last_usage_at", op: ">=", value: new Date(now - 5 * 86400000).toISOString() }];
+  const state = { ...base, metric: "tokens", split: "none", period: "days", days: 3, display: "cumulative", completePeriods: true };
+  const { built } = draw(state, { where });
+  const local = key => { const [y, m, d] = key.split("-").map(Number); return new Date(y, m - 1, d); };
+  const first = built.buckets[0].date, last = new Date(built.buckets.at(-1).date); last.setDate(last.getDate() + 3);
+  const kept = rows.filter(row => local(row.day) >= first && local(row.day) < last && Date.parse(row.last_usage_at) >= now - 5 * 86400000);
+  assert.ok(rows.some(row => local(row.day) < first && Date.parse(row.last_usage_at) >= now - 5 * 86400000), "the fixture has records in the partial first period");
+  assert.equal(built.buckets.at(-1).values.total, kept.reduce((sum, row) => sum + row.total_tokens, 0));
+});
+
+test("results that may be incomplete are an error, never idle periods", () => {
+  const state = { ...base, metric: "cache_read_share", split: "provider" };
+  const query = trendQuery(catalog, state, range, { now });
+  const exact = core.evaluateMetrics(rows, query.query, schema, { now }).metrics;
+  assert.equal(trendSeries(catalog, state, query, exact, { where: range, now }).error, undefined);
+  for (const [name, broken] of [
+    ["partial coverage", results => results.map(result => ({ ...result, coverage: "partial" }))],
+    ["a truncated group count", results => results.map((result, index) => index ? { ...result, groupCount: result.buckets.length + 1 } : result)],
+    ["a bucket error", results => results.map((result, index) => index ? { ...result, buckets: [...result.buckets.slice(1), { ...result.buckets[0], error: "overflow" }] } : result)],
+    ["a missing denominator", results => results.slice(0, 1)],
+  ]) assert.ok(trendSeries(catalog, state, query, broken(exact), { where: range, now }).error, name);
+});
+
+test("a ratio may pool a sum over a count: a mean per timed record", () => {
+  const meanCost = { label: "Mean cost per priced record", unit: "USD", format: { kind: "number", decimals: 2 }, op: "sum", ratio: ["cost_usd", { op: "count", field: "cost_usd" }], additive: false, note: "" };
+  const means = { ...catalog, measures: { ...catalog.measures, mean_cost: meanCost } };
+  const day = offset => { const at = new Date(now); at.setHours(6, 0, 0, 0); at.setDate(at.getDate() - offset); return at; };
+  const row = (id, at, cost) => ({ ...rows[0], id, day: localDay(at), first_usage_at: at.toISOString(), last_usage_at: at.toISOString(), cost_usd: cost });
+  // One 10-dollar record yesterday, 99 at 100 today, and one unpriced.
+  const data = [row("one", day(1), 10), ...Array.from({ length: 99 }, (_, index) => row(`many-${index}`, day(0), 100)), row("unpriced", day(0), null)];
+  const state = { ...base, metric: "mean_cost", split: "none", rollingPeriods: 2 };
+  const query = trendQuery(means, state, range, { now });
+  assert.deepEqual(query.query.aggregations.map(clause => [clause.op, clause.field]), [["sum", "cost_usd"], ["count", "cost_usd"]]);
+  const built = trendSeries(means, state, query, core.evaluateMetrics(data, query.query, schema, { now }).metrics, { where: range, now });
+  assert.ok(Math.abs(built.buckets.at(-1).values.total - 9910 / 100) < 1e-12, `pooled ${built.buckets.at(-1).values.total}, not the 55 of averaged means`);
+  assert.match(trendNote(means, state), /summed cost usd divided by the count of cost usd/);
+  const units = analysisQuery(means, { view: "compare", unit: "conversation", metric: "mean_cost", split: "none", reduce: "total" }, []);
+  assert.deepEqual(units.query.grouping.summaries.slice(1).map(column => [column.op, column.field]), [["sum", "cost_usd"], ["count", "cost_usd"]], "units pool the same parts");
+});
+
+test("a distinct count's drill-down opens only the records it counted", () => {
+  const query = trendQuery(catalog, { ...base, metric: "delegated_runs", split: "none" }, range, { now });
+  const opened = core.applyQuery(rows, { ...core.EMPTY_QUERY, where: query.records, limit: 1000 }, schema, { now }).rows;
+  assert.ok(opened.length > 0 && opened.length < rows.length);
+  assert.ok(opened.every(row => row.delegated_session_id), "root records hold no delegated run");
+  assert.deepEqual(trendQuery(catalog, { ...base, metric: "priced_cost", split: "none" }, range, { now }).records, [{ field: "price_status", op: "=", value: "priced" }]);
+});
+
+test("a change applies to the state as asked for: old names never override it, and coerced settings return", () => {
+  for (const alias of ["percent", "percent_cost"]) {
+    const link = { ...base, metric: alias, split: "provider" };
+    const values = normalizeAnalysis(catalog, changeState(catalog, link, { share: false }));
+    assert.deepEqual([values.metric, values.share], [alias === "percent" ? "tokens" : "cost", false], `${alias}: Values takes effect at once`);
+    assert.equal(normalizeAnalysis(catalog, changeState(catalog, link, { split: "model_family" })).share, true, `${alias}: other changes keep the shares`);
+  }
+  const asked = { ...base, metric: "tokens", split: "provider", share: true, rollingPeriods: 7, rollingOp: "sum", norm: true };
+  const ratio = changeState(catalog, asked, { metric: "cache_read_share" });
+  assert.deepEqual(["share", "rollingOp", "norm"].map(key => normalizeAnalysis(catalog, ratio)[key]), [false, "mean", false], "drawn without what the ratio cannot use");
+  assert.equal(trendAdjustments(catalog, ratio).length, 3, "and each change is explained");
+  const back = changeState(catalog, ratio, { metric: "tokens" });
+  assert.deepEqual(["share", "rollingOp", "norm"].map(key => back[key]), [true, "sum", true], "all three are still saved");
+  assert.deepEqual(normalizeAnalysis(catalog, back), normalizeAnalysis(catalog, asked), "and tokens draws exactly as before");
+  // Shares have no norm, so without them the saved norm draws again.
+  assert.equal(normalizeAnalysis(catalog, changeState(catalog, back, { share: false })).norm, true);
+  // A visit to Compare keeps the trend's own settings.
+  const returned = switchView(catalog, switchView(catalog, asked, "compare"), "trend");
+  assert.deepEqual(["share", "rollingOp", "norm", "rollingPeriods"].map(key => returned[key]), [true, "sum", true, 7]);
+});
+
+test("a share is of every group in the filters; a selection never changes it, in the trend or in Compare", () => {
   const where = [...range, { field: "provider", op: "=", value: "codex" }];
-  const codex = draw({ ...base, metric: "tokens", split: "provider", completePeriods: true, norm: true }, { where }).built;
-  const drawn = codex.buckets.slice(0, -1).map(bucket => bucket.values["s:codex"] ?? 0);
-  assert.ok(Math.abs(codex.norm - drawn.reduce((a, b) => a + b, 0) / drawn.length) < 1e-9);
-  assert.match(trendNote(catalog, { ...base, metric: "tokens", split: "none", completePeriods: true, norm: true }), /whole local days.*current day is left out.*norm is the mean/);
+  const trend = draw({ ...base, metric: "tokens", split: "provider", share: true, display: "cumulative" }, { where }).built;
+  const compare = analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider", compareAs: "share" }, where, { now });
+  assert.equal(compare.selection, "provider");
+  assert.ok(!compare.query.where.some(term => term.field === "provider"), "the selection is left out of the share's query");
+  const groups = core.evaluateMetrics(rows, compare.query, schema, { now }).metrics[0].buckets;
+  const codex = groups.find(bucket => bucket.keys[0] === "codex").value / groups.reduce((sum, bucket) => sum + bucket.value, 0);
+  assert.ok(codex > 0 && codex < 1);
+  assert.ok(Math.abs(trend.buckets.at(-1).values["s:codex"] - codex) < 1e-12, "the trend's share over the range is Compare's share");
+  assert.deepEqual(trend.selected, ["s:codex"], "the trend draws only the selection");
+  // Bars keep the filter: a selection there chooses the groups.
+  assert.ok(analysisQuery(catalog, { view: "compare", metric: "tokens", split: "provider" }, where, { now }).query.where.some(term => term.field === "provider"));
 });
 
 test("hourly trends read the hourly ledger; several hours add theirs", async () => {

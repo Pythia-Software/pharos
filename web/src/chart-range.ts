@@ -100,9 +100,17 @@ export function withTimeRange(where: WhereTerm[], fields: TimeFields, from?: Dat
 export function smoothingWhere(where: WhereTerm[], fields: TimeFields, period: ChartPeriod, periods: number, count = 1, now = Date.now()): WhereTerm[] {
   const bounds = timeBounds(where, fields, now);
   if (!bounds.from || !validRollingPeriods(periods) || periods < 2) return where;
+  return widenStart(where, fields, shiftPeriod(bounds.from, period, 1 - periods, count), now);
+}
+
+// Move the range's start back to start, keeping the field that held it. An
+// unbounded range, or a start that is not earlier, is returned unchanged; no
+// start at all (one before the calendar's limits) removes the bound.
+export function widenStart(where: WhereTerm[], fields: TimeFields, start: Date | undefined, now = Date.now()): WhereTerm[] {
+  const bounds = timeBounds(where, fields, now);
+  if (!bounds.from || start && start >= bounds.from) return where;
   const lower = (term: WhereTerm): term is WhereClause => isTimeTerm(term, fields) && [">", ">="].includes(term.op);
   const field = where.find(term => lower(term) && parseStamp(term.value, now)?.getTime() === bounds.from!.getTime());
-  const start = shiftPeriod(bounds.from, period, 1 - periods, count);
   // Preserve fact-time vs overlap-time selection and relative upper bounds.
   // Resolving +0s into a new timestamp on each render would refetch forever.
   return [...where.filter(term => !lower(term)), ...(start ? [{ field: field && "field" in field ? field.field : fields.last, op: ">=" as const, value: localStamp(start) }] : [])];

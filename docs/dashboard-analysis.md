@@ -21,9 +21,12 @@ A **catalog** describes one dashboard topic
 (`web/src/token-analysis-catalog.ts` for Tokens and Cost):
 
 - **Measures.** Each has a label and format, and a record-level aggregate:
-  an `op` with a `field`, an `expression`, or a `ratio` of two summed fields.
+  an `op` with a `field`, an `expression`, or a `ratio` of two parts.
   A ratio such as `["cache_read_input_tokens", "input_tokens"]` means
-  `SUM(numerator)/NULLIF(SUM(denominator),0)`. Each also has:
+  `SUM(numerator)/NULLIF(SUM(denominator),0)`. A part may instead count a
+  field's non-empty values, `{ op: "count", field }`, so a mean pools too: a
+  mean duration per timed call is `["duration_ms", { op: "count", field:
+  "duration_ms" }]`. Each also has:
   - an optional per-record `value`, which makes the measure eligible for
     record distributions;
   - an `additive` flag, which decides whether groups may be shown as shares;
@@ -53,9 +56,13 @@ A **catalog** describes one dashboard topic
   `week` and `month`. For usage, hours come from the hourly ledger and the
   others are recorded dates. Several hours or days sum hourly or daily
   totals in the browser.
-- **Trend defaults and aliases.** The trend's default measure and breakdown,
-  and the metric names older links used: `percent` reads as tokens shown as
-  shares, `percent_cost` as cost shown as shares.
+- **Trend defaults.** The trend's default measure and breakdown.
+- **Legacy mapping** (optional, `legacy`). A function that reads a link or
+  saved state written in an older vocabulary into the catalog's terms, and
+  leaves a current state unchanged. For Tokens, `percent` reads as tokens
+  shown as shares and `percent_cost` as cost shown as shares. 2b's older
+  shapes (Human Words' `scope`, Skills' and Agent Time's numeric metrics,
+  Carbon's `co2` and `tier`) map the same way.
 
 The **state** is one flat object stored in `analyze_chart` beside the trend's
 fields:
@@ -76,7 +83,7 @@ fields:
 | `display` | `interval` or `cumulative` |
 | `share` | each trend series as a share of its bucket's total |
 | `completePeriods` | whole periods only |
-| `norm` | a reference line at the mean of the earlier points |
+| `norm`, `normPeriods` | a reference line at the mean of the `normPeriods` (30) points before the latest |
 | `seriesLimit`, `selection` | series drawn before Other, and a legend selection the chart keeps itself |
 
 A link without `view` is the trend, so existing bookmarks and
@@ -84,8 +91,17 @@ A link without `view` is the trend, so existing bookmarks and
 `percent_cost` metric is read as its measure with `share`. A unit test
 enumerates every Tokens card destination and Usage chart preset and checks
 the state and query each opens. `validAnalysisState` checks each field.
-`normalizeAnalysis` and `switchView` move a combination the view cannot use
-to the nearest one it can:
+`canonicalState` reads a state through the catalog's legacy mapping.
+
+**Saved as asked, drawn as normalized.** A control's change is applied to
+the canonical state as the user asked for it (`changeState`) and saved that
+way; only drawing and querying normalize. A setting the current measure
+cannot use (shares of a ratio, say) is drawn without it, explained beneath
+the chart (`trendAdjustments`), and returns when the user picks a measure
+that allows it. A view switch maps the fields views share; the trend's own
+settings survive a visit to another view. `normalizeAnalysis` and
+`switchView` move a combination the view cannot use to the nearest one it
+can:
 
 - a trend's shares become a compare share display, and back;
 - a breakdown that is not constant within the unit becomes `none`;
@@ -102,8 +118,7 @@ to the nearest one it can:
   are reserved. `catalogProblems` reports a unit or breakdown with either id,
   and its test runs over every catalog. It also reports a component
   breakdown that shares a breakdown's id, splits a measure that is not
-  additive, or falls back to an unknown breakdown, and an alias that names
-  no measure.
+  additive, or falls back to an unknown breakdown.
 - **Implied filters and units.** A breakdown with an implied `where` is never
   offered for units. The filter would remove records from inside each unit,
   changing every unit's own value rather than only choosing which units
@@ -136,6 +151,13 @@ to the nearest one it can:
     Table's exact Other.
 - **Shares need groups.** With no breakdown there is nothing to divide, so a
   share becomes bars.
+- **A share is of every group the filters define.** A legend selection only
+  hides series; it never changes the denominator. In the trend, a selection
+  on a single-field breakdown is a filter on that field, which the trend's
+  query leaves out. In Compare, the same filter is left out of a records
+  share's query, so the pie shows every group and says that the selection
+  does not change the shares; bars keep the filter. The two views therefore
+  agree on the same filters, and a test checks it.
 - **No legacy link.** The analysis views do not link to the legacy page.
   That page has no analysis views, so it would show the grouped query under
   its default chart.
@@ -160,13 +182,13 @@ point combines a measure, a window and a display:
 | Rolling sum | the window's total, as `carbon-trend` needs | not offered: a sum of ratios means nothing | the window's counts added: conversation-days, labelled so |
 | Cumulative | running totals from the range start | the running pooled ratio | not offered: a running distinct count cannot be built from bucket counts |
 | Share | each series ÷ the bucket's total of all series, Other included, after smoothing | not offered | not offered |
-| Stacking | stacked columns, with a total | lines, no total | lines, no total; Other is not drawn |
+| Stacking | stacked columns, with a total | lines when there are several series, no total | lines when there are several series, no total; Other is not drawn |
 
 Any other non-additive measure is a level per bucket: rolling means only,
 no sum, cumulative or share.
 
-- **Breakdowns.** Any catalog breakdown, a component breakdown, or `none`,
-  which is the total line cards need. A single-field breakdown's legend
+- **Breakdowns.** Any catalog breakdown, a component breakdown, or `none`:
+  the single total series cards need, drawn as columns like any one series. A single-field breakdown's legend
   selection filters the dashboard, and the chart's query leaves that filter
   out so the alternatives stay in the key. A multi-field breakdown, a
   component breakdown and `none` keep the selection in the state.
@@ -177,21 +199,33 @@ no sum, cumulative or share.
   days), a custom multi-day or multi-hour bucket starting before it is
   history, and buckets ending after the range's end or now are left out.
   For days this is `cardTrendDays`' `completeDays`.
-- **Norm.** The mean of every drawn point before the latest one: the stacked
-  total of the drawn series for additive measures, or the one series
-  otherwise. For a 31-day range it is `buildCardTrend`'s baseline, the mean
-  of the prior 30 endpoints. It is not offered for shares, cumulative
-  displays, or non-additive measures with several series. The legend and
-  tooltip show it, and the note says what it averages.
+- **Norm.** The mean of the `normPeriods` (default 30) points before the
+  latest drawn point, whatever the range: the stacked total of the drawn
+  series for additive measures, or the one series otherwise. The query
+  reaches back for those points and their smoothing windows, and every one
+  of them counts, idle ones included. It is `buildCardTrend`'s baseline, the
+  mean of the prior 30 endpoints, even when "Last 30 days" opened
+  mid-afternoon draws only 29 whole days. When fewer earlier points have a
+  value (all time, or a ratio with idle periods), the chart says how many it
+  averaged. It is not offered for shares, cumulative displays, or
+  non-additive measures with several series. The legend and tooltip show it,
+  and the note says what it averages.
+- **Complete results only.** A clause with partial coverage, a truncated
+  group count, hidden groups or a bucket error is an error beneath the chart,
+  never idle periods, as in `buildCardTrend`.
+- **Drill-downs** open the records behind a point: the dashboard's filters,
+  the measure's and breakdown's populations, the series and the point's
+  window, and for a distinct count only records holding a value
+  (`TrendQuery.records`).
 - **Coercion.** `normalizeAnalysis` moves the trend to the nearest state it
-  can draw: a share of a ratio or of no breakdown becomes values; a
+  can draw (to draw, not to save): a share of a ratio or of no breakdown becomes values; a
   cumulative distinct count becomes per interval; a rolling sum of a ratio
   becomes pooled; a distinct count over several hours or days moves to one;
   a component breakdown with a measure it does not split becomes its
   fallback. `trendAdjustments` says each change beneath the chart, and each
   control disables the option with the same reason (`trendLimits`).
 - **Query.** `trendQuery` builds one clause per series kind grouped by
-  `[period field, ...breakdown fields]`, a ratio's parts as two sums, or one
+  `[period field, ...breakdown fields]`, a ratio's parts as two clauses (a sum or a count each), or one
   sum per component, over the filters widened by the smoothing window
   (`smoothingWhere`). It runs through `runAnalysisQuery`, so hourly usage
   reads the hourly ledger, as before.
@@ -330,8 +364,9 @@ timeline transforms with the dashboard's series day by day. Two more trend
 checks have no usage card: cache-read share by provider + model over 7 days
 against an independent pooled calculation, on a fixture whose daily ratios
 differ, and a `buildCardTrend` card (daily tokens, 7-day mean over complete
-days) against the trend with whole periods and a norm, point by point and
-norm against baseline.
+days, and the same card for one provider selected in the legend) against
+the trend opened on "Last 30 days" at 14:00 with whole periods and a norm,
+point by point and norm against baseline.
 
 The fixture serves one model family from two providers, and the tests
 compare full group keys. Its input includes cache writes, so a wrong
@@ -368,15 +403,15 @@ The four Query Table limitations are requested in
    trend.
 2. **Trend options and more dashboards.**
    - **2a (done).** Over time is catalog-driven: every measure and
-     population, any breakdown, component breakdowns and a total line,
+     population, any breakdown, component breakdowns and a single total series,
      rolling sums as well as means, whole periods only, and a norm. Tokens
      and Cost and the legacy Usage page draw it; the bespoke Token chart is
      gone.
    - **2b inherits** the trend unchanged: a new catalog declares its
      measures (additive, ratio or distinct), breakdowns with any `order`,
-     `values` and `empty` labels, component breakdowns such as Carbon's token
-     types, `periods`, and aliases for its old metric names, then renders
-     `AnalysisTrend`. What 2b adds:
+     `values` and `empty` labels, component breakdowns, `periods`, and a
+     `legacy` mapping for its old link shapes, then renders `AnalysisTrend`
+     (typed to a `UsageDataset`, which every 2b dashboard is). What 2b adds:
      - Let each cycle entry declare how its keys work. A recorded date (usage
        `day`) and an instant (usage `hour`) work today. A `dateGrouping` over
        timestamps in the viewer's zone is needed for Human Words and
@@ -386,8 +421,14 @@ The four Query Table limitations are requested in
        trend's `periods` need the same for datasets without calendar fields.
      - Move the Tools and MCP views (compare and trend) onto the engine,
        and the bespoke trends of `RecordUsageDashboard`, `WritingPanel` and
-       `CarbonImpact`. Carbon's trailing sum is `rollingOp: "sum"`; its token
-       types are a component breakdown.
+       `CarbonImpact`. Carbon's trailing sum is `rollingOp: "sum"`.
+     - **Open question: Carbon's token types.** A component part is a summed
+       record field, but usage has only total `energy_wh`/`energy_kwh` and
+       `co2e_g`/`co2e_kg`; the per-type split is computed in the browser from
+       the user's carbon factors (`carbon-impact.tsx`). Carbon's type split
+       therefore needs a component part that is an expression (or a computed
+       field) over the token fields and the factors, or per-type fields in
+       the ledger.
      - Add catalogs for Carbon, Human Words, Agent Time, Skills and
        Parallelism.
 3. **Record-level Tools analysis.** Add `tool_calls` fields such as

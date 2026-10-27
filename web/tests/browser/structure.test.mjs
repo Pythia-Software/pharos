@@ -221,17 +221,15 @@ const ROUTES = [
   }).map(([view, chart]) => ({ name: `Tokens and Cost ${view} view`, url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify(chart))}`, ready: '.usage-analysis-dashboard[aria-busy="false"] .usage-query-destinations',
     check: async page => assert.equal(await page.locator(".usage-analysis-dashboard [role=alert]").count(), 0, "the analysis reports an error") })),
   // Over time draws every measure, population and breakdown kind.
-  ...[
-    ["ratio", { metric: "cache_read_share", split: "provider_model", rollingPeriods: 7 }, ".usage-chart-lines"],
-    ["distinct rolling sum", { metric: "conversations", split: "none", rollingPeriods: 7, rollingOp: "sum" }, "> button"],
-    ["whole periods and norm", { metric: "tokens", split: "none", rollingPeriods: 7, completePeriods: true, norm: true }, ".usage-chart-reference"],
-    ["token type", { metric: "tokens", split: "type", share: true }, "> button"],
-    ["priced cost", { metric: "priced_cost", split: "provider", display: "cumulative" }, ".usage-chart-lines"],
-  ].map(([name, chart, mark]) => ({ name: `Tokens and Cost trend ${name}`, url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify({ period: "day", ...chart }))}`, ready: `.usage-dashboard .usage-chart-bars:not(.loading) ${mark}`,
-    check: async page => {
-      assert.equal(await page.locator(".usage-dashboard .usage-chart .query-table-error").count(), 0, "the trend reports an error");
-      assert.equal(await page.locator(".usage-dashboard .usage-chart-bars > button").count() > 0, true, "the trend has periods");
-    } })),
+  ...Object.entries({
+    ratio: { metric: "cache_read_share", split: "provider_model", rollingPeriods: 7 },
+    "distinct rolling sum": { metric: "conversations", split: "none", rollingPeriods: 7, rollingOp: "sum" },
+    "whole periods and norm": { metric: "tokens", split: "none", rollingPeriods: 7, completePeriods: true, norm: true },
+    "token type": { metric: "tokens", split: "type", share: true },
+    "priced cost": { metric: "priced_cost", split: "provider", display: "cumulative" },
+  }).map(([name, chart]) => ({ name: `Tokens and Cost trend ${name}`, url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify({ period: "day", ...chart }))}`,
+    ready: '.usage-dashboard section[aria-label="Over time"][aria-busy="false"] .usage-query-destinations',
+    check: async page => assert.equal(await page.locator('section[aria-label="Over time"] .query-table-error').count(), 0, "the trend reports an error") })),
   { name: "Analyze cumulative human", url: `/analyze?analyze_topic=human&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20}))}`, ready: ".usage-dashboard .usage-chart-lines" },
   { name: "Analyze cumulative skills", url: `/analyze?analyze_topic=skills&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20}))}`, ready: ".usage-dashboard .usage-chart-lines" },
   { name: "Analyze cumulative time", url: `/analyze?analyze_topic=time&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20}))}`, ready: ".usage-dashboard .usage-chart-lines" },

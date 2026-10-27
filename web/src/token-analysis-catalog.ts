@@ -59,6 +59,8 @@ export const tokenAnalysisCatalog: AnalysisCatalog = {
   cycle: { hour: "hour", weekday: "day" },
   // The hourly ledger answers hour; the others are recorded calendar dates.
   periods: { hour: "hour", day: "day", week: "week", month: "month" },
-  trend: { aliases: { percent: { measure: "tokens", share: true }, percent_cost: { measure: "cost", share: true } }, metric: "tokens", split: "model_family" },
+  trend: { metric: "tokens", split: "model_family" },
+  // The Usage chart's percentage metrics are a measure shown as shares.
+  legacy: state => state.metric === "percent" || state.metric === "percent_cost" ? { ...state, metric: state.metric === "percent" ? "tokens" : "cost", share: true } : state,
   scatter: ["tokens", "cost"],
 };

@@ -181,17 +181,25 @@ test("a pooled ratio trend: cache-read share by model over 7 days, never an aver
   assert.ok(checked > 0, "some windows differ between pooling and averaging daily ratios");
 });
 
-test("a trailing-window card: daily tokens, 7-day mean over complete days, with its norm", () => {
+// A trailing-window card through buildCardTrend: daily tokens, a 7-day mean
+// over complete days, and its norm, the mean of the 30 endpoints before the
+// latest. The dashboard opens on the "Last 30 days" preset mid-afternoon, so
+// it draws fewer whole days than the card's 31 endpoints; the points it draws
+// and its norm must still be the card's.
+for (const [name, filter] of [["all usage", []], ["one provider, selected in the legend", [{ field: "provider", op: "=", value: "codex" }]]]) test(`a trailing-window card: daily tokens, 7-day mean over complete days, with its norm (${name})`, () => {
+  const afternoon = new Date(now); afternoon.setHours(14, 0, 0, 0);
+  const at = afternoon.getTime() < now ? afternoon.getTime() + 86400000 : afternoon.getTime();
   const trend = { value: { op: "sum", field: "total_tokens" }, perDay: true, lookback: 7, completeDays: true, valueLabel: "tokens a day", pointValueLabel: "tokens a day", sample: "records", detail: "" };
-  const { days, ends } = cardTrendDays(7, true, now);
-  const card = buildCardTrend(trend, 7, cardTrendQueries([], trend, days).map(query => core.evaluateMetrics(rows, query, schema, { now }).metrics), now).study;
-  const from = new Date(`${ends[0]}T00:00:00`);
-  const where = withTimeRange([], usageTime, from);
-  const state = { metric: "tokens", split: "none", period: "day", hours: 6, days: 3, rollingPeriods: 7, rollingOp: "mean", completePeriods: true, norm: true };
-  const query = trendQuery(tokenAnalysisSource, state, where, { now });
-  const built = trendSeries(tokenAnalysisSource, state, query, core.evaluateMetrics(rows, query.query, schema, { now }).metrics, { where, now });
-  assert.deepEqual(built.buckets.map(bucket => bucket.key), ends, "whole days through yesterday");
-  close(Object.fromEntries(built.buckets.map(bucket => [bucket.key, bucket.values.total ?? 0])), Object.fromEntries(ends.map((end, index) => [end, card.points[index]])), "points");
+  const { days, ends } = cardTrendDays(7, true, at);
+  const card = buildCardTrend(trend, 7, cardTrendQueries(filter, trend, days).map(query => core.evaluateMetrics(rows, query, schema, { now: at }).metrics), at).study;
+  const where = [...withTimeRange([], usageTime, undefined, undefined, "30d"), ...filter];
+  const state = { metric: "tokens", split: filter.length ? "provider" : "none", period: "day", hours: 6, days: 3, rollingPeriods: 7, rollingOp: "mean", completePeriods: true, norm: true };
+  const query = trendQuery(tokenAnalysisSource, state, where, { now: at });
+  const built = trendSeries(tokenAnalysisSource, state, query, core.evaluateMetrics(rows, query.query, schema, { now: at }).metrics, { where, now: at });
+  assert.deepEqual(built.buckets.map(bucket => bucket.key), ends.slice(2), "29 whole days through yesterday: the partial first day is left out");
+  const drawn = bucket => filter.length ? bucket.values["s:codex"] ?? 0 : bucket.values.total ?? 0;
+  close(Object.fromEntries(built.buckets.map(bucket => [bucket.key, drawn(bucket)])), Object.fromEntries(ends.slice(2).map((end, index) => [end, card.points[index + 2]])), "points");
   assert.ok(card.points.some(point => point > 0));
+  assert.equal(built.normPoints, 30);
   assert.ok(Math.abs(built.norm - card.baseline) < 1e-9, `norm ${built.norm} != baseline ${card.baseline}`);
 });

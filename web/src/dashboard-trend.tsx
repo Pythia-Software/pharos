@@ -1,7 +1,7 @@
 import React, { useMemo } from "react";
 import type { FieldSchema, WhereTerm } from "@pythia-software/query-table-core";
 import { AnalysisControls, useAnalysisResult } from "./dashboard-analysis";
-import { normalizeAnalysis, rollingSumUnit, trendAdjustments, trendKind, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
+import { changeState, normalizeAnalysis, ratioPart, rollingSumUnit, trendAdjustments, trendKind, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
 import { trendNote, trendPeriodCount, trendQuery, trendSeries, trendTitle } from "./dashboard-trend-model";
 import type { LocalRows } from "./analysis-request";
 import { StackedColumns, pickRange, timeBounds, withTimeRange, type FilterChange } from "./usage-chart";
@@ -40,7 +40,9 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
   const built = useMemo(() => trendSeries(catalog, view, trend, result.results, { where, label }),
     [result.results, originRevision, JSON.stringify(view), JSON.stringify(trend.range), JSON.stringify(where)]);
   useUsageChartPalette(trend.slice ?? null, built.series);
-  const set = (change: Partial<AnalysisState>) => onChange(normalizeAnalysis(catalog, { ...state, ...change }) as Partial<T>);
+  // Save what was asked for; only drawing and querying normalize, so a
+  // setting a measure cannot use returns with one that can.
+  const set = (change: Partial<AnalysisState>) => onChange(changeState(catalog, state, change) as Partial<T>);
 
   function select(key: string | null, action: LegendAction) {
     const value = key === null ? undefined : built.series.find(item => item.key === key)?.value;
@@ -54,10 +56,10 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
   // Drill-downs open the records behind a point: the dashboard's filters,
   // the measure's population, the series, and the point's window.
   const href = (range: ChartInspectionRange, item: ChartSeries) => {
-    const base = [...range.rolling ? trend.requested : where, ...trend.population];
+    const base = [...range.rolling ? trend.requested : where, ...trend.records];
     const components = catalog.components?.[view.split];
     if (components) return dashboardChartURL({ dataset, where: base, time: catalog.time, range, series: item, fields: [components.parts.find(part => part.key === item.key)?.field ?? measure.field ?? ""], current: new URLSearchParams(location.search) });
-    const fields = kind === "ratio" ? [measure.ratio![1]] : measure.op === "sum" && measure.field ? [measure.field] : [];
+    const fields = kind === "ratio" ? [ratioPart(measure.ratio![1]).field] : measure.op === "sum" && measure.field ? [measure.field] : [];
     if (breakdown && breakdown.fields.length > 1) {
       // A combined group is several equalities; Other has no single filter.
       if (item.value === undefined) return;
@@ -68,10 +70,13 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
     return dashboardChartURL({ dataset, where: base, time: catalog.time, range, series: item, split: trend.slice ?? null, fields, current: new URLSearchParams(location.search) });
   };
   const adjustments = trendAdjustments(catalog, { ...state, view: "trend" });
+  if (view.norm && !result.loading && built.normPoints !== undefined && built.normPoints < view.normPeriods) adjustments.push(built.normPoints
+    ? `The norm averages ${built.normPoints.toLocaleString()} earlier ${built.normPoints === 1 ? "point" : "points"}: fewer than ${view.normPeriods} have a value before the latest.`
+    : "No earlier point has a value, so there is no norm yet.");
   const bounds = timeBounds(where, catalog.time);
   const title = trendTitle(catalog, view);
   const controls = <AnalysisControls catalog={catalog} view={view} set={set} onView={onView} bounds={bounds} onRange={(from, to, preset) => onTimeFilter(current => withTimeRange(current, catalog.time, from, to, preset))} />;
-  return <>
+  return <section className="usage-analysis-trend" aria-label="Over time" aria-busy={result.loading}>
     <StackedColumns title={title} controls={controls} series={built.series.length ? built.series : [{ key: "none", label: title, color: "var(--heat-1)" }]} buckets={built.buckets} prepared
       period={view.period} periodCount={count} rollingPeriods={view.rollingPeriods} display={view.display} cumulativeStart={built.cumulativeStart} scale={view.scale}
       rolling={kind === "ratio" ? "pooled" : view.rollingOp === "sum" ? "sum" : "average"} lines={built.lines} additive={built.additive}
@@ -86,5 +91,5 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
       <UsageDashboardLinks schema={schema} dataset={dataset} query={trend.supporting} currentURL={currentURL} />
       <p className="usage-dashboard-note">{trendNote(catalog, view)} Click a column or point to pin its key, then follow a series to its contributing records. Drag across two or more periods to filter dates. Select legend entries to compare or exclude series. Grouped rows show the interval amounts before smoothing, accumulation, shares or folding.</p>
     </> : null}
-  </>;
+  </section>;
 }

@@ -499,6 +499,8 @@ dialog.mcp-dialog::backdrop { background: #1118; }
 }
 .usage-chart-lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .usage-chart-bars:has(> .usage-chart-lines) > button { position: relative; }
+/* The trend wraps its parts only to report loading; they lay out as before. */
+.usage-analysis-trend { display: contents; }
 /* A norm or other reference level, above the columns and lines. */
 .usage-chart-reference { position: absolute; left: 0; right: 0; height: 0; border-top: 2px dashed var(--ink); opacity: .55; pointer-events: none; z-index: 1; }
 .usage-reference-swatch { height: 0; border-top: 2px dashed var(--ink); border-radius: 0; opacity: .55; vertical-align: 3px; }
