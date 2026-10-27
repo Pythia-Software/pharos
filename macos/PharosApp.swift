@@ -109,7 +109,7 @@ final class ArchiveService: ObservableObject {
     private var currentManagedStatus: ManagedLibraryStatus {
         managedStatus.current(pendingFor: managedLibraryStateTask == nil ? nil : Date().timeIntervalSince(managedStateRequestedAt))
     }
-    var libraryOperation: String? { managedApplication ? currentManagedStatus.operation : nil }
+    var libraryOperation: String? { managedApplication ? currentManagedStatus.activeOperation : nil }
     var noLibrarySelected: Bool { managedApplication && currentManagedStatus.noLibrary }
     @Published var error: String?
     @Published var status = "Starting local archive…"
@@ -139,6 +139,7 @@ final class ArchiveService: ObservableObject {
     private var managedPortable = false
     private var managedLibraryMonitors: [String: LibraryVolumeMonitor] = [:]
     private var managedLibraryStateTask: URLSessionDataTask?
+    private var brokerOperationsTask: URLSessionDataTask?
     private let releaseService: (URL, String) -> ServiceClient.Release
     var deferUpdate: (@escaping (Error?) -> Void) -> Void = { $0(nil) }
     var resumeUpdates: () -> Void = {}
@@ -252,6 +253,25 @@ final class ArchiveService: ObservableObject {
     /// Finder can release a data SSD while an app in Applications stays open.
     /// Only libraries on that volume are closed; local pending capture remains
     /// configured. The app's own volume still requires quitting the app.
+    /// The broker's operations, which it answers without its main lock, so
+    /// the menu can tell a library operation is running while /api/app/state
+    /// waits for one to finish. An older broker without the endpoint leaves
+    /// the state-based detection alone.
+    private func watchBrokerOperations(_ broker: (url: URL, token: String)) {
+        guard brokerOperationsTask == nil, let request = localRequest("/api/app/operations") else { return }
+        brokerOperationsTask = URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+            let document = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.brokerOperationsTask = nil
+                guard !self.shuttingDown, self.lock.withLock({ self.endpoint?.url == broker.url }) else { return }
+                guard let document, let running = ManagedLibraryStatus.runningBrokerOperations(document) else { return }
+                self.managedStatus = self.managedStatus.withBrokerOperations(running)
+            }
+        }
+        brokerOperationsTask?.resume()
+    }
+
     private func watchManagedLibraries() {
         guard managedApplication, !shuttingDown else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.watchManagedLibraries() }
@@ -271,7 +291,7 @@ final class ArchiveService: ObservableObject {
                     self.managedStatus = self.managedStatus.failedRequest(timedOut: timedOut)
                     return
                 }
-                self.managedStatus = status
+                self.managedStatus = status.withBrokerOperations(self.managedStatus.brokerOperation.map { [$0] } ?? [])
                 let selected = status.selected
                 let generation = (state["generation"] as? NSNumber)?.stringValue ?? "0"
                 let connected = status.connected
@@ -298,6 +318,7 @@ final class ArchiveService: ObservableObject {
             }
         }
         managedLibraryStateTask?.resume()
+        watchBrokerOperations(broker)
     }
 
     var installationFolder: URL { Bundle.main.bundleURL.deletingLastPathComponent() }
