@@ -68,6 +68,8 @@ type Catalog struct {
 	projectionBatches atomic.Int32
 	// ingestRuns counts this process's running ingests (see cacheVersion).
 	ingestRuns atomic.Int32
+	// flags caches feature flags read from ui_preferences (feature_flags.go).
+	flags featureFlagCache
 }
 
 func OpenCatalog(path string) (*Catalog, error) {

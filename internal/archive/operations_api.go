@@ -256,7 +256,17 @@ func (s *Server) ejectInputs(ctx context.Context, fresh bool) (verdictInput, []o
 		held, failures := heldCaptureLocks(s.Config().CaptureRoot)
 		in.locks, in.scanErrors = unnamedLocks(held, own, leases), failures
 	}
-	in.unregistered = unregisteredActivities(s.libraryActivitiesProbing(fresh), own, leases)
+	activities := s.libraryActivitiesProbing(fresh)
+	in.unregistered = unregisteredActivities(activities, own, leases)
+	// An idle daemon pass is registered tentatively before it looks for
+	// work, every 2 s, so a polled verdict that counted it would flicker
+	// between safe and safe-in with nothing running. A polled verdict counts
+	// a tentative pass only while it may be writing: a tracked write
+	// transaction is open in this process, or libraryActivities lists a
+	// writer. A fresh verdict (the release path) always counts it.
+	if !fresh && !s.Catalog.writerActive() && !slices.ContainsFunc(activities, func(activity libraryActivity) bool { return activity.Writes }) {
+		in.ops = slices.DeleteFunc(slices.Clone(in.ops), func(view opView) bool { return view.Tentative })
+	}
 	// A lease listed through its journal rows is one holder, not two.
 	in.leases = slices.DeleteFunc(slices.Clone(leases), func(probe leaseProbe) bool {
 		return probe.Info != nil && slices.ContainsFunc(foreign, func(view opView) bool {

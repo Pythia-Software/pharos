@@ -71,8 +71,12 @@ type brokerOperations struct {
 	mu        sync.Mutex
 	previous  []brokerOperationRecord // from earlier broker lifetimes
 	libraries []brokerLibrary
+	// published counts library-list changes, for the status hub.
+	published uint64
 	lastWrite time.Time
 	client    *http.Client
+	// status shares the latest /api/app/status document among its readers.
+	status statusHub
 }
 
 func brokerOperationsPath(installation string) string {
@@ -211,6 +215,7 @@ func (b *brokerOperations) publish(libraries []brokerLibrary) {
 	}
 	b.mu.Lock()
 	b.libraries = libraries
+	b.published++
 	b.mu.Unlock()
 }
 
@@ -315,9 +320,10 @@ func (b *brokerOperations) start(ctx context.Context) <-chan struct{} {
 	return done
 }
 
-// fetchServiceOperations asks a library's service for its snapshot.
-func (b *brokerOperations) fetchServiceOperations(ctx context.Context, endpoint applicationEndpoint) (map[string]any, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.URL+"/api/operations", nil)
+// fetchServiceOperations asks a library's service for its snapshot at path
+// (/api/operations, or /api/status for the status document).
+func (b *brokerOperations) fetchServiceOperations(ctx context.Context, endpoint applicationEndpoint, path string) (map[string]any, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.URL+path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -344,6 +350,11 @@ func (b *brokerOperations) fetchServiceOperations(ctx context.Context, endpoint 
 // the broker's own operations and app-level leases: no child is asked, no
 // library's leases are read.
 func (b *brokerOperations) document(ctx context.Context, withLibraries bool) map[string]any {
+	return b.documentFrom(ctx, withLibraries, "/api/operations")
+}
+
+// documentFrom is document, with each child's snapshot read from path.
+func (b *brokerOperations) documentFrom(ctx context.Context, withLibraries bool, path string) map[string]any {
 	b.mu.Lock()
 	libraries := slices.Clone(b.libraries)
 	b.mu.Unlock()
@@ -358,7 +369,7 @@ func (b *brokerOperations) document(ctx context.Context, withLibraries bool) map
 		if library.Child == nil {
 			continue
 		}
-		wait.Go(func() { snapshots[index], failures[index] = b.fetchServiceOperations(ctx, *library.Child) })
+		wait.Go(func() { snapshots[index], failures[index] = b.fetchServiceOperations(ctx, *library.Child, path) })
 	}
 	wait.Wait()
 	cutoff := time.Now().Add(-10 * time.Minute)

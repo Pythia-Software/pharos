@@ -122,7 +122,9 @@ func (s *Server) menuBarStatus(ctx context.Context) (map[string]any, error) {
 	for key, value := range settings {
 		preferences[key] = value
 	}
-	status := map[string]any{"settings": preferences}
+	// With the unified activity flag on, the native menu also reads the
+	// status snapshot (docs/background-work.md §9); off, it is unchanged.
+	status := map[string]any{"settings": preferences, "unified_activity": s.Catalog.unifiedActivity(ctx)}
 	if !settings["enabled"] {
 		return status, nil
 	}

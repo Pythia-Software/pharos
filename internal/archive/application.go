@@ -347,6 +347,14 @@ func (m *applicationManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, m.operations.document(r.Context(), r.URL.Query().Get("libraries") != "0"), http.StatusOK)
 		return
 	}
+	if r.URL.Path == "/api/app/status" && r.Method == http.MethodGet {
+		m.operations.serveStatus(w, r)
+		return
+	}
+	if r.URL.Path == "/api/app/status/stream" && r.Method == http.MethodGet {
+		m.operations.serveStatusStream(w, r)
+		return
+	}
 	if r.Method == "POST" && !sameOrigin(r) {
 		writeError(w, fmt.Errorf("request origin does not match this app"), http.StatusForbidden)
 		return
