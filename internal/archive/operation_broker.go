@@ -283,7 +283,9 @@ func brokerLibraryVerdict(own *ejectVerdict, records []brokerOperationRecord, li
 	if merged.Verdict == own.Verdict {
 		merged.ETASeconds = own.ETASeconds
 	}
-	sort.SliceStable(merged.Blockers, func(i, j int) bool { return verdictRank[merged.Blockers[i].Verdict] > verdictRank[merged.Blockers[j].Verdict] })
+	sort.SliceStable(merged.Blockers, func(i, j int) bool {
+		return verdictRank[merged.Blockers[i].Verdict] > verdictRank[merged.Blockers[j].Verdict]
+	})
 	merged.Summary = verdictSummary(merged)
 	return merged
 }

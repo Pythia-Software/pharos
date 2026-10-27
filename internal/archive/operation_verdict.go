@@ -84,6 +84,9 @@ func holderVerdict(view opView) (string, *float64) {
 	switch {
 	case kind == nil || kind.Kind == unknownOperationKind:
 		return verdictUnsafe, nil
+	case view.Foreign && holdsDrive(view.Spec.Holds):
+		// Another process's work: Pharos cannot stop it (a held lease).
+		return verdictBusy, nil
 	case kind.Broker, kind.Kind == "catalog.initialize":
 		return verdictBusy, nil
 	case !writesDrive(view.Spec.Holds):
@@ -122,6 +125,7 @@ func computeEjectVerdict(in verdictInput) ejectVerdict {
 		blocker := ejectBlocker{Operation: string(view.ID), Kind: view.Spec.Kind, Label: label, OnEject: view.Kind.OnEject, Latency: view.Kind.Latency,
 			Verdict: verdict, ETASeconds: eta, Process: view.Process, unit: view.Step.Unit}
 		if view.Foreign {
+			blocker.Label = leaseLabel(leaseInfo{Kinds: []string{view.Spec.Kind}, Process: view.Process})
 			blocker.OnEject = "Pharos cannot stop it; the drive stays busy until it ends."
 		}
 		// One blocker per run: the worst of the run and its stages.
@@ -146,7 +150,7 @@ func computeEjectVerdict(in verdictInput) ejectVerdict {
 		if !holdsDrive(probe.Info.Holds) {
 			continue
 		}
-		blockers = append(blockers, ejectBlocker{Kind: firstString(probe.Info.Kinds), Label: leaseLabel(*probe.Info), Verdict: verdictBusy, Process: probe.Info.Process,
+		blockers = append(blockers, ejectBlocker{Kind: firstOf(probe.Info.Kinds), Label: leaseLabel(*probe.Info), Verdict: verdictBusy, Process: probe.Info.Process,
 			OnEject: "Pharos cannot stop it; the drive stays busy until it ends."})
 	}
 	for _, lock := range in.locks {
@@ -190,7 +194,7 @@ func computeEjectVerdict(in verdictInput) ejectVerdict {
 // another process (pharos capture)".
 func leaseLabel(info leaseInfo) string {
 	label := "Pharos work"
-	if kind, ok := lookupOperationKind(firstString(info.Kinds)); ok {
+	if kind, ok := lookupOperationKind(firstOf(info.Kinds)); ok {
 		label = kind.Label
 	}
 	command := strings.TrimPrefix(info.Process, "cli:")
@@ -308,9 +312,11 @@ func unnamedLocks(locks []heldLock, ops []opView, leases []leaseProbe) []heldLoc
 	if len(locks) == 0 {
 		return locks
 	}
+	// Only a write hold takes these locks exclusively (a backup's read of
+	// the captures takes them shared, which a probe does not see).
 	names := func(holds []Hold, kind string) bool {
 		return slices.ContainsFunc(holds, func(hold Hold) bool {
-			return hold.Resource == "ingest" || hold.Resource == kind || strings.HasPrefix(hold.Resource, kind+":")
+			return hold.Mode == "write" && (hold.Resource == "ingest" || hold.Resource == kind || strings.HasPrefix(hold.Resource, kind+":"))
 		})
 	}
 	unnamed := []heldLock{}

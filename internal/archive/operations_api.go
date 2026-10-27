@@ -200,7 +200,7 @@ func (s *Server) foreignOperations(ctx context.Context, leases []leaseProbe) []o
 		if listed {
 			continue
 		}
-		kind := firstString(probe.Info.Kinds)
+		kind := firstOf(probe.Info.Kinds)
 		row, ok := lookupOperationKind(kind)
 		if !ok {
 			row = operationKindIndex[unknownOperationKind]
@@ -399,8 +399,17 @@ func unregisteredActivities(activities []libraryActivity, ops []opView, leases [
 				ok = running(legacy(parts[2]))
 			}
 		case activity.Kind == "capture-other":
-			ok = slices.ContainsFunc(leases, func(probe leaseProbe) bool {
-				return probe.Live && probe.Info != nil && slices.ContainsFunc(probe.Info.Holds, func(hold Hold) bool { return strings.HasPrefix(hold.Resource, "capture") })
+			// The capture lock is held by a Terminal capture (its lease), or
+			// by this service's own work that captures under the ingest
+			// coordinator (Capture & index, which libraryActivities lists as
+			// another process's capture).
+			capturing := func(holds []Hold) bool {
+				return slices.ContainsFunc(holds, func(hold Hold) bool {
+					return hold.Mode == "write" && (hold.Resource == "ingest" || strings.HasPrefix(hold.Resource, "capture"))
+				})
+			}
+			ok = running(func(view opView) bool { return capturing(view.Spec.Holds) }) || slices.ContainsFunc(leases, func(probe leaseProbe) bool {
+				return probe.Live && probe.Info != nil && capturing(probe.Info.Holds)
 			})
 		case activity.Kind == "git":
 			ok = running(kinds("analysis.git", "analysis.refresh"))
