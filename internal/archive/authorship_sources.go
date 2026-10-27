@@ -428,6 +428,16 @@ func (c *classifier) addAuthorshipCall(at time.Time, origin textOrigin, name str
 // establish provenance. Free-text answers remain available to other rules.
 func (c *classifier) claimQuestionForms(l *labeler, input authorInput, bodyStart int) {
 	lines := textLines(input.Text)
+	// One answer per answer line: questions are in asking order, so the most
+	// recent matching one replaces an earlier one with the same title.
+	answers := map[int]questionAnswer{}
+	defer func() {
+		for _, line := range lines {
+			if answer, ok := answers[line[0]]; ok {
+				c.answers = append(c.answers, answer)
+			}
+		}
+	}()
 	for _, q := range c.questions[input.ConversationID] {
 		for i, line := range lines {
 			if line[0] < bodyStart || strings.TrimSpace(input.Text[line[0]:line[1]]) != q.title || i+1 >= len(lines) {
@@ -446,8 +456,8 @@ func (c *classifier) claimQuestionForms(l *labeler, input authorInput, bodyStart
 				}
 				if trim(option) == trim(value) {
 					generated = true
-					c.answers = append(c.answers, questionAnswer{Title: q.title, Option: option, TitleStart: line[0], TitleEnd: line[1],
-						Start: answer[0], End: answer[1], Origin: q.origin})
+					answers[answer[0]] = questionAnswer{Title: q.title, Option: option, TitleStart: line[0], TitleEnd: line[1],
+						Start: answer[0], End: answer[1], Origin: q.origin}
 					break
 				}
 			}

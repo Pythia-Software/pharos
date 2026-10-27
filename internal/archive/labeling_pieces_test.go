@@ -38,11 +38,17 @@ func checkHumanUnit(t *testing.T, text string, unit humanUnit) {
 			for _, between := range unit.Pieces[previous+1 : index] {
 				excluded = excluded || strings.TrimSpace(text[between.Start:between.End]) != ""
 			}
-			if excluded != strings.Contains(gap, "⟦excluded: ") {
+			if excluded != strings.Contains(gap, "⟦") {
 				t.Fatalf("pieces joined without a marker, or a marker without excluded text: %q", unit.Visible)
 			}
 		}
 		previous = index
+	}
+	for _, marker := range unit.Markers {
+		value := unit.Visible[marker.Start:marker.End]
+		if !strings.HasPrefix(value, "⟦") || !strings.HasSuffix(value, "⟧") || strings.Count(value, "⟦") != 1 {
+			t.Fatalf("marker range %+v holds %q", marker, value)
+		}
 	}
 }
 
@@ -68,11 +74,11 @@ func TestHumanPiecesSeparateTheirMaterial(t *testing.T) {
 	}{{
 		name:    "mixed harness, typed and pasted code",
 		text:    "<system-reminder>\nKeep answers short.\n</system-reminder>\nWhy does this fail?\n```go\nfunc main() { panic(\"boom\") }\n```\nIt panics on start.",
-		visible: "Why does this fail?\n⟦excluded: likely pasted text, 39 chars⟧\nIt panics on start.",
+		visible: "Why does this fail?\n⟦likely pasted text, context only, 39 chars: \"```go\nfunc main() { panic(\"boom\") }\n```\"⟧\nIt panics on start.",
 	}, {
 		name:    "quoted agent claim and the person's criticism",
 		text:    reply + "\n\nThat is wrong: the cache is per worker already.",
-		visible: "⟦excluded: quoted text, 107 chars⟧\n\nThat is wrong: the cache is per worker already.",
+		visible: "⟦quoted agent text, context only, 107 chars: \"" + reply + "\"⟧\n\nThat is wrong: the cache is per worker already.",
 		prepare: func(c *classifier) {
 			c.agentText.add(authorAt(0), textOrigin{"agent-chat", "agent-reply"}, shingles(wordTokens(reply)))
 		},
@@ -114,6 +120,24 @@ func TestHumanPiecesSeparateTheirMaterial(t *testing.T) {
 			}
 			if strings.Contains(unit.Visible, "Selector") || strings.Contains(unit.Visible, "Save your changes") {
 				t.Fatalf("generated fields are visible: %q", unit.Visible)
+			}
+		},
+	}, {
+		name:    "a secret in typed text",
+		text:    "Use the key sk-abcdefghijklmnopqrstuv for staging",
+		visible: "Use the key ⟦excluded: redacted secret, 25 chars⟧ for staging",
+		check: func(t *testing.T, text string, unit humanUnit) {
+			if unit.Secrets != 1 || pieceWithStatus(unit, "redacted_secret").Role != pieceDropped {
+				t.Fatalf("secret pieces = %+v", unit.Pieces)
+			}
+		},
+	}, {
+		name:    "an app block authorship does not recognize",
+		text:    "<in-app-browser-context source=\"ambient-ui-state\">\nThe browser shows /settings\n</in-app-browser-context>\nMake the header sticky",
+		visible: "Make the header sticky",
+		check: func(t *testing.T, text string, unit humanUnit) {
+			if unit.Unrecognized != 1 {
+				t.Fatalf("unrecognized = %d", unit.Unrecognized)
 			}
 		},
 	}, {
@@ -170,6 +194,12 @@ func TestQuestionFormAnswersAreActions(t *testing.T) {
 		text[answer.TitleStart:answer.TitleEnd] != "Which mode?" || answer.Origin.message != "question" {
 		t.Fatalf("answer = %+v", answer)
 	}
+	// Asked again: the one answer line belongs to the most recent asking.
+	c.addAuthorshipTool(authorAt(1), textOrigin{"chat", "asked-again"},
+		`{"tool":"AskUserQuestion","input":{"questions":[{"question":"Which mode?","options":[{"label":"Records"},{"label":"Text"}]}]}}`)
+	if again := classifyOne(c, "chat", "Which mode?\nText", 6); len(again) == 0 || len(c.answers) != 1 || c.answers[0].Origin.message != "asked-again" || c.answers[0].Option != "Text" {
+		t.Fatalf("answers to a repeated question = %+v", c.answers)
+	}
 	unit := humanPieces(text, spans)
 	if !strings.HasSuffix(unit.Visible, "Also check mobile") || strings.Contains(unit.Visible, "Records") {
 		t.Fatalf("visible = %q", unit.Visible)
@@ -187,9 +217,17 @@ func TestChunkingKeepsEveryCharacterAtBoundaries(t *testing.T) {
 		"astral emoji":    astral,
 		"combining marks": combining,
 		"joined emoji":    strings.Repeat("👩‍💻", 2500),
+		// One leading character puts each sequence across the 6,000 boundary.
+		"misaligned combining marks": "x" + combining,
+		"misaligned joined emoji":    "x" + strings.Repeat("\U0001F469\u200d\U0001F4BB", 2500),
+		"misaligned flags":           "x" + strings.Repeat("\U0001F1EB\U0001F1F7", 4000),
+		"variation selectors":        "x" + strings.Repeat("\u2764\ufe0f", 4000),
 	} {
 		t.Run(name, func(t *testing.T) {
-			chunks := chunkLabelingText(text, labelingChunkChars)
+			chunks := chunkLabelingText(text, labelingChunkChars, nil)
+			if name == "misaligned flags" && utf8.RuneCountInString(text[:chunks[0].End])%2 != 1 {
+				t.Fatalf("a flag was split at %d", chunks[0].End)
+			}
 			if len(chunks) < 2 {
 				t.Fatalf("%d chunks", len(chunks))
 			}
@@ -212,12 +250,20 @@ func TestChunkingKeepsEveryCharacterAtBoundaries(t *testing.T) {
 		})
 	}
 	text := strings.Repeat("word ", 700) + "\n\n" + strings.Repeat("next ", 400)
-	chunks := chunkLabelingText(text, labelingChunkChars)
+	chunks := chunkLabelingText(text, labelingChunkChars, nil)
 	if len(chunks) != 1 {
 		t.Fatalf("text under the limit split: %+v", chunks)
 	}
+	// A cut never falls inside a marker.
+	marker := "⟦excluded: quoted text, 400 chars⟧"
+	text = strings.Repeat("a", 5990) + marker + strings.Repeat("b", 3000)
+	at := strings.Index(text, marker)
+	chunks = chunkLabelingText(text, labelingChunkChars, []labelingChunk{{at, at + len(marker)}})
+	if chunks[0].End != at {
+		t.Fatalf("cut inside the marker: %+v", chunks)
+	}
 	text = strings.Repeat("x", 3500) + "\n\n" + strings.Repeat("y", 3500)
-	if chunks := chunkLabelingText(text, labelingChunkChars); text[chunks[0].Start:chunks[0].End] != strings.Repeat("x", 3500)+"\n\n" {
+	if chunks := chunkLabelingText(text, labelingChunkChars, nil); text[chunks[0].Start:chunks[0].End] != strings.Repeat("x", 3500)+"\n\n" {
 		t.Fatalf("paragraph boundary not preferred: %+v", chunks)
 	}
 }
@@ -289,5 +335,46 @@ func TestPackLabelingRequests(t *testing.T) {
 	}
 	if got := packLabelingRequests(sizes, 2, 1_000_000); len(got) != 5 || len(got[0]) != 2 {
 		t.Fatalf("two per request = %v", got)
+	}
+}
+
+func TestParseQuestionAnswers(t *testing.T) {
+	call := `{"tool":"AskUserQuestion","input":{"questions":[{"question":"Which mode?","options":[{"label":"Records"},{"label":"Text"}]},` +
+		`{"question":"Which checks?","multiSelect":true,"options":[{"label":"Lint"},{"label":"Tests"}]},{"question":"Name?","options":[{"label":"Keep"}]}]}}`
+	result := `{"content":"User has answered your questions: \"Which mode?\"=\"Records\", \"Which checks?\"=\"Lint, Tests\", \"Name?\"=\"Call it Atlas\". You can now continue with the user's answers in mind.","tool":"AskUserQuestion"}`
+	got := []string{}
+	for _, answer := range parseQuestionAnswers(call, result) {
+		got = append(got, answer.kind+":"+answer.question+"="+answer.option+answer.text)
+	}
+	want := "[submitted_option:Which mode?=Records submitted_option:Which checks?=Lint submitted_option:Which checks?=Tests free_text_answer:Name?=Call it Atlas]"
+	if fmt.Sprint(got) != want {
+		t.Fatalf("answers = %v", got)
+	}
+	codexCall := `{"tool":"request_user_input","input":{"questions":[{"id":"mode","question":"Which mode?","options":[{"label":"Records"}]}]}}`
+	codexResult := `{"content":"{\"answers\":{\"mode\":{\"answers\":[\"Records\"]}}}","tool":"request_user_input"}`
+	if answers := parseQuestionAnswers(codexCall, codexResult); len(answers) != 1 || answers[0].option != "Records" {
+		t.Fatalf("codex answers = %+v", answers)
+	}
+	conductor := `{"content":[{"type":"text","text":"User responses:\n1. Text\n2. Lint\n3. Something else"}],"is_error":false}`
+	got = got[:0]
+	for _, answer := range parseQuestionAnswers(call, conductor) {
+		got = append(got, answer.kind+":"+answer.question+"="+answer.option+answer.text)
+	}
+	if fmt.Sprint(got) != "[submitted_option:Which mode?=Text submitted_option:Which checks?=Lint free_text_answer:Name?=Something else]" {
+		t.Fatalf("numbered answers = %v", got)
+	}
+	if answers := parseQuestionAnswers(call, `{"content":"Records","tool":"AskUserQuestion"}`); len(answers) != 0 {
+		t.Fatalf("an unrecognized result was parsed: %+v", answers)
+	}
+}
+
+func TestLabelingSentencesKeepOriginalRanges(t *testing.T) {
+	text := "  First one. Second? Third!\nLast line without end  "
+	got := []string{}
+	for _, r := range labelingSentences(text, 0, len(text)) {
+		got = append(got, text[r[0]:r[1]])
+	}
+	if fmt.Sprint(got) != "[First one. Second? Third! Last line without end]" {
+		t.Fatalf("sentences = %q", got)
 	}
 }

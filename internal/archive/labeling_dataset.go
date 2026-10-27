@@ -22,7 +22,8 @@ CREATE TABLE units(
   session_id TEXT, session_role TEXT, cohort TEXT NOT NULL, actor_kind TEXT NOT NULL, sender_role TEXT NOT NULL, sender TEXT,
   provider TEXT NOT NULL, kind TEXT NOT NULL, channel TEXT NOT NULL, reasoning_format TEXT, created_at TEXT,
   content_hash TEXT, message_sha256 TEXT NOT NULL, message_text TEXT NOT NULL, authorship_reason TEXT,
-  visible_text TEXT NOT NULL, visible_chars INTEGER NOT NULL, length_bucket TEXT NOT NULL, chunk_count INTEGER NOT NULL,
+  visible_text TEXT NOT NULL, visible_chars INTEGER NOT NULL, marker_ranges TEXT NOT NULL, length_bucket TEXT NOT NULL,
+  chunk_count INTEGER NOT NULL, dropped_chunks INTEGER NOT NULL,
   context_text TEXT NOT NULL, context_prompt TEXT NOT NULL, context_excerpt INTEGER NOT NULL, context_refs TEXT NOT NULL,
   duplicate_of TEXT, duplicate_relation TEXT, family_id TEXT, split TEXT);
 CREATE TABLE pieces(
@@ -33,12 +34,15 @@ CREATE TABLE items(
   id TEXT PRIMARY KEY, unit_id TEXT NOT NULL, chunk_index INTEGER NOT NULL, chunk_count INTEGER NOT NULL,
   visible_start INTEGER NOT NULL, visible_end INTEGER NOT NULL, text TEXT NOT NULL, chars INTEGER NOT NULL, source_ranges TEXT NOT NULL);
 CREATE INDEX items_unit_idx ON items(unit_id);
+CREATE TABLE sentences(
+  unit_id TEXT NOT NULL, position INTEGER NOT NULL, piece_position INTEGER NOT NULL, start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL,
+  transform TEXT, PRIMARY KEY(unit_id, position)) WITHOUT ROWID;
 CREATE TABLE actions(
   message_id TEXT NOT NULL, position INTEGER NOT NULL, conversation_id TEXT NOT NULL, actor TEXT NOT NULL, kind TEXT NOT NULL,
-  status TEXT NOT NULL, question TEXT NOT NULL, option TEXT NOT NULL, title_start INTEGER NOT NULL, title_end INTEGER NOT NULL,
-  answer_start INTEGER NOT NULL, answer_end INTEGER NOT NULL, question_conversation_id TEXT, question_message_id TEXT,
+  status TEXT NOT NULL, source TEXT NOT NULL, question TEXT NOT NULL, option TEXT, answer_text TEXT, title_start INTEGER, title_end INTEGER,
+  answer_start INTEGER, answer_end INTEGER, question_conversation_id TEXT, question_message_id TEXT,
   PRIMARY KEY(message_id, position));
-CREATE TABLE exclusions(message_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, cohort TEXT NOT NULL, reason TEXT NOT NULL, detail TEXT);
+CREATE TABLE exclusions(message_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, cohort TEXT NOT NULL, reason TEXT NOT NULL, detail TEXT, duplicate_of TEXT);
 CREATE TABLE families(conversation_id TEXT PRIMARY KEY, family_id TEXT NOT NULL, split TEXT NOT NULL, first_at TEXT);
 `
 
@@ -97,12 +101,12 @@ func (w *labelingWriter) unit(unit *labelingUnit) error {
 	refs, _ := json.Marshal(unit.contextRefs)
 	if err := w.exec(`INSERT INTO units(id,message_id,conversation_id,canonical_conversation_id,workspace_id,root_conversation_id,run_id,depth,depth_status,
 		session_id,session_role,cohort,actor_kind,sender_role,sender,provider,kind,channel,reasoning_format,created_at,content_hash,message_sha256,message_text,
-		authorship_reason,visible_text,visible_chars,length_bucket,chunk_count,context_text,context_prompt,context_excerpt,context_refs)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		authorship_reason,visible_text,visible_chars,marker_ranges,length_bucket,chunk_count,dropped_chunks,context_text,context_prompt,context_excerpt,context_refs)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		unit.id, unit.messageID, unit.conversation, nilIfEmpty(unit.canonical), unit.workspace, nilIfEmpty(unit.root), nilIfEmpty(unit.run), unit.depth, unit.depthStatus,
 		nilIfEmpty(unit.session), nilIfEmpty(unit.sessionRole), unit.cohort, unit.actor, unit.role, nilIfEmpty(unit.sender), unit.provider, unit.kind, unit.channel,
 		nilIfEmpty(unit.format), nilIfEmpty(unit.createdAt), nilIfEmpty(unit.contentHash), hashBytes([]byte(unit.text)), unit.text, nilIfEmpty(unit.authorship),
-		unit.visible, utf8.RuneCountInString(unit.visible), unit.length, len(unit.chunks), unit.context, unit.contextPrompt, unit.contextExcerpt, string(refs)); err != nil {
+		unit.visible, utf8.RuneCountInString(unit.visible), jsonText(markerPairs(unit.markers)), unit.length, len(unit.chunks), unit.droppedChunks, unit.context, unit.contextPrompt, unit.contextExcerpt, string(refs)); err != nil {
 		return err
 	}
 	for position, piece := range unit.pieces {
@@ -114,6 +118,23 @@ func (w *labelingWriter) unit(unit *labelingUnit) error {
 			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, unit.id, position, piece.Role, piece.Status, nilIfEmpty(piece.Category), nilIfEmpty(piece.Reason), piece.Start, piece.End,
 			visibleStart, visibleEnd, nilIfEmpty(piece.Transform), nilIfEmpty(piece.SourceConversation), nilIfEmpty(piece.SourceMessage)); err != nil {
 			return err
+		}
+	}
+	sentence := 0
+	for position, piece := range unit.pieces {
+		if piece.Role != pieceTarget || piece.VisibleStart < 0 {
+			continue
+		}
+		ranges := [][2]int{{piece.Start, piece.End}}
+		if piece.Transform == "" {
+			ranges = labelingSentences(unit.text, piece.Start, piece.End)
+		}
+		for _, r := range ranges {
+			if err := w.exec(`INSERT INTO sentences(unit_id,position,piece_position,start_byte,end_byte,transform) VALUES(?,?,?,?,?,?)`,
+				unit.id, sentence, position, r[0], r[1], nilIfEmpty(piece.Transform)); err != nil {
+				return err
+			}
+			sentence++
 		}
 	}
 	for index, chunk := range unit.chunks {
@@ -148,15 +169,31 @@ func chunkSourceRanges(pieces []labelingPiece, chunk labelingChunk) []map[string
 	return ranges
 }
 
-func (w *labelingWriter) exclusion(message, conversation, cohort, reason, detail string) error {
-	return w.exec(`INSERT INTO exclusions(message_id,conversation_id,cohort,reason,detail) VALUES(?,?,?,?,?)`, message, conversation, cohort, reason, nilIfEmpty(detail))
+func markerPairs(markers []labelingChunk) [][2]int {
+	pairs := [][2]int{}
+	for _, marker := range markers {
+		pairs = append(pairs, [2]int{marker.Start, marker.End})
+	}
+	return pairs
 }
 
-func (w *labelingWriter) action(message, conversation string, position int, answer questionAnswer) error {
-	return w.exec(`INSERT INTO actions(message_id,position,conversation_id,actor,kind,status,question,option,title_start,title_end,answer_start,answer_end,
-		question_conversation_id,question_message_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, message, position, conversation, "human", "submitted_option",
-		"recognized_question_form", answer.Title, answer.Option, answer.TitleStart, answer.TitleEnd, answer.Start, answer.End,
-		nilIfEmpty(answer.Origin.conversation), nilIfEmpty(answer.Origin.message))
+func (w *labelingWriter) exclusion(message, conversation, cohort, reason, detail, duplicate string) error {
+	return w.exec(`INSERT INTO exclusions(message_id,conversation_id,cohort,reason,detail,duplicate_of) VALUES(?,?,?,?,?,?)`, message, conversation, cohort, reason,
+		nilIfEmpty(detail), nilIfEmpty(duplicate))
+}
+
+// action records an answer; byte ranges are absent (-1) for tool results.
+func (w *labelingWriter) action(message, conversation string, position int, answer labelingAnswer) error {
+	rangeValue := func(value int) any {
+		if value < 0 {
+			return nil
+		}
+		return value
+	}
+	return w.exec(`INSERT INTO actions(message_id,position,conversation_id,actor,kind,status,source,question,option,answer_text,title_start,title_end,answer_start,answer_end,
+		question_conversation_id,question_message_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, message, position, conversation, answer.actor, answer.kind,
+		answer.status, answer.source, answer.question, nilIfEmpty(answer.option), nilIfEmpty(answer.text), rangeValue(answer.titleStart), rangeValue(answer.titleEnd),
+		rangeValue(answer.start), rangeValue(answer.end), nilIfEmpty(answer.questionConversation), nilIfEmpty(answer.questionMessage))
 }
 
 func (w *labelingWriter) duplicate(message, of, relation string) error {
@@ -186,7 +223,9 @@ func (w *labelingWriter) finish(families map[string]labelingFamily, manifest map
 		return err
 	}
 	w.tx = nil
-	if _, err := w.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+	// A finished dataset leaves WAL mode, so read-only opens (plan, status)
+	// create no -wal or -shm files beside it.
+	if _, err := w.db.Exec("PRAGMA journal_mode=DELETE"); err != nil {
 		return err
 	}
 	return w.db.Close()

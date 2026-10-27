@@ -22,7 +22,7 @@ func (l *stringList) String() string         { return strings.Join(*l, ",") }
 func (l *stringList) Set(value string) error { *l = append(*l, value); return nil }
 
 const labelingUsage = `usage:
-  pharos [--config PATH] labeling prepare --dir DIR [--catalog PATH] [--fresh-days 14] [--limit-conversations N] [--conversation ID ...] [--replace] [--dry-run]
+  pharos [--config PATH] labeling prepare --dir DIR [--catalog PATH] [--fresh-days 14] [--limit-conversations N] [--conversation ID ...] [--splits-from OLD_DIR] [--snapshot-copy] [--replace] [--dry-run]
   pharos labeling plan --dir DIR --route claude|codex --model M --effort E [--items-per-request 4] [--max-request-chars N] [--concurrency 3] [--cohort C ...] [--split S ...] [--limit-items N]
   pharos labeling status --dir DIR`
 
@@ -59,7 +59,9 @@ func runLabelingPrepare(configPath string, args []string, stdout, stderr io.Writ
 	var conversations stringList
 	flags.Var(&conversations, "conversation", "prepare only this conversation (repeatable)")
 	replace := flags.Bool("replace", false, "replace a dataset already in DIR")
+	splitsFrom := flags.String("splits-from", "", "keep the splits an earlier dataset gave its conversations")
 	dryRun := flags.Bool("dry-run", false, "print the manifest counts without writing anything")
+	snapshotCopy := flags.Bool("snapshot-copy", false, "the catalog is a static copy (a backup): read it immutably, without its WAL or shared memory")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || (*dir == "" && !*dryRun) || *freshDays < 0 || *limit < 0 {
 		return errors.New(labelingUsage)
 	}
@@ -74,12 +76,13 @@ func runLabelingPrepare(configPath string, args []string, stdout, stderr io.Writ
 		if err := config.checkLibrary(volumeIdentity); err != nil {
 			return err
 		}
-		// A shared lease, like other readers: a library move waits for it.
-		use, err := fileLease(libraryUseLock(config), false)
+		use, err := labelingLibraryLease(config, *dryRun)
 		if err != nil {
 			return err
 		}
-		defer use.Close()
+		if use != nil {
+			defer use.Close()
+		}
 		*catalogPath = config.CatalogPath
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -90,7 +93,10 @@ func runLabelingPrepare(configPath string, args []string, stdout, stderr io.Writ
 	}
 	*catalogPath, _ = filepath.Abs(expandPath(*catalogPath))
 	opts := labelingPrepareOptions{Dir: *dir, CatalogPath: *catalogPath, FreshDays: *freshDays, Limit: *limit, Conversations: conversations,
-		DryRun: *dryRun, Progress: stderr}
+		DryRun: *dryRun, SnapshotCopy: *snapshotCopy, Progress: stderr}
+	if *splitsFrom != "" {
+		opts.SplitsFrom, _ = filepath.Abs(expandPath(*splitsFrom))
+	}
 	if *dryRun {
 		manifest, err := prepareLabeling(ctx, opts)
 		if err != nil {
@@ -105,6 +111,28 @@ func runLabelingPrepare(configPath string, args []string, stdout, stderr io.Writ
 	fmt.Fprintln(stdout, manifest["population"])
 	fmt.Fprintf(stdout, "Wrote %s\n", filepath.Join(opts.Dir, labelingManifestFile))
 	return nil
+}
+
+// labelingLibraryLease takes a shared lease on the library, like other
+// readers, so a library move waits for preparation. A dry run writes nothing:
+// it leases only an existing lock file and never creates one.
+func labelingLibraryLease(config Config, dryRun bool) (*os.File, error) {
+	path := libraryUseLock(config)
+	if !dryRun {
+		return fileLease(path, false)
+	}
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		file.Close()
+		return nil, fmt.Errorf("Pharos is using this library; close its active operation and retry: %w", err)
+	}
+	return file, nil
 }
 
 func writeLabelingJSON(w io.Writer, value any) error {
@@ -151,6 +179,12 @@ func prepareLabelingDataset(ctx context.Context, opts labelingPrepareOptions, re
 	if len(others) > 0 {
 		return nil, fmt.Errorf("%s holds files a dataset does not (%s); move them or choose another directory", opts.Dir, strings.Join(others, ", "))
 	}
+	// Earlier splits are read before a replacement removes their dataset.
+	if opts.SplitsFrom != "" {
+		if opts.splits, err = loadLabelingSplits(opts.SplitsFrom); err != nil {
+			return nil, fmt.Errorf("--splits-from: %w", err)
+		}
+	}
 	// The manifest goes first, so an interrupted replacement is incomplete.
 	for _, name := range labelingDatasetFiles {
 		if err := os.Remove(filepath.Join(opts.Dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -159,7 +193,7 @@ func prepareLabelingDataset(ctx context.Context, opts labelingPrepareOptions, re
 	}
 	marker := filepath.Join(opts.Dir, labelingIncompleteFile)
 	attempt := map[string]any{"state": "preparing", "started_at": now(), "pid": os.Getpid(), "catalog": opts.CatalogPath,
-		"limit_conversations": opts.Limit, "conversations": opts.Conversations, "fresh_days": opts.FreshDays}
+		"snapshot_copy": opts.SnapshotCopy, "limit_conversations": opts.Limit, "conversations": opts.Conversations, "fresh_days": opts.FreshDays}
 	if err := durableJSON(marker, attempt); err != nil {
 		return nil, err
 	}

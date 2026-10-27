@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -14,15 +13,23 @@ import (
 // (see docs/library-labeling.md). These are the versioned contracts a prepared
 // dataset records; changing what one of them produces needs a new version.
 const (
-	labelingUnitsVersion   = "labeling-units-v1"
-	humanPiecesVersion     = "human-pieces-v1"
-	labelingContextVersion = "context-v1"
-	labelingChunkVersion   = "chunking-v1"
-	labelingSplitsVersion  = "splits-v1"
-	// labelingMarker stands in a human unit's model-visible text for material
-	// that is not the person's: what it was and how many characters (code
-	// points) it held. Pieces are never joined without one.
-	labelingMarker = "⟦excluded: %s, %d chars⟧"
+	labelingUnitsVersion    = "labeling-units-v1"
+	humanPiecesVersion      = "human-pieces-v1"
+	labelingContextVersion  = "context-v1"
+	labelingChunkVersion    = "chunking-v1"
+	labelingSplitsVersion   = "splits-v1"
+	labelingSentenceVersion = "sentences-v1"
+	// Markers stand in a unit's model-visible text for material that is not
+	// the target: what it was and how many characters (code points) it held.
+	// Context (quotes, pastes, attachments) shows a bounded excerpt so the
+	// teacher sees what the person reacts to; harness and secrets never do.
+	// Pieces are never joined without a marker between them.
+	labelingMarker        = "⟦excluded: %s, %d chars⟧"
+	labelingContextMarker = "⟦%s, context only, %d chars: \"%s\"⟧"
+	// labelingExcerptChars bounds one marker's excerpt (head…tail), and
+	// labelingExcerptBudget all excerpts of a unit.
+	labelingExcerptChars  = 300
+	labelingExcerptBudget = 1200
 	// labelingChunkChars is the longest item, in code points. Longer target
 	// text is split, never truncated.
 	labelingChunkChars = 6000
@@ -51,24 +58,132 @@ type labelingPiece struct {
 	SourceConversation, SourceMessage string
 }
 
-// humanUnit is human-pieces-v1 applied to one user message: its pieces in
-// order, the text a teacher model sees, or the reason it is excluded.
+// humanUnit is human-pieces-v1 applied to one message: its pieces in order,
+// the text a teacher model sees with the visible byte ranges of its markers,
+// or the reason it is excluded.
 type humanUnit struct {
 	Pieces  []labelingPiece
 	Visible string
+	Markers []labelingChunk
 	Exclude string
+	// Secrets counts redacted secret ranges; Unrecognized, leading blocks of
+	// harness tags authorship does not know.
+	Secrets, Unrecognized int
 }
 
 // leadingHarnessReasons are the reasons of harness blocks that open a message,
 // which are dropped without a marker: they are never the person's and say
 // nothing about the message.
 var leadingHarnessReasons = func() map[string]bool {
-	reasons := map[string]bool{reasonHarness.text(): true}
+	reasons := map[string]bool{reasonHarness.text(): true, unrecognizedHarnessReason: true}
 	for _, reason := range harnessReasons {
 		reasons[reason.text()] = true
 	}
 	return reasons
 }()
+
+// unrecognizedHarnessTags are app-supplied blocks that open user messages but
+// that authorship-v8 does not recognize, so it counts them as typed.
+// Labeling drops them like harness.
+var unrecognizedHarnessTags = []string{"in-app-browser-context"}
+
+const unrecognizedHarnessReason = "unrecognized_harness_tag"
+
+// labelingHarnessBlocks returns the harness blocks that open text, those
+// authorship knows and the unrecognized tags, the latter flagged.
+func labelingHarnessBlocks(text string) (blocks []harnessBlock, unrecognized []bool) {
+	offset := 0
+	for {
+		known := leadingHarnessBlocks(text[offset:])
+		for _, block := range known {
+			blocks = append(blocks, harnessBlock{Start: offset + block.Start, End: offset + block.End, Source: block.Source})
+			unrecognized = append(unrecognized, false)
+		}
+		if len(known) > 0 {
+			offset += known[len(known)-1].End
+		}
+		start := offset + len(text[offset:]) - len(strings.TrimLeft(text[offset:], " \t\r\n"))
+		found := false
+		for _, tag := range unrecognizedHarnessTags {
+			rest := text[start:]
+			if !strings.HasPrefix(rest, "<"+tag) || len(rest) == len(tag)+1 || !strings.ContainsRune("> \n", rune(rest[len(tag)+1])) {
+				continue
+			}
+			end := strings.Index(rest, "</"+tag+">")
+			if end < 0 {
+				return blocks, unrecognized
+			}
+			end = start + end + len("</"+tag+">")
+			blocks = append(blocks, harnessBlock{Start: start, End: end, Source: tag})
+			unrecognized = append(unrecognized, true)
+			offset, found = end, true
+		}
+		if !found {
+			return blocks, unrecognized
+		}
+	}
+}
+
+// carvePieces gives the bytes [start, end) to replacement, splitting the
+// target and context pieces it overlaps. Dropped pieces keep their bytes.
+func carvePieces(pieces []labelingPiece, start, end int, replacement labelingPiece) []labelingPiece {
+	result := make([]labelingPiece, 0, len(pieces)+2)
+	for _, piece := range pieces {
+		if piece.Role == pieceDropped || piece.End <= start || piece.Start >= end {
+			result = append(result, piece)
+			continue
+		}
+		piece.Transform = "" // a carved piece shows its bytes literally
+		if piece.Start < start {
+			before := piece
+			before.End = start
+			result = append(result, before)
+		}
+		inner := replacement
+		inner.Start, inner.End = max(piece.Start, start), min(piece.End, end)
+		result = append(result, inner)
+		if piece.End > end {
+			after := piece
+			after.Start = end
+			result = append(result, after)
+		}
+	}
+	return result
+}
+
+// secretRanges finds what the context redaction patterns would redact.
+func secretRanges(text string) [][2]int {
+	ranges := [][2]int{}
+	for _, secret := range labelingSecrets {
+		for _, match := range secret.pattern.FindAllStringSubmatchIndex(text, -1) {
+			start := match[0]
+			if len(match) > 2 && match[3] > 0 {
+				start = match[3] // keep the prefix group ("Bearer ", "token=")
+			}
+			ranges = append(ranges, [2]int{start, match[1]})
+		}
+	}
+	return ranges
+}
+
+// cleanPieces applies the labeling-side rules to a message's pieces: leading
+// blocks of unrecognized harness tags are dropped silently, and each secret
+// becomes a dropped piece, so no secret is ever visible or quotable.
+func cleanPieces(text string, pieces []labelingPiece) ([]labelingPiece, int, int) {
+	blocks, unrecognized := labelingHarnessBlocks(text)
+	tags := 0
+	for index, block := range blocks {
+		if unrecognized[index] {
+			tags++
+			pieces = carvePieces(pieces, block.Start, block.End, labelingPiece{Role: pieceDropped, Status: spanHarness, Category: spanHarness, Reason: unrecognizedHarnessReason})
+		}
+	}
+	secrets := secretRanges(text)
+	for _, secret := range secrets {
+		pieces = carvePieces(pieces, secret[0], secret[1], labelingPiece{Role: pieceDropped, Status: "redacted_secret", Category: "secret", Reason: "redacted_secret"})
+	}
+	return pieces, tags, len(secrets)
+}
 
 // pieceRole maps an authorship span to its human-pieces-v1 role and status.
 func pieceRole(span authorSpan) (role, status string) {
@@ -96,64 +211,116 @@ func pieceRole(span authorSpan) (role, status string) {
 func markerLabel(piece labelingPiece) string {
 	switch piece.Category {
 	case spanQuoted:
+		if strings.HasPrefix(piece.Reason, "Matches") {
+			return "quoted agent text"
+		}
 		return "quoted text"
 	case spanPasted:
 		return "likely pasted text"
 	case spanAttachment:
 		return "attachment reference"
+	case "secret":
+		return "redacted secret"
 	case spanHarness:
 		switch piece.Reason {
 		case reasonQuestionForm.text():
 			return "question form"
 		case reasonPageFeedback.text():
 			return "generated page feedback"
+		case unrecognizedHarnessReason:
+			return "unrecognized harness block"
 		}
 		return "harness text"
 	}
 	return piece.Category
 }
 
+// markerExcerpt shortens text to at most limit code points, keeping its head and
+// tail, and removes marker brackets and secrets from it.
+func markerExcerpt(text string, limit int) string {
+	text = strings.TrimSpace(text)
+	for _, secret := range labelingSecrets {
+		text = secret.pattern.ReplaceAllString(text, secret.replacement)
+	}
+	text = strings.NewReplacer("⟦", "[", "⟧", "]").Replace(text)
+	if utf8.RuneCountInString(text) <= limit {
+		return text
+	}
+	head := (limit - 1) / 2
+	return firstRunes(text, head) + "…" + lastRunes(text, limit-1-head)
+}
+
 // humanPieces applies human-pieces-v1 to a user message the classifier did
-// not attribute to automation. Target pieces keep their exact byte ranges and
-// appear in order in the visible text; each run of other material between,
-// before, or after them becomes one marker. A unit whose targets hold no
-// letter, number, or symbol is kept when that is the whole message (a "?" or
-// "+1" sent on purpose) and excluded as residual punctuation when material
-// around it was excluded.
+// not attribute to automation. A unit whose targets hold no letter, number,
+// or symbol is kept when that is the whole message (a "?" or "+1" sent on
+// purpose) and excluded as residual punctuation when material around it was
+// excluded.
 func humanPieces(text string, spans []authorSpan) humanUnit {
-	pieces := mergeFeedbackJSON(text, spans)
+	pieces, tags, secrets := cleanPieces(text, mergeFeedbackJSON(text, spans))
+	unit := renderPieces(text, pieces)
+	unit.Secrets, unit.Unrecognized = secrets, tags
+	if unit.Exclude == "" && !meaningfulText(targetText(text, unit.Pieces)) && len(unit.Markers) > 0 {
+		unit.Exclude = "residual_punctuation"
+	}
+	return unit
+}
+
+// renderPieces builds the visible text: target pieces in order, exactly as
+// stored (or decoded, for a transformed piece), and one marker for each run of
+// other material with the same label, except leading harness blocks, which
+// are dropped silently. Whitespace between targets is kept; edges are trimmed.
+func renderPieces(text string, pieces []labelingPiece) humanUnit {
 	var visible strings.Builder
+	markers := []labelingChunk{}
+	budget, targets := labelingExcerptBudget, 0
 	run := []int{}
-	marked, targets := false, 0
 	flush := func(leading, final bool) {
-		if len(run) == 0 {
-			return
-		}
 		defer func() { run = run[:0] }()
-		chars, silent, labels := 0, leading, []string{}
+		groups := [][]int{}
 		for _, index := range run {
 			piece := pieces[index]
 			if strings.TrimSpace(text[piece.Start:piece.End]) == "" {
 				continue
 			}
-			chars += utf8.RuneCountInString(text[piece.Start:piece.End])
-			silent = silent && piece.Category == spanHarness && leadingHarnessReasons[piece.Reason]
-			if label := markerLabel(piece); !slices.Contains(labels, label) {
-				labels = append(labels, label)
+			if leading && piece.Category == spanHarness && leadingHarnessReasons[piece.Reason] {
+				continue
+			}
+			leading = false
+			if last := len(groups) - 1; last >= 0 && markerLabel(pieces[groups[last][0]]) == markerLabel(piece) {
+				groups[last] = append(groups[last], index)
+			} else {
+				groups = append(groups, []int{index})
 			}
 		}
-		if chars == 0 {
-			// Only whitespace: nothing was excluded, so keep it between targets.
-			if !leading && !final {
+		if len(groups) == 0 {
+			// Only whitespace (or silent harness): keep whitespace between targets.
+			if targets > 0 && !final {
 				for _, index := range run {
-					visible.WriteString(text[pieces[index].Start:pieces[index].End])
+					if pieces[index].Role != pieceDropped {
+						visible.WriteString(text[pieces[index].Start:pieces[index].End])
+					}
 				}
 			}
 			return
 		}
-		if !silent {
-			marked = true
-			visible.WriteString(fmt.Sprintf(labelingMarker, strings.Join(labels, " + "), chars))
+		for _, group := range groups {
+			first := pieces[group[0]]
+			chars := 0
+			var shown strings.Builder
+			for _, index := range group {
+				chars += utf8.RuneCountInString(text[pieces[index].Start:pieces[index].End])
+				shown.WriteString(text[pieces[index].Start:pieces[index].End])
+			}
+			start := visible.Len()
+			limit := min(labelingExcerptChars, budget)
+			if first.Role == pieceContext && limit >= 40 {
+				value := markerExcerpt(shown.String(), limit)
+				budget -= utf8.RuneCountInString(value)
+				visible.WriteString(fmt.Sprintf(labelingContextMarker, markerLabel(first), chars, value))
+			} else {
+				visible.WriteString(fmt.Sprintf(labelingMarker, markerLabel(first), chars))
+			}
+			markers = append(markers, labelingChunk{start, visible.Len()})
 		}
 	}
 	for index := range pieces {
@@ -178,19 +345,15 @@ func humanPieces(text string, spans []authorSpan) humanUnit {
 	if targets == 0 {
 		return humanUnit{Pieces: pieces, Exclude: "no_target_text"}
 	}
-	// Trailing excluded material is marked too.
 	flush(false, true)
-	unit := humanUnit{Pieces: pieces, Visible: visible.String()}
+	unit := humanUnit{Pieces: pieces, Visible: visible.String(), Markers: markers}
 	trimLabelingEdges(text, &unit)
-	if !meaningfulText(targetText(text, unit.Pieces)) && marked {
-		unit.Exclude = "residual_punctuation"
-	}
 	return unit
 }
 
 // trimLabelingEdges removes whitespace at the start of the first target and
-// the end of the last, adjusting byte ranges, so visible text never starts or
-// ends with it.
+// the end of the last when they open or close the visible text, adjusting
+// byte ranges, so visible text never starts or ends with it.
 func trimLabelingEdges(text string, unit *humanUnit) {
 	first, last := -1, -1
 	for index, piece := range unit.Pieces {
@@ -212,6 +375,10 @@ func trimLabelingEdges(text string, unit *humanUnit) {
 				}
 				unit.Pieces[index].VisibleEnd -= trim
 			}
+		}
+		for index := range unit.Markers {
+			unit.Markers[index].Start -= trim
+			unit.Markers[index].End -= trim
 		}
 	}
 	if piece := &unit.Pieces[last]; piece.VisibleEnd == len(unit.Visible) && piece.Transform == "" {
@@ -305,9 +472,11 @@ type labelingChunk struct{ Start, End int }
 // chunkLabelingText splits text into chunks of at most limit code points
 // (chunking-v1): at the last paragraph break in the second half of the
 // window, else the last sentence end there, else the last whitespace, else
-// between characters, never inside a UTF-8 sequence or before a combining
-// mark. The chunks concatenate to text exactly.
-func chunkLabelingText(text string, limit int) []labelingChunk {
+// between characters. A cut never falls inside a UTF-8 sequence, before a
+// character that joins the previous one (combining marks, joiners, variation
+// selectors, emoji modifiers, the second of a flag's regional indicators), or
+// inside a protected range (a marker). The chunks concatenate to text exactly.
+func chunkLabelingText(text string, limit int, protected []labelingChunk) []labelingChunk {
 	chunks := []labelingChunk{}
 	for start := 0; start < len(text); {
 		end, count := start, 0
@@ -340,13 +509,22 @@ func chunkLabelingText(text string, limit int) []labelingChunk {
 		}
 		if cut == 0 {
 			cut = len(window)
-			for cut > 0 && joinsPrevious(window, cut) {
-				_, size := utf8.DecodeLastRuneInString(window[:cut])
-				cut -= size
+		}
+		for _, r := range protected {
+			if r.Start < start+cut && start+cut < r.End {
+				cut = r.Start - start
+				if cut <= 0 {
+					cut = r.End - start
+				}
 			}
-			if cut == 0 {
-				cut = len(window)
-			}
+		}
+		// Judged against the whole text: the next character may lie past the window.
+		for cut > 0 && joinsPrevious(text, start+cut) {
+			_, size := utf8.DecodeLastRuneInString(text[:start+cut])
+			cut -= size
+		}
+		if cut == 0 {
+			cut = len(window)
 		}
 		chunks = append(chunks, labelingChunk{start, start + cut})
 		start += cut
@@ -357,13 +535,54 @@ func chunkLabelingText(text string, limit int) []labelingChunk {
 var sentenceEnd = regexp.MustCompile(`[.!?…。！？]["')\]]*\s+|\n`)
 
 // joinsPrevious reports whether the character at text[at:] attaches to the
-// one before it: a combining mark, joiner, variation selector, or emoji
-// modifier, or anything after a zero-width joiner.
+// one before it: a combining mark, joiner, variation selector, emoji modifier
+// or tag, anything after a zero-width joiner, or a regional indicator that
+// completes a flag.
 func joinsPrevious(text string, at int) bool {
+	if at <= 0 || at >= len(text) {
+		return false
+	}
 	next, _ := utf8.DecodeRuneInString(text[at:])
 	previous, _ := utf8.DecodeLastRuneInString(text[:at])
+	if regionalIndicator(next) && regionalIndicator(previous) {
+		count := 0
+		for at > 0 {
+			r, size := utf8.DecodeLastRuneInString(text[:at])
+			if !regionalIndicator(r) {
+				break
+			}
+			count++
+			at -= size
+		}
+		return count%2 == 1
+	}
 	return unicode.Is(unicode.M, next) || next == 0x200D || previous == 0x200D || next >= 0xFE00 && next <= 0xFE0F ||
 		next >= 0xE0100 && next <= 0xE01EF || next >= 0x1F3FB && next <= 0x1F3FF || next >= 0xE0020 && next <= 0xE007F
+}
+
+func regionalIndicator(r rune) bool { return r >= 0x1F1E6 && r <= 0x1F1FF }
+
+// labelingSentences splits the bytes [start, end) of text into sentences
+// (sentences-v1): after sentence-ending punctuation followed by space, and at
+// line breaks, without surrounding whitespace.
+func labelingSentences(text string, start, end int) [][2]int {
+	sentences := [][2]int{}
+	add := func(from, to int) {
+		value := text[from:to]
+		trimmed := strings.TrimLeftFunc(value, unicode.IsSpace)
+		from += len(value) - len(trimmed)
+		to = from + len(strings.TrimRightFunc(trimmed, unicode.IsSpace))
+		if to > from {
+			sentences = append(sentences, [2]int{from, to})
+		}
+	}
+	from := start
+	for _, match := range sentenceEnd.FindAllStringIndex(text[start:end], -1) {
+		add(from, start+match[1])
+		from = start + match[1]
+	}
+	add(from, end)
+	return sentences
 }
 
 // The historical extractor's secret redaction, applied to context.
