@@ -99,11 +99,12 @@ export type AnalysisCatalog = {
   // A dataset without one of them (no hour field, say) leaves it out, and the
   // trend offers it disabled.
   periods: Partial<Record<TrendPeriodField, string>>;
-  // The day-boundary rule. Records with a true timestamp are placed in
-  // calendar periods of the viewer's time zone (dateGrouping), in Over time
-  // as in the cycle, so a traveller's days agree between the two; such a
-  // catalog offers every period, hours included, and ignores periods. A
-  // day-grained ledger (usage) keeps its recorded day and hour fields.
+  // The day-boundary rule. Days, weeks and months are the recorded calendar
+  // fields (periods), as the cards group them, so the trend runs on /metrics
+  // and its supporting query is grouped. Records with a true timestamp group
+  // it for hours, in the viewer's zone (UTC clock hours placed at the local
+  // hour, dateGrouping), as the hour and weekday cycles do. A day-grained
+  // ledger (usage) keeps its recorded hour field too.
   timestamp?: string;
   request?: AnalysisRequest;
   // The trend's default measure and breakdown.
@@ -216,7 +217,7 @@ export function catalogProblems(catalog: AnalysisCatalog): string[] {
     if (components.fallback !== noSplit && !has(catalog.breakdowns, components.fallback)) problems.push(`${id} falls back to unknown breakdown ${components.fallback}.`);
   }
   if (!has(catalog.measures, catalog.trend.metric) || !trendSplit(catalog, catalog.trend.split)) problems.push("The trend's default measure or breakdown is unknown.");
-  if (!catalog.periods.day && !catalog.timestamp) problems.push("The trend needs a day field or a timestamp.");
+  if (!catalog.periods.day) problems.push("The trend needs a day field.");
   for (const [id, measure] of Object.entries(catalog.measures)) for (const part of measure.ratio ?? []) if (typeof part !== "string" && "expression" in part && !part.label) problems.push(`${id} has an expression part without a label.`);
   return problems;
 }
@@ -350,7 +351,7 @@ export function trendLimits(catalog: AnalysisCatalog, state: Pick<ResolvedAnalys
     cumulative: kind === "count" ? `A running count of distinct ${measure.unit} cannot be built from per-period counts` : kind === "level" ? `${measure.label} does not accumulate` : undefined,
     rollingSum: kind === "ratio" ? `${measure.label} pools its window; a sum of ratios means nothing` : kind === "level" ? `${measure.label} does not add up across periods` : undefined,
     multiple: kind === "count" ? `Distinct ${measure.unit} are counted per hour, day, week or month; several periods would add their counts` : undefined,
-    period: (period: ChartPeriod) => catalog.timestamp || catalog.periods[periodField(period)] ? undefined : `These records have no ${periodField(period)} to group by`,
+    period: (period: ChartPeriod) => catalog.periods[periodField(period)] || periodField(period) === "hour" && catalog.timestamp ? undefined : `These records have no ${periodField(period)} to group by`,
     norm: state.display === "cumulative" ? "A norm compares interval values, not running totals" : state.share ? "Shares have no norm" : !measure.additive && state.split !== noSplit ? `${measure.label} has no total across groups; choose no breakdown for a norm` : undefined,
     component, name,
   };

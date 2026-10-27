@@ -23,8 +23,11 @@ export function writingMessages() {
     const at = new Date(now - (index % 40 + 1) * 86400000); at.setHours(7 + index * 7 % 15, index % 60, 0, 0);
     const conversation = index % 17, work = conversation % 7;
     const typed = index % 6 === 0 ? 0 : (index % 9 + 1) * (index % 4 + 2), pasted = index % 5 === 0 ? 40 + index % 30 : 0, copied = index % 7 === 0 ? 25 : 0, prompt = index % 11 === 0 ? 12 : 0, machine = index % 13 === 0 ? 80 : 0;
+    // Message 1 was classified on a Mac in another zone: its recorded day is
+    // the day after its local date here.
+    const recorded = index === 1 ? calendar(at.getTime() + 86400000) : calendar(at);
     return {
-      id: `message-${index}`, sent_at: at.toISOString(), ...calendar(at),
+      id: `message-${index}`, sent_at: at.toISOString(), ...recorded,
       typed_words: typed, pasted_words: pasted, copied_words: copied, prompt_words: prompt, machine_words: machine, words: typed + pasted + copied + prompt + machine,
       message_count: 1, conversation_id: `conversation-${conversation}`, work_id: `work-${work}`, workspace_id: `work-${work}`, repository_name: repositories[work % 3],
       provider: conversation % 2 ? "claude" : "codex", source_kind: conversation % 2 ? "claude" : "codex", channel: conversation % 3 ? "desktop" : "cli",

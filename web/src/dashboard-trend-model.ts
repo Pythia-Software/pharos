@@ -14,6 +14,10 @@ import { aggregate, completeStart, partClause, partLabel, periodField, measureEx
 export const trendPeriodCount = (state: Pick<ResolvedAnalysis, "period" | "hours" | "days">) => state.period === "hours" ? state.hours : state.period === "days" ? state.days : 1;
 const localZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
+// Whether this trend groups the catalog's timestamp: hours, where the
+// dataset records no hour of its own.
+export const timestampHours = (catalog: AnalysisCatalog, state: Pick<ResolvedAnalysis, "period">) => periodField(state.period) === "hour" && !catalog.periods.hour && Boolean(catalog.timestamp);
+
 export type TrendQuery = {
   // The executed query: interval amounts by period and series.
   query: QueryState;
@@ -40,11 +44,12 @@ export type TrendQuery = {
 export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where: WhereTerm[], { now = Date.now(), zone = localZone() }: { now?: number; zone?: string } = {}): TrendQuery {
   const state = normalizeAnalysis(catalog, { ...input, view: "trend" }), measure = catalog.measures[state.metric];
   const breakdown = catalog.breakdowns[state.split], components = catalog.components?.[state.split];
-  const count = trendPeriodCount(state), field = catalog.timestamp ?? catalog.periods[periodField(state.period)]!, cumulative = state.display === "cumulative";
-  // A timestamp is placed in the viewer's calendar periods; hours are UTC
-  // hours, as in the cycle, which the chart places at the viewer's hour.
-  const interval = periodField(state.period);
-  const dateGrouping = catalog.timestamp ? { dateGrouping: { field, interval, timeZone: interval === "hour" ? "UTC" : zone, includeEmpty: false, range: "query" as const } } : {};
+  // Days, weeks and months are recorded calendar fields. Hours of a
+  // timestamped dataset group the timestamp by UTC hour, as the hour cycle
+  // does, and the chart places each at the viewer's hour.
+  const interval = periodField(state.period), hourly = timestampHours(catalog, state);
+  const count = trendPeriodCount(state), field = hourly ? catalog.timestamp! : catalog.periods[interval]!, cumulative = state.display === "cumulative";
+  const dateGrouping = hourly ? { dateGrouping: { field, interval, timeZone: "UTC", includeEmpty: false, range: "query" as const } } : {};
   const slice = breakdown?.fields.length === 1 ? breakdown.fields[0] : undefined;
   const range = state.completePeriods ? completeStart(where, catalog.time, zone, now, periodField(state.period)) : where;
   const run = (terms: WhereTerm[]) => catalog.executable ? catalog.executable(terms, now) : terms;
@@ -82,10 +87,10 @@ export function trendQuery(catalog: AnalysisCatalog, input: AnalysisState, where
   }
   return {
     query: { ...EMPTY_QUERY, where: run(unique([...requested, ...population])), aggregations: clauses },
-    // A grouping stage cannot group a timestamp by calendar period (Query
-    // Table request 6), so a timestamp trend's supporting query opens the
+    // A grouping stage cannot group a timestamp by hour (Query Table
+    // request 6), so an hourly timestamp trend's supporting query opens the
     // records it draws, as a timestamp cycle's does.
-    supporting: { ...EMPTY_QUERY, where: run(unique([...shown, ...population])), ...catalog.timestamp ? {} : { aggregations: supporting } },
+    supporting: { ...EMPTY_QUERY, where: run(unique([...shown, ...population])), ...hourly ? {} : { aggregations: supporting } },
     range, requested, population, slice, normFrom, normTo,
     records: unique([...population, ...trendKind(measure) === "count" && measure.field ? [{ field: measure.field, op: "is_not_null" as const, value: "" }, { field: measure.field, op: "!=" as const, value: "" }] : []]),
   };
@@ -279,7 +284,8 @@ export function trendNote(catalog: AnalysisCatalog, input: AnalysisState): strin
   if (catalog.breakdowns[state.split]?.note) parts.push(catalog.breakdowns[state.split].note!);
   if (catalog.rangeNote) parts.push(catalog.rangeNote);
   if (catalog.request?.note) parts.push(catalog.request.note);
-  if (catalog.timestamp) parts.push(`Periods are ${periodField(state.period) === "hour" ? "clock hours, placed at your local hour" : `${periodLabel(state.period, 1)}s in your time zone`}, as in the hour and weekday cycle.`);
+  if (timestampHours(catalog, state)) parts.push("Hours are clock hours of each record's time, placed at your local hour, as in the hour cycle.");
+  else if (catalog.timestamp) parts.push(`${periodLabel(state.period, 1)[0].toUpperCase()}${periodLabel(state.period, 1).slice(1)}s are the recorded calendar dates, as the cards count them; the hour and weekday cycles place each record in your time zone, so after a time-zone change a late-evening record can fall on different days in the two.`);
   const part = (index: 0 | 1) => partLabel(measure.ratio![index]);
   if (kind === "ratio") parts.push(`Each point pools its records: ${part(0)} divided by ${part(1)}, never an average of ratios.`);
   if (kind === "count") parts.push(`Distinct ${measure.unit} are counted in each ${unit}.${state.split === noSplit ? "" : ` One active in several groups counts in each, so groups do not add up, and Other is not drawn.`}`);

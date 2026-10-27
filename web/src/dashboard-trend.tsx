@@ -2,7 +2,7 @@ import React, { useMemo } from "react";
 import type { FieldSchema, WhereTerm } from "@pythia-software/query-table-core";
 import { AnalysisControls, useAnalysisResult } from "./dashboard-analysis";
 import { changeState, normalizeAnalysis, partField, rollingSumUnit, trendAdjustments, trendKind, type AnalysisCatalog, type AnalysisMeasure, type AnalysisState, type AnalysisView } from "./dashboard-analysis-model";
-import { trendNote, trendPeriodCount, trendQuery, trendSeries, trendTitle } from "./dashboard-trend-model";
+import { timestampHours, trendNote, trendPeriodCount, trendQuery, trendSeries, trendTitle } from "./dashboard-trend-model";
 import type { LocalRows } from "./analysis-request";
 import { StackedColumns, pickRange, timeBounds, withTimeRange, type FilterChange } from "./usage-chart";
 import { updateSlice, type LegendAction } from "./chart-selection";
@@ -94,7 +94,7 @@ export function AnalysisTrend<T extends AnalysisState>({ catalog, schema, datase
     {children}
     {links ? <>
       <UsageDashboardLinks schema={schema} dataset={dataset} query={trend.supporting} currentURL={currentURL} />
-      <p className="usage-dashboard-note">{trendNote(catalog, view)} Click a column or point to pin its key, then follow a series to its contributing records. Drag across two or more periods to filter dates. Select legend entries to compare or exclude series. {catalog.timestamp ? "Totals by calendar period of a timestamp cannot yet open as a grouped query, so the link opens the records drawn." : "Grouped rows show the interval amounts before smoothing, accumulation, shares or folding."}</p>
+      <p className="usage-dashboard-note">{trendNote(catalog, view)} Click a column or point to pin its key, then follow a series to its contributing records. Drag across two or more periods to filter dates. Select legend entries to compare or exclude series. {timestampHours(catalog, view) ? "Hourly totals of a timestamp cannot yet open as a grouped query, so the link opens the records drawn." : "Grouped rows show the interval amounts before smoothing, accumulation, shares or folding."}</p>
     </> : null}
   </section>;
 }

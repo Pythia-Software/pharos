@@ -308,36 +308,45 @@ test("collected cards compare dashboard charts as drawn: defaults filled, keys s
 // ----- 2c engine items -------------------------------------------------------
 
 const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-test("one day boundary: Over time places timestamps in the viewer's periods, as the cycle does, and offers hours", () => {
-  // Days another Mac recorded in its own zone: the trend no longer reads them.
-  const moved = rows.mcp_calls.map(row => ({ ...row, day: "2001-01-01", week: "2001-01-01", month: "2001-01" }));
+test("the day boundary: Over time's days are the recorded days the cards count; hours and cycles use the viewer's zone", () => {
+  // One request recorded by a Mac in another zone: its recorded day is the
+  // day after its local date here.
+  const moved = rows.mcp_calls.map((row, index) => {
+    if (index) return row;
+    const next = new Date(row.called_at); next.setDate(next.getDate() + 1);
+    return { ...row, day: `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-${String(next.getDate()).padStart(2, "0")}` };
+  });
   const where = month(mcp), state = { metric: "calls", split: "none" };
   const query = trendQuery(mcp, state, where, { now, zone: localZone });
-  assert.deepEqual(query.query.aggregations[0].dateGrouping, { field: "called_at", interval: "day", timeZone: localZone, includeEmpty: false, range: "query" });
+  assert.deepEqual(query.query.aggregations[0].groupBy, ["day"]);
+  assert.equal(query.query.aggregations[0].dateGrouping, undefined, "days run on /metrics");
+  assert.ok(query.supporting.aggregations?.length, "and their supporting query is grouped");
   const built = trendSeries(mcp, state, query, core.evaluateMetrics(moved, query.query, schemas.mcp_calls, { now }).metrics, { now });
-  const local = date => { const at = new Date(date); return `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`; };
-  const expected = {};
-  for (const row of moved) if (Date.parse(row.called_at) >= Date.parse(where[0].value)) expected[local(row.called_at)] = (expected[local(row.called_at)] ?? 0) + 1;
-  assert.deepEqual(Object.fromEntries(built.buckets.filter(bucket => bucket.values.total).map(bucket => [bucket.key, bucket.values.total])), expected);
-  // The weekday cycle's days are the same days.
+  const recorded = {}, local = date => { const at = new Date(date); return `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`; };
+  for (const row of moved) if (Date.parse(row.called_at) >= Date.parse(where[0].value)) recorded[row.day] = (recorded[row.day] ?? 0) + 1;
+  assert.deepEqual(Object.fromEntries(built.buckets.filter(bucket => bucket.values.total).map(bucket => [bucket.key, bucket.values.total])), recorded, "the trend files the moved request under its recorded day");
+  // The weekday cycle's days are the viewer's: the moved request is on its
+  // local date, not its recorded one (the documented trade-off).
   const cycle = analysisQuery(mcp, { view: "cycle", cycle: "weekday", metric: "calls", split: "none" }, where, { now, zone: localZone });
-  for (const bucket of core.evaluateMetrics(moved, cycle.query, schemas.mcp_calls, { now }).metrics[0].buckets) if (bucket.value) assert.equal(bucket.value, expected[local(bucket.keys[0])], String(bucket.keys[0]));
-  // Hours: every catalog with a timestamp offers them, as UTC clock hours.
+  const daily = Object.fromEntries(core.evaluateMetrics(moved, cycle.query, schemas.mcp_calls, { now }).metrics[0].buckets.filter(bucket => bucket.value).map(bucket => [local(bucket.keys[0]), bucket.value]));
+  const viewer = {};
+  for (const row of moved) if (Date.parse(row.called_at) >= Date.parse(cycle.query.where.find(term => term.op === ">=").value)) viewer[local(row.called_at)] = (viewer[local(row.called_at)] ?? 0) + 1;
+  assert.deepEqual(daily, viewer);
+  assert.notEqual(local(moved[0].called_at), moved[0].day);
+  assert.match(trendNote(mcp, state), /after a time-zone change a late-evening record can fall on different days/);
+  // Hours: every catalog with a timestamp offers them, as UTC clock hours,
+  // whose supporting query opens records.
   for (const catalog of [mcp, time, skills]) {
     assert.equal(trendAdjustments(catalog, { metric: catalog.trend.metric, split: "none", period: "hour" }).length, 0, catalog.dataset);
     const hours = trendQuery(catalog, { metric: catalog.trend.metric, split: "none", period: "hour" }, where.map(term => ({ ...term, field: catalog.time.first })), { now, zone: localZone });
-    assert.equal(hours.query.aggregations[0].dateGrouping.timeZone, "UTC");
+    assert.deepEqual(hours.query.aggregations[0].dateGrouping, { field: catalog.timestamp, interval: "hour", timeZone: "UTC", includeEmpty: false, range: "query" });
+    assert.equal(hours.supporting.aggregations, undefined);
     const drawn = trendSeries(catalog, { metric: catalog.trend.metric, split: "none", period: "hour" }, hours, run(catalog, hours.query), { now });
     assert.equal(drawn.error, undefined);
     assert.ok(drawn.buckets.length > 24 * 29 && drawn.buckets.some(bucket => bucket.values.total), catalog.dataset);
   }
-  assert.match(trendNote(mcp, state), /days in your time zone, as in the hour and weekday cycle/);
-  // A grouping stage cannot group a timestamp by calendar period, so the
-  // supporting query opens the records drawn.
-  assert.equal(query.supporting.aggregations, undefined);
-  // Usage keeps its recorded days.
-  assert.equal(tokenAnalysisCatalog.timestamp, undefined);
-  assert.equal(trendQuery(tokenAnalysisCatalog, { metric: "tokens", split: "none" }, [], { now }).query.aggregations[0].dateGrouping, undefined);
+  // Usage keeps its recorded hours.
+  assert.equal(trendQuery(tokenAnalysisCatalog, { metric: "tokens", split: "none", period: "hour" }, [], { now }).query.aggregations[0].dateGrouping, undefined);
 });
 
 test("a ratio part may state a condition: the empty-search rate pools zero-result searches per period and group", () => {
@@ -381,7 +390,7 @@ test("a catalog's request: its parameters reach every request, and its populatio
   };
   t.after(() => { global.fetch = prior; });
   await runAnalysisQuery("mcp_calls", schemas.mcp_calls, compare.query, { params: catalog.request.params });
-  await runAnalysisQuery("mcp_calls", schemas.mcp_calls, trend.query, { params: catalog.request.params });
+  await runAnalysisQuery("mcp_calls", schemas.mcp_calls, trendQuery(catalog, { metric: "calls", split: "tool_name", period: "hour" }, where, { now }).query, { params: catalog.request.params });
   const encoded = new URLSearchParams(catalog.request.params).toString();
   assert.deepEqual(requests, [`/api/query/mcp_calls/metrics?${encoded}`, "/api/query/mcp_calls/capabilities", `/api/query/mcp_calls/query-v3?${encoded}`]);
 });

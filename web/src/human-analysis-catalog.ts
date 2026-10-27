@@ -70,7 +70,7 @@ export const humanAnalysisCatalog: AnalysisCatalog = {
       note: "A work is one workspace's conversations with the delegated work folded into it (work_id), as Human words by workspace counts them; it is not a working directory. Only its messages in the range count." },
   },
   cycle: { hour: { kind: "timestamp", field: "sent_at" }, weekday: { kind: "timestamp", field: "sent_at" } },
-  periods: {}, timestamp: "sent_at",
+  periods: { day: "day", week: "week", month: "month" }, timestamp: "sent_at",
   trend: { metric: "typed", split: "none" },
   legacy, legacySlices: true,
   scatter: ["typed", "words"],

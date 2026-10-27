@@ -164,6 +164,20 @@ test("human-words and human-repository-words-trend: typed words a day, and a 7-d
   }
 });
 
+test("a message recorded on another Mac's day: the day trend files it as the card does, the weekday cycle on your local day", () => {
+  const message = cardRows.writing_messages[1], local = new Date(message.sent_at).toLocaleDateString("en-CA");
+  assert.notEqual(message.day, local, "the fixture's recorded day differs from its local day");
+  const where = withTimeRange([], human.time, undefined, undefined, "7d"), state = { metric: "typed", split: "none" };
+  const query = trendQuery(human, state, where, { now, zone }), built = trendSeries(human, state, query, core.evaluateMetrics(cardRows.writing_messages, query.query, schemas.writing_messages, { now }).metrics, { now });
+  const card = core.evaluateMetrics(cardRows.writing_messages, cardCoverQuery(instantiateRecipe(recipeById("human-words"), 7, new Date(now)).query, recipeById("human-words")).query, schemas.writing_messages, { now }).metrics[0];
+  const recorded = Object.fromEntries(card.buckets.map(bucket => [bucket.keys[0], bucket.value]));
+  assert.equal(built.buckets.find(bucket => bucket.key === message.day).values.total, recorded[message.day], "the recorded day holds the message on both");
+  const cycle = analysisQuery(human, { view: "cycle", cycle: "weekday", metric: "typed", split: "none" }, where, { now, zone });
+  const days = Object.fromEntries(core.evaluateMetrics(cardRows.writing_messages, cycle.query, schemas.writing_messages, { now }).metrics[0].buckets.map(bucket => [new Date(String(bucket.keys[0])).toLocaleDateString("en-CA"), bucket.value]));
+  const viewer = cardRows.writing_messages.filter(row => new Date(row.sent_at).toLocaleDateString("en-CA") === local && Date.parse(row.sent_at) >= Date.parse(cycle.query.where.find(term => term.op === ">=").value)).reduce((sum, row) => sum + row.typed_words, 0);
+  assert.equal(days[local], viewer, "the cycle files it on its local day");
+});
+
 // A trailing-window card through buildCardTrend, opened on "Last 30 days" at
 // 14:00 (dashboard-parity.test.mjs): the dashboard's points and norm are the
 // card's.

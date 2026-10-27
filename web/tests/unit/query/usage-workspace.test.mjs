@@ -20,9 +20,7 @@ import { mcpAnalysisCatalog } from "../../../src/mcp-analysis-catalog.ts";
 import { toolsAnalysisCatalog } from "../../../src/tools-analysis-catalog.ts";
 import { agentTimeAnalysisCatalog, skillsAnalysisCatalog } from "../../../src/record-analysis-catalogs.ts";
 // A dashboard's trend clause, as its supporting query carries it.
-// A timestamp trend's supporting query opens records (Query Table request
-// 6), so these dashboards' grouped links come from Compare.
-const trendClause = (catalog, state) => trendQuery(catalog, state, [], { now: Date.parse("2026-10-20T12:00:00Z") }).supporting.aggregations?.[0] ?? analysisQuery(catalog, { ...state, view: "compare" }, []).clause;
+const trendClause = (catalog, state) => trendQuery(catalog, state, [], { now: Date.parse("2026-10-20T12:00:00Z") }).supporting.aggregations[0];
 import { timeBounds, usageTime, withTimeRange, smoothingWhere } from "../../../src/usage-chart.tsx";
 import { dashboardQueryDetails, dashboardQueryLinks, dashboardQuerySentence } from "../../../src/dashboard-query-links.ts";
 import { dashboardChartURL } from "../../../src/dashboard-chart-links.ts";

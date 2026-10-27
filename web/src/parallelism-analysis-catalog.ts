@@ -38,7 +38,7 @@ export function parallelismAnalysisCatalog(settings?: ParallelismRequest): Analy
         note: "An agent is one workspace, or one top-level session, by your counting setting; its repository and origin are constant." },
     },
     cycle: { hour: { kind: "timestamp", field: "started_at" }, weekday: { kind: "timestamp", field: "started_at" } },
-    periods: {}, timestamp: "started_at",
+    periods: { day: "day", week: "week", month: "month" }, timestamp: "started_at",
     request: settings ? { where, note: `Records count ${settings.counting === "agent" ? "top-level sessions" : "workspaces"} and join turns across gaps up to ${settings.gap} minutes: your saved Parallelism settings, with which the service builds them.` } : undefined,
     trend: { metric: "agent_hours", split: "level_band" },
     scatter: ["agent_hours", "active_hours"],

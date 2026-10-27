@@ -34,10 +34,10 @@ export const mcpAnalysisCatalog: AnalysisCatalog = {
   },
   units: {},
   records: { label: "Pharos request", plural: "Pharos requests", note: "The latest 5,000 requests are retained, so a long range can hold fewer than were made." },
-  // Requests are timestamps: hours and local days come from called_at, in
-  // Over time as in the cycle.
+  // Requests are timestamps: the cycles' hours and local days come from
+  // called_at, as do Over time's hours; its days are the recorded day.
   cycle: { hour: { kind: "timestamp", field: "called_at" }, weekday: { kind: "timestamp", field: "called_at" } },
-  periods: {}, timestamp: "called_at",
+  periods: { day: "day", week: "week", month: "month" }, timestamp: "called_at",
   trend: { metric: "calls", split: "tool_name" },
   scatter: ["calls", "output"],
 };
