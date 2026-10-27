@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadClassicScript, plain } from './helpers/classic-script.mjs';
-const model = loadClassicScript('ask-model.js');
+const model = loadClassicScript('ask-model.js',{TextEncoder,TextDecoder});
 
 test('Ask composer keeps search available while draft and conversation controls follow content', () => {
   const actions = state => plain(model.askComposerActions({enabled:true, model:'available-model', ...state}));
@@ -18,6 +18,55 @@ test('a single destination opens for any question, while editing or search suppr
   assert.equal(navigate({}), true);
   for (const prompt of ['Where am I wasting time?', 'Please show me yesterday’s page', 'Take me to my earlier chat', 'Go to Settings', 'Find my work']) assert.equal(navigate({prompt}),true);
   for (const state of [{cards:[]}, {cards:[{},{}]}, {draft:' '}, {draft:'Actually…'}, {edited:true}, {regular:true}, {enabled:false}]) assert.equal(navigate(state),false);
+});
+test('retrying with another model restores the full conversation and unsent draft in order', () => {
+  const turns=[
+    {prompt:'Find slow commands\nin this project',status:'clarification',clarification:{question:'Which period?',options:['This week','Last week']}},
+    {prompt:'This week',status:'multiple',reply:'Here are some views.',cards:[{title:'Usage',description:'Explore commands',href:'/analyze'}]},
+    {prompt:'This week',status:'error',reply:'No response'},
+  ];
+  const expected='You:\nFind slow commands\nin this project\n\nPharos:\nWhich period?\n\n- This week\n\n- Last week\n\nYou:\nThis week\n\nPharos:\nHere are some views.\n\nUsage\nExplore commands\n/analyze\n\nYou:\nThis week\n\nPharos (error):\nNo response';
+  assert.equal(model.askRetryDraft({turns}),expected);
+  assert.equal(model.askRetryDraft({turns,draft:'  Focus on build commands\nand tests  '}),expected+'\n\nYou (unsent draft):\n  Focus on build commands\nand tests  ');
+  assert.equal(model.askRetryDraft({turns,draft:'  '}),expected);
+  assert.equal(model.askRetryDraft({}), '');
+  assert.equal(model.askRetryDraft({turns:[{prompt:'Try this',status:'canceled',reply:'Request canceled'}]}),'You:\nTry this\n\nPharos (canceled):\nRequest canceled');
+  assert.equal(model.askRetryDraft({turns:[{prompt:'Hello',reply:''}]}),'You:\nHello');
+});
+test('retry transcripts fit the server byte limit while prioritizing recent turns and the unsent draft', () => {
+  const turns=[
+    {prompt:'Older question',reply:'A'.repeat(8000)},
+    {prompt:'Recent question',reply:'B'.repeat(8000)},
+    {prompt:'Latest question',status:'error',reply:'No response'},
+  ];
+  const draft='Keep this unsent question.';
+  const text=model.askRetryDraft({turns,draft});
+  assert.ok(Buffer.byteLength(text,'utf8')<=12000);
+  assert.ok(text.startsWith('[Earlier conversation omitted or shortened to fit.]'));
+  assert.ok(!text.includes('Older question'));
+  assert.ok(text.includes('Recent question\n\nPharos:\n'+'B'.repeat(8000)));
+  assert.ok(text.includes('Latest question\n\nPharos (error):\nNo response'));
+  assert.ok(text.endsWith('You (unsent draft):\n'+draft));
+  assert.equal(turns[0].reply.length,8000,'formatting must not modify the saved conversation');
+});
+test('retry transcript limits count UTF-8 bytes, including labels, and safely shorten oversized messages', () => {
+  const exact={turns:[{prompt:'x'.repeat(11995)}]};
+  assert.equal(Buffer.byteLength(model.askRetryDraft(exact),'utf8'),12000);
+  assert.equal(model.askRetryDraft(exact),'You:\n'+'x'.repeat(11995),'an exactly fitting transcript needs no omissions');
+  const cases=[
+    {turns:[{prompt:'x'.repeat(11996)}]},
+    {turns:[{prompt:'p'.repeat(11000),reply:'r'.repeat(8000)}]},
+    {turns:[{prompt:'é漢🧭'.repeat(2000),reply:'Reply'}],draft:'Keep my draft'},
+    {turns:[{prompt:'Earlier question'}],draft:'🧭'.repeat(3000)},
+  ];
+  for(const input of cases){
+    const text=model.askRetryDraft(input);
+    assert.ok(Buffer.byteLength(text,'utf8')<=12000,'labels and notices must fit the same byte budget');
+    assert.ok(text.includes('[Message shortened.]'));
+    assert.equal(text,text.toWellFormed(),'truncation must preserve complete Unicode code points');
+    assert.ok(!text.includes('\ufffd'),'truncation must not replace part of a code point');
+    if(input.draft==='Keep my draft')assert.ok(text.endsWith('You (unsent draft):\nKeep my draft'));
+  }
 });
 test('chat URLs preserve unrelated parameters and support replacing and clearing the active chat', () => {
   const original='http://pharos.test/?token=local&range=week#composer';
