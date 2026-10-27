@@ -585,7 +585,9 @@ progress is, and the next run redoes it.
   and `on_eject` (what a release does to it). Kinds: `sync` and `index` (runs),
   `capture` (by the service), `capture-other` (another process on this Mac,
   such as `pharos capture`, holds the capture lock; Pharos cannot stop it,
-  and it keeps the drive busy), `backup` (reads the library, writes elsewhere),
+  and it keeps the drive busy), `backup` (a local backup, which also writes the library's `backups.json`,
+  or a cloud upload, verification or destination test, which stage files on
+  the drive),
   `git` (the main-branch merge lookup that follows a sync or an index, or the
   first scan of a catalog), and `maintenance` (among others, Library view rows
   still to be indexed, listed once that has run for 15 seconds: those an

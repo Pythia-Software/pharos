@@ -46,8 +46,8 @@ type libraryActivity struct {
 	EstimatedCompletionScope string            `json:"estimated_completion_scope,omitempty"`
 	Work                     *activityWork     `json:"work,omitempty"`
 	Estimate                 *activityEstimate `json:"estimate,omitempty"`
-	// Writes is true for work that writes to the library's drive; a backup
-	// only reads it.
+	// Writes is true for work that writes to the library's drive. Every
+	// activity listed today does (a backup writes backups.json there).
 	Writes bool `json:"writes"`
 	// OnEject says what a release before an eject does to it.
 	OnEject string `json:"on_eject"`
@@ -331,8 +331,11 @@ func (s *Server) libraryActivities() []libraryActivity {
 	if active, runs := s.backups.status(); active && len(runs) > 0 {
 		run := runs[0]
 		detail := fmt.Sprintf("To %s · %s · %s copied", run.Destination, defaultString(run.Phase, "starting"), humanBytes(run.BytesCopied))
+		// A backup mostly reads the library, but it writes the library's
+		// backups.json (its id on the first backup, and each finished
+		// backup), so it writes to the drive.
 		activities = append(activities, libraryActivity{ID: run.ID, Kind: "backup", Label: "Backing up", Detail: detail, StartedAt: run.StartedAt,
-			Work:    &activityWork{Phase: run.Phase, Unit: "byte", Done: float64(run.BytesCopied)},
+			Work: &activityWork{Phase: run.Phase, Unit: "byte", Done: float64(run.BytesCopied)}, Writes: true,
 			OnEject: "Stops; the next backup carries on from what was copied."})
 	}
 	if job := s.cloud.job(); job != nil {

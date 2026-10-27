@@ -229,14 +229,15 @@ func TestLibraryStatusListsEverythingHoldingTheLibrary(t *testing.T) {
 		expect()
 	}
 
-	// A backup reads the library; it does not write to it.
+	// A backup reads the library and writes its backups.json, so it writes
+	// to the drive.
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if err := server.backups.begin(BackupRun{ID: "b1", Kind: "backup", State: "running", Phase: "catalog", Destination: "/Volumes/Other/Pharos Backup"}, cancel); err != nil {
 		t.Fatal(err)
 	}
 	status = expect("backup")
-	if status["writing"] != false || !strings.Contains(firstString(status["activities"].([]any)[0].(map[string]any)["detail"]), "/Volumes/Other/Pharos Backup · catalog") {
+	if status["writing"] != true || status["activities"].([]any)[0].(map[string]any)["writes"] != true || !strings.Contains(firstString(status["activities"].([]any)[0].(map[string]any)["detail"]), "/Volumes/Other/Pharos Backup · catalog") {
 		t.Fatalf("backup: %#v", status)
 	}
 	server.backups.update(BackupRun{ID: "b1", State: "complete"}, true)
