@@ -214,6 +214,28 @@ final class MenuFixture: URLProtocol {
         controller.refresh()
         pump { menu.items.contains { $0.title.replacingOccurrences(of: "\n", with: " ").hasPrefix("Capture & index · stage 42% · about") && $0.title.replacingOccurrences(of: "\n", with: " ").hasSuffix(" min for this stage") } }
         MenuFixture.activityExtra = [:]
+        // The broker state the menu derives "no library" and library
+        // operations from.
+        let library: [String: Any] = ["id": "a", "available": true, "connected": false]
+        let idle = ManagedLibraryStatus.answered(["selected": "a", "libraries": [library], "busy": false])!
+        precondition(!idle.noLibrary && idle.operation == nil && !idle.connected, "A selected library starting is not no library")
+        precondition(ManagedLibraryStatus().noLibrary == false, "Before the broker answers, nothing is known")
+        let none = ManagedLibraryStatus.answered(["selected": "", "libraries": [library], "busy": false, "job": ["state": "complete", "phase": "done"]])!
+        precondition(none.noLibrary && none.operation == nil)
+        let unavailable = ManagedLibraryStatus.answered(["selected": "a", "libraries": [["id": "a", "available": false]]])!
+        precondition(unavailable.noLibrary)
+        let recovering = ManagedLibraryStatus.answered(["selected": "", "libraries": [], "busy": true, "job": ["state": "running", "phase": "Restoring the backup"]])!
+        precondition(!recovering.noLibrary && recovering.operation == "Restoring the backup")
+        let busy = ManagedLibraryStatus.answered(["selected": "", "libraries": [], "busy": true])!
+        precondition(busy.operation == ManagedLibraryStatus.unanswered)
+        precondition(ManagedLibraryStatus.answered(["error": "x"]) == nil, "Not a state document")
+        // A failed or timed-out request (the broker holding its lock while it
+        // creates a library) keeps "Finishing" until an answer says idle.
+        let failed = none.unansweredRequest()
+        precondition(!failed.noLibrary && failed.operation == ManagedLibraryStatus.unanswered)
+        precondition(failed.current(pendingFor: nil) == failed)
+        precondition(none.current(pendingFor: 3) == none && none.current(pendingFor: 7).operation == ManagedLibraryStatus.unanswered)
+        precondition(recovering.unansweredRequest().operation == "Restoring the backup")
         let font = NSFont.menuFont(ofSize: 13)
         for text in [String(repeating: "conversation/", count: 20), "👩🏽‍💻 日本語の会話を読み込み、ライブラリのインデックスを更新しています。"] {
             let wrapped = MenuBarController.wrappedMenuTitle(text, width: 160, font: font)

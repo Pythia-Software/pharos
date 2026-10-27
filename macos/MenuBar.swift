@@ -61,6 +61,53 @@ struct MenuBarPreferences {
 
 // The template lighthouse and colored dot are separate views, so macOS can
 // tint the mark for its menu bar appearance without tinting the status dot.
+/// What the broker's /api/app/state says about the selected library and any
+/// library operation, as the native menu shows it. Pure, for the harness.
+struct ManagedLibraryStatus: Equatable {
+    static let unanswered = "Finishing a library operation…"
+    /// Whether the broker has answered at least once.
+    var known = false
+    var selected = ""
+    /// The selected library's service is up.
+    var connected = false
+    /// A library is selected and available. One whose service is not up
+    /// (starting, respawning, stopped for a delivery) is still a library.
+    var selectedAvailable = false
+    /// A library operation the broker reports (recover, transfer, delivery),
+    /// or one it is too busy to report: creating a library holds the lock
+    /// /api/app/state waits for.
+    var operation: String?
+
+    var noLibrary: Bool { known && !selectedAvailable && operation == nil }
+
+    /// A successful answer; nil if it is not a state document.
+    static func answered(_ state: [String: Any]) -> ManagedLibraryStatus? {
+        guard let libraries = state["libraries"] as? [[String: Any]] else { return nil }
+        let selected = state["selected"] as? String ?? ""
+        let entry = selected.isEmpty ? nil : libraries.first { $0["id"] as? String == selected }
+        let job = state["job"] as? [String: Any]
+        let running = job?["state"] as? String == "running"
+        let operating = state["busy"] as? Bool == true || running
+        return ManagedLibraryStatus(known: true, selected: selected, connected: entry?["connected"] as? Bool == true,
+            selectedAvailable: entry?["available"] as? Bool == true,
+            operation: operating ? ((running ? job?["phase"] as? String : nil) ?? unanswered) : nil)
+    }
+
+    /// A request that failed or timed out: assume the broker is busy until a
+    /// successful answer says nothing is running.
+    func unansweredRequest() -> ManagedLibraryStatus {
+        var status = self
+        status.operation = status.operation ?? Self.unanswered
+        return status
+    }
+
+    /// What to show while a request has been waiting pendingFor seconds.
+    func current(pendingFor: TimeInterval?) -> ManagedLibraryStatus {
+        if let pendingFor, pendingFor > 6 { return unansweredRequest() }
+        return self
+    }
+}
+
 final class MenuBarDot: NSView {
     var color = NSColor.systemYellow { didSet { needsDisplay = true } }
     override func draw(_ dirtyRect: NSRect) {

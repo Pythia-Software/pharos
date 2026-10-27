@@ -103,23 +103,14 @@ final class ArchiveService: ObservableObject {
     private var managedLibraryConnected = false
     private var managedSelectedLibrary = ""
     var hasConnectedLibrary: Bool { !managedApplication || managedLibraryConnected }
-    // Whether the broker has answered, and whether it names a selected
-    // library that is available. A selected library whose service is not up
-    // (starting, respawning, stopped for a delivery) is not "no library".
-    private var managedLibraryKnown = false
-    private var managedSelectedAvailable = false
-    // A library operation the broker reports (recover, transfer, delivery),
-    // or one it is too busy to report: /api/app/state waits for the broker's
-    // lock, which creating a library holds.
-    private var managedOperationPhase: String?
+    // What the broker last said (see ManagedLibraryStatus in MenuBar.swift).
+    private var managedStatus = ManagedLibraryStatus()
     private var managedStateRequestedAt = Date.distantPast
-    var libraryOperation: String? {
-        guard managedApplication else { return nil }
-        if let phase = managedOperationPhase { return phase }
-        if managedLibraryStateTask != nil, Date().timeIntervalSince(managedStateRequestedAt) > 6 { return "Finishing a library operation…" }
-        return nil
+    private var currentManagedStatus: ManagedLibraryStatus {
+        managedStatus.current(pendingFor: managedLibraryStateTask == nil ? nil : Date().timeIntervalSince(managedStateRequestedAt))
     }
-    var noLibrarySelected: Bool { managedApplication && managedLibraryKnown && !managedSelectedAvailable && libraryOperation == nil }
+    var libraryOperation: String? { managedApplication ? currentManagedStatus.operation : nil }
+    var noLibrarySelected: Bool { managedApplication && currentManagedStatus.noLibrary }
     @Published var error: String?
     @Published var status = "Starting local archive…"
     @Published var disconnected: Disconnection?
@@ -271,17 +262,18 @@ final class ArchiveService: ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.managedLibraryStateTask = nil
-                guard !self.shuttingDown, self.lock.withLock({ self.endpoint?.url == broker.url }),
-                      let state, let libraries = state["libraries"] as? [[String: Any]] else { return }
-                let selected = state["selected"] as? String ?? ""
+                guard !self.shuttingDown, self.lock.withLock({ self.endpoint?.url == broker.url }) else { return }
+                guard let state, let status = ManagedLibraryStatus.answered(state), let libraries = state["libraries"] as? [[String: Any]] else {
+                    // The broker may be holding its lock for a library
+                    // operation; keep saying so until it answers.
+                    self.managedStatus = self.managedStatus.unansweredRequest()
+                    return
+                }
+                self.managedStatus = status
+                let selected = status.selected
                 let generation = (state["generation"] as? NSNumber)?.stringValue ?? "0"
-                let connected = libraries.contains { $0["id"] as? String == selected && $0["connected"] as? Bool == true }
+                let connected = status.connected
                 self.managedLibraryConnected = connected
-                self.managedLibraryKnown = true
-                let job = state["job"] as? [String: Any]
-                let operating = state["busy"] as? Bool == true || job?["state"] as? String == "running"
-                self.managedOperationPhase = operating ? ((job?["state"] as? String == "running" ? job?["phase"] as? String : nil) ?? "Finishing a library operation…") : nil
-                self.managedSelectedAvailable = !selected.isEmpty && libraries.contains { $0["id"] as? String == selected && $0["available"] as? Bool == true }
                 self.managedSelectedLibrary = selected
                 let connection = "\(selected):\(generation):\(connected)"
                 if self.libraryConnection != connection { self.libraryConnection = connection }
