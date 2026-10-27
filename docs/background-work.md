@@ -1105,7 +1105,8 @@ recent rows and `freshness: []`; it has no stream. `GET /api/status?fresh=1`
                  "catching_up": null, "catching_up_label": null, "next": "updates with the next manual index"}],
   "freshness_summary": {"all_current": false, "checked_at": null, "groups": [{"group": "analyses", "label": "Analyses", "state": "behind",
                          "short": "waits for manual index", "text": "behind, updates with the next manual index", "as_of": "…", "shown": true}]},
-  "resources": null,
+  "resources": {"cpu_percent": 3, "memory_bytes": 340000000, "label": "Pharos is using ~3% of one core · 340 MB", "…": "§10"},
+  "headings": {"work": "Work", "data": "Data"},
   "journal": {"dropped": 0}
 }
 ```
@@ -1127,7 +1128,9 @@ recent rows and `freshness: []`; it has no stream. `GET /api/status?fresh=1`
   early estimate"); otherwise `label` is null and surfaces show only "step
   N of M".
 - `freshness` (the §5 rows) and `freshness_summary` are filled from phase
-  3; `resources` is filled in phase 4 and is `null` until then.
+  3; `resources` (§10) from phase 4, `null` when nothing could be read.
+  `headings` (`{"work": "Work", "data": "Data"}`) are the words over Show
+  all's two parts.
   `/api/operations` keeps `freshness: []`. `attention` (§7.3) is filled
   from phase 2.
 - Phase 2 adds to `/api/status`: `library.drive.location` and `mounted`,
@@ -1185,7 +1188,8 @@ menu's poll, which runs on its own schedule, apart from `/api/app/state`):
     "error": null
   }],
   "app": {"operations": ["broker operations, same shape"], "update": {"phase": "…", "progress": 42}},
-  "attention": ["the union over libraries plus app-level items"]
+  "attention": ["the union over libraries plus app-level items"],
+  "resources": {"…": "the machine's total over every Pharos process on this Mac (§10); each library entry has its own"}
 }
 ```
 
@@ -1358,33 +1362,104 @@ allowlist with a reason (request handling, subprocess pipes, timers).
 
 ## 10. Resources
 
-Phase 4 measures, and the snapshot reports, per process:
+Phase 4 measures, and the snapshots report, per process (`resources.go`):
 
-- **CPU and memory** for the broker, each library service and the other
-  Pharos processes found through live leases (§6.5; their `pid`, read from
-  the lease file while its flock is held), whether or not they journal. The broker samples
-  `proc_pid_rusage` (`RUSAGE_INFO_V4`) every 5 s: CPU is the delta of
-  `ri_user_time + ri_system_time` over wall time (as % of one core);
-  memory is `ri_phys_footprint`. No `ps` fork; the 1 s `ps` sampler in
-  `incremental_metrics.go` is replaced behind the flag.
-- **Subprocesses** (`git`, `gh`, `diskutil`) are counted when they exit, from
-  `RUSAGE_CHILDREN` deltas, against the process that ran them.
+- **Which processes.** A service reports itself and the other Pharos
+  processes on this Mac holding a live lease on its library (§6.5; the
+  `pid` is read from the lease file while its flock is held, and a lease
+  whose `host_id` is another Mac's is skipped). The broker reads itself,
+  each library's service by the PID it started (so a service too busy to
+  answer is still measured), the Terminal commands each service's snapshot
+  names (or, without a service, the library's leases), and the app-level
+  commands' leases. The native app (Swift) is not measured.
+- **How.** `proc_pid_rusage(pid, RUSAGE_INFO_V4)`, made as the `proc_info`
+  system call (336, `PROC_INFO_CALL_PIDRUSAGE`) with `syscall.Syscall6`,
+  as `capture_iopolicy_darwin.go` makes `iopolicysys`: the package has no
+  cgo, and `macos/build-app.sh` builds with whatever `go env CGO_ENABLED`
+  says, so the release build must not need it. Times are Mach units,
+  converted with `hw.tbfrequency`. No `ps` fork. Off macOS a process reads
+  only itself (getrusage and the Go runtime's memory), with `basis`
+  `self-reported` and `approximate: true`.
+- **When.** Only when a snapshot is computed, and at most once per process
+  per 1.5 s (`resourceSampleInterval`): nothing is sampled while no page
+  is open, and with any number open each process is read at most every
+  1.5 s (in practice every 2 s, the stream's recheck). The sampler is not
+  a loop and starts no goroutine. Measured cost: about 20 µs of CPU for a
+  sample of ten processes and its summary, 0.0013 % of one core
+  (`TestResourceSamplingIsCheap`).
+- **What.** CPU is the delta of own plus exited children's user and system
+  time over the wall time between two readings, as % of one core (`null`
+  until a second reading); memory is `ri_phys_footprint` (Activity
+  Monitor's figure). A reused PID (another `ri_proc_start_abstime`) starts
+  again. For a stable ETag, `cpu_percent` is a whole number, `memory_bytes`
+  two significant figures, and `sampled_at` is left out of the tag.
+- **Subprocesses** (`git`, `gh`, `diskutil`, CLIs) count only when they
+  exit and are reaped, in the child time of the process that ran them: a
+  long `git` call shows as one spike at its end.
 - **Per-operation** attribution inside a process (pprof labels, already
-  used by findings detectors) is later; questions about load need only
+  used by findings detectors) is not built; questions about load need only
   per-machine and per-library answers.
+- **Index runs' telemetry** (`incremental_metrics.go`) reads its RSS from
+  the same call's `ri_resident_size`, the figure `ps -o rss` reports, so
+  history stays comparable; `ps` remains the fallback. This is not behind
+  the flag: it changes no behaviour and drops one fork per second of a
+  run.
+
+Shape, in `/api/status` (`resources`, `null` when nothing could be read)
+and in `/api/app/status` (the machine's total as `resources`, and each
+library entry's own as `libraries[].resources`):
+
+```json
+{"cpu_percent": 45, "memory_bytes": 1200000000, "sampled_at": "…", "basis": "proc_pid_rusage", "approximate": false,
+ "label": "Pharos is using ~45% of one core · 1.2 GB",
+ "processes": [{"pid": 4120, "role": "service", "library": "lib-a", "cpu_percent": 38, "memory_bytes": 1100000000,
+                "sampled_at": "…", "basis": "proc_pid_rusage", "text": "Library service (Euclid) · ~38% of one core · 1.1 GB"}]}
+```
+
+`role` is `service`, `broker` or the lease's process (`cli:ingest`).
+`label` and `text` are the server's words; the panel's Load row shows the
+machine's `label` in the app and the library's otherwise, with the
+processes' `text` in its tooltip.
 
 **Priority classes to IO policy** (applied only with the flag on):
 
 | Class | Disk IO policy | Applied |
 |---|---|---|
 | `foreground` | default (`IOPOL_DEFAULT`) | — |
-| `background` | utility (`IOPOL_UTILITY`), per thread | around each operation's IO-heavy section, with `runtime.LockOSThread` as `withCaptureIOPolicy` does today |
+| `background` | utility (`IOPOL_UTILITY`), per thread | `Op.RunIO` around the operation's IO-heavy sections, with `runtime.LockOSThread`, as `withCaptureIOPolicy` does |
 
-Today only capture copies, local backups and adoption run at utility.
-Phase 4 applies the class in one place (the handle), so ingest, acquisition,
-cloud, maintenance and checkpoints follow their kind's priority instead of
-three copy paths deciding for themselves. A read-started rebuild that a
-user is waiting on is foreground.
+The class is applied in one place, the handle: `Op.RunIO(fn)` runs fn
+under utility when the operation's priority is `background` and the
+registry's `lowerIO` (the flag, through `Catalog.unifiedActivity`) says so;
+otherwise it runs fn unchanged. The policy is per thread and goroutines fn
+starts do not inherit it, so it wraps the loops that do their IO on their
+own goroutine:
+
+- every operation started with `start`, `launch` or `startBackground`: the
+  whole body (`runOperation`), so the Git backfill and refresh, findings
+  and authorship rebuilds from reads, the upgrade count, `drive.measure`,
+  and the writes requests hand to the background
+  (`maintenance.mcp-history`, `cloud.reconcile`, `ask.save`);
+- the automatic index (`index.changes.automatic`): each source's discovery
+  walk, each source's ingest, the Search view projection and the audit;
+- each background stage of the analysis chain (Git, tools, authorship,
+  findings, and the stages that take the chain's class);
+- each batch of a daemon pass (search index builds, the Search view,
+  previews, parallelism, cache warming, the origins publication, the cloud
+  schedule tick's `cloud.reconcile`), not the pauses between them;
+- the WAL bound's checkpoint (`maintenance.checkpoint`).
+
+Not covered: work an operation hands to other goroutines (capture's hashing
+pipeline, a backup's WAL poller), and the broker's operations
+(`library.deliver`), whose registry has no catalog to read the flag from.
+The three copy paths that ran at utility before (capture copies, local
+backups, adoption) keep doing so with the flag on or off: they are not
+moved to the default tier even where their kind is foreground. A
+read-started rebuild that a user is waiting on is registered foreground
+(`analysis.tools` from a read, `analysis.findings` from Refresh findings)
+and keeps the default tier. A background body holding the catalog writer
+at utility can make a foreground writer wait a little longer; the utility
+tier, unlike background, is not throttled hard.
 
 ## Known hazards this contract must not hide
 
