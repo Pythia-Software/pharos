@@ -432,22 +432,36 @@ func (s *Server) finishDeferredSyncPhases(ctx context.Context, forceFindings boo
 		{"tools", func() error { return s.Catalog.ensureToolRollup(ctx) }},
 		{"authorship", func() error {
 			// The rebuild runs in the background, as a child of this stage.
-			s.Catalog.refreshAuthorshipInContext(withOp(ctx, stage))
-			for s.Catalog.authorshipRunning() {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(50 * time.Millisecond):
+			// A rebuild a page started may be running; it does not check
+			// again while this index runs (startAuthorship), so once it ends
+			// this stage starts its own. A few rounds also cover the moment
+			// between a rebuild and its own follow-up.
+			for round := 1; ; round++ {
+				started := s.Catalog.refreshAuthorshipInContext(withOp(ctx, stage))
+				for s.Catalog.authorshipRunning() {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-time.After(50 * time.Millisecond):
+					}
+				}
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				want, built, err := s.Catalog.authorshipGenerations()
+				if err != nil {
+					return err
+				}
+				if want == built {
+					return nil
+				}
+				s.Catalog.authorship.mu.Lock()
+				failed := s.Catalog.authorship.lastError != ""
+				s.Catalog.authorship.mu.Unlock()
+				if round == 3 || (started && failed) {
+					return errors.New("authorship rebuild did not complete; dirty generation retained")
 				}
 			}
-			want, built, err := s.Catalog.authorshipGenerations()
-			if err != nil {
-				return err
-			}
-			if want != built {
-				return errors.New("authorship rebuild did not complete; dirty generation retained")
-			}
-			return nil
 		}},
 		{"findings", func() error {
 			// A page or another explicit action may already be discovering

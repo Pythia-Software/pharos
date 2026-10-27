@@ -1166,13 +1166,15 @@ func (c *Catalog) refreshAuthorship() {
 
 // A coordinated manual index cancels its own classification when stopped;
 // page/source refreshes continue to use the service's background lifetime.
-func (c *Catalog) refreshAuthorshipInContext(parent context.Context) {
+// It reports whether it started a rebuild.
+func (c *Catalog) refreshAuthorshipInContext(parent context.Context) bool {
 	if parent != nil && parent.Err() != nil {
-		return
+		return false
 	}
 	if want, built, err := c.authorshipGenerations(); err == nil && want != built {
-		c.startAuthorshipInContext(want, parent)
+		return c.startAuthorshipInContext(want, parent)
 	}
+	return false
 }
 
 // ensureAuthorship is refreshAuthorship for a page. It builds a ledger that
@@ -1195,17 +1197,29 @@ func (c *Catalog) ensureAuthorship() (stale bool) {
 
 // startAuthorship rebuilds for generation in the background, unless a
 // rebuild is running already. A rebuild that succeeds checks again for
-// messages an index wrote while it ran.
+// messages an index wrote while it ran, except one a page started while this
+// process indexes: the index writes on every record, so that rebuild would
+// start again as soon as it ended, rewriting message_authorship and holding a
+// read snapshot round after round. The index's analysis chain rebuilds at its
+// end (refreshAuthorship), and a scheduled index leaves it pending in
+// sync_deferred for the next explicit one; pages show the last ledger
+// meanwhile (ensureAuthorship).
 func (c *Catalog) startAuthorship(generation string) {
 	c.startAuthorshipInContext(generation, nil)
 }
 
-func (c *Catalog) startAuthorshipInContext(generation string, parent context.Context) {
+// authorshipFollowUp reports whether a rebuild that just succeeded should
+// check again for inputs written while it ran.
+func (c *Catalog) authorshipFollowUp(parent context.Context) bool {
+	return parent != nil || c.ingestRuns.Load() == 0
+}
+
+func (c *Catalog) startAuthorshipInContext(generation string, parent context.Context) bool {
 	state := &c.authorship
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	if state.running {
-		return
+		return false
 	}
 	state.running = true
 	rebuild := func(ctx context.Context, op *Op) error {
@@ -1234,7 +1248,7 @@ func (c *Catalog) startAuthorshipInContext(generation string, parent context.Con
 			state.lastError = err.Error()
 		}
 		state.mu.Unlock()
-		if err == nil && ctx.Err() == nil {
+		if err == nil && ctx.Err() == nil && c.authorshipFollowUp(parent) {
 			c.refreshAuthorshipInContext(parent)
 		}
 		return err
@@ -1251,6 +1265,7 @@ func (c *Catalog) startAuthorshipInContext(generation string, parent context.Con
 	if !c.startBackground(spec, rebuild) {
 		state.running = false // the service is stopping
 	}
+	return state.running
 }
 
 // authorshipRunning reports whether a rebuild is writing message_authorship.

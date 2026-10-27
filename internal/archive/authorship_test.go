@@ -439,6 +439,43 @@ func TestAuthorshipRebuildsAfterIndex(t *testing.T) {
 	catalog.authorship.lastError = ""
 	catalog.ensureAuthorship()
 	check("a page with older rules", 4, true)
+	started[3](context.Background())
+	check("after the page's rebuild", 4, false)
+
+	// While this process indexes, a rebuild a page started does not start
+	// again for what the index wrote meanwhile: the index rebuilds at its end.
+	if _, err := catalog.DB.Exec("UPDATE meta SET value='1/authorship-v0' WHERE key='authorship_generation'"); err != nil {
+		t.Fatal(err)
+	}
+	catalog.ingestRuns.Add(1)
+	catalog.ensureAuthorship()
+	check("a page with older rules during an index", 5, true)
+	if err := bumpToolLedgerGeneration(catalog.DB); err != nil {
+		t.Fatal(err)
+	}
+	started[4](context.Background())
+	check("the page's rebuild during an index", 5, false)
+	if !catalog.ensureAuthorship() {
+		t.Fatal("the ledger should lag the index")
+	}
+	check("a page during the index", 5, false)
+	// The index's analysis chain still follows up on its own rebuild.
+	chain := context.Background()
+	catalog.refreshAuthorshipInContext(chain)
+	check("the index's chain", 6, true)
+	if err := bumpToolLedgerGeneration(catalog.DB); err != nil {
+		t.Fatal(err)
+	}
+	started[5](chain)
+	check("the chain's follow-up", 7, true)
+	started[6](chain)
+	check("after the chain", 7, false)
+	if err := bumpToolLedgerGeneration(catalog.DB); err != nil {
+		t.Fatal(err)
+	}
+	catalog.ingestRuns.Add(-1)
+	catalog.refreshAuthorship()
+	check("the next refresh after the index ends", 8, true)
 }
 
 func TestAuthorshipManualRefreshHonorsRunCancellation(t *testing.T) {
