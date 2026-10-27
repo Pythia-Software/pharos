@@ -544,6 +544,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeResult(w, map[string]any{"substring": progress}, err)
 	case path == "/api/library/status":
 		writeJSON(w, s.libraryStatus(), http.StatusOK)
+	case path == "/api/operations":
+		s.serveOperations(w, r)
 	case path == "/api/health/drive":
 		// Just the drive checks, from their cache: cheap enough to poll.
 		writeJSON(w, s.driveHealth(), http.StatusOK)
@@ -688,6 +690,8 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 		s.startCapture(w, body)
 	case path == "/api/index":
 		s.startIndex(w, body)
+	case path == "/api/operations/stop":
+		s.stopOperation(w, body)
 	case path == "/api/index/cancel":
 		writeJSON(w, map[string]any{"stopped": s.stopIngest()}, http.StatusOK)
 	case path == "/api/library/refresh/stop":
