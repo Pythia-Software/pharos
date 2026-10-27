@@ -139,10 +139,10 @@ func (j *cloudJobs) stop(id string) bool {
 // mistaken for one by a stale poll. It is released before storing them, which
 // can wait for a sync holding the writer, so the Cloud page does not wait too;
 // the update applies only to a run unchanged since it was read.
-func (s *Server) reconcileCloudRuns(ctx context.Context) error {
+func (s *Server) reconcileCloudRuns(ctx context.Context) (stored int, err error) {
 	interrupted, err := s.interruptedCloudRuns(ctx)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	for _, change := range interrupted {
 		run := change.run
@@ -157,15 +157,16 @@ func (s *Server) reconcileCloudRuns(ctx context.Context) error {
 			return e
 		})
 		if err != nil {
-			return err
+			return stored, err
 		}
+		stored += int(updated)
 		if updated > 0 && run.State == "failed" {
 			if err := cleanInterruptedCloudStaging(s.Config(), run.ID); err != nil {
-				return err
+				return stored, err
 			}
 		}
 	}
-	return nil
+	return stored, nil
 }
 
 type interruptedCloudRun struct {
@@ -249,7 +250,7 @@ func (s *Server) getCloud(w http.ResponseWriter, r *http.Request) {
 		// A write a read starts (§1): stored in the background, so the page
 		// does not wait for the writer.
 		s.start(OperationSpec{Kind: "cloud.reconcile", Trigger: triggerRead}, func(ctx context.Context, _ *Op) error {
-			err := s.reconcileCloudRuns(ctx)
+			_, err := s.reconcileCloudRuns(ctx)
 			if err != nil && ctx.Err() == nil {
 				fmt.Fprintln(os.Stderr, "Pharos cloud runs:", err)
 			}

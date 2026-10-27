@@ -388,8 +388,17 @@ func (s *Server) startCloudRun(ctx context.Context, id, kind, trigger string, at
 	return run, nil
 }
 
-func (s *Server) cloudScheduleTick(ctx context.Context, at time.Time) error {
-	if err := s.reconcileCloudRuns(ctx); err != nil {
+// settleCloudRuns records runs whose process is gone and settles the
+// schedules of finished runs: a cloud.reconcile pass (§3.6), an operation
+// only when it stored something.
+func (s *Server) settleCloudRuns(ctx context.Context, at time.Time) (err error) {
+	pass := s.Catalog.beginPass(ctx, "cloud.reconcile", triggerSchedule)
+	defer func() { pass.end(err) }()
+	stored, err := s.reconcileCloudRuns(ctx)
+	if stored > 0 {
+		pass.worked(stored)
+	}
+	if err != nil {
 		return err
 	}
 	schedules, err := s.Catalog.cloudSchedules(ctx)
@@ -397,17 +406,28 @@ func (s *Server) cloudScheduleTick(ctx context.Context, at time.Time) error {
 		return err
 	}
 	for _, schedule := range schedules {
-		if schedule.InFlight != "" {
-			run, err := s.Catalog.cloudRun(ctx, schedule.InFlight)
-			if err != nil {
-				return err
-			}
-			if err := s.Catalog.settleCloudSchedule(ctx, run, at); err != nil {
-				return err
-			}
+		if schedule.InFlight == "" {
+			continue
+		}
+		run, err := s.Catalog.cloudRun(ctx, schedule.InFlight)
+		if err != nil {
+			return err
+		}
+		if run.Kind == "full" && run.State != "running" {
+			pass.worked(1) // its schedule is settled below
+		}
+		if err := s.Catalog.settleCloudSchedule(ctx, run, at); err != nil {
+			return err
 		}
 	}
-	schedules, err = s.Catalog.cloudSchedules(ctx)
+	return nil
+}
+
+func (s *Server) cloudScheduleTick(ctx context.Context, at time.Time) error {
+	if err := s.settleCloudRuns(ctx, at); err != nil {
+		return err
+	}
+	schedules, err := s.Catalog.cloudSchedules(ctx)
 	if err != nil {
 		return err
 	}
