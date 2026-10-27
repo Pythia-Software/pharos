@@ -181,8 +181,10 @@ cancellation, so locks and ordering do not change.
   `context.AfterFunc(s.life.ctx, cancel)`, as `ask.go` does and the cloud
   connection test does since phase 0), or be declared `release-blocking` in
   its kind row with a truthful `on_eject` ("Eject waits for it, up to N"),
-  in which case it makes the verdict `busy` (§4.2). `index.sources.legacy`
-  is the remaining request-scoped kind; phase 1 merges its context.
+  in which case it makes the verdict `busy` (§4.2). No kind is
+  release-blocking today: request contexts derive from `s.life.ctx`
+  (`http.Server.BaseContext`), and `index.sources.legacy` runs on
+  `beginIngest`'s context, which derives from it too.
 - Phase 2 (flagged) may refuse to start drive-holding work once a release
   has begun; until then `start` only records that it started during a
   release (`detail.during_release`).
@@ -263,7 +265,7 @@ the words here are the words surfaces show (§8).
 | `library.update` | Capture & index · Capturing and indexing | user | svc | D:w W:w I:w | capt:this/\*, conv:\*, an.\*, findings, upgrade | index | As `index.captures`; the browser then starts `library.upgrade`. | batch | always | fg |
 | `library.rebuild` (variants `full`, `retained`) | Full recapture & reindex / Reindex from stored messages · Rebuilding | user, resume | svc | D:w W:w I:w | conv:\*, view, an.\*, findings | index | Stops between workspaces; resuming the repair continues it (`sync_recovery_jobs`). | batch | always | fg |
 | `index.verify` (variants `sample`, `all`) | Verify retained inputs · Verifying | user; `sample` is a step of index runs | svc | D:w W:w I:w (reads retained inputs; writes `sync_verifications` and integrity issues) | — | index | Stops between inputs. | record | always (`all`); step only (`sample`) | fg |
-| `index.sources.legacy` | Index sources (legacy API) · Indexing | user (API) | svc | D:w W:w I:w | conv:\* | — | Runs inside the request. Until phase 1 merges `s.life.ctx` into its context it is release-blocking: eject waits for it (verdict `busy`). | batch (after the merge) | always | fg |
+| `index.sources.legacy` | Index sources (legacy API) · Indexing | user (API) | svc | D:w W:w I:w | conv:\* | — | Runs inside the request, with the service's lifetime merged into its context: a release stops it between workspaces. | batch | always | fg |
 | `ingest.cli` (variants `ingest`, `repair-existing`) | Index (Terminal) · Indexing | cli | cli | D:w W:w (no `I` today) | conv:\* | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
 | `host.add` | Add this Mac (Terminal) · Adding this Mac | cli | cli | D:w W:w | conv:\* | — | Pharos cannot stop it. | none (to Pharos) | always | fg |
 | `capture.history-backfill` (variants by subcommand) | Capture history backfill (Terminal) · Backfilling history | cli | cli | D:w C(h):w | capt:h/\* | — | Pharos cannot stop it; its native-snapshot pause blocks ordinary capture of the chosen sources until released. | none (to Pharos) | always | fg |
