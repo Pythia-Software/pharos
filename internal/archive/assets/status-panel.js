@@ -22,7 +22,9 @@
 .pharos-status-verdict{display:flex;gap:8px;align-items:baseline}
 .pharos-status-verdict>.pharos-dot{position:relative;top:-1px}
 .pharos-status-line{display:block}
-.pharos-status-line+.pharos-status-line{margin-top:4px}
+.pharos-status-line+.pharos-status-line{margin-top:6px}
+.pharos-status-step{display:block;font-size:12px}
+.pharos-status-finished{margin-top:4px;font-size:12px}
 .pharos-status-line>strong{font-weight:650}
 .pharos-status-line .pharos-status-time{color:var(--muted,#666);white-space:nowrap}
 .pharos-status-more{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 12px;color:var(--muted,#666)}
@@ -70,30 +72,33 @@
   // library.js does for activities: captures, indexes and the upgrade.
   const INDEX_KINDS = /^(index\.|capture\.|ingest\.|library\.(update|rebuild|upgrade)$|host\.add$)/;
 
-  // One line per top-level operation: label · state when not running · step
-  // N of M · the step · its measured amount · a time range when the server
-  // gives one (only while estimating, or early and marked so).
+  // One line per top-level operation. The primary part is label · the state
+  // word when not running (and not just the label again) · step N of M · the
+  // measured amount · a time range when the server gives one (only while
+  // estimating, or early and marked so); the secondary part, shown muted, is
+  // the step's name and source.
   function operationLine(operation) {
-    const parts = [];
-    if (operation.state !== 'running' && operation.state_label) parts.push(operation.state_label);
+    const primary = [], secondary = [];
+    if (operation.state !== 'running' && operation.state_label && operation.state_label !== operation.label) primary.push(operation.state_label);
     const step = operation.step;
-    if (step?.count > 0 && step.index > 0) parts.push(`step ${step.index} of ${step.count}`);
-    const name = step?.name && step.name !== operation.label ? step.name : '';
-    if (name) parts.push(name);
-    if (step?.source && step.source !== name) parts.push(step.source);
+    if (step?.count > 0 && step.index > 0) primary.push(`step ${step.index} of ${step.count}`);
     const amount = stepAmount(step);
-    if (amount) parts.push(amount);
+    if (amount) primary.push(amount);
+    const name = step?.name && step.name !== operation.label ? step.name : '';
+    if (name) secondary.push(name);
+    if (step?.source && step.source !== name) secondary.push(step.source);
     const tooltip = [operation.detail, operation.on_eject].filter(Boolean).join('\n');
-    return {id: operation.id, label: operation.label, parts, time: operation.time?.label || '', tooltip,
+    return {id: operation.id, label: operation.label, primary, secondary, time: operation.time?.label || '', tooltip,
       fraction: Number.isFinite(step?.fraction) ? step.fraction : null, state: operation.state, background: operation.priority === 'background'};
   }
+  // A line as one string, for tooltips and the other libraries' rows.
+  const lineText = line => [[line.label, ...line.primary, ...line.secondary].join(' · '), line.time].filter(Boolean).join(' ');
 
   function treeNode(operation) {
-    return {id: operation.id, label: operation.label, state: operation.state,
-      text: [operation.state_label, ...operationLine(operation).parts.filter(part => part !== operation.state_label)].filter(Boolean).join(' · '),
-      tooltip: [operation.detail, operation.on_eject].filter(Boolean).join('\n'),
-      children: (operation.children || []).map(treeNode),
-      hidden: Math.max(0, (operation.children_count || 0) - (operation.children || []).length)};
+    const line = operationLine(operation);
+    return {id: operation.id, label: operation.label, text: [...line.primary, ...line.secondary].join(' · '), time: line.time, tooltip: line.tooltip,
+      children: (operation.children || []).filter(running).map(treeNode),
+      hidden: Math.max(0, (operation.children_count || 0) - (operation.children || []).filter(running).length)};
   }
 
   // The chip's and the panel's name: the drive's, else Library for a
@@ -101,47 +106,55 @@
   const driveName = view => {
     const library = view?.library?.library || {};
     const drive = library.drive || {};
+    if (!view?.library) return view?.service?.name || 'Library';
     return drive.ejectable ? drive.name || 'Library' : library.portable ? 'Library' : 'This Mac';
   };
   const LOCATIONS = {external: 'External drive', 'disk-image': 'Disk image', internal: "This Mac's internal disk"};
 
+  // What runs for the selected library: the app's operations that touch it
+  // (a transfer, a delivery), then its own.
+  const currentOperations = view => [...(view?.appOperations || []), ...(view?.library?.operations || [])].filter(running);
+
   // The panel's content, from the store's view. options.ejectState is the
   // panel's eject flow; options.verdict overrides the snapshot's verdict
-  // (the debounced one, see settleVerdict).
-  function panelModel(view, {ejectState = null, verdict = null, unavailable = null, nativeEject = false} = {}) {
+  // (the debounced one, see settleVerdict); options.stopRequested holds the
+  // operations Stop was pressed for.
+  function panelModel(view, {ejectState = null, verdict = null, unavailable = null, nativeEject = false, stopRequested = new Set()} = {}) {
     const library = view?.library || null;
+    const operations = currentOperations(view);
+    const foreground = operations.filter(operation => operation.priority !== 'background');
+    const shown = foreground.length ? foreground : operations.slice(0, 1);
+    // Show all reveals what Now does not: the shown runs' running stages,
+    // and the other work. Finished runs are counted apart.
+    const tree = [...shown.flatMap(operation => treeNode(operation).children), ...operations.filter(operation => !shown.includes(operation)).map(treeNode)];
+    const finished = (library?.operations || []).filter(operation => !running(operation)).length;
+    const common = {lines: shown.map(operationLine), tree, moreCount: tree.length, finished, attention: (view?.attention || []).map(attentionModel)};
     if (!library) {
-      return {available: false, title: view?.service?.name || 'Library',
-        message: unavailable || (view?.service?.error ? `${view.service.error}` : null), attention: (view?.attention || []).map(attentionModel)};
+      return {available: false, title: driveName(view), ...common, stateLabel: view?.service?.stateLabel || null,
+        message: operations.length ? null : unavailable || (view?.service?.error ? `${view.service.error}` : null)};
     }
     const drive = library.library?.drive || {};
     const eject = verdict || library.eject || {};
-    const operations = (library.operations || []).filter(running);
-    const foreground = operations.filter(operation => operation.priority !== 'background');
-    const shown = foreground.length ? foreground : operations.slice(0, 1);
-    const hiddenCount = operations.length - shown.length;
     const stoppable = operations.filter(operation => operation.stoppable && operation.stop?.path);
-    const stoppingAll = operations.some(operation => operation.state === 'stopping') && !stoppable.length;
+    const requested = stoppable.length > 0 && stoppable.every(operation => stopRequested.has(operation.id));
+    const stopping = operations.some(operation => operation.state === 'stopping');
+    const text = eject.headline || eject.summary || '';
     return {
-      available: true,
+      available: true, ...common,
       title: driveName(view),
       where: [LOCATIONS[drive.location] || (drive.ejectable ? 'Drive' : ''), library.library?.path].filter(Boolean).join(' · '),
-      verdict: {verdict: eject.verdict || 'unsafe', text: eject.summary || '', dot: VERDICT_DOT[eject.verdict] ?? 'bad',
-        tooltip: (eject.blockers || []).map(blocker => [blocker.label, blocker.on_eject].filter(Boolean).join(': ')).join('\n'), checked: eject.checked || null},
+      verdict: {verdict: eject.verdict || 'unsafe', text, dot: VERDICT_DOT[eject.verdict] ?? 'bad', checked: eject.checked || null,
+        tooltip: [eject.summary !== text ? eject.summary : '', ...(eject.blockers || []).map(blocker => [blocker.label, blocker.on_eject].filter(Boolean).join(': '))].filter(Boolean).join('\n')},
       // Phases 3 and 4 fill these; a null keeps the row out.
       freshness: library.freshness ?? null,
       load: library.resources ?? null,
-      lines: shown.map(operationLine),
-      hiddenCount,
-      tree: (library.operations || []).map(treeNode),
       others: (view.others || []).map(other => {
         const first = (other.operations || []).find(running);
         return {id: other.id, name: other.name || 'Library',
-          text: first ? [first.label, ...operationLine(first).parts].join(' · ') : other.eject?.summary || '', tooltip: first?.detail || ''};
+          text: first ? lineText(operationLine(first)) : other.stateLabel || other.eject?.headline || '', tooltip: first?.detail || other.eject?.summary || ''};
       }),
-      attention: (view.attention || []).map(attentionModel),
       stop: stoppable.length ? {targets: stoppable.map(operation => ({id: operation.id, method: operation.stop.method || 'POST', path: operation.stop.path, body: operation.stop.body || {id: operation.id}})),
-        title: stoppable.map(operation => operation.label).join(', ')} : stoppingAll ? {targets: [], stopping: true, title: ''} : null,
+        stopping: requested, title: stoppable.map(operation => operation.label).join(', ')} : stopping ? {targets: [], stopping: true, title: ''} : null,
       eject: drive.ejectable && nativeEject ? ejectModel(ejectState, drive) : null,
     };
   }
@@ -167,14 +180,13 @@
   // warning) when something needs attention, brass while work runs, green
   // when idle; grey before the first snapshot.
   function chipModel(view, {error = null} = {}) {
-    const library = view?.library;
-    if (!library) return {name: 'Library', dot: error?.status === 503 ? 'warn' : 'idle', state: 'unavailable', title: view?.service?.error || ''};
+    const operations = currentOperations(view);
+    if (!view?.library && !operations.length) return {name: 'Library', dot: error?.status === 503 ? 'warn' : 'idle', state: 'unavailable', title: view?.service?.error || ''};
     const name = driveName(view);
     const attention = view.attention || [];
-    const operations = (library.operations || []).filter(running);
     const first = operations.find(operation => operation.priority !== 'background') || operations[0];
     const dot = attention.some(item => item.severity !== 'warning') ? 'bad' : attention.length ? 'warn' : operations.length ? 'busy' : '';
-    const status = attention[0]?.title || (first ? [first.label, ...operationLine(first).parts].join(' · ') : library.eject?.summary || '');
+    const status = attention[0]?.title || (first ? lineText(operationLine(first)) : view.library?.eject?.headline || view.library?.eject?.summary || '');
     return {name, dot, state: operations.length ? 'busy' : 'idle', title: status ? `${name}: ${status}` : name};
   }
 
@@ -241,7 +253,12 @@
     window.dispatchEvent(new PopStateEvent('popstate'));
   }
 
+  // The operations Stop was pressed for, so a snapshot that arrives before
+  // their state changes does not enable it again.
+  const stopRequested = new Set();
   async function stopAll(targets) {
+    for (const target of targets) stopRequested.add(target.id);
+    render();
     for (const target of targets) {
       try {
         const response = await fetch(target.path, {method: target.method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(target.body)});
@@ -296,7 +313,8 @@
   function renderPanel() {
     if (!panel) return;
     const state = storeState();
-    const model = panelModel(state?.view, {ejectState, verdict: currentVerdict(), nativeEject: Boolean(nativeLibrary()),
+    for (const id of [...stopRequested]) if (!currentOperations(state?.view).some(operation => operation.id === id && operation.state !== 'stopping')) stopRequested.delete(id);
+    const model = panelModel(state?.view, {ejectState, verdict: currentVerdict(), nativeEject: Boolean(nativeLibrary()), stopRequested,
       unavailable: state?.error ? (state.error.status === 503 ? 'Pharos is stopping; it has released or is releasing the library.' : `Could not read the library's status: ${state.error.message}`) : null});
     const scrollTop = panel.scrollTop;
     const content = node('div');
@@ -305,7 +323,7 @@
     const actions = node('div', 'pharos-status-actions');
     actions.dataset.key = 'actions';
     if (model.stop) {
-      const stop = button(model.stop.stopping ? 'Stopping…' : 'Stop', '', event => { event.currentTarget.disabled = true; return stopAll(model.stop.targets); });
+      const stop = button(model.stop.stopping ? 'Stopping…' : 'Stop', '', () => stopAll(model.stop.targets));
       stop.dataset.key = 'stop';
       stop.disabled = Boolean(model.stop.stopping);
       if (model.stop.title) stop.title = model.stop.title;
@@ -324,6 +342,9 @@
     content.append(head);
     if (!model.available) {
       if (model.message) content.append(node('p', 'pharos-error', model.message));
+      else if (model.stateLabel) content.append(node('div', 'pharos-sub', model.stateLabel));
+      const rows = node('dl', 'pharos-status-rows');
+      appendWork(content, rows, model);
       appendAttention(content, model.attention);
       commit(content, scrollTop);
       return;
@@ -354,29 +375,7 @@
     row('eject', 'Eject', verdict);
     if (model.freshness) row('data', 'Data', node('span', '', freshnessText(model.freshness)));
     if (model.load) row('load', 'Load', node('span', '', loadText(model.load)));
-    if (model.lines.length) {
-      const lines = model.lines.map(line => {
-        const item = node('span', 'pharos-status-line');
-        item.dataset.key = `line:${line.id}`;
-        item.append(node('strong', '', line.label));
-        if (line.parts.length) item.append(` · ${line.parts.join(' · ')}`);
-        if (line.time) item.append(' ', node('span', 'pharos-status-time', line.time));
-        if (line.tooltip) item.title = line.tooltip;
-        if (line.fraction != null) item.setAttribute('aria-description', `${Math.floor(line.fraction * 100)}% of this step`);
-        return item;
-      });
-      row('now', 'Now', lines);
-    }
-    if (model.hiddenCount || model.tree.length > model.lines.length) {
-      const details = node('details', 'pharos-status-all');
-      details.dataset.key = 'show-all';
-      if (showAll) details.open = true;
-      details.addEventListener('toggle', () => { showAll = details.open; });
-      const summary = node('summary', 'pharos-status-more');
-      summary.append(node('span', '', model.hiddenCount ? `+ ${model.hiddenCount} background task${model.hiddenCount === 1 ? '' : 's'}` : ''), node('span', '', 'Show all'));
-      details.append(summary, treeList(model.tree));
-      content.append(rows, details);
-    } else content.append(rows);
+    appendWork(content, rows, model);
     if (model.others.length) {
       const others = node('dl', 'pharos-status-rows');
       others.dataset.key = 'others';
@@ -394,6 +393,43 @@
     commit(content, scrollTop);
   }
 
+  // The Now row and Show all.
+  function appendWork(content, rows, model) {
+    if (model.lines.length) {
+      const lines = model.lines.map(line => {
+        const item = node('span', 'pharos-status-line');
+        item.dataset.key = `line:${line.id}`;
+        const primary = node('span');
+        primary.dataset.key = 'primary';
+        primary.append(node('strong', '', line.label));
+        if (line.primary.length) primary.append(` · ${line.primary.join(' · ')}`);
+        if (line.time) primary.append(' ', node('span', 'pharos-status-time', line.time));
+        item.append(primary);
+        if (line.secondary.length) item.append(node('span', 'pharos-sub pharos-status-step', line.secondary.join(' · ')));
+        if (line.tooltip) item.title = line.tooltip;
+        if (line.fraction != null) item.setAttribute('aria-description', `${Math.floor(line.fraction * 100)}% of this step`);
+        return item;
+      });
+      const term = node('dt', '', 'Now'), detail = node('dd');
+      term.dataset.key = 'now-label';
+      detail.dataset.key = 'now';
+      detail.append(...lines);
+      rows.append(term, detail);
+    }
+    if (rows.childElementCount) content.append(rows);
+    if (!model.moreCount && !model.finished) return;
+    const details = node('details', 'pharos-status-all');
+    details.dataset.key = 'show-all';
+    if (showAll) details.open = true;
+    details.addEventListener('toggle', () => { showAll = details.open; });
+    const summary = node('summary', 'pharos-status-more');
+    summary.append(node('span', '', model.moreCount ? `+ ${model.moreCount} more` : ''), node('span', '', 'Show all'));
+    details.append(summary);
+    if (model.tree.length) details.append(treeList(model.tree));
+    if (model.finished) details.append(node('div', 'pharos-sub pharos-status-finished', `${model.finished} finished`));
+    content.append(details);
+  }
+
   const freshnessText = value => Array.isArray(value) ? value.map(row => row.label || row.domain).filter(Boolean).join(' · ') : '';
   const loadText = value => [Number.isFinite(value?.cpu_percent) ? `${Math.round(value.cpu_percent)}% of one core` : '', Number.isFinite(value?.memory_bytes) ? size(value.memory_bytes) : ''].filter(Boolean).join(' · ');
 
@@ -404,6 +440,7 @@
       entry.dataset.key = `tree:${item.id}`;
       entry.append(node('strong', '', item.label));
       if (item.text) entry.append(` · ${item.text}`);
+      if (item.time) entry.append(' ', node('span', 'pharos-status-time', item.time));
       if (item.tooltip) entry.title = item.tooltip;
       if (item.children.length) entry.append(treeList(item.children));
       if (item.hidden) entry.append(node('div', 'pharos-sub', `+ ${item.hidden} finished`));
@@ -522,7 +559,7 @@
   window.pharosStatusPanel = {
     open, close, toggle, render, renderHeader,
     // Pure helpers, for web/tests/unit/page/status-panel.test.mjs.
-    panelModel, chipModel, operationLine, treeNode, settleVerdict, ejectDecision, indexBusy, stepAmount,
+    panelModel, chipModel, operationLine, lineText, treeNode, currentOperations, settleVerdict, ejectDecision, indexBusy, stepAmount,
   };
   if (enabled()) activate();
 })();

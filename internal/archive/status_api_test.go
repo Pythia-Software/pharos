@@ -59,6 +59,22 @@ func TestStatusSnapshotComposesVerdictOperationsAndPlaceholders(t *testing.T) {
 	if _, ok := idle.Library["drive"].(map[string]any)["location"]; !ok {
 		t.Fatalf("the drive says where it is: %#v", idle.Library)
 	}
+	if idle.Eject.Headline == "" || idle.Eject.Summary == "" {
+		t.Fatalf("the verdict has a short headline and a full summary: %+v", idle.Eject)
+	}
+	// A polled snapshot takes no capture or index lock (§4.2); only the
+	// release path's fresh check scans them.
+	scans, probes := lockScans.Load(), lockProbes.Load()
+	for range 3 {
+		getStatus(t, server, "/api/status")
+	}
+	if lockScans.Load() != scans || lockProbes.Load() != probes {
+		t.Fatalf("polled reads scanned %d and probed %d locks", lockScans.Load()-scans, lockProbes.Load()-probes)
+	}
+	getStatus(t, server, "/api/status?fresh=1")
+	if lockScans.Load() == scans {
+		t.Fatal("the fresh check scanned no lock")
+	}
 	if idle.Features["unified_activity"] != false {
 		t.Fatalf("the flag defaults to off: %#v", idle.Features)
 	}
@@ -203,6 +219,63 @@ func TestAttentionListsWhatTheUserCanActOn(t *testing.T) {
 	if status := getStatus(t, server, "/api/status"); len(status.Attention) != len(rules()) {
 		t.Fatalf("the snapshot lists every item: %+v", status.Attention)
 	}
+
+	// Rule 5: the latest capture failed for an enabled source.
+	server.captures.runs = []*CaptureRun{{ID: "c1", State: "failed", Sources: []string{"codex"}, Results: []CaptureSourceResult{{Name: "codex", State: "failed"}}}}
+	if _, ok := rules()["capture-failed"]; !ok {
+		t.Fatal("a failed capture is missing")
+	}
+	server.captures.runs = []*CaptureRun{{ID: "c2", State: "failed", Sources: []string{"cursor"}, Results: []CaptureSourceResult{{Name: "cursor", State: "failed"}}}}
+	if _, ok := rules()["capture-failed"]; ok {
+		t.Fatal("a disabled source's failed capture counts")
+	}
+	// Rule 7: a scheduled cloud backup failed, and the latest verification.
+	execTx(t, catalog.DB,
+		`INSERT INTO cloud_destinations(id,config_json,credential_json,imported_at) VALUES('d1','{}','{}','2026-10-27T10:00:00Z')`,
+		`INSERT INTO cloud_backup_schedules(destination_id,state_json) VALUES('d1','{"destination_id":"d1","enabled":true,"failures":2,"last_error":"access denied"}')`,
+		`INSERT INTO cloud_backup_runs(id,destination_id,status_json,created_at) VALUES
+			('r-old','d1','{"id":"r-old","destination_id":"d1","verification_state":"complete"}','2026-10-26T10:00:00Z'),
+			('r-new','d1','{"id":"r-new","destination_id":"d1","verification_state":"failed","verification_error":"checksum mismatch"}','2026-10-27T10:00:00Z')`)
+	found = rules()
+	if item := found["cloud-schedule-failed:d1"]; item.Detail != "access denied" || item.Action.Path != "/settings/backups" {
+		t.Fatalf("a failed cloud schedule: %+v", found)
+	}
+	if item := found["cloud-verify-failed:d1"]; item.Detail != "checksum mismatch" {
+		t.Fatalf("a failed verification: %+v", found)
+	}
+
+	// After a restart or crash this process has no runs; the journal still
+	// says the last index was interrupted (the reconcile pass ends a dead
+	// process's row so), and an in-memory run that ended later wins.
+	restarted := testServer(t, config, catalog)
+	execTx(t, catalog.DB, `INSERT INTO operation_journal(id,root_id,kind,trigger,host_id,process,pid,instance,state,reason,started_at,updated_at,ended_at,legacy_ref)
+		VALUES('op-crashed','op-crashed','index.changes.manual','user','host-a','service',1,'dead','interrupted','owner-exited','2026-10-27T09:00:00Z','2026-10-27T09:05:00Z','2026-10-27T09:05:00Z','run-crashed')`)
+	after := map[string]attentionItem{}
+	for _, item := range restarted.attention(context.Background()) {
+		after[item.ID] = item
+	}
+	if item, ok := after["index-interrupted"]; !ok || item.Severity != "warning" {
+		t.Fatalf("a crash during an index is forgotten on restart: %+v", after)
+	}
+	execTx(t, catalog.DB, `UPDATE operation_journal SET state='failed',error='the drive went away' WHERE id='op-crashed'`)
+	if item := firstItem(restarted.attention(context.Background()), "index-failed"); item == nil || item.Detail != "the drive went away" {
+		t.Fatal("a failed index is forgotten on restart")
+	}
+	restarted.runsMu.Lock()
+	restarted.runs = []*SyncRun{{ID: "r9", Kind: "manual-sync", State: "complete", CompletedAt: "2026-10-27T11:00:00Z"}}
+	restarted.runsMu.Unlock()
+	if item := firstItem(restarted.attention(context.Background()), "index-failed"); item != nil {
+		t.Fatalf("a later successful index still shows the journal's failure: %+v", item)
+	}
+}
+
+func firstItem(items []attentionItem, id string) *attentionItem {
+	for _, item := range items {
+		if item.ID == id {
+			return &item
+		}
+	}
+	return nil
 }
 
 // An idle daemon pass is registered tentatively before it looks for work. A
@@ -261,16 +334,31 @@ func TestStatusHubSharesOneComputation(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("waited %s", elapsed)
 	}
-	// generated_at alone never changes the tag.
-	if statusTag(map[string]any{"a": 1, "generated_at": "x"}) != statusTag(map[string]any{"a": 1, "generated_at": "y"}) {
+	// generated_at alone never changes the tag, nested ones included.
+	if statusTag(map[string]any{"a": 1, "generated_at": "x", "libraries": []any{map[string]any{"snapshot": map[string]any{"generated_at": "1"}}}}) !=
+		statusTag(map[string]any{"a": 1, "generated_at": "y", "libraries": []any{map[string]any{"snapshot": map[string]any{"generated_at": "2"}}}}) {
 		t.Fatal("the tag depends on generated_at")
 	}
+	// A slow computation runs outside the hub's lock: a reader whose request
+	// ends gives up with the cached frame instead of waiting for it.
+	release := make(chan struct{})
+	revision.Add(1)
+	go hub.frame(context.Background(), time.Minute, revision.Load, func() map[string]any { <-release; return compute() })
+	waitUntil(t, 5*time.Second, "the slow computation to start", func() bool { hub.mu.Lock(); defer hub.mu.Unlock(); return hub.flight != nil })
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	started = time.Now()
+	if frame := hub.frame(ctx, time.Minute, revision.Load, compute); frame.tag != second.tag || time.Since(started) > 2*time.Second {
+		t.Fatalf("a waiter blocked on a slow computation for %s", time.Since(started))
+	}
+	close(release)
 }
 
 // The stream sends the document on connect and again when an operation
 // starts.
 func TestStatusStreamSendsOnConnectAndOnChange(t *testing.T) {
-	override(t, &statusCoalesce, 20*time.Millisecond)
+	override(t, &statusCoalesce, 200*time.Millisecond)
+	override(t, &statusRecheck, 300*time.Millisecond)
 	catalog, config := testCatalog(t)
 	server := testServer(t, config, catalog)
 	listener := httptest.NewServer(server)
@@ -287,7 +375,7 @@ func TestStatusStreamSendsOnConnectAndOnChange(t *testing.T) {
 	if response.Header.Get("Content-Type") != "text/event-stream" {
 		t.Fatalf("content type %q", response.Header.Get("Content-Type"))
 	}
-	events := make(chan statusSnapshot, 8)
+	events := make(chan statusSnapshot, 64)
 	go func() {
 		reader := bufio.NewReader(response.Body)
 		for {
@@ -327,6 +415,45 @@ func TestStatusStreamSendsOnConnectAndOnChange(t *testing.T) {
 			break
 		}
 	}
+	// Coalescing: 40 changes over 800 ms give at most one event per window.
+	backup.Step("Copying", "byte", 1000)
+	stamps := []time.Time{}
+	done := time.After(800 * time.Millisecond)
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for changing := true; changing; {
+		select {
+		case <-ticker.C:
+			backup.Advance(1)
+		case <-events:
+			stamps = append(stamps, time.Now())
+		case <-done:
+			changing = false
+		}
+	}
+	if len(stamps) < 2 || len(stamps) > 6 {
+		t.Fatalf("40 changes in 800 ms with a 200 ms window sent %d events", len(stamps))
+	}
+	for index := 1; index < len(stamps); index++ {
+		if gap := stamps[index].Sub(stamps[index-1]); gap < statusCoalesce*3/4 {
+			t.Fatalf("two events %s apart, inside the %s window", gap, statusCoalesce)
+		}
+	}
+	// A lease that appears changes no registry revision; the recheck finds it.
+	lease, err := acquireProcessLease(leaseDirs(config)[0], leaseInfo{Instance: "cli-index", PID: os.Getpid(), HostID: currentHost().ID, Process: "cli:index",
+		Kinds: []string{"ingest.cli"}, Holds: []Hold{{Resource: "drive", Mode: "write"}, {Resource: "catalog-writer", Mode: "write"}}, StartedAt: now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.release()
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		if document := next("the lease"); document.Eject.Verdict == verdictBusy {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the stream never saw the lease")
+		}
+	}
 	cancel()
 }
 
@@ -343,12 +470,16 @@ func TestBrokerStatusDocument(t *testing.T) {
 	if attention, _ := empty["attention"].([]attentionItem); len(attention) != 0 {
 		t.Fatalf("no library needs no attention: %#v", empty["attention"])
 	}
+	var freshAsked atomic.Int32
 	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/status" {
 			http.Error(w, "no", http.StatusNotFound)
 			return
 		}
-		writeJSON(w, map[string]any{"version": 1, "operations": []any{}, "eject": computeEjectVerdict(verdictInput{}),
+		if r.URL.Query().Get("fresh") == "1" {
+			freshAsked.Add(1)
+		}
+		writeJSON(w, map[string]any{"version": 1, "operations": []any{}, "eject": computeEjectVerdict(verdictInput{fresh: r.URL.Query().Get("fresh") == "1"}),
 			"attention": []attentionItem{{ID: "backup-failed", Rule: 6, Severity: "error", Title: "The last backup failed", Action: openBackups}}}, http.StatusOK)
 	}))
 	defer service.Close()
@@ -362,9 +493,29 @@ func TestBrokerStatusDocument(t *testing.T) {
 		t.Fatalf("the union of the libraries' items, each naming its library: %+v", attention)
 	}
 	broker.publish([]brokerLibrary{{ID: "lib-b", Name: "Archive", Selected: true}})
-	attention, _ = broker.statusDocument(context.Background())["attention"].([]attentionItem)
-	if len(attention) != 1 || attention[0].Rule != 8 || attention[0].Library != "lib-b" {
-		t.Fatalf("a selected library without a service: %+v", attention)
+	rule8 := func() []attentionItem {
+		items, _ := broker.statusDocument(context.Background())["attention"].([]attentionItem)
+		return items
+	}
+	if items := rule8(); len(items) != 0 {
+		t.Fatalf("one document without a service is not yet a problem: %+v", items)
+	}
+	if items := rule8(); len(items) != 1 || items[0].Rule != 8 || items[0].Library != "lib-b" {
+		t.Fatalf("a selected library without a service, twice: %+v", items)
+	}
+	// Not while a broker operation touches it (a transfer stops its
+	// service on purpose), and the count starts again afterwards.
+	transfer := broker.begin(OperationSpec{Kind: "library.transfer", Variant: "copy"}, "lib-b")
+	if items := rule8(); len(items) != 0 {
+		t.Fatalf("rule 8 during a transfer: %+v", items)
+	}
+	document = broker.statusDocument(context.Background())
+	if entries, _ := document["libraries"].([]map[string]any); entries[0]["state_label"] == "" || entries[0]["state_label"] == nil {
+		t.Fatalf("a library touched by a transfer has a state word: %#v", entries)
+	}
+	transfer.Finish(nil)
+	if items := rule8(); len(items) != 0 {
+		t.Fatalf("the count did not start again: %+v", items)
 	}
 	// The endpoint answers without the broker's main lock.
 	m := &applicationManager{token: "broker-token", id: "installation", operations: broker, children: map[string]*applicationChild{}}
@@ -382,6 +533,50 @@ func TestBrokerStatusDocument(t *testing.T) {
 	}
 	if response.Code != http.StatusOK || !json.Valid(response.Body.Bytes()) {
 		t.Fatalf("%d %s", response.Code, response.Body.String())
+	}
+
+	// The panel's Eject in the app: the broker asks the library's service for
+	// its fresh verdict, at this moment, and says so.
+	broker.publish([]brokerLibrary{{ID: "lib-a", Name: "Euclid", Selected: true, Child: &applicationEndpoint{URL: service.URL, Token: "t"}, ChildStarted: time.Now()}})
+	fresh := httptest.NewRecorder()
+	freshRequest := httptest.NewRequest(http.MethodGet, "/api/app/status?fresh=1", nil)
+	freshRequest.AddCookie(&http.Cookie{Name: "pharos_app_installation", Value: "broker-token"})
+	m.ServeHTTP(fresh, freshRequest)
+	var freshDocument struct {
+		Checked   string `json:"checked"`
+		Libraries []struct {
+			ID    string       `json:"id"`
+			Eject ejectVerdict `json:"eject"`
+		} `json:"libraries"`
+	}
+	if err := json.Unmarshal(fresh.Body.Bytes(), &freshDocument); err != nil || freshDocument.Checked != "fresh" || freshAsked.Load() != 1 ||
+		len(freshDocument.Libraries) != 1 || freshDocument.Libraries[0].Eject.Checked != "fresh" {
+		t.Fatalf("a fresh broker check: %s (fresh asked %d)", fresh.Body.String(), freshAsked.Load())
+	}
+
+	// Its stream, end to end, with the main lock still held.
+	listener := httptest.NewServer(m)
+	defer listener.Close()
+	streamRequest, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, listener.URL+"/api/app/status/stream", nil)
+	streamRequest.AddCookie(&http.Cookie{Name: "pharos_app_installation", Value: "broker-token"})
+	stream, err := http.DefaultClient.Do(streamRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Body.Close()
+	reader := bufio.NewReader(stream.Body)
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		line, err := reader.ReadString('\n')
+		if err != nil || time.Now().After(deadline) {
+			t.Fatalf("no event from the broker's stream: %v", err)
+		}
+		if data, ok := strings.CutPrefix(line, "data: "); ok {
+			var document map[string]any
+			if json.Unmarshal([]byte(data), &document) != nil || document["libraries"] == nil {
+				t.Fatalf("the broker's stream sent %s", data)
+			}
+			break
+		}
 	}
 }
 

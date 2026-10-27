@@ -256,7 +256,8 @@ final class MenuFixture: URLProtocol {
             ["state": "running", "label": "Index changes", "priority": "foreground", "step": ["index": 3, "count": 6, "name": "Claude Code"], "time": ["label": "about 3–6 min"]],
             ["state": "running", "label": "Index the Search view", "priority": "background"]], "attention": []]
         precondition(UnifiedMenuStatus.from(indexing) == UnifiedMenuStatus(state: .working, detail: "Index changes · step 3 of 6 · Claude Code · about 3–6 min"))
-        precondition(UnifiedMenuStatus.from(["eject": ["verdict": "safe"], "operations": [["state": "succeeded", "label": "Back up"]], "attention": []])?.state == .idle)
+        precondition(UnifiedMenuStatus.from(["eject": ["verdict": "safe", "headline": "Safe to eject"], "operations": [["state": "succeeded", "label": "Back up"]], "attention": []])
+            == UnifiedMenuStatus(state: .idle, detail: "Safe to eject"), "Idle, the detail is the verdict's headline")
         let failing: [String: Any] = ["eject": ["verdict": "safe"], "operations": [], "attention": [["severity": "warning", "title": "Interrupted"], ["severity": "error", "title": "The last backup failed"]]]
         precondition(UnifiedMenuStatus.from(failing) == UnifiedMenuStatus(state: .attention, detail: "The last backup failed"), "An error outranks a warning")
         let broker: [String: Any] = ["libraries": [["selected": true, "snapshot": ["eject": ["verdict": "safe"], "operations": []]]],

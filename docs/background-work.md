@@ -963,6 +963,10 @@ recent rows and `freshness: []`; it has no stream. `GET /api/status?fresh=1`
 - Phase 2 adds to `/api/status`: `library.drive.location` and `mounted`,
   `library.portable` and `library.path`, and `features.unified_activity`
   (the flag, §9). It drops `journal.recent`, keeping `journal.dropped`.
+- `eject.headline` (both documents, phase 2 round 1): the verdict as one
+  short clause ("Safe to eject in ~2 s: stops back up first"); `summary`
+  stays the full sentence, including the release's 7 s limit, for
+  tooltips.
 - Phase 1 also returns, per operation, `variant`, `subject`, `detail` (the
   state with its detail, §8.2), `on_eject` and `latency`, and `step.source`
   where a step is per source; and `journal.recent`, this Mac's newest 50
@@ -978,8 +982,11 @@ document. Sent on connect, then on change, coalesced to at most one per
 every 2 s without a registry change (leases, attention and lock evidence
 change without one) and sends only a document whose content changed.
 **One computation:** every reader of a service (each stream and each GET)
-shares one cached document, computed at most once per 500 ms on the
-service's lifetime, so the cost does not grow with the number of pages.
+shares one cached document, computed at most once per 500 ms, outside the
+hub's lock and one at a time, on the service's lifetime with a 5 s limit;
+a reader whose request ends stops waiting. The cost does not grow with
+the number of pages. Change detection ignores every `generated_at`,
+nested ones included.
 **Polling fallback:** `GET /api/status` with `If-None-Match: <ETag>` returns
 304 when unchanged. The client store polls every 5 s once the stream fails,
 tries the stream again after 30 s of polling, and holds neither a stream
@@ -1014,7 +1021,14 @@ any change to its own registry, rather than holding a stream to each
 child; its readers share one document as a service's do. In the app the
 page reads the broker's stream; the reverse proxy passes a child's
 `/api/status/stream` through unbuffered. Neither endpoint takes the
-broker's main lock. It never opens a catalog
+broker's main lock. `GET /api/app/status?fresh=1` asks every library's
+service for `/api/status?fresh=1` at that moment and bypasses the shared
+document; the panel's Eject in the app acts only on it, for the selected
+library, and refuses when it is missing or not fresh. Each library entry
+has a `state_label` (the verb of a broker operation touching it, else
+Open, Opening or Not open). The web panel shows running `app.operations`
+that touch the selected library on its Now row, and the rest under Other.
+It never opens a catalog
 to build this document; today's `/api/app/state` does (taxonomy D6), and is
 left as it is.
 
@@ -1041,10 +1055,15 @@ first rule that applies sets the menu's single line; the snapshot lists all.
 
 Phase 2 (`status_attention.go`): rules 1–7 are the service's, each item
 `{id, rule, severity, title, detail, action: {label, path}}`; rules 3 and 4
-are left out while an index or capture runs, as the web rule does. Rule 8
+are left out while an index or capture runs, as the web rule does, and
+read the journal's latest ended top-level index row as well as this
+process's runs (the newer wins), so a restart or crash keeps the warning.
+Rule 8
 is split: the broker adds "<library> is not answering" (its service did not
 answer) and "<library> is not open" (selected, no service, not starting),
-each naming its `library`; the native app keeps its own disconnection and
+each naming its `library`, only after two documents in a row and never
+while a broker operation touches the library or its service is starting;
+the native app keeps its own disconnection and
 setup rules, which come before the snapshot's line. The broker's
 `attention` is the union of every library's items, each with its
 `library`, plus its rule 8 items. A query that fails leaves its rule out.

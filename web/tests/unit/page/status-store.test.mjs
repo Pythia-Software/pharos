@@ -130,21 +130,67 @@ test("in the app the store reads the broker's document: the selected library, th
   assert.equal(view.others.length, 1);
   assert.equal(view.others[0].name, "Archive");
   assert.equal(view.attention.length, 1);
+  // The broker's own operations: those touching the selected library go with
+  // it, the rest with the library they touch, or a row of their own.
+  const withApp = normalize({ libraries: [{ id: "a", selected: true, snapshot: { operations: [] } }, { id: "b", name: "Archive", snapshot: null }],
+    app: { operations: [{ id: "t", state: "running", libraries: ["a", "b"] }, { id: "c", state: "running", label: "Create a library", libraries: [] }, { id: "old", state: "succeeded", libraries: ["a"] }] }, attention: [] }, { managed: true });
+  assert.deepEqual(plain(withApp.appOperations.map(operation => operation.id)), ["t"]);
+  assert.deepEqual(plain(withApp.others.map(other => other.operations.map(operation => operation.id))), [["t"], ["c"]]);
   const none = normalize({ libraries: [], app: {}, attention: [] }, { managed: true });
   assert.equal(none.library, null);
   assert.equal(normalize({ revision: 1 }).library.revision, 1);
 });
 
-test("the eject check asks for a fresh verdict, and in the app the worse of it and the broker's", async () => {
-  const { createStore, worseVerdict } = loadClassicScript("status-store.js").window.pharosStatusStore;
-  const fake = fakeBrowser({ answers: [
-    { status: 200, body: { eject: { verdict: "safe", checked: "fresh" } } },
-    { status: 200, body: { libraries: [{ id: "a", selected: true, eject: { verdict: "busy", summary: "Delivering history" } }] } },
-  ] });
-  const store = createStore({ ...fake.browser, managed: true });
-  const document = await store.fresh();
-  assert.equal(fake.requests[0].url, "/api/status?fresh=1");
-  assert.equal(document.eject.verdict, "busy");
-  assert.equal(worseVerdict({ verdict: "safe" }, null).verdict, "safe");
-  assert.equal(worseVerdict({ verdict: "unsafe" }, { verdict: "safe-in" }).verdict, "unsafe");
+test("the eject check asks for a fresh verdict; in the app only the broker's fresh verdict for the selected library counts", async () => {
+  const { createStore, brokerEjectVerdict } = loadClassicScript("status-store.js").window.pharosStatusStore;
+  const plainStore = fakeBrowser({ answers: [{ status: 200, body: { eject: { verdict: "safe", checked: "fresh" } } }] });
+  assert.equal((await createStore(plainStore.browser).fresh()).eject.verdict, "safe");
+  assert.equal(plainStore.requests[0].url, "/api/status?fresh=1");
+  const broker = fakeBrowser({ answers: [{ status: 200, body: { libraries: [{ id: "a", selected: true, eject: { verdict: "busy", checked: "fresh", summary: "Delivering history" } }] } }] });
+  const managed = createStore({ ...broker.browser, managed: true, selectedId: "a" });
+  assert.equal((await managed.fresh()).eject.verdict, "busy");
+  assert.equal(broker.requests[0].url, "/api/app/status?fresh=1");
+  assert.equal(broker.requests.length, 1, "the library's own verdict is never asked for instead");
+  // Fail closed: no answer, another library, or a verdict that is not fresh.
+  const failing = fakeBrowser({ answers: [{ status: 503, body: {} }] });
+  assert.equal((await createStore({ ...failing.browser, managed: true, selectedId: "a" }).fresh()).eject.verdict, "unsafe");
+  assert.equal(brokerEjectVerdict({ libraries: [{ id: "b", selected: true, eject: { verdict: "safe", checked: "fresh" } }] }, "a").verdict, "unsafe");
+  assert.equal(brokerEjectVerdict({ libraries: [{ id: "a", selected: true, eject: { verdict: "safe", checked: "polled" } }] }, "a").verdict, "unsafe");
+  assert.equal(brokerEjectVerdict(null, "a").verdict, "unsafe");
+  assert.ok(brokerEjectVerdict(null, "a").summary);
+  assert.equal(brokerEjectVerdict({ libraries: [{ id: "a", selected: true, eject: { verdict: "safe", checked: "fresh" } }] }, "a").verdict, "safe");
+});
+
+test("after the stream, a poll compares with what the stream last showed, so it never gets a stale 304", async () => {
+  const { createStore } = loadClassicScript("status-store.js").window.pharosStatusStore;
+  const fake = fakeBrowser({ answers: [{ status: 200, headers: { ETag: '"a"' }, body: { revision: 1 } }] });
+  const store = createStore(fake.browser);
+  store.start();
+  for (const listener of fake.sources[0].listeners.snapshot) listener({ data: JSON.stringify({ revision: 2 }), lastEventId: '"b"' });
+  fake.sources[0].fail();
+  await settle();
+  assert.equal(fake.requests[0].headers["If-None-Match"], '"b"');
+  store.stop();
+});
+
+test("a poll in flight while the page is hidden and shown again is dropped: one feed, never two", async () => {
+  const { createStore } = loadClassicScript("status-store.js").window.pharosStatusStore;
+  let release;
+  const fake = fakeBrowser();
+  const browser = { ...fake.browser, fetch: url => { fake.requests.push({ url }); return new Promise(resolve => { release = () => resolve({ status: 200, ok: true, headers: { get: () => null }, json: async () => ({ revision: 9 }) }); }); } };
+  const store = createStore(browser);
+  store.start();
+  fake.sources[0].fail(); // polling, request in flight
+  fake.setHidden(true);
+  store.visibility();
+  fake.setHidden(false);
+  store.visibility(); // the stream again
+  assert.equal(fake.sources.length, 2);
+  release();
+  await settle();
+  await settle();
+  assert.equal(fake.timers.size, 0, "the stale poll scheduled another");
+  assert.equal(store.current().mode, "stream");
+  assert.notEqual(store.current().view?.library?.revision, 9, "the stale poll's answer was taken");
+  store.stop();
 });

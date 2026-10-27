@@ -77,6 +77,9 @@ type brokerOperations struct {
 	client    *http.Client
 	// status shares the latest /api/app/status document among its readers.
 	status statusHub
+	// unavailable counts, per library, the documents in a row that found it
+	// unreachable or not open (rule 8).
+	unavailable map[string]int
 }
 
 func brokerOperationsPath(installation string) string {
@@ -305,7 +308,7 @@ func brokerLibraryVerdict(own *ejectVerdict, records []brokerOperationRecord, li
 	sort.SliceStable(merged.Blockers, func(i, j int) bool {
 		return verdictRank[merged.Blockers[i].Verdict] > verdictRank[merged.Blockers[j].Verdict]
 	})
-	merged.Summary = verdictSummary(merged)
+	merged.Summary, merged.Headline = verdictSummary(merged), verdictHeadline(merged)
 	return merged
 }
 

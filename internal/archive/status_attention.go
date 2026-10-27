@@ -153,6 +153,21 @@ func (s *Server) attention(ctx context.Context) []attentionItem {
 			}
 		}
 		s.runsMu.RUnlock()
+		// The journal outlives the process: after a restart or a crash,
+		// s.runs is empty, and the journal's latest finished index (made
+		// interrupted by the reconcile pass if its process died) still
+		// says what happened. It wins when it is newer than this
+		// process's latest run, and is not that same run.
+		if row, ok := s.Catalog.latestIndexRow(ctx); ok && (latest == nil || row.Legacy != latest.ID && endedAfter(row.EndedAt, firstString(latest.CompletedAt))) {
+			item = nil
+			switch row.State {
+			case opFailed:
+				item = &attentionItem{ID: "index-failed", Rule: 3, Severity: "error", Title: "The last index failed", Detail: row.Error, Action: openCaptureAndIndex}
+			case opInterrupted:
+				item = &attentionItem{ID: "index-interrupted", Rule: 4, Severity: "warning", Title: "The last index was interrupted",
+					Detail: "What it wrote is kept; the next index resumes it.", Action: openCaptureAndIndex}
+			}
+		}
 		if item != nil {
 			items = append(items, *item)
 		}
@@ -240,4 +255,34 @@ func formatCount(n int) string {
 		text.WriteRune(digit)
 	}
 	return text.String()
+}
+
+// attentionIndexKinds are the runs rules 3 and 4 look at: the kinds of
+// today's SyncRuns.
+var attentionIndexKinds = []string{"index.changes.automatic", "index.changes.manual", "index.captures", "library.update", "library.rebuild", "index.verify", "index.sources.legacy"}
+
+// latestIndexRow is this Mac's most recently ended top-level index in the
+// journal.
+func (c *Catalog) latestIndexRow(ctx context.Context) (journalRow, bool) {
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(attentionIndexKinds)), ",")
+	args := []any{currentHost().ID}
+	for _, kind := range attentionIndexKinds {
+		args = append(args, kind)
+	}
+	rows, err := c.reader().QueryContext(ctx, "SELECT "+journalColumns+" FROM operation_journal WHERE host_id=? AND parent_id IS NULL AND ended_at IS NOT NULL AND kind IN ("+placeholders+") ORDER BY ended_at DESC LIMIT 1", args...)
+	if err != nil {
+		return journalRow{}, false
+	}
+	found, err := scanJournalRows(rows)
+	if err != nil || len(found) == 0 {
+		return journalRow{}, false
+	}
+	return found[0], true
+}
+
+// endedAfter reports whether time a is after time b; an unreadable b loses.
+func endedAfter(a, b string) bool {
+	left, ok := parseTime(a)
+	right, known := parseTime(b)
+	return ok && (!known || left.After(right))
 }

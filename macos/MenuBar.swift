@@ -140,7 +140,8 @@ struct ManagedLibraryStatus: Equatable {
 /// The menu's status line from the status snapshot (docs/background-work.md
 /// §7), used only while the library's pharos-unified-activity-v1 preference
 /// is on. Every word is the server's: the first attention item's title, else
-/// the first top-level operation's line. Pure, for the harness.
+/// the first top-level operation's line, else the eject verdict's headline.
+/// Pure, for the harness.
 struct UnifiedMenuStatus: Equatable {
     enum State: Equatable { case attention, warning, working, idle }
     var state: State
@@ -169,7 +170,8 @@ struct UnifiedMenuStatus: Equatable {
         if let operation = running.first(where: { $0["priority"] as? String != "background" }) ?? running.first {
             return UnifiedMenuStatus(state: .working, detail: line(operation))
         }
-        return UnifiedMenuStatus(state: .idle, detail: "")
+        let eject = library["eject"] as? [String: Any]
+        return UnifiedMenuStatus(state: .idle, detail: eject?["headline"] as? String ?? eject?["summary"] as? String ?? "")
     }
 
     /// label · state when not running · step N of M · the step · a time
@@ -570,7 +572,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
         // With the flag on, the snapshot's attention list and operations set
         // the line, after the app's own problems and transitions above.
-        if let unified, problem == nil, !noLibrary, !service.ejecting, service.url != nil, service.disconnected == nil {
+        // Not over the transitions the line above checks first: setting up, an
+        // index this menu just started, a library operation, or no library
+        // snapshot yet.
+        if let unified, problem == nil, !noLibrary, !service.ejecting, service.url != nil, service.disconnected == nil,
+           !service.settingUp, !indexing, service.libraryOperation == nil, snapshot["library"] != nil {
             switch unified.state {
             case .attention: title = "Pharos · Needs attention"; dot.color = .systemRed
             case .warning: title = "Pharos · Needs attention"; dot.color = .systemOrange

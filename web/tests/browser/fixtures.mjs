@@ -208,7 +208,7 @@ export const eventStream = documents => ({ __eventStream: [documents].flat() });
 const statusLibrary = { id: "library-fixture", name: "Pharos SSD", drive: { name: "Pharos SSD", ejectable: true, location: "external", mounted: true }, portable: true, path: "/Volumes/Pharos SSD/Pharos" };
 export const idleStatus = {
   version: 1, revision: 1, generated_at: iso(0), host: { id: "test-mac", label: "This Mac" }, library: statusLibrary,
-  eject: { verdict: "safe", eta_seconds: null, checked: "polled", blockers: [], summary: "Nothing Pharos can see is writing to the library. Pharos checks everything again when you eject." },
+  eject: { verdict: "safe", eta_seconds: null, checked: "polled", blockers: [], headline: "Safe to eject; checked again on eject", summary: "Nothing Pharos can see is writing to the library. Pharos checks everything again when you eject." },
   operations: [], attention: [], freshness: null, resources: null, features: { unified_activity: true }, journal: { dropped: 0 },
 };
 const statusOperation = (id, changes) => ({
@@ -219,7 +219,7 @@ const statusOperation = (id, changes) => ({
 });
 export const busyStatus = {
   ...idleStatus, revision: 2,
-  eject: { verdict: "safe-in", eta_seconds: null, checked: "polled", summary: "Ejecting stops index changes after the current workspace; if that takes more than 7 s, Pharos refuses and you can try again.",
+  eject: { verdict: "safe-in", eta_seconds: null, checked: "polled", headline: "Safe to eject after the current workspace: stops index changes", summary: "Ejecting stops index changes after the current workspace; if that takes more than 7 s, Pharos refuses and you can try again.",
     blockers: [{ operation: "op-index", label: "Index changes", on_eject: "Stops between workspaces; the next index resumes it.", latency: "batch", verdict: "safe-in" }] },
   operations: [
     statusOperation("op-index", { step: { index: 3, count: 6, name: "Indexing a source with a very long name that has to wrap somewhere", source: "Claude Code", unit: "byte", done: 812e6, total: 1980e6, fraction: 0.41 },
@@ -236,11 +236,14 @@ export const managedStatus = snapshot => ({
   version: 1, revision: 3, generated_at: iso(0),
   libraries: [
     { id: "local", name: "Pending history", selected: true, connected: true, service: { state: "running" }, snapshot, eject: snapshot.eject, error: null },
-    { id: "archive", name: "Archive (Backup drive)", selected: false, connected: true, service: { state: "running" }, eject: idleStatus.eject, error: null,
-      snapshot: { ...idleStatus, operations: [statusOperation("op-copy", { kind: "library.transfer", label: "Copy library", state_label: "Copying the library", stoppable: false, stop: undefined, step: { index: 2, count: 3, name: "Verified copy", unit: "byte", done: 4e9, total: 1e10, fraction: 0.4 } })] } },
-    { id: "spare", name: "Spare", selected: false, connected: false, service: { state: "stopped" }, snapshot: null, eject: idleStatus.eject, error: null },
+    { id: "archive", name: "Archive (Backup drive)", selected: false, connected: true, service: { state: "running" }, state_label: "Copying the library", eject: idleStatus.eject, error: null, snapshot: idleStatus },
+    { id: "spare", name: "Spare", selected: false, connected: false, service: { state: "stopped" }, state_label: "Not open", snapshot: null, eject: idleStatus.eject, error: null },
   ],
-  app: { operations: [], update: null }, attention: snapshot.attention,
+  // As the broker reports its own work: in app.operations, naming the
+  // libraries it touches (a copy from the selected library to Archive).
+  app: { operations: [statusOperation("op-copy", { kind: "library.transfer", label: "Copy library", state_label: "Copying the library", process: "broker", stoppable: false, stop: undefined,
+    libraries: ["local", "archive"], step: { index: 2, count: 3, name: "Verified copy", unit: "byte", done: 4e9, total: 1e10, fraction: 0.4 } })], update: null },
+  attention: snapshot.attention,
 });
 
 export const defaultApi = {

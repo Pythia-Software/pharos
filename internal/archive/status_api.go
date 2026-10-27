@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"net/http"
 	"sync"
 	"time"
@@ -59,22 +58,52 @@ func (s *Server) statusDocument(ctx context.Context, fresh bool) map[string]any 
 }
 
 // statusTag identifies a document's content apart from when it was made:
-// equal tags mean nothing a surface shows has changed.
+// equal tags mean nothing a surface shows has changed. Every generated_at,
+// nested ones included (each child snapshot in the broker's document has
+// its own), is left out.
 func statusTag(document map[string]any) string {
-	content := maps.Clone(document)
-	delete(content, "generated_at")
-	data, _ := json.Marshal(content)
+	data, _ := json.Marshal(document)
+	var content any
+	_ = json.Unmarshal(data, &content)
+	data, _ = json.Marshal(withoutGeneratedAt(content))
 	sum := sha256.Sum256(data)
 	return fmt.Sprintf("\"%x\"", sum[:12])
+}
+
+func withoutGeneratedAt(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		delete(value, "generated_at")
+		for key, item := range value {
+			value[key] = withoutGeneratedAt(item)
+		}
+	case []any:
+		for index, item := range value {
+			value[index] = withoutGeneratedAt(item)
+		}
+	}
+	return value
 }
 
 // statusHub holds the latest polled document for every reader of a
 // service's (or the broker's) snapshot.
 type statusHub struct {
-	mu       sync.Mutex
-	tag      string
-	data     []byte
+	mu   sync.Mutex
+	tag  string
+	data []byte
+	// at is when the cached document's computation started, so an age
+	// limit equal to a reader's period is not missed by the time the
+	// computation took.
 	at       time.Time
+	revision uint64
+	// flight is the computation in progress, shared by every reader that
+	// arrives while it runs.
+	flight *statusFlight
+}
+
+type statusFlight struct {
+	done     chan struct{}
+	frame    statusFrame
 	revision uint64
 }
 
@@ -85,36 +114,77 @@ type statusFrame struct {
 
 // frame returns the latest document, computing it only when revision
 // changed since or it is older than maxAge, and never more often than once
-// per statusCoalesce: a caller that arrives sooner waits for the window and
-// shares the result.
+// per statusCoalesce. The computation runs outside the hub's lock, one at a
+// time: a reader that arrives while one runs waits for it (or gives up with
+// the cached frame when its own request ends).
 func (hub *statusHub) frame(ctx context.Context, maxAge time.Duration, revision func() uint64, compute func() map[string]any) statusFrame {
-	hub.mu.Lock()
-	defer hub.mu.Unlock()
-	current := revision()
-	if hub.data != nil && hub.revision == current && time.Since(hub.at) < maxAge {
-		return statusFrame{hub.tag, hub.data}
-	}
-	if wait := statusCoalesce - time.Since(hub.at); hub.data != nil && wait > 0 {
-		timer := time.NewTimer(wait)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return statusFrame{hub.tag, hub.data}
-		case <-timer.C:
+	for {
+		hub.mu.Lock()
+		current := revision()
+		cached := statusFrame{hub.tag, hub.data}
+		if hub.data != nil && hub.revision == current && time.Since(hub.at) < maxAge {
+			hub.mu.Unlock()
+			return cached
 		}
-		current = revision()
+		if flight := hub.flight; flight != nil {
+			hub.mu.Unlock()
+			select {
+			case <-flight.done:
+				if flight.frame.data != nil && flight.revision >= current {
+					return flight.frame
+				}
+				continue
+			case <-ctx.Done():
+				return cached
+			}
+		}
+		flight := &statusFlight{done: make(chan struct{})}
+		hub.flight = flight
+		last, cachedAny := hub.at, hub.data != nil
+		hub.mu.Unlock()
+		return hub.run(flight, last, cachedAny, revision, compute)
 	}
+}
+
+// run is one computation: it waits out the coalescing window, computes,
+// and publishes the result to the flight's waiters and the cache.
+func (hub *statusHub) run(flight *statusFlight, last time.Time, cached bool, revision func() uint64, compute func() map[string]any) statusFrame {
+	defer func() {
+		hub.mu.Lock()
+		if hub.flight == flight {
+			hub.flight = nil
+		}
+		hub.mu.Unlock()
+		close(flight.done)
+	}()
+	if wait := statusCoalesce - time.Since(last); cached && wait > 0 {
+		time.Sleep(wait)
+	}
+	started := time.Now()
+	current := revision()
 	document := compute()
 	data, _ := json.Marshal(document)
-	hub.tag, hub.data, hub.at, hub.revision = statusTag(document), data, time.Now(), current
-	return statusFrame{hub.tag, hub.data}
+	frame := statusFrame{statusTag(document), data}
+	hub.mu.Lock()
+	hub.tag, hub.data, hub.at, hub.revision = frame.tag, frame.data, started, current
+	flight.frame, flight.revision = frame, current
+	hub.mu.Unlock()
+	return frame
 }
+
+// statusComputeTimeout bounds one computation of a service's document: a
+// slow drive or probe delays readers by at most this much.
+var statusComputeTimeout = 5 * time.Second
 
 // statusCurrent is this service's latest polled document. It is computed
 // on the service's lifetime, not the caller's request: the result is
 // shared, and a reader that leaves must not spoil it.
 func (s *Server) statusCurrent(ctx context.Context, maxAge time.Duration) statusFrame {
-	return s.status.frame(ctx, maxAge, s.ops.currentRevision, func() map[string]any { return s.statusDocument(s.life.ctx, false) })
+	return s.status.frame(ctx, maxAge, s.ops.currentRevision, func() map[string]any {
+		compute, cancel := context.WithTimeout(s.life.ctx, statusComputeTimeout)
+		defer cancel()
+		return s.statusDocument(compute, false)
+	})
 }
 
 // serveFrame answers a GET of a snapshot with an ETag, or 304 when the
@@ -147,8 +217,12 @@ func (s *Server) serveStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) serveStatusStream(w http.ResponseWriter, r *http.Request) {
 	changes, unsubscribe := s.ops.subscribe()
 	defer unsubscribe()
-	streamStatus(w, r, changes, statusRecheck, func(ctx context.Context) statusFrame { return s.statusCurrent(ctx, statusRecheck) })
+	streamStatus(w, r, changes, statusRecheck, func(ctx context.Context) statusFrame { return s.statusCurrent(ctx, recheckAge(statusRecheck)) })
 }
+
+// recheckAge is the age limit a stream that rechecks every period passes:
+// a little under the period, so each tick computes afresh.
+func recheckAge(period time.Duration) time.Duration { return period * 3 / 4 }
 
 // streamStatus is the event loop both streams share: next returns the
 // current frame, and changes wakes it early.
