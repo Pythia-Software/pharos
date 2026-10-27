@@ -12,8 +12,15 @@ private runtime credential. The broker owns the primary connection, explicit MCP
 assignment and verified library transfers. See [Libraries and application setup](library-management.md)
 and the [implementation design](onboarding-and-library-design.md).
 
+Channel and Machine attribute work to its initiating conversation and device,
+including delegated usage. Execution machine records each session's placement
+separately. These dimensions are available across query tables, charts, cards,
+and MCP; see [channel and machine](channel-and-machine.md) for the evidence and
+inheritance contract. Unknown placement remains visible in totals.
+
 ## Safety defaults
 
+- Filesystem imports use live readers by default; experimental `retained_input_capture` opts into `capture_acquire.go` before planning/parsing. Immutable input inventories, row-evidence pins, and temporary native leases keep readers stable while capture continues. Accepted copy evidence is transactional with catalog rows; source acquisition/index summaries are separate. SQLite defaults and remaining rollout gates are documented in [Index changes](incremental-sync.md#source-acquisition-rollout).
 - Every configured source is read-only. No home-directory scan occurs: `pharos probe` and the new-Mac panel check only a fixed list of known agent locations, and nothing is indexed until you opt in.
 - No source is reclaimed. TL1 reclamation is mothballed and excluded from the default build.
 - The archive never calls `rm -rf`, `git worktree remove`, `git worktree prune`, or `git gc`. TL1 owns the worker handshake, lock/lease, atomic recheck, and exact-resource removal.
@@ -64,7 +71,7 @@ Past Work also shows when an archived commit appears on the local `origin/main` 
 - **Tools** analyzes tool use from retained transcripts. A daily summary table groups calls by tool, shell program and subcommand (`git status`, `go test`, `sed`), model, repository, and agent kind, with error counts by kind, durations, the tokens each result added to the context, the tokens re-read by later requests until compaction, and their API-equivalent cost. A per-call table filters and sorts every call; a summary row drills into its calls, and each call opens with its parsed commands, input, and result. Each call also records the sites it reached: URLs from web fetches, browser navigation, Codex web searches, and network commands such as `curl`, plus any web search query and the links it returned. Presets cover error rates, failure kinds, top commands, shell calls a dedicated tool could make, slow tools, test and build time, context cost, sites reached, and web searches. Definitions are in [`docs/tool-analytics.md`](tool-analytics.md).
 - **Findings** turns recurring, fixable patterns (failures, instruction drift between harnesses, CLI friction, context-heavy commands, orientation and exploration cost, cost outliers, and TL1 flavor problems) into plain-language cards with a proposed change. Findings go into per-target prompts ("carts") saved in the library; copying one is the intervention that starts a before-and-after measurement with a fixed analysis plan, guard metrics, and weekly net savings. Manual Index changes runs a full findings pass; scheduled indexing defers findings. Capture & index and separate index actions retain daily full discovery and watched-finding measurements between daily passes. See [`docs/findings.md`](findings.md).
 - **MCP** controls local agent access, provides a copyable stdio connection definition and setup prompt, and offers a query-table of recent tool calls with filters, saved views, metrics, response-size estimates, duration, result counts, truncation, and errors.
-- **Sources on this Mac** lists every configured source, path availability, coverage, last index attempt and successful index, and errors. Each card has an enable switch in its header. It offers **Find sources on this Mac** and links to Settings → Capture & index, which has **Capture & index** (capture this Mac, index captures from every Mac, then any pending library upgrade) and, separately, **Capture this Mac** and **Index captured files**. The header's **Index changes** button incrementally indexes this Mac's sources, then refreshes GitHub, identities, Git integration, Tools, Human Words, and findings without capturing source files.
+- **Sources on this Mac** lists every configured source, path availability, coverage, last index attempt and successful index, and errors. Each card has an enable switch in its header. It offers **Find sources on this Mac** and links to Settings → Capture & index, which has **Capture & index** (capture this Mac, index captures from every Mac, then any pending library upgrade) and, separately, **Capture this Mac** and **Index captured files**. The header's **Index changes** button incrementally indexes this Mac's sources, then refreshes GitHub, identities, Git integration, Tools, Human Words, and findings using live inputs by default and retained inputs only when explicitly enabled. Acquisition rollout is staged; see the [source acquisition matrix](incremental-sync.md#source-acquisition-rollout).
 - **Library drive** (in the header) names the drive holding the library and what is holding or writing the library (capture, index, backup, Git lookups, Library view indexing), with progress and estimated completion times based on recent successful runs. In the app, **Eject** at the right of the panel's title releases the library, stops agents' Pharos MCP servers running from the drive, quits, and ejects it. See [Library status and Eject](configuration.md#library-status-and-eject).
 - **Macs and captures** (in Settings → Sources) lists this Mac and every Mac whose captures are in the library, with when each source was captured and indexed and which need indexing. **Open Capture & index** links to the capture and index controls and their progress. A newly added Mac is captured right after onboarding, then offered **Index now**.
 - **Library drive** checks and **Backups** (in Settings → Health) show the drive's encryption, Spotlight, file system, free space, volume pin and backup age, each with what to do and a copyable command, and back the library up to a folder on another drive.
@@ -100,9 +107,22 @@ Deduplication uses account-scoped native IDs. Conductor aliases are retained as 
 
 No claim is made that ChatGPT desktop’s local cache is complete. ChatGPT is indexed from a user-provided supported export, and its health row makes that acquisition boundary visible.
 
+## UI feedback
+
+The **Send feedback** header tool reuses element annotations for optional bug
+reports, feature requests, and prompts. Users review their commentary and choose
+whether to attach element screenshots, captured URLs, element text, recent
+diagnostics, and a contact email. Sending explicitly uploads that report to the
+independent Go feedback service; archive indexing and search remain local.
+`internal/uifeedback` owns the reusable protocol, GCS store, Pythia-authenticated
+admin inbox, and notifications. `cmd/feedback` hosts it separately from Pharos's
+loopback service. The admin UI uses Query Table over the complete cached report
+population, with tags and permanent deletion. See [UI feedback](ui-feedback.md)
+for the protocol, privacy boundaries, deployment, and operation.
+
 ## Search, API, and MCP
 
-The Library UI sends its text, file, and URL searches to the Library query table as `find=` (with `find_kind`, `find_fuzzy`, `find_case`, and `find_separators`), which keeps the work `/api/library/find` hits and adds each row's best match and match count; `/api/library/find` still returns the hits themselves. Its text path uses FTS vocabulary and message verification without vector ranking. Legacy `/api/search`, query-table `search=`, and MCP conversation discovery still retain the previous concept/feature embedding behavior. No archive content leaves the machine. Extractive summaries cite retained source locators.
+The Library UI sends its text, file, and URL searches to the Library query table as `find=` (with `find_kind`, `find_fuzzy`, `find_case`, and `find_separators`), which keeps the work `/api/library/find` hits and adds each row's best match and match count; `/api/library/find` still returns the hits themselves. Its text path uses FTS vocabulary and message verification without vector ranking. Legacy `/api/search`, query-table `search=`, and MCP conversation discovery still retain the previous concept/feature embedding behavior. Search and MCP do not upload archive content. Extractive summaries cite retained source locators.
 
 The workspace page loads a workspace in pieces, since one long session with many sub-agents can retain hundreds of megabytes. `/api/work/{id}` returns the workspace without messages, plus what the page used to derive from all of them: each conversation's message count and first prompt, pull request links found in any message, and the files its tool calls touched. `/api/work/{id}/conversations/{id}` returns one conversation for the reader. Its long tool outputs and event bodies are shortened past 2 KB, with JSON keeping its structure so error flags, exit codes, and token usage survive, and are marked `text_clipped`/`raw_clipped`. `/api/messages/{id}` returns a message's original when the reader opens it. Finding text across a workspace's conversations runs on the service (`/find`). In the reader, a turn initially renders 50 events and adds pages of 150 as it scrolls; event details are built when opened.
 
@@ -537,3 +557,12 @@ Average parallelism divides workspace or session time by the full selected date 
 (24 hours for an ordinary day), or by the full interval when zoomed, including idle time.
 The reader defaults to the last seven captured days and the `America/Denver` timezone;
 `--days` and `--timezone` override those defaults.
+
+
+Historical preservation jobs (`capture_history*.go`) keep their fixed-cutoff
+inventory, pins, receipts and cursors independently of the catalog. They reuse
+native SQLite row evidence and immutable filesystem inventories; typed degraded
+recovery envelopes rescue catalog-only entities. Fresh rebuilds use production
+parsers/writers before opening a separate rollback oracle for comparison. See
+[the operator contract](capture-history.md); this facility does not run on
+startup or authorize production migrations.

@@ -30,8 +30,11 @@ Pharos gathers your conversations with Claude Code, Codex, Google Antigravity
 moves between Macs. You can search past work by what you were trying to do, see
 what each piece of work cost in tokens and dollars, find which tools and
 commands your agents spend their context on, and give your agents read-only
-access to the whole history over MCP. Nothing leaves your machine: every source
+access to the whole history over MCP. Indexing and search stay on your machine: every source
 is read-only, and the service only listens on loopback.
+
+The optional [feedback tool](docs/ui-feedback.md) sends only the report and
+attachments you review and submit to Pythia Software.
 
 For the story of why I built it and what I learned from my own numbers, read the
 blog post: **[grady.dev/projects/pharos](https://grady.dev/projects/pharos)**.

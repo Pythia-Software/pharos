@@ -188,74 +188,182 @@ func (c *Catalog) auditUnit(ctx context.Context, unit syncUnit, runID string, bu
 		result.Outcome, result.Detail = "deferred", "large group queued for manual verification"
 		return
 	}
+	if (unit.Reader == nil || captureViewOf(unit.Reader) == nil) && retainedAcquisitionEnabled(unit.Source) {
+		adapter := unit.Reader
+		var err error
+		if adapter == nil {
+			adapter, err = MakeAdapter(unit.Source)
+		}
+		if err != nil {
+			result.Detail = err.Error()
+			return
+		}
+		var input retainedInput
+		if unit.Source.Kind == "codex" && unit.Source.Options["sqlite_record_capture"] != true {
+			plan, e := planCapture(unit.Source)
+			if e != nil {
+				result.Detail = e.Error()
+				return
+			}
+			var bytes int64
+			for _, file := range plan.files {
+				if info, e := os.Stat(file.path); e == nil {
+					bytes += info.Size()
+				} else {
+					result.Detail = e.Error()
+					return
+				}
+			}
+			for _, database := range plan.databases {
+				if state, e := sqliteDependencyState(database.path); e == nil {
+					bytes += state.Size + state.WALSize
+				} else {
+					result.Detail = e.Error()
+					return
+				}
+			}
+			if budget > 0 && bytes > budget {
+				result.Outcome, result.Detail = "deferred", "dependency group exceeds verification budget"
+				return
+			}
+			if len(plan.databases) > 0 {
+				result.Outcome, result.Detail = "deferred", "SQLite record verification requires sqlite_record_capture"
+				return
+			} else {
+				input, err = c.acquireRetainedInput(ctx, adapter, nil)
+			}
+		} else if unit.Source.Kind == "antigravity" && unit.Source.Options["sqlite_record_capture"] != true {
+			input, err = c.acquireAuditFilesystemGroup(ctx, unit)
+		} else {
+			input, err = c.acquireRetainedInput(ctx, adapter, nil)
+		}
+		if err != nil {
+			result.Detail = err.Error()
+			if errors.Is(err, errCaptureBusy) || errors.Is(err, errAuditUnstable) {
+				result.Outcome = "deferred"
+			}
+			return
+		}
+		defer input.Close()
+		if captureViewOf(input.Adapter) == nil && isConductorSource(unit.Source.Kind) {
+			ctx = context.WithValue(ctx, sqliteAcquisitionKey{}, &sqliteAcquisitionBoundary{root: c.captureRootPath(), reconciled: map[string]bool{}, identities: map[string]map[string]string{}})
+		} else if captureViewOf(input.Adapter) == nil {
+			// Live SQLite audit never certifies a temporary copy as durable.
+			result.Outcome, result.Detail = "deferred", "SQLite acquisition rollout is pending; no retained revision verified"
+			return
+		}
+		unit.Reader, unit.Source = input.Adapter, input.Adapter.Config()
+	}
+	if unit.Reader != nil && unit.Record == nil {
+		view := captureViewOf(unit.Reader)
+		if view != nil && view.evidenceRevision == "" && view.recordRevision == nil {
+			lock, err := lockCaptureTarget(ctx, view.dir)
+			if err != nil {
+				result.Outcome, result.Detail = "deferred", err.Error()
+				return
+			}
+			manifest := view.manifest
+			// Historical Conductor readers map one superseded database, not
+			// the current source root. Lease exactly that generation.
+			canonicalRoot, _ := newCaptureView(view.host, view.dir, manifest).captured(manifest.Source.Path)
+			if isConductorSource(unit.Source.Kind) && canonicalRoot != unit.Reader.Config().Path {
+				original := view.original(unit.Reader.Config().Path)
+				rel, err := filepath.Rel(view.dir, unit.Reader.Config().Path)
+				if err != nil {
+					lock.Close()
+					result.Detail = err.Error()
+					return
+				}
+				state, _ := view.databaseState(unit.Reader.Config().Path)
+				selected := *manifest
+				selected.Source.Path = original
+				selected.Files = nil
+				selected.PathMap = []capturePathMapping{{Original: original, Captured: filepath.ToSlash(rel)}}
+				selected.Snapshots = []*capturedSnapshot{{Path: original, Captured: filepath.ToSlash(rel), Source: state}}
+				manifest = &selected
+			}
+			input, err := freezeManifestInput(ctx, captureTarget{Host: view.host, Source: manifest.Source.Name, Dir: view.dir}, SourceConfig{}, len(manifest.Snapshots) == 0 && manifest.RetainedInputCapture, manifest)
+			lock.Close()
+			if err != nil {
+				result.Detail = err.Error()
+				return
+			}
+			defer input.Close()
+			unit.Reader, unit.Source = input.Adapter, input.Adapter.Config()
+		}
+	}
+	if budget > 0 && unit.Reader != nil {
+		if view := captureViewOf(unit.Reader); view != nil {
+			var bytes int64
+			for _, file := range view.manifest.Files {
+				bytes += file.Size
+			}
+			for _, snapshot := range view.manifest.Snapshots {
+				bytes += snapshot.Size
+			}
+			if bytes > budget {
+				result.Outcome, result.Detail = "deferred", "retained dependency group exceeds verification budget"
+				return
+			}
+		}
+	}
 	dir, err := os.MkdirTemp(filepath.Dir(c.Path), ".pharos-verification-")
 	if err != nil {
 		result.Detail = err.Error()
 		return
 	}
 	defer os.RemoveAll(dir)
-	record, read, err := freezeAuditRecord(ctx, unit, filepath.Join(dir, "evidence"), budget)
+	read := unit.Parts
+	compare := func(record WorkspaceRecord) error {
+		scope, err := os.MkdirTemp(dir, "scope-")
+		if err != nil {
+			return err
+		}
+		differences, err := c.compareRetainedAuditRecord(ctx, unit, record, scope, budget)
+		for _, difference := range differences {
+			if !slices.Contains(result.Differences, difference) {
+				result.Differences = append(result.Differences, difference)
+			}
+		}
+		return err
+	}
+	if unit.Record != nil {
+		err = compare(*unit.Record)
+	} else if group, ok := unit.Reader.(*logicalGroupAdapter); ok {
+		compared := 0
+		err = group.Discover(func(record WorkspaceRecord) error {
+			matches := strings.HasPrefix(unit.ID, "sqlite:")
+			for _, conversation := range record.Conversations {
+				matches = matches || conversation.Origin == unit.ID
+			}
+			if !matches {
+				return nil
+			}
+			compared++
+			return compare(record)
+		})
+		if err == nil && compared == 0 {
+			err = errAuditUnstable
+		}
+	} else {
+		var record *WorkspaceRecord
+		record, read, err = freezeAuditRecord(ctx, unit, filepath.Join(dir, "evidence"), budget)
+		if err == nil && record == nil {
+			err = errAuditUnstable
+		}
+		if err == nil && partsSignature(read) != partsSignature(unit.Parts) {
+			err = errAuditUnstable
+		}
+		if err == nil {
+			err = compare(*record)
+		}
+	}
 	if err != nil {
 		result.Detail = err.Error()
-		if errors.Is(err, errAuditUnstable) || ctx.Err() != nil {
+		if errors.Is(err, errAuditUnstable) || errors.Is(err, errOlderCopy) || ctx.Err() != nil {
 			result.Outcome = "deferred"
 		}
 		return
-	}
-	if record == nil {
-		result.Outcome, result.Detail = "deferred", "the unit has no conversation to compare"
-		return
-	}
-	if partsSignature(read) != partsSignature(unit.Parts) {
-		result.Outcome, result.Detail = "deferred", "source version or group membership changed during acquisition"
-		return
-	}
-	seed, err := snapshotAuditScope(ctx, c, *record, budget)
-	if err != nil {
-		result.Detail = err.Error()
-		return
-	}
-	reference, err := newCatalog(filepath.Join(dir, "reference.sqlite3"))
-	if err != nil {
-		result.Detail = err.Error()
-		return
-	}
-	defer reference.Close()
-	reference.RepositoryAliases, reference.RepositorySeparate = c.RepositoryAliases, c.RepositorySeparate
-	if err := seedAuditScope(ctx, reference, seed); err != nil {
-		result.Detail = err.Error()
-		return
-	}
-	tx, err := reference.beginWrite(ctx)
-	if err != nil {
-		result.Detail = err.Error()
-		return
-	}
-	defer tx.Rollback()
-	if _, _, err := ingestCopyMode(tx, *record, false, unit.hostID(), unit.Source.Name, unit.Reader != nil && captureViewOf(unit.Reader) != nil, true, repositoryOptions{c.RepositoryAliases, c.RepositorySeparate}); err != nil {
-		result.Detail = err.Error()
-		if errors.Is(err, errOlderCopy) {
-			result.Outcome = "deferred"
-		}
-		return
-	}
-	if err := tx.Commit(); err != nil {
-		result.Detail = err.Error()
-		return
-	}
-	expected, err := snapshotAuditScope(ctx, reference, *record, budget)
-	if err != nil {
-		result.Detail = err.Error()
-		return
-	}
-	if ctx.Err() != nil {
-		result.Outcome, result.Detail = "deferred", "verification budget or cancellation"
-		return
-	}
-	for _, category := range auditCategories {
-		if normalizeAuditRows(category, seed[category]) != normalizeAuditRows(category, expected[category]) {
-			result.Differences = append(result.Differences, category)
-		}
 	}
 	if len(result.Differences) > 0 {
 		result.Outcome = "mismatch"
@@ -283,7 +391,9 @@ var errAuditUnstable = errors.New("audit source changed during acquisition")
 
 func readCapturedAuditRecord(ctx context.Context, unit syncUnit) (*WorkspaceRecord, []sourcePart, error) {
 	view := captureViewOf(unit.Reader)
-	adapter, err := MakeAdapter(unit.Source)
+	config := unit.Source
+	config.Path = unit.Reader.Config().Path
+	adapter, err := MakeAdapter(config)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -345,6 +455,7 @@ func readCapturedAuditRecord(ctx context.Context, unit syncUnit) (*WorkspaceReco
 		if record != nil {
 			return errors.New("audit selected more than one captured group")
 		}
+		retainedRecordIdentity(view, value, parts)
 		record, read = value, parts
 		return nil
 	})
@@ -1005,6 +1116,65 @@ func (s *Server) verifyAllInputs(ctx context.Context, runID string, progress fun
 	for _, target := range targets {
 		if ctx.Err() != nil {
 			break
+		}
+		manifest, err := loadCaptureManifest(target.Dir)
+		if err != nil {
+			summary.Errors++
+			continue
+		}
+		if len(manifest.Snapshots) == 0 || manifest.LatestRecords {
+			if _, err := os.Stat(filepath.Join(target.Dir, recordDir, "entities")); err == nil {
+				reader, close, err := openSQLiteReplay(ctx, target)
+				if err != nil {
+					summary.Errors++
+					continue
+				}
+				if reader != nil {
+					// Newest evidence gets the first comparison for each native
+					// session; history must not replace that observation.
+					slices.Reverse(reader.revisions)
+					err = reader.Discover(func(record WorkspaceRecord) error {
+						id := "sqlite:" + record.SourceID
+						if isConductorSource(manifest.Source.Kind) {
+							for key := range seen {
+								if strings.HasPrefix(key, target.Host.ID+"/"+target.Source+"/") && strings.Contains(key, ":sessions:"+record.SourceID+"/") {
+									return nil
+								}
+							}
+						}
+						key := target.Host.ID + "/" + target.Source + "/" + id
+						if seen[key] {
+							return nil
+						}
+						seen[key] = true
+						unit := syncUnit{ID: id, Source: reader.Config(), Host: target.Host.ID, Reader: reader, Record: &record}
+						result := s.Catalog.auditUnit(ctx, unit, runID, 0)
+						if err := s.Catalog.recordVerification(unit, result); err != nil {
+							result.Outcome = "read_error"
+						}
+						summary.Checked++
+						switch result.Outcome {
+						case "passed":
+							summary.Passed++
+						case "mismatch":
+							summary.Mismatch++
+						case "deferred":
+							summary.Deferred++
+						default:
+							summary.Errors++
+						}
+						if progress != nil {
+							progress(summary)
+						}
+						return nil
+					})
+					close()
+					if err != nil {
+						summary.Errors++
+					}
+					continue
+				}
+			}
 		}
 		adapter, manifest, view, err := openCaptureAdapter(target)
 		if err != nil {

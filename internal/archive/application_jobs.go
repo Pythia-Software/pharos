@@ -114,7 +114,7 @@ func (m *applicationManager) deliveryCycle(sourceID, targetID string) {
 	progress := func(s string) { m.reportJob("running", s) }
 	if _, e := os.Stat(pendingDeliveryPath(source)); os.IsNotExist(e) {
 		progress("Capturing approved sources into the pending library")
-		err = capturePending(m.ctx, source)
+		err = capturePendingLibrary(m.ctx, source)
 	}
 	if err == nil {
 		err = targetErr
@@ -129,7 +129,7 @@ func (m *applicationManager) deliveryCycle(sourceID, targetID string) {
 	}
 }
 
-func capturePending(ctx context.Context, config Config) error {
+func capturePendingLibrary(ctx context.Context, config Config) error {
 	config.PendingCapture = true
 	if err := config.checkLibrary(libraryVolumeIdentity); err != nil {
 		return err

@@ -481,6 +481,11 @@ func TestProbeAcceptWritesHostFileAndReloadsSources(t *testing.T) {
 	if !sources["claude-mbp"].Enabled || sources["codex"].Enabled || sources["claude-mbp"].File != host || sources["claude-mbp"].Path != filepath.Join(home, ".claude", "projects") {
 		t.Fatalf("running sources = %+v", sources)
 	}
+	for _, source := range sources {
+		if retainedAcquisitionEnabled(source) {
+			t.Fatal("source approval enabled an experimental preservation mode", source)
+		}
+	}
 	if _, status := probeCall(t, server, http.MethodGet, "/api/probe/status", ""); status["needs_onboarding"] != false || status["host_sources"] != float64(3) {
 		t.Fatalf("status after accept = %v", status)
 	}

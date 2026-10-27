@@ -30,11 +30,7 @@ fi
 IDENTITY=${PHAROS_CODESIGN_IDENTITY-'Developer ID Application: Pythia Software LLC'}
 PROFILE=${PHAROS_NOTARY_PROFILE-pharos}
 notarize() {
-    if [ -n "${PHAROS_NOTARY_KEYCHAIN:-}" ]; then
-        xcrun notarytool submit "$1" --keychain-profile "$PROFILE" --keychain "$PHAROS_NOTARY_KEYCHAIN" --wait
-    else
-        xcrun notarytool submit "$1" --keychain-profile "$PROFILE" --wait
-    fi
+    xcrun notarytool submit "$1" --keychain-profile "$PROFILE" --keychain "${PHAROS_NOTARY_KEYCHAIN:?Release keychain session required}" --wait
 }
 if [ "$MODE" = developer-id ] && { [ -z "$IDENTITY" ] || [ -z "$PROFILE" ]; }; then
     echo "A Developer ID Application signing identity and notarytool keychain profile are required." >&2
@@ -88,6 +84,10 @@ if printf '%s\n' "$LATEST" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
 fi
 
 if [ "$MODE" = developer-id ]; then
+    # Verify the explicit profile before building; never fall back to Local Items
+    # or login credentials, which can introduce independent password prompts.
+    xcrun notarytool history --keychain-profile "$PROFILE" \
+        --keychain "$PHAROS_NOTARY_KEYCHAIN" --output-format json >/dev/null
     # Fail before building if the release Mac lacks the embedded public key's
     # private key. On the first release, establish the stable, signed feed.
     python3 "$ROOT/macos/update-feed.py" bootstrap

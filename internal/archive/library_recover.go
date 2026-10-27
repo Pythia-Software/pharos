@@ -229,7 +229,7 @@ func RecoverLibrary(ctx context.Context, backup, destination string, progress fu
 		_, err = catalog.DB.ExecContext(ctx, `DELETE FROM sync_settings; DELETE FROM automatic_source_states; DELETE FROM sync_deferred; DELETE FROM sync_recovery_jobs;
  DELETE FROM cloud_backup_schedules;
  DELETE FROM library_delivery_checkpoints; DELETE FROM library_workspace_delivery_checkpoints;
- DELETE FROM source_states; DELETE FROM source_record_states; DELETE FROM source_item_states; DELETE FROM source_terminal_states; DELETE FROM sync_generations;`)
+ DELETE FROM source_input_states; DELETE FROM source_states; DELETE FROM source_record_states; DELETE FROM source_item_states; DELETE FROM source_terminal_states; DELETE FROM sync_generations;`)
 	}
 	if closeErr := catalog.Close(); err == nil {
 		err = closeErr
@@ -330,6 +330,9 @@ func validateCaptureEvidence(ctx context.Context, root string) error {
 		if err != nil {
 			return err
 		}
+		if err = validateRetainedRecords(ctx, dir, manifest); err != nil {
+			return fmt.Errorf("retained records in %s: %w", dir, err)
+		}
 		verify := func(rel string, size int64, checksum string) error {
 			if !filepath.IsLocal(rel) || rel == "." || strings.Contains(rel, "\\") {
 				return fmt.Errorf("unsafe captured evidence path: %q", rel)
@@ -372,6 +375,109 @@ func validateCaptureEvidence(ctx context.Context, root string) error {
 					return err
 				}
 			}
+		}
+		return nil
+	})
+}
+
+// A copied native snapshot is no longer the only preservation product. Check
+// every published row-evidence reference, including heads and group receipts,
+// before exposing the recovered library. Partial acquisitions remain evidence
+// of incomplete work and do not claim a complete closure.
+func validateRetainedRecords(ctx context.Context, dir string, manifest *captureManifest) error {
+	if err := checkSQLiteRecordCompatibility(dir); err != nil {
+		return err
+	}
+	pins, err := loadPreservationPins(dir)
+	if err != nil {
+		return err
+	}
+	for _, pin := range pins.Pins {
+		if pin.ReleasedAt != "" {
+			continue
+		}
+		digest, size, err := fileDigestContext(ctx, filepath.Join(dir, filepath.FromSlash(pin.Path)))
+		if err != nil {
+			return err
+		}
+		if digest != pin.SHA256 || size != pin.Size {
+			return fmt.Errorf("preservation pin failed verification: %s", pin.Path)
+		}
+		for _, dependency := range pin.Dependencies {
+			if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(dependency))); err != nil {
+				return err
+			}
+		}
+	}
+	store := newRecordStore(&sourceCapture{ctx: ctx, dir: dir, manifest: manifest, source: SourceConfig{Kind: manifest.Source.Kind}})
+	verified := map[recordObject]bool{}
+	verify := func(ref recordObject) error {
+		if verified[ref] {
+			return nil
+		}
+		if err := store.verify(ref); err != nil {
+			return err
+		}
+		verified[ref] = true
+		return nil
+	}
+	return filepath.WalkDir(filepath.Join(dir, recordDir), func(path string, entry os.DirEntry, err error) error {
+		if os.IsNotExist(err) && path == filepath.Join(dir, recordDir) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			return nil
+		}
+		rel, err := filepath.Rel(filepath.Join(dir, recordDir), path)
+		if err != nil {
+			return err
+		}
+		parts := strings.Split(filepath.ToSlash(rel), "/")
+		switch parts[0] {
+		case "entities":
+			if entry.Name() == "head.json" {
+				var head sqliteRecordHead
+				if err = historyReadJSON(path, &head); err != nil {
+					return err
+				}
+				if head.Version != recordFormat {
+					return fmt.Errorf("unsupported SQLite head; upgrade Pharos")
+				}
+				return verify(head.Revision)
+			}
+			var ref recordObject
+			if err = historyReadJSON(path, &ref); err != nil {
+				return err
+			}
+			return verify(ref)
+		case "groups":
+			var group sqliteRecordGroup
+			if err = historyReadJSON(path, &group); err != nil {
+				return err
+			}
+			if group.Version != recordFormat {
+				return fmt.Errorf("unsupported SQLite group; upgrade Pharos")
+			}
+			for _, ref := range group.Revisions {
+				if err = verify(ref); err != nil {
+					return err
+				}
+			}
+		case "receipts":
+			var receipt sqliteExportReceipt
+			if err = historyReadJSON(path, &receipt); err != nil {
+				return err
+			}
+			if receipt.Version != recordFormat {
+				return fmt.Errorf("unsupported SQLite receipt; upgrade Pharos")
+			}
+			return verify(receipt.Revision)
 		}
 		return nil
 	})

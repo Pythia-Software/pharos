@@ -58,7 +58,7 @@ type Server struct {
 	Catalog  *Catalog
 	config   Config
 	configMu sync.RWMutex
-	ingestMu sync.Mutex
+	ingestMu ingestCoordinator
 	// ingestStop stops the run holding ingestMu.
 	ingestStop ingestStopper
 	runsMu     sync.RWMutex
@@ -81,6 +81,7 @@ func NewServer(config Config, catalog *Catalog) *Server {
 	server := &Server{Catalog: catalog, config: config, runs: []*SyncRun{}, queryMetadata: make(chan struct{}, 1)}
 	server.life.init()
 	if catalog != nil {
+		server.ingestMu.path = catalog.Path
 		catalog.background = server.spawn
 		catalog.RepositoryAliases = config.RepositoryAliases
 		catalog.RepositorySeparate = config.RepositorySeparate
@@ -181,6 +182,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 	if strings.HasPrefix(r.URL.Path, "/api/ask/") {
 		s.askHTTP(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/feedback/") {
+		s.feedbackHTTP(w, r)
 		return
 	}
 	if r.URL.Path == "/api/query-object-references" {
@@ -458,6 +463,18 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 		writeResult(w, value, err)
 	case path == "/api/pricing":
 		writeJSON(w, s.Catalog.pricingStatus(), 200)
+	case path == "/api/origins":
+		if err := s.Catalog.ensureOrigins(r.Context()); err != nil {
+			writeError(w, err, 500)
+			return
+		}
+		rows, err := queryMapsContext(r.Context(), s.Catalog.reader(), "SELECT id,label,kind FROM machines ORDER BY label,id")
+		if err != nil {
+			writeError(w, err, 500)
+			return
+		}
+		rows = append(rows, map[string]any{"id": "environment:web", "label": "Web (device unknown)", "kind": "web"})
+		writeJSON(w, map[string]any{"machines": rows}, 200)
 	case path == "/api/usage/history":
 		value, err := s.Catalog.UsageHistory(r.Context())
 		writeResult(w, value, err)
@@ -718,7 +735,7 @@ func (s *Server) post(w http.ResponseWriter, r *http.Request) {
 }
 
 func searchOptions(query url.Values) (SearchOptions, error) {
-	options := SearchOptions{Query: query.Get("q"), Repository: query.Get("repository"), Source: query.Get("source"), File: query.Get("file"), Owner: query.Get("owner"), Provider: query.Get("provider"), Model: query.Get("model"), Effort: query.Get("effort"), From: query.Get("from"), To: query.Get("to"), Flavor: query.Get("flavor"), Version: query.Get("version"), Outcome: query.Get("outcome"), Error: query.Get("error"), Metric: query.Get("metric"), ChangedOnly: query.Get("changed") == "1", Substring: query.Get("substring") == "1", Limit: 50}
+	options := SearchOptions{Query: query.Get("q"), Repository: query.Get("repository"), Source: query.Get("source"), File: query.Get("file"), Owner: query.Get("owner"), Provider: query.Get("provider"), Channel: query.Get("channel"), MachineID: query.Get("machine_id"), ExecutionMachineID: query.Get("execution_machine_id"), Model: query.Get("model"), Effort: query.Get("effort"), From: query.Get("from"), To: query.Get("to"), Flavor: query.Get("flavor"), Version: query.Get("version"), Outcome: query.Get("outcome"), Error: query.Get("error"), Metric: query.Get("metric"), ChangedOnly: query.Get("changed") == "1", Substring: query.Get("substring") == "1", Limit: 50}
 	if query.Get("limit") != "" {
 		value, err := strconv.Atoi(query.Get("limit"))
 		if err != nil {
@@ -849,6 +866,8 @@ func (s *Server) sourceInventory() (map[string]any, error) {
 			stale = value
 		}
 		item := map[string]any{"name": source.Name, "kind": source.Kind, "account": source.Account, "path": nilIfEmpty(source.Path), "path_status": pathStatus, "enabled": source.Enabled, "capability": capability, "coverage": coverage, "last_attempt_at": state["last_attempt_at"], "last_success_at": state["last_success_at"], "pending_count": integer(state["pending_count"]), "error": state["error"], "stale": stale, "host_id": host.ID, "host_label": host.Label}
+		item["preservation_mode"] = preservationMode(source)
+		item["preservation"] = s.Catalog.inputPreservationStatus(context.Background(), host.ID, source.Name)
 		items = append(items, item)
 		if source.Enabled {
 			enabled++

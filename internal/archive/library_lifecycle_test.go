@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -89,6 +90,114 @@ func TestLibraryRegistryAssignmentAndCopies(t *testing.T) {
 		t.Fatal("recovery lost copy lineage", err)
 	}
 }
+func TestLibraryTransferRetainedEvidence(t *testing.T) {
+	useHost(t, "host-a")
+	a, b := lifecycleLibraries(t)
+	sourceDir := filepath.Join(t.TempDir(), "conductor")
+	exec := conductorFixture(t, sourceDir)
+	exec(addConductorSession("portable", 2)...)
+	source := SourceConfig{Name: "conductor", Kind: "conductor", Account: "local", Path: sourceDir, Enabled: true, Options: map[string]any{"sqlite_record_capture": true}}
+	a.Sources = []SourceConfig{source}
+	if run := runCapture(t, a); !run.OK {
+		t.Fatal(run)
+	}
+	c := reopenCatalog(t, a.CatalogPath)
+	c.setCaptureRoot(a.CaptureRoot)
+	recordTestReplay(t, a, source.Name, c)
+	var conversation string
+	if err := c.DB.QueryRow("SELECT id FROM conversations WHERE native_id='conductor:portable'").Scan(&conversation); err != nil {
+		t.Fatal(err)
+	}
+	execTx(t, c.DB,
+		`INSERT INTO machines(id,label,kind) VALUES('portable-mac','Portable Mac','device')`,
+		`INSERT INTO host_machines(host_id,machine_id) VALUES('host-a','portable-mac')`,
+		`INSERT INTO origin_observations(conversation_id,evidence_key,channel,machine_id,execution_machine_id,priority,evidence,channel_priority,machine_priority,execution_priority) VALUES('`+conversation+`','portable-test','desktop','portable-mac','portable-mac',100,'explicit fixture',100,100,100)`,
+	)
+	evidence, err := queryMaps(c.DB, "SELECT * FROM copy_evidence ORDER BY conversation_id")
+	if err != nil || len(evidence) == 0 {
+		t.Fatal("fixture did not associate raw evidence", err)
+	}
+	c.Close()
+	receipt, err := TransferLibrary(t.Context(), a, b, true, nil)
+	if err != nil {
+		t.Fatal("move row evidence", err)
+	}
+	if catalogCount(t, a, "messages") != 0 || catalogCount(t, a, "copy_evidence") != 0 {
+		t.Fatal("move left history in pending")
+	}
+	c = reopenCatalog(t, b.CatalogPath)
+	actual, err := queryMaps(c.DB, "SELECT * FROM copy_evidence ORDER BY conversation_id")
+	if err != nil || jsonText(actual) != jsonText(evidence) {
+		t.Fatal("move lost raw authority", actual, evidence, err)
+	}
+	origins, err := c.conversationOrigins(t.Context())
+	if err != nil || origins[conversation]["channel"] != "desktop" || origins[conversation]["machine_id"] != "portable-mac" {
+		t.Fatal("move lost origin observations", origins[conversation], err)
+	}
+	// Equal source versions with different raw bytes must stay rejected even
+	// after a transfer, while a newer extractor can reuse the same evidence.
+	var rejected bool
+	err = c.writeTransaction(t.Context(), "check transferred evidence", func(tx *sql.Tx) error {
+		row := actual[len(actual)-1]
+		var e error
+		rejected, e = evidenceVersionRejected(tx, firstString(row["host_id"]), firstString(row["workspace_id"]), firstString(row["conversation_id"]), firstString(row["origin"]), integer(row["version"]), integer(row["version"]), true, "different-raw-identity")
+		return e
+	})
+	c.Close()
+	if err != nil || !rejected {
+		t.Fatal("transferred authority accepted conflicting equal-version evidence", err)
+	}
+	imported := filepath.Join(b.CaptureRoot, ".imports", receipt.ID, "captures")
+	if err = validateCaptureEvidence(t.Context(), imported); err != nil {
+		t.Fatal("moved record closure is invalid", err)
+	}
+	recovered, err := RecoverLibrary(t.Context(), filepath.Dir(b.Path), filepath.Join(t.TempDir(), "recovered"), nil)
+	if err != nil {
+		t.Fatal("recover moved row evidence", err)
+	}
+	if catalogCount(t, recovered, "copy_evidence") != len(evidence) {
+		t.Fatal("recovery lost evidence authority")
+	}
+	// A logical-only source still has a closure to validate without any native
+	// database snapshot. Missing row chunks must never publish a usable library.
+	logical, _ := lifecycleLibraries(t)
+	logical.Sources = []SourceConfig{source}
+	if err = acquireConductorSession(t.Context(), logical.CaptureRoot, source, filepath.Join(sourceDir, "conductor.db"), "portable", func(WorkspaceRecord) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err = validateCaptureEvidence(t.Context(), logical.CaptureRoot); err != nil {
+		t.Fatal("logical-only evidence rejected", err)
+	}
+	if _, err = RecoverLibrary(t.Context(), filepath.Dir(logical.Path), filepath.Join(t.TempDir(), "logical-recovered"), nil); err != nil {
+		t.Fatal("logical-only recovery failed", err)
+	}
+	store := recordTestStore(t, logical, source.Name)
+	revisions, err := store.revisions()
+	if err != nil || len(revisions) == 0 {
+		t.Fatal(revisions, err)
+	}
+	var chunk recordObject
+	for _, table := range revisions[0].Revision.Tables {
+		if len(table.Chunks) > 0 {
+			chunk = table.Chunks[0]
+			break
+		}
+	}
+	if chunk.Hash == "" {
+		t.Fatal("fixture has no row chunk")
+	}
+	if err = os.Remove(store.objectPath(chunk.Hash)); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(t.TempDir(), "incomplete")
+	if _, err = RecoverLibrary(t.Context(), filepath.Dir(logical.Path), dest, nil); err == nil {
+		t.Fatal("recovery accepted a missing logical row chunk")
+	}
+	if _, err = os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatal("failed logical recovery published a library", err)
+	}
+}
+
 func TestLibraryTransferCopyMoveAndPreferences(t *testing.T) {
 	a, b := lifecycleLibraries(t)
 	c := reopenCatalog(t, a.CatalogPath)
@@ -626,7 +735,7 @@ func TestLibraryRecoveryCandidate(t *testing.T) {
 	canonicalExport(t, path, "Surviving original", "recapture after recovery")
 	source := SourceConfig{Name: "surviving", Kind: "canonical", Path: path, Account: "local", Enabled: true}
 	a.Sources = []SourceConfig{source}
-	if err = capturePending(context.Background(), a); err != nil {
+	if err = capturePendingLibrary(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = TransferLibrary(context.Background(), a, candidate, true, nil); err != nil {
@@ -645,7 +754,7 @@ func TestLibraryRecoveryCandidate(t *testing.T) {
 		}
 		recovered.Sources = []SourceConfig{source}
 		recovered.DeliveryTargetInstance = randomToken()
-		if err = capturePending(context.Background(), recovered); err != nil {
+		if err = capturePendingLibrary(context.Background(), recovered); err != nil {
 			t.Fatal(err)
 		}
 		if catalogCount(t, recovered, "messages") != 1 {
@@ -1033,14 +1142,14 @@ func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
 		staying := `{"id":"stay-chat","provider":"codex","messages":[{"id":"q","role":"user","text":"unchanged sibling"}]}`
 		writeSourceFile(t, file, `{"workspaces":[{"id":"before","title":"Before","conversations":[`+moving+`]},{"id":"stable","title":"Stable","conversations":[`+staying+`]}]}`)
 		a.Sources = []SourceConfig{{Name: "workspace", Kind: "canonical", Path: file, Account: "local", Enabled: true}}
-		if err := capturePending(t.Context(), a); err != nil {
+		if err := capturePendingLibrary(t.Context(), a); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := TransferLibrary(t.Context(), a, b, true, nil); err != nil {
 			t.Fatal(err)
 		}
 		writeSourceFile(t, file, `{"workspaces":[{"id":"after","title":"After","conversations":[`+moving+`]},{"id":"stable","title":"Stable","conversations":[`+staying+`]}]}`)
-		if err := capturePending(t.Context(), a); err != nil {
+		if err := capturePendingLibrary(t.Context(), a); err != nil {
 			t.Fatal(err)
 		}
 		if catalogCount(t, a, "conversations") != 1 {
@@ -1070,7 +1179,7 @@ func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
 		file := filepath.Join(t.TempDir(), "rewrite.json")
 		canonicalExport(t, file, "Rewrite", "before")
 		a.Sources = []SourceConfig{{Name: "rewrite", Kind: "canonical", Path: file, Account: "local", Enabled: true}}
-		if err := capturePending(t.Context(), a); err != nil {
+		if err := capturePendingLibrary(t.Context(), a); err != nil {
 			t.Fatal(err)
 		}
 		info, err := os.Stat(file)
@@ -1081,12 +1190,17 @@ func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
 		if err = os.Chtimes(file, info.ModTime(), info.ModTime()); err != nil {
 			t.Fatal(err)
 		}
-		if err = capturePending(t.Context(), a); err != nil {
+		if err = capturePendingLibrary(t.Context(), a); err != nil {
 			t.Fatal(err)
 		}
 		captured, err := capturedPathFor(a.CaptureRoot, currentHost().ID, "rewrite", file)
 		if err != nil || !strings.Contains(readText(t, captured), "after!") {
 			t.Fatal("pending capture kept old bytes after a same-size, same-mtime rewrite", err)
+		}
+		manifest := readCaptureManifest(t, a, "rewrite")
+		entry := manifest.Files[0]
+		if entry.MTimeNS != info.ModTime().UnixNano() || entry.ObservedNS <= entry.MTimeNS || len(entry.Previous) == 0 || entry.ObservedNS <= entry.Previous[0].ObservedNS {
+			t.Fatal("verified rewrite did not retain its native metadata and newer observation", entry)
 		}
 		if _, err = TransferLibrary(t.Context(), a, b, true, nil); err != nil {
 			t.Fatal(err)
@@ -1098,7 +1212,7 @@ func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
 		if err != nil || !strings.Contains(messages, "after!") {
 			t.Fatal("rewritten bytes were not delivered", messages, err)
 		}
-		if err = capturePending(t.Context(), a); err != nil {
+		if err = capturePendingLibrary(t.Context(), a); err != nil {
 			t.Fatal(err)
 		}
 		if catalogCount(t, a, "messages") != 0 {
@@ -1110,7 +1224,7 @@ func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
 	writeSourceFile(t, path, `{"workspaces":[{"id":"pending-session","title":"Pending","conversations":[{"id":"pending-chat","provider":"codex","messages":[{"id":"q","role":"user","text":"pending text"}]},{"id":"unchanged-chat","provider":"codex","messages":[{"id":"q2","role":"user","text":"already delivered sibling"}]}]}]}`)
 	source := SourceConfig{Name: "pending", Kind: "canonical", Path: path, Account: "local", Enabled: true}
 	a.Sources = []SourceConfig{source}
-	if err := capturePending(context.Background(), a); err != nil {
+	if err := capturePendingLibrary(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := TransferLibrary(context.Background(), a, b, true, nil); err != nil {
@@ -1147,7 +1261,7 @@ func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
 	if err = os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
 		t.Fatal(err)
 	}
-	if err = capturePending(context.Background(), a); err != nil {
+	if err = capturePendingLibrary(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}
 	if catalogCount(t, a, "messages") != 1 {
@@ -1159,7 +1273,7 @@ func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
 	// Metadata changes carry information even when every message is identical.
 	contents = strings.Replace(readText(t, path), `"id":"unchanged-chat"`, `"id":"unchanged-chat","harness_version_last":"2.0"`, 1)
 	writeSourceFile(t, path, contents)
-	if err = capturePending(context.Background(), a); err != nil {
+	if err = capturePendingLibrary(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}
 	if catalogCount(t, a, "messages") != 1 {
@@ -1172,7 +1286,7 @@ func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
 	// bringing unchanged conversations back into the local pending library.
 	contents = strings.Replace(readText(t, path), `"title":"Pending"`, `"title":"Renamed workspace","outcome":"complete","metadata":{"branch":"updated-branch"}`, 1)
 	writeSourceFile(t, path, contents)
-	if err = capturePending(context.Background(), a); err != nil {
+	if err = capturePendingLibrary(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}
 	if catalogCount(t, a, "messages") != 0 {
@@ -1197,7 +1311,7 @@ func TestPendingCaptureDoesNotRecaptureDeliveredInputs(t *testing.T) {
 		t.Fatal("workspace-only delivery changed conversation storage or failed to empty the pending workspace")
 	}
 	a.DeliveryTargetInstance = randomToken()
-	if err = capturePending(context.Background(), a); err != nil {
+	if err = capturePendingLibrary(context.Background(), a); err != nil {
 		t.Fatal(err)
 	}
 	if catalogCount(t, a, "messages") != 2 {

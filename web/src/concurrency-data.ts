@@ -1,7 +1,7 @@
 export type Interval = [number, number];
 export type ConcurrencyThread = {
   id: string; conversation_id: string; work_id: string; workspace_id: string; workspace_name: string;
-  repository: string; title: string; provider: string; model: string; agent_depth: number;
+  channel?: string; machine_id?: string; execution_machine_id?: string; repository: string; title: string; provider: string; model: string; agent_depth: number;
   turns: Interval[]; model_spans: Interval[]; root_conversation_id?: string;
   continuous_spans?: Interval[];
 };

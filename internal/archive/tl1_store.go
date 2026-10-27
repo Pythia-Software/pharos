@@ -237,7 +237,11 @@ func (c *Catalog) storeTL1Snapshots(ctx context.Context, snapshots []tl1Snapshot
 				return err
 			}
 			defer func() { _ = tx.Rollback(); finish() }()
-			if fromCapture {
+			hasEvidence := false
+			if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM source_evidence WHERE host_id=? AND source_kind='tl1' AND source_account=? AND entity=?)", host, snapshot.Account, snapshot.Installation.ID).Scan(&hasEvidence); err != nil {
+				return err
+			}
+			if fromCapture || snapshot.EvidenceIdentity != "" || hasEvidence {
 				stored, known, err := storedTL1Version(tx, snapshot.Installation.ID)
 				if err != nil {
 					return err
@@ -245,8 +249,26 @@ func (c *Catalog) storeTL1Snapshots(ctx context.Context, snapshots []tl1Snapshot
 				if known && snapshot.Version < stored {
 					return nil
 				}
+				if known && snapshot.Version == stored && (snapshot.EvidenceIdentity != "" || hasEvidence) {
+					var identity string
+					err := tx.QueryRow("SELECT identity FROM source_evidence WHERE host_id=? AND source_kind='tl1' AND source_account=? AND entity=? AND version=?", host, snapshot.Account, snapshot.Installation.ID, stored).Scan(&identity)
+					if err == sql.ErrNoRows || err == nil && identity != snapshot.EvidenceIdentity {
+						return nil
+					}
+					if err != nil {
+						return err
+					}
+				}
 			}
 			if err := storeTL1Snapshot(tx, snapshot, host); err != nil {
+				return err
+			}
+			if snapshot.EvidenceIdentity != "" {
+				_, err = tx.Exec(`INSERT INTO source_evidence(host_id,source_kind,source_account,entity,version,identity,revision) VALUES(?,'tl1',?,?,?,?,?) ON CONFLICT(host_id,source_kind,source_account,entity) DO UPDATE SET version=excluded.version,identity=excluded.identity,revision=excluded.revision`, host, snapshot.Account, snapshot.Installation.ID, snapshot.Version, snapshot.EvidenceIdentity, snapshot.EvidenceRevision)
+			} else {
+				_, err = tx.Exec("DELETE FROM source_evidence WHERE host_id=? AND source_kind='tl1' AND source_account=? AND entity=?", host, snapshot.Account, snapshot.Installation.ID)
+			}
+			if err != nil {
 				return err
 			}
 			return tx.Commit()

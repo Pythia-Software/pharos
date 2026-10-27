@@ -15,6 +15,19 @@ import { defaultApi, cloudScheduledStatus, rootConversation, workID } from "./fi
 import { EMPTY_QUERY, encodeQuery, withGroupingKeys } from "@pythia-software/query-table-core";
 
 const work = `/work/${workID}`;
+async function publishAppUpdate(page, state) {
+  await page.evaluate(state => {
+    window.pharosUpdateFixture = state;
+    window.webkit = {messageHandlers: {pharosUpdates: {postMessage: async ({action}) => {
+      if (action === 'install') {
+        window.pharosUpdateFixture = {...window.pharosUpdateFixture, phase: 'downloading'};
+        dispatchEvent(new CustomEvent('pharos:app-update', {detail: window.pharosUpdateFixture}));
+      }
+      return window.pharosUpdateFixture;
+    }}}};
+    dispatchEvent(new CustomEvent('pharos:app-update', {detail: state}));
+  }, state);
+}
 const exploreGroupedSearch = `/library?${new URLSearchParams({ q_library: encodeQuery(withGroupingKeys({ ...EMPTY_QUERY, select: [{ field: "repository_name" }], where: [{ field: "repository_name", op: "=", value: "repo-1" }] }, ["repository_name"])), search: "cache", text_plain: "1" })}`;
 const analyzeFilteredQuery = { ...EMPTY_QUERY, select: [{ field: "tool_name" }, { field: "duration_ms" }], where: [{ field: "tool_name", op: "=", value: "Bash" }] };
 const analyzeGroupedQuery = { ...withGroupingKeys(analyzeFilteredQuery, ["tool_name"]), where: [{ field: "tool_name", op: "!=", value: "Read" }] };
@@ -80,6 +93,10 @@ const ROUTES = [
     await page.locator('#library-actions [data-flow=recover]').click();await page.locator('#backup').fill('/Backups/Library');await page.locator('#submit').click();
     if(step===2){await page.locator('#recover-path').fill('/Libraries/Restored');await page.locator('#submit').click()}
   },shown:step===1?'#wizard-recover-target:not([hidden])':'#wizard-recover-review:not([hidden])'})),
+  ...[["Search", "/library"], ["Analyze", "/analyze"], ["Optimize", "/findings"]].flatMap(([name, url]) => [["unconfigured", false, false], ["idle", true, false], ["syncing", true, true]].map(([state, sources, busy]) => ({
+    name: `${name} empty library ${state}`, url, ready: ".view.active .library-empty-card",
+    api: { "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], library_empty: true, has_sources: sources, busy, sources: sources ? [{ name: "codex" }] : [], available_sources: [] } },
+  }))),
   ...["dark","light"].flatMap(theme => [
   {name:"Ask Pharos removed CLI",url:"/",ready:"#pharos-ask .home-search-trigger",api:{"GET /api/ask/status":{settings:{enabled:true,showInvitation:true,selection:askSelection},providers:[]}}},
   {name:"Ask Pharos opted out",url:"/",ready:"#pharos-ask .home-search-trigger",api:{"GET /api/ask/status":{settings:{enabled:false,showInvitation:false},providers:askProviders}}},
@@ -165,6 +182,15 @@ const ROUTES = [
   { name: "Carbon Impact", url: "/analyze?analyze_view=carbon", ready: "#carbonSummary" },
   { name: "Analyze conversations", url: "/analyze?analyze_view=conversations", ready: "#queryTableUsage .qt-row" },
   { name: "Analyze workspace dashboards", url: "/analyze", ready: ".usage-dashboard .usage-chart" },
+  ...['tokens', 'human', 'skills', 'time', 'carbon'].map(topic => ({
+    name: `Dashboard pinned key ${topic}`, url: `/analyze?analyze_topic=${topic}`, ready: '.usage-chart-bars:not(.loading) > button',
+    open: async page => {
+      const chart = page.locator('.usage-dashboard .usage-chart').first();
+      await chart.locator('.usage-chart-bars > button').filter({ has: page.locator('i') }).first().focus();
+      await page.keyboard.press('Enter');
+      await chart.getByRole('group', { name: /^Details for / }).getByRole('link').first().waitFor();
+    }, shown: '.usage-chart-tip.pinned',
+  })),
   { name: "Analyze relative query previews", url: `/analyze?${new URLSearchParams({ analyze_topic: "tokens", analyze_filters: encodeQuery({ ...EMPTY_QUERY, where: [{ field: "first_usage_at", op: ">=", value: "-30d" }, { field: "first_usage_at", op: "<", value: "+0s" }, { field: "provider", op: "=", value: "codex" }] }) })}`, ready: ".usage-query-destinations" },
   { name: "Analyze workspace cumulative", url: `/analyze?analyze_topic=tokens&analyze_chart=${encodeURIComponent(JSON.stringify({ display: "cumulative", period: "days", days: 3, split: "model_family", metric: "percent_cost" }))}`, ready: ".usage-dashboard .usage-chart-lines" },
   { name: "Analyze cumulative human", url: `/analyze?analyze_topic=human&analyze_chart=${encodeURIComponent(JSON.stringify({"display": "cumulative", "rollingPeriods": 20}))}`, ready: ".usage-dashboard .usage-chart-lines" },
@@ -273,11 +299,13 @@ const ROUTES = [
   { name: "Capture & index empty", url: "/settings/sync", ready: "#syncHistoryTables .qt-empty", api: { "GET /api/sync/status": { ...defaultApi["GET /api/sync/status"], history: [], source_states: [] } } },
   { name: "Legacy Findings settings", url: "/settings/optimization", ready: ".findings-settings .findings-panel" },
   { name: "Header settings", url: "/settings/header", ready: "#headerActive .header-tool" },
-  { name: "App preferences", url: "/settings/preferences", ready: "#optionalBehaviors .optional-behavior" },
-  { name: "Mac menu syncing", url: "/settings/preferences", ready: "#menuBarActive .menu-bar-detail", api: {
+  { name: "App preferences", url: "/settings/preferences", ready: "#showMacMenuBar" },
+  { name: "Mac menu disabled", url: "/settings/preferences", ready: "#showMacMenuBar", preferences: { 'pharos-menu-bar': { enabled: false } } },
+  { name: "Mac menu expanded", url: "/settings/preferences", ready: "#showMacMenuBar", open: page => page.getByRole('button', { name: 'Expand', exact: true }).click(), shown: '#menuBarActive button' },
+  { name: "Mac menu syncing", url: "/settings/preferences", ready: "#showMacMenuBar", open: page => page.getByRole('button', { name: 'Expand', exact: true }).click(), shown: '#menuBarActive .menu-bar-detail', api: {
     'GET /api/menu-bar/status': {...defaultApi['GET /api/menu-bar/status'], library: {activities: [{label: 'Manual sync: evaluating findings while checking every captured conversation and its retained tool results', progress: .22, estimated_completion_at: new Date(Date.now() + 60000).toISOString()}]}},
   } },
-  { name: "Mac menu with all items", url: "/settings/preferences", ready: "#menuBarActive button", preferences: { 'pharos-menu-bar': { cost: true, backup: true, space: true, index: true, eject: true, search: true, analyze: true, optimize: true, capture: true, health: true, sources: true, finder: true } } },
+  { name: "Mac menu with all items", url: "/settings/preferences", ready: "#showMacMenuBar", open: page => page.getByRole('button', { name: 'Expand', exact: true }).click(), shown: '#menuBarActive button', preferences: { 'pharos-menu-bar': { cost: true, backup: true, space: true, index: true, eject: true, search: true, analyze: true, optimize: true, capture: true, health: true, sources: true, finder: true } } },
   { name: "Workspace overview", url: work, ready: ".delegation-table tbody tr" },
   { name: "Workspace parallel activity", url: `${work}?explorer=parallel`, ready: ".delegation-parallel" },
   { name: "Long transcript", url: `${work}/conversation/${rootConversation}`, ready: ".conversation-panel .turn" },
@@ -405,6 +433,11 @@ test('header fit responds to tool choices and label changes without resizing', {
   await settled();
   const more = page.getByRole('button', { name: 'More tools', exact: true });
   assert.equal(await more.isVisible(), false, 'a smaller tool selection fits');
+  await publishAppUpdate(page, {version: '12.123.456-beta.123', phase: 'available'});
+  await more.waitFor();
+  assert.deepEqual(await layoutProblems(page), [], 'the release action reflows the measured combo without resizing');
+  await publishAppUpdate(page, {});
+  await more.waitFor({state: 'hidden'});
   const name = page.locator('#headerLibrary .pharos-drive-name');
   const original = await name.textContent();
   await name.evaluate(element => { element.textContent = 'A library with a much longer drive label'; });
@@ -425,6 +458,49 @@ test('header fit responds to tool choices and label changes without resizing', {
   await tab.evaluate((button, label) => { button.textContent = label; }, label);
   await navigation.waitFor();
   await settled();
+});
+
+for (const width of [1440, 1024, 390, 320]) test(`Pharos release action fits through download and relaunch @ ${width}`, {skip}, async t => {
+  const {page, settled, shot} = await open(t, {
+    url: '/library', viewport: {width, height: width < 500 ? 844 : 900}, ready: '#queryTableLibrary .qt-row',
+    api: {'GET /api/library/status': {...defaultApi['GET /api/library/status'],
+      drive: {...defaultApi['GET /api/library/status'].drive, ejectable: true, name: 'My portable Pharos library with a long drive name'}}},
+  });
+  const more = page.getByRole('button', {name: 'More tools', exact: true});
+  const reveal = async () => {
+    await settled();
+    if (!await page.locator('#pharosAppUpdate').isVisible()) await more.click();
+    await page.locator('#pharosAppUpdate').waitFor();
+    assert.deepEqual(await layoutProblems(page), []);
+  };
+  await shot('current');
+  await publishAppUpdate(page, {version: '0.8.0', phase: 'available'});
+  await reveal();
+  const updateWidth = (await page.locator('#pharosAppUpdate').boundingBox()).width;
+  await page.locator('#pharosAppUpdate').hover();
+  await shot('release-available');
+  await page.locator('#pharosAppUpdate').click();
+  await reveal();
+  await shot('download-started');
+  for (const state of [
+    {version: '0.8.0', phase: 'downloading', progress: 42},
+    {version: '0.8.0', phase: 'preparing'},
+    {version: '0.8.0', phase: 'installing'},
+    {version: '12.123.456-beta.123', phase: 'available'},
+  ]) {
+    await publishAppUpdate(page, state);
+    await reveal();
+    assert.equal((await page.locator('#pharosAppUpdate').boundingBox()).width, updateWidth, 'progress and long version tooltips keep the same icon width');
+    await page.locator('#pharosAppUpdate').hover();
+    await shot(state.phase === 'available' ? 'long-version' : state.phase);
+  }
+  // Availability can change while the overflow popup is closed. It must
+  // still use the new measured width when tools return to the header.
+  if (await page.locator('#headerOverflow').evaluate(el => el.matches(':popover-open'))) await page.keyboard.press('Escape');
+  await publishAppUpdate(page, {});
+  await page.setViewportSize({width: 1440, height: 900});
+  await settled();
+  assert.deepEqual(await layoutProblems(page), []);
 });
 
 test("macOS window controls stay clear of the lighthouse when resizing", { skip }, async t => {

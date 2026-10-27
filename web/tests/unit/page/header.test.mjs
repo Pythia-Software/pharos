@@ -18,6 +18,11 @@ test('headers overflow only tools that do not fit and retain saved order', () =>
   assert.deepEqual(place(saved, 40), { inline: [], overflow: saved });
   assert.deepEqual(place([], 40), { inline: [], overflow: [] });
   assert.deepEqual(place(saved, 323), { inline: saved, overflow: [] }, 'tools return as soon as there is room');
+  widths.library += 35;
+  assert.deepEqual(place(saved, 323), { inline: ['history', 'settings', 'search'], overflow: ['theme', 'library'] }, 'a release button changes the measured combo width');
+  assert.deepEqual(place(saved, 358), { inline: saved, overflow: [] }, 'the expanded combo fits at its new measured boundary');
+  widths.library -= 35;
+  assert.deepEqual(place(saved, 323), { inline: saved, overflow: [] }, 'removing the release action restores the previous fit');
   assert.deepEqual(saved, ['theme', 'library', 'history', 'settings', 'search']);
 });
 

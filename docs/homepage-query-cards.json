@@ -15261,6 +15261,468 @@
       }
     },
     {
+      "id": "origin-tokens-channel",
+      "title": "Tokens by channel",
+      "description": "Recorded tokens over the last {days} days, grouped by channel.",
+      "category": "usage",
+      "idea": "cost-01",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "days": [
+        7,
+        30
+      ],
+      "unit": "tokens",
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [],
+      "action": "Explore Tokens and Cost",
+      "note": "Retained positive-token usage facts, including assumed, partial, and unpriced usage. Tokens are recorded processing volume, not unique text, context-window size, human effort, quality, or value. Repeated cached input contributes again on each recorded request. Time selection uses first_usage_at at the retained fact grain, which can use request time or session-based placement (session-start or reconciled session-remainder). Facts are not prorated. Daily buckets use their recorded local day. Missing repositories remain Unspecified. Channel and Machine follow the initiating conversation, including delegated usage. Execution machine identifies the session's execution location. Unknown attribution stays in the denominator; a capture host is not necessarily an execution device.",
+      "exploration": {
+        "keys": [
+          "channel"
+        ],
+        "summaries": [
+          {
+            "id": "tu_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Recorded tokens"
+          },
+          {
+            "id": "origin_sessions",
+            "op": "count_distinct",
+            "field": "agent_session_id",
+            "label": "Agent sessions"
+          }
+        ],
+        "valueField": "tu_tokens",
+        "unit": "tokens",
+        "subjects": "token groups",
+        "action": "Inspect channel usage",
+        "labelFields": [
+          "channel"
+        ]
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "tu_tokens",
+        "kind": "bar-horizontal",
+        "maxGroups": 6,
+        "showOther": true
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "channel",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect channel usage"
+      }
+    },
+    {
+      "id": "origin-cost-channel",
+      "title": "API cost by channel",
+      "description": "Recorded API-equivalent cost over the last {days} days, grouped by channel.",
+      "category": "usage",
+      "idea": "cost-01",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "days": [
+        7,
+        30
+      ],
+      "unit": "USD",
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [],
+      "action": "Explore Tokens and Cost",
+      "note": "API list-price equivalent, not subscription spend or invoices. Assumed and partial prices retain their existing meaning; missing costs do not become zero. Channel and Machine follow task initiation, including descendants; execution placement stays separate. Unknown origin groups remain visible.",
+      "exploration": {
+        "keys": [
+          "channel"
+        ],
+        "summaries": [
+          {
+            "id": "origin_cost",
+            "op": "sum",
+            "field": "cost_usd",
+            "label": "API equivalent"
+          },
+          {
+            "id": "tu_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Recorded tokens"
+          }
+        ],
+        "valueField": "origin_cost",
+        "unit": "tokens",
+        "subjects": "token groups",
+        "action": "Inspect channel cost",
+        "labelFields": [
+          "channel"
+        ]
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "origin_cost",
+        "kind": "bar-horizontal",
+        "maxGroups": 6,
+        "showOther": true
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "cost",
+          "split": "channel",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect channel cost"
+      }
+    },
+    {
+      "id": "origin-tokens-machine_id",
+      "title": "Tokens by machine",
+      "description": "Recorded tokens over the last {days} days, grouped by machine.",
+      "category": "usage",
+      "idea": "cost-01",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "days": [
+        7,
+        30
+      ],
+      "unit": "tokens",
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [],
+      "action": "Explore Tokens and Cost",
+      "note": "Retained positive-token usage facts, including assumed, partial, and unpriced usage. Tokens are recorded processing volume, not unique text, context-window size, human effort, quality, or value. Repeated cached input contributes again on each recorded request. Time selection uses first_usage_at at the retained fact grain, which can use request time or session-based placement (session-start or reconciled session-remainder). Facts are not prorated. Daily buckets use their recorded local day. Missing repositories remain Unspecified. Channel and Machine follow the initiating conversation, including delegated usage. Execution machine identifies the session's execution location. Unknown attribution stays in the denominator; a capture host is not necessarily an execution device.",
+      "exploration": {
+        "keys": [
+          "machine_id"
+        ],
+        "summaries": [
+          {
+            "id": "tu_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Recorded tokens"
+          },
+          {
+            "id": "origin_sessions",
+            "op": "count_distinct",
+            "field": "agent_session_id",
+            "label": "Agent sessions"
+          }
+        ],
+        "valueField": "tu_tokens",
+        "unit": "tokens",
+        "subjects": "token groups",
+        "action": "Inspect machine usage",
+        "labelFields": [
+          "machine_id"
+        ]
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "tu_tokens",
+        "kind": "bar-horizontal",
+        "maxGroups": 6,
+        "showOther": true
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "machine_id",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect machine usage"
+      }
+    },
+    {
+      "id": "origin-cost-machine_id",
+      "title": "API cost by machine",
+      "description": "Recorded API-equivalent cost over the last {days} days, grouped by machine.",
+      "category": "usage",
+      "idea": "cost-01",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "days": [
+        7,
+        30
+      ],
+      "unit": "USD",
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [],
+      "action": "Explore Tokens and Cost",
+      "note": "API list-price equivalent, not subscription spend or invoices. Assumed and partial prices retain their existing meaning; missing costs do not become zero. Channel and Machine follow task initiation, including descendants; execution placement stays separate. Unknown origin groups remain visible.",
+      "exploration": {
+        "keys": [
+          "machine_id"
+        ],
+        "summaries": [
+          {
+            "id": "origin_cost",
+            "op": "sum",
+            "field": "cost_usd",
+            "label": "API equivalent"
+          },
+          {
+            "id": "tu_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Recorded tokens"
+          }
+        ],
+        "valueField": "origin_cost",
+        "unit": "tokens",
+        "subjects": "token groups",
+        "action": "Inspect machine cost",
+        "labelFields": [
+          "machine_id"
+        ]
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "origin_cost",
+        "kind": "bar-horizontal",
+        "maxGroups": 6,
+        "showOther": true
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "cost",
+          "split": "machine_id",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect machine cost"
+      }
+    },
+    {
+      "id": "origin-tokens-execution_machine_id",
+      "title": "Tokens by execution machine",
+      "description": "Recorded tokens over the last {days} days, grouped by execution machine.",
+      "category": "usage",
+      "idea": "cost-01",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "days": [
+        7,
+        30
+      ],
+      "unit": "tokens",
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [],
+      "action": "Explore Tokens and Cost",
+      "note": "Retained positive-token usage facts, including assumed, partial, and unpriced usage. Tokens are recorded processing volume, not unique text, context-window size, human effort, quality, or value. Repeated cached input contributes again on each recorded request. Time selection uses first_usage_at at the retained fact grain, which can use request time or session-based placement (session-start or reconciled session-remainder). Facts are not prorated. Daily buckets use their recorded local day. Missing repositories remain Unspecified. Channel and Machine follow the initiating conversation, including delegated usage. Execution machine identifies the session's execution location. Unknown attribution stays in the denominator; a capture host is not necessarily an execution device.",
+      "exploration": {
+        "keys": [
+          "execution_machine_id"
+        ],
+        "summaries": [
+          {
+            "id": "tu_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Recorded tokens"
+          },
+          {
+            "id": "origin_sessions",
+            "op": "count_distinct",
+            "field": "agent_session_id",
+            "label": "Agent sessions"
+          }
+        ],
+        "valueField": "tu_tokens",
+        "unit": "tokens",
+        "subjects": "token groups",
+        "action": "Inspect execution machine usage",
+        "labelFields": [
+          "execution_machine_id"
+        ]
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "tu_tokens",
+        "kind": "bar-horizontal",
+        "maxGroups": 6,
+        "showOther": true
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "tokens",
+          "split": "execution_machine_id",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect execution machine usage"
+      }
+    },
+    {
+      "id": "origin-cost-execution_machine_id",
+      "title": "API cost by execution machine",
+      "description": "Recorded API-equivalent cost over the last {days} days, grouped by execution machine.",
+      "category": "usage",
+      "idea": "cost-01",
+      "dataset": "usage",
+      "field": "first_usage_at",
+      "days": [
+        7,
+        30
+      ],
+      "unit": "USD",
+      "where": [
+        {
+          "field": "total_tokens",
+          "op": ">",
+          "value": "0"
+        }
+      ],
+      "measures": [],
+      "action": "Explore Tokens and Cost",
+      "note": "API list-price equivalent, not subscription spend or invoices. Assumed and partial prices retain their existing meaning; missing costs do not become zero. Channel and Machine follow task initiation, including descendants; execution placement stays separate. Unknown origin groups remain visible.",
+      "exploration": {
+        "keys": [
+          "execution_machine_id"
+        ],
+        "summaries": [
+          {
+            "id": "origin_cost",
+            "op": "sum",
+            "field": "cost_usd",
+            "label": "API equivalent"
+          },
+          {
+            "id": "tu_tokens",
+            "op": "sum",
+            "field": "total_tokens",
+            "label": "Recorded tokens"
+          }
+        ],
+        "valueField": "origin_cost",
+        "unit": "tokens",
+        "subjects": "token groups",
+        "action": "Inspect execution machine cost",
+        "labelFields": [
+          "execution_machine_id"
+        ]
+      },
+      "cover": {
+        "mode": "result",
+        "metricId": "origin_cost",
+        "kind": "bar-horizontal",
+        "maxGroups": 6,
+        "showOther": true
+      },
+      "destination": {
+        "topic": "tokens",
+        "chart": {
+          "period": "day",
+          "rollingPeriods": 0,
+          "display": "interval",
+          "scale": "linear",
+          "seriesLimit": 15,
+          "metric": "cost",
+          "split": "execution_machine_id",
+          "hours": 6,
+          "days": 3,
+          "selection": {
+            "values": [],
+            "excluded": false
+          }
+        },
+        "dataset": "usage",
+        "detailAction": "Inspect execution machine cost"
+      }
+    },
+    {
       "id": "run-effort-token-ranges",
       "title": "Run tokens by effort",
       "description": "Own tokens per standalone, parent, or delegated run by recorded effort over the last {days} days.",

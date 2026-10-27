@@ -62,6 +62,9 @@ func (c *Catalog) queryStatistics(tool string, args map[string]any) (any, error)
 		}
 		return map[string]any{"snapshot_id": id, "released": count > 0, "returned_count": 0}, nil
 	}
+	if err := c.ensureOrigins(context.Background()); err != nil {
+		return nil, err
+	}
 	r, err := parseMetricRequest(tool, args)
 	if err != nil {
 		return nil, err
@@ -127,7 +130,11 @@ func (c *Catalog) queryStatistics(tool string, args map[string]any) (any, error)
 			if r.Entity == "conversation" {
 				from = `conversations c JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories repo ON repo.id=w.repository_id`
 			}
-			dirty, e := queryMapsContext(ctx, c.DB, `SELECT DISTINCT w.id FROM `+from+` JOIN mcp_metric_dirty d ON d.workspace_id=w.id WHERE `+strings.Join(where, " AND ")+` LIMIT 100`, args...)
+			prefix, originArgs, e := c.originReadSource(ctx, c.reader())
+			if e != nil {
+				return nil, e
+			}
+			dirty, e := queryMapsContext(ctx, c.DB, prefix+`SELECT DISTINCT w.id FROM `+from+` JOIN mcp_metric_dirty d ON d.workspace_id=w.id WHERE `+strings.Join(where, " AND ")+` LIMIT 100`, append(originArgs, args...)...)
 			if e != nil {
 				return nil, e
 			}
@@ -198,6 +205,10 @@ func (c *Catalog) buildStatisticsSnapshot(ctx context.Context, r statisticsReque
 		return snapshot, err
 	}
 	defer tx.Rollback()
+	prefix, originArgs, err := c.originReadSource(ctx, tx)
+	if err != nil {
+		return snapshot, err
+	}
 	clauses, values := statisticsContext(r)
 	entityID, from, projectionID, entity := "w.id", `workspaces w LEFT JOIN repositories repo ON repo.id=w.repository_id`, "w.id", "workspace"
 	fields := `w.id workspace_id,w.source_kind source,w.activity_at,repo.display_name repository,w.indexed_at,
@@ -206,9 +217,17 @@ func (c *Catalog) buildStatisticsSnapshot(ctx context.Context, r statisticsReque
 		entityID = "c.id"
 		from = `conversations c JOIN workspaces w ON w.id=c.workspace_id LEFT JOIN repositories repo ON repo.id=w.repository_id`
 		fields += `,c.provider,c.model,c.effort,c.coverage,c.started_at,c.ended_at`
+		for _, f := range originFields {
+			fields += ",(SELECT oo." + f + " FROM conversation_origins oo WHERE oo.conversation_id=c.id) " + f
+		}
 		if r.Scope == "conversation" {
 			projectionID = "c.id"
 			entity = "conversation"
+		}
+	}
+	if r.Entity == "workspace" {
+		for _, f := range []struct{ field, set string }{{"channel", "channels"}, {"machine_id", "machines"}, {"execution_machine_id", "execution_machines"}} {
+			fields += ",(SELECT GROUP_CONCAT(v, ' , ') FROM (SELECT DISTINCT COALESCE(oo." + f.field + ",'Unknown') v FROM conversations oc LEFT JOIN conversation_origins oo ON oo.conversation_id=oc.id WHERE oc.workspace_id=w.id ORDER BY v)) " + f.set
 		}
 	}
 	if r.Query != "" || r.Mode == "cards" {
@@ -222,7 +241,7 @@ func (c *Catalog) buildStatisticsSnapshot(ctx context.Context, r statisticsReque
 	if len(jsonFields) > 0 {
 		metrics = "CASE WHEN p.entity_id IS NULL THEN NULL ELSE json_object(" + strings.Join(jsonFields, ",") + ") END"
 	}
-	rows, err := queryMapsContext(ctx, tx, `SELECT `+entityID+` entity_id,`+fields+`,`+metrics+` metrics,EXISTS(SELECT 1 FROM mcp_metric_dirty d WHERE d.workspace_id=w.id) metric_pending FROM `+from+` LEFT JOIN mcp_metric_projection p ON p.entity='`+entity+`' AND p.entity_id=`+projectionID+` WHERE `+strings.Join(clauses, " AND ")+` LIMIT ?`, append(values, statisticsRowCap+1)...)
+	rows, err := queryMapsContext(ctx, tx, prefix+`SELECT `+entityID+` entity_id,`+fields+`,`+metrics+` metrics,EXISTS(SELECT 1 FROM mcp_metric_dirty d WHERE d.workspace_id=w.id) metric_pending FROM `+from+` LEFT JOIN mcp_metric_projection p ON p.entity='`+entity+`' AND p.entity_id=`+projectionID+` WHERE `+strings.Join(clauses, " AND ")+` LIMIT ?`, append(append(originArgs, values...), statisticsRowCap+1)...)
 	if err != nil {
 		return snapshot, err
 	}
@@ -339,6 +358,16 @@ func statisticsContext(r statisticsRequest) ([]string, []any) {
 	if r.Repository != "" {
 		where = append(where, repositoryNamePredicate("repo"))
 		args = append(args, r.Repository, r.Repository)
+	}
+	for _, f := range []struct{ field, value string }{{"channel", r.Channel}, {"machine_id", r.MachineID}, {"execution_machine_id", r.ExecutionMachineID}} {
+		if f.value != "" {
+			clause := "EXISTS(SELECT 1 FROM conversations oc JOIN conversation_origins oo ON oo.conversation_id=oc.id WHERE oc.workspace_id=w.id AND oo." + f.field + "=?)"
+			if r.Entity == "conversation" {
+				clause = "EXISTS(SELECT 1 FROM conversation_origins oo WHERE oo.conversation_id=c.id AND oo." + f.field + "=?)"
+			}
+			where = append(where, clause)
+			args = append(args, f.value)
+		}
 	}
 	if r.Source != "" {
 		where = append(where, "w.source_kind=?")
@@ -1048,7 +1077,7 @@ func statisticsCursorPosition(s statisticsSnapshot, r statisticsRequest) (int, e
 
 func compatibleStatisticsRequest(original, r statisticsRequest, membership bool) error {
 	if original.Entity == "workspace" && r.Entity == "conversation" && membership && len(r.Metrics) == 0 && len(r.Filters) == 0 && r.Query == "" && r.Scope == "conversation" {
-		if r.Type != "rows" || r.Repository != "" || r.Source != "" || r.Model != "" || r.Provider != "" || r.Effort != "" || r.File != "" || r.PR != nil || r.From != "" || r.To != "" || r.Owner != "" || r.Flavor != "" || r.Version != "" || r.Outcome != "" || r.Error != "" {
+		if r.Type != "rows" || r.Repository != "" || r.Source != "" || r.Model != "" || r.Provider != "" || r.Channel != "" || r.MachineID != "" || r.ExecutionMachineID != "" || r.Effort != "" || r.File != "" || r.PR != nil || r.From != "" || r.To != "" || r.Owner != "" || r.Flavor != "" || r.Version != "" || r.Outcome != "" || r.Error != "" {
 			return fmt.Errorf("membership snapshot only supports IDs/coverage and workspace_ids selection")
 		}
 		return nil

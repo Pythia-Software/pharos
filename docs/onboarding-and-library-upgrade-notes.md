@@ -22,3 +22,14 @@ Include these behavior changes in the release that introduces managed libraries.
   separate candidate, creates its writable identity and leaves schedules paused.
   A copied backup cannot be made writable by editing `volume_id` alone. Keep the
   original backup until you have reviewed the recovered library.
+- **Storage format compatibility.** This build writes catalog schema 21 and
+  capture manifest version 5. Upgrade every Pharos copy that writes the same
+  library. These guards combine durable SQLite evidence with delivery retention;
+  source paths, raw evidence identities, machine and channel observations travel
+  through library transfers. Recovery checks published row-evidence closures as
+  well as native files before publishing a candidate.
+- **Source setup remains explicit.** The guide detects installed tools, asks
+  which source folders to approve, preserves their data, then offers indexing.
+  It does not start history backfill or enable the experimental
+  `retained_input_capture` or `sqlite_record_capture` source options. Large
+  database captures may take longer than transcript copies.

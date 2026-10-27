@@ -75,7 +75,7 @@ func (c *Catalog) SetMCPEnabled(enabled bool) error {
 }
 
 var mcpLoggedArguments = []string{
-	"query", "repository", "source", "provider", "file", "pr", "from", "to",
+	"query", "repository", "source", "provider", "channel", "machine_id", "execution_machine_id", "file", "pr", "from", "to",
 	"limit", "offset", "max_output_tokens", "conversation_id", "workspace_id",
 	"message_id", "around_message_id", "text_offset", "change_set_id", "task", "name",
 	"match_mode", "roles", "kinds", "host_id", "stale_only",

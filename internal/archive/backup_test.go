@@ -119,6 +119,35 @@ func runBackup(t *testing.T, config Config, dest string, prune bool) BackupRun {
 }
 
 func TestBackupCopiesTheLibraryIncrementally(t *testing.T) {
+	t.Run("hard-linked-inputs", func(t *testing.T) {
+		config, dest := backupFixture(t)
+		source := filepath.Join(config.CaptureRoot, "host-a", "claude", "files", "p", "b.jsonl")
+		alias := filepath.Join(config.CaptureRoot, "host-a", "claude", "inputs", "revision", "files", "b.jsonl")
+		if err := os.MkdirAll(filepath.Dir(alias), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Link(source, alias); err != nil {
+			t.Fatal(err)
+		}
+		lease := filepath.Join(config.CaptureRoot, "host-a", "claude", ".reader-active"+captureTempSuffix, "files", "reader.jsonl")
+		writeSourceFile(t, lease, "temporary reader")
+		runBackup(t, config, dest, false)
+		a, err := os.Stat(filepath.Join(dest, "captures", "host-a", "claude", "files", "p", "b.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.Stat(filepath.Join(dest, "captures", "host-a", "claude", "inputs", "revision", "files", "b.jsonl"))
+		if err != nil || !os.SameFile(a, b) {
+			t.Fatal("backup duplicated a retained inode", err)
+		}
+		original, _ := os.Stat(source)
+		if os.SameFile(a, original) {
+			t.Fatal("backup links to the original drive")
+		}
+		if _, err := os.Stat(filepath.Join(dest, "captures", "host-a", "claude", filepath.Base(filepath.Dir(filepath.Dir(lease))))); !os.IsNotExist(err) {
+			t.Fatal("backup included a reader lease", err)
+		}
+	})
 	config, dest := backupFixture(t)
 	first := runBackup(t, config, dest, false)
 	// Config and descriptor, 2 captures and manifest, host settings, preserved evidence.
@@ -683,5 +712,35 @@ func TestBackupBoundsTheCatalogWAL(t *testing.T) {
 	}
 	if backupFileExists(t, filepath.Join(dest, "catalog", "catalog.sqlite3"+backupTempSuffix)) {
 		t.Fatal("the abandoned snapshot was left behind")
+	}
+}
+
+// Raw revisions and persistent pin ownership are ordinary capture-tree files.
+// A restored library must replay them without either the native DB or its
+// source host, including after every native generation has disappeared.
+func addSQLiteRecordBackupFixture(t *testing.T, config *Config) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "conductor")
+	exec := conductorFixture(t, dir)
+	exec(addConductorSession("durable-backup", 2)...)
+	config.Sources = []SourceConfig{{Name: "records", Kind: "conductor", Path: dir, Account: "local", Enabled: true, Options: map[string]any{"sqlite_record_capture": true}}}
+	if run := runCapture(t, *config); !run.OK {
+		t.Fatal(run)
+	}
+	return dir
+}
+func TestBackupRestoresSQLiteRecordReplay(t *testing.T) {
+	config, dest := backupFixture(t)
+	original := addSQLiteRecordBackupFixture(t, &config)
+	runBackup(t, config, dest, false)
+	os.RemoveAll(original)
+	restored := config
+	restored.CaptureRoot = filepath.Join(dest, "captures")
+	os.RemoveAll(capturedPath(restored, "records", "files"))
+	os.RemoveAll(capturedPath(restored, "records", "history"))
+	catalog, _ := testCatalog(t)
+	recordTestReplay(t, restored, "records", catalog)
+	if conversationMessages(t, catalog, "conductor:durable-backup") != 2 {
+		t.Fatal("backup lost durable SQLite evidence")
 	}
 }

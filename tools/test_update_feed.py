@@ -26,6 +26,14 @@ def manifest(number='0.7.2'):
 
 
 class UpdateFeedTests(unittest.TestCase):
+    def test_missing_tool_authorization_stops_before_private_key_lookup(self):
+        with patch.object(feed, 'require_release_machine'), \
+             patch.object(feed, 'run', return_value='/test/Sparkle') as command, \
+             patch.object(feed, 'check_sparkle_access', side_effect=ValueError('authorization required')):
+            with self.assertRaisesRegex(ValueError, 'authorization required'):
+                feed.config_and_tools()
+            command.assert_called_once_with(feed.ROOT / 'macos/fetch-sparkle.sh')
+
     def test_development_machine_never_accesses_keychain(self):
         with patch.object(feed, 'require_release_machine', side_effect=ValueError('deployment only')), patch.object(feed, 'run') as command:
             with self.assertRaisesRegex(ValueError, 'deployment only'):

@@ -1,4 +1,5 @@
 import { preferences } from "./preferences";
+import { focusPageContent } from "./page-focus";
 import "./workspace-inbox.css";
 
 type InboxProps = {
@@ -168,7 +169,7 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
         requestAnimationFrame(() => {
           if (disposed) return;
           overview.scrollTop = viewing ? navScroll : overviewScroll;
-          if (!viewing) overview.querySelector<HTMLElement>(".work-heading h1")?.focus({ preventScroll: true });
+          if (!viewing) focusPageContent();
         });
       } else if (viewing && sheet) {
         sheet = false;
@@ -260,7 +261,6 @@ function mountInbox(props: InboxProps): WorkspaceInbox {
   mobile.addEventListener("change", update);
   window.addEventListener("resize", update);
   document.addEventListener("keydown", key);
-  props.overview[0]?.querySelector("h1")?.setAttribute("tabindex", "-1");
   update();
   return api;
 }

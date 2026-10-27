@@ -45,6 +45,15 @@ func planCapture(source SourceConfig) (capturePlan, error) {
 		plan.files = plan.walk(source.Path, info, "", func(file string) bool {
 			return jsonl(file) || filepath.Base(file) == "sessions-index.json"
 		})
+		if !info.IsDir() {
+			index := filepath.Join(filepath.Dir(source.Path), "sessions-index.json")
+			if stat, e := os.Stat(index); e == nil && stat.Mode().IsRegular() {
+				plan.files = append(plan.files, captureItem{index, "sessions-index.json"})
+				plan.pathMap = append(plan.pathMap, capturePathMapping{Original: filepath.Dir(source.Path), Captured: captureFilesDir})
+			} else if e != nil && !os.IsNotExist(e) {
+				return plan, e
+			}
+		}
 	case "codex":
 		adapter := jsonlAdapter{baseAdapter: baseAdapter{config: source}, provider: "codex"}
 		plan.files = plan.walk(source.Path, info, "", func(file string) bool {
@@ -203,4 +212,24 @@ func (p *capturePlan) tl1(source SourceConfig) error {
 		p.installations = append(p.installations, record)
 	}
 	return nil
+}
+
+// A previously captured conversation DB stays in scope after a schema change
+// removes its session/message tables. Unrelated cache/auth databases remain
+// outside the established Conductor capture boundary.
+func includeKnownCaptureDatabases(plan *capturePlan, manifest *captureManifest, source SourceConfig) {
+	for _, rel := range plan.skipped {
+		for _, snapshot := range manifest.Snapshots {
+			if snapshot.Captured != path.Join(captureFilesDir, rel) {
+				continue
+			}
+			expected := filepath.Join(source.Path, filepath.FromSlash(rel))
+			if info, e := os.Stat(source.Path); e == nil && !info.IsDir() {
+				expected = source.Path
+			}
+			if snapshot.Path == expected {
+				plan.databases = append(plan.databases, captureItem{snapshot.Path, rel})
+			}
+		}
+	}
 }

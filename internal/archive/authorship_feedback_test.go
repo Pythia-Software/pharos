@@ -30,6 +30,8 @@ func TestAuthorshipFeedbackFormats(t *testing.T) {
 		"Alexandria":          embeddedFeedback("Alexandria", note),
 		"AI Work Archive":     embeddedFeedback("AI Work Archive", note),
 		"custom embedded":     embeddedFeedback("Another project", note),
+		"design preview":      designFeedback(note),
+		"design CRLF":         strings.ReplaceAll(designFeedback(note), "\n", "\r\n"),
 	}
 	for name, text := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -218,5 +220,21 @@ func TestAuthorshipFeedbackLedger(t *testing.T) {
 	}
 	if !strings.Contains(fmt.Sprint(rows[0]["spans_json"]), "Human feedback comment") {
 		t.Fatalf("missing explanation: %v", rows)
+	}
+}
+
+func designFeedback(note string) string {
+	return "# Ask Pharos design feedback\n\n## 1. Destination cards\n\n" + note + "\n\n- Element: `#composer`\n- State: Opted in · AI · light · Claude · Low\n- Source: .context/sketch.html\n- Revision: abcdef\n\n```json\n{\"state\":\"preview\"}\n```"
+}
+
+func TestAuthorshipDesignFeedbackBoundaries(t *testing.T) {
+	text := designFeedback("Make the composer larger") + "\n\nAlso check mobile."
+	spans := newClassifier(nil).classify(authorInput{ID: "m", ConversationID: "chat", Text: text, SentAt: authorAt(0)})
+	if got := categoryText(text, spans, spanTyped); got != "Make the composer larger|Also check mobile." {
+		t.Fatalf("typed=%q", got)
+	}
+	example := "Please review this example.\n```markdown\n" + designFeedback("This is an example comment") + "\n```"
+	if got := countSpans(example, newClassifier(nil).classify(authorInput{ID: "example", Text: example, SentAt: authorAt(0)})).words[spanHarness]; got != 0 {
+		t.Fatalf("fenced example recognized as real feedback: %d", got)
 	}
 }

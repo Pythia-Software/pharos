@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -9,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"net/http"
@@ -20,6 +22,7 @@ import (
 
 	"filippo.io/age"
 	"filippo.io/age/armor"
+	"github.com/klauspost/compress/zstd"
 )
 
 func cloudFixture(t *testing.T, protected bool) (*Catalog, Config, cloudDestination, cloudRun, string) {
@@ -197,6 +200,63 @@ func TestCloudArchiveRoundTripAndChangedDownload(t *testing.T) {
 	}
 }
 func TestCloudManifestRejectsEscapingPaths(t *testing.T) {
+	for _, test := range []struct {
+		name, target string
+		version      int
+		valid        bool
+	}{
+		{"valid-link", "seed", 2, true}, {"escaping-link", "../outside", 2, false}, {"forward-link", "later", 2, false}, {"legacy-link", "seed", 1, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, config, _, _, _ := cloudFixture(t, false)
+			var data bytes.Buffer
+			compressed, err := zstd.NewWriter(&data, zstd.WithEncoderConcurrency(1))
+			if err != nil {
+				t.Fatal(err)
+			}
+			writer := tar.NewWriter(compressed)
+			body := "retained bytes"
+			hash := sha256.Sum256([]byte(body))
+			digest := hex.EncodeToString(hash[:])
+			if err = writer.WriteHeader(&tar.Header{Name: "seed", Mode: 0600, Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = io.WriteString(writer, body); err != nil {
+				t.Fatal(err)
+			}
+			if err = writer.WriteHeader(&tar.Header{Name: "alias", Mode: 0600, Typeflag: tar.TypeLink, Linkname: test.target}); err != nil {
+				t.Fatal(err)
+			}
+			manifest := cloudManifest{Version: test.version, Kind: "sample", Files: []cloudFile{{Path: "seed", Size: int64(len(body)), SHA256: digest}, {Path: "alias", Size: int64(len(body)), SHA256: digest, Link: test.target}}}
+			raw, _ := json.Marshal(manifest)
+			if err = writer.WriteHeader(&tar.Header{Name: cloudManifestName, Mode: 0600, Size: int64(len(raw)), Typeflag: tar.TypeReg}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = writer.Write(raw); err != nil {
+				t.Fatal(err)
+			}
+			if err = writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err = compressed.Close(); err != nil {
+				t.Fatal(err)
+			}
+			restored, err := extractCloudArchive(t.Context(), config, bytes.NewReader(data.Bytes()), nil)
+			if !test.valid {
+				if err == nil {
+					t.Fatal("unsafe archive link accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if content, err := os.ReadFile(filepath.Join(restored, "alias")); err != nil || string(content) != body {
+				t.Fatal("hard-linked restore lost bytes", err)
+			}
+		})
+	}
+
 	c, config, _, run, archive := cloudFixture(t, false)
 	var raw string
 	if err := c.reader().QueryRow("SELECT manifest_json FROM cloud_backup_runs WHERE id=?", run.ID).Scan(&raw); err != nil {
@@ -248,6 +308,14 @@ func TestCloudConfigurationCannotExposeUnknownSecretFields(t *testing.T) {
 func TestCloudFullSnapshotDoesNotClaimLocalBackup(t *testing.T) {
 	slowTest(t)
 	config, _ := backupFixture(t)
+	source := filepath.Join(config.CaptureRoot, "host-a", "claude", "files", "p", "b.jsonl")
+	alias := filepath.Join(config.CaptureRoot, "host-a", "claude", "inputs", "revision", "files", "b.jsonl")
+	if err := os.MkdirAll(filepath.Dir(alias), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(source, alias); err != nil {
+		t.Fatal(err)
+	}
 	catalog := reopenCatalog(t, config.CatalogPath)
 	if err := os.MkdirAll(config.StagingRoot, 0700); err != nil {
 		t.Fatal(err)
@@ -268,6 +336,18 @@ func TestCloudFullSnapshotDoesNotClaimLocalBackup(t *testing.T) {
 	archive, manifest, err := buildCloudArchive(context.Background(), d, &run, config, stage, func(string) {})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if manifest.Version != 2 {
+		t.Fatal("hard-linked snapshot did not use compact archive format", manifest.Version)
+	}
+	var aliases int
+	for _, file := range manifest.Files {
+		if file.Link != "" {
+			aliases++
+		}
+	}
+	if aliases != 1 {
+		t.Fatal("archive duplicated the retained inode", aliases)
 	}
 	if len(loadBackupHistory(config).Backups) != 0 {
 		t.Fatal("temporary cloud staging was recorded as a durable local backup")
@@ -365,5 +445,51 @@ func TestCloudDisconnectPreservesRestoreEvidence(t *testing.T) {
 	}
 	if err = catalog.finishCloudVerification(context.Background(), config, &run, archive, nil); err != nil {
 		t.Fatalf("disconnect removed recovery evidence: %v", err)
+	}
+}
+
+func TestCloudRestoresSQLiteRecordReplay(t *testing.T) {
+	slowTest(t)
+	for _, protected := range []bool{false, true} {
+		t.Run(fmt.Sprint(protected), func(t *testing.T) {
+			_, _, destination, run, _ := cloudFixture(t, protected)
+			config, _ := backupFixture(t)
+			original := addSQLiteRecordBackupFixture(t, &config)
+			if e := os.MkdirAll(config.StagingRoot, 0700); e != nil {
+				t.Fatal(e)
+			}
+			stage, e := cloudWorkDir(config, "cloud-records-test-")
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer os.RemoveAll(stage)
+			run.Kind = "full"
+			archive, _, e := buildCloudArchive(t.Context(), destination, &run, config, stage, func(string) {})
+			if e != nil {
+				t.Fatal(e)
+			}
+			f, e := os.Open(archive)
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer f.Close()
+			payload, e := cloudPayload(f, []byte("correct recovery password"), "")
+			if e != nil {
+				t.Fatal(e)
+			}
+			restored, e := extractCloudArchive(t.Context(), config, payload, nil)
+			if e != nil {
+				t.Fatal(e)
+			}
+			os.RemoveAll(original)
+			config.CaptureRoot = filepath.Join(restored, "captures")
+			os.RemoveAll(capturedPath(config, "records", "files"))
+			os.RemoveAll(capturedPath(config, "records", "history"))
+			catalog, _ := testCatalog(t)
+			recordTestReplay(t, config, "records", catalog)
+			if conversationMessages(t, catalog, "conductor:durable-backup") != 2 {
+				t.Fatal("cloud archive lost raw SQLite evidence")
+			}
+		})
 	}
 }

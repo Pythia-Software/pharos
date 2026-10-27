@@ -1,12 +1,13 @@
 package archive
 
-import "sort"
+import "strings"
 
 type usageConversationAttribution struct {
 	roots          map[string]map[string]any
 	delegatedRuns  map[string]string
 	delegatedDepth map[string]int64
 	sessionRoles   map[string]string
+	unresolved     map[string]string
 	// canonical names the conversation each mirror alias stands for, and runs
 	// its execution identity: "" for a root's own (or continued) execution.
 	canonical, runs map[string]string
@@ -38,6 +39,10 @@ func (c *Catalog) usageConversationRoots(ledger []map[string]any) (*usageConvers
 	if err != nil {
 		return nil, err
 	}
+	return resolveUsageConversationRoots(conversations, sessions, links, launches, ledger), nil
+}
+
+func resolveUsageConversationRoots(conversations, sessions, links, launches, ledger []map[string]any) *usageConversationAttribution {
 	kept := map[string]bool{}
 	for _, row := range ledger {
 		kept[firstString(row["workspace_id"])] = true
@@ -68,16 +73,36 @@ func (c *Catalog) usageConversationRoots(ledger []map[string]any) (*usageConvers
 		aliases[right] = left
 	}
 	parents := map[string]string{}
+	parentPriority := map[string]int{}
+	parentConflict := map[string]bool{}
+	claimParent := func(id, parent string, priority int) {
+		if parent == "" {
+			return
+		}
+		if priority > parentPriority[id] {
+			parents[id] = parent
+			parentPriority[id] = priority
+			delete(parentConflict, id)
+		} else if priority == parentPriority[id] && parents[id] != parent {
+			parentConflict[id] = true
+		}
+	}
+
 	delegations := map[string]bool{}
-	// Prefer the retained transcript's parent if both mirrors recorded one.
-	isAlias := func(row map[string]any) bool { return canonical(firstString(row["id"])) != firstString(row["id"]) }
-	sort.SliceStable(conversations, func(i, j int) bool {
-		return isAlias(conversations[i]) && !isAlias(conversations[j])
-	})
+	// Equally authoritative incompatible parents remain conflicted; exact
+	// delegation handles outrank recorded ancestry, which outranks inferred launches.
 	for _, row := range conversations {
 		id, parent := canonical(firstString(row["id"])), canonical(firstString(row["parent_id"]))
 		if parent != "" && (parent != id || row["parent_id"] == row["id"]) {
-			parents[id] = parent
+			claimParent(id, parent, 10)
+		}
+		if recorded, ok := row["recorded_parent_ids"].([]string); ok {
+			for _, parentID := range recorded {
+				p := canonical(parentID)
+				if p != id || parentID == firstString(row["id"]) {
+					claimParent(id, p, 10)
+				}
+			}
 		}
 		if integer(row["agent_depth"]) > 0 || parent != "" && row["provider"] != "codex" {
 			delegations[id] = true
@@ -92,21 +117,24 @@ func (c *Catalog) usageConversationRoots(ledger []map[string]any) (*usageConvers
 		if parent := bySession[firstString(row["parent_id"])]; parent != nil {
 			pid := canonical(firstString(parent["conversation_id"]))
 			if pid != "" && pid != id {
-				parents[id] = pid
+				claimParent(id, pid, 15)
 				delegations[id] = true
 			}
 		}
 		if child := canonical(firstString(row["child_conversation_id"])); child != "" && child != id {
-			parents[child] = id
+			claimParent(child, id, 20)
 			delegations[child] = true
 		}
 	}
 	for _, link := range launches {
 		id, parent := canonical(firstString(link["child_id"])), canonical(firstString(link["parent_id"]))
-		if id != parent && parents[id] == "" {
-			parents[id] = parent
+		if id != parent {
+			claimParent(id, parent, 5)
 			delegations[id] = true
 		}
+	}
+	for id := range parentConflict {
+		parents[id] = "conflict:" + id
 	}
 	resolved, done := map[string]map[string]any{}, map[string]bool{}
 	for _, row := range conversations {
@@ -132,9 +160,23 @@ func (c *Catalog) usageConversationRoots(ledger []map[string]any) (*usageConvers
 		}
 	}
 	result := &usageConversationAttribution{roots: map[string]map[string]any{}, canonical: map[string]string{}, runs: map[string]string{},
-		delegatedRuns: map[string]string{}, delegatedDepth: map[string]int64{}, sessionRoles: map[string]string{}}
+		delegatedRuns: map[string]string{}, delegatedDepth: map[string]int64{}, sessionRoles: map[string]string{}, unresolved: map[string]string{}}
 	for id := range byID {
 		result.roots[id], result.canonical[id] = resolved[canonical(id)], canonical(id)
+		if result.roots[id] == nil {
+			at, seen := canonical(id), map[string]bool{}
+			for byID[at] != nil && !seen[at] && parents[at] != "" {
+				seen[at] = true
+				at = parents[at]
+			}
+			result.unresolved[id] = "missing_parent"
+			if strings.HasPrefix(at, "conflict:") {
+				result.unresolved[id] = "conflict"
+			}
+			if seen[at] {
+				result.unresolved[id] = "cycle"
+			}
+		}
 	}
 	// A continuation is the same execution, not another delegation. Exact
 	// handles and their child transcripts name that same execution as well.
@@ -282,5 +324,5 @@ func (c *Catalog) usageConversationRoots(ledger []map[string]any) (*usageConvers
 			}
 		}
 	}
-	return result, nil
+	return result
 }

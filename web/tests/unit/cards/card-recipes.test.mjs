@@ -15,6 +15,17 @@ import { usageWorkspaceURL } from "../../../src/usage-workspace-model";
 import { timeBounds, usageTime, writingTime } from "../../../src/usage-chart";
 const clock = new Date(2026, 9, 13, 12);
 
+test("origin cards explore the metric and breakdown promised by their covers", () => {
+  for (const field of ["channel", "machine_id", "execution_machine_id"]) for (const metric of ["tokens", "cost"]) {
+    const recipe = queryRecipes.find(recipe => recipe.id === `origin-${metric}-${field}`);
+    assert.ok(recipe);
+    const params = new URL(instantiateRecipe(recipe, 30, clock).url, "http://home.test").searchParams;
+    const chart = JSON.parse(params.get("analyze_chart"));
+    assert.equal(chart.split, field);
+    assert.equal(chart.metric, metric);
+  }
+});
+
 test("dashboard card windows and retained cover queries stay aligned after collection edits", t => {
   bookmarkFixture(t, []);
   for (const recipe of queryRecipes.filter(recipe => recipe.destination)) {

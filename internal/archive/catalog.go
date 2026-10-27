@@ -18,6 +18,7 @@ import (
 )
 
 type Catalog struct {
+	queryOnly          bool
 	Path               string
 	DB                 *sql.DB
 	reads              *sql.DB
@@ -25,16 +26,20 @@ type Catalog struct {
 	RepositorySeparate []string
 	captureRootMu      sync.RWMutex
 	captureRoot        string
-	library            libraryCache
-	catchUp            libraryCatchUp
-	find               libraryFindCache
-	transcripts        transcriptFindCache
-	derived            derivedCache
-	queryCounts        queryCountCache
+	// evidenceOnly restricts offline rebuild enrichment to imported catalog rows.
+	// Set once before replay; live paths and unselected captures are unavailable.
+	evidenceOnly bool
+	library      libraryCache
+	catchUp      libraryCatchUp
+	find         libraryFindCache
+	transcripts  transcriptFindCache
+	derived      derivedCache
+	queryCounts  queryCountCache
 	// quietVersion and warmVersion are the catalog versions warmCaches last
 	// saw and warmed; only the Library maintenance loop uses them.
 	quietVersion, warmVersion int64
 	tools                     toolLedgerState
+	originsMu                 sync.Mutex
 	gitMainMu                 sync.Mutex
 	parallelismMu             sync.Mutex // serializes storing parallelism activity
 	// authorship tracks the human-authorship rebuild.
@@ -179,9 +184,15 @@ func (c *Catalog) Close() error {
 // the newly retained reasoning during a reindex, losing saved thought again.
 // 17: searchable handback replies and lexical JSON-whitespace postings. Older
 // writers could prune the replies or replace corrected postings with raw JSON.
-// 18: library delivery checkpoints. Older writers ignore delivered inventories
-// and can recreate history that was explicitly moved out of the source.
-const catalogSchemaVersion = 18
+// 18: retained initiation observations, physical machines, and origin-aware
+// tool rollups. Older writers do not preserve these attribution dimensions.
+// 19: skipped. Unmerged preservation builds wrote it without version 18.
+// 20: raw SQLite evidence authority, retained input acquisition state and
+// deferred historical relationships. Older writers cannot maintain the
+// preservation contract of these rows.
+// 21: library delivery checkpoints. Older writers ignore moved inventories
+// and can recreate history explicitly moved out of a source library.
+const catalogSchemaVersion = 21
 
 // checkSchemaVersion refuses, before any migration runs, a catalog written by
 // a newer build.
@@ -213,6 +224,9 @@ func (c *Catalog) Initialize() error {
 	}
 	if _, err := c.DB.Exec(schemaSQL()); err != nil {
 		return fmt.Errorf("initialize catalog: %w", err)
+	}
+	if err := c.ensureOriginSchema(); err != nil {
+		return err
 	}
 	if err := c.ensureAnalysisPartitions(); err != nil {
 		return fmt.Errorf("initialize analysis partitions: %w", err)
@@ -851,6 +865,7 @@ func integer(value any) int64 {
 
 type SearchOptions struct {
 	Query, Repository, Source, File, Owner, Provider, Model, Effort, From, To, Flavor, Version, Outcome, Error, Metric string
+	Channel, MachineID, ExecutionMachineID                                                                             string
 	PR                                                                                                                 *int
 	Minimum, Maximum                                                                                                   *float64
 	ChangedOnly                                                                                                        bool
@@ -915,8 +930,17 @@ func (c *Catalog) searchRows(options SearchOptions, fields libraryFields) ([]map
 
 func (c *Catalog) computeSearchRows(options SearchOptions, fields libraryFields) ([]map[string]any, error) {
 	ctx := options.context()
+	if err := c.ensureOrigins(ctx); err != nil {
+		return nil, err
+	}
 	where := []string{}
 	args := []any{}
+	for _, f := range []struct{ field, value string }{{"channel", options.Channel}, {"machine_id", options.MachineID}, {"execution_machine_id", options.ExecutionMachineID}} {
+		if f.value != "" {
+			where = append(where, "EXISTS(SELECT 1 FROM conversations oc JOIN conversation_origins oo ON oo.conversation_id=oc.id WHERE oc.workspace_id=w.id AND oo."+f.field+"=?)")
+			args = append(args, f.value)
+		}
+	}
 	var evidence map[string]*searchEvidence
 	if strings.TrimSpace(options.Query) != "" && ftsQuery(options.Query) != "" {
 		var err error
@@ -1028,6 +1052,9 @@ func (c *Catalog) computeSearchRows(options SearchOptions, fields libraryFields)
 			return nil, err
 		}
 	}
+	if err := c.attachWorkspaceOrigins(ctx, rows, nil); err != nil {
+		return nil, err
+	}
 	return rows, nil
 }
 
@@ -1042,8 +1069,11 @@ func (c *Catalog) workDetail(id string, includeMessages bool) (map[string]any, e
 		return nil, err
 	}
 	result := rows[0]
-	conversations, err := queryMaps(c.reader(), "SELECT * FROM conversations WHERE workspace_id=? ORDER BY started_at", id)
+	conversations, err := queryMaps(c.reader(), "SELECT c.*,c.id conversation_id FROM conversations c WHERE c.workspace_id=? ORDER BY c.started_at", id)
 	if err != nil {
+		return nil, err
+	}
+	if err := c.attachOrigins(context.Background(), conversations); err != nil {
 		return nil, err
 	}
 	for _, conversation := range conversations {

@@ -27,6 +27,7 @@ type tl1Installation struct{ ID, Database, Repository, Transcripts, Project, Con
 // tl1Snapshot is TL1's workflow state for one installation, normalized to the
 // tl1_* catalog tables. Rows are keyed by those tables' column names.
 type tl1Snapshot struct {
+	EvidenceIdentity, EvidenceRevision string
 	// Installation names the original paths, also for a capture.
 	Installation tl1Installation
 	Account      string
@@ -288,7 +289,7 @@ func (a *tl1Adapter) Fingerprint() (string, error) {
 	return hashBytes([]byte(a.indexVersion() + ":" + strings.Join(rows, "\n"))), nil
 }
 
-func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v3-reasoning" }
+func (a *tl1Adapter) indexVersion() string { return "tl1-analysis-v4-origins" }
 
 func (a *tl1Adapter) Discover(emit func(WorkspaceRecord) error) error {
 	a.snapshots = nil

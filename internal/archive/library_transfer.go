@@ -22,10 +22,10 @@ import (
 // private user/application state or a rebuildable projection. The retained
 // transfer catalog also preserves conflicting revisions as evidence.
 var transferHistoryTables = []string{
-	"repositories", "hosts", "pull_requests", "workspaces", "workspace_delivery_inputs", "work_items", "conversations", "messages",
+	"repositories", "hosts", "machines", "host_machines", "pull_requests", "workspaces", "workspace_delivery_inputs", "work_items", "conversations", "origin_observations", "messages",
 	"agent_sessions", "agent_session_usage", "agent_session_messages", "message_authorship", "message_authorship_spans", "reasoning_extraction_state", "conversation_launches", "conversation_identity_links", "model_requests", "tool_calls", "tool_commands", "tool_urls",
 	"skill_usages", "conversation_instructions", "task_attempts", "handoffs", "change_sets", "change_files",
-	"work_pr_links", "metrics", "metric_ledger", "workspace_sightings", "conversation_sightings", "copy_versions",
+	"work_pr_links", "metrics", "metric_ledger", "workspace_sightings", "conversation_sightings", "copy_versions", "copy_evidence", "source_evidence",
 	"declared_native_aliases", "conversation_group_membership", "conversation_parent_refs", "ask_native_sessions", "protections", "activity_events", "receipts", "mcp_calls",
 }
 
@@ -564,6 +564,12 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
  WHERE COALESCE(s.origin_host_id,'')=COALESCE(d.origin_host_id,'') AND COALESCE(s.origin,'')=COALESCE(d.origin,'') AND
  COALESCE((SELECT MAX(version) FROM incoming_copy_versions v WHERE v.conversation_id=s.id AND v.host_id=s.origin_host_id),0)<
  COALESCE((SELECT MAX(version) FROM copy_versions v WHERE v.conversation_id=d.id AND v.host_id=d.origin_host_id),0);
+ INSERT OR IGNORE INTO delivered_older
+ SELECT v.conversation_id FROM incoming_copy_versions v JOIN copy_evidence e
+ ON e.host_id=v.host_id AND e.workspace_id=v.workspace_id AND e.conversation_id=v.conversation_id AND e.origin=v.origin
+ WHERE v.conversation_id<>'' AND v.version=e.version AND NOT EXISTS(
+ SELECT 1 FROM incoming_copy_evidence s WHERE s.host_id=v.host_id AND s.workspace_id=v.workspace_id
+ AND s.conversation_id=v.conversation_id AND s.origin=v.origin AND s.version=v.version AND s.identity=e.identity);
  CREATE TEMP TABLE delivered_conversations(id TEXT PRIMARY KEY);
  INSERT INTO delivered_conversations SELECT s.id FROM incoming_conversations s LEFT JOIN conversations d ON d.id=s.id
  WHERE s.id NOT IN (SELECT id FROM delivered_older) AND (d.id IS NULL OR (
@@ -645,6 +651,12 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 			scope = "excluded.workspace_id IN (SELECT id FROM delivered_workspace_metadata)"
 		case "copy_versions":
 			scope = "excluded.version>copy_versions.version"
+		case "copy_evidence":
+			scope = "excluded.version>copy_evidence.version"
+		case "source_evidence":
+			scope = "excluded.version>source_evidence.version"
+		case "origin_observations":
+			scope = "excluded.conversation_id IN (SELECT id FROM delivered_conversations)"
 		}
 		if strings.HasPrefix(table, "tl1_") {
 			scope = "excluded.installation_id IN (SELECT installation_id FROM delivered_tl1_installations)"
@@ -674,6 +686,12 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 		if table == "workspace_delivery_inputs" {
 			predicate = "workspace_id IN (SELECT id FROM delivered_workspace_metadata)"
 		}
+		if table == "copy_evidence" {
+			predicate += " AND EXISTS(SELECT 1 FROM copy_versions v WHERE v.host_id=incoming.host_id AND v.workspace_id=incoming.workspace_id AND v.conversation_id=incoming.conversation_id AND v.origin=incoming.origin AND v.version=incoming.version)"
+		}
+		if table == "source_evidence" {
+			predicate = "source_kind='tl1' AND entity IN (SELECT installation_id FROM delivered_tl1_installations)"
+		}
 		if table == "conversation_parent_refs" {
 			predicate = "EXISTS(SELECT 1 FROM incoming_conversations c WHERE c.provider=incoming.provider AND c.account=incoming.account AND c.native_id=incoming.native_id AND c.id NOT IN (SELECT id FROM delivered_older))"
 			scope = "EXISTS(SELECT 1 FROM incoming_conversations c WHERE c.provider=excluded.provider AND c.account=excluded.account AND c.native_id=excluded.native_id AND c.id IN (SELECT id FROM delivered_conversations))"
@@ -697,6 +715,16 @@ func mergeHistory(ctx context.Context, target *Catalog, incoming string) error {
 		if _, err = tx.ExecContext(ctx, query); err != nil {
 			return fmt.Errorf("merge history table %s: %w", table, err)
 		}
+	}
+	// Advancing an unassociated legacy copy must clear the prior association,
+	// just as ordinary ingestion does; a stale raw identity cannot guard it.
+	if _, err = tx.ExecContext(ctx, `DELETE FROM copy_evidence WHERE NOT EXISTS(
+ SELECT 1 FROM copy_versions v WHERE v.host_id=copy_evidence.host_id AND v.workspace_id=copy_evidence.workspace_id
+ AND v.conversation_id=copy_evidence.conversation_id AND v.origin=copy_evidence.origin AND v.version=copy_evidence.version);
+ DELETE FROM source_evidence WHERE source_kind='tl1' AND entity IN (SELECT installation_id FROM delivered_tl1_installations)
+ AND NOT EXISTS(SELECT 1 FROM incoming_source_evidence s WHERE s.host_id=source_evidence.host_id
+ AND s.source_kind=source_evidence.source_kind AND s.source_account=source_evidence.source_account AND s.entity=source_evidence.entity);`); err != nil {
+		return err
 	}
 	// Divergent copies can add missing messages, but cannot prune or rewrite the
 	// other copy. The existing merged writer marker prevents later source pruning.
@@ -1002,6 +1030,9 @@ func TransferLibrary(ctx context.Context, source, target Config, move bool, prog
 			return receipt, e
 		}
 		receipt.Files = append(receipt.Files, files...)
+	}
+	if err = validateCaptureEvidence(ctx, filepath.Join(dir, "captures")); err != nil {
+		return receipt, fmt.Errorf("verify retained source evidence: %w", err)
 	}
 	// Content-addressed transfer IDs make retries and repeated copies reuse the
 	// same evidence. Prior imports retain their own proof inside this inventory.

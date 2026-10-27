@@ -1,4 +1,5 @@
 import React from "react";
+import { originRenderers } from "./origin-dimensions";
 import { JsonValueView, type RenderRegistry } from "@pythia-software/query-table-ui";
 import { conversationRowURL, primaryUsageSource, usageRowLinks, type UsageRowLink } from "./usage-row-model";
 import type { UsageDataset } from "./usage-workspace-model";
@@ -18,6 +19,7 @@ export function UsageRowActions({ dataset, row }: { dataset: UsageDataset; row: 
 }
 export function usageRowRenderers(dataset: UsageDataset, shared = false): RenderRegistry<Record<string, any>> {
   return {
+    ...originRenderers<Record<string, any>>(),
     ...Object.fromEntries(usageDrilldownColumns[dataset].map(column => [usageDrilldownField(column.kind), ({ row }: { row: Record<string, any> }) => {
       const link = !shared && usageRowLinks(dataset, row, new URLSearchParams(location.search)).find(link => link.kind === column.kind);
       return link ? <span className="usage-drilldown"><UsageSourceLink link={link}>{column.label}</UsageSourceLink></span> : <span className="muted">—</span>;

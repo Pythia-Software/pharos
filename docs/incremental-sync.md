@@ -7,10 +7,10 @@ Pharos keeps a library current with two verbs:
 - **Index** reads conversations into the library so they are searchable and
   analyzed.
 
-**Index changes** is the incremental index: it indexes only what changed in
-this Mac's sources, and does not capture them. **Capture & index** does both:
-it captures this Mac, indexes captures from every Mac, and finishes any
-pending library upgrade.
+**Index changes** reads live sources by default. Experimental retained-input
+acquisition is opt-in; the source matrix below describes its limits. **Capture
+& index** captures this Mac, indexes captures from every Mac, and finishes
+pending library upgrades.
 
 ## Controls and freshness
 
@@ -57,13 +57,93 @@ do not overlap or queue missed timer ticks. The next interval starts after a
 run finishes. A capture or index started by hand cancels and waits for
 automatic work before taking the coordinator.
 
-Index changes reads live inputs but **does not capture them**. Freshness is
-the selected interval plus processing time. A source indexed but not yet
-captured is shown as **Needs capture**. **Capture & index** captures this
+With acquisition enabled, Index changes reports preservation and parsing as separate phases. Freshness
+is the selected interval plus processing time. Preservation status uses accepted
+copy identities and committed input inventories, independently of capture/index
+timestamp order. Historical copies without an evidence association stay visible
+as legacy gaps, including after an unchanged index. **Capture & index** captures this
 Mac, indexes retained captures across Macs, reconciles deferred library-wide
 work, and continues pending upgrades through the existing UI. Its coordinator
 holds the pause across capture and index; independent capture and index
 endpoints also pause automatic writes.
+
+## Source acquisition rollout
+
+| Source | Index changes / API / CLI ingest |
+| --- | --- |
+| Claude | Live by default. `retained_input_capture = true` retains files, subagents and naming indexes before planning and parsing. |
+| Codex | Live by default. `retained_input_capture = true` enables file-only acquisition. Sources with SQLite naming stores require `sqlite_record_capture = true` for transactional row export with a committed dependency group, without native backup per tick. |
+| Canonical, TL1 exports, ChatGPT exports | Live by default. `retained_input_capture = true` retains export files before parsing, with existing automatic-indexing eligibility. |
+| Conductor | `sqlite_record_capture = true` uses the existing candidate session exporter and periodic full reconciliation. Default live ingestion remains pending the hot 11 GB validation. |
+| TL1 and Antigravity | `sqlite_record_capture = true` enables bounded logical database/file groups. Default live ingestion remains a preservation gap pending validation of incremental costs. |
+
+The options belong inside a source's `[sources.options]` table. Filesystem
+acquisition remains experimental: it keeps complete immutable inventories and
+has no collector, so growing transcripts and inventory entry counts can grow
+without a bound. Do not enable it on production timers until retention and
+backup file counts have been validated for that library. Default indexing
+creates no such inventories. No options are enabled by an upgrade.
+
+This is a staged implementation, not completion of the all-source rollout or
+historical rebuild. SQLite group acquisition reuses row chunks and dependency
+objects when inputs are unchanged, and scans changed databases within the
+[documented budgets](sqlite-records.md). It still scans all rows of a changed
+TL1/Antigravity/Codex metadata database; candidate-level acquisition and production performance
+validation remain required before making that path the default. No source
+configuration is changed automatically. Unsupported or failed acquisition after
+a source's cutover returns an explicit pending/error result, without parsing live
+inputs as a fallback.
+
+With filesystem acquisition enabled, inventories are published under
+`captures/<host>/<source>/inputs/<revision>/manifest.json`. They reference immutable
+hard links to the acquired files, or flushed copies on filesystems such as
+exFAT that do not support hard links. Copies are streamed, verified against the
+retained bytes, and retain their modification times. The free-space reserve
+and acquisition allowances include these additional bytes. Capture replaces
+latest files with new inodes, so another capture, source deletion, or a parser upgrade cannot change an active
+reader's inventory. These revisions are evidence and are not automatically
+collected. Append growth therefore retains earlier complete file revisions;
+unchanged files share storage where links are available. Local and cloud
+backups preserve these links when supported; cloud archives still enforce their
+200,000-path restore limit. Default captured-file indexes and native snapshot
+readers instead use temporary leases, with verified copies when links are
+unavailable. Their raw identities do not claim an immutable inventory receipt.
+Leases are released after parsing and keep existing rotation rules.
+Ordinary captured-file indexing skips missing or resized entries and reports
+them in `unavailable_capture_inputs`, while continuing with healthy files and
+surviving snapshot generations. A partial lease does not certify a durable
+inventory. Acquisition and verification still require complete retained inputs.
+Logical SQLite readers use the durable revision/pin contract from handoff 1.
+
+The shared `Catalog.acquireRetainedInput` boundary is used by ingestion, service
+preparation and CLI ingestion. Metadata backfills use existing captured inputs
+when available, otherwise same-host live files; they never create enrichment
+captures. Offline evidence-only rebuilds cannot use that live fallback.
+Plans built over live files
+are discarded after acquisition and rebuilt against the retained reader. A
+whole-source logical group advances its parts checkpoint only after all of its
+records commit. With acquisition disabled, verification uses bounded temporary
+inputs as before and does not certify durable preservation. SQLite row export
+is never enabled merely to run an automatic audit. Logical group verification compares each selected workspace against its pinned
+revision. Conductor verification acquires a bounded durable session even when
+normal live indexing has not opted into enforcement.
+
+The ingestion coordinator is acquired only by entry points. Acquisition takes
+the nonblocking host capture flock, publishes evidence, and releases the flock
+before parsing, catalog transactions or verification. Explicit capture indexing
+takes the index lock first, then briefly takes the host flock to lease its exact
+inventory. Acquisition never recursively takes the ingestion coordinator. No
+upload runs under these locks. A busy host capture defers automatic work until
+a later tick, without consuming a retry or advancing success/checkpoint state;
+manual callers receive the existing capture-in-progress explanation.
+
+`source_input_states` separates acquisition time/revision, indexed inventory,
+pending newer inputs and acquisition errors. `copy_evidence` identifies accepted
+catalog copies transactionally; a no-op acquisition does not manufacture evidence
+for older catalog rows. Source status and MCP archive status expose both this
+operational summary and legacy copy counts. Interrupted acquisition leaves earlier
+content and checkpoints intact. Committed evidence can be indexed offline after
+an interruption using **Index captured files** or `pharos index`.
 
 ## Changed-unit ingestion
 
@@ -136,7 +216,7 @@ Moving/unreadable inputs report deferred or
 read-error coverage, never an invented pass. Resource telemetry and opt-in
 regression gates are not hard per-process memory or CPU quotas.
 
-The verifier freezes evidence and creates an isolated reference catalog,
+The verifier uses a pinned retained revision and creates an isolated reference catalog,
 seeded with identity/authority/retained-copy context and the catalog's global
 repository lookup metadata for cross-repository tool paths. Context remains
 subject to the comparison memory budget. It bypasses incremental
@@ -178,6 +258,11 @@ Existing authentication applies to all endpoints. POST bodies are JSON.
 | `GET /api/activity` | Progress, interruption, failures and verification summaries by returned run ID. |
 
 ## Measurement and regression gates
+
+Frequently polled source status reports only the latest acquisition and whether
+it was indexed. Default live sources have no acquisition warning. These reads
+do not count historical conversation sightings or join per-copy evidence;
+detailed historical coverage is inspected through an explicit preservation plan.
 
 History samples expose `finished_at`, `sources` (attempted sources), and
 `source_results` (the per-source ingest results). Older samples receive their

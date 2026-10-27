@@ -305,7 +305,7 @@ function createPharosSourceWizard() {
     function review(){
       active.stage=2;active.back=renderLocations;
       const selected=wizard.selected();
-      heading('Review source access.',selected.length?'Pharos will add these sources for this Mac and copy their conversation files into your library. Indexing comes next.':'No new sources are selected. You can finish setup now and add sources later.');
+      heading('Review source access.',selected.length?'Pharos will add these sources for this Mac and preserve their conversation files and database history in your library. Indexing comes next.':'No new sources are selected. You can finish setup now and add sources later.');
       body.replaceChildren();error.textContent='';
       selected.forEach(candidate=>{const row=node('div','pharos-source-review');row.append(node('strong','',KINDS[candidate.kind]),node('code','',candidate.display_path||candidate.path),node('span','pharos-muted',facts(candidate)||'Size unavailable'));body.append(row)});
       if(selected.length){const bytes=selected.reduce((total,c)=>total+(c.bytes||0),0);body.append(node('p','pharos-muted',`${plural(selected.length,'source')} selected${bytes?' · '+size(bytes)+' of source files':''}. Counts and sizes are estimates; database snapshots and search indexes need additional room.`))}
@@ -342,8 +342,8 @@ function createPharosSourceWizard() {
     actions.replaceChildren(done);
     if (!added.length) { active.back=close; return done.focus(); }
     active.back=()=>{};
-    // Copying the raw files is quick; once it is done the drive can go, and
-    // indexing can follow now or later on any Mac.
+    // Preservation completes before offering indexing. Large databases can take
+    // longer; experimental row acquisition remains an explicit source opt-in.
     captureSources(added, status, body, actions);
   }
 
@@ -409,8 +409,8 @@ function createPharosSourceWizard() {
     if(active)active.back=()=>{};
     const shown = () => document.body.contains(body);
     setTitle(body, `Capturing from ${label}`);
-    const lead = node('p', 'pharos-lead', `Copying the conversation files of ${sources.join(', ')} into the library…`);
-    const note = node('p', 'pharos-muted', 'This copies raw files and takes seconds to minutes. Nothing is parsed yet. You can close this; the capture carries on and the header shows its progress.');
+    const lead = node('p', 'pharos-lead', `Preserving conversation files and database history from ${sources.join(', ')} in the library…`);
+    const note = node('p', 'pharos-muted', 'This preserves source data before indexing it. Large databases can take a while. You can close this; capture carries on and the header shows its progress.');
     const rows = node('div');
     rows.append(working('Starting the capture…'));
     body.replaceChildren(lead, rows, note);
